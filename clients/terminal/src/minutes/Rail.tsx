@@ -98,7 +98,7 @@ export function Rail(p: {
           WHO is here, not of which chat is in front, so they sit at the foot of the column and
           fold away with it. */}
       <AccountBadge />
-      <ConfirmDialog open={!!deleting} title="Delete this chat?" confirmLabel="Delete chat"
+      <ConfirmDialog open={!!deleting} title="Delete this chat?" confirmLabel="Delete chat" focusConfirm
         consequence={<>“{deleting?.label}” and its conversation are removed from your chats.</>}
         onCancel={() => setDeleting(null)}
         onConfirm={() => { const id = deleting?.chatId; setDeleting(null); if (id) p.onDeleteChat(id); }} />

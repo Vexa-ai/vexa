@@ -14,7 +14,15 @@
  * Per theme it opens the catalogue's Dialog and ConfirmDialog and asserts that the element under the
  * centre of every button in the dialog IS that button, and that a real mouse click on the confirm
  * reaches its handler; then opens the Drawer and asserts its rows are hit and the area beside it
- * hits the drawer's scrim (the drawer stratum is unchanged). Needs Playwright, which is not a
+ * hits the drawer's scrim (the drawer stratum is unchanged).
+ *
+ * KEYBOARD (the second 2026-10-11 defect): the dialog re-ran its focus setup on every parent render,
+ * because callers pass `onClose` as an inline arrow, so the rail's sessions poll moved focus back to
+ * the first button (Cancel) and Enter cancelled a delete. The catalogue's "Delete chat…" confirm
+ * (`focusConfirm`) re-renders its parent every 250 ms while open; this opens it with Enter, asserts
+ * focus starts on "Delete chat" and stays on whichever button the reader moved to across several of
+ * those renders, that Enter on "Delete chat" reaches it, and that Escape cancels and returns focus
+ * to the opener. Needs Playwright, which is not a
  * terminal dependency — run it where Playwright is installed (CI's terminal-layout job, bbb).
  * Exit 1 on any miss.
  */
@@ -43,7 +51,7 @@ async function main() {
     const dialogSection = page.locator("[data-gallery=dialog]");
     await dialogSection.waitFor();
 
-    for (const [opener, closeLabel] of [["Open a dialog", "Rename chat"], ["Delete workspace…", "Delete workspace"]]) {
+    for (const [opener, closeLabel] of [["Open a dialog", "Rename chat"], ["Delete workspace…", "Delete workspace"], ["Delete chat…", "Delete chat"]]) {
       // Openers are clicked without Playwright's "stable" wait: a headless browser on a loaded host
       // may render no frames at all (see layout-sweep.mjs), and the opener is not under test.
       await dialogSection.first().evaluate((el) => el.scrollIntoView({ block: "center" }));
@@ -67,6 +75,38 @@ async function main() {
       const hit = await page.evaluate(() => window.__vxHit);
       check(hit === closeLabel, `${theme} "${opener}": a mouse click on "${closeLabel}" reaches it (got ${JSON.stringify(hit)})`);
       if (await dialog.count()) await page.keyboard.press("Escape");
+    }
+
+    // Keyboard: focus is set once, on open, and survives the parent re-rendering under it.
+    {
+      const focused = () => page.evaluate(() => (document.activeElement?.textContent || "").trim());
+      const opener = dialogSection.getByRole("button", { name: "Delete chat…", exact: true }).first();
+      await dialogSection.first().evaluate((el) => el.scrollIntoView({ block: "center" }));
+      await opener.focus();
+      await page.keyboard.press("Enter");
+      const dialog = page.getByRole("dialog", { name: "Delete this chat?" });
+      await dialog.waitFor();
+      check(await focused() === "Delete chat", `${theme} keyboard: Enter on "Delete chat…" opens the confirm on "Delete chat" (focused: ${JSON.stringify(await focused())})`);
+      await page.waitForTimeout(800);   // ≥3 parent renders, each with a new onCancel
+      check(await focused() === "Delete chat", `${theme} keyboard: focus stays on "Delete chat" across parent renders (focused: ${JSON.stringify(await focused())})`);
+      await page.keyboard.press("Tab");
+      await page.waitForTimeout(800);
+      check(await focused() === "Cancel", `${theme} keyboard: after Tab, focus stays on "Cancel" across parent renders (focused: ${JSON.stringify(await focused())})`);
+      await page.keyboard.press("Shift+Tab");
+      await page.waitForTimeout(800);
+      const act = dialog.getByRole("button", { name: "Delete chat", exact: true });
+      await act.evaluate((el) => { window.__vxKey = null; el.addEventListener("click", () => { window.__vxKey = el.textContent; }, { once: true }); });
+      await page.keyboard.press("Enter");
+      const got = await page.evaluate(() => window.__vxKey);
+      check(got === "Delete chat", `${theme} keyboard: Enter confirms — it reaches "Delete chat" (got ${JSON.stringify(got)})`);
+      if (await dialog.count()) await page.keyboard.press("Escape");
+      await opener.focus();
+      await page.keyboard.press("Enter");
+      await dialog.waitFor();
+      await page.waitForTimeout(600);
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "detached" });
+      check(await focused() === "Delete chat…", `${theme} keyboard: Escape cancels and returns focus to the opener (focused: ${JSON.stringify(await focused())})`);
     }
 
     // The drawer stratum is unchanged: rows hit, the area beside the drawer hits its scrim.

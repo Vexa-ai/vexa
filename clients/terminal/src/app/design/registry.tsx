@@ -3,7 +3,7 @@
  *  components it shows and a demo built from fixtures. Gate G13 (`designCatalogue.test.ts`) fails
  *  when a component exported from `src/ui-kit/index.tsx` has no entry here, and renders every entry
  *  in both themes. Adding a primitive means adding it here in the same PR. */
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Bell, FileText, Pin, Plus, Search, X } from "lucide-react";
 import {
   Badge, Breadcrumb, Button, Card, Checkbox, Chip, ChipRow, Code, ConfirmDialog, DateText, Dialog, Drawer, EmptyState, EntityChip,
@@ -52,10 +52,20 @@ function SelectDemo() {
   return <Select label="Theme" value={v} onChange={setV} options={[{ value: "dark", label: "Dark" }, { value: "light", label: "Light" }]} />;
 }
 function DialogDemo() {
-  const [open, setOpen] = useState<"" | "dialog" | "confirm">("");
+  const [open, setOpen] = useState<"" | "dialog" | "confirm" | "chat">("");
+  // The "Delete chat…" confirm re-renders its parent every 250 ms while open, with a new inline
+  // `onCancel` each time — the shape of the rail's sessions poll. `overlay-hit.mjs` drives it by
+  // keyboard and asserts focus stays where the reader put it across those renders.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (open !== "chat") return;
+    const t = setInterval(() => setTick((n) => n + 1), 250);
+    return () => clearInterval(t);
+  }, [open]);
   return <Row>
     <Button onClick={() => setOpen("dialog")}>Open a dialog</Button>
     <Button variant="danger-ghost" onClick={() => setOpen("confirm")}>Delete workspace…</Button>
+    <Button variant="danger-ghost" onClick={() => setOpen("chat")}>Delete chat…</Button>
     <Dialog open={open === "dialog"} onClose={() => setOpen("")} title="Rename the chat"
       footer={<><Button variant="ghost" onClick={() => setOpen("")}>Cancel</Button><Button variant="primary" onClick={() => setOpen("")}>Rename chat</Button></>}>
       <Input label="Chat name" defaultValue="Weekly sync" />
@@ -63,6 +73,9 @@ function DialogDemo() {
     <ConfirmDialog open={open === "confirm"} onCancel={() => setOpen("")} onConfirm={() => setOpen("")}
       title="Delete this workspace?" consequence={`Every page in ${WORKSPACE} is deleted for everyone it is shared with. This cannot be undone.`}
       confirmLabel="Delete workspace" typeToConfirm={WORKSPACE} />
+    <ConfirmDialog open={open === "chat"} onCancel={() => setOpen("")} onConfirm={() => setOpen("")} focusConfirm
+      title="Delete this chat?" consequence="“Weekly sync” and its conversation are removed from your chats."
+      confirmLabel="Delete chat" />
   </Row>;
 }
 function PopoverDemo() {
@@ -109,7 +122,7 @@ export const REGISTRY: Entry[] = [
     demo: () => <div className="vx-cat-col"><PanelHeader title="Chats" actions={<IconButton label="New chat"><Plus size={16} strokeWidth={1.75} /></IconButton>} inset="rail" />
       <ListRow title="Weekly sync" meta="6:29 PM" selected leading={<span className="vx-dot" data-tone="success" />} /><ListRow title="Pricing questions" meta="Yesterday" actions={<IconButton label="Delete chat" size="xs"><X size={14} strokeWidth={1.75} /></IconButton>} />
       <Card title="Workspace" actions={<Button variant="ghost">Open</Button>}>Shared with 3 people. Last changed Thursday.</Card><Card onOpen={() => {}} raised>An interactive card is one button.</Card></div> },
-  { id: "dialog", title: "Dialog, ConfirmDialog", components: ["Dialog", "ConfirmDialog"], note: "Replaces window.confirm. The confirm names the act.", demo: () => <DialogDemo /> },
+  { id: "dialog", title: "Dialog, ConfirmDialog", components: ["Dialog", "ConfirmDialog"], note: "Replaces window.confirm. The confirm names the act. Focus moves in once, on open; focusConfirm starts on the act, so Enter confirms.", demo: () => <DialogDemo /> },
   { id: "states", title: "EmptyState, Skeleton, ErrorState", components: ["EmptyState", "Skeleton", "ErrorState"], note: "Loading, empty, error and content never look alike (P18).",
     demo: () => <div className="vx-cat-col"><Skeleton lines={3} delay={0} /><EmptyState icon={<FileText size={24} strokeWidth={1.75} />} action={<Button variant="primary">New page</Button>}>No pages here yet. They appear when the conversation writes one.</EmptyState>
       <ErrorState what="Could not load this workspace" why="The workspace service did not answer." fix={<Button>Retry</Button>} detail="workspace-api: HTTP 503 (unavailable)" /></div> },
