@@ -33,7 +33,8 @@ other character it keeps **Join now** disabled. Operator-facing description, lim
    The button is never clicked and the admission wait never runs.
 6. The error is not an `AdmissionError`. The bot's join driver re-raises it, and the orchestrator's
    join catch emits the terminal `failed` lifecycle event with `completion_reason: join_failure`
-   and `reason: String(e)`. meeting-api stores that as the meeting's `last_error`.
+   and `reason: String(e)`. meeting-api stores that as the meeting's `data.reason` (and
+   `data.last_error.reason` on `GET /meetings/{id}`).
 
 **Data ownership.** The join brick only reads the page and throws. The bot orchestrator is the
 single writer of the terminal lifecycle event; meeting-api is the single writer of the meeting
