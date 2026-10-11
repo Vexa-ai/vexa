@@ -361,6 +361,9 @@ pushed with `POST /meetings` is matched on its link's host only. A Teams or Goog
 is Microsoft's or Google's, so block an organisation by its email domain, not by its link. If the
 person's list cannot be read when the meeting is due, that meeting is not joined either.
 
+Both settings are listed with their defaults in [Configuration → Auto-join & calendar sync](/configuration#auto-join--calendar-sync)
+and in the Helm values table ([`deploy/helm/README.md`](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md#configuration-that-matters)).
+
 ### How it works
 
 Internal feeds:
