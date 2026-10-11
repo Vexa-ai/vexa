@@ -5727,7 +5727,7 @@ def report_friction(session: str, what_i_was_doing: str, what_went_wrong: str,
 
     `session` is REQUIRED — the chat or meeting session this happened in (whatever id ties this
     call back to that conversation). #1510: this now posts straight onto flows' own carrier
-    (`POST /friction`), the same door the worker and the terminal's "Report this" land on, and
+    (`POST /friction`), the same door the worker's filings land on, and
     that route refuses a report with no session — the founder's own 13 reports from one live call
     could not be tied back to it, which is exactly the gap this requirement closes.
 

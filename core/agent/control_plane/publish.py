@@ -203,8 +203,7 @@ def post_friction(rec: dict, *, deployment: str = "", worker_image: str = "") ->
     its arguments, the same convention `reactions_list`/`timeline` already read on this surface.
     Returns `(published, body)` -- `body` is flows' own response (`{id, recorded}`) when it
     landed, `{}` otherwise. NEVER raises: a friction report is never worth failing the caller's
-    own request over (the worker's turn, the terminal's "Report this", a refused model
-    endpoint).
+    own request over (the worker's turn, a refused model endpoint).
 
     `rec` is `shared.friction`-normalized (`tried`/`happened`/`session`/`severity`/`subject`/
     `context`). `deployment`/`worker_image` are not part of that shape's CONTEXT_KEYS, so a

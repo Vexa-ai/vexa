@@ -260,6 +260,10 @@ still lands. The first claim the person stands behind writes the desk's `.scaffo
 
 ## Rough edges
 
+People report friction by telling the chat agent what did not work; the agent files it with the
+`report_friction` tool. The terminal has no separate report control. The route below is what the
+agent's worker and its harness post to.
+
 `POST /api/friction` — body `{ kind?, severity?, tried?, happened?, would_help?, session?, context? }`;
 the context keys `workspace` · `path` · `meeting_id` · `scaffold_id` · `tool` · `error` · `surface` are
 also accepted flat. → `201 { id, status, recurrence, kind, known }`, where `known` is `recurrence > 1`.

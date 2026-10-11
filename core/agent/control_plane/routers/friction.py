@@ -6,13 +6,15 @@ ONLY producing domain (a carrier has exactly one — `core/flows/contracts/flows
 own entry says so, and `gate:config-contract` enforces it against every service). This route does
 not store anything any more (the old `FrictionStore` — `control_plane/friction.py` — is deleted,
 #1510's C5): it is an HTTP CLIENT of flows' existing route (`control_plane.publish.post_friction`),
-for the two callers that cannot reach flows directly — the worker's auto-filer (no flows credential
-in a worker container) and the terminal's "Report this" (no flows address on the terminal's host).
+for the caller that cannot reach flows directly — the worker's auto-filer (no flows credential in a
+worker container). A person's report reaches it the same way: they tell the chat agent, and the
+agent files it (the terminal's own "Report this" control was removed, founder 2026-10-11). The
+route still accepts `reporter: "person"` bodies from any authenticated caller.
 The rig posts straight to flows now too (`deploy/dogfood/rig/vexa_control_mcp.py`'s
 `report_friction`); this route is not its door any more.
 
 `shared/friction.py`'s `normalize()` still does the shape validation, clipping and redaction —
-one contract, three producers (worker / terminal / this route) — it just no longer feeds a store,
+one contract, two producers (worker / this route) — it just no longer feeds a store,
 it feeds `control_plane/publish.py`'s `post_friction()`, which POSTs onto the exact same route
 flows itself serves, using the operator key/URL pair `desk.unscaffolded`/`claim.proposed` already
 declare.
@@ -32,8 +34,8 @@ def build(**d) -> APIRouter:
 
     @router.post("/api/friction", status_code=201)
     def file_friction(body: dict, request: Request):
-        """File one rough edge — from an agent (`report_friction`), the harness, or a person's
-        "Report this" (decision 33 §§1-2). Forwards onto flows' own `POST /friction` and returns
+        """File one rough edge — from an agent (`report_friction`, including what a person told it
+        in chat) or the harness (decision 33 §1). Forwards onto flows' own `POST /friction` and returns
         exactly what it returned — `{id, recorded}` — since this is a forward and not a second
         contract (#1510's C1/C4). When flows cannot be reached (or refuses — no account to
         attribute an anonymous report to), returns `{id: "", recorded: False}` rather than

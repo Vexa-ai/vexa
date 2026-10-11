@@ -179,7 +179,7 @@ def main(argv=None) -> int:
 def _live_reporter():
     """File a friction record through decision 33's route — `POST /api/friction` on AGENT-API.
 
-    Not the flows `friction` table: agent-api owns the store (the terminal's "Report this" posts
+    Not the flows `friction` table: agent-api owns the store (the worker's filings post
     there, the blank script deletes the flows table with the rest of the lane, and only agent-api's
     record has the context and status columns the dump groups on). The reasoning is written down at
     `core/agent/shared/friction.py`; this comment exists so the second writer does not appear here.
