@@ -112,7 +112,9 @@ def test_connection_faults_are_typed_and_logged_without_values(keys, broker, cap
     caplog.set_level(logging.WARNING)
     with pytest.raises(HTTPException) as exc:
         connections.call_broker("u1", "POST", "/api/connections/" + "c" * 32 + "/read", {"action": "gmail.search", "query": "PRIVATE-QUERY"}, identity="signed-u1")
-    assert exc.value.status_code == status and exc.value.detail == "Connection service unavailable"
+    assert exc.value.status_code == status
+    assert exc.value.detail["reason"] == "broker_unreachable"
+    assert exc.value.detail["message"] == "Connection service unavailable"
     logged = faults(caplog)
     assert logged and logged[-1]["kind"] == kind and logged[-1]["source"] == "credential-broker"
     assert logged[-1]["route"] == "/api/connections/{cid}/read" and logged[-1]["role"] == "agent"
@@ -133,8 +135,10 @@ def test_an_upstream_outage_keeps_its_status_and_is_never_a_reconnect(keys, brok
     with pytest.raises(HTTPException) as exc:
         connections.call_broker("u1", "POST", "/api/connections/" + "c" * 32 + "/read", {"action": "gmail.search"}, identity="signed-u1")
     assert exc.value.status_code == status
-    assert exc.value.detail.startswith(sentence)
-    assert "not an authorization problem" in exc.value.detail and "do not ask the person to reconnect" in exc.value.detail
+    assert exc.value.detail["reason"] == "provider_error"
+    assert exc.value.detail["message"].startswith(sentence)
+    assert "not an authorization problem" in exc.value.detail["message"]
+    assert "do not ask the person to reconnect" in exc.value.detail["message"]
     assert faults(caplog)[-1]["kind"] == f"http_{status}"
 
 
@@ -142,8 +146,8 @@ def test_an_outage_without_a_sentence_still_says_what_it_is(keys, broker):
     broker["handler"] = lambda req: httpx.Response(503, text="PRIVATE")
     with pytest.raises(HTTPException) as exc:
         connections.call_broker("u1", "GET", "/api/connections", identity="signed-u1")
-    assert exc.value.status_code == 503 and "PRIVATE" not in exc.value.detail
-    assert "not an authorization problem" in exc.value.detail
+    assert exc.value.status_code == 503 and "PRIVATE" not in str(exc.value.detail)
+    assert "not an authorization problem" in exc.value.detail["message"]
 
 
 def test_refusals_the_person_can_act_on_pass_through(keys, broker):
@@ -158,7 +162,8 @@ def test_unconfigured_is_its_own_answer(monkeypatch, broker, caplog):
     caplog.set_level(logging.WARNING)
     with pytest.raises(HTTPException) as exc:
         connections.call_broker("u1", "GET", "/api/connections", identity="signed-u1")
-    assert exc.value.detail == "Connections are not configured on this deployment"
+    assert exc.value.detail["message"] == "Connections are not configured on this deployment"
+    assert exc.value.detail["reason"] == "broker_unreachable"
     assert faults(caplog)[-1]["kind"] == "config"
     assert not broker["sent"]
 
@@ -194,3 +199,37 @@ def test_the_identity_header_names_come_from_the_vendored_contract_file():
         source = Path(module.__file__).read_text()
         literals = re.findall(r"""['"](x-vexa-identity|x-user-[a-z-]+)['"]""", source, re.I)
         assert not literals, (module.__name__, literals)
+
+
+# ── typed reasons: an outage is never confused with an authorization the person can renew ─────────
+
+@pytest.mark.parametrize("status,body,reason", [
+    (503, {"detail": "Credential store unavailable", "reason": "store_unavailable"}, "store_unavailable"),
+    (503, {"detail": "Account read is unavailable; retry later", "reason": "provider_error"}, "provider_error"),
+    (409, {"detail": "Authorization expired; reconnect this account", "reason": "reconnect_required"},
+     "reconnect_required"),
+    (409, {"detail": "Provider refused access; check granted scopes and API enablement",
+           "reason": "provider_error"}, "provider_error"),
+])
+def test_the_brokers_reason_reaches_the_agent_with_what_to_do(keys, broker, caplog, status, body, reason):
+    broker["handler"] = lambda req: httpx.Response(status, json=body)
+    caplog.set_level(logging.WARNING)
+    with pytest.raises(HTTPException) as exc:
+        connections.call_broker("u1", "POST", "/api/connections/" + "c" * 32 + "/read",
+                                {"action": "gmail.search"}, identity="signed-u1")
+    detail = exc.value.detail
+    assert exc.value.status_code == status and detail["reason"] == reason
+    assert detail["message"].startswith(body["detail"])
+    assert ("Call connection_request" in detail["instruction"]) == (reason == "reconnect_required")
+    if status >= 500:   # P18: an outage is a typed fault line naming its reason
+        assert faults(caplog)[-1]["reason"] == reason
+
+
+def test_a_store_outage_is_never_answered_as_a_reconnect(keys, broker):
+    broker["handler"] = lambda req: httpx.Response(503, json={"detail": "Credential store unavailable",
+                                                              "reason": "store_unavailable"})
+    with pytest.raises(HTTPException) as exc:
+        connections.call_broker("u1", "GET", "/api/connections", identity="signed-u1")
+    assert "do not ask them to reconnect" in exc.value.detail["instruction"].lower()
+    assert "do not call connection_request" in exc.value.detail["instruction"]
+    assert "Call connection_request" not in exc.value.detail["instruction"]
