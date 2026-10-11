@@ -240,7 +240,8 @@ def _concrete(path: str) -> str:
     # A `{platform}` segment must name a meeting platform: the edge refuses any other value (422).
     return path.replace("{path:path}", "x").replace("{platform}", "google_meet").replace(
         "{", "").replace("}", "").replace(
-        "meeting_id", "1").replace("recording_id", "1").replace("media_file_id", "1")
+        "meeting_id", "1").replace("recording_id", "1").replace("media_file_id", "1").replace(
+        "grant_id", "g1").replace("viewer_id", "1")
 
 
 def test_a_delegation_bearer_is_admitted_exactly_where_a_row_says_so():

@@ -730,14 +730,14 @@
   {
    "key": "VEXA_FLOWS_API_URL",
    "class": "publish-edge",
-   "publishes_events": ["meeting.started", "meeting.completed"],
-   "description": "flows' intake, told when a bot this service dispatched goes active and when it completes (F168/F181 — an ad hoc bot started via the MCP request_meeting_bot never reached flows before this; only invite_intake's own emit_started/emit_completed, calendar-only, ever did). MEETING-API TELLS FLOWS; IT DOES NOT ASK IT — best-effort, bounded at 2s, swallowed (events.py), so a deployment with no flows domain runs meetings exactly as one with a flows domain does, and so does one where flows is down. Unset is a profile, not a degraded state. Spelled VEXA_FLOWS_API_URL to match agent-api's control_plane/config.v1.json (identity's admin-api spells the bare key FLOWS_API_URL for the same edge — the two publishers that already exist do not agree with each other; not fixed here).",
+   "publishes_events": ["meeting.started", "meeting.completed", "meeting.shared"],
+   "description": "flows' intake, told when a bot this service dispatched goes active and when it completes, and when a meeting's owner invites an address by email from the Share dialog (meeting.shared, which flows mails) (F168/F181 — an ad hoc bot started via the MCP request_meeting_bot never reached flows before this; only invite_intake's own emit_started/emit_completed, calendar-only, ever did). MEETING-API TELLS FLOWS; IT DOES NOT ASK IT — best-effort, bounded at 2s, swallowed (events.py), so a deployment with no flows domain runs meetings exactly as one with a flows domain does, and so does one where flows is down. Unset is a profile, not a degraded state. Spelled VEXA_FLOWS_API_URL to match agent-api's control_plane/config.v1.json (identity's admin-api spells the bare key FLOWS_API_URL for the same edge — the two publishers that already exist do not agree with each other; not fixed here).",
    "targets": ["compose"]
   },
   {
    "key": "VEXA_FLOWS_API_KEY",
    "class": "publish-edge",
-   "publishes_events": ["meeting.started", "meeting.completed"],
+   "publishes_events": ["meeting.started", "meeting.completed", "meeting.shared"],
    "secret": true,
    "description": "operator key for the same edge, sent as X-Flows-Operator-Key (flows' POST /events is authenticated). Declared as part of the edge rather than beside it, on the same terms as identity's admin-api and agent-api's control_plane declare theirs: unset alongside an unset URL is the no-flows profile; unset with a URL set is a deployment whose facts are being refused.",
    "targets": ["compose"]

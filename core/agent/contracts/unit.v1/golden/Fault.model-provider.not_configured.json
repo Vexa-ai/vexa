@@ -1,0 +1,9 @@
+{
+  "source": "model-provider",
+  "kind": "not_configured",
+  "provider": "own",
+  "model": "mine",
+  "status": null,
+  "detail": "My endpoint runs on your own endpoint, and you have not set one.",
+  "remedy": "Set a custom endpoint under Settings → Models, or pick another model."
+}

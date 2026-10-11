@@ -1268,10 +1268,11 @@ async def test_spawn_threads_capture_signal_from_bot_context(monkeypatch, ctx, e
 # this, `POST /bots` took no such field and nothing called the after-the-fact bind endpoint, so an
 # ad-hoc meeting was owner-only by construction.
 
-def _spawn(client, body, workspaces=None):
+def _spawn(client, body, workspaces=None, writable=None):
     headers = dict(HEADERS)
     if workspaces is not None:
         headers["x-user-workspaces"] = ",".join(workspaces)
+        headers["x-user-writable-workspaces"] = ",".join(writable if writable is not None else workspaces)
     return client.post("/bots", headers=headers, json=body)
 
 
@@ -1320,6 +1321,7 @@ def _spawn_as_worker(client, body, workspaces, target):
     # A chat worker: its person is in the loop (`human`), which is the only regime a bot is sent
     # under by a delegated identity (`meeting_api/regime.py`; test_regime.py has the refusals).
     headers = {**HEADERS, "x-user-workspaces": ",".join(workspaces),
+               "x-user-writable-workspaces": ",".join(workspaces),
                "x-user-regime": "human", "x-user-delegation-workspaces": "*",
                "x-user-delegation-target": target}
     return client.post("/bots", headers=headers, json=body)
@@ -1358,3 +1360,25 @@ def test_spawn_refuses_a_workspace_id_that_is_not_a_slug(monkeypatch, bad):
     r = _spawn(_client(), {"platform": "google_meet", "native_meeting_id": "bad-aaaa-bbb",
                            "workspace_id": bad}, ["team-notes"])
     assert r.status_code == 422, r.text
+
+
+# ── binding takes write access (meeting_api.workspace_write) ───────────────────────────────────
+
+def test_spawn_refuses_to_bind_into_a_workspace_the_caller_only_reads(monkeypatch):
+    """A viewer is a member, so the membership check passes — and the bind is still refused: it
+    would publish this meeting to every member of a workspace the caller may only read."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _spawn(_client(), {"platform": "google_meet", "native_meeting_id": "view-aaaa-bbb",
+                           "workspace_id": "team-notes"}, ["team-notes"], writable=[])
+    assert r.status_code == 403 and "edit access" in r.json()["detail"]
+
+
+def test_a_workers_default_into_a_read_only_workspace_stays_private(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    headers = {**HEADERS, "x-user-workspaces": "team-notes", "x-user-writable-workspaces": "",
+               "x-user-regime": "human", "x-user-delegation-workspaces": "*",
+               "x-user-delegation-target": "team-notes"}
+    r = _client().post("/bots", headers=headers,
+                       json={"platform": "google_meet", "native_meeting_id": "ro-aaaa-bbb"})
+    assert r.status_code == 201, r.text
+    assert "workspace_id" not in (r.json().get("data") or {})

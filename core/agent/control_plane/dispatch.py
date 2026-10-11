@@ -24,6 +24,7 @@ from control_plane.workspace_membership import reconciled_memberships
 from control_plane.workspace_purpose import read_purpose
 from control_plane import delegation_refresh, delegation_revocation, global_layer
 from control_plane import model_endpoint
+from control_plane import model_providers
 from control_plane import unit_faults
 from control_plane.meeting_room import group_desk_mount, resolve_desks
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
@@ -517,6 +518,154 @@ def overlay_model_config(env: dict[str, str], config: dict, *, allowlist: str = 
     env.update(subject_route_env(base_url, api_key, (config.get("extra_body") or "").strip()))
 
 
+# ── a catalog route: the operator's model, through its provider's adapter ────────────────────
+# With a model catalog declared (VEXA_MODEL_CATALOG), the person's Settings → Models no longer picks
+# the model: their chat does, from the catalog, and `model_providers` resolves that pick into a
+# `ModelRoute`. These two functions are where a route becomes a worker's environment, beside
+# `subject_route_env` and for the same reason: the dispatch is the one writer of a worker's model
+# route, and every key either harness reads is stamped, the empty string included, so nothing of
+# the deployment's route survives into a worker whose route came from the catalog.
+
+#: The claude CLI's model tiers. A route to a gateway pins every tier to the model the person
+#: chose, so no background call asks that gateway for a model id it does not serve; a route to
+#: Anthropic itself (or a harness that never reads them) pins them empty: the CLI's own defaults.
+_CLAUDE_TIERS = ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                 "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL")
+
+
+#: Room kept for the model's answer when the entry names no output cap of its own.
+_ANSWER_RESERVE = 8192
+
+
+def context_budget(window: Optional[int], max_output_tokens: Optional[int] = None) -> Optional[int]:
+    """The request-size budget a model's context ``window`` allows: the window less room for the
+    answer (the entry's own output cap, else ``_ANSWER_RESERVE``). ``None`` when no window is known."""
+    if not window:
+        return None
+    reserve = max_output_tokens or _ANSWER_RESERVE
+    return max(window // 2, window - reserve)
+
+
+def route_env(route: "model_providers.ModelRoute") -> dict[str, str]:
+    """A catalog route as the worker env — every key, every time.
+
+    The credential goes to the route's own endpoint under the one name the endpoint expects (a
+    bearer token, or Anthropic's API-key header), every other credential name is stamped empty, and
+    the deployment's subscription token is stamped empty unless the route IS that subscription — in
+    which case the endpoint is stamped empty too, so the CLI sends it to Anthropic and nowhere else.
+    A ``custom`` route is the person's own endpoint and is stamped by ``subject_route_env``,
+    unchanged."""
+    if route.credential_source == model_providers.CRED_SUBJECT:
+        env = subject_route_env(route.base_url, route.credential, route.extra_body)
+    else:
+        key = route.credential if route.credential_source == model_providers.CRED_SECRET else ""
+        bearer = key if route.auth_header == "bearer" else ""
+        env = {
+            "ANTHROPIC_BASE_URL": route.base_url,
+            "ANTHROPIC_AUTH_TOKEN": bearer,
+            "ANTHROPIC_API_KEY": key if route.auth_header == "x-api-key" else "",
+            "CLAUDE_CODE_OAUTH_TOKEN": "",
+            "VEXA_LLM_BASE_URL": route.base_url,
+            "VEXA_LLM_API_KEY": bearer,
+            "VEXA_LLM_MODEL": "",
+            "VEXA_LLM_EXTRA_BODY": route.extra_body,
+        }
+        if route.credential_source == model_providers.CRED_SUBSCRIPTION:
+            # The backfill below (MODEL_AUTH_ENV_ALLOWLIST) brings the deployment's subscription
+            # token, and the runtime brokers its credential file — both only ever to Anthropic,
+            # because this route's endpoint is stamped empty and the CLI's default is Anthropic.
+            del env["CLAUDE_CODE_OAUTH_TOKEN"]
+    gateway = (route.harness == "claude-code" and bool(route.base_url)
+               and model_endpoint.host_of(route.base_url) != "api.anthropic.com")
+    tier = route.provider_model if gateway else ""
+    env.update({k: tier for k in _CLAUDE_TIERS})
+    env["VEXA_RUNNER"] = route.harness
+    if route.provider_model:
+        env["VEXA_AGENT_MODEL"] = route.provider_model
+    env["VEXA_AGENT_STREAM"] = "1" if route.capabilities.streaming else "0"
+    # THE CONTEXT BUDGET — the chosen model's own window, less room for its answer. NEVER STAMPED
+    # EMPTY: a stamped key wins over the runtime's forwarded one, so an empty value here erased the
+    # deployment's VEXA_AGENT_CONTEXT_TOKENS and the worker fell back to its own default (seen on
+    # app.dev: every unpicked chat's worker carried `VEXA_AGENT_CONTEXT_TOKENS=`). An entry that
+    # names no window leaves the key out, so the deployment's value applies.
+    budget = context_budget(route.capabilities.context_tokens, route.max_output_tokens)
+    if budget:
+        env["VEXA_AGENT_CONTEXT_TOKENS"] = str(budget)
+    else:
+        env.pop("VEXA_AGENT_CONTEXT_TOKENS", None)
+    # THE EFFORT, stamped every time, empty included: the claude CLI's --effort for this route (a
+    # level the adapter has checked), or nothing — never a level left over from the deployment or
+    # from Settings → Models riding into a model that did not offer it. On openai-agent the
+    # adapter has already written the level into VEXA_LLM_EXTRA_BODY in its provider's own field.
+    env["VEXA_AGENT_EFFORT"] = route.effort if route.harness == "claude-code" else ""
+    # THE ENTRY'S OUTPUT CAP, when it names one. Absent, the deployment's own
+    # VEXA_AGENT_MAX_OUTPUT_TOKENS (forwarded by the runtime) applies, or the harness's default.
+    if route.max_output_tokens:
+        env["VEXA_AGENT_MAX_OUTPUT_TOKENS"] = str(route.max_output_tokens)
+    return env
+
+
+def route_context(model_config: Optional[dict], *, allowlist: str = "",
+                  deployment_runner: str = "", deployment_model: str = "",
+                  env: Optional[dict] = None) -> "model_providers.RouteContext":
+    """What a provider adapter may consult for one person: their effective Settings → Models
+    config, agent-api's environment for ``secret_ref`` values (read now, never cached), the operator
+    gates, and the deployment's own harness and model. One constructor, so the dispatch, the
+    catalog route and the Test button resolve a model against the same facts."""
+    return model_providers.RouteContext(
+        subject_config=dict(model_config or {}),
+        secret=model_providers.secret_from_env(os.environ if env is None else env),
+        endpoint_refusal=model_endpoint.route_refusal,
+        model_allowed=lambda m: _allowlisted(m, allowlist),
+        deployment_runner=deployment_runner or units.deployment_runner(),
+        deployment_model=deployment_model)
+
+
+def apply_model_route(env: dict[str, str], model_config: Optional[dict], *,
+                      catalog: Optional["model_providers.Catalog"] = None, choice: str = "",
+                      admin=False, allowlist: str = "", friction=None, subject: str = "",
+                      session: str = "", effort: str = "") -> Optional["model_providers.ModelRoute"]:
+    """THE ONE PLACE A WORKER'S MODEL ROUTE IS DECIDED, with or without a catalog.
+
+    No catalog: the person's Settings → Models overlays the deployment env exactly as it always has
+    (``overlay_model_config``), and nothing is returned.
+
+    A catalog: ``choice`` (the chat's own pick, ``""`` for none) resolves through the provider port —
+    the chat's pick, else the person's default, else the catalog's — and the route is stamped whole
+    (``route_env``). A pick that cannot run raises ``ModelChoiceFault`` BEFORE anything is spawned:
+    the caller refuses the turn out loud rather than run it on a model the person did not choose. A
+    refused own endpoint also files the friction record a refused endpoint has always filed."""
+    cfg = model_config or {}
+    if catalog is None or catalog.empty:
+        if cfg:
+            overlay_model_config(env, cfg, allowlist=allowlist, friction=friction,
+                                 subject=subject, session=session)
+        return None
+    ctx = route_context(cfg, allowlist=allowlist, deployment_runner=env.get("VEXA_RUNNER", ""),
+                        deployment_model=env.get("VEXA_AGENT_MODEL", ""))
+    try:
+        route = catalog.route(choice, ctx, admin=admin, effort=effort)
+    except model_providers.ModelChoiceFault as fault:
+        logger.warning(json.dumps({"event": "model_choice_refused", "source": fault.source,
+                                   "kind": fault.kind, "model": fault.model,
+                                   "provider": fault.provider, "subject": subject}))
+        if fault.kind == model_providers.ENDPOINT_REFUSED and friction is not None:
+            base_url = model_endpoint.custom_base_url(cfg)
+            try:
+                friction(model_endpoint.refusal_friction(
+                    base_url, model_endpoint.refuse_reason(base_url) or fault.detail,
+                    subject=subject, session=session))
+            except Exception:  # noqa: BLE001 — a report is never worth a dispatch
+                logger.warning("model endpoint refusal could not be filed as friction")
+        raise
+    env.update(route_env(route))
+    logger.info(json.dumps({"event": "model_route", "model": route.model_id,
+                            "provider": route.provider, "adapter": route.adapter,
+                            "harness": route.harness, "credential": route.credential_source,
+                            "effort": route.effort, "subject": subject}))
+    return route
+
+
 def _worker_cwd(root: str, subject: str, mounts: list[dict], target: str = "") -> str:
     """The worker's CWD — the workspace it 'lives in', whose ``CLAUDE.md`` auto-loads as project memory.
 
@@ -606,7 +755,9 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
                    room: Optional[dict] = None,
                    scaffold_workspaces: Optional[list[str]] = None,
                    target: str = "",
-                   entry_nonce: str = "", friction=None) -> dict[str, str]:
+                   entry_nonce: str = "", friction=None,
+                   catalog: Optional["model_providers.Catalog"] = None,
+                   model_choice: str = "", admin=False, effort_choice: str = "") -> dict[str, str]:
     """Map a ``unit.v1`` dispatch to the worker's ``runtime.v1`` env (12-factor, P7). The minted token +
     the workspace LIST + the per-dispatch Stream topics travel here; the runtime injects them opaquely."""
     identity = invocation["identity"]
@@ -755,13 +906,15 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # The optional operator model gate.
     if settings.model_allowlist:
         env["VEXA_MODEL_ALLOWLIST"] = settings.model_allowlist
-    # Settings → Models (per-user/platform config from admin-api) beats the deployment env
-    # defaults stamped above, field-by-field; anything it leaves unset falls through unchanged.
-    if model_config:
-        # #1510: the friction carrier requires a session on every report; `chat_session` already
-        # defaults to "main" for a non-message trigger, so this is never empty.
-        overlay_model_config(env, model_config, allowlist=settings.model_allowlist,
-                             friction=friction, subject=subject, session=chat_session(invocation))
+    # THE MODEL ROUTE, decided once (`apply_model_route`): the chat's pick from the operator's
+    # catalog when one is declared, else Settings → Models (per-user/platform config from admin-api)
+    # over the deployment env defaults stamped above, field-by-field. A pick that cannot run raises
+    # here, before anything is spawned.
+    # #1510: the friction carrier requires a session on every report; `chat_session` already
+    # defaults to "main" for a non-message trigger, so this is never empty.
+    apply_model_route(env, model_config, catalog=catalog, choice=model_choice, admin=admin,
+                      allowlist=settings.model_allowlist, friction=friction, subject=subject,
+                      session=chat_session(invocation), effort=effort_choice)
     # The chat conversation thread (default "main") — the worker namespaces its continuity session file
     # by this so multiple threads coexist in the one user workspace. Meeting/digest paths ignore it.
     if invocation["trigger"] == "message":
@@ -858,7 +1011,7 @@ class Dispatcher:
 
     def __init__(self, settings: Settings, runtime: RuntimePort, identity: IdentityPort,
                  membership_index=None, model_config=None, warm_stream=None,
-                 workload_redis=None, delegation_store=None) -> None:
+                 workload_redis=None, delegation_store=None, catalog=None) -> None:
         self._settings = settings
         self._runtime = runtime
         self._identity = identity
@@ -884,6 +1037,9 @@ class Dispatcher:
         # AdminApiModelConfig — user pref > platform setting over the admin-api internal edge).
         # None → deployment env defaults only, exactly as before.
         self._model_config = model_config
+        # The operator's model catalog (`model_providers`, VEXA_MODEL_CATALOG), parsed and refused
+        # whole at boot. None or empty → no catalog: Settings → Models routes every turn as before.
+        self._catalog = catalog if catalog is not None else model_providers.Catalog(None)
         # PRD decision 33: where a REFUSED model endpoint is filed (F84). A callable taking the raw
         # friction record — `create_app` attaches the store's `file` once it has built it. None (a
         # test, a dispatcher built without an app) logs the refusal and files nothing; the refusal
@@ -894,6 +1050,15 @@ class Dispatcher:
     @property
     def settings(self) -> Settings:
         return self._settings
+
+    @property
+    def catalog(self) -> "model_providers.Catalog":
+        return self._catalog
+
+    def is_admin(self, subject: str) -> bool:
+        """The instance-admin check an admins-only catalog entry needs — the same one the global
+        layer uses, asked only when an entry is actually restricted."""
+        return bool(global_layer.is_admin(self._settings, str(subject)))
 
     def attach_friction(self, file_record) -> None:
         """Wire the friction sink after construction — ``create_app`` builds it (#1510:
@@ -915,7 +1080,8 @@ class Dispatcher:
 
     def dispatch(self, invocation: dict, *, room: Optional[dict] = None,
                  scaffold_workspaces: Optional[list[str]] = None,
-                 target: str = "", inbox: Optional[dict] = None) -> str:
+                 target: str = "", inbox: Optional[dict] = None, model: str = "",
+                 effort: str = "") -> str:
         """Validate + spawn. Returns the workload id. Raises on a non-conformant envelope (P18).
 
         ``inbox`` — WHAT A QUEUED ROW SHOWS (Vexa-ai/vexa#1610). The pre-delivered stream entry IS
@@ -936,6 +1102,11 @@ class Dispatcher:
         and where an agent writes must never be assertable from a request body. ``""`` (every chat
         that writes to the person's own desk, and every non-chat trigger) leaves the dispatch
         byte-identical to before.
+
+        ``model`` is the chat's own pick from the operator's model catalog — a catalog id, never a
+        free-form model name, and a dispatcher argument for the reasons ``target`` is. ``""`` (a
+        chat nobody picked for, and every non-chat trigger) runs on the person's default. A pick
+        that cannot run raises ``model_providers.ModelChoiceFault`` before anything is spawned.
 
         ``context.session`` (the chat conversation thread) is an agent-api routing hint, not part of the
         published unit.v1 wire contract — it is stripped before the schema check so the envelope stays
@@ -973,7 +1144,9 @@ class Dispatcher:
                              entry_nonce=entry_nonce,
                              model_config=model_config, room=room,
                              scaffold_workspaces=scaffold_workspaces, target=target,
-                             friction=self._friction)
+                             friction=self._friction, catalog=self._catalog, model_choice=model,
+                             effort_choice=effort,
+                             admin=lambda: self.is_admin(identity["subject"]))
         self._record_delegation(uid, env)
         if self._workload_redis is not None:
             # The worker connects as its unit's own Redis user, never with the service connection.

@@ -81,7 +81,7 @@ def _validate(client, body):
 
 def test_the_response_model_declares_the_whole_wire_in_one_place():
     assert set(validate_mod.ValidatedIdentity.model_fields) == BASE_FIELDS | {
-        "webhook_url", "webhook_secret", "webhook_events", "workspaces", "delegation",
+        "webhook_url", "webhook_secret", "webhook_events", "workspaces", "writable_workspaces", "delegation",
         "person_is_admin"}
     assert set(validate_mod.DelegationCeiling.model_fields) == {"regime", "workspaces", "target"}
     assert set(validate_mod.ValidateRequest.model_fields) == {"token"}

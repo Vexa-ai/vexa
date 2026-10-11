@@ -28,6 +28,12 @@ and links.
 - **Stop bot** takes the bot out of the meeting. It is shown while the bot is requested, joining,
   waiting, active or stopping, and only to the meeting's owner.
 
+### Share it
+
+The owner presses **Share** in the meeting's header to invite people by email, add the meeting's
+workspace, see who has access and take it back, live or after the meeting. The recording is shared
+only if the owner allows it. See [Share a meeting](/how-to/share-a-meeting).
+
 ### Highlight
 
 Press **Highlight** on the transcript. The agent picks out the people, companies and projects the
@@ -163,7 +169,7 @@ go to the meetings side, everything else to the agent. The meetings routes are d
 |---|---|---|
 | **P2** contracts · **P6** one front door | the browser calls only the terminal; meeting routes are meeting-api's sealed `api.v1` | `gate:isolation`, `gate:exports`, `gate:contract-conformance` |
 | **P18** fail loud | an unreachable gateway is a `502`; a stream failure arrives as a `stream-error` event; a recording that cannot be made seekable is a typed fault; each control says when it failed | ungated: reviewed |
-| **P20** authorize every access | agent-api and meeting-api check every read: the owner, a share recipient, or a member of the meeting's workspace; recordings and delete are owner-only | `gate:access` and the deny tests below |
+| **P20** authorize every access | agent-api and meeting-api check every read: the owner, a share recipient, or a member of the meeting's workspace; a recording also needs the owner's permission for anyone but the owner; delete is owner-only | `gate:access` and the deny tests below |
 | **P21** state from evidence | the bot card reports what the bot is observed doing, including *admitted · no words for …* | ungated: reviewed |
 | **P22** guaranteed teardown | **Stop bot** uses meeting-api's stop route, which ends the bot directly when it cannot confirm the bot is listening | the meeting-lifecycle eval under `gate:python` |
 | **P23** one writer per carrier | meeting-api is the only writer of the transcript stream; agent-api and the terminal read it, and the terminal renders it with one engine | `gate:dataflow` |
@@ -171,8 +177,9 @@ go to the meetings side, everything else to the agent. The meetings routes are d
 ### Security
 
 **Who can do what.** You can open a meeting you own, a meeting shared with you, and a meeting that
-belongs to a workspace you are a member of. Only the owner can play the recording, stop the bot or
-delete the meeting's data.
+belongs to a workspace you are a member of. Anyone but the owner can play the recording only if the
+owner allowed it when sharing ([Share a meeting](/how-to/share-a-meeting)). Only the owner can stop
+the bot, delete the meeting's data or change who has access.
 
 **Protections.**
 
@@ -195,6 +202,7 @@ delete the meeting's data.
 | `core/agent/tests/test_deleted_meeting_transcript.py` · `test_the_live_view_refuses_a_deleted_meeting` | deleted meetings |
 | `core/agent/tests/test_transcript_terms_route.py` · `test_a_meeting_the_caller_may_not_read_is_refused` | Highlight |
 | `core/agent/tests/test_meeting_mint.py` · `test_the_mint_route_refuses_a_meeting_the_caller_does_not_own` | meeting pages |
+| `core/meetings/services/meeting-api/tests/test_meeting_share_access.py` · `test_recording_needs_the_owners_permission_as_well_as_access`, `test_recording_for_a_workspace_member_follows_the_same_rule` | a shared recording needs the owner's permission |
 | `core/meetings/services/meeting-api/tests/test_completed_artifact_deletion.py` · `test_non_owner_gets_indistinguishable_404_and_cannot_delete_any_artifact`, `test_completed_artifact_delete_is_idempotent_and_active_lifecycle_is_not_deleted` | delete |
 | `core/meetings/services/meeting-api/tests/test_recordings_list_page.py` · `test_the_filter_still_only_sees_the_callers_own_recordings` | recordings |
 | `core/meetings/services/meeting-api/tests/test_collector_api.py` · `test_get_transcript_other_user_is_404` | transcripts |

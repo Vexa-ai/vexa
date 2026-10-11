@@ -23,6 +23,7 @@ import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, w
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { presentError } from "./apiClient";
+import { ModelPicker } from "./ModelPicker";
 import { promptCarriesActiveContext } from "./surfaceSync";
 import { isPageIntent, type ChatIntent } from "./chatIntent";
 import { surfaceOf, type FrictionSurface } from "./frictionApi";
@@ -527,7 +528,18 @@ function AttachmentChips({ attachments, onRemove }: { attachments: ComposerAttac
   if (attachments.length === 0) return null;
   return (
     <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6, minWidth: 0 }}>
-      {attachments.map((a) => (
+      {attachments.map((a) => a.previewUrl ? (
+        // AN IMAGE IS SHOWN AS ITSELF (the Claude Code composer): a thumbnail above the text,
+        // removed from its corner.
+        <span key={a.id} title={a.file.name} data-attachment-thumb
+          style={{ position: "relative", width: 56, height: 56, flex: "none", borderRadius: 8, overflow: "hidden", border: "1px solid var(--line2)", background: "var(--bg)" }}>
+          <img src={a.previewUrl} alt={a.file.name || "image"} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+          <button aria-label={`Remove ${a.file.name || "attachment"}`} title="Remove" type="button" onClick={() => onRemove(a.id)}
+            style={{ position: "absolute", top: 3, right: 3, width: 18, height: 18, borderRadius: 999, border: "none", background: "var(--panel)", color: "var(--t2)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, boxShadow: "0 1px 3px rgba(0,0,0,.3)" }}>
+            <Icon name="x" size={10} />
+          </button>
+        </span>
+      ) : (
         <span key={a.id} title={a.file.name}
           style={{ display: "inline-flex", alignItems: "center", gap: 6, maxWidth: 210, minWidth: 0, border: "1px solid var(--line2)", borderRadius: 7, background: "var(--panel2)", color: "var(--t2)", padding: "3px 5px", fontSize: 12, lineHeight: 1.2 }}>
           {a.previewUrl
@@ -1724,7 +1736,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       <div
         onDragOver={(e) => e.preventDefault()}
         onDrop={onDrop}
-        style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}
+        style={{ border: "1px solid var(--line2)", borderRadius: 14, background: "var(--panel)", padding: "10px 10px 6px 12px", display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}
       >
         {((advertiseFocus && contextRef) || (!minutesOnly() && (ambientEligible || includeSchedule === true)) || (bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today"))) && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
@@ -1791,29 +1803,32 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           onChange={(e) => { addFiles(Array.from(e.target.files ?? [])); e.currentTarget.value = ""; }}
           style={{ display: "none" }}
         />
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 9 }}>
-          <span style={{ fontFamily: "var(--mono)", color: "var(--t3)", fontSize: 13, height: 30, display: "flex", alignItems: "center", flex: "none" }}>/</span>
-          <textarea
-            ref={inputRef}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            onInput={(e) => resizeComposerTextarea(e.currentTarget)}
-            onPaste={onPaste}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter" || e.shiftKey) return;
-              e.preventDefault();
-              void onSubmit();
-            }}
-            placeholder={contextRef?.kind === "meeting" && activeMeeting
-              ? MODE_PLACEHOLDER[meetingPhase(activeMeeting)]
-              : "Type / for skills, or ask the agent…"}
-            disabled={uploading}
-            rows={1}
-            style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, lineHeight: "20px", minWidth: 0, minHeight: 28, maxHeight: MAX_TEXTAREA_HEIGHT, resize: "none", overflowY: "hidden", padding: "4px 0", margin: 0, fontFamily: "inherit" }}
-          />
+        {/* THE CLAUDE CODE COMPOSER (founder 2026-10-10): the text on top at full width, growing
+            with what is typed; under it one toolbar — attach and dictate as quiet icons on the
+            left, the chat's model and effort as plain text and send on the right. The toolbar
+            wraps at narrow widths and the model name truncates before anything else gives. */}
+        <textarea
+          ref={inputRef}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onInput={(e) => resizeComposerTextarea(e.currentTarget)}
+          onPaste={onPaste}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || e.shiftKey) return;
+            e.preventDefault();
+            void onSubmit();
+          }}
+          placeholder={contextRef?.kind === "meeting" && activeMeeting
+            ? MODE_PLACEHOLDER[meetingPhase(activeMeeting)]
+            : "Type / for skills, or ask the agent…"}
+          disabled={uploading}
+          rows={2}
+          style={{ width: "100%", boxSizing: "border-box", background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, lineHeight: "20px", minWidth: 0, minHeight: 44, maxHeight: MAX_TEXTAREA_HEIGHT, resize: "none", overflowY: "hidden", padding: "2px 2px", margin: 0, fontFamily: "inherit" }}
+        />
+        <div data-composer-toolbar style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 4, minWidth: 0 }}>
           <button type="button" aria-label="Attach files" title="Attach files" disabled={busy || uploading} onClick={() => fileInputRef.current?.click()}
-            style={{ background: "transparent", color: "var(--t3)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: busy || uploading ? "default" : "pointer", flex: "none", opacity: busy || uploading ? 0.6 : 1 }}>
-            <Icon name="paperclip" size={15} />
+            style={{ background: "transparent", color: "var(--t3)", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: busy || uploading ? "default" : "pointer", flex: "none", opacity: busy || uploading ? 0.6 : 1 }}>
+            <Icon name="plus" size={16} />
           </button>
           <button type="button"
             aria-label={mic === "rec" ? "Stop recording" : "Dictate"}
@@ -1823,7 +1838,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             style={{
               background: mic === "rec" ? "var(--accentbg)" : "transparent",
               color: mic === "rec" ? "var(--accent)" : "var(--t3)",
-              border: `1px solid ${mic === "rec" ? "var(--accent)" : "var(--line2)"}`,
+              border: "none",
               width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
               cursor: uploading || mic === "stt" ? "default" : "pointer", flex: "none", opacity: mic === "stt" ? 0.6 : 1,
             }}>
@@ -1831,9 +1846,14 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
               ? <span className="vx-op-spin" style={{ width: 12, height: 12, border: "2px solid var(--line2)", borderTopColor: "var(--t2)", borderRadius: "50%", display: "block" }} />
               : <Icon name="mic" size={15} />}
           </button>
-          {busy
-            ? <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>
-            : <button aria-label="Send" disabled={uploading} onClick={() => void onSubmit()} style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: uploading ? "default" : "pointer", flex: "none", opacity: uploading ? 0.7 : 1 }}><Icon name="send" size={16} /></button>}
+          <div style={{ flex: "1 1 auto", minWidth: 0, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
+            {/* THE MODEL THIS CHAT RUNS ON, AND ITS EFFORT (ADR-0043) — beside send, because the next
+                turn is when a pick takes effect. Absent on a deployment with no catalog. */}
+            <ModelPicker session={session} />
+            {busy
+              ? <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>
+              : <button aria-label="Send" disabled={uploading} onClick={() => void onSubmit()} style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: uploading ? "default" : "pointer", flex: "none", opacity: uploading ? 0.7 : 1 }}><Icon name="send" size={16} /></button>}
+          </div>
         </div>
       </div>
     </>

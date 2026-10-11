@@ -18,6 +18,15 @@ SDKs, and any client build against.
   scopes `GET /transcripts/{platform}/{native_meeting_id}` takes (`tx`); otherwise `insufficient_scope`
   and the socket stays open. Authorization is delegated to the collector
   (`POST /ws/authorize-subscribe`, which checks the same scopes) — you only receive meetings your key may read.
+- **Live re-authorization:** access is re-checked while the socket is open, not only at subscribe.
+  Every ~15 s the gateway asks `POST /ws/authorize-subscribe` again for the meetings this socket is
+  subscribed to; a meeting that no longer passes (the owner removed the reader, turned a share link
+  off, or a workspace membership ended) has its fan-in stopped and the client receives
+  `{type:"error", error:"subscription_revoked", details:{platform, native_id}}` — the socket stays
+  open. The key is re-resolved on the same tick: a membership change re-derives the workspace status
+  channels, and a key that no longer resolves gets `invalid_api_key` and close `4401`. A failed
+  authorize hop is retried on the next tick; two failures in a row stop the per-meeting
+  subscriptions with `authorization_call_failed` (fail closed), and the client may subscribe again.
 - **Server → client (control):** `Subscribed` `{type:"subscribed", meetings:[…]}`, `Unsubscribed`,
   and `Error` `{type:"error", error:<code>, details?}`. `error` is a fixed code (a formal `enum` in
   the schema). Control/auth codes: `missing_api_key`, `invalid_json`, `invalid_subscribe_payload`,

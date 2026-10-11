@@ -337,6 +337,9 @@ class ModelPrefsUpdate(BaseModel):
     extra_body: Optional[str] = None
     effort: Optional[str] = None  # claude-code reasoning-effort pin (low|medium|high|xhigh); empty = unset
     runner: Optional[str] = None  # the harness that runs workspace turns; empty = the deployment's
+    # the model-catalog id (ADR-0043) new and unpicked chats run on; empty = the organisation's
+    # default, else the catalog's
+    default_model: Optional[str] = None
 
 
 class TranscriptionPrefsUpdate(BaseModel):
@@ -663,7 +666,7 @@ def create_app() -> FastAPI:
         return {"mode": prefs.get("mode"), "model": prefs.get("model"),
                 "base_url": prefs.get("base_url"),
                 "effort": prefs.get("effort"), "runner": prefs.get("runner"),
-                "extra_body": prefs.get("extra_body"),
+                "extra_body": prefs.get("extra_body"), "default_model": prefs.get("default_model"),
                 "api_key_set": bool(prefs.get("api_key")),
                 "api_key": _mask_secret(prefs.get("api_key"))}
 
@@ -1003,6 +1006,7 @@ def create_app() -> FastAPI:
             "base_url": prefs.get("base_url"),
             "effort": prefs.get("effort"),
             "runner": prefs.get("runner"),
+            "default_model": prefs.get("default_model"),
             "api_key_set": bool(prefs.get("api_key")),
             "api_key": _mask_secret(prefs.get("api_key")),
         }
@@ -1215,6 +1219,21 @@ def create_app() -> FastAPI:
         if not user:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
         return {"id": user.id}
+
+    # The reverse of the door above: a subject's verified address, for meeting-api to name the
+    # people a meeting is shared with on its OWNER's access list (Vexa-ai/vexa#1801). Readers who
+    # redeemed a share before meeting-api kept a roster carry only an id; this is how that roster is
+    # backfilled. Internal tier only, like every route on this prefix — an owner's view never
+    # reaches identity directly, and a subject with no address answers 404.
+    @app.get("/internal/users/{user_id}/email", include_in_schema=False)
+    async def internal_user_email(user_id: int, request: Request,
+                                  db: AsyncSession = Depends(get_db)):
+        # NO DEV-MODE BYPASS: this reads one named person's address by path id (R1801-9).
+        check_internal_no_dev_bypass(request)
+        user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+        if not user or not user.email:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        return {"id": user.id, "email": user.email}
 
     @app.get("/internal/users/{user_id}/is-admin", include_in_schema=False)
     async def user_is_admin(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):

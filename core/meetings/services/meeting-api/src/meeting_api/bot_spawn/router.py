@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 
 from ..collector.meeting_link import parse_meeting_url
 from ..regime import require_person
+from ..workspace_write import require_writable, writable_workspaces
 from ..service_authority import (
     ServiceAuthorityDenied,
     ServiceAuthorityUnavailable,
@@ -482,13 +483,18 @@ def build_router(
         # is that workspace's meeting when the caller is a member of it — the target may be their own
         # desk, which is not a membership, and that is a private meeting as before. `personal` (or
         # `desk`) keeps any bot private explicitly.
+        #
+        # A MEMBER WHO MAY ONLY READ cannot put a meeting into the workspace (`workspace_write`):
+        # binding publishes it to every member, which is a write. A worker's default follows the same
+        # rule — a read-only target leaves the bot private rather than failing the spawn.
         workspace_id = body.get("workspace_id")
         member_of = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
+        may_write = writable_workspaces(request.headers)
         if isinstance(workspace_id, str) and workspace_id.strip() in PRIVATE_WORKSPACE_WORDS:
             workspace_id = None
         elif workspace_id is None:
             target = (x_user_delegation_target or "").strip()
-            workspace_id = target if target and target in member_of else None
+            workspace_id = target if target and target in member_of and target in may_write else None
         elif not isinstance(workspace_id, str) or not workspace_id.strip():
             raise HTTPException(
                 status_code=422, detail="'workspace_id' must be a non-empty string")
@@ -497,6 +503,7 @@ def build_router(
             if workspace_id not in member_of:
                 raise HTTPException(
                     status_code=403, detail=f"not a member of workspace '{workspace_id}'")
+            require_writable(workspace_id, request.headers)
 
         try:
             meeting = await request_bot(

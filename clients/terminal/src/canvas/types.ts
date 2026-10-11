@@ -51,7 +51,7 @@ export interface MeetingDocLink {
 /** A fault in the meeting FEED. There is no "model" kind: the product runs no model calls of its
  *  own beside the agent (PRD decision 34), so there is no inference to fail here. */
 export interface MeetingDiagnosticIssue {
-  kind: "stream" | "parse";
+  kind: "stream" | "parse" | "access";
   message: string;
   status?: number;
   at?: number;

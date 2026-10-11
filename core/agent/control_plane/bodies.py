@@ -146,6 +146,19 @@ class ResetBody(BaseModel):
     room_meeting_id: Optional[str] = None      # accepted-and-ignored (reset mounts nothing)
 
 
+class ChatModelBody(BaseModel):
+    """``POST /api/chat/model`` — pick which of the operator's models one chat runs on."""
+    model_config = {"extra": "forbid"}
+    session: Optional[SessionId] = Field(default=None,
+                                         description="the chat session; the default chat when absent")
+    model: str = Field(max_length=64, description="a model id from GET /api/models/catalog; "
+                                                  "empty puts the chat back on your default")
+    effort: Optional[str] = Field(default=None, max_length=16,
+                                  description="an effort level the model lists in its "
+                                              "capabilities.reasoning_efforts; empty or absent runs "
+                                              "it at its default_effort")
+
+
 class RoutineCreate(BaseModel):
     """The Routines surface / ``/routine`` create form — compiles to a routine.v1 + a schedule.v1 job."""
     model_config = {"extra": "forbid"}

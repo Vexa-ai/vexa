@@ -21,6 +21,17 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pathlib import Path
 import json
+import time
+
+#: How often an OPEN live stream re-asks whether its caller may still read the meeting, and how long
+#: it waits before asking a second time when the first answer is no. The redis read between checks
+#: blocks for at most `LIVE_READ_BLOCK_MS`, so a removed person's live view ends within
+#: RECHECK + BLOCK + RETRY ≈ 17 s — never the ~30 s a 15 s block on top of a 15 s re-check allowed
+#: (R1801-6). Pings still go out every `LIVE_PING_EVERY_MS` of quiet, as before.
+LIVE_ACCESS_RECHECK_SEC = 10.0
+LIVE_ACCESS_RETRY_SEC = 2.0
+LIVE_READ_BLOCK_MS = 5000
+LIVE_PING_EVERY_MS = 15000
 
 
 def build(**d) -> APIRouter:
@@ -268,6 +279,24 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=403, detail="session_uid does not match this meeting")
 
         resume_t = _decode_sse_cursor(request.headers.get("last-event-id"))
+        within = _within(request)
+
+        def still_allowed() -> bool:
+            """ACCESS IS RE-CHECKED WHILE THE STREAM IS OPEN, not only when it opens. The owner can
+            remove a person, or a workspace member can be removed, mid-meeting; the same access union
+            that admitted the caller (`_meeting_access`, meeting-api's one decision) is asked again
+            every `LIVE_ACCESS_RECHECK_SEC`. A refusal is asked twice, a moment apart, so one failed
+            hop to meeting-api does not end a stream the caller is still entitled to — and if it is
+            refused twice the stream ends with `access-revoked`, never with silence."""
+            def allowed() -> bool:
+                row = _meeting_access(subject, meeting_id, within=within)
+                # A transcript the owner DELETED while the stream was open ends it too: the row
+                # survives as history, so access alone would still pass (R1801-6).
+                return row is not None and not transcript_erased(row)
+            if allowed():
+                return True
+            time.sleep(LIVE_ACCESS_RETRY_SEC)
+            return allowed()
 
         def gen():
             import redis
@@ -287,6 +316,7 @@ def build(**d) -> APIRouter:
             # producer gone (PRD decision 34) the only thing that can still arrive is a resumed
             # session, and one poll is enough to see it.
             ending = False
+            checked_at = time.monotonic()
 
             def cursor():
                 return _encode_sse_cursor(last, tkey)
@@ -307,16 +337,24 @@ def build(**d) -> APIRouter:
                     yield ({"type": "retract", "segment_ids": ids}, cursor())
 
             while True:
-                resp = r.xread(last, count=500, block=1500 if ending else 15000)
+                if time.monotonic() - checked_at >= LIVE_ACCESS_RECHECK_SEC:
+                    if not still_allowed():
+                        yield ({"type": "access-revoked",
+                                "message": "You no longer have access to this meeting."}, cursor())
+                        return
+                    checked_at = time.monotonic()
+                block = 1500 if ending else LIVE_READ_BLOCK_MS
+                resp = r.xread(last, count=500, block=block)
                 if not resp:
                     if ending:
                         live.drop(session_uid)  # leaves the terminal's live-meetings feed
                         yield ({"type": "meeting-end"}, cursor())
                         return
-                    idle += 15000
+                    idle += block
                     if idle >= 600000:
                         return
-                    yield ({"type": "ping"}, cursor())
+                    if idle % LIVE_PING_EVERY_MS < block:
+                        yield ({"type": "ping"}, cursor())
                     continue
                 idle = 0
                 for stream, entries in resp:

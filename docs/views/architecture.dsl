@@ -53,6 +53,7 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   contract routine.v1
   contract task.v1
   contract tool.v1
+  contract models.v1
   contract unit.v1
   contract credential-broker.v1
   service credentials-broker
@@ -153,6 +154,8 @@ edges:
   meeting-api -write-> object-store
   meeting-api -req-> runtime  # meeting-api drives the kernel with Authorization: Bearer RUNTIME_API_TOKEN (runtime.v1 CallerCredential): POST /workloads to spawn a bot, GET /workloads/{id} to read it and DELETE /workloads/{id} to tear it down; its RuntimeEvents come back signed on rt-ma
   meeting-api -req-> admin-api  # GET /internal/calendar-configs discovers secret-gated calendar connections for sync and disconnect cleanup
+  meeting-api -req-> admin-api  # GET /internal/users/{id}/email (X-Internal-Secret) answers {id, email} for a reader of a shared meeting, asked only on the OWNER's access view (GET /meetings/{id}/access) for readers who redeemed before meeting-api kept a roster; meeting-api writes the address into that meeting's own data.share_viewers (one writer) and a failed lookup leaves the reader listed by id (collector/reader_directory.py)
+  meeting-api -req-> admin-api  # GET /internal/users/{id}/memberships (X-Internal-Secret), read once per calendar sync run: a new occurrence of a calendar series inherits the series' workspace only while its owner still holds contributor or owner there (R1801-3); an unanswered lookup is 'may write nowhere' and the occurrence is created private (calendar_sync/runner.py, collector/reader_directory.py)
   meeting-api -req-> service-authority  # optional signed service-authority.v1 admit/continue decision; unset is explicit OSS allow-all, configured failure is closed
   meeting-api -req-> system-webhook  # optional signed terminal webhook.v1 delivery to a boot-frozen operator destination; customer webhook SSRF policy remains separate
   agent-api -read-> segments-stream  # the transcription watcher's group agent_copilot: XREADGROUP + XACK each raw entry as a hint only, naming which verified per-meeting feed (tc-stream) to read; it acts on nothing it reads here

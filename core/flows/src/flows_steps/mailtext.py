@@ -25,7 +25,7 @@ import re
 from typing import Optional
 
 from . import policies
-from .common import ws_file
+from .common import AgentDomainAbsent, ws_file
 
 # The fixed half. Not admin-editable, deliberately. The same sentence is in the MCP instructions
 # so the chat and the mail introduce the product identically -- a person who reads one and then
@@ -168,6 +168,20 @@ DEFAULTS: dict[str, str] = {
         "\n"
         "The link below is yours alone — it signs you in, so please do not forward it.\n"
     ),
+    # BYTE-FOR-BYTE `behavior/mail/meeting-share.md`. Read by `mail_meeting_share` with two tokens
+    # of its own, `{{inviter}}` and `{{title}}`; no URL — the step appends the link.
+    "meeting-share": (
+        "subject: {{inviter}} shared {{title}} with you\n"
+        "---\n"
+        "I am Vexa, the meeting assistant at {{company}}. {{service}}\n"
+        "\n"
+        "{{inviter}} shared {{title}} with you. While it runs you can follow the live transcript; "
+        "afterwards you can read the transcript and the notes.\n"
+        "\n"
+        "{{visibility}}\n"
+        "\n"
+        "The link below works only for this address — it signs you in, so please do not forward it.\n"
+    ),
 }
 
 
@@ -182,6 +196,21 @@ def mailbox_address() -> str:
     return (os.environ.get("VEXA_MAIL_ADDR") or "").strip() or "the Vexa mailbox for this deployment"
 
 
+def _global_file(uid: str, path: str) -> Optional[str]:
+    """A `_global` file, or None when this deployment runs no agent domain to hold one.
+
+    The company layer lives in agent-api's workspace store. A deployment without it is a PROFILE,
+    not a fault: it has no admin-written README and no template overrides, so the answer is the one
+    an empty `_global` gives — the baked wording and "this organisation" — which is how a mail
+    whose step reaches no domain (`mail_meeting_share`) still goes out there. Only the absent
+    domain is absorbed; any other failure of the door still raises, so a broken agent-api is never
+    mistaken for one that was not deployed."""
+    try:
+        return ws_file(uid, path, "_global")
+    except AgentDomainAbsent:
+        return None
+
+
 def company_name(uid: str) -> str:
     """WHO THIS VEXA BELONGS TO, read from the company layer the admin wrote.
 
@@ -189,7 +218,7 @@ def company_name(uid: str) -> str:
     `_global`, or the seed's unwritten placeholder. Read per send rather than cached: an admin who
     corrects the company name expects the next mail to carry the correction, and mail volume is
     nowhere near a rate at which this read matters."""
-    readme = ws_file(uid, "README.md", "_global") or ""
+    readme = _global_file(uid, "README.md") or ""
     if UNWRITTEN_MARKER in readme:
         return COMPANY_UNSET
     for line in readme.splitlines():
@@ -221,7 +250,7 @@ def render(name: str, uid: str, values: Optional[dict] = None) -> tuple[str, str
     product differently; everything else comes from `values`. An unknown `{{token}}` is left
     STANDING rather than blanked: a visible `{{organizer}}` in a test inbox is a bug report, and a
     silently empty sentence is not."""
-    raw = ws_file(uid, f"mail/{name}.md", "_global")
+    raw = _global_file(uid, f"mail/{name}.md")
     # An override that is EMPTY, or only whitespace, is an accident and not an instruction. `or`
     # alone did not catch it -- `"   \n\n"` is truthy in Python, so an admin who cleared the file
     # instead of editing it would have mailed a stranger a blank introduction with a blank subject,

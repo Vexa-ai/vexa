@@ -4,6 +4,7 @@
  *  {id, platform, native_meeting_id, status, start_time, end_time, data:{recordings:[...]}}, newest-first.
  *  Live meetings carry a `session_uid` so the tab subscribes to the copilot stream; past meetings open a
  *  recorded view whose transcript is fetched on demand from `GET /api/transcripts/{platform}/{native}`. */
+import { sharedWithCount } from "./meetingShareApi";
 import { useSyncExternalStore } from "react";
 import type { MeetingMock, TranscriptLine } from "./meetingModel";
 import { onGatewayWSConnected, onMeetingStatus } from "./gatewayWS";
@@ -26,6 +27,8 @@ export interface MeetingRowDTO {
     // planned-meeting keys (POST /meetings / calendar sync)
     title?: string;
     workspace_id?: string;
+    // the reader ids this meeting is shared with — meeting-api ships it to the OWNER only
+    transcript_viewers?: unknown[];
     calendar_uid?: string;
     auto_join?: boolean;
     auto_join_error?: string;
@@ -147,6 +150,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     status: live ? "live" : "past",
     live_status: raw,
     shared: !!d.shared,   // owned by someone else, surfaced via a share/membership (data.shared)
+    shared_with: d.shared ? undefined : sharedWithCount(d.data),
     scheduled_at: d.data?.scheduled_at ?? undefined,
     workspace_id: d.data?.workspace_id ?? undefined,
     calendar_uid: d.data?.calendar_uid ?? undefined,

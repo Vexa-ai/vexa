@@ -75,6 +75,7 @@
           "how-to/plan-a-meeting",
           "how-to/live-copilot",
           "how-to/post-meeting-report",
+          "how-to/share-a-meeting",
           "chatgpt-transcript-share-links"
         ]
       },
@@ -129,6 +130,7 @@
           "connections",
           "upgrade-from-minio",
           "authenticated-bots",
+          "model-catalog",
           "model-credentials-licensing",
           "agent-web-search",
           "agent-tool-calls",

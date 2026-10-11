@@ -72,6 +72,7 @@ curl "$API_BASE/user/models" -H "X-API-Key: $API_KEY"
   "base_url": "https://api.example.com/v1",
   "effort": "medium",
   "runner": "claude-code",
+  "default_model": "qwen3-32b",
   "api_key_set": true,
   "api_key": "********1f4c"
 }
@@ -124,9 +125,19 @@ Returns the same masked shape as the read, with **200 OK**.
   as an opaque slug — an unknown one is dropped back to the deployment default at dispatch, not
   refused here.
 </ParamField>
+<ParamField body="default_model" type="string">
+  The [model catalog](/model-catalog) id that new chats, and chats you have not picked a model for,
+  run on. Stored as an id and not checked against the catalog here. At dispatch, an id that is gone
+  from the catalog, or is not open to you, is skipped in favour of the organisation's default, then
+  the catalog's. A value that is not shaped like a catalog id (lowercase letters, digits, `.`, `_`,
+  `-`) returns **422**. The organisation's default is the same field on the admin's platform
+  settings. With a catalog declared, `model` and `runner` no longer pick a turn's model: they
+  configure your own-endpoint entry.
+</ParamField>
 
-Only three things return **422** on this write: a `mode` outside `subscription`/`custom`, a `base_url`
-that is not an `http(s)` URL with a hostname, and any field over 2,048 characters. `effort` and
+Only four things return **422** on this write: a `mode` outside `subscription`/`custom`, a `base_url`
+that is not an `http(s)` URL with a hostname, a `default_model` that is not shaped like a catalog id,
+and any field over 2,048 characters. `effort` and
 `runner` are not validated against a list at this tier, and an unrecognized field name is ignored
 rather than refused.
 

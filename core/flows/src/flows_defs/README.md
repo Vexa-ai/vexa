@@ -13,7 +13,7 @@ anything when the **agent domain is not deployed** (PRD decisions 40.6/40.7).
 
 | | Flows | With no agent domain |
 |---|---|---|
-| `production.py` | `invite_intake` · `post_meeting` · `live_meeting` | they still run — the invite is accepted, the bot joins, the meeting is recorded, and the agent-reaching steps answer `agent:not_present` |
+| `production.py` | `invite_intake` · `post_meeting` · `live_meeting` · `meeting_share` | they still run — the invite is accepted, the bot joins, the meeting is recorded, and the agent-reaching steps answer `agent:not_present` |
 | `production_agent.py` | `meeting_prep` · `email_chat` · `desk_setup` · `desk_claim` · `workspace_invite` | **not registered at all** — a conversation with an agent, two cards on a desk and a fact only agent-api publishes have nothing to degrade to |
 
 The split is by **whether the flow still does anything**, and `workspace_invite`

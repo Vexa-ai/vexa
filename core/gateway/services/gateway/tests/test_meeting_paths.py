@@ -34,7 +34,8 @@ _ROWS = [(r["method"], r["path"], r.get("upstream", r["path"])) for r in _MEETIN
 _TEXT_ROWS = [(m, p, u) for (m, p, u) in _ROWS
               if "{platform}" in p or "{native_meeting_id}" in p]
 _VALUES = {"platform": "google_meet", "native_meeting_id": "abc-defg-hij", "meeting_id": "12",
-           "recording_id": "34", "media_file_id": "56", "calendar_id": "work-1"}
+           "recording_id": "34", "media_file_id": "56", "calendar_id": "work-1",
+           "grant_id": "a1b2c3d4", "viewer_id": "78"}
 
 
 def _fill(template: str, **override: str) -> str:

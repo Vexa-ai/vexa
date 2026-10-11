@@ -275,11 +275,9 @@ def _provider_fault(text: str, sdk_error: str, model: str,
     """The typed fault for what the CLI reported, against the endpoint it was pointed at. ``status``
     is the result's ``api_error_status`` when the CLI wrote one — the provider's HTTP status, read
     as such rather than out of the prose."""
-    host = provider_host()
     code = status if isinstance(status, int) and not isinstance(status, bool) and status >= 400 else None
     return provider_faults.classify(status=code, text=text or None, sdk_error=sdk_error or None,
-                                    model=model,
-                                    provider=host if host != "unknown" else "api.anthropic.com")
+                                    model=model, provider=provider_host())
 
 
 #: The settings every launch adds on top of the user scope: no hooks run in the worker.

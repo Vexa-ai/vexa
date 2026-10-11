@@ -459,3 +459,23 @@ export function navigateView(workspace: string | undefined, path: string): void 
   if (!detail.path || detail.path.split("/").includes("..")) return;
   window.dispatchEvent(new CustomEvent(VIEW_NAVIGATE_EVENT, { detail }));
 }
+
+/** Set beside `vexa.openMeetingRef` by a share redeem (`app/App.tsx` `stashSharedMeeting`): the
+ *  reader arrived through somebody else's link to one meeting, and is spent on that arrival. */
+export const SHARED_ARRIVAL_KEY = "vexa.openMeetingFront";
+
+/** WHERE A SHARE ARRIVAL LANDS — the meeting's own page, never the reader's desk.
+ *
+ *  The room's strip leads with the reader's home (their desk), and a fresh chat opens on its first
+ *  tab — so somebody who followed a link to a meeting landed on their own README, with the meeting
+ *  a tab away and nothing on screen saying it was shared with them. The meeting page is the
+ *  transcript canvas (it carries the meeting's header: title, status, "Shared with you"); a room
+ *  whose note renders the transcript inside itself has no canvas tab, and then the meeting's own
+ *  page is that note. `null` when this is not a share arrival, or the room has neither — the
+ *  caller's usual rule then decides, exactly as before. */
+export function sharedArrivalFront(pages: Page[], front?: "meeting"): Page | null {
+  if (front !== "meeting") return null;
+  return pages.find((pg) => pg.kind === "meeting")
+    ?? pages.find((pg) => pg.permanent)
+    ?? null;
+}

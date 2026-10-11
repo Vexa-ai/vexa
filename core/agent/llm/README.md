@@ -131,6 +131,13 @@ subject's endpoint also needs the subject's own key: without one the dispatch re
 (`model_endpoint.route_refusal`, which the Test button asks too) and the deployment route applies.
 openai-agent reads no file and sends no credential to a keyless endpoint.
 
+**With a model catalog (`VEXA_MODEL_CATALOG`, ADR-0043), the chat's pick decides the route** — and
+the same dispatch stamps it, whole: `VEXA_RUNNER`, `VEXA_AGENT_MODEL`, every `ANTHROPIC_*` and
+`VEXA_LLM_*` name (the provider's key under the one name its endpoint expects, every other one
+empty), `VEXA_AGENT_STREAM` / `VEXA_AGENT_CONTEXT_TOKENS` from the model's capabilities, and the
+claude CLI's model tiers (pinned to the chosen model on a gateway). Nothing in this module changes:
+a harness reads its environment exactly as above and never learns that a catalog chose it.
+
 ## Rules
 
 - **This module imports NOTHING from product code** (`shared/`, `contracts`, `worker/`,

@@ -157,6 +157,39 @@ class TranscriptStore(Protocol):
         same one-time token as the pair-keyed mint; ``None`` when the row is unknown OR not the caller's."""
         ...
 
+    async def get_share_access(self, user_id: int, meeting_id: int) -> "Optional[dict]":
+        """OWNER-scoped: who can read this meeting — ``share_access.access_view``. ``None`` when the
+        row is unknown or not the caller's."""
+        ...
+
+    async def stamp_share_mail(self, user_id: int, meeting_id: int, grant_id: str) -> None:
+        """OWNER-scoped: record that an invite mail was handed over for ``grant_id``."""
+        ...
+
+    async def count_share_mails_since(self, user_id: int, since_iso: str) -> int:
+        """Invite mails this owner handed over since ``since_iso`` (the hourly cap's count)."""
+        ...
+
+    async def backfill_share_roster(self, user_id: int, meeting_id: int,
+                                    emails: "dict[int, str]") -> "Optional[dict]":
+        """OWNER-scoped, one-time per reader: name the readers who redeemed before the roster
+        existed, from ``{user_id: address}``. Answers the access view; ``None`` for a row that is
+        not the caller's."""
+        ...
+
+    async def revoke_share_grant(self, user_id: int, meeting_id: int, grant_id: str) -> "Optional[dict]":
+        """OWNER-scoped: revoke one grant and drop the people who joined through it. ``None`` when the
+        row or the grant is not found."""
+        ...
+
+    async def remove_share_viewer(self, user_id: int, meeting_id: int, viewer_id: int) -> "Optional[dict]":
+        """OWNER-scoped: remove one person's access. ``None`` when they had none."""
+        ...
+
+    async def set_share_settings(self, user_id: int, meeting_id: int, *, recording: bool) -> "Optional[dict]":
+        """OWNER-scoped: whether people the meeting is shared with may play its recording."""
+        ...
+
     async def complete_transcript_import(
         self, user_id: int, meeting_id: int, *, segments: list, started_at, ended_at,
         source: str, session_uid: str,
