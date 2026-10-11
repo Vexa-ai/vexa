@@ -17,6 +17,7 @@ import { useContext, useEffect, useState, type CSSProperties, type ReactNode } f
 import { Icon } from "./index";
 import { isWsRef } from "./wsLinks";
 import { WsLink } from "./WsLink";
+import { MeetingChip, meetingNotePath, meetingRefOfHref } from "./MeetingChip";
 // The link vocabulary both renderers share. Re-exported below so every existing importer of
 // docLinks keeps working — the extraction is about the dependency graph, not about the API.
 import { DocMetaContext, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, useOpenEntity } from "./docRefs";
@@ -426,6 +427,9 @@ function EntityWikilink({ title }: { title: string }) {
       </span>
     );
   }
+  // A [[wikilink]] that lands on a meeting's NOTES is the meeting: its title and date, not the
+  // page's slug (founder, 2026-10-11: "a special label for a meeting alongside people companies").
+  if (target && meetingNotePath(target.path)) return <MeetingChip path={target.path} slug={target.slug} label={title} />;
   return (
     <span onClick={() => { if (target) openEntity({ path: target.path, slug: target.slug }); else openEntity({ wikilink: title }); }}
       onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
@@ -456,6 +460,12 @@ function EntityWikilink({ title }: { title: string }) {
  *     live only once it is found in a mounted tree. A miss stays plain monospace, which is why
  *     `package.json` in a reply never becomes a chip that lands nowhere. */
 export function DocPath({ path }: { path: string }) {
+  // A meeting's notes page is named as the MEETING — never as its filename.
+  if (meetingNotePath(path)) return <MeetingChip path={path} />;
+  return <DocPathLink path={path} />;
+}
+
+function DocPathLink({ path }: { path: string }) {
   const meta = useContext(DocMetaContext);
   const openEntity = useOpenEntity();
   const [hover, setHover] = useState(false);
@@ -511,6 +521,14 @@ export function WorkspaceRef({ token }: { token: string }) {
  *  a tab outside one), resolving relative hrefs against the linking doc. Both renderers
  *  (MdxDoc's `a` mapping and the plain-Markdown fallback) emit this for internal links. */
 export function InternalLink({ href, children }: { href: string; children?: ReactNode }) {
+  // `/?meeting=<ref>` and a link to a meeting's notes page are both the meeting (MeetingChip).
+  const meetingRef = meetingRefOfHref(href);
+  if (meetingRef) return <MeetingChip meetingRef={meetingRef} label={children} />;
+  if (meetingNotePath(href)) return <MeetingChip path={href} label={children} />;
+  return <PathLink href={href}>{children}</PathLink>;
+}
+
+function PathLink({ href, children }: { href: string; children?: ReactNode }) {
   const meta = useContext(DocMetaContext);
   const openEntity = useOpenEntity();
   // absolute = a worker-visible mount path — pass verbatim; resolveDocRef translates it

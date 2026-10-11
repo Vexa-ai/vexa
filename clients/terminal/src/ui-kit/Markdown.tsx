@@ -10,6 +10,7 @@
 import { Fragment, type ReactNode } from "react";
 import { Card, CardGroup, InternalLink, Wikilink, isInternalHref, useOpenEntity } from "./docLinks";
 import { DocImage } from "./docImages";
+import { MeetingChip, meetingNotePath, meetingRefOfHref } from "./MeetingChip";
 import { MermaidDiagram, isMermaidFence } from "./docDiagrams";
 
 // A workspace-doc path in inline code → clickable to open the doc. Matches kg/ docs by any
@@ -22,6 +23,11 @@ const ENTITY_PATH = /^(?:\/workspaces\/[\w./ -]+|[\w./ -]*\.md|PURPOSE|[\w./-]*\
 // Clickable `kg/entities/...` inline code — a component so it can read the doc's
 // workspace context (DocMeta/DocNav) via useOpenEntity, same as every other link.
 function EntityCode({ code }: { code: string }) {
+  // A meeting's notes page is named as the meeting, never as its filename (MeetingChip).
+  if (meetingNotePath(code)) return <MeetingChip path={code} />;
+  return <EntityCodeLink code={code} />;
+}
+function EntityCodeLink({ code }: { code: string }) {
   const openEntity = useOpenEntity();
   return (
     <code onClick={() => openEntity({ path: code })}
@@ -129,6 +135,8 @@ function emphasis(text: string, key: string, out: ReactNode[]): void {
       // [text](url) — workspace-internal (schemeless) hrefs navigate in place, resolving
       // relative paths against the linking doc; external links open a browser tab
       const lm = tok.match(/^\[([^\]]*)\]\(([^)]+)\)$/)!;
+      const meetingRef = meetingRefOfHref(lm[2]);
+      if (meetingRef) { out.push(<MeetingChip key={`${key}-m${i}`} meetingRef={meetingRef} label={lm[1] || undefined} />); last = re.lastIndex; i++; continue; }
       out.push(isInternalHref(lm[2])
         ? <InternalLink key={`${key}-l${i}`} href={lm[2]}>{lm[1] || lm[2]}</InternalLink>
         : <a key={`${key}-l${i}`} href={/^https?:/i.test(lm[2]) || lm[2].startsWith("#") ? lm[2] : undefined} target="_blank" rel="noreferrer noopener" style={{ color: "var(--blue)", textDecoration: "underline" }}>

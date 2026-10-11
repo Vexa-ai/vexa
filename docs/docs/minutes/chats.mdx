@@ -77,6 +77,15 @@ not offered again in that chat.
 Every page a reply names opens on click: wiki links, `.md` paths and workspace paths. A link to a page
 that does not exist yet opens its path, where you can [create it](/minutes/pages#extend-or-create-a-page-with-the-agent).
 
+**Meetings** show as a meeting chip, beside the people and companies: a microphone, the meeting's
+title and its date, for example *Campbell · Fri 9 Oct*. The title is the meeting's own, so a
+renamed call shows its new name; a meeting nobody named shows its platform
+(*Zoom · Fri 9 Oct*). Click the chip to open the meeting, as from the Calls list. A reply gets the
+chip when it links the meeting (`/?meeting=<id>`) or its notes page (`kg/entities/meeting/….md`),
+including a notes page the turn wrote. The notes filename itself is never shown.
+
+If you cannot open a meeting, its chip shows as plain text, with no title and no date.
+
 ### Choose where a chat writes
 
 The bar above the chat reads *Chat ›* or *Meeting ›* followed by the chat's name, then one chip per
@@ -162,6 +171,17 @@ person: an agent acting for someone cannot start one.
 `/agent/chat` is a streamed route of its own in `core/agent/routes.v1.json`; the others pass through the
 gateway's `/agent/*` forward. The request and event shapes are in [the agent API](/api/agent).
 
+### Meeting chips
+
+1. A meeting link (`?meeting=<id>` or `?meeting=<platform>/<native id>`) is looked up in your
+   meetings list, the same `GET /api/meetings` list the Calls list shows. Found: the chip. Not
+   found: plain text.
+2. A notes-page link goes to `POST /api/links/resolve`. agent-api finds the page in the workspace
+   you are reading, then on your desk. It reads the meeting id from the page's `meeting:` field and
+   asks meeting-api for that meeting as you. It answers `kind: "meeting"` with the title (`data.title`)
+   and time, or `not-yours` with no title. A page with no `meeting:` field keeps its own title.
+3. The agent is told to name meetings by their link, never by the notes filename.
+
 ### Configuration
 
 `GATEWAY_URL` on the terminal server. The job and tool-budget limits are worker settings
@@ -175,7 +195,7 @@ gateway's `/agent/*` forward. The request and event shapes are in [the agent API
 |---|---|---|
 | **P2** contracts · **P6** one front door | the browser calls only the terminal's `/api/*`; the terminal calls only the gateway | `gate:isolation`, `gate:exports`, `gate:domain-doors` |
 | **P18** fail loud | a refused spawn, a provider refusal or a gateway outage ends as a typed fault (`source` + `kind`) shown in the chat; the terminal never passes a bare *Internal Server Error*; a blocked queue says what blocked it; a failed job posts a line | `gate:fault-surfacing` (under `gate:node` and `gate:python`) |
-| **P20** authorize every access | the user is the signed identity; the target must be a workspace you can write; suggestions are your own desk's | deny tests below |
+| **P20** authorize every access | the user is the signed identity; the target must be a workspace you can write; suggestions are your own desk's; a meeting chip shows a title only for a meeting meeting-api answers to you | deny tests below |
 | **P21** state from evidence | the activity line and job rows come from the worker's events, not from the button press | ungated: reviewed |
 | **P23** one writer per carrier | agent-api is the inbox's only writer; the worker is the output stream's only writer and agent-api relays it unchanged | `gate:dataflow` |
 
@@ -193,6 +213,9 @@ the workspaces of the chat that dispatched it. Only an org admin can target the 
 - A message composed by Vexa or dispatched by a flow is marked, and never shown as your words.
 - An agent acting for someone cannot start a chat turn.
 - Job events carry their chat's id, so one chat's job never shows in another.
+- A meeting chip's title and date come only from meetings you can open: your meetings list, or
+  meeting-api's access check (owner, shared with you, or a member of its workspace). Holding a copy
+  of someone's notes page does not reveal the meeting's name.
 
 **Deny tests.**
 
@@ -213,6 +236,8 @@ the workspaces of the chat that dispatched it. Only an org admin can target the 
 | `clients/terminal/src/surfaces/__tests__/inbox.test.ts` · "a refused submission is not silently acknowledged" | the client's queue |
 | `clients/terminal/src/surfaces/__tests__/jobs.test.ts` · "a job event from session A never renders in chat B", "posts a line when the job fails — never silence" | job isolation and failure lines |
 | `clients/terminal/src/minutes/__tests__/workspaceTarget.test.tsx` · "refuses a workspace the chat is not over"; `globalTarget.test.tsx` · "does not offer it to anyone else" | the target chips |
+| `core/agent/tests/test_meeting_link.py` · `test_a_reader_the_meeting_is_not_answered_to_gets_no_title`, `test_an_access_check_that_raises_is_a_refusal` | meeting chips name only meetings you can open |
+| `clients/terminal/src/ui-kit/__tests__/meetingChip.test.tsx` · "a notes link the server answers not-yours is plain text — no title, no filename", "a ?meeting= link not in the reader's meetings list is the writer's words, plain" | the client shows no title it was not given |
 
 ## Related
 
