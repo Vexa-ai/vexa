@@ -138,7 +138,9 @@
 
 /* ── Dialog ───────────────────────────────────────────────────────────────────────────────── */
 .vx-dialog-layer { position: fixed; inset: 0; z-index: var(--z-modal); display: flex; align-items: center; justify-content: center; padding: var(--space-4); }
-.vx-dialog-layer > .vx-scrim { position: absolute; }
+/* The layer is its own stacking context at --z-modal; inside it the scrim drops the shared drawer
+ * stratum (z-index auto) so the dialog, later in the tree, paints and hit-tests above it. */
+.vx-dialog-layer > .vx-scrim { position: absolute; z-index: auto; }
 .vx-dialog { position: relative; width: 560px; max-width: 100%; max-height: calc(100vh - 32px); overflow: auto; background: var(--surface-overlay); border: 1px solid var(--border); border-radius: var(--radius-xl); box-shadow: var(--shadow-2); padding: var(--space-5); outline: none; }
 .vx-dialog[data-width="confirm"] { width: 400px; }
 .vx-dialog[data-width="wide"] { width: 720px; }

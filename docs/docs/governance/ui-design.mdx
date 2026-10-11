@@ -144,7 +144,7 @@ one implements rest, hover, **focus-visible** (a 2px ring with a 2px offset), pr
 | `Tabs`, `OverflowStrip` | roving tabindex; strips fade and list hidden tabs in an overflow menu |
 | `Breadcrumb` | sans, chevron separators; the middle collapses into "…" past four segments |
 | `ListRow`, `PanelHeader`, `Card` | 28/44px rows; selected = fill, weight 500 and a 2px accent bar; 44px panel headers; an interactive card is one button |
-| `Dialog`, `ConfirmDialog` | focus trap, Esc, focus return, titled; the confirm names the act; irreversible acts can require typing a name. Replaces `window.confirm` |
+| `Dialog`, `ConfirmDialog` | focus trap, Esc, focus return, titled; the confirm names the act; irreversible acts can require typing a name. Replaces `window.confirm`. Stacking: the layer sits at `--z-modal` and its scrim drops the drawer stratum (`z-index: auto`), so the dialog paints and takes clicks above it — `scripts/overlay-hit.mjs` proves it in a browser |
 | `EmptyState`, `Skeleton`, `ErrorState` | loading, empty, error and content look different; an error states what, why, the fix and the verbatim detail |
 | `Tooltip`, `Toaster` | a tooltip is supplementary to the trigger's own name; toasts only for completed background outcomes or Undo |
 | `KeyValue`, `Truncate`, `DateText`, `SourceList` | see §5 |

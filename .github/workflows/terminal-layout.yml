@@ -50,6 +50,8 @@ jobs:
           cat /tmp/next.log; exit 1
       - name: Layout sweep (L1–L3, desktop and phones)
         run: node scripts/layout-sweep.mjs 'http://localhost:3123/design?view=shell' --mobile --json layout-sweep.json
+      - name: Overlay hit-test (dialog controls take the click; the drawer stratum is unchanged)
+        run: node scripts/overlay-hit.mjs 'http://localhost:3123/design'
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with: { name: terminal-layout-sweep, path: clients/terminal/layout-sweep.json, if-no-files-found: ignore }

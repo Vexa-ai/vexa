@@ -14,3 +14,11 @@ below its mode's floor, a composer toolbar on more than one row, or a tab strip 
 without its overflow control. Needs Playwright, which is not a terminal dependency — run it on the
 sweep runner (bbb) with `NODE_PATH` pointing at an install. `MEASURE` is exported so the same
 measurement can run in any browser console.
+
+## overlay-hit.mjs
+
+The overlay hit-test (guidelines §3.5, §4.11): opens the catalogue's Dialog, ConfirmDialog and
+Drawer in a real browser and fails when the element under a dialog button is not that button, when
+a mouse click on the confirm does not reach it, or when the drawer's scrim leaves its stratum.
+jsdom has no hit-testing, so this cannot be a unit test. Runs in the terminal-layout workflow;
+locally, on bbb with `NODE_PATH` pointing at a Playwright install.
