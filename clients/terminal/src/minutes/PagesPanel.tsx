@@ -41,7 +41,6 @@ import { isMachineryEntry } from "./machinery";
 import { loadNavOpen, saveNavOpen } from "./navigatorApi";
 import { CreatePageButton, ExtendPageButton, SelectionExtend, useIntentLanding } from "./ExtendAction";
 import { registry } from "../contributions";
-import { ReportPageButton } from "../surfaces/ReportThis";
 import { header, surface, type as ty } from "./tokens";
 import { WorkspaceReadmePanel } from "./WorkspaceReadmePanel";
 import { splitLeadingH1 } from "./workspaceFrontPage";
@@ -289,10 +288,6 @@ export function PagesPanel(p: {
                   style={iconBtn(copied)} onMouseEnter={litIcon} onMouseLeave={dimIcon(copied)}>
                   <Icon name={copied ? "check" : "copy"} size={14} />
                 </button>
-                {/* PRD decision 33 §2 — this page is wrong, or is not the page I asked for. The
-                    RESOLVED view slot, never the tab label or the crumb (F63): those are display
-                    strings, and a report built from one names a file nobody opened. */}
-                <ReportPageButton workspace={p.docSlug} path={p.docPath} />
                 <button data-doc-act="edit" onClick={() => { setDraft(p.body ?? ""); setSaveError(null); setMode("edit"); }}
                   title="Edit" aria-label="Edit"
                   style={iconBtn(false)} onMouseEnter={litIcon} onMouseLeave={dimIcon(false)}>

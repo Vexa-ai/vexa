@@ -5,10 +5,12 @@ Founder, 2026-09-02 16:0xZ: *"we also need to leverage the mcp tool that should 
 agent that would just fix that (like you are here)."*
 
 This module normalizes a report into ONE shape, and nothing else: no storage, no HTTP, no status
-machine, no renderer. Three producers write this shape — the worker (`worker/friction.py`), the
-terminal's "Report this" (`clients/terminal/src/surfaces/frictionApi.ts`), and agent-api's own
-`POST /api/friction` (`control_plane/routers/friction.py`) — and this file is the only place the
-shape is written down, so the three cannot quietly drift into three different records.
+machine, no renderer. Two producers write this shape — the worker (`worker/friction.py`: the
+agent's `report_friction` and the harness's own filings) and agent-api's own `POST /api/friction`
+(`control_plane/routers/friction.py`) — and this file is the only place the shape is written down,
+so the two cannot quietly drift into two different records. A PERSON reports friction by telling
+the chat agent, which files it through `report_friction` (founder 2026-10-11: *"they report
+friction via chat"*); the terminal has no report control of its own any more.
 
 ── WHY THE STATUS MACHINE AND THE DUMP RENDERER ARE GONE (#1510's C5) ─────────────────────────────
 This module used to also own dedup (`dedup_key`), a status machine (`apply_report`/`apply_fix`/

@@ -112,6 +112,9 @@ def friction_preamble() -> str:
         "the only outcome that guarantees it is still there tomorrow — you are the only one who "
         "knows what you expected. Report it and carry on: it does not interrupt the work, and it "
         "never goes to the person you are talking to.\n\n"
+        "**When the person tells you something did not work, file it the same way** — their words "
+        "as what HAPPENED, the ids you have — and tell them it is filed. This chat is how people "
+        "report friction; there is no other button for it.\n\n"
     )
 
 
