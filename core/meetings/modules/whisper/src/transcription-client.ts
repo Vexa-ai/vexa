@@ -38,7 +38,9 @@ export interface TranscriptionClientConfig {
   maxRetries?: number;
   /** Base delay between retries in ms. Default: 1000 */
   retryDelayMs?: number;
-  /** Per-request timeout in ms. Default: 30000 */
+  /** Per-request timeout in ms. Default: 90000 (DEFAULT_STT_REQUEST_TIMEOUT_MS). A remote STT answers
+   *  a 6 s window in 15–28 s at the tail (measured 2026-10-11 against transcription.vexa.ai), so a
+   *  30 s timeout aborted live requests and retried the same audio from scratch. */
   requestTimeoutMs?: number;
   /** Sample rate of input audio. Default: 16000 */
   sampleRate?: number;
@@ -60,6 +62,9 @@ export interface TranscriptionClientConfig {
   /** Replaces DNS for the guard (tests). */
   resolveHost?: Resolver;
 }
+
+/** Default per-request STT timeout (ms) — sized to a remote, realtime-tier STT's measured tail. */
+export const DEFAULT_STT_REQUEST_TIMEOUT_MS = 90_000;
 
 /** The STT boundary's FAILURE vocabulary (P5 + P18: an adapter must translate the
  *  dependency's failures, not just its successes). A consumer reads `.kind` to surface
@@ -124,7 +129,7 @@ export class TranscriptionClient {
     this.apiToken = config.apiToken;
     this.maxRetries = config.maxRetries ?? 3;
     this.retryDelayMs = config.retryDelayMs ?? 1000;
-    this.requestTimeoutMs = config.requestTimeoutMs ?? 30000;
+    this.requestTimeoutMs = config.requestTimeoutMs ?? DEFAULT_STT_REQUEST_TIMEOUT_MS;
     this.sampleRate = config.sampleRate ?? 16000;
     this.maxSpeechDurationSec = config.maxSpeechDurationSec;
     this.minSilenceDurationMs = config.minSilenceDurationMs;

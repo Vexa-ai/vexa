@@ -19,7 +19,8 @@
  * CONTRACT BOUNDARY: identity is CARRIED (the glow bound it at capture), never
  * derived. No diarizer, no post-hoc window-match.
  */
-import { SpeakerStreamManager, type SpeakerStreamManagerConfig } from './speaker-streams.js';
+import { SpeakerStreamManager, type CoverageStats, type SpeakerStreamManagerConfig } from './speaker-streams.js';
+import { log } from './log.js';
 import type { TranscriptionResult } from '@vexa/transcribe-whisper';
 import type { TranscriptSegment, TranscriptSink } from './contracts/transcript-v1.js';
 
@@ -43,6 +44,14 @@ export interface GmeetPipelineOptions {
    *  so the host can make it observable (a /ws health frame, telemetry, lifecycle) instead
    *  of a silent "no transcript". Receives the thrown value (e.g. a TranscriptionError). */
   onError?: (fault: unknown) => void;
+  /** A closed turn is freed once it owes nothing (its last request answered); this bounds how long
+   *  it may wait for a slow STT. Past it the turn is removed and its untranscribed audio is counted
+   *  as dropped, loudly. Default 600000 (10 min — beyond the client's worst case of four timed-out
+   *  attempts on a deferred final). */
+  closeSettleCapMs?: number;
+  /** Interval of the per-meeting `[COVERAGE]` log line (ms). 0 disables the periodic line; the
+   *  line is always written once at dispose. Default 60000. */
+  coverageLogIntervalMs?: number;
 }
 
 export interface GmeetPipeline {
@@ -50,6 +59,15 @@ export interface GmeetPipeline {
   feedAudio(channel: number, glowName: string | undefined, pcm: Float32Array, tsMs: number): void;
   flush(): Promise<void>;
   dispose(): Promise<void>;
+  /** Seconds of audio captured / submitted / transcribed / skipped / dropped so far. */
+  coverage(): CoverageStats;
+}
+
+/** One log line for a meeting's coverage: what was captured, what reached STT, where it ended up. */
+export function formatCoverage(c: CoverageStats): string {
+  const pct = c.capturedSec > 0 ? Math.round((c.transcribedSec / c.capturedSec) * 100) : 0;
+  return `[COVERAGE] captured=${c.capturedSec}s submitted=${c.submittedSec}s transcribed=${c.transcribedSec}s ` +
+    `(${pct}% of captured) no_speech=${c.noSpeechSec}s short=${c.shortSec}s dropped=${c.droppedSec}s`;
 }
 
 export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
@@ -90,7 +108,7 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
         mgr.handleTranscriptionResult(speakerId, (r?.text || '').trim(), segs?.[segs.length - 1]?.end, segs, langOf(r?.language));
       } catch (e) {
         opts.onError?.(e);                          // P18: report the fault, don't swallow it…
-        mgr.handleTranscriptionResult(speakerId, '');   // …but still free the turn (graceful degrade)
+        mgr.handleTranscriptionFault(speakerId, e);  // …a draft keeps its audio; a final counts its loss
       }
     })();
     inflight.add(p);
@@ -108,11 +126,30 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
   const settle = async () => { while (inflight.size) await Promise.all([...inflight]); };
   // Close a finished turn: final-submit + emit (name is fixed on the key, so the late
   // transcribe can't be mislabeled), then free the stream after it has long settled.
+  // The stream is freed only once it owes nothing: with STT answering in 5–30 s, a fixed delay
+  // removed turns whose deferred final was still in flight, and their audio never reached the
+  // transcript. The cap bounds a request that never answers (its loss is counted, loudly).
+  const SETTLE_CAP = opts.closeSettleCapMs ?? 600_000;
   const closeTurn = (key: string) => {
     void mgr.flushSpeaker(key, true).catch(() => { /* nothing owed */ });
-    const t = setTimeout(() => mgr.removeSpeaker(key), 12000);
-    (t as { unref?: () => void }).unref?.();   // don't keep the process alive for cleanup
+    const closedAt = Date.now();
+    const tick = () => {
+      if (mgr.isSettled(key) || Date.now() - closedAt > SETTLE_CAP) { mgr.removeSpeaker(key); return; }
+      const t = setTimeout(tick, 1000);
+      (t as { unref?: () => void }).unref?.();   // don't keep the process alive for cleanup
+    };
+    const t = setTimeout(tick, 1000);
+    (t as { unref?: () => void }).unref?.();
   };
+  const coverageEvery = opts.coverageLogIntervalMs ?? 60_000;
+  let lastCoverageLine = '';
+  const logCoverage = (force = false) => {
+    const line = formatCoverage(mgr.coverage());
+    if (force || line !== lastCoverageLine) log(line);
+    lastCoverageLine = line;
+  };
+  const coverageTimer = coverageEvery > 0 ? setInterval(() => logCoverage(), coverageEvery) : undefined;
+  (coverageTimer as { unref?: () => void } | undefined)?.unref?.();
 
   return {
     feedAudio: (channel, glowName, pcm, tsMs) => {
@@ -142,10 +179,13 @@ export function createGmeetPipeline(opts: GmeetPipelineOptions): GmeetPipeline {
       mgr.feedAudio(st.key, pcm, tsMs);
     },
     flush: async () => { for (const st of chan.values()) await mgr.flushSpeaker(st.key, true); await settle(); },
+    coverage: () => mgr.coverage(),
     dispose: async () => {
       for (const st of chan.values()) await mgr.flushSpeaker(st.key, true);
       await settle();
       mgr.removeAll();
+      if (coverageTimer) clearInterval(coverageTimer);
+      logCoverage(true);
       await opts.sink.finalize();
     },
   };

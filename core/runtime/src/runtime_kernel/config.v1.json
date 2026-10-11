@@ -398,6 +398,28 @@
       ]
     },
     {
+      "key": "BOT_SPEAKER_MIN_FINAL_AUDIO_SEC",
+      "class": "defaulted",
+      "default": "(unset — bot default 1)",
+      "description": "speaker turns whose whole audio is shorter than this many seconds are not sent to STT (they only return filtered phrases) and are counted as short in the bot's coverage line; forwarded to spawned bots",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "BOT_STT_TIMEOUT_SEC",
+      "class": "defaulted",
+      "default": "(unset — bot default 90)",
+      "description": "per-request transcription timeout in seconds for spawned bots (minimum 20); a remote realtime STT answers a few seconds of audio in 5-30 s; forwarded to spawned bots",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
       "key": "AGENT_IMAGE",
       "class": "capability",
       "capability": "agent_spawn",

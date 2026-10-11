@@ -38,7 +38,7 @@ import {
   type TurnSourceObservation,
 } from '@vexa/mixed-pipeline';
 import { TranscriptionClient, type TranscriptionResult } from '@vexa/transcribe-whisper';
-import { isMixedLanePlatform, isPerTrackLanePlatform, type Invocation, type Platform } from './config.js';
+import { isMixedLanePlatform, isPerTrackLanePlatform, sttTimeoutMsFromEnv, type Invocation, type Platform } from './config.js';
 import type { TranscriptSegment } from './contracts.js';
 import type { Pipeline, TranscriptSink } from './ports.js';
 
@@ -414,7 +414,7 @@ function createMixedBotPipeline(
 /** Build the real STT transcribe closure from invocation.v1 — language baked into the call so
  *  the lane never knows about config. transcribeEnabled=false ⇒ a no-op transcribe (the engine
  *  still runs turn gating but emits empty text; recording-only meetings need no STT). */
-export function createTranscribe(inv: Invocation): Transcribe {
+export function createTranscribe(inv: Invocation, env: NodeJS.ProcessEnv = process.env): Transcribe {
   if (inv.transcribeEnabled === false || !inv.transcriptionServiceUrl) {
     return async () => ({ text: '', language: inv.language ?? 'en', duration: 0, segments: [] });
   }
@@ -424,6 +424,8 @@ export function createTranscribe(inv: Invocation): Transcribe {
     model: inv.transcriptionModel ?? undefined,
     // the person's own Settings endpoint: every request held to the outbound URL guard
     publicOnly: inv.transcriptionServiceOwner === 'customer',
+    // BOT_STT_TIMEOUT_SEC (forwarded by the runtime like the BOT_SPEAKER_* knobs); unset → 90 s.
+    requestTimeoutMs: sttTimeoutMsFromEnv(env),
   });
   const language = inv.language ?? undefined;
   return (pcm, prompt) => client.transcribe(pcm, language, prompt);

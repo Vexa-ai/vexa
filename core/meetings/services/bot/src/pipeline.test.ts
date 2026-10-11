@@ -176,6 +176,23 @@ async function main(): Promise<void> {
     check('no transcriptionModel → default whisper-1 (wire unchanged)', modelParts[1] === 'whisper-1', JSON.stringify(modelParts[1]));
   }
 
+  // ── 4a) BOT_STT_TIMEOUT_SEC reaches the client: a slow answer within it is waited for, past it aborted ──
+  {
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    (globalThis as any).fetch = async (_url: unknown, init: { signal: AbortSignal }) => {
+      calls++;
+      return await new Promise<Response>((resolve, reject) => {
+        const t = setTimeout(() => resolve(new Response(JSON.stringify({ text: 'late', language: 'en', duration: 0.1, segments: [] }), { status: 200 })), 50);
+        init.signal.addEventListener('abort', () => { clearTimeout(t); reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })); });
+      });
+    };
+    const pcm = new Float32Array(1600).fill(0.05);
+    const waited = await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test' }), { BOT_STT_TIMEOUT_SEC: '20' })(pcm);
+    (globalThis as any).fetch = realFetch;
+    check('BOT_STT_TIMEOUT_SEC: a slow STT answer within the timeout is waited for (one call)', waited.text === 'late' && calls === 1, `calls=${calls} text=${waited.text}`);
+  }
+
   // ── 4b) a CUSTOMER-owned endpoint is held to the outbound URL guard; the deployment's own is not ──
   // The invocation states the owner; an internal address on a customer endpoint is never dialled
   // (global fetch is not called either: the guarded path refuses before any socket).
