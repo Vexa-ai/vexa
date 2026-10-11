@@ -1,4 +1,4 @@
-- **The bot mailbox reads any IMAP server, not only Gmail.** Invite-by-email now works with an
+- **The bot mailbox reads any IMAP server, not only Gmail (#1819).** Invite-by-email now works with an
   on-premises Exchange or any other IMAP server: `VEXA_MAIL_IMAP_HOST`, `_PORT`, `_TLS` (`tls`,
   `starttls`, or `none` for a lab), `_USER` (a login name other than the address), `_FOLDER` and
   `_CA_FILE` (an internal CA). Every default is the Gmail preset, so an existing install behaves as
