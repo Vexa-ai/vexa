@@ -167,6 +167,9 @@ services:
 | `VEXA_OIDC_REQUIRE_EMAIL_VERIFIED` (`requireEmailVerified`) | off | `1`: refuse unless the ID token says `email_verified: true`. |
 | `VEXA_SIGNIN_METHODS` (`terminal.signinMethods`) | every configured door | A comma-separated subset of `google`, `microsoft`, `oidc`, `email`. |
 
+The same keys are listed in [Configuration → Secrets & identity](/configuration#secrets--identity) and in the Helm
+values table ([`deploy/helm/README.md`](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md#configuration-that-matters)).
+
 **The redirect URI is fixed:** `<terminal URL>/api/auth/callback/oidc`. The provider id `oidc` does
 not change with the display name.
 
@@ -277,7 +280,18 @@ the IdP; NextAuth's `/api/auth/signin/oidc` and `/api/auth/callback/oidc` in the
 - **Closed doors stay closed.** A method left out of `VEXA_SIGNIN_METHODS` is not registered or
   answers `404`.
 
-Deny tests:
+**Hop by hop**
+
+| Hop | What protects it | Deny tests |
+|---|---|---|
+| Browser → Terminal (sign-in card, `/api/auth/signin/oidc`) | Only providers that are configured and allowed by `VEXA_SIGNIN_METHODS` are registered; any other provider id completes nothing. The PKCE verifier, `state` and `nonce` are kept in short-lived httpOnly cookies. | "refuses an unknown provider outright"; "VEXA_SIGNIN_METHODS=oidc removes configured Google and Microsoft providers"; "is registered from discovery, with PKCE, state and nonce, the profile read from the ID token" |
+| Browser → IdP | The IdP's own authentication and access-control policy. The request carries the fixed redirect URI the IdP has registered. | the IdP's (outside Vexa) |
+| Terminal → IdP (discovery, signing keys, token exchange) | HTTPS only (`https://` issuer required at boot), certificates checked against the public roots plus only the operator's CA bundle; the code is exchanged with the client secret and the PKCE verifier. | the `refuses %s` configuration cases ("an http issuer", "an unreadable CA file"); "adds a custom CA to the public roots rather than replacing them" |
+| IdP → browser → Terminal (`/api/auth/callback/oidc`) | `state`, PKCE and `nonce` checked; the ID token's signature, `iss`, `aud` and expiry verified before any claim is read; then `iss` compared again with configuration, `sub` and an address required, `email_verified` when configured. | "refuses a token from another issuer before asking admin-api"; the `refuses %s` identity cases; "refuses an oidc callback when the provider is not configured" |
+| Terminal → admin-api (`signin.v1`) | Internal secret (`X-Internal-Secret`) on admin-api's internal routes; admission refuses unless admin-api says yes; a second subject for a bound account is refused and nothing changes. | "an address the allow-list does not admit is refused (and so is another identity for a bound account)"; `test_a_generic_oidc_subject_binds_and_another_is_refused`; `test_the_door_refuses_another_oidc_identity_and_changes_nothing`; `test_only_the_subjects_the_terminal_makes_are_accepted` |
+| Terminal → browser (session) | The same httpOnly `vexa-token` / `vexa-user-info` cookies as every other door; a closed emailed-link door answers `404`. | "request-link and redeem answer 404, and the instance says email_link: false" |
+
+All deny tests:
 
 | Where | Tests |
 |---|---|
