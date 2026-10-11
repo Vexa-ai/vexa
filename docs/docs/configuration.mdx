@@ -208,6 +208,12 @@ when `meetingApi.extraEnv` also sets one of them.
 | `STORAGE_BACKEND` | `s3` — the label stamped on each new recording's metadata |
 | `AWS_CONFIG_FILE` | `/etc/vexa/s3/config`, a mounted file with `storage.s3.region`, the addressing style from `storage.s3.forcePathStyle` and, when set, `storage.s3.caBundle` |
 
+### Captured-signal tapes
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VEXA_CAPTURE_SIGNAL_DEFAULT` | `true` (unset); the Helm chart sets `false` | Whether a bot tapes its raw captured signal (audio, captions, speaker events) to the bucket under `signal/`, when neither the account nor the platform setting `diagnostics.capture_signal` says otherwise. Read by admin-api (the last tier of its answer) and by meeting-api (its fallback when identity gives no answer). Accepts `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`; anything else stops both services at boot. Compose and Lite leave it unset, so taping stays on. Helm: `diagnostics.captureSignal` (default `"false"`). See [Captured-signal tapes](/deployment-kubernetes#captured-signal-tapes-off-by-default). |
+
 ## Agent inference (bring your own)
 
 Point the agent at your own model so no inference leaves the network.

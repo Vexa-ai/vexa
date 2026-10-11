@@ -115,6 +115,11 @@ def build_production_app():
     if problems:
         raise ConfigError("admin-api refuses to boot — malformed sign-in configuration: "
                           + "; ".join(problems))
+    from .app.main import capture_signal_default
+    try:
+        capture_signal_default()
+    except ValueError as e:
+        raise ConfigError(f"admin-api refuses to boot: {e}") from None
     if open_to_everyone():
         logger.warning("VEXA_SIGNIN_ALLOW contains '*': ANY email address may sign in to this "
                        "instance and get an account. Meant for dev/demo stacks only.")

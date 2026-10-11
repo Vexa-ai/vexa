@@ -728,6 +728,13 @@
    "targets": []
   },
   {
+   "key": "VEXA_CAPTURE_SIGNAL_DEFAULT",
+   "class": "defaulted",
+   "default": "true (the Helm chart sets false)",
+   "targets": ["helm"],
+   "description": "whether a bot tapes its raw captured signal (audio, captions, speaker events) to the bucket under signal/ when identity gives no answer for its owner (unreachable, or an admin-api that predates the field). admin-api reads the same key as its last tier (user > platform setting > this), so a reachable identity already carries it. Unset or empty = true, the compose and Lite behaviour; the Helm chart sets it from diagnostics.captureSignal, default false. Anything but a recognized boolean (true/1/yes/on, false/0/no/off) refuses the boot: whether meetings are taped is a data-protection decision a typo must not make."
+  },
+  {
    "key": "VEXA_FLOWS_API_URL",
    "class": "publish-edge",
    "publishes_events": ["meeting.started", "meeting.completed"],

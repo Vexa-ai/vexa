@@ -201,6 +201,14 @@ storage:
       secretName: ""
       key: ca.crt
 
+# Captured-signal tapes: a bot can tee its raw captured stream (audio, captions, speaker events) to
+# your bucket under signal/, for replaying a meeting when debugging transcription. OFF by default on
+# Kubernetes: nothing is taped unless you set captureSignal "true" here, or switch it on fleet-wide
+# (PUT /internal/settings/diagnostics) or for one account. It sets VEXA_CAPTURE_SIGNAL_DEFAULT on
+# admin-api and meeting-api; an explicit platform or per-user setting still wins over it.
+diagnostics:
+  captureSignal: "false"
+
 # Model ids brokered into agents/bots (empty ⇒ provider default). Mirrors compose ANTHROPIC_*/VEXA_*.
 models:
   anthropicModel: ""

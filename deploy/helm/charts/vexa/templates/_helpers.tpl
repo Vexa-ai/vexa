@@ -477,3 +477,19 @@ securityContext:
 {{- printf "%s/api/auth/callback/google" (trimSuffix "/" .Values.terminal.publicUrl) -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+vexa.captureSignalDefault — VEXA_CAPTURE_SIGNAL_DEFAULT for admin-api and meeting-api, from
+diagnostics.captureSignal: "true" or "false", nothing else. Default "false": a bot spawned by this
+chart tapes no captured signal (raw audio, captions, speaker events) unless the operator turns it
+on. A value that is neither stops the render rather than reaching a service that would refuse to
+boot on it.
+*/ -}}
+{{- define "vexa.captureSignalDefault" -}}
+{{- $raw := (.Values.diagnostics | default dict).captureSignal -}}
+{{- $v := ternary "false" (toString $raw | lower) (kindIs "invalid" $raw) -}}
+{{- if not (has $v (list "true" "false")) -}}
+{{- fail (printf "diagnostics.captureSignal must be \"true\" or \"false\" (got %q)" (toString $raw)) -}}
+{{- end -}}
+{{- $v -}}
+{{- end -}}

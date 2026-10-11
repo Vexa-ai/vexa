@@ -129,6 +129,9 @@ spec:
               value: {{ .Values.meetingApi.systemWebhookAllowPrivateHttp | default "false" | quote }}
             - name: VEXA_SYSTEM_WEBHOOK_TIMEOUT_S
               value: {{ .Values.meetingApi.systemWebhookTimeoutSeconds | default "10" | quote }}
+            # diagnostics.captureSignal (default "false"): no captured-signal tape unless turned on.
+            - name: VEXA_CAPTURE_SIGNAL_DEFAULT
+              value: {{ include "vexa.captureSignalDefault" . | quote }}
             # Object storage: storage.s3, the operator's own bucket (vexa.storage.validate refuses to
             # render without it). meeting-api's own names for it: S3_ENDPOINT/S3_*_KEY are the
             # explicit S3 settings; MINIO_BUCKET is the bucket it reads first, and MINIO_ACCESS_KEY/

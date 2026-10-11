@@ -1262,4 +1262,21 @@ if [ -z "$loose" ] && grep -q 'app.kubernetes.io/component: flows-api' <<< "$flo
   echo "  OK: every policy, Service and Pod template naming a flows component also names this release"
 else echo "  FAIL: flows matched by component alone:"; echo "$loose" | head -40; fail=1; fi
 
+# ── diagnostics.captureSignal — no captured-signal tape by default on Kubernetes ─────────────────
+# Both services that decide whether a bot tapes (admin-api's last tier, meeting-api's no-answer
+# fallback) get VEXA_CAPTURE_SIGNAL_DEFAULT="false" from the chart defaults; "true" turns it on; any
+# other value stops the render.
+for t in deployment-admin-api.yaml deployment-meeting-api.yaml; do
+  doc="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -s "templates/$t")"
+  if grep -A1 'name: VEXA_CAPTURE_SIGNAL_DEFAULT$' <<< "$doc" | grep -q 'value: "false"'; then
+    echo "  OK: $t sets VEXA_CAPTURE_SIGNAL_DEFAULT=false by default (no tapes)"
+  else echo "  FAIL: $t does not default VEXA_CAPTURE_SIGNAL_DEFAULT to false"; fail=1; fi
+  doc="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -s "templates/$t" --set diagnostics.captureSignal=true)"
+  if grep -A1 'name: VEXA_CAPTURE_SIGNAL_DEFAULT$' <<< "$doc" | grep -q 'value: "true"'; then
+    echo "  OK: $t carries diagnostics.captureSignal=true when the operator turns tapes on"
+  else echo "  FAIL: $t ignores diagnostics.captureSignal=true"; fail=1; fi
+done
+refuse "diagnostics.captureSignal not a boolean" 'diagnostics\.captureSignal must be "true" or "false" \(got "maybe"\)' \
+  -f "$CHART/values-test.yaml" --set diagnostics.captureSignal=maybe
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
