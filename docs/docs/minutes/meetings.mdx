@@ -71,7 +71,8 @@ so).
 ### Download the audio
 
 Press the download icon at the end of the player row (*Download audio*). The browser saves the
-recording as `<platform>-<meeting-id>-<date>.<ext>`, in its own format (usually `.webm`). It goes
+recording as `<platform>-<meeting-code>-<date>.<ext>` (for example `zoom-84512345678-2026-10-09.webm`),
+in its own format (usually `.webm`). It goes
 through the same owner-only check as playback. If the download is refused or interrupted, the
 controls say so under the player (*Could not download audio…*). Over the API, see
 [Recordings](/how-to/recordings).
@@ -79,7 +80,7 @@ controls say so under the player (*Could not download audio…*). Over the API, 
 ### Delete a meeting's data
 
 On a finished meeting, the owner sees the trash icon (*Delete meeting data*) with the other icons in the
-page header (copy, report, edit). It turns red only when you point at it.
+page header. It turns red only when you point at it.
 
 1. Press it. The dialog reads *Delete meeting data?*: *Permanently delete this meeting's audio,
    transcript and captured fixtures, including promoted fixtures. Saved pages are kept.*
@@ -150,7 +151,7 @@ running. Stop and Delete are not shown on a meeting someone shared with you.
 | Browser calls (terminal) | Goes to |
 |---|---|
 | `GET /api/meetings`, `GET /api/transcripts/by-id/{id}` | meeting-api, through the gateway |
-| `GET /api/recordings`, `GET /api/recordings/{id}/media/{media}/raw` (with `Range`) | meeting-api, through the gateway |
+| `GET /api/recordings`, `GET /api/recordings/{id}/media/{media}/raw` (with `Range`; `download=1` to save) | meeting-api, through the gateway |
 | `DELETE /api/meetings/{id}`, `DELETE /api/bots/{platform}/{id}` | meeting-api, through the gateway |
 | `GET /api/meeting/stream` (server-sent events) | agent-api `/api/meeting/stream`, through the gateway's `/agent/*` |
 | `GET`, `POST /api/meeting/note`; `GET /api/meeting/terms` | agent-api, through the gateway's `/agent/*` |
@@ -171,8 +172,8 @@ go to the meetings side, everything else to the agent. The meetings routes are d
 | Rule | How this design meets it | Gate |
 |---|---|---|
 | **P2** contracts · **P6** one front door | the browser calls only the terminal; meeting routes are meeting-api's sealed `api.v1` | `gate:isolation`, `gate:exports`, `gate:contract-conformance` |
-| **P18** fail loud | an unreachable gateway is a `502`; a stream failure arrives as a `stream-error` event; a recording that cannot be made seekable is a typed fault; each control says when it failed | ungated: reviewed |
-| **P20** authorize every access | agent-api and meeting-api check every read: the owner, a share recipient, or a member of the meeting's workspace; recordings and delete are owner-only | `gate:access` and the deny tests below |
+| **P18** fail loud | an unreachable gateway is a `502`; a stream failure arrives as a `stream-error` event; a recording that cannot be made seekable is a typed fault; each control says when it failed, and a refused or interrupted download says so and saves nothing | ungated: reviewed; the download errors are pinned by `audioDownload.test.tsx` under `gate:node` |
+| **P20** authorize every access | agent-api and meeting-api check every read: the owner, a share recipient, or a member of the meeting's workspace; recordings (playback and download) and delete are owner-only | `gate:access` and the deny tests below |
 | **P21** state from evidence | the bot card reports what the bot is observed doing, including *admitted · no words for …* | ungated: reviewed |
 | **P22** guaranteed teardown | **Stop bot** uses meeting-api's stop route, which ends the bot directly when it cannot confirm the bot is listening | the meeting-lifecycle eval under `gate:python` |
 | **P23** one writer per carrier | meeting-api is the only writer of the transcript stream; agent-api and the terminal read it, and the terminal renders it with one engine | `gate:dataflow` |
@@ -193,6 +194,10 @@ delete the meeting's data.
   cannot be discovered.
 - A deleted meeting's transcript is refused, and new segments for it are refused.
 - Recording responses are `private, no-store`. A bot-only API key cannot subscribe to a transcript.
+- A download is the playback read with `download=1`: the same owner check, and nothing else changes.
+  Its file name is built only from server-side fields (meeting id, recording date, stored format),
+  never from the request, and the browser fetches it through the session proxy with no credential in
+  the URL.
 - Meeting ids in links are checked so they cannot escape their path segment.
 
 **Deny tests.**
@@ -209,10 +214,12 @@ delete the meeting's data.
 | `core/meetings/services/meeting-api/tests/test_collector_api.py` · `test_get_transcript_other_user_is_404` | transcripts |
 | `core/meetings/services/meeting-api/tests/test_ingest_after_delete.py` · `test_segments_for_a_deleted_meeting_are_refused` | no writes after delete |
 | `core/meetings/services/meeting-api/tests/test_recordings_range.py` · `test_unsatisfiable_range_returns_416` | byte ranges |
+| `core/meetings/services/meeting-api/tests/test_recordings_download.py` · `test_another_user_cannot_download_the_owners_audio` | download: another user gets `404`, no bytes and no attachment header |
 | `core/identity/tests/test_access.py` · `test_other_user_denied_on_each_read_path`, `test_unowned_resource_default_denies` | the access rule's default |
 | `core/gateway/services/gateway/tests/test_multiplex.py` · `test_a_bot_only_key_cannot_subscribe_to_a_transcript`, `test_invalid_api_key_closes_4401` | live subscriptions |
 | `clients/terminal/src/minutes/__tests__/meetingControls.test.tsx` · "offers playback without autoplay and requires the exact confirmation word before deleting" | the delete ceremony |
 | `clients/terminal/src/app/api/__tests__/catchAllProxy.test.ts` · "streams recording bytes and preserves range seeking through the meetings gateway" | seeking through the proxy |
+| `clients/terminal/src/minutes/__tests__/audioDownload.test.tsx` · "saves the recording through the playback route, named <platform>-<native_id>-<date>.<ext>", "shows an explicit error when the download is refused, and saves nothing" | download goes through the owner-scoped route with no credential in the URL; a refusal saves nothing |
 | `clients/terminal/src/app/__tests__/meetingRoute.test.ts` · "rejects an id that could escape the segment" | meeting links |
 
 ## Related
