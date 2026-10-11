@@ -14,7 +14,7 @@
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { COMPANY_WORD, WORKSPACE_WORD } from "./vocabulary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT, useService } from "../platform";
+import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, PAGE_REMOVED_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT, useService } from "../platform";
 import { Chat } from "../surfaces/chat";
 import { ensureMeetingKnown, useLiveMeetings } from "../surfaces/liveMeetings";
 import {
@@ -25,6 +25,7 @@ import { AttachRepo } from "./AttachRepo";
 import { orderedRows, moveChat } from "./chatOrder";
 import { ContextBar, GLOBAL_MOUNT } from "./ContextBar";
 import { ConnectionsPanel, CONNECTIONS_CLOSE } from "./ConnectionsPanel";
+import { dropRemovedPage } from "./pageDelete";
 import { PagesPanel, type Listing } from "./PagesPanel";
 import {
   bindMeeting, chatForRow, chatsFromSessions, hideChat, loadChats, loadCollapsed, loadHidden, loadRailAll, markTouched,
@@ -1078,6 +1079,24 @@ export function MinutesShell() {
     window.addEventListener(WORKSPACE_COMMIT_EVENT, onCommit);
     return () => window.removeEventListener(WORKSPACE_COMMIT_EVENT, onCommit);
   }, []);
+
+  // A PERSON DELETED A PAGE (`./pageDelete`): every tab on it goes, and if it was in front its
+  // neighbour comes forward — `closeTab`'s rule, applied to all of that page's tabs at once. No deps
+  // on purpose, like the key listener above: it reads the strip as it is now.
+  useEffect(() => {
+    const onRemoved = (e: Event) => {
+      const d = (e as CustomEvent<{ path?: string; slug?: string }>).detail;
+      if (!d?.path) return;
+      const next = dropRemovedPage(pages, d.path, d.slug);
+      if (next.length === pages.length) return;
+      const front = docKind !== "meeting" && docPath === d.path && (docSlug || undefined) === (d.slug || undefined);
+      const i = pages.findIndex((x) => x.kind !== "meeting" && x.path === d.path && (x.slug || undefined) === (d.slug || undefined));
+      setPages(next);
+      if (front && next.length) openPage(next[Math.min(Math.max(i, 0), next.length - 1)]);
+    };
+    window.addEventListener(PAGE_REMOVED_EVENT, onRemoved);
+    return () => window.removeEventListener(PAGE_REMOVED_EVENT, onRemoved);
+  });
 
   // The live phase means words ARRIVING. Re-read the live transcript on a timer so "flowing" is
   // something you watch rather than something the label claims. Mock-only: the real live feed will
