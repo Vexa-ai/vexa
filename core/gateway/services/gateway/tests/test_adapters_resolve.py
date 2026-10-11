@@ -155,6 +155,54 @@ async def test_resolve_transport_failure_raises_unavailable(exc):
         await auth.resolve("vxa_bot_ok")
 
 
+# ── a validate hop that never connected is retried; one that reached admin-api is not ─────────────
+
+def _flaky(failures, exc):
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        if len(calls) <= failures:
+            raise exc
+        return httpx.Response(200, json={"user_id": 7, "scopes": ["bot"]})
+    return handler, calls
+
+
+def _recording_authorizer(handler):
+    waits = []
+
+    async def sleep(sec):
+        waits.append(sec)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return AdminApiAuthorizer(client, ADMIN, "http://meeting-api:8080", sleep=sleep), waits
+
+
+@pytest.mark.parametrize("exc", [httpx.ConnectError("refused"), httpx.ConnectTimeout("no route")])
+async def test_a_connect_failure_that_recovers_resolves_the_key(exc):
+    """admin-api restarting: the first two connects fail, the third answers."""
+    handler, calls = _flaky(2, exc)
+    auth, waits = _recording_authorizer(handler)
+    assert await auth.resolve("vxa_bot_ok") == {"user_id": 7, "scopes": ["bot"]}
+    assert len(calls) == 3 and waits == [0.5, 1.5]
+
+
+async def test_a_persistent_connect_failure_still_answers_unavailable():
+    handler, calls = _flaky(99, httpx.ConnectError("refused"))
+    auth, waits = _recording_authorizer(handler)
+    with pytest.raises(AuthUnavailable):
+        await auth.resolve("vxa_bot_ok")
+    assert len(calls) == 3 and waits == [0.5, 1.5]
+
+
+@pytest.mark.parametrize("exc", [httpx.ReadTimeout("slow"), httpx.PoolTimeout("pool exhausted")])
+async def test_a_hop_that_reached_admin_api_or_hit_this_edges_pool_is_not_retried(exc):
+    handler, calls = _flaky(99, exc)
+    auth, waits = _recording_authorizer(handler)
+    with pytest.raises(AuthUnavailable):
+        await auth.resolve("vxa_bot_ok")
+    assert len(calls) == 1 and waits == []
+
+
 async def test_auth_isolated_from_slow_downstream():
     """#495 acceptance A1 (unit arm) — validation is decoupled from a slow forward.
 
