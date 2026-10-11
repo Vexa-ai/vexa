@@ -125,6 +125,7 @@
           "deployment",
           "deployment-lite",
           "deployment-kubernetes",
+          "sign-in-oidc",
           "configuration",
           "connections",
           "upgrade-from-minio",

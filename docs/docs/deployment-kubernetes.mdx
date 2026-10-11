@@ -540,6 +540,13 @@ The terminal uses a provider's email only when the provider verified it: Google 
 the `xms_edov` claim (Entra admin center → App registrations → your app → Token configuration → Add
 optional claim → ID → `xms_edov`). Anything else is refused with a sentence on the sign-in card.
 
+### Sign-in through your own identity provider (ADFS, Keycloak)
+
+The chart has first-class values for a generic OpenID Connect provider — `terminal.oidc` (issuer,
+client id, the client secret from an existing Secret, an optional CA bundle) and
+`terminal.signinMethods` to offer only that door. The full guide, with the checklist for your
+identity-provider team, is [Sign-in with your own identity provider](/sign-in-oidc).
+
 ### Who may sign in
 
 A provider vouches for an address; it does not decide whether that address belongs here. Every
