@@ -905,6 +905,34 @@ refuse() {  # refuse <label> <expected-message-regex> <helm args...>
   elif grep -qE "$want" <<< "$out"; then echo "  OK: $label → refused with the actionable message"
   else echo "  FAIL: $label — refused without the expected message: $(grep -m1 Error <<< "$out")"; fail=1; fi
 }
+# ── calendar.internalFeedAllow / calendar.autoJoinBlock — operator calendar settings ────────────
+# Empty by default (no internal feed, no deployment block); a set value reaches exactly the services
+# that read it: the feed allowance admin-api (save) and meeting-api (fetch), the block list meeting-api.
+cal_env() {  # cal_env <template> <key> [helm args…] → the value line under that env name
+  local t="$1" k="$2"; shift 2
+  helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -s "templates/$t" "$@" \
+    | grep -A1 "name: $k\$" | grep 'value:' | head -1
+}
+for t in deployment-admin-api.yaml deployment-meeting-api.yaml; do
+  if [ "$(cal_env $t VEXA_CALENDAR_FEED_ALLOW)" = '              value: ""' ]; then
+    echo "  OK: $t VEXA_CALENDAR_FEED_ALLOW empty by default"
+  else echo "  FAIL: $t VEXA_CALENDAR_FEED_ALLOW not empty by default"; fail=1; fi
+  if cal_env $t VEXA_CALENDAR_FEED_ALLOW --set 'calendar.internalFeedAllow=cal.corp.example\,10.20.0.0/16' \
+       | grep -q 'value: "cal.corp.example,10.20.0.0/16"'; then
+    echo "  OK: $t carries calendar.internalFeedAllow"
+  else echo "  FAIL: $t ignores calendar.internalFeedAllow"; fail=1; fi
+done
+if cal_env deployment-meeting-api.yaml VEXA_AUTO_JOIN_BLOCK --set calendar.autoJoinBlock=gated.example \
+     | grep -q 'value: "gated.example"' \
+   && [ "$(cal_env deployment-meeting-api.yaml VEXA_AUTO_JOIN_BLOCK)" = '              value: ""' ]; then
+  echo "  OK: meeting-api VEXA_AUTO_JOIN_BLOCK empty by default, carries calendar.autoJoinBlock"
+else echo "  FAIL: meeting-api VEXA_AUTO_JOIN_BLOCK plumbing"; fail=1; fi
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" | grep -q 'VEXA_CALENDAR_FEED_ALLOW' \
+   && ! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -s templates/deployment-gateway.yaml \
+        | grep -q 'VEXA_CALENDAR_FEED_ALLOW'; then
+  echo "  OK: the feed allowance reaches no other service (gateway checked)"
+else echo "  FAIL: feed allowance placement"; fail=1; fi
+
 refuse "no storage.s3 (chart defaults)" 'storage\.s3 is incomplete, missing: storage\.s3\.endpoint, storage\.s3\.bucket, storage\.s3\.existingSecret' \
   --set secrets.internalApiSecret=x
 refuse "stale minio.enabled=true" 'minio\.enabled=true is no longer supported.*data-vexa-vexa-minio-0' \

@@ -76,6 +76,9 @@ spec:
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.adminApi.logLevel | default "info" | quote }}
+            # calendar.internalFeedAllow: internal hosts/networks a calendar feed may be saved from.
+            - name: VEXA_CALENDAR_FEED_ALLOW
+              value: {{ (.Values.calendar | default dict).internalFeedAllow | default "" | quote }}
             - name: VEXA_SIGNIN_ALLOW
               value: {{ .Values.adminApi.signinAllow | default "" | quote }}
             - name: VEXA_ADMIN_EMAILS

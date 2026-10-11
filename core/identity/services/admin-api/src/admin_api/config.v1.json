@@ -176,6 +176,13 @@
    "targets": ["compose", "helm", "lite"]
   },
   {
+   "key": "VEXA_CALENDAR_FEED_ALLOW",
+   "class": "defaulted",
+   "default": "(empty — no internal feed may be saved)",
+   "targets": ["compose", "helm"],
+   "description": "operator allowance for calendar feeds served inside a private network (same value and grammar as meeting-api's, which fetches): exact host names and CIDRs. PUT /user/calendar and /user/calendars accept a feed URL whose literal address is inside a listed network or whose host is a listed name; every other internal URL is still a 422. An unsafe or malformed entry refuses the boot."
+  },
+  {
    "key": "VEXA_FLOWS_API_URL",
    "class": "publish-edge",
    "publishes_events": ["onboarding.completed"],

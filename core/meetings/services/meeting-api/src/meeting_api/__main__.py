@@ -101,6 +101,32 @@ def _auth_session_at_boot(env: "os._Environ | dict | None" = None) -> None:
         raise ConfigError(f"meeting-api refuses to boot: {e}") from None
 
 
+def _calendar_feed_allow_at_boot(env: "os._Environ | dict | None" = None):
+    """``VEXA_CALENDAR_FEED_ALLOW``, parsed once at boot (P14/P18). A bad entry — a wildcard, a
+    network overlapping loopback or cloud metadata, a malformed name — refuses the boot naming it."""
+    from .calendar_sync.adapters import FEED_ALLOW_ENV, feed_allowance
+    from .config_preflight import ConfigError
+
+    env = os.environ if env is None else env
+    try:
+        return feed_allowance(env.get(FEED_ALLOW_ENV) or "")
+    except ValueError as e:
+        raise ConfigError(f"meeting-api refuses to boot: {e}") from None
+
+
+def _auto_join_block_at_boot(env: "os._Environ | dict | None" = None):
+    """``VEXA_AUTO_JOIN_BLOCK``, parsed once at boot. A bad entry refuses the boot naming it: a
+    block list that silently matched nothing would send bots where the operator forbade them."""
+    from .bot_spawn.auto_join_block import BLOCK_ENV, deployment_block
+    from .config_preflight import ConfigError
+
+    env = os.environ if env is None else env
+    try:
+        return deployment_block(env.get(BLOCK_ENV) or "")
+    except ValueError as e:
+        raise ConfigError(f"meeting-api refuses to boot: {e}") from None
+
+
 def _identity_key():
     """gateway-identity.v1 — the gateway's Ed25519 public key, or a refused boot. A file that is
     unreadable, or is anything but an Ed25519 public key (the private key included: a verifier that
@@ -153,6 +179,8 @@ def build_production_app():
     _require_config()  # A4: refuse to boot a misconfigured deploy (no ADMIN_TOKEN → every spawn 500s).
     workload_acl = _redis_workload_acl()  # S51: an unknown mode refuses the boot, as agent-api's does
     _auth_session_at_boot()  # S64: a broken authenticated-bot store refuses the boot, not the first spawn
+    _calendar_feed_allow_at_boot()  # a malformed internal-feed allowance refuses the boot
+    _auto_join_block_at_boot()  # a malformed auto-join block list refuses the boot
 
     import redis.asyncio as aioredis
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -649,6 +677,7 @@ def _attach_background_loops(
     # self-host opt-in that chooses the uncapped mode (never defaulted).
     from .bot_spawn.env_flags import env_flag
     auto_join_allow_uncapped = env_flag("AUTO_JOIN_ALLOW_UNCAPPED", default=False)
+    auto_join_block = _auto_join_block_at_boot()
 
     async def _auto_join_loop() -> None:
         if meeting_repo is None or runtime is None or not hasattr(meeting_repo, "list_scheduled_meetings"):
@@ -679,6 +708,7 @@ def _attach_background_loops(
                 redis_url=os.getenv("REDIS_URL"),
                 redis_grant=bot_redis.grant if bot_redis is not None else None,
                 allow_uncapped=auto_join_allow_uncapped,
+                deployment_block=auto_join_block,
             )
 
         while True:

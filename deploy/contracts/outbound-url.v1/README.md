@@ -56,6 +56,18 @@ Where each service applies it:
 The deployment's own endpoints (its bundled transcription service, its own model gateway) are
 operator configuration and are not held to this rule.
 
+**The one operator exception: `OperatorAllowance`.** An operator may name internal hosts and
+networks that ONE kind of fetch may reach, today calendar feeds served inside a corporate network
+(`VEXA_CALENDAR_FEED_ALLOW`, read by meeting-api's ICS fetch and admin-api's save check).
+`parse_allowance` builds it from deployment configuration and refuses a wildcard, a URL, a malformed
+name, `localhost` and metadata names, and any network overlapping loopback, link-local (cloud
+metadata), unspecified, multicast or reserved addresses. The check never admits those addresses even
+when an entry seems to cover them. A listed host name may resolve to private addresses; other hosts
+are admitted only to public addresses or addresses inside a listed network. The caller passes it
+explicitly (`allow=`) to `validate_url`, `revalidate_at_connect` and the pinned transports; every
+caller that passes nothing (webhooks, the agent's fetches, the broker) is unchanged, and the pin and
+connect-time re-check apply to allowed fetches exactly as to others.
+
 **Ownership.** The rule has one canonical copy, `ssrf.py` here, and one table,
 `golden/outbound-url-vectors.json`. Each image carries a verbatim copy; no service writes or
 changes the rule at runtime. Paths above are relative to each service's source root.
@@ -82,6 +94,8 @@ Deny tests:
 | meeting-api | `core/meetings/services/meeting-api/tests/test_webhook_ssrf.py` | `test_blocked_urls`, `test_dns_rebinding_to_private_blocked`, `test_sink_blocks_ssrf_without_touching_transport`, `test_every_form_of_an_internal_address_is_refused`, `test_a_name_resolving_to_any_form_of_an_internal_address_is_refused`, `test_a_connect_time_rebind_to_a_transition_form_never_dials` |
 | meeting-api, the case table | `core/meetings/services/meeting-api/tests/test_outbound_url_vectors.py` | `test_address`, `test_hostname`, `test_url` |
 | admin-api | `core/identity/services/admin-api/tests/test_saved_url_guard.py` | `test_an_internal_feed_is_refused`, `test_a_saved_url_is_checked_without_a_lookup` |
+| meeting-api, the operator allowance | `core/meetings/services/meeting-api/tests/test_calendar_feed_allow.py` | `test_everything_else_stays_refused_with_an_allowance`, `test_a_listed_host_that_rebinds_to_metadata_at_connect_is_never_dialled`, `test_the_allowance_never_reaches_customer_webhooks`, `test_an_unsafe_or_malformed_entry_refuses_the_boot` |
+| admin-api, the operator allowance | `core/identity/services/admin-api/tests/test_calendar_enterprise.py` | `test_with_an_allowance_everything_else_internal_is_still_refused`, `test_an_unsafe_allowance_entry_is_refused` |
 | agent | `core/agent/tests/test_outbound_url_guard.py` | `test_webfetch_refuses_every_notation`, `test_the_asset_fetch_refuses_every_notation`, `test_the_repository_host_check_refuses_every_notation`, `test_a_name_resolving_into_any_notation_is_refused`, `test_a_record_flipped_after_the_check_is_never_dialled`, `test_webfetch_refuses_a_rebind_at_connect`, `test_the_stt_test_never_probes_an_internal_customer_endpoint` |
 | agent, model endpoint | `core/agent/tests/test_model_endpoint.py` | `test_a_non_allowlisted_endpoint_is_refused`, `test_a_wildcard_never_reaches_an_internal_address_in_any_notation`, `test_a_wildcard_never_reaches_the_deployments_own_network` |
 | bot | `core/meetings/modules/whisper/src/url-guard.test.ts` | checks `address <addr>`, `url <url>` (every table row), `lookup refuses when any answer is internal`, `customer endpoint refused: …`, `the internal server was never reached` |
