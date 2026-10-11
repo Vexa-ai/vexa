@@ -71,7 +71,7 @@ def refused(request: "Request", status: int, detail, *, reason: str, **fields) -
 #: `personal` (or `desk`) names the desk explicitly, which is how *"note this on my desk"* still works
 #: from a chat working somewhere else.
 WRITE_SLUG_HELP = ("the workspace to act in. Omit it to act where this conversation is working; "
-                   "pass `personal` for the person's own desk, or a workspace's slug for one act "
+                   "pass `personal` for the person's personal workspace, or a workspace's slug for one act "
                    "anywhere else they may write.")
 #: The words that name the person's own desk on a page verb.
 DESK_ALIASES = frozenset({"personal", "desk"})

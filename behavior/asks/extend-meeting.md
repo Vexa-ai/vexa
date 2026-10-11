@@ -57,7 +57,7 @@ the file once, whole, with `workspace_write`.
 
 For every company, person, project or product the new segments name and that has no page: write it
 (`entity_upsert`). A COMPANY goes in the company layer, `slug="_global"` — companies are the
-organisation's, not one person's desk. Everything else goes on the desk this page is on. Link both
+organisation's, not one person's personal workspace. Everything else goes in the personal workspace this page is on. Link both
 ways: the meeting page names the entity, the entity's page names this meeting.
 
 Then publish the terms so the transcript shows them where they were said:

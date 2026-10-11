@@ -74,7 +74,7 @@ def build(**d) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
         if row is None:
-            raise HTTPException(status_code=404, detail="no such proposal on this desk")
+            raise HTTPException(status_code=404, detail="no such proposal in this personal workspace")
         return row
 
     return router

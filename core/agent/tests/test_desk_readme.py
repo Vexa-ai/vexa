@@ -70,11 +70,11 @@ def test_the_header_is_two_lines_of_prose_and_is_written_once(tmp_path):
     d = _desk(tmp_path)
     _write(d, name="nora@studio.example")
     head = (d / "README.md").read_text().split("<!-- desk:pinned:start -->")[0].strip()
-    assert head.startswith("# nora@studio.example — desk")
+    assert head.startswith("# nora@studio.example — personal")
     assert len([ln for ln in head.splitlines() if ln.strip()]) == 2
     # a later run does not rewrite it, even if the name changed
     _write(d, name="somebody.else@studio.example")
-    assert (d / "README.md").read_text().startswith("# nora@studio.example — desk")
+    assert (d / "README.md").read_text().startswith("# nora@studio.example — personal")
 
 
 def test_the_page_is_links_not_prose(tmp_path):
@@ -306,8 +306,8 @@ def test_empty_is_said_never_omitted(tmp_path):
     d = _desk(tmp_path)
     _write(d)
     got = _sections((d / "README.md").read_text())
-    assert "No people on this desk yet" in got["people"]
-    assert "No projects on this desk yet" in got["projects"]
+    assert "No people in this personal workspace yet" in got["people"]
+    assert "No projects in this personal workspace yet" in got["projects"]
     assert "belongs to no group workspace yet" in got["workspaces"]
     assert "Nothing opened from here yet" in got["recent"]
     assert "Nothing scheduled." in got["now"]         # `desk_now`'s words, because it is the renderer

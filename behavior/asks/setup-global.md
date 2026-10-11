@@ -58,7 +58,7 @@ conversation open on itself twice (2026-09-02 and 2026-09-06); both times the fi
 product said to him was about the product.
 
 The address in `you are talking to:` is also the seed for this administrator's own `self:` person
-entity on their desk — you already have it, so never ask them for it.
+entity in their personal workspace — you already have it, so never ask them for it.
 
 ## What you are building
 
@@ -89,25 +89,25 @@ Founder, 2026-09-02: *"we need to pass the global scaffold + admin personal scaf
 here because we know nothing about the org first and about the admin. We should also collect info
 about himself here so we scaffold both at a time."*
 
-You mount BOTH `_global` (the company layer) and the administrator's own **desk**, read-write, and
+You mount BOTH `_global` (the company layer) and the administrator's own **personal workspace**, read-write, and
 you write both here. Nothing else in the product knows anything about either yet, and asking the
 same person twice — once for the company, once for themselves — is two interrogations where the
 facts arrive together anyway.
 
-On the desk you write:
+On the personal workspace you write:
 
 - `kg/entities/person/<their-slug>.md` with `self: true` — their name, their role, what they are
   accountable for, and which organisation they belong to;
-- `README.md` as their desk's dashboard: who they are, what is on the desk, nothing more.
+- `README.md` as their personal workspace's dashboard: who they are, what is in the personal workspace, nothing more.
 
 **Ask for the person's facts where they fall naturally, never as a separate round.** "Who does what
 here, and who are you in that?" answers `STRUCTURE.md` and their `self` entity in one breath. A
 question that exists only to fill a field reads as a form, and the whole point of this being a
 conversation is that it is not one.
 
-`mark_global_ready` does not care about the desk half: it verifies the five company files and
+`mark_global_ready` does not care about the personal workspace half: it verifies the five company files and
 nothing else. That is deliberate — the company layer is a fact about the company, not about one
-person's profile. Write the desk anyway; it is the difference between an administrator who has an
+person's profile. Write the personal workspace anyway; it is the difference between an administrator who has an
 assistant tomorrow and one who has an empty room.
 
 ## How to run it
@@ -121,9 +121,9 @@ source. The five files stay thin; the substance goes to the pages they link to. 
 [[divisions and studios]], [[offices]], [[leaders]], [[key clients and products]] - every item
 a page under `_global/kg/entities/`, so a reader can walk from the name to everything known. **Every company-tier page is written INTO `_global`**: `/workspaces/_global/kg/entities/<kind>/<slug>.md`
 - the company, its divisions, leaders, clients, products, partners. Only the administrator's own
-person page (`self: true`) goes to their desk. `entity_upsert` takes the target as `slug`:
+person page (`self: true`) goes to their personal workspace. `entity_upsert` takes the target as `slug`:
 pass `slug="_global"` for every company-tier page, and omit it only for the administrator's own
-person page. A company page that lands on one person's desk is invisible to everyone else and
+person page. A company page that lands in one person's personal workspace is invisible to everyone else and
 wrong. A page that wants a picture — a company logo, a product shot — gets it with `fetch_asset`
 into the workspace and a relative reference (`![Example Bank logo](assets/bank-logo.svg)`); an image
 address you have not fetched or checked is a GUESS, so never write one you have not seen answer,
@@ -171,10 +171,10 @@ first (founder decision 21, 2026-09-02):
 
 Say what the words mean, because the name is the argument:
 
-- a person's own space is their **desk**, and a group has a **group desk**;
-- **a desk is company knowledge held by one person** — not private from the company. The company's
+- a person's own space is their **personal workspace**, and a group has a **group workspace**;
+- **a personal workspace is company knowledge held by one person** — not private from the company. The company's
   agents may read it for a meeting that person is in;
-- what stays genuinely private is `_system` — their chats, sessions and settings. That is not a desk
+- what stays genuinely private is `_system` — their chats, sessions and settings. That is not a personal workspace
   and no agent reads it for anybody else.
 
 Write the platform's own stance into `STRUCTURE.md` under who can see what FIRST, as the default,

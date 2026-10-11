@@ -66,7 +66,7 @@ logger = logging.getLogger("agent_api.scaffolds")
 # (`core/flows/src/flows_steps/mailtext.py`); three languages cannot share a literal, so the three
 # lines name each other and together they are the whole rename. Founder, 2026-09-02: a workspace is
 # a DESK.
-WORKSPACE_WORD = "desk"
+WORKSPACE_WORD = "personal workspace"
 
 # The catalogue (PRD §5.5). One preset file each, both halves declared. A kind outside this set is
 # refused at mint: a scaffold whose kind nothing renders is a link that opens a shrug.

@@ -66,7 +66,7 @@ export function buildWorkspaces(src: {
   const home = active.find((m) => isHomeMount(m, src.subject));
   const desk: NavWorkspace = {
     key: "desk", slug: undefined, kind: "desk",
-    name: home?.name?.trim() || "Desk",
+    name: home?.name?.trim() || "Personal",
   };
 
   const globalMount = active.find((m) => m.slug === GLOBAL_SLUG);

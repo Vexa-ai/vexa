@@ -266,13 +266,13 @@ def render_sections(root, *, mounts: Iterable[dict] = (), workspaces: Iterable[d
         "pinned": f"## Pinned\n\n{PINNED_HINT}\n",
         "now": "## Now\n\n" + now_body + "\n",
         "people": block("People", _card_rows(all_cards, "person", touched),
-                        "No people on this desk yet."),
+                        "No people in this personal workspace yet."),
         "companies": block("Companies", _card_rows(all_cards, "company", touched),
-                           "No companies on this desk yet."),
+                           "No companies in this personal workspace yet."),
         "projects": block("Projects", _card_rows(all_cards, "project", touched),
-                          "No projects on this desk yet."),
+                          "No projects in this personal workspace yet."),
         "workspaces": block("Workspaces", _workspace_rows(workspaces),
-                            "This desk belongs to no group workspace yet."),
+                            "This personal workspace belongs to no group workspace yet."),
         "recent": block("Recently opened", _recent_rows(touches or [], all_cards, home_id),
                         "Nothing opened from here yet."),
     }
@@ -303,7 +303,7 @@ def header_for(name: str = "") -> str:
     Written ONCE, above the markers, and never regenerated — the moment the agent has something
     better to say at the top of somebody's desk it says it, and this is out of the way."""
     who = (name or "").strip()
-    return (f"# {who} — desk\n" if who else "# This desk\n") + \
+    return (f"# {who} — personal\n" if who else "# Personal\n") + \
         "\nThe view over the files, never a second source of truth.\n"
 
 

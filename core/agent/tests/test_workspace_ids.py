@@ -104,7 +104,7 @@ def test_a_desk_is_never_named_by_its_bare_subject_id(tmp_path):
     _ws(tmp_path, "126")
     rec = ids.sync_workspace(tmp_path, "126", registry=reg, owner="126")
     assert rec["name"] != "126"
-    assert rec["name"] == "Desk 126"
+    assert rec["name"] == "Personal 126"
 
 
 def test_rename_moves_the_name_and_nothing_else(tmp_path):
@@ -398,7 +398,7 @@ def test_a_deleted_tree_is_gone_not_not_yours(tmp_path):
     shutil.rmtree(tmp_path / "126")
     assert ids.access_for(reg.get(rec["id"]), "126") == ids.ACCESS_GONE
     # and the LAST KNOWN NAME still comes back, which is what renders in a dead link
-    assert ids.view(reg.get(rec["id"]), ids.ACCESS_GONE)["name"] == "Desk 126"
+    assert ids.view(reg.get(rec["id"]), ids.ACCESS_GONE)["name"] == "Personal 126"
     assert ids.writable_for(reg.get(rec["id"]), "126") is False
 
 

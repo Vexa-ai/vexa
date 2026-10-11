@@ -89,7 +89,7 @@ def test_starting_the_app_gives_every_existing_workspace_an_id(tmp_path):
 def test_a_desk_is_named_never_numbered(tmp_path):
     """F49 — the chat header read `126`, which was the directory name showing through."""
     c = _world(tmp_path)
-    assert c.get("/api/workspaces/by-slug/126", headers=_h("126")).json()["name"] == "Desk 126"
+    assert c.get("/api/workspaces/by-slug/126", headers=_h("126")).json()["name"] == "Personal 126"
 
 
 def test_init_names_the_desk_after_the_address_that_signed_in(tmp_path, monkeypatch):

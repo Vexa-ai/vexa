@@ -137,7 +137,7 @@ def test_the_mount_description_says_desk():
         {"slug": "_system", "path": "/workspaces/_system", "role": "system", "write": True},
     ]
     text = engine.mounts_preamble(mounts)
-    assert "your DESK" in text
+    assert "your PERSONAL workspace" in text
     assert "PRIVATE baseline (durable personal memory)" not in text
     assert "`/workspaces/127`" in text          # the path is untouched
     assert "**seed**" in text                   # …and so is the slug

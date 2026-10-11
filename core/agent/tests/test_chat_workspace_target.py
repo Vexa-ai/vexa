@@ -256,8 +256,8 @@ def test_the_target_moves_the_CWD_and_nothing_else_about_the_stack(store):
     theirs = next(m for m in mounts if m["slug"] == wid)
     assert desk["primary"] is True and theirs.get("primary") is False
     assert engine.desk_mounts(mounts)[0]["path"] == f"{store}/175"
-    assert "your DESK" in engine._tier_label(desk)
-    assert "your DESK" not in engine._tier_label(theirs)
+    assert "your PERSONAL workspace" in engine._tier_label(desk)
+    assert "your PERSONAL workspace" not in engine._tier_label(theirs)
 
 
 def test_a_target_that_is_not_a_writable_mount_moves_no_cwd(store):
@@ -505,7 +505,7 @@ def test_a_chat_that_has_chosen_nothing_is_told_it_writes_to_the_desk(stack):
     """The default is STATED, not left implicit — the founder's failure was a chat that did not say
     where it writes, and silence is what that failure sounded like."""
     _turn(_client(stack, QUIET_TURN), "pchat-plain", prompt="hello")
-    assert "target workspace: your own desk — writes go here unless asked otherwise" in _sent_prompt(stack)
+    assert "target workspace: your personal workspace — writes go here unless asked otherwise" in _sent_prompt(stack)
 
 
 def test_the_desk_stays_readable_from_a_chat_targeting_somewhere_else(stack):

@@ -3,7 +3,7 @@ title: "Workspaces and connections"
 description: "A workspace's front page, adding members and invite links, links to workspace pages, attaching a repository, and connecting your accounts."
 ---
 
-A workspace is a shared folder of pages with a roster. Your **desk** is yours; a **shared workspace**
+A workspace is a shared folder of pages with a roster. Your **personal workspace** is yours; a **shared workspace**
 has members; the **company** workspace (`_global`) is read by everyone and written by the
 administrator. This page covers the front page of a workspace, how people join one, links into it,
 attaching an existing repository, and the **Connections** page where you connect your own accounts.
@@ -14,9 +14,9 @@ attaching an existing repository, and the **Connections** page where you connect
 
 Open a workspace's `README.md` (or a `/w/<workspace>` link) and its header shows:
 
-- **What it is:** *Your desk*, *Shared workspace* or *Company layer*, with its title.
+- **What it is:** *Your personal workspace*, *Shared workspace* or *Company layer*, with its title.
 - **Who is in it:** for a shared workspace, up to two names with *you* first ("you, … and 2 more");
-  for your desk, whether agents read it for your meetings; for the company workspace, who reads and
+  for your personal workspace, whether agents read it for your meetings; for the company workspace, who reads and
   who writes it. A reader who may not see the roster sees *you and the other members*.
 - **What is in it:** the page count, and what the workspace is bound to (a meeting series, or where it
   came from).
@@ -29,7 +29,7 @@ The buttons depend on your role:
 |---|---|
 | a member who is not an owner | **History** only |
 | owner of a shared workspace | **Add a member**, **Connect a repo** (or **Sync**), **History** |
-| owner of your desk | **Connect a repo** (or **Sync**), **History** |
+| owner of your personal workspace | **Connect a repo** (or **Sync**), **History** |
 | the administrator, on the company workspace | **Set up policies**, **Add an editor**, **History** |
 
 Every button except History starts a conversation in the chat; none opens a form.
@@ -80,7 +80,7 @@ Choose **Attach existing repo…** in the chat bar's **+** menu, **Attach a repo
 **Attach repository as a workspace** under Connections → Git repositories.
 
 1. Enter the **Repository** address (for example `git@github.com:<org>/<repo>.git`) and the **Branch**
-   (`main` by default). The repository always becomes a **new workspace**; your desk and other
+   (`main` by default). The repository always becomes a **new workspace**; your personal workspace and other
    workspaces are unchanged.
 2. Press **Attach**. Large repositories can take several minutes; the dialog shows progress.
 3. When it is done (*Cloned … into …*), press **Open workspace**.
@@ -120,7 +120,7 @@ How an operator runs the credential broker behind this page is in [Connections](
 | *This invite could not be checked just now.* | the service did not answer | try again |
 | an owner-only refusal from the agent | only owners add, remove or change members | ask an owner |
 | *cannot remove the last owner* | a workspace needs an owner | add another owner first |
-| *That page is in …, a workspace you do not have access to.* · *That link points at a workspace that is no longer here.* | a `/w/` link you cannot open; Minutes never shows your desk instead | ask for access |
+| *That page is in …, a workspace you do not have access to.* · *That link points at a workspace that is no longer here.* | a `/w/` link you cannot open; Minutes never shows your personal workspace instead | ask for access |
 | *Repository access failed. Check the repository URL and credential.* | the clone was refused | check the address, token or deploy key |
 | *Import interrupted. Check the workspace before retrying.* | the import stopped part-way | check what arrived, then retry |
 | *Allow popups for Minutes, then try again.* · *Authorization was not completed.* | Google consent did not finish | allow pop-ups and retry |

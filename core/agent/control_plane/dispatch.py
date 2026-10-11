@@ -231,7 +231,7 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
     It was written here first, as ``primary`` on the target's mount, and that was WRONG in a way
     that would have looked right: ``primary`` already means *"which of these is the person's own
     desk"* — ``worker/engine.desk_mounts`` reads it to decide whose README the end-of-turn refresh
-    maintains, and ``_tier_label`` renders it to the model as *"your DESK — your private baseline,
+    maintains, and ``_tier_label`` renders it to the model as *"your PERSONAL workspace — your private baseline,
     durable personal memory"*. Pointing it at a customer's shared workspace would have told the
     agent that workspace was the person's private desk and moved the desk README onto it. One field,
     one meaning."""
@@ -552,7 +552,7 @@ def _worker_cwd(root: str, subject: str, mounts: list[dict], target: str = "") -
 
     It is applied HERE rather than as ``primary`` on the mount, and that distinction is load-bearing:
     ``primary`` means *"the person's own desk"* to ``engine.desk_mounts`` and to ``_tier_label``,
-    which renders it as *"your DESK — your private baseline"*. See ``build_mount_set``'s last
+    which renders it as *"your PERSONAL workspace — your private baseline"*. See ``build_mount_set``'s last
     section for what stamping it would have done.
 
     Otherwise the private baseline (the primary mount). But the baseline can be switched OFF, in which case

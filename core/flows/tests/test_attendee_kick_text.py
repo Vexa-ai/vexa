@@ -52,7 +52,7 @@ def test_the_kick_asks_for_one_shared_report_and_no_per_person_file(monkeypatch)
     assert "## <address>" not in k
     assert "THE REPORT IS SHARED, AND IT IS YOUR REPLY" in k
     # the attribution rule the shared report has to carry, now that the turn can read desks
-    assert ("MEETING-RELEVANT FACTS ONLY, ATTRIBUTED — a person's desk informs the report, it is "
+    assert ("MEETING-RELEVANT FACTS ONLY, ATTRIBUTED — a person's personal workspace informs the report, it is "
             "never quoted into it.") in k
     # and the clause that supersedes the behavior-domain kick's own desk writes (decision 22)
     assert "WRITE NO FILES FOR THIS REPORT" in k
@@ -85,4 +85,4 @@ def test_a_group_meeting_asks_the_turn_to_MAINTAIN_the_group_desk(monkeypatch):
     assert "Maintaining is not appending" in k
     # ...and it is still the one desk it writes to
     assert "WRITE NO FILES FOR THIS REPORT" in k
-    assert "never copy one person's desk into the group's" in k
+    assert "never copy one person's personal workspace into the group's" in k

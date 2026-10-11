@@ -44,7 +44,7 @@
                 "type": "null"
               }
             ],
-            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's own desk, or a workspace's slug for one act anywhere else they may write. Fetch it into the workspace of the page that shows it.",
+            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's personal workspace, or a workspace's slug for one act anywhere else they may write. Fetch it into the workspace of the page that shows it.",
             "title": "Slug"
           },
           "url": {
@@ -361,7 +361,7 @@
                 "type": "null"
               }
             ],
-            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's own desk, or a workspace's slug for one act anywhere else they may write. Companies belong in the company layer, `_global`.",
+            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's personal workspace, or a workspace's slug for one act anywhere else they may write. Companies belong in the company layer, `_global`.",
             "title": "Slug"
           },
           "source": {
@@ -963,7 +963,7 @@
                 "type": "null"
               }
             ],
-            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's own desk, or a workspace's slug for one act anywhere else they may write.",
+            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's personal workspace, or a workspace's slug for one act anywhere else they may write.",
             "title": "Slug"
           },
           "to": {
@@ -980,7 +980,7 @@
                 "type": "null"
               }
             ],
-            "description": "the workspace it is going to; omit it for a rename inside the same workspace, pass `personal` for the person's own desk",
+            "description": "the workspace it is going to; omit it for a rename inside the same workspace, pass `personal` for the person's personal workspace",
             "title": "To Slug"
           }
         },
@@ -1012,7 +1012,7 @@
       },
       "WorkspaceRemoveBody": {
         "additionalProperties": false,
-        "description": "REMOVE one page from a workspace \u2014 the body behind `workspace_delete` (Vexa-ai/vexa#1621).\n\n``path`` is workspace-RELATIVE; ``slug`` names the workspace (omitted = the chat's target, or the\ncaller's own desk when there is none).\n\n\u26a0 WHY THIS IS A POST AND NOT `DELETE /api/workspace/file`, which is what it was written as\nfirst. `DELETE /api/workspace/{slug}` already exists and DESTROYS A WHOLE WORKSPACE\nirreversibly \u2014 and `{slug}` matches the literal segment `file`, so the two routes can match one\nURL and the answer would be decided by which router `create_app` includes first.\n`test_route_table.test_no_two_routes_can_match_the_same_url` caught it, which is the entire\npoint of that gate: of all the pairs to leave to registration order, \"remove one page\" and\n\"destroy the workspace\" is the worst. A POST on its own literal path cannot be confused with\nanything, and it reads beside its sibling `POST /api/workspace/move`.",
+        "description": "REMOVE one page from a workspace \u2014 the body behind `workspace_delete` (Vexa-ai/vexa#1621).\n\n``path`` is workspace-RELATIVE; ``slug`` names the workspace (omitted = the chat's target, or the\ncaller's personal workspace when there is none).\n\n\u26a0 WHY THIS IS A POST AND NOT `DELETE /api/workspace/file`, which is what it was written as\nfirst. `DELETE /api/workspace/{slug}` already exists and DESTROYS A WHOLE WORKSPACE\nirreversibly \u2014 and `{slug}` matches the literal segment `file`, so the two routes can match one\nURL and the answer would be decided by which router `create_app` includes first.\n`test_route_table.test_no_two_routes_can_match_the_same_url` caught it, which is the entire\npoint of that gate: of all the pairs to leave to registration order, \"remove one page\" and\n\"destroy the workspace\" is the worst. A POST on its own literal path cannot be confused with\nanything, and it reads beside its sibling `POST /api/workspace/move`.",
         "properties": {
           "path": {
             "description": "workspace-relative path of the page to remove",
@@ -1028,7 +1028,7 @@
                 "type": "null"
               }
             ],
-            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's own desk, or a workspace's slug for one act anywhere else they may write.",
+            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's personal workspace, or a workspace's slug for one act anywhere else they may write.",
             "title": "Slug"
           }
         },
@@ -1061,7 +1061,7 @@
                 "type": "null"
               }
             ],
-            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's own desk, or a workspace's slug for one act anywhere else they may write.",
+            "description": "the workspace to act in. Omit it to act where this conversation is working; pass `personal` for the person's personal workspace, or a workspace's slug for one act anywhere else they may write.",
             "title": "Slug"
           }
         },
@@ -1093,7 +1093,7 @@
     },
     "/api/claims": {
       "post": {
-        "description": "Record what an agent believes about this person's company as PROPOSED \u2014 and tell flows,\nonce per claim. Put everything learned in ONE call, show the person the lines it hands\nback, and record their answer with `validate`. A proposed claim is never company context\nuntil a person has answered: an agent cannot promote its own guess.\n\nTHIS ROUTE EXISTS SO THE FACT HAS A PRODUCER. The book was written through\n`PUT /api/workspace/file`, a generic route that holds bytes and knows nothing about what\nthey mean \u2014 so the one moment worth telling anybody about, a claim being proposed, was\nindistinguishable from any other file write, and `claim.proposed` had no publisher. A\ngeneric route cannot publish a specific fact without inspecting paths and guessing at\ncontents, which is how a file route quietly becomes a state machine nobody declared.\n\nONE EVENT PER CLAIM, and only for claims this call actually added: `await_claim` looks a\n`claim_id` up in the book and blocks on that claim's own words, so one event for a batch\nwould be one card for three questions with no way to answer two of them.\n\nIt lives in the workspaces router because the book is a file on a desk and everything this\nneeds \u2014 the subject, the reader, the desk path \u2014 is already closed over here; the state\nmachine itself is `control_plane.claims`, which is the concern.",
+        "description": "Record what an agent believes about this person's company as PROPOSED \u2014 and tell flows,\nonce per claim. Put everything learned in ONE call, show the person the lines it hands\nback, and record their answer with `validate`. A proposed claim is never company context\nuntil a person has answered: an agent cannot promote its own guess.\n\nTHIS ROUTE EXISTS SO THE FACT HAS A PRODUCER. The book was written through\n`PUT /api/workspace/file`, a generic route that holds bytes and knows nothing about what\nthey mean \u2014 so the one moment worth telling anybody about, a claim being proposed, was\nindistinguishable from any other file write, and `claim.proposed` had no publisher. A\ngeneric route cannot publish a specific fact without inspecting paths and guessing at\ncontents, which is how a file route quietly becomes a state machine nobody declared.\n\nONE EVENT PER CLAIM, and only for claims this call actually added: `await_claim` looks a\n`claim_id` up in the book and blocks on that claim's own words, so one event for a batch\nwould be one card for three questions with no way to answer two of them.\n\nIt lives in the workspaces router because the book is a file in a personal workspace and everything this\nneeds \u2014 the subject, the reader, the workspace path \u2014 is already closed over here; the state\nmachine itself is `control_plane.claims`, which is the concern.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1109,7 +1109,7 @@
     },
     "/api/claims/verdicts": {
       "post": {
-        "description": "Record a PERSON's word on proposed claims \u2014 `confirmed`, `corrected` (the note is the\ncorrection; the original stays beside it) or `rejected`. Put their whole answer in ONE call,\nand only after asking them: this is their word, never an agent's guess about it.\n\nThe first claim they stand behind makes the desk ready, so answering finishes the setup.\nAn unknown id or verdict comes back in `errors` and the rest of the answer still lands.",
+        "description": "Record a PERSON's word on proposed claims \u2014 `confirmed`, `corrected` (the note is the\ncorrection; the original stays beside it) or `rejected`. Put their whole answer in ONE call,\nand only after asking them: this is their word, never an agent's guess about it.\n\nThe first claim they stand behind makes their personal workspace ready, so answering finishes the setup.\nAn unknown id or verdict comes back in `errors` and the rest of the answer still lands.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1390,7 +1390,7 @@
         "summary": "Ws File"
       },
       "put": {
-        "description": "WRITE one page, creating it or replacing it whole \u2014 the terminal's in-place page editor and\nthe verb behind `workspace_write`. Authorization mirrors the MOUNT rules, not the read rules:\nown desk and `_system` always; a shared workspace needs contributor+; `_global` only the\nadmin allowlist. Commits, so the history stays honest.\n\nNever overwrite a page with a note saying it moved or went away: `workspace_move` and\n`workspace_delete` do those, and keep the history.",
+        "description": "WRITE one page, creating it or replacing it whole \u2014 the terminal's in-place page editor and\nthe verb behind `workspace_write`. Authorization mirrors the MOUNT rules, not the read rules:\nown personal workspace and `_system` always; a shared workspace needs contributor+; `_global` only the\nadmin allowlist. Commits, so the history stays honest.\n\nNever overwrite a page with a note saying it moved or went away: `workspace_move` and\n`workspace_delete` do those, and keep the history.",
         "requestBody": {
           "content": {
             "application/json": {

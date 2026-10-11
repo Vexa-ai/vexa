@@ -158,7 +158,7 @@ def _tier_label(m: dict) -> str:
         # the slug, the path and every code identifier keep saying what they say, because renaming
         # those would move data. Same word as `control_plane.scaffolds.WORKSPACE_WORD` and the
         # terminal's `minutes/vocabulary.ts`; four spellings of one noun, each naming the others.
-        return "your DESK — your private baseline, durable personal memory — read-write"
+        return "your PERSONAL workspace — your private baseline, durable personal memory — read-write"
     writable = "read-write" if m.get("write", True) else "READ-ONLY (do not write here)"
     return f"{role} workspace — {writable}"
 
@@ -833,14 +833,14 @@ def _writeback_workspace_note(mounts: "list[dict] | None" = None) -> str:
         return (
             f"\nTHIS TURN IS IN THE SHARED WORKSPACE `{slug}`" + (f" ({label})" if label != slug else "")
             + f" — pass `slug=\"{slug}\"` explicitly on every `entity_upsert` call below so each "
-            "page lands there, not on your personal desk (which is where a call with no `slug` "
+            "page lands there, not in your personal workspace (which is where a call with no `slug` "
             "goes). Only leave `slug` off for something that is genuinely personal and not part "
             "of this shared work.\n"
         )
     listed = ", ".join(f"`{g.get('slug') or g.get('id')}`" for g in groups)
     return (
         f"\nMORE THAN ONE SHARED WORKSPACE IS ACTIVE ({listed}). A call to `entity_upsert` with no "
-        "`slug` lands on your personal desk, never on one of these — pass `slug=\"<the one this "
+        "`slug` lands in your personal workspace, never in one of these — pass `slug=\"<the one this "
         "name belongs to>\"` explicitly for every name that is shared work, and leave it off only "
         "for something genuinely personal.\n"
     )
@@ -903,7 +903,7 @@ def writeback_prompt(candidates: list[str], mounts: "list[dict] | None" = None) 
         "For a MEETING, pass `dates` as well — `held_at` when you know it ran, "
         "`report_delivered_at` when you know its write-up reached them, `scheduled_at` when it is "
         "still ahead (ISO-8601 or epoch, any subset, only what this turn actually knows). Those "
-        "three fields are what the desk's `Now` section and `timeline` both read, so a meeting "
+        "three fields are what the personal workspace's `Now` section and `timeline` both read, so a meeting "
         "that ran with no write-up shows as an open commitment without anyone writing a sentence "
         "about it. A meeting page with no `dates` is a page nothing can order.\n\n"
         + _ENTITY_FILE_SHAPE +

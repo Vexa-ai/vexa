@@ -14,7 +14,7 @@ find pages, edit them, ask the agent to grow them, and what happens to images an
 1. Click the **folder icon** at the left of the page header, or press <kbd>/</kbd> after it is open,
    to show the **navigator**. It is hidden by default, and your browser remembers whether you left it
    open.
-2. The navigator lists your **Desk** first, then the company workspace (`_global`, shown under the
+2. The navigator lists **Personal** — your own workspace — first, then the company workspace (`_global`, shown under the
    company name when it is known), then every shared workspace you belong to, by name. Workspaces you
    cannot read are not listed at all.
 3. Type in **Filter files** to match file *names* across every listed workspace. The list shows the
@@ -179,9 +179,9 @@ the tools are declared in `core/agent/mcp.tools.v1.json`.
 
 ### Security
 
-**Who can do what.** You can read your own desk, the company workspace, a colleague's desk (read-only),
+**Who can do what.** You can read your own personal workspace, the company workspace, a colleague's personal workspace (read-only),
 your own private tier, and every shared workspace you belong to (viewers included). You can write your
-desk, your private tier, a shared workspace where you are a contributor or above, and the company
+personal workspace, your private tier, a shared workspace where you are a contributor or above, and the company
 workspace only as an org admin. Nobody writes `kg/templates/`. An agent acting for you is further held
 to the workspace scope of the chat that dispatched it.
 
@@ -202,7 +202,7 @@ to the workspace scope of the chat that dispatched it.
 | Test | Proves |
 |---|---|
 | `core/agent/tests/test_agent_api_authz.py` · `test_every_path_route_refuses_the_same_shapes`, `test_every_path_route_refuses_a_symlink_out_of_the_workspace`, `test_every_path_route_refuses_the_repository_and_identity_directories` | bad paths are refused on every route |
-| `test_agent_api_authz.py` · `test_a_non_member_is_refused_by_every_route_that_names_a_group`, `test_a_colleagues_desk_is_readable_and_never_writable` | membership and read-only desks |
+| `test_agent_api_authz.py` · `test_a_non_member_is_refused_by_every_route_that_names_a_group`, `test_a_colleagues_desk_is_readable_and_never_writable` | membership and read-only personal workspaces |
 | `core/agent/tests/test_lane_a_shared_mounts.py` · `test_non_member_is_refused_shared_tree_and_file`, `test_non_member_is_refused_a_shared_WRITE_by_slug`, `test_viewer_gets_a_read_only_shared_mount` | shared workspaces |
 | `core/agent/tests/test_workspace_delete_move.py` · `test_a_path_that_leaves_the_workspace_is_refused`, `test_the_private_system_tier_is_never_a_removal_target`, `test_a_cross_workspace_move_into_a_workspace_the_caller_only_reads_is_refused`, `test_a_move_out_of_the_company_tier_is_refused_for_everyone_but_the_admin`, `test_kg_templates_are_shapes_and_not_records_here_either` | remove and move |
 | `core/agent/tests/test_workspace_assets.py` · `test_the_asset_route_is_scoped_exactly_like_the_file_route`, `test_the_deployments_own_network_is_never_an_asset_source`, `test_every_redirect_hop_is_re_checked_against_the_guard`, `test_a_refused_url_is_a_named_400_not_a_silent_empty_asset`, `test_an_enormous_remote_costs_the_call_and_not_the_workspace` | assets and fetches |

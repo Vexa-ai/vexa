@@ -25,7 +25,7 @@ what each answer changes, what it buys, what it costs, and what a hostile person
 
 **A rule has one shape: _subject may action object when relation._** The subjects are `user`,
 `participant`, `organizer`, `admin`, `agent` (software acting for exactly one user) and `company`.
-The objects are `meeting`, `transcript`, `report`, `workspace` (a desk, a group, `_global`,
+The objects are `meeting`, `transcript`, `report`, `workspace` (a personal workspace, a group, `_global`,
 `_system`), `page` and `mailbox`. The relations are `participant-of`, `organizer-of`,
 `member-of(role)`, `owner-of`, `agent-for`, `admin-of`, `derived-from`, `lives-in` and
 `bound-to(group, series)`. The actions are `read`, `write`, `deliver`, `join`, `retain` and
@@ -73,7 +73,7 @@ These are the product's, and they hold whatever the front matter says:
 ## The rules
 
 <a id="agent_reads_desk"></a>
-### `agent_reads_desk` — an agent may read its user's desk when its user is a participant
+### `agent_reads_desk` — an agent may read its user's personal workspace when its user is a participant
 
 **Default `on`.** *(founder decision 21, 2026-09-02.)*
 
@@ -81,7 +81,7 @@ These are the product's, and they hold whatever the front matter says:
 your workspaces is visible to the company's agents*. With it off, they are told the opposite, and
 the mail says so in the same breath.
 
-**The effect.** In a post-meeting room, the turn mounts the desks of the people who were in the
+**The effect.** In a post-meeting room, the turn mounts the personal workspaces of the people who were in the
 meeting, read-only, so the report can say what this meeting means for each of them. Off, it mounts
 none of them and writes from the transcript alone.
 
@@ -89,7 +89,7 @@ none of them and writes from the transcript alone.
 between *"we agreed X"* and *"we agreed X, and you own the migration you wrote up last week"*.
 **Security.** It is the widest read in the product: one meeting can pull a dozen people's working
 notes into one turn. It never reaches `_system`. **Adversarial.** Somebody who gets themselves into
-a meeting gets an agent reading the other participants' desks for that meeting — so participation is
+a meeting gets an agent reading the other participants' personal workspaces for that meeting — so participation is
 resolved from the directory, not from a display name, and the bot announces itself in the room.
 
 **The price of turning it off.** Reports stop being personal and the product becomes a transcriber.
@@ -122,7 +122,7 @@ by hand.
 
 **Default `on`.**
 
-**An external is a participant with no desk here** — someone who was in the room and has never
+**An external is a participant with no personal workspace here** — someone who was in the room and has never
 signed in. It is not another word for another domain: the line between inside and outside is
 [`attendee_domains`](#attendee_domains), and *outside the domain, never* holds whatever this rule
 says.
@@ -299,7 +299,7 @@ install that is not a cost, it is the requirement.
 **The sentence it changes.** The prep note before a meeting, and the line that tells an organiser how
 to put Vexa in a meeting of their own.
 
-**The effect.** Before a meeting, the organiser and people who already have a desk get a short prep
+**The effect.** Before a meeting, the organiser and people who already have a personal workspace get a short prep
 note. Off, nothing is sent before a meeting.
 
 **Adoption.** **The second measured lever**, and the cheapest one: the prep line is where a first

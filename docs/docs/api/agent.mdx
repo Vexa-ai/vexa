@@ -172,7 +172,7 @@ curl -X POST "$AGENT_API/events" -H "Content-Type: application/json" -d '{
 - `GET /api/meeting/relay-health` → typed transcript-relay health (a stale bot key surfaces as
   `native_resolve:{ok:false,kind:"unauthorized"}` rather than silent dead air).
 - `POST /api/meeting/terms/scan` `{ meeting_id, since?, keep? }` → the terms the meeting has named
-  since `since`, each with `known` (the page this reader can open, desk first) or `null`, plus
+  since `since`, each with `known` (the page this reader can open, personal workspace first) or `null`, plus
   `cursor` and `emit`. Without `keep` it publishes nothing; `keep` (comma separated, `*` for all) adds
   those terms to the meeting's highlight map, which `GET /api/meeting/terms?meeting_id=` returns.
   The transcript is read from meeting-api as the caller: `403` for a meeting they cannot read,
@@ -206,7 +206,7 @@ workspace (parks the current one; omit `repo` to swap back to the seed).
 
 On the page writes — file, remove, move, asset and entity — an omitted `slug` is where the conversation
 is working: an agent worker's identity carries its chat's target workspace, and a caller with none
-writes on its own desk. `slug: "personal"` (or `"desk"`) names the desk explicitly.
+writes in its own personal workspace. `slug: "personal"` (or `"desk"`) names the personal workspace explicitly.
 
 ## Workspace identity and links
 
@@ -222,7 +222,7 @@ renaming either the workspace or the page leaves them resolving.
 as its own title.
 
 `POST /api/workspaces/{workspace_id}/rename` `{ name }` → the same view plus `renamed_from`. A group's
-owner and instance admins only — `403` otherwise, including for a desk's own owner; `404` unknown id,
+owner and instance admins only — `403` otherwise, including for a personal workspace's own owner; `404` unknown id,
 `400` empty name. The rename is audited on the record.
 
 `POST /api/links/resolve` `{ refs: [...], slug? }` →
@@ -231,7 +231,7 @@ trip, capped at 200. A readable ref with no file yet adds `missing: true` and st
 resolved one adds `path` and `slug`.
 
 `POST /api/desk/touch` `{ workspace, path }` → `202 { "recorded": true|false }`. The touch is filed
-under the **caller's own** desk, never a workspace named in the body; a workspace this caller cannot
+under the **caller's own** personal workspace, never a workspace named in the body; a workspace this caller cannot
 read answers `recorded: false` rather than confirming it exists. `400` without both fields.
 
 ## Entities
@@ -256,7 +256,7 @@ person has answered. `POST /api/claims` `{ claims: [{ claim, source?, scope? } |
 claim (`400` on an empty list). `POST /api/claims/verdicts` `{ verdicts: [{ id, verdict, note? }] }` →
 `{ recorded: [{ id, state, usable_as_context }], errors?, workspace_ready? }` — `verdict` is
 `confirmed` · `corrected` · `rejected`; an unknown id or verdict is reported in `errors` and the rest
-still lands. The first claim the person stands behind writes the desk's `.scaffolded` marker.
+still lands. The first claim the person stands behind writes the personal workspace's `.scaffolded` marker.
 
 ## Rough edges
 

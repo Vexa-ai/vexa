@@ -379,7 +379,7 @@ def test_the_step_fails_loudly_only_when_every_drop_failed(monkeypatch):
     reg = _rig(monkeypatch, store)
     with pytest.raises(StepError) as e:
         reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
-    assert "every desk drop failed" in str(e.value)
+    assert "every personal-workspace drop failed" in str(e.value)
     for a in EVERYONE:
         assert a in str(e.value)
     assert e.value.retryable is True          # every write above is safe to repeat

@@ -343,7 +343,7 @@ describe("the acts are conversations, and they are this viewer's", () => {
 });
 
 describe("the title never repeats the eyebrow", () => {
-  it("a desk whose README opens `# Your desk` shows the eyebrow once and no title", async () => {
+  it("a README seeded as `# Your desk` (before the rename) shows the eyebrow once and no title", async () => {
     // Seen in a browser on the seeded desk: `Your desk` on one line and `Your desk` again in 19px
     // under it. A title that repeats the label above it is not a title.
     vi.mocked(api.readWorkspaceBySlug).mockResolvedValue({ id: "w1", name: "Desk", kind: "desk", slug: "personal", access: "readable", writable: true });
@@ -352,7 +352,8 @@ describe("the title never repeats the eyebrow", () => {
       body: "# Your desk\n\nWhat you are working on.",
     });
 
-    await waitFor(() => expect(container.querySelector("[data-ws-eyebrow]")?.textContent).toBe("Your desk"));
+    await waitFor(() => expect(container.querySelector("[data-ws-eyebrow]")?.textContent).toBe("Your personal workspace"));
+    expect(container.querySelector("[data-ws-readme]")?.textContent ?? "").not.toMatch(/\bdesk\b/i);
     expect(container.querySelector("[data-ws-title]")).toBeNull();
     // …and the body does not get it back either — it was lifted, not hidden
     expect([...container.querySelectorAll("h1")].map((h) => h.textContent)).toEqual([]);

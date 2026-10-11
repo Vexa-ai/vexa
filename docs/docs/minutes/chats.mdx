@@ -64,7 +64,7 @@ An empty chat shows up to 10 **Suggestions**, in this order:
 | *Prep me for `<meeting>` at `<time>`* | a meeting starts within two hours |
 | *What came out of `<meeting>`?* | the newest finished meeting has nothing written about it |
 | *Review N new item(s)* | there are new items in the rail |
-| *My email is …, set up a workspace for me* | your desk is new |
+| *My email is …, set up a workspace for me* | your personal workspace is new |
 | items your agents proposed | each with **×** (*Not now*) to dismiss it |
 | *Connect Google, so I can create meetings for you* · *Paste a meeting link* | always, last |
 
@@ -85,7 +85,7 @@ workspace in the chat.
 - The highlighted chip is the **target**: *Writes in this chat go here. The others are mounted to
   read.* Click another chip to make it the target.
 - **+** (*Add a workspace to this chat*) mounts another workspace; a chip's remove button takes it out.
-- With no target set, writes go to your own desk.
+- With no target set, writes go to your own personal workspace.
 - Org admins can also choose **Company** (the `_global` workspace).
 - You can also say "work in `<workspace>`" and the agent moves the target itself.
 
@@ -143,7 +143,7 @@ person: an agent acting for someone cannot start one.
 | Turn output and job events | the agent worker | the chat unit's output stream; agent-api only relays it |
 | Inbox position | the agent worker | the chat unit's cursor |
 | Job records | the agent worker | the chat's working folder |
-| Suggestions | agent-api | `.vexa/proposals.json` on your desk |
+| Suggestions | agent-api | `.vexa/proposals.json` in your personal workspace |
 | Open tabs, view, unsent copies | your browser | `localStorage` |
 
 ### Routes
@@ -175,7 +175,7 @@ gateway's `/agent/*` forward. The request and event shapes are in [the agent API
 |---|---|---|
 | **P2** contracts · **P6** one front door | the browser calls only the terminal's `/api/*`; the terminal calls only the gateway | `gate:isolation`, `gate:exports`, `gate:domain-doors` |
 | **P18** fail loud | a refused spawn, a provider refusal or a gateway outage ends as a typed fault (`source` + `kind`) shown in the chat; the terminal never passes a bare *Internal Server Error*; a blocked queue says what blocked it; a failed job posts a line | `gate:fault-surfacing` (under `gate:node` and `gate:python`) |
-| **P20** authorize every access | the user is the signed identity; the target must be a workspace you can write; suggestions are your own desk's | deny tests below |
+| **P20** authorize every access | the user is the signed identity; the target must be a workspace you can write; suggestions are your own personal workspace's | deny tests below |
 | **P21** state from evidence | the activity line and job rows come from the worker's events, not from the button press | ungated: reviewed |
 | **P23** one writer per carrier | agent-api is the inbox's only writer; the worker is the output stream's only writer and agent-api relays it unchanged | `gate:dataflow` |
 

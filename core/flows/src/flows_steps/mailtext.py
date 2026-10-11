@@ -51,7 +51,7 @@ SERVICE_SENTENCE = ("I sit in meetings you are invited to; afterwards you get wh
 # word, not the product's name for one — it is describing where things are kept, not naming a
 # surface, and a stranger reading their first mail should not have to learn a product noun to
 # understand who can see their notes.
-WORKSPACE_WORD = "desk"
+WORKSPACE_WORD = "personal workspace"
 
 # WHO CAN SEE WHAT, in the founder's own words. It goes into the mails a person reads before they
 # have decided whether to keep anything here, because that is the only moment at which telling them
@@ -109,7 +109,7 @@ DEFAULTS: dict[str, str] = {
     # visibility sentence entirely. `test_the_baked_defaults_match_the_files_in_deploy_dogfood_mail`
     # now reads both, for every template.
     #
-    # THREE SENTENCES ARE LITERAL HERE, not tokens: the service sentence, "your desk", and the
+    # THREE SENTENCES ARE LITERAL HERE, not tokens: the service sentence, "your personal workspace", and the
     # visibility sentence. `render` would fill {{service}}, {{workspace}} and {{visibility}}, but
     # the FILE spells them out and these two strings must be equal. The visibility one especially
     # must not become a token that a deployment could leave unfilled: it is the sentence that tells
@@ -122,7 +122,7 @@ DEFAULTS: dict[str, str] = {
         "I am Vexa, the meeting assistant at {{company}}. I sit in meetings you are invited to; "
         "afterwards you get what came out of them and what they leave on your plate.\n"
         "\n"
-        "{{organizer}} had me in {{meeting}} on {{date}}. This is now on your desk.\n"
+        "{{organizer}} had me in {{meeting}} on {{date}}. This is now in your personal workspace.\n"
         "\n"
         "Vexa runs on this organisation's own servers; what you and your colleagues keep in your "
         "workspaces is visible to the company's agents; recordings and transcripts stay here.\n"
@@ -133,7 +133,7 @@ DEFAULTS: dict[str, str] = {
     "minutes-head": (
         "subject: Minutes: {{title}}\n"
         "---\n"
-        "{{title}} — {{when}}. This is now on your {{workspace}}.\n"
+        "{{title}} — {{when}}. This is now in your {{workspace}}.\n"
         "\n"
         "{{visibility}}\n"
     ),

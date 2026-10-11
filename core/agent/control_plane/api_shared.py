@@ -833,7 +833,7 @@ TARGET_LINE_ALONE = "target workspace: {target} — writes go here unless asked 
 #: `kg/entities/` (the rule Vexa-ai/vexa#1589 settled when it stopped refusing entity writes here).
 GLOBAL_TARGET_NOTE = ("The company layer is thin: the five files at its root, and company-tier "
                       "pages under `kg/entities/`. Meeting notes, customer records and personal "
-                      "documents belong on a desk or in an ordinary workspace, never here.")
+                      "documents belong in a personal workspace or an ordinary workspace, never here.")
 
 
 def toolbelt_preamble(session: str) -> str:

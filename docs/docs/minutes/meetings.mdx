@@ -13,7 +13,7 @@ words as they are said. This page covers what you can do with a meeting from the
 
 In an empty chat, press **Paste a meeting link** (or paste one) and ask the agent to join. When the bot
 is sent, the chat binds to that meeting and its pages are pinned. A meeting you start inside a shared
-workspace belongs to that workspace, so its members can open it too; a meeting from your desk stays
+workspace belongs to that workspace, so its members can open it too; a meeting from your personal workspace stays
 yours. Meetings also arrive by calendar invitation. See [Send a bot](/how-to/send-a-bot) for platforms
 and links.
 
@@ -134,7 +134,7 @@ running. Stop and Delete are not shown on a meeting someone shared with you.
 | Transcript segments | meeting-api | Postgres, and the meeting's transcript stream in Redis (agent-api and the terminal only read it) |
 | Recording master | meeting-api (from the bot's chunks) | object storage |
 | Meeting pages | agent-api | the workspace's git repository |
-| Highlight terms | agent-api | `.vexa/meeting-terms/<meeting>.json` on the reader's desk |
+| Highlight terms | agent-api | `.vexa/meeting-terms/<meeting>.json` in the reader's personal workspace |
 
 ### Routes
 
