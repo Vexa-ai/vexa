@@ -199,8 +199,10 @@ An answer's sources render as a citation list — one row per source, title as a
 date beneath, the date shown **once** (a date already in the title is not repeated). Two ways in:
 
 - **Structured:** a `sources` event on the chat stream, `{ "type": "sources", "items": [{ "url",
-  "title"?, "date"?, "snippet"? }] }`. agent-api sends one per page the turn successfully fetched
-  (see [Agent API](/api/agent)); the terminal merges a turn's items by URL. Only `http:`/`https:`
+  "title"?, "date"?, "snippet"? }] }`. The terminal merges a turn's items by URL. agent-api's
+  producer (one frame per page a turn successfully fetched) lands separately, in
+  [Vexa-ai/vexa#1815](https://github.com/Vexa-ai/vexa/pull/1815); until it does, no server sends
+  the event and the fallback below is what renders. Only `http:`/`https:`
   URLs are kept, at most 50, and a server that never sends it changes nothing.
 - **Fallback:** when the agent writes its sources as a Markdown list under a "Sources" (or
   "References", "Citations", "Links") label, that list is lifted out of the prose and rendered as
@@ -304,12 +306,13 @@ sent to a server.
 | **P1** package by domain | `ui-kit` is the terminal's shared presentational leaf; primitives are named for UI concepts; surfaces stay grouped by domain (`minutes/`, `surfaces/`) | review |
 | **P2** couple through contracts, **P3** acyclic | `ui-kit` imports React, `lucide-react` and its own files only; it never imports `minutes/`, `surfaces/` or `canvas/` | `gate:isolation` (the terminal's folder-cycle check) |
 | **P6** one front door | layout, primitives and the formatter are exported only from `src/ui-kit/index.tsx`; `minutes/` and `surfaces/` import from there | `gate:exports`; ungated inside the terminal: reviewed |
-| **P9** mechanically enforced | the layout rules are a unit sweep (`shellLayout.test.ts`, 320–2560px, every preference) and a browser sweep (`scripts/layout-sweep.mjs`, L1–L3) | `gate:node` (vitest); the browser sweep runs on bbb and is attached to the PR |
+| **P9** mechanically enforced | the layout rules are a unit sweep (`shellLayout.test.ts`, 320–2560px, every preference) and a browser sweep (`scripts/layout-sweep.mjs`, L1–L3) | `gate:ui-design` (also under `gate:node`); the browser sweep runs in CI as `terminal-layout` |
+| **P4**, **P16** published, backward-compatible wires | the chat stream's `sources` event is additive: an older client ignores an unknown event, and a server that never sends it changes nothing; no sealed contract changed | ungated: reviewed |
 | **P12** every folder self-documents | `ui-kit/layout/`, `ui-kit/primitives/`, `ui-kit/format/`, `app/design/` and `app/design/sections/` each carry a README | `gate:readme` |
 | **P14** config by env | the catalogue's one switch is `VEXA_TERMINAL_DESIGN_CATALOGUE`, read per request; documented in [Configuration](/configuration) | ungated: reviewed |
 | **P17** licence-clean | no new dependency. `geist` (the Geist fonts, SIL OFL-1.1, FINOS Category B) was already a dependency and is logged as an exception in `license-exceptions.json` — served unmodified as web fonts; `lucide-react` (ISC) was already in the lockfile; Playwright (Apache-2.0) is not a terminal dependency — the sweep runs where it is installed | `gate:licenses` |
 | **P18** fail loud | a storage failure degrades to defaults (the shell still renders) and is never thrown into the page; nothing is swallowed into a wrong layout | `layoutPrimitives.test.tsx` ("storage that throws still yields a working layout") |
-| **P23** one writer per carrier | colour and size values are written only in `tokens.css`; `vexa.shell.v1` only by `useShellLayout`; the theme only by `theme.ts` | G3 and G7 for tokens (`designTokens.test.ts`); ungated for the layout store and theme: reviewed |
+| **P23** one writer per carrier | colour and size values are written only in `tokens.css`; `vexa.shell.v1` only by `useShellLayout`; the theme only by `theme.ts`; a turn's source list comes from the stream event, else from the answer text, never both | G3 and G7 for tokens (`designTokens.test.ts`); ungated for the layout store and theme: reviewed |
 
 ### Security
 
@@ -335,8 +338,15 @@ sent to a server.
 - **External links.** `ExternalLink` allows `http:` and `https:` only and always sets
   `rel="noopener noreferrer"`; any other scheme renders as text. Test: `primitives.test.tsx`,
   "refuses javascript: and data: schemes".
+- **Sources.** A `sources` event's items are kept only for `http:`/`https:` URLs, at most 50, and
+  render through `ExternalLink`; Markdown links in answers also go through `ExternalLink`, so a
+  `javascript:` or `data:` href renders as text. Test: `sources.test.tsx`, "keeps only http(s)
+  sources, with a title".
 - **Destructive acts.** `ConfirmDialog` names the act on its button and can require typing the
-  name; it is the replacement for `window.confirm` as surfaces migrate.
+  name. Every browser dialog in the terminal now goes through it (`useConfirm`); G12 holds that:
+  `designGuards.test.ts`, "no window.confirm or window.alert". Its buttons sit above the dialog's
+  scrim, checked in a real browser by `clients/terminal/scripts/overlay-hit.mjs` (a step of
+  `terminal-layout`).
 
 ---
 
