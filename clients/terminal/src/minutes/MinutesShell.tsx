@@ -50,6 +50,7 @@ import { reportOpened } from "./deskTouch";
 import { applyProposal, proposals, type Proposal } from "./proposals";
 import { listProposals, resolveProposal, type DeskProposal } from "../surfaces/proposalsApi";
 import { ProposalChips } from "./ProposalChips";
+import { AdminHome } from "./AdminHome";
 import { EdgeHandle, EDGE_W } from "./Collapse";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
 import { T, maxPagesW, surface, type as ty } from "./tokens";
@@ -1586,7 +1587,9 @@ export function MinutesShell() {
             onDismiss={() => setScaffoldRefusal(null)} />
         )}
         <div style={{ flex: 1, minHeight: 0 }}>
-          <Chat params={{ session }} emptyExtra={<ProposalChips items={shownChips}
+          {/* THE ADMIN ACCOUNT'S HOME (founder ruling 2026-10-11): its four areas in place of the
+              everyday chips, which offer a desk and meetings it does not have. */}
+          <Chat params={{ session }} emptyExtra={isAdminAccount ? <AdminHome /> : <ProposalChips items={shownChips}
             onPick={(p) => void runProposal(p)} onDismiss={dismissProposal} />} />
         </div>
       </main>
