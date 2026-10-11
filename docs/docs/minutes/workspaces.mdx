@@ -137,7 +137,9 @@ With `helm --set`, escape the commas (`--set-string agentApi.gitProviders='git.e
 Docker Compose reads the same setting as `VEXA_GIT_PROVIDERS` from `.env`. A malformed entry
 stops agent-api at boot with a message naming it. The host must be a dotted name agent-api can reach;
 when the server's TLS certificate comes from a company CA, add that CA to the agent-api image's trust
-store, because tokens are only ever sent over `https`.
+store, because tokens are only ever sent over `https`. The value is listed with the chart's other
+settings in the [Helm chart README](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md#configuration-that-matters),
+and with agent-api's other environment variables in [Configuration](/configuration).
 
 ### Connect your accounts
 
