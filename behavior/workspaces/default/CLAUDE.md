@@ -63,6 +63,12 @@ Three rules travel with it, and they are the whole of it:
   have several sessions — when you continue a note for a later session, KEEP the earlier links and ADD
   this session's after them. The client renders the frontmatter markdown link and opens the canvas from it.
 
+**Reference a meeting by its link, not its notes file.** Write `[<title>](/?meeting=<meeting_id>)`,
+the id being the `meeting:` field of the notes page's frontmatter. The client renders it as a meeting
+chip — the meeting's current title (a rename shows) and its date — that opens the meeting. Never name
+a meeting by its notes filename (`kg/entities/meeting/<date>-<slug>.md`); a link to that file renders
+as the same chip, but the filename itself means nothing to the reader.
+
 **Reference entities as `[[Title]]` everywhere — chat replies included.** The client renders
 `[[wikilinks]]` as clickable entity chips, workspace file paths (backticked or as markdown
 links) as clickable links, and a workspace's slug as a chip opening its README — in chat and in

@@ -25,7 +25,7 @@ import {
   Wikilink, WorkspaceRef, isDistinctiveWorkspaceToken, isInternalHref, knownWorkspaces, lookupWorkspace,
   primeKnownWorkspaces, type DocNavigate,
 } from "./docLinks";
-import { OPEN_MEETING_EVENT } from "../platform";
+import { MeetingChip, meetingRefOfHref } from "./MeetingChip";
 import { registry } from "../contributions";
 import { splitTranscriptSlots, TRANSCRIPT_WIDGET_KIND } from "./transcriptSlot";
 import { POLICY_ACT_KIND, PROPOSAL_ACT_KIND, PROPOSAL_KIND, ViewSource, declaredKind, docHeader, splitFrontmatter } from "./policyDoc";
@@ -128,12 +128,10 @@ const htmlComponents = {
   a: ({ href, children }: { href?: string; children?: ReactNode }) => {
     // Meeting deep-link (`?meeting=<id>`, relative or absolute) → open the meeting canvas (transcript +
     // recording) in-app, no reload. The same URL also cold-opens the meeting via App.tsx (portable).
-    const mref = href?.match(/[?&]meeting=([^&#]+)/);
-    if (mref) {
-      const ref = decodeURIComponent(mref[1]);
-      return <span role="link" onClick={() => window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref } }))}
-        style={{ color: "var(--blue)", textDecoration: "underline", cursor: "pointer" }}>{children}</span>;
-    }
+    // It renders as the MEETING CHIP — the meeting's own title and date, for a reader who may see
+    // it; the link's words as plain text for one who may not (founder, 2026-10-11).
+    const mref = meetingRefOfHref(href);
+    if (mref) return <MeetingChip meetingRef={mref} label={children} />;
     // Workspace-internal link (no scheme, not an anchor) → navigate the doc pane in place
     // (or open a tab outside a doc pane), same path the Wikilink chip uses. Relative hrefs
     // resolve against the linking doc's directory. External links open a browser tab.

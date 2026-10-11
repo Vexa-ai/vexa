@@ -8,6 +8,7 @@ import { type CSSProperties, type ReactNode, type RefObject, useEffect, useState
 import { Icon } from "../ui-kit";
 import { Markdown } from "../ui-kit/Markdown";
 import { MdxDoc } from "../ui-kit/MdxDoc";
+import { MeetingChip, meetingNotePath } from "../ui-kit/MeetingChip";
 import { OPEN_ENTITY_EVENT } from "../platform";
 import { faultHeadline, type Fault } from "../surfaces/faults";
 
@@ -96,6 +97,9 @@ function OpRow({ op }: { op: Op }) {
 
 // ── files the turn created/edited — ACTIONABLE chips: click opens the doc in the pages panel ──
 function FileChip({ path }: { path: string }) {
+  // A meeting's notes the turn wrote is named as the MEETING — its title and date — never as the
+  // file (founder, 2026-10-11: "a special label for a meeting alongside people companies etc").
+  if (meetingNotePath(path)) return <MeetingChip path={path} />;
   const name = path.split("/").filter(Boolean).pop() ?? path;
   return (
     <button

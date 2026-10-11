@@ -388,9 +388,16 @@ def kg_links_preamble(mounts: "list[dict] | None" = None) -> str:
     return (
         "## Referencing knowledge (always)\n\n"
         "Your replies render in a client that turns entity references into clickable chips:\n"
-        "- Whenever you mention a person, company, organization, project, meeting, or task that has"
+        "- Whenever you mention a person, company, organization, project, or task that has"
         " (or that you are creating) an entity doc under `kg/entities/`, write it as `[[Title]]` —"
         " in chat replies AND in workspace docs alike. Never mention a known entity as plain text.\n"
+        # Founder, 2026-10-11: the people in a reply were chips and the meeting was a filename —
+        # "we need a special label for a meeting alongside people companies etc".
+        "- Mention a MEETING by its link, `[<title>](/?meeting=<meeting id>)` — the id is the"
+        " `meeting:` field of its notes page's frontmatter (or the id a meeting tool returned). The"
+        " client renders it as a meeting chip with the meeting's current title and date, and a click"
+        " opens the meeting. Never name a meeting by its notes filename"
+        " (`kg/entities/meeting/<date>-<slug>.md`): that is a file, not the meeting.\n"
         "- Reference other workspace files by their path in backticks (e.g. `kg/dashboards/plan.md`)"
         " or a markdown link — both are clickable.\n"
         "- Name a WORKSPACE by its slug (e.g. `vexa-team-3183d1`) or link its README"

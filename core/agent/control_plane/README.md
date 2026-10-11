@@ -66,7 +66,8 @@ caller or with the internal secret, never with a credential of its own:
   (where its report lives on a desk), `meeting_room.py` (the attendees' read-only mounts after it),
   `meeting_highlight.py` (what it has named, and which names have a page), `meeting_terms.py` (the
   annotation layer over its transcript), `meeting_steering.py` (per-state preambles for meeting chat
-  turns), `schedule_digest.py` (the schedule as a prompt block).
+  turns), `schedule_digest.py` (the schedule as a prompt block), `meeting_link.py` (a link to a
+  meeting's notes, answered as the meeting: its title and date, for a reader who may see it).
 
 **Workspaces**
 - `workspace_reader.py`, `workspace_ids.py` (id → where it is now), `workspace_purpose.py`,

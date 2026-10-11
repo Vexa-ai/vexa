@@ -9,12 +9,15 @@ single identifier changed.
 from __future__ import annotations
 
 from control_plane import link_resolver as link_resolver_mod
+from control_plane import meeting_link as meeting_link_mod
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import system_mounts
 from control_plane import workspace_ids as ids_mod
 from control_plane.api_shared import logger
 from control_plane.bodies import ScaffoldHandBody, ScaffoldMintBody
 from control_plane.ceiling import reads_within, require_in_ceiling
+from control_plane.peer_lookups import meeting_access_check
+from pathlib import Path
 from fastapi import APIRouter, Body, HTTPException, Request
 from workspaces.shared import workspace_paths as wpaths
 
@@ -40,6 +43,9 @@ def build(**d) -> APIRouter:
     workspace_registry = d['workspace_registry']
     workspace_touches = d['workspace_touches']
     wsr = d['wsr']
+    # The one meeting access decision (owner, share recipient, member of its workspace) — the same
+    # callable `routers/meetings.py` builds, for the meeting a notes-page link names.
+    _meeting_access = meeting_access_check(_meeting_owner_lookup, wsr.root)
 
     @router.get("/internal/has-history")
     def has_history(who: str, request: Request):
@@ -377,9 +383,21 @@ def build(**d) -> APIRouter:
         if not isinstance(refs, list):
             raise HTTPException(status_code=400, detail="refs must be a list of link references")
         slug = str(body.get("slug") or "").strip() or None
+        subject = subject_of(request)
+        here = _ws_here(request, slug)
+        within = lambda ws: reads_within(request, ws)  # noqa: E731
+        # A MEETING'S NOTES PAGE is answered as the meeting (`meeting_link`): read on a tree this
+        # reader may read — the workspace they are in (access-checked by `_ws_here`), then their own
+        # desk — and named only through the one meeting access decision.
+        here_dir = (Path(here.get("dir") or (wsr.root / str(here.get("slug") or "")))
+                    if here else None)
+        roots = [here_dir, Path(wsr.root) / str(subject)]
+        meeting = lambda ref: meeting_link_mod.resolve(  # noqa: E731
+            ref, roots=roots,
+            access=lambda mid: _meeting_access(subject, mid, within=within))
         return {"results": link_resolver_mod.resolve_many(
-            [str(r) for r in refs], subject=subject_of(request), root=wsr.root,
-            registry=workspace_registry, here=_ws_here(request, slug), is_member=_ws_is_member,
-            within=lambda ws: reads_within(request, ws))}
+            [str(r) for r in refs], subject=subject, root=wsr.root,
+            registry=workspace_registry, here=here, is_member=_ws_is_member,
+            within=within, meeting=meeting)}
 
     return router
