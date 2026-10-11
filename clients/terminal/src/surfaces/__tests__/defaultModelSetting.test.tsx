@@ -68,6 +68,26 @@ describe("the Default model setting", () => {
     expect((selects()[1] as HTMLSelectElement).options[0].textContent).toBe("Catalog default");
   });
 
+  it("with a catalog, offers no own-endpoint fields and says why", async () => {
+    stub(CATALOG, { admin: true });
+    render(<ModelsSection />);
+    await waitFor(() => expect(selects().length).toBe(2));
+    for (const label of ["Provider", "Base URL", "API key", "Chat model", "Reasoning effort"]) {
+      expect(screen.queryByText(label)).toBeNull();
+    }
+    expect(document.querySelector("[data-catalog-note]")?.textContent).toContain("model catalog");
+    expect(document.body.textContent).not.toMatch(/Custom endpoint/);
+  });
+
+  it("without a catalog, the own-endpoint fields are the route as before", async () => {
+    stub({ models: [], default: null });
+    render(<ModelsSection />);
+    await screen.findAllByText("Save");
+    expect(screen.getByText("Provider")).toBeTruthy();
+    expect(screen.getByText("Chat model")).toBeTruthy();
+    expect(document.querySelector("[data-catalog-note]")).toBeNull();
+  });
+
   it("shows no such field on a deployment with no catalog", async () => {
     stub({ models: [], default: null });
     render(<ModelsSection />);

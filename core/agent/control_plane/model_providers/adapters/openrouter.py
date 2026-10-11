@@ -60,9 +60,6 @@ class OpenRouterAdapter:
     def efforts(self, provider: Mapping, model: Mapping) -> tuple[str, ...]:
         return EFFORTS.get(self.harness(provider), ())
 
-    def available(self, ctx: RouteContext) -> bool:
-        return True
-
     def route(self, model: Mapping, provider_key: str, provider: Mapping,
               ctx: RouteContext, effort: str = "") -> ModelRoute:
         harness = self.harness(provider)

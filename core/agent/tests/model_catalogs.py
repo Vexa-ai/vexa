@@ -1,6 +1,6 @@
 """The worked model catalog the model-choice tests share: one provider of each adapter kind — a
-self-hosted Qwen 3 on an OpenAI-compatible endpoint, OpenRouter (admins only), Anthropic on the
-deployment's subscription, and the person's own endpoint — and the environment its secret_ref
+self-hosted Qwen 3 on an OpenAI-compatible endpoint, OpenRouter (admins only) and Anthropic on the
+deployment's subscription, every model named by its real id — and the environment its secret_ref
 resolves in. It is the contract's golden (`models.v1/golden/Catalog.self-hosted-and-openrouter.json`)
 as a dict; `test_model_catalog` holds the two equal."""
 from __future__ import annotations
@@ -18,7 +18,6 @@ EXAMPLE = {
         "openrouter": {"adapter": "openrouter", "auth": "secret",
                        "secret_ref": "env:VEXA_MODEL_SECRET_OPENROUTER"},
         "anthropic": {"adapter": "anthropic", "auth": "subscription"},
-        "own": {"adapter": "custom"},
     },
     "models": [
         {"id": "qwen3-32b", "display_name": "Qwen 3 32B (self-hosted)", "provider": "lab-vllm",
@@ -33,6 +32,5 @@ EXAMPLE = {
         {"id": "claude", "display_name": "Claude (subscription)", "provider": "anthropic",
          "model": "claude-sonnet-4-6",
          "capabilities": {"reasoning_efforts": ["low", "medium", "high", "xhigh", "max"]}},
-        {"id": "mine", "display_name": "My endpoint", "provider": "own"},
     ],
 }

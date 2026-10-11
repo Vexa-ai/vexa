@@ -17,8 +17,8 @@ import pytest
 
 from contracts import validate_model_list
 from control_plane.model_providers import (
-    CRED_NONE, CRED_SECRET, CRED_SUBJECT, CRED_SUBSCRIPTION, CREDENTIAL_MISSING,
-    ENDPOINT_REFUSED, NOT_CONFIGURED, NOT_PERMITTED, UNKNOWN_MODEL, ModelChoiceFault,
+    CRED_NONE, CRED_SECRET, CRED_SUBSCRIPTION, CREDENTIAL_MISSING,
+    NOT_CONFIGURED, NOT_PERMITTED, UNKNOWN_MODEL, ModelChoiceFault,
     RouteContext, parse, secret_from_env,
 )
 
@@ -26,6 +26,8 @@ from tests.model_catalogs import ENV, EXAMPLE
 
 GOLDEN = Path(__file__).resolve().parents[1] / "contracts" / "models.v1" / "golden"
 
+#: A person's own endpoint under Settings → Models. With a catalog it routes nothing: it is not an
+#: entry, and it never makes one appear.
 OWN = {"mode": "custom", "base_url": "https://gateway.example.com/v1", "api_key": "sk-person",
        "model": "llama-4", "extra_body": '{"top_k": 4}', "runner": "openai-agent"}
 
@@ -34,11 +36,8 @@ def _catalog(decl=EXAMPLE, env=ENV):
     return parse(json.dumps(decl), env)
 
 
-def _ctx(cfg=None, env=ENV, refuse=None, allowed=None):
-    return RouteContext(subject_config=cfg or {}, secret=secret_from_env(env),
-                        endpoint_refusal=refuse or (lambda *_a: None),
-                        model_allowed=allowed or (lambda _m: True),
-                        deployment_runner="claude-code", deployment_model="deployment-model")
+def _ctx(cfg=None, env=ENV):
+    return RouteContext(subject_config=cfg or {}, secret=secret_from_env(env))
 
 
 # ── per adapter ─────────────────────────────────────────────────────────────────────────────────
@@ -93,34 +92,15 @@ def test_anthropic_by_api_key_sends_it_as_the_api_key_header():
                                                          ENV["VEXA_MODEL_SECRET_ANTHROPIC"], "x-api-key")
 
 
-def test_custom_is_the_persons_own_endpoint_key_model_body_and_harness():
-    r = _catalog().route("mine", _ctx(OWN), admin=False)
-    assert (r.adapter, r.base_url, r.credential_source, r.credential) == (
-        "custom", OWN["base_url"], CRED_SUBJECT, "sk-person")
-    assert (r.provider_model, r.extra_body, r.harness) == ("llama-4", '{"top_k": 4}', "openai-agent")
-
-
-def test_custom_keeps_the_deployment_model_when_the_persons_is_not_allowlisted():
-    r = _catalog().route("mine", _ctx(OWN, allowed=lambda m: m != "llama-4"), admin=False)
-    assert r.provider_model == "deployment-model"
-
-
-def test_custom_refuses_an_endpoint_the_operator_gate_refuses():
+def test_a_persons_own_endpoint_is_not_a_route_when_there_is_a_catalog():
+    """With a catalog every turn runs on a model it names: an own endpoint under Settings → Models
+    neither adds an entry nor reroutes the default — nothing of the person's endpoint reaches it."""
+    r = _catalog().route("", _ctx(OWN), admin=False)
+    assert (r.model_id, r.base_url) == ("qwen3-32b", "http://10.0.0.5:8000/v1")
+    assert "sk-person" not in (r.credential, r.extra_body)
     with pytest.raises(ModelChoiceFault) as exc:
-        _catalog().route("mine", _ctx(OWN, refuse=lambda *_a: "host not allow-listed"), admin=False)
-    assert exc.value.kind == ENDPOINT_REFUSED
-    assert "sk-person" not in json.dumps(exc.value.as_dict())
-
-
-def test_a_keyless_own_endpoint_runs_on_openai_agent_and_never_on_claude_code():
-    from control_plane import model_endpoint
-
-    keyless = dict(OWN, api_key="", base_url="https://openrouter.ai/api/v1")   # allow-listed
-    rule = model_endpoint.route_refusal
-    assert _catalog().route("mine", _ctx(keyless, refuse=rule), admin=False).credential == ""
-    with pytest.raises(ModelChoiceFault) as exc:
-        _catalog().route("mine", _ctx(dict(keyless, runner="claude-code"), refuse=rule), admin=False)
-    assert exc.value.kind == ENDPOINT_REFUSED and "API key" in exc.value.detail
+        _catalog().route("mine", _ctx(OWN), admin=False)
+    assert exc.value.kind == UNKNOWN_MODEL
 
 
 def test_a_missing_secret_is_a_typed_refusal_naming_the_reference_not_the_value():
@@ -178,12 +158,6 @@ def test_an_admins_only_model_is_refused_to_a_member_and_runs_for_an_admin():
     assert _catalog().route("or-sonnet", _ctx(), admin=True).model_id == "or-sonnet"
 
 
-def test_an_own_endpoint_pick_without_an_endpoint_is_refused():
-    with pytest.raises(ModelChoiceFault) as exc:
-        _catalog().route("mine", _ctx(), admin=False)
-    assert exc.value.kind == NOT_CONFIGURED
-
-
 def test_a_catalog_that_offers_this_person_nothing_says_so():
     decl = {"providers": EXAMPLE["providers"], "models": [EXAMPLE["models"][1]]}  # admins only
     with pytest.raises(ModelChoiceFault) as exc:
@@ -201,8 +175,8 @@ def test_the_admin_check_is_asked_only_when_an_entry_is_restricted():
 # ── what a person sees (models.v1 ModelList) ────────────────────────────────────────────────────
 
 def test_a_member_sees_the_golden_listing():
-    """Visibility by role, pinned to the contract's golden: no admins-only model, no own-endpoint
-    model until they have one, and nothing that names an endpoint or a credential."""
+    """Visibility by role, pinned to the contract's golden: no admins-only model, and nothing that
+    names an endpoint or a credential."""
     listing = _catalog().listing(_ctx(), admin=False)
     validate_model_list(listing)
     assert listing == json.loads((GOLDEN / "ModelList.member.json").read_text())
@@ -215,12 +189,13 @@ def test_a_chats_listing_carries_its_own_pick():
     assert listing == json.loads((GOLDEN / "ModelList.chat.json").read_text())
 
 
-def test_an_admin_with_an_own_endpoint_sees_everything():
+def test_an_admin_sees_every_catalog_model_and_nothing_else():
+    """An own endpoint under Settings → Models adds nothing to the list: every entry is a model the
+    catalog names, by its real name."""
     listing = _catalog().listing(_ctx(OWN), admin=True)
     validate_model_list(listing)
-    assert [m["id"] for m in listing["models"]] == ["qwen3-32b", "or-sonnet", "claude", "mine"]
-    mine = listing["models"][-1]
-    assert (mine["adapter"], mine["harness"]) == ("custom", "openai-agent")
+    assert [m["id"] for m in listing["models"]] == ["qwen3-32b", "or-sonnet", "claude"]
+    assert {m["adapter"] for m in listing["models"]} == {"openai_compatible", "openrouter", "anthropic"}
 
 
 def test_no_listing_ever_carries_an_endpoint_or_a_credential():

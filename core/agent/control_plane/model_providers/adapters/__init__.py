@@ -5,11 +5,10 @@ places that a red test ties together: a module here, and its name in the publish
 from __future__ import annotations
 
 from control_plane.model_providers.adapters.anthropic import AnthropicAdapter
-from control_plane.model_providers.adapters.custom import CustomAdapter
 from control_plane.model_providers.adapters.openai_compatible import OpenAICompatibleAdapter
 from control_plane.model_providers.adapters.openrouter import OpenRouterAdapter
 
 ADAPTERS = {a.kind: a for a in (OpenAICompatibleAdapter(), OpenRouterAdapter(),
-                                AnthropicAdapter(), CustomAdapter())}
+                                AnthropicAdapter())}
 
 __all__ = ["ADAPTERS"]

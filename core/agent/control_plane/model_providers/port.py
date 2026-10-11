@@ -7,8 +7,8 @@ the extra request fields, and what the model can do. It decides nothing else and
 ``control_plane.dispatch`` turns the route into the worker's environment, in the one place that has
 always decided a worker's route.
 
-An adapter is one provider KIND — ``openai_compatible``, ``openrouter``, ``anthropic``, ``custom`` —
-and is data plus a little code: the harnesses it can drive, the declaration fields it takes, and the
+An adapter is one provider KIND — ``openai_compatible``, ``openrouter``, ``anthropic`` — and is
+data plus a little code: the harnesses it can drive, the declaration fields it takes, and the
 ``route`` that maps a declaration to a route. Adding a provider kind is adding an adapter
 (``adapters/``) and its enum entry in ``models.v1``; the dispatch never changes.
 
@@ -41,23 +41,18 @@ SOURCE = _V.SOURCE
 UNKNOWN_MODEL = _V.UNKNOWN_MODEL
 #: The model exists and this person may not use it (an admins-only entry).
 NOT_PERMITTED = _V.NOT_PERMITTED
-#: The entry needs something of the person's that they have not set (a ``custom`` entry with no
-#: endpoint under Settings → Models), or the catalog offers this person nothing at all.
+#: The catalog offers this person nothing at all.
 NOT_CONFIGURED = _V.NOT_CONFIGURED
 #: The secret the provider's ``secret_ref`` names is not in agent-api's environment.
 CREDENTIAL_MISSING = _V.CREDENTIAL_MISSING
-#: The person's own endpoint cannot carry the turn (``model_endpoint.route_refusal``).
-ENDPOINT_REFUSED = _V.ENDPOINT_REFUSED
-
 #: The effort level picked is not one this model offers, or not one its adapter can express.
 EFFORT_UNSUPPORTED = _V.EFFORT_UNSUPPORTED
 
-KINDS = (UNKNOWN_MODEL, NOT_PERMITTED, NOT_CONFIGURED, CREDENTIAL_MISSING, ENDPOINT_REFUSED,
-         EFFORT_UNSUPPORTED)
+KINDS = (UNKNOWN_MODEL, NOT_PERMITTED, NOT_CONFIGURED, CREDENTIAL_MISSING, EFFORT_UNSUPPORTED)
 
 #: What agent-api answers its caller for each kind. Never 500: agent-api did not break.
 _HTTP_STATUS = {UNKNOWN_MODEL: 422, NOT_PERMITTED: 403, NOT_CONFIGURED: 409,
-                CREDENTIAL_MISSING: 503, ENDPOINT_REFUSED: 409, EFFORT_UNSUPPORTED: 422}
+                CREDENTIAL_MISSING: 503, EFFORT_UNSUPPORTED: 422}
 
 #: The effort vocabulary (``models.v1#/$defs/ReasoningEffort``), in increasing order. Each adapter
 #: maps it onto its provider's own control and offers only the levels that control can express.
@@ -67,7 +62,6 @@ EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 CRED_NONE = "none"                  # a keyless endpoint: every credential name is stamped empty
 CRED_SECRET = "secret"              # the value of the provider's secret_ref
 CRED_SUBSCRIPTION = "subscription"  # the deployment's own Claude subscription, brokered as today
-CRED_SUBJECT = "subject"            # the person's own key, for the person's own endpoint only
 
 HARNESSES = ("claude-code", "openai-agent", "codex")
 
@@ -141,7 +135,7 @@ class ModelRoute:
     adapter: str             # the adapter kind that resolved it
     harness: str             # the agent harness that drives it
     base_url: str            # the endpoint; "" = the harness's own default (api.anthropic.com)
-    credential_source: str   # CRED_NONE | CRED_SECRET | CRED_SUBSCRIPTION | CRED_SUBJECT
+    credential_source: str   # CRED_NONE | CRED_SECRET | CRED_SUBSCRIPTION
     provider_model: str      # the model's id at the provider; "" = the deployment's model
     extra_body: str          # a JSON object's text, merged into every openai-agent request; "" = none
     capabilities: Capabilities = field(default_factory=Capabilities)
@@ -167,17 +161,6 @@ class RouteContext:
     subject_config: Mapping = field(default_factory=dict)
     #: A ``secret_ref`` → its value, ``""`` when the reference resolves to nothing.
     secret: Callable[[str], str] = lambda _ref: ""
-    #: The rule on a person's own endpoint — ``(base_url, api_key, harness)`` → ``None`` when it may
-    #: carry the turn, else why not (``model_endpoint.route_refusal``: the operator gate, and the
-    #: person's own key on a harness that would otherwise sign in from its config directory).
-    endpoint_refusal: Callable[[str, str, str], Optional[str]] = lambda _url, _key, _harness: None
-    #: ``VEXA_MODEL_ALLOWLIST`` as a predicate — still the gate on a person's own free-form model
-    #: name, and on nothing the operator declared.
-    model_allowed: Callable[[str], bool] = lambda _model: True
-    #: The deployment's own harness and model, for a route that keeps them (a ``custom`` entry whose
-    #: owner named neither).
-    deployment_runner: str = "claude-code"
-    deployment_model: str = ""
 
 
 class ModelProviderPort(Protocol):
@@ -195,11 +178,6 @@ class ModelProviderPort(Protocol):
 
     def harness(self, provider: Mapping, ctx: Optional[RouteContext] = None) -> str:
         """The harness that drives this provider's models."""
-        ...
-
-    def available(self, ctx: RouteContext) -> bool:
-        """Whether a model on this provider can run for the person ``ctx`` describes at all — the
-        person-specific half of visibility (``custom`` needs their own endpoint)."""
         ...
 
     def efforts(self, provider: Mapping, model: Mapping) -> tuple[str, ...]:

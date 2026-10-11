@@ -36,7 +36,7 @@ def _with(mutate) -> dict:
 
 def test_the_worked_example_parses():
     cat = parse(json.dumps(EXAMPLE), ENV)
-    assert cat.ids == ["qwen3-32b", "or-sonnet", "claude", "mine"]
+    assert cat.ids == ["qwen3-32b", "or-sonnet", "claude"]
     assert not cat.empty
 
 
@@ -65,6 +65,30 @@ def test_the_contract_names_exactly_the_adapters_that_exist():
     """A kind is added in two places a red test ties together: its module, and its enum entry."""
     schema = json.loads((CONTRACT / "models.schema.json").read_text())
     assert set(schema["$defs"]["Adapter"]["enum"]) == set(ADAPTERS)
+
+
+def test_a_catalog_that_declares_a_custom_own_endpoint_is_refused_at_boot_naming_the_fix():
+    """THE CATALOG LISTS REAL MODELS ONLY (founder 2026-10-11: "non sense for 'my own endpoint'").
+
+    A `custom` provider put a placeholder in the picker — "My own endpoint", a model with no name.
+    It is not a model, so a catalog that still declares one is refused whole at boot, with one
+    sentence that names what to do instead, and no second enum line repeating it."""
+    decl = _with(lambda d: (d["providers"].update(own={"adapter": "custom"}),
+                            d["models"].append({"id": "mine", "display_name": "My endpoint",
+                                                "provider": "own", "model": "unused"})))
+    problems = _refused(decl)
+    said = [p for p in problems if p.startswith("providers/own")]
+    assert said == ["providers/own: adapter 'custom' (a person's own endpoint) is not a model and is "
+                    "no longer accepted in the catalog — remove this provider and its models, and "
+                    "list each model people may pick by its real name on an openai_compatible, "
+                    "openrouter or anthropic provider"], problems
+    assert "custom" not in ADAPTERS
+
+
+def test_every_catalog_model_names_its_id_at_the_provider():
+    """A model with no `model` is not a model anyone can name: the contract requires it."""
+    schema = json.loads((CONTRACT / "models.schema.json").read_text())
+    assert "model" in schema["$defs"]["CatalogModel"]["required"]
 
 
 def test_duplicate_ids_are_refused():
@@ -138,9 +162,6 @@ def test_an_inline_credential_is_refused_and_never_quoted(mutate):
     (lambda d: d["providers"]["openrouter"].update(harness="claude-code",
                                                    extra_body={"x": 1}), "extra_body"),
     (lambda d: d["providers"]["anthropic"].update(auth="none"), "'auth' must be secret"),
-    (lambda d: d["providers"]["own"].update(base_url="https://x.example/v1"),
-     "'base_url' is not used by the custom adapter"),
-    (lambda d: d["models"][3].update(model="gpt-x"), "the person's own setting"),
     (lambda d: d["models"][0].pop("model"), "'model' (the id at the provider) is required"),
 ])
 def test_each_adapter_refuses_what_it_does_not_take(mutate, expect):
@@ -176,11 +197,8 @@ def test_a_default_effort_must_be_one_of_the_models_levels():
     assert any("default_effort is set but reasoning_efforts is not" in p for p in problems)
 
 
-def test_effort_on_a_custom_entry_and_effort_control_off_openai_compatible_are_refused():
-    problems = _refused(_with(lambda d: (
-        _model(d, "mine").update(capabilities={"reasoning_efforts": ["low"]}),
-        _model(d, "claude").update(effort_control="reasoning_effort"))))
-    assert any("model 'mine': effort on a custom entry is the person's own setting" in p for p in problems)
+def test_effort_control_off_openai_compatible_is_refused():
+    problems = _refused(_with(lambda d: _model(d, "claude").update(effort_control="reasoning_effort")))
     assert any("model 'claude': 'effort_control' is read only by the openai_compatible adapter" in p
                for p in problems)
 

@@ -880,8 +880,7 @@ def build(**d) -> APIRouter:
             if catalog.empty:
                 raise HTTPException(status_code=409, detail="this deployment offers no model "
                                                             "catalog; its model is set by the operator")
-            ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {},
-                                             allowlist=settings.model_allowlist)
+            ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {})
             try:
                 # The effort is checked against the model it will run on — the pick, else the
                 # person's default — so a stored effort is always one the next turn can send.

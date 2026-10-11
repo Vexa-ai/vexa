@@ -85,9 +85,8 @@ ModelList):
 }
 ```
 
-- **`models`** holds only what this caller may pick. An `admins` model is absent for everyone else,
-  and an own-endpoint model is absent until the caller has set one under Settings → Models. No entry
-  carries an endpoint or a credential.
+- **`models`** holds only what this caller may pick, each a real model by its catalog name. An
+  `admins` model is absent for everyone else. No entry carries an endpoint or a credential.
 - **`default`** is the model the caller runs on before picking: their own `default_model`, else the
   organisation's, else the catalog's default.
 - **`selected`** is the named chat's own pick (`null` means the chat follows the default). It is
@@ -113,7 +112,6 @@ returns `{ "ok": true, "session", "model", "effort", "changed" }`.
   |---|---|
   | `422` | the model is not in the catalog |
   | `403` | an admins-only model, for anyone else |
-  | `409` | an own-endpoint model, for someone with no endpoint set |
   | `422` | an effort level the model does not offer (`effort_unsupported`) |
 
   Each refusal is `{ "detail", "fault" }`, and `fault` is the [typed fault](#chat-streamed) below.
@@ -164,8 +162,9 @@ A chat whose model cannot run, for example because it was removed from the catal
 before anything starts. The answer is `{ "detail", "fault" }` with
 `fault: { source: "model-provider", kind, provider, model, status: null, detail, remedy }`.
 
-- **`kind`** is one of `unknown_model`, `not_permitted`, `not_configured`, `credential_missing`,
-  `endpoint_refused` or `effort_unsupported` (a stored effort level the model no longer offers).
+- **`kind`** is one of `unknown_model`, `not_permitted`, `not_configured` (the catalog offers this
+  caller nothing), `credential_missing` or `effort_unsupported` (a stored effort level the model no
+  longer offers).
 - **The record's shape** is the one a failed provider call (`unpaid`, `unauthorized`,
   `rate_limited`, `unavailable`, `refused`) carries on the turn's `done` frame.
 - **No substitution:** the turn never runs on another model instead.

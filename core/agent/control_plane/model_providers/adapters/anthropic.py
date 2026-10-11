@@ -57,9 +57,6 @@ class AnthropicAdapter:
     def efforts(self, provider: Mapping, model: Mapping) -> tuple[str, ...]:
         return EFFORTS
 
-    def available(self, ctx: RouteContext) -> bool:
-        return True
-
     def route(self, model: Mapping, provider_key: str, provider: Mapping,
               ctx: RouteContext, effort: str = "") -> ModelRoute:
         effort = common.check_effort(effort, model, provider_key, EFFORTS)

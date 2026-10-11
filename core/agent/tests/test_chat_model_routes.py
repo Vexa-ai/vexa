@@ -107,11 +107,12 @@ def test_an_admin_sees_the_admins_only_model(stack):
     assert "or-sonnet" in [m["id"] for m in body["models"]]
 
 
-def test_the_own_endpoint_model_appears_once_the_person_has_one(stack):
+def test_an_own_endpoint_adds_no_entry_to_the_list(stack):
+    """The list is the catalog's real models only — never a placeholder for an own endpoint."""
     stack["model_config"].by_subject[MEMBER] = {"mode": "custom",
                                                 "base_url": "https://openrouter.ai/api/v1"}
     body = stack["client"].get("/api/models/catalog", headers=_as(MEMBER)).json()
-    assert "mine" in [m["id"] for m in body["models"]]
+    assert [m["id"] for m in body["models"]] == ["qwen3-32b", "claude"]
 
 
 def test_the_listing_never_carries_an_endpoint_or_a_key(stack):
@@ -150,7 +151,8 @@ def test_picking_forces_the_next_turn_onto_a_fresh_worker(stack):
 
 @pytest.mark.parametrize("model,status,kind", [("retired-model", 422, "unknown_model"),
                                                ("or-sonnet", 403, "not_permitted"),
-                                               ("mine", 409, "not_configured")])
+                                               # the retired own-endpoint id is no model at all
+                                               ("mine", 422, "unknown_model")])
 def test_a_pick_the_next_turn_could_not_run_is_refused_and_not_stored(stack, model, status, kind):
     c = stack["client"]
     r = c.post("/api/chat/model", json={"session": "s1", "model": model}, headers=_as(MEMBER))

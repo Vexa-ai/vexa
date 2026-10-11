@@ -268,14 +268,11 @@ def run_route_test(route, creds_path: Optional[str] = None,
     * claude-code — a 1-token ``POST {base_url}/v1/messages``, the key under the header the
       provider expects (bearer for a gateway, ``x-api-key`` for Anthropic's own API).
 
-    A ``custom`` route is the person's own endpoint and keeps its own probe (both dialects).
-
     WHO SEES THE ENDPOINT'S OWN WORDS (``admin``). An operator's endpoint answers a failed probe
     with its own body and the Test button used to show up to 200 characters of it — and the
     endpoint's address — to any signed-in person, while the catalog listing withholds both. For
     anyone but an instance admin, an operator route's failure is the typed ``model-provider`` fault
-    with no body and no address; the person's own endpoint (``custom``) is theirs and keeps its
-    detail."""
+    with no body and no address."""
     from control_plane import model_providers as mp
 
     post = post or _post          # resolved per call, never bound once at import
@@ -285,9 +282,6 @@ def run_route_test(route, creds_path: Optional[str] = None,
         return _quiet_route_test(route, creds_path, post)
     if route.credential_source == mp.CRED_SUBSCRIPTION:
         out = test_subscription_credentials(creds_path)
-    elif route.credential_source == mp.CRED_SUBJECT:
-        out = test_custom_endpoint(route.base_url, route.credential, model, post=post,
-                                   extra_body=route.extra_body)
     elif not model:
         out = _result(False, "This model names no model id at its provider.")
     elif route.harness == "openai-agent":

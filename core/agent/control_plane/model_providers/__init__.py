@@ -15,12 +15,10 @@ from control_plane.model_providers.catalog import (
 from control_plane.model_providers.port import (
     CRED_NONE,
     CRED_SECRET,
-    CRED_SUBJECT,
     CRED_SUBSCRIPTION,
     CREDENTIAL_MISSING,
     EFFORT_UNSUPPORTED,
     EFFORTS,
-    ENDPOINT_REFUSED,
     KINDS,
     NOT_CONFIGURED,
     NOT_PERMITTED,
@@ -36,8 +34,8 @@ from control_plane.model_providers.port import (
 
 __all__ = [
     "ADAPTERS", "ENV", "Catalog", "CatalogError", "load", "parse", "secret_from_env",
-    "CRED_NONE", "CRED_SECRET", "CRED_SUBJECT", "CRED_SUBSCRIPTION",
-    "CREDENTIAL_MISSING", "EFFORT_UNSUPPORTED", "EFFORTS", "ENDPOINT_REFUSED", "KINDS", "NOT_CONFIGURED", "NOT_PERMITTED", "SOURCE",
+    "CRED_NONE", "CRED_SECRET", "CRED_SUBSCRIPTION",
+    "CREDENTIAL_MISSING", "EFFORT_UNSUPPORTED", "EFFORTS", "KINDS", "NOT_CONFIGURED", "NOT_PERMITTED", "SOURCE",
     "UNKNOWN_MODEL", "Capabilities", "ModelChoiceFault", "ModelProviderPort", "ModelRoute",
     "RouteContext", "is_model_id",
 ]

@@ -17,11 +17,16 @@ import { setModelPrefs } from "./settingsApi";
 /** The effort vocabulary (`models.v1#/$defs/ReasoningEffort`). */
 export type Effort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+/** The provider kinds a catalog model runs on (`models.v1#/$defs/Adapter`). Every one is a real
+ *  model named by its id at the provider; there is no placeholder kind (founder 2026-10-11). */
+export const CATALOG_ADAPTERS = ["openai_compatible", "openrouter", "anthropic"] as const;
+export type Adapter = (typeof CATALOG_ADAPTERS)[number];
+
 export type ModelEntry = {
   id: string;
   display_name: string;
   provider: string;
-  adapter: "openai_compatible" | "openrouter" | "anthropic" | "custom";
+  adapter: Adapter;
   harness: string;
   capabilities: {
     tool_calling: boolean; streaming: boolean; context_tokens?: number | null;
@@ -43,9 +48,13 @@ export type ModelList = {
   selected_effort?: Effort | null;
 };
 
+/** The person's model list. Only concrete catalog models are kept: an entry of any other kind (an
+ *  older server's "own endpoint" placeholder, which names no model) is never offered as a pick. */
 export async function getModelCatalog(session?: string): Promise<ModelList> {
   const q = session ? `?session=${encodeURIComponent(session)}` : "";
-  return getJson<ModelList>(`/api/models/catalog${q}`, { cache: "no-store" });
+  const list = await getJson<ModelList>(`/api/models/catalog${q}`, { cache: "no-store" });
+  if (!Array.isArray(list?.models)) return list;
+  return { ...list, models: list.models.filter((m) => (CATALOG_ADAPTERS as readonly string[]).includes(m.adapter)) };
 }
 
 /** Pin one chat to a model at an effort level; `""` puts it back on the person's default model,

@@ -55,9 +55,6 @@ class OpenAICompatibleAdapter:
     def efforts(self, provider: Mapping, model: Mapping) -> tuple[str, ...]:
         return EFFORTS.get(_control(model), ())
 
-    def available(self, ctx: RouteContext) -> bool:
-        return True
-
     def route(self, model: Mapping, provider_key: str, provider: Mapping,
               ctx: RouteContext, effort: str = "") -> ModelRoute:
         secret = common.auth_of(provider, default="none") == "secret"

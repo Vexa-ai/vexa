@@ -46,7 +46,11 @@ The route itself was already decided in one place: `dispatch.overlay_model_confi
    | `openai_compatible` | openai-agent | declared (vLLM, llama.cpp, LiteLLM, a gateway) | none or secret |
    | `openrouter` | openai-agent on `/api/v1`, or claude-code on `/api`, as declared | fixed | secret, as a bearer token |
    | `anthropic` | claude-code | Anthropic | secret as `x-api-key`, or the deployment's subscription |
-   | `custom` | the person's own | the person's own Settings → Models endpoint, still gated by `VEXA_MODEL_BASE_URL_ALLOW` | the person's own key |
+
+   Every catalog entry is a real model, named by its id at the provider. There is no placeholder
+   kind: an earlier `custom` kind put "your own endpoint" in the picker as if it were a model, and
+   was removed before release (founder, 2026-10-11). A catalog that still declares it is refused at
+   boot with a sentence naming the fix.
 
    Adding a kind means adding an adapter module and its `models.v1` enum entry. A test holds the
    enum and the adapter table equal. The dispatch never changes.
@@ -112,7 +116,7 @@ The route itself was already decided in one place: `dispatch.overlay_model_confi
    - **A pick that cannot run** fails earlier, in agent-api, before any call: `ModelChoiceFault`,
      raised before anything is spawned. Its kinds are the ones only agent-api can decide:
      `unknown_model`, `not_permitted`, `not_configured`, `credential_missing` and
-     `endpoint_refused`.
+     `effort_unsupported`.
    - **One shape, two producers.** agent-api's image carries no `llm/`, so it produces the same
      record: `source: model-provider` and the same keys (`kind`, `provider`, `model`, `status` as
      `null`, `detail`, `remedy`). A test holds the two key sets and the source equal, and no kind is
@@ -142,9 +146,9 @@ The route itself was already decided in one place: `dispatch.overlay_model_confi
 
 - People switch models from the chat. Operators offer self-hosted and hosted models side by side,
   and each person sees only what they may use.
-- **With a catalog declared, the free-form Settings → Models `model` and `runner` no longer pick a
-  turn's model.** They still configure the `custom` entry, if the operator declares one.
-  `VEXA_MODEL_ALLOWLIST` still gates only a person's own model name.
+- **With a catalog declared, Settings → Models' endpoint fields (provider, base URL, key, model,
+  harness, effort) route nothing**, and the terminal does not show them: every turn runs on a model
+  the catalog names. Only `default_model` applies. Without a catalog they are the route, unchanged.
 - **A deployment with a catalog does not need a deployment credential.** The pre-turn credential
   check is skipped when a catalog exists, because every provider's secret resolved at boot.
 - **A route is fixed for a worker's life.** A changed catalog or default reaches a warm chat at its

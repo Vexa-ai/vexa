@@ -68,8 +68,7 @@ def build(**d) -> APIRouter:
         if catalog.empty:
             return {"models": [], "default": None,
                     **({"selected": None, "selected_effort": None} if with_selected else {})}
-        ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {},
-                                         allowlist=settings.model_allowlist)
+        ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {})
         return catalog.listing(ctx, admin=lambda: dispatcher.is_admin(subject),
                                selected=selected, with_selected=with_selected,
                                selected_effort=selected_effort)
@@ -207,8 +206,7 @@ def build(**d) -> APIRouter:
         from control_plane import config_test as _ct
         subject = subject_of(request)
         if not dispatcher.catalog.empty:
-            ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {},
-                                             allowlist=settings.model_allowlist)
+            ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {})
             try:
                 route = dispatcher.catalog.route(str(model or "").strip(), ctx,
                                                  admin=lambda: dispatcher.is_admin(subject))

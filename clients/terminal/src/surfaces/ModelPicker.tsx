@@ -18,13 +18,15 @@
  *  select did not always fire its change on ArrowDown + Enter (seen on the app.dev hot loop); a
  *  menu item is a button, and a button's click always fires.
  *
- *  A pick the server refuses (gone from the catalog, not open to this person, an own endpoint not
- *  set, an effort the model does not offer) is shown as the server's own sentence; the stored pick
- *  is left as it was. */
+ *  EVERY ENTRY IS A REAL MODEL, by its catalog name (founder 2026-10-11). The catalog is the one
+ *  place that lists what people may run on; there is no "own endpoint" pseudo-model here.
+ *
+ *  A pick the server refuses (gone from the catalog, not open to this person, an effort the model
+ *  does not offer) is shown as the server's own sentence; the stored pick is left as it was. */
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Icon } from "../ui-kit";
 import { presentError } from "./apiClient";
-import { effectiveModel, effortsOf, getModelCatalog, setChatModel, setDefaultModel, type Effort, type ModelEntry, type ModelList } from "./modelsApi";
+import { effectiveModel, effortsOf, getModelCatalog, setChatModel, setDefaultModel, type Adapter, type Effort, type ModelEntry, type ModelList } from "./modelsApi";
 
 const textButton: CSSProperties = {
   height: 28, minWidth: 0, display: "inline-flex", alignItems: "center", gap: 3, padding: "0 6px",
@@ -55,8 +57,8 @@ export function splitDisplayName(name: string): { short: string; note: string | 
   return m ? { short: m[1], note: m[2] } : { short: name, note: null };
 }
 
-const ADAPTER_NOTE: Record<string, string> = {
-  openrouter: "OpenRouter", anthropic: "Anthropic", custom: "your own endpoint", openai_compatible: "self-hosted",
+const ADAPTER_NOTE: Record<Adapter, string> = {
+  openrouter: "OpenRouter", anthropic: "Anthropic", openai_compatible: "self-hosted",
 };
 
 /** The muted second line of a model: the catalog's own note, else where it runs. */

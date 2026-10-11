@@ -142,7 +142,11 @@ export function defaultModelField(models: ModelEntry[], inherit: string) {
 
 /** Models — which LLM the agent runs on and which STT backend the bot transcribes with; your own
  *  settings first, the deployment-wide defaults below for admins. Empty fields = the level below
- *  decides (global settings, then the deployment env). */
+ *  decides (global settings, then the deployment env).
+ *
+ *  WITH A MODEL CATALOG the only model field is the default model: every turn runs on a model the
+ *  catalog names, so the provider, endpoint, key, model and effort fields would set nothing and are
+ *  not shown (founder 2026-10-11). Without one, they are the route, exactly as before. */
 export function ModelsSection() {
   const [globalAdmin, setGlobalAdmin] = useState(false);
   const [catalog, setCatalog] = useState<ModelEntry[]>([]);
@@ -192,19 +196,20 @@ export function ModelsSection() {
     <div>
       <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5, marginBottom: 12, maxWidth: 460 }}>
         Which model the agent runs on, and which transcription service meeting bots use. There is
-        one model: the agent&rsquo;s — meetings themselves run no inference. Provider
-        &ldquo;subscription&rdquo; rides the deployment&rsquo;s Claude credentials; &ldquo;custom&rdquo; points at your own
+        one model: the agent&rsquo;s — meetings themselves run no inference.{catalog.length === 0 && <>
+        {" "}Provider &ldquo;subscription&rdquo; rides the deployment&rsquo;s Claude credentials; &ldquo;custom&rdquo; points at your own
         Anthropic/OpenAI-compatible endpoint (a LiteLLM/OpenRouter gateway serves open-source
-        models). Empty fields inherit the deployment defaults.
+        models). Empty fields inherit the deployment defaults.</>}
       </div>
       <div style={head}>Your models</div>
       {catalog.length > 0 && (
-        <div style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5, marginBottom: 6, maxWidth: 460 }}>
-          This deployment offers a model catalog: each chat picks its model in the composer, and new
-          chats start on your default model. The endpoint fields below are your own endpoint&rsquo;s.
+        <div data-catalog-note style={{ fontSize: 11, color: "var(--t3)", lineHeight: 1.5, marginBottom: 6, maxWidth: 460 }}>
+          This deployment&rsquo;s models are set by its operator in the model catalog, so there is no
+          endpoint to set here: each chat picks its model in the composer, and new chats start on
+          your default.
         </div>
       )}
-      <ConfigForm key={`own-${catalog.length}`} fields={[...catalogFields, ...modelFields]}
+      <ConfigForm key={`own-${catalog.length}`} fields={catalog.length ? catalogFields : modelFields}
         load={async () => asStrings(await getModelPrefs())}
         save={async (u) => asStrings(await setModelPrefs(u))} />
       <TestRow label="Test model credentials" run={testModels} />
@@ -214,7 +219,7 @@ export function ModelsSection() {
       <TestRow label="Test transcription backend" run={testTranscription} />
       {globalAdmin && <>
         <div style={{ ...head, marginTop: 22, color: "var(--accent)" }}>Global defaults (admin — every user without own settings)</div>
-        <ConfigForm key={`global-${catalog.length}`} fields={[...globalCatalogFields, ...modelFields]}
+        <ConfigForm key={`global-${catalog.length}`} fields={catalog.length ? globalCatalogFields : modelFields}
           load={async () => (await getGlobalSetting("models")) ?? {}}
           save={(u) => setGlobalSetting("models", u)} />
         <div style={head}>Global transcription backend</div>

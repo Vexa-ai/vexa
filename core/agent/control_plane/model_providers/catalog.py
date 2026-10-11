@@ -14,6 +14,9 @@ listing them all, without ever repeating a value (a problem names the field; a m
 stays out of the log). The rules this module owns:
 
   * an ``adapter`` is a kind ``adapters.ADAPTERS`` has (the schema's enum is held to that table);
+  * every model is a real one, named: there is no placeholder entry. ``custom`` — "the person's own
+    endpoint", once offered as a catalog entry — is refused with a sentence naming the fix, because
+    a picker entry that names no model is not a model a person can choose (founder 2026-10-11);
   * no two models share an ``id``; at most one is the ``default``; every model's ``provider`` is
     declared;
   * nothing secret-shaped is written inline — a credential is a ``secret_ref`` and nothing else —
@@ -102,6 +105,16 @@ def _inline_secrets(node, at: list) -> list[str]:
     return out
 
 
+#: The adapter kind the catalog no longer takes, and what to declare instead. Refused by name, not
+#: only by the schema's enum, so an operator upgrading a catalog that still lists it reads the fix.
+_RETIRED_ADAPTERS = {
+    "custom": ("adapter 'custom' (a person's own endpoint) is not a model and is no longer "
+               "accepted in the catalog — remove this provider and its models, and list each model "
+               "people may pick by its real name on an openai_compatible, openrouter or anthropic "
+               "provider"),
+}
+
+
 #: The only variables a ``secret_ref`` may name (R1797-1). agent-api's environment holds its own
 #: secrets too — the internal API secret, the database URL, the deployment's model credentials — and
 #: a catalog entry that could name one would send it, as a bearer token, to whatever endpoint that
@@ -135,13 +148,19 @@ def parse(raw: Optional[str], env: Optional[Mapping[str, str]] = None) -> "Catal
     except ValueError as exc:
         raise CatalogError([f"is not valid JSON ({exc.msg} at line {exc.lineno} column "
                             f"{exc.colno})"]) from None
-    problems = _inline_secrets(decl, [])
-    problems += [_schema_problem(e) for e in validate_model_catalog_errors(decl)]
     # The rules the schema cannot state run whether or not it passed, over whatever is well-shaped,
     # so one refusal names everything wrong rather than the first layer of it.
     body = decl if isinstance(decl, dict) else {}
     providers = {k: p for k, p in (body.get("providers") or {}).items() if isinstance(p, dict)} \
         if isinstance(body.get("providers"), dict) else {}
+    retired = {k: _RETIRED_ADAPTERS[p["adapter"]] for k, p in providers.items()
+               if isinstance(p.get("adapter"), str) and p["adapter"] in _RETIRED_ADAPTERS}
+    problems = _inline_secrets(decl, [])
+    problems += [f"providers/{k}: {why}" for k, why in retired.items()]
+    problems += [_schema_problem(e) for e in validate_model_catalog_errors(decl)
+                 # a retired adapter is named above with its fix, not again as an enum miss
+                 if not (len(e.absolute_path) == 3 and e.absolute_path[0] == "providers"
+                         and e.absolute_path[1] in retired and e.absolute_path[2] == "adapter")]
     models = [m for m in (body.get("models") or []) if isinstance(m, dict)] \
         if isinstance(body.get("models"), list) else []
     seen: set[str] = set()
@@ -216,12 +235,9 @@ class Catalog:
     def _permitted(self, model: Mapping, admin: AdminCheck) -> bool:
         return model.get("access", "everyone") != "admins" or self._admin(admin)
 
-    def _usable(self, model: Mapping, ctx: RouteContext, admin: AdminCheck) -> bool:
-        return self._permitted(model, admin) and self._adapter(model).available(ctx)
-
     def visible(self, ctx: RouteContext, *, admin: AdminCheck) -> list[dict]:
         """The models this person may pick, in the catalog's order."""
-        return [m for m in self._models if self._usable(m, ctx, admin)]
+        return [m for m in self._models if self._permitted(m, admin)]
 
     def default_for(self, ctx: RouteContext, *, admin: AdminCheck) -> Optional[str]:
         """What this person runs on before they pick: their own ``default_model`` (Settings →
@@ -231,7 +247,7 @@ class Catalog:
         mine = str((ctx.subject_config or {}).get("default_model") or "").strip()
         if mine:
             m = self._by_id.get(mine)
-            if m is not None and self._usable(m, ctx, admin):
+            if m is not None and self._permitted(m, admin):
                 return mine
             logger.warning("default_model %r is not a model this person may use — the catalog's "
                            "default applies", mine)
@@ -256,11 +272,6 @@ class Catalog:
                     NOT_PERMITTED, model=pick, provider=m["provider"],
                     detail=f"{m['display_name']} is open to admins only on this deployment.",
                     remedy="Pick another model for this chat.")
-            if not self._adapter(m).available(ctx):
-                raise ModelChoiceFault(
-                    NOT_CONFIGURED, model=pick, provider=m["provider"],
-                    detail=f"{m['display_name']} runs on your own endpoint, and you have not set one.",
-                    remedy="Set a custom endpoint under Settings → Models, or pick another model.")
             return m
         fallback = self.default_for(ctx, admin=admin)
         if fallback is None:

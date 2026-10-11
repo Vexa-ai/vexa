@@ -72,6 +72,20 @@ describe("the model picker", () => {
     expect(document.body.innerHTML).not.toMatch(/10\.0\.0\.5|openrouter\.ai|sk-|secret_ref/);
   });
 
+  it("never renders a placeholder: only concrete catalog models, never an own-endpoint entry", async () => {
+    // an older agent-api still listing the retired `custom` kind (founder 2026-10-11)
+    const old = { ...MEMBER, models: [...MEMBER.models,
+      { id: "mine", display_name: "My own endpoint", provider: "own", adapter: "custom",
+        harness: "openai-agent", capabilities: { tool_calling: true, streaming: true },
+        access: "everyone", default: false } as unknown as ModelList["models"][number]] };
+    stub(old);
+    render(<ModelPicker session="s1" />);
+    fireEvent.click(await chip());
+    const items = screen.getAllByRole("menuitemradio");
+    expect(items.map((i) => i.getAttribute("data-model-id"))).toEqual(["qwen3-32b", "claude"]);
+    expect(screen.getByRole("menu").textContent).not.toMatch(/own endpoint/i);
+  });
+
   it("a pick posts to this chat and becomes the chat's model", async () => {
     const calls = stub(MEMBER);
     render(<ModelPicker session="s1" />);

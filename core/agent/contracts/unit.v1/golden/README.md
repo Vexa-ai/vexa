@@ -13,5 +13,6 @@ wire: one `Fault` golden per kind of every source. The Python ones were written 
 (`clients/terminal/src/app/api/chat/route.ts`). The five `model-provider` pick kinds
 (`unknown_model` … `endpoint_refused`, and `DispatchRefusal.model-unknown`) are agent-api's refusal
 of a chat's model pick (`control_plane/model_providers`, ADR-0043), where `provider` is the
-catalog's provider key and `model` the catalog id. Hosts, models, times and session ids are
-synthetic.
+catalog's provider key and `model` the catalog id. `endpoint_refused` stays in the sealed
+vocabulary but has no producer since the catalog stopped taking a `custom` (own-endpoint) entry.
+Hosts, models, times and session ids are synthetic.

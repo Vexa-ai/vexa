@@ -15,12 +15,11 @@
       "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
     },
     "Adapter": {
-      "description": "Which provider adapter resolves a model on this provider. openai_compatible: a self-hosted vLLM / llama.cpp / LiteLLM or any OpenAI-compatible gateway, on the openai-agent harness. openrouter: OpenRouter, on the openai-agent harness (/api/v1) or the claude-code harness (its Anthropic-compatible /api), as the provider declares. anthropic: Anthropic directly, by API key or by the deployment's subscription, on the claude-code harness. custom: the person's own Settings → Models endpoint, gated by VEXA_MODEL_BASE_URL_ALLOW.",
+      "description": "Which provider adapter resolves a model on this provider. openai_compatible: a self-hosted vLLM / llama.cpp / LiteLLM or any OpenAI-compatible gateway, on the openai-agent harness. openrouter: OpenRouter, on the openai-agent harness (/api/v1) or the claude-code harness (its Anthropic-compatible /api), as the provider declares. anthropic: Anthropic directly, by API key or by the deployment's subscription, on the claude-code harness. Every model in a catalog is a real model named by its id at the provider; there is no placeholder kind (the person's own endpoint is not a catalog entry).",
       "enum": [
         "openai_compatible",
         "openrouter",
-        "anthropic",
-        "custom"
+        "anthropic"
       ]
     },
     "Harness": {
@@ -147,7 +146,8 @@
       "required": [
         "id",
         "display_name",
-        "provider"
+        "provider",
+        "model"
       ],
       "properties": {
         "id": {
@@ -162,7 +162,7 @@
           "$ref": "#/$defs/ProviderKey"
         },
         "model": {
-          "description": "The model's id at the provider (e.g. Qwen/Qwen3-32B, anthropic/claude-sonnet-4.5). Absent for a custom entry, whose model is the person's own setting.",
+          "description": "The model's id at the provider (e.g. Qwen/Qwen3-32B, anthropic/claude-sonnet-4.5).",
           "type": "string",
           "minLength": 1,
           "maxLength": 256

@@ -131,8 +131,8 @@ Returns the same masked shape as the read, with **200 OK**.
   from the catalog, or is not open to you, is skipped in favour of the organisation's default, then
   the catalog's. A value that is not shaped like a catalog id (lowercase letters, digits, `.`, `_`,
   `-`) returns **422**. The organisation's default is the same field on the admin's platform
-  settings. With a catalog declared, `model` and `runner` no longer pick a turn's model: they
-  configure your own-endpoint entry.
+  settings. With a catalog declared, the other fields here (`mode`, `base_url`, `api_key`,
+  `model`, `runner`, `effort`) route nothing: every turn runs on a model the catalog names.
 </ParamField>
 
 Only four things return **422** on this write: a `mode` outside `subscription`/`custom`, a `base_url`

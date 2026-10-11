@@ -552,29 +552,24 @@ def route_env(route: "model_providers.ModelRoute") -> dict[str, str]:
     The credential goes to the route's own endpoint under the one name the endpoint expects (a
     bearer token, or Anthropic's API-key header), every other credential name is stamped empty, and
     the deployment's subscription token is stamped empty unless the route IS that subscription — in
-    which case the endpoint is stamped empty too, so the CLI sends it to Anthropic and nowhere else.
-    A ``custom`` route is the person's own endpoint and is stamped by ``subject_route_env``,
-    unchanged."""
-    if route.credential_source == model_providers.CRED_SUBJECT:
-        env = subject_route_env(route.base_url, route.credential, route.extra_body)
-    else:
-        key = route.credential if route.credential_source == model_providers.CRED_SECRET else ""
-        bearer = key if route.auth_header == "bearer" else ""
-        env = {
-            "ANTHROPIC_BASE_URL": route.base_url,
-            "ANTHROPIC_AUTH_TOKEN": bearer,
-            "ANTHROPIC_API_KEY": key if route.auth_header == "x-api-key" else "",
-            "CLAUDE_CODE_OAUTH_TOKEN": "",
-            "VEXA_LLM_BASE_URL": route.base_url,
-            "VEXA_LLM_API_KEY": bearer,
-            "VEXA_LLM_MODEL": "",
-            "VEXA_LLM_EXTRA_BODY": route.extra_body,
-        }
-        if route.credential_source == model_providers.CRED_SUBSCRIPTION:
-            # The backfill below (MODEL_AUTH_ENV_ALLOWLIST) brings the deployment's subscription
-            # token, and the runtime brokers its credential file — both only ever to Anthropic,
-            # because this route's endpoint is stamped empty and the CLI's default is Anthropic.
-            del env["CLAUDE_CODE_OAUTH_TOKEN"]
+    which case the endpoint is stamped empty too, so the CLI sends it to Anthropic and nowhere else."""
+    key = route.credential if route.credential_source == model_providers.CRED_SECRET else ""
+    bearer = key if route.auth_header == "bearer" else ""
+    env = {
+        "ANTHROPIC_BASE_URL": route.base_url,
+        "ANTHROPIC_AUTH_TOKEN": bearer,
+        "ANTHROPIC_API_KEY": key if route.auth_header == "x-api-key" else "",
+        "CLAUDE_CODE_OAUTH_TOKEN": "",
+        "VEXA_LLM_BASE_URL": route.base_url,
+        "VEXA_LLM_API_KEY": bearer,
+        "VEXA_LLM_MODEL": "",
+        "VEXA_LLM_EXTRA_BODY": route.extra_body,
+    }
+    if route.credential_source == model_providers.CRED_SUBSCRIPTION:
+        # The backfill below (MODEL_AUTH_ENV_ALLOWLIST) brings the deployment's subscription
+        # token, and the runtime brokers its credential file — both only ever to Anthropic,
+        # because this route's endpoint is stamped empty and the CLI's default is Anthropic.
+        del env["CLAUDE_CODE_OAUTH_TOKEN"]
     gateway = (route.harness == "claude-code" and bool(route.base_url)
                and model_endpoint.host_of(route.base_url) != "api.anthropic.com")
     tier = route.provider_model if gateway else ""
@@ -605,20 +600,15 @@ def route_env(route: "model_providers.ModelRoute") -> dict[str, str]:
     return env
 
 
-def route_context(model_config: Optional[dict], *, allowlist: str = "",
-                  deployment_runner: str = "", deployment_model: str = "",
+def route_context(model_config: Optional[dict], *,
                   env: Optional[dict] = None) -> "model_providers.RouteContext":
     """What a provider adapter may consult for one person: their effective Settings → Models
-    config, agent-api's environment for ``secret_ref`` values (read now, never cached), the operator
-    gates, and the deployment's own harness and model. One constructor, so the dispatch, the
-    catalog route and the Test button resolve a model against the same facts."""
+    config (its ``default_model``) and agent-api's environment for ``secret_ref`` values (read now,
+    never cached). One constructor, so the dispatch, the catalog route and the Test button resolve a
+    model against the same facts."""
     return model_providers.RouteContext(
         subject_config=dict(model_config or {}),
-        secret=model_providers.secret_from_env(os.environ if env is None else env),
-        endpoint_refusal=model_endpoint.route_refusal,
-        model_allowed=lambda m: _allowlisted(m, allowlist),
-        deployment_runner=deployment_runner or units.deployment_runner(),
-        deployment_model=deployment_model)
+        secret=model_providers.secret_from_env(os.environ if env is None else env))
 
 
 def apply_model_route(env: dict[str, str], model_config: Optional[dict], *,
@@ -633,30 +623,22 @@ def apply_model_route(env: dict[str, str], model_config: Optional[dict], *,
     A catalog: ``choice`` (the chat's own pick, ``""`` for none) resolves through the provider port —
     the chat's pick, else the person's default, else the catalog's — and the route is stamped whole
     (``route_env``). A pick that cannot run raises ``ModelChoiceFault`` BEFORE anything is spawned:
-    the caller refuses the turn out loud rather than run it on a model the person did not choose. A
-    refused own endpoint also files the friction record a refused endpoint has always filed."""
+    the caller refuses the turn out loud rather than run it on a model the person did not choose.
+    The person's own endpoint (Settings → Models ``mode: custom``) is not a catalog route: with a
+    catalog, every turn runs on a model the catalog names."""
     cfg = model_config or {}
     if catalog is None or catalog.empty:
         if cfg:
             overlay_model_config(env, cfg, allowlist=allowlist, friction=friction,
                                  subject=subject, session=session)
         return None
-    ctx = route_context(cfg, allowlist=allowlist, deployment_runner=env.get("VEXA_RUNNER", ""),
-                        deployment_model=env.get("VEXA_AGENT_MODEL", ""))
+    ctx = route_context(cfg)
     try:
         route = catalog.route(choice, ctx, admin=admin, effort=effort)
     except model_providers.ModelChoiceFault as fault:
         logger.warning(json.dumps({"event": "model_choice_refused", "source": fault.source,
                                    "kind": fault.kind, "model": fault.model,
                                    "provider": fault.provider, "subject": subject}))
-        if fault.kind == model_providers.ENDPOINT_REFUSED and friction is not None:
-            base_url = model_endpoint.custom_base_url(cfg)
-            try:
-                friction(model_endpoint.refusal_friction(
-                    base_url, model_endpoint.refuse_reason(base_url) or fault.detail,
-                    subject=subject, session=session))
-            except Exception:  # noqa: BLE001 — a report is never worth a dispatch
-                logger.warning("model endpoint refusal could not be filed as friction")
         raise
     env.update(route_env(route))
     logger.info(json.dumps({"event": "model_route", "model": route.model_id,

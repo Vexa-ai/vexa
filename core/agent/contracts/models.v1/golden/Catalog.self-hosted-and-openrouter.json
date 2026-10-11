@@ -18,9 +18,6 @@
     "anthropic": {
       "adapter": "anthropic",
       "auth": "subscription"
-    },
-    "own": {
-      "adapter": "custom"
     }
   },
   "models": [
@@ -72,11 +69,6 @@
           "max"
         ]
       }
-    },
-    {
-      "id": "mine",
-      "display_name": "My endpoint",
-      "provider": "own"
     }
   ]
 }

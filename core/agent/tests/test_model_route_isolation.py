@@ -213,23 +213,22 @@ def test_an_anthropic_api_key_goes_as_the_api_key_to_anthropic(monkeypatch, tmp_
     _no_foreign_credential(worker, allowed=(ENV["VEXA_MODEL_SECRET_ANTHROPIC"],))
 
 
-# ── 2. the person's key goes to the person's endpoint, and nothing else does ────────────────────
+# ── 2. with a catalog, a person's own endpoint carries no turn ──────────────────────────────────
 
 @pytest.mark.parametrize("backend", ["process", "docker", "k8s"])
-def test_the_own_endpoint_entry_carries_the_persons_key_and_nothing_of_the_deployments(
-        monkeypatch, tmp_path, backend):
-    worker = _worker(monkeypatch, tmp_path, backend, choice="mine", model_config=OWN)
-    assert worker["VEXA_LLM_BASE_URL"] == OWN["base_url"]
-    assert worker["VEXA_LLM_API_KEY"] == PERSON_KEY
-    _no_foreign_credential(worker, allowed=(PERSON_KEY,))
-    for request in _turn(monkeypatch, tmp_path, worker):
-        assert request["url"] == f"{OWN['base_url']}/chat/completions"
-        assert request["auth"] == f"Bearer {PERSON_KEY}"
-        assert request["body"]["model"] == "z-ai/glm-5.3"
+def test_with_a_catalog_an_own_endpoint_never_carries_a_turn(monkeypatch, tmp_path, backend):
+    """The catalog lists real models only (founder 2026-10-11). A person's own endpoint under
+    Settings → Models is not one of them: an unpicked chat runs on the catalog's default, and
+    neither the person's endpoint nor their key reaches the worker."""
+    worker = _worker(monkeypatch, tmp_path, backend, choice="", model_config=OWN)
+    assert worker["VEXA_LLM_BASE_URL"] == "http://10.0.0.5:8000/v1"
+    assert worker["VEXA_AGENT_MODEL"] == "Qwen/Qwen3-32B"
+    assert PERSON_KEY not in worker.values()
+    assert OWN["base_url"] not in worker.values()
 
 
 def test_a_catalog_secret_is_absent_from_a_worker_on_another_provider(monkeypatch, tmp_path):
-    for choice in ("qwen3-32b", "claude", "mine"):
+    for choice in ("qwen3-32b", "claude"):
         worker = _worker(monkeypatch, tmp_path, choice=choice, model_config=OWN)
         assert OPERATOR_KEY not in worker.values(), choice
 
@@ -256,19 +255,6 @@ def test_a_pick_that_cannot_run_is_refused_before_any_env_exists(monkeypatch, tm
     with pytest.raises(ModelChoiceFault) as exc:
         _spec(monkeypatch, tmp_path, choice="retired-model")
     assert exc.value.kind == UNKNOWN_MODEL
-
-
-def test_a_refused_own_endpoint_files_the_friction_it_always_filed(monkeypatch, tmp_path):
-    reports: list[dict] = []
-    agent_api, _ = _deployment()
-    _isolate(monkeypatch, agent_api)
-    with pytest.raises(ModelChoiceFault):
-        build_unit_env(load_settings(workspaces_dir=str(tmp_path)), _INV, unit_id="unit-1",
-                       token="tok", friction=reports.append,
-                       model_config=dict(OWN, base_url="https://evil.example.com/v1"),
-                       catalog=parse(json.dumps(EXAMPLE), ENV), model_choice="mine")
-    assert reports and reports[0]["kind"] == "refusal"
-    assert PERSON_KEY not in json.dumps(reports)
 
 
 # ── the effort level, on the wire, per adapter (founder 2026-10-10) ─────────────────────────────

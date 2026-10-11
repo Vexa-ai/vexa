@@ -1,9 +1,9 @@
 {
   "source": "model-provider",
   "kind": "not_configured",
-  "provider": "own",
-  "model": "mine",
+  "provider": "",
+  "model": "",
   "status": null,
-  "detail": "My endpoint runs on your own endpoint, and you have not set one.",
-  "remedy": "Set a custom endpoint under Settings → Models, or pick another model."
+  "detail": "No model on this deployment is open to you.",
+  "remedy": "Ask an operator to offer one in the model catalog."
 }
