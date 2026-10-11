@@ -22,6 +22,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
+from tests import admin_accounts
 from fastapi.testclient import TestClient
 
 from control_plane import global_layer
@@ -45,9 +47,10 @@ VERBS = {
 
 
 def _client(root: Path) -> TestClient:
+    admin_accounts.name(ADMIN)
     settings = load_settings(workspaces_dir=str(root),
                              global_system_workspace_path=str(root / "_global"),
-                             global_admin_subjects=ADMIN, internal_api_secret="s", redis_url="")
+                             internal_api_secret="s", redis_url="")
     return TestClient(create_app(Dispatcher(settings, _FakeRuntime(), _FakeIdentity()),
                                  reader=WorkspaceReader(str(root))))
 
@@ -82,3 +85,7 @@ def test_the_accept_is_authored_by_the_person_who_called_it(tmp_path):
     author = subprocess.run(["git", "-C", str(g), "log", "-1", "--format=%ae|%an"],
                             capture_output=True, text=True, check=True).stdout.strip()
     assert author == "ada@acme.example|ada"
+
+
+# Identity's admin-account answer, faked at agent-api's one reader (tests/admin_accounts.py).
+pytestmark = pytest.mark.usefixtures("fake_admin_accounts")

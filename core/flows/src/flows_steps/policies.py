@@ -86,7 +86,7 @@ DEFAULTS: dict = {
     "recording_retention_days": 0,
     # a newcomer to a series reads its earlier reports — the ONE rule that ships off
     "newcomer_reads_history": False,
-    # only the admin writes `_global` (editors may be added)
+    # only the admin account writes `_global` (identity names it; admin-api)
     "global_admin_only": True,
     # an agent may fetch from the open web
     "open_web": True,

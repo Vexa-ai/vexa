@@ -235,20 +235,34 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
     durable personal memory"*. Pointing it at a customer's shared workspace would have told the
     agent that workspace was the person's private desk and moved the desk README onto it. One field,
     one meaning."""
-    active = build_active_set(settings, subject, memberships)
     stack: list[dict] = []
 
     # Tier 1 — GLOBAL SYSTEM. Fail before spawn rather than silently run an under-grounded agent.
-    # The INSTANCE ADMIN receives the one sanctioned read-write setup mount: their setup
-    # conversation is the only writer the organisation tier has. The role is `users.data.is_admin`,
-    # claimed at first sign-in and asked of admin-api (global_layer.is_admin, which keeps the env
-    # allow-list as an operator override and fails CLOSED when it cannot resolve the role) — an env
-    # list could never have been the definition, because the admin does not exist yet when the
-    # deployment env is written.
+    # THE ADMIN ACCOUNT receives the one read-write `_global` mount, and nobody else does (founder
+    # ruling 2026-10-11: *"admin is a special account that has global only and this being the only
+    # one that has control to global"*). It is the deployment's dedicated account, asked of identity
+    # (global_layer.is_admin_account, failing CLOSED) — never a person's everyday account, the
+    # instance admin's included: every other subject mounts `_global` read-only.
+    admin_account = global_layer.is_admin_account(settings, str(subject))
     g = global_mount(settings, settings.workspaces_dir)
-    if global_layer.is_admin(settings, str(subject)):
+    if admin_account:
         g = {**g, "write": True}
     stack.append(g)
+    if admin_account:
+        # …AND THAT IS ALL IT HAS. The admin account's chats work on `_global` and nothing else: no
+        # desk, no shared workspace, no meeting room, no scaffold's extra mount. `_system` stays — it
+        # holds the account's own chats and continuity, is writable by contract, and no conversation
+        # is ever aimed at it. Returned HERE, before the active set is even read, so no later tier
+        # can add a workspace this account was never meant to see.
+        try:
+            stack.append(system_mount(settings.workspaces_dir, subject))
+        except Exception:  # noqa: BLE001
+            logger.warning("private-system (_system) mount resolution failed for the admin account "
+                           "subject=%s — running without it", subject)
+        logger.info("dispatch ADMIN ACCOUNT subject=%s mounts=_global(rw),_system — no desk, no "
+                    "workspaces, no room", subject)
+        return stack
+    active = build_active_set(settings, subject, memberships)
 
     # Tier 2 — the NORMAL active set (private baseline + activated extras). In ROOM mode EVERY desk
     # the subject owns is demoted to read-only — their own included; the meeting's group desk is the
@@ -587,6 +601,14 @@ def _worker_cwd(root: str, subject: str, mounts: list[dict], target: str = "") -
                    if m.get("write") and m.get("role") not in ("global", "system") and m.get("path")), None)
     if normal:
         return normal["path"]
+    # THE ADMIN ACCOUNT, which has no desk: a writable `_global` is the only workspace it has, so it
+    # is its cwd whatever the chat says. Nobody else ever reaches this line with `_global` writable
+    # (build_mount_set grants that bit to the admin account alone), so for everyone else this is the
+    # same fallback chain as before — a turn never drifts into the company layer by elimination.
+    company = next((m for m in mounts
+                    if m.get("role") == "global" and m.get("write") and m.get("path")), None)
+    if company:
+        return company["path"]
     system = next((m for m in mounts
                    if m.get("role") == "system" and m.get("write") and m.get("path")), None)
     return system["path"] if system else f"{root}/{subject}"
@@ -625,6 +647,11 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # and a chat's target must never be able to talk that run into writing a desk. Dropped HERE, in
     # one place, rather than inside `_worker_cwd`, which is a function of its arguments.
     cwd_target = "" if room else str(target or "").strip()
+    # THE ADMIN ACCOUNT'S TARGET IS `_global`, ALWAYS — it has nothing else to write (build_mount_set
+    # returned only `_global` and `_system`). Stated here so the worker's cwd and its target are the
+    # company layer even on a chat that never set one, never the `_system` fallback.
+    if any(m.get("role") == "global" and m.get("write") for m in mounts):
+        cwd_target = target = GLOBAL_SLUG
     env = {
         "VEXA_OWNER": subject,                                    # quota + cred-brokerage axis = the person
         "VEXA_LAUNCHER": identity["launcher"],
@@ -1003,7 +1030,10 @@ class Dispatcher:
         # A watchdog then waits for the worker's turn-accepted ack and respawns once if the worker
         # exited in the XADD↔idle-exit race window without taking the message.
         # The mount must exist before the runtime is asked to bind it (see the helper).
-        _ensure_workspace_exists(self._settings, identity["subject"])
+        # …except for the ADMIN ACCOUNT, which has no desk to seed (build_mount_set mounts it
+        # `_global` and `_system` only, and its cwd is `_global`).
+        if not global_layer.is_admin_account(self._settings, str(identity["subject"])):
+            _ensure_workspace_exists(self._settings, identity["subject"])
         delivery = (self._predeliver(uid, invocation, entry_nonce, inbox=inbox)
                     if invocation["trigger"] == "message" else None)
         if delivery is _DELIVERY_FAILED:

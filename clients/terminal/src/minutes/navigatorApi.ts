@@ -61,8 +61,15 @@ export function buildWorkspaces(src: {
   active?: readonly ActiveMount[];
   subject?: string;
   memberships?: readonly NavMembership[];
+  /** The deployment's ADMIN ACCOUNT: it has the company layer and nothing else — no desk row, no
+   *  group rows, whatever else the inputs carry (founder ruling 2026-10-11). */
+  adminAccount?: boolean;
 }): NavWorkspace[] {
   const active = src.active ?? [];
+  if (src.adminAccount === true) {
+    const g = active.find((m) => m.slug === GLOBAL_SLUG);
+    return [{ key: GLOBAL_SLUG, slug: GLOBAL_SLUG, kind: "global", name: g?.name?.trim() || GLOBAL_SLUG }];
+  }
   const home = active.find((m) => isHomeMount(m, src.subject));
   const desk: NavWorkspace = {
     key: "desk", slug: undefined, kind: "desk",
@@ -237,6 +244,7 @@ export async function loadNavWorkspaces(): Promise<NavWorkspace[]> {
     active: set?.active ?? [],
     subject: set?.subject,
     memberships: named.filter((m): m is NavMembership => m !== null),
+    adminAccount: set?.admin_account === true,
   });
 }
 

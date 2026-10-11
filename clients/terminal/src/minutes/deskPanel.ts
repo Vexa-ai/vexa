@@ -44,6 +44,14 @@ export async function deskLabel(): Promise<string> {
  *  because the desk is the page that says where they are — then a README tab per group, then the
  *  organisation tier last (it is the constant, and a constant belongs at the end of a tab strip). */
 export async function deskPanelPages(workspaces: string[]): Promise<Page[]> {
+  // THE ADMIN ACCOUNT HAS NO DESK (founder ruling 2026-10-11): its one page is the company layer's.
+  // The active set says so (`admin_account: true`); an answer that does not say leaves the
+  // everyday panel below, and the server refuses whatever that panel would not be allowed to read.
+  try {
+    if ((await readActiveSet()).admin_account === true) {
+      return [{ path: "README.md", slug: "_global", label: "_global" }];
+    }
+  } catch { /* the everyday panel below — it degrades on its own */ }
   const shared = (workspaces ?? []).filter((w) => w && !IMPLICIT.has(w) && w !== PERSONAL);
   await primeWorkspaceNames(shared).catch(() => { /* labels degrade to slugs, never to a failure */ });
   const label = await deskLabel();

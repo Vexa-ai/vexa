@@ -67,6 +67,17 @@ Auth is two tiers, because two different callers reach this API:
   `POST /events/batch` take the operator key `X-Flows-Operator-Key` and nothing else (`X-Flows-Admin-Key` still works for one release — it named admin-api's token, which it never was). The operator key
   also opens everything above, unscoped, which is the admin console's view.
 
+### Authoring from a chat: sign in as the admin account
+
+Flows are part of the company layer, so only the deployment's **admin account** authors them from a
+chat ([The admin account](/minutes/workspaces#the-admin-account)). Sign in as the admin account and
+ask in its chat; its agent can use `flows_submit` and `flow_lifecycle`, and it can write flow pages in
+`_global/flows/`. The MCP spends the operator key on those two tools only when the gateway's
+`/auth/me` reports `admin_account: true` for the caller, or for a worker whose person is the admin
+account and is in the loop. From an everyday account, the instance admin's included, both tools
+answer `403` and nothing is forwarded, and a flow page cannot be written because `_global` is
+read-only there.
+
 New events always select the **newest active version** of each flow; running reactions are never
 migrated.
 

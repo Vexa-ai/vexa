@@ -19,7 +19,9 @@ owns three things about it:
      authored by that admin, so an edit to what every agent carries is reviewable, diffable and
      revertable.
 
-And it is agent-api's one reader of the admin role (`is_admin`).
+And it is agent-api's one reader of the two roles identity answers: the ADMIN ACCOUNT
+(`is_admin_account`) — the only identity that writes `_global` — and the instance admin (`is_admin`),
+a person, who reads `_global` like everybody else.
 """
 from __future__ import annotations
 
@@ -233,32 +235,48 @@ def _admin_api(url: str, secret: str, path: str, *, timeout: float = 6.0) -> dic
         return json.loads(resp.read().decode() or "{}")
 
 
-def is_admin(settings, subject: str) -> bool:
-    """Is this subject the instance admin? `users.data.is_admin`, asked of the service that owns it.
-
-    The env allow-list (`VEXA_GLOBAL_ADMIN_SUBJECTS`) stays as an OPERATOR OVERRIDE — a deployment
-    that has locked itself out needs a door that does not depend on the database being right — but
-    it is no longer the definition. It could not be: the admin is claimed at first sign-in, which
-    happens long after the env was written."""
-    override = {a.strip() for a in (getattr(settings, "global_admin_subjects", "") or "").split(",") if a.strip()}
-    if str(subject) in override:
-        return True
+def _ask_identity(settings, subject: str) -> Optional[dict]:
+    """`/internal/users/{subject}/is-admin`, cached briefly — or None when identity cannot answer.
+    The one hop both questions below ride, so they can never read two different answers."""
     url = (getattr(settings, "admin_api_url", "") or "").strip()
     try:
         secret = settings.internal_api_secret.get_secret_value()
     except Exception:  # noqa: BLE001
         secret = ""
     if not url or not secret or not str(subject).strip():
-        return False
+        return None
     key = f"is_admin::{url}::{subject}"
     now = time.monotonic()
     hit = _CACHE.get(key)
     if hit and hit[0] > now:
-        return bool(hit[1].get("is_admin"))
+        return hit[1]
     try:
         out = _admin_api(url, secret, f"/internal/users/{subject}/is-admin")
     except (urllib.error.URLError, OSError, ValueError) as e:  # noqa: PERF203
-        logger.warning("global_layer: could not resolve the admin role for subject=%s (%s) — treating as NOT admin", subject, e)
-        return False
+        logger.warning("global_layer: could not resolve the roles of subject=%s (%s) — treating as "
+                       "NEITHER the instance admin NOR the admin account", subject, e)
+        return None
     _CACHE[key] = (now + _CACHE_TTL_S, out)
-    return bool(out.get("is_admin"))
+    return out
+
+
+def is_admin(settings, subject: str) -> bool:
+    """Is this subject the INSTANCE admin? `users.data.is_admin` (or `VEXA_ADMIN_EMAILS`), asked of
+    the service that owns it. A PERSON — it governs support surfaces (scaffolds, renames), and it no
+    longer writes `_global`: that is :func:`is_admin_account`'s, and nobody else's. Fails closed."""
+    out = _ask_identity(settings, subject)
+    return bool(out and out.get("is_admin") is True)
+
+
+def is_admin_account(settings, subject: str) -> bool:
+    """Is this subject the deployment's ADMIN ACCOUNT — the one identity that controls `_global`?
+
+    Founder ruling 2026-10-11: *"admin is a special account that has global only and this being the
+    only one that has control to global"*. Identity owns the answer (admin-api
+    `app/admin_account.py`: a row created as the admin account while `VEXA_ADMIN_ACCOUNT` names its
+    address, and still named); this is agent-api's one reader of it. There is no list here and no
+    override: the operator's door is that env key on admin-api, one writer. Fail closed — no admin
+    account configured, identity unreachable, or a field missing (an older identity) all say no, and
+    then nobody writes `_global`."""
+    out = _ask_identity(settings, subject)
+    return bool(out and out.get("admin_account") is True)

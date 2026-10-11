@@ -168,8 +168,8 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=403, detail="kg/templates/ holds entity shapes, not records")
         if slug == system_mounts.GLOBAL_SLUG:
             require_in_ceiling(request, slug)
-            if not global_layer.is_admin(settings, str(subject)):
-                raise HTTPException(status_code=403, detail="only an org admin may edit _global")
+            if not global_layer.is_admin_account(settings, str(subject)):
+                raise HTTPException(status_code=403, detail="only the admin account may edit _global")
             target = _writable_global()
             if target is None:
                 raise HTTPException(status_code=404, detail="the organisation tier is not writable here")
@@ -602,9 +602,9 @@ def build(**d) -> APIRouter:
             # the administrator's desk, where nobody else will ever read it. The five files stay
             # thin; the graph they link to lives HERE, written by the one identity that may write
             # here at all — the same test the file route runs two screens up.
-            if not global_layer.is_admin(settings, str(subject)):
+            if not global_layer.is_admin_account(settings, str(subject)):
                 raise HTTPException(status_code=403,
-                                    detail="only an org admin may write company-tier pages into _global")
+                                    detail="only the admin account may write company-tier pages into _global")
             global_target = _writable_global()
             if global_target is None:
                 raise HTTPException(status_code=404, detail="the organisation tier is not writable here")
@@ -1152,8 +1152,21 @@ def build(**d) -> APIRouter:
     @router.get("/api/workspace/active")
     def ws_active(request: Request):
         """The subject's ordered ACTIVE SET — the workspaces the next dispatch mounts (the private baseline
-        first, then any activated extras). Each: ``slug, repo, ref, role, path, write, primary``."""
+        first, then any activated extras). Each: ``slug, repo, ref, role, path, write, primary``.
+
+        THE ADMIN ACCOUNT's set is the company layer and nothing else — the same answer its dispatch
+        mounts (`dispatch.build_mount_set`) — and says so with `admin_account: true`, the one fact the
+        terminal needs to show it only Company. Every other subject's answer carries no such key."""
         subject = subject_of(request)
+        if global_layer.is_admin_account(settings, str(subject)):
+            return {
+                "subject": subject,
+                "active": [{"slug": system_mounts.GLOBAL_SLUG, "repo": "", "ref": "", "role": "global",
+                            "path": str(_global_dir()), "write": True, "primary": False,
+                            "name": None}],
+                "index_degraded": False,
+                "admin_account": True,
+            }
         try:
             mounts = active_workspaces(wsr.root, subject)
         except ValueError:
@@ -1618,8 +1631,8 @@ def build(**d) -> APIRouter:
         target = str(body.get("target") or "")
         require_in_ceiling(request, None if target == "personal" else target)
         if target == "_global":
-            if not global_layer.is_admin(settings, str(subject)):
-                raise HTTPException(status_code=403, detail="only an org admin may reset _global")
+            if not global_layer.is_admin_account(settings, str(subject)):
+                raise HTTPException(status_code=403, detail="only the admin account may reset _global")
             # The `_global` the worker mount serves (`system_mounts.global_root`): unset config is the
             # in-store one (founder ruling 2026-10-08), not "no _global".
             path = system_mounts.global_root(settings, wsr.root)

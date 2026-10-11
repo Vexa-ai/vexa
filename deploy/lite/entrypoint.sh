@@ -54,6 +54,9 @@ export VEXA_SIGNIN_ALLOW="${VEXA_SIGNIN_ALLOW:-}"
 # The administrators, comma-separated full addresses (admin-api reads it; the terminal only asks).
 # Naming them closes the admin claim — set it whenever the terminal is reachable from outside.
 export VEXA_ADMIN_EMAILS="${VEXA_ADMIN_EMAILS:-}"
+# The ADMIN ACCOUNT — one fresh address, the only account that writes the company layer `_global`
+# (and that has nothing else). Empty = nobody writes `_global`. `docker run -e VEXA_ADMIN_ACCOUNT=…`.
+export VEXA_ADMIN_ACCOUNT="${VEXA_ADMIN_ACCOUNT:-}"
 # The mail relay the terminal sends the emailed sign-in link through — the deployment's
 # VEXA_MAIL_SMTP_* family (see deploy/compose/.env.example). Empty host: no link is delivered.
 export VEXA_MAIL_SMTP_HOST="${VEXA_MAIL_SMTP_HOST:-}"

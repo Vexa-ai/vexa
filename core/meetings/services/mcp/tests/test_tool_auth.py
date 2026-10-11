@@ -158,29 +158,31 @@ def test_an_admin_tool_sends_the_deployments_key_and_not_the_callers():
     """The caller is still authenticated at this edge — they just do not get to present their own
     credential to a door that reads an operator key."""
     env = {"VEXA_MCP_FLOWS_ADMIN_KEY": "an-operator-key"}
-    client, seen = _wire(ADMIN_MANIFEST, env, me={"user_id": 1, "is_admin": True})
+    client, seen = _wire(ADMIN_MANIFEST, env, me={"user_id": 1, "admin_account": True})
     client.post("/tools/flows_retire", headers={"Authorization": "Bearer person-key"}, json={})
     sent = seen[-1].headers
     assert sent["X-Flows-Operator-Key"] == "an-operator-key"
     assert "person-key" not in str(dict(sent))
 
 
-# ── and for whom: the instance admin, with their own credential, confirmed at call time ─────────
+# ── and for whom: the admin account, with its own credential, confirmed at call time ─────────
 
 @pytest.mark.parametrize("me", [
     {"user_id": 7, "is_admin": False},          # a person's own key, not the admin
+    {"user_id": 7, "is_admin": True},           # the INSTANCE admin is a person, not the admin account
+    {"user_id": 7, "is_admin": True, "admin_account": False},
     {"user_id": 7},                              # an answer that does not say
-    {"user_id": 7, "is_admin": "true"},          # not a boolean
+    {"user_id": 7, "admin_account": "true"},     # not a boolean
     (403, {"detail": "a worker's delegation token is accepted on /mcp only"}),  # a worker
     (401, {"detail": "Invalid API key"}),        # nobody
     None,                                        # no gateway to ask
 ])
-def test_an_admin_tool_spends_the_deployments_key_for_the_instance_admin_only(me):
+def test_an_admin_tool_spends_the_deployments_key_for_the_admin_account_only(me):
     env = {"VEXA_MCP_FLOWS_ADMIN_KEY": "an-operator-key"}
     client, seen = _wire(ADMIN_MANIFEST, env, me=me)
     r = client.post("/tools/flows_retire", headers={"Authorization": "Bearer someone"}, json={})
     assert r.status_code == 403
-    assert "instance admin" in r.json()["detail"]
+    assert "admin account" in r.json()["detail"]
     assert seen == [], "the operator key went out for a caller who is not the admin"
 
 
@@ -240,7 +242,7 @@ def test_the_admin_question_carries_the_re_entry_identity_so_a_worker_can_be_ans
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/auth/me":
             asked.append(request)
-            return httpx.Response(200, json={"user_id": 1, "is_admin": True})
+            return httpx.Response(200, json={"user_id": 1, "admin_account": True})
         return httpx.Response(200, json={"ok": True})
 
     app = FastAPI()

@@ -28,6 +28,8 @@ from __future__ import annotations
 import json
 
 import pytest
+
+from tests import admin_accounts
 from fastapi.testclient import TestClient
 
 from control_plane.api import _Sessions, create_app
@@ -105,11 +107,11 @@ def stack(tmp_path, monkeypatch):
 
 
 def _settings(stack, *, admins: str = ""):
-    """`global_admin_subjects` is the operator override `global_layer.is_admin` consults first — the
-    one door into that answer that does not need an admin-api on the other end of a socket."""
+    """`admins` names the ADMIN ACCOUNT for this test — identity's answer, faked at agent-api's one
+    reader (`tests/admin_accounts.py`), since agent-api holds no list of its own any more."""
+    admin_accounts.name(admins)
     return load_settings(workspaces_dir=str(stack["root"]),
                          global_system_workspace_path=str(stack["root"] / "_global"),
-                         global_admin_subjects=admins,
                          internal_api_secret="s", ui_url="https://app.example.test", redis_url="")
 
 
@@ -254,14 +256,28 @@ def test_the_turns_cwd_IS_the_company_layer_when_the_admin_aims_a_chat_there(sta
     assert stack["runtime"].envs[-1]["VEXA_WORKSPACE_PATH"].endswith("/_global")
 
 
-def test_a_chat_the_admin_has_NOT_aimed_there_still_works_on_his_desk(stack):
-    """EVERYTHING ELSE IS UNCHANGED. The cwd moves on the TARGET, never on the mount — `_global` is
-    mounted read-write in every one of the admin's turns, and only the chat he aimed writes there.
-    Without this the change would read as "the admin now always works in the company layer", which
-    is the thin tier filling up by default rather than by a decision."""
+def test_the_admin_accounts_plain_chat_works_in_the_company_layer_and_has_no_desk(stack):
+    """THE ADMIN ACCOUNT HAS ONLY `_global` (founder ruling 2026-10-11: *"admin is a special account
+    that has global only"*). A chat it never aimed anywhere still writes the company layer — there is
+    nothing else to write — and its mount table carries no desk, no workspace and no room."""
     client = _client(stack, admins=ADMIN)
     _turn(client, ADMIN, "pchat-plain", prompt="hello")
-    assert not stack["runtime"].envs[-1]["VEXA_WORKSPACE_PATH"].endswith("/_global")
+    env = stack["runtime"].envs[-1]
+    assert env["VEXA_WORKSPACE_PATH"].endswith("/_global")
+    assert env["VEXA_TARGET_WORKSPACE"] == "_global"
+    roles = [(m["role"], m["write"]) for m in json.loads(env["VEXA_MOUNTS"])]
+    assert roles == [("global", True), ("system", True)]
+    assert not (stack["root"] / ADMIN).exists(), "the admin account's desk was seeded"
+
+
+def test_an_everyday_chat_never_works_in_the_company_layer(stack):
+    """Everybody else — the person who is the instance admin included — mounts `_global` read-only."""
+    client = _client(stack, admins=ADMIN)
+    _turn(client, MEMBER, "pchat-plain", prompt="hello")
+    env = stack["runtime"].envs[-1]
+    assert not env["VEXA_WORKSPACE_PATH"].endswith("/_global")
+    assert "VEXA_TARGET_WORKSPACE" not in env
+    assert next(m for m in json.loads(env["VEXA_MOUNTS"]) if m["role"] == "global")["write"] is False
 
 
 def test_a_non_admin_can_never_have_the_company_layer_as_a_cwd(stack):
@@ -287,7 +303,8 @@ def test_a_non_admin_can_never_have_the_company_layer_as_a_cwd(stack):
         "a read-only tier is not a cwd — F59, and the member's own desk is where the turn stays"
 
     system = next(m for m in admin_mounts if m["role"] == "system")["path"]
-    assert _worker_cwd(root, ADMIN, admin_mounts, "_system") != system
+    assert _worker_cwd(root, ADMIN, admin_mounts, "_system") == f"{root}/_global", \
+        "the admin account has nothing but the company layer to work in"
     assert _worker_cwd(root, MEMBER, member_mounts, "_system") != system
 
 
@@ -297,3 +314,7 @@ def test_a_chat_that_is_not_aimed_there_carries_no_rule_about_it(stack):
     client = _client(stack, admins=ADMIN)
     _turn(client, ADMIN, "pchat-plain", prompt="hello")
     assert "The company layer is thin" not in _sent_prompt(stack)
+
+
+# Identity's admin-account answer, faked at agent-api's one reader (tests/admin_accounts.py).
+pytestmark = pytest.mark.usefixtures("fake_admin_accounts")

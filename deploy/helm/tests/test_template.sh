@@ -34,6 +34,14 @@ need 2 '^kind: PersistentVolumeClaim' "PVCs (redis+workspaces)"
 need 1 'name: vexa-vexa-agent-api' "agent-api present"
 need 1 'RUNTIME_BACKEND'      "runtime backend env"
 need 1 'serviceAccountName: vexa-vexa-runtime' "runtime SA bound"
+# The admin account (the only writer of _global) is designated on admin-api and nowhere else; the
+# retired agent-api id list must never render again (one writer: identity).
+need 1 'name: VEXA_ADMIN_ACCOUNT' "admin-api carries VEXA_ADMIN_ACCOUNT"
+if grep -q 'VEXA_GLOBAL_ADMIN_SUBJECTS' <<< "$RENDER"; then
+  echo "  FAIL: the retired VEXA_GLOBAL_ADMIN_SUBJECTS is rendered"; fail=1
+else
+  echo "  OK: VEXA_GLOBAL_ADMIN_SUBJECTS is not rendered"
+fi
 # model-auth wiring: worker creds ride the dispatch spec env FROM agent-api, so agent-api must
 # carry the optional secret refs (values-test leaves auth unset — CI has no creds; render + boot
 # must stay green, the env ref is optional:true).

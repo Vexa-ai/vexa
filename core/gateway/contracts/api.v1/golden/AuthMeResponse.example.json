@@ -6,5 +6,6 @@
     "tx"
   ],
   "max_concurrent": 3,
-  "is_admin": false
+  "is_admin": false,
+  "admin_account": false
 }

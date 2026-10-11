@@ -93,9 +93,8 @@ class Settings(BaseSettings):
     global_system_workspace_path: str = ""
     # Pin the _global mount to a ref (branch/tag/sha) for safe rollout; empty = mount HEAD (main).
     global_system_workspace_ref: str = ""
-    # Comma-separated user ids whose workers mount _global READ-WRITE — the admin setup
-    # conversation writes the org tier; everyone else stays ro. Empty = nobody writes.
-    global_admin_subjects: str = ""
+    # (VEXA_GLOBAL_ADMIN_SUBJECTS is RETIRED — 2026-10-11. Who writes `_global` is identity's answer:
+    # the deployment's admin account, admin-api `VEXA_ADMIN_ACCOUNT`; see global_layer.is_admin_account.)
     # The ONE model this product runs (PRD decision 34): the agent harness's. The fields that used
     # to sit beside it — `meeting_model`, `llm_provider`, `llm_model`, `meeting_idle_timeout_sec`,
     # `post_meeting_dev_email` — all configured the in-product inference pipeline, which is gone.

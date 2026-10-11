@@ -243,3 +243,32 @@ def test_a_worker_is_the_admin_only_for_an_admin_person_in_the_loop_and_only_on_
     assert me("human", False).json()["is_admin"] is False
     assert me("human", None).json()["is_admin"] is False
     assert me("human", True, marker=False).status_code == 403
+
+
+def test_auth_me_says_whether_the_key_is_the_admin_account_and_nothing_else_is():
+    """The deployment's dedicated admin account (identity.v1 `admin_account`) — the only identity that
+    writes `_global`, and the only one the MCP spends the operator key for on flows authoring. The
+    instance admin is NOT it: `is_admin` true says nothing about `admin_account`. Anything but a
+    literal true is no, so an older identity that never sends the field fails closed."""
+    for answered, said in ((True, True), (False, False), (None, False), ("true", False)):
+        user = {"user_id": 1, "scopes": ["legacy"], "max_concurrent": 0, "is_admin": True}
+        if answered is not None:
+            user["admin_account"] = answered
+        client, _ = _client(user=user, key=VALID_KEY)
+        body = client.get("/auth/me", headers={"X-API-Key": VALID_KEY}).json()
+        assert body["admin_account"] is said and body["is_admin"] is True
+
+
+def test_a_worker_is_the_admin_account_only_for_that_accounts_person_in_the_loop():
+    def me(regime, person_admin_account):
+        user = {**DELEGATED_USER, "delegation": {"regime": regime, "workspaces": "*" if regime == "human"
+                                                 else ["ws_1"]}, "person_is_admin": True,
+                "admin_account": False, "person_admin_account": person_admin_account}
+        client, _ = _client(user=user)
+        return client.get("/auth/me", headers={"X-API-Key": DELEGATED,
+                                               "X-Vexa-Internal-Mcp-Identity": _reentry(user=user)})
+
+    assert me("human", True).json()["admin_account"] is True
+    assert me("autonomous", True).json()["admin_account"] is False
+    assert me("human", False).json()["admin_account"] is False      # the instance admin's worker
+    assert me("human", None).json()["admin_account"] is False

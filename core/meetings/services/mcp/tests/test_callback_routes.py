@@ -94,7 +94,7 @@ class Recorder:
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.sent.append(request)
         if request.url.path == "/auth/me":
-            return httpx.Response(200, json={"user_id": 1, "is_admin": True})
+            return httpx.Response(200, json={"user_id": 1, "admin_account": True})
         status, body = self.routes.get((request.method, request.url.path), (200, {"ok": True}))
         return httpx.Response(status, json=body)
 
@@ -140,7 +140,7 @@ def _hand_written_calls(monkeypatch) -> List[Row]:
         "native_meeting_id": "abc-defg-hij", "platform": "google_meet"})
     assert r.status_code == 200, r.text
     # what an `auth: admin` tool asks before it spends the deployment's key
-    asyncio.run(register._require_instance_admin(
+    asyncio.run(register._require_admin_account(
         "vxd_a.b.c", f"http://{GATEWAY_HOST}", httpx.MockTransport(rec.handler)))
     return rec.to_gateway()
 

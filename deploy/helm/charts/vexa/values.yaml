@@ -360,6 +360,13 @@ adminApi:
   # terminal only asks admin-api. A VEXA_ADMIN_EMAILS still set under terminal.extraEnv is carried
   # over when this is empty.
   adminEmails: ""
+  # The ADMIN ACCOUNT (VEXA_ADMIN_ACCOUNT): one fresh address that is nobody's everyday account, e.g.
+  # "admin@example.com". It is the only account that writes the company layer `_global` (its files,
+  # flows, POLICIES.md) and it has nothing else — no desk, no shared workspaces, no meetings. Set it,
+  # roll admin-api, then sign in AS that address; the terminal shows it only Company. An address that
+  # already signed in as an everyday account is never turned into the admin account. Empty = nobody
+  # writes `_global` (everybody reads it). Replaces agentApi.globalAdminSubjects, which is retired.
+  adminAccount: ""
   extraEnv: []
 
 # Meetings + recordings (compose: meeting-api → :8080).

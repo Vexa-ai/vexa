@@ -129,4 +129,26 @@ describe("/api/auth/me", () => {
     const res = await meRoute();
     expect(res.headers.get("Cache-Control")).toContain("no-store");
   });
+
+  it("says whether this is the ADMIN ACCOUNT — from the oracle, a literal true, and never from is_admin", async () => {
+    cookieJar["vexa-token"] = "good-token";
+    for (const [answer, said] of [
+      [{ admin_account: true, is_admin: false }, true],
+      [{ admin_account: false, is_admin: true }, false],   // the instance admin is a person, not it
+      [{ is_admin: true }, false],                          // an older identity: no field at all
+      [{ admin_account: "true" }, false],                   // not a boolean
+    ] as const) {
+      stubOracle(() => new Response(JSON.stringify({ user_id: 7, email: "a@example.test", ...answer }), { status: 200 }));
+      const body = await (await meRoute()).json();
+      expect(body.admin_account).toBe(said);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("an unreachable oracle leaves admin_account UNKNOWN (null), never a yes", async () => {
+    cookieJar["vexa-token"] = "good-token";
+    stubOracle(() => new Response("down", { status: 503 }));
+    const body = await (await meRoute()).json();
+    expect(body.admin_account).toBeNull();
+  });
 });

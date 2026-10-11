@@ -92,7 +92,12 @@ export async function readAttachedWorkspaces(): Promise<AttachedWorkspaces> {
 /** One member of the ADDITIVE active set (the mount stack the next agent turn mounts — WP-A2.1). The
  *  `primary` member is the private baseline (active by default; can be switched off via `baseline_hidden`). */
 export interface ActiveMount { slug: string; repo: string | null; ref: string | null; role: string; path: string; write: boolean; primary: boolean; name?: string | null }
-export interface ActiveSet { subject: string; active: ActiveMount[] }
+export interface ActiveSet {
+  subject: string; active: ActiveMount[];
+  /** True only for the deployment's ADMIN ACCOUNT, whose set is the company layer and nothing else
+   *  (agent-api `GET /api/workspace/active`). Absent for every everyday account. */
+  admin_account?: boolean;
+}
 
 /** The subject's ORDERED active set — the workspaces currently MOUNTED into the agent turn (vs the parked
  *  ones in `slots`, which are AVAILABLE to activate). The private baseline is first and always present. */

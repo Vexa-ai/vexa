@@ -5,8 +5,8 @@
   "description": "Who may sign in, and who may become the administrator: the internal wire between the terminal's server (the sign-in doors) and admin-api (which holds every input and decides). The terminal asks and obeys; it holds no list of its own. Internal tier only (X-Internal-Secret). The reason vocabularies are the contract: the terminal's TypeScript and admin-api's Python both read them from code generated from this file (gen.mjs), so a reason one side adds is a reason the other side knows.",
   "$defs": {
     "AdmittedReason": {
-      "description": "Why a sign-in was admitted. admin: the claimed role is on this user. admin-email: VEXA_ADMIN_EMAILS names this address. existing-user: an account exists. allow-list: VEXA_SIGNIN_ALLOW or the admin-edited signin.allow setting matches. claim-code: the instance is unclaimed, nothing is configured, and this sign-in carries the live admin claim code.",
-      "enum": ["admin", "admin-email", "existing-user", "allow-list", "claim-code"]
+      "description": "Why a sign-in was admitted. admin: the claimed role is on this user. admin-email: VEXA_ADMIN_EMAILS names this address. admin-account: VEXA_ADMIN_ACCOUNT names this address as the deployment's dedicated admin account. existing-user: an account exists. allow-list: VEXA_SIGNIN_ALLOW or the admin-edited signin.allow setting matches. claim-code: the instance is unclaimed, nothing is configured, and this sign-in carries the live admin claim code.",
+      "enum": ["admin", "admin-email", "admin-account", "existing-user", "allow-list", "claim-code"]
     },
     "RefusedReason": {
       "description": "Why a sign-in was refused. not-allowed covers every refusal on purpose: the answer must not tell a caller which list an address is missing from.",

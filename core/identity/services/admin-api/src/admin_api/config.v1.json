@@ -176,6 +176,13 @@
    "targets": ["compose", "helm", "lite"]
   },
   {
+   "key": "VEXA_ADMIN_ACCOUNT",
+   "class": "defaulted",
+   "default": "(empty — there is no admin account, and nobody writes the company layer _global; everybody reads it)",
+   "description": "The deployment's dedicated ADMIN ACCOUNT (founder ruling 2026-10-11), normally one exact address (at most 5; no @domain, no *). It is the only identity that writes the company layer _global — its files, flows, POLICIES.md and its reset — and it does nothing else: no desk, no shared workspaces, no meetings (its bot cap is always 0). An account is the admin account only when BOTH hold: its row was CREATED while this key named the address (users.data.account = admin, stamped by POST /admin/users in the creating transaction, never on an existing row), and this key still names it. So naming an address that already belongs to somebody's everyday account promotes nothing (the boot warns), and removing the address revokes the account at the next restart. A named address is admitted to sign in (why: admin-account). Answered on /internal/validate (admin_account, person_admin_account) and /internal/users/{id}/is-admin (admin_account); agent-api, the gateway and the terminal hold no list of their own (app/admin_account.py). A malformed entry refuses the boot. Not the same as VEXA_ADMIN_EMAILS: those are people, who administer Settings and read _global like everybody else.",
+   "targets": ["compose", "helm", "lite"]
+  },
+  {
    "key": "VEXA_FLOWS_API_URL",
    "class": "publish-edge",
    "publishes_events": ["onboarding.completed"],

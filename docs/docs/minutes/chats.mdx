@@ -86,7 +86,10 @@ workspace in the chat.
   read.* Click another chip to make it the target.
 - **+** (*Add a workspace to this chat*) mounts another workspace; a chip's remove button takes it out.
 - With no target set, writes go to your own desk.
-- Org admins can also choose **Company** (the `_global` workspace).
+- **Company** (the `_global` workspace) is never offered to an everyday account, the instance
+  admin's included. Signed in as the deployment's **admin account**, the bar shows **Company** alone:
+  it is always the target, there is no `+`, and every chat writes there (see
+  [The admin account](/minutes/workspaces#the-admin-account)).
 - You can also say "work in `<workspace>`" and the agent moves the target itself.
 
 The target is where writes go by default. It never grants a right: a workspace you cannot write is
@@ -107,7 +110,8 @@ happens when a long turn reaches its tool-call limit is in [Long agent turns](/a
 | a red block *`<Source>` · `<kind>`* with **Retry** | a dependency failed; the turn ended with a typed fault | read the remedy line; retry |
 | *the terminal could not reach the Vexa gateway* | the gateway is down or unreachable | try again in a moment |
 | *not a workspace you can write* | the chosen target is read-only for you | pick a workspace where you are a contributor |
-| *only an org admin may write into _global* | **Company** is admin-only | ask an admin |
+| *only the admin account may write into _global…* | **Company** belongs to the admin account | sign in as the admin account |
+| *the admin account works on the company layer (_global) only…* | the admin account has no desk or other workspace | sign in with your everyday account |
 | *Lost the connection to that background job…* | the stream dropped during a job | reopen the page |
 
 Other limits: a chat id is 1–128 letters, digits, `.`, `_` or `-`; the queue lists at most 200 waiting
@@ -183,7 +187,8 @@ gateway's `/agent/*` forward. The request and event shapes are in [the agent API
 
 **Who can do what.** Only you can post into your chats. The chat's target is a default, never a grant:
 writes are still checked against your rights in that workspace, and an agent acting for you is held to
-the workspaces of the chat that dispatched it. Only an org admin can target the company workspace.
+the workspaces of the chat that dispatched it. Only the admin account can target the company workspace,
+and the admin account can target nothing else.
 
 **Protections.**
 
@@ -203,7 +208,7 @@ the workspaces of the chat that dispatched it. Only an org admin can target the 
 | `core/agent/tests/test_chat_session_bound.py` · `test_the_routes_answer_422_and_dispatch_nothing`, `test_the_pending_list_refuses_a_session_outside_the_bound`, `test_the_rail_order_and_the_target_refuse_a_session_outside_the_bound` | chat ids |
 | `core/agent/tests/test_meeting_room.py` · `test_the_body_still_refuses_an_unknown_field` | no extra fields |
 | `core/agent/tests/test_chat_workspace_target.py` · `test_a_target_aimed_at_a_guess_is_refused`, `test_a_workspace_this_person_cannot_write_is_refused_at_the_chip`, `test_a_malformed_slug_is_a_400_not_a_stored_guess`, `test_the_target_is_a_default_and_never_a_grant` | the target |
-| `core/agent/tests/test_global_target.py` · `test_a_non_admin_session_cannot_set_global_as_target`, `test_an_instance_with_no_admin_configured_refuses_everybody` | the company target |
+| `core/agent/tests/test_global_target.py` · `test_a_non_admin_session_cannot_set_global_as_target`, `test_an_instance_with_no_admin_configured_refuses_everybody`, `test_the_admin_accounts_plain_chat_works_in_the_company_layer_and_has_no_desk`, `test_an_everyday_chat_never_works_in_the_company_layer`; `test_admin_account.py` · `test_the_admin_account_aims_a_chat_nowhere_else` | the company target |
 | `core/agent/tests/test_delegation_ceiling_verbs.py` · `test_a_workspace_outside_the_ceiling_is_refused_and_nothing_changes` | the agent's ceiling |
 | `core/agent/tests/test_chat_runtime_fault.py` · `test_a_refused_spawn_on_api_chat_is_a_typed_502_not_internal_server_error`, `test_queued_rows_behind_the_refusal_say_they_are_blocked_and_by_what` | typed faults and blocked queues |
 | `core/agent/tests/test_inbox.py` · `test_ten_submissions_during_a_job_all_execute_in_order` | nothing is dropped |

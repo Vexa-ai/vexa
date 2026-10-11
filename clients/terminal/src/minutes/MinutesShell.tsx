@@ -1420,17 +1420,18 @@ export function MinutesShell() {
   // reader cannot see which identity that was — so the card names it. Probed only when a refusal
   // actually exists: the common path is a link that opens, and it should cost nothing. Fail-soft —
   // an identity probe that does not answer leaves the copy exactly as it read before.
-  // IS THIS PERSON THE INSTANCE'S ADMIN (Vexa-ai/vexa#1616) — the one question the `+` menu's
-  // company-layer entry turns on. FAIL CLOSED: `is_admin` is three-valued (see /api/auth/me) and
-  // only a literal `true` counts, because an unknown answer must not offer a door the server
-  // would then slam. Nothing hangs on it being right — the write seam refuses a non-admin either
-  // way — so it is a probe, not a gate, and a probe that does not answer costs an offer.
-  const [isAdmin, setIsAdmin] = useState(false);
+  // IS THIS THE DEPLOYMENT'S ADMIN ACCOUNT (founder ruling 2026-10-11: *"admin is a special account
+  // that has global only"*) — the one question the header turns on. The admin account sees Company
+  // and nothing else; every everyday account (the instance admin's included) never sees Company.
+  // FAIL CLOSED: `admin_account` is three-valued (see /api/auth/me) and only a literal `true` counts.
+  // Nothing hangs on it being right — the server confines the admin account and refuses everybody
+  // else's `_global` writes either way — so it is a probe, not a gate.
+  const [isAdminAccount, setIsAdminAccount] = useState(false);
   useEffect(() => {
     let active = true;
     void fetch("/api/auth/me", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (active) setIsAdmin((d as { is_admin?: boolean } | null)?.is_admin === true); })
+      .then((d) => { if (active) setIsAdminAccount((d as { admin_account?: boolean } | null)?.admin_account === true); })
       .catch(() => undefined);
     return () => { active = false; };
   }, []);
@@ -1551,7 +1552,7 @@ export function MinutesShell() {
           if (sel.target === id) chooseTarget("");
         }}
         onSetTarget={(id) => chooseTarget(id)}
-        isAdmin={isAdmin}
+        adminAccount={isAdminAccount}
         onTargetGlobal={() => {
           // THE ADMIN AIMS A CHAT AT THE COMPANY LAYER (Vexa-ai/vexa#1616) — MOUNT · TARGET ·
           // OPEN, in that order, which is the same three beats the `focus` event performs and

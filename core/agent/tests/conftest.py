@@ -113,3 +113,16 @@ def _isolated_home(monkeypatch, tmp_path_factory):
     (Git is unaffected: workspaces set ``user.name``/``user.email`` per-repo, never globally.)"""
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(home))
+
+
+@pytest.fixture
+def fake_admin_accounts(monkeypatch):
+    """Identity's admin-account answer for one test (`tests/admin_accounts.py`): nobody until a
+    helper names somebody, and nobody again for the next test."""
+    from tests import admin_accounts
+    from control_plane import global_layer
+
+    admin_accounts.NAMED.clear()
+    monkeypatch.setattr(global_layer, "is_admin_account", admin_accounts.is_admin_account)
+    yield admin_accounts
+    admin_accounts.NAMED.clear()

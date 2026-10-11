@@ -189,7 +189,7 @@ ask about a meeting with `POST /api/chat`, passing
 `GET /api/workspace/tree?hidden=` → `{ "files": ["kg/entities/..."] }` ·
 `GET /api/workspace/file?path=` → `{ "path": "...", "content": "..." }` (`404` if absent) ·
 `PUT /api/workspace/file` `{ path, content, slug? }` → `{ "path": "...", "written": true }` (commits;
-`kg/templates/` is refused `403`, and `_global` needs the admin allowlist) ·
+`kg/templates/` is refused `403`, and `_global` needs the [admin account](/minutes/workspaces#the-admin-account)) ·
 `POST /api/workspace/remove` `{ path, slug? }` → `{ path, deleted, workspace, commit }` (one page, as a
 commit) · `POST /api/workspace/move` `{ path, to, slug?, to_slug? }` → `{ from, to, moved, pointer,
 commit, source_commit }` (an omitted `to_slug` is the same workspace) ·
@@ -335,7 +335,7 @@ do not move ·
 `POST /api/workspace/{slug}/archive` `{ archived }` → `{ slug, archived }` ·
 `DELETE /api/workspace/{slug}` → `{ slug, deleted: true }`, irreversible; the baseline is refused ·
 `POST /api/workspace/reset` `{ target }` → `{ target, reset: true }` for `personal` or `_global` (admin
-only) — the slot survives and the content returns to the seed. `_system` is never resettable.
+account only) — the slot survives and the content returns to the seed. `_system` is never resettable.
 
 ## Git remotes, deploy keys and publish
 
@@ -368,8 +368,8 @@ operator verb waits for it (founder ruling 2026-10-08). Unless `VEXA_GLOBAL_SYST
 names a separate host repo, agent-api keeps `_global` in its own store and creates it empty at boot.
 
 `POST /api/global/ready` `{ author_email?, author_name? }` →
-`{ accepted, company, service, commit, files }` — accept a company layer an admin chose to write.
-Admin only (`403`) and idempotent; it reads the files and commits them itself, authored by the
+`{ accepted, company, service, commit, files }` — accept a company layer the admin account chose to write.
+Admin account only (`403`) and idempotent; it reads the files and commits them itself, authored by the
 admin (the caller's own address unless the body names another) — nothing may mark itself accepted. A layer that is not complete answers
 `409 { accepted: false, missing_files, reasons, next }`. It gates nothing.
 
