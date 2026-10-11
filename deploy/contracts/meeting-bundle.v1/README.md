@@ -7,6 +7,11 @@ for anyone producing or reading bundles, inside Vexa or not; the schema is
 [`meeting-bundle.schema.json`](meeting-bundle.schema.json) and the goldens in [`golden/`](golden/)
 are the spec (P8). Product page: [Move a meeting between deployments](../../../docs/docs/how-to/move-a-meeting.mdx).
 
+In the Vexa Terminal a person imports a bundle by **dropping the file into any chat**: the chat
+recognises it by this format's own rules (a zip whose `manifest.json` names `meeting-bundle`, beside
+`meeting.json`; never by file name) and sends it to `POST /meetings/import`, the same importer the
+API uses.
+
 ## Layout
 
 ```

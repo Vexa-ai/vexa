@@ -52,10 +52,25 @@ workspace sees a projected meeting, not the whole one, and is answered `403`.
 
 ## Import
 
-**Terminal:** click **Import meeting** (the meetings list, or **⇪** at the top of the chat rail in
-Minutes), then drop the file or choose it. You see what will be created — title, time, platform,
-speakers, number of segments, recordings and their sizes, and anything this deployment will not
-restore — before anything is written. **Import** creates the meeting.
+**Terminal: drop the bundle file into any chat.** Drag it anywhere onto the chat, paste it, or pick
+it with the chat's attach button. The chat recognises a meeting bundle by its own contents — the
+manifest the format requires, not the file's name — and imports it as a call instead of attaching
+it. A card in the conversation shows how it goes:
+
+| You see | What happened |
+|---|---|
+| **Importing a call from** *file* with a progress bar | the file is going up; dropping the same file again meanwhile does not send it twice |
+| **Imported the call** and its title, as a link | the call is yours: the link opens its transcript, and it is in your **Calls** list |
+| **You already imported this call**, with a link | this file was imported before; nothing is imported again — the link opens the call it already is |
+| **Not imported:** and the reason, with its code | the deployment refused the file, e.g. *the file does not match its signature* (`hash_mismatch`), *made in a bundle version this deployment does not read* (`unsupported_version`), *too big* (`too_large`), *you are not allowed to import meetings here* (`403`) |
+
+Drop several files at once and each bundle imports while every other file attaches to your message
+as usual. A zip that is not a meeting bundle is an ordinary attachment.
+
+To see what a file holds before importing it, use **Import meeting** in the meetings list: drop or
+choose the file, and you see the title, time, platform, speakers, number of segments, recordings and
+their sizes, and anything this deployment will not restore, before anything is written. **Import**
+creates the meeting.
 
 **API** (key scope `tx`), the zip as the request body:
 
@@ -166,8 +181,17 @@ refused rather than produced without it).
 5. **Writing.** The codec (`meeting_api.bundle.codec.write_bundle`) validates every part against the
    sealed schema, hashes each, writes `manifest.json` and the parts into one deterministic zip, and
    the route returns it with `Content-Disposition: attachment`.
-6. **Import request.** The Terminal streams the dropped file to the gateway's `POST /meetings/import`
-   (`?dry_run=true` first); meeting-api reads the body with a hard size cap.
+6. **Import request.** A file dropped, pasted or attached in a chat is first read by the Terminal
+   (`surfaces/meetingBundleSniff.ts`): the zip's central directory, the way the contract's
+   `validate.mjs` reads it, must hold `manifest.json` and `meeting.json`, and a manifest it can
+   inflate must name a `meeting-bundle` contract. That decides only *where the file goes* — a file
+   that fails it is attached as before; one that passes goes to the import route, which checks
+   everything else. The chat (`surfaces/ChatBundleImport.tsx`) sends it with the same client call
+   the meetings list's **Import meeting** uses (`confirmImport`), with upload progress, once per
+   file at a time; on `409 duplicate_import` it asks the dry run which meeting the file already is,
+   to link it. **Import meeting** sends `?dry_run=true` first for its preview. Either way the
+   Terminal streams the file to the gateway's `POST /meetings/import`; meeting-api reads the body
+   with a hard size cap.
 7. **Validation.** `read_bundle` checks every entry by name and header (paths, symlinks, encryption,
    compression, declared and actual sizes, inflation ratio), the manifest's contract and major
    version, the manifest ↔ archive listing, every length and SHA-256, every part against the schema,
@@ -212,7 +236,8 @@ is stable, distinct per deployment, and reveals nothing).
 | P9 — domain doors | meetings never calls agent-api and agent-api adds no new door: the person's client carries the agent half between them, and agent-api's only meetings read is the access check it already makes | `gate:domain-doors` |
 | No duplication across the two services | one codec, vendored byte-for-byte from the contract into both, with its schema | `gate:fact-parity` (`meeting-bundle-codec`, `meeting-bundle-schema`) |
 | P18 — fail loud | every refusal is a typed code with a sentence and a `meeting_bundle_refused` log event; an export that cannot read a recording is refused, never produced without it; a failed import is rolled back and raised | `test_meeting_bundle.py` (refusal and rollback tests) |
-| P20 — complete mediation, default deny | both rows are scoped `tx` at the gateway and again in meeting-api; export is owner-only; import writes only the caller's own row | `gate:access` scope matrix, the deny tests below |
+| P20 — complete mediation, default deny | both rows are scoped `tx` at the gateway and again in meeting-api; export is owner-only; import writes only the caller's own row. Dropping a file into a chat adds no route and no permission: it calls the same import route with the person's own session | `gate:access` scope matrix, the deny tests below |
+| P18 — a refusal reaches the person | a bundle dropped into a chat that the importer refuses is shown as a card with the importer's code and sentence, never attached instead and never silent | `chatBundleDrop.test.tsx` |
 | P23 — one writer per carrier | the bundle file is a registered data carrier with meeting-api as its one writer; an import writes the meeting through the writers that already own each part, adding none | `gate:dataflow` (`architecture.calm.json`, `meeting-bundle-file`) |
 | No duplication | the import reuses the transcript-import write (one definition of a segment upsert) and the recordings record shape; the codec is the only reader and writer of the format | review |
 
@@ -246,4 +271,12 @@ is stable, distinct per deployment, and reveals nothing).
   `test_the_restore_needs_a_person_in_the_loop`, and the roster never leaving
   (`test_the_owner_gets_the_workspace_tree_and_the_page_never_the_roster`). Terminal:
   `src/app/api/__tests__/meetingBundleProxy.test.ts`, `src/surfaces/__tests__/meetingBundle.test.tsx`
-  (bundle text renders as text, never markup).
+  (bundle text renders as text, never markup), and `src/surfaces/__tests__/chatBundleDrop.test.tsx`
+  for the chat path: a bundle dropped into a chat goes to the import route and never to the
+  attachment upload; a file that is not a bundle (a zip with no manifest, a parts archive, text) is
+  attached and never imported, whatever it is named; a refused bundle shows its code and is not
+  attached; a re-import says it is already imported; the same file dropped twice in flight is sent
+  once. The chat path holds no access rule of its own — the deny tests above are the ones it relies on.
+- **In the chat.** Detection reads only the zip's directory and its manifest, never the recordings,
+  and grants nothing: the server's checks are the verdict. Every value from the file or the server
+  is rendered as text.
