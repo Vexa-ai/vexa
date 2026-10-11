@@ -34,17 +34,11 @@ const chatRowS = (on: boolean): CSSProperties => ({
   borderLeft: `2px solid ${on ? "var(--accent)" : "transparent"}`, width: "100%", textAlign: "left",
 });
 const liveDot: CSSProperties = { width: 6, height: 6, borderRadius: "50%", flex: "none", background: "var(--accent)", alignSelf: "center" };
-/** THE MEETING'S STATUS, ON THE ROW (Vexa-ai/vexa#1597) — *"just attach the status to it"*.
- *
- *  Rendered for `held` only, and that is not half a job: `live` is already on the row twice over —
- *  the accent dot and the accent word where the time goes — so a third "live" beside them would be
- *  noise in 248px. `held` had no rendering at all, which is why a chat that owns a finished meeting
- *  read as an ordinary conversation. `Row.status` names both states so a test, and anything else
- *  that ever asks, reads ONE field rather than reassembling it from a dot and a label. */
-const statusTag: CSSProperties = {
-  ...ty.meta, flex: "none", color: "var(--t3)", background: surface.raised,
-  border: "1px solid var(--line)", borderRadius: 4, padding: "0 4px", lineHeight: 1.5,
-};
+/* NO STATUS WORD FOR A FINISHED MEETING (founder 2026-10-11: *"i think this 'held' does not make
+ * sense anymore"*). Nearly every meeting row is over, so a tag saying so on each of them is chrome.
+ * A meeting row shows its date in the time column like any chat row; its filled dot (a chat's is a
+ * ring) says it is a call; a LIVE meeting keeps the accent dot and the accent "live" word. `Row.status`
+ * still names the phase for anything that asks; the rail just does not print `held`. */
 /** THE TARGET WORKSPACE'S NAME on a row that has one (Vexa-ai/vexa#1611). The accent the header's
  *  target chip wears, so the two surfaces say the same thing in the same colour; capped in width
  *  because the rail is 248px and a long workspace name must not push the row's own name out. */
@@ -162,9 +156,8 @@ export function Rail(p: {
               on nearly every row is chrome. A row that is NOT the ordinary case is the information
               — and it is the case the founder lost a morning's files to. */}
           {r.target && <span data-row-target={r.target} style={targetTag}><WorkspaceName slug={r.target} /></span>}
-          {r.status === "held" && <span data-row-status="held" style={statusTag}>held</span>}
           {r.pinned && <Pin data-row-pinned role="img" aria-label="Pinned" size={12} strokeWidth={1.75} style={{ flex: "none", alignSelf: "center", color: "var(--t3)" }} />}
-          <span style={{ ...ty.meta, flex: "none", fontVariantNumeric: "tabular-nums", color: r.live ? "var(--accent)" : "var(--t3)" }}>{r.whenLabel}</span>
+          <span data-row-when style={{ ...ty.meta, flex: "none", fontVariantNumeric: "tabular-nums", color: r.live ? "var(--accent)" : "var(--t3)" }}>{r.whenLabel}</span>
         </button>
         {armed ? (
           <button data-del data-armed className="vx-row-act" ref={confirmRef} autoFocus

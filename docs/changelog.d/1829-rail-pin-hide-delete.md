@@ -7,3 +7,6 @@
   first time you sign in. The row menu has keyboard shortcuts — `⇧⌘P` pin, `⇧⌘X` hide,
   `⌘⌫` delete (it still asks), `⇧⌘E` new chat; Ctrl instead of ⌘ off a Mac — and `P`, `H`, `D` while
   the menu is open. (#1829) See [Manage your chats](/how-to/chat-controls).
+- **A finished meeting's row shows its date, not "held".** The `held` tag is gone from the chat list:
+  a meeting row shows the meeting's time where every row does, its filled dot marks it as a call, and
+  a live meeting still says `live`. (#1829)

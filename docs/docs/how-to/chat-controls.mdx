@@ -29,8 +29,10 @@ A row shows a blue dot ("Agent is working") while a turn is running in that chat
 background job started from it is running. A job that is only queued does not count. Several chats
 can be working at once, and switching to another chat does not stop a turn.
 
-Other dots: a live meeting's row has an accent dot and shows the time in the accent colour, and a
-finished meeting's chat is tagged `held`.
+Other dots: a meeting's row has a filled dot and a chat's an outlined one. A live meeting's row has
+an accent dot and says `live`, in the accent colour, where the time goes. Every other row, a finished
+meeting included, shows its time there: a clock today, a weekday this week, a date before that. A
+meeting row shows the meeting's own time, not when its chat was last used.
 
 **Limit.** The dot reflects the turns and jobs this browser tab is following. It is not read from the
 server, so another browser or a reload does not show turns that tab is not streaming.
