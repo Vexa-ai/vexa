@@ -487,6 +487,24 @@
    ]
   },
   {
+   "key": "VEXA_AGENT_URL_ALLOWLIST",
+   "class": "defaulted",
+   "default": "",
+   "description": "Comma-separated hosts whose external voice-agent pages (POST /bots voice_agent_settings.url) a bot may open even on a private network. Every other private address stays refused; cloud metadata is refused either way.",
+   "targets": [
+    "compose"
+   ]
+  },
+  {
+   "key": "VEXA_AGENT_ALLOW_PRIVATE_URLS",
+   "class": "defaulted",
+   "default": "false",
+   "description": "Operator opt-in that lifts the private-address guard on voice_agent_settings.url, for a self-hosted agent on the deployment's own network. Cloud metadata stays refused.",
+   "targets": [
+    "compose"
+   ]
+  },
+  {
    "key": "HOST",
    "class": "defaulted",
    "default": "0.0.0.0",

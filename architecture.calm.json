@@ -421,6 +421,17 @@
    ]
   },
   {
+   "unique-id": "virtual-camera",
+   "node-type": "module",
+   "name": "virtual-camera",
+   "description": "virtual-camera — atomic module in meetings",
+   "metadata": [
+    {
+     "path": "core/meetings/modules/virtual-camera"
+    }
+   ]
+  },
+  {
    "unique-id": "event.v1",
    "node-type": "contract",
    "name": "event.v1",
@@ -730,7 +741,17 @@
     }
    ]
   },
-    {"unique-id": "claude-plugin", "node-type": "webclient", "name": "claude-plugin", "description": "claude-plugin — client (Claude Code plugin: manifest, skills, hosted MCP config; no code)", "metadata": [{"path": "clients/claude-plugin"}]},
+  {
+   "unique-id": "claude-plugin",
+   "node-type": "webclient",
+   "name": "claude-plugin",
+   "description": "claude-plugin — client (Claude Code plugin: manifest, skills, hosted MCP config; no code)",
+   "metadata": [
+    {
+     "path": "clients/claude-plugin"
+    }
+   ]
+  },
   {
    "unique-id": "terminal",
    "node-type": "webclient",
@@ -1409,6 +1430,7 @@
       "recording",
       "remote-browser",
       "teams-capture",
+      "virtual-camera",
       "whisper",
       "zoom-capture",
       "acts.v1",

@@ -337,6 +337,11 @@ export async function joinGoogleMeeting(
   // and <html lang> — with the pin in place these should read en-US / en.
   log(`Lobby locale (#856): ${await observedPageContext(page)}`);
 
+  // Recorder bots join muted (they only receive audio). A voice agent joins with its microphone
+  // on: it speaks into the room, and an unmute after admission is not reliably honoured once
+  // others are already in the call.
+  const isVoiceAgent = !!botConfig.voiceAgentEnabled;
+
   // --- Humanized input layer (defeats Google Meet input-authenticity detection) ---
   const uiMode = resolveUiInteractionMode(botConfig);
   let humanizer: HumanizedInteractor | null = null;
@@ -401,11 +406,15 @@ export async function joinGoogleMeeting(
     log("📸 Diagnostic screenshot: auth lobby state");
 
     // Mute mic and camera if visible
-    try {
-      const micHandle = await page.waitForSelector(googleMicrophoneButtonSelectors[0], { timeout: 3000 });
-      if (micHandle) { await clickHandle(micHandle, "microphone"); log("Microphone muted."); }
-    } catch (e) {
-      log("Microphone already muted or not found.");
+    if (isVoiceAgent) {
+      log("Microphone left on (voice agent).");
+    } else {
+      try {
+        const micHandle = await page.waitForSelector(googleMicrophoneButtonSelectors[0], { timeout: 3000 });
+        if (micHandle) { await clickHandle(micHandle, "microphone"); log("Microphone muted."); }
+      } catch (e) {
+        log("Microphone already muted or not found.");
+      }
     }
 
     try {
@@ -464,11 +473,15 @@ export async function joinGoogleMeeting(
     await fillField(nameHandle!, nameFieldSelector, botName, "name");
 
     // Mute mic and camera if available
-    try {
-      const micHandle = await page.waitForSelector(googleMicrophoneButtonSelectors[0], { timeout: 1000 });
-      if (micHandle) await clickHandle(micHandle, "microphone");
-    } catch (e) {
-      log("Microphone already muted or not found.");
+    if (isVoiceAgent) {
+      log("Microphone left on (voice agent).");
+    } else {
+      try {
+        const micHandle = await page.waitForSelector(googleMicrophoneButtonSelectors[0], { timeout: 1000 });
+        if (micHandle) await clickHandle(micHandle, "microphone");
+      } catch (e) {
+        log("Microphone already muted or not found.");
+      }
     }
 
     try {

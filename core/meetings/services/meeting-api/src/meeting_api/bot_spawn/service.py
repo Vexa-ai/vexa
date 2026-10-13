@@ -419,6 +419,8 @@ async def request_bot(
     transcription_tier: str = "realtime",
     recording_enabled: bool = False,
     transcribe_enabled: bool = True,
+    voice_agent_enabled: bool = False,
+    agent_page_url: Optional[str] = None,
     automatic_leave: Optional[dict] = None,
     continue_meeting: bool = False,
     max_concurrent: Optional[int] = None,
@@ -680,6 +682,8 @@ async def request_bot(
             meeting_id=reused_row["id"],
             data_patch={
                 "transcribe_enabled": transcribe_enabled,
+                "voice_agent_enabled": voice_agent_enabled,
+                **({"voice_agent_settings": {"url": agent_page_url}} if agent_page_url else {}),
                 "recording_enabled": recording_enabled,
                 "transcription_provider": transcription_provider,
                 "service_authority": authority_record,
@@ -690,6 +694,9 @@ async def request_bot(
         if constructed_url:
             meeting_data["constructed_meeting_url"] = constructed_url
         meeting_data["transcribe_enabled"] = transcribe_enabled
+        meeting_data["voice_agent_enabled"] = voice_agent_enabled
+        if agent_page_url:
+            meeting_data["voice_agent_settings"] = {"url": agent_page_url}
         meeting_data["recording_enabled"] = recording_enabled
         if transcription_provider is not None:
             meeting_data["transcription_provider"] = transcription_provider
@@ -758,6 +765,7 @@ async def request_bot(
         meeting_api_callback_url=f"{meeting_api_url}/bots/internal/callback/lifecycle",
         internal_secret=internal_secret,
         transcribe_enabled=transcribe_enabled,
+        voice_agent_enabled=voice_agent_enabled,
         transcription_service_url=transcription_service_url,
         transcription_service_token=transcription_service_token,
         transcription_model=transcription_model,
@@ -797,6 +805,9 @@ async def request_bot(
         workload_id=f"mtg-{meeting_id}-{connection_id[:8]}",
         invocation=invocation,
         callback_url=f"{meeting_api_url}/runtime/callback",
+        # The agent page belongs to THIS bot, so it rides the workload's own env rather than the
+        # deployment's: two meetings can carry two different agents at the same time.
+        extra_env={"VEXA_AGENT_PAGE_URL": agent_page_url} if agent_page_url else None,
     )
     try:
         result = await runtime.create_workload(spec)

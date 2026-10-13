@@ -55,6 +55,7 @@ const MIXED = moduleEntry('mixed-capture-core');  // @vexa/mixed-capture-core
 const RECORD = moduleEntry('record-chunker');     // @vexa/record-chunker (MediaRecorder → recording.v1)
 const JITSI = moduleEntry('jitsi-capture');       // @vexa/jitsi-capture (dominant-speaker hints + chat)
 const TEAMS = moduleEntry('teams-capture');       // @vexa/teams-capture (voice-level-outline speaker hints)
+const VCAM = moduleEntry('virtual-camera');       // @vexa/virtual-camera (the bot's outgoing canvas camera)
 const ZOOM = moduleEntry('zoom-capture');         // @vexa/zoom-capture (active-speaker DOM watcher → 'dom-active' hints)
 
 // In-memory entry: import the bricks and hang them on window.VexaBrowserUtils with
@@ -89,6 +90,16 @@ import {
   createTeamsCaptions,
 } from ${JSON.stringify(TEAMS)};
 import {
+  installVirtualCamera,
+  drawVirtualCameraImage,
+  clearVirtualCamera,
+  startVirtualCameraPump,
+  stopVirtualCameraPump,
+  applyVirtualCameraTrack,
+  virtualCameraFramesSent,
+  virtualCameraState,
+} from ${JSON.stringify(VCAM)};
+import {
   createZoomSpeakers,
   createTrackNameResolver,
 } from ${JSON.stringify(ZOOM)};
@@ -119,6 +130,15 @@ const VexaBrowserUtils = {
   // ── zoom lane (active-speaker DOM watcher → 'dom-active' naming hints) ──
   createZoomSpeakers,        // capture-bridge.ts: w.VexaBrowserUtils.createZoomSpeakers
   createTrackNameResolver,   // capture-bridge.ts setupPerTrack: the pure channel↔name correlator
+  // ── the bot's OUTGOING camera (all platforms): a canvas published as its video track ──
+  installVirtualCamera,      // capture-bridge.ts addInitScript: hooks gUM/addTrack/replaceTrack/createOffer
+  drawVirtualCameraImage,    // camera-controller.ts: avatar_set / screen_show
+  clearVirtualCamera,        // camera-controller.ts: screen_stop with no avatar to fall back to
+  startVirtualCameraPump,    // camera-controller.ts: keep frames flowing for a still image
+  stopVirtualCameraPump,
+  applyVirtualCameraTrack,   // camera-controller.ts: push a fresh track after a renegotiation
+  virtualCameraFramesSent,   // camera-controller.ts: is the meeting actually sending our video?
+  virtualCameraState,
 };
 
 (globalThis).VexaBrowserUtils = VexaBrowserUtils;

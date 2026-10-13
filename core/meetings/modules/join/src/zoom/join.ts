@@ -328,7 +328,7 @@ export async function joinZoomMeeting(
 
   // Ensure mic is muted in preview for recorder bots (they only need to receive audio).
   // Voice agent bots keep mic unmuted so Zoom grants audio access for TTS output.
-  const isVoiceAgent = !!(botConfig as any).voiceAgentEnabled;
+  const isVoiceAgent = !!botConfig.voiceAgentEnabled;
   if (!isVoiceAgent) {
     try {
       const muteBtn = page.locator(zoomPreviewMuteSelector);

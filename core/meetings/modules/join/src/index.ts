@@ -53,6 +53,8 @@ export interface JoinOptions {
    *  (e.g. from @vexa/remote-browser); the brick skips guest name-entry. */
   authenticated?: boolean;
   waitingRoomTimeoutMs?: number;
+  /** the bot speaks into the meeting — zoom keeps the mic live in its preview instead of muting it */
+  voiceAgentEnabled?: boolean;
   /** turn on the live debug view (VNC pixels on Linux, CDP control anywhere) */
   debug?: boolean;
   hooks?: Partial<Hooks>;
@@ -94,6 +96,7 @@ export async function joinMeeting(page: Page, opts: JoinOptions): Promise<JoinRe
     passcode: opts.passcode,
     authenticated: opts.authenticated,
     uiInteractionMode: opts.uiInteractionMode,
+    voiceAgentEnabled: opts.voiceAgentEnabled,
     automaticLeave: { waitingRoomTimeout: opts.waitingRoomTimeoutMs ?? 180_000 },
   };
 

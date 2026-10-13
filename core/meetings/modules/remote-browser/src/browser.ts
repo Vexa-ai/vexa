@@ -26,6 +26,10 @@ export interface LaunchPersistentOptions {
   args: string[];
   /** Headed by default (Xvfb under VNC); pass true only for headless contexts. */
   headless?: boolean;
+  /** Environment for the browser PROCESS — e.g. PULSE_SINK, which decides where its audio plays.
+   *  A bot that seats an external agent runs that agent in a browser of its own so the agent's
+   *  voice lands in the microphone sink while the meeting's playback does not. */
+  env?: Record<string, string>;
   /** Pinned UI locale (#856) — sets navigator.language / Accept-Language on the
    *  context. Defaults to BOT_UI_LOCALE (env), else en-US. Keeps the page-level
    *  locale byte-identical to the --lang launch flag the caller passes in args. */
@@ -43,6 +47,7 @@ export async function launchPersistentBrowser(
     args: opts.args,
     viewport: null,
     locale,
+    ...(opts.env ? { env: opts.env } : {}),
   });
   // Anti-detection the stealth plugin misses under playwright-extra. Measured live (with stealth
   // active) that the bot's browser still leaks the tells below; patch them on every frame/navigation.

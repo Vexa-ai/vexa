@@ -305,6 +305,11 @@ services:
     ports:
       - "127.0.0.1:${MEETING_API_PORT:-18080}:8080"
     environment:
+      # Hosts whose agent pages the bot may open even on a private network — a self-hosted
+      # agent lives on the operator's own LAN. Empty (the default) keeps every private
+      # address refused; cloud metadata is refused either way.
+      - VEXA_AGENT_URL_ALLOWLIST=${VEXA_AGENT_URL_ALLOWLIST:-}
+      - VEXA_AGENT_ALLOW_PRIVATE_URLS=${VEXA_AGENT_ALLOW_PRIVATE_URLS:-}
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=${DB_NAME:-vexa}

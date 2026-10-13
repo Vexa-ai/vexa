@@ -1,13 +1,14 @@
 ---
 title: "Interactive bots"
-description: "Speaking, chatting, screen-sharing bots — what is actually reachable in 0.12, what is proven at the bot layer but unwired at the API, and where the interactive shape is being decided."
+description: "Speaking, chatting, screen-sharing bots and external voice agents — what is actually reachable in 0.12, what is proven at the bot layer but unwired at the API, and where the interactive shape is being decided."
 ---
 
 <Warning>
 **Honest status:** the interactive capability family this page once advertised is **partially available
 in 0.12**. Chat *read* works. Speak, chat *write*, screen share and avatar are contract-sealed but not
-reachable through the API today. The API shape for interactive capabilities is under active design —
-it is **not** a straight restoration of the pre-0.12 endpoints.
+reachable through the API today. One interactive path **is** reachable: seating your own
+[external voice agent](#seat-an-external-voice-agent) in the meeting by URL on `POST /bots`. The API shape
+for the rest is under active design — it is **not** a straight restoration of the pre-0.12 endpoints.
 </Warning>
 
 ## Per-surface status (0.12, verified against the tree)
@@ -18,7 +19,8 @@ it is **not** a straight restoration of the pre-0.12 endpoints.
 | **Speak** | sealed | ❌ 404 | proven live at the bot layer (acts.v1 `speak` → TTS → virtual mic), **not wired at the API layer** — tracked in [#514](https://github.com/Vexa-ai/vexa/issues/514) |
 | Chat **write** | sealed | ❌ 404 | Teams chat write is prepared as [#500](https://github.com/Vexa-ai/vexa/issues/500) |
 | Screen share | sealed | ❌ 404 | planned back in 0.12.x |
-| Avatar / virtual camera | sealed | ❌ 404 | planned back in 0.12.x |
+| Avatar / virtual camera | sealed | ❌ 404 | planned back in 0.12.x — the bot's canvas camera exists, and today shows only an external agent's page (next row) |
+| **External voice agent** | `voice_agent_settings` on `POST /bots` | ✅ `POST /bots` | the bot hears, speaks and shows your agent page — [below](#seat-an-external-voice-agent); validated live on Google Meet, Zoom, Jitsi and Teams ([#333](https://github.com/Vexa-ai/vexa/issues/333)) |
 
 "Sealed" means the endpoint shape is frozen in the public API contract; it does not mean served. A call
 to an unmounted surface returns `404` on every deployment.
@@ -27,6 +29,8 @@ to an unmounted surface returns `404` on every deployment.
 
 - **Read the meeting chat** while a bot is in the room: `GET /bots/{platform}/{native_meeting_id}/chat`
   with a `bot`-scoped API key.
+- **Seat an external voice agent** — your own agent web page, carried into the meeting by the bot
+  ([below](#seat-an-external-voice-agent)).
 - **Capture and transcribe** as usual — the interactive gaps do not affect transcription, recordings,
   or the transcript API.
 
@@ -34,11 +38,56 @@ to an unmounted surface returns `404` on every deployment.
 account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
 required. Self-hosted: `make all` prints a key when the stack comes up.
 
+## Seat an external voice agent
+
+Name a web page when you send the bot, and the bot carries that page into the meeting as a participant:
+the page **hears** the meeting, **speaks** into it with its own voice, and is **shown** as the bot's camera.
+The page is yours — an OpenAI-Realtime front end, say — and needs no Vexa code.
+
+```bash
+curl -X POST "$API_BASE/bots" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{
+        "platform": "google_meet",
+        "native_meeting_id": "abc-defg-hij",
+        "voice_agent_settings": { "url": "https://agent.example.com/?autostart=true" }
+      }'
+```
+
+Sending a URL turns the voice agent on by itself; `voice_agent_enabled: true` is implied. The URL belongs
+to **this one bot** — two meetings can carry two different agents at once, and a bot sent without a URL
+carries none.
+
+**What your page gets, and what it must do**
+
+- It runs in a browser of its own inside the bot, with microphone access granted and autoplay allowed —
+  so it must **start by itself on load**; there is nobody to click.
+- When it asks for a microphone (`navigator.mediaDevices.getUserMedia({ audio: … })`), it receives the
+  **meeting's mixed audio** — every other participant — instead of a device.
+- Its voice is whatever it plays: an `<audio>`/`<video>` element, or the audio track arriving on its own
+  WebRTC connection to its backend. That sound becomes the bot's microphone in the meeting.
+- Its page, as rendered, is copied onto the bot's camera about once a second (Google Meet, Zoom, Jitsi;
+  Teams shows no camera).
+
+**Which URLs are accepted** — the bot's browser opens this page inside the deployment, so the URL is
+checked like a webhook URL. A refused URL returns `422` and no bot is started.
+
+- `http://` or `https://` only, at most 2048 characters, no whitespace, no `user:password@`.
+- Public addresses only. Cloud metadata (`169.254.169.254`, `metadata.google.internal`) is always refused.
+- Self-hosted, with the agent on your own network: set `VEXA_AGENT_URL_ALLOWLIST` on meeting-api to the
+  agent's host(s) (comma-separated; every other private address stays refused), or
+  `VEXA_AGENT_ALLOW_PRIVATE_URLS=true` to lift the private-address check altogether.
+
+`voice_agent_settings.url` is the documented field; `voiceAgentSettings`, `voice_agent_url` and
+`voiceAgentUrl` are accepted as the same thing. The meeting record carries `data.voice_agent_enabled` and
+`data.voice_agent_settings`.
+
 ## Where this is going
 
 The pre-0.12 shape was REST-per-surface (`POST /bots/.../speak`, `/chat`, `/screen`). That design predates
 the 0.12 agent layer, and the open question is **where interactive capabilities belong** — bot-level REST,
-or the Agent API driving the bot's proven acts layer (cf. the external request to
-[attach an external agent by URL, #333](https://github.com/Vexa-ai/vexa/issues/333)). That design decision
+or the Agent API driving the bot's proven acts layer. Attaching an external agent by URL
+([#333](https://github.com/Vexa-ai/vexa/issues/333)) is now reachable — [above](#seat-an-external-voice-agent);
+speak, chat write, screen and avatar as API calls are still open. That design decision
 is tracked openly; demand for this family is measured and sustained, and comments on the design issue are
 exactly the evidence the decision consumes.

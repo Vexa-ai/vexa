@@ -58,6 +58,22 @@ class InvalidFlagValue(ValueError):
         self.field = field
 
 
+def parse_flag(value: object, field: str) -> bool:
+    """A caller-supplied boolean, type-validated: a bool is honored, a recognized string is parsed,
+    an empty string is an explicit False (a request body that says ``""`` asked for off), and anything
+    else raises ``InvalidFlagValue`` rather than being ``bool()``-coerced (which turns ``"false"``
+    into True)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in _TRUE:
+            return True
+        if v in _FALSE or v == "":
+            return False
+    raise InvalidFlagValue(field)
+
+
 def resolve_spawn_flag(
     env_name: str,
     value: Optional[object] = None,

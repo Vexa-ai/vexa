@@ -18,6 +18,8 @@ export interface BotConfig {
   passcode?: string;
   authenticated?: boolean;
   uiInteractionMode?: "humanized" | "synthetic";
+  /** the bot speaks into the meeting (zoom keeps its mic live in the preview) */
+  voiceAgentEnabled?: boolean;
   automaticLeave?: {
     waitingRoomTimeout: number;
     noOneJoinedTimeout?: number;

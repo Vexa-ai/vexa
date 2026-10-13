@@ -121,6 +121,7 @@ export function createBrowserJoinDriver(
           botName: inv.botName,
           passcode: inv.passcode,                      // zoom passcode screen / jitsi room password
           authenticated: inv.authenticated,            // join as a signed-in user (persistent context)
+          voiceAgentEnabled: inv.voiceAgentEnabled,    // zoom and google meet keep the mic live in the lobby
           waitingRoomTimeoutMs: inv.automaticLeave?.waitingRoomTimeout,
           hooks: {
             onState: (s: JoinState) => {

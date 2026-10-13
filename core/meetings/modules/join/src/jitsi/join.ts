@@ -25,7 +25,9 @@ import {
  * append:
  *   • config.startWithAudioMuted / startWithVideoMuted — a recorder bot is
  *     receive-only; muting via config is more reliable than clicking the
- *     prejoin toggles across deployment versions.
+ *     prejoin toggles across deployment versions. A voice agent joins with its
+ *     camera on (its video is the host's canvas), so startWithVideoMuted is
+ *     left out for it.
  *   • userInfo.displayName — so the bot is correctly named even on deployments
  *     that DISABLE the prejoin screen (no name field to type into).
  * Existing hash params are preserved; ours are appended only when absent, so an
@@ -37,7 +39,7 @@ import {
  */
 export function buildJitsiMeetingUrl(
   meetingUrl: string,
-  opts: { botName?: string } = {},
+  opts: { botName?: string; voiceAgentEnabled?: boolean } = {},
 ): string {
   let url: URL;
   try {
@@ -55,7 +57,7 @@ export function buildJitsiMeetingUrl(
   const has = (key: string): boolean => existing.includes(`${key}=`);
 
   if (!has("config.startWithAudioMuted")) parts.push("config.startWithAudioMuted=true");
-  if (!has("config.startWithVideoMuted")) parts.push("config.startWithVideoMuted=true");
+  if (!opts.voiceAgentEnabled && !has("config.startWithVideoMuted")) parts.push("config.startWithVideoMuted=true");
   if (opts.botName && !has("userInfo.displayName")) {
     // JSON string value: double-quoted, then URI-encoded (jitsi decodes + JSON.parses).
     parts.push(`userInfo.displayName=${encodeURIComponent(`"${opts.botName}"`)}`);
@@ -141,7 +143,7 @@ export async function joinJitsiMeeting(
   // admission wait recognizes the lobby even when the DOM shows no lobby affordances (#592).
   attachMembersOnlyWatch(page);
 
-  const navUrl = buildJitsiMeetingUrl(meetingUrl, { botName });
+  const navUrl = buildJitsiMeetingUrl(meetingUrl, { botName, voiceAgentEnabled: botConfig.voiceAgentEnabled });
   log(`[Jitsi] Navigating to: ${navUrl}`);
   await page.goto(navUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   await page.waitForTimeout(2000);

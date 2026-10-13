@@ -36,6 +36,8 @@ import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap,
 import { uploadSignalTapes } from './signal-upload.js';
 import { createSttFaultReporter } from './stt-faults.js';
 import { launchBrowser, startCaptureBridge, startRecording, restartMixedCapture, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
+import { createCameraController } from './camera-controller.js';
+import { createAgentBridge } from './agent-bridge.js';
 import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import type {
@@ -286,8 +288,17 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // page-side capture + recording attach + the engine start so pipeline.start() ALWAYS RESOLVES;
     // each failure surfaces LOUD via onFault (console with a full-fidelity serr(e)) instead of
     // throwing into the orchestrator's leave-on-fail backstop (which would hang the bot up).
+    // The camera the agent's UI is drawn on, and the agent itself: an external voice-agent page
+    // (named per request) seated through this bot — it hears the meeting, answers with its own
+    // voice, and shows its UI on the bot's camera.
+    const camera = createCameraController(sess.page, inv);
+    const agent = createAgentBridge(sess.page, camera, env.VEXA_AGENT_PAGE_URL);
     pipeline = createLivePipeline({
       startCapture: () => startCaptureBridge(sess.page, inv, bp, signalRecorder?.sink, publishChat, remoteAudioActivity),   // on the live meeting page
+      startCamera: async () => {                                                           // canvas → the bot's video track, then the agent
+        await camera.start();
+        if (inv.voiceAgentEnabled) await agent.start();
+      },
       startRecording: rec ? () => startRecording(sess.page, inv, rec) : undefined,          // MediaRecorder → recording.v1
       engine: bp,
       onFault: (stage, e) => {

@@ -54,6 +54,12 @@ expect(
   'https://meet.jit.si/MyRoom#config.startWithAudioMuted=true&config.startWithVideoMuted=true&userInfo.displayName=%22Vexa%20Bot%22',
 );
 
+expect(
+  'voice agent — camera left on (no startWithVideoMuted), mic still muted',
+  buildJitsiMeetingUrl('https://meet.jit.si/MyRoom', { botName: 'Vexa Bot', voiceAgentEnabled: true }),
+  'https://meet.jit.si/MyRoom#config.startWithAudioMuted=true&userInfo.displayName=%22Vexa%20Bot%22',
+);
+
 console.log('\n=== buildJitsiMeetingUrl — self-hosted deployments ===');
 
 expect(

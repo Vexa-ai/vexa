@@ -473,7 +473,7 @@ export function createBotPipeline(
 }
 
 /** The post-admission subsystem stages createLivePipeline sequences (used in fault labels). */
-export type LiveStage = 'capture-start' | 'recording-start' | 'engine-start';
+export type LiveStage = 'capture-start' | 'camera-start' | 'recording-start' | 'engine-start';
 
 /**
  * Serialize a thrown value for a LOG LINE (#593 A1). Prefer the stack (names the throwing frame),
@@ -491,6 +491,9 @@ export function serr(e: unknown): string {
 export interface LivePipelineDeps {
   /** Attach the page-side capture; returns its teardown. Best-effort — a throw DEGRADES, never evicts. */
   startCapture: () => Promise<() => Promise<void>>;
+  /** Turn the bot's camera on and publish its canvas (optional). Best-effort: a dark tile is not a
+   *  reason to leave a meeting the bot is otherwise transcribing. */
+  startCamera?: () => Promise<void>;
   /** Attach the page-side recording (optional); returns its teardown. Best-effort. */
   startRecording?: () => Promise<() => Promise<void>>;
   /** The transcription engine (the BotPipeline). Its start() failure is non-fatal + retried. */
@@ -518,7 +521,7 @@ export interface LivePipelineDeps {
  * thunks to the live page.
  */
 export function createLivePipeline(deps: LivePipelineDeps): Pipeline {
-  const { startCapture, startRecording, engine, onFault } = deps;
+  const { startCapture, startRecording, startCamera, engine, onFault } = deps;
   const maxAttempts = Math.max(1, deps.retry?.attempts ?? 3);
   const delayMs = Math.max(0, deps.retry?.delayMs ?? 2000);
 
@@ -545,6 +548,11 @@ export function createLivePipeline(deps: LivePipelineDeps): Pipeline {
       // capture-start — best-effort (a page media Event / exposeFunction reject must not evict).
       try { stopCapture = await startCapture(); }
       catch (e) { onFault('capture-start', e); }
+      // camera-start — best-effort: a bot whose tile stays dark still transcribes the meeting.
+      if (startCamera) {
+        try { await startCamera(); }
+        catch (e) { onFault('camera-start', e); }
+      }
       // recording-start — best-effort.
       if (startRecording) {
         try { stopRecording = await startRecording(); }

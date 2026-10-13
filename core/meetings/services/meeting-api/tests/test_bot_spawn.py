@@ -302,6 +302,94 @@ def test_post_bots_legacy_everyone_left_alias_still_works(monkeypatch):
     assert inv["automaticLeave"]["everyoneLeftTimeout"] == 23_456
 
 
+@pytest.mark.parametrize("sent,enabled", [(None, False), (True, True), (False, False), ("yes", True), ("0", False)])
+def test_post_bots_voice_agent_enabled_reaches_the_bot_and_the_meeting(monkeypatch, sent, enabled):
+    """api.v1 MeetingCreate.voice_agent_enabled → invocation.v1 voiceAgentEnabled (the bot's gate for
+    speak/screen/avatar) AND meeting.data (the command routes' gate). Absent means off: there is no
+    deployment default, a bot that speaks in someone's meeting is an explicit per-spawn opt-in."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    runtime = FakeRuntimeClient()
+    body = {"platform": "google_meet", "native_meeting_id": "voice-agent"}
+    if sent is not None:
+        body["voice_agent_enabled"] = sent
+    r = _client(runtime=runtime).post("/bots", headers=HEADERS, json=body)
+    assert r.status_code == 201, r.text
+    assert json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])["voiceAgentEnabled"] is enabled
+    assert r.json()["data"]["voice_agent_enabled"] is enabled
+
+
+#: A public IP literal: the agent-URL guard judges it without DNS, so these stay offline.
+AGENT_URL = "https://93.184.216.34/sara/?autostart=true"
+
+
+@pytest.mark.parametrize("body_extra", [
+    {"voice_agent_settings": {"url": AGENT_URL}},
+    {"voice_agent_settings": {"voice_agent_url": AGENT_URL}},
+    {"voiceAgentSettings": {"url": AGENT_URL}},
+    {"voice_agent_url": AGENT_URL},
+])
+def test_post_bots_agent_page_url_rides_the_workload_not_the_deployment(monkeypatch, body_extra):
+    """``voice_agent_settings.url`` names the external agent THIS bot carries: it reaches that one
+    workload's env, turns the voice agent on by itself, and is recorded on the meeting — so two
+    meetings can run two different agents at once and neither is a deployment setting."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    runtime = FakeRuntimeClient()
+    body = {"platform": "google_meet", "native_meeting_id": "agent-page", **body_extra}
+    r = _client(runtime=runtime).post("/bots", headers=HEADERS, json=body)
+    assert r.status_code == 201, r.text
+    assert runtime.specs[0]["env"]["VEXA_AGENT_PAGE_URL"] == AGENT_URL
+    assert json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])["voiceAgentEnabled"] is True
+    assert r.json()["data"]["voice_agent_settings"] == {"url": AGENT_URL}
+
+
+def test_post_bots_without_an_agent_url_carries_no_agent_env(monkeypatch):
+    """A bot nobody gave an agent to must not inherit one: no env, whatever the deployment holds."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    runtime = FakeRuntimeClient()
+    r = _client(runtime=runtime).post(
+        "/bots", headers=HEADERS,
+        json={"platform": "google_meet", "native_meeting_id": "no-agent", "voice_agent_enabled": True})
+    assert r.status_code == 201, r.text
+    assert "VEXA_AGENT_PAGE_URL" not in runtime.specs[0]["env"]
+
+
+@pytest.mark.parametrize("url,reason", [
+    ("http://127.0.0.1:8080/agent", "not an allowed agent URL"),
+    ("ftp://agent.example.com/", "http(s) URL"),
+    ("https://agent.example.com/" + "a" * 2048, "at most"),
+    ("https://agent.example.com/a b", "whitespace"),
+])
+def test_post_bots_refuses_an_agent_url_the_bot_should_not_open(monkeypatch, url, reason):
+    """The bot opens this page in its own browser INSIDE the deployment network, so it passes the
+    same guard as a webhook. A refused URL spawns nothing."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    runtime = FakeRuntimeClient()
+    r = _client(runtime=runtime).post(
+        "/bots", headers=HEADERS,
+        json={"platform": "google_meet", "native_meeting_id": "bad-agent",
+              "voice_agent_settings": {"url": url}})
+    assert r.status_code == 422, r.text
+    assert reason in r.json()["detail"]
+    assert runtime.specs == []
+
+@pytest.mark.parametrize("sent", [42, "maybe", ["true"], {"on": True}])
+def test_post_bots_refuses_a_voice_agent_flag_that_is_not_a_boolean(monkeypatch, sent):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    runtime = FakeRuntimeClient()
+    r = _client(runtime=runtime).post(
+        "/bots", headers=HEADERS,
+        json={"platform": "google_meet", "native_meeting_id": "voice-agent", "voice_agent_enabled": sent},
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == "voice_agent_enabled must be a boolean"
+    assert runtime.specs == [], "a refused spawn must not reach the runtime"
+
+
 def test_post_bots_omits_everyone_left_when_not_explicit(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")

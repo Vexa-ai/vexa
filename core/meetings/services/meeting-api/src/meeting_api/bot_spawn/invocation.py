@@ -144,6 +144,7 @@ def build_invocation(
     meeting_api_callback_url: Optional[str] = None,
     internal_secret: Optional[str] = None,
     transcribe_enabled: bool = True,
+    voice_agent_enabled: bool = False,
     recording_enabled: bool = False,
     capture_modes: Optional[list[str]] = None,
     capture_signal_enabled: Optional[bool] = None,
@@ -177,6 +178,9 @@ def build_invocation(
         "task": task,
         "transcriptionTier": transcription_tier,
         "transcribeEnabled": transcribe_enabled,
+        # Gates the external voice agent in the bot. Always explicit, so a bot never falls back to
+        # a default of its own.
+        "voiceAgentEnabled": voice_agent_enabled,
         "transcriptionServiceUrl": transcription_service_url,
         "transcriptionServiceToken": transcription_service_token,
         "transcriptionModel": transcription_model,

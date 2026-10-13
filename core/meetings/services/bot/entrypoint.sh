@@ -29,6 +29,13 @@ sleep 1
 # Voice/capture audio graph (best-effort; only the speak path strictly needs it).
 pactl load-module module-null-sink sink_name=tts_sink \
   sink_properties=device.description="TTSAudioSink" 2>/dev/null || true
+# The browser's SPEAKERS, kept apart from its microphone. Without a sink of their own, the only sink
+# is tts_sink — whose monitor IS the microphone — so everything the meeting plays is fed straight
+# back into the meeting, and the browser's echo canceller, hearing the bot's own voice on both
+# sides, cancels exactly what the bot is trying to say.
+pactl load-module module-null-sink sink_name=playback_sink \
+  sink_properties=device.description="BotSpeakers" 2>/dev/null || true
+pactl set-default-sink playback_sink 2>/dev/null || true
 pactl load-module module-remap-source master=tts_sink.monitor source_name=virtual_mic \
   source_properties=device.description="VirtualMicrophone" 2>/dev/null || true
 pactl set-default-source virtual_mic 2>/dev/null || true

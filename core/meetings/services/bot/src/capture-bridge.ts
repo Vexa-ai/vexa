@@ -631,6 +631,47 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
     });
   })();`).catch(() => { /* never fatal at launch */ });
 
+  // The bot's OUTGOING camera: a canvas published as its video track, hooked before the page builds
+  // its peer connections. Only for a voice-agent bot — a transcription bot shows nothing and should
+  // not touch the page's media at all. The flag is set by the init script above.
+  await context.addInitScript(`(() => {
+    try {
+      if (!window.__vexa_voice_agent_enabled) return;
+      if (${inv.platform === 'teams'}) { window.logBot?.('[VirtualCamera] DIAGNOSTIC: not installed on Teams'); return; } // Teams drops the call once it has video to send
+      window.VexaBrowserUtils?.installVirtualCamera?.({
+        shapeOffers: ${inv.platform !== 'zoom'},   // Zoom rejects an offer that gained a video section
+        log: (m) => window.logBot?.('[VirtualCamera] ' + m),
+      });
+    } catch (e) { window.logBot?.('[VirtualCamera] install failed: ' + String(e)); }
+  })();`).catch(() => { /* never fatal at launch */ });
+
+  // A seated external agent speaks INTO the bot's own microphone (its audio rides the container's
+  // single sink, whose monitor is that microphone). The platform's capture would then treat the
+  // agent's voice as echo of its own playback and cancel it — which is heard in the meeting as
+  // chopped, half-missing speech. Ask for the microphone raw instead: no echo canceller, no noise
+  // suppressor, no gain rider. Document-start, because the platform acquires the microphone during
+  // the join and a track keeps the processing it was created with.
+  if (process.env.VEXA_AGENT_PAGE_URL?.trim()) {
+    await context.addInitScript(`(() => {
+      try {
+        const media = navigator.mediaDevices;
+        if (!media?.getUserMedia) return;
+        const original = media.getUserMedia.bind(media);
+        media.getUserMedia = (constraints) => {
+          if (constraints && constraints.audio) {
+            const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+            constraints = {
+              ...constraints,
+              audio: constraints.audio === true ? raw : { ...constraints.audio, ...raw },
+            };
+            window.logBot?.('[AgentAudio] microphone requested without echo cancellation');
+          }
+          return original(constraints);
+        };
+      } catch (e) { window.logBot?.('[AgentAudio] could not unprocess the microphone: ' + String(e)); }
+    })();`).catch(() => { /* never fatal at launch */ });
+  }
+
   // Zoom/Teams expose NO per-participant <audio> in the DOM — install the WebRTC hook so each
   // remote audio track is mirrored into a hidden <audio> element (→ __vexaCapturedRemoteAudioStreams)
   // the mixed lane combines. Jitsi rides the same hook: its remote audio also arrives as WebRTC
