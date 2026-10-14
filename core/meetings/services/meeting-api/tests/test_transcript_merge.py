@@ -18,9 +18,12 @@ from meeting_api.collector.adapters import SqlAlchemyTranscriptStore, _segment_t
 START = datetime(2026, 7, 14, 12, 0, 0, tzinfo=timezone.utc)
 CREATED = datetime(2026, 7, 14, 11, 59, 0, tzinfo=timezone.utc)
 
-# The exact key set + order _merge_live_segments must emit (byte-identical to the pre-split build).
+# The exact key set + order _merge_live_segments must emit. `next_since` closes the set: it is the
+# incremental-read watermark (#1219), present on EVERY response so a follower bootstraps from a full
+# read and polls incrementally from the second request on. `retracted_segment_ids` / `resynced` are
+# NOT here — they ride only on a cursor read, which is assembled one level up (`_cursor_response`).
 EXPECTED_KEYS = ["id", "platform", "native_meeting_id", "constructed_meeting_url", "status",
-                 "start_time", "end_time", "recordings", "notes", "data", "segments"]
+                 "start_time", "end_time", "recordings", "notes", "data", "segments", "next_since"]
 
 
 class _RedisStub:
