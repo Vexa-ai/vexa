@@ -245,3 +245,7 @@ helm template vexa . -n vexa -f values-test.yaml
 `values-test.yaml` points `storage.s3` at the test-only S3 fixture in
 [`../../tests/s3-fixture.yaml`](../../tests/s3-fixture.yaml); an install from it needs that fixture
 running first (the file's header has the commands).
+
+## OpenShift and multi-node clusters
+
+Layer `values-openshift.yaml` (in this chart) over your values and name a ReadWriteMany class with `agentApi.workspaces.storageClassName`. It switches off the hostPath seccomp installer, which restricted Pod Security refuses (install the bot profile with a MachineConfig or the Security Profiles Operator), and makes the agent workspace store ReadWriteMany: on ReadWriteOnce block storage an agent worker on another node waits for the volume and its chat never answers.

@@ -1942,6 +1942,22 @@ tb "backend s3: workers get a private emptyDir from the runtime" 'grep -A1 "name
 tb "backend s3 without a bucket refuses to render" '! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set agentApi.workspaces.backend=s3 >/dev/null 2>&1'
 tb "backend s3 refuses the recordings key" '! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${WS[@]}" --set agentApi.workspaces.s3.existingSecret=s3-fixture-credentials >/dev/null 2>&1'
 tb "the migration Job mounts the old claim read-only" 'helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${WS[@]}" --set agentApi.workspaces.s3.migrate.enabled=true --show-only templates/job-workspaces-s3-migrate.yaml | grep -B2 -A2 "claimName: vexa-vexa-agent-workspaces" | grep -q "readOnly: true"'
+# OpenShift / multi-node profile (values-openshift.yaml). Measured on a three-node cluster with
+# network-attached block storage and restricted Pod Security: with the defaults, agent workers
+# scheduled off agent-api's node wait for the ReadWriteOnce workspace volume and the chat never
+# answers, and the hostPath seccomp installer is refused by Pod Security. The profile carries the
+# values that install there; the RWX class is the operator's to name.
+OS_PROFILE="$CHART/values-openshift.yaml"
+tb "the chart ships an OpenShift / multi-node profile" '[ -f "$OS_PROFILE" ]'
+if [ -f "$OS_PROFILE" ]; then
+  R_OS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -f "$OS_PROFILE" --set agentApi.workspaces.storageClassName=rwx-class)"
+  OS_PVC="$(doc PersistentVolumeClaim vexa-vexa-agent-workspaces "$R_OS")"
+  tb "profile: no hostPath seccomp installer DaemonSet" '! grep -q "component: bot-seccomp" <<< "$R_OS"'
+  tb "profile: bot Pods still name the Localhost profile" '[ "$(envval RUNTIME_K8S_BOT_SECCOMP_PROFILE "$R_OS")" = "\"vexa/seccomp-userns.json\"" ]'
+  tb "profile: the workspace store is ReadWriteMany on the named class" 'grep -q "ReadWriteMany" <<< "$OS_PVC" && grep -q "storageClassName: \"rwx-class\"" <<< "$OS_PVC"'
+  tb "profile: agent workers keep no added capability" '[ "$(envval RUNTIME_K8S_AGENT_WORKER_CAPABILITIES "$R_OS")" = "\"[]\"" ]'
+  tb "profile: the chart delivers no securityContext (restricted-v2 injects it)" '! grep -q "runAsUser: 10001" <<< "$R_OS"'
+fi
 
 # F1b: the terminal's page policy admits the LiveKit server a browser joins, from the same value agent-api hands it.
 TLK="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set livekit.enabled=true --set livekit.url=wss://calls.example.test --show-only templates/deployment-terminal.yaml)"
