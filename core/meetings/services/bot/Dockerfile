@@ -122,7 +122,6 @@ RUN export DEBIAN_FRONTEND=noninteractive \
        fluxbox \
        socat \
        ca-certificates \
-       libnss3-tools \
        curl \
        unzip \
     && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
@@ -133,6 +132,14 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && aws --version \
     && rm -rf /usr/lib/node_modules/npm /usr/lib/node_modules/corepack /usr/lib/node_modules/yarn \
          /usr/bin/npm /usr/bin/npx /usr/bin/corepack /usr/bin/yarn /usr/bin/yarnpkg
+
+# certutil, for corporate TLS inspection: entrypoint.sh imports VEXA_EXTRA_CA_FILE into Chromium's
+# NSS store (Chromium on Linux reads no CA bundle file). Its own layer, so the one above is unchanged.
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends libnss3-tools \
+    && rm -rf /var/lib/apt/lists/* \
+    && certutil -H >/dev/null 2>&1; command -v certutil
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     DISPLAY=:99 \
