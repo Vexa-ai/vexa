@@ -31,6 +31,9 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with include "vexa.extraCA.initContainer" . }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
       containers:
         - name: meeting-api
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
@@ -47,6 +50,7 @@ spec:
             - name: http
               containerPort: 8080
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: DB_HOST
               value: {{ include "vexa.dbHostEffective" . | quote }}
             - name: DB_PORT
@@ -294,6 +298,7 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 5
           volumeMounts:
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: s3-client
               mountPath: /etc/vexa/s3
               readOnly: true
@@ -313,6 +318,7 @@ spec:
           resources:
             {{- toYaml .Values.meetingApi.resources | nindent 12 }}
       volumes:
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
         - name: s3-client
           configMap:
             name: {{ include "vexa.componentName" (list . "s3-client") }}

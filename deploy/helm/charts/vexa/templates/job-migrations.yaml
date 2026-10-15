@@ -37,6 +37,12 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with include "vexa.extraCA.initContainer" . }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
+      {{- with include "vexa.extraCA.volumes" . }}
+      volumes:{{ . | trim | nindent 8 }}
+      {{- end }}
       containers:
         - name: migrations
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
@@ -46,7 +52,11 @@ spec:
           image: "{{ default .Values.adminApi.image.repository .Values.migrations.image.repository }}:{{ .Values.global.imageTag | default (default .Values.adminApi.image.tag .Values.migrations.image.tag) | default (include "vexa.releaseTag" .) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           command: ["python", "-m", "admin_api.migrate"]
+          {{- with include "vexa.extraCA.mounts" . }}
+          volumeMounts:{{ . | trim | nindent 12 }}
+          {{- end }}
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: DB_HOST
               value: {{ include "vexa.dbHostEffective" . | quote }}
             - name: DB_PORT

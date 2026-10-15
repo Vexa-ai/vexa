@@ -25,6 +25,9 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with include "vexa.extraCA.initContainer" . }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
       containers:
         - name: terminal
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
@@ -34,6 +37,7 @@ spec:
             - name: http
               containerPort: 3000
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: NODE_ENV
               value: "production"
             - name: PORT
@@ -183,8 +187,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- $oidcCa := and .Values.terminal.oidc.issuer (or .Values.terminal.oidc.caBundle.configMap .Values.terminal.oidc.caBundle.secret) }}
-          {{- if or (include "vexa.credentialBrokerEnabled" .) $oidcCa }}
+          {{- if or (include "vexa.credentialBrokerEnabled" .) $oidcCa (include "vexa.extraCA.enabled" .) }}
           volumeMounts:
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
             {{- if include "vexa.credentialBrokerEnabled" . }}
             - name: connections-keys
               mountPath: /run/vexa-connections
@@ -220,8 +225,9 @@ spec:
           resources:
             {{- toYaml .Values.terminal.resources | nindent 12 }}
       {{- $oidcCa := and .Values.terminal.oidc.issuer (or .Values.terminal.oidc.caBundle.configMap .Values.terminal.oidc.caBundle.secret) }}
-      {{- if or (include "vexa.credentialBrokerEnabled" .) $oidcCa }}
+      {{- if or (include "vexa.credentialBrokerEnabled" .) $oidcCa (include "vexa.extraCA.enabled" .) }}
       volumes:
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
         {{- if include "vexa.credentialBrokerEnabled" . }}
         # The human role key only.
         - name: connections-keys

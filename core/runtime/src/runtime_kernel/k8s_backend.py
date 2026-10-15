@@ -105,6 +105,33 @@ def refused_secret_mount(entry: object) -> Optional[str]:
         return (f"key {key!r} is a model credential or a control-plane secret, and no workload holds "
                 "one (H5/W1)")
     return None
+# Corporate TLS inspection (the chart's global.extraCA): every outbound HTTPS call is re-signed by
+# the operator's own root CA, so every spawned Pod must trust it exactly as the chart's own Pods do.
+# JSON {"configMap" | "secret": <name>, "key": <key holding the PEM>, "awsCaBundle": <bool>}. Unset ⇒
+# the Pod is unchanged. Malformed is fatal at boot (K8sBackend.__init__), never silently dropped.
+EXTRA_CA_ENV = "RUNTIME_K8S_EXTRA_CA"
+EXTRA_CA_DIR = "/etc/vexa/extra-ca"
+EXTRA_CA_FILE = f"{EXTRA_CA_DIR}/ca.crt"
+CA_BUNDLE_DIR = "/etc/vexa/ca-bundle"
+CA_BUNDLE_FILE = f"{CA_BUNDLE_DIR}/ca-bundle.crt"
+#: The bundle writer, run by an init container from the workload's OWN image: that image's system
+#: bundle (Debian/Ubuntu, then RHEL, then Alpine paths) plus the operator's PEM, into an emptyDir.
+#: Same script as the chart's (templates/_helpers.tpl vexa.extraCA.script). No root, no writable
+#: root filesystem; a PEM without a certificate stops the Pod instead of starting it untrusting.
+EXTRA_CA_SCRIPT = (
+    "set -eu\n"
+    f"out={CA_BUNDLE_FILE}\n"
+    f"grep -q 'BEGIN CERTIFICATE' {EXTRA_CA_FILE} || "
+    "{ echo 'global.extraCA: the key holds no PEM certificate' >&2; exit 1; }\n"
+    ': > "$out"\n'
+    "for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do\n"
+    '  if [ -s "$f" ]; then cat "$f" >> "$out"; echo >> "$out"; break; fi\n'
+    "done\n"
+    f'cat {EXTRA_CA_FILE} >> "$out"\n'
+    "echo \"ca-bundle: $(grep -c 'BEGIN CERTIFICATE' \"$out\") certificates\""
+)
+_K8S_OBJECT_NAME = re.compile(r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$")
+_CONFIG_KEY = re.compile(r"^[-._a-zA-Z0-9]{1,253}$")
 
 
 def _scheduling_json(env: dict[str, str], key: str, expected: type) -> Optional[object]:
@@ -127,12 +154,85 @@ def _scheduling_json(env: dict[str, str], key: str, expected: type) -> Optional[
     return value or None                                 # empty [] / {} ⇒ treat as unset
 
 
+def extra_ca(env: dict[str, str]) -> Optional[dict]:
+    """The operator's extra root CA (``RUNTIME_K8S_EXTRA_CA``), validated, or None when unset."""
+    raw = env.get(EXTRA_CA_ENV)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError(f"{EXTRA_CA_ENV} is not valid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{EXTRA_CA_ENV} must be a JSON object, got {type(value).__name__}")
+    config_map = str(value.get("configMap") or "").strip()
+    secret = str(value.get("secret") or "").strip()
+    key = str(value.get("key") or "ca.crt").strip()
+    if bool(config_map) == bool(secret):
+        raise ValueError(f"{EXTRA_CA_ENV} must name exactly one of configMap or secret")
+    name = config_map or secret
+    if not _K8S_OBJECT_NAME.match(name):
+        raise ValueError(f"{EXTRA_CA_ENV}: {name!r} is not a Kubernetes object name")
+    if not _CONFIG_KEY.match(key):
+        raise ValueError(f"{EXTRA_CA_ENV}: {key!r} is not a ConfigMap/Secret key")
+    return {"configMap": config_map, "secret": secret, "key": key,
+            "awsCaBundle": bool(value.get("awsCaBundle", True))}
+
+
+def extra_ca_env(ca: dict) -> dict[str, str]:
+    """The trust env every runtime in a Vexa Pod reads: OpenSSL, requests, curl, git and botocore
+    take the full bundle; Node adds the PEM to its own roots; the bot imports the PEM into
+    Chromium's NSS store (entrypoint.sh), since Chromium on Linux reads no bundle file."""
+    env = {"SSL_CERT_FILE": CA_BUNDLE_FILE, "REQUESTS_CA_BUNDLE": CA_BUNDLE_FILE,
+           "CURL_CA_BUNDLE": CA_BUNDLE_FILE, "GIT_SSL_CAINFO": CA_BUNDLE_FILE,
+           "NODE_EXTRA_CA_CERTS": EXTRA_CA_FILE, "VEXA_EXTRA_CA_FILE": EXTRA_CA_FILE}
+    if ca.get("awsCaBundle"):
+        env["AWS_CA_BUNDLE"] = CA_BUNDLE_FILE
+    return env
+
+
+def apply_extra_ca(spec: dict, container: dict, ca: dict) -> None:
+    """Give a spawned Pod the operator's CA: the PEM mounted read-only, an init container (the
+    workload's own image, its own hardening and sizing) writing image bundle + PEM into an emptyDir
+    mounted read-only, and the trust env. A key the workload already sets is never overridden."""
+    source = ({"configMap": {"name": ca["configMap"], "defaultMode": 0o444,
+                             "items": [{"key": ca["key"], "path": "ca.crt"}]}}
+              if ca["configMap"] else
+              {"secret": {"secretName": ca["secret"], "defaultMode": 0o444,
+                          "items": [{"key": ca["key"], "path": "ca.crt"}]}})
+    spec.setdefault("volumes", [])
+    spec["volumes"] += [{"name": "vexa-extra-ca", **source},
+                        {"name": "vexa-ca-bundle", "emptyDir": {"sizeLimit": "8Mi"}}]
+    security = json.loads(json.dumps(container.get("securityContext") or {}))
+    (security.get("capabilities") or {}).pop("add", None)     # the bundle writer needs none
+    init: dict = {
+        "name": "vexa-ca-bundle",
+        "image": container["image"],
+        "command": ["/bin/sh", "-c", EXTRA_CA_SCRIPT],
+        "volumeMounts": [{"name": "vexa-extra-ca", "mountPath": EXTRA_CA_DIR, "readOnly": True},
+                         {"name": "vexa-ca-bundle", "mountPath": CA_BUNDLE_DIR}],
+        "securityContext": security,
+    }
+    if container.get("resources"):
+        # the same sizing as the workload: a quota that requires it on every container admits the
+        # Pod, and the Pod's effective request (max of init, sum of containers) does not grow
+        init["resources"] = json.loads(json.dumps(container["resources"]))
+    spec["initContainers"] = [init, *spec.get("initContainers", [])]
+    container.setdefault("volumeMounts", [])
+    container["volumeMounts"] += [
+        {"name": "vexa-extra-ca", "mountPath": EXTRA_CA_DIR, "readOnly": True},
+        {"name": "vexa-ca-bundle", "mountPath": CA_BUNDLE_DIR, "readOnly": True}]
+    present = {e.get("name") for e in container.get("env", [])}
+    container.setdefault("env", [])
+    container["env"] += [{"name": k, "value": v} for k, v in extra_ca_env(ca).items() if k not in present]
+
+
 def _runtime_scheduling_env() -> dict[str, str]:
     """The runtime's own scheduling knobs from its PROCESS env (set by the chart on the runtime
     Deployment). Overlaid onto the per-workload spawn env for ``pod_overrides`` — spec.env cannot
     carry these: it is built per-workload by different producers (meeting-api for a bot, agent-api for
     an agent worker), whereas the scheduling constraints are a property of the runtime/backend."""
-    return {k: os.environ[k] for k in (TOLERATIONS_ENV, NODE_SELECTOR_ENV, SECRET_MOUNTS_ENV)
+    return {k: os.environ[k] for k in (TOLERATIONS_ENV, NODE_SELECTOR_ENV, SECRET_MOUNTS_ENV, EXTRA_CA_ENV)
             if os.environ.get(k)}
 
 
@@ -374,6 +474,10 @@ def build_pod(
     if runnable.run_as_non_root:
         security["runAsNonRoot"] = True
     container["securityContext"] = security
+    # Corporate TLS inspection: the operator's CA, after hardening so the init container copies it.
+    ca = extra_ca(overlay_source)
+    if ca:
+        apply_extra_ca(pod["spec"], container, ca)
     return pod
 
 
@@ -392,6 +496,7 @@ class K8sBackend:
         # The runtime-wide placement every spawned Pod carries is held to the profiles' rules here,
         # at boot, so a bad value stops the runtime by name instead of placing Pods.
         pod_scheduling.validate_runtime_wide(os.environ)
+        extra_ca(dict(os.environ))                       # a malformed extra CA stops the boot by name
 
     def _pname(self, workload_id: str) -> str:
         return k8s_name(f"{self._prefix}{workload_id}")  # always a DNS-1123 label (the container's too)

@@ -360,6 +360,15 @@
       ]
     },
     {
+      "key": "RUNTIME_K8S_EXTRA_CA",
+      "class": "defaulted",
+      "default": "(unset \u2014 spawned Pods trust the image's own roots only)",
+      "description": "k8s backend: corporate TLS inspection. JSON {\"configMap\" | \"secret\": <name>, \"key\": <key holding the PEM root CA>, \"awsCaBundle\": <bool>} (the chart sets it from global.extraCA). Every SPAWNED bot and agent-worker Pod then mounts the PEM read-only, runs an init container that writes its image's system bundle plus the PEM into an emptyDir, and gets SSL_CERT_FILE, REQUESTS_CA_BUNDLE, CURL_CA_BUNDLE, GIT_SSL_CAINFO (and AWS_CA_BUNDLE unless awsCaBundle is false) pointing at it, NODE_EXTRA_CA_CERTS and VEXA_EXTRA_CA_FILE at the PEM; the bot imports the PEM into Chromium's NSS store. A key the workload already sets wins. Validated at boot; malformed is fatal. Never taken from a workload spec",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
       "key": "BROWSER_IMAGE",
       "class": "capability",
       "capability": "bot_spawn",

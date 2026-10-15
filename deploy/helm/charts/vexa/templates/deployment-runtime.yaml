@@ -29,6 +29,9 @@ spec:
       # The runtime spawns bot/agent Pods via kubectl — bind the SA carrying the pod-spawn RBAC.
       serviceAccountName: {{ include "vexa.componentName" (list . "runtime") }}
       {{- end }}
+      {{- with include "vexa.extraCA.initContainer" . }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
       containers:
         - name: runtime
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
@@ -38,6 +41,7 @@ spec:
             - name: http
               containerPort: 8090
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: RUNTIME_BACKEND
               value: {{ .Values.runtime.backend | quote }}
             {{- if eq .Values.runtime.backend "k8s" }}
@@ -210,15 +214,24 @@ spec:
             # releases in one namespace never adopt each other's Pods.
             - name: RUNTIME_K8S_INSTANCE
               value: {{ .Release.Name | quote }}
+            {{- if include "vexa.extraCA.enabled" . }}
+            # Corporate TLS inspection (global.extraCA): the runtime gives every Pod it spawns the
+            # same CA mount, bundle init container and trust env as the chart's own Pods.
+            - name: RUNTIME_K8S_EXTRA_CA
+              value: {{ include "vexa.extraCA.runtimeJson" . | quote }}
+            {{- end }}
             {{- end }}
             {{- with .Values.runtime.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if eq .Values.runtime.backend "docker" }}
+          {{- if or (eq .Values.runtime.backend "docker") (include "vexa.extraCA.enabled" .) }}
           volumeMounts:
+          {{- end }}
+          {{- if eq .Values.runtime.backend "docker" }}
             - name: docker-sock
               mountPath: /var/run/docker.sock
           {{- end }}
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
           startupProbe:
             httpGet:
               path: /health
@@ -242,8 +255,11 @@ spec:
             timeoutSeconds: 5
           resources:
             {{- toYaml .Values.runtime.resources | nindent 12 }}
-      {{- if eq .Values.runtime.backend "docker" }}
+      {{- if or (eq .Values.runtime.backend "docker") (include "vexa.extraCA.enabled" .) }}
       volumes:
+      {{- end }}
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
+      {{- if eq .Values.runtime.backend "docker" }}
         - name: docker-sock
           hostPath:
             path: /var/run/docker.sock

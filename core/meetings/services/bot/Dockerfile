@@ -122,6 +122,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
        fluxbox \
        socat \
        ca-certificates \
+       libnss3-tools \
        curl \
        unzip \
     && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \

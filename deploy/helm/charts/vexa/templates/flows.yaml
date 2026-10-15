@@ -81,8 +81,11 @@ spec:
       OTHER than the application's own — when flows.databaseName == database.name they already
       live in a database that is guaranteed to exist (F-D5 follow-up: compose already runs this
       shape, sharing the app's own "vexa" database — no separate CREATE DATABASE anywhere). */}}
-      {{- if ne .Values.flows.databaseName .Values.database.name }}
+      {{- if or (ne .Values.flows.databaseName .Values.database.name) (include "vexa.extraCA.enabled" .) }}
       initContainers:
+      {{- end }}
+        {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
+      {{- if ne .Values.flows.databaseName .Values.database.name }}
         - name: ensure-db
           image: {{ include "vexa.flowsImage" . | quote }}
           command: ["python", "-c"]
@@ -178,6 +181,7 @@ spec:
             - secretRef:
                 name: {{ include "vexa.componentName" (list . "flows") }}
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             {{- /* flows.extraEnv: operator env for the flows tier, like <component>.extraEnv on every
             other component (e.g. VEXA_MAIL_KINDS_DEFAULT on an upgraded install). */}}
             {{- with .Values.flows.extraEnv }}
@@ -249,13 +253,13 @@ spec:
           the database's health, not the loop's. The compose file says the same thing about the
           same two processes. Giving these a real liveness surface needs a health endpoint in
           flows itself; that is E4's work, not this template's. */}}
-          {{- with include "vexa.flowsMailCaMount" . }}
+          {{- with print (include "vexa.flowsMailCaMount" .) (include "vexa.extraCA.mounts" .) }}
           volumeMounts:{{ . | trim | nindent 12 }}
           {{- end }}
           resources:
             requests: {cpu: 100m, memory: 128Mi}
             limits: {cpu: 500m, memory: 512Mi}
-      {{- with include "vexa.flowsMailCaVolume" . }}
+      {{- with print (include "vexa.flowsMailCaVolume" .) (include "vexa.extraCA.volumes" .) }}
       volumes:{{ . | trim | nindent 8 }}
       {{- end }}
 {{- /* THE MAILBOX RENDERS ONLY WHEN IT CAN RUN (vexa.flowsMailboxEnabled): an explicit
@@ -307,8 +311,11 @@ spec:
       TEMPLATE comment, not a YAML one — a plain "#" line here renders into every values-name
       permutation regardless of the if-guard below, including the word "ensure-db" the guard
       exists to keep OUT of the no-op case. */}}
-      {{- if ne .Values.flows.databaseName .Values.database.name }}
+      {{- if or (ne .Values.flows.databaseName .Values.database.name) (include "vexa.extraCA.enabled" .) }}
       initContainers:
+      {{- end }}
+        {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
+      {{- if ne .Values.flows.databaseName .Values.database.name }}
         - name: ensure-db
           image: {{ include "vexa.flowsImage" . | quote }}
           command: ["python", "-c"]
@@ -395,6 +402,7 @@ spec:
           # authorization decision (R-B12) — a known user outside the domain would otherwise be
           # quarantined on a lookup that never reached anything.
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             {{- /* flows.extraEnv: operator env for the flows tier, like <component>.extraEnv on every
             other component (e.g. VEXA_MAIL_KINDS_DEFAULT on an upgraded install). */}}
             {{- with .Values.flows.extraEnv }}
@@ -463,6 +471,7 @@ spec:
             - name: tmp
               mountPath: /tmp
             {{- with include "vexa.flowsMailCaMount" . }}{{ . | trim | nindent 12 }}{{ end }}
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
           resources:
             requests: {cpu: 50m, memory: 96Mi}
             limits: {cpu: 250m, memory: 256Mi}
@@ -470,6 +479,7 @@ spec:
         - name: tmp
           emptyDir: {}
         {{- with include "vexa.flowsMailCaVolume" . }}{{ . | trim | nindent 8 }}{{ end }}
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
 {{- end }}
 ---
 apiVersion: apps/v1
@@ -512,8 +522,11 @@ spec:
       VEXA_FLOWS_DB_URL must be able to create the database it opens itself, not rely on
       flows-worker's pod happening to have won the startup race first. Helm TEMPLATE comment,
       not YAML — see the note on flows-mailbox's identical block for why. */}}
-      {{- if ne .Values.flows.databaseName .Values.database.name }}
+      {{- if or (ne .Values.flows.databaseName .Values.database.name) (include "vexa.extraCA.enabled" .) }}
       initContainers:
+      {{- end }}
+        {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
+      {{- if ne .Values.flows.databaseName .Values.database.name }}
         - name: ensure-db
           image: {{ include "vexa.flowsImage" . | quote }}
           command: ["python", "-c"]
@@ -596,6 +609,7 @@ spec:
             - secretRef:
                 name: {{ include "vexa.componentName" (list . "flows") }}
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             {{- /* flows.extraEnv: operator env for the flows tier, like <component>.extraEnv on every
             other component (e.g. VEXA_MAIL_KINDS_DEFAULT on an upgraded install). */}}
             {{- with .Values.flows.extraEnv }}
@@ -701,6 +715,7 @@ spec:
               mountPath: /run/vexa-fact-verify
               readOnly: true
           {{- with include "vexa.flowsMailCaMount" . }}{{ . | trim | nindent 12 }}{{- end }}
+          {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{- end }}
           resources:
             requests: {cpu: 50m, memory: 96Mi}
             limits: {cpu: 250m, memory: 256Mi}
@@ -710,6 +725,7 @@ spec:
             name: {{ include "vexa.componentName" (list . "fact-verify-keys") }}
             optional: true
       {{- with include "vexa.flowsMailCaVolume" . }}{{ . | trim | nindent 8 }}{{- end }}
+      {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{- end }}
 ---
 apiVersion: v1
 kind: Service

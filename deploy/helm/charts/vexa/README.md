@@ -249,3 +249,27 @@ running first (the file's header has the commands).
 ## OpenShift and multi-node clusters
 
 Layer `values-openshift.yaml` (in this chart) over your values and name a ReadWriteMany class with `agentApi.workspaces.storageClassName`. It switches off the hostPath seccomp installer, which restricted Pod Security refuses (install the bot profile with a MachineConfig or the Security Profiles Operator), and makes the agent workspace store ReadWriteMany: on ReadWriteOnce block storage an agent worker on another node waits for the volume and its chat never answers.
+
+## Corporate TLS inspection: add your root CA
+
+If a proxy inspects outbound HTTPS and re-signs it with your own root CA, every Vexa Pod has to trust
+that CA, or calls to transcription, the model provider, git hosts, OAuth providers and the meeting
+pages the bot opens fail certificate verification. Put the PEM (one or more certificates) in a
+ConfigMap in the release namespace and name it:
+
+```bash
+oc -n <ns> create configmap corp-root-ca --from-file=ca.crt=<your-root-ca.pem>
+helm upgrade --install vexa <chart> ... --set global.extraCA.configMap=corp-root-ca
+```
+
+(`global.extraCA.secret` takes a Secret instead; `global.extraCA.key` names the key, default
+`ca.crt`.) Every Vexa Deployment and Job, and every meeting-bot and agent-worker Pod the runtime
+spawns, then mounts the PEM read-only. An init container writes the image's system bundle plus your
+PEM into an emptyDir, and `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`
+and `AWS_CA_BUNDLE` point at it, `NODE_EXTRA_CA_CERTS` at your PEM. The bot also adds it to
+Chromium's certificate store, which reads no bundle file. It needs no root and no writable root
+filesystem, so it runs under OpenShift restricted-v2. Unset, the chart renders exactly as before.
+
+`storage.s3.caBundle`, `terminal.oidc.caBundle`, the flows mail CA and a git provider's own
+`caBundle` keep working as before for their own endpoint; when `storage.s3.caBundle` is set,
+`AWS_CA_BUNDLE` is left to it.

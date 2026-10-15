@@ -44,6 +44,11 @@ spec:
       # Waits for the agent-sessions-schema Job to have made the store's role and tables (a release
       # resource, so on a first install it runs beside this Pod). Logs in as the store's own role only.
       initContainers:
+      {{- else if include "vexa.extraCA.enabled" . }}
+      initContainers:
+      {{- end }}
+        {{- with include "vexa.extraCA.initContainer" . }}{{ . | trim | nindent 8 }}{{ end }}
+      {{- if $ss.active }}
         - name: session-schema
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: "{{ .Values.agentApi.image.repository }}:{{ .Values.global.imageTag | default .Values.agentApi.image.tag | default (include "vexa.releaseTag" .) }}"
@@ -76,6 +81,7 @@ spec:
             - name: http
               containerPort: 8100
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: VEXA_AGENT_API_PORT
               value: "8100"
             - name: VEXA_RUNTIME_API_URL
@@ -396,6 +402,7 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           volumeMounts:
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: workspaces
               mountPath: {{ include "vexa.workspacesDir" . }}
             {{- include "vexa.workspaceStore.caMount" . | nindent 12 }}
@@ -431,6 +438,7 @@ spec:
           resources:
             {{- toYaml .Values.agentApi.resources | nindent 12 }}
       volumes:
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
         {{- if $ws.s3 }}
         # backend: s3 — a disposable cache, hydrated from the bucket at boot; losing it loses nothing.
         - name: workspaces

@@ -29,6 +29,12 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with include "vexa.extraCA.initContainer" . }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
+      {{- with include "vexa.extraCA.volumes" . }}
+      volumes:{{ . | trim | nindent 8 }}
+      {{- end }}
       containers:
         - name: mcp
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
@@ -37,7 +43,11 @@ spec:
           ports:
             - name: http
               containerPort: 8010
+          {{- with include "vexa.extraCA.mounts" . }}
+          volumeMounts:{{ . | trim | nindent 12 }}
+          {{- end }}
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: PORT
               value: "8010"
             # Tool calls go back out through the edge with the caller's own bearer.

@@ -1979,4 +1979,61 @@ tb "redis has a startup probe with a >= 300 s budget" 'grep -q "startupProbe:" <
 tb "redis probes time out in >= 5 s" '[ "$(grep -c timeoutSeconds <<< "$RDS")" -eq 3 ] && [ "$(min_timeout "$RDS")" -ge 5 ]'
 tb "postgres.probes is operator-tunable" '[ "$(startup_budget "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set postgres.probes.startup.failureThreshold=120 --show-only templates/statefulset-postgres.yaml)")" -eq 1200 ]'
 
+# Corporate TLS inspection (global.extraCA). Unset renders nothing new; set, every Vexa Deployment and
+# Job writes image bundle + operator PEM into an emptyDir before the app starts and points every
+# runtime's trust env at it, and the runtime hands the same to the Pods it spawns.
+XCA_FULL=(--set flows.enabled=true,crm.enabled=true,crm.orgId=x,dashboard.enabled=true,flows.mail.enabled=true,flows.mail.address=a@b.c,flows.databaseName=flows,migrations.enabled=true)
+xca_check() { python3 -c '
+import sys, json, yaml
+mode = sys.argv[1]; docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+infra = {"redis", "postgres", "pgbouncer", "livekit", "install"}
+seen = 0
+for d in docs:
+    if d["kind"] not in ("Deployment", "Job", "StatefulSet"): continue
+    sp = d["spec"]["template"]["spec"]
+    for c in sp["containers"]:
+        if c["name"] in infra: continue
+        seen += 1
+        env = {e["name"]: e.get("value") for e in c.get("env", [])}
+        inits = sp.get("initContainers", [])
+        if mode == "off":
+            assert not any(i["name"] == "vexa-ca-bundle" for i in inits), d["metadata"]["name"]
+            assert "SSL_CERT_FILE" not in env and "vexa-extra-ca" not in str(sp.get("volumes")), d["metadata"]["name"]
+            continue
+        n = d["metadata"]["name"]
+        assert inits and inits[0]["name"] == "vexa-ca-bundle", n
+        vols = {v["name"]: v for v in sp["volumes"]}
+        assert "emptyDir" in vols["vexa-ca-bundle"], n
+        src = vols["vexa-extra-ca"].get("configMap") or vols["vexa-extra-ca"].get("secret")
+        assert src["items"] == [{"key": "root.pem", "path": "ca.crt"}], n
+        m = {x["name"]: x for x in c["volumeMounts"]}
+        assert m["vexa-ca-bundle"]["readOnly"] and m["vexa-extra-ca"]["readOnly"], n
+        for k in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO"):
+            assert env[k] == "/etc/vexa/ca-bundle/ca-bundle.crt", (n, k)
+        assert env["NODE_EXTRA_CA_CERTS"] == "/etc/vexa/extra-ca/ca.crt", n
+        assert ("AWS_CA_BUNDLE" in env) == (mode != "s3ca"), n
+        sc = inits[0].get("securityContext")
+        if mode == "osh":
+            assert sc is None, n                      # restricted-v2 injects it
+        else:
+            assert sc["allowPrivilegeEscalation"] is False and "runAsUser" not in sc, n
+        assert inits[0]["resources"]["limits"], n
+        if c["name"] == "runtime":
+            j = json.loads(env["RUNTIME_K8S_EXTRA_CA"])
+            assert j["key"] == "root.pem" and j["awsCaBundle"] == (mode != "s3ca"), j
+assert seen >= 10, seen
+print("ok", seen)
+' "$1"; }
+X_OFF="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${XCA_FULL[@]}")"
+tb "extraCA unset: no bundle writer, no CA volume, no trust env anywhere" 'xca_check off <<< "$X_OFF" >/dev/null'
+X_ON="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${XCA_FULL[@]}" --set global.extraCA.configMap=corp-ca,global.extraCA.key=root.pem)"
+tb "extraCA (configMap): every Vexa Deployment/Job bundles it and trusts it" 'xca_check on <<< "$X_ON" >/dev/null'
+X_SEC="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${XCA_FULL[@]}" --set global.extraCA.secret=corp-ca,global.extraCA.key=root.pem)"
+tb "extraCA (secret): the same from a Secret" 'xca_check on <<< "$X_SEC" >/dev/null && grep -q "secretName: \"corp-ca\"" <<< "$X_SEC"'
+X_S3="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${XCA_FULL[@]}" --set global.extraCA.configMap=corp-ca,global.extraCA.key=root.pem,storage.s3.caBundle.configMapName=s3-ca)"
+tb "extraCA leaves AWS_CA_BUNDLE to storage.s3.caBundle when that is set" 'xca_check s3ca <<< "$X_S3" >/dev/null'
+X_OSH="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -f "$CHART/values-openshift.yaml" "${XCA_FULL[@]}" --set agentApi.workspaces.storageClassName=rwx --set global.extraCA.configMap=corp-ca,global.extraCA.key=root.pem)"
+tb "extraCA under the OpenShift profile: the bundle writer brings no securityContext of its own" 'xca_check osh <<< "$X_OSH" >/dev/null'
+tb "extraCA naming both a configMap and a secret is refused" '! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set global.extraCA.configMap=a,global.extraCA.secret=b >/dev/null 2>&1'
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

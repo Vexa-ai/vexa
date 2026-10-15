@@ -29,6 +29,9 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with include "vexa.extraCA.initContainer" . }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
       containers:
         - name: gateway
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
@@ -38,6 +41,7 @@ spec:
             - name: http
               containerPort: 8000
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: ADMIN_API_URL
               value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
             - name: MEETING_API_URL
@@ -142,12 +146,14 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 5
           volumeMounts:
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: identity-signing-key
               mountPath: /run/vexa-identity/signing
               readOnly: true
           resources:
             {{- toYaml .Values.gateway.resources | nindent 12 }}
       volumes:
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
         # gateway-identity.v1: the signing key, here and in no other workload.
         - name: identity-signing-key
           secret:

@@ -698,3 +698,131 @@ active: {{ and .Values.agentApi.enabled (ne ($s3.existingSecret | default "" | t
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Corporate TLS inspection: global.extraCA (a ConfigMap OR a Secret holding the PEM root CA, under
+`key`). When set, every Vexa workload Pod — the chart's Deployments and Jobs, and through the runtime
+(RUNTIME_K8S_EXTRA_CA) every bot and agent worker Pod it spawns — gets:
+  * the PEM mounted read-only at /etc/vexa/extra-ca/ca.crt;
+  * an init container that writes the image's system bundle plus that PEM into an emptyDir,
+    mounted read-only at /etc/vexa/ca-bundle/ca-bundle.crt (no root, no writable root filesystem);
+  * SSL_CERT_FILE, REQUESTS_CA_BUNDLE, CURL_CA_BUNDLE and GIT_SSL_CAINFO pointing at that bundle,
+    NODE_EXTRA_CA_CERTS and VEXA_EXTRA_CA_FILE at the PEM (the bot imports it into Chromium's NSS
+    store at start), and AWS_CA_BUNDLE at the bundle unless storage.s3.caBundle names S3's own CA.
+Unset renders nothing: every helper below is empty, so the chart is byte-identical.
+Call with the root context. vexa.extraCA.mounts / .env / .volumes / .initContainer emit LIST ITEMS
+(no key) at column 0; indent them with nindent where they are included.
+*/}}
+{{- define "vexa.extraCA" -}}
+{{- $c := (.Values.global | default dict).extraCA | default dict -}}
+configMap: {{ $c.configMap | default "" | toString | trim | quote }}
+secret: {{ $c.secret | default "" | toString | trim | quote }}
+key: {{ $c.key | default "ca.crt" | toString | trim | quote }}
+{{- end -}}
+
+{{- define "vexa.extraCA.enabled" -}}
+{{- $c := include "vexa.extraCA" . | fromYaml -}}
+{{- if and $c.configMap $c.secret -}}
+{{- fail "global.extraCA: name a configMap or a secret, not both" -}}
+{{- end -}}
+{{- if or $c.configMap $c.secret -}}true{{- end -}}
+{{- end -}}
+
+{{/* AWS_CA_BUNDLE only when S3 has no CA of its own (that one is set through the client config,
+which an AWS_CA_BUNDLE in the environment would override). */}}
+{{- define "vexa.extraCA.aws" -}}
+{{- $s3 := include "vexa.s3" . | fromYaml -}}
+{{- if not (or $s3.caConfigMap $s3.caSecret) -}}true{{- end -}}
+{{- end -}}
+
+{{/* The JSON the runtime reads (RUNTIME_K8S_EXTRA_CA) to give every spawned Pod the same. */}}
+{{- define "vexa.extraCA.runtimeJson" -}}
+{{- $c := include "vexa.extraCA" . | fromYaml -}}
+{{- dict "configMap" $c.configMap "secret" $c.secret "key" $c.key "awsCaBundle" (eq (include "vexa.extraCA.aws" .) "true") | toJson -}}
+{{- end -}}
+
+{{- define "vexa.extraCA.volumes" -}}
+{{- if include "vexa.extraCA.enabled" . -}}
+{{- $c := include "vexa.extraCA" . | fromYaml }}
+- name: vexa-extra-ca
+  {{- if $c.configMap }}
+  configMap:
+    name: {{ $c.configMap | quote }}
+  {{- else }}
+  secret:
+    secretName: {{ $c.secret | quote }}
+  {{- end }}
+    defaultMode: 0444
+    items:
+      - { key: {{ $c.key | quote }}, path: ca.crt }
+- name: vexa-ca-bundle
+  emptyDir:
+    sizeLimit: 8Mi
+{{- end -}}
+{{- end -}}
+
+{{- define "vexa.extraCA.mounts" -}}
+{{- if include "vexa.extraCA.enabled" . }}
+- name: vexa-extra-ca
+  mountPath: /etc/vexa/extra-ca
+  readOnly: true
+- name: vexa-ca-bundle
+  mountPath: /etc/vexa/ca-bundle
+  readOnly: true
+{{- end -}}
+{{- end -}}
+
+{{- define "vexa.extraCA.env" -}}
+{{- if include "vexa.extraCA.enabled" . }}
+- name: SSL_CERT_FILE
+  value: /etc/vexa/ca-bundle/ca-bundle.crt
+- name: REQUESTS_CA_BUNDLE
+  value: /etc/vexa/ca-bundle/ca-bundle.crt
+- name: CURL_CA_BUNDLE
+  value: /etc/vexa/ca-bundle/ca-bundle.crt
+- name: GIT_SSL_CAINFO
+  value: /etc/vexa/ca-bundle/ca-bundle.crt
+- name: NODE_EXTRA_CA_CERTS
+  value: /etc/vexa/extra-ca/ca.crt
+- name: VEXA_EXTRA_CA_FILE
+  value: /etc/vexa/extra-ca/ca.crt
+{{- if include "vexa.extraCA.aws" . }}
+- name: AWS_CA_BUNDLE
+  value: /etc/vexa/ca-bundle/ca-bundle.crt
+{{- end }}
+{{- end -}}
+{{- end -}}
+
+{{/* The bundle writer. Its image is global.extraCA.image, else the runtime image (Debian, has the
+system bundle and a shell). It runs as whatever uid the platform assigns and writes only the
+emptyDir. A PEM with no certificate in it stops the Pod rather than starting it without the CA. */}}
+{{- define "vexa.extraCA.script" -}}
+set -eu
+out=/etc/vexa/ca-bundle/ca-bundle.crt
+grep -q 'BEGIN CERTIFICATE' /etc/vexa/extra-ca/ca.crt || { echo 'global.extraCA: the key holds no PEM certificate' >&2; exit 1; }
+: > "$out"
+for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+  if [ -s "$f" ]; then cat "$f" >> "$out"; echo >> "$out"; break; fi
+done
+cat /etc/vexa/extra-ca/ca.crt >> "$out"
+echo "ca-bundle: $(grep -c 'BEGIN CERTIFICATE' "$out") certificates"
+{{- end -}}
+
+{{- define "vexa.extraCA.initContainer" -}}
+{{- if include "vexa.extraCA.enabled" . -}}
+{{- $c := (.Values.global | default dict).extraCA | default dict }}
+- name: vexa-ca-bundle
+  {{- include "vexa.containerSecurityContext" . | nindent 2 }}
+  image: {{ $c.image | default (printf "%s:%s" .Values.runtime.image.repository (.Values.global.imageTag | default .Values.runtime.image.tag | default (include "vexa.releaseTag" .))) | quote }}
+  imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+  command: ["/bin/sh", "-c", {{ include "vexa.extraCA.script" . | quote }}]
+  volumeMounts:
+    - name: vexa-extra-ca
+      mountPath: /etc/vexa/extra-ca
+      readOnly: true
+    - name: vexa-ca-bundle
+      mountPath: /etc/vexa/ca-bundle
+  resources:
+    {{- toYaml ($c.resources | default (dict "requests" (dict "cpu" "10m" "memory" "16Mi") "limits" (dict "cpu" "100m" "memory" "64Mi"))) | nindent 4 }}
+{{- end -}}
+{{- end -}}

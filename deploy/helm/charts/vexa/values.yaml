@@ -63,6 +63,31 @@ global:
     allowPrivilegeEscalation: false
     capabilities:
       drop: ["ALL"]
+  # Corporate TLS inspection: your proxy re-signs every outbound HTTPS connection with your own root
+  # CA, so every Vexa Pod must trust it. Put the PEM (one or more certificates) in a ConfigMap OR a
+  # Secret in the release namespace and name it here:
+  #   oc create configmap corp-root-ca --from-file=ca.crt=<your-root-ca.pem>
+  #   --set global.extraCA.configMap=corp-root-ca
+  # Every Vexa Deployment and Job, and every bot and agent-worker Pod the runtime spawns, then mounts
+  # it read-only at /etc/vexa/extra-ca/ca.crt; an init container writes the image's system bundle plus
+  # your PEM into an emptyDir (/etc/vexa/ca-bundle/ca-bundle.crt, read-only to the app), and
+  # SSL_CERT_FILE, REQUESTS_CA_BUNDLE, CURL_CA_BUNDLE, GIT_SSL_CAINFO and AWS_CA_BUNDLE point at that
+  # bundle, NODE_EXTRA_CA_CERTS at your PEM; the bot adds it to Chromium's own store. No root, no
+  # writable root filesystem: it runs under OpenShift restricted-v2. AWS_CA_BUNDLE is left out when
+  # storage.s3.caBundle names S3's own CA. A git provider's own caBundle (agentApi.gitProviders) still
+  # replaces the bundle for that host. Unset (the default) renders exactly as before.
+  # Infra Pods running third-party images (postgres, redis, pgbouncer, livekit) make no outbound
+  # HTTPS and are left as they are.
+  extraCA:
+    configMap: ""
+    secret: ""
+    key: ca.crt
+    # The bundle writer's image; empty = the runtime image (it carries the system bundle and a shell).
+    image: ""
+    # The bundle writer's own requests/limits (a quota that requires them on every container).
+    resources:
+      requests: {cpu: 10m, memory: 16Mi}
+      limits: {cpu: 100m, memory: 64Mi}
 
 # ---------- gateway-identity.v1: the gateway's signing keypair ----------
 # The gateway signs the identity it resolved onto every forward with an Ed25519 PRIVATE key; agent-api,
