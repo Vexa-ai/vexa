@@ -660,6 +660,12 @@ function QueuedActions({ j, onSendNow, onEdit, onRemove }: {
   );
 }
 
+/** Nothing in the conversation yet: no turn, no queued job, no room line. Its body is the empty
+ *  state (the home), which is read from its top, never followed to its bottom. */
+export function conversationEmpty(turns: readonly unknown[], jobs: readonly unknown[] | undefined, room: { lines: readonly unknown[] } | null | undefined): boolean {
+  return turns.length === 0 && !(jobs?.length) && !room?.lines.length;
+}
+
 export function ChatConversation({ turns, busy, empty, jobs = [], room, onContinue, onStopRunning, onDecide, onRetryRow, onSendNow, onEditQueued, onRemoveQueued }: {
   turns: Turn[]; busy?: boolean; empty?: ReactNode; jobs?: JobRec[];
   /** A SHARED CHAT'S LINES — what people typed to each other — drawn in the same stream, by time. */
@@ -677,7 +683,7 @@ export function ChatConversation({ turns, busy, empty, jobs = [], room, onContin
   onEditQueued?: (j: JobRec) => void;
   onRemoveQueued?: (j: JobRec) => void;
 }) {
-  if (turns.length === 0 && empty && jobs.length === 0 && !room?.lines.length) return <>{empty}</>;
+  if (empty && conversationEmpty(turns, jobs, room)) return <>{empty}</>;
   // a queued message drawn ON its own bubble when the bubble is here; on a bubble of its own when
   // it is not (sent from another window, or this one reloaded)
   const pending = jobs.filter(isPendingMessage);
@@ -1081,10 +1087,6 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
   }, [stick]);
-  // The transcript is measured AFTER the commit that grew it, which the stream callback below
-  // cannot do — a chunk's text is not in the DOM yet when it fires. Keyed on the content itself
-  // (every chunk rebuilds `turns`) so that typing in the composer costs no layout read.
-  useEffect(() => { stick.onContent(); }, [stick, turns, chatState.jobs, busy, loading, bundleImports.cards]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentSeqRef = useRef(0);
@@ -1185,6 +1187,16 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   // A SHARED CHAT'S LINES are part of the conversation (drawn between the turns, by time); a move
   // of the conversation's version re-reads it.
   const room = useRoomLines(session, rereadHistory);
+  // The transcript is measured AFTER the commit that grew it, which the stream callback
+  // cannot do — a chunk's text is not in the DOM yet when it fires. Keyed on the content itself
+  // (every chunk rebuilds `turns`) so that typing in the composer costs no layout read.
+  // AN EMPTY CONVERSATION IS READ FROM ITS TOP (0.13.4 S0, mobile G1): its body is the home (the
+  // greeting, the composer, the desktop), drawn as `emptyExtra`; following "the newest" there pinned
+  // the home to its bottom on every load. Nothing to follow until the first turn, which pins anyway.
+  useEffect(() => {
+    if (conversationEmpty(turns, chatState.jobs, room)) return;
+    stick.onContent();
+  }, [stick, turns, chatState.jobs, busy, loading, bundleImports.cards]); // eslint-disable-line react-hooks/exhaustive-deps -- room is read, not followed (as before)
   // Load history into an idle, empty session snapshot. Live turns stay in the per-session store so switching
   // sessions never redirects or clears an in-flight stream.
   useEffect(() => {
