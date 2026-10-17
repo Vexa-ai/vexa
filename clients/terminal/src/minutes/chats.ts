@@ -381,9 +381,15 @@ export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now(
     });
   }
 
+  // A CALL STARTED IN A ROOM IS THE ROOM'S (app.dev 2026-10-17: a call started in #test also
+  // appeared as its own "Call with Vexa" row beside the room). agent-api binds the meeting's chat to
+  // the room and stamps the room on the row; the room's row is where it lives, so it gets no second
+  // row while the reader has that room.
+  const chatIds = new Set(chats.map((c) => c.id));
   for (const m of meetings) {
     const id = String(m.id);
     if (claimed.has(id)) continue;
+    if (m.room && chatIds.has(m.room)) continue;
     const phase = meetingPhase(m);
     const when = meetingWhen(m);
     rows.push({

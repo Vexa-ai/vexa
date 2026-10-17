@@ -39,6 +39,7 @@ export interface MeetingMock {
   docs?: { workspace: string; path: string; title?: string; kind?: string }[];  // connected workspace docs (data.docs)
   artifacts_deleted?: boolean;  // its owner deleted the transcript + recordings (data.artifact_deletion)
   transcription_language?: MeetingLanguage;  // the language setting the bot runs with (data.transcription_language)
+  room?: string;                // the room (its session id) a call started in, which owns it (data.metadata.room)
   // A VEXA CALL (founder O1, 2026-10-18) — see liveMeetings `callFields`
   call_session?: string;        // the session (s-…) the call is held in (data.session_id)
   call_room?: string;           // the room it belongs to, when it was started in one (data.metadata.room)

@@ -49,6 +49,7 @@ export interface MeetingRowDTO {
     // called — who or where (`call_named`), renamed by its topic (`call_renamed_from`)
     session_id?: string | null;
     completion_reason?: string | null;
+    // caller-set metadata: agent-api stamps `room` on a call started in a room (calls.py `_own_by_room`)
     metadata?: { room?: string; call_named?: string; call_renamed_from?: string; call_kind?: string;
       call_with?: { subject?: string; name?: string }[]; [extra: string]: unknown } | null;
   } | null;
@@ -217,6 +218,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     docs: d.data?.docs ?? [],
     artifacts_deleted: artifactsDeleted(d),
     transcription_language: readMeetingLanguage(d.data?.transcription_language),
+    room: typeof d.data?.metadata?.room === "string" && d.data.metadata.room ? d.data.metadata.room : undefined,
     ...vexaCallFields(d),
     participants: [],
     mentioned: [],
@@ -265,7 +267,7 @@ async function snapshotOnce() {
     const seen = new Set<string>();
     const next = (list || []).map(toMock).filter((m) => !seen.has(m.id) && (seen.add(m.id), true));
     const key = (m: MeetingMock[]) => m.map((x) =>
-      `${x.id}|${x.live_status}|${x.has_recording}|${x.artifacts_deleted ? "deleted" : ""}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}|${JSON.stringify(x.transcription_language ?? null)}`,
+      `${x.id}|${x.live_status}|${x.has_recording}|${x.artifacts_deleted ? "deleted" : ""}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}|${JSON.stringify(x.transcription_language ?? null)}|${x.room ?? ""}`,
     ).join(",");
     const wasLoaded = loaded;
     loaded = true;
