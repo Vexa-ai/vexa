@@ -71,4 +71,39 @@ describe("ModelChip", () => {
     fireEvent.click(screen.getByRole("button", { name: /Switch to Sonnet 5/ }));
     await waitFor(() => expect(posts.find((p) => p.url === "/api/chat/level")?.body).toMatchObject({ level: 3, switch: true }));
   });
+
+  // perf-turns-1017: a new chat ran Qwen with thinking ON (the person's last pick, High) while the
+  // chip read "Qwen 3.8 27B · None", and the effort row had no way back to None.
+  describe("a self-hosted Qwen (efforts none/high)", () => {
+    const qwen = { id: "m-qwen", display_name: "Qwen 3.8 27B (self-hosted)", provider: "lab", adapter: "openai_compatible",
+      harness: "openai-agent", access: "everyone", default: true,
+      capabilities: { tool_calling: true, streaming: true, reasoning_efforts: ["none", "high"], default_effort: "none" } };
+    const useQwen = (list: Record<string, unknown>) => {
+      vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (init?.method === "POST") { const body = JSON.parse(String(init.body)); posts.push({ url: u, body }); return new Response(JSON.stringify({ ok: true, ...body, changed: true }), { status: 200 }); }
+        if (u.startsWith("/api/models/levels")) return new Response(JSON.stringify({ levels: [{ level: 1, word: "fastest", model: "m-qwen" }], chat: null }));
+        if (u.startsWith("/api/models/catalog")) return new Response(JSON.stringify({ models: [qwen], ...list }));
+        return new Response("{}");
+      }));
+    };
+    it("a new chat names the effort its turn will run at — the last pick — not the catalogue default", async () => {
+      useQwen({ default: "m-qwen", default_effort: "high", selected: null, selected_effort: null });
+      render(<ModelChip session="new" hasMessages={false} />);
+      const chip = await screen.findByRole("button", { name: /Qwen 3\.8 27B/ });
+      expect(chip.textContent).toBe("Qwen 3.8 27B · High");
+    });
+    it("offers No thinking, and picking it sends effort none", async () => {
+      useQwen({ default: "m-qwen", default_effort: "high", selected: null, selected_effort: null });
+      render(<ModelChip session="new" hasMessages={false} />);
+      fireEvent.click(await screen.findByRole("button", { name: /Qwen 3\.8 27B/ }));
+      fireEvent.click(screen.getByRole("button", { name: "No thinking" }));
+      await waitFor(() => expect(posts.find((p) => p.url === "/api/chat/model")?.body).toEqual({ session: "new", model: "m-qwen", effort: "none" }));
+    });
+    it("with no last pick it reads the model's own default", async () => {
+      useQwen({ default: "m-qwen", default_effort: null, selected: null, selected_effort: null });
+      render(<ModelChip session="new" hasMessages={false} />);
+      expect((await screen.findByRole("button", { name: /Qwen 3\.8 27B/ })).textContent).toBe("Qwen 3.8 27B · No thinking");
+    });
+  });
 });

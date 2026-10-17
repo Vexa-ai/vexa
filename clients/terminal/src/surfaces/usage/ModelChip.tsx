@@ -12,13 +12,17 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { useViewportPlacement } from "../../ui-kit/placement";
 import { LEVEL_SET_EVENT } from "../../platform/events";
-import { getModelCatalog, setChatModel, type Effort, type ModelList } from "../modelsApi";
+import { effectiveEffort, getModelCatalog, setChatModel, type Effort, type ModelList } from "../modelsApi";
 import "./usage.css";
 
 type Row = { level: number; word: string; model: string | null };
 type Levels = { levels: Row[]; chat?: { level: number; model: string } | null };
-const EFFORTS: Effort[] = ["low", "medium", "high"];
-const word = (e: string) => e.charAt(0).toUpperCase() + e.slice(1);
+/** The effort row. "none" is in it (perf-turns-1017): a Qwen behind vLLM offers only none/high, so
+ *  without it a person who once clicked High could never turn thinking off again — and every new chat
+ *  inherits that last pick, paying minutes of hidden reasoning per step. */
+const EFFORTS: Effort[] = ["none", "low", "medium", "high"];
+const EFFORT_WORD: Partial<Record<Effort, string>> = { none: "No thinking" };
+const word = (e: string) => EFFORT_WORD[e as Effort] ?? e.charAt(0).toUpperCase() + e.slice(1);
 
 const readLevels = (session: string) => fetch(`/api/models/levels?session=${encodeURIComponent(session)}`, { cache: "no-store" })
   .then((r) => (r.ok ? r.json() : null)).then((x: Levels | null) => (x && Array.isArray(x.levels) ? x : null)).catch(() => null);
@@ -56,7 +60,10 @@ export function ModelChip({ session, hasMessages }: { session: string; hasMessag
   const currentId = lv.chat?.model ?? cat?.selected ?? cat?.default ?? rows[0]?.model ?? "";
   const current = cat?.models.find((m) => m.id === currentId) ?? null;
   const efforts = (current?.capabilities.reasoning_efforts ?? []).filter((e) => EFFORTS.includes(e));
-  const effort = (cat?.selected_effort ?? current?.capabilities.default_effort ?? "") as string;
+  // THE EFFORT THE NEXT TURN RUNS AT, not the model's catalogue default: a chat with no pick of its
+  // own runs at the person's last pick (`default_effort`), which the server holds at the turn. Reading
+  // `capabilities.default_effort` here showed "None" while the turn ran with thinking on (2026-10-17).
+  const effort = (cat ? effectiveEffort(cat, current) : "") as string;
   const label = `${nameOf(currentId)}${efforts.length && effort ? ` · ${word(effort)}` : ""}`;
   const extra = (cat?.models ?? []).filter((m) => !rows.some((r) => r.model === m.id));
 
