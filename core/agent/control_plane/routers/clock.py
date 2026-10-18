@@ -15,6 +15,7 @@ import urllib.request
 from datetime import datetime, timezone as _tz
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from shared.clock_line import now_label, utc_offset
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -37,9 +38,12 @@ def clock_context(zone: str = '', now: "datetime | None" = None) -> dict:
     try:
         if zone:
             local = now.astimezone(ZoneInfo(zone))
-            result.update(local_now=local.isoformat(timespec='seconds'), abbreviation=local.tzname())
+            result.update(local_now=local.isoformat(timespec='seconds'), abbreviation=local.tzname(),
+                          utc_offset=utc_offset(zone, now))
     except (ZoneInfoNotFoundError, ValueError):
         result.update(timezone=None, timezone_required=True)
+    # The same spelling of now the turn context carries (Vexa-ai/vexa#1783).
+    result['now'] = now_label(result['timezone'] or '', now)
     result['instruction'] = (
         'Ask the user which timezone to remember, then call timezone_set. '
         'Report UTC explicitly until they answer.' if result['timezone_required'] else

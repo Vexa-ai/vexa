@@ -12,7 +12,7 @@
         "from": "person@example.test",
         "subject": "fixture"
       },
-      "web_url": "https://mail.google.com/mail/u/robin.vale%2Bwork@example.test/#all/abc"
+      "web_url": "https://mail.google.com/mail/?authuser=robin.vale%2Bwork@example.test#all/abc"
     }
   ],
   "has_more": false,

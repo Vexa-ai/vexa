@@ -10,7 +10,10 @@
       "account": "person@example.test",
       "setup": {},
       "application_configured": false,
-      "approved_host": ""
+      "approved_host": "",
+      "permissions": [
+        "drafts"
+      ]
     },
     {
       "id": "fedcba9876543210fedcba9876543210",

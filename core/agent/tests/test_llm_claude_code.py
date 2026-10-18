@@ -794,6 +794,24 @@ def test_the_stdin_exec_delivers_the_prompt_and_keeps_it_off_the_command_line(mo
         assert claude_code._ACTIVE_STDIN is None          # cleared when the turn ends
 
 
+def test_a_cli_that_exits_before_reading_its_prompt_is_read_not_crashed(monkeypatch, tmp_path):
+    """A CLI that refuses its arguments (a stale `--resume` id) prints its result and exits before
+    reading stdin. The write of the prompt then meets a closed pipe; the turn reads what the CLI said
+    (so the resume-heal path can run) instead of crashing the worker."""
+    import sys
+    from llm import claude_code
+
+    monkeypatch.setattr(claude_code, "harness_identity_kwargs", lambda: {})
+    script = ("import json, os\n"
+              "print(json.dumps({'type': 'result', 'subtype': 'error_during_execution', 'is_error': True,"
+              " 'errors': ['--resume requires a valid session ID'], 'session_id': 'x'}), flush=True)\n"
+              "os.close(0)\n")
+    big = "x" * (1 << 20)        # larger than a pipe buffer, so the write must meet the closed end
+    lines = list(claude_code._exec_subprocess_stdin([sys.executable, "-c", script], str(tmp_path),
+                                                    big, injectable=False))
+    assert any('"error_during_execution"' in line for line in lines)
+
+
 # ── chat continuity never follows a link the turn planted (the _system mount is tools-writable) ──
 
 @pytest.mark.parametrize("planted", [".claude", ".claude/projects"])

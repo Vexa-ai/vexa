@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import re
 import sqlite3
 import threading
@@ -61,6 +62,14 @@ def credential_hosts(spec: dict) -> list[str]:
     return [h for i, h in enumerate(hosts) if h and h not in hosts[:i]]
 
 
+def signed_session(claims: dict) -> str:
+    """The agent session a verified identity names: ``delegation.unit``, the unit a worker's token
+    was minted for (gateway-identity.v1). ``""`` for a person's own identity, or none."""
+    dlg = claims.get("delegation") if isinstance(claims, dict) else None
+    unit = dlg.get("unit") if isinstance(dlg, dict) else None
+    return unit.strip() if isinstance(unit, str) else ""
+
+
 def unwatched(claims: dict) -> bool:
     """A delegated identity (a worker's) whose regime is not ``human``: nobody is in the loop. An
     identity with a ``delegation`` claim of any other shape counts as unwatched (fail closed)."""
@@ -68,6 +77,13 @@ def unwatched(claims: dict) -> bool:
         return False
     dlg = claims["delegation"]
     return not (isinstance(dlg, dict) and str(dlg.get("regime") or "").strip().lower() == "human")
+
+
+def shared(claims: dict) -> bool:
+    """A delegated identity whose turn other people read (gateway-identity.v1 ``delegation.shared``,
+    ADR-0048 decision 4): only what every reader can read may reach its answer, and no connection
+    of its person's is that."""
+    return identity_token.claims_shared(claims)
 
 
 class Broker:
@@ -233,6 +249,11 @@ class Broker:
             log_event("role_refused", level="warning", user_id=who["actor"],
                       fields={"role": who["role"], "route": route_of(request.url.path)})
             raise HTTPException(403, "Human setup required")
+        if who["role"] == "agent" and who.get("shared"):
+            # every agent-role route, listing included: a connection's name is its person's too
+            log_event("shared_refused", level="warning", user_id=who["actor"],
+                      fields={"route": route_of(request.url.path)})
+            raise HTTPException(403, identity_token.SHARED_REFUSAL)
         if who["role"] == "agent" and who.get("unwatched") and not unwatched_ok:
             log_event("regime_refused", level="warning", user_id=who["actor"],
                       fields={"route": route_of(request.url.path)})
@@ -240,11 +261,43 @@ class Broker:
         return who
 
     def connection(self, who: dict, cid: str) -> dict:
-        row = self.sql("SELECT * FROM connections WHERE id=? AND actor=? AND status!='deleted'",
-                       (cid, who["actor"]), one=True)
+        """The caller's live connection ``cid``. One they deleted answers 410 — naming the
+        connection they created in its place when there is one (`successor`) — never a bare 404
+        (Vexa-ai/vexa#1783: the agent kept calling a re-created connection by its old id). Another
+        person's id, deleted or not, is 404: nothing is said about it."""
+        row = self.sql("SELECT * FROM connections WHERE id=? AND actor=?", (cid, who["actor"]), one=True)
         if not row:
             raise HTTPException(404, "Connection not found")
+        if row["status"] == "deleted":
+            successor = self.successor(row)
+            if successor:
+                raise HTTPException(410, f"This connection was deleted and replaced by connection {successor}; "
+                                         "use that connection_id")
+            raise HTTPException(410, "This connection was deleted; call connections_status for the current ones")
         return row
+
+    def successor(self, row: dict) -> str:
+        """The live connection the person created in place of deleted ``row``: same person, same
+        kind, created after it, with the same name or (a custom service) the same destination host.
+        The ready one first, then the newest. ``""`` when there is none."""
+        def host(r: dict) -> str:
+            try:
+                spec = json.loads(r.get("setup_spec") or "{}")
+            except ValueError:
+                spec = {}
+            return (destination_host(spec) if spec else "") or (r.get("approved_host") or "").split(" ")[0]
+
+        def label(text) -> str:
+            return " ".join((text or "").split()).casefold()
+
+        candidates = self.sql("SELECT * FROM connections WHERE actor=? AND provider=? AND status!='deleted'"
+                              " AND created>=? AND id!=? ORDER BY (status='ready') DESC, created DESC",
+                              (row["actor"], row["provider"], row["created"] or 0, row["id"]), rows=True)
+        mine = host(row) if row["provider"] == "custom_secret" else ""
+        for c in candidates:
+            if label(c["label"]) == label(row["label"]) or (mine and host(c) == mine):
+                return c["id"]
+        return ""
 
     # ── audit and faults ──────────────────────────────────────────────────────────────────
     def audit(self, who, cid, action, outcome, *, operation="", receipt_id="", version=0, receipt=""):

@@ -15,11 +15,12 @@ repository is small and knowable while the set of things that are a secret is ne
 * ``https://host/owner/repo`` (``.git`` optional, ``http`` accepted for a self-hosted mirror)
 * ``git@host:owner/repo.git`` — the scp-like form
 * ``ssh://[user@]host[:port]/owner/repo``
-* ``owner/repo`` — the bare shorthand, expanded to ``https://github.com/owner/repo.git``
+* ``owner/repo`` — the bare shorthand, expanded on the default git provider (``shared.git_provider``)
 
-On any host but ``github.com`` the path may be deeper than ``owner/repo``: GitLab nests projects in
-groups and subgroups (``https://host/group/sub/repo``), up to :data:`MAX_PATH_SEGMENTS` segments.
-``github.com`` has exactly two, so a deeper path there is refused rather than cloned and failed. Every
+On a GitLab (or any host not configured as GitHub) the path may be deeper than ``owner/repo``: GitLab
+nests projects in groups and subgroups (``https://host/group/sub/repo``), up to
+:data:`MAX_PATH_SEGMENTS` segments. A provider of kind GitHub has exactly two, so a deeper path there
+is refused rather than cloned and failed. Every
 segment is a plain name — never empty, never ``.``/``..``, never GitLab's ``-`` route separator — so a
 path cannot climb out of where it points.
 
@@ -62,7 +63,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from shared import ssrf
+from shared import git_provider, ssrf
 from shared.git_redaction import TOKEN_PREFIXES, looks_like_token
 
 #: The one sentence a person sees when they paste a credential where a repository goes. It says what
@@ -72,8 +73,8 @@ TOKEN_SENTENCE = ("That looks like a token, not a repository. Paste the reposito
                   "a saved token goes in the token card.")
 #: …and when it is simply not a repository reference. Saying "that looks like a token" about `foo bar`
 #: would be a guess, and a wrong guess about a secret is how people learn to ignore the warning.
-SHAPE_SENTENCE = ("That is not a repository. Use https://github.com/owner/repo, "
-                  "git@github.com:owner/repo.git, owner/repo, or a full URL with groups "
+SHAPE_SENTENCE = ("That is not a repository. Use https://host/owner/repo, "
+                  "git@host:owner/repo.git, owner/repo, or a full URL with groups "
                   "(https://git.example.com/group/subgroup/repo).")
 #: …and when the shape is right and the HOST is somewhere only this server can reach.
 HOST_SENTENCE = ("That host is not reachable as a repository. Use a public or company git host, "
@@ -87,7 +88,9 @@ LOCAL_SENTENCE = ("That is a path on the server, not a repository URL. Use https
 #: …and for the OTHER field beside it, which was never validated at all.
 REF_SENTENCE = "That is not a branch, tag or commit. Use a name like `main` or a commit id."
 
-DEFAULT_HOST = "github.com"
+def _default_provider():
+    """The provider ``owner/repo`` shorthand expands on: the deployment's default (built-in GitHub)."""
+    return git_provider.registry().default()
 
 #: The transports a caller-supplied repository may name. Everything else — ``ext``, ``file``, ``git``,
 #: ``ftp`` and the whole ``<helper>::`` family — is refused: ``ext::`` runs a shell command and
@@ -144,13 +147,14 @@ def _tidy(name: str) -> str:
 def _repo_path(host: str, path: str) -> str:
     """``owner/repo`` or ``group/sub/…/repo`` from a URL's path, ``.git`` dropped — or ``RepoRefError``.
 
-    Two or more plain segments (exactly two on ``github.com``), each a name and nothing that moves:
+    Two or more plain segments (exactly two on a GitHub provider), each a name and nothing that moves:
     an empty segment, ``.``, ``..`` and GitLab's ``-`` route separator are refused, as is anything
     outside ``[A-Za-z0-9._-]``."""
     segs = path.split("/")
     if segs:
         segs[-1] = _tidy(segs[-1])
-    limit = 2 if _bare_host(host) == DEFAULT_HOST else MAX_PATH_SEGMENTS
+    provider = git_provider.registry().for_host(host) or git_provider.registry().for_host(_bare_host(host))
+    limit = provider.max_path_segments if provider else MAX_PATH_SEGMENTS
     if not 2 <= len(segs) <= limit:
         raise RepoRefError(SHAPE_SENTENCE)
     for seg in segs:
@@ -198,6 +202,10 @@ def _host_is_internal(host: str) -> bool:
     h = _bare_host(host)
     if not h:
         return True
+    # A host the OPERATOR configured as a git provider is theirs to name, wherever it lives (an
+    # in-cluster GitLab answers to a bare label): the configuration, not the request, decides it.
+    if any(p.host == h for p in git_provider.registry().all()):
+        return False
     if ssrf.literal_address(h) is not None:
         return ssrf.is_blocked_ip(h)
     return ssrf.is_blocked_hostname(h)    # a bare label: only resolvable inside the deployment
@@ -382,5 +390,5 @@ def normalize(raw: Optional[str]) -> Optional[str]:
         return f"ssh://{user}{_checked_host(m.group(2))}/{_repo_path(m.group(2), m.group(3))}.git"
     m = _BARE.match(v)
     if m:
-        return f"https://{DEFAULT_HOST}/{m.group(1)}/{_tidy(m.group(2))}.git"
+        return _default_provider().clone_url(f"{m.group(1)}/{_tidy(m.group(2))}")
     raise RepoRefError(SHAPE_SENTENCE)

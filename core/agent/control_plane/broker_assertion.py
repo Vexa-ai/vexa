@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Optional
 
 HEADER = "X-Vexa-Assertion"
-ROLES = ("agent", "human", "git")
+ROLES = ("agent", "human", "git", "bots", "sensors", "signals")
 METHODS = ("GET", "POST")
 MAX_AGE_S = 30
 MAX_SKEW_S = 5
@@ -47,6 +47,9 @@ PUBLISHED_KEYS = frozenset({
     b"fixture-agent-key-not-a-deployment-secret-0001",
     b"fixture-human-key-not-a-deployment-secret-0001",
     b"fixture-git-key-not-a-deployment-secret-000001",
+    b"fixture-bots-key-not-a-deployment-secret-00001",
+    b"fixture-sensors-key-not-a-deployment-secret-01",
+    b"fixture-signals-key-not-a-deployment-secret-01",
 })
 
 

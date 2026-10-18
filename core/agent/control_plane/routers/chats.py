@@ -9,33 +9,51 @@ single identifier changed.
 """
 from __future__ import annotations
 
+from control_plane.workspace_reader import home_of
+
+import hmac
+import json
 import re
+import stat as _stat_mod
+import threading
 import time
 
+from control_plane import chat_folders
+from control_plane import identity_token
+from control_plane import workspace_membership as _membership_mod
+from control_plane import workspace_names as _names_mod
+from control_plane.routers.workspace_states import apply_profile, default_target_for, first_turn_profile
+from control_plane import workspace_attach as _attach_mod
 from control_plane import chat_intents
 from control_plane import dispatch as dispatch_mod
+from control_plane import llm_budget as llm_budget_mod
 from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import scaffolds as scaffolds_mod
-from control_plane import unit_faults
+from control_plane import session_store as session_store_mod
+from control_plane import session_sync, unit_faults
 from control_plane import admin_account_scope, global_layer, model_providers, system_mounts
 from control_plane.api_shared import (
     CONTEXT_SENTINEL, GLOBAL_TARGET_NOTE,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
-    inbox_pending, inbox_withdraw, logger, turns_taken_after, meeting_binding, target_preamble, toolbelt_preamble, workspace_focus)
+    inbox_pending, inbox_send_now, inbox_withdraw, stop_turns, logger, turn_outcome, turns_taken_after, running_turn_from, meeting_binding, target_preamble, toolbelt_preamble,
+    pinned_pages_preamble, unit_busy, workspace_focus)
 from control_plane.peer_lookups import meeting_access_check
-from control_plane.bodies import CHAT_SESSION_PATTERN, ChatBody, ChatModelBody, ResetBody, SessionId
+from control_plane.bodies import CHAT_SESSION_PATTERN, ChatBody, ChatContextBody, ChatModelBody, DefaultTargetBody, ResetBody, SessionId
 from control_plane.ceiling import reads_within, refuse_delegated, require_in_ceiling
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Optional
 
-from fastapi import APIRouter, Body, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Body, Header, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from fastapi.responses import JSONResponse, StreamingResponse
+from shared import attachments as attachments_mod
 from shared import chat_label as chat_label_mod
+from control_plane import display_name as display_name_mod
+from control_plane import chat_autotitle
 from shared import unit_input, units
-from shared.marks import flow_mark
+from shared.marks import flow_mark, message_mark
 from shared.runtime_fault import RuntimeFault
 
 #: How the terminal names a meeting's own agent session — `meet-<row id>`. The `/api/sessions`
@@ -67,9 +85,76 @@ RAIL_KEY_PATTERN = r"^(?:[cm]:)?[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 RailKey = Annotated[str, StringConstraints(pattern=RAIL_KEY_PATTERN)]
 
 
+class PinnedPage(BaseModel):
+    """One pinned page: where it lives and what its tab says."""
+    model_config = ConfigDict(extra='forbid')
+    slug: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_][\w.-]{0,127}$")
+    path: str = Field(min_length=1, max_length=512, description='workspace-relative page path')
+    label: str = Field(default='', max_length=200)
+
+
+class PinnedPagesBody(BaseModel):
+    """The person's pinned pages, in order — the whole list (#1783)."""
+    model_config = ConfigDict(extra='forbid')
+    pages: list[PinnedPage] = Field(max_length=50)
+
+
+#: SETTINGS → APPEARANCE: the vocabulary the terminal draws (`platform/appearance.ts`). A field set to
+#: null goes back to the company default (`appearance_*` in `_global/POLICIES.md`).
+APPEARANCE_ACCENTS = ("clay", "blue", "indigo", "violet", "teal", "green", "amber", "rose", "graphite")
+APPEARANCE_CHOICES = {
+    "font_ui": ("geist", "system", "inter", "plex"),
+    "font_reading": ("ui", "inter", "plex", "source-serif"),
+    "font_mono": ("geist", "plex-mono", "jetbrains"),
+    "density": ("comfortable", "compact"),
+    "text_size": ("default", "large"),
+}
+
+
+def appearance_value(field: str, value) -> "str | None":
+    """The value if this vocabulary knows it, else None (an unknown value is never stored)."""
+    v = str(value or "").strip().lower()
+    if field == "accent":
+        return v if v in APPEARANCE_ACCENTS or re.fullmatch(r"#[0-9a-f]{6}", v) else None
+    return v if v in APPEARANCE_CHOICES.get(field, ()) else None
+
+
+class AppearanceBody(BaseModel):
+    """A change to the person's appearance: the fields named change; null = the company default."""
+    model_config = ConfigDict(extra='forbid')
+    accent: Optional[str] = Field(default=None, max_length=16)
+    font_ui: Optional[str] = Field(default=None, max_length=24)
+    font_reading: Optional[str] = Field(default=None, max_length=24)
+    font_mono: Optional[str] = Field(default=None, max_length=24)
+    density: Optional[str] = Field(default=None, max_length=16)
+    text_size: Optional[str] = Field(default=None, max_length=16)
+
+
 class ChatOrderBody(BaseModel):
     model_config = ConfigDict(extra='forbid')
     order: list[RailKey] = Field(max_length=5000)
+
+
+class ChatMeetingBindBody(BaseModel):
+    """Bind a meeting started from a chat to that chat."""
+    model_config = ConfigDict(extra='forbid')
+    session: str = Field(pattern=CHAT_SESSION_PATTERN, description='the chat the meeting was started from')
+    meeting: str = Field(pattern=r'^[0-9]{1,18}$', description='the meeting row id')
+
+
+class ChatStopBody(BaseModel):
+    """Stop this chat's running reply (its turn and every tool process under it)."""
+    model_config = ConfigDict(extra='forbid')
+    session: str = Field(default=units.DEFAULT_CHAT_SESSION, pattern=CHAT_SESSION_PATTERN,
+                         description='the chat whose reply to stop')
+
+
+class ChatSendNowBody(BaseModel):
+    """Run one queued message of this chat now (the running turn stops)."""
+    model_config = ConfigDict(extra='forbid')
+    session: str = Field(default=units.DEFAULT_CHAT_SESSION, pattern=CHAT_SESSION_PATTERN,
+                         description='the chat the queued message is in')
+    id: str = Field(min_length=1, max_length=200, description="the queued row's id")
 
 
 class ChatMarkBody(BaseModel):
@@ -78,6 +163,164 @@ class ChatMarkBody(BaseModel):
     row: RailKey = Field(description='the rail row: `c:<chat session>` or `m:<meeting id>`')
     pinned: bool | None = Field(default=None, description='keep the row at the top of the list')
     hidden: bool | None = Field(default=None, description='take the row out of the list, reversibly')
+
+
+#: A folder of the caller's own, or a built-in section: ``pinned`` · ``ungrouped`` · ``hidden``.
+FolderId = Annotated[str, StringConstraints(pattern=r"^(?:pinned|shared|hidden|ungrouped|routines|f-[0-9a-f]{12})$")]
+
+
+class ChatFolderCreateBody(BaseModel):
+    """Make one of the person's own chat folders (or find the one they already have by that name)."""
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=60, description='the folder name the person used, e.g. "Clients"')
+
+
+class ChatFolderUpdateBody(BaseModel):
+    """Rename, collapse or reorder one folder. A field that is absent is left as it is."""
+    model_config = ConfigDict(extra='forbid')
+    folder: FolderId = Field(description='the folder id from chat_folders_list')
+    name: str | None = Field(default=None, min_length=1, max_length=60, description='a new name')
+    collapsed: bool | None = Field(default=None, description='fold the section shut (true) or open it (false)')
+    position: int | None = Field(default=None, ge=0, le=500, description='0 puts it first among the person\'s folders')
+
+
+class ChatFolderDeleteBody(BaseModel):
+    """Dissolve one folder; its chats move to Ungrouped and are never deleted."""
+    model_config = ConfigDict(extra='forbid')
+    folder: FolderId = Field(description='the folder id from chat_folders_list')
+
+
+class ChatMoveBody(BaseModel):
+    """File chats in one place on the person's own rail."""
+    model_config = ConfigDict(extra='forbid')
+    rows: list[RailKey] = Field(min_length=1, max_length=200,
+                                description='rail rows from chat_folders_list: `c:<chat session>` or `m:<meeting id>`')
+    to: FolderId = Field(description='a folder id, or `pinned`, `ungrouped` or `hidden` (hiding a chat is moving it here)')
+    before: RailKey | None = Field(default=None, description='place them ahead of this row (the manual order of Pinned)')
+
+
+def _read_view(reader, unit_id: str, resume, *, fresh: bool):
+    """The view's events, read through the ``StreamReader`` port as declared: ``fresh`` marks the
+    view of a turn this request just dispatched."""
+    return reader.read(unit_id, resume=resume, fresh=fresh)
+# ── A MESSAGE WAITS BEHIND ITS OWN CHAT'S TURN (live app.dev 2026-10-15) ───────────────────────
+# The post-meeting recap ran in the call chat's `-auto` sibling and held the conversation's head; the
+# founder's "finalize the meeting" was answered 409 three times in the 52 seconds it ran. A turn of
+# the SAME chat is not another participant: the person's message is queued behind it and runs the
+# moment the head is free, for up to `session_sync.QUEUE_WAIT_S`, then is refused as before.
+QUEUE_POLL_S = 0.5
+_QUEUED: dict = {}
+_QUEUED_LOCK = threading.Lock()
+
+
+class QueuedTurn:
+    """One message waiting for its chat's head. ``done`` is set once it was dispatched (``unit_id``
+    and ``start``, the out-stream tail just before) or refused (``error``, a stream error event)."""
+
+    def __init__(self, unit_id: str) -> None:
+        self.unit_id = unit_id
+        self.done = threading.Event()
+        self.start: Optional[str] = None
+        self.error: Optional[dict] = None
+
+
+def _queue_error(exc: BaseException, session: str) -> dict:
+    """What a queued message that could not be dispatched says, on the stream, typed."""
+    if isinstance(exc, model_providers.ModelChoiceFault):
+        return {"type": "error", "message": exc.sentence(), "fault": exc.as_dict()}
+    if isinstance(exc, llm_budget_mod.BudgetExhausted):
+        return {"type": "error", "message": exc.sentence(), "fault": exc.fault()}
+    if isinstance(exc, RuntimeFault):
+        a = unit_faults.answer(exc)
+        return {"type": "error", "message": a.get("detail", ""), "fault": a.get("fault")}
+    if isinstance(exc, session_sync.SessionBusy):
+        a = session_sync.answer(exc.kind, session, status=409)
+        return {"type": "error", "message": a["detail"], "fault": a["fault"]}
+    return {"type": "error", "message": "That message did not reach your agent — nothing was lost "
+                                        "on your side, please send it again."}
+
+
+def queue_behind(r, busy: "session_sync.SessionBusy", unit_id: str, do_dispatch, tail, *,
+                 session: str, key=None, wait_s: Optional[float] = None,
+                 poll_s: float = QUEUE_POLL_S) -> QueuedTurn:
+    """Wait (on a thread of its own, so a dropped stream does not drop the message) for the head of
+    ``busy.session`` to be free, then ``do_dispatch()``. ``tail()`` snapshots the unit's out-stream
+    right before the dispatch. Registered under ``key`` while waiting so a retry of the same turn
+    attaches instead of queueing a second copy."""
+    waiter = QueuedTurn(unit_id)
+    deadline = time.time() + (session_sync.QUEUE_WAIT_S if wait_s is None else wait_s)
+
+    def run() -> None:
+        try:
+            while time.time() < deadline:
+                if session_sync.lease_free(r, busy.session):
+                    start = tail()
+                    try:
+                        waiter.unit_id = do_dispatch() or unit_id
+                    except session_sync.SessionBusy as again:
+                        if again.queueable_for(unit_id):
+                            time.sleep(poll_s)       # another of its own turns took it first
+                            continue
+                        waiter.error = _queue_error(again, session)
+                        return
+                    except Exception as exc:  # noqa: BLE001 — said on the stream, typed
+                        logger.warning("queued chat turn for session=%s refused: %s", session,
+                                       type(exc).__name__)
+                        waiter.error = _queue_error(exc, session)
+                        return
+                    waiter.start = start
+                    return
+                time.sleep(poll_s)
+            a = session_sync.answer("session_conflict", session, status=409,
+                                    waited_s=int(session_sync.QUEUE_WAIT_S if wait_s is None else wait_s))
+            a["detail"] = a["fault"]["detail"] = session_sync.QUEUE_TIMEOUT_SENTENCE
+            waiter.error = {"type": "error", "message": a["detail"], "fault": a["fault"]}
+        finally:
+            if key is not None:
+                with _QUEUED_LOCK:
+                    if _QUEUED.get(key) is waiter:
+                        _QUEUED.pop(key, None)
+            waiter.done.set()
+
+    if key is not None:
+        with _QUEUED_LOCK:
+            _QUEUED[key] = waiter
+    threading.Thread(target=run, daemon=True, name=f"chat-queue-{unit_id}").start()
+    return waiter
+
+
+def queued_events(waiter: QueuedTurn, holder_kind: str, follow, *, tick_s: float = 5.0):
+    """The stream of a queued message: what it waits behind, keepalives while it waits, then the
+    turn itself (``follow(unit_id, start)``) or the typed refusal."""
+    yield {"type": "queued", "holder_kind": holder_kind or "reply",
+           "message": session_sync.queued_sentence(holder_kind)}
+    while not waiter.done.wait(tick_s):
+        yield None
+    if waiter.error is not None:
+        yield waiter.error
+        yield {"type": "turn-complete"}
+        return
+    yield from follow(waiter.unit_id, waiter.start)
+
+
+def queued_waiter(key) -> Optional[QueuedTurn]:
+    with _QUEUED_LOCK:
+        return _QUEUED.get(key)
+
+
+def _queued_display(prompt: str) -> str:
+    """WHAT A QUEUED ROW SAYS: the person's words, never the narration the terminal folds in front of
+    them (the active-context line). The human half after the last sentinel, then the rail's own
+    rule (`chat_label.human_head`); a prompt that is machinery end to end keeps its text."""
+    text = str(prompt or "")
+    i = text.rfind(CONTEXT_SENTINEL)
+    if i >= 0:
+        text = text[i + len(CONTEXT_SENTINEL):].strip()
+    return chat_label_mod.human_head(text) or text
+
+
+#: How long an idle incognito chat is kept before it is deleted, unless `_global/POLICIES.md` says.
+INCOGNITO_RETENTION_DAYS = 7
 
 
 def build(**d) -> APIRouter:
@@ -105,6 +348,79 @@ def build(**d) -> APIRouter:
                          instruction="A chat turn is started by the person, not by an agent acting for "
                                      "them. Say what you would ask and stop; do not retry it another way.")
 
+    def _flow_turn(request: Request, session: str = "") -> "dict | None":
+        """A ROUTINE'S RUN, posted by flows into its chat thread (ADR-0046 decision 12) — or None.
+
+        Only the internal tier may say a turn is a routine's: it changes the turn's regime, and a
+        person's own credential claiming `autonomous` would be claiming to be a schedule. The
+        headers name the flow; the regime header is the switch."""
+        if (request.headers.get("x-vexa-flow-regime") or "").strip().lower() != "autonomous":
+            return None
+        secret = settings.internal_api_secret.get_secret_value() if settings is not None else ""
+        provided = request.headers.get("x-internal-secret", "")
+        if not secret or not provided or not hmac.compare_digest(provided, secret):
+            raise HTTPException(status_code=403, detail={
+                "refused": "flow_turn_needs_internal_tier",
+                "note": "a routine's turn is posted by flows over the internal tier"})
+        name = (request.headers.get("x-vexa-flow-name") or "").strip()
+        scope = (request.headers.get("x-vexa-flow-scope") or "").strip()
+        try:
+            version = int(request.headers.get("x-vexa-flow-version") or 0)
+        except ValueError:
+            version = 0
+        turn = {"flow": name or (request.headers.get("x-vexa-flow") or "").strip(),
+                "scope": scope or "instance", "version": version,
+                "step": (request.headers.get("x-vexa-flow-step") or "").strip()}
+        # A ROUTINE'S DELEGATED AUTHORITY (flows phase 0): the unattended verbs its person granted
+        # it at creation, as flows read them off the flow version and capped by policy. Only the
+        # internal tier reaches this line, so the header is flows' word, never a person's.
+        grants = [g.strip() for g in (request.headers.get("x-vexa-flow-grants") or "").split(",")
+                  if g.strip()]
+        if grants and turn["step"] == "agent_run" and turn["scope"].startswith("user:"):
+            turn["grants"] = grants
+        # AN EVENT AGENT'S OCCURRENCE (ADR-0046 decision 12): the concern this chat holds.
+        concern = (request.headers.get("x-vexa-concern") or "").strip()[:160]
+        if concern:
+            turn["concern"] = concern
+        _kind = (request.headers.get("x-vexa-flow-kind") or "").strip()
+        if _kind in ("event_agent", "sink"):
+            turn["kind"] = _kind
+        stage = (request.headers.get("x-vexa-concern-stage") or "").strip()
+        if stage:
+            turn["stage"] = stage
+        # ANOTHER AGENT'S MESSAGE (ADR-0046 decision 13), delivered by flows' `deliver_message`.
+        sender = (request.headers.get("x-vexa-message-from-uid") or "").strip()
+        if sender:
+            # ACROSS TWO PEOPLE, ONLY INTO A CONVERSATION BOTH TAKE PART IN — the same rule
+            # `message_agent` checked at send, held again where the turn is started.
+            receiver = (request.headers.get("x-user-id") or "").strip()
+            if sender != receiver:
+                from control_plane.routers import agent_messages as _am  # noqa: PLC0415
+                if not _am.cross_person_deliverable(session_store, sender, receiver, session):
+                    raise HTTPException(status_code=403, detail=dict(_am.CROSS_PERSON_REFUSAL))
+            try:
+                origin = json.loads(request.headers.get("x-vexa-message-origin") or "[]")
+            except ValueError:
+                origin = []
+            turn["message"] = {
+                "uid": sender,
+                "thread": (request.headers.get("x-vexa-message-from-thread") or "").strip(),
+                "label": (request.headers.get("x-vexa-message-from-label") or "").strip(),
+                "origin": [str(x) for x in origin] if isinstance(origin, list) else []}
+        return turn
+
+    def _thread_busy(subject: str, session: str, *, for_routine: bool) -> bool:
+        """IS THE OTHER HALF OF THIS THREAD MID-TURN? One thread never runs two turns at once
+        (ADR-0046 decision 12): a routine's run checks the person's unit, a person's turn checks the
+        routine's — each unit already serialises its own inbox."""
+        try:
+            gen = sess.mount_gen(subject, session)
+        except Exception:  # noqa: BLE001 — an unreadable generation is the id it always had
+            gen = 0
+        other = (units.chat_unit_id(subject, session, gen) if for_routine
+                 else units.routine_unit_id(subject, session, gen))
+        return unit_busy(redis_url, other, _unit_key(other))
+
     def _unit_key(unit_id: str) -> str:
         """The unit's input key, the one the dispatcher signs that unit's entries with."""
         secret = settings.internal_api_secret if settings is not None else None
@@ -114,9 +430,16 @@ def build(**d) -> APIRouter:
         return bool(settings is not None and (settings.mcp_url or "").strip()
                     and settings.mcp_delegation_secret.get_secret_value())
     stream_reader = d['stream_reader']
+    session_store = d.get('session_store')
+    notifier = d.get('notifier')
     subject_of = d['subject_of']
     workspace_registry = d['workspace_registry']
     wsr = d['wsr']
+
+    def _person_rows(subject: str) -> list:
+        """Every workspace the person has, with its state — what the default target is checked against."""
+        rows, _ = _membership_mod.reconciled_memberships(wsr.root, subject, mindex.list)
+        return _names_mod.listing(wsr.root, subject, registry=workspace_registry, index_list=lambda _s: rows)
     # The same access decision the live transcript stream makes (routers/meetings.py): a chat may
     # fold a meeting's transcript only when its caller could watch that transcript.
     _meeting_access = meeting_access_check(_meeting_owner_lookup, getattr(wsr, "root", None))
@@ -152,6 +475,14 @@ def build(**d) -> APIRouter:
             row = None
         mounts = [str(w) for w in ((row or {}).get("workspaces") or [])
                   if str(w) not in ("_global", "_system")]
+        # A CHAT WITH ITS OWN READS names exactly those (Vexa-ai/vexa#1783) — the line must not
+        # tell the agent about a workspace this turn does not mount.
+        try:
+            own = sess.reads(subject, session)
+        except Exception:  # noqa: BLE001
+            own = None
+        if own is not None:
+            mounts = [w for w in own if w not in ("_global", "_system", "personal")]
         desk = _ws_name(str(subject), fallback="your personal workspace")
         # The registry names `_global` too — `The organisation` until the setup conversation
         # writes the company's own — so this fallback is only reached when the lookup FAILS, and
@@ -164,7 +495,7 @@ def build(**d) -> APIRouter:
         # one that stops the fix from becoming a new failure. "Note this on my desk" must still
         # work from a chat targeting a customer's workspace; a line that named only the target
         # would teach the agent it has nowhere else to write.
-        if target and desk not in others:
+        if target and desk not in others and (own is None or "personal" in own):
             others.append(desk)
         # WHAT THE COMPANY LAYER IS FOR, said to the one turn that can write there (#1616). An
         # admin can now aim any chat at `_global`; a turn told only "writes go here" would fill
@@ -215,10 +546,8 @@ def build(**d) -> APIRouter:
             rid = str((r or {}).get("id") or "")
             if rid not in wanted:
                 continue
-            data = r.get("data") if isinstance(r.get("data"), dict) else {}
-            title = str((data or {}).get("title") or "")
-            if title:
-                out[rid] = title
+            # the one name rule (UI decisions 14): title · people · "Call with Vexa" — never an id
+            out[rid] = display_name_mod.meeting_display_name(r)
         return out
 
     def _labelled(subject: str, rows: "list[dict]") -> "list[dict]":
@@ -332,10 +661,13 @@ def build(**d) -> APIRouter:
         failed index write is logged and the stream goes on."""
         for item in events:
             ev = item[0] if isinstance(item, tuple) else item
+            if isinstance(ev, dict) and ev.get("type") == "session-bundle":
+                continue    # ADR-0048: the conversation goes to the store, never to a browser
             bound = meeting_binding(ev)
             if bound is not None:
                 try:
                     sess.upsert(subject, session, meeting=bound[0], meeting_native=bound[1] or None)
+                    sess.bind_meeting_chat(subject, bound[0], session)
                 except Exception:  # noqa: BLE001 — the turn outranks its own bookkeeping
                     logger.exception("binding meeting %s to subject=%s session=%s failed",
                                      bound[0], subject, session)
@@ -349,6 +681,373 @@ def build(**d) -> APIRouter:
                     logger.exception("focusing workspace %s on subject=%s session=%s failed",
                                      focused, subject, session)
             yield item
+
+    def _with_call_focus(body: ChatBody, subject: str, session: str) -> ChatBody:
+        """The body with the session's live call — or the meeting this chat started (a bot it sent,
+        founder 2026-10-13) — as its meeting focus, when it names no focus of its own."""
+        focus = body.context.focus if body.context is not None else body.active
+        if focus:
+            return body
+        meeting_id = ""
+        if session_store is not None:
+            try:
+                from control_plane import session_sync  # noqa: PLC0415
+
+                row = session_sync.resolve(session_store, subject, session, create=False)
+                call = session_store.active_call(row["id"]) if row else None
+                if call:
+                    meeting_id = str(call["meeting_id"])
+            except Exception:  # noqa: BLE001 — a store that cannot answer grounds nothing extra
+                pass
+        if not meeting_id:
+            try:
+                meeting_id = str((sess.meta(subject, session) or {}).get("meeting") or "")
+            except Exception:  # noqa: BLE001
+                meeting_id = ""
+        if not meeting_id:
+            return body
+        meeting = {"kind": "meeting", "meeting_id": meeting_id, "status": "active"}
+        ctx = (body.context.model_copy(update={"focus": meeting}) if body.context is not None
+               else ChatContextBody(focus=meeting))
+        return body.model_copy(update={"context": ctx})
+
+    # ── THE SESSION, WHEN CONVERSATIONS ARE STORED APART (ADR-0048) ───────────────────────────
+    def _session_plan(request: Request, body: ChatBody, subject: str, session: str):
+        """What this message does in its session — or None when the store is off (or, for a PRIVATE
+        thread only, cannot answer: the chat then runs exactly as it always did). A refusal of the
+        SESSION gate is an HTTP error; a store that cannot name a shared turn's readers is a typed
+        503 (returned as the response)."""
+        if session_store is None or body.room_meeting_id:
+            return None
+        from control_plane import session_turn, workspace_membership  # noqa: PLC0415
+
+        def _is_member(ws: str, who: str) -> bool:
+            try:
+                return workspace_membership.is_member(wsr.root, ws, who) is not None
+            except Exception:  # noqa: BLE001 — an unreadable member list is not a membership
+                return False
+
+        try:
+            mounts = (active_workspaces(wsr.root, subject)
+                      + shared_active_mounts(wsr.root, subject, mindex.list(subject)))
+            candidates = [m.slug for m in mounts] + [system_mounts.GLOBAL_SLUG, "_system", str(subject)]
+        except Exception:  # noqa: BLE001 — with no candidates the shared scope is _global alone
+            candidates = [system_mounts.GLOBAL_SLUG]
+        names = {c: _ws_name(c, fallback=c) for c in candidates}
+        shared = _shared_items(request, body.share)
+        try:
+            return session_turn.plan_turn(
+                session_store, subject=subject, session=session, text=body.prompt or "",
+                candidates=candidates, is_member=_is_member, global_root=_global_root(),
+                names=names, shared_items=shared,
+                speaker_name=(request.headers.get("x-user-email") or "").strip(),
+                # A BUTTON IS ADDRESSED TO THE AGENT (live app.dev: "Update notes" in a shared meeting
+                # chat became a room line carrying its whole internal instruction). A turn with an
+                # intent was composed by a press, never typed to the people in the chat.
+                addressed=(bool(body.to_agent) or bool(body.intent)
+                           or (bool(body.reply_to) and _rooms_on(subject))
+                           or _routine_run(request)),
+                is_room=_room_check(subject))
+        except session_turn.SessionDenied as exc:
+            if exc.reason == "not_a_participant":
+                raise HTTPException(status_code=404, detail="session not found") from None
+            raise HTTPException(status_code=403, detail=exc.reason) from None
+        except session_sync.SessionUnavailable as exc:
+            # a store id, or a thread other people read: refused, never run wide open (S6)
+            logger.warning("session store could not plan a shared turn (%s); refused",
+                           type(exc.__cause__).__name__ if exc.__cause__ else "error")
+            return JSONResponse(status_code=503, content=session_sync.answer(exc.kind, session))
+        except Exception as exc:  # noqa: BLE001 — the store is furniture to a PRIVATE chat only
+            logger.warning("session store could not plan this turn (%s); the chat runs as before",
+                           type(exc).__name__)
+            return None
+
+    def _stored_flow(subject: str, session: str) -> "dict | None":
+        """The flow a stored session is bound to (ADR-0046 decision 12 over ADR-0048), or None —
+        also None when the store is off or cannot answer."""
+        if session_store is None:
+            return None
+        from control_plane import session_sync  # noqa: PLC0415
+        try:
+            row = session_sync.resolve(session_store, subject, session, create=False)
+        except Exception:  # noqa: BLE001 — an unreadable store binds nothing
+            return None
+        return session_store_mod.read_flow((row or {}).get("flow"))
+
+    def _bind_flow(subject: str, session: str, flow_turn: dict) -> None:
+        """A ROUTINE'S THREAD IS A SESSION BOUND TO ITS FLOW (ADR-0048 decision 1, ADR-0046
+        decision 12). The run's own session row — the one its transcript is saved to — carries
+        the flow and is titled with the flow's name. The binding is written once and never moved:
+        a thread that already belongs to a flow keeps it."""
+        if session_store is None or (flow_turn or {}).get("step") != "agent_run":
+            return
+        from control_plane import session_sync  # noqa: PLC0415
+        try:
+            row = session_sync.resolve(session_store, subject, session)
+            if row is None or row.get("flow"):
+                return
+            session_store.update(row["id"], flow=session_store_mod.flow_ref(flow_turn["scope"], flow_turn["flow"]),
+                                 title=(row.get("title") or flow_turn["flow"]) or None)
+        except Exception as exc:  # noqa: BLE001 — the run outranks its own bookkeeping
+            logger.warning("session store could not bind this routine thread (%s)", type(exc).__name__)
+
+    def _mention_block(subject: str, mentioned: list, plan) -> str:
+        """Who this message @-mentions, by account id — only people the speaker shares a workspace
+        with (``people_directory``)."""
+        from control_plane import people_directory  # noqa: PLC0415
+
+        try:
+            people = people_directory.mentionable(wsr.root, subject, mindex.list)
+            in_chat = ([p["principal"] for p in session_store.participants(plan.row["id"])]
+                       if plan is not None and session_store is not None else [])
+        except Exception:  # noqa: BLE001 — a mention the server cannot check is not passed on
+            return ""
+        return people_directory.mention_block(people, mentioned, in_chat=in_chat)
+
+    def _room_principal_for(subject: str, plan, session: str = ""):
+        """The room principal for this turn's session (rooms on, a room with a workspace), else None.
+        A turn with no session plan (the post-meeting recap names its meeting) is resolved by the
+        session it lands in."""
+        if not _rooms_on(subject) or session_store is None:
+            return None
+        from control_plane import room_principal as _rp  # noqa: PLC0415
+        try:
+            sid = plan.row["id"] if plan is not None else ""
+            if not sid and session:
+                found = session_sync.resolve(session_store, str(subject), session, create=False)
+                sid = (found or {}).get("id") or ""
+            p = _rp.resolve(session_store, wsr.root, sid, speaker=str(subject)) if sid else None
+            # THE OWNER'S ACCOUNT HAS ROOMS TOO: the turn runs on the owner's authority and pool, so
+            # the per-account switch is read for them as well as for the speaker.
+            if p is not None and not _rooms_on(p.owner):
+                return None
+            return p
+        except Exception:  # noqa: BLE001 — a room that cannot be resolved runs as the speaker, narrowed
+            logger.warning("room principal not resolved for %s", session)
+            return None
+
+    def _call_changes_block(meeting_id) -> str:
+        """The changes the room's agent made during this meeting's call, for its recap."""
+        try:
+            call = session_store.call_by_meeting(int(meeting_id)) if session_store is not None else None
+            changes = session_store.call_changes(call["room"]) if call else []
+        except Exception:  # noqa: BLE001 — a recap without the list is still a recap
+            return ""
+        if not changes:
+            return ""
+        lines = ["Changes you made in the workspace during the call — list them in the recap; each can "
+                 "be undone from the call's change list:"]
+        for c in changes:
+            state = f" (undone by {c['undone_by']})" if c["undone_at"] is not None else ""
+            lines.append(f"- {c['workspace']}/{c['path']}{state}")
+        return "\n".join(lines)
+
+    def _room_check(subject: str = ""):
+        """``is_room(session_id)`` while the rooms feature is on, else None (nothing changes)."""
+        if not _rooms_on(subject) or session_store is None:
+            return None
+        from control_plane import rooms as _rooms  # noqa: PLC0415
+        return lambda sid: _rooms.is_room(session_store, sid)
+
+    def _rooms_on(subject: str = "") -> bool:
+        from control_plane import rooms as _rooms  # noqa: PLC0415
+        return _rooms.enabled(_global_root, str(subject or ""))
+
+    def _speaker_name(request: Request, subject: str) -> str:
+        """How the people in a room name the speaker (their roster name), "" when nobody can say."""
+        from control_plane import people_directory  # noqa: PLC0415
+        try:
+            return people_directory.name_of(wsr.root, subject, mindex.list,
+                                            request.headers.get("x-user-email") or "") or ""
+        except Exception:  # noqa: BLE001 — a name is a courtesy
+            return ""
+
+    def _notify_turn(request: Request, subject: str, body: ChatBody, plan, flow_turn) -> None:
+        """The two notifications a message emits (#1783), from here and nowhere else:
+        ``chat_mentioned`` to each @-mentioned person who can read this chat, and
+        ``routine_posted`` to the other people in a shared routine chat when its run lands. The
+        text names the speaker (or the routine) and the chat only — never the message."""
+        if notifier is None or plan is None or session_store is None:
+            return
+        from control_plane import people_directory  # noqa: PLC0415
+
+        try:
+            row = plan.row
+            title = row.get("title") or "a chat"
+            humans = set(session_store.humans(row["id"]))
+            if flow_turn is not None:
+                # a routine's scheduled run only — another agent's message is not a run
+                others = [h for h in humans if h != subject] if flow_turn.get("step") == "agent_run" else []
+                if others:
+                    notifier.emit(others, kind="routine_posted", actor=f"flow:{flow_turn.get('flow')}",
+                                  actor_name=str(flow_turn.get("flow") or "routine"),
+                                  object_kind="chat", object_id=row["id"], object_name=title)
+                return
+            mentioned = [str(m) for m in (body.mentions or []) if str(m) in humans and str(m) != subject]
+            if mentioned:
+                name = people_directory.name_of(wsr.root, subject, mindex.list,
+                                                request.headers.get("x-user-email") or "")
+                # the message itself is the anchor a click opens at — its turn id, never its text
+                anchor = f"?turn={body.turn_id}" if getattr(body, "turn_id", None) else None
+                notifier.emit(mentioned, kind="chat_mentioned", actor=subject, actor_name=name,
+                              object_kind="chat", object_id=row["id"], object_name=title, url=anchor)
+        except Exception as exc:  # noqa: BLE001 — a notification never fails the turn
+            logger.warning("turn notifications not sent (%s)", type(exc).__name__)
+
+    def _routine_run(request: Request) -> bool:
+        """A routine's run, posted by flows over the internal tier (ADR-0046 decision 12): the agent
+        answers it in a shared chat without being mentioned. Only the internal tier may say so."""
+        if (request.headers.get("x-vexa-flow-regime") or "").strip().lower() != "autonomous":
+            return False
+        import hmac as _hmac  # noqa: PLC0415
+
+        secret = settings.internal_api_secret.get_secret_value() if settings is not None else ""
+        provided = request.headers.get("x-internal-secret", "")
+        return bool(secret and provided and _hmac.compare_digest(provided, secret))
+
+    def _shared_items(request: Request, refs) -> list:
+        """The items the speaker explicitly shares for this turn (``workspace/path``), read with the
+        SPEAKER's own access. An item they cannot read is refused, never silently dropped."""
+        from workspaces.shared import workspace_paths as _wpaths  # noqa: PLC0415
+
+        out = []
+        for ref in refs or []:
+            slug, _, rel = str(ref).partition("/")
+            if not slug or not rel:
+                raise HTTPException(status_code=422, detail="share names workspace/path")
+            try:
+                base = _read_target(request, slug)
+                text = _wpaths.read_text_inside(base, rel, max_bytes=64 << 10)
+            except HTTPException:
+                raise
+            except Exception:  # noqa: BLE001
+                text = None
+            if text is None:
+                raise HTTPException(status_code=404, detail=f"cannot share {ref}: not readable")
+            out.append({"label": f"{_ws_name(slug, fallback=slug)} / {rel}", "text": text})
+        return out
+
+    def _attachment_dir(subject: str, ws: str):
+        """The directory of workspace ``ws`` for ``subject``: one of their own slots, or a shared
+        workspace they are a member of — else None (not readable any more)."""
+        from pathlib import Path as _P  # noqa: PLC0415
+        from control_plane import workspace_attach as _wa  # noqa: PLC0415
+        from control_plane import workspace_membership as _wm  # noqa: PLC0415
+        try:
+            st = _wa._load_state(_wa._store(_P(wsr.root), subject))
+            if ws in (st.get("slots") or {}):
+                return _wa.workspace_slot_dir(wsr.root, subject, ws)
+            if (_P(wsr.root) / ws).is_dir() and _wm.is_member(_P(wsr.root), ws, subject):
+                return _P(wsr.root) / ws
+        except Exception:  # noqa: BLE001
+            return None
+        return None
+
+    def _vouch_attachments(body: ChatBody, subject: str):
+        """``body`` with its attachments mark rewritten to the files that are really the speaker's,
+        and those files. A body with no mark comes back untouched."""
+        text = body.prompt or ""
+        if attachments_mod.MARK_OPEN not in text:
+            return body, []
+        try:
+            desk = home_of(wsr, subject, for_read=True)   # where `ws_upload` put them (#1783)
+        except ValueError:
+            return body.model_copy(update={"prompt": attachments_mod.strip(text)}), []
+        # WHERE EACH FILE WAS STORED for this chat (Vexa-ai/vexa#1783): its target workspace, the
+        # `_system` tier (incognito), or the desk.
+        _session = str(body.session or "").strip()
+        try:
+            _homes = sess.attachments_of(str(subject), _session) if _session else {}
+        except Exception:  # noqa: BLE001
+            _homes = {}
+
+        def _dir(rel: str):
+            ws = _homes.get(rel) or ""
+            if ws == system_mounts.SYSTEM_SLUG:
+                return system_mounts.ensure_system_workspace(wsr.root, str(subject))
+            if ws:
+                return _attachment_dir(str(subject), ws)
+            return desk
+
+        def _stat(rel: str):
+            from workspaces.shared import workspace_paths as _wpaths  # noqa: PLC0415
+            base = _dir(rel)
+            if base is None:
+                return None
+            try:
+                st = _wpaths.stat_inside(base, rel)
+            except Exception:  # noqa: BLE001 — a refused path is not an attachment
+                return None
+            return int(st.st_size) if st is not None and _stat_mod.S_ISREG(st.st_mode) else None
+
+        prompt, kept = attachments_mod.normalise(text, owner=str(subject), stat=_stat,
+                                                 where=lambda rel: _homes.get(rel) or "")
+        return body.model_copy(update={"prompt": prompt}), kept
+
+    @router.get("/api/sessions/{session}/attachment")
+    def session_attachment(session: Annotated[str, Path(pattern=CHAT_SESSION_PATTERN)], path: str,
+                           request: Request,
+                           if_none_match: Optional[str] = Header(default=None, alias="If-None-Match")):
+        """ONE FILE ATTACHED TO A MESSAGE IN THIS CONVERSATION, AS ITSELF — the thumbnail in the
+        bubble and the picture its lightbox opens.
+
+        WHO MAY READ IT is the SESSION's question (ADR-0048 decision 4), never a workspace's: a
+        participant reads what was posted here, from the poster's desk, because posting it into the
+        conversation was the poster's explicit share. Nothing else on that desk opens through this
+        door — only a path recorded against this session. The caller's own uploads always open
+        (a private chat, or a deployment without the session store). Anyone else gets the answer a
+        file that does not exist gets."""
+        from workspaces.shared import workspace_paths as _wpaths  # noqa: PLC0415
+
+        subject = subject_of(request)
+        if not attachments_mod.STORED.fullmatch(path or ""):
+            raise HTTPException(status_code=404, detail="not found")
+        poster = None
+        if session_store is not None:
+            from control_plane import session_sync  # noqa: PLC0415
+            try:
+                row = session_sync.resolve(session_store, subject, session, create=False)
+            except Exception:  # noqa: BLE001 — an unreadable store opens nothing but the caller's own
+                row = None
+            if row is not None:
+                poster = session_store.attachment_poster(row["id"], path, prefer=str(subject))
+        if poster is None:
+            poster = str(subject)   # the caller's own desk, which they may always read
+        try:
+            # the poster's HOME, where uploads land with no chat recorded (#1783)
+            desk = home_of(wsr, poster, for_read=True)
+            # STORED WHERE THE CHAT WORKED (Vexa-ai/vexa#1783): the poster's record of this chat
+            # names the workspace (or `_system` for incognito); unrecorded = the desk, as before.
+            try:
+                home = (sess.attachments_of(poster, session) or {}).get(path, "")
+            except Exception:  # noqa: BLE001
+                home = ""
+            if home == system_mounts.SYSTEM_SLUG:
+                desk = system_mounts.ensure_system_workspace(wsr.root, poster)
+            elif home:
+                desk = _attachment_dir(poster, home) or desk
+            data = _wpaths.read_bytes_inside(desk, path)
+            if data is None and desk != wsr.workspace_dir(poster):
+                desk = wsr.workspace_dir(poster)
+                data = _wpaths.read_bytes_inside(desk, path)
+            st = _wpaths.stat_inside(desk, path) if data is not None else None
+        except (ValueError, _wpaths.PathRefused):
+            data, st = None, None
+        if data is None or st is None:
+            raise HTTPException(status_code=404, detail="not found")
+        etag = f'"{st.st_size:x}-{st.st_mtime_ns:x}"'
+        name = attachments_mod.original_name(path)
+        headers = {
+            "ETag": etag,
+            "Cache-Control": "private, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "Content-Disposition": f'inline; filename="{name}"',
+        }
+        if if_none_match and etag in [t.strip() for t in if_none_match.split(",")]:
+            return Response(status_code=304, headers=headers)
+        from shared.asset_source import media_type_for  # noqa: PLC0415
+        return Response(content=data, media_type=media_type_for(path), headers=headers)
 
     @router.post("/api/chat")
     def chat(body: ChatBody, request: Request):
@@ -383,6 +1082,74 @@ def build(**d) -> APIRouter:
         clears it on this response."""
         return _chat(body, request, stream=False)
 
+    @router.post("/api/chat/meeting")
+    def chat_bind_meeting(request: Request, body: ChatMeetingBindBody = Body(...)):
+        """BIND A MEETING STARTED FROM THIS CHAT TO IT (founder, 2026-10-13): a voice note or a call
+        the person started here. The same binding a bot sent from the chat makes; a meeting the
+        person cannot read is 404."""
+        subject = subject_of(request)
+        if _meeting_access(subject, body.meeting) is None:
+            raise HTTPException(status_code=404, detail="meeting not found")
+        sess.upsert(subject, body.session, meeting=body.meeting)
+        sess.bind_meeting_chat(subject, body.meeting, body.session)
+        return {"ok": True, "session": body.session, "meeting": body.meeting}
+
+    @router.post("/api/chat/pending/now")
+    def chat_pending_now(request: Request, body: ChatSendNowBody = Body(...)):
+        """RUN THIS QUEUED MESSAGE NOW: the running turn stops (said in the chat) and this one runs
+        next, once. 404 when it is no longer queued."""
+        subject = subject_of(request)
+        session, item = body.session, body.id
+        try:
+            gen = sess.mount_gen(subject, session)
+        except Exception:  # noqa: BLE001
+            gen = 0
+        unit_id = units.chat_unit_id(subject, session, gen)
+        entry = inbox_send_now(redis_url, unit_id, _unit_key(unit_id), item)
+        if not entry:
+            raise HTTPException(status_code=404, detail="that message is no longer queued")
+        return {"ok": True, "id": item}
+
+    @router.post("/api/chat/stop")
+    def chat_stop(request: Request, body: ChatStopBody = Body(...)):
+        """STOP THE RUNNING REPLY (live app.dev 2026-10-15). The browser's Stop used to close only its
+        own request: the turn — and a 14-minute `grep` under it — ran on, held the conversation, and
+        every next message was refused (409). This reaches the worker: its stop watcher kills the
+        running turn's CLI and every process the turn started, and the turn ends with a
+        `turn-truncated` the chat shows. The unit holding the conversation's head is stopped too, so
+        the 409's "Stop it" works from any device. A viewer of a shared chat may not stop it (403)."""
+        subject = subject_of(request)
+        session = body.session
+        try:
+            gen = sess.mount_gen(subject, session)
+        except Exception:  # noqa: BLE001
+            gen = 0
+        session_id = ""
+        if session_store is not None:
+            try:
+                row = session_sync.resolve(session_store, subject, session, create=False)
+            except Exception:  # noqa: BLE001 — a store that cannot answer still stops this person's own unit
+                row = None
+            if row is not None:
+                if not session_store.can_write(row["id"], subject):
+                    raise HTTPException(status_code=403, detail="only a participant who can post may stop this reply")
+                session_id = row["id"]
+        stopped = stop_turns(redis_url, [units.chat_unit_id(subject, session, gen)], session_id=session_id)
+        return {"ok": True, "stopped": stopped}
+
+    @router.post("/api/chat/pending/withdraw")
+    def chat_pending_withdraw(request: Request, body: ChatSendNowBody = Body(...)):
+        """TAKE BACK A QUEUED MESSAGE before the agent reaches it (Remove, and Edit — which puts the
+        words back in the box). Only an entry the worker has not taken is touched; `withdrawn` is
+        how many were (0 when it already ran or was never queued)."""
+        subject = subject_of(request)
+        try:
+            gen = sess.mount_gen(subject, body.session)
+        except Exception:  # noqa: BLE001
+            gen = 0
+        unit_id = units.chat_unit_id(subject, body.session, gen)
+        return {"withdrawn": inbox_withdraw(redis_url, unit_id, _unit_key(unit_id), body.id)}
+
     @router.get("/api/chat/pending")
     def chat_pending(request: Request,
                      session: Annotated[str | None, Query(pattern=CHAT_SESSION_PATTERN)] = None,
@@ -403,7 +1170,7 @@ def build(**d) -> APIRouter:
         pending; `taken` is what tells that client there is an answer running that it has not seen,
         and that it should attach from its cursor and watch it."""
         subject = subject_of(request)
-        session = session or units.DEFAULT_CHAT_SESSION
+        session = sess.chat_for(subject_of(request), session or units.DEFAULT_CHAT_SESSION)
         try:
             gen = sess.mount_gen(subject, session)
         except Exception:  # noqa: BLE001 — an unreadable generation is the id it always had
@@ -413,22 +1180,205 @@ def build(**d) -> APIRouter:
         # WHY THE QUEUE IS NOT MOVING, when something is (P18): the typed fault each blocked row
         # already carries, once more at the top for a client that draws one banner, not N rows.
         blocked = next((p["blocked"] for p in pending if p.get("blocked")), None)
-        return {"pending": pending,
+        # BUSY ACROSS BOTH HALVES OF THE THREAD (ADR-0046 decision 12): the person's unit and, for
+        # a routine's thread, the routine's sibling. Flows asks this before it posts a run.
+        auto = units.routine_unit_id(subject, session, gen)
+        busy = bool(pending) or unit_busy(redis_url, unit_id, _unit_key(unit_id)) or unit_busy(
+            redis_url, auto, _unit_key(auto))
+        return {"pending": pending, "busy": busy,
                 "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or "",
+                # where a routine run's turn will start on the thread's routine unit: flows reads it
+                # before it posts, and asks /api/chat/turn-outcome for the first turn after it
+                "routine_cursor": _stream_tail_id(redis_url, units.output_topic(auto)) or "",
                 **({"taken": turns_taken_after(redis_url, unit_id, after)} if after else {}),
+                # a turn running right now, from its start: a reload attaches here and keeps the reply
+                **({"running_from": rf} if (rf := running_turn_from(redis_url, unit_id)) else {}),
                 **({"fault": blocked} if blocked else {})}
+
+    @router.get("/api/chat/turn-outcome")
+    def chat_turn_outcome(request: Request,
+                          session: Annotated[str, Query(pattern=CHAT_SESSION_PATTERN)],
+                          turn_id: Annotated[str, Query(min_length=1, max_length=128)],
+                          after: Annotated[str | None, Query(pattern=r"^\d{1,20}-\d{1,20}$")] = None):
+        """HOW A ROUTINE'S TURN ENDED (flows phase 0). Flows asks this after it posted a routine's
+        run, so the run ends `failed` when its acts were refused instead of `done` on the post.
+        Reads the thread's routine unit (`-auto` sibling) first, then the person's own unit:
+        `{state: unknown|running|done, ok, refused, acted, failed}` (`api_shared.turn_outcome`)."""
+        subject = subject_of(request)
+        session = sess.chat_for(subject, session)
+        try:
+            gen = sess.mount_gen(subject, session)
+        except Exception:  # noqa: BLE001 — an unreadable generation is the id it always had
+            gen = 0
+        out = turn_outcome(redis_url, units.routine_unit_id(subject, session, gen), turn_id,
+                           after=after or "")
+        if out.get("state") == "unknown" and not after:
+            out = turn_outcome(redis_url, units.chat_unit_id(subject, session, gen), turn_id)
+        from control_plane.identity_token import SHARED_REFUSAL  # noqa: PLC0415
+        if ((out.get("refused") or {}).get("reason") == SHARED_REFUSAL["reason"]
+                and session_store is not None):
+            # WHO THE CHAT IS SHARED WITH, so a routine that pauses for it can say so in its chat.
+            from control_plane import people_directory, session_access  # noqa: PLC0415
+            out["shared_with"] = session_access.shared_with(
+                session_store, subject, session,
+                lambda who: people_directory.name_of(wsr.root, who, mindex.list if mindex else (lambda _s: [])))
+        return out
 
     def _chat(body: ChatBody, request: Request, *, stream: bool):
         _refuse_delegated(request)
+        if not (request.headers.get("x-vexa-flow-step") or "").strip():
+            # THE PERSON'S OWN WORDS confirm a held write (`private_taint`): only here, never from
+            # a delegated caller, so an agent cannot confirm its own write.
+            from control_plane import private_taint  # noqa: PLC0415
+            private_taint.confirm_from_text(str(subject_of(request)), body.prompt or "")
+        if (request.headers.get("x-vexa-flow-step") or "").strip() == "stage":
+            # A CONCERN CHAT MOVES STAGE (opened → active → waiting → resolved → archived): stored on
+            # the chat (the rail and the home read it) and said in one line. Internal tier only.
+            _session = body.session or units.DEFAULT_CHAT_SESSION
+            _move = _flow_turn(request, _session)
+            if _move is not None:
+                from control_plane.api_shared import CONCERN_STAGES  # noqa: PLC0415
+                if _move.get("stage") not in CONCERN_STAGES:
+                    raise HTTPException(status_code=422, detail={"refused": "unknown_stage"})
+                _who = subject_of(request)
+                sess.upsert(_who, _session, concern={"stage": _move["stage"]})
+                from control_plane import routine_flows as _rf  # noqa: PLC0415
+                _rf.post_to_routine_chat(session_store, _who, "concern", (body.prompt or "").strip(),
+                                         session=_session, bind=False)
+                return {"ok": True, "session": _session, "stage": _move["stage"]}
+        if (request.headers.get("x-vexa-flow-step") or "").strip() == "notice":
+            # A LINE FROM FLOWS, NOT A TURN: why a routine did not run (its daily cap, a refusal),
+            # written into the routine's chat for the person and the next run to read. Same
+            # internal-tier check as a routine's turn (`_flow_turn`); nothing is dispatched.
+            _session = body.session or units.DEFAULT_CHAT_SESSION
+            _notice = _flow_turn(request, _session)
+            if _notice is not None:
+                from control_plane import routine_flows as _rf  # noqa: PLC0415
+                _who = subject_of(request)
+                noted = _rf.post_to_routine_chat(session_store, _who, _notice["flow"],
+                                                 (body.prompt or "").strip(), session=_session)
+                # …and the chat is marked as the routine's at once — the rail's label and the strip
+                # appear now, not at the routine's next run.
+                try:
+                    if _notice.get("kind") == "sink":
+                        raise LookupError        # an event card is not a routine's mark
+                    sess.upsert(_who, _session, routine={"flow": _notice["flow"],
+                                                         "scope": _notice["scope"],
+                                                         "version": _notice.get("version") or 1})
+                except LookupError:
+                    pass
+                except Exception:  # noqa: BLE001 — the line was the point; the marker follows next run
+                    logger.warning("could not mark chat %s as a routine's", _session)
+                return {"ok": True, "noted": noted, "session": _session}
         if stream_reader is None:
             raise HTTPException(status_code=501, detail="stream relay not wired")
         subject = subject_of(request)  # server-derived (P20); body.subject is ignored
-        session = body.session or units.DEFAULT_CHAT_SESSION
+        # A MEETING STARTED FROM A CHAT IS THAT CHAT (founder, 2026-10-13): `meet-<row>` lands there.
+        session = sess.chat_for(subject, body.session or units.DEFAULT_CHAT_SESSION)
+        # A ROUTINE'S RUN (ADR-0046 decision 12): the internal tier posting a scheduled turn into
+        # the routine's own thread. It runs `autonomous`, on the thread's sibling unit.
+        flow_turn = _flow_turn(request, session)
+        _stored_routine = None
+        if flow_turn is None:
+            _stored_routine = next((r.get("routine") for r in sess.list(subject)
+                                    if r.get("session") == session), None)
+            if not _stored_routine:
+                _stored_routine = _stored_flow(subject, session)
+        if (flow_turn is not None or _stored_routine) and not (
+                stream and request.headers.get("last-event-id")):
+            if _thread_busy(subject, session, for_routine=flow_turn is not None):
+                raise HTTPException(status_code=409, detail={
+                    "refused": "thread_busy",
+                    "note": ("this routine's thread is running a turn — send it again when that "
+                             "turn ends" if flow_turn is None else
+                             "the person's turn in this thread is still running")})
+        # THE COMPANY'S TOKEN BUDGET (#1783, `budgets`), read live from `_global/POLICIES.md`: a
+        # routine's run pauses with a visible reason; a person's turn is warned at 80%, stopped at 100%.
+        if not (stream and request.headers.get("last-event-id")):
+            from control_plane import budgets as _budgets  # noqa: PLC0415
+            from shared import usage as _usage  # noqa: PLC0415
+            try:
+                _desk = home_of(wsr, subject, for_read=True)   # where narrow_mine writes the limits (#1783)
+            except Exception:  # noqa: BLE001
+                _desk = None
+            _pol = _budgets.effective(_global_root() if _global_root else None, _desk)
+            _row = None
+            if flow_turn is not None and session_store is not None:
+                try:
+                    _row = session_store.get(session) or session_store.by_name(subject, session)
+                except Exception:  # noqa: BLE001
+                    _row = None
+            _stop = _budgets.gate(
+                subject, background=flow_turn is not None, policy=_pol,
+                used=_usage.rolling(_budgets.usage_client(redis_url), subject), notifier=notifier,
+                note=(lambda t: session_store.add_note(_row["id"], "vexa", t)) if _row else None)
+            if _stop:
+                raise HTTPException(status_code=423 if flow_turn is not None else 429, detail=_stop)
         # THE PERSON'S OWN WORDS, CAPTURED BEFORE ANYTHING COMPOSES OVER THEM (Vexa-ai/vexa#1610).
         # Every branch below may replace `body.prompt` — with a scaffold's opening, a preset's ask, a
         # mark — and a queued row has to say what the person submitted, not what the server made of
         # it. One read, at the top, where the sentence still exists.
-        _submitted = body.prompt
+        # WHAT WAS ATTACHED, AS THE SERVER VOUCHES FOR IT. The terminal names files in one mark
+        # (`shared/attachments.py`); only files the speaker's own upload stored on their own desk
+        # survive, and whose desk, the size and the type are written here, never taken from the body.
+        body, _attached = _vouch_attachments(body, subject)
+        _submitted = attachments_mod.strip(body.prompt) if _attached else body.prompt
+        # ADR-0048: the session gate, when the agent speaks, and the leak rule — one decision.
+        _plan = _session_plan(request, body, subject, session)
+        if isinstance(_plan, JSONResponse):
+            return _plan        # a typed session refusal (S6), before anything ran
+        if _plan is not None and _plan.attachments:
+            body = body.model_copy(update={"prompt": attachments_mod.merge(body.prompt or "", _plan.attachments)})
+        if _attached and _plan is not None:
+            try:
+                session_store.add_attachments(_plan.row["id"], subject, _attached)
+            except Exception as exc:  # noqa: BLE001 — the turn outranks its bookkeeping
+                logger.warning("session store did not record this turn's attachments (%s)",
+                               type(exc).__name__)
+        _notify_turn(request, subject, body, _plan, flow_turn)
+        if flow_turn is not None:
+            _bind_flow(subject, session, flow_turn)
+            if flow_turn.get("concern"):
+                try:
+                    _known = (sess.meta(subject, session) or {}).get("concern")
+                    sess.upsert(subject, session, concern={
+                        "key": flow_turn["concern"], "flow": flow_turn["flow"],
+                        "stage": "active" if _known else "opened"})
+                except Exception:  # noqa: BLE001 — the run outranks its own bookkeeping
+                    logger.warning("concern stage not recorded for %s", session)
+            # A ROUTINE REFUSED THE SAME WAY THREE RUNS IN A ROW IS PAUSED (`routine_flow_refusals`).
+            from control_plane import routine_flow_refusals as _rfr  # noqa: PLC0415
+            try:
+                _gen = sess.mount_gen(subject, session)
+            except Exception:  # noqa: BLE001 — an unreadable generation is the id it always had
+                _gen = 0
+            _paused = _rfr.before_run(subject, flow_turn, units.routine_unit_id(subject, session, _gen),
+                                      read=_rfr.redis_reader(redis_url), workspaces_dir=wsr.root,
+                                      store=session_store, session=session)
+            if _paused:
+                raise HTTPException(status_code=423, detail=_paused)
+        if _plan is not None and not _plan.speak:
+            # Not addressed to the agent: a message every participant reads, heard on the next turn.
+            # the person's words only: the terminal's context line before the sentinel is for the agent
+            _said = str(body.prompt or "")
+            _cut = _said.rfind(CONTEXT_SENTINEL)
+            note = session_store.add_note(_plan.row["id"], subject,
+                                          _said[_cut + len(CONTEXT_SENTINEL):].strip() if _cut >= 0 else _said)
+            # A ROOM'S MESSAGE IS FOR ITS SENSOR, NOT A TURN (rooms, 2026-10-15): on the room's
+            # stream, which the signals service's chat source reads; it wakes the agent when it
+            # matters. agent-api is the stream's one writer.
+            if _rooms_on(subject):
+                from control_plane import rooms as _rooms  # noqa: PLC0415
+                _rooms.publish(_rooms.redis_for(redis_url), _plan.row, note,
+                               author_name=_speaker_name(request, subject))
+            if not stream:
+                return {"ok": True, "spoken": False, "id": body.turn_id or "", "session": session,
+                        "note": note}
+            return StreamingResponse(
+                _sse([{"type": "session-note", **note}, {"type": "turn-complete"}]),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                         "X-Chat-Session": session})
         # THE MEETING ROOM (post-meeting run). Resolved and AUTHORISED here, before anything else
         # happens on this request — a refusal must cost the caller a 403, never a partially-run turn.
         # ``room`` never comes from the body: the body names a MEETING (and may PROPOSE a narrowing);
@@ -546,8 +1496,10 @@ def build(**d) -> APIRouter:
         # #1588 ruled what it renders as. A SCAFFOLDED opening is machinery-marked by
         # `scaffolds.turn_prompt` and the client hides that bubble whole, so it is left alone: two
         # marks on one turn would be two answers to one question.
+        _msg = (flow_turn or {}).get("message")
         _turn_mark = _job_mark or ("" if scaffold_view is not None else (
-            chat_intents.act_prefix(body.intent)
+            (message_mark(_msg["uid"], _msg["thread"], _msg["label"]) if _msg else "")
+            or chat_intents.act_prefix(body.intent)
             or flow_mark(request.headers.get("x-vexa-flow") or "",
                          request.headers.get("x-vexa-flow-step") or "")))
         if _turn_mark:
@@ -558,12 +1510,17 @@ def build(**d) -> APIRouter:
         # A SUBMISSION IS NEVER A RECONNECT (Vexa-ai/vexa#1610): it exists to put something new on
         # the server, so it takes the dispatch path whatever a stale header says.
         resume = (request.headers.get("last-event-id") or None) if stream else None
+        _fresh_turn = False   # set when THIS request dispatched the turn its view will watch
         # Ground the chat in the terminal's ACTIVE meeting (if any): agent-api folds the live transcript
         # from the meeting's redis Stream (tc:meeting:{row} — the SAME stream the live view renders) into
         # the prompt, fresh on every turn. The transcript stays inside the trusted control plane and
         # rides the prompt to the worker — no file, no cross-domain HTTP, no user key in the worker (P15).
         # The meeting the client names is checked with the live stream's own access decision before
         # anything is folded; a meeting this caller cannot read grounds nothing.
+        # A CALL IN THIS SESSION (ADR-0048 decision 6): the shared chat follows the call's live
+        # transcript. When the client names no meeting, the session's live call is the focus; the
+        # access check below still decides, so a participant who has not joined grounds nothing.
+        body = _with_call_focus(body, subject, session)
         ctx, tools, prompt = _context_grounding(
             body, session, redis_url,
             schedule_rows=lambda: _schedule_source(subject),
@@ -600,6 +1557,9 @@ def build(**d) -> APIRouter:
             _gen = 0
         if _gen:
             ctx = {**ctx, "mount_gen": _gen}
+        if _plan is not None and _plan.gen:
+            # a shared session's narrowed mounts live on their own warm unit, one per intersection
+            ctx = {**ctx, "mount_gen": f"{_gen or 0}{_plan.gen}"}
         # Read ONCE, fail-soft, and used twice: it names the target in the prompt below and it is
         # what `build_unit_env` points the cwd and the delegation token at. An index that cannot
         # answer costs the turn its target line, never the turn.
@@ -609,6 +1569,30 @@ def build(**d) -> APIRouter:
             logger.warning("target workspace unreadable for subject=%s session=%s — this turn "
                            "writes where it always did", subject, session)
             _target = ""
+        # A NEW CHAT WRITES TO THE PERSON'S DEFAULT (Vexa-ai/vexa#1783, founder 2026-10-14:
+        # "default set to biz but it's writing in personal"). Applied HERE, on the chat's first turn,
+        # by the one writer of the chat's target — the client used to apply it to a draft and could
+        # lose the race. Kept as the chat's own once the record exists (stored below, after the
+        # record is made, so the first prompt still names the chat).
+        _default_applied = False
+        _default_profile = None
+        try:
+            if not sess.has_record(subject, session):
+                _default_profile = first_turn_profile(sess, settings, wsr.root, subject,
+                                                      _person_rows(subject))
+                if _default_profile is not None:
+                    _target = _default_profile[1][0]
+        except Exception:  # noqa: BLE001 — a profile that cannot be read is no profile
+            logger.info("default profile not applied for subject=%s session=%s", subject, session)
+        if not _target and _default_profile is None:
+            try:
+                if not sess.has_record(subject, session):
+                    _wid, _ = default_target_for(sess, subject, _person_rows(subject))
+                    if _wid:
+                        _check_target(request, subject, _wid)
+                        _target, _default_applied = _wid, True
+            except Exception:  # noqa: BLE001 — a default that cannot be used is Personal
+                logger.info("default target not applied for subject=%s session=%s", subject, session)
         # THE CHAT'S MODEL — its own pick from the operator's catalog, "" for the person's
         # default. Read once, fail-soft like the target: an index that cannot answer costs the
         # turn its pick, and the dispatch runs it on the person's default.
@@ -619,12 +1603,38 @@ def build(**d) -> APIRouter:
             logger.warning("chat model unreadable for subject=%s session=%s — this turn runs on "
                            "the person's default", subject, session)
             _model, _effort = "", ""
+        if not _model and not _effort:
+            _model, _effort = _hold_default(subject, session)
         # THE TARGET WORKSPACE, IN FRONT OF THE ASK (Vexa-ai/vexa#1611). Every turn, including the
         # ones nobody typed — a flow's kick and a routine's wake write somewhere too, and the
         # founder's failure was a turn that did not know where. It goes in FRONT of the grounding
         # and therefore in front of the sentinel below, so the person's half stays exactly their
         # words (F47): this is machinery, and machinery never renders as somebody's speech.
-        prompt = _target_line(subject, session, _target) + prompt
+        try:
+            _reads = sess.reads(subject, session)
+            _no_target = sess.no_target(subject, session)
+        except Exception:  # noqa: BLE001 — an unreadable record is a chat on the defaults
+            _reads, _no_target = None, False
+        if _default_profile is not None:
+            _target, _reads, _no_target = _default_profile[1]
+        if _no_target:
+            _target = ""
+            prompt = ("[this chat has NO target workspace: the person chose \"no workspaces\". Answer "
+                      "in the chat; do not write to any workspace unless they name one for that write.]\n"
+                      + prompt)
+        else:
+            prompt = _target_line(subject, session, _target) + prompt
+        # THE PERSON'S PINNED PAGES (#1783), named and addressed, never read: in their own chats only
+        # (a shared chat's other readers are not shown what one person keeps pinned).
+        if _plan is None:
+            try:
+                prompt = pinned_pages_preamble(sess.pinned_pages(subject)) + prompt
+            except Exception:  # noqa: BLE001 — a turn outranks its own bookkeeping
+                logger.warning("pinned pages unreadable subject=%s", subject)
+        if _plan is not None and _plan.preamble:
+            prompt = _plan.preamble + prompt
+        if body.mentions:
+            prompt = _mention_block(subject, body.mentions, _plan) + prompt
         # The naming ask and the clock name TOOLS, so they ride only a turn whose worker gets the
         # toolbelt that serves them (`chat_name` and `current_time` on the assembled MCP — the
         # `worker_toolbelt` capability). A turn without one is never told to call something it
@@ -651,17 +1661,65 @@ def build(**d) -> APIRouter:
         # (<subject>@vexa.local) stays for the you/member classification (workspace_reader.git_state_at).
         _email = (request.headers.get("x-user-email") or "").strip()
         inv = units.make_dispatch(
-            subject=subject, trigger="message",
+            subject=subject, trigger="scheduled" if flow_turn is not None else "message",
             start=units.entrypoint(inline=prompt), context=ctx, tools=tools,
-            principal={"name": _email} if _email else None,
+            principal={"name": _email} if (_email and flow_turn is None) else None,
         )
+        # A ROOM'S TURN RUNS AS ITS WORKSPACE'S AGENT (C1, rooms on): one worker for the room, its
+        # grant the room's workspace (+ connected open ones), its level the room's — never the
+        # speaker's own reach, target or model. Named here, before any unit id is read.
+        # …the post-meeting recap of a call in a room included (R1 1.2): it is the room's agent that
+        # writes it, under the room's grant — never the starter's desk, never the attendees' desks.
+        _room_p = _room_principal_for(subject, _plan, session)
+        if _room_p is not None and flow_turn is not None and body.room_meeting_id:
+            # THE RECAP LISTS WHAT VEXA CHANGED DURING THE CALL (R1 1.5), each still undoable.
+            _changes = _call_changes_block(body.room_meeting_id)
+            if _changes:
+                _ep = inv["start"].get("entrypoint") or {}
+                inv = {**inv, "start": {**inv["start"], "entrypoint": {
+                    **_ep, "inline": str(_ep.get("inline") or "") + "\n\n" + _changes}}}
+        if _room_p is not None:
+            inv = {**inv, "context": {**(inv.get("context") or {}),
+                                      "room_unit": _room_p.unit + (units.ROUTINE_UNIT_SUFFIX
+                                                                   if flow_turn is not None else "")}}
+        _running = _want = None
         if resume:
             # Re-attach only — the warm unit id is deterministic from (subject, session); resume reads
             # its durable output Stream from the cursor. No new turn, no session re-title.
             unit_id = units.dispatch_id(inv)
         else:
+            # A PICK APPLIES ON THE NEXT TURN (0.13.3). A worker keeps the model it was started on
+            # for its whole warm window, so a fresh turn whose chat now runs on another model goes to
+            # a fresh unit — decided from the model the running worker was started on, not from the
+            # stale flag alone (which a submission or a held default can leave down). A submission
+            # queues behind the running turn on the unit that runs it, and says the switch is next.
+            if flow_turn is None:
+                _running = dispatcher.running_model(units.dispatch_id(inv), alive=True)
+                _want = dispatcher.turn_model(subject, _model, last_pick=_last_pick(subject)) if _running else None
+            if stream and _running and _want and _running != _want:
+                try:
+                    _new = sess.step_generation(subject, session)
+                    _mg = f"{_new}{_plan.gen}" if (_plan is not None and _plan.gen) else _new
+                    inv = {**inv, "context": {**(inv.get("context") or {}), "mount_gen": _mg}}
+                    logger.info("chat %s: worker runs %s, the chat now runs %s — a fresh unit", session,
+                                _running, _want)
+                except Exception:  # noqa: BLE001 — the warm unit answers rather than no unit
+                    logger.warning("model switch not applied for subject=%s session=%s", subject, session)
             unit_id = units.dispatch_id(inv)
             retry_from = _chat_turn_head(redis_url, unit_id, body.turn_id) if body.turn_id else None
+            _waiting = queued_waiter((unit_id, body.turn_id)) if (stream and body.turn_id) else None
+            if retry_from is None and _waiting is not None:
+                # A RETRY OF A MESSAGE STILL QUEUED behind its chat's turn attaches to that wait —
+                # it is never queued a second time.
+                def _follow_again(uid, st, _tid=body.turn_id):
+                    if st is not None:
+                        _record_chat_turn_head(redis_url, uid, _tid, st)
+                    return _binding_watch(_read_view(stream_reader, uid, st, fresh=True), subject, session)
+                return StreamingResponse(
+                    _sse(queued_events(_waiting, "", _follow_again)),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                             "X-Unit-Id": unit_id, "X-Chat-Session": session})
             if retry_from is not None:
                 # No-cursor RETRY of the current turn (the stream dropped before the client saw any
                 # ``id:``): re-attach from the turn's recorded start — the whole turn replays, including
@@ -700,6 +1758,7 @@ def build(**d) -> APIRouter:
                 # The thread's Stream holds PRIOR turns too, so the snapshot (not stream start) is the
                 # earliest safe attach point — the client appends and stops on any ``turn-complete``.
                 start = _stream_tail_id(redis_url, units.output_topic(unit_id)) or None
+                _fresh_turn = True
                 # Upsert the durable index on first use of a thread: a new thread is titled by its first
                 # prompt; an existing one just bumps last_active (title preserved).
                 _stored = next((r for r in sess.list(subject) if r["session"] == session), None)
@@ -727,6 +1786,10 @@ def build(**d) -> APIRouter:
                 elif preset_fm is not None and not _job_mark:
                     _scaffold_label = str(preset_fm.get("label") or "")
                 _title = chat_label_mod.chat_label(body.prompt, scaffold_label=_scaffold_label)
+                if (flow_turn or {}).get("step") == "agent_run":
+                    # A routine's thread is named by its flow (ADR-0046 decision 12) — never by
+                    # the instruction, which is machinery and not the person's words.
+                    _title = flow_turn["flow"] or _title
                 # WHAT THE RAIL NEEDS, RECORDED WHERE IT IS KNOWN (Vexa-ai/vexa#1591). The chat list
                 # is derived from this index now, so a row has to carry what a row shows: the mount
                 # set, the record the chat was composed from, and whether a PERSON has written here.
@@ -741,14 +1804,28 @@ def build(**d) -> APIRouter:
                 # when they were minted. So a stored title the rule REFUSES is replaced by this
                 # turn's — and a title anybody's rule accepted, including a person's own rename, is
                 # still written once and never again.
-                _retitle = is_new or chat_label_mod.is_machinery_label(
-                    str((_stored or {}).get("title") or ""))
+                # …AND A RECORD NO TURN EVER TITLED (#1783): a draft's scope written before its first
+                # message (its target, its mounts) made the record, titled with its own id.
+                _stored_title = str((_stored or {}).get("title") or "").strip()
+                _retitle = (is_new or _stored_title in ("", session)
+                            or chat_label_mod.is_machinery_label(_stored_title))
                 sess.upsert(subject, session, title=_title if (_retitle and _title) else None,
                             workspaces=((scaffold_view or {}).get("workspaces") or None),
                             scaffold=({"kind": scaffold_view.get("kind"), "id": scaffold_view.get("id")}
                                       if scaffold_view is not None else None),
-                            touched=(scaffold_view is None
-                                     and not chat_intents.is_silent(body.intent)))
+                            touched=(flow_turn is None and scaffold_view is None
+                                     and not chat_intents.is_silent(body.intent)),
+                            routine=(flow_turn if (flow_turn or {}).get("step") == "agent_run"
+                                     else None))
+                if _default_profile is not None:
+                    apply_profile(sess, subject, session, _default_profile[0], _default_profile[1])
+                    sess.settle_mounts(subject, session)   # this turn's worker already runs on it
+                elif _default_applied:
+                    sess.set_target(subject, session, _target, restart=False)
+                if flow_turn is not None and flow_turn.get("message"):
+                    # the conversation's hops so far, so a reply from this thread carries them on
+                    msg = flow_turn["message"]
+                    sess.set_agent_chain(subject, session, msg["origin"])
                 # ``room`` applies AT SPAWN: the mount table is fixed when the container is created,
                 # so a WARM unit (this thread already has a live worker) keeps the stack it booted
                 # with and a room named on a later turn of the same thread does not retro-mount. The
@@ -759,29 +1836,48 @@ def build(**d) -> APIRouter:
                 # is withdrawn before the new one goes on — the next worker runs it once, not twice.
                 if body.turn_id:
                     inbox_withdraw(redis_url, unit_id, _unit_key(unit_id), body.turn_id)
-                try:
-                    unit_id = dispatcher.dispatch(  # spawn-or-touch the thread's warm chat unit
-                        inv, room=room,
+                _dispatch_kwargs = dict(
+                        room=room,
                         scaffold_workspaces=(scaffold_view or {}).get("workspaces") or None,
                         # WHERE THIS CHAT WRITES (Vexa-ai/vexa#1611) — a dispatcher argument like
                         # `room` and `scaffold_workspaces`, never a field of the sealed unit.v1
                         # envelope, and never anything a request body asserted. It decides the
                         # turn's cwd and rides the delegation token as the tools' default `slug`.
                         target=_target,
+                        # WHAT THIS CHAT READS (Vexa-ai/vexa#1783) — its own reads, or None for the
+                        # person's default active set. Read once, fail-soft to the default.
+                        reads=_reads, no_target=_no_target,
                         # WHICH MODEL — the chat's pick, a catalog id or "" — resolved through the
                         # provider port inside the dispatch, the one place a route is decided.
                         model=_model,
                         # …AT WHICH EFFORT — the chat's pick, checked again against the model
                         # in the dispatch (a catalog may have changed since it was stored).
                         effort=_effort,
+                        shared_scope=(_plan.scope if _plan is not None else None),
+                        # AN EVENT AGENT'S TURN reads and proposes, nothing more (ADR-0046 d12).
+                        least_privilege=(flow_turn or {}).get("kind") == "event_agent",
+                        **({"routine_grants": (f"{flow_turn['scope']}/{flow_turn['flow']}",
+                                               flow_turn["grants"])}
+                           if (flow_turn or {}).get("grants") else {}),
                         # WHAT A QUEUED ROW SHOWS (Vexa-ai/vexa#1610), stamped on the inbox entry
                         # itself so the record a person reads and the record the worker takes are
                         # the same object. Written for every turn, not only a submission: a chat
                         # open on a second device has to be able to see the turn this one is about
                         # to run, and the row disappears the moment the worker takes it.
-                        inbox={"id": body.turn_id or "", "display": _submitted,
+                        inbox={"id": body.turn_id or "", "display": _queued_display(_submitted),
                                "kind": _intent_kind, "target": _intent_target,
                                "at": round(time.time(), 3)})
+                if _room_p is not None:
+                    _dispatch_kwargs.update(room_principal=_room_p, shared_scope=None, reads=None, room=None,
+                                            no_target=not _room_p.writable,
+                                            target=_room_p.workspace if _room_p.writable else None,
+                                            model=_room_p.level or _model)
+                try:
+                    unit_id = dispatcher.dispatch(inv, **_dispatch_kwargs)  # spawn-or-touch the warm chat unit
+                    if _room_p is not None:
+                        from control_plane import rooms as _rooms_sp  # noqa: PLC0415
+                        _rooms_sp.note_speaker(_rooms_sp.redis_for(redis_url), _room_p.session,
+                                               _room_p.on_behalf_of or str(subject))
                 except model_providers.ModelChoiceFault as fault:
                     # THE CHAT'S MODEL CANNOT RUN (P18): gone from the catalog, admins-only, an own
                     # endpoint not set or not allowed, a provider secret missing. Refused before
@@ -790,6 +1886,20 @@ def build(**d) -> APIRouter:
                     return JSONResponse(status_code=fault.http_status,
                                         content={"detail": fault.sentence(),
                                                  "fault": fault.as_dict()})
+                except llm_budget_mod.BudgetExhausted as refusal:
+                    # THE SPEND CAP (llm_budget.py): the person or the deployment has spent its AI
+                    # budget for the period, or the operator switched model calls off. Refused
+                    # before anything was spawned. A person watching the stream reads the sentence
+                    # ON the stream, as the typed fault the chat already renders; a routine's turn
+                    # and a submission get it as the JSON answer (402/403: not retried).
+                    if stream and flow_turn is None:
+                        return StreamingResponse(
+                            _sse([{"type": "error", "message": refusal.sentence(),
+                                   "fault": refusal.fault()}, {"type": "turn-complete"}]),
+                            media_type="text/event-stream",
+                            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                                     "X-Chat-Session": session})
+                    return JSONResponse(status_code=refusal.http_status, content=refusal.as_dict())
                 except dispatch_mod.WarmDeliveryFailed as exc:
                     # THE TURN IS REFUSED, NOT DROPPED. For a warm unit the pre-delivery is the only
                     # delivery, so a failure here means the person's words reached nobody. Answering
@@ -803,6 +1913,44 @@ def build(**d) -> APIRouter:
                         status_code=503,
                         detail="That message did not reach your agent — nothing was lost on your "
                                "side, please send it again.") from exc
+                except session_sync.SessionUnavailable as exc:
+                    # ADR-0048 (S6): a shared turn whose conversation the store cannot hand over is
+                    # refused, typed — never run on the old layout where no other participant reads.
+                    return JSONResponse(status_code=503,
+                                        content=session_sync.answer(exc.kind, session))
+                except session_sync.SessionBusy as exc:
+                    # THIS CHAT'S OWN TURN HOLDS THE HEAD (its `-auto` sibling running the meeting
+                    # recap or a routine, or another generation of its unit): the message waits
+                    # behind it and runs next, said on the stream — never a 409 for the person to
+                    # retry by hand (live app.dev 2026-10-15).
+                    if stream and flow_turn is None and exc.queueable_for(unit_id):
+                        _unit, _inv, _kw, _tid = unit_id, inv, _dispatch_kwargs, body.turn_id
+
+                        def _follow(uid, st, _tid=_tid):
+                            if _tid and st is not None:
+                                _record_chat_turn_head(redis_url, uid, _tid, st)
+                            return _binding_watch(_read_view(stream_reader, uid, st, fresh=True),
+                                                  subject, session)
+
+                        waiter = queue_behind(
+                            session_sync._redis_for(redis_url), exc, _unit,
+                            lambda: dispatcher.dispatch(_inv, **_kw),
+                            lambda: _stream_tail_id(redis_url, units.output_topic(_unit)) or None,
+                            session=session, key=(_unit, _tid) if _tid else None)
+                        logger.info("chat %s: queued behind its own %s turn", session,
+                                    exc.holder_kind or "reply")
+                        return StreamingResponse(
+                            _sse(queued_events(waiter, exc.holder_kind, _follow)),
+                            media_type="text/event-stream",
+                            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                                     "X-Unit-Id": unit_id, "X-Chat-Session": session})
+                    # ADR-0048 (S5): another participant's turn holds this session's head. Refused
+                    # before anything ran, typed, so the client says "send it again" — a reply is
+                    # never produced only to be refused at save.
+                    return JSONResponse(status_code=409,
+                                        content=session_sync.answer(exc.kind, session))
+                except session_sync.SessionDenied as exc:
+                    raise HTTPException(status_code=403, detail=exc.reason) from None
                 except RuntimeFault as fault:
                     # THE RUNTIME SAID NO, OR WAS NOT THERE (P18). This used to climb out of here as
                     # a bare `HTTPError` and reach the person as "Internal Server Error". It is a
@@ -827,9 +1975,14 @@ def build(**d) -> APIRouter:
             # what is still queued — including this one until a worker takes it. The client draws its
             # rows from this list rather than from what it remembers, which is what makes a reload,
             # another device and a swapped container agree.
-            return {"ok": True, "id": body.turn_id or "", "session": session, "unit": unit_id,
-                    "pending": inbox_pending(redis_url, unit_id, _unit_key(unit_id)),
-                    "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or ""}
+            out = {"ok": True, "id": body.turn_id or "", "session": session, "unit": unit_id,
+                   "pending": inbox_pending(redis_url, unit_id, _unit_key(unit_id)),
+                   "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or ""}
+            if _running:
+                out["running"] = _running
+                if _want and _want != _running:
+                    out["model_pending"] = _want     # the composer: "switching to … on your next message"
+            return out
         # AN ATTACH TO A UNIT NOTHING WILL RUN ON (P18). When the last spawn for this chat failed
         # and the worker has taken nothing since, a view that attaches would wait out its whole
         # timeout for events no worker is going to write. The relay answers with the recorded fault
@@ -846,7 +1999,7 @@ def build(**d) -> APIRouter:
                          "X-Unit-Id": unit_id, "X-Chat-Session": session},
             )
         return StreamingResponse(
-            _sse(_binding_watch(stream_reader.read(unit_id, resume=resume), subject, session)),
+            _sse(_binding_watch(_read_view(stream_reader, unit_id, resume, fresh=_fresh_turn), subject, session)),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                      "X-Unit-Id": unit_id, "X-Chat-Session": session},
@@ -871,6 +2024,18 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=422, detail="not a chat session id")
         wid = str(body.get("workspace") or "").strip()
         require_in_ceiling(request, wid)
+        # THE PERSON'S CLICK, NEVER THE AGENT (UI decision 6b): a worker acting for a chat may
+        # propose a target (`propose_write_target`) and is refused here.
+        if identity_token.is_delegated(request.headers):
+            raise HTTPException(status_code=403, detail=(
+                "Only the person switches where this chat writes — call propose_write_target instead."))
+        _check_target(request, subject, wid)
+        changed = sess.set_target(subject, session, wid)
+        return {"ok": True, "session": session, "target": wid or None, "changed": changed}
+
+    def _check_target(request: Request, subject: str, wid: str) -> None:
+        """May ``subject`` aim writes at ``wid``? Raises the refusal the chip shows; ``""`` (their
+        own desk) always may. ONE check for a chat's target and for the default new chats take."""
         if wid and not _is_slug(wid):
             raise HTTPException(status_code=400, detail="not a workspace slug")
         if wid == system_mounts.GLOBAL_SLUG:
@@ -904,8 +2069,76 @@ def build(**d) -> APIRouter:
                 raise
             except Exception:  # noqa: BLE001
                 raise HTTPException(status_code=403, detail="not a workspace you can write")
-        changed = sess.set_target(subject, session, wid)
-        return {"ok": True, "session": session, "target": wid or None, "changed": changed}
+
+    @router.get("/api/chat/default-target")
+    def chat_default_target(request: Request):
+        """The workspace this person's NEW chats write to (`target`), or null for Personal.
+
+        RE-CHECKED ON EVERY READ, by the check a chat's target gets: a stored default the person can
+        no longer write — removed from it, the workspace gone, the role lowered to reader — answers
+        null, and the workspace is not named, because they may no longer be able to see it.
+        Existing chats never read this; each keeps its own target."""
+        subject = subject_of(request)
+        wid = ""
+        try:
+            wid = sess.default_target(subject)
+        except Exception:  # noqa: BLE001 — an unreadable default is Personal
+            logger.warning("default target unreadable for subject=%s", subject)
+        if not wid:
+            return {"target": None}
+        try:
+            _check_target(request, subject, wid)
+        except Exception:  # noqa: BLE001 — not writable any more: Personal, silently
+            return {"target": None}
+        return {"target": wid}
+
+    @router.put("/api/chat/default-target")
+    def set_chat_default_target(request: Request, body: DefaultTargetBody):
+        """Make `workspace` the one this person's new chats write to — the "Writes to …" menu's
+        "Make default". Only a workspace they can write is accepted (403 otherwise, nothing stored);
+        `""` puts new chats back on Personal. No existing chat moves."""
+        _refuse_delegated(request)
+        subject = subject_of(request)
+        wid = str(body.workspace or "").strip()
+        require_in_ceiling(request, wid)
+        _check_target(request, subject, wid)
+        sess.set_default_target(subject, wid)
+        return {"target": wid or None}
+    def _last_pick(subject):
+        """The person's last pick in any chat — what a new chat starts on. Unreadable = none."""
+        try:
+            return sess.remembered_pick(subject)
+        except Exception:  # noqa: BLE001 — an unreadable memory is the default
+            return ("", "")
+
+    def _hold_default(subject: str, session: str) -> tuple[str, str]:
+        """A CHAT WITH NO PICK OF ITS OWN TAKES THE PERSON'S DEFAULT AT ITS TURN, AND KEEPS IT.
+
+        The default is the person's last pick in any chat, so it moves; a chat that merely followed
+        it would move too, and the founder's rule is that an existing chat keeps the model and
+        effort it was last used with. So the turn resolves the default now — the last pick if the
+        catalog still offers it to this person (and its effort if the model still takes it), else
+        the next default, silently — and stores it as this chat's own, without a restart: the
+        worker this turn starts already runs exactly that. ``("", "")`` (no catalog, or nothing
+        open) leaves the dispatch to decide and refuse as it always has."""
+        catalog = dispatcher.catalog
+        if catalog.empty:
+            return "", ""
+        try:
+            ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {},
+                                             last_pick=_last_pick(subject))
+            chosen, _level = catalog.choose_with_effort("", "", ctx,
+                                                        admin=lambda: dispatcher.is_admin(subject),
+                                                        person=lambda: dispatcher.identities(subject))
+            held = (chosen["id"], catalog.remembered_effort(chosen, ctx))
+            sess.set_model(subject, session, held[0], held[1], restart=False)
+            return held
+        except model_providers.ModelChoiceFault:
+            return "", ""
+        except Exception:  # noqa: BLE001 — holding is a convenience; the turn runs on the default
+            logger.warning("default model not held for subject=%s session=%s", subject, session)
+            return "", ""
+
     @router.post("/api/chat/model")
     def chat_model(body: ChatModelBody, request: Request):
         """Pick which of the deployment's models this chat runs on — the model picker.
@@ -925,16 +2158,26 @@ def build(**d) -> APIRouter:
             if catalog.empty:
                 raise HTTPException(status_code=409, detail="this deployment offers no model "
                                                             "catalog; its model is set by the operator")
-            ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {})
+            ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {},
+                                             last_pick=_last_pick(subject))
             try:
                 # The effort is checked against the model it will run on — the pick, else the
                 # person's default — so a stored effort is always one the next turn can send.
-                catalog.choose_with_effort(mid, effort, ctx,
-                                           admin=lambda: dispatcher.is_admin(subject))
+                chosen, _level = catalog.choose_with_effort(
+                    mid, effort, ctx, admin=lambda: dispatcher.is_admin(subject),
+                    person=lambda: dispatcher.identities(subject))
             except model_providers.ModelChoiceFault as fault:
                 return JSONResponse(status_code=fault.http_status,
                                     content={"detail": fault.sentence(), "fault": fault.as_dict()})
         changed = sess.set_model(subject, session, mid, effort)
+        if mid or effort:
+            # THE LAST PICK IS THE PERSON'S DEFAULT FOR NEW CHATS (founder 2026-10-13): the model
+            # this chat now runs on and the effort picked with it. "Follow my default" (both
+            # empty) picks nothing, so it leaves the memory as it was.
+            try:
+                sess.remember_pick(subject, chosen["id"], effort)
+            except Exception:  # noqa: BLE001 — the chat's pick is stored; the memory is a convenience
+                logger.warning("last model pick not stored for subject=%s", subject)
         return {"ok": True, "session": session, "model": mid or None, "effort": effort or None,
                 "changed": changed}
     @router.post("/api/chat/reset")
@@ -995,6 +2238,9 @@ def build(**d) -> APIRouter:
             if kind == 'c':
                 if any(r['session'] == ref for r in sess.list(subject)):
                     return True
+                # a shared session someone added this person to (ADR-0048) is on their rail too
+                if session_store is not None and session_store.can_read(ref, subject):
+                    return True
                 ref = ref[len(_MEET_SESSION_PREFIX):] if ref.startswith(_MEET_SESSION_PREFIX) else ''
             if not ref.isdigit():
                 return False
@@ -1003,10 +2249,196 @@ def build(**d) -> APIRouter:
             logger.warning("rail mark visibility check failed subject=%s row=%s", subject, row)
             return False
 
+    def _legacy_marks(subject: str):
+        """The person's old pin/hide marks and rail order, which their folders take in once."""
+        return lambda: (sess.rail_marks(subject), sess.rail_order(subject))
+
+    def _folders_store():
+        if session_store is None:
+            raise HTTPException(503, detail={'refused': 'folders_unavailable',
+                                             'message': 'Chat folders need the session store, which this deployment has off.'})
+        return session_store
+
+    def _folder_refusal(exc: "chat_folders.FolderError"):
+        code = 404 if exc.reason == 'no_such_folder' else 422
+        return HTTPException(code, detail={'refused': exc.reason, 'message': str(exc)})
+
+    def _mark(subject: str, row: str, *, pinned=None, hidden=None) -> dict:
+        """Pin/hide one row: over the folders when the session store is on, else the old marks."""
+        if session_store is None:
+            return sess.mark_row(subject, row, pinned=pinned, hidden=hidden)
+        return chat_folders.set_mark(session_store, subject, row, pinned=pinned, hidden=hidden,
+                                     legacy=_legacy_marks(subject))
+
+    @router.get("/api/user/pinned-pages")
+    def read_pinned_pages(request: Request):
+        """The person's pinned pages, in order: tabs in every one of their chats (#1783)."""
+        return {'pages': sess.pinned_pages(subject_of(request))}
+
+    @router.put("/api/user/pinned-pages")
+    def save_pinned_pages(request: Request, body: PinnedPagesBody):
+        """Replace the person's pinned pages. A path is workspace-relative: no `..`, no leading `/`."""
+        seen, pages = set(), []
+        for p in body.pages:
+            parts = p.path.split('/')
+            if p.path.startswith('/') or any(x in ('', '.', '..') for x in parts):
+                raise HTTPException(422, 'A pinned page is a workspace-relative path')
+            key = (p.slug or '', p.path)
+            if key in seen:
+                continue
+            seen.add(key)
+            pages.append({'slug': p.slug or None, 'path': p.path, 'label': p.label})
+        return {'pages': sess.pinned_pages(subject_of(request), pages)}
+
+    def _company_appearance() -> dict:
+        try:
+            from control_plane import budgets as _budgets  # noqa: PLC0415
+            pol = _budgets.read(_global_root() if _global_root else None)
+        except Exception:  # noqa: BLE001 — no company layer: the product's own defaults
+            pol = {}
+        out = {}
+        for field, key in (("accent", "appearance_accent"), ("font_ui", "appearance_font_ui"), ("font_reading", "appearance_font_reading")):
+            v = appearance_value(field, pol.get(key))
+            if v:
+                out[field] = v
+        return out
+
+    def _appearance_answer(subject: str) -> dict:
+        user = {k: v for k, v in sess.appearance(subject).items() if appearance_value(k, v)}
+        company = _company_appearance()
+        return {"user": user, "company": company, "effective": {**company, **user}}
+
+    @router.get("/api/user/appearance")
+    def read_appearance(request: Request):
+        """The person's appearance (Settings → Appearance): their own choice over the company default
+        in `_global/POLICIES.md`. `effective` is what to paint; a field missing there is the
+        product's default."""
+        return _appearance_answer(subject_of(request))
+
+    @router.put("/api/user/appearance")
+    def save_appearance(request: Request, body: AppearanceBody):
+        """Change the person's appearance: the fields sent change, null returns one to the company
+        default. A value outside the vocabulary is refused, never stored."""
+        subject = subject_of(request)
+        cur = sess.appearance(subject)
+        for field in body.model_fields_set:
+            raw = getattr(body, field)
+            if raw is None:
+                cur.pop(field, None)
+                continue
+            v = appearance_value(field, raw)
+            if v is None:
+                raise HTTPException(422, detail=f"{field}: not one of the choices")
+            cur[field] = v
+        sess.appearance(subject, cur)
+        return _appearance_answer(subject)
+
     @router.get("/api/chat/marks")
     def read_chat_marks(request: Request):
         """The caller's pinned and hidden rail rows: `{pinned: [row], hidden: [row]}`."""
-        return sess.rail_marks(subject_of(request))
+        subject = subject_of(request)
+        if session_store is None:
+            return sess.rail_marks(subject)
+        return chat_folders.marks(session_store, subject, legacy=_legacy_marks(subject))
+
+    @router.get("/api/chat/folders")
+    def chat_folders_list(request: Request):
+        """List the person's chat folders and where each of their chats is filed.
+
+        `folders` are the rail's sections in drawing order: `pinned`, `shared` (chats other people
+        added the person to), the person's own folders (`routines` is the automatic one for routine
+        chats), `ungrouped`, `hidden`. `chats` is every
+        chat on the person's rail with its `row` (what `chat_move` takes), its `session` (what `chat_read`
+        reads), its `label` and the `folder`
+        it shows in. Folders are the person's own: on a shared chat each participant files it in
+        their own folders, and nobody sees another's. Use it before `chat_move` to find rows by
+        name, e.g. every chat whose label mentions a client."""
+        subject = subject_of(request)
+        store = _folders_store()
+        got = chat_folders.listing(store, subject, legacy=_legacy_marks(subject))
+        have = {f['id'] for f in got['folders']}
+        chats = []
+        try:
+            rows = _with_stored(subject, _labelled(subject, sess.list(subject)))
+        except Exception:  # noqa: BLE001 — the folders still answer without the chat names
+            logger.warning("chat folders: listing the rail failed subject=%s", subject)
+            rows = []
+        for r in rows:
+            sid = str(r.get('session') or '')
+            if not sid:
+                continue
+            key = f'c:{sid}'
+            folder = got['filings'].get(key) or (
+                chat_folders.SHARED if r.get('owner') and r.get('owner') != subject and chat_folders.SHARED in have
+                else chat_folders.ROUTINES if r.get('routine') and chat_folders.ROUTINES in have
+                else chat_folders.UNGROUPED)
+            # `session` is the id `chat_read` takes (it also takes the `row`)
+            chats.append({'row': key, 'session': sid, 'label': r.get('label') or r.get('title') or '',
+                          'folder': folder, 'last_active': r.get('last_active')})
+        return {**got, 'chats': chats}
+
+    @router.post("/api/chat/folders")
+    def chat_folder_create(request: Request, body: ChatFolderCreateBody):
+        """Make a chat folder on the person's own rail, named as they said it. Asking for a name they
+        already have returns that folder (`created: false`), so it is safe to call before filing.
+        Then file chats into it with `chat_move`, and confirm in one line."""
+        subject = subject_of(request)
+        try:
+            return chat_folders.create(_folders_store(), subject, body.name, legacy=_legacy_marks(subject))
+        except chat_folders.FolderError as exc:
+            raise _folder_refusal(exc)
+
+    @router.post("/api/chat/folders/update")
+    def chat_folder_update(request: Request, body: ChatFolderUpdateBody):
+        """Rename a folder, fold it shut or open, or move it (`position` 0 is first). Pinned,
+        Ungrouped and Hidden only fold."""
+        try:
+            return chat_folders.update(_folders_store(), subject_of(request), body.folder, name=body.name,
+                                       collapsed=body.collapsed, position=body.position)
+        except chat_folders.FolderError as exc:
+            raise _folder_refusal(exc)
+
+    @router.post("/api/chat/folders/delete")
+    def chat_folder_delete(request: Request, body: ChatFolderDeleteBody):
+        """Dissolve one of the person's folders. Its chats move to Ungrouped; no chat is deleted.
+        Returns the rows that moved."""
+        try:
+            return {'ok': True, 'moved': chat_folders.delete(_folders_store(), subject_of(request), body.folder)}
+        except chat_folders.FolderError as exc:
+            raise _folder_refusal(exc)
+
+    @router.post("/api/chat/move")
+    def chat_move(request: Request, body: ChatMoveBody):
+        """Move chats on the person's own rail: into a folder, to `pinned`, back to `ungrouped`,
+        or to `hidden` (that is how a chat is hidden; moving it out un-hides it). A chat lives in one
+        place, so it leaves wherever it was. `rows` come from `chat_folders_list`. Only rows the
+        person's rail can show may be filed (`404` otherwise); moving to `ungrouped` always works."""
+        subject = subject_of(request)
+        store = _folders_store()
+        rows = [r if ':' in r else f'c:{r}' for r in body.rows]
+        if body.to != chat_folders.UNGROUPED:
+            hidden = [r for r in rows if not _row_visible(subject, r, request)]
+            # A CHAT THIS PERSON STARTED THAT HAS HAD NO TURN YET is on their rail (the browser keeps
+            # it) but not in the server's index, so it was refused — "Not a chat on this person's
+            # rail" on a chat that plainly was (#1783). Filing it indexes it for this person: their
+            # own index, their own preference, nothing read or granted. A meeting's chat (`meet-<id>`)
+            # still needs the meeting to be theirs, and a `m:` row is never indexed this way.
+            for r in list(hidden):
+                kind, _, ref = r.partition(':')
+                if kind == 'c' and not ref.startswith(_MEET_SESSION_PREFIX):
+                    try:
+                        sess.upsert(subject, ref)
+                        hidden.remove(r)
+                    except Exception:  # noqa: BLE001 — stays refused, said below
+                        logger.warning("chat move: indexing an unindexed chat failed subject=%s", subject)
+            if hidden:
+                raise HTTPException(404, detail={'refused': 'row_not_found', 'rows': hidden,
+                                                 'message': 'That chat could not be found. Reload the page and try again.'})
+        try:
+            return chat_folders.file_rows(store, subject, rows, body.to, before=body.before,
+                                     legacy=_legacy_marks(subject))
+        except chat_folders.FolderError as exc:
+            raise _folder_refusal(exc)
 
     @router.post("/api/chat/marks")
     def mark_chat_row(request: Request, body: ChatMarkBody):
@@ -1021,7 +2453,9 @@ def build(**d) -> APIRouter:
         if (body.pinned or body.hidden) and not _row_visible(subject, row, request):
             raise HTTPException(404, 'Row not found')
         try:
-            return sess.mark_row(subject, row, pinned=body.pinned, hidden=body.hidden)
+            return _mark(subject, row, pinned=body.pinned, hidden=body.hidden)
+        except chat_folders.FolderError as exc:
+            raise _folder_refusal(exc)
         except OverflowError:
             raise HTTPException(422, 'Too many marked rows')
 
@@ -1054,7 +2488,124 @@ def build(**d) -> APIRouter:
         never a name of ours: "Chat" is the client's placeholder and a server that shipped it would
         outrank the reader's own rename in the merge."""
         subject = subject_of(request)
-        return {"sessions": _labelled(subject, sess.list(subject))}
+        _purge_incognito(subject)
+        rows = [r for r in _labelled(subject, sess.list(subject)) if not _is_empty_chat(subject, r)]
+        # A CHAT NOBODY NAMED IS NAMED FROM WHAT WAS SAID (founder 2026-10-15): a few per listing, in
+        # the background, by the cheap model within the spend cap; never over the person's own name.
+        try:
+            chat_autotitle.schedule(subject, rows, turns_of=lambda s: _turns_of(subject, s),
+                                    name=lambda s, t, n=None, over_token=False: sess.name(subject, s, t, human=bool(over_token), turns=n),
+                                    complete=_title_model(subject))
+        except Exception:  # noqa: BLE001 — a name is furniture; the rail outranks it
+            logger.warning("auto-title scheduling failed for subject=%s", subject)
+        return {"sessions": _with_stored(subject, rows)}
+
+    def _is_empty_chat(subject: str, row: dict) -> bool:
+        """A CHAT NOBODY WROTE IN IS NOT A ROW (#1783, founder 2026-10-15: "empty new chats after every
+        new attempt to do something in the desktop"). Writing a draft's scope — its target, mounts or
+        reads — creates its index record before anybody said anything; such a record is not listed.
+
+        Empty = nothing it was made for (no meeting, routine, ask or concern), no name recoverable from
+        a first message (its stored title is empty or its own id — a turn titles it), no file attached in it, and no turn in its history. Only rows
+        that pass the cheap tests have their history read, so a listing reads no history for a chat
+        that has a name. Fail-open: a history that cannot be read keeps the row."""
+        sid = str(row.get("session") or "")
+        if not sid or sid.startswith(_MEET_SESSION_PREFIX):
+            return False
+        # a record no turn ever titled carries its own id as its title (a turn titles it, #1783)
+        if str(row.get("title") or "").strip() not in ("", sid) or (row.get("named_title") or "").strip():
+            return False
+        if row.get("meeting") or row.get("routine") or row.get("scaffold") or row.get("concern"):
+            return False
+        try:
+            if sess.attachments_of(subject, sid):
+                return False
+            return not _turns_of(subject, sid)
+        except Exception:  # noqa: BLE001 — unknown is not empty
+            return False
+
+    def _turns_of(subject: str, sid: str) -> list:
+        """A chat's turns: the session store's conversation, else the workspace layout's."""
+        if session_store is not None:
+            row = session_sync.resolve(session_store, subject, sid, create=False)
+            if row is not None:
+                got = session_sync.history(session_store, row)
+                if got is not None:
+                    return got
+        return wsr.history(subject, sid)
+
+    def _title_model(subject: str):
+        """The cheap model call for a chat's title — None when the person's budget says stop or no
+        model is configured. Every call is counted (`usage` kind `title`)."""
+        from control_plane import budgets, home_model  # noqa: PLC0415
+        from shared import usage as usage_mod  # noqa: PLC0415
+        catalog = getattr(dispatcher, "catalog", None)
+        if catalog is None or getattr(catalog, "empty", True):
+            return None
+
+        def complete(system: str, user: str):
+            gdir = _global_root()
+            pol = budgets.read(gdir)
+            ucli = budgets.usage_client(redis_url)
+            if budgets.verdict(pol, usage_mod.rolling(ucli, subject), background=True).get("stop"):
+                return None
+            out = home_model.complete_json(catalog, system, user, named=pol.get("model_home", "cheapest"),
+                                           allowed=budgets.allowed_list(pol))
+            if out and out.get("_tokens"):
+                llm_budget_mod.record_local(subject, "title", out.get("_usage") or {"prompt_tokens": int(out["_tokens"])},
+                                            fallback_client=ucli)
+            return out
+        return complete
+
+    def _incognito_days() -> int:
+        """`incognito_retention_days` in `_global/POLICIES.md` (Vexa-ai/vexa#1783); 7 when unset."""
+        try:
+            from workspaces.shared import workspace_paths as _wpaths  # noqa: PLC0415
+            text = _wpaths.read_text_inside(system_mounts.global_root(settings, wsr.root), "POLICIES.md",
+                                            max_bytes=1_000_000) or ""
+            m = re.search(r"^incognito_retention_days:\s*(\d+)\s*$", text, re.M)
+            return max(0, int(m.group(1))) if m else INCOGNITO_RETENTION_DAYS
+        except Exception:  # noqa: BLE001 — no policy file: the default
+            return INCOGNITO_RETENTION_DAYS
+
+    def _purge_incognito(subject: str, now: "float | None" = None) -> list:
+        """INCOGNITO CHATS ARE DELETED ON SCHEDULE: one idle longer than the company's retention is
+        removed the next time the person's rail is read — conversation, index row and marks, as a
+        person's own delete would. Fail-soft: a purge that cannot run costs nothing else."""
+        cutoff = (now if now is not None else time.time()) - _incognito_days() * 86400
+        gone = []
+        try:
+            rows = sess.list(subject)
+        except Exception:  # noqa: BLE001
+            return gone
+        for row in rows:
+            s_id = row.get("session") or ""
+            try:
+                if not sess.is_incognito(subject, s_id) or float(row.get("last_active") or 0) > cutoff:
+                    continue
+                wsr.drop_history(subject, s_id, extra_roots=[])
+                # ITS ATTACHMENTS GO WITH IT: an incognito chat's files live in `_system` only.
+                for _path, _ws in (sess.attachments_of(subject, s_id) or {}).items():
+                    if _ws == system_mounts.SYSTEM_SLUG:
+                        from workspaces.shared import workspace_paths as _wp  # noqa: PLC0415
+                        try:
+                            _wp.unlink_inside(system_mounts.ensure_system_workspace(wsr.root, subject), _path)
+                        except Exception:  # noqa: BLE001
+                            pass
+                if session_store is not None:
+                    # THE SESSION STORE'S COPY GOES TOO (ADR-0048): incognito is "not retained", and
+                    # once chats live in the store that is where the conversation is.
+                    _row = session_sync.resolve(session_store, subject, s_id, create=False)
+                    if _row is not None:
+                        session_store.delete(_row["id"])
+                sess.drop(subject, s_id)
+                sess.mark_row(subject, f"c:{s_id}", pinned=False, hidden=False)
+                gone.append(s_id)
+            except Exception:  # noqa: BLE001
+                logger.warning("incognito purge skipped one chat for subject=%s", subject)
+        if gone:
+            logger.info("incognito purge subject=%s removed=%d", subject, len(gone))
+        return gone
     @router.delete("/api/sessions/{session}")
     def delete_session(session: Annotated[str, Path(pattern=CHAT_SESSION_PATTERN)], request: Request):
         """DELETE ONE OF YOUR CHATS, for good (`DELETE /api/sessions/{session_id}`, api.v1).
@@ -1094,6 +2645,11 @@ def build(**d) -> APIRouter:
             raise HTTPException(500, 'Could not delete the conversation. Nothing was removed from your list.')
         sess.drop(subject, session)
         sess.mark_row(subject, f'c:{session}', pinned=False, hidden=False)
+        if session_store is not None:
+            try:
+                chat_folders.forget(session_store, subject, f'c:{session}')
+            except Exception:  # noqa: BLE001 — the chat is gone; a stale filing names nothing
+                logger.warning("chat delete: dropping the folder filing failed subject=%s", subject)
         order = sess.rail_order(subject)
         if f'c:{session}' in order or session in order:
             sess.rail_order(subject, [k for k in order if k not in (f'c:{session}', session)])
@@ -1102,9 +2658,60 @@ def build(**d) -> APIRouter:
         hidden_meeting = None
         if meeting.isdigit():
             hidden_meeting = f'm:{meeting}'
-            sess.mark_row(subject, hidden_meeting, hidden=True)
+            _mark(subject, hidden_meeting, hidden=True)
         return {'ok': True, 'session': session, 'files_removed': files, 'hidden_meeting': hidden_meeting}
 
+
+    def _with_stored(subject: str, rows: "list[dict]") -> "list[dict]":
+        """ADR-0048: the rail reads sessions from the store too. A thread of the caller's own gains
+        `session_id` and `participants`; a session somebody ADDED them to joins the rail under its
+        store id, marked `shared`, with the caller's `role`. Store off or unreadable: unchanged."""
+        if session_store is None:
+            return rows
+        try:
+            stored = session_store.list_for(subject)
+        except Exception as exc:  # noqa: BLE001 — the rail outranks its own enrichment
+            logger.warning("session store unreadable for the rail (%s)", type(exc).__name__)
+            return rows
+        by_name = {r["session"]: r for r in rows}
+        out = list(rows)
+        for st in stored:
+            count = len(session_store.participants(st["id"]))
+            bound = session_store_mod.read_flow(st.get("flow"))
+            if st["owner"] == subject and st["name"] in by_name:
+                by_name[st["name"]].update(session_id=st["id"], participants=count, role="owner",
+                                           shared=count > 1)
+                if bound and not by_name[st["name"]].get("routine"):
+                    # the store remembers a routine thread the index row has lost the mark of
+                    by_name[st["name"]]["routine"] = {**bound, "step": "agent_run"}
+                continue
+            if st["owner"] == subject and not st["name"].startswith("s-"):
+                continue     # an own thread the index no longer lists (dropped): not resurrected
+            if st["id"] in by_name:
+                # a shared session this person has posted in is in their own index too: one row
+                by_name[st["id"]].update(session_id=st["id"], participants=count, shared=True,
+                                         role=st.get("role"), owner=st["owner"])
+                continue
+            out.append({"session": st["id"], "session_id": st["id"], "title": st["title"] or "",
+                        "label": st["title"] or "", "created": st["created"],
+                        "last_active": st["last_active"], "workspaces": [], "scaffold": None,
+                        "touched": True, "target": None, "meeting": None, "owner": st["owner"],
+                        "role": st.get("role"), "participants": count, "shared": True})
+        # WHOSE IT IS (#1783): a chat somebody else owns carries their name, so the rail can show
+        # their initials on its "shared" chip. Named the way the @-mention picker names people.
+        names: dict = {}
+        for r in out:
+            owner = r.get("owner")
+            if owner and owner != subject:
+                if owner not in names:
+                    try:
+                        from control_plane import people_directory  # noqa: PLC0415
+                        names[owner] = people_directory.name_of(wsr.root, owner, mindex.list)
+                    except Exception:  # noqa: BLE001 — a nameless owner is still an owner
+                        names[owner] = ""
+                r["owner_name"] = names[owner]
+        out.sort(key=lambda r: float(r.get("last_active") or 0), reverse=True)
+        return out
     @router.get("/api/sessions/{session}/history")
     def session_history(session: Annotated[str, Path(pattern=CHAT_SESSION_PATTERN)],
                         request: Request):
@@ -1112,6 +2719,35 @@ def build(**d) -> APIRouter:
         saved chat re-opens its history). A session the caller has no thread for is 404; a thread whose
         transcript is missing or empty returns ``{turns: []}``; an invalid subject/session never 500s."""
         subject = subject_of(request)
+        session = sess.chat_for(subject, session)      # a meeting started from a chat reads that chat
+        # ADR-0048: a stored conversation is read from the store; the workspace layout below is the
+        # one-release fallback for a thread the store holds no version of yet.
+        if session_store is not None:
+            try:
+                row = session_sync.resolve(session_store, subject, session, create=False)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("session store unreadable for history (%s)", type(exc).__name__)
+                row = None
+            if row is None and session.startswith(session_sync.STORE_ID_PREFIX):
+                raise HTTPException(status_code=404, detail="session not found")
+            if row is not None:
+                try:
+                    stored_turns = session_sync.history(session_store, row)
+                    messages = session_store.notes(row["id"])
+                except Exception:  # noqa: BLE001 — history is best-effort, as below
+                    logger.exception("reading the stored conversation failed session=%s", row["id"])
+                    stored_turns, messages = None, []
+                # A reply the store refused (a version on a stale head) is SAID here, typed, until
+                # the next save lands — it never just goes missing (S5).
+                try:
+                    refused = session_sync.recorded_fault(session_sync._redis_for(redis_url), row["id"])
+                except Exception:  # noqa: BLE001
+                    refused = None
+                if stored_turns is not None or row["owner"] != subject:
+                    out = {"turns": stored_turns or [], "messages": messages, "session_id": row["id"]}
+                    if refused:
+                        out["fault"] = session_sync.shown_fault(refused)
+                    return out
         # The turn's cwd FOLLOWS the active set (flat model), so a thread's continuity may sit under
         # any currently-mounted workspace dir — hand the reader those candidates. Best-effort: a
         # failing mount resolution only narrows the search to _system + home.

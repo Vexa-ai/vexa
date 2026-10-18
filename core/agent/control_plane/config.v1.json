@@ -144,6 +144,13 @@
       "targets": []
     },
     {
+      "key": "VEXA_HOME_MEDIA_DIR",
+      "class": "defaulted",
+      "default": "/tmp/vexa-home-media",
+      "description": "where the home caches the avatars and company icons it fetched (home_media); a cache, rebuilt on loss",
+      "targets": []
+    },
+    {
       "key": "VEXA_WORKSPACE_SEED_DIR",
       "class": "defaulted",
       "default": "(unset \u2014 resolve via VEXA_WORKSPACE_SEEDS_DIR + template)",
@@ -230,7 +237,7 @@
       "key": "VEXA_ROUTINE_RECONCILE_INTERVAL_SEC",
       "class": "defaulted",
       "default": "60",
-      "description": "workspace-authored routines reconcile interval (0 disables the reconciler)",
+      "description": "how often the one-time move of old routines into flows retries until it completes, then stops (0 runs one pass at startup)",
       "targets": []
     },
     {
@@ -428,8 +435,8 @@
     {
       "key": "VEXA_GIT_PROVIDERS",
       "class": "defaulted",
-      "default": "(unset \u2014 every host takes GitHub's bare-token form)",
-      "description": "comma-separated <host>=<provider> entries naming the git provider a self-hosted host runs: github (the token as the whole URL userinfo), gitlab (oauth2:<token>) or basic:<username> (<username>:<token>). Decides how a per-call token is presented on clone, pull, push and publish (shared/git_provider.py), and makes a gitlab host a place publish may create a repository. A per-call token written <user>:<token> overrides the map. Parsed at boot; a malformed entry is a boot refusal naming it",
+      "default": "(unset \u2014 GitHub only; every unlisted host takes GitHub's bare-token form)",
+      "description": "the git providers besides the built-in GitHub (shared/git_provider.py): a JSON list of {name, kind: github|gitlab, baseUrl (https), label?, caBundle? (PEM of a private CA) | caFile?, apiUrl?} \u2014 or the earlier comma-separated <host>=github|gitlab|basic:<username>. Each provider decides how a token is presented on clone, pull, push and publish (gitlab: oauth2:<token>), where its API is (create a repository, nested GitLab groups included; check a token), the CA its TLS is checked against, and which saved token it receives (one per provider in the credential broker). A per-call token written <user>:<token> is used as written. Parsed at boot; a malformed entry is a boot refusal naming it",
       "targets": [
         "compose",
         "helm"
@@ -506,19 +513,9 @@
     {
       "key": "VEXA_SECRETS_KEY",
       "class": "defaulted",
-      "default": "(empty \u2014 outside production a 0600 key is generated under the workspaces secrets root on first use, with a warning; in production an empty value is a boot refusal)",
+      "default": "(empty \u2014 then the retired store's own generated key under the workspaces secrets root, if one is there)",
       "secret": true,
-      "description": "server-side key the credential store seals with (saved GitHub PAT + per-workspace deploy-key private halves). EMPTY GENERATES ONE BESIDE THE CIPHERTEXT, under the workspaces secrets root \u2014 enough against a stray read, nothing against a stolen volume or a backup. It was settable on no deployment surface, so no deployment ever set it and every deployment quietly took the weaker property while the docs asserted the stronger one (R-E08). It is on compose and helm now, and with VEXA_ENV=production an unset value is a refusal naming the fix rather than a silent downgrade",
-      "targets": [
-        "compose",
-        "helm"
-      ]
-    },
-    {
-      "key": "VEXA_ENV",
-      "class": "defaulted",
-      "default": "development",
-      "description": "the deployment profile, spelled as the mcp and transcription services already spell it (`transcription/main.py`, `vexa_mcp/app.py`): anything but the exact word `production`, including unset, is a development posture. agent-api reads it in ONE place \u2014 the credential store, where production turns an unset VEXA_SECRETS_KEY from a generated key beside the ciphertext into a refusal (R-E08)",
+      "description": "DEPRECATED \u2014 read only to move Git credentials an older build kept on agent-api's own volume (saved GitHub tokens, deploy-key private halves) into the credential broker, which is now their one store (ADR-0040). Nothing is sealed with it any more. Keep it set until the boot log no longer reports Git credentials waiting to move, then remove it",
       "targets": [
         "compose",
         "helm"
@@ -556,7 +553,10 @@
         "desk.unscaffolded",
         "claim.proposed",
         "workspace.invited",
-        "routine.paused"
+        "workspace.joined_via_link",
+        "routine.paused",
+        "thread.message",
+        "workspace.references.changed"
       ]
     },
     {
@@ -579,7 +579,10 @@
         "desk.unscaffolded",
         "claim.proposed",
         "workspace.invited",
-        "routine.paused"
+        "workspace.joined_via_link",
+        "routine.paused",
+        "thread.message",
+        "workspace.references.changed"
       ]
     },
     {
@@ -639,6 +642,13 @@
       "targets": [
         "compose"
       ]
+    },
+    {
+      "key": "VEXA_LLM_IMAGES",
+      "class": "defaulted",
+      "default": "(unset \u2014 on only when VEXA_LLM_BASE_URL is api.openai.com)",
+      "description": "openai-agent harness: whether a picture attached to a chat message is sent to the endpoint as an image (`on` | `off`). A self-hosted model that cannot read images refuses the whole request, so unset means on only for OpenAI's own API. Either way the agent is given the file's exact path in the text. claude-code and codex always send pictures natively",
+      "targets": []
     },
     {
       "key": "VEXA_LLM_EXTRA_BODY",
@@ -834,10 +844,24 @@
       "targets": []
     },
     {
+      "key": "VEXA_SESSION_STORE",
+      "class": "defaulted",
+      "default": "(unset \u2014 the store is off)",
+      "description": "ADR-0048: \"1\" when agent-api runs with the session store; the worker then keeps no conversation under a mount (a turn that carries none uses a private folder under its HOME). Runtime-injected per dispatch",
+      "targets": []
+    },
+    {
       "key": "VEXA_UNIT_ID",
       "class": "defaulted",
       "default": "(unset \u2014 always stamped per dispatch: build_unit_env's own workload id)",
       "description": "the stable per-dispatch workload id (`dispatch.dispatch_id`), set on EVERY dispatch unconditionally. #1510: worker/friction.py's `fallback_session()` reads it as the friction carrier's session ref when no chat session exists at all (a scheduled/event/transcription dispatch never sets VEXA_CHAT_SESSION) \u2014 the flows carrier refuses a report with no session, so a stable id here is the honest fallback rather than a made-up string. Runtime-injected per dispatch, never a deploy surface",
+      "targets": []
+    },
+    {
+      "key": "VEXA_TRACE_ID",
+      "class": "defaulted",
+      "default": "(unset \u2014 stamped per dispatch with the dispatching request's trace; the worker mints one when absent)",
+      "description": "the logevent.v1 trace the dispatch was made under (Vexa-ai/vexa#1783). The worker runs its entrypoint turn under it and sends it as X-Trace-Id on its MCP attachment, so the turn's tool calls join the request that started it; later turns take theirs from the signed stream entry. Correlation only, never a credential. Runtime-injected per dispatch, never a deploy surface",
       "targets": []
     },
     {
@@ -852,6 +876,13 @@
       "class": "defaulted",
       "default": "(unset \u2014 present only when the chat has chosen one; unset means the person's own desk)",
       "description": "the chat's TARGET WORKSPACE (Vexa-ai/vexa#1611) \u2014 the one slug this conversation's writes go to, while every other mount in the stack is there to read. Runtime-injected per dispatch, never a deploy surface. The worker reads it to MARK that mount in its own `## Your mounted workspaces` block, so a file operation with no better instruction has a path rather than a guess; agent-api says the same fact in the person's vocabulary (`target workspace: <name> \u2014 writes go here unless asked otherwise`) and points the turn's cwd and the delegation token's default `slug` at the same place. A POSITIVE signal rather than an inference from which mount is `primary`, because `primary` also answers for a room run's group desk and for an ordinary subject's own baseline. Founder, 2026-09-06: \u201cit creates files in the wrong workspace, we need so that the thing knew the workspace of writing, if it's specified\u201d",
+      "targets": []
+    },
+    {
+      "key": "VEXA_WORKSPACE_NAMES",
+      "class": "defaulted",
+      "default": "(unset when the listing cannot be read \u2014 the worker then gives no workspace hint)",
+      "description": "the person's workspaces as [{slug,name}], hidden ones left out \u2014 runtime-injected per dispatch (UI decision 6b). The worker compares what a request names with the chat's target and, when they differ, tells the model to call propose_write_target before writing. Names only, never a credential.",
       "targets": []
     },
     {
@@ -895,7 +926,7 @@
       "key": "VEXA_GIT_STORE_BROKER_URL",
       "class": "capability",
       "capability": "git_credential_broker",
-      "description": "the credential broker's base URL for Git credentials. Opt-in: set, saved Git tokens and deploy keys move into the broker on first use and a broker outage refuses Git operations rather than falling back to disk; unset, they stay in this service's own encrypted store (VEXA_SECRETS_KEY)",
+      "description": "the credential broker's base URL for Git credentials: the only place a saved Git token or deploy key is kept (ADR-0040). Compose and the chart point it at the broker they deploy with agent-api. A broker outage refuses Git operations that need a saved credential rather than running them without one",
       "targets": [
         "compose",
         "helm"
@@ -952,6 +983,263 @@
         "helm",
         "lite"
       ]
+    },
+    {
+      "key": "VEXA_SESSIONS_DB_URL",
+      "class": "defaulted",
+      "secret": true,
+      "description": "ADR-0048: an explicit database URL for the session store (`postgresql://\u2026` or `sqlite:///path`), overriding DB_HOST and its siblings. Unset (the normal case) uses the instance's Postgres",
+      "targets": [],
+      "default": ""
+    },
+    {
+      "key": "VEXA_SESSIONS_S3_ENDPOINT",
+      "class": "defaulted",
+      "default": "",
+      "description": "ADR-0048: the install's S3 endpoint transcript versions are written to, under the `sessions/` prefix of the bucket below \u2014 the same S3 service recordings use, never their bucket. A bare `host:port` takes http (https with VEXA_SESSIONS_S3_SECURE). Unset \u21d2 the store is off",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_SESSIONS_S3_BUCKET",
+      "class": "defaulted",
+      "default": "vexa-sessions",
+      "description": "ADR-0048: the session store's own bucket for transcript versions (keys under `sessions/`); never the recordings bucket. storage-init creates it on the bundled storage",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_SESSIONS_S3_REGION",
+      "class": "defaulted",
+      "default": "us-east-1",
+      "description": "ADR-0048: the SigV4 region for the transcript bucket",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_SESSIONS_S3_ACCESS_KEY",
+      "class": "defaulted",
+      "default": "",
+      "secret": true,
+      "description": "ADR-0048: the session store's own access key, scoped by storage-init to its bucket alone (never the storage root key)",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_SESSIONS_S3_SECRET_KEY",
+      "class": "defaulted",
+      "default": "",
+      "secret": true,
+      "description": "ADR-0048: the secret of the session store's scoped key",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "LIVEKIT_URL",
+      "class": "capability",
+      "capability": "calls",
+      "targets": [
+        "compose",
+        "helm"
+      ],
+      "description": "ADR-0048 decision 6: the LiveKit server's public address (wss://\u2026) a session's call is joined at \u2014 the same value meeting-api reads. Unset \u21d2 no calls: every /api/sessions/{s}/call route answers 503"
+    },
+    {
+      "key": "LIVEKIT_API_KEY",
+      "class": "capability",
+      "capability": "calls",
+      "targets": [
+        "compose",
+        "helm"
+      ],
+      "description": "the LiveKit API key participant room tokens are signed with"
+    },
+    {
+      "key": "LIVEKIT_API_SECRET",
+      "class": "capability",
+      "capability": "calls",
+      "secret": true,
+      "targets": [
+        "compose",
+        "helm"
+      ],
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ],
+      "description": "SECRET \u2014 the LiveKit API secret (32+ characters): signs participant room tokens and the room-service reads that confirm who started a call"
+    },
+    {
+      "key": "LIVEKIT_INTERNAL_URL",
+      "class": "defaulted",
+      "default": "",
+      "targets": [
+        "compose",
+        "helm"
+      ],
+      "description": "the LiveKit server inside the deployment, for room-service reads; empty \u21d2 LIVEKIT_URL"
+    },
+    {
+      "key": "DB_HOST",
+      "class": "capability",
+      "capability": "session_store",
+      "description": "ADR-0048: the instance's Postgres host \u2014 the same name admin-api and meeting-api read. agent-api keeps its session store (agent_session* tables) there, logged in as VEXA_SESSIONS_DB_USER",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "DB_PORT",
+      "class": "defaulted",
+      "default": "5432",
+      "description": "ADR-0048: the instance's Postgres port",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "DB_NAME",
+      "class": "defaulted",
+      "default": "vexa",
+      "description": "ADR-0048: the instance's database",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_SESSIONS_DB_USER",
+      "class": "defaulted",
+      "default": "vexa_agent_sessions",
+      "description": "ADR-0048: the session store's own Postgres role \u2014 created by the migrations path (`python -m control_plane.session_schema init`) with grants on the agent_session* tables only; a superuser login is refused. Never the instance's admin user",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_SESSIONS_DB_PASSWORD",
+      "class": "capability",
+      "capability": "session_store",
+      "secret": true,
+      "description": "ADR-0048: the session store role's password (minted per install; the migrations path sets it on the role)",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_SESSIONS_S3_SECURE",
+      "class": "defaulted",
+      "default": "false",
+      "description": "ADR-0048: https for a bare `host:port` VEXA_SESSIONS_S3_ENDPOINT (the MINIO_SECURE of the same store)",
+      "targets": [
+        "compose",
+        "lite"
+      ]
+    },
+    {
+      "key": "DB_USER",
+      "class": "defaulted",
+      "default": "postgres",
+      "description": "ADR-0048: the instance's admin database user, read ONLY by the session store's migrations path (`python -m control_plane.session_schema init`: the compose agent-sessions-init service, the Helm agent-sessions-schema Job, the Lite entrypoint) to create the store's role. The agent-api server never receives it",
+      "targets": []
+    },
+    {
+      "key": "DB_PASSWORD",
+      "class": "defaulted",
+      "default": "",
+      "secret": true,
+      "description": "ADR-0048: the instance's admin database password, read ONLY by the session store's migrations path (`session_schema init`). The agent-api server never receives it",
+      "targets": []
+    },
+    {
+      "key": "VEXA_SESSIONS_WAIT_SEC",
+      "class": "defaulted",
+      "default": "600",
+      "description": "ADR-0048: how long `session_schema wait` (Helm's agent-api initContainer) waits for the store's role and tables before it gives up",
+      "targets": []
+    },
+    {
+      "key": "VEXA_SHARED_SCRATCH",
+      "class": "defaulted",
+      "default": "",
+      "description": "ADR-0048: stamped by agent-api on a worker whose shared-chat turn has no workspace every participant can write; the worker then works in the session's own scratch folder under its HOME and removes it on exit. Never set by an operator",
+      "targets": []
+    },
+    {
+      "key": "VEXA_CRM_REFERENCES_POLL_S",
+      "class": "defaulted",
+      "default": "0",
+      "description": "ADR-0047 d5: how often agent-api reads each workspace's links to CRM records at its head commit and publishes workspace.references.changed (control_plane/crm_references.py). 0 is off: the deployment runs no CRM.",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_AGENT_ALLOW",
+      "class": "defaulted",
+      "default": "(empty — no restriction: every signed person is served the agent tier)",
+      "description": "who agent-api serves the agent tier to (control_plane/agent_admission.py, read per request after the identity door): empty or unset = everyone (the default); `*` = everyone; otherwise a comma list of user ids, email addresses and `@domain` entries, case-insensitive. A signed person not on it is refused 403 `agent_tier_not_enabled`; health, the internal tier and a worker acting for an admitted person are not refused",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_FEATURES",
+      "class": "defaulted",
+      "default": "(empty — the release default: every switchable feature off)",
+      "description": "the install's switched-on features (control_plane/features.py): empty = the release default, every unproven feature off; `all` = every one on (a dev stack); a comma list switches on just those; `all,-name` takes one back. `features:` in _global/POLICIES.md overlays it per company for the features that are not install-scope. A switched-off route refuses 403 `feature_disabled` and its tools leave the served manifest",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_LLM_KILL_SWITCH",
+      "class": "defaulted",
+      "default": "(empty \u2014 model calls allowed)",
+      "description": "`1`/`true`/`on` refuses every agent turn before dispatch (chat, routine, sensor, event agent) with a typed refusal, whatever the spend ledger says (control_plane/llm_budget.py). The spend caps themselves are `_global/POLICIES.md` keys (llm_budget_*).",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "VEXA_MODEL_PRICES_URL",
+      "class": "defaulted",
+      "default": "https://openrouter.ai/api/v1/models",
+      "description": "The market price table the spend ledger prices a call's tokens at when the call reports no cost (control_plane/model_prices.py): OpenRouter's public models list (no key), read at most once a day and cached in redis. `off` never reads the network (air-gapped installs); the price snapshot bundled with the release prices every call instead.",
+      "targets": []
     }
   ],
   "capabilities": {
@@ -971,14 +1259,24 @@
       "when_unconfigured": "every /api/connections* route answers 503 'Connections are not configured on this deployment', and so does /api/onboarding/research for `start` and `next`, which reach the broker; its `status` and `ack` answer from the research already stored. The agent's connection tools report the same sentence"
     },
     "git_credential_broker": {
-      "description": "Git tokens and deploy keys are kept in the credential broker instead of this service's own encrypted store",
+      "description": "saved Git tokens and deploy keys: kept in the credential broker, used by this service for one Git operation at a time",
       "mode": "all",
-      "when_unconfigured": "nothing degrades: Git credentials stay in the local encrypted store (control_plane/secret_store.py, keyed by VEXA_SECRETS_KEY)"
+      "when_unconfigured": "saving a Git token or generating a deploy key answers 503 with fault `git_credentials_unavailable`; Git operations run with a token typed for that operation or with none, and a credential still on this service's retired local store is refused rather than used"
     },
     "worker_toolbelt": {
       "description": "each spawned worker gets the vexa MCP toolbelt: a delegation token minted per dispatch (who it acts for, the regime, the workspace ceiling) and the gateway's /mcp to present it to",
       "mode": "all",
       "when_unconfigured": "workers run with no vexa tools; the dispatcher logs the gap on every spawn and the worker files a spawn_gap friction record when only one of the two is set"
+    },
+    "session_store": {
+      "description": "conversations are stored apart from workspaces (ADR-0048): metadata and participants in a database, transcript versions in object storage; a chat can gain participants",
+      "mode": "all",
+      "when_unconfigured": "chats keep the per-workspace transcript layout; /api/sessions/{id}/participants answers 503 'Shared sessions are not configured on this deployment'. On by default wherever the instance's Postgres is configured"
+    },
+    "calls": {
+      "description": "calls in a session (ADR-0048 decision 6): agent-api mints participants' room tokens on the deployment's LiveKit server and binds a call to its session",
+      "mode": "all",
+      "when_unconfigured": "GET /api/sessions/{s}/call answers calls:false and the Terminal shows no Call button; the token and bind routes answer 503"
     }
   },
   "surface_only": [

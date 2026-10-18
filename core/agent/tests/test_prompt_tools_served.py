@@ -19,15 +19,15 @@ Two checks, so a name nobody has listed is still caught:
   a served tool; the few code identifiers that grammar also matches are listed in `NOT_TOOL_ASKS`,
   each with where it is cited, and that list can only shrink.
 * A REFERENCE is a looser tool-shaped mention — a bare `` `name` `` or a bare call `name(…` — of a
-  name that is a tool somewhere: served, allow-listed, or rig-only. Loose forms are too common in
+  name that is a tool somewhere: served, allow-listed, or named by the harness. Loose forms are too common in
   prose to check without a vocabulary, so this check needs one.
 
 Plain English ("propose the first piece", "validate it") is neither, and docstrings and comments
 are not prompts.
 
 The worker's allow-list and the harness's result vocabularies are held to the same set, except
-`ALLOWLIST_GAP`: two verbs the harness turns into panel and focus events that only the rig serves
-today, which no product prompt names. That set is checked in both directions — it can only shrink.
+`ALLOWLIST_GAP`, which is checked in both directions and can only shrink. It is empty since
+Vexa-ai/vexa#1783 moved `open_page` and `workspace_target` onto agent-api routes.
 """
 from __future__ import annotations
 
@@ -40,24 +40,25 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 FULL_DEPLOYMENT = {"identity", "meetings", "flows", "agent"}
-MANIFEST_GLOBS = ("core/*/mcp.tools.v1.json", "core/*/services/*/mcp.tools.v1.json")
-BUILT_IN_SOURCE = REPO / "core/meetings/services/mcp/src/vexa_mcp/app.py"
+#: The MCP service's own source, wherever its module puts it (it lives in the gateway module from
+#: 0.13.3, in the meetings module before) — exactly one match.
+BUILT_IN_SOURCES = sorted(REPO.glob("core/*/services/mcp/src/vexa_mcp/app.py"))
 ALLOWLIST = REPO / "core/agent/worker/mcp_tools.v1.json"
-#: The verbs only the dogfood rig serves that NOTHING under `core/` names — the surface product
-#: prompts once drifted onto. They cannot be derived: the rig lives under `deploy/`, which `core/`
-#: does not read (`test_no_deploy_reads.py`). The rig verbs core still names (the worker's allow-list,
-#: the harness's vocabularies) are derived in `rig_only()`. This list only widens the loose-form
-#: check; the ask grammar catches an unserved name whether it is listed here or not.
-RIG_ONLY_UNNAMED_IN_CORE = frozenset({
-    "auth_claim", "auth_link", "bot_config", "bot_say", "bot_schedule", "bot_send", "bot_stop",
-    "bots_running", "captions_to_segments", "company_context", "confirm_login", "deeplink",
-    "fact_emit", "friction_dump", "friction_fixed", "mark_scaffolded", "meeting_delete",
-    "meeting_info", "meeting_participants", "meeting_seed", "meeting_transcript", "meeting_update",
-    "meetings_list", "recordings_list", "rehearse", "rehearse_states", "settings",
-    "start_onboarding", "subject_reset", "transcript_search", "user_ensure", "vexa_overview",
-    "vexa_search_docs", "workspace_attach", "workspace_init", "workspace_pull", "workspace_push",
-    "workspace_regime", "zoom_transcript_to_segments",
-})
+_MANIFEST_SKIP = {"node_modules", "dist", "__pycache__"}
+
+
+def manifests() -> list:
+    """Every domain manifest under `core/`, found the way the contract's own validate.mjs finds
+    them: `mcp.tools.v1.json` or `*.mcp.tools.v1.json`, anywhere, so a domain that keeps its
+    manifest inside its service package (identity) is not missed."""
+    out = []
+    for path in sorted((REPO / "core").rglob("*mcp.tools.v1.json")):
+        rel = path.relative_to(REPO / "core").parts
+        if any(p.startswith(".") or p in _MANIFEST_SKIP for p in rel):
+            continue
+        if path.name == "mcp.tools.v1.json" or path.name.endswith(".mcp.tools.v1.json"):
+            out.append(path)
+    return out
 
 #: Code identifiers the ask grammar matches that are not tools: name -> where it is cited. Each
 #: must still be found somewhere and must not be served; otherwise it leaves this list.
@@ -68,8 +69,8 @@ NOT_TOOL_ASKS = {
     "ws_file": "flows' workspace-file reader, cited by behavior/global/flows/post_meeting.md",
 }
 
-#: Allow-listed and harness-consumed verbs the edge does not serve yet (Vexa-ai/vexa#1586, #1611).
-ALLOWLIST_GAP = frozenset({"open_page", "workspace_target"})
+#: Allow-listed and harness-consumed verbs the edge does not serve yet. Empty since Vexa-ai/vexa#1783.
+ALLOWLIST_GAP: frozenset = frozenset()
 
 #: Where the product's prompts live.
 PROMPT_TREES = ("behavior",)
@@ -90,12 +91,12 @@ _IDENTIFIER = re.compile(r"(?:mcp__vexa__)?[a-z][a-z0-9_]*")
 
 
 def served() -> set:
-    names = set(re.findall(r'operation_id="(\w+)"', BUILT_IN_SOURCE.read_text()))
-    for pattern in MANIFEST_GLOBS:
-        for path in REPO.glob(pattern):
-            for tool in json.loads(path.read_text()).get("tools") or []:
-                if set(tool.get("requires") or []) <= FULL_DEPLOYMENT:
-                    names.add(tool["name"])
+    assert len(BUILT_IN_SOURCES) == 1, BUILT_IN_SOURCES
+    names = set(re.findall(r'operation_id="(\w+)"', BUILT_IN_SOURCES[0].read_text()))
+    for path in manifests():
+        for tool in json.loads(path.read_text()).get("tools") or []:
+            if set(tool.get("requires") or []) <= FULL_DEPLOYMENT:
+                names.add(tool["name"])
     return names
 
 
@@ -115,8 +116,10 @@ def harness_vexa_tools() -> set:
 
 
 def rig_only() -> set:
-    """The verbs only the rig serves: the ones core names (derived) and the ones it does not."""
-    return ((allowlisted() | harness_vexa_tools()) - served()) | RIG_ONLY_UNNAMED_IN_CORE
+    """Verbs core still names (the worker's allow-list, the harness's vocabularies) that nothing
+    serves — the surface the deleted dogfood rig once served. Derived, so it can only be what core
+    actually says."""
+    return (allowlisted() | harness_vexa_tools()) - served()
 
 
 def vocabulary() -> set:
@@ -233,6 +236,15 @@ def test_the_served_set_is_the_assembled_edge():
     assert {"get_meeting_transcript", "request_meeting_bot", "whats_waiting",
             "entity_upsert", "transcript_terms"} <= names
     assert not names & rig_only()
+
+
+def test_every_domain_manifest_is_read():
+    """identity keeps its manifest inside admin-api's package and meetings at its module root; a
+    fixed glob missed the first, so its tools counted as unserved by accident of layout."""
+    domains = {json.loads(p.read_text()).get("domain") for p in manifests()}
+    assert {"identity", "meetings", "flows", "agent"} <= domains, domains
+    assert {"settings", "settings_set", "workspace_regime", "workspace_regime_set",
+            "get_bot_status", "get_recording"} <= served()
 
 
 # ── the guard ────────────────────────────────────────────────────────────────────────────────────

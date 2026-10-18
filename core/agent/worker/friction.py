@@ -32,6 +32,7 @@ import time
 import urllib.error
 import urllib.request
 
+from shared import obs
 from shared.git_redaction import redact
 from llm.refusal_guard import refusal_reason
 from pathlib import Path
@@ -113,9 +114,16 @@ def friction_preamble() -> str:
         "the only outcome that guarantees it is still there tomorrow — you are the only one who "
         "knows what you expected. Report it and carry on: it does not interrupt the work, and it "
         "never goes to the person you are talking to.\n\n"
-        "**When the person tells you something did not work, file it the same way** — their words "
-        "as what HAPPENED, the ids you have — and tell them it is filed. This chat is how people "
-        "report friction; there is no other button for it.\n\n"
+        "**When the person says something did not work, treat it first as a reply to what you last "
+        "said or did** (\"no it does not fix\", \"still broken\", \"the links don't open\"). Your "
+        "next step is never `report_friction`: re-check the thing that failed — re-run the read, "
+        "re-open the page, compare what you wrote with what the tool returned — fix what you can, "
+        "and answer them with what you found and what you changed. Never answer with a filing, and "
+        "never ask them to explain a bug report they did not make. File it only when they ask you "
+        "to report it, or after your re-check confirmed the failure is Vexa's (a Vexa tool, page or "
+        "link of ours did not work) — then also file it, with their words as what HAPPENED and the "
+        "ids you have, and say it is filed. This chat is how people report friction; there is no "
+        "other button for it.\n\n"
     )
 
 
@@ -152,7 +160,7 @@ def report(record: dict, *, subject: str = "", timeout: float = TIMEOUT_S) -> di
         return None
     req = urllib.request.Request(
         f"{base}/agent/friction", method="POST", data=json.dumps(body).encode(),
-        headers={"content-type": "application/json", "x-api-key": token})
+        headers={"content-type": "application/json", "x-api-key": token, **obs.trace_headers()})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode())

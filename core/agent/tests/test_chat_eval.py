@@ -93,3 +93,44 @@ def test_the_failing_tools_answer_is_what_agent_api_sends():
         assert variant["detail"]["instruction"] == INSTRUCTIONS[reason]
     refusal = CASE["variants"]["store_unavailable"]["lookups"]["connection_request"]["detail"]
     assert refusal["instruction"] == INSTRUCTIONS["store_unavailable"]
+
+
+# ── links-dont-open: "no it does not fix" is a reply, not a bug report (2026-10-13) ───────────────
+
+LINKS = chat_eval.load_case("links-dont-open")
+V = "no_it_does_not_fix"
+
+
+def test_the_links_case_is_the_exchange_and_its_tools_are_served():
+    msgs = chat_eval.messages(LINKS, V, "s")
+    assert msgs[-1] == {"role": "user", "content": "no it does not fix"}
+    assert msgs[-3] == {"role": "user", "content": "the links don't open"}
+    specs = {s["function"]["name"]: s["function"] for s in chat_eval.tool_specs(LINKS["tools"])}
+    assert set(specs) == set(LINKS["tools"])
+    assert specs["report_friction"]["description"].startswith("Report friction")
+    tool = json.loads(next(m for m in msgs if m["role"] == "tool")["content"])
+    assert all(m["web_url"].startswith("https://mail.google.com/mail/?authuser=") for m in tool["detail"]["messages"])
+
+
+def test_filing_friction_on_the_reply_fails_the_case():
+    assert not chat_eval.score(LINKS, V, _reply(["report_friction"]))[0]
+    assert not chat_eval.score(LINKS, V, _reply(["report_friction"], "Filed. What do you mean?"))[0]
+    assert not chat_eval.score(LINKS, V, _reply(["gmail_search", "report_friction"]))[0]
+
+
+def test_rechecking_or_owning_the_link_passes():
+    assert chat_eval.score(LINKS, V, _reply(["gmail_search"]))[0]
+    assert chat_eval.score(LINKS, V, _reply(["gmail_thread"]))[0]
+    assert chat_eval.score(LINKS, V, _reply(text="You're right: my links were wrong. I've rebuilt them from each thread's web_url."))[0]
+
+
+def test_blaming_google_again_or_asking_what_they_mean_fails():
+    assert not chat_eval.score(LINKS, V, _reply(text="It is still a problem on Google's side; the links were wrong anyway."))[0]
+    assert not chat_eval.score(LINKS, V, _reply(text="What do you mean by 'does not fix'?"))[0]
+
+
+def test_the_case_is_scored_under_the_friction_and_connections_rules():
+    from worker.engine import connections_preamble
+    from worker.friction import friction_preamble
+    system = chat_eval.system_text(LINKS, {"connections": connections_preamble, "friction": friction_preamble})
+    assert "reply to what you last said or did" in system and "suspect the link first" in system

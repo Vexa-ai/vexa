@@ -1,7 +1,7 @@
 # Paths in this workspace the PERSON never sees as pages.
 #
 # Founder ruling 2026-09-02: a new desk keeps its machinery — the agent reads CLAUDE.md, the flows,
-# the skills, the routines, the views and the entity templates on every turn — but none of it is
+# the skills, the views and the entity templates on every turn — but none of it is
 # content, and a person who opens a desk should not be handed the product's own wiring as their
 # documents. He signed in as a new user and was shown a README template rendered as a page.
 #
@@ -14,6 +14,7 @@ CLAUDE.md
 .gitignore
 flows/**
 skills/**
+# routines/ is not seeded: routines are flows (ADR-0046). An old install's folder stays hidden.
 routines/**
 views/**
 kg/templates/**

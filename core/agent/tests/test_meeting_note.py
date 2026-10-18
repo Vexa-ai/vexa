@@ -211,7 +211,7 @@ def test_describe_reads_the_widget_and_the_cursor_off_the_page(tmp_path):
     page = meeting_doc.advance_cursor(page, "2026-09-06T12:04:31.000Z")
     (desk / DNA).write_text(page)
     got = meeting_note.describe(tmp_path, "175", _row())
-    assert got == {"path": f"kg/entities/meeting/{DNA}", "transcript": "147",
+    assert got == {"path": f"kg/entities/meeting/{DNA}", "workspace": "", "transcript": "147",
                    "cursor": "2026-09-06T12:04:31.000Z"}
 
 
@@ -225,6 +225,6 @@ def test_a_page_written_before_the_widget_says_so_rather_than_guessing(tmp_path)
 
 def test_no_report_describes_as_nothing_and_never_raises(tmp_path):
     _desk(tmp_path)
-    assert meeting_note.describe(tmp_path, "175", _row()) == {"path": None, "transcript": "", "cursor": ""}
+    assert meeting_note.describe(tmp_path, "175", _row()) == {"path": None, "workspace": "", "transcript": "", "cursor": ""}
     # a desk that is not there at all is the same answer, not an exception
-    assert meeting_note.describe(tmp_path / "nope", "175", _row()) == {"path": None, "transcript": "", "cursor": ""}
+    assert meeting_note.describe(tmp_path / "nope", "175", _row()) == {"path": None, "workspace": "", "transcript": "", "cursor": ""}

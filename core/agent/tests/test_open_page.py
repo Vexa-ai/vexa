@@ -158,3 +158,15 @@ def test_the_worker_is_allowed_to_call_it():
     manifest = _json.loads(
         (Path(__file__).resolve().parents[1] / "worker" / "mcp_tools.v1.json").read_text())
     assert "open_page" in manifest["tools"]
+
+
+def test_a_browser_session_result_opens_the_live_view_by_id_only():
+    # ADR-0049: the sign-in browser's id is the only thing that crosses into the stream; the VNC
+    # password the tool result also carries stays out of the event.
+    sid = "a" * 32
+    body = {"ui_action": "open_browser_session", "session_id": sid, "vnc_password": "pw-fixture"}
+    assert "mcp__vexa__browser_session_open" in _OPEN_TOOLS
+    ev = _open_event(json.dumps(body))
+    assert ev == {"type": "open", "target": "browser-session", "workspace": "", "path": f"browser-session:{sid}"}
+    assert "pw-fixture" not in json.dumps(ev)
+    assert _open_event(json.dumps({**body, "session_id": "../x"})) is None

@@ -40,7 +40,9 @@ class SetupSpec(BaseModel):
     endpoint: str = Field(default='', max_length=2000, description='the exact public HTTPS endpoint')
     header: str = Field(default='Authorization', max_length=64,
                         description='Authorization or X-API-Key')
-    scheme: Literal['bearer', 'raw', 'telegram'] = 'bearer'
+    scheme: Literal['bearer', 'raw', 'telegram', 'prefix'] = 'bearer'
+    prefix: str = Field(default='', max_length=32,
+                        description='scheme=prefix only: the word before the credential, e.g. Bot or Token')
     method: Literal['GET', 'POST'] = 'GET'
     secret_label: str = Field(default='API token', min_length=1, max_length=80)
     fields: list[InputField] = Field(default_factory=list, max_length=10)

@@ -353,3 +353,18 @@ def test_end_to_end_a_turn_that_outlives_its_token_fails_loud(tmp_path):
     assert _identity_refuses(store, token, late)          # what the gateway hears from identity
     done = list(tool_access.watch(_turn(tool_ok=False), exp, now=lambda: late))[-1]
     assert done["ok"] is False and done["fault"]["kind"] == "access_expired"
+
+
+def test_a_refreshed_token_of_a_shared_turn_stays_shared(tmp_path):
+    """ADR-0048: the half-life refresh re-mints the WHOLE ceiling — a shared turn's new token is
+    still marked shared, never widened back to the person's private reach."""
+    store = _store()
+    now = 1_800_000_000
+    token = delegation.mint_delegation(SECRET, subject="u_jane", regime="human", workspaces=["team"],
+                                       shared=True, ttl_sec=TTL, now=now)
+    claims = delegation.verify_delegation(SECRET, token, now=now)
+    store.set(dr.CURRENT_PREFIX + "u-shared", token)
+    later = now + TTL * 0.6
+    assert _refresher()(store, "u-shared", later) is not None
+    fresh = delegation.verify_delegation(SECRET, store.get(delegation_key("u-shared")), now=int(later))
+    assert fresh["scope"] == claims["scope"] and fresh["scope"]["shared"] is True

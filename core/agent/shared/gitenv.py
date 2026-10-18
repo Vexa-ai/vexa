@@ -91,7 +91,24 @@ def transport_env(url: str | None) -> dict[str, str]:
     """The one variable a NETWORK git op adds to :func:`shared.gitexec.run_git`'s environment:
     ``GIT_ALLOW_PROTOCOL`` pinned to what ``url`` legitimately needs. ``run_git`` opens no transport
     by default (``protocol.allow=never``), so an op that omits this cannot reach any remote."""
-    return {"GIT_ALLOW_PROTOCOL": ":".join(git_transports_for(url))}
+    env = {"GIT_ALLOW_PROTOCOL": ":".join(git_transports_for(url))}
+    # A provider the operator configured with a private CA: git trusts exactly that CA for this one
+    # operation, whose URL is on that provider (``shared.git_provider``). Any other URL keeps the
+    # system trust.
+    ca = _provider_ca(url)
+    if ca:
+        env["GIT_SSL_CAINFO"] = ca
+    return env
+
+
+def _provider_ca(url: str | None) -> str | None:
+    if not url or not url.strip().lower().startswith("https://"):
+        return None
+    from shared import git_provider   # lazily: gitenv is imported by modules git_provider never needs
+    try:
+        return git_provider.ca_file_for(url)
+    except ValueError:
+        return None
 
 
 def pinned_git_env(url: str | None, **overrides: str) -> dict[str, str]:

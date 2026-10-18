@@ -105,21 +105,23 @@ def test_entity_upsert_links_only_into_the_ceiling(world):
     c, a, b, _ = world
     reg = c.app.state.workspace_registry
     a_id, b_id = reg.by_slug(a)["id"], reg.by_slug(b)["id"]
-    body = {"kind": "person", "name": "Ana Lima", "source": "the call",
+    # Written INTO group A (read by the same person as B): a page links by id only into workspaces
+    # every one of its readers can open (`readers_covered`), and the ceiling narrows that further.
+    body = {"kind": "person", "name": "Ana Lima", "source": "the call", "slug": a,
             "facts": ["Met [[Northwind Labs]] about [[Robin Vale]]."]}
     r = c.post("/api/workspace/entity", headers=_worker(a), json=body)
     assert r.status_code == 200, r.text
     out = r.json()
     assert "Robin Vale" in out["links_missing"]
-    page = c.get("/api/workspace/file", headers=_me(), params={"path": out["path"]}).json()["content"]
-    assert f"ws:{a_id}/" in page and f"ws:{b_id}/" not in page
+    page = c.get("/api/workspace/file", headers=_me(), params={"path": out["path"], "slug": a}).json()["content"]
+    assert "[[Northwind Labs]]" in page and f"ws:{b_id}/" not in page
 
     r = c.post("/api/workspace/entity", headers=_me(),
                json={**body, "name": "Ben Ode"})
     out = r.json()
     assert "Robin Vale" not in out["links_missing"]
-    page = c.get("/api/workspace/file", headers=_me(), params={"path": out["path"]}).json()["content"]
-    assert f"ws:{b_id}/" in page
+    page = c.get("/api/workspace/file", headers=_me(), params={"path": out["path"], "slug": a}).json()["content"]
+    assert f"ws:{b_id}/" in page and f"ws:{a_id}/" not in page
 
 
 def test_links_resolve_answers_not_yours_outside_the_ceiling(world):

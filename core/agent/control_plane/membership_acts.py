@@ -180,6 +180,7 @@ def invite(root: Path, slug: str, *, email, role, inviter: str, index,
            resolve_subject: Optional[Callable[[str], Optional[str]]] = None,
            mail: Optional[Callable[[dict], bool]] = None,
            inviter_email: str = "", workspace_name: str = "",
+           mail_delivery: Optional[Callable[[], str]] = None,
            now: Optional[float] = None) -> dict:
     """Invite ``email`` to ``slug`` as ``role``, and get it to them. The caller has already gated.
 
@@ -235,11 +236,38 @@ def invite(root: Path, slug: str, *, email, role, inviter: str, index,
             "expires_at": int(minted.expires_at), "invite_id": minted.id,
         }))
         delivery = "mailed" if mailed else "link"
+        # THE CARRIER TAKING THE FACT IS NOT A DELIVERY (founder, 2026-10-14: the agent said "the
+        # invite link was emailed to her"; the mail sat in the capture double and she received
+        # nothing). `mail_delivery()` asks the deployment's mail path what it does with mail —
+        # `delivered`, `captured` (a capture double: nothing reaches a real mailbox) or anything
+        # else (unknown) — and only `delivered` may be said as "mailed".
+        if mailed and mail_delivery is not None:
+            try:
+                mode = str(mail_delivery() or "").strip().lower()
+            except Exception:  # noqa: BLE001 — not knowing is "unknown", never "mailed"
+                mode = "unknown"
+            delivery = ("mailed" if mode == "delivered"
+                        else "captured" if mode == "captured" else "sent")
 
-    where = ("mailed to them" if mailed
-             else "yours to give them — this deployment sends no mail" if not subject
-             else "theirs to open — they already have an account here")
-    said = f"Invited {address} to {slug} as a {word} — {role_sentence(word)}. The link is {where}."
+    if delivery == "mailed":
+        where = "mailed to them"
+    elif delivery == "captured":
+        where = "yours to give them — this deployment captures mail and does not deliver it"
+    elif delivery == "sent":
+        where = ("handed to the mail carrier, but this deployment could not confirm it delivers "
+                 "mail — give it to them yourself too")
+    elif not subject:
+        where = "yours to give them — this deployment sends no mail"
+    else:
+        where = "theirs to open — they already have an account here"
+    name = str(workspace_name or slug)
+    if subject and delivery == "link":
+        # AN ACCOUNT HERE HAS IT IN THEIR BELL (the route tells them, with Accept): nothing is to be
+        # sent, and the answer names the workspace, never its slug (founder test 2026-10-16).
+        said = (f"Invited {address} to {name} as a {word} — {role_sentence(word)}. It is waiting in "
+                f"their notifications in the app; nothing to send.")
+    else:
+        said = f"Invited {address} to {name} as a {word} — {role_sentence(word)}. The link is {where}."
 
     # AND SAY THAT THE OLD LINKS ARE DEAD, WHEN THEY ARE (Vexa-ai/vexa#1645). The founder opened a
     # link the agent had handed him and read *"This invite link is not valid"* — the store had been
@@ -315,3 +343,55 @@ def set_membership(root: Path, slug: str, *, email, role, actor: str, index, com
     return {"workspace": slug, "email": address, "subject": subject, "removed": False,
             "role": word, "role_sentence": role_sentence(word),
             "said": f"{address} is now a {word} in {slug} — {role_sentence(word)}."}
+
+
+# ── adding someone who already has an account (ADR-0048: "share this workspace with @joe") ────────
+#: The two words a person says for a role when they add someone, as the lattice spells them.
+ADD_ROLES = {"read": "viewer", "write": "contributor"}
+
+
+def add_member(root: Path, slug: str, *, person: str, role: str, actor: str, index,
+               commit_fn=None, resolve_subject: Optional[Callable[[str], Optional[str]]] = None,
+               known_people: Optional[Callable[[], list]] = None) -> dict:
+    """Make ``person`` a member of ``slug`` with ``role`` (``read`` | ``write``). The caller has gated
+    (``assert_may_manage``: the workspace's owner, never ``_system`` or ``_global``).
+
+    ``person`` is a stable account id — what an @-mention carries — or an email. An id must be one
+    of ``known_people()`` (the people the actor shares a workspace with), so an id nobody showed the
+    actor grants nothing; an email must resolve to an account here. Somebody with no account is not
+    added: inviting new people is ``invite``'s, and this answers that rather than minting a link."""
+    lattice = ADD_ROLES.get(str(role or "").strip().lower())
+    if lattice is None:
+        raise ActRefused(f"{role!r} is not a role to add someone with — read or write", status=400)
+    who = str(person or "").strip()
+    if not who:
+        raise ActRefused("name the person to add", status=400)
+    email = ""
+    if "@" in who and "." in who.split("@", 1)[1]:
+        email = normalize_address(who)
+        subject, _ = _resolve(root, slug, email, resolve_subject)
+        if not subject:
+            raise ActRefused(f"{email} has no account here — adding someone new is an invite "
+                             f"(workspace_invite), not this", status=404)
+    else:
+        people = list((known_people() if known_people else []) or [])
+        match = next((p for p in people if str(p.get("subject")) == who), None)
+        if match is None:
+            raise ActRefused("that person is not someone you share a workspace with — mention them "
+                             "with @ so the chat names their account", status=404)
+        subject, email = who, str(match.get("email") or "")
+    if subject == actor:
+        raise ActRefused("you are already in it", status=409)
+    held = membership_mod.is_member(root, slug, subject)
+    if held is not None and membership_mod._RANK.get(held, -1) >= membership_mod._RANK[lattice]:
+        word = role_word(held)
+        return {"workspace": slug, "subject": subject, "email": email, "role": word,
+                "already_member": True, "added": False,
+                "said": f"{email or subject} is already a {word} in {slug} — {role_sentence(word)}."}
+    record = membership_mod.grant_membership(root, slug, subject, lattice, added_by=actor,
+                                             index=index, email=email or None, commit_fn=commit_fn)
+    word = role_word(record.get("role"))
+    verb = "read" if lattice == "viewer" else "read and write"
+    return {"workspace": slug, "subject": subject, "email": email, "role": word,
+            "already_member": False, "added": True,
+            "said": f"{email or subject} can now {verb} {slug}."}

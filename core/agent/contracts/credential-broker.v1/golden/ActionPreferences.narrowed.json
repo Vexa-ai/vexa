@@ -1,0 +1,13 @@
+{
+  "connection_actions": [
+    "gmail.search",
+    "gmail.read",
+    "gmail.thread",
+    "calendar.events",
+    "gmail.draft"
+  ],
+  "calendar_attendee_domains": [
+    "example.test"
+  ],
+  "draft_attachments": false
+}

@@ -162,9 +162,22 @@ def _meeting_inv(subject):
                                                        "platform": "google_meet"}}}
 
 
-def test_a_second_dispatch_of_another_person_to_a_running_unit_publishes_neither_token(tmp_path):
-    """A meeting's unit id is keyed on the meeting: a later dispatch for someone else reaching the same
-    running unit neither publishes its token to the worker there nor leaves the first person's."""
+@pytest.fixture()
+def shared_unit(monkeypatch):
+    """One unit id for everybody. A meeting's unit is keyed on the session AND the subject, so two
+    people no longer reach one unit through it; the guard below still holds for any id that would."""
+    monkeypatch.setattr(dispatch, "dispatch_id", lambda inv: "agent-meet-abc-defg-hij")
+
+
+def test_two_people_on_one_meeting_get_two_units(tmp_path):
+    rt = _Runtime()
+    d = dispatch.Dispatcher(_settings(tmp_path), rt, _Identity(), delegation_store=_store())
+    assert d.dispatch(_meeting_inv("u_jane")) != d.dispatch(_meeting_inv("u_bob"))
+
+
+def test_a_second_dispatch_of_another_person_to_a_running_unit_publishes_neither_token(tmp_path, shared_unit):
+    """A later dispatch for someone else reaching the same running unit neither publishes its token
+    to the worker there nor leaves the first person's."""
     store = _store()
     rt = _Runtime()
     d = dispatch.Dispatcher(_settings(tmp_path), rt, _Identity(), delegation_store=store)
@@ -176,7 +189,7 @@ def test_a_second_dispatch_of_another_person_to_a_running_unit_publishes_neither
         assert store.get(key) not in (jane, bob), key
 
 
-def test_a_unit_respawned_for_another_person_within_the_grace_never_hands_over_the_first_token(tmp_path):
+def test_a_unit_respawned_for_another_person_within_the_grace_never_hands_over_the_first_token(tmp_path, shared_unit):
     """Unit X runs for A and ends; within the spawn grace it is respawned for B. B's worker boots with
     B's token and reads the unit's published token before each turn: that is B's, never A's."""
     store = _store()
@@ -192,7 +205,7 @@ def test_a_unit_respawned_for_another_person_within_the_grace_never_hands_over_t
     assert store.get(dr.CURRENT_PREFIX + uid) == bob_env["VEXA_MCP_DELEGATION_TOKEN"]
 
 
-def test_a_respawn_for_another_person_whose_runtime_state_is_unknown_gets_no_published_token(tmp_path):
+def test_a_respawn_for_another_person_whose_runtime_state_is_unknown_gets_no_published_token(tmp_path, shared_unit):
     store = _store()
     rt = _Runtime()
     d = dispatch.Dispatcher(_settings(tmp_path), rt, _Identity(), delegation_store=store)
@@ -204,7 +217,7 @@ def test_a_respawn_for_another_person_whose_runtime_state_is_unknown_gets_no_pub
     assert jane not in (store.get(delegation_key(uid)), store.get(dr.CURRENT_PREFIX + uid))
 
 
-def test_a_token_that_cannot_be_withdrawn_is_not_handed_to_the_next_person(tmp_path, monkeypatch):
+def test_a_token_that_cannot_be_withdrawn_is_not_handed_to_the_next_person(tmp_path, monkeypatch, shared_unit):
     store = _store()
     rt = _Runtime()
     d = dispatch.Dispatcher(_settings(tmp_path), rt, _Identity(), delegation_store=store)

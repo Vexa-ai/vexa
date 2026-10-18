@@ -8,6 +8,8 @@ single identifier changed.
 """
 from __future__ import annotations
 
+from control_plane.workspace_reader import home_of
+
 from control_plane import global_layer
 from control_plane import link_resolver as link_resolver_mod
 from control_plane import meeting_link as meeting_link_mod
@@ -399,8 +401,10 @@ def build(**d) -> APIRouter:
         workspace_touches.touch(desk["id"], wid, path)
         # Mirror it where the WORKER can read it: the README is regenerated at the end of a turn,
         # in a container that holds the mounts and no redis.
-        ids_mod.mirror_touches(desk.get("dir") or (wsr.root / str(subject)),
-                               workspace_touches.recent(desk["id"]))
+        try:
+            ids_mod.mirror_touches(home_of(wsr, str(subject)), workspace_touches.recent(desk["id"]))
+        except Exception:  # noqa: BLE001 — no home (Personal hidden): nothing to mirror into
+            pass
         return {"recorded": True}
     @router.post("/api/links/resolve")
     def links_resolve(request: Request, body: dict = Body(default={})):
@@ -428,5 +432,22 @@ def build(**d) -> APIRouter:
             [str(r) for r in refs], subject=subject, root=wsr.root,
             registry=workspace_registry, here=here, is_member=_ws_is_member,
             within=within, meeting=meeting)}
+
+    @router.post("/api/links/backlinks")
+    def links_backlinks(request: Request, body: dict = Body(default={})):
+        """The pages that link to one page — "Mentioned in" at the foot of it. `{slug, path}` name
+        the page; only workspaces this reader can read are looked through."""
+        path = str(body.get("path") or "").strip()
+        slug = str(body.get("slug") or "").strip()
+        if not path or link_resolver_mod.escapes(path):
+            raise HTTPException(status_code=400, detail="path must be a workspace-relative page")
+        subject = subject_of(request)
+        # the page's own workspace, checked like `/api/links/resolve` checks it (access + ceiling)
+        here = _ws_here(request, slug or None)
+        slug = str((here or {}).get("slug") or slug)
+        within = lambda ws: reads_within(request, ws)  # noqa: E731
+        return {"results": link_resolver_mod.backlinks(
+            slug, path, subject=subject, root=wsr.root, registry=workspace_registry,
+            is_member=_ws_is_member, within=within)}
 
     return router

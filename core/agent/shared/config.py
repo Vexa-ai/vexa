@@ -123,8 +123,8 @@ class Settings(BaseSettings):
     # A unit's unit.v1.tools names resolve against this dir into --allowedTools + an .mcp.json.
     tools_seed_dir: str = "/app/tools-seed"
 
-    # Workspace-authored routines are reconciled from /workspaces/*/routines/*.md onto the durable
-    # runtime scheduler. Set to 0 to disable the background reconciler.
+    # How often the one-time move of old routines into flows retries until it completes (ADR-0046);
+    # it then stops for good. 0 runs one pass at startup and no retries.
     routine_reconcile_interval_sec: int = Field(default=60, ge=0)
 
     # ── membership index seam (Lane M) — users.data.memberships[] lives in Postgres, reachable ONLY
@@ -199,24 +199,49 @@ class Settings(BaseSettings):
     # credential at all: a delegation token signed with a zero-length key would verify for anyone who
     # guessed the format, so "unset" must mean ABSENT, never "signed with nothing".
     mcp_delegation_secret: SecretStr = SecretStr("")
-    # The ONE server-side key every stored credential is sealed with (control_plane.secret_store): the
-    # user's saved GitHub PAT and every workspace DEPLOY KEY's private half. Empty is NOT "no
-    # encryption" — the store then generates a 0600 key under the secrets root on first use, so a
-    # self-hoster gets encryption without configuring anything. Set this when the key must live OUTSIDE
-    # the data volume (rotating it makes every previously-sealed secret unreadable, which reads as "no
-    # credential saved" — deliberately, so a wrong key never decrypts to garbage).
-    secrets_key: SecretStr = SecretStr("")
-    # Which git provider a self-hosted git host runs, so a per-call token is presented the way that
-    # host expects (shared.git_provider): ``gitlab.example.com=gitlab,git.example.org=basic:svc``.
-    # Unlisted hosts keep GitHub's bare-token form. Parsed here so a typo fails the boot (P18) rather
-    # than every clone; read again by shared.git_provider at the moment a token is embedded.
+    # The git providers this deployment reaches (shared.git_provider): a JSON list of
+    # {name, kind: github|gitlab, baseUrl, caBundle?|caFile?, label?, apiUrl?} — or the earlier
+    # comma list ``gitlab.example.com=gitlab,git.example.org=basic:svc``. GitHub is always present.
+    # Parsed here so a typo fails the boot (P18) rather than every clone.
     git_providers: str = ""
 
     @field_validator("git_providers")
     @classmethod
     def _git_providers_parse(cls, value: str) -> str:
-        git_provider.parse_providers(value)     # raises ValueError naming the bad entry
+        git_provider.parse_registry(value)      # raises ValueError naming the bad entry
         return value
+
+    # ── the session store (ADR-0048) — conversations stored apart from workspaces ─────────────
+    # The database holding session metadata, participants and transcript heads: `postgresql://…`
+    # (pg8000) or `sqlite:///path`. Empty ⇒ the store is OFF and chats keep the workspace layout.
+    sessions_db_url: SecretStr = SecretStr("")
+    # …or, the usual way, the instance's Postgres host, port and database, logged into as the session
+    # store's OWN role (VEXA_SESSIONS_DB_USER / _PASSWORD) — never the instance's admin user. The
+    # migrations path creates that role with grants on the agent_session* tables only
+    # (control_plane/session_schema.py). DB_HOST and the role's password set ⇒ the store is ON.
+    db_host: str = Field(default="", validation_alias=AliasChoices("DB_HOST"))
+    db_port: int = Field(default=5432, validation_alias=AliasChoices("DB_PORT"))
+    db_name: str = Field(default="vexa", validation_alias=AliasChoices("DB_NAME"))
+    sessions_db_user: str = "vexa_agent_sessions"
+    sessions_db_password: SecretStr = SecretStr("")
+    # Where transcript versions go: the install's S3 (path-style, boto3; ADR-0038) — required once the
+    # database is set; there is no directory fallback. An endpoint without a scheme (`storage:9000`,
+    # MinIO-style) takes http, or https with VEXA_SESSIONS_S3_SECURE=true.
+    sessions_s3_endpoint: str = ""
+    sessions_s3_secure: bool = False
+    sessions_s3_bucket: str = "vexa-sessions"
+    sessions_s3_region: str = "us-east-1"
+    sessions_s3_access_key: SecretStr = SecretStr("")
+    sessions_s3_secret_key: SecretStr = SecretStr("")
+
+    # ── calls (ADR-0048 decision 6) — the deployment's LiveKit server ──────────────────────────
+    # The same four names meeting-api reads. Empty LIVEKIT_URL ⇒ this deployment has no calls, and
+    # every /api/sessions/{s}/call route answers 503. agent-api mints participants' room tokens (the
+    # session is its own) and reads a room's metadata to confirm who started it.
+    livekit_url: str = Field(default="", validation_alias=AliasChoices("LIVEKIT_URL"))
+    livekit_internal_url: str = Field(default="", validation_alias=AliasChoices("LIVEKIT_INTERNAL_URL"))
+    livekit_api_key: str = Field(default="", validation_alias=AliasChoices("LIVEKIT_API_KEY"))
+    livekit_api_secret: SecretStr = Field(default=SecretStr(""), validation_alias=AliasChoices("LIVEKIT_API_SECRET"))
 
     def delegation_ttl_sec(self) -> int:
         """The lifetime of a minted delegation token: ``mcp_delegation_ttl_sec`` when configured,

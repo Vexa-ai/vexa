@@ -3,7 +3,12 @@ connection.
 
 * Lifecycle — list, request setup, prepare a custom service, the human saves (a secret, an OAuth
   application), consent (authorize and the Google callback), disconnect and delete.
-* Use — account reads, Gmail drafts and custom-service calls, each audited before it acts.
+* Use — account reads, Gmail drafts (create, reply in a thread, update one this broker created),
+  Google Calendar changes (create, update, cancel) and custom-service calls, each audited before it
+  acts and held to the connection policy agent-api forwards (`action_policy`). A write (a draft, a
+  calendar change) is refused to a worker without a person in the loop whatever policy it forwards;
+  only an account read may run unattended, and only when the forwarded policy allows it.
+* The person's own narrower connection-policy setting (`/api/preferences`).
 
 An upstream's refusal (`ProviderError`, `ServiceError`) answers 409; an upstream that is down or
 answers unusably (`faults.UpstreamFault`) answers 502/503 through the app's handler.
@@ -19,40 +24,123 @@ import re
 import secrets
 import time
 import uuid
+from typing import Optional
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 
-from . import connection_setup, providers, secret_service, service_oauth, setup_schema
+from . import action_policy, connection_setup, providers, secret_service, service_oauth, setup_schema
 from .broker import Broker, credential_hosts
 from .faults import UpstreamFault
 from .reasons import ReasonedError, refusal_reason
-from .models import (AccountReadBody, CustomCallBody, CustomSecretBody, GmailDraftBody, OAuthApplicationBody,
-                     PreparedSetupBody, SetupBody)
+from .models import (AccountReadBody, ActionPreferences, AuthorizeBody, CalendarEventBody, CustomCallBody,
+                     CustomSecretBody, GmailDraftBody, GmailDraftUpdateBody, OAuthApplicationBody, PreparedSetupBody,
+                     SetupBody)
+
+
+#: An unfinished setup — awaiting the person, no credential stored, no OAuth application saved —
+#: that nobody has asked for in this long is hidden from Connections and is never reused.
+PENDING_SETUP_TTL = 24 * 3600
+#: The SQL condition for an unfinished setup. A saved credential or OAuth application never matches.
+PENDING = "status='awaiting_user' AND version=0 AND oauth_app_version=0"
+
+
+def _host(endpoint: str) -> str:
+    try:
+        return (urlsplit((endpoint or "").replace("{secret}", "x")).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _normalised(spec: dict) -> dict:
+    """A stored proposal in today's shape, so a key added since (``prefix``) does not read as a change."""
+    if not spec:
+        return {}
+    try:
+        return setup_schema.SetupSpec.model_validate(spec).model_dump()
+    except ValidationError:
+        return spec
+
+
+def _same_label(a: str, b: str) -> bool:
+    return " ".join((a or "").split()).casefold() == " ".join((b or "").split()).casefold()
 
 
 def build(b: Broker) -> APIRouter:
     router = APIRouter()
 
+    def stale_before() -> float:
+        return time.time() - PENDING_SETUP_TTL
+
+    def live_pending(actor: str, provider: str) -> list:
+        return b.sql(f"SELECT id,label,session,setup_spec FROM connections WHERE actor=? AND provider=? AND {PENDING}"
+                     " AND MAX(created,touched)>=? ORDER BY created DESC", (actor, provider, stale_before()), rows=True)
+
+    def supersede(who: dict, keep: str, spec: dict, label: str) -> None:
+        """A prepared setup replaces the person's other unfinished setups for the same service: same
+        destination host, same name, or — from this same session — one whose proposal was never
+        accepted. Only unfinished rows match (`PENDING`): nothing stored is ever removed."""
+        host = _host(spec.get("endpoint", ""))
+        for row in live_pending(who["actor"], "custom_secret"):
+            if row["id"] == keep:
+                continue
+            previous = json.loads(row["setup_spec"] or "{}")
+            if (host and _host(previous.get("endpoint", "")) == host) or _same_label(row["label"], label) or \
+                    (not previous and row["session"] == who["session"]):
+                b.sql(f"UPDATE connections SET status='deleted' WHERE id=? AND actor=? AND {PENDING}", (row["id"], who["actor"]))
+                b.sql("DELETE FROM oauth_states WHERE connection=?", (row["id"],))
+                b.audit(who, row["id"], "setup.prepare", "superseded")
+
     @router.get("/api/connections")
     def connection_list(request: Request):
         who = b.identity(request, {"agent", "human"}, unwatched_ok=True)
-        rows = b.sql("SELECT id,provider,label,status,created,setup_request,account,setup_spec,oauth_app_version,approved_host"
-                     " FROM connections WHERE actor=? AND status!='deleted' ORDER BY created DESC",
-                     (who["actor"],), rows=True)
+        # An unfinished setup left alone past PENDING_SETUP_TTL is not listed (nothing is stored for it).
+        rows = b.sql("SELECT id,provider,label,status,created,setup_request,account,setup_spec,oauth_app_version,approved_host,grants"
+                     f" FROM connections WHERE actor=? AND status!='deleted' AND NOT ({PENDING} AND MAX(created,touched)<?)"
+                     " ORDER BY created DESC", (who["actor"], stale_before()), rows=True)
         for row in rows:
             row["setup"] = json.loads(row.pop("setup_spec") or "{}")
             row["application_configured"] = bool(row.pop("oauth_app_version"))
+            row["permissions"] = (row.pop("grants") or "").split()
         return {"connections": rows}
+
+    @router.get("/api/preferences")
+    def preferences_read(request: Request):
+        # A background routine reads it too: agent-api narrows every action with it.
+        who = b.identity(request, {"agent", "human"}, unwatched_ok=True)
+        row = b.sql("SELECT value FROM preferences WHERE actor=?", (who["actor"],), one=True)
+        return ActionPreferences.model_validate(json.loads(row["value"]) if row else {}).model_dump(exclude_none=True)
+
+    @router.post("/api/preferences")
+    def preferences_write(request: Request, body: ActionPreferences):
+        who = b.identity(request, {"agent", "human"})
+        if who.get("delegated"):
+            # The person's own word: no worker saves it, even one whose person is in the chat.
+            b.audit(who, "", "preferences.write", "refused")
+            raise HTTPException(403, "Only the person can change their own setting")
+        b.audit(who, "", "preferences.write", "requested")
+        value = body.model_dump(exclude_none=True)
+        b.sql("INSERT INTO preferences(actor,value,updated) VALUES (?,?,?) ON CONFLICT(actor) DO UPDATE SET"
+              " value=excluded.value, updated=excluded.updated", (who["actor"], json.dumps(value), time.time()))
+        b.audit(who, "", "preferences.write", "stored")
+        return value
 
     @router.post("/api/setup")
     def setup(request: Request, body: SetupBody):
         who = b.identity(request, {"agent", "human"})
-        cid = uuid.uuid4().hex
-        b.audit(who, cid, "setup.request", "requested")
-        b.sql("INSERT INTO connections(id,actor,session,label,status,created,provider,setup_request) VALUES (?,?,?,?,?,?,?,?)",
-              (cid, who["actor"], who["session"], body.label, "awaiting_user", time.time(), body.provider, uuid.uuid4().hex))
+        with b.lock:
+            # Asking again for a service whose setup is still unfinished reuses that setup.
+            again = next((r for r in live_pending(who["actor"], body.provider) if _same_label(r["label"], body.label)), None)
+            if again is not None:
+                b.audit(who, again["id"], "setup.request", "requested")
+                b.sql("UPDATE connections SET setup_request=?,touched=? WHERE id=?", (uuid.uuid4().hex, time.time(), again["id"]))
+                return {"connection_id": again["id"], "status": "awaiting_user"}
+            cid = uuid.uuid4().hex
+            b.audit(who, cid, "setup.request", "requested")
+            now = time.time()
+            b.sql("INSERT INTO connections(id,actor,session,label,status,created,provider,setup_request,touched) VALUES (?,?,?,?,?,?,?,?,?)",
+                  (cid, who["actor"], who["session"], body.label, "awaiting_user", now, body.provider, uuid.uuid4().hex, now))
         return {"connection_id": cid, "status": "awaiting_user"}
 
     @router.post("/api/connections/{cid}/request")
@@ -61,8 +149,8 @@ def build(b: Broker) -> APIRouter:
         row = b.connection(who, cid)
         if row["status"] in {"ready", "awaiting_user"}:
             b.audit(who, cid, "setup.request", "requested")
-            b.sql("UPDATE connections SET setup_request=? WHERE id=? AND actor=? AND status!='deleted'",
-                  (uuid.uuid4().hex, cid, who["actor"]))
+            b.sql("UPDATE connections SET setup_request=?,touched=? WHERE id=? AND actor=? AND status!='deleted'",
+                  (uuid.uuid4().hex, time.time(), cid, who["actor"]))
         return {"connection_id": cid, "status": row["status"]}
 
     @router.post("/api/connections/{cid}/prepare")
@@ -88,11 +176,13 @@ def build(b: Broker) -> APIRouter:
             previous = json.loads(current["setup_spec"] or "{}")
             if previous.get("oauth") and not spec.get("oauth"):
                 raise HTTPException(409, "This connection uses OAuth. Preserve its OAuth definition.")
-            if previous == spec:
+            supersede(who, cid, spec, current["label"])
+            if _normalised(previous) == spec:
+                b.sql("UPDATE connections SET touched=? WHERE id=?", (time.time(), cid))
                 return {"connection_id": cid, "status": current["status"], "setup": spec}
             b.audit(who, cid, "setup.prepare", "proposed")
-            b.sql("UPDATE connections SET setup_spec=?,setup_request=?,oauth_app_version=0 WHERE id=?",
-                  (json.dumps(spec), uuid.uuid4().hex, cid))
+            b.sql("UPDATE connections SET setup_spec=?,setup_request=?,oauth_app_version=0,touched=? WHERE id=?",
+                  (json.dumps(spec), uuid.uuid4().hex, time.time(), cid))
             b.sql("DELETE FROM oauth_states WHERE connection=?", (cid,))
         return {"connection_id": cid, "status": row["status"], "setup": spec}
 
@@ -125,7 +215,7 @@ def build(b: Broker) -> APIRouter:
             saved_config = b.must_get(cid, row["version"], owner=who["actor"])["value"]
             b.audit(who, cid, "credential.read", "retrieved", version=row["version"])
             proposed = spec or {"endpoint": body.endpoint, "header": body.header, "scheme": body.scheme, "method": body.method}
-            if any(saved_config.get(k) != proposed.get(k) for k in ("endpoint", "header", "scheme", "method")):
+            if any((saved_config.get(k) or "") != (proposed.get(k) or "") for k in ("endpoint", "header", "scheme", "method", "prefix")):
                 raise HTTPException(409, "Saved credentials cannot be reused for a different service configuration. Create a separate connection.")
             value = saved_config["value"]
         try:
@@ -134,7 +224,8 @@ def build(b: Broker) -> APIRouter:
                 required = {f["name"] for f in spec["fields"]}
                 if set(body.fields) != required or any(not v.strip() or len(v) > 2000 for v in body.fields.values()):
                     raise secret_service.ServiceError("Fill all requested connection fields")
-                config = secret_service.configure(value, spec["endpoint"], spec["header"], spec["scheme"], spec["method"])
+                config = secret_service.configure(value, spec["endpoint"], spec["header"], spec["scheme"], spec["method"],
+                                                  spec.get("prefix", ""))
                 config["fixed_query"] = {f["name"]: body.fields[f["name"]] for f in spec["fields"] if f["location"] == "query"}
                 config["fixed_body"] = {f["name"]: body.fields[f["name"]] for f in spec["fields"] if f["location"] == "body"}
                 if spec["scheme"] == "telegram" and "chat_id" in body.fields and \
@@ -185,9 +276,10 @@ def build(b: Broker) -> APIRouter:
     # Authorization starts only from the trusted human panel. The agent gets no URL carrying
     # state, code or token, and cannot complete or submit the human callback.
     @router.post("/api/connections/{cid}/authorize")
-    def begin_authorize(cid: str, request: Request):
+    def begin_authorize(cid: str, request: Request, body: Optional[AuthorizeBody] = None):
         who = b.identity(request, {"human"})
         row = b.connection(who, cid)
+        grant = body.grant if body is not None else ""
         custom_oauth = row["provider"] == "custom_secret" and bool(json.loads(row["setup_spec"] or "{}").get("oauth"))
         if not custom_oauth and providers.CATALOG.get(row["provider"], {}).get("method") != "oauth":
             raise HTTPException(409, "This connection uses the secure input panel")
@@ -200,10 +292,15 @@ def build(b: Broker) -> APIRouter:
             except secret_service.ServiceError as e:
                 raise ReasonedError(409, str(e), refusal_reason(str(e))) from None
         else:
-            url = providers.authorize(row["provider"], b.google(), b.redirect(), state, challenge)
+            try:
+                url = providers.authorize(row["provider"], b.google(), b.redirect(), state, challenge, grant)
+            except providers.ProviderError as e:
+                raise HTTPException(409, str(e)) from None
+        if grant and custom_oauth:
+            raise HTTPException(409, "This permission does not apply to this connection")
         b.sql("DELETE FROM oauth_states WHERE connection=? OR expires<?", (cid, time.time()))
-        b.sql("INSERT INTO oauth_states VALUES (?,?,?,?,?)",
-              (hashlib.sha256(state.encode()).hexdigest(), who["actor"], who["session"], cid, time.time() + 600))
+        b.sql("INSERT INTO oauth_states(state_hash,actor,session,connection,expires,grant_name) VALUES (?,?,?,?,?,?)",
+              (hashlib.sha256(state.encode()).hexdigest(), who["actor"], who["session"], cid, time.time() + 600, grant))
         b.audit(who, cid, "oauth.authorize", "requested")
         return {"authorize_url": url}
 
@@ -230,11 +327,13 @@ def build(b: Broker) -> APIRouter:
                     value = service_oauth.exchange(cfg["spec"], cfg, code=code, verifier=verifier, redirect=b.redirect())
                     value["oauth_application"] = cfg
                 else:
-                    value = providers.tokens(row["provider"], b.google(), code=code, verifier=verifier, redirect=b.redirect())
+                    value = providers.tokens(row["provider"], b.google(), code=code, verifier=verifier, redirect=b.redirect(),
+                                             grant=pending.get("grant_name") or "")
                 saved = b.put(cid, {"value": value}, owner=who["actor"])
                 account = providers.account_email(row["provider"], value)
                 b.audit(who, cid, "oauth.authorize", "stored", receipt_id=saved.receipt, version=saved.version)
-                b.sql("UPDATE connections SET status=?,version=?,account=? WHERE id=?", ("ready", saved.version, account, cid))
+                b.sql("UPDATE connections SET status=?,version=?,account=?,grants=? WHERE id=?",
+                      ("ready", saved.version, account, " ".join(providers.permissions(row["provider"], value.get("scope", ""))), cid))
             except (providers.ProviderError, HTTPException, secret_service.ServiceError):
                 b.refused("oauth", "exchange_refused", "/api/auth/callback/google")
                 b.audit(who, cid, "oauth.authorize", "refused")
@@ -277,7 +376,8 @@ def build(b: Broker) -> APIRouter:
 
     @router.post("/api/connections/{cid}/read")
     def account_read(cid: str, request: Request, body: AccountReadBody):
-        who = b.identity(request, {"agent", "human"})
+        who = b.identity(request, {"agent", "human"}, unwatched_ok=True)
+        action_policy.require_regime(who, action_policy.effective(body.policy), "/api/connections/{cid}/read")
         operation = uuid.uuid4().hex
         with b.lock:
             row = b.connection(who, cid)
@@ -297,46 +397,156 @@ def build(b: Broker) -> APIRouter:
             # The connected address comes from the broker's own row (Gmail's profile answer at
             # consent), never from the body: AccountReadBody forbids extra fields.
             result = providers.read_account(row["provider"], value, account=row.get("account") or "",
-                                            **body.model_dump())
+                                            **body.model_dump(exclude={"policy"}))
             b.audit(who, cid, body.action, "success", operation=operation, version=row["version"])
             return {"operation_id": operation, "source": row["provider"], "untrusted_content": True, **result}
         except (providers.ProviderError, UpstreamFault, HTTPException):
             b.audit(who, cid, body.action, "failed", operation=operation, version=row["version"])
             raise
 
-    @router.post("/api/connections/{cid}/draft")
-    def gmail_draft(cid: str, request: Request, body: GmailDraftBody):
+    def idempotent(who, cid, request_id, kind, body, unknown):
+        """The keyed fingerprint binding a retry to exact input (never storing the text), and the
+        first result when this request id already ran. Raises 409 on reuse with other input, and on
+        a first attempt whose outcome is unknown."""
+        content = body.model_dump(exclude={"policy"})
+        fingerprint = hmac.new(b.hmac_key, (kind + ":" + json.dumps(content, sort_keys=True)).encode(),
+                               hashlib.sha256).hexdigest()
+        legacy = fingerprint
+        plain = ("request_id", "recipient", "subject", "body")
+        if kind == "gmail.draft" and body.model_dump(exclude={"policy", *plain}, exclude_defaults=True) == {}:
+            # A draft request as this broker fingerprinted it before cc, threads and attachments
+            # existed: its retry still answers with the first result.
+            legacy = hmac.new(b.hmac_key, json.dumps({k: content[k] for k in plain}, sort_keys=True).encode(),
+                              hashlib.sha256).hexdigest()
+        prior = b.sql("SELECT * FROM draft_requests WHERE id=?", (request_id,), one=True)
+        if prior:
+            if prior["actor"] != who["actor"] or prior["connection"] != cid or prior["fingerprint"] not in (fingerprint, legacy):
+                raise HTTPException(409, "Request ID already used")
+            if not prior["result"]:
+                raise HTTPException(409, unknown)
+            return fingerprint, json.loads(prior["result"])
+        return fingerprint, None
+
+    def credential(who, cid, row, operation, action, scope, permission, instruction):
+        """The stored grant, or the permission_required answer when it lacks ``scope``."""
+        value = b.must_get(cid, row["version"], owner=who["actor"])["value"]
+        b.audit(who, cid, "credential.read", "retrieved", operation=operation, version=row["version"])
+        b.sql("UPDATE connections SET grants=? WHERE id=?",
+              (" ".join(providers.permissions(row["provider"], value.get("scope", ""))), cid))
+        if scope not in value.get("scope", "").split():
+            b.sql("UPDATE connections SET setup_request=? WHERE id=?", (secrets.token_urlsafe(18), cid))
+            b.audit(who, cid, action, "permission_required", operation=operation)
+            return None, {"status": "permission_required", "ui_action": "open_connections",
+                          "permission": permission, "instruction": instruction}
+        return b.refreshed(who, cid, row, value, operation), None
+
+    def draft(cid: str, request: Request, body: GmailDraftBody, *, update: bool):
+        kind = "gmail.draft.update" if update else "gmail.draft"
+        # A write: never for a worker without a person in the loop, whatever policy it forwards.
         who = b.identity(request, {"agent", "human"})
+        policy = action_policy.effective(body.policy)
         with b.lock:
             row = b.connection(who, cid)
             if row["provider"] != "google_email" or row["status"] != "ready":
                 raise HTTPException(409, "Gmail connection is not ready")
-            # Keyed digest binds a retry to exact input without storing email text.
-            fingerprint = hmac.new(b.hmac_key, json.dumps(body.model_dump(), sort_keys=True).encode(), hashlib.sha256).hexdigest()
-            prior = b.sql("SELECT * FROM draft_requests WHERE id=?", (body.request_id,), one=True)
-            if prior:
-                if prior["actor"] != who["actor"] or prior["connection"] != cid or prior["fingerprint"] != fingerprint:
-                    raise HTTPException(409, "Request ID already used")
-                if not prior["result"]:
-                    raise HTTPException(409, "Draft outcome unknown; check Gmail before retrying")
-                return json.loads(prior["result"])
-            b.audit(who, cid, "gmail.draft", "requested", operation=body.request_id)
-            value = b.must_get(cid, row["version"], owner=who["actor"])["value"]
-            b.audit(who, cid, "credential.read", "retrieved", operation=body.request_id, version=row["version"])
-            if providers.DRAFT_SCOPE not in value.get("scope", "").split():
-                b.sql("UPDATE connections SET setup_request=? WHERE id=?", (secrets.token_urlsafe(18), cid))
-                b.audit(who, cid, "gmail.draft", "permission_required", operation=body.request_id)
-                return {"status": "permission_required", "ui_action": "open_connections",
-                        "instruction": "Use Enable drafts in Connections and approve the additional Google permission. No draft has been saved. Do not construct a link."}
-            value = b.refreshed(who, cid, row, value, body.request_id)
+            fingerprint, prior = idempotent(who, cid, body.request_id, kind, body,
+                                            "Draft outcome unknown; check Gmail before retrying")
+            if prior is not None:
+                return prior
+            if update and not b.sql("SELECT 1 FROM drafts WHERE draft_id=? AND actor=? AND connection=?",
+                                    (body.draft_id, who["actor"], cid), one=True):
+                b.audit(who, cid, kind, "refused", operation=body.request_id)
+                raise HTTPException(409, "Only drafts Vexa created in this mailbox can be updated")
+            try:
+                action_policy.require_domains([body.recipient, *body.cc, *body.bcc], policy.recipient_domains,
+                                              "draft_recipient_domains")
+                files = action_policy.attachments(body.attachments, policy)
+            except HTTPException:
+                b.audit(who, cid, kind, "refused_by_policy", operation=body.request_id)
+                raise
+            b.audit(who, cid, kind, "requested", operation=body.request_id)
+            value, answer = credential(who, cid, row, body.request_id, kind, providers.DRAFT_SCOPE, "drafts",
+                                       "Use Enable drafts in Connections and approve the additional Google permission. "
+                                       "No draft has been saved. Do not construct a link.")
+            if answer is not None:
+                return answer
             b.sql("INSERT INTO draft_requests VALUES (?,?,?,?,?)", (body.request_id, who["actor"], cid, fingerprint, ""))
             try:
-                result = providers.create_gmail_draft(value, body.recipient, body.subject, body.body)
-            except (providers.ProviderError, UpstreamFault):
-                b.audit(who, cid, "gmail.draft", "unknown", operation=body.request_id)
+                result = providers.create_gmail_draft(
+                    value, body.recipient, body.subject, body.body, cc=body.cc, bcc=body.bcc,
+                    thread_id=body.thread_id, in_reply_to=body.in_reply_to, attachments=files,
+                    draft_id=body.draft_id if update else "")
+            except providers.ProviderError:
+                # Google refused before anything was written: the request id may be used again.
+                b.sql("DELETE FROM draft_requests WHERE id=? AND result=''", (body.request_id,))
+                b.audit(who, cid, kind, "refused", operation=body.request_id)
+                raise
+            except UpstreamFault:
+                b.audit(who, cid, kind, "unknown", operation=body.request_id)
                 raise
             b.sql("UPDATE draft_requests SET result=? WHERE id=?", (json.dumps(result), body.request_id))
-            b.audit(who, cid, "gmail.draft", "success", operation=body.request_id, version=row["version"])
+            b.sql("INSERT OR IGNORE INTO drafts(draft_id,actor,connection,created) VALUES (?,?,?,?)",
+                  (result["draft_id"], who["actor"], cid, time.time()))
+            b.audit(who, cid, kind, "success", operation=body.request_id, version=row["version"])
+            return result
+
+    @router.post("/api/connections/{cid}/draft")
+    def gmail_draft(cid: str, request: Request, body: GmailDraftBody):
+        return draft(cid, request, body, update=False)
+
+    @router.post("/api/connections/{cid}/draft-update")
+    def gmail_draft_update(cid: str, request: Request, body: GmailDraftUpdateBody):
+        return draft(cid, request, body, update=True)
+
+    @router.post("/api/connections/{cid}/calendar-event")
+    def calendar_event(cid: str, request: Request, body: CalendarEventBody):
+        # A write: never for a worker without a person in the loop, whatever policy it forwards.
+        who = b.identity(request, {"agent", "human"})
+        policy = action_policy.effective(body.policy)
+        unknown = "Calendar change outcome unknown; check your calendar before retrying"
+        with b.lock:
+            row = b.connection(who, cid)
+            if row["provider"] != "google_calendar" or row["status"] != "ready":
+                raise HTTPException(409, "Google Calendar connection is not ready")
+            fingerprint, prior = idempotent(who, cid, body.request_id, body.action, body, unknown)
+            if prior is not None:
+                return prior
+            create = body.action == "calendar.event.create"
+            if create == bool(body.event_id):
+                raise HTTPException(422, "event_id is required to update or cancel, and not accepted to create")
+            try:
+                action_policy.require_calendar(body.calendar_id, policy)
+                action_policy.require_notify(body.notify, policy)
+                action_policy.require_domains(body.attendees or [], policy.attendee_domains, "calendar_attendee_domains")
+            except HTTPException:
+                b.audit(who, cid, body.action, "refused_by_policy", operation=body.request_id)
+                raise
+            b.audit(who, cid, body.action, "requested", operation=body.request_id)
+            value, answer = credential(who, cid, row, body.request_id, body.action, providers.CALENDAR_WRITE_SCOPE,
+                                       "calendar_write",
+                                       "Use Enable calendar changes in Connections and approve the additional Google "
+                                       "permission. Nothing was changed. Do not construct a link.")
+            if answer is not None:
+                return answer
+            b.sql("INSERT INTO draft_requests VALUES (?,?,?,?,?)", (body.request_id, who["actor"], cid, fingerprint, ""))
+            fields = body.model_dump(include={"title", "start", "end", "description", "location", "attendees"})
+            try:
+                result = providers.write_calendar_event(
+                    value, body.action, body.calendar_id, event_id=body.event_id, fields=fields, notify=body.notify,
+                    conference=body.conference, request_key=who["actor"] + ":" + body.request_id)
+            except providers.ProviderError:
+                b.sql("DELETE FROM draft_requests WHERE id=? AND result=''", (body.request_id,))
+                b.audit(who, cid, body.action, "refused", operation=body.request_id)
+                raise
+            except UpstreamFault:
+                b.audit(who, cid, body.action, "unknown", operation=body.request_id)
+                raise
+            b.sql("UPDATE draft_requests SET result=? WHERE id=?", (json.dumps(result), body.request_id))
+            b.audit(who, cid, body.action, "success", operation=body.request_id, version=row["version"])
+            if body.notify:
+                # Mail sent in the person's name: its own row, with how many it went to.
+                b.audit(who, cid, "calendar.attendees_notified", f"sent:{len(body.attendees or [])}",
+                        operation=body.request_id, version=row["version"])
             return result
 
     @router.post("/api/connections/{cid}/call")

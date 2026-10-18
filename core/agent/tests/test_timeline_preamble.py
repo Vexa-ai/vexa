@@ -178,3 +178,62 @@ def test_a_turn_with_no_timeline_is_still_a_turn(tmp_path, monkeypatch):
 
     list(engine.run_turn_over_workspace(tmp_path, "hello", harness=H(), commit=False))
     assert "hello" in seen["prompt"] and "Where this person is in time" not in seen["prompt"]
+
+
+# ── ONE clock: the cached block never carries a stale now (Vexa-ai/vexa#1783) ────────────────────
+
+class _Body:
+    def __init__(self, payload):
+        import json as _j
+        self._b = _j.dumps(payload).encode()
+
+    def read(self):
+        return self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+LIVE_BLOCK = ("## Where this person is in time\n\n**Now: Tuesday 13 October 2026, 19:05 Europe/Lisbon "
+              "(WEST, UTC+01:00); 18:05 UTC.** State times in this zone.\n")
+
+
+def test_the_now_line_is_rendered_at_turn_time_not_cache_time(monkeypatch):
+    """The block is cached for a minute; `now` inside it must not be. A minute-old now is how a
+    turn ends up an hour or a minute off what the person sees on their own clock."""
+    from datetime import datetime, timezone
+    _configured(monkeypatch)
+    monkeypatch.setattr(T.urllib.request, "urlopen", lambda *a, **k: _Body(
+        {"text": LIVE_BLOCK, "timezone": "Europe/Lisbon", "timezone_set": True}))
+    t0 = datetime(2026, 10, 13, 18, 5, 30, tzinfo=timezone.utc).timestamp()
+    first = T.timeline_preamble("126", now=t0)
+    later = T.timeline_preamble("126", now=t0 + 40)          # inside the TTL: cached events
+    assert "19:05 Europe/Lisbon (WEST, UTC+01:00); 18:05 UTC" in first
+    assert "19:05 Europe/Lisbon (WEST, UTC+01:00); 18:05 UTC" not in later
+    assert "19:06 Europe/Lisbon (WEST, UTC+01:00); 18:06 UTC" in later
+
+
+def test_the_now_line_crosses_dst_in_the_cache(monkeypatch):
+    from datetime import datetime, timezone
+    _configured(monkeypatch)
+    monkeypatch.setattr(T.urllib.request, "urlopen", lambda *a, **k: _Body(
+        {"text": LIVE_BLOCK, "timezone": "Europe/Lisbon", "timezone_set": True}))
+    t0 = datetime(2026, 10, 25, 0, 59, 40, tzinfo=timezone.utc).timestamp()
+    T.timeline_preamble("126", now=t0)
+    after = T.timeline_preamble("126", now=t0 + 30)          # 01:00:10 UTC — summer time is over
+    assert "01:00 Europe/Lisbon (WET, UTC+00:00); 01:00 UTC" in after
+
+
+def test_an_unset_zone_renders_utc_said_plainly(monkeypatch):
+    from datetime import datetime, timezone
+    _configured(monkeypatch)
+    monkeypatch.setattr(T.urllib.request, "urlopen", lambda *a, **k: _Body(
+        {"text": LIVE_BLOCK.replace("19:05 Europe/Lisbon (WEST, UTC+01:00); 18:05 UTC",
+                                    "18:05 UTC (no timezone set)"),
+         "timezone": "UTC", "timezone_set": False}))
+    t0 = datetime(2026, 10, 13, 18, 7, tzinfo=timezone.utc).timestamp()
+    assert "**Now: Tuesday 13 October 2026, 18:07 UTC (no timezone set).**" in T.timeline_preamble(
+        "126", now=t0)

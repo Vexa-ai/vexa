@@ -745,7 +745,7 @@ wheels = [
 
 [[package]]
 name = "vexa-credential-broker"
-version = "0.13.2"
+version = "0.13.3"
 source = { virtual = "." }
 dependencies = [
     { name = "cryptography" },

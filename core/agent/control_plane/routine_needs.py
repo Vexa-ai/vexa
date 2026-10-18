@@ -25,6 +25,8 @@ import json
 import re
 from pathlib import Path
 
+from control_plane import connection_policy
+
 #: `core/agent/` — both manifests sit there, beside `routes.v1.json` (`route_policy.MANIFEST_PATH`).
 _AGENT_DIR = Path(__file__).resolve().parents[1]
 
@@ -70,7 +72,9 @@ def person_tools() -> dict[str, str]:
         if not path.startswith("/api/connections/"):
             continue
         public = "/agent/" + path[len("/api/"):]
-        if (str(route.get("method") or "").upper(), public) in person:
+        # A ROUTE THE CONNECTION POLICY DECIDES needs a person too, at the default policy: its
+        # unattended refusal is `human_session_required` (connection_actions_unattended, default none).
+        if (str(route.get("method") or "").upper(), public) in person or path in connection_policy.ROUTES:
             out[str(t.get("name"))] = _category_for_route(path)
     return out
 

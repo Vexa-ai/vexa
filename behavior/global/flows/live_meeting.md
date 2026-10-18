@@ -53,6 +53,10 @@ def attend_live(ctx: StepCtx):
             retryable=False)
     if _completion_seen(mid):
         return Done({"meeting_id": mid, "outcome": "completed"})
+    if "live_since" not in ctx.scratch and ctx.refs.get("uid"):
+        # The first tick is the bot going live: the owner's bell says so, once (#1783).
+        _common.notify_in_app("bot_joined", to=str(ctx.refs["uid"]), meeting_id=mid,
+                              title=str(ctx.refs.get("title") or ctx.refs.get("native") or ""))
     since = ctx.scratch.setdefault("live_since", ctx.clock_now)
     if ctx.clock_now - since > LIVE_CAP_S:
         return Done({"meeting_id": mid, "outcome": "lapsed"})

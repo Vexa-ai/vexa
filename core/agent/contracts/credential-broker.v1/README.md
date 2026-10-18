@@ -1,8 +1,9 @@
 # credential-broker.v1 — the Connections broker wire
 
-The contract between the credential broker (`core/agent/services/credential-broker`) and its three
+The contract between the credential broker (`core/agent/services/credential-broker`) and its four
 callers: agent-api's Connections routes (role `agent`), agent-api's Git credential store (role
-`git`), and the terminal's server-side Connections routes (role `human`).
+`git`), the terminal's server-side Connections routes (role `human`), and meeting-api's bot-account
+store (role `bots`, ADR-0049).
 
 > **SEALED** — pinned in `contracts.seal.json`; changes ride the human `lane:contract` review
 > (`pnpm seal:contracts` re-pins the hash).
@@ -12,7 +13,7 @@ callers: agent-api's Connections routes (role `agent`), agent-api's Git credenti
 | File | What it is |
 |---|---|
 | `credential-broker.schema.json` | `$defs` for the signed assertion and every request and response body, plus `x-routes`: each route's method, path, the roles allowed to call it, and its body shapes |
-| `assertion.py` | the canonical Python signer and verifier, stdlib only. Vendored verbatim into agent-api (`control_plane/broker_assertion.py`) and the broker (`credential_broker/assertion.py`); `gate:fact-parity` fails on a differing byte |
+| `assertion.py` | the canonical Python signer and verifier, stdlib only. Vendored verbatim into agent-api (`control_plane/broker_assertion.py`), the broker (`credential_broker/assertion.py`) and meeting-api (`meeting_api/bot_accounts/broker_assertion.py`); `gate:fact-parity` fails on a differing byte |
 | `golden/` | one vector per shape and case; `SignedAssertionVector.*` are deterministic signing vectors both language bindings must reproduce |
 | `validate.mjs` | `gate:schema`: goldens ≡ schema, routes resolve, and the signing vectors re-derive with `node:crypto` |
 
@@ -48,11 +49,46 @@ person's connections and Git credentials only while it is serving a request the 
 that person. The `human` role carries no gateway signature: the terminal resolves the person from the
 sign-in cookie against identity.
 
+When that identity is a worker's, its `delegation.unit` names the agent session — the chat or
+background job — the worker runs as. The assertion's `session` must then equal it (else **401**), and
+it is what the broker writes to `audit.session` and logs as `session` (Vexa-ai/vexa#1783), so a
+credential use joins to every log line that session caused. A person's own identity carries no unit
+and the assertion's session is recorded as sent.
+
 | Role | Held by | May |
 |---|---|---|
-| `agent` | agent-api, for the person in the forwarded `X-Vexa-Identity` | list, request, prepare, read mail and calendar, create Gmail drafts, call a saved custom service |
+| `agent` | agent-api, for the person in the forwarded `X-Vexa-Identity` | list, request, prepare, read mail and calendar, create and update Gmail drafts, create, update and cancel calendar events, read and narrow the person's connection-policy setting (`/api/preferences`), call a saved custom service |
 | `human` | the terminal's server routes, for a signed-in person | everything `agent` may, plus store a credential, save an OAuth application, start and complete consent, disconnect, delete |
 | `git` | agent-api's Git credential store, for the person in the forwarded `X-Vexa-Identity` | read and write that person's Git credentials (`pat/<person>`, `deploy/user-<person>.*`) and the deploy keys of the shared workspaces among the memberships signed with them (`deploy/ws-<id>.*`), nothing else |
+| `bots` | meeting-api, for a bot (no `X-Vexa-Identity`; actor `user:<id>`, `company` or `meeting-api`) | `POST /api/internal/bot-account` only: list, read, save, re-state and delete saved signed-in browser profiles (bot accounts) |
+
+## Bot accounts (role `bots`)
+
+`POST /api/internal/bot-account` takes a `BotAccountRequest` and answers a `BotAccountResponse`
+(`accounts`, plus `files` only for `get`). **list** returns the accounts whose owner is among
+`owners`, metadata only. **get** returns one account and its profile files, 404 when absent.
+**put** creates the account, or replaces the profile of an existing id; the stored owner and platform
+must match the request's, else 409; the state becomes `ok` and `verified_at` now. **state** sets
+`ok` or `signed_out` (`verified_at` now when `ok`). **delete** destroys every stored version and
+the index entry, and is idempotent (200 with the deleted account, or `accounts: []`).
+
+The broker keeps each account at `bot/<id>` (`{account, files}`, sealed with `account.owner`) and an
+index `bot-index` (`{accounts: {id: BotAccount}}`), both written under its one lock; every action is
+audited as `bot.account.<action>`. On a deployment without `VEXA_CONNECTIONS_BOTS_KEY_FILE` no
+caller can use the route: a `bots` assertion is refused (401) and every other role is refused (403).
+
+## The connection policy on the wire
+
+agent-api resolves the administrator's `_global/POLICIES.md` connection keys, narrows them by the
+person's stored setting (`ActionPreferences`), and attaches the result to every read, draft and
+calendar change as `policy` (`ActionPolicy`). The broker enforces it again: an agent-role call from a
+worker without a person in the loop is served only when `policy.unattended` is true, and a calendar
+id, attendee or recipient domain, notification or attachment outside it is refused with
+`409 Refused by policy <key>: …`. Without `policy` the broker applies the safe defaults (no
+background use, no attendee mail, the primary calendar only, no attachments).
+
+`permission_required` names the missing permission (`drafts`, `calendar_write`); the human role asks
+for one with `AuthorizeRequest.grant`. `ConnectionRow.permissions` lists what a grant carries.
 
 ## Probes and status codes
 

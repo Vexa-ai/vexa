@@ -1,0 +1,17 @@
+{
+  "key": "fixture-signals-key-not-a-deployment-secret-01",
+  "claims": {
+    "role": "signals",
+    "actor": "signals",
+    "session": "signals-0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+    "at": 1760000000,
+    "nonce": "7e6f5a4b3c2d1e0f5c4d3e2f1a0b9c8d",
+    "method": "POST",
+    "path": "/api/internal/signals/model-key",
+    "body": "a49e3f253c81a208e7bb816e44233bb2527feec7864f76b5300f4cfe39a2b32a"
+  },
+  "request_body": "{\"name\":\"openrouter\"}",
+  "encoded": "eyJyb2xlIjoic2lnbmFscyIsImFjdG9yIjoic2lnbmFscyIsInNlc3Npb24iOiJzaWduYWxzLTBhMWIyYzNkNGU1ZjYwNzE4MjkzYTRiNWM2ZDdlOGY5IiwiYXQiOjE3NjAwMDAwMDAsIm5vbmNlIjoiN2U2ZjVhNGIzYzJkMWUwZjVjNGQzZTJmMWEwYjljOGQiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii9hcGkvaW50ZXJuYWwvc2lnbmFscy9tb2RlbC1rZXkiLCJib2R5IjoiYTQ5ZTNmMjUzYzgxYTIwOGU3YmI4MTZlNDQyMzNiYjI1MjdmZWVjNzg2NGY3NmI1MzAwZjRjZmUzOWEyYjMyYSJ9",
+  "signature": "a50a3ce727a3d3a25d21a3cb44f872c567a6d09b7e37d511113e444f13392fd4",
+  "header": "eyJyb2xlIjoic2lnbmFscyIsImFjdG9yIjoic2lnbmFscyIsInNlc3Npb24iOiJzaWduYWxzLTBhMWIyYzNkNGU1ZjYwNzE4MjkzYTRiNWM2ZDdlOGY5IiwiYXQiOjE3NjAwMDAwMDAsIm5vbmNlIjoiN2U2ZjVhNGIzYzJkMWUwZjVjNGQzZTJmMWEwYjljOGQiLCJtZXRob2QiOiJQT1NUIiwicGF0aCI6Ii9hcGkvaW50ZXJuYWwvc2lnbmFscy9tb2RlbC1rZXkiLCJib2R5IjoiYTQ5ZTNmMjUzYzgxYTIwOGU3YmI4MTZlNDQyMzNiYjI1MjdmZWVjNzg2NGY3NmI1MzAwZjRjZmUzOWEyYjMyYSJ9.a50a3ce727a3d3a25d21a3cb44f872c567a6d09b7e37d511113e444f13392fd4"
+}

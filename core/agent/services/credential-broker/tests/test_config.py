@@ -21,7 +21,8 @@ def env_for(tmp_path, **over):
     store_key = tmp_path / "store.key"
     store_key.write_text("ab" * 32)
     env = {"VEXA_CONNECTIONS_AGENT_KEY_FILE": keys["agent"], "VEXA_CONNECTIONS_HUMAN_KEY_FILE": keys["human"],
-           "VEXA_CONNECTIONS_GIT_KEY_FILE": keys["git"], "VEXA_CONNECTIONS_STATE_DIR": str(tmp_path / "state"),
+           "VEXA_CONNECTIONS_GIT_KEY_FILE": keys["git"], "VEXA_CONNECTIONS_BOTS_KEY_FILE": keys["bots"],
+           "VEXA_CONNECTIONS_STATE_DIR": str(tmp_path / "state"),
            "VEXA_CONNECTIONS_STORE_KEY_FILE": str(store_key),
            "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE": keys["identity"]}
     env.update(over)
@@ -90,7 +91,7 @@ def test_boot_refuses_the_published_rfc8032_identity_key(tmp_path):
     assert "BEGIN" not in str(e.value)
 
 
-@pytest.mark.parametrize("role", ["agent", "human", "git"])
+@pytest.mark.parametrize("role", ["agent", "human", "git", "bots"])
 def test_boot_refuses_a_role_key_published_in_the_contract_vectors(tmp_path, role):
     """credential-broker.v1's SignedAssertionVector goldens carry fixed fixture keys. A role key
     file still holding one would accept assertions anybody who read the repository can sign."""

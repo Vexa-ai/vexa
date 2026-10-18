@@ -102,6 +102,29 @@ which is the safe answer; write it out only with the domains **they** named, nev
 
 Every key you write must already be a row in `POLICIES.md`'s front matter. Do not invent a key.
 
+### Connected mail and calendar — not one of the five questions
+
+The five questions do not touch these keys, so the recommendation leaves them at their defaults and
+does not write them. Raise them only when the administrator does (*"may the agent change calendars
+in routines?"*, *"keep drafts to our own domain"*), and then write exactly the keys they named, in
+the same block and recorded in the same `## Decision` section:
+
+| key | default | what it decides |
+|---|---|---|
+| `connection_actions` | `all` | which Gmail and Calendar actions an agent may take while its person is present |
+| `connection_actions_unattended` | `none` | which reads a background routine may take (reads only; a write here is refused) |
+| `calendar_notify_attendees` | `off` | whether an agent may ask Google to email attendees about a change |
+| `calendar_attendee_domains` | `any` | which domains an agent may add as attendees |
+| `calendar_ids` | `primary` | which calendars an agent may change |
+| `draft_recipient_domains` | `any` | which domains a draft may address |
+| `draft_attachments`, `draft_attachment_max_kb` | `off`, `5120` | whether a draft may carry workspace files, and how much |
+
+Action names are `gmail.search`, `gmail.read`, `gmail.thread`, `calendar.events`, `gmail.draft`,
+`gmail.draft.update`, `calendar.event.create`, `calendar.event.update`, `calendar.event.cancel`.
+These are read loudly: a value the software cannot read stops every mail and calendar action until it
+is fixed, so read the block back before you write it. Each person can narrow them for themselves and
+never widen them. The reasoning per key is in `POLICIES.md` under *Connected mail and calendar*.
+
 ### The four shapes, worked
 
 Recognise the one you are recommending. Under each is the block the table above produces for those

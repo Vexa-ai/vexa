@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import contextvars
 import threading
 import uuid
 from pathlib import Path
@@ -237,7 +238,9 @@ class JobRunner:
         if job.turn_id:
             ev["turn_id"] = job.turn_id
         self._emit(ev)
-        th = threading.Thread(target=self._run, args=(job, key),
+        # The job continues the trace of the turn that asked for it (logevent.v1, Vexa-ai/vexa#1783):
+        # a thread starts with an empty context unless it is handed this one.
+        th = threading.Thread(target=contextvars.copy_context().run, args=(self._run, job, key),
                               daemon=True, name=f"job-{job.job_id}")
         with self._lock:
             self._threads = [t for t in self._threads if t.is_alive()]

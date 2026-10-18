@@ -4,29 +4,33 @@ Every route except the two probes (GET /health, GET /ready) requires an X-Vexa-A
 with a role key; the role decides what the caller may do (contract `x-routes`). An agent- or
 git-role call must ALSO carry the gateway's signed identity (gateway-identity.v1 `X-Vexa-Identity`)
 naming the same person as the assertion's actor: agent-api holds both keys, and neither key alone
-may let it act for anybody it likes. On the agent role that identity must also have a person in the
+may let it act for anybody it likes. A bots-role call (meeting-api's bot-account store) carries no
+identity: meeting-api acts for a bot, and that role reaches only `/api/internal/bot-account`. On the agent role that identity must also have a person in the
 loop (a worker dispatched without one may only list connections), the same rule agent-api applies. The broker owns three things nobody else writes:
 connection metadata and its audit trail (metadata.sqlite), the credential store (ADR-0040), and
 the OAuth state that binds a consent to the browser session that started it.
 
 This module wires the assertion middleware, the error handlers and the probes, and includes
-the routes (`routes_connections.py`, `routes_git.py`); the shared state and checks are `broker.py`,
+the routes (`routes_connections.py`, `routes_git.py`, `routes_bots.py`); the shared state and checks are `broker.py`,
 the request bodies `models.py`.
 
-No route returns a stored credential to the `agent` or `human` roles. Errors are fixed sentences
+No route returns a stored credential to the `agent` or `human` roles; `git` and `bots` read back only
+their own kind (Git credentials, bot-account profiles). Errors are fixed sentences
 and never echo input. Every refusal and every fault is logged as a typed line — source, kind,
 route — and never with a value.
 """
 from __future__ import annotations
 
+import hmac
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import assertion, identity_token, providers, routes_connections, routes_git
-from .broker import Broker, route_of, unwatched
+from . import assertion, identity_token, providers, routes_bots, routes_connections, routes_git, routes_sensors, routes_signals
+from .broker import Broker, route_of, shared, signed_session, unwatched
 from .faults import UpstreamFault
-from .obs import TraceMiddleware, log_event
+from .obs import TraceMiddleware, log_event, set_session
 from .reasons import ReasonedError, refusal_reason
 from .store import StoreUnavailable
 
@@ -78,17 +82,29 @@ def create_app(broker: Broker) -> FastAPI:
             person = {}
             if claims["role"] in ("agent", "git"):
                 person = b.person_signed(request.headers.get(identity_token.HEADER, "").strip(), claims["actor"])
+            # THE SESSION IS THE GATEWAY'S WORD (Vexa-ai/vexa#1783). A worker's signed identity names
+            # the unit its delegation was minted for; the assertion must audit under that unit and no
+            # other, so `audit.session` joins to the logs of the chat or job that used the credential.
+            unit = signed_session(person)
+            if unit and not hmac.compare_digest(str(claims["session"]).encode(), unit.encode()):
+                raise assertion.AssertionRefused("session_mismatch")
+            set_session(unit)
         except assertion.AssertionRefused as exc:
             log_event("assertion_refused", level="warning",
                       fields={"kind": exc.kind, "method": request.method, "route": route_of(path)})
             return JSONResponse({"detail": "Product identity refused"}, 401)
+        # A bots-role call has no person: `person` stays empty.
         # `memberships`: the shared workspaces the gateway signed for this person (agent and git
         # roles only; the human role's person is resolved by the terminal, without them).
         # `unwatched`: the signed identity is a worker's, dispatched without a person in the loop
         # (`Broker.identity` refuses it on every agent-role route that reads or uses a credential).
+        # `delegated`: any worker's identity, watched or not (the person's own setting refuses it).
         request.state.who = {"actor": claims["actor"], "session": claims["session"], "role": claims["role"],
                              "memberships": frozenset(str(w) for w in person.get("workspaces") or ()),
-                             "unwatched": unwatched(person)}
+                             "unwatched": unwatched(person), "delegated": "delegation" in person,
+                             # `shared`: other people read this turn's answer (ADR-0048); refused on
+                             # every agent-role route (`Broker.identity`)
+                             "shared": shared(person)}
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -124,4 +140,7 @@ def create_app(broker: Broker) -> FastAPI:
 
     app.include_router(routes_connections.build(b))
     app.include_router(routes_git.build(b))
+    app.include_router(routes_bots.build(b))
+    app.include_router(routes_sensors.build(b))
+    app.include_router(routes_signals.build(b))
     return app

@@ -1,9 +1,11 @@
 """`web_url` on account reads: the broker builds every provider link, from its own metadata.
 
-The agent never builds a Gmail or Calendar address. A Gmail link names the CONNECTED mailbox by
-its address (recorded at consent), never an account index such as `/u/0/`, which opens whichever
-account the browser lists first. A Calendar link is Google's own `htmlLink`, kept only on a Google
-Calendar host."""
+The agent never builds a Gmail or Calendar address. A Gmail link names the CONNECTED mailbox with
+Google's `authuser=<address>` (recorded at consent), never an account index such as `/u/0/`, which
+opens whichever account the browser lists first, and never `/mail/u/<address>/`, which Gmail answers
+with its own "Temporary Error (404)" page (the links "did not open", 2026-10-13). The fragment is
+`#all/<thread id>`, the message id only when Gmail gave no thread id. A Calendar link is Google's own
+`htmlLink`, kept only on a Google Calendar host."""
 import base64
 import json
 import time
@@ -20,13 +22,18 @@ from conftest import OWNER
 SCHEMA = json.loads((Path(__file__).resolve().parents[3] / "contracts" / "credential-broker.v1"
                      / "credential-broker.schema.json").read_text())
 
+GMAIL = "https://mail.google.com/mail/?authuser="
+
 
 def conforms(shape, data):
     jsonschema.validate(data, {"$ref": f"#/$defs/{shape}", **{k: v for k, v in SCHEMA.items() if k != "x-routes"}})
 
 
-def _mail(mid="m1", thread="t1"):
-    data = {"id": mid, "payload": {"mimeType": "text/plain", "headers": [{"name": "Subject", "value": "fixture"}],
+def _mail(mid="m1", thread="t1", msgid="<CAF1.fixture@mail.example.test>"):
+    headers = [{"name": "Subject", "value": "fixture"}]
+    if msgid:
+        headers.append({"name": "Message-ID", "value": msgid})
+    data = {"id": mid, "payload": {"mimeType": "text/plain", "headers": headers,
                                    "body": {"data": base64.urlsafe_b64encode(b"fixture").decode()}}}
     if thread:
         data["threadId"] = thread
@@ -38,11 +45,18 @@ def _read(action, respond, account, **kw):
         return providers.read_account("google_email", {"access_token": "x"}, action, account=account, http=c, **kw)
 
 
-def test_gmail_web_url_names_the_connected_account_not_an_index():
+def test_gmail_web_url_selects_the_connected_account_with_authuser_not_a_path_or_index():
     r = _read("gmail.read", lambda req: httpx.Response(200, json=_mail()), "robin.vale@example.test", message_id="m1")
     url = r["message"]["web_url"]
-    assert url == "https://mail.google.com/mail/u/robin.vale@example.test/#all/t1"
-    assert "/u/0/" not in url and "/u/1/" not in url
+    assert url == GMAIL + "robin.vale@example.test#all/t1"
+    assert "/u/" not in url
+
+
+def test_the_incident_form_is_never_built():
+    """The link that opened Gmail's 404 page: the address in the /u/ path."""
+    url = providers.gmail_web_url("robin@example.test", "1a0e78bbdd420e61")
+    assert url == GMAIL + "robin@example.test#all/1a0e78bbdd420e61"
+    assert not url.startswith("https://mail.google.com/mail/u/")
 
 
 @pytest.mark.parametrize("account,segment", [
@@ -51,14 +65,14 @@ def test_gmail_web_url_names_the_connected_account_not_an_index():
     ("a/b#c?d@example.test", "a%2Fb%23c%3Fd@example.test"),
 ])
 def test_gmail_web_url_percent_encodes_the_account_address(account, segment):
-    r = _read("gmail.read", lambda req: httpx.Response(200, json=_mail()), account, message_id="m1")
-    assert r["message"]["web_url"] == f"https://mail.google.com/mail/u/{segment}/#all/t1"
+    r = _read("gmail.read", lambda req: httpx.Response(200, json=_mail(msgid="")), account, message_id="m1")
+    assert r["message"]["web_url"] == f"{GMAIL}{segment}#all/t1"
 
 
 def test_gmail_web_url_uses_thread_id_and_falls_back_to_message_id():
-    assert providers.gmail_web_url("robin@example.test", "t9", "m9").endswith("/#all/t9")
-    assert providers.gmail_web_url("robin@example.test", None, "m9").endswith("/#all/m9")
-    assert providers.gmail_web_url("robin@example.test", "", "m9").endswith("/#all/m9")
+    assert providers.gmail_web_url("robin@example.test", "t9", "m9").endswith("#all/t9")
+    assert providers.gmail_web_url("robin@example.test", None, "m9").endswith("#all/m9")
+    assert providers.gmail_web_url("robin@example.test", "", "m9").endswith("#all/m9")
 
 
 @pytest.mark.parametrize("account", ["", "not-an-address", "a@b@c", "robin@example.test\n", None])
@@ -78,12 +92,12 @@ def test_search_and_thread_items_each_carry_web_url():
         if req.url.path.endswith("/messages"):
             return httpx.Response(200, json={"messages": [{"id": "m1"}]})
         if "/threads/" in req.url.path:
-            return httpx.Response(200, json={"id": "t7", "messages": [_mail("m1", None), _mail("m2", "t7")]})
+            return httpx.Response(200, json={"id": "t7", "messages": [_mail("m1", None, ""), _mail("m2", "t7", "")]})
         return httpx.Response(200, json=_mail("m1", "t1"))
     search = _read("gmail.search", respond, "robin@example.test")
-    assert search["messages"][0]["web_url"] == "https://mail.google.com/mail/u/robin@example.test/#all/t1"
+    assert search["messages"][0]["web_url"] == GMAIL + "robin@example.test#all/t1"
     thread = _read("gmail.thread", respond, "robin@example.test", message_id="t7")
-    assert {m["web_url"] for m in thread["messages"]} == {"https://mail.google.com/mail/u/robin@example.test/#all/t7"}
+    assert {m["web_url"] for m in thread["messages"]} == {GMAIL + "robin@example.test#all/t7"}
 
 
 def _events(*links):
@@ -122,7 +136,7 @@ def test_route_builds_web_url_from_the_brokers_recorded_account(signed, connecti
     with patch.object(providers, "read_account", lambda *a, **kw: real(*a, **kw, http=mock)):
         r = signed("agent", "POST", f"/api/connections/{cid}/read", {"action": "gmail.read", "message_id": "m1"})
     assert r.status_code == 200, r.text
-    assert r.json()["message"]["web_url"] == "https://mail.google.com/mail/u/robin.vale%2Bwork@example.test/#all/t1"
+    assert r.json()["message"]["web_url"] == GMAIL + "robin.vale%2Bwork@example.test#all/t1"
     conforms("AccountReadResponse", r.json())
 
 

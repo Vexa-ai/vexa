@@ -196,8 +196,7 @@ def test_the_generated_connection_shape_matches_its_declared_file():
     """`shared/entity_connection.v1.txt` is what the MCP's `entity_upsert` description must state.
 
     Same mechanism as `entity_sections.v1.txt`, for the same reason and now with an incident behind
-    it. This half says the file still matches the generator; the rig's own suite says its
-    description carries every line. Neither side reads the other's source."""
+    it. This half says the file still matches the generator."""
     decl = pathlib.Path(__file__).resolve().parents[1] / "shared" / "entity_connection.v1.txt"
     body = "\n".join(ln for ln in decl.read_text().splitlines() if not ln.startswith("#"))
     assert body.strip() == E.tool_connection_text().strip()

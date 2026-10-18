@@ -55,6 +55,7 @@ from llm.errors import _AUTH_SIGNATURE_RE  # noqa: F401 — re-exported for the 
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from workspaces.shared import workspace_paths as wpaths
 from shared.marks import UNWRITTEN_MARK
+from shared import attachments as attachments_mod
 # PRD decision 31 §1 — WHERE THIS PERSON IS IN TIME, on every dispatch (used in the preamble list
 # in `run_turn_over_workspace`). Imported rather than written here: the work is an HTTP read and a
 # cache, not prompt text, and what it returns is rendered by the flows route — the same rendering
@@ -70,12 +71,12 @@ from shared.timeline import timeline_preamble  # noqa: F401 — re-exported for 
 # `unit_of_topic` reads it back out and `inbox_cursor_key` spells the one key this loop writes, so
 # the reader that answers "what is still queued for this chat" is looking where the writer wrote.
 from shared import units as shared_units
-from shared import unit_input
+from shared import obs, stream_bounds, unit_input
 # THE JOB RUNNER (Vexa-ai/vexa#1584) — a long act that does not hold the chat. It sits above the
 # harness on purpose, so `serve` gets background work for every runner rather than one adapter's.
 from worker import jobs as worker_jobs
 from worker import meeting_link
-from worker import tool_access
+from worker import session_carry, tool_access
 from worker.friction import (disbelieved_capability, fallback_session, friction_preamble,
                              mcp_unreachable,
                              report as report_friction, scan_turn, spawn_gap, turn_refusal,
@@ -106,6 +107,19 @@ TurnFn = Callable[[str], Iterator[dict]]
 
 
 # ── the active mount set (WP-A1.1) — declared VERBATIM to the model so it never guesses where to write ──
+
+_PRIVATE_GUARD: list = []
+
+
+def private_guard(mounts: list[dict]):
+    """This worker's leak-rule guard on writes (``llm.private_writes``): ONE per worker process, so a
+    private source read on one turn still holds the next turn's shared writes (the model keeps what
+    it read in its context)."""
+    if not _PRIVATE_GUARD:
+        from llm.private_writes import Guard  # noqa: PLC0415
+        _PRIVATE_GUARD.append(Guard.from_env(dict(os.environ), mounts))
+    return _PRIVATE_GUARD[0]
+
 
 def active_mounts() -> list[dict]:
     """The dispatch's ordered active mount set from ``VEXA_MOUNTS`` (``[{slug,path,role,write,primary}]``).
@@ -140,8 +154,8 @@ def _tier_label(m: dict) -> str:
                     "change; everyone else mounts this ro.")
         return "GLOBAL SYSTEM tier — READ-ONLY (platform behaviour/skills/tools; never write here)"
     if role == "system":
-        return ("PRIVATE SYSTEM tier — read-write (who you're helping via `identity.md`, your"
-                " chats/sessions, settings, routines; private, never shared)")
+        return ("PRIVATE SYSTEM tier — read-write (who you're helping via `identity.md` and your"
+                " settings; private, never shared — chats are not here, they are in the session store)")
     if role == "room":
         # The post-meeting MEETING ROOM: another attendee's own desk, mounted read-only for this one
         # meeting. Declared explicitly (rather than falling through to the generic line below)
@@ -153,7 +167,10 @@ def _tier_label(m: dict) -> str:
         return (f"MEETING ROOM — READ-ONLY: {who}'s own workspace, mounted for meeting {mtg} only. "
                 f"Read it to ground the shared write-up; NEVER write here, and never copy anything "
                 f"out of it that the meeting itself did not cover.")
-    if m.get("primary"):
+    # THE DESK, not whatever is mounted first (Vexa-ai/vexa#1783): a set whose first member is an
+    # attached repo told the model that repo was "your PERSONAL workspace". `desk` says which one is;
+    # a dispatch that predates the flag still means its primary.
+    if m.get("desk", m.get("primary")):
         # DECISION 22 — a workspace is a DESK, and this is the sentence a person reads when the
         # mount stack is quoted back at them (it renders verbatim into the chat as `**seed** (…)`).
         # The founder saw "seed" in his own chat on 2026-09-02: a seed is what the platform copied
@@ -166,7 +183,65 @@ def _tier_label(m: dict) -> str:
     return f"{role} workspace — {writable}"
 
 
+#: THE CONVERSATION, CARRIED (ADR-0048 decision 3). Set by ``serve`` when agent-api hands a turn its
+#: session's transcript bundle; from then on the carry directory — under this worker's HOME, outside
+#: every mount — is the continuity root. ``None`` (no bundle ever arrived: the store is off, or an
+#: older agent-api) keeps the workspace layout below, unchanged.
+_CARRY: "session_carry.Carry | None" = None
+
+
+def set_carry(carry: "session_carry.Carry | None") -> None:
+    global _CARRY
+    _CARRY = carry
+
+
+def receive_session_bundle(bundle: "dict | None") -> None:
+    """Materialise a delivered bundle. A worker serving its first bundle starts carrying."""
+    if not bundle or _CARRY is None:
+        return
+    try:
+        _CARRY.receive(bundle, legacy_root=_workspace_continuity_root(
+            Path(os.environ.get("VEXA_WORKSPACE_PATH", "/workspace"))))
+    except Exception as exc:  # noqa: BLE001 — a bundle that cannot land leaves the turn on the old layout
+        log.warning("session bundle not materialised: %s", type(exc).__name__)
+
+
+def session_bundle_event() -> "dict | None":
+    """The ``session-bundle`` event to hand back after a turn, or None (nothing carried/changed)."""
+    if _CARRY is None:
+        return None
+    try:
+        return _CARRY.bundle_event()
+    except Exception as exc:  # noqa: BLE001 — never worth the turn; the next hand-back carries it
+        log.warning("session bundle not collected: %s", type(exc).__name__)
+        return None
+
+
+def turn_workdir(work: Path, session: str, env=None) -> Path:
+    """The folder a turn works in: the dispatch's cwd, or — when agent-api says this is a shared turn
+    with no workspace every participant can write (``VEXA_SHARED_SCRATCH``) — the session's own
+    scratch folder under this worker's HOME (ADR-0048), removed when the worker exits."""
+    env = os.environ if env is None else env
+    if (env.get("VEXA_SHARED_SCRATCH") or "") == "1":
+        return session_carry.shared_scratch(session)
+    return work
+
+
 def _continuity_root(work: Path) -> Path:
+    """The carry directory while a conversation is carried (ADR-0048), else — with the session store
+    on — a private folder of this worker's own, outside every mount: the store is the only place a
+    conversation lives, and anything under `_system` is readable by the agent's tools (a shared turn
+    must never find the speaker's other chats there). Only with the store off: the workspace layout."""
+    if _CARRY is not None and _CARRY.active:
+        return _CARRY.root
+    if os.environ.get("VEXA_SESSION_STORE") == "1":
+        root = Path(os.environ.get("HOME", "/root")) / ".vexa-session-local"
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return root
+    return _workspace_continuity_root(work)
+
+
+def _workspace_continuity_root(work: Path) -> Path:
     """Where chat continuity (session pointers + transcripts) LIVES: the PRIVATE SYSTEM mount
     (``_system``) when the dispatch declares one, else the turn's workspace. The flat model can
     point the turn's cwd at a SHARED workspace (Personal off -> first active mount), and chat
@@ -265,6 +340,11 @@ def _adopt_legacy_continuity(chat_root: Path, work: Path, session: str) -> None:
     Nothing is followed through a link and only regular files are copied (see the block above);
     the session name and the adopted session id are used as file names only when each is a single
     plain name. A refused file is logged and the turn runs without it."""
+    # ONLY WITH THE STORE OFF (live app.dev 2026-10-15). With it on, the conversation arrives as this
+    # turn's bundle and nothing is read out of a mount — a mount is exactly where another chat's raw
+    # transcript could be found, and agent-api moves those out of `_system` before the worker starts.
+    if os.environ.get("VEXA_SESSION_STORE") == "1":
+        return
     if not _plain_name(session):
         return
     target = chat_root / ".claude" / "sessions" / f"{session}.session"
@@ -319,15 +399,47 @@ _IMPERATIVE_PATTERNS: tuple[tuple["re.Pattern[str]", str, str], ...] = (
 )
 
 
+# A SENTENCE THAT MENTIONS THE VERB WITHOUT ASKING FOR IT (2026-10-13). "don't send the bot yet",
+# "did the bot join the meeting?", "why did you stop the bot?" name the verb and ask for nothing.
+_IMPERATIVE_NOT_ASKED = re.compile(
+    r"^\s*(?:did|does|has|have|had|is|was|were|why|when|whether|if)\b"
+    r"|\b(?:don'?t|do\s+not|never|no\s+need\s+to|not\s+yet|didn'?t|won'?t|shouldn'?t)\b", re.I)
+_SENTENCE = re.compile(r"[^.!?;\n]+[.!?]?")
+
+
+def thread_preamble(session: str) -> str:
+    """THIS CHAT'S OWN ID, said once per turn (ADR-0046 decision 12): a routine made here runs in
+    this chat, so `flows_submit` names it as `params.thread`; `message_agent` names it as
+    `from_thread`. Without it the agent would have to guess an id it cannot see."""
+    session = str(session or "").strip()
+    if not session:
+        return ""
+    return (f"This chat's thread id is `{session}`. A routine you create here runs in this chat: "
+            f"pass `params.thread: \"{session}\"` to flows_submit. Use it as `from_thread` in "
+            "message_agent.\n\n")
+
+
 def imperative_preamble(prompt: str) -> str:
     """If the person's own message names an operational imperative — send or stop the bot, join,
     stop recording — say so FIRST, in words that outrank every onboarding/propose/write-back
     concern the rest of the composed prompt carries. Empty string when nothing matches: an ordinary
-    chat turn gets no extra framing at all."""
+    chat turn gets no extra framing at all.
+
+    THE PERSON'S WORDS ONLY (friction 2026-10-13, fr_fd9b1e9ada4a8b0a / fr_45b8796bc15bb639). The
+    caller hands this the COMPOSED prompt, and during a live meeting the control plane folds the
+    meeting's context in front of the person's sentence — text that itself says "join the meeting"
+    and "send the bot". So "explain to me" was answered with "call request_meeting_bot first" while
+    the bot sat in the call. Only `human_half` is read, a machine-composed turn (a flow, a job, an
+    act, an agent message) has no person's words at all, and a sentence that negates or asks about
+    the verb is not a request for it."""
+    if turn_namespace(prompt or "") or (prompt or "").lstrip().startswith(MACHINERY_MARK):
+        return ""
+    said = human_half(prompt or "")
+    asked = [m.group(0) for m in _SENTENCE.finditer(said) if not _IMPERATIVE_NOT_ASKED.search(m.group(0))]
     matched: list[tuple[str, str]] = []
     seen_tools: set[str] = set()
     for pat, tool, phrase in _IMPERATIVE_PATTERNS:
-        if pat.search(prompt or "") and tool not in seen_tools:
+        if any(pat.search(x) for x in asked) and tool not in seen_tools:
             matched.append((tool, phrase))
             seen_tools.add(tool)
     if not matched:
@@ -371,6 +483,29 @@ def voice_preamble() -> str:
         "Keep anything you do say between steps to a minimum, and make it something the person "
         "gains by reading — a finding, a decision, a question. If the only content is that you are "
         "still working, say nothing: the step line is saying it already.\n\n"
+        "Never tell the person that a tool is missing, not attached, not wired or unavailable — that "
+        "is our plumbing, not their problem. Do what you can with what you have; where something "
+        "could not be done, offer it as a one-line proposal or leave the default in place, and say "
+        "nothing about the tool.\n\n"
+        "Never mention internal ids — meeting numbers, slugs, session ids, file names: name a call by its "
+        "title, a workspace by its name, a page by its title.\n\n"
+        + inline_card_preamble()
+    )
+
+
+def inline_card_preamble() -> str:
+    """THE ONE INLINE CARD (UI-DECISIONS 7g, founder 2026-10-16): how the agent asks a person to choose
+    or confirm. The client draws it; a press is the person's own message, bound to the card."""
+    return (
+        "## Asking the person\n\n"
+        "When you need the person to choose or to confirm, ask ONE thing at a time with an inline card: a "
+        "fenced ```ask block holding JSON — {\"id\": \"short-id\", \"question\": \"…\", \"chips\": [\"…\"], "
+        "\"free\": true} for a question, or {\"id\", \"question\", \"summary\": [[\"label\", \"value\"]], "
+        "\"primary\": {\"label\": \"…\"}, \"secondary\": {\"label\": \"…\"}} to confirm. Their answer arrives as "
+        "their own message `[answer <id>] …`. Never make the person type a code to approve something; creating, "
+        "inviting and sending happen only after their press. Never offer a card for something you have no tool "
+        "for: a card is a promise that the press will do it. Name a workspace by its title (\"Family Health\"), "
+        "never by its id.\n\n"
     )
 
 
@@ -472,7 +607,22 @@ def page_verbs_preamble() -> str:
         "Refused where you may not write: the `_system` tier always, `_global` unless you are the "
         "org admin, a shared workspace you only read. A refusal is the answer — say it, do not "
         "route around it.\n\n"
+        + page_blocks_preamble()
         + member_verbs_preamble()
+    )
+
+
+def page_blocks_preamble() -> str:
+    """WHAT A PAGE MAY BE WRITTEN WITH (founder 2026-10-16: a commitments page carried MDX components
+    the panel printed as literal tags). Exactly the blocks the page renderer draws, and nothing else."""
+    return (
+        "## Writing a page\n\n"
+        "A workspace page is Markdown plus exactly these blocks — nothing else (no other components, no HTML):\n"
+        "- typed references `[[kind:id|label]]` (person, company, meeting, room, page, workspace, card);\n"
+        "- live badges `{{status}}`, `{{members}}`, `{{upcoming}}`;\n"
+        "- `:::columns` (columns split by a `---` line), `:::callout`, `:::stats source=<file.json>`, each closed by `:::`;\n"
+        "- a ```view fenced block for a live table or board;\n"
+        "- `<Steps>` with one `<Step title=\"…\">…</Step>` per step, for commitments and timelines.\n\n"
     )
 
 
@@ -503,8 +653,31 @@ def connections_preamble() -> str:
         "later.\n"
         "- `provider_error` — the provider refused or is down: report its sentence and say that "
         "reconnecting will not fix it.\n"
+        "- `not_ready`, `not_connected` — no account of that kind is ready; the message names any setup "
+        "that waits for the person. Call `connection_request` so they finish or start it in "
+        "Connections.\n"
+        "- `connection_replaced` — the person re-created that connection: use `replaced_by` as the "
+        "`connection_id` from now on. `connection_deleted` — it is gone: check `connections_status`.\n"
+        "A failure's `hop` says which service was slow or down (`agent-api → credential-broker`, "
+        "`credential-broker → connected service`, `gateway → …`): name that one, not the person's account.\n"
         "Only if they ask again after that explanation, call `connection_request`, repeating that it "
         "will not fix the failure.\n\n"
+        "## Links and whose error it is\n\n"
+        "- Every message, thread and event the account tools return carries `web_url`, the one link "
+        "that opens it. Put that in pages and replies; never build a Gmail or Calendar address "
+        "yourself. An item with no `web_url` gets no link.\n"
+        "- If a person says a link you wrote does not open, or a provider shows an error page for it, "
+        "suspect the link first: re-read the item and compare its `web_url` with what you wrote, then "
+        "fix the page. A provider error page reached through a link we built is our fault until "
+        "shown otherwise.\n"
+        "- You are not signed in to anyone's Gmail or Calendar web pages: never fetch "
+        "mail.google.com, calendar.google.com or outlook pages (Bash, curl or a browser) to test a "
+        "link. What comes back proves nothing about what the person sees.\n"
+        "- Name Google or Microsoft only when the failure says the provider returned it "
+        "(`provider_error`, `source: provider`). `vexa_sign_in_unavailable` (HTTP 503 "
+        "\"Authentication temporarily unavailable\") is Vexa's own sign-in service, briefly down "
+        "(for example during an update): say that it is Vexa's, not their account and not the "
+        "provider, and retry in a few seconds.\n\n"
     )
 
 
@@ -551,6 +724,35 @@ def member_verbs_preamble() -> str:
         "`_global` only its administrator — and the company layer's editors are named in "
         "`_global/POLICIES.md` rather than invited. A refusal is the answer; say it in its own words "
         "and never write a page instead.\n\n"
+        + identity_preamble()
+    )
+
+
+def identity_preamble() -> str:
+    """A WORKSPACE HAS A FACE, and the agent gives it one unasked (UI decision 15f).
+
+    Founder, 2026-10-15: *"agent must find logo or choose identity for workspace so that all is human
+    beautiful"*. Appended beside the membership verbs because the moments it names — a workspace
+    created, a workspace shared — are the moments those verbs are used. The tools arrive deferred,
+    so the two verbs are named here or they are improvised around (a page with a hot-linked logo).
+    `tests/test_workspace_identity_guidance.py` holds the text to the served tool names."""
+    return (
+        "## A workspace's image\n\n"
+        "Every workspace shows an image wherever it appears. When a workspace is created or shared, or "
+        "`workspace_icon_state(slug)` answers `source: null` (only the generated monogram), give it a "
+        "real one without being asked:\n"
+        "- a company or project workspace: its logo. `workspace_icon_set(slug, use=\"company_logo\")` "
+        "when its README names the company's `domain:`, else `workspace_icon_set(slug, site=\"<their "
+        "domain>\")`, which finds the site's apple-touch-icon, icon links, favicon or og:image and "
+        "stores it in the workspace. Never put a remote image address anywhere.\n"
+        "- otherwise a simple mark you design: `workspace_icon_set(slug, svg=...)` with a square "
+        "`viewBox=\"0 0 24 24\"`, a rounded background in one colour that suits the topic and one glyph "
+        "or motif in white — not clip-art, not an emoji, no text longer than two letters, legible at "
+        "24 px on dark and light.\n"
+        "In a private workspace it is set: say so in one line (\"I gave Studio its logo.\"). In a shared "
+        "one the answer is `proposed`: say in one line that the owner can accept it. Never replace an "
+        "image a person chose. If the image cannot be set this turn, the generated monogram stays: "
+        "say nothing about it.\n\n"
     )
 
 
@@ -684,6 +886,74 @@ def active_target() -> str:
     return (os.environ.get("VEXA_TARGET_WORKSPACE") or "").strip()
 
 
+#: Words a workspace's name shares with ordinary requests; never enough on their own to say a
+#: request is ABOUT that workspace (UI decision 6b).
+_NAME_STOPWORDS = frozenset({"workspace", "workspaces", "personal", "project", "projects", "team", "notes",
+                             "shared", "company", "pilot", "vexa", "with", "from", "into", "about", "the"})
+
+
+def _workspace_names() -> list[dict]:
+    """``VEXA_WORKSPACE_NAMES`` — the person's workspaces as ``[{slug, name}]`` (dispatch stamps it)."""
+    try:
+        rows = json.loads(os.environ.get("VEXA_WORKSPACE_NAMES") or "[]")
+    except ValueError:
+        return []
+    return [r for r in rows if isinstance(r, dict) and r.get("slug")] if isinstance(rows, list) else []
+
+
+def named_workspaces(prompt: str, names: list[dict], target: str) -> list[dict]:
+    """The workspaces a request NAMES that are not where the chat writes (UI decision 6b).
+
+    A workspace is named when its full name or slug is in the text, or a word of its name that no
+    other workspace's name has (and that is not an everyday word) — "update the OeNB workspace"
+    names "OeNB × Vexa pilot". Deterministic and cheap: it only decides whether the turn is TOLD to
+    propose; the model still judges, and only the person's click moves the target."""
+    text = " " + re.sub(r"[^\w]+", " ", (prompt or "").casefold()) + " "
+    def toks(name: str) -> set:
+        return {t for t in re.findall(r"\w+", name.casefold()) if len(t) >= 3 and t not in _NAME_STOPWORDS}
+    counts: dict = {}
+    for r in names:
+        for t in toks(str(r.get("name") or "")):
+            counts[t] = counts.get(t, 0) + 1
+    want = (target or "").strip() or "personal"
+    hits = []
+    for r in names:
+        slug, name = str(r.get("slug") or ""), str(r.get("name") or "")
+        if slug == want or (want == "personal" and slug == "personal"):
+            continue
+        full = " " + re.sub(r"[^\w]+", " ", name.casefold()).strip() + " "
+        named = (full.strip() and full in text) or f" {slug.casefold()} " in text
+        if not named:
+            named = any(counts.get(t) == 1 and f" {t} " in text for t in toks(name))
+        if named and slug != "personal":
+            hits.append({"slug": slug, "name": name})
+    return hits
+
+
+def write_target_preamble(prompt: str, target: str = "") -> str:
+    """WHERE THIS TURN WRITES, decided BEFORE the first write (UI decision 6b, founder 2026-10-15:
+    "the agent should think which workspace it wants to write to and should ask to change its
+    writing target proactively if it thinks it needs to write there or doubts if writing to default
+    workspace is the right target"). Live case: a chat writing to biz, asked to update the OeNB pilot
+    from a transcript, started writing biz's README. The agent PROPOSES; only the person switches."""
+    names = _workspace_names()
+    want = (target or "").strip()
+    here = next((str(r.get("name")) for r in names if r.get("slug") == want), "") if want else "Personal"
+    here = here or want or "Personal"
+    lines = ["## Where this turn writes", "",
+             f"This chat writes to **{here}**. Before your FIRST write this turn, check what the request is"
+             " about — a workspace it names, the meeting's workspace, the open page's workspace, the people"
+             " involved. If that is another workspace, or you are not sure "
+             f"{here} is right, call `propose_write_target(workspace, reason)` and WAIT for the person's"
+             f" answer: write nothing to {here} meanwhile (reading is fine). You never move the target"
+             " yourself — writes to a shared workspace are seen by other people, so only their click"
+             " switches it. When their answer arrives (Switch or Keep), follow it."]
+    for h in named_workspaces(prompt, names, want):
+        lines.append(f"\n**This request names {h['name']}** (slug `{h['slug']}`), which is not where this chat"
+                     f" writes. Call `propose_write_target(workspace=\"{h['name']}\", reason=…)` before any write.")
+    return "\n".join(lines) + "\n\n"
+
+
 def mounts_preamble(mounts: list[dict], target: str = "") -> str:
     """A prompt preamble that DECLARES every mount in the THREE-TIER stack to the model VERBATIM — names,
     paths, tiers, roles, write rules — plus the default write-routing policy (WP-A1.2). The agent must
@@ -704,8 +974,13 @@ def mounts_preamble(mounts: list[dict], target: str = "") -> str:
              ""]
     for m in mounts:
         mark = " — **this chat's target: writes go here unless asked otherwise**" if (
-            want and m.get("slug") == want) else ""
-        lines.append(f"- `{m['path']}` — **{m.get('slug')}** ({_tier_label(m)}){mark}")
+            want and (m.get("slug") == want or (m.get("desk") and want in ("personal", "desk")))) else ""
+        # ONE NAME PER WORKSPACE (#1783): the name the person sees, then the slug tools take — and for
+        # the desk the slug tools take is `personal`, never a legacy pointer left in its slot.
+        name = str(m.get("name") or "").strip()
+        slug = "personal" if m.get("desk") else str(m.get("slug"))
+        label = f"**{name}** (slug `{slug}`)" if name and name != slug else f"**{slug}**"
+        lines.append(f"- `{m['path']}` — {label} ({_tier_label(m)}){mark}")
         # A per-workspace PURPOSE (stored in the workspace, travels when shared) tells the agent what THIS
         # workspace is for — so a composition (Personal + a deal ws + a dept ws) self-explains where to write.
         purpose = (m.get("purpose") or "").strip()
@@ -715,7 +990,10 @@ def mounts_preamble(mounts: list[dict], target: str = "") -> str:
         "",
         "Write-routing policy:",
         "- Platform behaviour/skills/tools live in the GLOBAL SYSTEM tier (`_global`) — READ-ONLY, never write it.",
-        "- Chats/sessions/settings, and who you're helping (`identity.md`) → the PRIVATE SYSTEM tier (`_system`).",
+        "- Settings, and who you're helping (`identity.md`) → the PRIVATE SYSTEM tier (`_system`).",
+        "- Chats are in NO workspace: every conversation is kept in the session store, apart from all"
+        " workspaces (workspaces hold knowledge only). Never write a chat into a mount; find or read the"
+        " person's chats with `chats_search` and `chat_read` when you have them.",
         "- If `_system/identity.md` still has no user name, ASK the user their name early and record it there"
         " (the full profile — company, role, relationships — belongs in the Personal baseline's `self: true`"
         " person entity, not here).",
@@ -726,8 +1004,9 @@ def mounts_preamble(mounts: list[dict], target: str = "") -> str:
         " that matches a workspace's purpose into THAT workspace.",
         "- Never write to a READ-ONLY mount.",
         *(["- THE TARGET MARKED ABOVE WINS over the two rules before it: it is where this conversation"
-           " is working, and a write elsewhere needs the person to have asked for it in this turn,"
-           " with its purpose. Say where you wrote."] if want else []),
+           " is working. If the request belongs somewhere else, PROPOSE the switch"
+           " (`propose_write_target`) and wait — never write it to the target meanwhile. Say where you"
+           " wrote."] if want else []),
         # SCOPED to file operations (2026-09-01). Unqualified, this line reads as a rule about
         # WRITING, and the model applied it to its reply prose too: asked to reference a workspace,
         # it pasted `/workspaces/<slug>/README.md` — the founder's "no reference, and when reference
@@ -838,6 +1117,17 @@ _ENTITY_FILE_SHAPE = entity_file_shape()
 # person sent meanwhile queued behind it. Finding names is a regex over text the turn already
 # produced; only the FACTS need a model. So the list arrives already made (`missing_names`), the
 # phase is told to take it in order, and a turn whose names all have pages never reaches a model.
+def room_run() -> str:
+    """The meeting this turn is the post-meeting run FOR, or `""` for every other dispatch.
+
+    Stamped by `control_plane.dispatch.build_unit_env` exactly when a room was authorised, so it
+    is a POSITIVE signal the platform always emits rather than an inference from the mount shape.
+    The mount shape cannot answer this: a room whose other attendees have no desks yet resolves to
+    zero `role: "room"` mounts — the small-team case — and "are there room mounts?" would then say
+    `no` on a run that is one."""
+    return (os.environ.get("VEXA_ROOM_MEETING") or "").strip()
+
+
 def desk_mounts(mounts: "list[dict] | None" = None) -> "tuple[dict | None, list[dict]]":
     """`(the desk, the group workspaces)` out of a mount set — whose README is maintained, and what
     the `## Workspaces` section lists.
@@ -853,7 +1143,14 @@ def desk_mounts(mounts: "list[dict] | None" = None) -> "tuple[dict | None, list[
     ms = [m for m in (mounts if mounts is not None else active_mounts()) if isinstance(m, dict)]
     normal = [m for m in ms if m.get("write", True) and m.get("role") not in ("global", "system")
               and m.get("slug") not in ("_global", "_system")]
-    desk = next((m for m in normal if m.get("primary")), None)
+    # THE DESK IS PERSONAL (one name per id, #1783): the mount flagged `desk` — never "whichever is
+    # primary", which with Personal hidden is the first workspace in a list, possibly a shared one.
+    # A mount set from before the flag keeps reading `primary`.
+    flagged = any("desk" in m for m in ms)
+    desk = next((m for m in normal if m.get("desk")), None) if flagged else None
+    if desk is None and (not flagged or room_run()):
+        # a mount set from before the flag, or a post-meeting room run (its group's desk is primary)
+        desk = next((m for m in normal if m.get("primary")), None)
     groups = [m for m in normal if m is not desk]
     return desk, groups
 
@@ -947,7 +1244,15 @@ def writeback_prompt(candidates: list[str], mounts: "list[dict] | None" = None) 
         "`source` is required and is where you read it: the meeting, the mail, the file, the "
         "person's message. What you would have to guess goes in `open_questions`, as the question. "
         "One sentence of fact is enough to start a page.\n\n"
-        "Do not judge whether a name is important enough or whether it is covered somewhere else. A "
+        # 2026-10-13: the list is a lexical guess, and the agent declined fourteen of its proposals
+        # in one day — each one correctly. Say what it may decline, so declining is the rule and
+        # not a judgement it has to defend in a friction report.
+        "Only a person, company, meeting, project or decision gets a page. A name on the list that is "
+        "none of those — a product feature or component, a UI label or button, a format string or "
+        "placeholder, an error or status text, a fragment of a sentence, a word from these "
+        "instructions — gets no page and no `kg/MISSING.md` line: skip it silently.\n\n"
+        "For a name that IS one of those five, do not judge whether it is important enough or whether "
+        "it is covered somewhere else. A "
         "meeting note is NOT a substitute for a page — it records an occasion, a page records a "
         "subject, and the point is that the next turn can find the subject.\n\n"
         "For a MEETING, pass `dates` as well — `held_at` when you know it ran, "
@@ -983,7 +1288,21 @@ WRITEBACK_PROMPT = writeback_prompt(["<the names the pre-pass found>"])
 WRITEBACK_TOOLS = ("Read", "Glob", "Grep", "Write", "Edit")
 
 
-def refresh_desk_readme(mounts: "list[dict] | None" = None) -> "dict | None":
+def _changed_since(root: Path, since: "float | None") -> bool:
+    """Did anything commit into ``root`` at or after ``since`` (epoch seconds) — i.e. did this turn
+    change it? ``since`` None (a direct call, no turn) answers yes, as before. The turn's start is a
+    VALUE the caller passes, never module state, so one turn can never decide another's."""
+    if since is None:
+        return True
+    try:
+        from llm.gitexec import run_git  # noqa: PLC0415
+        out = run_git(root, "log", "-1", "--format=%ct", timeout=10).stdout.strip()
+        return bool(out) and int(out) >= int(since) - 1
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def refresh_desk_readme(mounts: "list[dict] | None" = None, *, since: "float | None" = None) -> "dict | None":
     """Regenerate the desk README's generated sections and commit them (PRD decision 26.4).
 
     Runs at the END of a turn, in the same phase as the entity write-back, because it is the same
@@ -1028,6 +1347,9 @@ def refresh_desk_readme(mounts: "list[dict] | None" = None) -> "dict | None":
         return None
     root = Path(str(desk["path"]))
     if not root.is_dir():
+        return None
+    # ONLY A DESK THIS TURN CHANGED (#1783): a turn that wrote nothing there leaves its README alone.
+    if not _changed_since(root, since):
         return None
     home_id = desk.get("id") or workspace_id_of(root) or ""
     listed, feed = [], [{"path": str(root), "id": home_id}]
@@ -1136,14 +1458,40 @@ def removed_page_slugs(tool: str, args: object) -> set:
 _ASSISTANT_SELF = re.compile(r"^Claude(?:\s+(?:Sonnet|Opus|Haiku|Fable|Code|Instant))+(?:\s+[\d.]+)?$")
 
 
+def writeback_sources(prompt: str, reply_chunks) -> list[str]:
+    """What the pre-pass reads: the PERSON's words and the agent's WHOLE reply.
+
+    ONE REPLY, NOT ITS CHUNKS (2026-10-13). The reply reaches the worker as streamed
+    `message-delta` events, and the pre-pass used to read each delta as a separate text — so a name
+    that straddled two deltas arrived as two fragments, and the phase asked for pages called
+    "OpenAI Realt", "Agent Chrom", "Discord Developer Port" and "URL Gener". A fenced block split the
+    same way lost its fence and its box labels became names ("OT CONTAINER").
+
+    THE PERSON'S HALF, NOT THE COMPOSED PROMPT. Everything before the sentinel is context the control
+    plane folded in, and a machine-composed turn — a routine run, a flow step, an act, another
+    agent's message — has no person's words at all: its prompt is instruction text, whose format
+    placeholder ("`YYYY-MM-DD HH:MM`") and emphasis ("in TWO LINES") were proposed as names."""
+    out: list[str] = []
+    p = prompt or ""
+    if not turn_namespace(p) and not p.lstrip().startswith(MACHINERY_MARK):
+        out.append(human_half(p))
+    out.append("".join(str(c) for c in reply_chunks if c))
+    return [t for t in out if t and t.strip()]
+
+
 def writeback_candidates(texts, mounts: list[dict] | None = None,
-                         removed: "set | None" = None) -> list[str]:
+                         removed: "set | None" = None, offered: "set | None" = None) -> list[str]:
     """THE PRE-PASS — the phase's cheap half, in code, before any model is asked anything.
 
     Names out of what the turn already produced (the person's message, the agent's answer, the tool
     results), minus everything the mounted desks already have a page for. An empty list means the
     phase has nothing to do, and that is by far the commonest turn: it now costs a regex instead of
     a two-minute model call.
+
+    ``offered`` — the slugs this session's phase has already been handed (2026-10-13: "Reset Token"
+    was offered again one turn after the agent skipped it). A name the phase saw either got its page,
+    and the desk now answers to it, or was declined, and asking again buys the same decline. The set
+    is updated in place with what this call returns.
 
     ``removed`` — the slugs this turn deleted or moved away (`removed_page_slugs`). Filtered AFTER
     `missing_names` rather than passed into it, so the shared entity module keeps one meaning of
@@ -1167,8 +1515,8 @@ def writeback_candidates(texts, mounts: list[dict] | None = None,
     # writable ON PURPOSE — the runtime needs a writable cwd to create `<cwd>/.claude` at all
     # (F59) — so "writable" there means "the process can start", not "the turn may author here".
     #
-    # ...and NEVER THE SYSTEM TIERS, room or no room. `_system` is chats, sessions, settings and
-    # identity — `desk_mounts` one screen up excludes it from "the desk" for exactly this reason —
+    # ...and NEVER THE SYSTEM TIERS, room or no room. `_system` is settings and identity (chats are
+    # in the session store) — `desk_mounts` one screen up excludes it from "the desk" for exactly this reason —
     # and `_global` is the organisation's, read-only for everyone but the admin's setup turn. They
     # were reachable here only because both are writable, and the room narrowing would otherwise
     # have made `_system` the LAST root standing on a group-less room run: entity pages authored
@@ -1186,10 +1534,13 @@ def writeback_candidates(texts, mounts: list[dict] | None = None,
              and not (in_room and str(m.get("role") or "private") == "private")]
     if not roots:
         return []
+    from workspaces.shared.entities import slugify
     names = [n for n in missing_names(roots, [t for t in texts if t]) if not _ASSISTANT_SELF.match(n)]
+    if offered is not None:
+        names = [n for n in names if slugify(n) not in offered]
+        offered.update(slugify(n) for n in names)
     if not removed:
         return names
-    from workspaces.shared.entities import slugify
     # PREFIX, not equality — the same test `missing_names` makes against the slugs a desk already
     # holds. A name clipped out of prose ("Zenith SI" for "Zenith SIG") slugifies to a prefix of the
     # page's own slug, and a truncated echo of a page just deleted is no more worth writing than the
@@ -1271,6 +1622,11 @@ def writeback_events(events: Iterator[dict]) -> Iterator[dict]:
     try:
         for ev in events:
             t = ev.get("type")
+            if t == "done" and isinstance(ev.get("usage"), dict):
+                # WHAT THE PHASE'S MODEL CALLS COST still reaches the spend cap
+                # (control_plane/llm_budget.py): its `done` is dropped, its usage is not.
+                yield {"type": "llm-usage", **ev["usage"], "phase": "writeback"}
+                continue
             if t in ("message-delta", "artifact", "done"):
                 continue
             yield {**ev, "phase": "writeback"}
@@ -1358,6 +1714,39 @@ def human_half(prompt: str) -> str:
     return prompt[i + len(CONTEXT_SENTINEL):].lstrip() if i >= 0 else prompt
 
 
+def recorded_words(prompt: str) -> str:
+    """What the person said on a turn: the human half, with any attachments taken out — they are
+    read back off the stored prompt as their own field (``shared/attachments.py``)."""
+    _half = human_half(prompt)
+    return act_label(prompt) or composed_label(_half) or attachments_mod.strip(_half)
+
+
+def expand_attachments(prompt: str) -> str:
+    """The prompt with each attached file's EXACT absolute path in this turn's mounts (founder,
+    2026-10-13: the agent's turn opened with a Glob for a file it had been handed). The speaker's
+    desk is the mount whose slug is the item's ``ws``; a file the turn does not mount is said to be
+    unreadable here rather than left for the model to hunt for."""
+    if attachments_mod.MARK_OPEN not in prompt:
+        return prompt
+    by_slug = {str(m.get("slug") or ""): str(m.get("path") or "") for m in active_mounts()}
+
+    def resolve(ws: str, rel: str) -> "str | None":
+        base = by_slug.get(ws)
+        if not base:
+            # NOT MOUNTED — a shared conversation never mounts the poster's desk (ADR-0048 d4) — but
+            # a file POSTED in it arrives with the conversation itself (`session_carry`), and only
+            # those: nothing else on that desk ever travels.
+            return _CARRY.attachment_path(rel) if _CARRY is not None else None
+        try:
+            if not wpaths.is_file_inside(Path(base), rel):
+                return None
+        except Exception:  # noqa: BLE001 — a refused path is an unreadable one
+            return None
+        return str(Path(base) / rel)
+
+    return attachments_mod.expand(prompt, resolve)
+
+
 def _prompt_key(composed: str) -> str:
     """The lookup key for one turn: a digest of the EXACT string handed to the harness. The harness
     writes that string into its transcript verbatim (``llm.claude_code`` sends it as the first
@@ -1383,7 +1772,7 @@ def _turns_file(chat_root: Path, session: str) -> Path:
     return chat_root / ".claude" / "sessions" / f"{session}.turns.jsonl"
 
 
-def record_user_text(chat_root: Path, session: str, composed: str, user_text: str) -> None:
+def record_user_text(chat_root: Path, session: str, composed: str, user_text: str, harness: str = "") -> None:
     """Write down what the PERSON said on this turn, keyed by the prompt the MODEL was given.
 
     WHY THIS EXISTS, and why it is a field rather than a better parser. Chat history is read back
@@ -1404,8 +1793,10 @@ def record_user_text(chat_root: Path, session: str, composed: str, user_text: st
     back to the old strip. Bookkeeping never takes down a turn somebody is waiting on."""
     if not user_text.strip():
         return
-    line = json.dumps({"key": _prompt_key(composed), "user_text": user_text,
-                       "ts": time.time()}, ensure_ascii=False)
+    rec = {"key": _prompt_key(composed), "user_text": user_text, "ts": time.time()}
+    if harness:
+        rec["harness"] = harness      # whose session the pointer names after this turn
+    line = json.dumps(rec, ensure_ascii=False)
     f = _turns_file(chat_root, session)
     # `_system` is the tools user's to write, so the sidecar is read and replaced without following
     # a link (see `_read_text_nofollow` / `_replace_nofollow`), never appended to through one.
@@ -1419,6 +1810,74 @@ def record_user_text(chat_root: Path, session: str, composed: str, user_text: st
     except OSError as e:
         log.warning("could not record user_text for session=%s (%s) — history will fall back to "
                     "stripping the composed prompt", session, e)
+
+
+#: How much of a conversation seeds a harness that cannot resume it (another harness's session).
+SEED_EXCHANGES = 20
+SEED_TURN_CHARS = 1500
+SEED_MAX_CHARS = 24000
+REPLY_KEEP_CHARS = 4000
+
+
+def turn_records(chat_root: Path, session: str) -> list[dict]:
+    """This chat's turn records, oldest first (the sidecar `record_user_text` writes)."""
+    text = _read_text_nofollow(chat_root, _SESSIONS_DIR, _turns_file(chat_root, session).name,
+                               _TURNS_MAX_BYTES, "user_text sidecar") or ""
+    out = []
+    for ln in text.splitlines():
+        try:
+            rec = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(rec, dict):
+            out.append(rec)
+    return out
+
+
+def record_reply(chat_root: Path, session: str, composed: str, reply: str) -> None:
+    """The agent's answer beside the person's words, on the same record — what lets a harness that
+    cannot resume this chat's session be told the conversation so far. Fail-soft, like the record."""
+    if not reply.strip():
+        return
+    key = _prompt_key(composed)
+    f = _turns_file(chat_root, session)
+    try:
+        prior = _read_text_nofollow(chat_root, _SESSIONS_DIR, f.name, _TURNS_MAX_BYTES,
+                                    "user_text sidecar") or ""
+        lines = [ln for ln in prior.splitlines() if ln.strip()]
+        for i in range(len(lines) - 1, -1, -1):
+            try:
+                rec = json.loads(lines[i])
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and rec.get("key") == key:
+                rec["reply"] = reply[-REPLY_KEEP_CHARS:]
+                lines[i] = json.dumps(rec, ensure_ascii=False)
+                _replace_nofollow(chat_root, _SESSIONS_DIR, f.name, "\n".join(lines) + "\n")
+                return
+    except OSError as e:
+        log.warning("could not record the reply for session=%s (%s)", session, e)
+
+
+def conversation_seed(records: list[dict]) -> str:
+    """THE CONVERSATION SO FAR, for a harness that cannot resume it — the person's words and the
+    agent's replies, newest kept when it is long. Machinery for the model only: it is told to carry
+    on and not to mention it."""
+    pairs = [(str(r.get("user_text") or ""), str(r.get("reply") or "")) for r in records
+             if str(r.get("user_text") or "").strip()]
+    if not any(rep for _u, rep in pairs):
+        return ""
+    clip = lambda t: t if len(t) <= SEED_TURN_CHARS else t[:SEED_TURN_CHARS] + " …"
+    blocks = []
+    for u, rep in pairs[-SEED_EXCHANGES:]:
+        blocks.append(f"Person: {clip(u)}" + (f"\nYou: {clip(rep)}" if rep else ""))
+    body = "\n\n".join(blocks)
+    if len(body) > SEED_MAX_CHARS:
+        body = "…\n" + body[-SEED_MAX_CHARS:]
+    return ("## This conversation so far\n\n"
+            "You are continuing this chat; your earlier session is not available to you, so here is "
+            "what was said, oldest first. Carry on from it and do not mention this summary.\n\n"
+            + body + "\n\n---\n\n")
 
 
 def _chat_resume_max_bytes() -> int:
@@ -1456,6 +1915,29 @@ def _principal_author() -> tuple[str, str] | None:
     if name and email:
         return name, email
     return None
+
+
+def _note_home(mounts: list[dict]) -> "Path | None":
+    """Where this person's meeting notes live (#1783, ``llm.meeting_note_home``): their PRIMARY
+    writable workspace — the one every write that names no workspace lands in: Personal, or the
+    chat's workspace when Personal is switched off. Failing a primary, the ``<root>/<owner>`` mount.
+    None when the turn mounts neither."""
+    from llm.meeting_note_home import home_of  # noqa: PLC0415
+    writable = [m for m in mounts if m.get("path") and m.get("write", True) and m.get("role") not in ("global", "system")]
+    # THE CHAT'S WRITE TARGET first — the "Writes to …" chip — then Personal while it is mounted.
+    # Never a mount picked by its place in the list (#1783): with Personal hidden that could be a
+    # shared workspace the customer reads.
+    target = active_target()
+    if target:
+        hit = next((Path(m["path"]) for m in writable if str(m.get("slug") or "") == target), None)
+        if hit is not None:
+            return hit
+    desk = next((Path(m["path"]) for m in writable if m.get("desk")), None)
+    if desk is not None:
+        return desk
+    if any("desk" in m for m in mounts):
+        return None
+    return home_of(os.environ.get("VEXA_OWNER", ""), [Path(m["path"]) for m in writable])
 
 
 def _extra_mount_paths(work: Path) -> list[Path]:
@@ -1499,17 +1981,6 @@ VEXA_MCP_SERVER = "vexa"
 # list degrades safely in both directions — is in that file, beside the values it explains.
 VEXA_MCP_TOOLS = tuple(json.loads(
     pathlib.Path(__file__).with_name("mcp_tools.v1.json").read_text(encoding="utf-8"))["tools"])
-
-
-def room_run() -> str:
-    """The meeting this turn is the post-meeting run FOR, or `""` for every other dispatch.
-
-    Stamped by `control_plane.dispatch.build_unit_env` exactly when a room was authorised, so it
-    is a POSITIVE signal the platform always emits rather than an inference from the mount shape.
-    The mount shape cannot answer this: a room whose other attendees have no desks yet resolves to
-    zero `role: "room"` mounts — the small-team case — and "are there room mounts?" would then say
-    `no` on a run that is one."""
-    return (os.environ.get("VEXA_ROOM_MEETING") or "").strip()
 
 
 #: The verbs that act on a LIVE meeting. A post-meeting turn is offered none of them.
@@ -1571,14 +2042,18 @@ def _file_spawn_gap(url: str, token: str) -> None:
         log.warning("friction: could not file the spawn gap (%s)", e)
 
 
-def write_mcp_config(path: Path, url: str, token: str) -> None:
+def write_mcp_config(path: Path, url: str, token: str, trace: str = "") -> None:
     """Write the vexa MCP attachment: one HTTP server, the delegation token in its header. Replaced
     atomically (a temp file beside it, then ``os.replace``), because a refresh rewrites it while a
     background job's harness may be starting and reading it. 0600, and handed to the tools user the
     harness runs as where it can (llm/ports.py)."""
-    cfg = {"mcpServers": {VEXA_MCP_SERVER: {
-        "type": "http", "url": url, "headers": {"Authorization": f"Bearer {token}"},
-    }}}
+    headers = {"Authorization": f"Bearer {token}"}
+    # THE TURN'S TRACE (logevent.v1, Vexa-ai/vexa#1783): every tool call the harness makes continues
+    # the trace agent-api dispatched the turn under, so gateway → MCP → meeting-api / broker lines
+    # join to it. Correlation only; the session itself rides the token's signed `unit` claim.
+    if trace:
+        headers[obs.TRACE_HEADER] = trace
+    cfg = {"mcpServers": {VEXA_MCP_SERVER: {"type": "http", "url": url, "headers": headers}}}
     # NOFOLLOW, every time (the refresh rewrites this on every turn). `path` is a file in this
     # worker's private secrets directory (`shared.private_dir`), outside every mount: the write goes
     # to a NEW file with a random name created O_EXCL, is fchmod'd 0600 and fchown'd to the tools
@@ -1614,6 +2089,7 @@ class DelegationRefresh:
         self._path = Path(path) if path else None
         self._url = url
         self._token = token
+        self._trace = ""
         self._lock = threading.Lock()
 
     @staticmethod
@@ -1625,7 +2101,8 @@ class DelegationRefresh:
         return self._token
 
     def __call__(self) -> bool:
-        """True when the attachment was rewritten with a newer token."""
+        """True when the attachment was rewritten with a newer token. The turn's trace is brought
+        into the attachment too (:meth:`_retrace`), which is not a refresh."""
         if not self._token:
             return False  # this dispatch was handed no toolbelt; nothing to keep fresh
         try:
@@ -1633,23 +2110,43 @@ class DelegationRefresh:
         except Exception as e:  # noqa: BLE001 — the attachment stands until its token expires
             log.warning("delegation token refresh unread (%s) — keeping the current attachment",
                         type(e).__name__)
+            self._retrace()
             return False
         fresh = (value.decode() if isinstance(value, bytes) else str(value or "")).strip()
         if not fresh or fresh == self._token:
+            self._retrace()
             return False
         with self._lock:
             if fresh == self._token:
                 return False
+            trace = obs.get_trace_id() or self._trace
             if self._path is not None:
                 try:
-                    write_mcp_config(self._path, self._url, fresh)
+                    write_mcp_config(self._path, self._url, fresh, trace)
                 except (OSError, ValueError) as e:   # ValueError: a planted link (PathRefused)
                     log.warning("delegation token refresh not written (%s) — keeping the current "
                                 "attachment", e)
                     return False
             self._token = fresh
+            self._trace = trace
         print("vexa MCP toolbelt token refreshed", file=sys.stderr, flush=True)
         return True
+
+    def _retrace(self) -> None:
+        """Rewrite the attachment when the trace bound for this turn is not the one in it."""
+        trace = obs.get_trace_id() or ""
+        if not trace or self._path is None:
+            return
+        with self._lock:
+            if trace == self._trace:
+                return
+            try:
+                write_mcp_config(self._path, self._url, self._token, trace)
+            except (OSError, ValueError) as e:
+                log.warning("vexa MCP attachment not re-traced (%s) — tool calls keep the previous "
+                            "trace", e)
+                return
+            self._trace = trace
 
 
 def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
@@ -1862,6 +2359,15 @@ def run_turn_over_workspace(
     # session_continuity=False: never read/write the shared chat session — a machinery turn must NOT
     # pollute the user's chat conversation memory.
     resume = _resume_id(chat_root, sess_file, harness) if session_continuity else None
+    # A SESSION ANOTHER HARNESS MINTED IS NEVER RESUMED (a model picked mid-chat on another
+    # harness starts a worker that cannot read it); the conversation is told to it instead. The
+    # same harness on another model resumes its own session as before.
+    _records = turn_records(chat_root, session) if (session and session_continuity) else []
+    _last_harness = next((str(r.get("harness") or "") for r in reversed(_records) if r.get("harness")), "")
+    _name = str(getattr(harness, "name", "") or "")
+    if resume and _last_harness and _name and _last_harness != _name:
+        resume = None
+    seed = conversation_seed(_records) if (session and session_continuity and not resume) else ""
     allowed = allowed_tools or ["Read", "Write", "Edit"]
     # THE PER-TURN MCP GUARD (F153). This turn's `mcp_config` was intended by the caller (a URL was
     # minted); confirm it is actually LIVE before handing it to the harness rather than hoping the
@@ -1929,10 +2435,13 @@ def run_turn_over_workspace(
     # F162 — the imperative gate goes FIRST, ahead of even the MCP-status note: see its definition
     # for the ledger incident this closes (four unanswered "send bot"s, lost under six preambles'
     # worth of onboarding/propose framing).
-    turn_prompt = (link_note + imperative_preamble(prompt)
+    prompt = expand_attachments(prompt)
+    turn_prompt = (seed + link_note + imperative_preamble(prompt)
+                   + thread_preamble(session if session_continuity else "")
                    + mcp_status_note + voice_preamble() + friction_preamble() + kg_links_preamble(mounts)
-                   + page_verbs_preamble() + connections_preamble()
+                   + page_verbs_preamble() + connections_preamble() + CHATS_PREAMBLE
                    + mounts_preamble(mounts, active_target())
+                   + write_target_preamble(prompt, active_target())
                    + entity_index_preamble(mounts) + timeline_preamble()
                    + global_context_preamble(mounts)
                    + prompt)
@@ -1954,9 +2463,8 @@ def run_turn_over_workspace(
     # step, which `act_label` reads; `composed_label` covers the older shape, where the only thing
     # naming the composer is the `[kind]` its body opens with.
     if session and session_continuity:
-        _half = human_half(prompt)
-        record_user_text(chat_root, session, turn_prompt,
-                         act_label(prompt) or composed_label(_half) or _half)
+        record_user_text(chat_root, session, turn_prompt, recorded_words(prompt), harness=_name)
+    _recorded = turn_prompt      # the record's key, whatever a healed resume prepends later
     # WHICH KIND OF TURN THIS IS (Vexa-ai/vexa#1622). This function is the single funnel every
     # governed turn passes through, and the only place that can see all three signals at once — the
     # job flag (`_job_turn` set it on this thread), the flow mark on the prompt, and the platform's
@@ -1971,7 +2479,9 @@ def run_turn_over_workspace(
                             else "flow" if turn_namespace(prompt) == "flow"
                             else "room" if room_run() else "chat")
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
-                           commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
+                           commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config,
+                           private_guard=private_guard(mounts), confirm_text=prompt,
+                           note_home=_note_home(mounts))
     first = next(gen, None)
     # A FIRST EVENT THAT IS ALREADY `done.ok=False` means the harness refused the RESUME (an alien or
     # stale session id) — heal it by running the same prompt with no session. `reason` is what says
@@ -1985,8 +2495,13 @@ def run_turn_over_workspace(
         # The refused-resume turn is ABANDONED here — reap its CLI now rather than leaving a second
         # harness subprocess to whatever the interpreter does with an unreferenced generator.
         close_event_stream(gen)
+        if not seed and session and session_continuity:
+            seed = conversation_seed(_records)
+            turn_prompt = seed + turn_prompt
         gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=None, model=model,
-                               commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config)
+                               commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config,
+                               private_guard=private_guard(mounts), confirm_text=prompt,
+                           note_home=_note_home(mounts))
         first = next(gen, None)
     captured: str | None = None
     # THE TURN'S OWN ROUGH EDGES (PRD decision 33 §1). Only the event types the scan reads are kept
@@ -1995,8 +2510,13 @@ def run_turn_over_workspace(
     # and files a record naming no tool and saying "not run", which is what all four of the
     # founder's auto-filed reports said.
     tool_events: list[dict] = []
+    reply_parts: list[str] = []
     try:
         for ev in (gen if first is None else itertools.chain([first], gen)):
+            if ev.get("type") == "message-delta":
+                reply_parts.append(str(ev.get("text") or ""))
+            elif ev.get("type") == "done" and ev.get("ok", True) and not reply_parts and ev.get("reply"):
+                reply_parts.append(str(ev.get("reply")))
             if ev.get("type") in ("tool-call", "tool-result", "turn-truncated", "refusal-repeated"):
                 tool_events.append(ev)
             if ev.get("type") == "done":
@@ -2034,12 +2554,49 @@ def run_turn_over_workspace(
             report_friction(rec, subject=os.environ.get("VEXA_OWNER", ""))
     except Exception as e:  # noqa: BLE001 — a friction report is never worth a turn
         log.warning("friction: the auto-file scan failed (%s)", e)
+    if session and session_continuity:
+        record_reply(chat_root, session, _recorded, "".join(reply_parts))
     if captured and session_continuity:
         # never written through a link the tools user planted in `_system` (`_replace_nofollow`)
         try:
             _replace_nofollow(chat_root, _SESSIONS_DIR, sess_file.name, captured)
         except OSError as exc:
             log.warning("session pointer %s not saved: %s", sess_file.name, exc)
+
+
+def _express_lane(mcp_config: "str | None"):
+    """The express lane over this unit's MCP attachment, or None without one."""
+    from worker import express as _express, meeting_link as _ml  # noqa: PLC0415
+
+    if not mcp_config:
+        return None
+
+    def _send(link: str):
+        endpoint = _mcp_endpoint(mcp_config)
+        return _ml.send(link, endpoint) if endpoint else ([], None)
+
+    def _stop(platform: str, native_id: str) -> str:
+        endpoint = _mcp_endpoint(mcp_config)
+        if not endpoint or not native_id:
+            return ""
+        caller = _ml.McpCaller(*endpoint)
+        try:
+            caller.call("stop_bot", {"platform": platform, "native_meeting_id": native_id})
+            return f"Asked the bot to leave {_express.Express._where({'platform': platform, 'native_meeting_id': native_id})}"
+        except Exception as e:  # noqa: BLE001 — said, not raised
+            return f"The bot could not be stopped: {str(e).splitlines()[0][:160] if str(e) else type(e).__name__}"
+        finally:
+            caller.close()
+
+    return _express.Express(send=_send, stop=_stop)
+
+
+#: HOW THE PERSON'S OTHER CHATS ARE READ (founder, 2026-10-13): through the two tools that apply
+#: the session rules, never by looking for files — there are none to find under a mount.
+CHATS_PREAMBLE = ("## The person's other chats\n\nChats are kept in the session store, apart from every "
+                  "workspace (`_system` included). To find or read another of the person's chats, use "
+                  "`chats_search` and `chat_read`; without those tools, say you cannot read other chats here. "
+                  "Conversations are not files in any workspace; do not look for them with Bash, Read or Glob.\n\n")
 
 
 def start_prompt(start: dict) -> str | None:
@@ -2054,12 +2611,87 @@ def start_prompt(start: dict) -> str | None:
 
 # ── the harness loop (redis + the turn injected) ─────────────────────────────────────────────────
 
+#: The reason a turn the person stopped ends with (`turn-truncated`); the chat reads the prefix.
+STOPPED_REASON = "stopped: the person pressed Stop"
+#: How often the stop watcher looks, and how old a Stop may be and still be this turn's.
+STOP_POLL_S = 0.5
+STOP_SLACK_MS = 2000
+
+
+class StopWatch:
+    """STOP ENDS THE TURN (live app.dev 2026-10-15). agent-api writes the moment the person pressed
+    Stop (epoch ms) to the unit's stop key (`shared.units.stop_key`); this thread reads it while a
+    turn runs and, on a press made during this turn, clears it and kills the turn's process tree
+    through the harness (`llm.claude_code.stop_running_turn`). It has to be a thread: the turn loop
+    only looks up between the CLI's events, and a tool that prints nothing for 14 minutes gives it
+    no "between". A press older than the turn (a Stop meant for an earlier one) is cleared, not
+    obeyed."""
+
+    def __init__(self, stream, key: "str | None", harness) -> None:
+        self._stream, self._key, self._harness = stream, key, harness
+        self._getter = getattr(stream, "get", None) if key else None
+        self._started_ms = int(time.time() * 1000)
+        self._done = threading.Event()
+        self._thread: "threading.Thread | None" = None
+        self.hit = False
+
+    def start(self) -> None:
+        if self._getter is None or self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, name="turn-stop-watch", daemon=True)
+        self._thread.start()
+
+    def check(self) -> bool:
+        """One look: True (and the turn is being killed) when the person pressed Stop during it."""
+        if self.hit or self._getter is None:
+            return self.hit
+        try:
+            raw = str(self._getter(self._key) or "")
+        except Exception:  # noqa: BLE001 — a store that cannot answer stops nothing
+            return False
+        if not raw:
+            return False
+        try:
+            pressed = int(raw)
+        except ValueError:
+            pressed = self._started_ms
+        self._clear()
+        if pressed < self._started_ms - STOP_SLACK_MS:
+            return False
+        self.hit = True
+        log.warning("turn stopped by the person (pressed %d ms after it started)", pressed - self._started_ms)
+        stop = getattr(self._harness, "stop_running_turn", None)
+        if callable(stop):
+            try:
+                stop()
+            except Exception as e:  # noqa: BLE001
+                log.warning("could not kill the stopped turn's processes: %s: %s", type(e).__name__, e)
+        return True
+
+    def _clear(self) -> None:
+        # SET to empty, not DEL: the worker's redis user holds set/get on this key and no DEL
+        # (`control_plane.workload_redis.WORKER_COMMANDS`), exactly like the send-now key
+        try:
+            self._stream.set(self._key, "")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _run(self) -> None:
+        while not self._done.wait(STOP_POLL_S):
+            if self.check():
+                return
+
+    def close(self) -> None:
+        self._done.set()
+
+
 def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start: dict, idle_ms: int,
           harness: HarnessPort | None = None, writeback: TurnFn | None = None,
           tools: "list[str] | None" = None, job: TurnFn | None = None,
           jobs_dir: "Path | None" = None, jobs_session: str = "",
           inbox_cursor: "str | None" = None, in_key: "str | None" = None,
-          jobs_root: "Path | None" = None) -> None:
+          jobs_root: "Path | None" = None, express=None, send_now_key: "str | None" = None,
+          stop_key: "str | None" = None) -> None:
     """Run the entrypoint turn (if any), then serve interactive messages on ``in_topic`` until idle.
 
     Only stream entries signed with this unit's input key run (``shared/unit_input.py``; ``in_key``,
@@ -2119,6 +2751,10 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     """
     _desk_lock = threading.Lock()
     _trailers: list[threading.Thread] = []
+    # The names this session's write-back phase has already been handed — see `writeback_candidates`.
+    # A worker serves one chat until it idles out, so this is the session's memory for as long as
+    # the session is warm; a cold start may offer a declined name once more, never every turn.
+    _offered: set = set()
 
     def _took(cursor: list, entry_id: str) -> None:
         """Advance the cursor AND say where it now is (Vexa-ai/vexa#1610).
@@ -2188,7 +2824,8 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         msg = unit_input.verified_turn(key, fields)
         if msg is None:
             log.warning("input entry %s is not signed for this unit — not run", entry_id)
-        return msg
+            return msg
+        return stream_bounds.resolve_in_bundle(getattr(stream, "get", None), msg)
 
     def _drain_inject(cursor: list) -> None:
         enabled = getattr(harness, "midturn_enabled", lambda: False)
@@ -2261,11 +2898,96 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                     n += 1
                     # `cursor=None`: this call takes the job branch below and returns without
                     # streaming anything, so it neither drains again nor re-enters here.
-                    run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"))
+                    run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"),
+                                trace=msg.get("trace"))
             if not took:
                 return
 
-    def run_message(prompt: str, turn_id: str, nonce: str | None = None, cursor: list | None = None) -> None:
+    # THE EXPRESS LANE (`worker/express.py`). While a turn runs, a meeting link or a bot command at
+    # the head of the queue is carried out at once, beside the turn, with one line of its own; the
+    # drain stops at the first message it does not claim, like the job drain, so nothing is skipped.
+    def _drain_express(cursor: list) -> None:
+        nonlocal n
+        if express is None:
+            return
+        while True:
+            try:
+                resp = stream.xread({in_topic: cursor[0]}, count=1, block=None)
+            except Exception:  # noqa: BLE001 — a drain that cannot read drains nothing
+                return
+            entries = [e for _name, es in (resp or []) for e in es]
+            if not entries:
+                return
+            entry_id, fields = entries[0]
+            msg = _turn_of(entry_id, fields)
+            if msg is None or msg.get("type") == "stop":
+                return
+            prompt = msg.get("prompt", "")
+            if not express.claims(human_half(prompt), prompt):
+                return
+            _took(cursor, entry_id)
+            n += 1
+            tid = f"t{n}"
+            ack = {"type": "turn-accepted", "turn_id": tid, "express": True}
+            if msg.get("nonce"):
+                ack["nonce"] = msg["nonce"]
+            stream.xadd(out_topic, {"event": json.dumps(ack)})
+            try:
+                events, line = express.run(human_half(prompt))
+            except Exception as e:  # noqa: BLE001 — an act that failed says so, and the turn goes on
+                events, line = [], f"The bot could not be sent: {type(e).__name__}"
+            for ev in events:
+                stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": tid})})
+            stream.xadd(out_topic, {"event": json.dumps(
+                {"type": "message-delta", "text": line, "turn_id": tid, "express": True})})
+            stream.xadd(out_topic, {"event": json.dumps({"type": "turn-complete", "turn_id": tid, "express": True})})
+            inject = getattr(harness, "inject_user_message", None) if harness is not None else None
+            if callable(inject):
+                try:
+                    inject(f"(Meanwhile, done on the person's request: {line}.)")
+                except Exception:  # noqa: BLE001 — the next turn is told anyway
+                    pass
+
+    # SEND NOW: the person asked for one queued message to run before the rest. The running turn is
+    # stopped (said, never silent), that message runs next, and it is not run again in its place.
+    priority: list[str] = []
+    skip: set[str] = set()
+
+    def _send_now_requested(cursor: list) -> str:
+        getter = getattr(stream, "get", None) if send_now_key else None
+        if getter is None:
+            return ""
+        try:
+            want = str(getter(send_now_key) or "")
+        except Exception:  # noqa: BLE001
+            return ""
+        if not want or want in skip or want in priority:
+            return ""
+        try:
+            setter = getattr(stream, "set", None)
+            if setter is not None:
+                setter(send_now_key, "")
+        except Exception:  # noqa: BLE001
+            pass
+        return want
+
+    def run_message(prompt: str, turn_id: str, nonce: str | None = None, cursor: list | None = None,
+                    trace: "str | None" = None, bundle: "dict | None" = None) -> None:
+        stopper = StopWatch(stream, stop_key, harness)
+        try:
+            _run_message(prompt, turn_id, nonce, cursor, trace, bundle, stopper)
+        finally:
+            stopper.close()
+
+    def _run_message(prompt: str, turn_id: str, nonce: "str | None", cursor: "list | None",
+                     trace: "str | None", bundle: "dict | None", stopper: "StopWatch") -> None:
+        # THE TURN RUNS UNDER ITS TRACE (logevent.v1, Vexa-ai/vexa#1783): the one agent-api dispatched
+        # it under (the signed stream entry's `trace`, or VEXA_TRACE_ID for the entrypoint), else a
+        # fresh one. The MCP attachment carries it (DelegationRefresh), and so do this worker's lines.
+        obs.set_trace_id(obs.clean_trace_id(trace) or obs.new_trace_id())
+        obs.log_event("turn_started", fields={"turn_id": turn_id})
+        # ADR-0048: the conversation arrives with the turn, before anything reads its continuity.
+        receive_session_bundle(bundle)
         ack: dict = {"type": "turn-accepted", "turn_id": turn_id}
         if nonce:
             ack["nonce"] = nonce
@@ -2295,7 +3017,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         # dragged a model call it was supposed to prevent — 2 of 2 turns, exactly the gate failing
         # open. A truncated string is not a source of names. It may confirm one; it may never
         # introduce one, and confirmation buys nothing the complete text has not already given.
-        said: list[str] = [prompt]
+        said: list[str] = []          # the reply's streamed deltas — joined before anything reads them
         # WHAT THIS TURN TOOK AWAY (Vexa-ai/vexa#1621) — the write-back phase must not put it back.
         # Recorded on the CALL (that is where the path is) and only counted on a SUCCESSFUL result,
         # the same success-only discipline `llm.claude_code` applies to every other event it derives
@@ -2303,7 +3025,20 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         # write nobody asked to lose.
         pending_removals: dict[str, set] = {}
         removed_slugs: set = set()
-        for ev in turn(prompt):
+        # WHAT THE EXPRESS LANE DID MEANWHILE is told to this turn, on the grounding side of the
+        # sentinel so the person's own words (`human_half`) stay exactly theirs.
+        notes = express.take_notes() if express is not None else ""
+        if notes:
+            prompt = (notes + prompt) if CONTEXT_SENTINEL in prompt else (notes + CONTEXT_SENTINEL + "\n\n" + prompt)
+        turn_started = time.time()     # what this turn's README refresh compares against (#1783)
+        gen = turn(prompt)
+        stopper.start()
+        for ev in gen:
+            if stopper.hit:
+                # STOP (live app.dev 2026-10-15): the watcher has already killed the CLI and its
+                # tools; whatever the dying stream still yields is not this turn's any more
+                close_event_stream(gen)
+                break
             t = ev.get("type")
             if t == "tool-call":
                 tool_calls += 1
@@ -2322,7 +3057,24 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
             stream.xadd(out_topic, {"event": json.dumps({**ev, "turn_id": turn_id})})
             if cursor is not None:
                 _drain_jobs(cursor)
+                _drain_express(cursor)
                 _drain_inject(cursor)
+                wanted = _send_now_requested(cursor)
+                if wanted:
+                    priority.append(wanted)
+                    stream.xadd(out_topic, {"event": json.dumps(
+                        {"type": "turn-truncated", "turn_id": turn_id,
+                         "reason": "stopped: the person asked for their next message to run now"})})
+                    close_event_stream(gen)
+                    break
+        stopper.close()
+        if stopper.hit:
+            # SAID, NEVER SILENT: the person pressed Stop and this is the turn ending because of it.
+            # No correction pass and no write-back follow a stopped turn — it completes now, so the
+            # conversation's head is released and the next message runs.
+            close_event_stream(gen)
+            stream.xadd(out_topic, {"event": json.dumps(
+                {"type": "turn-truncated", "turn_id": turn_id, "reason": STOPPED_REASON})})
         # THE WRITE-BACK PHASE (decision 24.2). It runs AFTER the answer has streamed — the person
         # is already reading — and before `turn-complete`, so its tool calls land as step lines on
         # the turn they belong to instead of on nothing. A phase that raises must not lose the
@@ -2339,9 +3091,9 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         # rather than fed back through the detector. A correction that produces another refusal is a
         # real problem to file, not a loop to run. It fires only when the tool is actually in this
         # session's list — with the tool absent the refusal was true and the turn was right.
-        if tools:
+        if tools and not stopper.hit:
             try:
-                _refused = disbelieved_capability(prompt, "".join(said), tools)
+                _refused = disbelieved_capability(prompt, prompt + "".join(said), tools)
             except Exception:  # noqa: BLE001 — a detector must never cost a delivered answer
                 _refused = None
             if _refused:
@@ -2350,7 +3102,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                     report_friction({
                         "kind": "capability-hallucination", "tool": _refused,
                         "what": f"the turn said it lacked {_refused} with the tool in its list",
-                        "prompt": prompt[:400], "reply": "".join(said)[:400],
+                        "prompt": prompt[:400], "reply": (prompt + "".join(said))[:400],
                     }, subject=os.environ.get("VEXA_OWNER", ""))
                 except Exception as e:  # noqa: BLE001
                     log.warning("f70: could not file the friction record (%s)", e)
@@ -2377,10 +3129,11 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         # phase used to run here regardless, upserting every name the transcript mentioned onto
         # the desk (four pages on 2026-09-06), and the flow's own guard then failed the step for
         # exactly that. `room_run()` is the platform's positive signal for such a run.
-        if writeback is not None and not room_run():
+        if writeback is not None and not room_run() and not stopper.hit:
             try:
                 if should_write_back(prompt, tool_calls, upserts=upserts):
-                    candidates = writeback_candidates(said, removed=removed_slugs)
+                    candidates = writeback_candidates(writeback_sources(prompt, said),
+                                                      removed=removed_slugs, offered=_offered)
                 run_writeback = should_write_back(prompt, tool_calls, upserts=upserts, candidates=candidates)
             except Exception as e:  # noqa: BLE001 — the pre-pass must never cost the turn either
                 log.warning("write-back pre-pass failed on %s: %s: %s", turn_id, type(e).__name__, e)
@@ -2390,9 +3143,20 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
             """Decision 26.4's refresh + `turn-complete` — the part every turn does regardless of
             whether write-back itself ran."""
             try:
-                refresh_desk_readme()
+                refresh_desk_readme(since=turn_started)
             except Exception as e:  # noqa: BLE001
                 log.warning("desk README refresh failed on %s: %s: %s", turn_id, type(e).__name__, e)
+            # ADR-0048: the conversation goes back BEFORE the turn completes, so a reader that
+            # waits for `turn-complete` has already seen the version this turn produced.
+            handed = session_bundle_event()
+            if handed is not None:
+                if getattr(stream, "set", None) is not None and shared_units.unit_of_topic(out_topic):
+                    try:   # BY REFERENCE: a transcript is megabytes, a stream entry must not be
+                        handed = stream_bounds.handback_by_ref(
+                            stream, shared_units.unit_of_topic(out_topic), handed, tag=turn_id)
+                    except Exception as exc:  # noqa: BLE001 — inline is still a correct hand-back
+                        log.warning("session hand-back by reference failed: %s", type(exc).__name__)
+                stream.xadd(out_topic, {"event": json.dumps({**handed, "turn_id": turn_id})})
             # HOW MANY STEPS THE TURN TOOK, on the turn's own status event (Vexa-ai/vexa#1622).
             # This count already existed — it is what gates the write-back phase — and was thrown
             # away, so the only step count anywhere was one each browser derived for itself by
@@ -2447,25 +3211,48 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     # and queue the rest to run in arrival order after it. No nonce (a session-only start, an older
     # dispatcher) falls back to the tail anchor — the previous behaviour, unchanged.
     entry_nonce = ((start.get("entrypoint") or {}).get("nonce") or "") if start else ""
-    pending: list[str] = []          # boot-time messages that are NOT the entrypoint's copy
+    pending: list[tuple] = []        # boot-time (prompt, trace, session bundle) that are NOT the entrypoint's copy
+    entry_bundle: "dict | None" = None   # the entrypoint copy's session bundle (ADR-0048)
     last = "$"
     xrevrange = getattr(stream, "xrevrange", None)
     xrange_ = getattr(stream, "xrange", None)
+    # WHAT A PREVIOUS WORKER OF THIS UNIT ALREADY TOOK never runs again. The in-topic outlives the
+    # worker (an idle exit, a restart, a drain), and the cursor it published (`inbox_cursor`) says how
+    # far it read; an entry at or before it ran then. Without it a cold boot re-ran every message the
+    # chat had ever been sent (app.dev, 2026-10-13: 33 old turns in one chat).
+    prior = ""
+    getter = getattr(stream, "get", None) if inbox_cursor else None
+    if getter is not None:
+        try:
+            prior = str(getter(inbox_cursor) or "")
+        except Exception:  # noqa: BLE001 — no cursor read: every waiting entry runs, as before
+            prior = ""
+
+    def _id(e: str) -> tuple:
+        a, _, b = str(e).partition("-")
+        return (int(a or 0), int(b or 0)) if a.isdigit() and (b or "0").isdigit() else (0, 0)
+
     if entry_nonce and xrange_ is not None:
         try:
-            present = xrange_(in_topic) or []
+            try:   # after the published cursor, counted — never XRANGE - + (app.dev 2026-10-16)
+                present = stream_bounds.boot_window(xrange_, in_topic, prior)
+            except TypeError:     # a stream without range bounds (older fakes)
+                present = xrange_(in_topic) or []
             for entry_id, fields in present:
                 last = entry_id
+                if prior and _id(entry_id) <= _id(prior):
+                    continue          # taken by the worker before this one
                 msg = _turn_of(entry_id, fields)
                 if msg is None:
                     continue
                 if msg.get("nonce") == entry_nonce:
+                    entry_bundle = msg.get("session_bundle")
                     continue          # the entrypoint's own copy — it runs as t0 below
                 text = msg.get("prompt", "")
                 if text:
-                    pending.append(text)
+                    pending.append((text, msg.get("trace"), msg.get("session_bundle")))
         except Exception:  # noqa: BLE001 — never a boot blocker; fall back below
-            pending, last = [], "$"
+            pending, last, entry_bundle = [], "$", None
     if last == "$" and xrevrange is not None:
         try:
             tail = xrevrange(in_topic, count=1)
@@ -2483,14 +3270,31 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     first = start_prompt(start)
     n = 0
     if first:
-        run_message(first, "t0", cursor=cursor)
+        run_message(first, "t0", cursor=cursor, trace=os.environ.get("VEXA_TRACE_ID"),
+                    bundle=entry_bundle)
     # …then everything that was already waiting, in the order it arrived. These are turns somebody
     # sent and got a 200 for; the only thing that made them disappear was the anchor.
-    for text in pending:
+    for text, trace, waiting_bundle in pending:
         n += 1
-        run_message(text, f"t{n}", cursor=cursor)
+        run_message(text, f"t{n}", cursor=cursor, trace=trace, bundle=waiting_bundle)
 
     while True:
+        while priority:
+            want = priority.pop(0)
+            try:
+                rows = stream.xrange(in_topic, min=want, max=want) or []
+            except TypeError:     # a stream without range bounds
+                rows = [r for r in (stream.xrange(in_topic) or []) if r[0] == want]
+            except Exception:  # noqa: BLE001 — not found: it runs in its place instead
+                rows = []
+            for entry_id, fields in [r for r in rows if r[0] == want][:1]:
+                msg = _turn_of(entry_id, fields)
+                if msg is None or msg.get("type") == "stop":
+                    continue
+                skip.add(entry_id)
+                n += 1
+                run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"), cursor=cursor,
+                            trace=msg.get("trace"), bundle=msg.get("session_bundle"))
         resp = stream.xread({in_topic: cursor[0]}, count=1, block=idle_ms)
         if not resp:
             # A JOB IS A THREAD IN THIS PROCESS, so an idle reap under one is a kill. Keep serving
@@ -2505,6 +3309,8 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         for _name, entries in resp:
             for entry_id, fields in entries:
                 _took(cursor, entry_id)
+                if entry_id in skip:
+                    continue          # already run, out of turn, on the person's "send now"
                 msg = _turn_of(entry_id, fields)
                 if msg is None:
                     continue
@@ -2514,7 +3320,23 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                         _jobs.join_all()
                     return
                 n += 1
-                run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"), cursor=cursor)
+                run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"), cursor=cursor,
+                            trace=msg.get("trace"), bundle=msg.get("session_bundle"))
+
+
+def count_usage(events, client, unit_id: str):
+    """Pass every event through, and close the harness when the reader stops.
+
+    It no longer writes the token ledger (R0, 2026-10-16): each ``done``'s ``usage`` reaches
+    agent-api on the unit's output stream, and agent-api's ``llm_budget.Budget.record`` is the one
+    writer of both the spend ledger and the rolling token view (``shared/usage.py``). Writing here
+    too would count every turn twice. ``client`` and ``unit_id`` stay for the callers' shape."""
+    del client, unit_id
+    try:
+        for ev in events:
+            yield ev
+    finally:
+        close_event_stream(events)      # whoever stops reading this must reach the harness too
 
 
 def main() -> None:  # pragma: no cover — the container entrypoint (wired in tests via serve())
@@ -2523,6 +3345,9 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     # Before anything else: no process of this user without CAP_SYS_PTRACE — the model's tools,
     # wherever they could not be given a user of their own — reads this process's /proc entries.
     harden_worker_process()
+    # Every line this worker emits names the unit it runs as — the session (logevent.v1).
+    obs.configure("agent-worker")
+    obs.set_session(shared_units.unit_of_topic(os.environ.get("VEXA_UNIT_IN_TOPIC", "")) or None)
     work = Path(os.environ.get("VEXA_WORKSPACE_PATH", "/workspace"))
     model = os.environ.get("VEXA_AGENT_MODEL") or None
     # Boot preflight (WS1b): if a credential prefix and its base-url host obviously disagree, log a
@@ -2531,7 +3356,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     _warn = preflight_provider_guard()
     if _warn:
         log.warning("agent-api worker: %s", _warn)
-    client = redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
+    client = stream_bounds.BoundedStream(redis.from_url(os.environ["REDIS_URL"], decode_responses=True))
     out_topic = os.environ["VEXA_UNIT_OUT_TOPIC"]
     idle_ms = int(os.environ.get("VEXA_IDLE_TIMEOUT_SEC", "120")) * 1000
 
@@ -2547,6 +3372,12 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     chat_tools = (os.environ.get("VEXA_CHAT_TOOLS")
                   or "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,spawn_job").split(",")
     session = os.environ.get("VEXA_CHAT_SESSION") or DEFAULT_CHAT_SESSION
+    # ADR-0048: ready to carry this chat's conversation; inactive until agent-api hands one over.
+    set_carry(session_carry.Carry(session=session))
+    # …and a shared turn with no workspace in common works in this session's own scratch folder.
+    scratch = None
+    if turn_workdir(work, session) != work:
+        work = scratch = turn_workdir(work, session)
     # The delegated vexa MCP (meetings, transcripts, workspaces) — attached ONLY when the dispatcher
     # minted a token for this dispatch. Attaching the server is not enough: `--strict-mcp-config`
     # scopes WHICH servers exist, `--allowedTools` scopes what the model may CALL, so the server id
@@ -2562,14 +3393,17 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         token=DelegationRefresh.take())
     use_token_source(refresh_delegation.current)
 
+    _unit = shared_units.unit_of_topic(os.environ["VEXA_UNIT_IN_TOPIC"])
+
     def _fresh(fn):
         """``fn`` with the attachment brought up to date first, and its events watched for a vexa
         tool call refused after the token it attached with expired (``worker.tool_access``): that
-        turn ends with a typed fault rather than quietly without its tools."""
+        turn ends with a typed fault rather than quietly without its tools. Each turn's reported
+        usage rides its `done` to agent-api, which counts it (`llm_budget`, one writer)."""
         def call(*args, **kwargs):
             refresh_delegation()
             exp = tool_access.token_exp(refresh_delegation.current())
-            return tool_access.watch(fn(*args, **kwargs), exp)
+            return count_usage(tool_access.watch(fn(*args, **kwargs), exp), client, _unit)
         return call
 
     room = room_run()
@@ -2652,6 +3486,14 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # each record and each event carries the session that owns it.
         jobs_dir=_continuity_root(work) / ".claude" / "jobs",
         jobs_root=_continuity_root(work),     # the register is read and written nofollow under it
+        # THE EXPRESS LANE: a meeting link or a bot command acted on beside a running turn, on this
+        # unit's own MCP attachment (the person's token), never queued behind it.
+        express=_express_lane(mcp_cfg),
+        send_now_key=shared_units.send_now_key(
+            shared_units.unit_of_topic(os.environ["VEXA_UNIT_IN_TOPIC"])),
+        # STOP: agent-api writes the press here; the watcher kills the running turn (live 2026-10-15)
+        stop_key=shared_units.stop_key(
+            shared_units.unit_of_topic(os.environ["VEXA_UNIT_IN_TOPIC"])),
         jobs_session=session,
         # WHERE THIS WORKER SAYS HOW FAR IT HAS READ (Vexa-ai/vexa#1610). Derived from the in-topic
         # rather than handed in as a second environment variable: both sides can already compute it,
@@ -2665,3 +3507,8 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # only one that makes acting on a refusal safe.
         tools=chat_tools,
     )
+    # ADR-0048: every turn has handed the conversation back to agent-api by now, so this worker's
+    # copy and the session's scratch folder are nobody's any more — removed rather than left behind.
+    if _CARRY is not None and _CARRY.active:
+        session_carry.discard(_CARRY.root)
+    session_carry.discard(scratch)

@@ -875,7 +875,8 @@ def preview_invite(root: Path, token: str, *, now: Optional[float] = None) -> Op
     expiry · validity) — WITHOUT granting membership. Capability-gated by the token itself: whoever holds
     the link may see what they are being invited to, which is exactly what the pre-join consent screen
     needs (it renders before login). Returns ``None`` when no invite matches the token (never leaks which
-    workspaces exist). Read-only: no writes, no use-count change, no membership."""
+    workspaces exist). A revoked, expired or used-up token returns ``{"valid": False, "reason"}`` and
+    no terms. Read-only: no writes, no use-count change, no membership."""
     t = now if now is not None else time.time()
     found = find_invite(Path(root), token)
     if found is None:
@@ -885,6 +886,9 @@ def preview_invite(root: Path, token: str, *, now: Optional[float] = None) -> Op
     used_up = int(rec.get("uses", 0)) >= int(rec.get("max_uses", 1))
     reason = ("revoked" if rec.get("revoked") else "expired" if expired
               else "used_up" if used_up else None)
+    if reason is not None:
+        # A token that can no longer be redeemed says why, and nothing about the workspace.
+        return {"valid": False, "reason": reason}
     return {
         "workspace_id": slug,
         "role": rec.get("role", "viewer"),

@@ -207,6 +207,37 @@ def test_an_external_address_is_mailed_through_the_carrier(tmp_path):
     assert fact["uid"] == OWNER and fact["inviter"] == OWNER_MAIL
 
 
+def test_a_deployment_that_captures_mail_never_says_mailed(tmp_path):
+    """LIVE DEFECT (founder, 2026-10-14): the agent said "the invite link was emailed to her" while
+    the mail landed in the capture double and she received nothing. The carrier's acceptance is not
+    a delivery: when the deployment captures mail, the answer is `captured` and the link is the
+    person's to give."""
+    idx = _owned(tmp_path)
+    out = acts.invite(tmp_path, WS, email=NEW_MAIL, role="contributor", inviter=OWNER, index=idx,
+                      ui_url="https://app.example.test", resolve_subject=lambda a: None,
+                      mail=lambda fact: True, mail_delivery=lambda: "captured")
+    assert out["delivery"] == "captured"
+    assert "mailed" not in out["said"] and "emailed" not in out["said"]
+    assert "captures mail and does not deliver it" in out["said"]
+    assert out["link"] in out.get("link", "")
+
+
+def test_a_deployment_that_delivers_mail_still_says_mailed(tmp_path):
+    idx = _owned(tmp_path)
+    out = acts.invite(tmp_path, WS, email=NEW_MAIL, role="contributor", inviter=OWNER, index=idx,
+                      ui_url="https://app.example.test", resolve_subject=lambda a: None,
+                      mail=lambda fact: True, mail_delivery=lambda: "delivered")
+    assert out["delivery"] == "mailed" and "mailed to them" in out["said"]
+
+
+def test_an_unknown_delivery_mode_is_not_reported_as_a_mail(tmp_path):
+    idx = _owned(tmp_path)
+    out = acts.invite(tmp_path, WS, email=NEW_MAIL, role="contributor", inviter=OWNER, index=idx,
+                      ui_url="https://app.example.test", resolve_subject=lambda a: None,
+                      mail=lambda fact: True, mail_delivery=lambda: "unknown")
+    assert out["delivery"] == "sent" and "mailed to them" not in out["said"]
+
+
 def test_an_address_this_instance_knows_gets_the_link_and_no_mail(tmp_path):
     idx = _owned(tmp_path)
     sent: list = []
@@ -217,6 +248,17 @@ def test_an_address_this_instance_knows_gets_the_link_and_no_mail(tmp_path):
     assert sent == []                       # nothing published for somebody already here
     assert out["delivery"] == "link" and out["internal"] is True
     assert out["link"].startswith("https://app.example.test/join?i=")
+
+
+def test_an_account_here_is_told_it_is_in_their_notifications_not_to_be_sent_a_link(tmp_path):
+    """Founder test 2026-10-16: the agent answered "send them this link" for an account here, and
+    named the workspace by its slug. They have the invite in their bell; nothing is to be sent."""
+    idx = _owned(tmp_path)
+    out = acts.invite(tmp_path, WS, email=NEW_MAIL, role="owner", inviter=OWNER, index=idx,
+                      ui_url="https://app.example.test", workspace_name="Citizenship applications",
+                      resolve_subject=lambda a: "u_them")
+    assert "Citizenship applications" in out["said"] and WS not in out["said"]
+    assert "notifications" in out["said"] and "link" not in out["said"].lower()
 
 
 def test_a_publish_that_did_not_land_says_the_link_is_still_ours_to_give(tmp_path):
@@ -377,6 +419,9 @@ def test_the_invite_route_is_owner_only_and_answers_what_it_did(tmp_path, monkey
     published: list = []
     monkeypatch.setattr(publish_mod, "publish_invite",
                         lambda fact, **kw: (published.append(fact), True)[1])
+    # a deployment whose mail path DELIVERS (flows `GET /mail/delivery`) — the captured case is
+    # `test_a_deployment_that_captures_mail_never_says_mailed`
+    monkeypatch.setattr(publish_mod, "mail_delivery", lambda **kw: "delivered")
     c = _client(tmp_path, index=idx)
 
     r = c.post("/api/workspace/invite",
@@ -422,7 +467,8 @@ def test_mint_then_preview_then_accept_through_the_three_routes(tmp_path, monkey
     accepted = c.post("/api/workspace/invites/accept", json={"token": token},
                       headers=_h("u_jsmith", NEW_MAIL))
     assert accepted.status_code == 200, accepted.text
-    assert accepted.json() == {"workspace_id": WS, "role": "contributor", "already_member": False}
+    assert {k: accepted.json()[k] for k in ("workspace_id", "role", "already_member")} == \
+        {"workspace_id": WS, "role": "contributor", "already_member": False}
     assert m.is_member(tmp_path, WS, "u_jsmith") == "contributor"
     # and the link is spent: one address, one use
     assert c.get("/api/workspace/invites/preview", params={"token": token}).json()["valid"] is False
@@ -495,7 +541,9 @@ def test_the_route_body_is_a_named_model_so_the_verb_could_be_bound(tmp_path):
     from control_plane.bodies import WorkspaceInviteBody, WorkspaceMembershipBody
     assert set(WorkspaceInviteBody.model_fields) == {"slug", "email", "role"}
     assert set(WorkspaceMembershipBody.model_fields) == {"slug", "email", "role"}
-    assert WorkspaceInviteBody.model_fields["role"].default == "reader"
+    # contributor, not reader (Vexa-ai/vexa#1783): "share X with Y" names no role, and asking for
+    # one every time was the friction.
+    assert WorkspaceInviteBody.model_fields["role"].default == "contributor"
 
 
 # ── the fact on the wire ─────────────────────────────────────────────────────────────────────────

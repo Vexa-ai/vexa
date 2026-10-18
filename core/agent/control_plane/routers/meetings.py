@@ -15,9 +15,9 @@ from control_plane import meeting_terms as meeting_terms_mod
 from control_plane import system_mounts
 from control_plane.api_shared import _decode_sse_cursor, _encode_sse_cursor, _sse, transcript_erased
 from control_plane.peer_lookups import meeting_access_check, meeting_transcript_reader
-from control_plane.ceiling import reads_within
-from control_plane.bodies import TranscriptTermsBody
-from fastapi import APIRouter, Body, HTTPException, Request
+from control_plane.ceiling import reads_within, require_in_ceiling, require_private
+from control_plane.bodies import MeetingAttachBody, TranscriptTermsBody
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pathlib import Path
 import json
@@ -36,7 +36,8 @@ LIVE_PING_EVERY_MS = 15000
 
 def build(**d) -> APIRouter:
     """The meetings routes, bound to one app's dependencies."""
-    router = APIRouter()
+    # A turn other people read reaches none of the person's meetings (ADR-0048 decision 4).
+    router = APIRouter(dependencies=[Depends(require_private)])
     _entity_mounts = d['_entity_mounts']
     _meeting_note_recorder = d['_meeting_note_recorder']
     _meeting_owner_lookup = d['_meeting_owner_lookup']
@@ -142,6 +143,100 @@ def build(**d) -> APIRouter:
         return meeting_mint_mod.mint(wsr.root, subject, row,
                                      path=str((body or {}).get("path") or ""),
                                      record=_meeting_note_recorder)
+    @router.post("/api/meeting/note/attach")
+    def attach_meeting_page(request: Request, body: MeetingAttachBody = Body(...)):
+        """MAKE THIS PAGE THE MEETING'S PAGE — `meeting_attach_page`, and "Use as meeting page" (#1783).
+
+        Founder, 2026-10-15: *"why not map page to meeting reliably?"* An agenda his agent wrote
+        before a call sat beside the note the bot then minted, and the report went to the minted one.
+        So a page is bound by IDENTITY, never by a title that looks alike:
+
+          * ``meeting_id`` given — the meeting exists: the page is stamped with it (and with the
+            row's native id and link) and RECORDED on the row with its workspace, so the sidebar,
+            Update notes and the post-meeting report all read and write this page;
+          * no meeting yet — ``native`` (from ``parse_meeting_link``), ``meeting_url`` or
+            ``calendar_event`` are stamped, and the bot's mint ADOPTS the page when the meeting is
+            created (exact match, `meeting_note.resolve_exact_in`).
+
+        ONE MEETING, ONE PAGE: a meeting whose recorded page is a different page with words in it is
+        refused with ``409`` naming that page — merge the two first, then attach. A recorded page
+        that is still empty is simply replaced. The page must be a meeting page
+        (``kg/entities/meeting/<name>.md``) in one of the caller's own active workspaces; the
+        meeting, when named, must be one the caller may read."""
+        from workspaces.shared import workspace_paths as _wp
+        from workspaces.shared.entities import commit_entity
+
+        subject = subject_of(request)   # 401 if no (gateway-injected) identity — fail closed
+        b = body.model_dump()
+        path = str(b.get("path") or "").strip()
+        slug = str(b.get("workspace") or b.get("slug") or "").strip()
+        if slug in ("personal", "desk"):
+            slug = ""
+        # A NAMED WORKSPACE IS HELD TO A DELEGATED DISPATCH'S CEILING before anything is read
+        require_in_ceiling(request, slug or None)
+        if not meeting_note_mod.is_note_path(path):
+            raise HTTPException(status_code=400, detail={
+                "refused": "not a meeting page", "path": path,
+                "said": "A meeting page lives at kg/entities/meeting/<name>.md. Move the page there "
+                        "(workspace_move), then attach it."})
+        place = next((p for p in meeting_note_mod.note_places(wsr.root, subject)
+                      if not p["hidden"] and (p["slug"] == slug or (not slug and p["home"]))), None)
+        if place is None:
+            raise HTTPException(status_code=404, detail="no such workspace of yours is on")
+        text = _wp.read_text_inside(place["dir"], path)
+        if text is None:
+            raise HTTPException(status_code=404, detail="no such page")
+        keys: dict = {}
+        row = None
+        meeting_id = str(b.get("meeting_id") or "").strip()
+        if meeting_id:
+            row = _meeting_access(subject, meeting_id, within=_within(request))
+            if row is None:
+                raise HTTPException(status_code=403, detail="not authorized for this meeting")
+            ident = meeting_note_mod.row_identity(row)
+            keys.update({k: ident[k] for k in ("meeting", "native", "meeting_url", "calendar_event") if k in ident})
+            rec_path, rec_ws = meeting_note_mod.recorded_place(row)
+            if rec_path and not (rec_path == path and rec_ws == place["slug"]):
+                other = next((p for p in meeting_note_mod.note_places(wsr.root, subject)
+                              if not p["hidden"] and (p["slug"] == rec_ws or (not rec_ws and p["home"]))), None)
+                current = _wp.read_text_inside(other["dir"], rec_path) if other else None
+                if current is not None and not meeting_note_mod.nothing_written(current) and not b.get("replace"):
+                    raise HTTPException(status_code=409, detail={
+                        "refused": "this meeting already has a page",
+                        "current": {"path": rec_path, "workspace": rec_ws},
+                        "said": (f"Meeting {meeting_id} already has its page at {rec_path}"
+                                 f"{' in ' + rec_ws if rec_ws else ''}. A meeting has one page: merge "
+                                 f"what you need from one into the other, then attach again with "
+                                 f"replace=true.")})
+        else:
+            if b.get("native"):
+                keys["native"] = str(b["native"]).strip()
+            if b.get("meeting_url"):
+                keys["meeting_url"] = meeting_note_mod.normal_url(b["meeting_url"])
+            if b.get("calendar_event"):
+                keys["calendar_event"] = str(b["calendar_event"]).strip()
+            if not keys:
+                raise HTTPException(status_code=400, detail={
+                    "refused": "nothing names the meeting",
+                    "said": "Give meeting_id, or the meeting's link (meeting_url) / native id "
+                            "(parse_meeting_link) / calendar_event, so the meeting finds this page."})
+        if b.get("platform"):
+            keys.setdefault("platform", str(b["platform"]).strip())
+        stamped = meeting_note_mod.stamp_identity(text, keys)
+        if stamped != text:
+            _wp.write_text_inside(place["dir"], path, stamped)
+            try:
+                commit_entity(place["dir"], [path], subject_path=path, created=False)
+            except Exception:  # noqa: BLE001 — a workspace with no repo keeps the file uncommitted
+                pass
+        recorded = False
+        if row is not None:
+            try:
+                recorded = bool(_meeting_note_recorder(str(subject), str(row.get("id")), path, place["slug"]))
+            except TypeError:
+                recorded = bool(_meeting_note_recorder(str(subject), str(row.get("id")), path))
+        return {"path": path, "workspace": place["slug"], "stamped": sorted(keys), "recorded": recorded}
+
     @router.get("/api/meeting/terms")
     def meeting_terms(meeting_id: str, request: Request):
         """THIS MEETING'S ANNOTATION LAYER — `{"meeting", "cursor", "terms"}` (Vexa-ai/vexa#1595).
@@ -370,6 +465,13 @@ def build(**d) -> APIRouter:
                                 continue
                             if ptype == "retract":
                                 yield from retract_event(payload)
+                                continue
+                            if ptype == "progress":
+                                # How far transcription is behind capture. Not a sign of a resumed
+                                # session: it never disarms a pending end.
+                                yield ({"type": "progress", "backlog_s": payload.get("backlog_s"),
+                                        "silence_s": payload.get("silence_s"),
+                                        "finishing": bool(payload.get("finishing"))}, cursor())
                                 continue
                             # A `session_start` marker — or any real segment — after a prior
                             # session_end means the meeting is LIVE again on this reused row: clear

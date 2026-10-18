@@ -43,6 +43,7 @@
     }
   ],
   "default": "qwen3-32b",
+  "default_effort": null,
   "selected": "claude",
   "selected_effort": "high"
 }

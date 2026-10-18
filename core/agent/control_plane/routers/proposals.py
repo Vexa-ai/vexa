@@ -19,6 +19,8 @@ answer to "whose list is this", on every door.
 """
 from __future__ import annotations
 
+from control_plane.workspace_reader import home_of
+
 from control_plane.api_shared import logger
 from fastapi import APIRouter, Body, HTTPException, Request
 from shared import proposals as store
@@ -32,7 +34,7 @@ def build(**d) -> APIRouter:
 
     def _desk(request: Request):
         try:
-            return wsr.workspace_dir(subject_of(request))
+            return home_of(wsr, subject_of(request))      # the person's home (#1783)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject") from None
 

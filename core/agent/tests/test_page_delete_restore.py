@@ -19,7 +19,13 @@ L2: a real FastAPI app over fakes and real git repositories in `tmp_path`, the h
 """
 from __future__ import annotations
 
+import pytest
+
 from tests.test_workspace_delete_move import ADMIN, JANE, _client, _git, _h, _init_ws, _page
+
+# THE ADMIN ACCOUNT, NOT THE INSTANCE ADMIN, IS THE ONE WRITER OF `_global` (ruling 2026-10-11):
+# `_client(admins=…)` names it through identity's faked answer, which this fixture installs.
+pytestmark = pytest.mark.usefixtures("fake_admin_accounts")
 from control_plane import workspace_membership as m
 
 PAGE = "kg/entities/project/so-vexam.md"

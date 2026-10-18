@@ -52,13 +52,16 @@ EXPECTED = frozenset({
     # a dispatch armed for later
     ("POST", "/api/routines"), ("POST", "/api/routines/{name}/confirm"),
     ("PATCH", "/api/routines/{name}/enabled"), ("DELETE", "/api/routines/{routine_id}"),
-    # a mailbox, a calendar, a stored credential, a consent request, the person's clock
+    # a stored credential, a consent request, the person's clock, the person's own policy setting.
+    # A write to the person's mailbox or calendar always needs a person (ADR-0040); the Gmail and
+    # Calendar READS are not here: the connection policy decides their regime
+    # (`connection_actions_unattended`, default none) — `tests/test_connection_policy.py`.
     ("POST", "/api/connections/request"), ("POST", "/api/connections/read"),
-    ("POST", "/api/connections/gmail/search"), ("POST", "/api/connections/gmail/inbox"),
-    ("POST", "/api/connections/gmail/read"), ("POST", "/api/connections/gmail/thread"),
-    ("POST", "/api/connections/calendar/events"), ("POST", "/api/connections/gmail/draft"),
+    ("POST", "/api/connections/gmail/draft"), ("POST", "/api/connections/gmail/draft/update"),
+    ("POST", "/api/connections/calendar/event/create"), ("POST", "/api/connections/calendar/event/update"),
+    ("POST", "/api/connections/calendar/event/cancel"),
     ("POST", "/api/connections/service/call"), ("POST", "/api/onboarding/research"),
-    ("PUT", "/api/time/zone"),
+    ("PUT", "/api/connections/policy"), ("PUT", "/api/time/zone"),
 })
 #: A body that would act on the person's own things if the gate let it through.
 BODIES = {

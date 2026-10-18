@@ -58,11 +58,22 @@ def test_the_rules_name_the_units_three_keys_and_nothing_else():
     # …its delegation token too, READ-ONLY like its input: agent-api publishes it, the worker reads it.
     assert [r for r in rules if "~" in r] == [
         "%R~unit:agent-7-chat-a\\*b:in", "~unit:agent-7-chat-a\\*b:out", "~unit:agent-7-chat-a\\*b:cursor",
-        "%R~unit:agent-7-chat-a\\*b:delegation"]
+        "%R~unit:agent-7-chat-a\\*b:delegation",
+        # SESSION BUNDLES BY REFERENCE (app.dev 2026-10-16): agent-api's IN copy read-only, the
+        # worker's hand-back read-write — the glob is the unit's own escaped prefix
+        "%R~unit:agent-7-chat-a\\*b:bundle:*", "~unit:agent-7-chat-a\\*b:handback:*",
+        # SEND NOW (#1783): the key agent-api names a queued message on and the worker reads and
+        # clears. Without it the worker's GET was refused, silently, and "Send now" did nothing.
+        "~unit:agent-7-chat-a\\*b:send-now",
+        # STOP (live 2026-10-15): agent-api writes the press, the worker reads and clears it.
+        "~unit:agent-7-chat-a\\*b:stop"]
     legacy = wr.acl_rules("agent-7-chat-a*b", "pw", read_only_input=False)
     assert [r for r in legacy if "~" in r] == [
         "~unit:agent-7-chat-a\\*b:in", "~unit:agent-7-chat-a\\*b:out", "~unit:agent-7-chat-a\\*b:cursor",
-        "~unit:agent-7-chat-a\\*b:delegation"]
+        "~unit:agent-7-chat-a\\*b:delegation",
+        "~unit:agent-7-chat-a\\*b:bundle:*", "~unit:agent-7-chat-a\\*b:handback:*",
+        "~unit:agent-7-chat-a\\*b:send-now",
+        "~unit:agent-7-chat-a\\*b:stop"]
     assert "resetchannels" in rules and "-@all" in rules
     assert sorted(r[1:] for r in rules if r.startswith("+")) == sorted(wr.WORKER_COMMANDS)
     assert not any(r.startswith("&") or r in ("+@all", "~*", "allkeys", "allchannels") for r in rules)

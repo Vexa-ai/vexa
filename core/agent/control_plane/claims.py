@@ -155,6 +155,20 @@ def _record_verdicts(workspace: Path, batch: list) -> dict:
     return out
 
 
+def context(workspace: Path) -> dict:
+    """The company context: every claim a person CONFIRMED or CORRECTED, and how many are still
+    waiting on them. A proposed claim is counted, never shown — if it is not here, nobody has stood
+    behind it yet. A desk with no book has no context, and that is an answer, not an error."""
+    claims = [c for c in _load(workspace)["claims"] if isinstance(c, dict)]
+    return {
+        "validated": [{"id": c.get("id"), "claim": c.get("claim"), "verdict": c.get("verdict"),
+                       "note": c.get("human_note", "")}
+                      for c in claims if c.get("state") in USABLE],
+        "still_proposed": sum(1 for c in claims if c.get("state") == "proposed"),
+        "rejected": sum(1 for c in claims if c.get("state") == "rejected"),
+    }
+
+
 # ── one writer at a time ─────────────────────────────────────────────────────────────────────────
 # The book is read, changed and written back. Two calls at once (two tabs, an agent and a person)
 # would each write the book they read and one of them would lose the other's claims or verdicts, so

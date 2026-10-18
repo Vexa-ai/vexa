@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 import pathlib
 
+from control_plane import features as features_mod
 from control_plane import version as version_mod
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 #: ADR-0037 / PRD decision 40.5 — the agent domain's MCP tool manifest, SERVED not baked into the
@@ -26,6 +27,18 @@ def build(**d) -> APIRouter:
     """The health routes, bound to one app's dependencies."""
     router = APIRouter()
     dispatcher = d['dispatcher']
+    _global_root = d.get('_global_root')
+
+    def _root():
+        try:
+            return _global_root() if callable(_global_root) else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _features(subject: str = "") -> dict:
+        """The switches as THIS caller has them: the company's, plus every feature
+        `features_accounts` switches on for their account (the test-account switch)."""
+        return features_mod.effective(_root(), subject=subject or None)
 
     @router.get("/health")
     def health():
@@ -57,13 +70,30 @@ def build(**d) -> APIRouter:
         return version_mod.version_payload()
     @router.get("/.well-known/mcp-tools.json")
     def mcp_tools_manifest():
-        """This domain's MCP tool manifest — what the assembled edge (core/meetings/services/mcp)
+        """This domain's MCP tool manifest — what the assembled edge (core/gateway/services/mcp)
         discovers and binds against agent-api's own OpenAPI. OPEN, like `/health`: it names routes
         and argument names, never data and never a credential."""
         try:
-            return json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+            manifest = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=503,
                                 detail=f"this build carries no tool manifest: {e}") from e
+        # A tool of a switched-off feature is not listed (`features.py`); its route refuses anyway.
+        # WHY THIS LIST CANNOT BE PER CALLER: it is read once per install by the MCP edge, which
+        # assembles every domain's tools into one surface (core/gateway/services/mcp, `discover`) and
+        # serves it to every session. So a feature on for any named account (`features_accounts`)
+        # lists its tools, and the route gate (`FeatureGate`) refuses every other caller at call time
+        # with `feature_disabled` — "not enabled for this account" — before the route runs.
+        on = {n: features_mod.on_for_anyone(_root(), n) for n in features_mod.FEATURES}
+        manifest["tools"] = features_mod.visible_tools(manifest.get("tools") or [], on)
+        return manifest
+
+    @router.get("/api/features")
+    def features(request: Request):
+        """Which switchable features are on here FOR THIS PERSON, for the terminal to hide what is
+        off: the company's switches plus the ones `features_accounts` turns on for their account.
+        Names and booleans only; a feature not listed is not switchable and always on."""
+        return {"features": _features((request.headers.get("x-user-id") or "").strip()),
+                "summaries": {n: f["summary"] for n, f in features_mod.FEATURES.items()}}
 
     return router

@@ -190,10 +190,16 @@ def test_a_human_chat_dispatch_gets_a_soft_scoped_token_for_its_subject():
     assert claims["scope"] == {"regime": "human", "workspaces": "*"}
 
 
-def test_an_autonomous_dispatch_gets_the_hard_isolation_set():
+def test_an_autonomous_dispatch_gets_the_hard_isolation_set(tmp_path):
+    """The hard set is what the turn has MOUNTED WRITABLE (Vexa-ai/vexa#1783) — a workspace the
+    invocation names but the mount table does not hold is not in it."""
     inv = _inv(trigger="scheduled", workspaces=[{"id": "58", "mode": "rw"}, {"id": "ops", "mode": "ro"}])
-    claims = d.verify_delegation(SECRET, _env(_settings(), inv)["VEXA_MCP_DELEGATION_TOKEN"])
-    assert claims["scope"] == {"regime": "autonomous", "workspaces": ["58", "ops"]}
+    env = _env(_settings(workspaces_dir=str(tmp_path)), inv)
+    claims = d.verify_delegation(SECRET, env["VEXA_MCP_DELEGATION_TOKEN"])
+    assert claims["scope"]["regime"] == "autonomous"
+    writable = [m["slug"] for m in json.loads(env["VEXA_MOUNTS"])
+                if m.get("write") and m.get("role") != "system"]
+    assert claims["scope"]["workspaces"] == writable and "ops" not in writable
     assert not d.scope_allows_workspace(claims, "somebody-elses-workspace")
 
 

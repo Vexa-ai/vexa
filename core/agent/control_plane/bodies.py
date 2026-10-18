@@ -89,6 +89,21 @@ class ChatBody(BaseModel):
     # rather than a model on purpose: the CLOSED vocabulary is `chat_intents.INTENT_PRESETS`, an
     # unknown kind is ignored, and a client one release ahead must not be refused at the door.
     intent: Optional[dict] = None
+    # ADR-0048 decision 4: items the speaker explicitly shares into a shared session for THIS turn,
+    # each `workspace/path`, read with the speaker's own access — the one exception to the leak rule.
+    share: Optional[list[str]] = Field(default=None, max_length=5)
+    # ADR-0048: the people this message @-mentions, by the account id the composer's picker carried
+    # (never a name to look up). agent-api keeps only ids the speaker shares a workspace with and
+    # tells the agent who each one is, so "@joe" names exactly one account.
+    mentions: Optional[list[Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._@+-]{0,199}$")]]] = Field(
+        default=None, max_length=10)
+    # The message is for the agent, as if it opened with @vexa — what the composer sends for the
+    # first message of a chat that just became shared, which was typed where the agent answers
+    # everything. It grants nothing a person could not get by typing @vexa.
+    to_agent: Optional[bool] = None
+    # A REPLY TO THE AGENT'S MESSAGE (rooms, 2026-10-15): the turn id of the agent message this one
+    # answers. In a room it is addressed to the agent, like @vexa — rule 1 of the room sensor.
+    reply_to: Optional[Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")]] = None
 
 
 class ScaffoldMintBody(BaseModel):
@@ -146,6 +161,12 @@ class ResetBody(BaseModel):
     room_meeting_id: Optional[str] = None      # accepted-and-ignored (reset mounts nothing)
 
 
+class DefaultTargetBody(BaseModel):
+    """The workspace a person's new chats write to — the "Writes to …" menu's "Make default"."""
+    workspace: str = Field(default="", max_length=128,
+                           description="a workspace slug the person can write, or \"\" for Personal")
+
+
 class ChatModelBody(BaseModel):
     """``POST /api/chat/model`` — pick which of the operator's models one chat runs on."""
     model_config = {"extra": "forbid"}
@@ -185,17 +206,19 @@ class WorkspaceSwapBody(BaseModel):
 
 
 class WorkspacePublishBody(BaseModel):
-    """Publish the subject's vexa-born workspace — create the repo on GitHub or a registered GitLab
-    ``host`` (unless ``remote_url`` targets a pre-created one) and push the current branch's full history. ``token`` is the caller's
-    PAT, used server-side for this call only, NEVER stored (P15)."""
+    """Publish a vexa-born workspace: create a repository on one of the deployment's git providers
+    (unless ``remote_url`` names a pre-created one) and push the current branch's full history.
+    ``token`` is optional — without it the person's saved token for that provider is used — and is
+    used server-side for this call only, NEVER stored (P15)."""
     model_config = {"extra": "forbid"}
-    repo_name: Optional[str] = None    # name of the repo to create (required unless remote_url is given)
-    private: bool = True               # create the repo private (default) or public
-    token: Optional[str] = None        # GitHub PAT (repo-creation + push); OPTIONAL — falls back to the caller's SAVED token
-    org: Optional[str] = None          # create under this org instead of the user's account
-    remote_url: Optional[str] = None   # skip creation and push to this (pre-created/empty) repo
-    slug: Optional[str] = None         # target workspace (own slot or shared membership); omitted = the seed-slot workspace
-    host: Optional[str] = None         # where to CREATE: github.com (default) or a GitLab host the operator registered
+    repo_name: Optional[str] = Field(default=None, description="name of the repository to create (required unless remote_url is given)")
+    private: bool = Field(default=True, description="create the repository private (the default) or public")
+    token: Optional[str] = None        # per-call token from the terminal; never an agent argument — falls back to the saved one
+    org: Optional[str] = Field(default=None, description="the owner to create under: a GitHub org, or a GitLab group path (nested allowed: group/subgroup); omitted = the token's own account")
+    remote_url: Optional[str] = Field(default=None, description="skip creation and push to this pre-created, empty https repository")
+    slug: Optional[str] = Field(default=None, description="the workspace to publish (one the caller manages); omitted = their own")
+    provider: Optional[str] = Field(default=None, description="the configured git provider to create on, by name (git_providers lists them); omitted = the default")
+    host: Optional[str] = None         # earlier spelling of provider: the provider's host name
 
 
 class WorkspaceRenameBody(BaseModel):
@@ -206,9 +229,9 @@ class WorkspaceRenameBody(BaseModel):
 
 
 class WorkspacePushBody(BaseModel):
-    """Push a workspace's current branch to its GitHub home (origin / vexa-publish), fast-forward only.
+    """Push a workspace's current branch to its git home (origin / vexa-publish), fast-forward only.
     ``slug`` targets one of the caller's workspaces (default = the primary); ``token`` is the caller's PAT.
-    OPTIONAL — when omitted, the caller's SAVED reusable GitHub token (git_credentials) is used. Whichever
+    OPTIONAL — when omitted, the caller's SAVED token for the home's provider (git_credentials) is used. Whichever
     token applies is used for this push only and NEVER stored on the workspace remote (P15)."""
     model_config = {"extra": "forbid"}
     slug: Optional[str] = None
@@ -216,19 +239,32 @@ class WorkspacePushBody(BaseModel):
 
 
 class GitTokenBody(BaseModel):
-    """Save (or, with an empty/omitted ``token``, CLEAR) the caller's reusable GitHub token — stored ONCE,
-    server-side, and reused as the fallback credential for every git op across all their repos."""
+    """Save (or, with an empty/omitted ``token``, CLEAR) the caller's reusable token for one git
+    provider — stored ONCE in the credential broker and used as the fallback credential for every git
+    op on that provider. ``provider`` omitted = the default provider."""
     model_config = {"extra": "forbid"}
     token: Optional[str] = None
+    provider: Optional[str] = None
 
 
 class WorkspacePullBody(BaseModel):
-    """Fetch + fast-forward a workspace from its GitHub home. ``slug`` targets one of the caller's
+    """Fetch + fast-forward a workspace from its git home. ``slug`` targets one of the caller's
     workspaces (default = primary); ``token`` (optional — public repos need none) is used for the fetch
-    only and NEVER stored (P15). A divergence is refused, not merged/rebased/forced."""
+    only and NEVER stored (P15). A divergence is refused unless ``merge`` asks for a merge."""
     model_config = {"extra": "forbid"}
     slug: Optional[str] = None
     token: Optional[str] = None
+    merge: bool = Field(default=False, description=(
+        "When the workspace and its repository have BOTH moved: merge the repository's commits in "
+        "(never a rebase or a force). A conflict changes nothing and names the files."))
+
+
+class WorkspaceStatusBody(BaseModel):
+    """Which workspace to look at: ``slug`` names one of the caller's own or shared workspaces; omitted,
+    their own. There is no token field — the look uses the credential a pull would (the workspace's
+    deploy key or the person's saved token), and a credential is never an argument."""
+    model_config = {"extra": "forbid"}
+    slug: Optional[str] = None
 
 
 class WorkspacePurposeBody(BaseModel):
@@ -277,8 +313,29 @@ class WorkspaceInviteBody(BaseModel):
     slug: str = Field(description="the workspace this is about — always named, never defaulted")
     email: str = Field(description="the person's address, exactly as they gave it — never guessed "
                                    "from a name or a domain")
-    role: str = Field("reader", description="owner | contributor | reader — the default is the "
-                                            "smallest")
+    role: str = Field("contributor", description=(
+        "owner | contributor | reader. Omitted, contributor — when the person names no role, do "
+        "not ask: invite as contributor and say so in the one-line confirmation; they can change "
+        "it after with `workspace_membership`."))
+
+
+class WorkspaceForgetBody(BaseModel):
+    """FORGET something — the body behind `workspace_forget` (Vexa-ai/vexa#1783)."""
+    model_config = {"extra": "forbid"}
+    slug: Optional[str] = Field(None, description="the workspace; omitted, the person's own")
+    paths: list[str] = Field(default_factory=list, description=(
+        "files or folders to forget, workspace-relative — an attachment is its `uploads/…` path"))
+    text: str = Field("", description=(
+        "a name or phrase to forget wherever it is written. Never pass an identifier's digits here: "
+        "use `identifiers` instead"))
+    identifiers: bool = Field(False, description=(
+        "also remove every government id, passport, card or account number and credential found"))
+    confirm: bool = Field(False, description=(
+        "false (first call): answers what WOULD be forgotten, changing nothing. true: only after "
+        "the person said yes to that"))
+    push: bool = Field(False, description=(
+        "with confirm: also replace the workspace's remote repository history — only when the "
+        "person said yes to the force-push the first answer described"))
 
 
 class WorkspaceMembershipBody(BaseModel):
@@ -292,6 +349,18 @@ class WorkspaceMembershipBody(BaseModel):
     slug: str = Field(description="the workspace this is about — always named, never defaulted")
     email: str = Field(description="the member's address, as the roster shows it")
     role: str = Field(description="owner | contributor | reader, or `remove` to take them off it")
+
+
+class WorkspaceMemberAddBody(BaseModel):
+    """Add someone who already has an account to a workspace — the body behind
+    `workspace_member_add` (ADR-0048). ``person`` is the account id an @-mention carries, or an
+    email; ``workspace`` is a slug or a name the caller's own workspaces answer to."""
+    model_config = {"extra": "forbid"}
+    workspace: str = Field(min_length=1, max_length=200,
+                           description="the workspace, by its slug or its name")
+    person: str = Field(min_length=1, max_length=320,
+                        description="the person's account id (from an @-mention) or their email")
+    role: str = Field(default="write", description="read | write")
 
 
 class SharedNewBody(BaseModel):
@@ -354,6 +423,9 @@ class WorkspaceNewBody(BaseModel):
     up. ``name`` (optional) → the new workspace's display label (default a unique "New workspace")."""
     model_config = {"extra": "forbid"}
     name: Optional[str] = None
+    slug: Optional[str] = Field(default=None, max_length=63,
+                                description="The slug to use instead of one made from the name: lowercase "
+                                            "letters, digits and dashes. Refused, never changed, when taken.")
 
 
 class WorkspaceWriteBody(BaseModel):
@@ -370,15 +442,18 @@ class EntityUpsertBody(BaseModel):
     in place; repeating a fact the page already carries writes nothing."""
     model_config = {"extra": "forbid"}
     kind: str = Field(description="person | company | meeting | project | decision")
-    name: str = Field(description="what the page is about, as a person would say it; it becomes "
-                                  "the title `[[wikilinks]]` resolve to")
+    name: str = Field(description="what the page is about, as a person would say it, in any "
+                                  "script; it becomes the title `[[wikilinks]]` resolve to")
     facts: list[str] = Field(default_factory=list, description=(
-        "one short sentence each, only what was SAID or READ. Name another entity inside a fact as "
-        "`[[Their Name]]`. Filed under `section` when given, else under `## Timeline`."))
+        "a list of strings, one short sentence each, only what was SAID or READ — the same for every "
+        "kind. Name another entity inside a fact as `[[Their Name]]`. Filed under `section` when "
+        "given, else under `## Timeline`."))
     source: str = Field("", description=(
-        "where these facts came from, in a few words — the meeting, the mail, the file. Required "
-        "with facts: one source for the whole call, stamped onto every fact; split the call when "
-        "facts came from different places. A fact with no source is refused."))
+        "where these facts came from, in a few words — the meeting, the mail, the file, e.g. "
+        "\"2026-10-13 call with Ada Lovelace\", \"Ada's email of 2026-10-12\" or "
+        "\"notes/roadmap.md\". Required with facts: one source for the whole call, stamped onto "
+        "every fact (do not write it inside the facts); split the call when facts came from "
+        "different places. A fact with no source is refused."))
     slug: Optional[str] = Field(None, description=WRITE_SLUG_HELP + " Companies belong in the "
                                                   "company layer, `_global`.")
     dates: Optional[dict] = Field(None, description=(
@@ -387,8 +462,10 @@ class EntityUpsertBody(BaseModel):
     summary: str = Field("", description="the one line under the title; set when the page is "
                                          "created and never overwritten")
     fields: Optional[dict] = Field(None, description=(
-        "facts filed into the kind's sections, `{field: value}`; a field naming another entity "
-        "links both pages. The sections and fields, by kind:\n" + entities_mod.tool_sections_text()))
+        "facts filed into the kind's sections, `{field: value}`, each value plain text filed as "
+        "written. A field naming others (`who`, `participants`, `people`, `company`) links every "
+        "page it names, both ways: `[[Ada Lovelace]], [[Grace Hopper]]`, or plain `Ada Lovelace and "
+        "Grace Hopper`. The sections and fields, by kind:\n" + entities_mod.tool_sections_text()))
     section: str = Field("", description="the section `facts` are filed into, by its name")
     connections: list = Field(default_factory=list, description=(
         "other pages this one links to, both ways:\n" + entities_mod.tool_connection_text()))
@@ -424,6 +501,20 @@ class TranscriptTermsBody(BaseModel):
     keep: str = Field("", description=(
         "the terms to PUBLISH as chips, comma separated, exactly as the look returned them; `*` for "
         "all of them. Omitted, nothing is published — the first call only looks."))
+
+
+class MeetingAttachBody(BaseModel):
+    """MAKE A PAGE THE MEETING'S PAGE — the body behind `meeting_attach_page` (#1783)."""
+    model_config = {"extra": "forbid"}
+    path: str = Field(description="the page, `kg/entities/meeting/<name>.md`")
+    workspace: str = Field("", description="the workspace the page is in; empty for the person's own")
+    meeting_id: str = Field("", description="the meeting's row id, when the meeting exists")
+    meeting_url: str = Field("", description="the meeting's link, before the meeting exists")
+    native: str = Field("", description="the meeting's native id (from `parse_meeting_link`)")
+    platform: str = Field("", description="the meeting's platform (from `parse_meeting_link`)")
+    calendar_event: str = Field("", description="the calendar event's id, when known")
+    replace: bool = Field(False, description="true to replace a page the meeting already has, after "
+                                            "you merged what it held")
 
 
 class GlobalReadyBody(BaseModel):
@@ -525,3 +616,93 @@ class WorkspaceDeactivateBody(BaseModel):
     deactivated (it is the subject's durable memory root)."""
     model_config = {"extra": "forbid"}
     slug: str
+
+
+class WorkspaceTargetBody(BaseModel):
+    """Point this conversation's writes at a workspace — `workspace_target` (Vexa-ai/vexa#1611,
+    #1783). ``slug`` is a workspace this person can WRITE; empty means their own desk. The route
+    only answers whether that is a target; the chat's record is written by the focus event the
+    harness derives from the answer."""
+    model_config = {"extra": "forbid"}
+    slug: str = Field(default="", description="The workspace to work in from now on; empty = the person's own desk.")
+
+
+class PageOpenBody(BaseModel):
+    """Open something in the person's pages panel — `open_page` (Vexa-ai/vexa#1586, #1783)."""
+    model_config = {"extra": "forbid"}
+    target: str = Field(..., description=(
+        "`meeting:transcript` (the live transcript of `meeting`), `meeting:note` (that meeting's "
+        "own note), `<path>` (a file on the person's desk) or `<slug>/<path>` (a file in a shared "
+        "workspace they belong to)."))
+    meeting: str = Field(default="", description="The meeting's row id — required for the two `meeting:` targets.")
+
+
+class InviteLinkCreateBody(BaseModel):
+    """A link to a workspace that lets up to ``max_uses`` people join it — the body behind
+    `workspace_invite_link_create` (#1783). ``slug`` is the workspace, by slug or by name."""
+    model_config = {"extra": "forbid"}
+    slug: str = Field(min_length=1, max_length=200, description="the workspace, by its slug or its name")
+    max_uses: int = Field(default=10, ge=1, le=1000, description="how many people the link lets in")
+    expires_in_days: Optional[int] = Field(default=7, ge=1, le=365,
+                                           description="days until the link stops working (default 7)")
+    role: str = Field(default="contributor",
+                      description="what joiners get: contributor (read and write; also 'member') or reader")
+
+
+class InviteLinkRevokeBody(BaseModel):
+    """Stop one of a workspace's links working — `workspace_invite_link_revoke`."""
+    model_config = {"extra": "forbid"}
+    slug: str = Field(min_length=1, max_length=200, description="the workspace, by its slug or its name")
+    link_id: str = Field(min_length=1, max_length=64, description="the link's id from workspace_invite_links")
+
+
+class JoinLinkCreateBody(BaseModel):
+    """A link to a CHAT (the generic door; workspace links use `InviteLinkCreateBody`)."""
+    model_config = {"extra": "forbid"}
+    target_kind: str = Field(description="chat")
+    target_id: str = Field(min_length=1, max_length=128)
+    max_uses: int = Field(default=10, ge=1, le=1000)
+    expires_in_days: Optional[int] = Field(default=7, ge=1, le=365)
+    role: str = Field(default="write", description="read | write")
+
+
+class JoinLinkRevokeBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    target_kind: str
+    target_id: str = Field(min_length=1, max_length=128)
+    link_id: str = Field(min_length=1, max_length=64)
+
+
+class ListenLabel(BaseModel):
+    """One thing the meeting's signal model listens for."""
+    model_config = {"extra": "forbid"}
+    name: str = Field(description="lower_snake_case label, e.g. `decision`, `blocker`, `price_mentioned`")
+    question: Optional[str] = Field(None, description="the yes/no question the model scores each line "
+                                    "against (0..1), e.g. `Did someone name a blocker to the install?`")
+    wake: bool = Field(True, description="true: a line scoring high on this label counts toward waking "
+                       "you; false: it is only highlighted on the transcript")
+
+
+class ListenBrief(BaseModel):
+    """What to listen for in this meeting. Fields you leave out keep their current value."""
+    model_config = {"extra": "forbid"}
+    focus: Optional[str] = Field(None, description="one or two sentences: what matters in this meeting")
+    labels: Optional[list[ListenLabel]] = Field(None, description="the labels to score; "
+                                                "`addressed_to_vexa` is always kept and always wakes you")
+    known: Optional[str] = Field(None, description="what you already know from this meeting, in a few "
+                                 "lines — the model scores what is NEW against it")
+    wake_at: Optional[float] = Field(None, description="how much new information wakes you (0.2–10, "
+                                     "default 1.0): lower hears more, higher hears less")
+    max_wait_s: Optional[int] = Field(None, description="wake anyway after this many seconds with "
+                                      "anything scored (30–1800, default 300)")
+    threshold: Optional[float] = Field(None, description="the score (0–1, default 0.6) from which a "
+                                       "line is highlighted on the transcript; display only, it "
+                                       "does not wake you")
+
+
+class MeetingListenBody(BaseModel):
+    """SET OR REVISE a meeting's listening brief — the body behind `meeting_listen`."""
+    model_config = {"extra": "forbid"}
+    meeting: Annotated[str, StringConstraints(pattern=r"^[0-9]{1,20}$")] = Field(
+        description="the meeting's row id")
+    brief: ListenBrief = Field(description="what to listen for; omitted fields keep their current value")

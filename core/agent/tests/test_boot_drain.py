@@ -94,3 +94,43 @@ def test_without_a_nonce_the_old_tail_anchor_still_applies(monkeypatch):
     stream = FakeStream([_entry(1, "x", "n1"), _entry(2, "y", "n2")])
     ran = _run(monkeypatch, stream, {"entrypoint": {"inline": "x"}})
     assert ran == ["x"]
+
+
+class CursorStream(FakeStream):
+    """…plus the published inbox cursor (`shared/units.inbox_cursor_key`): how far the previous
+    worker of this unit read."""
+
+    def __init__(self, entries, cursor=None):
+        super().__init__(entries)
+        self.kv = {"cur": cursor} if cursor else {}
+
+    def get(self, key):
+        return self.kv.get(key)
+
+    def set(self, key, value):
+        self.kv[key] = value
+
+
+def test_a_cold_boot_never_reruns_what_a_previous_worker_already_took():
+    """A unit's in-topic outlives its worker. A worker that boots (idle exit, a restart, a drain)
+    must start after the cursor the previous worker published, or every message the person sent
+    in that chat runs again — measured on app.dev, 2026-10-13: a restarted worker re-ran 33 old turns
+    in one chat, ran its transcript copy ahead of the store and got its replies refused."""
+    nonce = "u1:333"
+    stream = CursorStream([_entry(1, "old one", "u1:111"), _entry(2, "old two", "u1:222"),
+                           _entry(3, "new", nonce), _entry(4, "queued after", "u1:444")], cursor="2-0")
+    start = {"entrypoint": {"inline": "new", "nonce": nonce}}
+    ran = []
+    engine.serve(stream, in_topic="in", out_topic="out", start=start, inbox_cursor="cur",
+                 turn=lambda p: ran.append(p) or iter(()), idle_ms=1)
+    assert ran == ["new", "queued after"]
+    assert stream.kv["cur"] == "4-0"
+
+
+def test_with_no_published_cursor_every_waiting_message_still_runs():
+    nonce = "u1:111"
+    stream = CursorStream([_entry(1, "first", nonce), _entry(2, "second", "u1:222")])
+    ran = []
+    engine.serve(stream, in_topic="in", out_topic="out", start={"entrypoint": {"inline": "first", "nonce": nonce}},
+                 inbox_cursor="cur", turn=lambda p: ran.append(p) or iter(()), idle_ms=1)
+    assert ran == ["first", "second"]

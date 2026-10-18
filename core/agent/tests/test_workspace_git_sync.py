@@ -170,3 +170,40 @@ def test_a_home_url_rewritten_in_git_config_is_refused_before_any_transfer(tmp_p
         pull_origin(ws, token=TOKEN)
     # the bare remote still has only the seed commit
     assert _run(bare, "rev-list", "--count", "main") == "1"
+
+
+# ── RECONCILE, deliberately (Vexa-ai/vexa#1783, founder friction 2026-10-14): a push refused because
+#    the remote moved, and a pull refused because there are local commits, left the agent with no
+#    supported way forward. `merge=True` merges the remote in — never a rebase, never a force — and a
+#    conflict changes nothing and names the files.
+
+def _write_commit(ws: Path, name: str, text: str) -> None:
+    (ws / name).write_text(text)
+    _run(ws, "add", "-A")
+    _run(ws, "commit", "-q", "-m", f"edit {name}")
+
+
+def test_pull_with_merge_reconciles_a_divergence_then_push_works(tmp_path):
+    bare = _bare(tmp_path / "remote.git")
+    a = _clone(bare, tmp_path / "a", seed=True)
+    b = _clone(bare, tmp_path / "b")
+    _write_commit(b, "theirs.md", "from B\n"); push_origin(b, token=TOKEN)
+    _write_commit(a, "mine.md", "from A\n")
+    r = pull_origin(a, token=TOKEN, merge=True)
+    assert r.updated is True and r.merged is True and r.conflicts == []
+    assert (a / "theirs.md").exists() and (a / "mine.md").exists()
+    push_origin(a, token=TOKEN)
+    assert _run(bare, "rev-parse", "main") == _run(a, "rev-parse", "HEAD")
+
+
+def test_pull_with_merge_stops_on_a_conflict_and_changes_nothing(tmp_path):
+    bare = _bare(tmp_path / "remote.git")
+    a = _clone(bare, tmp_path / "a", seed=True)
+    b = _clone(bare, tmp_path / "b")
+    _write_commit(b, "README.md", "B's line\n"); push_origin(b, token=TOKEN)
+    _write_commit(a, "README.md", "A's line\n")
+    head = _run(a, "rev-parse", "HEAD")
+    r = pull_origin(a, token=TOKEN, merge=True)
+    assert r.merged is False and r.conflicts == ["README.md"] and r.updated is False
+    assert _run(a, "rev-parse", "HEAD") == head and (a / "README.md").read_text() == "A's line\n"
+    assert not (a / ".git" / "MERGE_HEAD").exists()

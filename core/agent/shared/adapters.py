@@ -31,7 +31,7 @@ from shared.gitenv import transport_env
 from shared.gitexec import run_git
 from shared.models import WorkspaceWrite
 from shared.ports import IdentityPort, RuntimePort, SchedulerPort, StreamReader, VcsPort, WorkspacePort
-from shared import git_provider, runtime_fault
+from shared import git_provider, obs, runtime_fault
 from shared.token_destination import embed_token
 from workspaces.shared import workspace_paths as wpaths
 
@@ -138,7 +138,7 @@ class GitPushError(RuntimeError):
 
 
 def push_with_token(work_dir: str | Path, remote_url: str, ref: str, token: str | None,
-                    *, remote: str = _PUSH_REMOTE) -> str:
+                    *, remote: str = _PUSH_REMOTE, force: bool = False) -> str:
     """THE shared governed-push mechanic: push ``ref`` to ``remote_url`` over a DEDICATED remote so
     the repo's ``origin`` is never clobbered. The token (if any) rides on the remote URL for the
     push's duration ONLY, then the persisted remote is scrubbed back to the token-free URL (P15).
@@ -172,7 +172,9 @@ def push_with_token(work_dir: str | Path, remote_url: str, ref: str, token: str 
             _git(work, "remote", "add", remote, auth_url, token=token)
         try:
             # The push is the network op — pin the transports to what ``remote_url`` needs.
-            _git(work, "push", remote, ref, token=token, url=remote_url)
+            # ``force`` is the forget's push alone (Vexa-ai/vexa#1783): its rewritten history replaces
+            # the remote's, and only on the person's explicit go. Every other push stays ff-only.
+            _git(work, "push", *(["--force"] if force else []), remote, ref, token=token, url=remote_url)
             return _git(work, "rev-parse", "HEAD", token=token)
         finally:
             # Strip the token from the persisted remote so it can't leak to the repo/object store.
@@ -336,7 +338,7 @@ class RuntimeHttpClient(RuntimePort):
         body = json.dumps({"workloadId": workload_id, "profile": profile, "env": env}).encode()
         req = urllib.request.Request(
             f"{self._base}/workloads", data=body,
-            headers={"Content-Type": "application/json", **self._auth}, method="POST",
+            headers={"Content-Type": "application/json", **self._auth, **obs.trace_headers()}, method="POST",
         )
         status = self._call("spawn", req)
         return status.get("workloadId", workload_id) if isinstance(status, dict) else workload_id
@@ -350,7 +352,7 @@ class RuntimeHttpClient(RuntimePort):
         reading an unreadable answer as empty would end every live worker's tools and Redis access
         at once. A body that is not a list, or a row that is not a workload, raises the runtime's
         ``bad_response`` fault; both sweepers skip a sweep that raises."""
-        req = urllib.request.Request(f"{self._base}/workloads", headers=self._auth, method="GET")
+        req = urllib.request.Request(f"{self._base}/workloads", headers={**self._auth, **obs.trace_headers()}, method="GET")
         rows = self._call("list", req)
         if not isinstance(rows, list):
             raise runtime_fault.from_bad_body(
@@ -363,7 +365,7 @@ class RuntimeHttpClient(RuntimePort):
         return [s["workloadId"] for s in rows if s["state"] in ("starting", "running")]
 
     def await_done(self, workload_id: str, timeout_sec: float = 0.0) -> str:
-        req = urllib.request.Request(f"{self._base}/workloads/{workload_id}", headers=self._auth,
+        req = urllib.request.Request(f"{self._base}/workloads/{workload_id}", headers={**self._auth, **obs.trace_headers()},
                                      method="GET")
         status = self._call("status", req)
         return status.get("state", "unknown") if isinstance(status, dict) else "unknown"
@@ -420,6 +422,18 @@ class LocalIdentityMinter(IdentityPort):
         return f"{signing_input}.{_b64u(sig)}"
 
 
+def _fault_since(client, unit_id: str, since: float):
+    """The fault agent-api recorded on this unit after ``since`` (see ``RedisStreamReader.read``)."""
+    try:
+        raw = client.get(f"unit:{unit_id}:fault")
+        f = json.loads(raw) if raw else None
+    except Exception:  # noqa: BLE001 — an unreadable record ends nothing
+        return None
+    if not isinstance(f, dict) or float(f.get("at") or 0) < since:
+        return None
+    return {k: f.get(k) for k in ("source", "kind", "op", "status", "detail", "remedy")}
+
+
 class RedisStreamReader(StreamReader):
     """Dev-tier ``StreamReader`` — ``XREAD`` a dispatch's output Stream ``unit:<id>:out`` and yield each
     UnitEvent until every turn accepted on the view has reached ``turn-complete`` (and every job it
@@ -435,7 +449,7 @@ class RedisStreamReader(StreamReader):
         self._block = block_ms
         self._giveup = idle_giveup_ms
 
-    def read(self, unit_id: str, *, resume: str | None = None):
+    def read(self, unit_id: str, *, resume: str | None = None, fresh: bool = False):
         import redis
 
         client = redis.from_url(self._url, decode_responses=True)
@@ -467,11 +481,30 @@ class RedisStreamReader(StreamReader):
         # mid-turn never saw that turn's `turn-accepted`; its `turn-complete` still closes the view,
         # exactly as before, when nothing else is open.
         open_turns: set[str] = set()
+        # …AND A FRESH TURN'S VIEW WAITS FOR THAT TURN. ``fresh``: this view belongs to a turn the
+        # request just dispatched, attached at the pre-dispatch tail. The turn in front may still be
+        # writing its write-back there, so its `turn-complete` can arrive BEFORE this turn is
+        # accepted — and closing on it ended the view with no answer at all (the flaky "a new turn
+        # continues the chat" probe). Such a view closes only once something was accepted on it: a
+        # turn of its own (closed by that turn's completion, as above), or a message injected into
+        # the running turn (no turn of its own, so the running turn's completion is its end).
+        accepted = not fresh
+        # A UNIT THAT IS GONE ENDS ITS VIEW (app.dev 2026-10-16). agent-api records why a unit
+        # stopped (`unit:{id}:fault`, `control_plane.unit_faults`); a record made after this view
+        # opened means no worker will write here again, so the view says so and closes instead of
+        # ticking "still working" until its give-up.
+        opened_at = time.time()
         while True:
             resp = client.xread({topic: last_id}, count=50, block=self._block)
             if not resp:
                 waited += self._block
                 if waited >= self._giveup:
+                    return
+                gone = _fault_since(client, unit_id, opened_at)
+                if gone is not None:
+                    from shared import runtime_fault  # noqa: PLC0415
+                    yield {"type": "error", "message": runtime_fault.sentence(gone), "fault": gone}
+                    yield {"type": "turn-complete"}
                     return
                 yield None  # idle tick → SSE ``: keepalive`` comment (bytes keep flowing mid-think)
                 continue
@@ -494,9 +527,13 @@ class RedisStreamReader(StreamReader):
                         open_jobs.add(str(ev["job_id"]))
                     elif kind in ("job-done", "job-failed"):
                         open_jobs.discard(str(ev.get("job_id") or ""))
-                    elif kind == "turn-accepted" and ev.get("turn_id"):
-                        open_turns.add(str(ev["turn_id"]))
+                    elif kind == "turn-accepted":
+                        accepted = True
+                        if ev.get("turn_id"):
+                            open_turns.add(str(ev["turn_id"]))
                     elif kind == "turn-complete":
+                        if not accepted:
+                            continue   # the tail of a turn that began before this view's own
                         turn_done = True
                         if ev.get("turn_id"):
                             open_turns.discard(str(ev["turn_id"]))
@@ -519,19 +556,19 @@ class SchedulerHttpClient(SchedulerPort):
         body = json.dumps(job).encode()
         req = urllib.request.Request(
             f"{self._base}/schedule", data=body,
-            headers={"Content-Type": "application/json", **self._auth}, method="POST",
+            headers={"Content-Type": "application/json", **self._auth, **obs.trace_headers()}, method="POST",
         )
         with urllib.request.urlopen(req, timeout=self._timeout) as r:
             return json.loads(r.read())
 
     def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[dict]:
         q = f"?limit={limit}" + (f"&status={status}" if status else "")
-        req = urllib.request.Request(f"{self._base}/schedule{q}", headers=self._auth, method="GET")
+        req = urllib.request.Request(f"{self._base}/schedule{q}", headers={**self._auth, **obs.trace_headers()}, method="GET")
         with urllib.request.urlopen(req, timeout=self._timeout) as r:
             return json.loads(r.read())
 
     def cancel_job(self, job_id: str) -> dict | None:
-        req = urllib.request.Request(f"{self._base}/schedule/{job_id}", headers=self._auth,
+        req = urllib.request.Request(f"{self._base}/schedule/{job_id}", headers={**self._auth, **obs.trace_headers()},
                                      method="DELETE")
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as r:
@@ -558,7 +595,7 @@ class AdminApiMembershipIndex:
         self._timeout = timeout
 
     def _headers(self) -> dict[str, str]:
-        h = {"Content-Type": "application/json"}
+        h = {"Content-Type": "application/json", **obs.trace_headers()}
         if self._secret:
             h["X-Internal-Secret"] = self._secret
         return h
@@ -615,7 +652,7 @@ class AdminApiModelConfig:
         self._timeout = timeout
 
     def resolve(self, subject: str) -> dict:
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json", **obs.trace_headers()}
         if self._secret:
             headers["X-Internal-Secret"] = self._secret
         req = urllib.request.Request(

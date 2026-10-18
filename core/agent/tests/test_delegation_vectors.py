@@ -36,8 +36,11 @@ def test_the_goldens_are_there():
 def test_minting_the_inputs_reproduces_the_token(path):
     v = _load(path)
     token = d.mint_delegation(v["secret"], subject=v["subject"], regime=v["regime"],
-                              workspaces=v["workspaces"], target=v.get("target", ""),
-                              ttl_sec=v["ttl_sec"], now=v["now"], jti=v["jti"])
+                              workspaces=v["workspaces"], target=v.get("target", ""), unit=v.get("unit", ""),
+                              ttl_sec=v["ttl_sec"], now=v["now"], jti=v["jti"],
+                              shared=v.get("shared", False), audience=v.get("audience", ""),
+                              grants=v.get("grants"),
+                              flow=v.get("flow", ""))
     assert token == v["token"]
     assert d.verify_delegation(v["secret"], token, now=v["now"]) == v["claims"]
 

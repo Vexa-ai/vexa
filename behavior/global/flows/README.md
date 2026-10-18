@@ -1,6 +1,6 @@
 ---
 kind: flow-index
-flows: 12
+flows: 16
 generated: from the code that runs them — edits here are overwritten
 ---
 
@@ -10,17 +10,20 @@ Everything this deployment does on its own, one page each. A flow is a trigger a
 
 | flow | runs when | steps | rules it honours |
 |---|---|---|---|
+| [`agent_messages`](agent_messages.md) | `thread.message` | 1 | — |
 | [`desk_claim`](desk_claim.md) | `claim.proposed` | 1 | — |
 | [`desk_setup`](desk_setup.md) | `desk.unscaffolded` | 1 | — |
 | [`email_chat`](email_chat.md) | `mail.reply` | 2 | — |
 | [`friction_fix`](friction_fix.md) | `friction.fixed` | 1 | — |
 | [`friction_log`](friction_log.md) | `friction.reported` | 1 | — |
+| [`home_compose`](home_compose.md) | `home.stale` | 1 | — |
 | [`invite_intake`](invite_intake.md) | `invite.received` | 9 | — |
+| [`invite_intake`](invite_intake.md) | `invite.received` | 4 | — |
 | [`live_meeting`](live_meeting.md) | `meeting.started` | 1 | — |
 | [`meeting_prep`](meeting_prep.md) | `meeting.upcoming` | 1 | `prep_and_invite_mail` |
 | [`meeting_share`](meeting_share.md) | `meeting.shared` | 1 | — |
 | [`onboarding`](onboarding.md) | `onboarding.completed` | 1 | — |
-| [`post_meeting`](post_meeting.md) | `meeting.completed` | 4 | `report_to_participants`, `external_participants`, `minutes_mail`, `attendee_domains`, `data_statement` |
+| [`post_meeting`](post_meeting.md) | `meeting.completed` | 5 | `report_to_participants`, `external_participants`, `minutes_mail`, `attendee_domains`, `data_statement` |
 | [`routine_paused`](routine_paused.md) | `routine.paused` | 1 | — |
 | [`workspace_invite`](workspace_invite.md) | `workspace.invited` | 1 | — |
 

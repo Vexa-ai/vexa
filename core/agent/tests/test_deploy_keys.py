@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 from control_plane import deploy_keys as dk
-from control_plane import secret_store as ss
 from control_plane.workspace_attach import _git_clone
 
 pytestmark = pytest.mark.skipif(dk.shutil.which("ssh-keygen") is None,
@@ -23,8 +22,8 @@ pytestmark = pytest.mark.skipif(dk.shutil.which("ssh-keygen") is None,
 
 
 @pytest.fixture(autouse=True)
-def _no_ambient_key(monkeypatch):
-    monkeypatch.delenv(ss.ENV_KEY_NAME, raising=False)
+def _broker(git_broker):
+    return git_broker
 
 
 def _git(cwd, *a):
@@ -81,14 +80,15 @@ def test_ensure_is_idempotent_and_returns_only_the_public_half(tmp_path):
     assert second["public_key"] == first["public_key"], "a re-ask must not invalidate what they added"
 
 
-def test_the_private_half_is_sealed_at_rest(tmp_path):
+def test_the_private_half_is_kept_by_the_broker_and_nowhere_here(tmp_path, git_broker):
     key = dk.workspace_key(subject="u_jane")
     dk.ensure(tmp_path, key)
     blob = b""
     for dirpath, _d, files in os.walk(tmp_path):
         for f in files:
             blob += (Path(dirpath) / f).read_bytes()
-    assert b"OPENSSH PRIVATE KEY" not in blob, "the deploy key's private half must be encrypted at rest"
+    assert b"OPENSSH PRIVATE KEY" not in blob, "agent-api must hold no deploy key at rest"
+    assert "OPENSSH PRIVATE KEY" in git_broker["deploy/user-u_jane.priv"]
     assert dk.exists(tmp_path, key)
 
 

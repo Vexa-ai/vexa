@@ -116,7 +116,9 @@ def prepare_meeting(ctx: StepCtx):
                            provenance={"flow": "meeting_prep", "step": "prepare_meeting",
                                        "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                                        "minted_by": str(uid)})
-    mid = p.notify(to, subject or f"Prepare: {title}", body, link=link)
+    mid = p.mail("prepare", to, subject or f"Prepare: {title}", body, link=link, db=db, uid=uid)
+    if mid is None:
+        return Done({"skipped": "mail.prepare is off"})
     p.mx.register_thread(db, mid, uid, f"meet-{ref}")
     return Done({"message_id": mid, "meeting_ref": ref}, provider_ref=mid)
 ```

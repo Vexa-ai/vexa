@@ -32,6 +32,13 @@ from shared.config import load_settings
 from tests import gitserve
 
 
+@pytest.fixture(autouse=True)
+def _git_broker(git_broker):
+    """Saved Git credentials live in the credential broker (in memory here)."""
+    return git_broker
+
+
+
 class _FakeRuntime:
     def spawn(self, workload_id, profile, env): return workload_id
     def await_done(self, workload_id, timeout_sec=0.0): return "completed"

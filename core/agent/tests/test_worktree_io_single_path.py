@@ -70,14 +70,37 @@ _NAMES_ONLY = ("lists names only; nothing listed is opened by name — each is l
                "(a plain file reached without a link), or removed through `unlink_inside`")
 
 
+_SESSIONS = ("ADR-0048: the worker's private session folder under its HOME — never under the store or a work tree; "
+             "`SessionStore.open` is a classmethod, not a file")
+
+
 def _entries(reason: str, *keys: str) -> dict:
     return {k: reason for k in keys}
 
 
 #: ``<path under core/>::<function qualname>`` → why what it touches is not a work tree.
 ALLOW = {
+    "agent/control_plane/model_prices.py::load_snapshot":
+        "the price snapshot shipped next to the module (model_prices.snapshot.json), never a work tree",
+    "agent/llm/proctree.py::_table":
+        "reads /proc (the process table, to kill a stopped turn), never a work tree",
+    "agent/control_plane/home_media.py::cache_dir":
+        "the home's picture cache (VEXA_HOME_MEDIA_DIR), never under a work tree",
+    "agent/control_plane/home_media.py::get":
+        "reads and writes cache files named by a sha256 of the media key, inside the picture cache only",
     "agent/shared/meeting_bundle_codec.py::_read_bounded":
         "opens a member of an in-memory zip archive (zipfile.ZipFile.open), never a file by name",
+    **_entries(_SESSIONS,
+               "agent/control_plane/session_store.py::from_settings",
+               "agent/worker/session_carry.py::Carry._receive_files",
+               "agent/worker/engine.py::_continuity_root"),
+    **_entries(_STORE, "agent/control_plane/session_migrate.py::people"),
+    **_entries(_STORE,
+               "agent/control_plane/routine_flows.py::_read_json",
+               "agent/control_plane/routine_flows.py::_write_json",
+               "agent/control_plane/routine_flows.py::_retire",
+               "agent/control_plane/routine_flows.py::scan_subjects",
+               "agent/control_plane/routine_flows.py::start_migration.once"),
     **_entries(_OPERATOR,
                "agent/control_plane/broker_assertion.py::load_key",
                "agent/control_plane/config_preflight.py::load_declaration",
@@ -92,21 +115,16 @@ ALLOW = {
                "agent/control_plane/scaffolds.py::read_preset",
                "agent/control_plane/global_seed.py::_shippable",
                "agent/control_plane/preset_library.py::_shippable",
+               "agent/control_plane/preset_library.py::_load_superseded",
                "agent/shared/seeding.py::list_templates",
                "agent/shared/seeding.py::_seed_pairs",
                "agent/shared/tools.py::ToolRegistry.from_dir",
                "agent/shared/meeting_bundle_codec.py::_schema",
                "agent/worker/engine.py::<module>"),
     **_entries(_STORE,
-               "agent/control_plane/secret_store.py::read_key",
-               "agent/control_plane/secret_store.py::master_key",
-               "agent/control_plane/secret_store.py::put",
-               "agent/control_plane/secret_store.py::_envelope",
-               "agent/control_plane/secret_store.py::delete",
-               "agent/control_plane/git_secret_store.py::get",
-               "agent/control_plane/git_secret_store.py::put",
-               "agent/control_plane/git_credentials.py::read_github_token",
-               "agent/control_plane/git_credentials.py::set_github_token",
+               "agent/control_plane/legacy_git_store.py::delete",
+               "agent/control_plane/legacy_git_store.py::pending",
+               "agent/control_plane/legacy_git_store.py::retire_key_if_empty",
                "agent/control_plane/workspace_attach.py::_git_clone",
                "agent/control_plane/workspace_attach.py::_load_state",
                "agent/control_plane/workspace_attach.py::_save_state",
@@ -125,19 +143,19 @@ ALLOW = {
                "agent/control_plane/workspace_import.py::_store",
                "agent/control_plane/workspace_import.py::status",
                "agent/control_plane/workspace_import.py::start",
+               "agent/control_plane/folder_import.py::store_dir",
+               "agent/control_plane/folder_import.py::load",
+               "agent/control_plane/folder_import.py::staging",
                "agent/control_plane/meeting_bundle.py::restore",
                "agent/control_plane/workspace_membership.py::read_invites",
                "agent/control_plane/workspace_membership.py::_write_invites",
                "agent/control_plane/workspace_membership.py::drop_invites",
                "agent/control_plane/workspace_membership.py::workspaces_with_invites",
+               # the chat-link store sits beside the invite store, outside every work tree (#1783)
+               "agent/control_plane/join_links.py::_read_chat",
+               "agent/control_plane/join_links.py::_write_chat",
+               "agent/control_plane/join_links.py::_chats_with_links",
                "agent/control_plane/workspace_membership.py::list_memberships",
-               "agent/control_plane/workspace_routines.py::_read_approvals",
-               "agent/control_plane/workspace_routines.py::_write_approvals",
-               "agent/control_plane/routine_refusals.py::load_state",
-               "agent/control_plane/routine_refusals.py::_save_state",
-               "agent/control_plane/workspace_routines.py::_record_existing_approvals",
-               "agent/control_plane/workspace_routines.py::scan_workspace_subjects",
-               "agent/control_plane/routine_resign.py::resign_unsigned_routines",
                "agent/control_plane/onboarding_research.py::Research.locked",
                "agent/control_plane/onboarding_research.py::Research._write_audit",
                "agent/control_plane/system_mounts.py::ensure_global_dir",
@@ -150,6 +168,7 @@ ALLOW = {
                "agent/control_plane/deploy_keys.py::fingerprint",
                "agent/control_plane/deploy_keys.py::ensure",
                "agent/control_plane/deploy_keys.py::ssh_env",
+               "agent/shared/git_provider.py::_ca_file_for",
                "agent/worker/friction.py::report"),
     **_entries(_HOME,
                "agent/llm/claude_code.py::clear_deployment_credential",
@@ -161,7 +180,7 @@ ALLOW = {
     **_entries(_URL_OPEN,
                "agent/control_plane/config_test.py::_post",
                "agent/control_plane/config_test.py::_get",
-               "agent/control_plane/workspace_publish.py::_gitlab_call"),
+               "agent/shared/git_provider.py::GitProvider.call"),
     **_entries(_NAMES_ONLY,
                "agent/llm/openai_agent.py::run_builtin",
                "agent/llm/ports.py::_current_policy_entries"),

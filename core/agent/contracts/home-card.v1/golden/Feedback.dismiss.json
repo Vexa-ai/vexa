@@ -1,0 +1,9 @@
+{
+ "card": "w-replies",
+ "kind": "waiting",
+ "signal": "dismiss",
+ "reason": "not_now",
+ "people": [
+  "paul"
+ ]
+}

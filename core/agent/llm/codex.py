@@ -269,6 +269,17 @@ def _link_sessions_into_workspace(work: Path) -> None:
         os.close(home_fd)
 
 
+def _turn_input(prompt: str) -> list[dict]:
+    """The ``turn/start`` input: the text, then each attached picture as a ``localImage`` the
+    app-server reads from the mount itself (``shared/attachments.py``)."""
+    from shared import attachments  # noqa: PLC0415 — the worker image carries `shared/`
+
+    items: list[dict] = [{"type": "text", "text": prompt}]
+    for item in attachments.images(prompt):
+        if attachments.read_image(item) is not None:
+            items.append({"type": "localImage", "path": item["path"]})
+    return items
+
 class _RpcFailure(RuntimeError):
     """A JSON-RPC call the app server answered with an error, or a stream that ended early. ``error``
     is the server's own error object, when there was one, for :func:`_turn_fault`."""
@@ -512,7 +523,7 @@ class CodexHarness:
                 "method": "turn/start", "id": request_id,
                 "params": {
                     "threadId": thread_id,
-                    "input": [{"type": "text", "text": prompt}],
+                    "input": _turn_input(prompt),
                     # The runtime container is the enforcement boundary and mounts only the granted
                     # workspace set. Tell Codex it is externally sandboxed so nested sandboxing does
                     # not block additional granted mounts while approval prompts stay disabled.

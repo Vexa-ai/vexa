@@ -54,9 +54,10 @@ def snapshot(root, subject: str, row: dict, *, workspace_dir: Optional[Path]) ->
     A file whose NAME the contract's path grammar does not admit, or that is larger than its cap,
     is not silently dropped: it is returned in ``skipped`` and the route reports it."""
     notes = None
-    rel = meeting_note.resolve(root, subject, row)
+    found = meeting_note.find(root, subject, row)    # wherever the note lives (#1783)
+    rel = found[0] if found else None
     if rel:
-        notes = wpaths.read_bytes_inside(Path(root) / str(subject), rel,
+        notes = wpaths.read_bytes_inside(found[1], rel,
                                          max_bytes=codec.MAX_NOTES_PAGE_BYTES)
     files, skipped, total = [], [], 0
     if workspace_dir is not None:
@@ -118,7 +119,7 @@ def restore(root, subject: str, row: dict, parsed, *, record_note: Callable,
     out = {"meeting_id": row.get("id"), "workspace": None, "notes_page": None}
 
     if parsed.notes_page is not None:
-        desk = Path(root) / str(subject)
+        desk = meeting_note.home_dir(root, subject)      # the note's home (#1783)
         rel = meeting_note.recorded_path(row) or meeting_mint.compose(row)
         written = False
         if not wpaths.is_file_inside(desk, rel):

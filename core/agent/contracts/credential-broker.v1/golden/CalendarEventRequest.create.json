@@ -1,0 +1,31 @@
+{
+  "request_id": "fixture-event-0001",
+  "action": "calendar.event.create",
+  "calendar_id": "primary",
+  "title": "Fixture review",
+  "start": {
+    "date_time": "2026-10-20T10:00:00",
+    "time_zone": "Europe/Lisbon"
+  },
+  "end": {
+    "date_time": "2026-10-20T10:30:00",
+    "time_zone": "Europe/Lisbon"
+  },
+  "description": "Fixture agenda.",
+  "attendees": [
+    "person@example.test"
+  ],
+  "conference": true,
+  "notify": false,
+  "policy": {
+    "unattended": false,
+    "notify_attendees": false,
+    "attendee_domains": null,
+    "calendars": [
+      "primary"
+    ],
+    "recipient_domains": null,
+    "attachments": false,
+    "attachment_max_bytes": 5242880
+  }
+}

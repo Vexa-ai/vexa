@@ -10,6 +10,7 @@ one turn paints the same screen whichever harness the deployment runs.
 from __future__ import annotations
 
 import json
+import re
 
 
 # Tools whose SUCCESS means a document now exists that the person should be looking at. The
@@ -52,6 +53,19 @@ _BOT_TOOLS = frozenset({
 _OPEN_TOOLS = frozenset({
     "mcp__vexa__open_page",
     "open_page",
+    # A sign-in browser the person drives in the page (ADR-0049): its result asks for the live view
+    # with `ui_action: "open_browser_session"`, and the panel move is an `open` of the path
+    # `browser-session:<id>`. Only the id crosses — the view reads its own password from meeting-api.
+    "mcp__vexa__browser_session_open",
+    "browser_session_open",
+    # "start an incognito chat" (Vexa-ai/vexa#1783): a profile verb that made a NEW chat opens it.
+    "mcp__vexa__chat_profile_set",
+    "chat_profile_set",
+    # THE AGENT ASKS TO MOVE THE CHAT'S WRITES (UI decision 6b): its answer carries
+    # `ui_action: "propose_target"` and becomes a `propose-target` event the chat renders inline
+    # with Switch / Keep. It never moves anything itself — only the person's click does.
+    "mcp__vexa__propose_write_target",
+    "propose_write_target",
 })
 
 
@@ -75,8 +89,11 @@ _OPEN_TOOLS = frozenset({
 _FOCUS_TOOLS = frozenset({
     "mcp__vexa__workspace_new",
     "workspace_new",
-    "mcp__vexa__workspace_target",
-    "workspace_target",
+    # a workspace made from a chat with workspace_create is where that chat works (#1783)
+    "mcp__vexa__workspace_create",
+    "workspace_create",
+    "mcp__vexa__workspace_create",   # a workspace from a template — the same create (Vexa-ai/vexa#1783)
+    "workspace_create",
     "workspace_import",
     "mcp__vexa__workspace_import",
     "workspace_import_status",
@@ -262,6 +279,18 @@ def _open_event(content: object) -> "dict | None":
         obj = json.loads(_tool_result_text(content))
     except (json.JSONDecodeError, TypeError):
         return None
+    if isinstance(obj, dict) and obj.get("ui_action") == "open_chat":
+        sid = str(obj.get("session") or "")
+        if re.fullmatch(r"pchat-[0-9a-z]{4,20}", sid):
+            return {"type": "open", "target": "chat", "workspace": "", "path": f"chat:{sid}"}
+        return None
+    if isinstance(obj, dict) and obj.get("ui_action") == "propose_target":
+        return _target_proposal(obj)
+    if isinstance(obj, dict) and obj.get("ui_action") == "open_browser_session":
+        sid = str(obj.get("session_id") or "")
+        if len(sid) == 32 and all(c in "0123456789abcdef" for c in sid):
+            return {"type": "open", "target": "browser-session", "workspace": "", "path": f"browser-session:{sid}"}
+        return None
     if not isinstance(obj, dict) or not obj.get("opened"):
         return None
     path = str(obj.get("path") or "").strip()
@@ -269,6 +298,19 @@ def _open_event(content: object) -> "dict | None":
         return None
     return {"type": "open", "target": str(obj.get("target") or ""),
             "workspace": str(obj.get("workspace") or ""), "path": path}
+
+
+def _target_proposal(obj: dict) -> "dict | None":
+    """The `propose-target` event a `propose_write_target` answer earns (UI decision 6b), or None.
+    Display fields only; the switch itself is the person's `POST /api/chat/target`."""
+    wid = str(obj.get("proposed") or "").strip()
+    if not wid or "/" in wid or wid.startswith("."):
+        return None
+    return {"type": "propose-target", "workspace": wid,
+            "name": str(obj.get("name") or wid)[:200],
+            "current": str(obj.get("current") or ""),
+            "current_name": str(obj.get("current_name") or "")[:200],
+            "reason": str(obj.get("reason") or "")[:300]}
 
 
 def _written_artifact(tool: str, args: dict) -> "tuple[str, str] | None":

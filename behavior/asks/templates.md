@@ -27,3 +27,16 @@ they want to change.
 To undo, read the file's history (the workspace history of `_global`, filtered to the path), and
 write back the version they want. Removing a company template with `workspace_delete` returns that
 kind to the built-in shape.
+
+## Workspace templates
+
+The company's WORKSPACE templates (what a new workspace can start as: event organization, client
+project, meeting series, research, and any the company adds) live in
+`_global/workspace-templates/<name>/`: a `TEMPLATE.md` manifest (title, one-line description,
+when to use it, `## Creates`, `## Questions` as ``- `key` — question (default: x)``, `## Suggested
+routines`) and the pages, which may carry placeholders for the answers — the format is in
+`_global/workspace-templates/README.md`; read it before writing one. When asked about them, list them with `workspace_templates_list`. To change one,
+read its files, say the change back in one sentence, and write the whole file with
+`workspace_write` (`slug="_global"`). A new template is a new directory with a `TEMPLATE.md`.
+Every change is in `_global`'s history; to undo, write back the earlier version. Edited templates
+are never overwritten by a deploy.

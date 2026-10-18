@@ -28,13 +28,13 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
-from control_plane import deploy_keys, git_credentials, secret_store
+from control_plane import deploy_keys, git_credentials
 from shared import token_destination
 
 log = logging.getLogger(__name__)
 
-# Token shapes we refuse to accept as ordinary text (GitHub PATs, and any URL carrying userinfo).
-_TOKEN_SHAPES = re.compile(r"\b(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b")
+# Token shapes we refuse to accept as ordinary text (GitHub and GitLab tokens, and any URL carrying userinfo).
+_TOKEN_SHAPES = re.compile(r"\b(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|gl(?:pat|dt|oas|rt)-[A-Za-z0-9_-]{16,})")
 _URL_CREDENTIAL = re.compile(r"://[^/\s:@]+:[^/\s@]+@")
 # git's ways of saying "you are not authorised", across https and ssh.
 _AUTH_FAILURE = re.compile(
@@ -63,7 +63,7 @@ class Credential:
 
 
 def credential_in_text(*values: Optional[str]) -> bool:
-    """True when any argument LOOKS like a credential — a GitHub token, or a URL with userinfo in it.
+    """True when any argument LOOKS like a credential — a GitHub or GitLab token, or a URL with userinfo.
 
     The tools this guards take no credential parameter at all, so a token can only arrive by being typed
     into a repo URL or a branch name. That is exactly the path this refuses: a secret pasted into a chat
@@ -90,7 +90,7 @@ saved_token_may_reach = token_destination.saved_token_may_reach
 
 def _token_for(root: str | Path, repo_url: str, subject: str, explicit_token: Optional[str]) -> Optional[str]:
     """The token one op may use for ``repo_url``: a per-call token typed in the terminal, else the
-    saved token when ``repo_url`` is ``https://github.com/…``, else none.
+    saved token of the configured provider ``repo_url`` is on (``token_destination``), else none.
 
     A typed token is the person's choice for this one call and is returned for any URL; the three
     places a token is put on the wire (clone, pull, push) embed it only in an ``https`` URL, so it
@@ -98,9 +98,10 @@ def _token_for(root: str | Path, repo_url: str, subject: str, explicit_token: Op
     explicit = (explicit_token or "").strip()
     if explicit:
         return explicit
-    if not subject or not saved_token_may_reach(repo_url):
+    provider = token_destination.saved_token_provider(repo_url) if subject else None
+    if provider is None:
         return None
-    return git_credentials.read_github_token(root, subject)
+    return git_credentials.read_token(root, subject, provider)
 
 
 @contextlib.contextmanager
@@ -109,7 +110,7 @@ def for_workspace(root: str | Path, *, key: str, repo_url: str = "", subject: st
     """Resolve the credential for ONE git op on the workspace whose deploy-key name is ``key``.
 
     Deploy key for an ssh remote (the private half exists on disk only inside this ``with``), else an
-    explicitly-passed token / the caller's saved PAT (``https://github.com/`` only), else nothing. ``explicit_token`` is the terminal's per-call token field — the MCP path never supplies it."""
+    explicitly-passed token / the caller's saved token for the URL's provider, else nothing. ``explicit_token`` is the terminal's per-call token field — the MCP path never supplies it."""
     token = _token_for(root, repo_url, subject, explicit_token)
     if deploy_keys.is_ssh_url(repo_url) or not repo_url:
         with deploy_keys.ssh_env(root, key) as env:
@@ -131,19 +132,19 @@ def home_capability(root: str | Path, *, key: str, remote: Optional[str], url: O
     bits = [f"origin {url}" if (remote or "origin") == "origin" else f"{remote} {url}"]
     if deploy_keys.exists(root, key):
         bits.append("deploy key set")
-    elif subject and saved_token_may_reach(url) and git_credentials.read_github_token(root, subject):
+    elif subject and _token_for(root, url, subject, None):
         bits.append("saved token")
     else:
         bits.append("no credential yet")
     return ", ".join(bits)
 
 
-def deploy_key_prompt(root: str | Path, *, key: str, repo_url: str = "") -> dict:
+def deploy_key_prompt(root: str | Path, *, key: str, repo_url: str = "", subject: Optional[str] = None) -> dict:
     """Generate (or reuse) this workspace's deploy key and describe the ONE action that unblocks it.
 
     This is the answer to "how do we manage the secrets?": we do not take one. The person adds our
     public key to their repository as a **write** deploy key, and comes back and says so."""
-    made = deploy_keys.ensure(root, key)
+    made = deploy_keys.ensure(root, key, subject=subject)
     add_at = deploy_keys.deploy_keys_url(repo_url)
     return {
         "public_key": made["public_key"],
@@ -163,11 +164,3 @@ def prompt_sentence(prompt: dict) -> str:
         f"{prompt['public_key']}"
     )
 
-
-def secrets_key_env(settings) -> str:
-    """The operator's ``VEXA_SECRETS_KEY`` off the boot settings, or "" — kept here so no caller has to
-    know that ``secret_store`` also reads the env var directly."""
-    try:
-        return settings.secrets_key.get_secret_value() if settings is not None else ""
-    except AttributeError:
-        return secret_store.configured_key()

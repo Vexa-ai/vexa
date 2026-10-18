@@ -7,6 +7,13 @@ from fastapi import HTTPException
 from control_plane import workspace_import as jobs
 
 
+@pytest.fixture(autouse=True)
+def _git_broker(git_broker):
+    """Saved Git credentials live in the credential broker (in memory here)."""
+    return git_broker
+
+
+
 # How long a job may take to reach a final state. The jobs here are a stub operation on a thread
 # or a local `git` against a scratch repository — milliseconds on an idle machine. The old wait
 # counted 200 polls of 10 ms, two seconds, and a loaded CI or test host ran past it with the job
@@ -174,3 +181,66 @@ def test_import_can_reuse_an_owned_workspace_key_without_widening_access(tmp_pat
     bound = client.get(f'/api/workspace/{slug}/deploy-key', headers=headers).json()
     assert bound['fingerprint'] == key['fingerprint']
     assert bound['public_key'] == key['public_key']
+
+
+def test_a_repository_keeps_its_credential_when_the_workspace_it_borrowed_it_from_is_gone(tmp_path, monkeypatch):
+    """Founder, 2026-10-15: "sync biz workspace with github" failed with "Repository credential
+    workspace is no longer accessible" — biz was imported with the deploy key of a shared workspace
+    that was later removed, so every pull/push of biz stopped. The key outlives the workspace that
+    minted it and moves with the repository: the bound workspace still answers with the SAME key. A
+    workspace that still exists keeps its owner check (another person's id is still refused)."""
+    from tests.test_workspace_manage_routes import _client, _seed_primary
+    from tests.test_workspace_attach import _make_repo
+    from control_plane import workspace_attach
+    _seed_primary(tmp_path, 'u_jane')
+    origin = _make_repo(tmp_path / 'original', 'RAW', compliant=False)
+    clone = workspace_attach._git_clone
+    monkeypatch.setattr(workspace_attach, '_git_clone', lambda repo, ref, dest, token=None, **kwargs: clone(origin, ref, dest, token, **kwargs))
+    client = _client(tmp_path)
+    headers = {'X-User-Id': 'u_jane'}
+    source = client.post('/api/workspace/shared/new', headers=headers, json={'name':'Credential source'}).json()['workspace_id']
+    key = client.post(f'/api/workspace/{source}/deploy-key', headers=headers, json={}).json()
+    response = client.post('/api/workspace/import', headers=headers,
+                           json={'repo':'https://github.com/example/plain', 'credential_workspace':source})
+    slug = finish(tmp_path, 'u_jane', response.json()['operation_id'])['result']['workspace']
+    workspace_attach.delete_shared_workspace(tmp_path, 'u_jane', source)
+    assert not (tmp_path / source).exists()
+    bound = client.get(f'/api/workspace/{slug}/deploy-key', headers=headers)
+    assert bound.status_code == 200, bound.text
+    assert bound.json()['fingerprint'] == key['fingerprint']
+
+
+def test_an_orphaned_key_is_never_inherited_by_somebody_else_and_the_workspace_says_so(tmp_path, monkeypatch):
+    """Tightened (founder 2026-10-15): the key outlives its workspace ONLY for the person who stored
+    it. A co-owner who borrowed it gets "reconnect GitHub", and both see the state before a sync."""
+    from tests.test_workspace_manage_routes import _client, _seed_primary
+    from tests.test_workspace_attach import _make_repo
+    from control_plane import workspace_attach, workspace_membership as membership
+    from control_plane.api import ORPHANED_CREDENTIAL
+    _seed_primary(tmp_path, 'u_jane'); _seed_primary(tmp_path, 'u_ann')
+    origin = _make_repo(tmp_path / 'original', 'RAW', compliant=False)
+    clone = workspace_attach._git_clone
+    monkeypatch.setattr(workspace_attach, '_git_clone', lambda repo, ref, dest, token=None, **kwargs: clone(origin, ref, dest, token, **kwargs))
+    client = _client(tmp_path)
+    jane, ann = {'X-User-Id': 'u_jane'}, {'X-User-Id': 'u_ann'}
+    source = client.post('/api/workspace/shared/new', headers=jane, json={'name':'Credential source'}).json()['workspace_id']
+    client.post(f'/api/workspace/{source}/deploy-key', headers=jane, json={})     # Jane stores the key
+    membership.grant_membership(tmp_path, source, 'u_ann', 'owner', added_by='u_jane',
+                                index=membership.InMemoryMembershipIndex(), commit_fn=membership.policy_commit)
+    slugs = {}
+    for who, h in (('u_jane', jane), ('u_ann', ann)):
+        r = client.post('/api/workspace/import', headers=h, json={'repo':'https://github.com/example/plain', 'credential_workspace':source})
+        slugs[who] = finish(tmp_path, who, r.json()['operation_id'])['result']['workspace']
+    assert client.get('/api/workspace/git-remote-status', params={'slug': slugs['u_ann']}, headers=ann).json().get('credential') is None
+    workspace_attach.delete_shared_workspace(tmp_path, 'u_jane', source)
+    # the person who stored it keeps it
+    assert client.get(f"/api/workspace/{slugs['u_jane']}/deploy-key", headers=jane).status_code == 200
+    # somebody who borrowed it is told to reconnect
+    refused = client.get(f"/api/workspace/{slugs['u_ann']}/deploy-key", headers=ann)
+    assert refused.status_code == 403 and refused.json()['detail'] == ORPHANED_CREDENTIAL
+    assert 'reconnect' in ORPHANED_CREDENTIAL
+    # and both workspaces SAY it, before any sync
+    note_j = client.get('/api/workspace/git-remote-status', params={'slug': slugs['u_jane']}, headers=jane).json()['credential']
+    note_a = client.get('/api/workspace/git-remote-status', params={'slug': slugs['u_ann']}, headers=ann).json()['credential']
+    assert note_j == {'state': 'inherited_from_deleted', 'usable': True, 'note': 'GitHub login inherited from a deleted workspace — reconnect'}
+    assert note_a['usable'] is False

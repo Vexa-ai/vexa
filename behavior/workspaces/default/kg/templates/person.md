@@ -10,6 +10,8 @@ self: true                        # optional — set on the ONE person entity th
                                   # workspace's owner (the user); every other person omits it
 role: <their role>                # optional
 company: <Company>                # optional — use the company's title so [[Company]] links
+email: <address>                  # optional — shown copyable in the page's header
+last_contact: <YYYY-MM-DD>        # optional — ISO; the reader sees "3 days ago"
 resource: <url>                   # optional — a profile or source you can cite
 tags: [<tag>, <tag>]              # optional
 ---
@@ -31,6 +33,7 @@ the moment their name comes up.>
 ## How we relate
 
 - <What we are to each other: customer, maintainer, counterparty, colleague. What is owed either way.>
+- [ ] <a follow-up either side owes, as a task item — the reader ticks it off on the page>
 
 ## Connected
 

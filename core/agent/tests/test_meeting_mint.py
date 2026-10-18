@@ -148,9 +148,10 @@ def test_the_minted_page_is_the_meetings_own_page(tmp_path):
     assert "transcript_cursor:" in doc
     # the slot — the live transcript renders IN this page, which is what makes it the whole room
     assert "<!-- vexa:transcript meeting=118 -->" in doc
-    # …and the empty regions the flow's report and Expand write between
-    for key in ("about", "decisions", "commitments", "people", "questions", "report"):
-        assert f"<!-- meeting:{key}:start -->" in doc and f"<!-- meeting:{key}:end -->" in doc
+    # …and NOTHING else (#1783): no placeholder title, no empty headings. The first update (or the
+    # flow's report) writes a section with its heading when it has something to put in it.
+    body = doc.split("\n---\n", 1)[1]
+    assert "#" not in body and "meeting:report:start" not in body
 
 
 def test_a_page_that_is_already_there_is_never_rewritten(tmp_path):
@@ -236,7 +237,7 @@ class _SendingReader:
     def __init__(self, events):
         self.events = events
 
-    def read(self, unit_id, resume=None):
+    def read(self, unit_id, resume=None, fresh=False):
         yield from self.events
 
 
@@ -280,7 +281,7 @@ def test_the_send_puts_the_meetings_page_on_the_senders_desk(stack):
     assert _send(_client(stack)).status_code == 200
     doc = _page(stack).read_text()
     assert "<!-- vexa:transcript meeting=118 -->" in doc
-    assert "<!-- meeting:report:start -->" in doc
+    assert "type: meeting" in doc and "transcript_cursor:" in doc
 
 
 def test_the_page_is_on_the_desk_BEFORE_the_client_is_told(stack):
@@ -312,7 +313,7 @@ def test_the_note_route_then_answers_with_that_page_and_its_widget(stack):
     stack["rows"]["118"] = {**ROW, "data": {"metadata": {"note_path": stack["recorded"][0][2]}}}
     body = client.get("/api/meeting/note?meeting_id=118",
                       headers={"X-User-Id": SUBJECT}).json()
-    assert body == {"path": stack["recorded"][0][2], "transcript": "118", "cursor": ""}
+    assert body == {"path": stack["recorded"][0][2], "workspace": "", "transcript": "118", "cursor": ""}
 
 
 def test_a_turn_that_sends_nothing_mints_nothing(stack):

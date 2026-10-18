@@ -50,12 +50,14 @@ def launcher_for(trigger: str, subject: str, *, ref: str | None = None) -> str:
         return f"schedule:{ref or subject}"
     if trigger == "transcription":
         return "integration:meetings"
+    if trigger == "signal":
+        return "integration:signals"
     return f"integration:{ref or 'event'}"  # event
 
 
 def mode_for(trigger: str) -> str:
     """Input-trust → write access (governance). Trusted triggers (you, in chat; your own schedule) write
-    ``rw``; untrusted external input (event/web/transcription) is ``ro`` → propose-only."""
+    ``rw``; untrusted external input (event/web/transcription/signal) is ``ro`` → propose-only."""
     return "rw" if trigger in ("message", "scheduled") else "ro"
 
 
@@ -120,14 +122,32 @@ def chat_session(inv: dict) -> str:
 
 
 def dispatch_id(inv: dict) -> str:
-    """A stable workload id for the dispatch. A live meeting keys on its ``session_uid`` (one dispatch
-    per meeting); chat on (subject, session) so every turn of a conversation thread touches its own warm
+    """A stable workload id for the dispatch. A live meeting keys on its ``session_uid`` and the
+    subject (one warm unit per person per meeting: a worker's model route is fixed at spawn for the
+    person it was dispatched for, so two people never share one); chat on (subject, session) so every turn of a conversation thread touches its own warm
     unit while distinct threads stay isolated; others on a digest of (subject, trigger, start)."""
     ctx = inv.get("context") or {}
     meeting = ctx.get("meeting") if ctx.get("kind") == "meeting" else None
-    if meeting and meeting.get("session_uid"):
-        return f"agent-meet-{meeting['session_uid']}"
     subject = inv["identity"]["subject"]
+    if ctx.get("room_unit"):
+        # A ROOM'S TURN RUNS AS ITS WORKSPACE'S AGENT (C1, R1): one warm unit per room, whoever
+        # spoke — named by agent-api from the room (`room_principal.room_unit_id`), never a body.
+        return str(ctx["room_unit"])
+    if meeting and meeting.get("session_uid"):
+        return f"agent-meet-{meeting['session_uid']}-{subject}"
+    if inv["trigger"] == "scheduled" and ctx.get("session"):
+        # A ROUTINE'S TURN IN ITS OWN CHAT THREAD (ADR-0046 decision 12). Same thread, same
+        # per-session history as the person's turns — continuity is the session file — but its
+        # own warm unit, because a worker's regime is fixed when it is spawned: the person's
+        # replies run `human`, the routine's runs `autonomous`, never in one container.
+        return routine_unit_id(subject, chat_session(inv), ctx.get("mount_gen"))
+    if inv["trigger"] == "signal" and ctx.get("session"):
+        # A MEETING SIGNAL WAKES THE AGENT IN THE MEETING'S CHAT (transcript signals, 2026-10-15):
+        # the same thread and conversation as the person's turns, on a sibling unit of its own.
+        # Not the routine's `-auto` unit: a worker's mounts and token are fixed when it is spawned,
+        # and a routine's warm `-auto` worker writes, while a signal's turn is untrusted and may
+        # write only the meeting's page. Two regimes, two warm units, one conversation.
+        return signal_unit_id(subject, chat_session(inv), ctx.get("mount_gen"))
     if inv["trigger"] == "message":
         # One warm chat unit per (person, conversation thread), TTL-reaped; continuity = the per-session
         # file. ``session`` defaults to ``"main"`` so a dispatch with no session keeps the legacy id.
@@ -148,6 +168,32 @@ def dispatch_id(inv: dict) -> str:
         f"{subject}|{inv['trigger']}|{json.dumps(inv['start'], sort_keys=True)}".encode()
     ).hexdigest()[:10]
     return f"agent-{subject}-{inv['trigger']}-{digest}"
+
+
+#: The suffix that names a chat thread's AUTONOMOUS sibling unit (ADR-0046 decision 12).
+ROUTINE_UNIT_SUFFIX = "-auto"
+
+
+def routine_unit_id(subject: str, session: str, mount_gen=None) -> str:
+    """The warm unit a routine's scheduled turns run on in a chat thread — the chat's own id plus
+    `-auto`. Spelled once, beside `chat_unit_id`, so the busy check and the dispatcher agree."""
+    return chat_unit_id(subject, session, mount_gen) + ROUTINE_UNIT_SUFFIX
+
+
+#: The suffix that names a chat thread's SIGNAL sibling unit: a meeting.signal's untrusted turn in the
+#: meeting's chat (transcript signals). Read-only mounts; its tools write the meeting's page only.
+SIGNAL_UNIT_SUFFIX = "-signal"
+
+
+def signal_unit_id(subject: str, session: str, mount_gen=None) -> str:
+    """The warm unit a meeting signal's turns run on in a chat thread — the chat's own id plus
+    `-signal`. Spelled once, beside `routine_unit_id`, so the busy check and the dispatcher agree."""
+    return chat_unit_id(subject, session, mount_gen) + SIGNAL_UNIT_SUFFIX
+
+
+def is_signal_unit(unit_id: str) -> bool:
+    """Is this unit a chat's signal sibling? Read off the id the delegation token carries."""
+    return str(unit_id or "").endswith(SIGNAL_UNIT_SUFFIX)
 
 
 def chat_unit_id(subject: str, session: str, mount_gen=None) -> str:
@@ -192,6 +238,20 @@ def unit_of_topic(topic: str) -> str:
     if t.startswith("unit:") and (t.endswith(":in") or t.endswith(":out")):
         return t[len("unit:"):t.rindex(":")]
     return ""
+
+
+def send_now_key(unit_id: str) -> str:
+    """WHERE A PERSON ASKS FOR ONE QUEUED MESSAGE TO RUN NOW: the entry id of the message; the
+    worker stops the running turn and runs that message next (agent-api writes, the worker clears)."""
+    return f"unit:{unit_id}:send-now"
+
+
+def stop_key(unit_id: str) -> str:
+    """WHERE A PERSON'S STOP REACHES THE RUNNING TURN (live app.dev 2026-10-15): the moment Stop was
+    pressed, epoch milliseconds. The worker's stop watcher kills the running turn's whole process
+    tree — the CLI and every tool it started — and the turn ends, said (agent-api writes, the worker
+    clears)."""
+    return f"unit:{unit_id}:stop"
 
 
 def inbox_cursor_key(unit_id: str) -> str:

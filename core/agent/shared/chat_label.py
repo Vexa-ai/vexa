@@ -166,17 +166,50 @@ def composed_label(human: str) -> str:
     return composed_kind_label(m.group(1)) if m else ""
 
 
+def person_words(text: str) -> str:
+    """What the person said in a composed turn prompt, lines kept — for READING a turn back (MCP
+    ``chat_read``), where ``human_head`` would single-line it. Everything up to the last sentinel is
+    machinery; with no sentinel (a prompt from before it existed), a leading "Active context…"
+    block up to its ``---`` is. Any ``<!--vexa:…-->`` marker left is removed."""
+    s = str(text or "")
+    # A HIDDEN INSTRUCTION WITH THE PERSON'S LINE (the terminal's `withSay`): the line after the mark
+    # is the person's; everything before it is the agent's instruction and never a name
+    said = s.rfind(SAY_MARK)
+    if said >= 0:
+        line = " ".join(s[said + len(SAY_MARK):].split())
+        return "" if is_machinery_label(line) else line
+    cut = s.rfind(USER_INPUT_SENTINEL)
+    if cut >= 0:
+        s = s[cut + len(USER_INPUT_SENTINEL):]
+    elif any(s.lstrip().startswith(p) for p in _ACTIVE_OPENS):
+        m = _ACTIVE_BLOCK.match(s.lstrip())
+        s = s.lstrip()[m.end():] if m else s
+    return _VEXA_MARKER.sub("", s).strip()
+
+
+#: The terminal's mark between a hidden instruction and the person's own line (`withSay`).
+SAY_MARK = "<!-- vexa:say -->"
+
+
 def human_head(text: str) -> str:
     """The person's own words at the head of a composed prompt — every machinery preamble removed.
 
     Returns `""` when there are none, which is an answer: a prompt that is machinery end to end has
     no human head, and inventing one from the machinery's prose is the defect this file exists for."""
     s = str(text or "")
+    # A HIDDEN INSTRUCTION WITH THE PERSON'S LINE (the terminal's `withSay`): the line after the mark
+    # is the person's; everything before it is the agent's instruction and never a name
+    said = s.rfind(SAY_MARK)
+    if said >= 0:
+        line = " ".join(s[said + len(SAY_MARK):].split())
+        return "" if is_machinery_label(line) else line
     cut = s.rfind(USER_INPUT_SENTINEL)
     if cut >= 0:
         # The boundary is the authority when it is there: only what follows it is the person's.
         s = s[cut + len(USER_INPUT_SENTINEL):]
     s = _VEXA_MARKER.sub(" ", s)
+    # a home act's hidden tail ("(This came from your home, item …)") is the agent's, never the name
+    s = re.sub(r"\s*\(This came from your home, item [\s\S]*$", "", s)
     if any(s.lstrip().startswith(p) for p in _ACTIVE_OPENS):
         m = _ACTIVE_BLOCK.match(s.lstrip())
         # No separator left means the block itself was truncated — everything we hold is preamble.

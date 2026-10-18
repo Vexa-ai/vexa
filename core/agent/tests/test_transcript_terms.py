@@ -39,15 +39,47 @@ def test_one_name_said_twice_is_one_term_carrying_both_lines():
     assert rows[0]["segments"] == [1, 2]
 
 
-def test_a_single_word_name_is_not_a_term_and_that_is_the_extractor_we_chose():
-    """⚠ A REAL LIMIT, stated rather than worked around. `candidate_names` requires two capitalised
-    words — measured, over ten real DNA notes, as the rule that stops "Complete SSO" and "Await PR"
-    becoming pages. So "Anthropic" or "Helm", said alone, never becomes a chip.
+def test_a_room_that_names_people_and_companies_by_one_word_gets_its_terms():
+    """⚠ THE DEFECT (friction, 2026-10-13): `transcript_terms` answered NO terms for a meeting that
+    plainly named people and companies. Speech names people by first name and companies by one word;
+    the notes-tuned two-word floor saw none of them. A LOOK publishes nothing — the agent picks with
+    `keep` — so admitting single words costs a longer list, never a screen full of chips."""
+    rows = extract_terms([
+        seg(1, "I spoke with Maria yesterday and she said Siemens wants the pilot."),
+        seg(2, "Then Дмитрий from Яндекс joined late, on Monday."),
+        seg(3, "We should ask Priya whether Acme signed."),
+    ])
+    terms = [r["term"] for r in rows]
+    for name in ("Maria", "Siemens", "Дмитрий", "Яндекс", "Priya", "Acme"):
+        assert name in terms, (name, terms)
+    # a pronoun, a sentence opener and a weekday are not names
+    for noise in ("I", "Then", "We", "Monday"):
+        assert noise not in terms, (noise, terms)
+    assert next(r for r in rows if r["term"] == "Яндекс")["segments"] == [2]
 
-    We take that deliberately: the chips are the SAME population decision 24 writes pages for, and a
-    second extractor tuned for chips would drift from the one tuned for pages the first time either
-    moved — and the drift would show as a chip that opens a page nothing will ever write."""
-    assert extract_terms([seg(1, "Helm shipped on Monday.")]) == []
+
+def test_a_single_word_said_only_at_a_sentence_start_is_not_a_term():
+    """A capital at the head of a sentence is grammar, not a name — unless the same word is also
+    said mid-sentence somewhere in the meeting, and then every line that said it counts."""
+    assert extract_terms([seg(1, "Helm shipped yesterday.")]) == []
+    rows = extract_terms([seg(1, "Helm shipped yesterday."), seg(2, "We moved off Helm.")])
+    assert [r["term"] for r in rows] == ["Helm"]
+    assert sorted(rows[0]["segments"]) == [1, 2]
+    assert rows[0]["first_at"] == "2026-09-02T10:01:00Z"
+
+
+def test_a_word_inside_a_longer_name_is_not_its_own_term():
+    rows = extract_terms([seg(1, "Yesterday, Robin Vale met Northwind Labs.")])
+    assert [r["term"] for r in rows] == ["Robin Vale", "Northwind Labs"]
+
+
+def test_a_first_name_folds_into_the_full_name_but_never_into_a_longer_word():
+    rows = extract_terms([seg(1, "I asked Ana first."), seg(2, "Later, Ana Lima agreed."),
+                          seg(3, "We met Anacorp too.")])
+    terms = {r["term"]: r for r in rows}
+    assert set(terms) == {"Ana Lima", "Anacorp"}
+    assert sorted(terms["Ana Lima"]["segments"]) == [1, 2]
+    assert terms["Anacorp"]["segments"] == [3]
 
 
 def test_a_short_spelling_folds_into_the_long_one_and_keeps_its_line():
@@ -80,10 +112,11 @@ def test_a_sentence_opener_is_not_part_of_a_name():
     notes-tuned extractor returned 28 candidates and EIGHT were speech, not names: "But I'll",
     "So I'm", "Like I've", "So Cameron", "That's John", "And Gabe", "On DNA", "Our TAC". Prose does
     not open sentences with a capitalised function word; a transcript is nothing but sentence
-    openings. Stripping the lead took the same meeting to 18 candidates, none of that shape."""
+    openings. The opener never becomes part of a term; the name behind it is still a name."""
     said = ["But I'll take it.", "So I'm on it.", "Like I've said.", "So Cameron agreed.",
             "That's John's call.", "And Gabe will do it.", "On DNA we agreed.", "Our TAC met."]
-    assert extract_terms([seg(i, t) for i, t in enumerate(said)]) == []
+    assert [r["term"] for r in extract_terms([seg(i, t) for i, t in enumerate(said)])] == [
+        "Cameron", "John", "Gabe", "DNA", "TAC"]
 
 
 def test_stripping_the_lead_still_finds_the_name_behind_it():
@@ -91,10 +124,8 @@ def test_stripping_the_lead_still_finds_the_name_behind_it():
     assert [r["term"] for r in rows] == ["Academy Software Foundation"]
 
 
-def test_the_two_word_floor_holds_after_a_strip():
-    """A stripped candidate that shrinks to one word is DROPPED, not admitted: the floor is the
-    extractor's own rule and a back door through this path would be the same defect twice."""
-    assert extract_terms([seg(1, "So Cameron agreed.")]) == []
+def test_a_stripped_opener_leaves_the_one_word_name_behind_it():
+    assert [r["term"] for r in extract_terms([seg(1, "So Cameron agreed.")])] == ["Cameron"]
 
 
 # ── the index ────────────────────────────────────────────────────────────────────────────────────

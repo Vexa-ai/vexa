@@ -20,7 +20,7 @@ from worker import engine
 AGENT = Path(__file__).resolve().parents[1]
 READ_TOOLS = ('gmail_search', 'gmail_read', 'gmail_thread', 'calendar_events', 'mail_inbox', 'mail_read')
 RULE = 'Link to a message or event only with its web_url; never construct a provider URL.'
-MAIL_URL = 'https://mail.google.com/mail/u/robin.vale%2Bwork@example.test/#all/t1'
+MAIL_URL = 'https://mail.google.com/mail/?authuser=robin.vale%2Bwork@example.test#all/t1'
 EVENT_URL = 'https://calendar.google.com/calendar/event?eid=ZXZ0MQ'
 
 
@@ -64,7 +64,9 @@ HEADERS = {'x-user-id': 'owner', 'x-vexa-identity': 'signed-owner'}
 def test_agent_api_passes_the_brokers_web_url_through_unchanged(monkeypatch, route, body, provider, answer, pick):
     monkeypatch.setenv('VEXA_CONNECTIONS_BROKER_URL', 'http://broker.test')
     monkeypatch.setenv('VEXA_CONNECTIONS_AGENT_KEY_FILE', '/dev/null')
-    answers = {('GET', '/api/connections'): {'connections': [{'id': 'c' * 32, 'provider': provider, 'status': 'ready'}]},
+    # the person's own connection policy is read before any action (connection_policy.narrow): none set
+    answers = {('GET', '/api/preferences'): {},
+               ('GET', '/api/connections'): {'connections': [{'id': 'c' * 32, 'provider': provider, 'status': 'ready'}]},
                ('POST', '/api/connections/' + 'c' * 32 + '/read'): answer}
     with _broker(answers) as sent:
         r = _client().post(route, headers=HEADERS, json=body)

@@ -17,6 +17,8 @@ honestly. Built lazily (PEP 562) so ``uvicorn control_plane.api:app`` wires the 
 """
 from __future__ import annotations
 
+from control_plane.workspace_reader import home_of
+
 import os
 
 import functools
@@ -35,15 +37,14 @@ from jsonschema.exceptions import ValidationError
 from pydantic import BaseModel
 
 from control_plane import broker_client, identity_token
+from shared import obs
 from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import meeting_room
 from control_plane import meeting_steering
 from control_plane import schedule_digest as schedule_digest_mod
-from control_plane import routines as routines_mod
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state, missing_capability_keys
 from shared import units
 from workspaces.shared import entities as entities_mod
-from control_plane import workspace_routines as workspace_routines_mod
 from control_plane import link_resolver as link_resolver_mod
 from control_plane import workspace_ids as ids_mod
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
@@ -66,6 +67,8 @@ from control_plane.workspace_attach import (
     shared_attached_state,
     swap_workspace,
     workspace_dir_for,
+    home_dir as home_dir_for,
+    NoHome as attach_mod_NoHome,
     workspace_slot_dir,
 )
 from control_plane.repo_ref import RepoRefError, assert_fetchable
@@ -79,6 +82,7 @@ from control_plane import dispatch as dispatch_mod
 from control_plane import unit_faults as unit_faults_mod
 from shared.runtime_fault import RuntimeFault
 from control_plane import deploy_keys as deploy_keys_mod
+from control_plane import git_secret_store
 from control_plane import workspace_credentials as wcreds
 from control_plane import repo_ref
 from shared.git_redaction import redact as redact_secrets
@@ -86,6 +90,7 @@ from workspaces.shared import workspace_paths as wpaths
 from control_plane import global_layer
 from control_plane import version as version_mod
 from control_plane import system_mounts
+from control_plane import features as features_mod
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import model_endpoint
 from control_plane import chat_intents
@@ -98,22 +103,42 @@ from control_plane.workspace_reader import WorkspaceReader
 # The models, pure helpers and constants every route is built out of. They live in
 # `api_shared` so the routers can import them too — see that module's docstring.
 from control_plane.routers import health as routers_health
+from control_plane.routers import calls as routers_calls
+from control_plane.routers import notifications as routers_notifications
+from control_plane import livekit_rooms
 from control_plane.routers import chats as routers_chats
 from control_plane.routers import ingress as routers_ingress
 from control_plane.routers import routines as routers_routines
+from control_plane.routers import agent_messages as routers_agent_messages
 from control_plane.routers import admin as routers_admin
 from control_plane.routers import meetings as routers_meetings
 from control_plane.routers import scaffolds as routers_scaffolds
 from control_plane.routers import friction as routers_friction
 from control_plane.routers import proposals as routers_proposals
+from control_plane.routers import forget as routers_forget
+from control_plane.routers import refs as routers_refs
+from control_plane.routers import home as routers_home
+from control_plane.routers import budgets as routers_budgets
+from control_plane.routers import usage as routers_usage
+from control_plane.routers import levels as routers_levels
+from control_plane.routers import people as routers_people
+from control_plane.routers import identity_media as routers_identity_media
+from control_plane.routers import desktop as routers_desktop
+from control_plane.routers import rooms as routers_rooms
 from control_plane.routers import connections as routers_connections
 from control_plane.routers import clock as routers_clock
+from control_plane.routers import pages as routers_pages
 from control_plane.routers import workspaces as routers_workspaces
 from control_plane.routers import sharing as routers_sharing
 from control_plane.routers import meeting_bundle as routers_meeting_bundle
+from control_plane.routers import sessions as routers_sessions
+from control_plane.routers import chat_read as routers_chat_read
+from control_plane.routers import workspace_states as routers_workspace_states
+from control_plane.routers import workspace_templates as routers_workspace_templates
 from control_plane import route_policy
 from control_plane import admin_account_scope
-from control_plane.ceiling import reads_within, require_in_ceiling
+from control_plane.ceiling import (DESK_ALIASES, reads_within, require_in_ceiling,
+                                   require_read_in_ceiling)
 from control_plane.api_shared import (
     logger, _PHASE_WORD, _iso, _provenance_line, _epoch_text, _Sessions, _LiveMeetings)
 from control_plane.peer_lookups import (
@@ -125,6 +150,11 @@ from control_plane.api_shared import (  # noqa: F401
     _context_grounding, _decode_sse_cursor, _encode_sse_cursor, _fold_meeting_transcript,
     _has_custom_model_endpoint, _meeting_grounding, _truncate_title)
 from control_plane.bodies import ChatBody, ChatContextBody  # noqa: F401
+
+#: Said when a workspace's GitHub login came from a deleted workspace and was not this person's own.
+ORPHANED_CREDENTIAL = ("GitHub login inherited from a deleted workspace — reconnect: add this workspace's "
+                       "deploy key to the repository (it is offered on the next sync) or save a GitHub token "
+                       "in Connections → Git.")
 
 def create_app(
     dispatcher: Dispatcher,
@@ -141,7 +171,12 @@ def create_app(
     schedule_source: "Optional[Callable[[str], list]]" = None,
     email_subject_lookup: "Optional[object]" = None,
     meeting_note_recorder: "Optional[object]" = None,
+    meeting_annotator: "Optional[object]" = None,
     default_subject: str = "",
+    session_store: "Optional[object]" = None,
+    livekit: "Optional[object]" = None,
+    call_share_redeemer: "Optional[object]" = None,
+    notify_publish: "Optional[Callable[[str, str], None]]" = None,
 ) -> FastAPI:
     """Build agent-api. ``default_subject`` is for an in-process test harness only: the subject a
     request that names nobody runs as, honoured only when the app has no identity door. The
@@ -215,8 +250,91 @@ def create_app(
     _admin_account_gate = admin_account_scope.gate(
         (lambda subj: global_layer.is_admin_account(settings, subj)) if settings is not None
         else (lambda subj: False))
+    # A MEETING SIGNAL'S TURN WRITES ONE PAGE (transcript signals, `signal_scope`): the same shape
+    # again — an app-level dependency over the matched route, so a new write route is closed to it
+    # the day it lands. The dispatcher records the page; this reads it back by the caller's unit.
+    from control_plane import signal_scope as _signal_scope  # noqa: PLC0415
+    _signal_grants = _signal_scope.reader(redis_url)
     app = FastAPI(title="vexa-agent-api", version="0.12.0",
-                  dependencies=[route_policy.PERSON_GATE, Depends(_admin_account_gate)])
+                  dependencies=[route_policy.PERSON_GATE, Depends(_admin_account_gate),
+                                Depends(_signal_scope.gate(_signal_grants))])
+    # THE SESSION STORE (ADR-0048) — conversations apart from workspaces. Off unless configured;
+    # with it off every chat keeps the workspace layout, byte for byte.
+    if session_store is None and settings is not None:
+        try:
+            from control_plane import session_store as _session_store_mod
+
+            session_store = _session_store_mod.from_settings(settings)
+        except Exception as exc:  # noqa: BLE001 — a store that cannot open leaves chats on the old layout
+            logger.error("session store did not open (%s); chats keep the workspace layout",
+                         type(exc).__name__)
+            session_store = None
+    if session_store is not None and hasattr(dispatcher, "attach_sessions"):
+        _saver = None
+        if redis_url:
+            import redis as _redis_for_sessions
+
+            from control_plane import session_sync as _session_sync
+
+            _saver = _session_sync.SessionSaver(
+                session_store, _redis_for_sessions.from_url(redis_url, decode_responses=True),
+                output_topic=units.output_topic)
+            _saver.start()
+        dispatcher.attach_sessions(session_store, _saver)
+    # NOTIFICATIONS (#1783) live in the session store's database and go live on the recipient's own
+    # redis channel, which the gateway's /ws fans in for every tab they have open. `notify_publish`
+    # is a test's bus; production publishes on redis when there is one, and stores only when not.
+    from control_plane import notifications as _notifications_mod
+
+    notifier = None
+    if session_store is not None:
+        try:
+            _pub = notify_publish if notify_publish is not None else _notifications_mod.redis_publisher(redis_url)
+        except Exception as exc:  # noqa: BLE001 — stored, read on load; live delivery is the extra
+            logger.warning("notifications publish off (%s)", type(exc).__name__)
+            _pub = None
+        notifier = _notifications_mod.Notifier(session_store, publish=_pub)
+    # THE LLM SPEND CAP (llm_budget.py): every dispatch asks it first, and the meter counts what each
+    # dispatched turn's model calls report. Wired whenever the app is built from settings; a test that
+    # wired its own keeps it. Without redis there is no ledger: only the kill switch applies.
+    if settings is not None and hasattr(dispatcher, "set_llm_budget") \
+            and getattr(dispatcher, "_llm_budget", None) is None:
+        from control_plane import llm_budget as _llm_budget_mod
+
+        _budget_redis = None
+        if redis_url:
+            import redis as _redis_for_budget
+
+            _budget_redis = _redis_for_budget.from_url(redis_url, decode_responses=True)
+        _budget_notifier = notifier
+
+        def _notify_budget(recipients, notice, _n=_budget_notifier):
+            if _n is None:
+                return
+            when = "daily" if notice["period"] == "day" else "monthly"
+            whose = "the deployment's" if notice["scope"] == "org" else "one person's"
+            _n.emit(list(recipients), kind="llm_budget", actor="vexa", actor_name="Vexa",
+                    object_kind="none",
+                    object_id=f"{notice['scope']}:{notice['period']}:{notice['percent']}",
+                    object_name=f"{notice['percent']}% of {whose} {when} AI budget")
+
+        def _features_now(_s=settings):
+            from control_plane import system_mounts as _sm  # noqa: PLC0415
+            return features_mod.effective(_sm.global_root(_s))
+
+        _llm_budget = _llm_budget_mod.Budget(
+            _budget_redis, lambda: _llm_budget_mod.read_global_policy(settings), notify=_notify_budget,
+            features=_features_now)
+        _llm_meter = None
+        if _budget_redis is not None:
+            _llm_meter = _llm_budget_mod.UsageMeter(_llm_budget, _budget_redis, output_topic=units.output_topic)
+            _llm_meter.start()
+        else:
+            logger.warning("no redis: the LLM spend cap is not counted; only %s applies",
+                           _llm_budget_mod.KILL_ENV)
+        dispatcher.set_llm_budget(_llm_budget, _llm_meter)
+        # agent-api's own model calls (home, titles, summaries) go into the same one ledger
+        _llm_budget_mod.set_ledger(_llm_budget)
     # THE DOOR FOR `x-user-*` (gateway-identity.v1). Every request that names a person must carry the
     # gateway's signature over that identity, or come from the internal tier (flows, the terminal's
     # server-side admin routes, the dogfood rig) with `X-Internal-Secret`. Anything else that names a
@@ -230,7 +348,32 @@ def create_app(
     _identity_guarded = bool(_identity_key_file)
     # Holds the guard-verified person for the broker calls made while serving the request (the Git
     # credential store acts only for that person). Added first, so it sits INSIDE the guard.
+    # A WORKSPACE IS CALLED WHAT THE PERSON SEES (Vexa-ai/vexa#1783): every workspace argument a
+    # request carries may be the display name the Files pane shows, resolved to its slug here —
+    # innermost, so it runs on the identity the guard rebuilt (`workspace_names.py`).
+    from control_plane import workspace_names as workspace_names_mod
+    # UNPROVEN FEATURES ARE SWITCHES (founder, 2026-10-13): a route of a feature that is off answers
+    # `feature_disabled` here, innermost, so the guard has already admitted the caller
+    # (`features.py`: VEXA_FEATURES, then `features:` in _global/POLICIES.md, read per request).
+    app.add_middleware(
+        features_mod.FeatureGate,
+        global_dir=lambda: (wsr.root / system_mounts.GLOBAL_SLUG) if settings is None
+        else system_mounts.global_root(settings, wsr.root))
+    app.add_middleware(
+        workspace_names_mod.NameResolution,
+        rows_for=lambda subj: workspace_names_mod.listing(
+            wsr.root, subj, registry=workspace_registry, index_list=mindex.list))
     app.add_middleware(broker_client.ForwardedIdentity)
+    # THE TRACE AND THE SESSION (logevent.v1, Vexa-ai/vexa#1783): inside the guard, so the session it
+    # binds from `x-user-delegation-unit` is the one the guard rebuilt from the gateway's signature.
+    app.add_middleware(obs.TraceMiddleware)
+    # WHO THIS INSTALL SERVES THE AGENT TIER TO (VEXA_AGENT_ALLOW, read per request): directly
+    # inside the identity door, so it reads the signed person. Unset or empty serves everyone.
+    from control_plane import agent_admission as agent_admission_mod
+
+    app.add_middleware(
+        agent_admission_mod.AgentAdmission,
+        internal_secret=(settings.internal_api_secret.get_secret_value() if settings is not None else ""))
     if _identity_guarded:
         try:
             _identity_key = identity_token.read_verify_key(_identity_key_file)
@@ -252,17 +395,38 @@ def create_app(
     # internal sink, an event, a routine's run-now — answers a failed spawn with the TYPED fault
     # (`shared.runtime_fault`): 502 when the runtime answered wrongly, 503 when it is down or full.
     # The chat route handles its own (it also withdraws the turn); this is the floor under the rest.
+    @app.exception_handler(attach_mod_NoHome)
+    async def _no_home(_request, _exc):  # noqa: ANN001
+        from fastapi.responses import JSONResponse  # noqa: PLC0415
+        return JSONResponse(status_code=409, content={"detail": {
+            "refused": "no workspace to write to", "said": attach_mod_NoHome.message}})
+
     @app.exception_handler(RuntimeFault)
     async def _runtime_fault(_request: Request, fault: RuntimeFault) -> JSONResponse:
         return JSONResponse(status_code=fault.http_status, content=unit_faults_mod.answer(fault))
+
+    # NO GIT CREDENTIAL WITHOUT THE BROKER, AND NEVER A SILENT ANONYMOUS RUN. Git tokens and deploy
+    # keys live in the credential broker only (ADR-0040); when it is unconfigured, down, or cannot
+    # act for this person, every door that needs one answers this typed refusal.
+    @app.exception_handler(git_secret_store.GitStoreUnavailable)
+    async def _git_store_unavailable(_request: Request, exc: Exception) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": str(exc), "fault": git_secret_store.FAULT})
 
     app.state.dispatcher = dispatcher
     app.state.sessions = sess
     # Reachable for the operator seams that rename a workspace and for the tests that prove a
     # rename moves nothing else.
     app.state.workspace_registry = workspace_registry
+    # THE ORG BOUNDARY (architecture A1): every workspace access check asks identity for the
+    # viewer's org (orgs.OrgDirectory, cached). One org per install: every answer is the default org.
+    if settings is not None:
+        from control_plane import orgs as _orgs_mod  # noqa: PLC0415
+        _orgs_mod.configure_from_settings(settings)
     app.state.live_meetings = live
     app.state.scheduler = scheduler
+    app.state.session_store = session_store
+    app.state.notifier = notifier
+    app.state.llm_budget = getattr(dispatcher, "_llm_budget", None)
     if settings is not None:
         # An out-of-store `_global` is read where the worker mount serves it from, not from a stale
         # slot in the store (`system_mounts.global_root`).
@@ -272,6 +436,17 @@ def create_app(
     # The SSE ownership gate's owner-lookup (P0): default = HTTP to meeting-api; injectable for L2 tests.
     _meeting_owner_lookup = meeting_owner_lookup or _http_meeting_owner_lookup(
         settings.meeting_api_url if settings is not None else "", _internal_secret_value)
+    # CALLS (ADR-0048 decision 6): the deployment's LiveKit server, and the redeemer that gives a
+    # participant joining a session's call that call's transcript. Off without LIVEKIT_URL.
+    if livekit is None and settings is not None:
+        try:
+            livekit = livekit_rooms.LiveKit.from_settings(settings)
+        except ValueError as exc:
+            logger.error("calls are off: %s", exc)
+            livekit = None
+    if call_share_redeemer is None and livekit is not None:
+        call_share_redeemer = livekit_rooms.http_share_redeemer(
+            settings.meeting_api_url if settings is not None else "", _internal_secret_value)
     # The meeting's words, read as the caller (the Highlight scan): same door, same seam style.
     _meeting_transcript_lookup = meeting_transcript_lookup or _http_meeting_transcript_lookup(
         settings.meeting_api_url if settings is not None else "", _internal_secret_value)
@@ -290,6 +465,8 @@ def create_app(
     # WHERE A MEETING'S PAGE IS, PUT ON THE ROW ITSELF (Vexa-ai/vexa#1601): default = an owner-scoped
     # annotate on meeting-api; injectable for L2 tests, the same seam style as the two above. The
     # path stops being a thing two services each compose — whoever mints records, everybody reads.
+    _meeting_annotator = meeting_annotator or meeting_mint_mod.http_annotator(
+        settings.meeting_api_url if settings is not None else "", internal_secret=_internal_secret_value)
     _meeting_note_recorder = meeting_note_recorder or meeting_mint_mod.http_recorder(
         settings.meeting_api_url if settings is not None else "", internal_secret=_internal_secret_value)
 
@@ -426,10 +603,19 @@ def create_app(
                 and settings is not None
                 and global_layer.is_admin_account(settings, str(subject))):
             raise HTTPException(status_code=403, detail=admin_account_scope.REFUSAL)
+        # `personal` (or `desk`) is what the MCP verbs call the person's own workspace
+        # (`ceiling.WRITE_SLUG_HELP`). Every verb that writes knew the word; the tree, read and
+        # git reads did not, so a new person's first `workspace_tree(slug="personal")` answered
+        # 403 (Vexa-ai/vexa#1783). It names the DESK, exactly as an omitted slug does.
+        if target in DESK_ALIASES:
+            target = ""
         # _system — the caller's OWN private-system workspace (RW, surfaced hidden-by-default in the files
         # panel). It's a per-subject dispatch mount, not in the active set, so authorize it directly here:
         # it can only ever resolve to THIS subject's own .system store — never another user's.
         if target == system_mounts.SYSTEM_SLUG:
+            # A turn other people read never reaches the person's private system store.
+            if identity_token.is_shared(request.headers):
+                require_in_ceiling(request, target)
             return system_mounts.system_store_path(wsr.root, subject)
         # The _global org tier is readable by EVERY subject — it is mounted ro into every worker,
         # so the read API mirrors that; writes still go only through the admin's worker mount.
@@ -442,16 +628,24 @@ def create_app(
             raise HTTPException(status_code=404, detail="the organisation tier is not configured")
         # THE DISPATCH'S CEILING, for a worker dispatched without a person: a named workspace must be
         # in the isolation set it was granted. Checked before any resolution, so a workspace outside
-        # the set is refused the same way whether or not it exists.
-        require_in_ceiling(request, target)
+        # the set is refused the same way whether or not it exists. A READ is held to the read
+        # ceiling (what the dispatch may write, plus what it has mounted read-only), a write to the
+        # write ceiling (Vexa-ai/vexa#1783).
+        if write:
+            require_in_ceiling(request, target)
+        else:
+            require_read_in_ceiling(request, target)
         mounts = active_workspaces(wsr.root, subject)  # own actives (real .attached paths); may raise ValueError
         try:
             mounts = mounts + shared_active_mounts(wsr.root, subject, mindex.list(subject))
         except Exception:  # noqa: BLE001 — a shared-mount hiccup must not break a plain own-workspace read
             pass
         if not target or target == subject:
-            primary = next((m for m in mounts if m.primary), None)
-            return Path(primary.path) if primary else (wsr.root / subject)
+            # THE DESK, never "whatever is mounted first" (Vexa-ai/vexa#1783, founder 2026-10-15):
+            # with an attached repo first in the set, "personal" used to read and WRITE that repo.
+            desk = next((m for m in mounts if m.desk), None)
+            # …and never a Personal the person HID: then the home (#1783)
+            return Path(desk.path) if desk else home_dir_for(wsr.root, subject)
         for m in mounts:
             if m.slug == target:
                 # A MOUNTED MATCH IS NOT THE SAME AS A WRITABLE ONE. `shared_active_mounts` mounts
@@ -533,6 +727,9 @@ def create_app(
         require_in_ceiling(request, slug)
         subject = subject_of(request)
         try:
+            # NO SLUG IS THE PERSON'S HOME (#1783): Personal while it is on, never a switched-off one.
+            if not (slug or "").strip():
+                return home_of(wsr, subject)
             return workspace_dir_for(wsr.root, subject, slug)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid subject")
@@ -908,8 +1105,8 @@ def create_app(
 
         A slug the caller may not read resolves to None rather than to that workspace: the ref
         would otherwise be answered out of somebody else's tree because the READER named it. A slug
-        outside a delegated dispatch's ceiling is refused."""
-        require_in_ceiling(request, slug)
+        outside a delegated dispatch's read ceiling is refused."""
+        require_read_in_ceiling(request, slug)
         subject = subject_of(request)
         rec = workspace_registry.by_slug(slug) if slug else workspace_registry.by_slug(str(subject))
         if rec is None and slug:
@@ -949,14 +1146,37 @@ def create_app(
         target = (slug or "").strip()
         binding = attached_workspaces(wsr.root, subject).get("slots", {}).get(target, {}).get("credential_workspace")
         if binding:
-            try:
-                membership_mod.require_role(wsr.root, binding, subject, "owner")
-            except MembershipError as exc:
-                raise HTTPException(status_code=403, detail="Repository credential workspace is no longer accessible") from exc
-            return deploy_keys_mod.workspace_key(workspace_id=binding)
+            # THE KEY MOVES WITH THE REPOSITORY (Vexa-ai/vexa#1783, founder 2026-10-15: "sync biz
+            # workspace with github" failed — biz was imported with the deploy key of a shared
+            # workspace that was later removed). The binding was authorized at import, by the owner
+            # of the source; the key it names outlives the workspace that minted it. While the
+            # source EXISTS the owner check still holds — an id now held by someone else is refused.
+            # …but only for the person who STORED that key: an orphaned key is never inherited by
+            # somebody else (founder rule, 2026-10-15) — they reconnect GitHub instead.
+            key = deploy_keys_mod.workspace_key(workspace_id=binding)
+            if (wsr.root / binding).is_dir():
+                try:
+                    membership_mod.require_role(wsr.root, binding, subject, "owner")
+                except MembershipError as exc:
+                    raise HTTPException(status_code=403, detail="Repository credential workspace is no longer accessible") from exc
+            elif deploy_keys_mod.stored_by(wsr.root, key) != str(subject):
+                raise HTTPException(status_code=403, detail=ORPHANED_CREDENTIAL)
+            return key
         if target and target != subject and membership_mod.is_member(wsr.root, target, subject) is not None:
             return deploy_keys_mod.workspace_key(workspace_id=target)
         return deploy_keys_mod.workspace_key(subject=subject)
+
+    def _credential_note(subject: str, slug: Optional[str]) -> Optional[dict]:
+        """THE STATE BEFORE A SYNC FAILS (founder 2026-10-15): a workspace whose GitHub login came from
+        a workspace that has since been deleted says so, whether or not the key still works for this
+        person. None for every other workspace."""
+        target = (slug or "").strip()
+        binding = attached_workspaces(wsr.root, subject).get("slots", {}).get(target, {}).get("credential_workspace")
+        if not binding or (wsr.root / binding).is_dir():
+            return None
+        usable = deploy_keys_mod.stored_by(wsr.root, deploy_keys_mod.workspace_key(workspace_id=binding)) == str(subject)
+        return {"state": "inherited_from_deleted", "usable": usable,
+                "note": "GitHub login inherited from a deleted workspace — reconnect"}
 
     def _credential_refusal(detail: str, subject: str, slug: Optional[str], repo_url: str):
         """Turn git's "I do not know you" into the ONE action that fixes it. No box asking for a secret:
@@ -964,7 +1184,8 @@ def create_app(
         if not wcreds.is_auth_failure(detail):
             return HTTPException(status_code=502, detail=detail)
         try:
-            prompt = wcreds.deploy_key_prompt(wsr.root, key=_workspace_key(subject, slug), repo_url=repo_url)
+            prompt = wcreds.deploy_key_prompt(wsr.root, key=_workspace_key(subject, slug), repo_url=repo_url,
+                                              subject=str(subject))
         except Exception:  # noqa: BLE001 — no ssh-keygen on this host; say the plain failure instead
             return HTTPException(status_code=502, detail=detail)
         return HTTPException(status_code=502, detail=f"{detail}\n\n{wcreds.prompt_sentence(prompt)}")
@@ -1009,23 +1230,36 @@ def create_app(
         _entity_mounts=_entity_mounts, _friction_subject=_friction_subject,
         _global_root=_global_root, _global_store=_global_store,
         _internal_caller=_internal_caller, _manage_dir=_manage_dir,
-        _meeting_note_recorder=_meeting_note_recorder,
+        _meeting_note_recorder=_meeting_note_recorder, _meeting_annotator=_meeting_annotator,
         _meeting_owner_lookup=_meeting_owner_lookup,
         _meeting_transcript_lookup=_meeting_transcript_lookup, _member_error=_member_error, _pc=_pc,
         _read_target=_read_target, _repo=_repo, _require_shared_write=_require_shared_write,
         _resolve_room=_resolve_room, _scaffold_is_for=_scaffold_is_for,
         _scaffold_recipient_is=_scaffold_recipient_is, _scaffold_view=_scaffold_view,
-        _schedule_source=_schedule_source, _workspace_key=_workspace_key, _ws_here=_ws_here,
+        _schedule_source=_schedule_source, _signal_grants=_signal_grants,
+        _workspace_key=_workspace_key, _credential_note=_credential_note, _ws_here=_ws_here,
         _ws_is_member=_ws_is_member, _ws_sync=_ws_sync, _ws_lookup=_ws_lookup, dispatcher=dispatcher,
         invocations_url=invocations_url, live=live, mindex=mindex,
         redis_url=redis_url, scaffolds=scaffolds, scheduler=scheduler, sess=sess,
+        session_store=session_store, notifier=notifier, invite_doors={}, livekit=livekit, call_share_redeemer=call_share_redeemer,
         settings=settings, stream_reader=stream_reader,
         subject_of=subject_of,
         workspace_registry=workspace_registry, workspace_touches=workspace_touches, wsr=wsr)
-    for _r in (routers_health, routers_ingress, routers_chats, routers_routines, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_sharing, routers_connections, routers_clock, routers_meeting_bundle):
+    for _r in (routers_health, routers_ingress, routers_chats, routers_routines, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_sharing, routers_connections, routers_clock, routers_meeting_bundle, routers_pages, routers_sessions, routers_chat_read, routers_agent_messages, routers_calls, routers_notifications, routers_forget, routers_workspace_states, routers_workspace_templates, routers_refs, routers_home, routers_budgets, routers_usage, routers_levels, routers_people, routers_identity_media, routers_desktop, routers_rooms):
         app.include_router(_r.build(**_deps))
+    # WHAT A ROOM'S AGENT SAID, ONTO THE ROOM'S STREAM (rooms, `room_echo`): context for the room's
+    # sensor. Only with a store and a redis, and idle while the `rooms` feature is off.
+    if session_store is not None and redis_url:
+        import redis as _redis_for_echo
+
+        from control_plane import room_echo as _room_echo, rooms as _rooms_mod
+
+        _echo_client = _redis_for_echo.from_url(redis_url, decode_responses=True)
+        _room_echo.start(lambda: _echo_client, session_store,
+                         enabled=lambda: _rooms_mod.enabled_for_anyone(_global_root))
     # A `verbs` row naming a route this app does not serve protects nothing — refuse the boot.
     route_policy.assert_served(app.routes)
+    features_mod.assert_served(app.routes)
     admin_account_scope.assert_served(app.routes)
 
     return app
@@ -1036,7 +1270,7 @@ def _build_production_app() -> FastAPI:
     from shared.adapters import AdminApiMembershipIndex, AdminApiModelConfig, LocalIdentityMinter, RedisStreamReader, RuntimeHttpClient, SchedulerHttpClient
     from shared.config import load_settings
     from control_plane.config_preflight import preflight
-    from control_plane.workspace_routines import start_workspace_routine_reconciler
+    from control_plane.routine_flows import start_migration as start_routine_migration
 
     # ONE NAME for the internal tier (F95). The canonical key is INTERNAL_API_SECRET — the same
     # name compose, helm, admin-api, gateway and meeting-api use. VEXA_INTERNAL_API_SECRET still
@@ -1136,6 +1370,12 @@ def _build_production_app() -> FastAPI:
     from control_plane import model_providers
 
     catalog = model_providers.parse(settings.model_catalog)
+    # what is ALLOWED and the DEFAULTS come from the company's policy, read live (#1783, `budgets`)
+    try:
+        from control_plane import budgets as _budgets_mod  # noqa: PLC0415
+        catalog.policy = lambda: _budgets_mod.read(_global_root())
+    except Exception:  # noqa: BLE001
+        pass
     if not catalog.empty:
         logger.info("model catalog: %d model(s) — %s", len(catalog.ids), ", ".join(catalog.ids))
     dispatcher = Dispatcher(settings, runtime, identity, membership_index=membership_index,
@@ -1150,17 +1390,18 @@ def _build_production_app() -> FastAPI:
         redis_url=settings.redis_url,
         membership_index=membership_index,
     )
-    app.state.workspace_routine_reconciler = start_workspace_routine_reconciler(
+    # ROUTINES ARE FLOWS (ADR-0046): what the old mechanism left — routine files and scheduler
+    # jobs — moves into the person's own flows ONCE; the pass retries until it completes, then stops.
+    app.state.routine_migration = start_routine_migration(
         scheduler=scheduler,
-        invocations_url=invocations_url,
         workspaces_dir=settings.workspaces_dir,
         interval_sec=settings.routine_reconcile_interval_sec,
-        signing_secret=settings.internal_api_secret.get_secret_value(),
+        store=getattr(app.state, "session_store", None),
     )
 
     @app.on_event("shutdown")
-    def _stop_workspace_routine_reconciler() -> None:
-        handle = getattr(app.state, "workspace_routine_reconciler", None)
+    def _stop_routine_migration() -> None:
+        handle = getattr(app.state, "routine_migration", None)
         if handle is not None:
             handle.stop()
 
@@ -1182,6 +1423,13 @@ def _build_production_app() -> FastAPI:
             system_mounts.ensure_global_dir(settings.workspaces_dir)
         except Exception as exc:  # noqa: BLE001
             print(f"organisation tier: could not create {_gdir}: {exc}", flush=True)
+
+    # Git credentials agent-api kept itself before the broker held them: counted, never read out.
+    # Each moves into the broker on its owner's next Git operation (git_secret_store).
+    try:
+        git_secret_store.report_legacy(settings.workspaces_dir)
+    except Exception as exc:  # noqa: BLE001
+        print(f"git credentials: could not count the retired local store: {exc}", flush=True)
 
     # THE PRESET LIBRARY IS TOPPED UP BEFORE THE REPO IS INITIALISED, so a fresh instance's very
     # first commit carries the presets this build ships rather than acquiring them as an untracked
@@ -1231,10 +1479,19 @@ def _build_production_app() -> FastAPI:
     from control_plane import flow_pages_watch
     try:
         app.state.flow_pages_watch = flow_pages_watch.start(
-            _gdir)
+            _gdir, workspaces_dir=settings.workspaces_dir)
     except Exception as exc:  # noqa: BLE001
         app.state.flow_pages_watch = None
         logger.info("flow pages are not being watched here: %s", exc)
+
+    # ADR-0047 d5: each workspace's links to CRM records, one fact per commit. Off unless the
+    # deployment runs the CRM (VEXA_CRM_REFERENCES_POLL_S); best-effort like the watcher above.
+    from control_plane import crm_references
+    try:
+        app.state.crm_references = crm_references.start(settings.workspaces_dir)
+    except Exception as exc:  # noqa: BLE001
+        app.state.crm_references = None
+        logger.info("crm references are not being published here: %s", exc)
 
     @app.on_event("shutdown")
     def _stop_flow_pages_watch() -> None:

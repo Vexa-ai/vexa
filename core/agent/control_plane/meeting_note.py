@@ -57,6 +57,14 @@ MEETING_DIR = "kg/entities/meeting"
 #: trusted to compose — that is the whole of #1588. Whoever MINTS the page records it here; every
 #: other side READS it: this module, and `core/flows`' `_note_path` when it drops the report.
 NOTE_PATH_KEY = "note_path"
+#: the workspace the recorded page is in (#1783): "" is the person's home; a slug names another of
+#: their workspaces. Recorded beside the path, so every reader and writer goes to the SAME file.
+NOTE_WORKSPACE_KEY = "note_workspace"
+
+#: THE PAGE'S IDENTITY KEYS (#1783, founder 2026-10-15: "why not map page to meeting reliably?").
+#: A page written for a known meeting carries them in its frontmatter; a bot's mint ADOPTS the page
+#: whose key equals the meeting's — exact match, never a title guess.
+IDENTITY_KEYS = ("meeting", "native", "meeting_url", "calendar_event")
 
 #: A page name we could have minted: one path segment, `.md`, no dot-leader, no separators. The
 #: recorded value arrives from a row an account's own API key can annotate, and it is used to NAME A
@@ -69,6 +77,8 @@ _KV = re.compile(r"\A([A-Za-z_][A-Za-z0-9_-]*)[ \t]*:[ \t]*(.*)\Z")
 #: Frontmatter is the first thing in the file and it is small; a report is not. Reading the head is
 #: enough to answer, and it keeps a directory of 6 KB reports off the critical path of opening a chat.
 _HEAD_BYTES = 4096
+#: a read-only note handed back whole (a switched-off Personal workspace's report)
+_MAX_NOTE_BYTES = 1 << 20
 
 
 def _unquote(value: str) -> str:
@@ -100,6 +110,111 @@ def front_matter(text: str) -> dict:
     return out
 
 
+def nothing_written(text: str) -> bool:
+    """A note with no words in it yet: frontmatter, HTML comments (the transcript marker, region
+    fences) and headings only."""
+    body = _FRONT_MATTER.sub("", text or "", count=1)
+    body = re.sub(r"<!--[\s\S]*?-->", "", body)
+    body = re.sub(r"(?m)^#{1,6}\s.*$", "", body)
+    return not body.strip()
+
+
+def normal_url(url) -> str:
+    """A meeting link as it is compared: scheme and `www.` dropped, host lower-cased, no query or
+    fragment, no trailing slash. Two spellings of one link compare equal; two links never do."""
+    s = str(url or "").strip()
+    if not s:
+        return ""
+    s = re.sub(r"^[a-z][a-z0-9+.-]*://", "", s, flags=re.I)
+    s = re.split(r"[?#]", s, maxsplit=1)[0].rstrip("/")
+    host, _, rest = s.partition("/")
+    host = host.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return f"{host}/{rest}" if rest else host
+
+
+def row_identity(row) -> dict:
+    """What a meeting row says it IS, for the identity match: row id, native id, link, calendar
+    event. Empty values are left out — an empty key matches nothing."""
+    r = row if isinstance(row, dict) else {}
+    data = r.get("data") if isinstance(r.get("data"), dict) else {}
+    out = {
+        "meeting": str(r.get("id") or "").strip(),
+        "native": str(r.get("native_meeting_id") or r.get("platform_specific_id") or "").strip(),
+        "meeting_url": normal_url((data or {}).get("constructed_meeting_url") or (data or {}).get("meeting_url")),
+        "calendar_event": str((data or {}).get("calendar_uid") or (data or {}).get("calendar_event_id") or "").strip(),
+    }
+    return {k: v for k, v in out.items() if v}
+
+
+def identity_matches(fm: dict, row) -> bool:
+    """Does this page's frontmatter NAME this meeting — one identity key, exactly equal?"""
+    ident = row_identity(row)
+    for key in IDENTITY_KEYS:
+        mine = str((fm or {}).get(key) or "").strip()
+        if not mine or key not in ident:
+            continue
+        if (normal_url(mine) if key == "meeting_url" else mine) == ident[key]:
+            return True
+    return False
+
+
+def resolve_exact_in(desk: Path, row) -> "str | None":
+    """The page in ``desk`` whose frontmatter names this meeting by identity — or None. Exact only:
+    this is what a mint ADOPTS, so a title that merely looks alike is never enough."""
+    try:
+        names = wpaths.list_files_inside(Path(desk), MEETING_DIR, suffix=".md")
+    except (OSError, ValueError):
+        return None
+    for name in sorted(names or []):
+        if name == "index.md":
+            continue
+        try:
+            head = wpaths.read_head_inside(Path(desk), f"{MEETING_DIR}/{name}", _HEAD_BYTES)
+        except (OSError, ValueError):
+            continue
+        if head is None:
+            continue
+        fm = front_matter(head)
+        if str(fm.get("type") or "").strip().lower() not in ("", "meeting"):
+            continue
+        if identity_matches(fm, row):
+            return f"{MEETING_DIR}/{name}"
+    return None
+
+
+def recorded_place(row) -> tuple[str, str]:
+    """``(path, workspace)`` the row records for its page — ``("", "")`` when none."""
+    r = row if isinstance(row, dict) else {}
+    data = r.get("data") if isinstance(r.get("data"), dict) else {}
+    meta = (data or {}).get("metadata")
+    ws = str((meta or {}).get(NOTE_WORKSPACE_KEY) or "").strip() if isinstance(meta, dict) else ""
+    return recorded_path(row), ws
+
+
+def stamp_identity(text: str, keys: dict) -> str:
+    """The page with these identity keys set in its frontmatter (and ``type: meeting`` when it has no
+    type) — every other line exactly as it was. A page with no frontmatter gets one."""
+    keys = {k: str(v).strip() for k, v in (keys or {}).items() if str(v or "").strip()}
+    src = text or ""
+    m = _FRONT_MATTER.match(src)
+    lines = m.group(1).splitlines() if m else []
+    body = src[m.end():] if m else src
+    have = {(_KV.match(l.rstrip()).group(1).strip().lower() if _KV.match(l.rstrip()) else None): i
+            for i, l in enumerate(lines)}
+    if "type" not in have:
+        lines.insert(0, "type: meeting")
+        have = {(_KV.match(l.rstrip()).group(1).strip().lower() if _KV.match(l.rstrip()) else None): i
+                for i, l in enumerate(lines)}
+    for k, v in keys.items():
+        if k in have:
+            lines[have[k]] = f"{k}: {v}"
+        else:
+            lines.append(f"{k}: {v}")
+    return "---\n" + "\n".join(lines) + "\n---\n" + ("" if body.startswith("\n") else "\n") + body.lstrip("\n")
+
+
 def is_note_path(path) -> bool:
     """Is this one of ours — `kg/entities/meeting/<name>.md`, and not the folder's index?
 
@@ -111,6 +226,23 @@ def is_note_path(path) -> bool:
         return False
     name = p[len(prefix):]
     return name != "index.md" and bool(_NOTE_NAME.match(name))
+
+
+def desk_holds_note(workspaces_root, subject: str, path) -> bool:
+    """Is `path` a meeting's note that lives on this person's DESK? (#1783: one note per meeting.)
+
+    The note is minted on the desk when the bot is sent, and the meeting view reads it there. A turn
+    in a chat that works in another workspace used to write the same relative path into THAT
+    workspace, so the agent said "extended" while the view kept showing the empty desk copy. A write
+    of this path that names no workspace therefore goes to the desk when the desk holds the note:
+    a meeting page (`type: meeting`) at exactly that path. Anything else is an ordinary page."""
+    if not is_note_path(path):
+        return False
+    try:
+        head = wpaths.read_head_inside(home_dir(workspaces_root, subject), str(path).strip(), _HEAD_BYTES)
+    except (OSError, ValueError):
+        return False
+    return head is not None and front_matter(head).get("type") == "meeting"
 
 
 def recorded_path(row) -> str:
@@ -145,8 +277,71 @@ def row_facts(row) -> dict:
     }
 
 
+def note_places(workspaces_root, subject: str) -> list[dict]:
+    """WHERE THIS PERSON'S MEETING NOTES CAN BE, in the order they are looked for (#1783).
+
+    ``{"slug", "dir", "home", "hidden"}`` each. First the HOME — the person's primary active
+    workspace, which is where every writer with no workspace named lands (the mint, Update notes, the
+    page write, the post-meeting drop): their Personal workspace normally, the chat's workspace when
+    Personal is switched off or deleted. ``slug`` is ``""`` for it, which is what the read and write
+    routes default to. Then their other active workspaces, by slug. LAST, the Personal workspace's own
+    directory when it is no longer active (founder, 2026-10-15: he deleted Personal and his finished
+    report vanished from the meeting): read-only, never a home, so a report written there before is
+    still shown and nothing new is written into a workspace the person took away."""
+    root = Path(workspaces_root)
+    desk = root / str(subject)
+    try:
+        from control_plane.workspace_attach import active_workspaces, desk_hidden  # noqa: PLC0415
+        mounts = list(active_workspaces(root, str(subject)))
+        hidden = desk_hidden(root, str(subject))
+    except Exception:  # noqa: BLE001 — an unreadable state is the plain desk, as before
+        mounts, hidden = [], False
+    # THE HOME is the desk while Personal is on; a hidden Personal leaves NO home — nothing new is
+    # written anywhere picked by order (#1783). Other workspaces are still READ for a bound page.
+    out: list[dict] = [] if hidden else [{"slug": "", "dir": desk, "home": True, "hidden": False}]
+    try:
+        seen = {desk.resolve()} if not hidden else set()
+        for m in mounts:
+            d = Path(m.path)
+            if d.resolve() in seen or (hidden and getattr(m, "desk", False)):
+                continue
+            seen.add(d.resolve())
+            out.append({"slug": str(m.slug), "dir": d, "home": False, "hidden": False})
+        if hidden and desk.is_dir() and desk.resolve() not in seen:
+            out.append({"slug": "", "dir": desk, "home": False, "hidden": True})
+    except OSError:
+        pass
+    return out
+
+
+def home_dir(workspaces_root, subject: str) -> Path:
+    """The directory a meeting's note is written in — ``note_places``' home. Raises ``NoHome`` when
+    the person's Personal is hidden (nothing is written by order into another workspace)."""
+    for p in note_places(workspaces_root, subject):
+        if p["home"]:
+            return p["dir"]
+    from control_plane.workspace_attach import NoHome  # noqa: PLC0415
+    raise NoHome(subject)
+
+
+def find(workspaces_root, subject: str, row) -> "tuple[str, Path] | None":
+    """``(path, directory)`` of this meeting's note wherever ``note_places`` finds it, or None — for
+    the readers (the home stream, the bundle export) that used to look only in ``<root>/<subject>``."""
+    for p in note_places(workspaces_root, subject):
+        hit = resolve_in(p["dir"], row)
+        if hit:
+            return hit, p["dir"]
+    return None
+
+
 def resolve(workspaces_root, subject: str, row) -> "str | None":
-    """This meeting's report on this person's desk, as a workspace-relative path — or None.
+    """This meeting's report on this person's desk (``<root>/<subject>``), as a workspace-relative
+    path — or None. ``resolve_in`` is the same search over any one directory."""
+    return resolve_in(Path(workspaces_root) / str(subject), row)
+
+
+def resolve_in(desk: Path, row) -> "str | None":
+    """This meeting's report in ``desk``, as a workspace-relative path — or None.
 
     None is the ordinary answer for a meeting whose report has not been written yet, and the caller
     must treat it as one: it is "nothing here names this meeting", never "something failed"."""
@@ -154,7 +349,7 @@ def resolve(workspaces_root, subject: str, row) -> "str | None":
     # being on THIS desk: the record is one fact about the meeting, shared by everybody in the room,
     # and an attendee whose drop has not run yet has no such file. A tab onto a path nobody wrote on
     # this desk is exactly the failure this module exists to refuse.
-    desk = Path(workspaces_root) / str(subject)
+    desk = Path(desk)
     recorded = recorded_path(row)
     if recorded:
         # nofollow: the desk is a work tree the model's tools can write, so a link at the recorded
@@ -216,16 +411,48 @@ def describe(workspaces_root, subject: str, row) -> dict:
     what #1588 exists to answer — is still worth returning on its own."""
     from shared import meeting_doc
 
-    path = resolve(workspaces_root, subject, row)
-    out = {"path": path, "transcript": "", "cursor": ""}
+    # BY THE MEETING, WHEREVER IT IS (#1783): the home first, then the person's other active
+    # workspaces, then a Personal workspace they switched off — whose report comes back WITH its
+    # text, because no read route addresses a workspace that is not active, and read-only.
+    path, place = None, None
+    places = note_places(workspaces_root, subject)
+    # TIER 0 — THE BINDING (#1783): the page the row records, in the workspace it records.
+    rec_path, rec_ws = recorded_place(row)
+    if rec_path:
+        for p in places:
+            if p["hidden"] or (p["slug"] != rec_ws) or (not rec_ws and not p["home"]):
+                continue
+            try:
+                if wpaths.is_file_inside(p["dir"], rec_path):
+                    path, place = rec_path, p
+                    break
+            except (OSError, ValueError):
+                pass
+    if path is None:
+        # then a page that names the meeting by identity, then the older lookups
+        for finder in (resolve_exact_in, resolve_in):
+            for p in places:
+                hit = finder(p["dir"], row)
+                if hit:
+                    path, place = hit, p
+                    break
+            if path:
+                break
+    out = {"path": path, "workspace": place["slug"] if place else "", "transcript": "", "cursor": ""}
     if not path:
         return out
     try:
-        head = wpaths.read_head_inside(Path(workspaces_root) / str(subject), path, _HEAD_BYTES)
+        head = wpaths.read_head_inside(place["dir"], path, _HEAD_BYTES)
     except (OSError, ValueError):
         head = None
     if head is None:
         return out
     out["transcript"] = meeting_doc.slot_meeting(head)
     out["cursor"] = meeting_doc.read_cursor(head)
+    if place["hidden"]:
+        out["readonly"] = True
+        try:
+            out["content"] = wpaths.read_text_inside(place["dir"], path, max_bytes=_MAX_NOTE_BYTES) or ""
+        except (OSError, ValueError):
+            out["content"] = head
     return out

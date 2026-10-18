@@ -15,7 +15,7 @@ Runs when **`mail.reply`** happens, in 2 steps. This page is written from the co
 |---|---|
 | **trigger** | `mail.reply` |
 | **version** | 1 — a step list changes by adding a version, never by editing one in place |
-| **mails** | `(composed in the step, from no template)` |
+| **mails** | nothing |
 | **rules it honours** | none |
 
 ## The steps, in order
@@ -35,7 +35,6 @@ Mail the agent's reply on the same thread; register Message-ID; record the conte
 
 - **effect:** one notification
 - **domains:** reaches no other domain
-- **mails:** `(composed in the step, from no template)`
 
 ## The code
 
@@ -99,8 +98,11 @@ def email_reply(ctx: StepCtx):
     ft = ctx.prior["feedback_turn"]
     if not ft.get("reply"):
         return Done({"coalesced": True})                    # content already mailed by a sibling
-    mid = p.notify(ctx.refs["from_addr"], "Re: " + (ctx.refs.get("subject") or "Vexa"),
-                   ft["reply"], in_reply_to=ctx.refs.get("orig_msgid"))
+    mid = p.mail("reply", ctx.refs["from_addr"], "Re: " + (ctx.refs.get("subject") or "Vexa"),
+                 ft["reply"], in_reply_to=ctx.refs.get("orig_msgid"), db=db,
+                 uid=str(ctx.refs["uid"]))
+    if mid is None:
+        return Done({"skipped": "mail.reply is off"})
     p.mx.register_thread(db, mid, ctx.refs["uid"], ctx.refs["session"])
     db.execute("""INSERT INTO mail_outbox_sent (subject_uid, session, hash, sent_at)
                   VALUES (:u,:s,:h,:t) ON CONFLICT DO NOTHING""",

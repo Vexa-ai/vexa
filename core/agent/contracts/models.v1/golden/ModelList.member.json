@@ -42,5 +42,6 @@
       "default": false
     }
   ],
-  "default": "qwen3-32b"
+  "default": "qwen3-32b",
+  "default_effort": null
 }

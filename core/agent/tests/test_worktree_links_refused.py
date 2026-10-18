@@ -159,25 +159,25 @@ def test_a_linked_policy_does_not_classify_a_desk_as_a_group(tmp_path, outside):
 _ROUTINE = f"---\nenabled: true\ncron: '0 9 * * *'\nprompt: {SECRET}\n---\nbody\n"
 
 
-def test_a_linked_routine_file_is_not_loaded_or_rewritten(tmp_path, outside):
-    from control_plane import workspace_routines as wr
+def test_a_linked_routine_file_is_not_read_or_retired(tmp_path, outside):
+    from control_plane import routine_flows as rf
     (outside / "r.md").write_text(_ROUTINE)
     root = tmp_path / "workspaces"
     _link(root / "u1" / "routines" / "daily.md", outside / "r.md")
-    assert wr.load_routine_file(root / "u1" / "routines" / "daily.md") is None
-    with contextlib.suppress(OSError, ValueError):
-        wr.set_routine_file_enabled("u1", "daily", enabled=False, workspaces_dir=root)
+    assert rf.routine_files(root / "u1") == []
+    parsed, why = rf.parse_routine_file(root / "u1" / "routines" / "daily.md")
+    assert parsed is None and why
     assert (outside / "r.md").read_text() == _ROUTINE
 
 
-def test_routines_behind_a_linked_dir_are_not_listed(tmp_path, outside):
-    from control_plane import workspace_routines as wr
+def test_routines_behind_a_linked_dir_are_not_read(tmp_path, outside):
+    from control_plane import routine_flows as rf
     (outside / "r.md").write_text(_ROUTINE)
     root = tmp_path / "workspaces"
     (root / "u1").mkdir(parents=True)
     _link(root / "u1" / "routines", outside)
-    cards = wr.routine_cards_for_subject("u1", jobs=[], workspaces_dir=root)
-    assert SECRET not in json.dumps(cards, default=str)
+    assert rf.routine_files(root / "u1") == []
+    assert SECRET not in json.dumps(rf.problem_cards(root, "u1"), default=str)
 
 
 # ── agent-api: reset ─────────────────────────────────────────────────────────────────────────────

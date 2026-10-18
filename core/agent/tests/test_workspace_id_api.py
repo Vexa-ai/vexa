@@ -124,7 +124,7 @@ def test_resolve_by_id_reports_access_per_reader(tmp_path):
     other = c.get(f"/api/workspaces/{gid}", headers=_h("127"))
     assert other.status_code == 200                    # never a 403 — "not yours" is an ANSWER
     assert other.json()["access"] == ids.ACCESS_NOT_YOURS
-    assert other.json()["name"] == "grp"               # the greyed chip still says WHAT it is
+    assert other.json()["name"] is None                # the greyed chip names nothing to a non-member
 
 
 def test_an_unknown_id_is_gone_and_still_200(tmp_path):
@@ -320,20 +320,34 @@ def test_refs_must_be_a_list(tmp_path):
 # ── the entity write, across mounts ──────────────────────────────────────────────────────────────
 
 def test_the_entity_endpoint_writes_a_cross_workspace_link_in_id_form(tmp_path):
+    """Into the group, a link to a page on its owner's desk is written by id: every reader of the
+    group can read a desk. The other way round it is not (next test)."""
     c = _world(tmp_path)
-    gid = c.get("/api/workspaces/by-slug/grp", headers=_h("126")).json()["id"]
+    did = c.get("/api/workspaces/by-slug/126", headers=_h("126")).json()["id"]
+    r = c.post("/api/workspace/entity", headers=_h("126"), json={
+        "kind": "meeting", "name": "DNA TSC 2026-03-02", "slug": "grp",
+        "facts": ["[[Nora Quill]] chaired it."], "source": "the transcript"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["links_rewritten"] == [["Nora Quill", f"[[ws:{did}/nora-quill]]"]]
+    page = (tmp_path / "grp" / body["path"]).read_text()
+    assert f"[[ws:{did}/nora-quill]]" in page
+    # and the written link resolves back, for this reader
+    out = c.post("/api/links/resolve", headers=_h("126"),
+                 json={"refs": [f"ws:{did}/nora-quill"]}).json()["results"]
+    assert out[0]["access"] == ids.ACCESS_READABLE
+
+
+def test_a_desk_page_never_links_by_id_into_a_group_its_readers_cannot_open(tmp_path):
+    """A desk is read by everyone in the instance; the group only by its members. The link stays
+    `[[Robin Vale]]` and each reader's resolver decides (friction 2026-10-14)."""
+    c = _world(tmp_path)
     r = c.post("/api/workspace/entity", headers=_h("126"), json={
         "kind": "meeting", "name": "DNA TSC 2026-03-02",
         "facts": ["[[Robin Vale]] chaired it."], "source": "the transcript"})
     assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["links_rewritten"] == [["Robin Vale", f"[[ws:{gid}/robin-vale]]"]]
-    page = (tmp_path / "126" / body["path"]).read_text()
-    assert f"[[ws:{gid}/robin-vale]]" in page
-    # and the written link resolves back, for this reader
-    out = c.post("/api/links/resolve", headers=_h("126"),
-                 json={"refs": [f"ws:{gid}/robin-vale"]}).json()["results"]
-    assert out[0]["access"] == ids.ACCESS_READABLE
+    assert r.json()["links_rewritten"] == []
+    assert "[[Robin Vale]]" in (tmp_path / "126" / r.json()["path"]).read_text()
 
 
 # ── the whole promise, end to end ────────────────────────────────────────────────────────────────

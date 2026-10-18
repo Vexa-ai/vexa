@@ -21,6 +21,13 @@ SERVICE = "credential-broker"
 TRACE_HEADER = "x-trace-id"
 
 _trace_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("trace_id", default=None)
+# The agent session (logevent.v1 `session`): the unit the gateway's signed identity named, bound once
+# the request's identity verified (app.boundaries). Never read from a header the caller sets freely.
+_session: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("session", default=None)
+
+
+def set_session(session: Optional[str]) -> contextvars.Token:
+    return _session.set(str(session).strip() if session and str(session).strip() else None)
 
 
 def log_event(event: str, *, level: str = "info", user_id: Any = None, fields: Optional[dict] = None,
@@ -35,6 +42,8 @@ def log_event(event: str, *, level: str = "info", user_id: Any = None, fields: O
     }
     if user_id is not None:
         envelope["user_id"] = str(user_id)
+    if _session.get():
+        envelope["session"] = _session.get()
     if fields:
         envelope["fields"] = fields
     print(json.dumps(envelope, separators=(",", ":")), file=stream or sys.stdout, flush=True)
@@ -47,9 +56,11 @@ class TraceMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         trace_id = request.headers.get(TRACE_HEADER) or uuid.uuid4().hex
         token = _trace_id.set(trace_id)
+        session_token = _session.set(None)
         try:
             response = await call_next(request)
             response.headers[TRACE_HEADER] = trace_id
             return response
         finally:
+            _session.reset(session_token)
             _trace_id.reset(token)

@@ -38,7 +38,8 @@ def test_digest_buckets_and_renders_in_tz():
         _row(5, "completed", title="Design review", end_time="2026-07-07T15:00:00Z", processed=True),
     ]
     out = sd.build_schedule_digest(rows, tz="Europe/Lisbon", now=NOW)
-    assert out.startswith('<schedule tz="Europe/Lisbon" now="Wed 2026-07-08 15:00">')
+    assert out.startswith('<schedule tz="Europe/Lisbon" '
+                          'now="Wednesday 08 July 2026, 15:00 Europe/Lisbon (WEST, UTC+01:00); 14:00 UTC">')
     assert 'live:\n- [meeting 1] "Weekly sync" (google_meet/abc-defg-hij) — bot active' in out
     assert '- 17:00 [meeting 2] "Acme intro" — prep workspace: acme-deal' in out  # 16Z = 17:00 WEST
     assert '- Fri 10 Jul 10:00 [meeting 3] "Board review"' in out
@@ -55,6 +56,7 @@ def test_digest_invalid_tz_falls_back_to_utc():
     rows = [_row(2, "scheduled", title="X", scheduled_at="2026-07-08T16:00:00Z")]
     out = sd.build_schedule_digest(rows, tz="Not/AZone", now=NOW)
     assert "- 16:00 [meeting 2]" in out  # rendered in UTC
+    assert 'tz="UTC" now="Wednesday 08 July 2026, 14:00 UTC (no timezone set)"' in out
 
 
 def test_digest_caps_sections():

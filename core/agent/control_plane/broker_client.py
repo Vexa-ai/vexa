@@ -28,16 +28,23 @@ from typing import Any, Optional, Tuple
 import httpx
 
 from control_plane import broker_assertion, identity_token
+from shared import obs
 
 log = logging.getLogger(__name__)
 _CID = re.compile(r"/[a-f0-9]{32}(?=/|$)")
 
 
 class BrokerFault(Exception):
-    def __init__(self, kind: str, status: Optional[int] = None) -> None:
+    """``unsent``: no connection opened, so nothing reached the broker and sending again is safe for
+    any method. ``timed_out``: the broker did not answer within the request's timeout."""
+
+    def __init__(self, kind: str, status: Optional[int] = None, *, unsent: bool = False,
+                 timed_out: bool = False) -> None:
         super().__init__(f"credential broker fault: {kind}")
         self.kind = kind
         self.status = status
+        self.unsent = unsent
+        self.timed_out = timed_out
 
 
 def route_of(path: str) -> str:
@@ -105,14 +112,29 @@ def request(*, base_url: str, key_file: str, role: str, actor: str, method: str,
     except broker_assertion.KeyUnavailable:
         raise fault("config", role=role, method=method, path=path) from None
     body = json.dumps(payload, separators=(",", ":")).encode() if payload is not None else b""
-    header = broker_assertion.sign(key, role=role, actor=str(actor), session=f"{role}-request-{uuid.uuid4().hex}",
+    # THE SESSION the broker audits this use under (Vexa-ai/vexa#1783): the agent unit the gateway's
+    # signed identity named for the request being served — a worker's chat or job — so
+    # `audit.session` joins to every log line that session caused. A person's own request, or a call
+    # made outside one, keeps a per-request id.
+    session = obs.get_session() or f"{role}-request-{uuid.uuid4().hex}"
+    header = broker_assertion.sign(key, role=role, actor=str(actor), session=session,
                                    method=method, path=path, body=body)
     try:
         with httpx.Client(timeout=timeout, follow_redirects=False, trust_env=False) as client:
-            headers = {broker_assertion.HEADER: header, "Content-Type": "application/json"}
+            headers = {broker_assertion.HEADER: header, "Content-Type": "application/json",
+                       **obs.trace_headers()}
             if identity:
                 headers[identity_token.HEADER] = identity
             return client.request(method, base_url.rstrip("/") + path, content=body, headers=headers)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+        failed = fault("transport", role=role, method=method, path=path)
+        failed.unsent = True
+        failed.timed_out = isinstance(exc, httpx.TimeoutException)
+        raise failed from None
+    except httpx.TimeoutException:
+        failed = fault("transport", role=role, method=method, path=path)
+        failed.timed_out = True
+        raise failed from None
     except httpx.HTTPError:
         raise fault("transport", role=role, method=method, path=path) from None
 

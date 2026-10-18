@@ -74,7 +74,7 @@ class _FakeIdentity:
 
 
 class _FakeReader:
-    def read(self, unit_id, resume=None):
+    def read(self, unit_id, resume=None, fresh=False):
         yield {"type": "turn-complete"}
 
 
@@ -121,6 +121,21 @@ def test_a_submission_lands_on_the_server_at_once_and_comes_back_as_a_pending_ro
     # …and the answer carries the server's own view of what is queued.
     assert [(p["id"], p["display"]) for p in body["pending"]] == [
         ("c-1", "and share it with dmitry@vexa.ai")]
+
+
+def test_a_queued_row_shows_the_person_s_words_never_the_active_context_preamble(client):
+    """The terminal prefixes a turn with what the person has open ("Active context: the user is
+    viewing the workspace file …"). The queued row is named by the person's words, as the rail is."""
+    prompt = ("Active context: the user is viewing the workspace file kg/review.md. Read it with your Read "
+              "tool if relevant.\n\n---\nwhat changed since yesterday?")
+    body = _submit(client, prompt=prompt, turn_id="c-ctx").json()
+    assert [(p["id"], p["display"]) for p in body["pending"]] == [("c-ctx", "what changed since yesterday?")]
+    # the terminal's current shape: the narration, the sentinel, then the person's words
+    from control_plane.api_shared import CONTEXT_SENTINEL
+    marked = ("Active context: the user is viewing the workspace file kg/review.md. Read it with your Read "
+              "tool if relevant.\n\n" + CONTEXT_SENTINEL + "\n\nand the open questions?")
+    body = _submit(client, prompt=marked, turn_id="c-ctx2").json()
+    assert body["pending"][-1]["display"] == "and the open questions?"
 
 
 def test_an_act_submitted_mid_turn_is_marked_as_a_job_and_named_in_its_row(client):
@@ -335,3 +350,26 @@ def test_a_stream_that_cannot_hold_a_key_still_serves_every_turn(tmp_path):
     assert [e["type"] for e in s.events()] == [
         "turn-accepted", "message-delta", "turn-complete",
         "turn-accepted", "message-delta", "turn-complete"]
+
+
+def test_send_now_names_the_queued_entry_for_the_worker(client, fake_redis):
+    _submit(client, prompt="one", turn_id="c-1")
+    _submit(client, prompt="two", turn_id="c-2")
+    entries = fake_redis.xrange(units.input_topic(_UNIT))
+    r = client.post("/api/chat/pending/now", headers=_HEADERS, json={"session": "main", "id": "c-2"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert fake_redis.get(units.send_now_key(_UNIT)) == entries[1][0]
+    gone = client.post("/api/chat/pending/now", headers=_HEADERS, json={"session": "main", "id": "nope"})
+    assert gone.status_code == 404
+
+
+def test_a_queued_message_can_be_taken_back_before_it_runs(client, fake_redis):
+    """Remove (and Edit, which puts the words back in the box) on a queued message (#1783)."""
+    _submit(client, prompt="one", turn_id="c-1")
+    _submit(client, prompt="two", turn_id="c-2")
+    r = client.post("/api/chat/pending/withdraw", headers=_HEADERS, json={"session": "main", "id": "c-2"})
+    assert r.status_code == 200 and r.json()["withdrawn"] == 1
+    ids = [p["id"] for p in client.get("/api/chat/pending?session=main", headers=_HEADERS).json()["pending"]]
+    assert "c-2" not in ids and "c-1" in ids
+    again = client.post("/api/chat/pending/withdraw", headers=_HEADERS, json={"session": "main", "id": "c-2"})
+    assert again.json()["withdrawn"] == 0

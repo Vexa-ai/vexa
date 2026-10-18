@@ -34,10 +34,8 @@ from control_plane import model_providers
 from control_plane import meeting_steering
 from control_plane import schedule_digest as schedule_digest_mod
 from control_plane import unit_faults
-from control_plane import routines as routines_mod
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state, missing_capability_keys
 from shared import unit_input, units
-from control_plane import workspace_routines as workspace_routines_mod
 from control_plane import link_resolver as link_resolver_mod
 from control_plane import workspace_ids as ids_mod
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
@@ -238,6 +236,111 @@ def inbox_pending(redis_url: "str | None", unit_id: str, key: str) -> list[dict]
 TURNS_TAKEN_SCAN_MAX = 2000
 
 
+#: How far back the turn-outcome reader looks on a unit's output Stream. A routine's turn is one of
+#: the last few on its own unit; this bounds one read, not what a unit may hold.
+TURN_OUTCOME_SCAN_MAX = 4000
+
+
+def turn_outcome(redis_url: "str | None", unit_id: str, turn_id: str, after: str = "") -> dict:
+    """HOW ONE TURN ENDED, read off its unit's output Stream (flows phase 0: a routine's run used to
+    report `done` the moment its turn was POSTED, so a run whose every act was refused read as a
+    success). Counted off the events the worker stamps with ``turn_id``:
+
+        {"state": "unknown"}                          nothing for this turn yet (queued, or no redis)
+        {"state": "running"}                          taken, not finished
+        {"state": "done", "ok", "refused", "acted", "failed"}
+
+    ``refused`` is the ``done`` frame's own ``{tool, reason, count}`` (``worker.engine`` stamps it);
+    ``acted`` the tools whose results came back ok, ``failed`` the ones that did not. Pure reading,
+    best-effort: an unreadable Stream is ``unknown``, never an answer about the turn.
+
+    ``after`` — the unit's Stream tail the caller read just before it posted (`GET /api/chat/pending`
+    answers it as `routine_cursor`). A worker names the turns it takes itself (a cold unit's first is
+    `t0`), not by the id the poster gave, so with ``after`` the run's turn is the first one the worker
+    accepted after that cursor (found on app.dev, 2026-10-14: every routine run read `unknown`)."""
+    if not redis_url or not unit_id or not turn_id:
+        return {"state": "unknown"}
+    try:
+        import redis
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        if after:
+            rows = r.xrange(units.output_topic(unit_id), min=f"({after}", max="+",
+                            count=TURN_OUTCOME_SCAN_MAX)
+        else:
+            rows = list(reversed(r.xrevrange(units.output_topic(unit_id), max="+", min="-",
+                                             count=TURN_OUTCOME_SCAN_MAX) or []))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not read the output stream for unit=%s: %s", unit_id, exc)
+        return {"state": "unknown"}
+    parsed = []
+    for _entry_id, fields in rows or []:
+        try:
+            ev = json.loads((fields or {}).get("event") or "{}")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(ev, dict):
+            parsed.append(ev)
+    want = turn_id
+    if after and not any(str(e.get("turn_id") or "") == turn_id for e in parsed):
+        first = next((e for e in parsed if e.get("type") == "turn-accepted"), None)
+        want = str((first or {}).get("turn_id") or "")
+        if first is not None:
+            parsed = parsed[parsed.index(first):]
+    events = [e for e in parsed if want and str(e.get("turn_id") or "") == want]
+    if not events:
+        return {"state": "unknown"}
+    names = {str(e.get("callId") or ""): str(e.get("tool") or "")
+             for e in events if e.get("type") == "tool-call"}
+    done = next((e for e in reversed(events) if e.get("type") == "done"), None)
+    if done is None:
+        return {"state": "running"}
+    acted, failed = [], []
+    for e in events:
+        if e.get("type") != "tool-result":
+            continue
+        tool = str(e.get("tool") or names.get(str(e.get("callId") or ""), ""))
+        (acted if e.get("ok") else failed).append(tool)
+    return {"state": "done", "ok": bool(done.get("ok", True)),
+            "refused": done.get("refused") if isinstance(done.get("refused"), dict) else None,
+            "acted": acted, "failed": failed}
+
+
+def running_turn_from(redis_url: "str | None", unit_id: str, scan: int = TURNS_TAKEN_SCAN_MAX) -> "str | None":
+    """WHERE A RUNNING TURN STARTS (founder 2026-10-16: a reload mid-reply dropped the streaming output).
+    The Stream id just before the newest `turn-accepted` that has no `turn-complete` after it — a
+    client with no cursor of its own attaches there and sees the partial reply, then the rest. None
+    when no turn is running (or the Stream cannot be read); "0-0" when it is the first entry."""
+    if not redis_url or not unit_id:
+        return None
+    try:
+        import redis
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        rows = r.xrevrange(units.output_topic(unit_id), max="+", min="-", count=scan) or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not read the output stream for unit=%s: %s", unit_id, exc)
+        return None
+    completed: set = set()
+    for i, (entry_id, fields) in enumerate(rows):
+        try:
+            ev = json.loads((fields or {}).get("event") or "{}")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(ev, dict):
+            continue
+        tid = str(ev.get("turn_id") or "")
+        if ev.get("type") == "turn-complete":
+            completed.add(tid)
+            if not tid:
+                return None          # a completion naming no turn ends them all
+        elif ev.get("type") == "turn-accepted" and tid:
+            if tid in completed:
+                return None
+            return rows[i + 1][0] if i + 1 < len(rows) else "0-0"
+    return None
+
+
 def turns_taken_after(redis_url: "str | None", unit_id: str, after: str) -> int:
     """How many turns this chat's worker has TAKEN since ``after`` — a cursor on the unit's output
     Stream that a client has read up to. Counted off the worker's own ``turn-accepted`` events.
@@ -275,6 +378,58 @@ def turns_taken_after(redis_url: "str | None", unit_id: str, after: str) -> int:
         if isinstance(ev, dict) and ev.get("type") == "turn-accepted" and ev.get("turn_id"):
             taken += 1
     return taken
+
+
+def inbox_send_now(redis_url: "str | None", unit_id: str, key: str, item_id: str) -> str:
+    """Name one QUEUED entry (by its client id) as the next to run; the entry id, or "" when it is
+    not queued. The worker stops its running turn, runs that entry, and clears the key."""
+    if not redis_url or not item_id or not key:
+        return ""
+    try:
+        import redis
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        topic = units.input_topic(unit_id)
+        cursor = r.get(units.inbox_cursor_key(unit_id))
+        rows = r.xrange(topic, min=cursor or "-", max="+", count=INBOX_PENDING_MAX_ROWS + 1)
+        for entry_id, fields in rows or []:
+            if cursor and entry_id == cursor:
+                continue
+            meta = (unit_input.verified_turn(key, fields or {}) or {}).get("inbox")
+            if isinstance(meta, dict) and str(meta.get("id") or "") == item_id:
+                r.set(units.send_now_key(unit_id), entry_id, ex=600)
+                return entry_id
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not mark %s to send now on unit=%s: %s", item_id, unit_id, exc)
+        return ""
+
+
+def stop_turns(redis_url: "str | None", unit_ids, *, session_id: str = "") -> int:
+    """STOP THE RUNNING REPLY (live app.dev 2026-10-15): write the moment Stop was pressed to each
+    unit's stop key, and to the unit holding ``session_id``'s head lease when there is one (a turn
+    started under another mount generation, or by another participant of a shared chat, is the one
+    holding the conversation). The worker's stop watcher kills that turn's whole process tree and
+    the turn ends, said. The number of units signalled."""
+    if not redis_url:
+        return 0
+    try:
+        import redis
+        from control_plane import session_sync  # noqa: PLC0415
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        targets = {u for u in unit_ids if u}
+        if session_id:
+            holder = r.get(session_sync.lease_key(session_id))
+            if holder:
+                targets.add(str(holder))
+        pressed = str(int(time.time() * 1000))
+        for uid in targets:
+            r.set(units.stop_key(uid), pressed, ex=600)
+        return len(targets)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not signal stop for %s: %s", sorted(unit_ids), exc)
+        return 0
 
 
 def inbox_withdraw(redis_url: "str | None", unit_id: str, key: str, item_id: str) -> int:
@@ -348,6 +503,88 @@ def _chat_turn_head(redis_url: str | None, unit_id: str, turn_id: str) -> str | 
     except Exception as exc:  # noqa: BLE001
         logger.warning("could not read chat turn head for %s: %s", unit_id, exc)
         return None
+
+
+#: A CONCERN CHAT'S LIFECYCLE (ADR-0046 decision 12): opened by a person, a routine or an event
+#: agent → active → waiting (on someone) → resolved → archived.
+CONCERN_STAGES = ("opened", "active", "waiting", "resolved", "archived")
+
+
+def _concern_read(raw) -> "dict | None":
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return None
+    if not isinstance(raw, dict) or raw.get("stage") not in CONCERN_STAGES:
+        return None
+    return {k: raw[k] for k in ("stage", "key", "flow", "since") if raw.get(k) is not None}
+
+
+def _concern_of(new: dict, old) -> dict:
+    """Merge a concern update into what is stored: the key and flow are kept once set; `stage` moves."""
+    prev = _concern_read(old) or {}
+    stage = new.get("stage") if new.get("stage") in CONCERN_STAGES else prev.get("stage", "opened")
+    out = {**prev, **{k: v for k, v in new.items() if k in ("key", "flow") and v}, "stage": stage}
+    if stage != prev.get("stage"):
+        out["since"] = time.time()
+    return out
+
+
+def _routine_pair(raw) -> "dict | None":
+    """A routine thread's marker — ``{flow, scope, version}`` — or None. Accepts the stored JSON."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return None
+    if not isinstance(raw, dict):
+        return None
+    flow, scope = str(raw.get("flow") or "").strip(), str(raw.get("scope") or "").strip()
+    if not flow or not scope:
+        return None
+    try:
+        version = int(raw.get("version") or 0)
+    except (TypeError, ValueError):
+        version = 0
+    return {"flow": flow, "scope": scope, "version": version}
+
+
+#: How long an output stream may sit on a non-final event before the thread stops counting as
+#: busy — a worker that died mid-turn must not hold a routine off its thread forever.
+TURN_STALE_SEC = 1800.0
+
+
+def unit_busy(redis_url: "str | None", unit_id: str, key: str) -> bool:
+    """IS THIS UNIT RUNNING OR HOLDING A TURN (ADR-0046 decision 12)? Something queued on its inbox,
+    or its output stream's last event is not `turn-complete` and is recent. Best-effort: a redis
+    that cannot answer reads as idle, which is the behaviour chats had before the check existed."""
+    if inbox_pending(redis_url, unit_id, key):
+        return True
+    if not redis_url:
+        return False
+    try:
+        import redis
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        rows = r.xrevrange(units.output_topic(unit_id), count=1)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not read the output tail for unit=%s: %s", unit_id, exc)
+        return False
+    if not rows:
+        return False
+    entry_id, fields = rows[0]
+    try:
+        kind = json.loads((fields or {}).get("event") or "{}").get("type")
+    except ValueError:
+        kind = None
+    if kind == "turn-complete":
+        return False
+    try:
+        at = int(str(entry_id).split("-", 1)[0]) / 1000.0
+    except ValueError:
+        return False
+    return time.time() - at < TURN_STALE_SEC
 
 
 class _Sessions:
@@ -446,7 +683,8 @@ class _Sessions:
     def upsert(self, subject: str, session: str, *, title: str | None = None,
                workspaces: "list[str] | None" = None, scaffold: "dict | None" = None,
                touched: bool | None = None, meeting: str | None = None,
-               meeting_native: str | None = None) -> None:
+               meeting_native: str | None = None, routine: "dict | None" = None,
+               concern: "dict | None" = None) -> None:
         """Record the session on use: create it (stamping ``created`` + a default ``title``) or touch its
         ``last_active``. An explicit ``title`` overrides; otherwise the first prompt seeds it once.
 
@@ -459,8 +697,13 @@ class _Sessions:
         arriving after a human one does not un-write what they typed.
 
         ``meeting`` is written ONCE and never overwritten — see the class docstring. A send into a
-        second meeting from the same chat leaves the first binding standing."""
+        second meeting from the same chat leaves the first binding standing.
+
+        ``routine`` (ADR-0046 decision 12) marks the thread as a routine's — ``{flow, scope,
+        version}`` — so the rail can say so and link the flow's controls. Restated on every run, so
+        a newer version of the flow is what the thread names."""
         now = self._now()
+        routine_pair = _routine_pair(routine)
         pair = self._scaffold_pair(scaffold)
         bind = str(meeting or "").strip()
         native = str(meeting_native or "").strip()
@@ -481,6 +724,10 @@ class _Sessions:
                 fields["workspaces"] = json.dumps([str(w) for w in workspaces if str(w).strip()])
             if pair is not None:
                 fields["scaffold"] = json.dumps(pair)
+            if routine_pair is not None:
+                fields["routine"] = json.dumps(routine_pair)
+            if concern is not None:
+                fields["concern"] = json.dumps(_concern_of(concern, existing.get("concern")))
             if bind and not (existing.get("meeting") or "").strip():
                 fields["meeting"] = bind
                 if native:
@@ -503,24 +750,51 @@ class _Sessions:
             rec["workspaces"] = [str(w) for w in workspaces if str(w).strip()]
         if pair is not None:
             rec["scaffold"] = pair
+        if routine_pair is not None:
+            rec["routine"] = routine_pair
+        if concern is not None:
+            rec["concern"] = _concern_of(concern, rec.get("concern"))
         if bind and not str(rec.get("meeting") or "").strip():
             rec["meeting"] = bind
             if native:
                 rec["meeting_native"] = native
 
-    def name(self, subject: str, session: str, title: str, *, human: bool) -> bool:
-        """Persist a deliberate title without touching activity; human naming wins atomically."""
+    def meta(self, subject: str, session: str) -> dict:
+        """The raw stored fields of one session — `{}` when there is none."""
+        if self._redis is not None:
+            return dict(self._redis.hgetall(self._meta_key(subject, session)) or {})
+        return dict(self._mem.get(subject, {}).get(session) or {})
+
+    def set_agent_chain(self, subject: str, session: str, chain: list) -> None:
+        """THE ORIGIN CHAIN OF THE LAST AGENT MESSAGE DELIVERED INTO THIS THREAD (ADR-0046 decision
+        13), stamped with when — a message sent FROM this thread carries it forward one hop."""
+        value = json.dumps({"chain": [str(x) for x in chain][:64], "at": self._now()})
+        if self._redis is not None:
+            self._redis.hset(self._meta_key(subject, session), mapping={"agent_chain": value})
+            return
+        rec = self._mem.setdefault(subject, {}).get(session)
+        if rec is not None:
+            rec["agent_chain"] = value
+
+    def name(self, subject: str, session: str, title: str, *, human: bool, turns: "int | None" = None) -> bool:
+        """Persist a deliberate title without touching activity; human naming wins atomically.
+        `turns` (an automatic title only) records how long the chat was when it was titled, with the
+        row, so the one re-title after it grows survives a restart (`chat_autotitle`)."""
         if self._redis is not None:
             return bool(self._redis.eval("""
                 if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
                 if ARGV[2] == 'agent' and redis.call('HGET', KEYS[1], 'name_source') == 'human' then return 0 end
                 redis.call('HSET', KEYS[1], 'named_title', ARGV[1], 'name_source', ARGV[2])
+                if ARGV[3] ~= '' then redis.call('HSET', KEYS[1], 'auto_titled_turns', ARGV[3]) end
                 return 1
-            """, 1, self._meta_key(subject, session), title, 'human' if human else 'agent'))
+            """, 1, self._meta_key(subject, session), title, 'human' if human else 'agent',
+                '' if turns is None else str(int(turns))))
         rec = self._mem.get(subject, {}).get(session)
         if rec is None or (not human and rec.get('name_source') == 'human'):
             return False
         rec.update(named_title=title, name_source='human' if human else 'agent')
+        if turns is not None:
+            rec['auto_titled_turns'] = str(int(turns))
         return True
 
     def rail_order(self, subject: str, order=None) -> list[str]:
@@ -534,6 +808,43 @@ class _Sessions:
         if order is not None:
             self._orders[subject] = list(order)
         return list(self._orders.get(subject, []))
+
+    #: The most pages one person pins (#1783: pinned pages are the PERSON's, in every chat).
+    PINNED_PAGES_CAP = 50
+
+    def pinned_pages(self, subject: str, pages=None) -> list[dict]:
+        """THIS PERSON'S PINNED PAGES, in their order: ``[{slug, path, label}]``. One list per person,
+        so a page pinned in one chat is a tab in every chat. ``pages`` replaces the list."""
+        if self._redis is not None:
+            key = f'agent:pinned-pages:{subject}'
+            if pages is not None:
+                self._redis.set(key, json.dumps(list(pages)))
+            try:
+                return list(json.loads(self._redis.get(key) or '[]'))
+            except ValueError:
+                return []
+        if not hasattr(self, '_pinned_pages'):
+            self._pinned_pages = {}
+        if pages is not None:
+            self._pinned_pages[subject] = list(pages)
+        return list(self._pinned_pages.get(subject, []))
+
+    def appearance(self, subject: str, value=None) -> dict:
+        """THIS PERSON'S APPEARANCE choice (Settings → Appearance): ``{accent?, font_ui?, …}`` — only
+        what they picked; the company default fills the rest. ``value`` replaces it."""
+        if self._redis is not None:
+            key = f'agent:appearance:{subject}'
+            if value is not None:
+                self._redis.set(key, json.dumps(dict(value)))
+            try:
+                return dict(json.loads(self._redis.get(key) or '{}'))
+            except ValueError:
+                return {}
+        if not hasattr(self, '_appearance'):
+            self._appearance = {}
+        if value is not None:
+            self._appearance[subject] = dict(value)
+        return dict(self._appearance.get(subject, {}))
 
     #: The most rows one person may mark. A mark is one hash field per flag, so this bounds the
     #: carrier the way ``ChatOrderBody`` bounds the order.
@@ -619,6 +930,11 @@ class _Sessions:
         wid = str(workspace or "").strip()
         if not wid:
             return False
+        # A CHAT WITH ITS OWN READS reads what joins it too (Vexa-ai/vexa#1783): a workspace made or
+        # targeted from the conversation is mounted on its next turn either way.
+        own = self.reads(subject, session)
+        if own is not None and wid not in own:
+            self.set_reads(subject, session, [*own, wid])
         if self._redis is not None:
             mkey = self._meta_key(subject, session)
             meta = self._redis.hgetall(mkey) or {}
@@ -647,7 +963,14 @@ class _Sessions:
         rec["last_active"] = self._now()
         return True
 
-    def set_target(self, subject: str, session: str, workspace: str) -> bool:
+    def has_record(self, subject: str, session: str) -> bool:
+        """Has this chat a record yet? A chat that has none is NEW: it takes the person's defaults
+        (Vexa-ai/vexa#1783). One that has one keeps what it has."""
+        if self._redis is not None:
+            return bool(self._redis.exists(self._meta_key(subject, session)))
+        return session in self._mem.get(subject, {})
+
+    def set_target(self, subject: str, session: str, workspace: str, *, restart: bool = True) -> bool:
         """POINT this chat's writes at a workspace, and say whether that changed anything
         (Vexa-ai/vexa#1611). THE ONE WRITER of ``target``.
 
@@ -672,9 +995,55 @@ class _Sessions:
         if self._redis is not None:
             mkey = self._meta_key(subject, session)
             meta = self._redis.hgetall(mkey) or {}
-            if (meta.get("target") or "").strip() == wid:
+            if (meta.get("target") or "").strip() == wid and meta.get("no_target") != "1":
                 return False
-            self._redis.hset(mkey, mapping={"target": wid, "mounts_stale": "1",
+            fields = {"target": wid, "no_target": "", "last_active": str(self._now())}
+            if restart:
+                fields["mounts_stale"] = "1"
+            self._redis.hset(mkey, mapping=fields)
+            self._redis.sadd(self._ids_key(subject), session)
+            return True
+        rec = self._mem.setdefault(subject, {}).get(session)
+        if rec is None:
+            rec = {"created": self._now(), "last_active": self._now(), "title": session,
+                   "touched": False}
+            self._mem[subject][session] = rec
+        if str(rec.get("target") or "").strip() == wid and not rec.get("no_target"):
+            return False
+        rec["target"] = wid
+        rec["no_target"] = False
+        if restart:
+            rec["mounts_stale"] = True
+        rec["last_active"] = self._now()
+        return True
+
+    #: The most workspaces one chat may name as its reads.
+    READS_CAP = 200
+
+    def set_reads(self, subject: str, session: str, reads: "list[str] | None") -> bool:
+        """THE CHAT'S OWN READS (Vexa-ai/vexa#1783) — the workspaces this chat mounts — and whether
+        that changed anything. THE ONE WRITER of ``reads``: the person's toggle and the agent's
+        ``workspace_state_set`` both come through here.
+
+        ``None`` clears it: the chat follows the person's default active set again, which is what
+        every chat did before the field existed. A list is the chat's own (``"personal"`` is the
+        person's desk); a malformed slug in it is dropped, never repaired. Raises the stale-mounts
+        semaphore for the reason ``set_target`` does: the mount table is fixed at spawn."""
+        if reads is None:
+            value = ""
+        else:
+            clean: list[str] = []
+            for w in reads:
+                w = str(w or "").strip()
+                if w and (w == "personal" or _is_slug(w)) and w not in clean:
+                    clean.append(w)
+            value = json.dumps(clean[: self.READS_CAP])
+        if self._redis is not None:
+            mkey = self._meta_key(subject, session)
+            meta = self._redis.hgetall(mkey) or {}
+            if (meta.get("reads") or "") == value:
+                return False
+            self._redis.hset(mkey, mapping={"reads": value, "mounts_stale": "1",
                                             "last_active": str(self._now())})
             self._redis.sadd(self._ids_key(subject), session)
             return True
@@ -683,14 +1052,119 @@ class _Sessions:
             rec = {"created": self._now(), "last_active": self._now(), "title": session,
                    "touched": False}
             self._mem[subject][session] = rec
-        if str(rec.get("target") or "").strip() == wid:
+        if (rec.get("reads") or "") == value:
             return False
-        rec["target"] = wid
+        rec["reads"] = value
         rec["mounts_stale"] = True
         rec["last_active"] = self._now()
         return True
 
-    def set_model(self, subject: str, session: str, model: str, effort: str = "") -> bool:
+    def set_no_target(self, subject: str, session: str) -> bool:
+        """THIS CHAT WRITES NOWHERE (Vexa-ai/vexa#1783: "no workspaces"). Cleared by ``set_target``
+        — "write here" gives it a target again. Raises the stale-mounts semaphore."""
+        if self._redis is not None:
+            mkey = self._meta_key(subject, session)
+            if (self._redis.hget(mkey, "no_target") or "") == "1":
+                return False
+            self._redis.hset(mkey, mapping={"no_target": "1", "target": "", "mounts_stale": "1",
+                                            "last_active": str(self._now())})
+            self._redis.sadd(self._ids_key(subject), session)
+            return True
+        rec = self._mem.setdefault(subject, {}).get(session)
+        if rec is None:
+            rec = {"created": self._now(), "last_active": self._now(), "title": session, "touched": False}
+            self._mem[subject][session] = rec
+        if rec.get("no_target"):
+            return False
+        rec.update({"no_target": True, "target": "", "mounts_stale": True, "last_active": self._now()})
+        return True
+
+    def set_profile(self, subject: str, session: str, name: str, applied: "dict | None" = None) -> None:
+        """Which chat profile this chat uses (Vexa-ai/vexa#1783); ``incognito`` also marks it so no
+        other chat reads it and chat search leaves it out. ``applied`` is the scope the profile put on
+        the chat — what "Work (changed)" is measured against."""
+        fields = {"profile": name, "incognito": "1" if name == "incognito" else "",
+                  "profile_scope": json.dumps(applied or {}, sort_keys=True)}
+        if self._redis is not None:
+            self._redis.hset(self._meta_key(subject, session), mapping=fields)
+            self._redis.sadd(self._ids_key(subject), session)
+            return
+        rec = self._mem.setdefault(subject, {}).setdefault(
+            session, {"created": self._now(), "last_active": self._now(), "title": session, "touched": False})
+        rec.update(fields)
+
+    def profile_applied(self, subject: str, session: str) -> dict:
+        """The scope this chat's profile put on it, as written by ``set_profile``."""
+        if self._redis is not None:
+            raw = self._redis.hget(self._meta_key(subject, session), "profile_scope") or ""
+        else:
+            raw = (self._mem.get(subject, {}).get(session) or {}).get("profile_scope") or ""
+        try:
+            val = json.loads(raw) if raw else {}
+        except ValueError:
+            val = {}
+        return val if isinstance(val, dict) else {}
+
+    def profile(self, subject: str, session: str) -> str:
+        if self._redis is not None:
+            return str(self._redis.hget(self._meta_key(subject, session), "profile") or "")
+        return str((self._mem.get(subject, {}).get(session) or {}).get("profile") or "")
+
+    def is_incognito(self, subject: str, session: str) -> bool:
+        return self.profile(subject, session) == "incognito"
+
+    def record_attachment(self, subject: str, session: str, path: str, ws: str) -> None:
+        """WHERE an attachment of this chat was stored (Vexa-ai/vexa#1783): ``ws`` is the workspace
+        slug, ``_system`` for an incognito chat, or ``""`` for the person's desk."""
+        if not session or not path:
+            return
+        if self._redis is not None:
+            mkey = self._meta_key(subject, session)
+            try:
+                cur = json.loads(self._redis.hget(mkey, "attachment_ws") or "{}")
+            except ValueError:
+                cur = {}
+            cur = cur if isinstance(cur, dict) else {}
+            cur[path] = ws
+            self._redis.hset(mkey, "attachment_ws", json.dumps(cur))
+            return
+        rec = self._mem.setdefault(subject, {}).setdefault(
+            session, {"created": self._now(), "last_active": self._now(), "title": session, "touched": False})
+        rec.setdefault("attachment_ws", {})[path] = ws
+
+    def attachments_of(self, subject: str, session: str) -> dict:
+        """``{path: ws}`` for this chat's attachments, as ``record_attachment`` wrote them."""
+        if self._redis is not None:
+            try:
+                val = json.loads(self._redis.hget(self._meta_key(subject, session), "attachment_ws") or "{}")
+            except ValueError:
+                val = {}
+        else:
+            val = (self._mem.get(subject, {}).get(session) or {}).get("attachment_ws") or {}
+        return dict(val) if isinstance(val, dict) else {}
+
+    def no_target(self, subject: str, session: str) -> bool:
+        """Does this chat write nowhere?"""
+        if self._redis is not None:
+            return (self._redis.hget(self._meta_key(subject, session), "no_target") or "") == "1"
+        return bool((self._mem.get(subject, {}).get(session) or {}).get("no_target"))
+
+    def reads(self, subject: str, session: str) -> "list[str] | None":
+        """This chat's own reads, or ``None`` — it follows the person's default active set."""
+        if self._redis is not None:
+            raw = (self._redis.hgetall(self._meta_key(subject, session)) or {}).get("reads") or ""
+        else:
+            raw = str((self._mem.get(subject, {}).get(session) or {}).get("reads") or "")
+        if not raw:
+            return None
+        try:
+            val = json.loads(raw)
+        except ValueError:
+            return None
+        return [str(w) for w in val if str(w).strip()] if isinstance(val, list) else None
+
+    def set_model(self, subject: str, session: str, model: str, effort: str = "", *,
+                  restart: bool = True, level: Optional[int] = None) -> bool:
         """PIN this chat to one model of the operator's catalog, at one effort level, and say
         whether that changed anything. THE ONE WRITER of ``model`` and ``effort``.
 
@@ -705,9 +1179,17 @@ class _Sessions:
         into the container at spawn — the worker reads its harness, endpoint, credential, model and
         effort from its environment, once — so a warm worker would keep answering on the old model
         for its whole window. A new unit id is the cure; ``take_mount_generation`` hands the next
-        fresh turn one. A REAL CHANGE ONLY: re-picking what is in force costs nobody a cold start."""
+        fresh turn one. A REAL CHANGE ONLY: re-picking what is in force costs nobody a cold start.
+
+        ``restart=False`` HOLDS what the turn being dispatched runs on anyway (an unpicked chat
+        taking the person's default at its turn): the worker about to start already has that
+        route, so the semaphore stays down.
+
+        ``level`` (1–5, hosted plans, ``routers/levels.py``) is the level the model was picked by;
+        written with it, so a pick from the model picker (no level) clears it."""
         mid = str(model or "").strip()
         eff = str(effort or "").strip()
+        lvl = str(int(level)) if level in (1, 2, 3, 4, 5) else ""
         if mid and not model_providers.is_model_id(mid):
             return False
         if eff and eff not in model_providers.EFFORTS:
@@ -715,10 +1197,13 @@ class _Sessions:
         if self._redis is not None:
             mkey = self._meta_key(subject, session)
             meta = self._redis.hgetall(mkey) or {}
-            if (meta.get("model") or "").strip() == mid and (meta.get("effort") or "").strip() == eff:
+            if (meta.get("model") or "").strip() == mid and (meta.get("effort") or "").strip() == eff \
+                    and (meta.get("level") or "") == lvl:
                 return False
-            self._redis.hset(mkey, mapping={"model": mid, "effort": eff, "mounts_stale": "1",
-                                            "last_active": str(self._now())})
+            fields = {"model": mid, "effort": eff, "level": lvl, "last_active": str(self._now())}
+            if restart:
+                fields["mounts_stale"] = "1"
+            self._redis.hset(mkey, mapping=fields)
             self._redis.sadd(self._ids_key(subject), session)
             return True
         rec = self._mem.setdefault(subject, {}).get(session)
@@ -726,13 +1211,86 @@ class _Sessions:
             rec = {"created": self._now(), "last_active": self._now(), "title": session,
                    "touched": False}
             self._mem[subject][session] = rec
-        if str(rec.get("model") or "").strip() == mid and str(rec.get("effort") or "").strip() == eff:
+        if str(rec.get("model") or "").strip() == mid and str(rec.get("effort") or "").strip() == eff \
+                and str(rec.get("level") or "") == lvl:
             return False
         rec["model"] = mid
         rec["effort"] = eff
-        rec["mounts_stale"] = True
+        rec["level"] = lvl
+        if restart:
+            rec["mounts_stale"] = True
         rec["last_active"] = self._now()
         return True
+
+    @staticmethod
+    def _pick_key(subject: str) -> str:
+        return f"agent:model-pick:{subject}"
+
+    @staticmethod
+    def _meeting_chat_key(subject: str, row: str) -> str:
+        return f"agent:meeting-chat:{subject}:{row}"
+
+    def bind_meeting_chat(self, subject: str, row: str, session: str) -> None:
+        """THE CHAT A MEETING WAS STARTED FROM IS THAT MEETING'S SESSION (founder, 2026-10-13): what
+        addresses the meeting by its own name (``meet-<row>``) lands there. Per person; a meeting's
+        own ``meet-<row>`` chat never binds to itself."""
+        row, session = str(row or "").strip(), str(session or "").strip()
+        if not row or not session or session.startswith("meet-"):
+            return
+        if self._redis is not None:
+            self._redis.set(self._meeting_chat_key(subject, row), session)
+            return
+        if not hasattr(self, "_meeting_chats"):
+            self._meeting_chats = {}
+        self._meeting_chats[(subject, row)] = session
+
+    def meeting_chat(self, subject: str, row: str) -> str:
+        """The chat this person started meeting ``row`` from, or "" (it has its own chat)."""
+        if self._redis is not None:
+            try:
+                return str(self._redis.get(self._meeting_chat_key(subject, str(row))) or "")
+            except Exception:  # noqa: BLE001 — no answer: the meeting's own chat
+                return ""
+        return str(getattr(self, "_meeting_chats", {}).get((subject, str(row)), ""))
+
+    def chat_for(self, subject: str, session: str) -> str:
+        """``session`` as the chat it lands in: ``meet-<row>`` of a meeting this person started from a
+        chat is that chat; anything else is itself."""
+        s = str(session or "")
+        if s.startswith("meet-"):
+            return self.meeting_chat(subject, s[len("meet-"):]) or s
+        return s
+
+    def remember_pick(self, subject: str, model: str, effort: str = "") -> None:
+        """THE PERSON'S LAST PICK — the model and effort they last chose in any chat, which every
+        new chat of theirs starts on. Stored here, per person, on the server: it follows them
+        across devices and browsers, and nobody else's chats ever read it. A value not shaped like
+        a catalog id or a level is not stored; one the catalog later stops offering this person
+        is skipped when it is read (``Catalog.default_for``), never refused."""
+        mid = str(model or "").strip()
+        eff = str(effort or "").strip()
+        if not mid or not model_providers.is_model_id(mid) or (eff and eff not in model_providers.EFFORTS):
+            return
+        value = {"model": mid, "effort": eff, "at": self._now()}
+        if self._redis is not None:
+            self._redis.set(self._pick_key(subject), json.dumps(value))
+            return
+        if not hasattr(self, "_picks"):
+            self._picks = {}
+        self._picks[subject] = value
+
+    def remembered_pick(self, subject: str) -> tuple[str, str]:
+        """``(model, effort)`` of the person's last pick; ``("", "")`` when they never picked."""
+        if self._redis is not None:
+            try:
+                value = json.loads(self._redis.get(self._pick_key(subject)) or "{}")
+            except ValueError:
+                value = {}
+        else:
+            value = dict(getattr(self, "_picks", {}).get(subject) or {})
+        if not isinstance(value, dict):
+            return "", ""
+        return str(value.get("model") or "").strip(), str(value.get("effort") or "").strip()
 
     def model(self, subject: str, session: str) -> str:
         """This chat's own model pick (a catalog id), or ``""`` for the person's default."""
@@ -741,12 +1299,48 @@ class _Sessions:
             return (meta.get("model") or "").strip()
         return str((self._mem.get(subject, {}).get(session) or {}).get("model") or "").strip()
 
+    def level(self, subject: str, session: str) -> Optional[int]:
+        """The level (1–5) this chat's model was picked by, or None (picked by model, or unpicked)."""
+        if self._redis is not None:
+            raw = ((self._redis.hgetall(self._meta_key(subject, session)) or {}).get("level") or "")
+        else:
+            raw = str((self._mem.get(subject, {}).get(session) or {}).get("level") or "")
+        return int(raw) if raw in ("1", "2", "3", "4", "5") else None
+
     def effort(self, subject: str, session: str) -> str:
         """This chat's own effort pick, or ``""`` for the model's default."""
         if self._redis is not None:
             meta = self._redis.hgetall(self._meta_key(subject, session)) or {}
             return (meta.get("effort") or "").strip()
         return str((self._mem.get(subject, {}).get(session) or {}).get("effort") or "").strip()
+
+    @staticmethod
+    def _default_target_key(subject: str) -> str:
+        return f"agent:default-target:{subject}"
+
+    def default_target(self, subject: str) -> str:
+        """THE PERSON'S DEFAULT TARGET — the workspace their new chats start writing to, or ``""``
+        for Personal. Stored as set; the route that reads it re-checks it every time, so a stored
+        value the person can no longer write is never handed out."""
+        if self._redis is not None:
+            return str(self._redis.get(self._default_target_key(subject)) or "").strip()
+        return str(getattr(self, "_default_targets", {}).get(subject) or "").strip()
+
+    def set_default_target(self, subject: str, workspace: str) -> None:
+        """THE ONE WRITER of the default target. ``workspace`` was already checked writable by the
+        caller; ``""`` clears it back to Personal. A value that is not a slug is not stored."""
+        wid = str(workspace or "").strip()
+        if wid and not _is_slug(wid):
+            return
+        if self._redis is not None:
+            if wid:
+                self._redis.set(self._default_target_key(subject), wid)
+            else:
+                self._redis.delete(self._default_target_key(subject))
+            return
+        if not hasattr(self, "_default_targets"):
+            self._default_targets = {}
+        self._default_targets[subject] = wid
 
     def target(self, subject: str, session: str) -> str:
         """This chat's target workspace slug, or ``""`` for the person's own desk."""
@@ -771,6 +1365,46 @@ class _Sessions:
             meta = self._redis.hgetall(self._meta_key(subject, session)) or {}
             return self._as_gen(meta.get("mount_gen"))
         return self._as_gen((self._mem.get(subject, {}).get(session) or {}).get("mount_gen"))
+
+    def settle_mounts(self, subject: str, session: str) -> None:
+        """Lower the stale-mounts flag WITHOUT a new generation: the scope just written is the one the
+        turn being dispatched already runs on (a new chat's default profile)."""
+        if self._redis is not None:
+            self._redis.hset(self._meta_key(subject, session), "mounts_stale", "0")
+            return
+        rec = self._mem.get(subject, {}).get(session)
+        if rec is not None:
+            rec["mounts_stale"] = False
+
+    def mark_all_stale(self, subject: str) -> int:
+        """A PERSON-WIDE workspace change (a hide, an unhide, new defaults — Vexa-ai/vexa#1783) makes
+        every one of their chats' warm workers hold an out-of-date mount table. Raise the stale-mounts
+        semaphore on each existing chat so its next fresh turn gets a container built from the
+        current state; a hidden workspace then leaves the worker's disk on the next message, not in
+        15 minutes. Returns how many chats were marked."""
+        n = 0
+        if self._redis is not None:
+            for session in self._redis.smembers(self._ids_key(subject)) or set():
+                mkey = self._meta_key(subject, session)
+                if self._redis.exists(mkey):
+                    self._redis.hset(mkey, "mounts_stale", "1")
+                    n += 1
+            return n
+        for rec in self._mem.get(subject, {}).values():
+            rec["mounts_stale"] = True
+            n += 1
+        return n
+
+    def step_generation(self, subject: str, session: str) -> int:
+        """Move this chat to a unit nobody has spawned yet, now: raise the stale-mounts flag and take
+        it (``take_mount_generation``). For a turn whose chat runs on another model than its running
+        worker was started on."""
+        if self._redis is not None:
+            self._redis.hset(self._meta_key(subject, session), mapping={"mounts_stale": "1"})
+        else:
+            self._mem.setdefault(subject, {}).setdefault(
+                session, {"created": self._now(), "last_active": self._now(), "title": session})["mounts_stale"] = True
+        return self.take_mount_generation(subject, session)
 
     def take_mount_generation(self, subject: str, session: str) -> int:
         """The generation THIS turn runs under — THE LOWERER of the stale-mounts semaphore.
@@ -816,6 +1450,7 @@ class _Sessions:
                     "session": session,
                     "title": meta.get("title") or session,
                     "named_title": meta.get("named_title"), "name_source": meta.get("name_source"),
+                    "auto_titled_turns": int(meta.get("auto_titled_turns")) if str(meta.get("auto_titled_turns") or "").isdigit() else None,
                     "created": float(meta.get("created", 0) or 0),
                     "last_active": float(meta.get("last_active", 0) or 0),
                     "workspaces": [str(w) for w in mounts] if isinstance(mounts, list) else [],
@@ -831,12 +1466,15 @@ class _Sessions:
                     "meeting": (meta.get("meeting") or "").strip() or None,
                     "meeting_native": (meta.get("meeting_native") or "").strip() or None,
                     "mount_gen": self._as_gen(meta.get("mount_gen")),
+                    "routine": _routine_pair(meta.get("routine")),
+                    "concern": _concern_read(meta.get("concern")),
                 })
         else:
             for session, meta in self._mem.get(subject, {}).items():
                 rows.append({
                     "session": session, "title": meta.get("title") or session,
                     "named_title": meta.get("named_title"), "name_source": meta.get("name_source"),
+                    "auto_titled_turns": int(meta.get("auto_titled_turns")) if str(meta.get("auto_titled_turns") or "").isdigit() else None,
                     "created": meta.get("created", 0.0), "last_active": meta.get("last_active", 0.0),
                     "workspaces": list(meta.get("workspaces") or []),
                     "target": str(meta.get("target") or "").strip() or None,
@@ -846,6 +1484,8 @@ class _Sessions:
                     "meeting": str(meta.get("meeting") or "").strip() or None,
                     "meeting_native": str(meta.get("meeting_native") or "").strip() or None,
                     "mount_gen": self._as_gen(meta.get("mount_gen")),
+                    "routine": _routine_pair(meta.get("routine")),
+                    "concern": _concern_read(meta.get("concern")),
                 })
         rows.sort(key=lambda r: r["last_active"], reverse=True)
         return rows
@@ -1019,7 +1659,25 @@ def toolbelt_preamble(session: str) -> str:
             "include secrets, or narrate naming. A human-chosen title is protected.\n"
             "For the date or time — now, today, anything relative — call `current_time`; never infer "
             "it from earlier messages. If it answers `timezone_required`, ask the person their "
-            "timezone and save it with `timezone_set`.\n")
+            "timezone and save it with `timezone_set`.\n"
+            "When the task says to notify, alert or tell the person about something (an important email, "
+            "a finished job), call `notify` with one line naming it and this session; never paste content.\n")
+
+
+def pinned_pages_preamble(pages: "list[dict]") -> str:
+    """The person's pinned pages, by title and address only — never their content — so "update my
+    unanswered page" names a page the agent can find. ``""`` when nothing is pinned."""
+    rows = []
+    for p in (pages or [])[:50]:
+        path = str((p or {}).get("path") or "").strip()
+        if not path:
+            continue
+        slug = str((p or {}).get("slug") or "").strip()
+        label = str((p or {}).get("label") or path.rsplit("/", 1)[-1]).strip()
+        rows.append(f"- {label} — `{(slug + ':') if slug else ''}{path}`")
+    if not rows:
+        return ""
+    return "## The person's pinned pages\n\n" + "\n".join(rows) + "\n\n"
 
 
 def target_preamble(target: str, others: "list[str] | None" = None, note: str = "") -> str:

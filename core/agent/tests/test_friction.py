@@ -328,6 +328,20 @@ def test_the_rule_ships_and_names_the_silent_workaround():
         assert word in text.lower()
 
 
+def test_a_persons_reply_to_your_last_suggestion_is_rechecked_not_filed():
+    """2026-10-13: links on a page the agent wrote did not open; the agent blamed Google; the person
+    wrote "no it does not fix" and the agent filed `report_friction` with those words and asked what
+    they meant. In a running conversation that is a reply to the agent's last suggestion. The rule:
+    re-check the thing that failed and answer first; file only when asked, or once the failure is
+    confirmed as Vexa's."""
+    text = wfr.friction_preamble()
+    assert "reply to what you last said or did" in text
+    assert "re-check the thing that failed" in text.lower()
+    assert "Your next step is never `report_friction`" in text
+    assert "only when they ask you to report it, or after your re-check confirmed the failure is Vexa's" in text
+    assert "file it the same way" not in text
+
+
 def test_a_turn_that_ends_on_a_tool_error_files_by_itself():
     recs = wfr.scan_turn([
         {"type": "tool-call", "tool": "Read", "args": {"path": "a.md"}, "callId": "1"},

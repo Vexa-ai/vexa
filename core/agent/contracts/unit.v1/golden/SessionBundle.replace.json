@@ -1,0 +1,9 @@
+{
+  "id": "s-0f3c2a9e5b7d4c11a2b3c4d5e6f70812",
+  "version": 3,
+  "replace": true,
+  "files": {
+    ".claude/sessions/conversation.session": "c2lkLTEK",
+    ".claude/projects/-workspace/sid-1.jsonl": "eyJ0eXBlIjoidXNlciJ9Cg=="
+  }
+}

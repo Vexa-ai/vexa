@@ -22,48 +22,63 @@ from urllib.parse import quote, urlencode, urlsplit
 import httpx
 
 from .faults import UpstreamFault
+# The pieces every adapter shares (`provider_base`), and the calendar-change adapter
+# (`calendar_changes`), re-exported: callers and tests address them as `providers.<name>`.
+from .provider_base import (CALENDAR_WRITE_SCOPE, DRAFT_SCOPE, READ_SCOPE, ProviderError,  # noqa: F401
+                            _NO_ANSWER, _address, _bearer, _fault_for_status)
+from .calendar_changes import calendar_event, event_id_for, write_calendar_event  # noqa: F401
+from .calendar_sync import calendar_changes  # noqa: F401
 
 CATALOG = {
     "custom_secret": {"label": "Custom secret", "method": "secret"},
+    # Reading is the default; changing events is a separate consent the person opts into
+    # ("Enable calendar changes"), asked for incrementally on top of the read grant.
     "google_calendar": {"label": "Google Calendar", "method": "oauth", "family": "google",
-                        "scopes": ["https://www.googleapis.com/auth/calendar.events.readonly"]},
+                        "scopes": ["https://www.googleapis.com/auth/calendar.events.readonly"],
+                        "grants": {"calendar_write": ["https://www.googleapis.com/auth/calendar.events"]}},
     "google_email": {"label": "Gmail", "method": "oauth", "family": "google",
                      "scopes": ["https://www.googleapis.com/auth/gmail.readonly",
                                 "https://www.googleapis.com/auth/gmail.compose"]},
 }
 AUTHORIZE = {"google": "https://accounts.google.com/o/oauth2/v2/auth"}
 TOKEN = {"google": "https://oauth2.googleapis.com/token"}
-DRAFT_SCOPE = "https://www.googleapis.com/auth/gmail.compose"
-READ_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+#: The permissions a connection row reports, by the scope that grants each.
+PERMISSIONS = {"drafts": DRAFT_SCOPE, "calendar_write": CALENDAR_WRITE_SCOPE}
 
 
-class ProviderError(Exception):
-    """A sanitized refusal the person can act on; never retains a provider response body."""
-
-
-#: httpx failures where no answer arrived at all: the provider is unreachable, not refusing.
-_NO_ANSWER = (httpx.TimeoutException, httpx.NetworkError, httpx.ProxyError)
-
-
-def _fault_for_status(status: int, message: str) -> UpstreamFault:
-    """A non-refusal HTTP answer: 429 is a rate limit, anything else (5xx, unexpected) a bad answer."""
-    return UpstreamFault("provider", "rate_limited" if status == 429 else "bad_answer", message)
+def permissions(provider: str, scope: str) -> list[str]:
+    """The optional permissions a stored grant carries, by name (`ConnectionRow.permissions`)."""
+    granted = set((scope or "").split())
+    wanted = {"google_email": ("drafts",), "google_calendar": ("calendar_write",)}.get(provider, ())
+    return [name for name in wanted if PERMISSIONS[name] in granted]
 
 
 def family(provider: str) -> str:
     return CATALOG[provider].get("family", "")
 
 
-def authorize(provider: str, client: dict, redirect: str, state: str, challenge: str) -> str:
+def scopes_for(provider: str, grant: str = "") -> list[str]:
+    """The scopes one consent asks for: the provider's base scopes, plus an opted-in grant's."""
+    item = CATALOG[provider]
+    extra = item.get("grants", {}).get(grant, []) if grant else []
+    if grant and not extra:
+        raise ProviderError("This permission does not apply to this connection")
+    return item["scopes"] + extra
+
+
+def authorize(provider: str, client: dict, redirect: str, state: str, challenge: str, grant: str = "") -> str:
     item = CATALOG[provider]
     args = {"client_id": client["client_id"], "redirect_uri": redirect, "response_type": "code",
-            "scope": " ".join(item["scopes"]), "state": state,
+            "scope": " ".join(scopes_for(provider, grant)), "state": state,
             "code_challenge": challenge, "code_challenge_method": "S256",
             "access_type": "offline", "prompt": "select_account consent"}
+    if grant:
+        args["include_granted_scopes"] = "true"
     return AUTHORIZE[item["family"]] + "?" + urlencode(args)
 
 
-def tokens(provider: str, client: dict, *, code=None, verifier=None, redirect=None, refresh=None, http=None) -> dict:
+def tokens(provider: str, client: dict, *, code=None, verifier=None, redirect=None, refresh=None, http=None,
+           grant: str = "") -> dict:
     item = CATALOG[provider]
     form = {"client_id": client["client_id"], "client_secret": client["client_secret"],
             "grant_type": "refresh_token" if refresh else "authorization_code"}
@@ -75,7 +90,7 @@ def tokens(provider: str, client: dict, *, code=None, verifier=None, redirect=No
         if http is None:
             with httpx.Client(timeout=15, follow_redirects=False) as session:
                 return tokens(provider, client, code=code, verifier=verifier, redirect=redirect,
-                              refresh=refresh, http=session)
+                              refresh=refresh, http=session, grant=grant)
         response = http.post(TOKEN[item["family"]], data=form)
         if response.status_code == 429 or response.status_code >= 500:
             raise _fault_for_status(response.status_code, "Provider authorization is unavailable; try again later")
@@ -86,7 +101,7 @@ def tokens(provider: str, client: dict, *, code=None, verifier=None, redirect=No
         if not isinstance(access, str) or not access or result.get("token_type", "").lower() != "bearer":
             raise UpstreamFault("provider", "bad_answer", "Provider did not return a usable authorization; try again later")
         # Providers may omit scope on refresh; initial consent must prove the requested grants.
-        required = {s.lower() for s in item["scopes"]}
+        required = {s.lower() for s in scopes_for(provider, grant)}
         granted = {s.lower() for s in result.get("scope", "").split()}
         if not refresh and not required.issubset(granted):
             raise ProviderError("Required permission was not granted; reconnect this account")
@@ -143,17 +158,22 @@ def gmail_web_url(account: str, thread_id, message_id=None) -> str:
     """The Gmail web address of a thread in the CONNECTED mailbox, or "" when none can be built.
 
     `account` is the address the broker recorded at consent (Gmail's own profile answer), never a
-    caller argument. Gmail's `/mail/u/<address>/` route opens the browser session signed in as that
-    address; an index (`/u/0/`) would open whichever account the browser happens to list first, so
-    without a recorded address no link is built at all. The address is percent-encoded (`+` and any
-    reserved character), keeping only `@`."""
+    caller argument. The account is chosen with Google's `authuser=<address>` parameter, which the
+    signed-in browser resolves to that session. Two forms are NOT used: an index (`/u/0/`) opens
+    whichever account the browser lists first, and `/mail/u/<address>/` is a path Gmail answers with
+    its own "Temporary Error (404) … your account is temporarily unavailable" page (2026-10-13: every
+    link on a page the agent wrote failed that way while the same person's Inbox tab worked). Without
+    a recorded address no link is built at all.
+
+    The fragment is `#all/<thread id>` (the message id only when Gmail gave no thread id): `all`
+    finds the thread whatever its labels. The address is percent-encoded, keeping only `@`."""
     if not isinstance(account, str) or not 3 <= len(account) <= 320 or account.count("@") != 1 \
             or any(ord(c) <= 32 or ord(c) == 127 for c in account):
         return ""
     target = thread_id if isinstance(thread_id, str) and thread_id else message_id
     if not isinstance(target, str) or not _GMAIL_ID.fullmatch(target):
         return ""
-    return "https://mail.google.com/mail/u/" + quote(account, safe="@") + "/#all/" + target
+    return "https://mail.google.com/mail/?authuser=" + quote(account, safe="@") + "#all/" + target
 
 
 def calendar_web_url(link) -> str:
@@ -288,45 +308,133 @@ def read_account(provider, value, action, *, query="", message_id="", time_min="
         link = calendar_web_url(e.get("htmlLink"))
         if link:
             row["web_url"] = link
+        # THE CALL'S LINK (founder 2026-10-16): a Zoom added through Calendar's add-on lives only in
+        # conferenceData — derived once here so "join this call" needs no pasted link
+        from credential_broker.calendar_sync import video_link  # noqa: PLC0415
+        url = video_link(e)
+        if url:
+            row["meeting_url"] = url
         return row
     return {"events": [event(e) for e in data.get("items", [])[:limit]],
             "has_more": bool(data.get("nextPageToken")), "next_page_token": data.get("nextPageToken", "")}
 
 
-def create_gmail_draft(value, recipient, subject, body, *, http=None):
+def reply_context(value, thread_id: str, in_reply_to: str = "", *, http) -> dict:
+    """What a reply in ``thread_id`` needs: the replied-to message's Message-ID, References and
+    Subject. ``in_reply_to`` names that message (a Gmail message id from a read); empty means the
+    thread's last message. A message outside the thread is refused."""
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", thread_id) or \
+            (in_reply_to and not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", in_reply_to)):
+        raise ProviderError("Invalid thread or message ID")
+    params = [("format", "metadata"), ("metadataHeaders", "Message-ID"),
+              ("metadataHeaders", "References"), ("metadataHeaders", "Subject")]
+    base = "https://gmail.googleapis.com/gmail/v1/users/me/"
+    try:
+        if in_reply_to:
+            response = http.get(base + "messages/" + in_reply_to, params=params, headers=_bearer(value))
+        else:
+            response = http.get(base + "threads/" + thread_id, params=params, headers=_bearer(value))
+        if response.status_code == 404:
+            raise ProviderError("Thread or message not found; use ids from a Gmail read")
+        if response.status_code in (400, 401, 403):
+            raise ProviderError("Thread could not be read; check account permissions")
+        if response.status_code != 200:
+            raise _fault_for_status(response.status_code, "Thread could not be read; retry later")
+        data = response.json()
+        message = data if in_reply_to else (data.get("messages") or [None])[-1]
+        if not message or message.get("threadId", thread_id if not in_reply_to else None) != thread_id:
+            raise ProviderError("That message is not in this thread")
+        headers = {h["name"].lower(): h.get("value", "") for h in message.get("payload", {}).get("headers", [])}
+    except _NO_ANSWER:
+        raise UpstreamFault("provider", "unreachable", "Thread could not be read; retry later") from None
+    except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
+        raise UpstreamFault("provider", "bad_answer", "Thread could not be read; retry later") from None
+    mid = headers.get("message-id", "").strip()
+    if any(c in mid for c in "\r\n") or not re.fullmatch(r"<[^<>\s]{1,900}>", mid):
+        raise ProviderError("The replied-to message has no usable Message-ID")
+    refs = " ".join(r for r in headers.get("references", "").split() if re.fullmatch(r"<[^<>\s]{1,900}>", r))
+    subject = headers.get("subject", "").replace("\r", " ").replace("\n", " ").strip()
+    return {"thread_id": thread_id, "message_id": mid, "references": (refs + " " + mid).strip()[-8000:],
+            "subject": subject}
+
+
+def draft_message(recipient, subject, body, *, cc=(), bcc=(), reply=None, attachments=()) -> str:
+    """The draft as Gmail's base64url ``raw``. A reply carries In-Reply-To, References and a "Re:"
+    subject so Gmail files it in the conversation. Attachments are (filename, content_type, bytes)."""
     from email.message import EmailMessage
     from email.policy import SMTP
-    from email.utils import parseaddr
 
-    if DRAFT_SCOPE not in value.get("scope", "").split():
-        raise ProviderError("Draft permission required")
-    if any(c in recipient + subject for c in "\r\n") or parseaddr(recipient)[1] != recipient or "@" not in recipient:
+    if any(c in subject for c in "\r\n"):
         raise ProviderError("Use one valid recipient and a single-line subject")
     message = EmailMessage(policy=SMTP)
-    message["To"] = recipient
+    message["To"] = _address(recipient)
+    if cc:
+        message["Cc"] = ", ".join(_address(a) for a in cc)
+    if bcc:
+        message["Bcc"] = ", ".join(_address(a) for a in bcc)
+    if reply:
+        if not subject.strip():
+            subject = reply["subject"]
+        if not re.match(r"(?i)^\s*re:", subject):
+            subject = "Re: " + subject
+        message["In-Reply-To"] = reply["message_id"]
+        message["References"] = reply["references"]
     message["Subject"] = subject
     message.set_content(body)
-    raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    if http is None:
-        with httpx.Client(timeout=20, follow_redirects=False) as session:
-            return create_gmail_draft(value, recipient, subject, body, http=session)
+    for filename, content_type, data in attachments:
+        maintype, subtype = content_type.split("/", 1)
+        message.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
+    return base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+
+def _draft_call(http, method, url, value, payload, *, created: bool) -> dict:
+    """POST (create) or PUT (update) a draft; never the send endpoint."""
+    unknown = "Draft outcome unknown; check Gmail Drafts before retrying"
     try:
-        response = http.post("https://gmail.googleapis.com/gmail/v1/users/me/drafts",
-                             headers={"Authorization": "Bearer " + value["access_token"]},
-                             json={"message": {"raw": raw}})
+        response = http.request(method, url, headers=_bearer(value), json=payload)
+        if response.status_code == 404 and not created:
+            raise ProviderError("Draft not found in Gmail; it may have been sent or deleted")
         if response.status_code in (400, 401, 403):
             raise ProviderError("Draft creation failed; check account permissions")
         if response.status_code not in (200, 201):
-            raise _fault_for_status(response.status_code, "Draft outcome unknown; check Gmail Drafts before retrying")
+            raise _fault_for_status(response.status_code, unknown)
         data = response.json()
         if not data.get("id"):
             raise UpstreamFault("provider", "bad_answer", "Draft outcome unknown; do not retry automatically")
-        return {"draft_id": data["id"], "message_id": data.get("message", {}).get("id"),
-                "status": "draft_created", "sent": False}
+        message = data.get("message", {}) or {}
+        out = {"draft_id": data["id"], "message_id": message.get("id"),
+               "status": "draft_created" if created else "draft_updated", "sent": False}
+        if message.get("threadId"):
+            out["thread_id"] = message["threadId"]
+        return out
     except _NO_ANSWER:
-        raise UpstreamFault("provider", "unreachable", "Draft outcome unknown; check Gmail Drafts before retrying") from None
+        raise UpstreamFault("provider", "unreachable", unknown) from None
     except (httpx.HTTPError, ValueError, AttributeError):
-        raise UpstreamFault("provider", "bad_answer", "Draft outcome unknown; check Gmail Drafts before retrying") from None
+        raise UpstreamFault("provider", "bad_answer", unknown) from None
+
+
+def create_gmail_draft(value, recipient, subject, body, *, cc=(), bcc=(), thread_id="", in_reply_to="",
+                       attachments=(), draft_id="", http=None):
+    """Create (or, with ``draft_id``, replace) an unsent Gmail draft. Never sends."""
+    if DRAFT_SCOPE not in value.get("scope", "").split():
+        raise ProviderError("Draft permission required")
+    if http is None:
+        with httpx.Client(timeout=20, follow_redirects=False) as session:
+            return create_gmail_draft(value, recipient, subject, body, cc=cc, bcc=bcc, thread_id=thread_id,
+                                      in_reply_to=in_reply_to, attachments=attachments, draft_id=draft_id,
+                                      http=session)
+    if any(c in recipient + subject for c in "\r\n"):
+        raise ProviderError("Use one valid recipient and a single-line subject")
+    reply = reply_context(value, thread_id, in_reply_to, http=http) if thread_id else None
+    raw = draft_message(recipient, subject, body, cc=cc, bcc=bcc, reply=reply, attachments=attachments)
+    message = {"raw": raw, **({"threadId": thread_id} if reply else {})}
+    base = "https://gmail.googleapis.com/gmail/v1/users/me/drafts"
+    if draft_id:
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", draft_id):
+            raise ProviderError("Invalid draft ID")
+        return _draft_call(http, "PUT", base + "/" + draft_id, value, {"id": draft_id, "message": message},
+                           created=False)
+    return _draft_call(http, "POST", base, value, {"message": message}, created=True)
 
 
 def account_email(provider, value, *, http=None):

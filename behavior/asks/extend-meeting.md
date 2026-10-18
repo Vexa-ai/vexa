@@ -19,20 +19,21 @@ nothing:
 
 Those are THEIR words. When there is a line there it is the WHAT and it wins over your own reading.
 
-## Read only what is new
+## Read the whole meeting
 
-Read `{{path}}` in full first. Its frontmatter carries `transcript_cursor` — where the last Extend
-stopped. Then:
+Read `{{path}}` in full first. Then read the WHOLE transcript, from the top:
 
-    get_meeting_transcript(meeting_db_id={{meeting}}, since_index=<that cursor>)
+    get_meeting_transcript(meeting_db_id={{meeting}})
 
-With no cursor yet — or one that is not a whole number, which a page written before carries — read
-the meeting from the top (leave out `since_index`). Either way keep the `next_index` that call
-returns; it is the cursor you will write back. **Never re-read the whole room when a cursor exists** — the page
-already says what was said before it, and a second account of the same ten minutes in a slightly
-different voice is what a reader notices first.
+It answers one page at a time. While `complete` is false, call it again with
+`since_index=<the next_index it returned>`; stop when `complete` is true. Keep the last `next_index`: it is the cursor
+you write back (`transcript_cursor`). One exception: when the last segments are not yet `completed`
+(still being spoken), the cursor is the index of the first of them.
 
-Nothing new since the cursor is a fine answer: say so in one line and change nothing.
+Notes written from part of a meeting say wrong things about the rest. **Never write that something
+was "not discussed", "not decided" or "not mentioned" unless you read every page and it is not
+there**; while the meeting is still running, say "not yet" instead. Keep what the page already says
+and add what the transcript adds; rewrite a line only when the transcript corrects it.
 
 ## Write it into the regions, and nowhere else
 
@@ -54,16 +55,30 @@ move it, never write inside it.** It is how the page names its meeting for every
 file; the meeting view shows the transcript under the notes either way, and never inside them.
 
 Then set `transcript_cursor:` in the frontmatter to the `next_index` your read returned, and write
-the file once, whole, with `workspace_write`.
+the file once, whole, with `workspace_write(slug="{{workspace}}", path="{{path}}")` — THIS file in
+THIS workspace, never a copy of it in the workspace this chat works in. The meeting has ONE note: the
+one on the meeting view. A copy anywhere else is a page nobody sees.
 
-## Page what the room named
+## Link what the room named
 
-For every company, person, project or product the new segments name and that has no page: write it
-(`entity_upsert`). A COMPANY goes in the company layer, `slug="_global"`, when this turn mounts
-`_global` read-write — only an org admin's does. Otherwise write it in the personal workspace this page is on,
-like everything else: a `403 only an org admin may write company-tier pages into _global` means
-exactly that, so write it there and do not report it. Link both ways: the meeting page names the
-entity, the entity's page names this meeting.
+The notes are connected to the people, companies, projects and meetings they talk about. Every one
+of them is a link in the notes, never plain text:
+
+- **A page that exists** — look it up first (search the workspaces this turn mounts) and write it as
+  `[[Its Page Title]]`, spelled exactly as the page's title, so it renders as that page's chip.
+- **Another meeting** — `[[meeting:<its id>|<its name>]]`.
+- **A person or company with no page yet, clearly identified** — a full name the room used for
+  someone in the meeting or named more than once, a company named with what it does — write its page
+  with `entity_upsert`, with this meeting as its source, then link it the same way. A COMPANY goes in
+  the company layer, `slug="_global"`, when this turn mounts `_global` read-write — only an org
+  admin's does. Otherwise write it in the personal workspace this page is on: a `403 only the admin
+  account may write company-tier pages into _global` means exactly that, so write it there and do
+  not report it.
+- **A name heard once, a first name alone, or a speaker the transcript could not identify**
+  ("Speaker 2", "Guest") stays plain text. Never make a page for it.
+
+Link both ways: each linked entity's page names this meeting (`entity_upsert` with a connection to
+`[[meeting:{{meeting}}|<the meeting's name>]]`).
 
 Then publish the terms so the transcript shows them where they were said:
 

@@ -287,3 +287,74 @@ def test_first_visit_mints_against_a_library_that_does_not_have_it(tmp_path):
     # and the two files that were already there are still the admin's
     for name in ("prep.md", "catch-up.md"):
         assert (g / "asks" / name).read_text() == ADMIN_EDIT
+
+
+# ── 2026-10-13 friction: an UNEDITED copy of an older preset is refreshed ─────────────────────────
+# fr_aa621e07faef02ab / fr_85ce30c8a1bd53c2 / fr_2759c391677c3311: app.dev's Extend still named
+# `meeting_transcript(meeting_id, since=cursor)` and mandated company pages in `_global`, a month after
+# the repo's preset was corrected — because `_global/asks/extend-meeting.md` held the copy an earlier
+# top-up wrote, and the top-up never touches a file that exists. A file byte-identical to a version
+# this product shipped was never edited by anyone: it is ours, and it is brought up to date. A file
+# that matches no shipped version is the admin's and stays.
+
+def test_a_byte_identical_older_shipped_copy_is_refreshed(tmp_path, monkeypatch):
+    import hashlib
+    from control_plane import preset_library as PL
+    image = tmp_path / "image"
+    image.mkdir()
+    (image / "extend-meeting.md").write_text("NEW TEXT\n", encoding="utf-8")
+    store = tmp_path / "global"
+    (store / "asks").mkdir(parents=True)
+    old = b"call meeting_transcript(meeting_id, since=cursor)\n"
+    (store / "asks" / "extend-meeting.md").write_bytes(old)
+    monkeypatch.setattr(PL, "SUPERSEDED", {"extend-meeting.md": {hashlib.sha256(old).hexdigest()}})
+    changed = PL.top_up(store, image)
+    assert "extend-meeting.md" in changed
+    assert (store / "asks" / "extend-meeting.md").read_text(encoding="utf-8") == "NEW TEXT\n"
+
+
+def test_an_admin_edited_copy_is_never_refreshed(tmp_path, monkeypatch):
+    from control_plane import preset_library as PL
+    image = tmp_path / "image"
+    image.mkdir()
+    (image / "extend-meeting.md").write_text("NEW TEXT\n", encoding="utf-8")
+    store = tmp_path / "global"
+    (store / "asks").mkdir(parents=True)
+    (store / "asks" / "extend-meeting.md").write_text("the admin's own words\n", encoding="utf-8")
+    assert PL.top_up(store, image) == []
+    assert (store / "asks" / "extend-meeting.md").read_text(encoding="utf-8") == "the admin's own words\n"
+
+
+def test_the_shipped_meeting_extend_with_the_wrong_tool_is_recorded_as_superseded():
+    """The two versions app.dev was found serving (before 6d8d4b0d9 and before c3b349afe's fix) are
+    in the table, and the CURRENT preset is not — a current file in the table would be rewritten
+    on every boot and could never be edited."""
+    import hashlib
+    from pathlib import Path
+    from control_plane import preset_library as PL
+    asks = Path(__file__).resolve().parents[3] / "behavior" / "asks"
+    for f in asks.glob("*.md"):
+        assert hashlib.sha256(f.read_bytes()).hexdigest() not in PL.SUPERSEDED.get(f.name, set()), f.name
+    assert len(PL.SUPERSEDED.get("extend-meeting.md", set())) >= 2
+
+
+def test_the_meeting_extend_preset_names_the_real_tools():
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[3] / "behavior" / "asks" / "extend-meeting.md").read_text()
+    assert "get_meeting_transcript(meeting_db_id=" in text and "since_index=" in text
+    assert "meeting_transcript(meeting_id" not in text
+    assert "completed" in text  # the cursor stops before a segment still being written
+
+
+def test_update_notes_reads_every_page_and_never_claims_absence_from_part_of_it():
+    """A real call (2026-10-14): notes written from a cut transcript stopped half way and said
+    "Budget: not discussed yet" about a budget discussed later. Update notes reads the whole
+    meeting, page by page, and never asserts absence from part of it."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3] / "behavior"
+    text = (root / "asks" / "extend-meeting.md").read_text()
+    assert "Read the whole meeting" in text and "complete" in text
+    assert "not discussed" in text and "Never write that something" in text
+    assert "Never re-read the whole room" not in text
+    kick = (root / "prompts" / "process-meeting.md").read_text()
+    assert "complete" in kick and "not discussed" in kick

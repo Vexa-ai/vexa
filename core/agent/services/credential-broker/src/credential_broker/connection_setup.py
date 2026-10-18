@@ -11,6 +11,7 @@ def validate(raw):
         for url in (s.oauth.authorization_url,s.oauth.token_url):secret_service.validate_endpoint(url)
         if s.scheme!='bearer' or s.header!='Authorization':raise ValueError('OAuth uses Bearer authorization')
         if any(not scope or len(scope)>300 or any(c.isspace() for c in scope) for scope in s.oauth.scopes):raise ValueError('Invalid OAuth scopes')
+    if s.prefix and s.scheme!='prefix':raise ValueError('An authentication prefix needs scheme prefix')
     if s.scheme=='telegram':
         if s.endpoint not in ['https://api.telegram.org/bot{secret}/sendMessage','https://api.telegram.org/bot{secret}/getMe','https://api.telegram.org/bot{secret}/getUpdates']:
             raise ValueError('Choose a supported Telegram bot endpoint')
@@ -18,7 +19,7 @@ def validate(raw):
         if s.method!=expected:raise ValueError('Telegram method does not match endpoint')
         if expected=='POST' and not any(f.name=='chat_id' and f.location=='body' for f in s.fields):raise ValueError('Telegram sendMessage requires a chat_id field filled by the user')
     else:
-        secret_service.configure('validation-only',s.endpoint,s.header,s.scheme,s.method)
+        secret_service.configure('validation-only',s.endpoint,s.header,s.scheme,s.method,s.prefix)
     if not s.endpoint:raise ValueError('Prepare the HTTPS endpoint before requesting setup')
     if len({f.name for f in s.fields})!=len(s.fields):raise ValueError('Field names must be unique')
     if s.method=='GET' and any(f.location=='body' for f in s.fields):raise ValueError('GET fields must use query placement')

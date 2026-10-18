@@ -178,6 +178,13 @@ a harness reads its environment exactly as above and never learns that a catalog
 - **The write-back's git runs through `gitexec`** (`ports._git` → `llm/gitexec.py`, a verbatim copy
   of `shared/gitexec.py`): no hook, fsmonitor, driver or helper a workspace repository names runs
   in the worker.
+- **A turn is one process tree, and Stop kills all of it** (`proctree.py`): the CLI starts in a session
+  of its own; `claude_code.stop_running_turn()` (the worker's stop watcher, `POST /api/chat/stop`) and
+  the reaper kill the CLI and every process of its turn, detached shells included.
+- **Every shell command runs through `shell_guard.sh`** (`CLAUDE_CODE_SHELL_PREFIX`): a wall-clock
+  limit (`shell_timeout_sec`, default 120 s) that kills the command's whole process group and tells the
+  model it timed out, and a refusal for commands that read the CLI's own transcripts
+  (`.claude/projects`); the file tools are denied them by `--disallowedTools`.
 
 ## Adding a runner
 

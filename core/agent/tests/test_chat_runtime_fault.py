@@ -82,7 +82,7 @@ class _Identity:
 
 
 class _Reader:
-    def read(self, unit_id, resume=None):
+    def read(self, unit_id, resume=None, fresh=False):
         yield {"type": "turn-complete"}
 
 

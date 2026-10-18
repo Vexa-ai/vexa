@@ -65,7 +65,7 @@ class _FakeIdentity:
 class _FakeReader:
     """A StreamReader fake — yields the dispatch's UnitEvents (what redis XREAD would relay). Accepts the
     ``resume`` kwarg (the resumable-SSE contract) even though this bare fake ignores the cursor."""
-    def read(self, unit_id, *, resume=None):
+    def read(self, unit_id, *, resume=None, fresh=False):
         yield {"type": "message-delta", "text": "hi"}
         yield {"type": "commit", "sha": "abc123"}
 
@@ -317,7 +317,7 @@ class _CursorReader:
     def __init__(self):
         self.resume_seen = "UNSET"
 
-    def read(self, unit_id, *, resume=None):
+    def read(self, unit_id, *, resume=None, fresh=False):
         self.resume_seen = resume
         yield ({"type": "message-delta", "text": "hi"}, "5-0")
         yield ({"type": "turn-complete"}, "6-0")
@@ -545,10 +545,12 @@ def test_workspace_upload_saves_hash_prefixed_files_under_subject(tmp_path):
     first_name = f"{hashlib.sha256(first).hexdigest()[:16]}-same.txt"
     second_name = f"{hashlib.sha256(second).hexdigest()[:16]}-same.txt"
     files = r.json()["files"]
-    assert files == [
+    assert [{"name": f["name"], "path": f["path"]} for f in files] == [
         {"name": first_name, "path": f"uploads/{first_name}"},
         {"name": second_name, "path": f"uploads/{second_name}"},
     ]
+    # the name a person picked, for the chip — reduced to its last segment like the stored one
+    assert [f["original"] for f in files] == ["same.txt", "same.txt"]
     assert (tmp_path / "u_jane" / files[0]["path"]).read_bytes() == first
     assert (tmp_path / "u_jane" / files[1]["path"]).read_bytes() == second
     assert not (tmp_path / "same.txt").exists()
@@ -870,6 +872,40 @@ def test_sse_relays_retract_marker(monkeypatch):
         body = "".join(r.iter_text())
     assert '"retract"' in body        # the marker became a retract SSE event
     assert "turn:1:p0" in body        # carrying the withdrawn segment id
+
+
+class _ProgressAfterEndRedis:
+    """A `progress` marker arrives after `session_end`: it is relayed, and it must NOT disarm the end
+    (a progress report is not a resumed session), so `meeting-end` still follows."""
+    def __init__(self):
+        self._reads = 0
+
+    def xrevrange(self, key, count=1):
+        return []
+
+    def exists(self, key):
+        return 0
+
+    def xread(self, last, count=500, block=0):
+        import json as _j
+        self._reads += 1
+        if self._reads == 1:
+            return [("tc:meeting:m1", [("1-0", {"payload": _j.dumps({"type": "session_end"})})])]
+        if self._reads == 2:
+            return [("tc:meeting:m1", [("2-0", {"payload": _j.dumps(
+                {"type": "progress", "backlog_s": 12.5, "silence_s": 0.4, "finishing": True})})])]
+        return []
+
+
+def test_sse_relays_progress_without_disarming_the_end(monkeypatch):
+    fr = _ProgressAfterEndRedis()
+    c = _stream_client(fr, monkeypatch)
+    with c.stream("GET", "/api/meeting/stream", params={"meeting_id": "m1", "session_uid": "m1"},
+                  headers={"X-User-Id": "u_owner"}) as r:
+        assert r.status_code == 200
+        body = "".join(r.iter_text())
+    assert '"progress"' in body and '"backlog_s": 12.5' in body and '"finishing": true' in body
+    assert '"meeting-end"' in body
 
 
 class _ResumedSessionRedis:
@@ -1229,11 +1265,11 @@ def test_workspace_new_creates_a_blank_workspace_and_adds_it_without_swapping(tm
     assert active[0]["primary"] is True                       # baseline still primary+first
     assert active[1]["primary"] is False and active[1]["repo"] is None
 
-    # a named create honors the label; a second create mints a distinct slug
+    # a named create honors the label AND is addressed by it (Vexa-ai/vexa#1783); a distinct slug
     r2 = c.post("/api/workspace/new", headers=h, json={"name": "Research"})
-    assert r2.status_code == 201 and r2.json()["slug"] == "workspace-2"
+    assert r2.status_code == 201 and r2.json()["slug"] == "research"
     view = c.get("/api/workspace/attached", headers=h).json()
-    assert view["slots"]["workspace-2"]["name"] == "Research"
+    assert view["slots"]["research"]["name"] == "Research"
     assert view["slots"]["workspace-1"]["name"] == "New workspace"
 
 
@@ -1308,7 +1344,7 @@ def test_workspace_publish_slug_targets_that_workspace(tmp_path, monkeypatch):
     c.post("/api/workspace/init", headers=h)
     assert c.post("/api/workspace/new", headers=h, json={"name": "Acme"}).status_code == 201
 
-    slot = workspaces / ".attached" / "u_jane" / "workspace-1"
+    slot = workspaces / ".attached" / "u_jane" / "acme"
     if not (slot / ".git").exists():  # ensure the slot is a committed git repo (publish needs history)
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=slot, check=True)
     subprocess.run(["git", "config", "user.email", "t@t"], cwd=slot, check=True)
@@ -1319,7 +1355,7 @@ def test_workspace_publish_slug_targets_that_workspace(tmp_path, monkeypatch):
     subprocess.run(["git", "commit", "-q", "-m", "acme content"], cwd=slot, check=True)
 
     r = c.post("/api/workspace/publish", headers=h,
-               json={"repo_name": "acme-ws", "token": "ghp_SECRET", "slug": "workspace-1"})
+               json={"repo_name": "acme-ws", "token": "ghp_SECRET", "slug": "acme"})
     assert r.status_code == 200, r.text
     body = r.json()
     slot_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=slot,
@@ -1505,7 +1541,7 @@ def test_chat_sse_emits_keepalive_comments():
     """Fix C: the reader's idle ticks (``None``) surface as SSE comment keepalives so proxies/clients
     never cut a byte-quiet stream during a long agent think."""
     class _IdleThenDone:
-        def read(self, unit_id, *, resume=None):
+        def read(self, unit_id, *, resume=None, fresh=False):
             yield None
             yield None
             yield ({"type": "message-delta", "text": "hi"}, "5-0")

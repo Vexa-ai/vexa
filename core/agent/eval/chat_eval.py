@@ -10,7 +10,14 @@ what counts as a pass. The model's next step is scored:
     calls:<tool>        it calls that tool
     explains:outage     it calls nothing, and its text says the service is down / unavailable and
                         that reconnecting will not fix it
-    (always)            it never calls the tool that failed
+    explains:our_link   it calls nothing, and its text says the link (ours) was wrong, without
+                        blaming the provider again
+    (always)            it never calls the tool that failed, nor any tool the case lists under
+                        ``forbidden`` (``links-dont-open``: ``report_friction``)
+
+A case names the standing guidance it is scored under in ``preambles`` (default: the connections
+preamble); a tool agent-api does not serve (``report_friction`` is flows-api's) is described with its
+served docstring, read from the source without importing it.
 
 A call the case (or the variant) lists under ``lookups`` is answered with that canned result, the
 answer agent-api gives (``connections_status``; in an outage ``connection_request``, which then opens
@@ -37,6 +44,8 @@ AGENT = Path(__file__).resolve().parents[1]
 CASES = Path(__file__).resolve().parent / "chat_cases"
 
 _OUTAGE = re.compile(r"\b(unavailable|outage|down|not available)\b", re.I)
+_OUR_LINK = re.compile(r"\b(my|our|the) (links?|url)\b[^.]{0,80}\b(wrong|broken|bad|incorrect|fixed|rebuil|regenerat)", re.I)
+_BLAMES_PROVIDER = re.compile(r"(google|gmail|microsoft)('s)? (side|problem|issue|outage)|problem on google", re.I)
 _NO_FIX = re.compile(r"(won.t|will not|wouldn.t|would not|doesn.t|does not|can.t|cannot)\b[^.]{0,60}\b(fix|help|solve|resolve)"
                      r"|reconnect(ing)?\b[^.]{0,40}\b(won.t|will not|doesn.t|does not|not)\b", re.I)
 
@@ -45,11 +54,26 @@ def load_case(name: str) -> dict:
     return json.loads((CASES / f"{name}.json").read_text())
 
 
+def _flows_tool(name: str) -> dict | None:
+    """A flows-api tool (``core/flows/mcp.tools.v1.json``), described by its route's docstring."""
+    import ast
+    manifest = json.loads((AGENT.parent / "flows" / "mcp.tools.v1.json").read_text())
+    tool = next((t for t in manifest["tools"] if t["name"] == name), None)
+    if tool is None:
+        return None
+    src = (AGENT.parent / "flows" / "src" / "flows_integrations" / "flows_api.py").read_text()
+    fn = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == name)
+    props = {a: {"type": "string"} for a in tool.get("arguments", [])}
+    return {"type": "function", "function": {"name": name, "description": (ast.get_docstring(fn) or "")[:4000],
+                                             "parameters": {"type": "object", "properties": props}}}
+
+
 def tool_specs(names: list[str]) -> list[dict]:
-    """OpenAI tool definitions for the named agent tools, as agent-api serves them."""
+    """OpenAI tool definitions for the named agent tools, as agent-api (or flows-api) serves them."""
     manifest = json.loads((AGENT / "mcp.tools.v1.json").read_text())
     openapi = json.loads((AGENT / "mcp.tools.v1.openapi.json").read_text())
-    out = []
+    served = {t["name"] for t in manifest["tools"]}
+    out = [spec for n in names if n not in served for spec in [_flows_tool(n)] if spec]
     for tool in manifest["tools"]:
         if tool["name"] not in names:
             continue
@@ -85,6 +109,12 @@ def messages(case: dict, variant: str, system: str) -> list[dict]:
 MAX_STEPS = 3
 
 
+def system_text(case: dict, preambles: dict) -> str:
+    """The standing guidance the case is scored under, in the order it names."""
+    return "You are the person's assistant in Vexa Minutes.\n\n" + "".join(
+        preambles[n]() for n in case.get("preambles", ["connections"]))
+
+
 def run(case: dict, variant: str, msgs: list[dict], complete) -> dict:
     """Ask for the next step; answer the case's lookups and ask again; return the first other step.
     The returned reply carries ``lookups``: the lookups the model made on the way."""
@@ -109,14 +139,20 @@ def score(case: dict, variant: str, reply: dict) -> tuple[bool, str]:
     """``reply`` is the model's assistant message: ``{"content": str|None, "tool_calls": [...]}``."""
     calls = [c["function"]["name"] for c in (reply.get("tool_calls") or [])]
     text = reply.get("content") or ""
-    if case["failing_tool"] in calls:
+    if case.get("failing_tool") and case["failing_tool"] in calls:
         return False, f"retried {case['failing_tool']}"
+    for name in case.get("forbidden", []):
+        if name in calls:
+            return False, f"called {name}"
     for rule in case["variants"][variant]["pass"]:
         kind, _, arg = rule.partition(":")
         if kind == "calls" and arg in calls:
             return True, f"called {arg}"
         if kind == "explains" and arg == "outage" and not calls and _OUTAGE.search(text) and _NO_FIX.search(text):
             return True, "explained the outage"
+        if kind == "explains" and arg == "our_link" and not calls and _OUR_LINK.search(text) \
+                and not _BLAMES_PROVIDER.search(text):
+            return True, "said the link was ours"
     return False, f"calls={calls or 'none'}; text={text[:160]!r}"
 
 
@@ -142,9 +178,10 @@ def main(argv=None) -> int:
         return 2
     sys.path[:0] = [str(AGENT), str(AGENT.parent)]   # core/agent, and core/ for `workspaces`
     from worker.engine import connections_preamble
+    from worker.friction import friction_preamble
 
     case = load_case(args.case)
-    system = "You are the person's assistant in Vexa Minutes.\n\n" + connections_preamble()
+    system = system_text(case, {"connections": connections_preamble, "friction": friction_preamble})
     tools = tool_specs(case["tools"])
     failed = 0
     for variant in case["variants"]:

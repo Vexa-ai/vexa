@@ -222,8 +222,11 @@ def build_schedule_digest(rows: "list[dict]", *, tz: "str | None" = None,
     if not (live or today or upcoming or recent or ended_today):
         return ""
 
-    tz_label = tz if tz and _tzinfo(tz) is not timezone.utc else (tz or "UTC")
-    lines = [f'<schedule tz="{tz_label}" now="{moment.strftime("%a %Y-%m-%d %H:%M")}">']
+    tz_label = tz if tz and _tzinfo(tz) is not timezone.utc else "UTC"
+    # THE ONE SPELLING OF NOW (Vexa-ai/vexa#1783): zone, abbreviation, offset and UTC — the same
+    # line the timeline block and `current_time` carry, so a turn never holds two clocks.
+    from shared.clock_line import now_label
+    lines = [f'<schedule tz="{tz_label}" now="{now_label(tz or "", moment)}">']
     if live:
         lines.append("live:")
         lines += [_line(r, tzi=tzi, kind="live") for r in live[:MAX_LIVE]]

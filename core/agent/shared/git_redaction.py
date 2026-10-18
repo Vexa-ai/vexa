@@ -59,7 +59,7 @@ _OPAQUE_MIN = 36
 #: A BASE64-shaped secret — the one shape `_GENERIC` cannot see, because `+` and `/` are outside its
 #: class and SPLIT the run: an AWS secret key (`…/K7MDENG/…`) becomes three sub-24 fragments and
 #: survives whole. Applied with `_is_opaque_b64` rather than alone, because `/` is also the commonest
-#: character in a URL path and masking `github.com/owner/repository-name` out of a clone error would
+#: character in a URL path and masking `git.example.com/owner/repository-name` out of a clone error would
 #: destroy the message this scrubber exists to keep readable.
 _B64_RUN = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
 #: …except a git object id, which is exactly what an operator reading a git error needs to keep —

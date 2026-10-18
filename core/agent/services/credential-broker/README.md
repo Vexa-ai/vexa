@@ -20,11 +20,13 @@ human key — the authority to consent and store — must live in no process an 
 | consumes | agent-api (`routers/connections.py`) | `credential-broker.v1`, role `agent`, plus the gateway's `X-Vexa-Identity` for the same person (`gateway-identity.v1`) | request, prepare, list, read, draft, call — results only |
 | consumes | agent-api (`git_secret_store.py`) | `credential-broker.v1`, role `git`, plus the gateway's `X-Vexa-Identity` for the same person | the person's Git token and deploy keys, and the deploy keys of shared workspaces signed as theirs |
 | consumes | terminal (`src/app/api/connections/`) | `credential-broker.v1`, role `human` | consent, credential save, disconnect, delete |
+| consumes | meeting-api (`meeting_api/bot_accounts/`) | `credential-broker.v1`, role `bots` (no `X-Vexa-Identity`; meeting-api acts for a bot) | bot accounts — saved signed-in browser profiles (ADR-0049): list by owner, get, put, state, delete |
 | calls | Google OAuth, Gmail, Calendar APIs | fixed URLs in `providers.py` | tokens, reads, drafts |
 | calls | a human-approved HTTPS endpoint | `secret_service.py` (public addresses only, DNS pinned, no redirects) | one custom-service request |
 | stores | its state volume, or an operator's OpenBao | `store.py` | encrypted credential versions |
+| reads once | agent-api's retired `<workspaces>/.secrets/` (operator-run) | `import_git_legacy.py` | Git credentials older agent-api builds kept, moved into `git/<name>` |
 
-The broker is reachable only from agent-api and the terminal: compose puts it on a network nothing
+The broker is reachable only from agent-api, the terminal and meeting-api: compose puts it on a network nothing
 else joins, and the chart ships a NetworkPolicy. Worker containers never hold a role key.
 
 Two probes answer without an assertion: `GET /health` is liveness (the process answers; it stays
@@ -52,6 +54,10 @@ What this does and does not stop:
   mirror has missed is refused.
 - The human role belongs to the terminal. The terminal resolves the person from its sign-in cookie,
   and the broker trusts the terminal's key for that.
+- The bots role belongs to meeting-api and is bound to no person: whoever holds its key
+  (`VEXA_CONNECTIONS_BOTS_KEY_FILE`) may read every bot account's profile, and meeting-api decides
+  who may use which account. It reaches `/api/internal/bot-account` only. A deployment without the
+  key has no bot accounts: the route refuses every caller.
 
 ## How it works and why it complies
 
@@ -83,14 +89,18 @@ shared-workspace key outside the signed memberships), every
 route against the contract in both directions (`test_contract_conformance.py`), the two store
 adapters, the Google and custom-service adapters offline, M3's host confirmation, and a boot from a
 real environment with the encrypted store, asserting a canary secret appears in no file and no log
-line.
+line. `test_bot_accounts.py` covers the bots role: each action, owner-filtered listing, the
+owner/platform pin on put (409), delete destroying every version, the other roles and an unconfigured
+key refused, and store faults as 503.
 
 ## Status
 
-- ✅ delivered — product service: image `vexaai/v012-credential-broker`, compose service, helm
+- ✅ delivered — product service: image `vexaai/vexa-credential-broker`, compose service, helm
   Deployment + Service + PVC + Secret + NetworkPolicy (0.13.2)
 - ✅ delivered — local AES-256-GCM store (default) and OpenBao KV v2 store (optional)
 - ✅ delivered — Gmail, Google Calendar and custom-secret connections; Git credential store
+- 🔨 in progress — bot accounts (role `bots`, ADR-0049): the broker route; meeting-api's caller lands
+  separately
 - ✅ delivered — retention: a write keeps the current version and the one before it; delete destroys
   every stored version of a connection's credential and OAuth application, disconnect destroys the
   credential (the application stays, for reconnecting). Backups the deployment took keep what they hold.

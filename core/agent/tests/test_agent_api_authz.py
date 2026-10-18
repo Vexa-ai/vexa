@@ -17,7 +17,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from control_plane import link_resolver, repo_ref, scaffolds as scaffolds_mod, secret_store
+from control_plane import legacy_git_store, link_resolver, repo_ref, scaffolds as scaffolds_mod
+from tests import legacy_git_store_fixture
 from control_plane import workspace_ids as ids
 from control_plane.api import create_app
 from control_plane.dispatch import Dispatcher
@@ -373,24 +374,26 @@ def test_re14_and_rd15_reach_the_route_as_a_422_not_a_500(tmp_path, monkeypatch)
                   headers=JANE).status_code == 200
 
 
-# ── R-E13 · the secret store wrote on a read path, and a wrong key read as "no credential" ───────
+# ── R-E13 · the retired local store: a read creates nothing, and a wrong key is not "absent" ─────
 
-def test_re13_a_read_does_not_create_the_master_key(tmp_path):
-    """A sealed envelope exists (written under an operator-supplied key). Reading it with no key
-    configured must ANSWER, not mint a fresh `.master.key` beside the ciphertext it cannot open."""
-    secret_store.put(tmp_path, "u_jane/github", "ghp_thetoken", key_env="the-original-key")
-    assert secret_store.get(tmp_path, "u_jane/github") is None
-    assert not (secret_store.secrets_dir(tmp_path) / secret_store.MASTER_KEY_FILENAME).exists(), \
+def test_re13_a_read_does_not_create_the_master_key(tmp_path, monkeypatch):
+    """An entry sealed under an operator key, read with no key configured, must ANSWER — not mint a
+    fresh `.master.key` beside the ciphertext it cannot open."""
+    monkeypatch.delenv("VEXA_SECRETS_KEY", raising=False)
+    legacy_git_store_fixture.put(tmp_path, "pat/u_jane", "ghp_thetoken", operator_key="the-original-key")
+    assert legacy_git_store.get(tmp_path, "pat/u_jane") is None
+    assert not (legacy_git_store.secrets_dir(tmp_path) / legacy_git_store.MASTER_KEY_FILENAME).exists(), \
         "a pure read created server-side key state"
 
 
-def test_re13_an_undecryptable_secret_is_not_reported_as_absent(tmp_path):
-    secret_store.put(tmp_path, "u_jane/github", "ghp_thetoken", key_env="the-original-key")
-    assert secret_store.get(tmp_path, "u_jane/github", key_env="the-original-key") == "ghp_thetoken"
-    # The operator rotated (or lost) VEXA_SECRETS_KEY. "no credential" would have them re-paste the
-    # PAT, silently overwriting an envelope that was fine.
-    assert secret_store.state(tmp_path, "u_jane/github", key_env="a-different-key") == "unreadable"
-    assert secret_store.state(tmp_path, "u_jane/nothing-here", key_env="a-different-key") == "absent"
+def test_re13_an_undecryptable_secret_is_not_reported_as_absent(tmp_path, monkeypatch):
+    legacy_git_store_fixture.put(tmp_path, "pat/u_jane", "ghp_thetoken", operator_key="the-original-key")
+    monkeypatch.setenv("VEXA_SECRETS_KEY", "the-original-key")
+    assert legacy_git_store.get(tmp_path, "pat/u_jane") == "ghp_thetoken"
+    # The operator rotated (or lost) VEXA_SECRETS_KEY: "no credential" would let it be overwritten.
+    monkeypatch.setenv("VEXA_SECRETS_KEY", "a-different-key")
+    assert legacy_git_store.state(tmp_path, "pat/u_jane") == "unreadable"
+    assert legacy_git_store.state(tmp_path, "pat/u_nothing-here") == "absent"
 
 
 # ── R-A10 · the scaffold id was a non-expiring capability with an unpruned index ─────────────────

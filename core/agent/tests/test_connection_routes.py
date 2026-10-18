@@ -82,14 +82,12 @@ def test_the_inbox_is_the_inbox_query(client, broker):
 
 @pytest.mark.parametrize('path,payload', [
     ('/api/connections/request', {'provider': 'google_email'}),
-    ('/api/connections/gmail/search', {'query': 'x'}),
-    ('/api/connections/gmail/read', {'message_id': 'm1'}),
-    ('/api/connections/gmail/draft', {'recipient': 'a@b.c', 'subject': 's', 'body': 'b',
-                                      'request_id': 'req-0001'}),
     ('/api/connections/service/call', {'connection_id': 'c' * 32}),
     ('/api/onboarding/research', {'action': 'status'}),
 ])
 def test_a_worker_without_a_person_is_refused_before_the_broker(client, broker, path, payload):
+    """The Gmail and Calendar actions are refused to a worker by the connection policy instead, at
+    its default, and also before the broker (`tests/test_connection_policy.py`)."""
     before = len(broker)
     r = client.post(path, headers=WORKER, json=payload)
     assert r.status_code == 403
@@ -180,7 +178,7 @@ def test_a_setup_proposal_reaches_the_broker_as_written(client, monkeypatch):
 
 @pytest.mark.parametrize('setup,named', [
     ({**TELEGRAM, 'service': 'Telegram'}, 'setup.service is not a field here (allowed: oauth, '
-                                          'documentation_url, endpoint, header, scheme, method, '
+                                          'documentation_url, endpoint, header, scheme, prefix, method, '
                                           'secret_label, fields)'),
     ({**TELEGRAM, 'fields': [{'name': 'chat_id', 'label': 'Chat ID', 'value': '12345'}]},
      'setup.fields.0.value is not a field here (allowed: name, label, location)'),
@@ -205,7 +203,7 @@ def test_the_published_setup_is_closed_and_the_description_names_label_not_servi
     ref = next(b['$ref'] for b in setup['anyOf'] if '$ref' in b)
     model = spec['components']['schemas'][ref.rsplit('/', 1)[-1]]
     assert model['additionalProperties'] is False
-    assert set(model['properties']) == {'oauth', 'documentation_url', 'endpoint', 'header', 'scheme',
+    assert set(model['properties']) == {'oauth', 'documentation_url', 'endpoint', 'header', 'scheme', 'prefix',
                                         'method', 'secret_label', 'fields'}
     text = spec['paths']['/api/connections/request']['post']['description']
     assert 'name the service in label' in text and 'provide a service label' not in text

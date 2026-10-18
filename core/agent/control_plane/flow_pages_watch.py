@@ -125,18 +125,22 @@ def _get(path: str) -> Optional[dict]:
         return None
 
 
-def index() -> list[dict]:
+def _scoped(query: dict, scope: str) -> str:
+    return urllib.parse.urlencode({**query, **({"scope": scope} if scope != "instance" else {})})
+
+
+def index(scope: str = "instance") -> list[dict]:
     """`[{file, flow, version, status, etag}]` — the poll shape, no page bodies."""
-    body = _get("/flows/pages?bodies=0")
+    body = _get("/flows/pages?" + _scoped({"bodies": 0}, scope))
     pages = (body or {}).get("pages")
     return [p for p in pages if isinstance(p, dict)] if isinstance(pages, list) else []
 
 
-def bodies(files: "list[str]") -> list[dict]:
+def bodies(files: "list[str]", scope: str = "instance") -> list[dict]:
     """The named pages, with their markdown. Empty list when nothing was asked for."""
     if not files:
         return []
-    body = _get("/flows/pages?" + urllib.parse.urlencode({"only": ",".join(sorted(files))}))
+    body = _get("/flows/pages?" + _scoped({"only": ",".join(sorted(files))}, scope))
     pages = (body or {}).get("pages")
     return [p for p in pages if isinstance(p, dict)] if isinstance(pages, list) else []
 
@@ -221,8 +225,41 @@ def reconcile(global_root: "str | Path",
     return written
 
 
-def start(global_root: "str | Path", *, interval_sec: float = POLL_S
-          ) -> Optional[FlowPagesWatchHandle]:
+def user_scopes() -> list[str]:
+    """The people who own flows — `user:<uid>` scopes, from the operator's listing."""
+    body = _get("/flows")
+    scopes = {str(f.get("scope") or "") for f in (body or {}).get("flows") or []
+              if isinstance(f, dict)}
+    # one plain name: never `.`/`..`, never a leading dot, never a `..` inside
+    return sorted(s for s in scopes if re.fullmatch(r"user:[A-Za-z0-9_@-][A-Za-z0-9_.@-]{0,199}", s)
+                  and ".." not in s)
+
+
+def reconcile_people(workspaces_dir: "str | Path") -> list[str]:
+    """THE PER-PERSON MIRROR (ADR-0046 decision 10): each person's own flows, one page per version,
+    in `<their desk>/flows/` — never in `_global`, which everybody reads. Same writer, same rules."""
+    written: list[str] = []
+    root = Path(workspaces_dir)
+    for scope in user_scopes():
+        uid = scope[len("user:"):]
+        desk = root / uid
+        if not desk.is_dir():
+            continue                      # no desk here yet — the mirror waits for one
+        # the desk is a real directory directly under the root, never a link out of it
+        try:
+            if desk.is_symlink() or desk.resolve().parent != root.resolve():
+                logger.warning("flow pages: %r is not a desk under the workspaces root — skipped", uid)
+                continue
+        except OSError:
+            continue
+        written += [f"{uid}/{n}" for n in reconcile(
+            desk, index_fn=lambda s=scope: index(s),
+            bodies_fn=lambda files, s=scope: bodies(files, s))]
+    return written
+
+
+def start(global_root: "str | Path", *, interval_sec: float = POLL_S,
+          workspaces_dir: "str | Path | None" = None) -> Optional[FlowPagesWatchHandle]:
     """Reconcile once now, then keep the directory in step on a daemon thread.
 
     `interval_sec <= 0` runs nothing and returns None — the shape
@@ -234,6 +271,8 @@ def start(global_root: "str | Path", *, interval_sec: float = POLL_S
     def once() -> None:
         try:
             written = reconcile(global_root)
+            if workspaces_dir is not None:
+                written += reconcile_people(workspaces_dir)
             if written:
                 logger.info("flow pages: %d page(s) reconciled into %s — %s",
                             len(written), global_root, ", ".join(written))

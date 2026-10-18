@@ -25,6 +25,12 @@ from shared.gitenv import GIT_REPO_DISCOVERY_VARS
 for _var in GIT_REPO_DISCOVERY_VARS:
     os.environ.pop(_var, None)
 
+# Every switchable feature is ON for the suite (`control_plane/features.py`; the release default is
+# off). The tests that are about the switch itself pass their own env.
+os.environ.setdefault("VEXA_FEATURES", "all")
+# The model price table never reads the network in a test: the bundled snapshot prices every call.
+os.environ.setdefault("VEXA_MODEL_PRICES_URL", "off")
+
 
 def _register_workspaces_package() -> None:
     """Make ``workspaces.shared.<module>`` importable (PRD decision 47, step 2) WITHOUT putting
@@ -149,3 +155,75 @@ def fake_admin_accounts(monkeypatch):
     monkeypatch.setattr(global_layer, "is_admin_account", admin_accounts.is_admin_account)
     yield admin_accounts
     admin_accounts.NAMED.clear()
+
+
+@pytest.fixture
+def git_broker(monkeypatch):
+    """The credential broker's Git store (credential-broker.v1 `/api/internal/git-secret`), in
+    memory: what `git_secret_store` talks to. Returns the dict of what the broker holds."""
+    from control_plane import git_secret_store
+
+    monkeypatch.setenv("VEXA_GIT_STORE_BROKER_URL", "http://credential-broker:8100")
+    monkeypatch.delenv("VEXA_SECRETS_KEY", raising=False)
+    values: dict = {}
+
+    def call(name, action, value=None):
+        if action == "put" or action == "migrate" and name not in values:
+            values[name] = value
+        return {"found": name in values, "value": values.get(name)}
+    monkeypatch.setattr(git_secret_store, "_call", call)
+    return values
+
+
+@pytest.fixture(autouse=True)
+def _home_cards_on_in_tests(monkeypatch):
+    """The home's cards are OFF by default for the release (founder 2026-10-15); the suites that
+    exercise the composition switch them on, and the switch's own test switches them back off."""
+    monkeypatch.setenv("VEXA_HOME_CARDS", "on")
+
+
+class FakePresenceIdentity:
+    """Identity's presence doors, in memory (`control_plane.identity_presence._transport`):
+    ``GET /internal/presence?ids=…`` and ``PUT /internal/users/{id}/settings``. Every person answers
+    "never chosen" unless ``choices`` says otherwise (``known_only`` makes an unlisted id unknown);
+    ``down`` makes identity unreachable, ``refuse_writes`` fails a write."""
+
+    def __init__(self):
+        self.choices: dict = {}
+        self.reads: list = []
+        self.writes: list = []
+        self.down = False
+        self.refuse_writes = False
+        self.known_only = False
+
+    def __call__(self, method, path, body=None):
+        from urllib.parse import parse_qs, urlsplit
+        if self.down:
+            return 0, {}
+        parts = urlsplit(path)
+        if method == "GET" and parts.path == "/internal/presence":
+            ids = [i for i in (parse_qs(parts.query).get("ids") or [""])[0].split(",") if i]
+            self.reads.append(ids)
+            return 200, {"presence": {i: self.choices.get(i) for i in ids
+                                      if i in self.choices or not self.known_only}}
+        if method == "PUT" and parts.path.startswith("/internal/users/") and parts.path.endswith("/settings"):
+            if self.refuse_writes:
+                return 500, {}
+            who = parts.path.split("/")[3]
+            self.writes.append((who, dict(body or {})))
+            if "presence" in (body or {}):
+                self.choices[who] = bool(body["presence"])
+            return 200, {"presence": self.choices.get(who, True)}
+        return 404, {}
+
+
+@pytest.fixture(autouse=True)
+def presence_identity(monkeypatch):
+    """Every agent test has an identity that answers presence (a deployment always does); the
+    tests about identity being unreachable or unconfigured say so themselves."""
+    from control_plane import identity_presence
+    fake = FakePresenceIdentity()
+    monkeypatch.setattr(identity_presence, "_transport", fake)
+    identity_presence.reset()
+    yield fake
+    identity_presence.reset()

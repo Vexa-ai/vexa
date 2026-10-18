@@ -161,8 +161,13 @@ ACT_MARK = "[vexa-act:"
 #: Opens the flow mark; the flow and the step follow, closed by ``]``.
 FLOW_MARK = "[vexa-flow:"
 
+#: Opens the AGENT-MESSAGE mark (ADR-0046 decision 13): the sending person, then
+#: `<sending thread>|<label>`, closed by ``]``. The message itself follows the mark.
+MSG_MARK = "[vexa-msg:"
+
 #: Every mark that says NOBODY TYPED THIS — the namespace, then the two fields.
-_TURN_RE = _re.compile(r"\[vexa-(job|act|flow):" + _MARK_FIELDS)
+_TURN_RE = _re.compile(r"\[vexa-(job|act|flow|msg):" + _MARK_FIELDS)
+_MSG_RE = _re.compile(r"\[vexa-msg:" + _MARK_FIELDS)
 
 
 def _token(value: str, limit: int = 32) -> str:
@@ -183,6 +188,40 @@ def flow_mark(flow: str, step: str) -> str:
     which is the thing this file exists to stop."""
     f, s = _token(flow), _token(step, 64)
     return f"{FLOW_MARK}{f}:{s}] " if f and s else ""
+
+
+#: The mark a meeting signal's turn opens with (transcript signals): `flow_mark` of this pair.
+SIGNAL_FLOW, SIGNAL_STEP = "meeting-signal", "signal"
+#: …and a room signal's (rooms, 2026-10-15): the room's sensor woke the agent in the room.
+ROOM_SIGNAL_FLOW = "room-signal"
+
+
+def is_signal_turn(text: str) -> bool:
+    """Was this turn started by a meeting or room signal? Read off the mark the control plane wrote."""
+    t = str(text or "").lstrip()
+    return (t.startswith(flow_mark(SIGNAL_FLOW, SIGNAL_STEP))
+            or t.startswith(flow_mark(ROOM_SIGNAL_FLOW, SIGNAL_STEP)))
+
+
+def message_mark(sender_uid: str, sender_thread: str, label: str) -> str:
+    """The prefix a message from another agent carries — or ``""`` without a sender. The thread and
+    the label are free text from another turn, so everything that could close the mark early or
+    break its line is removed before they enter it."""
+    who = _token(sender_uid, 32)
+    thread = _re.sub(r"[^A-Za-z0-9._-]+", "", str(sender_thread or ""))[:128]
+    said = _re.sub(r"[\]\[|\r\n]+", " ", str(label or "")).strip()[:120]
+    return f"{MSG_MARK}{who}:{thread}|{said}] " if who and thread else ""
+
+
+def read_message_mark(text: str) -> "dict | None":
+    """`{uid, thread, label, text}` for a turn another agent sent, or None. `text` is the message —
+    everything after the mark — which is what the receiving person reads, beside who sent it."""
+    m = _MSG_RE.search(text or "")
+    if not m:
+        return None
+    thread, _, label = m.group(2).partition("|")
+    return {"uid": m.group(1), "thread": thread.strip(), "label": label.strip(),
+            "text": (text or "")[m.end():].strip()}
 
 
 def turn_namespace(text: str) -> str:
@@ -214,6 +253,11 @@ _TURN_LABELS = {
     "feedback_turn": "Email reply",
     "open_person": "Getting you set up",
     "open_group": "Setting up the group",
+    # a person's routine, one run in its own thread (ADR-0046 decision 12)
+    "agent_run": "Routine run",
+    # a meeting signal woke the agent in the meeting's chat (transcript signals)
+    "meeting-signal:signal": "From the meeting",
+    "room-signal:signal": "From the room",
     # composed bodies, by the kind their first bracket names
     "post-meeting": "Meeting processed",
     "email-reply": "Email reply",
@@ -283,6 +327,10 @@ def act_label(text: str) -> "str | None":
     if not m:
         return None
     namespace, first, second = m.group(1), m.group(2).strip().lower(), m.group(3).strip()
+    if namespace == "msg":
+        # ANOTHER AGENT'S WORDS ARE SHOWN AS THEIRS (ADR-0046 decision 13): the record keeps the
+        # message itself, and the reader attaches who sent it (`read_message_mark`).
+        return (read_message_mark(text) or {}).get("text") or None
     if namespace == "flow":
         return turn_label(f"{first}:{second}") or None
     verb = _ACT_VERBS.get(first) or (first[:1].upper() + first[1:])

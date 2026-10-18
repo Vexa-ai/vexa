@@ -80,6 +80,9 @@ COPY behavior/asks ./behavior/asks
 # to the other was somebody remembering to. Both destinations are pinned by test_global_seed.py.
 COPY behavior/global ./behavior/global
 COPY behavior/mail ./behavior/mail
+# Workspace templates (event organization, client project, …): seeds for `_global/workspace-templates/`,
+# copied in additively by global_seed and read by workspace_templates.
+COPY behavior/workspace-templates ./behavior/workspace-templates
 
 # The sealed contracts loaded BY PATH at import. In-image layout placed under /app/ so the module
 # walk-up (Path(__file__).resolve().parents → /app/contracts/loader.py → /app) resolves

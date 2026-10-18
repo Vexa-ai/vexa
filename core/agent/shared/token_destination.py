@@ -6,10 +6,10 @@ Two questions, answered here and nowhere else:
   would put the credential on the wire in cleartext; ``ssh://`` / ``git@host:`` authenticate with a
   deploy key and have nowhere to put one; a URL that already names a user or password would end up
   carrying two credentials.
-* **Which URL may receive the caller's SAVED token?** Only ``https://github.com/<path>`` on the default
-  port. The saved token is a GitHub credential entered once in the terminal's token card, and nothing
-  else is entitled to it. A token the person types for one call is their choice for that call and is
-  embedded for any URL the first rule allows.
+* **Which URL may receive the caller's SAVED token?** A saved token belongs to ONE configured git
+  provider (``shared.git_provider``) — the person saved it for that provider in Connections → Git —
+  and only an https URL on that provider (host, port and base path) may receive it. A token the person
+  types for one call is their choice for that call and is embedded for any URL the first rule allows.
 
 ``embed_token`` is the only place a token is written into a URL. Both rules parse with ``urlsplit``;
 a prefix test and a string split disagree with it on mixed case, stray whitespace and userinfo. The
@@ -50,16 +50,25 @@ def may_carry_token(url: str) -> bool:
                 and parts.username is None and parts.password is None)
 
 
-def saved_token_may_reach(url: str) -> bool:
-    """Whether the caller's SAVED GitHub token may be sent to ``url``: only ``https://github.com/…``.
+def saved_token_provider(url: str) -> Optional[git_provider.GitProvider]:
+    """The configured provider whose SAVED token ``url`` may receive, or ``None``.
 
-    Any other host, any other port, ``http://``, or a URL carrying userinfo gets no saved token — a
-    person can still type a token for that one call in the terminal."""
+    An https URL with a repository path on a configured provider, and nothing else: another host,
+    another port or base path, ``http://``, or a URL carrying userinfo gets no saved token — a person
+    can still type a token for that one call in the terminal."""
     parts = _split(url)
-    if not parts or not may_carry_token(url):
-        return False
-    return ((parts.hostname or "").lower() == "github.com" and parts.port in (None, 443)
-            and parts.path.startswith("/") and len(parts.path) > 1)
+    if not parts or not may_carry_token(url) or not parts.path.startswith("/") or len(parts.path) <= 1:
+        return None
+    provider = git_provider.for_url(url)
+    if provider is None or provider.repo_path(url) is None:
+        return None
+    return provider
+
+
+def saved_token_may_reach(url: str) -> bool:
+    """Whether some configured provider's saved token may be sent to ``url`` (see
+    :func:`saved_token_provider`)."""
+    return saved_token_provider(url) is not None
 
 
 def embed_token(url: str, token: Optional[str]) -> str:

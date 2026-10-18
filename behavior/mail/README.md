@@ -30,6 +30,14 @@ link that a template could write is a link anyone who can edit a file can point 
 | `minutes-head.md` | somebody who already knows what Vexa is | after the meeting |
 | `workspace-invite.md` | **a stranger** — somebody a person here named by address | when they are invited to a group |
 | `meeting-share.md` | anybody an owner invited by address from a meeting's **Share** dialog | when they are invited to read that meeting |
+| `sign-in.md` | anybody asking for a sign-in link | always on (`mail.sign-in`) |
+| `chat-share.md`, `call-invite.md` | somebody a chat was shared with, or invited to a call | `mail.chat-share`, `mail.call-invite` |
+| `bot-scheduled.md`, `bot-joined.md`, `bot-failed.md` | the organiser | `mail.bot-*`, off until switched on |
+| `recording.md`, `report-daily.md`, `report-weekly.md`, `digest.md` | people already using Vexa | off until switched on |
+
+Every template belongs to a mail KIND (`core/flows/src/flows_steps/mailkinds.py`), switched by
+`mail.<kind>` in `_global/POLICIES.md`. The admin account designs them from the chat: edit, preview,
+test-send to itself, switch on (`docs/docs/flows/mail-design.mdx`).
 
 **`workspace-invite.md` is the only mail here that nothing about a meeting produced**
 (Vexa-ai/vexa#1632). A person pressed **Add a member…**, was asked for an address and a role, read
@@ -135,7 +143,8 @@ should not cost a migration.
 
 The word carries the meaning, which is why "private" was the wrong word: **a personal workspace is company
 knowledge held by one person**, and the company's agents may read it for a meeting that person is
-in. What stays genuinely private is `_system` — chats, sessions, settings — which is not a personal workspace.
+in. What stays genuinely private is `_system` (identity, settings) and each person's chats (kept in the
+session store, not in any workspace) — neither is a personal workspace.
 
 After a meeting the shared artefact goes to every attendee's personal workspace as well as by mail, so the mail
 may say so; `attendee-head.md` says it as literal text for the same reason it carries the service
@@ -143,8 +152,8 @@ sentence literally — its renderer fills four tokens and would mail `{{workspac
 
 **`attendee-head.md` carries the service sentence as LITERAL TEXT, not as `{{service}}`** — its
 renderer fills four tokens and would mail `{{service}}` verbatim. If that sentence is ever changed it
-must be changed in three places at once: this file, `mailtext.SERVICE_SENTENCE`, and the MCP
-instructions in `deploy/dogfood/rig/vexa_control_mcp.py`. That is a known duplication, written down
+must be changed in two places at once: this file and `mailtext.SERVICE_SENTENCE`. That is a known
+duplication, written down
 here rather than discovered later: two renderers of one directory grew from two sides of the same
 night, and collapsing them into one is worth doing before a third appears.
 

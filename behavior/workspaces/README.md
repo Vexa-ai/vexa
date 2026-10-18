@@ -11,8 +11,7 @@ is a strict superset of OKF's (required `type` only), so seeded workspaces are p
 consumer as-is.
 
 - `default/` — the baseline seed checked out into a new agent workspace before the first turn.
-- `finos/` — a FINOS-flavored knowledge-worker seed: the `default` baseline **plus** a pre-populated
-  knowledge graph of the FINOS ecosystem (`kg/entities/` — companies, organizations, people, projects)
-  and the `routines/finos-discovery.md` job that grows it. Captured from the `finostest@vexa.ai`
-  workspace. Note the discovery routine ships `enabled: true` (reconciled onto the durable scheduler on
-  seed) — flip its frontmatter to `false` if you want it dormant until the user opts in.
+
+A seed carries no routines. A routine is a person's own flow, made with the flows tools after the
+workspace exists ([ADR-0046](../../docs/adr/0046-flows-absorb-routines-flows-own-time-flows-are-scoped.md));
+a `routines/*.md` file in a seed does nothing.

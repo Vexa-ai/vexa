@@ -47,6 +47,9 @@ WS_FIELDS = frozenset({"slug", "to_slug", "workspace_id", "credential_workspace"
 NOT_A_WORKSPACE = {
     ("POST", "/api/workspace/shared/{workspace_id}/attach", "slug"):
         "a parked tree of the workspace the path names, not another workspace",
+    ("POST", "/api/page/open", "target"):
+        "a page, not a workspace: a `<slug>/` head is honoured only when `reads_within` admits it, "
+        "otherwise the page is looked for on the caller's own desk",
 }
 #: Every route that takes a free-form body, and the keys of it that name a workspace.
 DICT_BODIES = {
@@ -60,6 +63,7 @@ DICT_BODIES = {
     ("POST", "/api/proposals/resolve"): (),
     ("POST", "/api/desk/touch"): ("workspace",),
     ("POST", "/api/links/resolve"): ("slug",),
+    ("POST", "/api/links/backlinks"): ("slug",),
     ("POST", "/api/workspace/git/reset"): (),              # the caller's own desk, internal tier
     ("POST", "/api/workspaces/{workspace_id}/rename"): (),  # the path names it
     ("POST", "/api/workspace/{slug}/deploy-key"): (),      # the path names it
@@ -68,11 +72,13 @@ DICT_BODIES = {
 #: The rest of a valid free-form body, for the routes above that name a workspace in one.
 DICT_BASE = {
     ("POST", "/api/links/resolve"): {"refs": []},
+    ("POST", "/api/links/backlinks"): {"path": "a.md"},
     ("POST", "/api/desk/touch"): {"path": "a.md"},
 }
 #: Routes a worker cannot call at all — the internal tier, which a worker never holds. Refused
 #: before the ceiling is asked, which is all a worker needs.
-INTERNAL_TIER = frozenset({("POST", "/internal/scaffolds")})
+INTERNAL_TIER = frozenset({("POST", "/internal/scaffolds"),
+                           ("POST", "/api/sessions/{session}/proposals")})
 #: Gaps this test documents until their router is changed: the route answers without refusing.
 KNOWN_GAPS: dict = {}
 #: The routes this pass found unguarded, by path — the floor below keeps them in the generated set.
@@ -81,6 +87,7 @@ MUST_COVER = {
     ("POST", "/api/workspace/push"), ("POST", "/api/workspace/pull"),
     ("POST", "/api/workspace/git-remote-detach"), ("POST", "/api/workspace/purpose"),
     ("GET", "/api/workspace/purpose"), ("GET", "/api/workspace/git-remote-status"),
+    ("POST", "/api/workspace/status"),
 }
 #: How many (route, field) cases the app generates today. A rename of a parameter cannot silently
 #: shrink the set: the count may grow, never fall below this without a deliberate edit here.
@@ -105,6 +112,8 @@ def _build(monkeypatch, tmp_path) -> TestClient:
     public.write_bytes(identity_token.public_key_pem(KEY))
     monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", str(public))
     monkeypatch.setenv("INTERNAL_API_SECRET", "agent-test-internal-secret")
+    # every route answers here, the explicit features' too (rooms and home2 are not in `all`)
+    monkeypatch.setenv("VEXA_FEATURES", "all,rooms,home2,transcript_signals")
     root = tmp_path / "workspaces"
     root.mkdir()
     monkeypatch.setenv("VEXA_WORKSPACES_DIR", str(root))
@@ -399,3 +408,39 @@ def test_a_worker_s_target_outside_its_ceiling_is_not_a_default_it_may_write(cli
     r = client.put("/api/workspace/file", json={"path": "a.md", "content": "x"},
                    headers={identity_token.HEADER: identity_token.sign(KEY, claims)})
     assert _kind(r) == "out_of_scope", r.text
+
+
+# ── a workspace the dispatch has mounted READ-ONLY (Vexa-ai/vexa#1783) ──────────────────────────
+#: How an unwatched dispatch's ceiling lists a workspace it may read but not write.
+RO = "ro:"
+
+
+@pytest.mark.parametrize("method,route,loc", CASES)
+def test_a_read_only_grant_changes_nothing_on_disk(client, owned, tmp_path, method, route, loc):
+    """Whatever the route, a workspace the ceiling lists only as readable is never written. A read
+    of git state refreshes git's own stat cache (`.git/index`), which is not a write of content."""
+    root = tmp_path / "workspaces"
+
+    def content(d):
+        return {k: v for k, v in d.items() if not (k.endswith("/.git") or k.endswith("/.git/index"))}
+    before = content(_disk(root))
+    _request(client, method, route, loc, owned, _as([INSIDE, f"{RO}{owned}"]))
+    assert content(_disk(root)) == before
+
+
+def test_a_read_only_grant_refuses_the_write(client, owned):
+    entity = client.post("/api/workspace/entity", headers=_as([INSIDE, f"{RO}{owned}"]),
+                         json={"kind": "person", "name": "Someone", "slug": owned})
+    assert _kind(entity) == "out_of_scope", entity.text
+    put = client.put("/api/workspace/file", headers=_as([INSIDE, f"{RO}{owned}"]),
+                     json={"slug": owned, "path": "notes/x.md", "content": "x"})
+    assert _kind(put) == "out_of_scope", put.text
+
+
+def test_a_read_only_grant_allows_the_read(client, owned):
+    hdr = _as([INSIDE, f"{RO}{owned}"])
+    tree = client.get("/api/workspace/tree", params={"slug": owned}, headers=hdr)
+    assert tree.status_code == 200, tree.text
+    # …and the same read with no grant at all is still refused
+    assert _kind(client.get("/api/workspace/tree", params={"slug": owned}, headers=_as([INSIDE]))) \
+        == "out_of_scope"

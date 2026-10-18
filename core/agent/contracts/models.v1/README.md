@@ -17,7 +17,8 @@ credential-shaped written inline, and names the field rather than the value when
 A `ModelList` is one person's view: only the models they may pick (an `admins` model is absent for
 everyone else), their `default`,
 and — when asked for one chat — that chat's own pick (`selected`) and effort pick
-(`selected_effort`). It carries no endpoint, no
+(`selected_effort`), and `running`: the model that chat's worker was started on (`null` before
+any turn). It carries no endpoint, no
 credential and no request setting: those never leave agent-api.
 
 The adapter kinds (`openai_compatible`, `openrouter`, `anthropic`) are held equal to the
@@ -29,6 +30,10 @@ which is a `models.v2` or a human re-seal (`gate:contract-version`).
 endpoint offered as a pseudo-model) is gone from `Adapter`, and `CatalogModel.model` is required.
 agent-api refuses a catalog that still declares `custom` with a sentence naming the fix. `models.v1`
 had not shipped in any release, so no deployed catalog is broken by the narrowing.
+
+**Re-sealed 2026-10-14, additive:** `ModelList.running` (optional, string or null) was added so
+the composer can show the model a chat's worker runs while a new pick is pending. A reader that
+ignores it is unaffected.
 
 `gate:schema` validates `golden/` against the schema (`validate.mjs`); the Python side validates
 through `contracts.validate_model_catalog_errors` / `validate_model_list`. Design:

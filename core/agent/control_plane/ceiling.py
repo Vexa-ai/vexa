@@ -12,6 +12,8 @@ This module is the one place agent-api reads those headers, by the names the ven
 - `is_delegated` / `is_unwatched` — the person-in-the-loop rule. Delegated means any delegation
   header is on the identity, an empty one included; unwatched means delegated and a regime other
   than `human` (an unknown or empty regime included). The fail direction is closed both times;
+- `require_private` — the refusal (`SHARED_REFUSAL`) a person-wide read gives a worker whose turn
+  other people read (`delegation.shared`, ADR-0048 decision 4);
 - `require_person` — the refusal (`REFUSAL`, the body meeting-api's `regime.py` answers with, so a
   worker reads one refusal everywhere) a verb that needs a person gives an unwatched caller, and
   `refuse_delegated` for a verb no delegated caller may use at all;
@@ -39,7 +41,7 @@ from control_plane import identity_token
 from shared import delegation
 # `REFUSAL` is what a verb that needs a person answers a worker dispatched without one: the vendored
 # gateway-identity.v1 body, the same one meeting-api's `regime.py` answers with.
-from control_plane.identity_token import CLAIM_HEADERS, DELEGATION_HEADERS, REFUSAL
+from control_plane.identity_token import CLAIM_HEADERS, DELEGATION_HEADERS, REFUSAL, SHARED_REFUSAL
 
 logger = logging.getLogger("agent_api.ceiling")
 
@@ -99,15 +101,28 @@ def _ceiling(request: "Request"):
     return "*" if raw.strip() == "*" else [w.strip() for w in raw.split(",") if w.strip()]
 
 
+def _shared_allows(ceiling, slug: Optional[str]) -> bool:
+    """A turn other people read reaches exactly the shared scope it was dispatched with: a named
+    workspace in that list. Its person's own desk — an empty slug, or their own id — is not in it
+    unless the scope names it, and a scope that is not a list admits nothing."""
+    w = str(slug or "").strip()
+    if not w or ceiling == "*" or not isinstance(ceiling, list):
+        return False
+    return w in ceiling
+
+
 def delegation_allows(request: "Request", slug: Optional[str]) -> bool:
     """May this caller address workspace ``slug``? A worker dispatched without a person carries the
     dispatch's isolation set (``x-user-delegation-workspaces``); ``*`` — and every caller that is not
     a delegated worker — is bounded by the account alone. An EMPTY slug, or the caller's own id, is
     the caller's own workspace and always in scope: the uid decides it, not the caller
-    (`delegation.ceiling_allows`)."""
+    (`delegation.ceiling_allows`) — except in a turn other people read, which reaches only its shared
+    scope (`_shared_allows`)."""
     ceiling = _ceiling(request)
     if ceiling is None:
         return True
+    if is_shared(request):
+        return _shared_allows(ceiling, slug)
     return delegation.ceiling_allows(ceiling, slug, subject=request.headers.get(SUBJECT_HEADER) or "")
 
 
@@ -126,6 +141,8 @@ def reads_within(request: "Request", slug: Optional[str]) -> bool:
     ceiling = _ceiling(request)
     if ceiling is None:
         return True
+    if is_shared(request):
+        return str(slug or "").strip() in READ_BY_EVERYONE or _shared_allows(ceiling, slug)
     return delegation.ceiling_reads(ceiling, slug, subject=request.headers.get(SUBJECT_HEADER) or "")
 
 
@@ -153,12 +170,38 @@ def require_in_ceiling(request: "Request", *slugs: Optional[str]) -> None:
                        "that is not one of them"}, reason="out_of_scope", workspace=str(slug))
 
 
+def require_read_in_ceiling(request: "Request", *slugs: Optional[str]) -> None:
+    """Refuse (403 `out_of_scope`) a READ of a named workspace outside a delegated dispatch's read
+    ceiling — what it may write, plus what it has mounted read-only (`delegation.ceiling_reads`)."""
+    for slug in slugs:
+        if not reads_within(request, slug):
+            raise refused(request, 403, {
+                "refused": "out_of_scope", "workspace": str(slug),
+                "why": "this session was dispatched with access to a named set of workspaces and "
+                       "that is not one of them"}, reason="out_of_scope", workspace=str(slug))
+
+
 def require_person(request: Request) -> None:
     """Refuse (403 `REFUSAL`) a verb that needs a person in the loop when the caller runs without
     one. `human` is the only regime these verbs run under; the fail direction on a verb that reads a
     mailbox, spends a credential or loads a repository is closed."""
     if is_unwatched(request):
         raise refused(request, 403, REFUSAL, reason=REFUSAL["reason"])
+
+
+def is_shared(request: Request) -> bool:
+    """A delegated worker whose answer other people read (``delegation.shared``, ADR-0048)."""
+    return identity_token.is_shared(request.headers)
+
+
+def require_private(request: Request) -> None:
+    """Refuse (403 `SHARED_REFUSAL`) a person-wide read — the person's mail, calendar, any other
+    connection, their meetings — to a worker whose turn other people read. The leak rule (ADR-0048
+    decision 4) narrows that turn's workspaces to what every participant reads; nothing else of the
+    person's may reach its answer. Installed on the routers that serve those reads, so a new verb
+    there is covered without remembering to call it."""
+    if is_shared(request):
+        raise refused(request, 403, SHARED_REFUSAL, reason=SHARED_REFUSAL["reason"])
 
 
 def refuse_delegated(request: Request, *, reason: str, instruction: str) -> None:

@@ -9,7 +9,7 @@ This **supersedes the sealed, meeting-shaped `invoke.v1`** (which required `meet
 frozen for the meetings path (`bridge.py`) and is retired once that path migrates; `dispatch.py` emits
 `unit.v1`. See `clients/terminal/docs/FOUNDATION.md`.
 
-- **`Trigger`** — `message` (chat turn) · `scheduled` (a `schedule.v1` cron fired) · `event` (an
+- **`Trigger`** — `message` (chat turn) · `scheduled` (a schedule fired — a flow's `agent_run`, ADR-0046) · `event` (an
   event-source published, e.g. `email.received`) · `transcription` (a live transcript beat, or
   `session_end`). **All four are frozen now** so MVP stages add behavior, not enum members.
 - **`Context`** — `kind` discriminates: `none` (a bare chat) · `meeting` (`MeetingRef`, by id —
@@ -80,3 +80,15 @@ key the terminal's label tables. A kind added here reaches every side on the nex
 
 **Status: sealed** in `contracts.seal.json` (gate:contract-version). An additive change re-seals with
 `pnpm seal:contracts` in a `lane:contract` PR; a breaking one is `unit.v2`.
+
+## The conversation, carried (`SessionBundle`, `SessionBundleEvent`) — ADR-0048
+When agent-api runs with a session store, a chat turn's message carries the conversation as
+`session_bundle` (`SessionBundle`: the session id, the transcript version, and the files under the
+harness's continuity root, base64). The worker materialises it outside every mount and runs the turn
+on it. Before `turn-complete` it hands the conversation back on its output stream as a
+`session-bundle` event (`SessionBundleEvent`), naming the version it was based on; agent-api saves it
+as the next version only while that version is still the head, and never relays the event to a
+client. A turn without a bundle (no store, or an older agent-api) keeps the workspace layout.
+When the store refused the conversation's last hand-back, the next bundle carries `replace: true`:
+the worker's copy is ahead of a head that never took it, so the worker adopts the bundle whatever
+version it holds (`SessionBundle.replace.json`).

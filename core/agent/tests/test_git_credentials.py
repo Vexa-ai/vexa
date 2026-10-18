@@ -1,17 +1,23 @@
-"""Tests for git_credentials — the per-user, save-once reusable GitHub token store.
+"""Tests for git_credentials — the per-user, save-once reusable GitHub token.
 
-The store moved from a PLAINTEXT file to the sealed :mod:`control_plane.secret_store` (one server-side
-key). These tests hold the two things that must stay true across that move: the round-trip and the mask
-are unchanged for every caller, and the clear token is nowhere on disk — including for an account whose
-token was written by the OLD code, which is migrated the first time anybody reads it.
+The token lives in the credential broker (ADR-0040). These tests hold what every caller relies on —
+the round trip and the mask — and that agent-api keeps no copy on disk, including for an account
+whose token an older build wrote locally, which moves into the broker the first time it is read.
 """
 import os
+
+import pytest
 
 from control_plane import git_credentials as gc
 
 
+@pytest.fixture(autouse=True)
+def _broker(git_broker):
+    return git_broker
+
+
 def _disk(root) -> bytes:
-    """Every byte the secrets root holds — what an attacker with the volume would read."""
+    """Every byte the workspaces root holds — what an attacker with the volume would read."""
     blob = b""
     for dirpath, _dirs, files in os.walk(root):
         for f in files:
@@ -20,42 +26,33 @@ def _disk(root) -> bytes:
     return blob
 
 
-def test_set_read_mask_and_clear(tmp_path):
+def test_set_read_mask_and_clear(tmp_path, git_broker):
     root = tmp_path
     assert gc.read_github_token(root, "42") is None
     assert gc.masked_github_token(root, "42") is None
 
-    # save → readable server-side, masked for display (never the clear value)
     assert gc.set_github_token(root, "42", "ghp_ABCDEFGH1234wxyz") is True
     assert gc.read_github_token(root, "42") == "ghp_ABCDEFGH1234wxyz"
     assert gc.masked_github_token(root, "42") == "••••wxyz"
+    assert git_broker["pat/42"] == "ghp_ABCDEFGH1234wxyz"
+    assert _disk(root) == b"", "agent-api must hold no token at rest"
 
-    # stored under a dot-dir the workspace scanners skip, NOT inside a workspace tree — and SEALED
-    f = root / ".secrets" / "pat" / "42.enc"
-    assert f.exists()
-    assert oct(f.stat().st_mode)[-3:] == "600"  # owner-only
-    assert b"ghp_ABCDEFGH1234wxyz" not in _disk(root), "the clear token must not exist on disk"
+    assert gc.read_github_token(root, "43") is None   # per-subject isolation
 
-    # per-subject isolation
-    assert gc.read_github_token(root, "43") is None
-
-    # clear
     assert gc.set_github_token(root, "42", "") is False
     assert gc.read_github_token(root, "42") is None
     assert gc.masked_github_token(root, "42") is None
 
 
-def test_a_legacy_plaintext_token_still_reads_and_is_migrated(tmp_path):
-    """The upgrade cannot lock anyone out: a token written by the old code is read once more, re-sealed,
-    and the plaintext file is removed — so the clear value stops existing without anyone re-entering it."""
+def test_a_legacy_plaintext_token_moves_into_the_broker(tmp_path, git_broker):
     legacy = tmp_path / ".secrets" / "u_old.ghtoken"
     legacy.parent.mkdir(parents=True)
     legacy.write_text("ghp_LEGACYplaintext99")
 
     assert gc.read_github_token(tmp_path, "u_old") == "ghp_LEGACYplaintext99"
-    assert not legacy.exists(), "the plaintext file must be gone after the migrating read"
-    assert (tmp_path / ".secrets" / "pat" / "u_old.enc").exists()
-    assert gc.read_github_token(tmp_path, "u_old") == "ghp_LEGACYplaintext99"  # still readable, now sealed
+    assert not legacy.exists(), "the plaintext file must be gone once the broker confirmed it"
+    assert git_broker["pat/u_old"] == "ghp_LEGACYplaintext99"
+    assert gc.read_github_token(tmp_path, "u_old") == "ghp_LEGACYplaintext99"
     assert b"ghp_LEGACYplaintext99" not in _disk(tmp_path)
 
 
@@ -77,8 +74,5 @@ def test_invalid_subject_rejected(tmp_path):
     assert gc._name("../escape") is None
     assert gc._name("") is None
     assert gc.read_github_token(tmp_path, "../escape") is None
-    try:
+    with pytest.raises(ValueError):
         gc.set_github_token(tmp_path, "../escape", "x")
-        assert False, "expected ValueError"
-    except ValueError:
-        pass

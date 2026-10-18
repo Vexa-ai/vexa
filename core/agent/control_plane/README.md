@@ -1,6 +1,6 @@
 # agent · control_plane
 
-The agent control plane: the FastAPI app (`api.py`) and orchestration that dispatches work to workers and reconciles routine/meeting lifecycle. Owns request handling, routine bookkeeping, transcription watching, and event relay — distinct from the `worker/` that runs a single agent workload.
+The agent control plane: the FastAPI app (`api.py`) and orchestration that dispatches work to workers and tracks meeting lifecycle. Owns request handling, the one-time routine migration into flows, transcription watching, and event relay — distinct from the `worker/` that runs a single agent workload.
 
 ## Modules
 
@@ -84,7 +84,8 @@ caller or with the internal secret, never with a credential of its own:
   conversation).
 - Git: `workspace_attach.py`, `workspace_import.py`, `workspace_publish.py`, `workspace_git_sync.py`,
   `repo_ref.py`, `deploy_keys.py`, `workspace_credentials.py`, `git_credentials.py`,
-  `git_secret_store.py`, and `secret_store.py` (the one encrypted-at-rest store).
+  `git_secret_store.py` (Git credentials, kept in the credential broker), and `legacy_git_store.py`
+  (read-only: moves what older builds kept on this volume into the broker).
 
 **Chat, pages and onboarding**
 - `scaffolds.py` (what the agent knows and the UI shows at the moment a person arrives),
@@ -92,6 +93,23 @@ caller or with the internal secret, never with a credential of its own:
   `front_page.py`, `flow_pages_watch.py`, `claims.py` (the claim book), `onboarding_research.py`
   (the account-scoped research cursor), `connection_setup_schema.py` (a custom-service setup
   proposal's shape).
+
+**Conversations — the session store (ADR-0048).** Chats are kept here, apart from every workspace;
+workspaces hold knowledge only, and `_system` holds who the person is (`identity.md`) and settings,
+never a chat.
+- `session_store.py` — the store: metadata in agent-api's own database (`agent_session*` tables, its
+  own login role), each transcript version one object in its own bucket (`session_blobs.py`). A new
+  version names its base and is accepted only while that base is the head.
+- `session_sync.py`, `session_turn.py` — a turn's bundle in and out; with the store on the worker
+  keeps no conversation under a mount (`VEXA_SESSION_STORE=1`: the carried bundle, or a private folder
+  under its HOME).
+- `session_access.py` (who may read a chat and what a shared turn may mount — the leak rule),
+  `session_fork.py` (sharing a chat starts a new shared one), `session_schema.py` (the DDL, run by the
+  migrations path, never by agent-api).
+- `session_migrate.py` — the operator's one-shot that moves old-layout chats out of `_system` and the
+  desks into the store: copy, read back, `--clean --retire` moves every old file into
+  `<workspaces>/.sessions-retired/<run>/` (no mount names it), `--restore` puts them back.
+- The agent reads other chats only with `chats_search` and `chat_read` (`routers/chat_read.py`).
 
 ## A worker's delegation token ends with its unit
 

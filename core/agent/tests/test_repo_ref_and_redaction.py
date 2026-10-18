@@ -27,6 +27,13 @@ from control_plane.workspace_reader import WorkspaceReader
 from shared.config import load_settings
 from shared.git_redaction import MASK, looks_like_token, redact
 
+
+@pytest.fixture(autouse=True)
+def _git_broker(git_broker):
+    """Saved Git credentials live in the credential broker (in memory here)."""
+    return git_broker
+
+
 PAT = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
 FINE = "github_pat_11ABCDE0aAbBcCdDeEfF_gGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ01"
 GLPAT = "glpat-aBcDeFgHiJkLmNoPqRsT"

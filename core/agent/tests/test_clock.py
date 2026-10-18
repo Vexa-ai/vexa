@@ -25,6 +25,16 @@ def test_lisbon_dst_and_winter():
         assert not r['timezone_required']
 
 
+def test_the_clock_states_offset_and_one_label():
+    """`current_time` speaks the same `now` as the turn context (Vexa-ai/vexa#1783)."""
+    r = clock.clock_context('Europe/Lisbon', datetime(2026, 10, 13, 18, 6, tzinfo=timezone.utc))
+    assert r['utc_offset'] == 'UTC+01:00' and r['abbreviation'] == 'WEST'
+    assert r['now'] == ('Tuesday 13 October 2026, 19:06 Europe/Lisbon (WEST, UTC+01:00); '
+                        '18:06 UTC')
+    r = clock.clock_context('', datetime(2026, 10, 13, 18, 6, tzinfo=timezone.utc))
+    assert r['now'] == 'Tuesday 13 October 2026, 18:06 UTC (no timezone set)'
+
+
 def test_unknown_and_invalid_ask_without_guessing():
     for zone in ('', 'invalid/zone'):
         r = clock.clock_context(zone)

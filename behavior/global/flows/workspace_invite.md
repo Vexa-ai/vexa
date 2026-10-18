@@ -126,7 +126,10 @@ def mail_workspace_invite(ctx: StepCtx):
     # THE LINK TRAVELS AS THE PORT'S ARGUMENT, never inside the body. `notify.compose` puts it
     # last and on its own paragraph because a URL buried mid-paragraph is a URL nobody clicks,
     # and a step that hands over a URL should not also decide its typography.
-    mid = p.notify(to, subject, body, link=link)
+    mid = p.mail("workspace-invite", to, subject, body, link=link, db=db, uid=uid)
+    if mid is None:
+        return Done({"skipped": "mail.workspace-invite is off", "to": to,
+                     "workspace": workspace})
     # NO `register_thread`, and this is the deliberate half of the decision rather than the
     # forgotten half. That row exists to route a REPLY into an ongoing conversation, by thread,
     # for the subject who owns it (`flows_integrations/mailbox.py`) — and there is no such

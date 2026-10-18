@@ -35,6 +35,8 @@ REFUSAL = ("the admin account works on the company layer (_global) only — it h
 REFUSED: FrozenSet[RouteKey] = frozenset({
     # a workspace of its own, or one it would join
     ("POST", "/api/workspace/new"),
+    ("POST", "/api/workspace/create"),
+    ("POST", "/api/workspace/templates/save"),
     ("POST", "/api/workspace/init"),
     ("POST", "/api/workspace/import"),
     ("POST", "/api/workspace/activate"),
@@ -55,6 +57,7 @@ REFUSED: FrozenSet[RouteKey] = frozenset({
     # meetings
     ("GET", "/api/meeting/note"),
     ("POST", "/api/meeting/note"),
+    ("POST", "/api/meeting/note/attach"),
     ("GET", "/api/meeting/stream"),
     ("GET", "/api/meeting/terms"),
     ("POST", "/api/meeting/terms"),

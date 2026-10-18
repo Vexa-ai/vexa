@@ -52,11 +52,26 @@ EVENT_CLAIM_PROPOSED = "claim.proposed"
 # for a mail nobody needed.
 EVENT_WORKSPACE_INVITED = "workspace.invited"
 
+# #1783: somebody joined a workspace through its LINK (an open invite). Published once per join, for
+# the company's `workspace_joined` mail kind; the host is also told in the app by the accept route.
+# `uid` is the host (the link's maker) — the person this deployment holds settings for.
+EVENT_WORKSPACE_JOINED_VIA_LINK = "workspace.joined_via_link"
+
+# ADR-0047 d5: a workspace's whole set of links to CRM records at one commit, published by the
+# reconciler in control_plane/crm_references.py (off unless VEXA_CRM_REFERENCES_POLL_S is set).
+# Re-derivable from git at any time, so a publish that never lands costs one poll's backlinks.
+EVENT_WORKSPACE_REFERENCES_CHANGED = "workspace.references.changed"
+
 # THE FOURTH CARRIER — a scheduled routine was switched off because its runs kept being refused the
 # same way (`routine_refusals.py`). Like `desk.unscaffolded` it is re-derivable from the desk: the
 # routine file says `enabled: false` with a `paused_reason:` line, so a publish that never lands
 # loses the queue card and never the fact.
 EVENT_ROUTINE_PAUSED = "routine.paused"
+
+# One agent wrote to another agent's thread (ADR-0046 decision 13). Published by
+# `routers/agent_messages.py`, which needs flows' answer (the sender is told whether its message was
+# accepted), so it posts through its own caller rather than `publish()` below, which swallows.
+EVENT_THREAD_MESSAGE = "thread.message"
 
 #: Bounded on purpose. Both publishes run INSIDE a request a person is waiting on — a sign-in that
 #: provisions a desk, and an agent turn writing what it learned — so the ceiling on how slow flows
@@ -109,6 +124,26 @@ def publish(event_type: str, source_event_id: str, subject_refs: dict,
             return 200 <= r.status < 300
     except Exception:  # noqa: BLE001 — see the module docstring: a publish is not a dependency
         return False
+
+
+def mail_delivery(*, timeout: Optional[float] = None) -> str:
+    """WHAT THIS DEPLOYMENT DOES WITH MAIL — flows' `GET /mail/delivery`: `delivered`, `captured`
+    (a capture double; nothing reaches a real mailbox) or `unknown`. NEVER raises. Asked so an
+    answer to a person never says "mailed" for a mail nobody will receive."""
+    base = _flows_base()
+    if not base:
+        return "unknown"
+    headers = {}
+    key = _flows_key()
+    if key:
+        headers["X-Flows-Operator-Key"] = key
+    req = urllib.request.Request(f"{base}/mail/delivery", headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout or TIMEOUT_S) as r:  # noqa: S310
+            mode = str((json.loads(r.read() or b"{}") or {}).get("delivery") or "")
+    except Exception:  # noqa: BLE001 — not knowing is "unknown"
+        return "unknown"
+    return mode if mode in ("delivered", "captured") else "unknown"
 
 
 def desk_source_id(subject) -> str:
@@ -185,6 +220,20 @@ def publish_invite(fact: dict, *, timeout: Optional[float] = None) -> bool:
                    invite_refs(fact), timeout=timeout)
 
 
+def joined_refs(fact: dict) -> dict:
+    """The refs of `workspace.joined_via_link`, every value a string."""
+    f = fact or {}
+    return {k: str(f.get(k) or "") for k in
+            ("uid", "joiner", "joiner_name", "joiner_email", "workspace", "workspace_name", "link_id")}
+
+
+def publish_joined_via_link(fact: dict, *, timeout: Optional[float] = None) -> bool:
+    """Hand ONE join-by-link to flows, keyed to (workspace, joiner): a person joins a workspace once."""
+    refs = joined_refs(fact)
+    return publish(EVENT_WORKSPACE_JOINED_VIA_LINK, f"joined-{refs['workspace']}-{refs['joiner']}",
+                   refs, timeout=timeout)
+
+
 # --- friction: a direct HTTP client of flows OWN /friction route (#1510) -------------------
 # NOT the generic /events intake above, and deliberately so. `friction.reported`s producing
 # domain is FLOWS ITSELF -- flows-api's POST /friction admits it in-process, no publish-edge,
@@ -194,8 +243,8 @@ def publish_invite(fact: dict, *, timeout: Optional[float] = None) -> bool:
 # not only this one's: "a carrier has exactly ONE producing domain, and a second producer is
 # how a consumer that must act once acts twice"). So agent-api's own `POST /api/friction`
 # (`routers/friction.py`) and the refused-model-endpoint path (`Dispatcher.attach_friction`)
-# are HTTP CLIENTS of flows' existing route -- exactly the same shape the rig's
-# `report_friction` already uses (`deploy/dogfood/rig/vexa_control_mcp.py`) -- never a second
+# are HTTP CLIENTS of flows' existing route -- exactly the same shape the one MCP's
+# `report_friction` already uses (`core/flows/mcp.tools.v1.json`) -- never a second
 # producer registered anywhere. This reuses the identical VEXA_FLOWS_API_URL/VEXA_FLOWS_API_KEY
 # pair desk.unscaffolded/claim.proposed already declare as a publish edge: same deploy surface,
 # same credential, a different kind of call over it.

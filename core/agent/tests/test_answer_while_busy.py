@@ -149,3 +149,74 @@ def test_a_submission_does_not_step_the_mount_generation(client, fake_redis):
     # The next turn started on an idle chat takes the new generation, as before.
     r = client.post("/api/chat", headers=_HEADERS, json={"session": "main", "prompt": "next"})
     assert r.headers["x-unit-id"] == units.chat_unit_id("u1", "main", 1)
+
+
+def _read_fresh(frames: list[dict]) -> list[dict]:
+    """`_read_frames`, as the view of a turn this request just dispatched (`fresh=True`)."""
+    import shared.adapters as adapters
+    orig = adapters.RedisStreamReader.read
+
+    def fresh_read(self, unit_id, *, resume=None, fresh=False):
+        return orig(self, unit_id, resume=resume, fresh=True)
+    adapters.RedisStreamReader.read = fresh_read
+    try:
+        return _read_frames(frames)
+    finally:
+        adapters.RedisStreamReader.read = orig
+
+
+def test_a_fresh_turns_view_does_not_close_on_the_previous_turns_tail():
+    """The flaky "a new turn continues the chat" row: the client stopped reading t1 at its `done`
+    and sent t2 at once. The view for t2 attaches at the pre-dispatch tail, so t1's write-back and
+    `turn-complete` arrive on it BEFORE t2 is accepted — and the view closed there, with no answer."""
+    frames = [
+        {"type": "tool-call", "tool": "Write", "turn_id": "t1"},   # t1's write-back, still running
+        {"type": "turn-complete", "turn_id": "t1"},                 # the old view closed HERE
+        {"type": "turn-accepted", "turn_id": "t2"},
+        {"type": "message-delta", "text": "PELICAN", "turn_id": "t2"},
+        {"type": "done", "ok": True, "turn_id": "t2"},
+        {"type": "turn-complete", "turn_id": "t2"},
+        {"type": "message-delta", "text": "never read", "turn_id": "t3"},
+    ]
+    got = _read_fresh(frames)
+    assert [(e["type"], e.get("turn_id")) for e in got][-3:] == [
+        ("message-delta", "t2"), ("done", "t2"), ("turn-complete", "t2")]
+    assert all(e.get("turn_id") != "t3" for e in got)
+
+
+def test_a_fresh_message_injected_into_a_running_turn_closes_with_that_turn():
+    """An injected message starts no turn of its own: its view closes on the running turn's end."""
+    frames = [
+        {"type": "turn-accepted", "nonce": "n2", "injected": True},
+        {"type": "message-delta", "text": "both", "turn_id": "t1"},
+        {"type": "turn-complete", "turn_id": "t1"},
+        {"type": "message-delta", "text": "never read", "turn_id": "t2"},
+    ]
+    assert [e["type"] for e in _read_fresh(frames)] == ["turn-accepted", "message-delta", "turn-complete"]
+
+
+def test_the_chat_route_opens_a_fresh_turns_view_as_fresh():
+    """The relay tells the reader which view belongs to a turn it just dispatched."""
+    from control_plane.routers import chats
+
+    seen = []
+
+    class _Reader:
+        def read(self, unit_id, *, resume=None, fresh=False):
+            seen.append(fresh)
+            return iter(())
+
+    list(chats._read_view(_Reader(), "u", "1-0", fresh=True))
+    list(chats._read_view(_Reader(), "u", "1-0", fresh=False))
+    assert seen == [True, False]
+
+
+def test_every_stream_reader_fake_takes_the_ports_fresh():
+    """The relay calls the `StreamReader` port as declared (`fresh` included) and does not inspect
+    signatures to tolerate a fake that predates it, so every fake in the suite takes it."""
+    import pathlib
+    import re
+
+    stale = [str(p.name) for p in pathlib.Path(__file__).parent.glob("test_*.py")
+             if re.search(r"def read\(self, unit_id(?![^)]*fresh)[^)]*\)", p.read_text())]
+    assert stale == []

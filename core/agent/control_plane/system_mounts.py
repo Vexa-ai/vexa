@@ -13,10 +13,11 @@ active set (the ``_global`` read-only base and the ``_system`` per-user private 
         "let it be empty with no data - it's fine"). Mount HEAD; a pinned ref is supported via
         ``GLOBAL_SYSTEM_WORKSPACE_REF`` (default the repo's HEAD/main).
 
-  2. ``/workspaces/_system``  PRIVATE SYSTEM — per-user, READ-WRITE, ALWAYS mounted. Chats/sessions,
-        settings, routines, membership/attachment records, credential refs. Private, never shareable.
-        CREATE-IF-ABSENT from a THIN template (layout only; behaviour lives in _global). Chats MIGRATE
-        here in a LATER WP — this WP only establishes the mount.
+  2. ``/workspaces/_system``  PRIVATE SYSTEM — per-user, READ-WRITE, ALWAYS mounted. Who you help
+        (``identity.md``), settings, routines, membership/attachment records, credential refs. Private,
+        never shareable. CREATE-IF-ABSENT from a THIN template (layout only; behaviour lives in
+        _global). CONVERSATIONS ARE NOT HERE: with the session store on (ADR-0048) every chat lives in
+        the store, apart from all workspaces; ``session_migrate --clean --retire`` moves old ones out.
 
 The normal active set (WP-A2.1: the subject's private baseline + activated extras) sits BETWEEN these as
 the middle tier; ``dispatch.build_mount_set`` composes the full stack ``[_global, *active, _system]``.
@@ -24,7 +25,7 @@ the middle tier; ``dispatch.build_mount_set`` composes the full stack ``[_global
 Pure + path-driven so the mount stack is unit-tested offline (no docker/kubectl): both builders take a
 ``workspaces_dir`` root + settings-like knobs and return the ``{slug, path, role, write, primary}`` mount
 dicts the runtime backends already understand (an out-of-store ``_global`` path becomes its own bind; the
-in-store ``_system`` path rides the store-root bind — see ``runtime_kernel.mounts``).
+in-store ``_system`` path is bound as its own store subpath — see ``runtime_kernel.mounts``).
 """
 from __future__ import annotations
 
@@ -67,7 +68,19 @@ _IDENTITY_STUB = (
 )
 
 
-def global_root(settings, root: "str | Path | None" = None) -> Path:
+def global_root(settings, root: "str | Path | None" = None, org: "str | None" = None) -> Path:
+    """WHERE THE ORG'S POLICY TIER IS — through the org (architecture A1, ``orgs.policy_root``).
+
+    ``org`` None is the default org, whose policy source is the install's ``_global``
+    (:func:`install_global_root`), so every caller that names no org gets exactly the answer it got
+    before orgs existed. An org this install does not know raises ``orgs.UnknownOrg`` — it is never
+    answered with the default org's tier."""
+    from control_plane import orgs  # noqa: PLC0415 — orgs resolves the install tier through here
+
+    return orgs.policy_root(settings, root, org)
+
+
+def install_global_root(settings, root: "str | Path | None" = None) -> Path:
     """WHERE ``_global`` IS, on this service's filesystem — the one answer every reader, every writer
     and the worker mount use.
 
@@ -198,7 +211,7 @@ def ensure_system_workspace(root: str, subject: str, *, seed_dir: Optional[Path]
     an existing ``.system/<subject>`` is returned untouched. Materialized from a THIN template (layout
     only — behaviour lives in _global): when ``seed_dir`` is given its tree is copied; otherwise a bare
     git repo with a single ``README`` marker is created. Either way it ends as a git repo with a HEAD so
-    a turn can commit onto it (chats migrate here in a later WP)."""
+    a turn can commit onto it."""
     home = _system_store(Path(root), subject)
     if (home / ".git").exists():
         return home
@@ -208,14 +221,8 @@ def ensure_system_workspace(root: str, subject: str, *, seed_dir: Optional[Path]
         wpaths.copy_tree_inside(Path(seed_dir), home)
     else:
         # The thin template: a marker + the LIGHT identity reference so the repo is non-empty and the
-        # agent always knows who it is helping. Chats/sessions, settings, routines, membership records
-        # land here in later WPs.
-        wpaths.write_text_inside(home, "README.md",
-            "# Private system workspace\n\n"
-            "Per-user, read-write, always mounted. Holds who you're helping (`identity.md`),\n"
-            "chats/sessions, settings, routines, membership/attachment records, and credential refs.\n"
-            "Private — never shareable.\n"
-        )
+        # agent always knows who it is helping. Conversations are never kept here (ADR-0048).
+        wpaths.write_text_inside(home, "README.md", SYSTEM_README)
         wpaths.write_text_inside(home, "identity.md", _IDENTITY_STUB)
     for args in (("init", "-q"), ("config", "user.email", "agent@vexa"), ("config", "user.name", "vexa-agent")):
         run_git(home, *args, check=True)
@@ -224,10 +231,43 @@ def ensure_system_workspace(root: str, subject: str, *, seed_dir: Optional[Path]
     return home
 
 
+#: The stock README of a private system tier. Conversations are NOT here: they live in the session
+#: store (ADR-0048), read with `chats_search` / `chat_read`.
+SYSTEM_README = (
+    "# Private system workspace\n\n"
+    "Per-user, read-write, always mounted. Holds who you're helping (`identity.md`) and your\n"
+    "settings. Private — never shareable.\n\n"
+    "Chats are not here: every conversation is kept in the session store, apart from all\n"
+    "workspaces. Find or read one with `chats_search` and `chat_read`.\n"
+)
+#: The README this tier was seeded with before the session store; `refresh_system_readme` replaces
+#: it, byte for byte only — a README the person or their agent edited is never touched.
+OLD_SYSTEM_README = (
+    "# Private system workspace\n\n"
+    "Per-user, read-write, always mounted. Holds who you're helping (`identity.md`),\n"
+    "chats/sessions, settings, routines, membership/attachment records, and credential refs.\n"
+    "Private — never shareable.\n"
+)
+
+
+def refresh_system_readme(root, subject: str) -> bool:
+    """Replace the old stock README of ``subject``'s system tier (it said chats live there) with
+    ``SYSTEM_README``, committing it when the tier is a repo. True when it was replaced."""
+    home = _system_store(Path(root), subject)
+    if wpaths.read_text_inside(home, "README.md", max_bytes=1 << 12) != OLD_SYSTEM_README:
+        return False
+    wpaths.write_text_inside(home, "README.md", SYSTEM_README)
+    if (home / ".git").is_dir():
+        run_git(home, "add", "README.md", check=False)
+        run_git(home, "-c", "user.email=agent@vexa", "-c", "user.name=vexa-agent", "commit", "-q",
+                "-m", "system workspace: chats are kept in the session store", "--", "README.md", check=False)
+    return True
+
+
 def system_mount(root: str, subject: str, *, seed_dir: Optional[Path] = None) -> dict:
     """The PRIVATE SYSTEM tier (``_system``) — READ-WRITE, ALWAYS mounted. Ensures the workspace exists
     (create-if-absent), then returns its mount dict at ``<root>/_system``. Its on-disk home is under the
-    store's ``.system/<subject>`` namespace (an IN-STORE path → rides the store-root bind, no extra bind);
+    store's ``.system/<subject>`` namespace (an IN-STORE path → bound as that one store subpath);
     ``path`` is that home so the runtime binds the bytes and the harness declares the container path.
 
     Note the container-facing path is the store home itself (``.system/<subject>``); the worker sees it as

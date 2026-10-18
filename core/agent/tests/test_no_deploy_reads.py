@@ -39,9 +39,6 @@ SEGMENT = "dogfood"
 #: file (repo-relative) -> why it may read a deploy surface. One line each, and it should be
 #: uncomfortable to add one.
 ALLOWED = {
-    "core/agent/tests/test_secrets_key_profile.py":
-        "asserts a secret key reaches the container — a claim about the deploy surface itself, "
-        "which has no in-core copy that could be true",
     "core/flows/eval/dna/replay.py":
         "an eval CLI reading a file in the OPERATOR'S HOME (~/dev/estate/...), not this repo — a "
         "different failure class: it makes nothing inseparable, it just does not run elsewhere",

@@ -4,7 +4,7 @@ The founder asked that the "Send Vexa to a meeting" chip go: a link pasted into 
 simply send the bot. Before this, a bare link reached the model like any other sentence and the send
 depended on the model choosing to make it. These tests run the real turn engine against a real local
 streamable-HTTP MCP stub that parses with the product's own link parser
-(`core/meetings/services/mcp/src/vexa_mcp/link_parser.py`) and keeps meeting-api's one rule that
+(`core/gateway/services/mcp/src/vexa_mcp/link_parser.py`) and keeps meeting-api's one rule that
 matters here — one active bot per person per meeting.
 
 What is proven, against the old code where each of these fails:
@@ -32,7 +32,7 @@ from shared.marks import MACHINERY_MARK, act_mark, job_mark
 from worker import meeting_link
 
 _PARSER = (pathlib.Path(__file__).resolve().parents[3]
-           / "core/meetings/services/mcp/src/vexa_mcp/link_parser.py")
+           / "core/gateway/services/mcp/src/vexa_mcp/link_parser.py")
 _spec = importlib.util.spec_from_file_location("vexa_mcp_link_parser", _PARSER)
 link_parser = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = link_parser          # pydantic resolves the module's annotations by name

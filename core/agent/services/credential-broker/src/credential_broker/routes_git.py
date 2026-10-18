@@ -7,7 +7,7 @@ to the git role.
 Who may read which name is decided from the gateway's signature, not from agent-api: the middleware
 has verified the forwarded X-Vexa-Identity and required its subject to be the assertion's actor, so
 ``who["actor"]`` is the signed person and ``who["memberships"]`` the shared workspaces signed with
-them. A name is then theirs when it is ``pat/<person>`` or ``deploy/user-<person>.(priv|pub)``, or
+them. A name is then theirs when it is ``pat/<person>``, ``pat/<person>/<git provider>``, or ``deploy/user-<person>.(priv|pub)``, or
 ``deploy/ws-<id>.(priv|pub)`` for an ``<id>`` among those memberships.
 """
 from __future__ import annotations
@@ -29,7 +29,8 @@ def owned_by(name: str, person: str, memberships: frozenset) -> bool:
     if ".." in name:
         return False
     if name.startswith("pat/"):
-        return name[len("pat/"):] == person
+        # ``pat/<person>`` (the built-in GitHub provider) or ``pat/<person>/<provider>``.
+        return name[len("pat/"):].split("/", 1)[0] == person
     match = _DEPLOY.fullmatch(name)
     if not match:
         return False

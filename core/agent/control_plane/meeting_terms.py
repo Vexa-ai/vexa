@@ -147,7 +147,12 @@ def _locate(workspaces_root, subject: str, meeting_id) -> "tuple[Path, str] | No
     subj = str(subject or "").strip()
     if not _SAFE.match(mid) or not _SAFE.match(subj):
         return None
-    return Path(workspaces_root) / subj, f"{TERMS_DIR}/{mid}.json"
+    # the person's HOME (#1783) — Personal while it is on, never a switched-off one
+    from control_plane.workspace_attach import home_dir  # noqa: PLC0415
+    try:
+        return home_dir(workspaces_root, subj), f"{TERMS_DIR}/{mid}.json"
+    except Exception:  # noqa: BLE001 — ValueError (subject) or NoHome (Personal hidden, no target)
+        return None
 
 
 def read(workspaces_root, subject: str, meeting_id) -> dict:

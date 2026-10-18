@@ -25,7 +25,7 @@ import re
 import secrets
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -94,6 +94,11 @@ class ActiveMount:
     write: bool = True  # the subject may always write their own private workspaces; membership gates land later
     primary: bool = False  # True == the DEFAULT HOME (first active workspace = the turn's cwd); dynamic, not a rank
     name: Optional[str] = None  # the DISPLAY label (switcher rename), so KNOWLEDGE shows the same name as the switcher — not the raw slug
+    #: THE PERSON'S OWN DESK — the tree at ``<root>/<subject>`` (Vexa-ai/vexa#1783, founder 2026-10-15:
+    #: "badges disagree personal = biz"). Not the same fact as ``primary``: primary is merely the first
+    #: active member (the turn's cwd), and when that is an attached repo, calling it "Personal" named a
+    #: biz clone after the desk. Personal is the desk, always, and this is how every reader knows it.
+    desk: bool = False
 
 
 @dataclass(frozen=True)
@@ -441,10 +446,12 @@ def active_workspaces(root: str | Path, subject: str) -> list[ActiveMount]:
     _safe_subject_dir(rootp, subject)
     store = _store(rootp, subject)
     state = _load_state(store)
-    ordered = _normalized_active_set(state)
+    hidden = _hidden_of(state)
+    ordered = [s for s in _normalized_active_set(state) if s not in hidden]   # HIDDEN is never mounted
     # No baseline: ``primary`` marks the DEFAULT HOME — the first active workspace (the cwd a turn opens in).
     # It is dynamic (moves as workspaces are activated/deactivated), not a fixed rank; empty set ⇒ no home.
     home = ordered[0] if ordered else None
+    desk_slug = _seed_slot_slug(state)
     mounts: list[ActiveMount] = []
     for slug in ordered:
         slot = state["slots"].get(slug, {})
@@ -457,6 +464,7 @@ def active_workspaces(root: str | Path, subject: str) -> list[ActiveMount]:
             write=True,
             primary=(slug == home),
             name=(slot.get("name") or "").strip() or None,   # the switcher's display label (rename), if set
+            desk=(slug == desk_slug),
         ))
     return mounts
 
@@ -508,11 +516,33 @@ def set_shared_active(root: str | Path, subject: str, workspace_id: str, active:
     state = _load_state(store)
     hidden = set(state.get("hidden_shared", []))
     if active:
+        if workspace_id in _hidden_of(state):
+            return      # a HIDDEN workspace comes back only by unhiding it (set_workspace_state)
         hidden.discard(workspace_id)
     else:
         hidden.add(workspace_id)
     state["hidden_shared"] = sorted(hidden)
     _save_state(store, state)
+
+
+def own_private_slot(root: str | Path, subject: str, slug: Optional[str]) -> Optional[dict]:
+    """The subject's OWN private, non-primary workspace slot named ``slug`` — its slot record
+    (``name``, ``repo``…) — or ``None``. The primary (personal) workspace, the seed slots, a shared
+    workspace and anything that is not one of this subject's slots all answer ``None``. Never
+    raises: a question about a slug is not a reason to fail the request asking it."""
+    target = (slug or "").strip()
+    if not target or target in (str(subject), PERSONAL_ALIAS, SEED_SLOT, SEED_BACKUP_SLOT):
+        return None
+    try:
+        rootp = Path(root)
+        _safe_subject_dir(rootp, subject)
+        state = _load_state(_store(rootp, subject))
+    except Exception:  # noqa: BLE001
+        return None
+    if target == _seed_slot_slug(state):
+        return None
+    slot = (state.get("slots") or {}).get(target)
+    return dict(slot) if isinstance(slot, dict) else None
 
 
 def ensure_workspace_shareable(root: str | Path, subject: str, slug: str) -> tuple[str, bool]:
@@ -581,8 +611,13 @@ def set_archived(root: str | Path, subject: str, slug: str, archived: bool) -> N
         raise KeyError(slug)
     slot["archived"] = bool(archived)
     state["slots"][slug] = slot
+    hidden = {str(s) for s in (state.get("hidden") or [])}
     if archived:
         state["active_set"] = [s for s in state.get("active_set", []) if s != slug]
+        hidden.add(slug)                     # ARCHIVED IS HIDDEN (see WORKSPACE STATES)
+    else:
+        hidden.discard(slug)
+    state["hidden"] = sorted(hidden)
     _save_state(store, state)
 
 
@@ -603,7 +638,32 @@ def delete_workspace(root: str | Path, subject: str, slug: str) -> None:
         wpaths.remove_tree(slot_dir, ignore_errors=True)
     state["slots"].pop(slug, None)
     state["active_set"] = [s for s in state.get("active_set", []) if s != slug]
+    state["hidden"] = sorted(s for s in (state.get("hidden") or []) if s != slug)
     _save_state(store, state)
+
+
+def delete_shared_workspace(root: str | Path, subject: str, workspace_id: str) -> None:
+    """DELETE a SHARED workspace's tree for everyone — its pages, history and parked repositories
+    (Vexa-ai/vexa#1783). The caller must be its owner and must have confirmed the other members by
+    name; both are the ROUTE's checks. The same guards as un-sharing: never a person's desk, never a
+    private store, never a system tier, never a path outside ``root``. Memberships, invites and the
+    registry row are the caller's to clear."""
+    rootp = Path(root).resolve()
+    _safe_subject_dir(rootp, subject)
+    from control_plane import workspace_membership as membership
+    if (not wpaths.is_workspace_name(workspace_id or "", tier=False)
+            or workspace_id in membership.RESERVED_SLUGS):
+        raise KeyError(workspace_id)
+    if (workspace_id == subject or (rootp / STORE_DIRNAME / workspace_id).is_dir()
+            or (rootp / ".system" / workspace_id).is_dir()):
+        raise KeyError(workspace_id)
+    ws = (rootp / workspace_id).resolve()
+    if not ws.is_dir() or rootp not in ws.parents:
+        raise KeyError(workspace_id)
+    wpaths.remove_tree(ws)
+    parked = (rootp / SHARED_STORE_DIRNAME / workspace_id)
+    if parked.is_dir() and rootp in parked.resolve().parents:
+        wpaths.remove_tree(parked, ignore_errors=True)
 
 
 def ensure_workspace_private(root: str | Path, subject: str, workspace_id: str) -> str:
@@ -637,7 +697,8 @@ def ensure_workspace_private(root: str | Path, subject: str, workspace_id: str) 
     return new_slug
 
 
-def shared_active_mounts(root: str | Path, subject: str, memberships: list[dict]) -> list[ActiveMount]:
+def shared_active_mounts(root: str | Path, subject: str, memberships: list[dict], *,
+                         include_off: bool = False) -> list[ActiveMount]:
     """The SHARED workspaces the subject is a MEMBER of (Lane A) — the seam that turns a membership grant
     into a mount in the active set. ``memberships`` is the derived index ``users.data.memberships[]`` (each
     ``{workspace_id, role, ...}``), used ONLY to ENUMERATE candidate workspaces; the role that gates WRITE
@@ -653,7 +714,9 @@ def shared_active_mounts(root: str | Path, subject: str, memberships: list[dict]
     from control_plane import workspace_membership as membership
 
     rootp = Path(root).resolve()  # resolve up front so the traversal guard compares like-for-like (macOS /var→/private/var)
-    hidden = hidden_shared_set(rootp, subject)  # workspaces the subject switched OFF (not mounted until re-enabled)
+    # Switched OFF (inactive) or HIDDEN are not mounted. ``include_off`` is a chat that NAMED an
+    # inactive one in its own reads (``chat_read_mounts``): inactive is a default, hidden is not.
+    hidden = hidden_set(rootp, subject) | (set() if include_off else hidden_shared_set(rootp, subject))
     mounts: list[ActiveMount] = []
     for entry in memberships:
         ws_id = (entry.get("workspace_id") or "").strip() if isinstance(entry, dict) else ""
@@ -679,6 +742,66 @@ def shared_active_mounts(root: str | Path, subject: str, memberships: list[dict]
             name=ws_id,  # a shared workspace's id IS its name (no per-user rename label)
         ))
     return mounts
+
+
+def chat_read_mounts(root: str | Path, subject: str, reads: list[str],
+                     memberships: Optional[list[dict]]) -> list[ActiveMount]:
+    """The mounts a chat with its OWN reads gets (Vexa-ai/vexa#1783): exactly the workspaces it names,
+    in its order, the personal one first when named. Inactive ones may be named (inactive is only the
+    default for new chats); HIDDEN ones never mount, and a shared one mounts only for a member, with
+    the write bit from its authoritative roster (``shared_active_mounts``). Nothing outside ``reads``."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    state = _load_state(_store(rootp, subject))
+    hidden = _hidden_of(state)
+    personal = _personal_names(state, subject)
+    seed = _seed_slot_slug(state)
+    # "personal" IS THE DESK (one name per workspace id) — and a desk the person HID (switched off,
+    # deleted) is NOTHING: it is not mounted and nothing stands in for it (#1783, founder 2026-10-15:
+    # after he deleted Personal, every chat naming "personal" still mounted and wrote it).
+    seed_hidden = seed in hidden
+    wanted: list[str] = []
+    for r in reads or []:
+        w = str(r or "").strip()
+        if w in personal:
+            if seed_hidden:
+                continue
+            w = seed
+        if w and w not in wanted:
+            wanted.append(w)
+    out: list[ActiveMount] = []
+    if seed in wanted and seed not in hidden:
+        slot = state["slots"].get(seed, {})
+        out.append(ActiveMount(slug=seed, repo=slot.get("repo"), ref=slot.get("ref"), role=PRIVATE_ROLE,
+                               path=str(_slug_dir(rootp, subject, state, seed)), write=True, primary=True,
+                               name=(slot.get("name") or "").strip() or None, desk=True))
+    shared_wanted = []
+    for w in wanted:
+        if w == seed:
+            continue
+        if w in (state.get("slots") or {}):
+            if w in hidden or w == SEED_SLOT:
+                continue
+            try:
+                path = _slug_dir(rootp, subject, state, w)
+            except KeyError:
+                continue
+            if not path.exists():
+                continue
+            slot = state["slots"].get(w, {})
+            out.append(ActiveMount(slug=w, repo=slot.get("repo"), ref=slot.get("ref"), role=PRIVATE_ROLE,
+                                   path=str(path), write=True, primary=False,
+                                   name=(slot.get("name") or "").strip() or None))
+        else:
+            shared_wanted.append(w)
+    if shared_wanted and memberships is not None:
+        rows = [m for m in memberships if isinstance(m, dict)
+                and str(m.get("workspace_id") or "").strip() in shared_wanted]
+        by = {m.slug: m for m in shared_active_mounts(rootp, subject, rows, include_off=True)}
+        out.extend(by[w] for w in shared_wanted if w in by)
+    if out and not any(m.primary for m in out) and out[0].role == PRIVATE_ROLE:
+        out[0] = replace(out[0], primary=True)   # the home is the first own one
+    return out
 
 
 def activate_workspace(
@@ -764,6 +887,34 @@ def _unique_new_slug(state: dict) -> str:
     return f"{NEW_SLUG_PREFIX}-{n}"
 
 
+#: Words a NAMED workspace's slug never takes, because they already mean something when a verb
+#: names a workspace: the person's own desk, the platform tiers, the seed slots.
+_UNNAMEABLE_SLUGS = frozenset({PERSONAL_ALIAS, "desk", SEED_SLOT, SEED_BACKUP_SLOT,
+                               "sys", "system", "_system", "global", "_global", "shared", "new"})
+
+
+def _named_new_slug(state: dict, subject: str, name: str) -> Optional[str]:
+    """The slug a NAMED new workspace is addressed by: its name, kebab-cased and made unique among
+    the subject's slots (``eugenia-dmitry``, then ``eugenia-dmitry-2``) — so "create a workspace
+    called X" gives the agent a slug the person would recognise, instead of ``workspace-1``.
+    ``None`` when the name yields nothing usable (all punctuation, a reserved word, a bare number
+    that could read as a person's id); the caller then falls back to the numbered slug."""
+    full = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+    base = full[:40].strip("-")
+    if len(full) > 40 and full[40] != "-" and "-" in base:
+        base = base.rsplit("-", 1)[0]       # never cut a word in half (Vexa-ai/vexa#1783)
+    if not base or base.isdigit() or base in _UNNAMEABLE_SLUGS or base == str(subject):
+        return None
+    if not wpaths.is_workspace_name(base, tier=False):
+        return None
+    taken = set(state.get("slots", {})) | {SEED_SLOT, SEED_BACKUP_SLOT, _seed_slot_slug(state)}
+    slug, n = base, 2
+    while slug in taken:
+        slug = f"{base}-{n}"
+        n += 1
+    return slug
+
+
 def _unique_new_name(state: dict, base: str = DEFAULT_NEW_NAME) -> str:
     """A display name not already used by another slot: ``New workspace``, then ``New workspace 2``, …
     Keeps the list readable when several blanks are created (labels are only cosmetic, so a soft-unique
@@ -782,6 +933,7 @@ def create_workspace(
     subject: str,
     *,
     name: Optional[str] = None,
+    slug: Optional[str] = None,
 ) -> ActiveResult:
     """CREATE a brand-new BLANK workspace, seeded from the validated template, at a fresh unique slug and
     ADD it to the subject's active set (the additive-model counterpart of "start fresh" — WP-A1).
@@ -797,7 +949,18 @@ def create_workspace(
     store = _store(rootp, subject)
     state = _load_state(store)
 
-    target_slug = _unique_new_slug(state)
+    if slug:
+        # A CHOSEN SLUG (Vexa-ai/vexa#1783): taken as given, or refused — never silently changed.
+        chosen = slug.strip()
+        taken = set(state.get("slots", {})) | {SEED_SLOT, SEED_BACKUP_SLOT, _seed_slot_slug(state)}
+        if (not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", chosen) or chosen in _UNNAMEABLE_SLUGS
+                or chosen == str(subject) or chosen.isdigit()):
+            raise ValueError("a slug is lowercase letters, digits and dashes, and not a reserved word")
+        if chosen in taken:
+            raise FileExistsError(chosen)
+        target_slug = chosen
+    else:
+        target_slug = _named_new_slug(state, subject, name or "") or _unique_new_slug(state)
     slot_dir = store / target_slug
 
     # Materialize OUT OF PLACE, then move into the slot — a seeding failure leaves the active set untouched
@@ -886,6 +1049,307 @@ def _backup_default(store: Path, src: Path, state: dict) -> None:
         "repo": None, "ref": None,
         "name": f"{prev_name} (previous)" if prev_name else "default (previous)",
     }
+
+
+# ── WORKSPACE STATES (Vexa-ai/vexa#1783, founder 2026-10-14) ─────────────────────────────────────────
+#
+# *"I can't use the software if the pile of workspaces is growing, I can't get rid of them, and I can't
+# properly manage agent context."* Every workspace a person has is in exactly one of three states, per
+# person, kept HERE — this attach state is the one store, extended rather than joined by a second:
+#
+#   ACTIVE    mounted by default: in ``active_set`` (their own) / not switched off (a shared one).
+#   INACTIVE  listed, not mounted: off ``active_set`` / in ``hidden_shared`` (the per-member switch).
+#   HIDDEN    not mounted, not listed, the agent is not told about it — reversible, history kept. In
+#             ``hidden`` (one list for own and shared alike). The old per-slot ``archived`` flag was the
+#             same state under another name and reads as hidden, so nothing needs migrating.
+#
+# Hiding a SHARED workspace is the member's own preference: membership and every other member's view
+# are untouched. The PERSONAL workspace is never hidden (nor shared, nor deleted) — it is where a chat
+# with nothing else to write to writes. Unhide means ACTIVE again.
+
+STATES = ("active", "inactive", "hidden")
+PERSONAL_REFUSAL = ("your personal workspace can't be deleted or shared. You can hide it instead: it is "
+                    "then not mounted, not listed, and nothing writes to it (say \"hide Personal\"; "
+                    "\"show Personal again\" brings it back)")
+
+
+def _hidden_of(state: dict) -> set[str]:
+    """The ids this person HID: the ``hidden`` list ∪ every slot still carrying the old ``archived``."""
+    out = {str(s) for s in (state.get("hidden") or []) if isinstance(s, str)}
+    for slug, slot in (state.get("slots") or {}).items():
+        if isinstance(slot, dict) and slot.get("archived"):
+            out.add(slug)
+    return out
+
+
+def hidden_set(root: str | Path, subject: str) -> set[str]:
+    """The workspaces ``subject`` hid (own and shared). Fails soft to empty: a read of the set never
+    breaks the read it decorates."""
+    try:
+        rootp = Path(root)
+        _safe_subject_dir(rootp, subject)
+        return _hidden_of(_load_state(_store(rootp, subject)))
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _personal_names(state: dict, subject: str) -> set[str]:
+    return {PERSONAL_ALIAS, str(subject), SEED_SLOT, _seed_slot_slug(state)}
+
+
+def workspace_states(root: str | Path, subject: str, memberships: list[dict]) -> list[dict]:
+    """Every workspace ``subject`` has, with its STATE: ``{slug, kind, state}`` — the personal one
+    first (slug ``personal``), then their own, then each shared one in ``memberships`` (enumeration
+    only; the caller has already reconciled the membership stores). Hidden ones are included: this is
+    the one answer the state verbs and "show hidden" read."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    state = _load_state(_store(rootp, subject))
+    active = set(_normalized_active_set(state))
+    hidden = _hidden_of(state)
+    off_shared = {str(s) for s in (state.get("hidden_shared") or [])}
+    seed = _seed_slot_slug(state)
+    rows = [{"slug": PERSONAL_ALIAS, "kind": "personal",
+             "state": "hidden" if seed in hidden else ("active" if seed in active else "inactive")}]
+    for slug in sorted(state.get("slots") or {}):
+        if slug in (seed, SEED_SLOT) or not isinstance(state["slots"].get(slug), dict):
+            continue
+        st = "hidden" if slug in hidden else ("active" if slug in active else "inactive")
+        rows.append({"slug": slug, "kind": "private", "state": st})
+    seen = {r["slug"] for r in rows}
+    from control_plane import workspace_membership as membership
+    for entry in memberships or []:
+        wid = str((entry or {}).get("workspace_id") or "").strip() if isinstance(entry, dict) else ""
+        if (not wid or wid in seen or wid == str(subject) or wid in membership.RESERVED_SLUGS
+                or not wpaths.is_workspace_name(wid)):
+            continue
+        st = "hidden" if wid in hidden else ("inactive" if wid in off_shared else "active")
+        rows.append({"slug": wid, "kind": "shared", "state": st,
+                     "role": (entry.get("role") or "member")})
+        seen.add(wid)
+    return rows
+
+
+def set_workspace_state(root: str | Path, subject: str, slug: str, new_state: str) -> bool:
+    """Put ONE workspace in ``new_state`` (``active`` · ``inactive`` · ``hidden``) for ``subject``; returns
+    whether anything changed. Raises ``ValueError`` for a state that is not one, and for hiding the
+    personal workspace (``PERSONAL_REFUSAL``); ``KeyError`` for a workspace this person does not have.
+
+    A SHARED id is any top-level workspace — membership is the ROUTE's question (activating needs it,
+    switching off or hiding never does, which is how a person clears one they were removed from)."""
+    if new_state not in STATES:
+        raise ValueError(f"state must be one of {', '.join(STATES)}")
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+    slug = (slug or "").strip()
+    before = json.dumps(state, sort_keys=True)
+    hidden = _hidden_of(state)
+    seed = _seed_slot_slug(state)
+
+    def _unhide(s: str) -> None:
+        hidden.discard(s)
+        slot = state["slots"].get(s)
+        if isinstance(slot, dict) and slot.get("archived"):
+            slot["archived"] = False
+
+    if slug in _personal_names(state, subject):
+        # PERSONAL CAN BE HIDDEN (founder 2026-10-15), never deleted or shared: hidden, it is not
+        # mounted, not listed, not a chat's target, and the desk writers have nowhere to write.
+        aset = _normalized_active_set(state)
+        if new_state == "active":
+            hidden.discard(seed)
+            if seed not in aset:
+                state["active_set"] = [*aset, seed]
+        elif new_state == "inactive":
+            hidden.discard(seed)
+            state["active_set"] = [s for s in aset if s != seed]
+        else:
+            hidden.add(seed)
+            state["active_set"] = [s for s in aset if s != seed]
+    elif slug in (state.get("slots") or {}) and slug != SEED_SLOT:
+        aset = _normalized_active_set(state)
+        if new_state == "active":
+            _unhide(slug)
+            if slug not in aset:
+                if not _slot(store, slug).exists():
+                    raise KeyError(slug)          # a slot record with no tree is nothing to mount
+                aset = [*aset, slug]
+        else:
+            aset = [s for s in aset if s != slug]
+            if new_state == "hidden":
+                hidden.add(slug)
+                state["slots"][slug]["archived"] = True   # the older Files view groups it as archived
+            else:
+                _unhide(slug)
+        state["active_set"] = aset
+    else:
+        from control_plane import workspace_membership as membership
+        if (not wpaths.is_workspace_name(slug, tier=False) or slug in membership.RESERVED_SLUGS
+                or slug in (SEED_BACKUP_SLOT,)):
+            raise KeyError(slug)
+        known = (rootp / slug).is_dir() or slug in hidden or slug in (state.get("hidden_shared") or [])
+        if not known:
+            raise KeyError(slug)
+        off = {str(s) for s in (state.get("hidden_shared") or [])}
+        if new_state == "active":
+            hidden.discard(slug)
+            off.discard(slug)
+        elif new_state == "inactive":
+            hidden.discard(slug)
+            off.add(slug)
+        else:
+            hidden.add(slug)
+            off.add(slug)      # a reader of the older switch alone still sees it as off
+        state["hidden_shared"] = sorted(off)
+    state["hidden"] = sorted(hidden)
+    changed = json.dumps(state, sort_keys=True) != before
+    if changed:
+        _save_state(store, state)
+    return changed
+
+
+def set_workspace_states(root: str | Path, subject: str, slugs, new_state: str,
+                         memberships: list[dict]) -> list[dict]:
+    """``set_workspace_state`` for many: ``slugs`` is a list, or ``"all"`` — every workspace the person
+    has (``workspace_states``). Under ``"all"`` the personal workspace is SKIPPED for ``hidden`` (hide all
+    = everything that can be hidden), and ``active`` means every hidden or inactive one comes back.
+    Returns ``[{slug, state, changed}]``; a named workspace that fails raises (nothing after it runs)."""
+    if slugs == "all":
+        rows = workspace_states(root, subject, memberships)
+        targets = [r["slug"] for r in rows if not (new_state == "hidden" and r["kind"] == "personal")]
+    else:
+        targets = [str(s).strip() for s in (slugs or []) if str(s).strip()]
+    out = []
+    for s in targets:
+        out.append({"slug": s, "state": new_state,
+                    "changed": set_workspace_state(root, subject, s, new_state)})
+    return out
+
+
+# ── CHAT PROFILES (Vexa-ai/vexa#1783, founder 2026-10-14) ────────────────────────────────────────
+#
+# A profile is a named preset of a chat's scope — where it writes, what it reads — plus a memory
+# mode. Kept in this same attach state (``profiles``, ``default_profile``): no new store. The four
+# starters exist for everyone; a person edits work / study / hobby. ``incognito`` is fixed: no
+# workspaces, no memory, never read by another chat, out of chat search.
+
+# Founder 2026-10-15: "remove the prebuilt profiles, they will create one if needed." Incognito is the
+# one built-in (it is not a scope a person could build from workspaces). Starters that were never
+# edited are therefore simply gone; one a person edited is stored and stays.
+STARTER_PROFILES = ("incognito",)
+INCOGNITO = "incognito"
+SHARED_WORK = "shared work"
+#: A profile may name VARIABLES — workspace references bound when it is applied ("use shared work for
+#: Collab Room"). `{{workspace}}` is the one the built-ins use.
+WORKSPACE_VAR = "{{workspace}}"
+#: The scope a SHARED chat gets — writes to and reads only the workspace it is bound to. Not a listed
+#: profile any more (no prebuilt profiles); applied unnamed when a link is opened or a chat is shared.
+STARTER_SCOPES = {SHARED_WORK: {"target": WORKSPACE_VAR, "reads": [WORKSPACE_VAR]}}
+
+
+def chat_profiles(root: str | Path, subject: str,
+                  company: Optional[dict] = None) -> tuple[list[dict], str]:
+    """``([{name, target, reads, incognito, variables, company}], default_profile)``. ``target`` None =
+    Personal; ``reads`` None = the person's default active set. ``company`` is the profiles the
+    company seeds from `_global/PROFILES.md`: a starter's scope < the company's < the person's edit."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    state = _load_state(_store(rootp, subject))
+    stored = state.get("profiles") if isinstance(state.get("profiles"), dict) else {}
+    company = {str(k).strip().lower(): v for k, v in (company or {}).items()
+               if isinstance(v, dict) and str(k).strip().lower() != INCOGNITO}
+    names = [*STARTER_PROFILES]
+    names += [n for n in sorted(company) if n not in names]
+    names += [n for n in sorted(stored) if n not in names]
+    out = []
+    for name in names:
+        rec = {**STARTER_SCOPES.get(name, {}),
+               **{k: v for k, v in company.get(name, {}).items() if k in ("target", "reads")},
+               **(stored.get(name) if isinstance(stored.get(name), dict) else {})}
+        inc = name == INCOGNITO
+        target = None if inc else (rec.get("target") or None)
+        reads = [] if inc else (rec.get("reads") if isinstance(rec.get("reads"), list) else None)
+        variables = sorted({v for v in [target, *(reads or [])] if isinstance(v, str)
+                            and v.startswith("{{") and v.endswith("}}")})
+        out.append({"name": name, "target": target, "reads": reads, "incognito": inc,
+                    "variables": variables, "company": name in company})
+    default = str(state.get("default_profile") or "")
+    # a default naming a profile that no longer exists (a never-edited starter) is no default
+    return out, (default if any(p["name"] == default for p in out) else "")
+
+
+def delete_chat_profile(root: str | Path, subject: str, name: str) -> bool:
+    """Remove a profile the person made, or put a starter back as it was. A default that named it is
+    cleared. Returns whether anything changed."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+    name = (name or "").strip().lower()
+    profiles = state.get("profiles") if isinstance(state.get("profiles"), dict) else {}
+    changed = profiles.pop(name, None) is not None
+    if state.get("default_profile") == name:
+        state["default_profile"] = ""
+        changed = True
+    if changed:
+        state["profiles"] = profiles
+        _save_state(store, state)
+    return changed
+
+
+def queue_profile(root: str | Path, subject: str, name: str, bind: dict) -> None:
+    """The NEXT new chat of this person starts in ``name`` with ``bind`` (Vexa-ai/vexa#1783): what
+    opening a workspace invite link does — "shared work" bound to that workspace. Consumed once."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+    state["queued_profile"] = {"name": str(name), "bind": {str(k): str(v) for k, v in (bind or {}).items()}}
+    _save_state(store, state)
+
+
+def take_queued_profile(root: str | Path, subject: str) -> Optional[dict]:
+    """The queued profile, removed — or None."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+    q = state.pop("queued_profile", None)
+    if q is None:
+        return None
+    _save_state(store, state)
+    return q if isinstance(q, dict) and q.get("name") else None
+
+
+def edit_chat_profile(root: str | Path, subject: str, name: str, *, target=..., reads=...,
+                      default: Optional[bool] = None) -> dict:
+    """Change one profile (``...`` leaves a field alone). Incognito's scope cannot be edited; it can
+    be the default. A new name makes a new profile."""
+    rootp = Path(root)
+    _safe_subject_dir(rootp, subject)
+    store = _store(rootp, subject)
+    state = _load_state(store)
+    name = (name or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9 _-]{0,31}", name):
+        raise ValueError("a profile name is a short word")
+    profiles = state.get("profiles") if isinstance(state.get("profiles"), dict) else {}
+    rec = dict(profiles.get(name) or {})
+    if name == INCOGNITO and (target is not ... or reads is not ...):
+        raise ValueError("incognito has no workspaces; it cannot be given any")
+    if target is not ...:
+        rec["target"] = target or None
+    if reads is not ...:
+        rec["reads"] = list(reads) if reads is not None else None
+    profiles[name] = rec
+    state["profiles"] = profiles
+    if default is True:
+        state["default_profile"] = name
+    elif default is False and state.get("default_profile") == name:
+        state["default_profile"] = ""
+    _save_state(store, state)
+    return {"name": name, **rec}
 
 
 def bind_repository_credential(root: str | Path, subject: str, slug: str, credential_workspace: str) -> None:
@@ -1148,3 +1612,41 @@ def shared_attached_state(root: str | Path, workspace_id: str) -> dict:
     _shared_dir(rootp, workspace_id)   # traversal guard, and a 400 for a nonsense id
     state = _plain_state(shared_store(rootp, workspace_id))
     return {"workspace_id": workspace_id, "active": state.get("active"), "slots": state.get("slots", {})}
+
+
+def desk_hidden(root: str | Path, subject: str) -> bool:
+    """Has the person HIDDEN (switched off, deleted) their Personal workspace — the tree at
+    ``<root>/<subject>``? A Personal that is merely not in the active set is still theirs and still
+    the desk; a hidden one is never read as "personal" nor written to (#1783)."""
+    rootp = Path(root)
+    try:
+        state = _load_state(_store(rootp, subject))
+    except Exception:  # noqa: BLE001
+        return False
+    return _seed_slot_slug(state) in _hidden_of(state)
+
+
+class NoHome(Exception):
+    """A write that names no workspace, for a person whose Personal workspace is hidden and whose
+    request carries no target workspace (#1783): refused, never sent to a workspace picked by order
+    — a shared one is somebody else's room too."""
+    message = ("Your Personal workspace is switched off and nothing names a workspace for this. "
+               "Choose one (the chat's \"Writes to\" chip), or turn Personal back on.")
+
+
+def home_dir(root: str | Path, subject: str) -> Path:
+    """THE PERSON'S HOME — where a write that names no workspace lands (#1783): their Personal
+    workspace (the desk, ``<root>/<subject>``) while it is on. Once they HIDE it (switch it off,
+    delete it) there is NO home: ``NoHome`` is raised, and the caller names a workspace (the chat's
+    target) or refuses. Never a workspace picked by its place in a list, never a shared one."""
+    rootp = Path(root)
+    desk = _safe_subject_dir(rootp, subject)
+    if desk_hidden(rootp, subject):
+        raise NoHome(subject)
+    return desk
+
+
+def home_slug(root: str | Path, subject: str) -> str:
+    """The slug that names ``home_dir`` on the routes: ``""`` (the desk). Raises ``NoHome`` alike."""
+    home_dir(root, subject)
+    return ""

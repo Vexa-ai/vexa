@@ -144,7 +144,8 @@ def test_the_cursor_and_the_regions_compose_the_way_an_expand_uses_them():
     assert md.slot_meeting(doc) == "147"
     assert md.read_cursor(doc) == ""
     for key, _t in md.REGIONS:
-        assert md.read_region(doc, key) == ""      # created, empty — not a form to fill in
+        assert md.read_region(doc, key) is None    # #1783: no section until there is content
+    assert "#" not in doc.split("\n---\n", 1)[1]  # …and no title, no bare headings
 
     doc = md.write_region(doc, "about", "The foundation's technical steering committee.")
     doc = md.advance_cursor(doc, "2026-03-02T10:05:00.000Z")

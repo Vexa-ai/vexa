@@ -114,7 +114,7 @@ def test_the_page_writer_writes_where_the_mount_reads(deployment):
 
 def test_a_non_admin_company_tier_write_is_refused_and_nothing_lands(deployment):
     """The deny half of the company tier (friction report, dogfood 2026-10-10): a person who is not
-    an org admin gets the 403 the `extend-meeting` and `create` briefs now name, and no page is
+    the admin account gets the 403 the `extend-meeting` and `create` briefs now name, and no page is
     written into `_global` or anywhere else by that call."""
     store, settings, want, stale = deployment
     c = _client(store, settings)
@@ -122,7 +122,7 @@ def test_a_non_admin_company_tier_write_is_refused_and_nothing_lands(deployment)
                json={"slug": "_global", "kind": "company", "name": "Globex",
                      "facts": ["Globex makes widgets."], "source": "a meeting"})
     assert r.status_code == 403, r.text
-    assert "only an org admin may write company-tier pages into _global" in r.text
+    assert "only the admin account may write company-tier pages into _global" in r.text
     assert not [p for p in store.rglob("*.md") if "globex" in p.name]
 
 

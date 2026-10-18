@@ -268,6 +268,16 @@ def is_admin(settings, subject: str) -> bool:
     return bool(out and out.get("is_admin") is True)
 
 
+def identities(settings, subject: str) -> list[str]:
+    """The subject id and its sign-in address, asked of identity (the same hop as the two role
+    questions). What a catalog entry open to named people only (``allowed_subjects``) is matched
+    against; ``[]`` when identity cannot answer, so such an entry fails closed."""
+    out = _ask_identity(settings, subject)
+    if not out:
+        return []
+    return [str(v) for v in (subject, out.get("email")) if str(v or "").strip()]
+
+
 def is_admin_account(settings, subject: str) -> bool:
     """Is this subject the deployment's ADMIN ACCOUNT — the one identity that controls `_global`?
 

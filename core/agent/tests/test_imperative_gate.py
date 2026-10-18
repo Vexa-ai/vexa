@@ -125,3 +125,40 @@ def test_a_turn_with_no_imperative_carries_no_extra_framing(tmp_path, monkeypatc
 
     list(engine.run_turn_over_workspace(tmp_path, "what's on the agenda today?", harness=H(), commit=False))
     assert "operational imperative" not in seen["prompt"]
+
+
+# ── 2026-10-13 friction: the gate read the meeting context, not the person ─────────────────────────
+# fr_fd9b1e9ada4a8b0a / fr_45b8796bc15bb639: during a live meeting, with the bot already in the call,
+# "explain to me" and "research the PR … blast radius" were each answered with "join the meeting ->
+# call request_meeting_bot first". Neither message asks for a join, a send or a stop; the composed
+# prompt's folded context (before the sentinel) is what matched.
+
+_CONTEXT = ("## Live meeting\nThe bot is in the call. If they ask you to join the meeting, send the bot "
+            "or stop the bot, do it.\nTranscript: \"…can we stop recording at the end…\"\n"
+            "<!--vexa:user-input-below-->")
+
+
+def test_explain_to_me_during_a_live_meeting_is_not_an_imperative():
+    assert imperative_preamble(_CONTEXT + "explain to me") == ""
+
+
+def test_research_the_pr_during_a_live_meeting_is_not_an_imperative():
+    msg = ("research the PR and let's think how it complies with our architecture and what's the "
+           "blast radius")
+    assert imperative_preamble(_CONTEXT + msg) == ""
+
+
+def test_an_explicit_join_after_the_context_still_fires():
+    assert "call `request_meeting_bot` first" in imperative_preamble(_CONTEXT + "join the meeting")
+    assert "call `stop_bot` first" in imperative_preamble(_CONTEXT + "stop the bot")
+
+
+def test_a_machine_composed_turn_names_no_imperative():
+    from shared.marks import flow_mark
+    assert imperative_preamble(flow_mark("agent_run", "r1") + "If asked, send the bot.") == ""
+
+
+def test_a_negated_or_past_tense_mention_is_not_an_imperative():
+    assert imperative_preamble("don't send the bot yet") == ""
+    assert imperative_preamble("did the bot join the meeting?") == ""
+    assert imperative_preamble("why did you stop the bot?") == ""

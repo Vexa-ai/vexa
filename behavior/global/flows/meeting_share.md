@@ -85,7 +85,14 @@ def mail_meeting_share(ctx: StepCtx):
     if not subject:
         logger.warning("the meeting-share template carries no `subject:` line — falling back")
         subject = f"{values['inviter']} shared a meeting with you"
-    mid = notify(to, subject, body, link=link)
+    # The same link lights the recipient's bell when the address has an account (#1783):
+    # agent-api writes it; an address with none is told by the mail alone.
+    _common.notify_in_app("meeting_shared", email=to, actor=uid, actor_name=values["inviter"],
+                          meeting_id=meeting_id, title=str(ctx.refs.get("title") or ""), url=link)
+    mid = mail("meeting-share", to, subject, body, link=link, db=db, uid=uid)
+    if mid is None:
+        return Done({"skipped": "mail.meeting-share is off", "to": to,
+                     "meeting_id": meeting_id})
     return Done({"message_id": mid, "to": to, "meeting_id": meeting_id}, provider_ref=mid)
 ```
 

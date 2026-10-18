@@ -7,9 +7,8 @@ Proves the cookbook → client → endpoint path end-to-end for the agent-domain
 Lives under core/agent/tests (not clients/slim/tests) because it imports BOTH packages — it's an integration
 level, so it sits with the server it integrates against and reuses the agent test fakes.
 
-KNOWN UPSTREAM GAP (surfaced by this level): `schedule_routine` (POST /api/routines) compiles a job only,
-while `list`/`set_routine_enabled` read FILE-authored routines (routines/*.md) — two stores. Enabling a
-POST-created routine 404s. Both paths are tested separately below; unifying them is a deferred upstream fix.
+Routines are flows (ADR-0046): the cookbook's routine verbs reach the deprecated `/api/routines` adapter,
+which writes and reads the person's own flows — one store — so a routine created here lists and toggles.
 """
 from __future__ import annotations
 
@@ -68,7 +67,7 @@ class _FakeScheduler:
 
 
 class _FakeReader:
-    def read(self, unit_id, *, resume=None):
+    def read(self, unit_id, *, resume=None, fresh=False):
         yield {"type": "message-delta", "text": "hi"}
         yield {"type": "commit", "sha": "abc123"}
 
@@ -123,24 +122,22 @@ async def test_chat_streams_reply(ctx):
     assert reply == "hi"          # _FakeReader's message-delta folded by the cookbook
 
 
-# ── routines: the POST create path ────────────────────────────────────────────────────────────────--
-async def test_schedule_routine_compiles_a_job(ctx):
+# ── routines: one store, flows (the deprecated adapter) ───────────────────────────────────────────--
+@pytest.fixture
+def flows(monkeypatch):
+    from control_plane import routine_flows as rf
+    from tests.test_routine_flows import FakeFlows
+    fake = FakeFlows()
+    monkeypatch.setattr(rf, "FlowsClient", lambda: fake)
+    monkeypatch.setattr(rf, "configured", lambda: True)
+    return fake
+
+
+async def test_a_routine_is_a_flow_that_lists_and_toggles(ctx, flows):
     out = await cb.schedule_routine(ctx.slim, "digest", cron="0 8 * * *", prompt="brief me")
-    assert out["job_id"] == "job_0"
-    assert ctx.scheduler.jobs and ctx.scheduler.jobs[0]["cron"] == "0 8 * * *"
-
-
-# ── routines: the FILE-authored path (list + enable/disable) ───────────────────────────────────────--
-async def test_file_routine_lists_and_toggles(ctx):
-    await cb.init_workspace(ctx.slim)
-    routines = ctx.ws / "routines"
-    routines.mkdir(parents=True, exist_ok=True)
-    (routines / "digest.md").write_text(
-        '---\nenabled: true\ncron: "30 9 * * mon-fri"\nprompt: "brief me"\n---\nGroup by person.\n')
-
+    assert out["job_id"] is None and out["flow"]["scope"] == "user:u_jane"
+    assert ctx.scheduler.jobs == [], "nothing is armed on the runtime scheduler"
     cards = await cb.list_routines(ctx.slim)
-    assert any(c.get("name") == "digest" for c in cards)
-
+    assert any(c.get("name") == "digest" and c["enabled"] for c in cards)
     out = await cb.set_routine_enabled(ctx.slim, "digest", False)
-    assert out["enabled"] is False
-    assert 'enabled: false' in (routines / "digest.md").read_text().lower()
+    assert out["enabled"] is False and flows.rows[-1]["status"] == "retired"

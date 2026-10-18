@@ -282,7 +282,10 @@ def tokens_for(intent) -> dict:
     return {
         "kind": s("kind"),
         "path": s("path"),
-        "workspace": s("workspace"),
+        # A MEETING'S NOTE NAMES ITS WORKSPACE (#1783). An empty one is the person's desk, and the
+        # preset says so out loud: a blank here read as "the workspace this chat works in", and the
+        # agent wrote a second copy of the note there that the meeting view never shows.
+        "workspace": s("workspace") or ("personal" if s("meeting").strip() else ""),
         "selection": s("selection"),
         # THE PERSON'S OWN LINE (Vexa-ai/vexa#1593). The one token whose value is text a human typed
         # rather than a fact about their screen — see `with_instruction` below for why that is

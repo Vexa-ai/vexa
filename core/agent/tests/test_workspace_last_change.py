@@ -537,7 +537,7 @@ def test_system_is_refused_the_way_the_history_refuses_it(tmp_path):
     r = _client(tmp_path).get("/api/workspaces/_system/git/last-change", headers=_h("owner1"))
 
     assert r.status_code == 403
-    assert "sessions and settings" in r.json()["detail"]
+    assert "identity and settings" in r.json()["detail"] and "session store" in r.json()["detail"]
 
 
 def test_personal_is_the_desk(tmp_path):

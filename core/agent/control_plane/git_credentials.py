@@ -1,5 +1,9 @@
-"""git_credentials.py — a per-user, reusable GitHub token stored ONCE, server-side, and applied as the
-FALLBACK credential for every git op (attach · publish · push · pull) across ALL of the user's repos.
+"""git_credentials.py — a per-user, reusable token PER GIT PROVIDER, stored ONCE, server-side, and
+applied as the FALLBACK credential for every git op (attach · publish · push · pull) on that provider.
+
+**One store, one name per provider.** The built-in GitHub provider keeps the name it always had,
+``pat/<subject>``; any other configured provider (``shared.git_provider``) is ``pat/<subject>/<name>``.
+A saved token is read only for a URL on its own provider (``shared.token_destination``).
 
 **Fallback, not the primary.** The primary credential for loading an existing repo is now the
 per-workspace DEPLOY KEY (:mod:`control_plane.deploy_keys`): the person adds OUR public key to THEIR
@@ -8,12 +12,12 @@ over every repo the account can reach — so it stays available for https remote
 prefer it, entered only in the terminal's token card and never in chat.
 
 Security model:
-  • **Encrypted at rest** — the value goes through :mod:`control_plane.secret_store` (one server-side
-    key: ``VEXA_SECRETS_KEY``, or a ``0600`` key generated under the secrets root on first use). This
-    module used to write the clear token to ``<root>/.secrets/<subject>.ghtoken``; a legacy plaintext
-    file is still READ, and is re-sealed and unlinked on the next read (silent, one-way migration).
-  • **Server-side only** — the store is a dot-dir the workspace scanners skip and NOT inside any
-    workspace's git tree, so a token never lands in a commit. It is NEVER returned to the browser.
+  • **Kept in the credential broker** — :mod:`control_plane.git_secret_store` writes it to the broker
+    (ADR-0040) as the ``git`` role, for the person the gateway signed for. agent-api holds no copy at
+    rest. A token from agent-api's retired local store (sealed, or the older plaintext
+    ``<root>/.secrets/<subject>.ghtoken``) moves into the broker on first use and is then removed.
+  • **No broker, no saving** — without ``VEXA_GIT_STORE_BROKER_URL`` a save is a typed refusal
+    (``GitStoreUnavailable``), never a token parked on agent-api's volume.
   • **Browser-isolated + masked** — a read for the UI returns only ``••••abcd`` (last-4), enough to
     confirm one is saved without disclosing it. The clear value never leaves the server after it is set.
   • **Log-redacted in use** — ``workspace_git_sync`` / ``workspace_attach`` scrub it from URLs and
@@ -21,88 +25,83 @@ Security model:
 """
 from __future__ import annotations
 
-import logging
 import re
 from pathlib import Path
 from typing import Optional
 
 from control_plane import git_secret_store as secret_store
+from shared import git_provider
 
-log = logging.getLogger(__name__)
-
-_SECRETS_DIRNAME = secret_store.SECRETS_DIRNAME   # kept as the legacy path's parent
 _SUBJECT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")   # the secret name is subject-derived — path-safe
-_NAME = "pat/{subject}"                                 # where the sealed token lives in the store
+_NAME = "pat/{subject}"
 
 
-def _legacy_path(root: str | Path, subject: str) -> Optional[Path]:
-    """``<root>/.secrets/<subject>.ghtoken`` — the PLAINTEXT file this module used to write. Read once
-    more, then re-sealed and removed. Never written again."""
+def secret_name(subject: str, provider: Optional[git_provider.GitProvider] = None) -> Optional[str]:
+    """The broker name of ``subject``'s saved token for ``provider`` (the default provider when None)."""
     if not subject or not _SUBJECT_RE.match(subject):
         return None
-    return Path(root) / _SECRETS_DIRNAME / f"{subject}.ghtoken"
+    if provider is None or provider.name == git_provider.DEFAULT_NAME:
+        return _NAME.format(subject=subject)
+    return f"{_NAME.format(subject=subject)}/{provider.name}"
 
 
 def _name(subject: str) -> Optional[str]:
-    if not subject or not _SUBJECT_RE.match(subject):
-        return None
-    return _NAME.format(subject=subject)
+    return secret_name(subject)
 
 
-def read_github_token(root: str | Path, subject: str) -> Optional[str]:
-    """The caller's stored GitHub token, or ``None`` when unset/unreadable. On the git-op hot path — a
-    missing secret is simply "no saved token", never an error.
+def _is_default(provider: Optional[git_provider.GitProvider]) -> bool:
+    return provider is None or provider.name == git_provider.DEFAULT_NAME
 
-    Reads the sealed secret first; falls back to a legacy plaintext file and MIGRATES it (seal, then
-    unlink) so the clear value stops existing on disk the first time anyone touches the account."""
-    name = _name(subject)
+
+def read_token(root: str | Path, subject: str, provider: Optional[git_provider.GitProvider] = None) -> Optional[str]:
+    """The caller's saved token for ``provider`` (the default provider when None), or ``None`` when
+    none is saved. Raises ``GitStoreUnavailable`` when the store cannot answer — a saved token that
+    cannot be fetched is never read as "no token"."""
+    if _is_default(provider):
+        return read_github_token(root, subject)
+    name = secret_name(subject, provider)
+    return secret_store.get(root, name) if name else None
+
+
+def set_token(root: str | Path, subject: str, token: Optional[str],
+              provider: Optional[git_provider.GitProvider] = None) -> bool:
+    """Save (or, with a falsy ``token``, CLEAR) the caller's token for ``provider``. True when one is
+    now stored, False when cleared."""
+    if _is_default(provider):
+        return set_github_token(root, subject, token)
+    name = secret_name(subject, provider)
     if name is None:
+        raise ValueError("invalid subject")
+    return secret_store.put(root, name, token)
+
+
+def masked(token: Optional[str]) -> Optional[str]:
+    """``••••`` + last-4 of ``token`` — the only shape a saved token takes on the way to the browser."""
+    if not token:
         return None
-    tok = secret_store.get(root, name)
-    if tok or secret_store.enabled():
-        return tok
-    legacy = _legacy_path(root, subject)
-    if legacy is None:
-        return None
-    try:
-        tok = legacy.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not tok:
-        return None
-    try:                                   # migrate: seal it, then drop the plaintext
-        secret_store.put(root, name, tok)
-        legacy.unlink()
-        log.info("migrated a plaintext git token to the sealed store for subject=%s", subject)
-    except (OSError, ValueError):
-        log.debug("could not migrate the plaintext git token", exc_info=True)
-    return tok
+    return "••••" + (token[-4:] if len(token) >= 8 else "")
+
+
+def masked_token(root: str | Path, subject: str, provider: Optional[git_provider.GitProvider] = None) -> Optional[str]:
+    """A display-safe mask of the saved token for ``provider``; NEVER the clear value."""
+    return masked(read_token(root, subject, provider))
+
+
+# The default (built-in GitHub) provider, under the names every caller before the port used. Its
+# broker name is unchanged: ``pat/<subject>``.
+def read_github_token(root: str | Path, subject: str) -> Optional[str]:
+    """The caller's saved token for the default provider, or ``None`` when none is saved."""
+    name = secret_name(subject)
+    return secret_store.get(root, name) if name else None
 
 
 def set_github_token(root: str | Path, subject: str, token: Optional[str]) -> bool:
-    """Save (or, with a falsy ``token``, CLEAR) the caller's reusable GitHub token. Returns True when a
-    token is now stored, False when cleared/absent. Stored SEALED; any legacy plaintext file for the
-    same subject is removed on the way through, clear or not."""
-    name = _name(subject)
+    """Save (or CLEAR) the caller's token for the default provider."""
+    name = secret_name(subject)
     if name is None:
         raise ValueError("invalid subject")
-    if secret_store.enabled():
-        return secret_store.put(root, name, token)
-    legacy = _legacy_path(root, subject)
-    if legacy is not None:
-        try:
-            legacy.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            log.debug("could not remove the legacy plaintext token file", exc_info=True)
     return secret_store.put(root, name, token)
 
 
 def masked_github_token(root: str | Path, subject: str) -> Optional[str]:
-    """A display-safe mask of the stored token (``••••`` + last-4), or ``None`` if none is saved. NEVER
-    returns the clear value — this is the only shape the token may take on the way to the browser."""
-    tok = read_github_token(root, subject)
-    if not tok:
-        return None
-    return "••••" + (tok[-4:] if len(tok) >= 8 else "")
+    return masked(read_github_token(root, subject))

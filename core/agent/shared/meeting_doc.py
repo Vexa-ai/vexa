@@ -46,8 +46,7 @@ and this module decides WHERE it lands — the agent hands over a region body an
 document with everything else exactly as it was.
 
 Stdlib only, and no imports from the rest of this tree: the same file is read by agent-api, by the
-worker, by the dogfood rig (``deploy/dogfood/rig/vexa_control_mcp.py`` loads ``shared.*`` by path)
-and by the tests. A dependency here would be a dependency in four images.
+worker and by the tests. A dependency here would be a dependency in every one of them.
 """
 from __future__ import annotations
 
@@ -220,11 +219,11 @@ def advance_cursor(text: str, cursor: str) -> str:
 # ── a page that is not there yet ─────────────────────────────────────────────────────────────────
 
 def scaffold(*, meeting: str, title: str = "", native: str = "", date: str = "") -> str:
-    """A fresh meeting doc: frontmatter, the title, the widget, and the empty regions.
+    """A fresh meeting note: frontmatter and the widget slot, nothing else. It starts empty.
 
-    The regions are created EMPTY rather than filled with a placeholder sentence. A page that says
-    "No decisions yet" in six sections reads as a form somebody has to fill in; the empty region is
-    invisible until an Expand puts something in it."""
+    Sections arrive with their content: the first update that has decisions writes `## Decisions`
+    and its region (`write_region` appends a missing one). A page that says "No decisions yet" in
+    six sections, or carries six bare headings, reads as a form somebody has to fill in."""
     name = str(title or "").strip() or "Meeting"
     fm = ["type: meeting"]
     if str(meeting or "").strip():
@@ -235,10 +234,11 @@ def scaffold(*, meeting: str, title: str = "", native: str = "", date: str = "")
     if str(date or "").strip():
         fm.append(f"date: {str(date).strip()}")
     fm.append(f"{CURSOR_KEY}:")
-    doc = "---\n" + "\n".join(fm) + "\n---\n\n" + f"# {name}\n\n" + slot_marker(meeting) + "\n"
-    for key, _title in REGIONS:
-        doc = write_region(doc, key, "")
-    return doc
+    # NOTHING ELSE (#1783, founder: "we do not want this at all"). No `# Title`: the meeting view and
+    # the page chip carry the real name, and a minted placeholder ("Google Meet meeting") is a second,
+    # wrong title. No empty regions: six headings over nothing read as a form; `write_region`
+    # appends a section with its heading the first time there is something to put in it.
+    return "---\n" + "\n".join(fm) + "\n---\n\n" + slot_marker(meeting) + "\n"
 
 
 # ── frontmatter, kept RAW ────────────────────────────────────────────────────────────────────────

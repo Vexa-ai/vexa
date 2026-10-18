@@ -20,6 +20,8 @@ meeting notes, customer records or documents.
 | [`STRUCTURE.md`](STRUCTURE.md) | the teams, who does what, and who can see what |
 | [`MISSING.md`](MISSING.md) | what is not yet known — the only file that gets more useful the more it admits |
 | [`POLICIES.md`](POLICIES.md) | the rules: who may do what to what, with this deployment's answers |
+| [`lifecycle.md`](lifecycle.md) | the stages a person moves through, decided from usage, and what their home is for at each: goal, purpose mix, curriculum in scope, nudge caps, success |
+| [`onboarding.md`](onboarding.md) | what a new person's home offers over time, in order, each step done when their usage shows it |
 | `asks/` | the presets a link opens a chat on. The image tops them up; an admin edits them here |
 | `mail/` | the words this deployment mails, as files. Edit one and the next mail carries it |
 | [`flows/`](flows/README.md) | one page per flow, generated from the code that runs it — trigger, steps, mails, writes, the rules it honours, and the Python at the foot |

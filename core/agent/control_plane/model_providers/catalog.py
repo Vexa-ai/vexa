@@ -62,6 +62,9 @@ class CatalogError(ValueError):
 
 
 AdminCheck = Union[bool, Callable[[], bool]]
+#: The caller's identities — their subject id and sign-in address — asked only when an entry names
+#: ``allowed_subjects``. ``None`` or an empty answer (identity could not be reached) matches nothing.
+PersonCheck = Optional[Callable[[], Iterable[str]]]
 
 
 def _path(parts: Iterable) -> str:
@@ -232,30 +235,94 @@ class Catalog:
     def _admin(admin: AdminCheck) -> bool:
         return bool(admin() if callable(admin) else admin)
 
-    def _permitted(self, model: Mapping, admin: AdminCheck) -> bool:
-        return model.get("access", "everyone") != "admins" or self._admin(admin)
+    @staticmethod
+    def _named(model: Mapping, person: PersonCheck) -> bool:
+        """Is the caller on the entry's ``allowed_subjects``? Fails closed: no resolver, or one that
+        cannot answer, is nobody."""
+        allowed = {str(a).strip().lower() for a in model.get("allowed_subjects") or ()}
+        if person is None:
+            return False
+        try:
+            mine = {str(i).strip().lower() for i in (person() or ()) if str(i or "").strip()}
+        except Exception:  # noqa: BLE001 — an identity that cannot answer is nobody
+            logger.warning("model catalog: the caller's identity could not be resolved — an entry "
+                           "open to named people only is closed to them")
+            return False
+        return bool(allowed & mine)
 
-    def visible(self, ctx: RouteContext, *, admin: AdminCheck) -> list[dict]:
+    #: THE COMPANY'S MODEL POLICY (#1783): a callable answering `_global/POLICIES.md`'s budgets
+    #: dict (`control_plane.budgets.read`), set by the app. The catalog says what is AVAILABLE;
+    #: the policy says what is ALLOWED (`models_allowed`) and who may use which (`models_for`,
+    #: which replaces an entry's `allowed_subjects` — those stay as its seed until the policy says).
+    policy = None
+
+    def _policy(self) -> Optional[dict]:
+        try:
+            return self.policy() if callable(self.policy) else None
+        except Exception:  # noqa: BLE001 — an unreadable policy leaves the catalog's own answer
+            return None
+
+    def _permitted(self, model: Mapping, admin: AdminCheck, person: PersonCheck = None) -> bool:
+        if model.get("access", "everyone") == "admins" and not self._admin(admin):
+            return False
+        pol = self._policy()
+        if pol:
+            from control_plane import budgets  # noqa: PLC0415
+            allow = budgets.allowed_list(pol)
+            if allow is not None and model["id"] not in allow:
+                return False
+            rules = budgets.models_for(pol)
+            if rules is not None and model["id"] in rules:
+                try:
+                    mine = [str(i) for i in (person() if person else ()) or ()]
+                except Exception:  # noqa: BLE001
+                    mine = []
+                emails = [m for m in mine if "@" in m]
+                return any(budgets.may_use(pol, model["id"], email=e) for e in emails) or "all" in rules[model["id"]] \
+                    or any(m.lower() in rules[model["id"]] for m in mine)
+        return "allowed_subjects" not in model or self._named(model, person)
+
+    def visible(self, ctx: RouteContext, *, admin: AdminCheck,
+                person: PersonCheck = None) -> list[dict]:
         """The models this person may pick, in the catalog's order."""
-        return [m for m in self._models if self._permitted(m, admin)]
+        return [m for m in self._models if self._permitted(m, admin, person)]
 
-    def default_for(self, ctx: RouteContext, *, admin: AdminCheck) -> Optional[str]:
-        """What this person runs on before they pick: their own ``default_model`` (Settings →
+    def default_for(self, ctx: RouteContext, *, admin: AdminCheck,
+                    person: PersonCheck = None) -> Optional[str]:
+        """What this person runs on before they pick: the model they last picked in any chat
+        (``last_model``, agent-api's per-person memory), else their own ``default_model`` (Settings →
         Models, user over platform), else the catalog's default, else the first model they may use.
         A stored default that is gone or not theirs is skipped and logged — a stale preference
         never stops a turn — and ``None`` means the catalog offers them nothing."""
-        mine = str((ctx.subject_config or {}).get("default_model") or "").strip()
-        if mine:
+        cfg = ctx.subject_config or {}
+        for key in ("last_model", "default_model"):
+            mine = str(cfg.get(key) or "").strip()
+            if not mine:
+                continue
             m = self._by_id.get(mine)
-            if m is not None and self._permitted(m, admin):
+            if m is not None and self._permitted(m, admin, person):
                 return mine
-            logger.warning("default_model %r is not a model this person may use — the catalog's "
-                           "default applies", mine)
-        usable = self.visible(ctx, admin=admin)
+            logger.warning("%s %r is not a model this person may use — the next default applies",
+                           key, mine)
+        usable = self.visible(ctx, admin=admin, person=person)
+        # the company's `model_chat_default` before the catalog's own flag — when it is available here
+        company = str((self._policy() or {}).get("model_chat_default") or "").strip()
+        if company and any(m["id"] == company for m in usable):
+            return company
+        # A MODEL GRANTED TO THIS PERSON BY NAME outranks the open default (0.13.3): an operator who
+        # named someone on a Claude entry meant them to run on it, and the catalog's `default` is the
+        # model for everyone else. `_global/POLICIES.md` `model_chat_default: catalog` keeps the
+        # catalog's default for everybody (it rides here as `chat_default`).
+        if str(cfg.get("chat_default") or "").strip().lower() != "catalog":
+            named = next((m["id"] for m in usable if "allowed_subjects" in m
+                          and self._providers.get(m["provider"], {}).get("adapter") == "anthropic"), None)
+            if named:
+                return named
         flagged = next((m["id"] for m in usable if m.get("default")), None)
         return flagged or (usable[0]["id"] if usable else None)
 
-    def choose(self, explicit: str, ctx: RouteContext, *, admin: AdminCheck) -> dict:
+    def choose(self, explicit: str, ctx: RouteContext, *, admin: AdminCheck,
+               person: PersonCheck = None) -> dict:
         """The model a turn runs on: ``explicit`` (the chat's own pick) when there is one, else the
         person's default. An explicit pick is never silently replaced — a pick that cannot run is a
         typed refusal, because running some other model is the failure P18 forbids."""
@@ -267,13 +334,16 @@ class Catalog:
                     UNKNOWN_MODEL, model=pick,
                     detail=f"The model {pick!r} is not offered on this deployment any more.",
                     remedy="Pick another model for this chat.")
-            if not self._permitted(m, admin):
+            if not self._permitted(m, admin, person):
+                only = ("open to named accounts only" if "allowed_subjects" in m
+                        and (m.get("access", "everyone") != "admins" or self._admin(admin))
+                        else "open to admins only")
                 raise ModelChoiceFault(
                     NOT_PERMITTED, model=pick, provider=m["provider"],
-                    detail=f"{m['display_name']} is open to admins only on this deployment.",
+                    detail=f"{m['display_name']} is {only} on this deployment.",
                     remedy="Pick another model for this chat.")
             return m
-        fallback = self.default_for(ctx, admin=admin)
+        fallback = self.default_for(ctx, admin=admin, person=person)
         if fallback is None:
             raise ModelChoiceFault(
                 NOT_CONFIGURED, model="",
@@ -292,18 +362,38 @@ class Catalog:
         return common.check_effort(chosen, model, model["provider"],
                                    adapter.efforts(provider, model))
 
+    def offered_efforts(self, model: Mapping) -> list[str]:
+        """The levels a chat may pick for ``model``: declared by the entry AND sendable by its
+        adapter (what the listing shows as ``capabilities.reasoning_efforts``)."""
+        provider = self._providers[model["provider"]]
+        adapter = self._adapter(model)
+        return [e for e in common.declared_efforts(model) if e in adapter.efforts(provider, model)]
+
+    def remembered_effort(self, model: Mapping, ctx: RouteContext) -> str:
+        """The effort the person last picked (``last_effort``), when it was picked with ``model``
+        and ``model`` still offers it; else ``""`` — the model's own default. Never a refusal: a
+        memory the catalog moved away from is simply not used."""
+        cfg = ctx.subject_config or {}
+        if str(cfg.get("last_model") or "").strip() != model["id"]:
+            return ""
+        level = str(cfg.get("last_effort") or "").strip()
+        return level if level and level in self.offered_efforts(model) else ""
+
     def choose_with_effort(self, explicit: str, effort: str, ctx: RouteContext, *,
-                           admin: AdminCheck) -> tuple[dict, str]:
+                           admin: AdminCheck, person: PersonCheck = None) -> tuple[dict, str]:
         """``choose`` and ``effort`` together — what a pick is checked against before it is
-        stored, so a stored pick is always one the next turn can run."""
-        m = self.choose(explicit, ctx, admin=admin)
+        stored, so a stored pick is always one the next turn can run. A chat with no pick of
+        its own (neither model nor effort) runs on the person's last pick, effort included."""
+        m = self.choose(explicit, ctx, admin=admin, person=person)
+        if not str(explicit or "").strip() and not str(effort or "").strip():
+            effort = self.remembered_effort(m, ctx)
         return m, self.effort(m, effort)
 
     def route(self, explicit: str, ctx: RouteContext, *, admin: AdminCheck,
-              effort: str = "") -> ModelRoute:
+              effort: str = "", person: PersonCheck = None) -> ModelRoute:
         """The port, end to end: the chosen model at the chosen effort, resolved by its provider's
         adapter."""
-        m, level = self.choose_with_effort(explicit, effort, ctx, admin=admin)
+        m, level = self.choose_with_effort(explicit, effort, ctx, admin=admin, person=person)
         provider = self._providers[m["provider"]]
         return self._adapter(m).route(m, m["provider"], provider, ctx, effort=level)
 
@@ -327,13 +417,18 @@ class Catalog:
                                  "default_effort": caps.get("default_effort")},
                 "access": m.get("access", "everyone"), "default": bool(m.get("default"))}
 
-    def listing(self, ctx: RouteContext, *, admin: AdminCheck,
+    def listing(self, ctx: RouteContext, *, admin: AdminCheck, person: PersonCheck = None,
                 selected: Optional[str] = None, with_selected: bool = False,
                 selected_effort: Optional[str] = None) -> dict:
         """``models.v1#/$defs/ModelList`` for one person — what ``GET /api/models/catalog`` serves.
         Carries no endpoint, credential or request setting: those never leave agent-api."""
-        out: dict = {"models": [self.entry(m["id"], ctx) for m in self.visible(ctx, admin=admin)],
-                     "default": self.default_for(ctx, admin=admin)}
+        default = self.default_for(ctx, admin=admin, person=person)
+        out: dict = {"models": [self.entry(m["id"], ctx) for m in self.visible(ctx, admin=admin, person=person)],
+                     "default": default,
+                     # the effort a new chat starts at: the last one picked with that model, if
+                     # it still offers it; null = the model's own default_effort
+                     "default_effort": (self.remembered_effort(self._by_id[default], ctx) or None)
+                     if default else None}
         if with_selected:
             out["selected"] = (selected or "").strip() or None
             out["selected_effort"] = (selected_effort or "").strip() or None

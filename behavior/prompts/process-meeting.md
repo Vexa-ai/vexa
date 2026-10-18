@@ -5,8 +5,11 @@
 Call the tool `mcp__vexa__get_meeting_transcript` with `meeting_db_id={mid}`.
 
 That tool IS available to you in this turn. If you do not see it in your tool list, load it first
-(your harness may defer MCP tools behind a tool-search step) and then call it. Without
-`since_index` it returns EVERY segment of the meeting, not a sample.
+(your harness may defer MCP tools behind a tool-search step) and then call it. It answers one page
+at a time: while `complete` is false, call it again with `since_index` = the `next_index` it returned,
+until `complete` is true. Only then do you have the meeting.
+Never write that something was "not discussed" or "not decided" unless you read every page and it
+is not there.
 
 You may not write the record from the title, from the meeting id, from this prompt, or from
 anything you already believe about this group. None of those are the meeting. If the call returns
@@ -29,7 +32,9 @@ every personal workspace in the room afterwards by a separate step that is not y
 Write the report AS YOUR REPLY, in this shape:
 
 1) the body — frontmatter-free prose, then sections Decided / Committed / Open, each item
-   attributed, people as [[wikilinks]];
+   attributed; people, companies and projects as [[wikilinks]] spelled as the titles of their
+   existing pages (it lands in the meeting's note, where each one is a chip); a speaker the
+   transcript could not identify ("Speaker 2") stays plain text;
 2) a line '---';
 3) 2-4 crisp action points.
 

@@ -14,8 +14,8 @@ The platform's own stance, written here as the default before anyone is asked:
 - a person's own space is their **personal workspace**, and a group has a **group workspace**;
 - **a personal workspace is company knowledge held by one person** — not private from the company. The company's
   agents may read it for a meeting that person is in;
-- what stays genuinely private is `_system` — chats, sessions and settings. That is not a personal workspace, and
-  no agent reads it for anybody else.
+- what stays genuinely private is `_system` — identity and settings — and each person's chats, which are kept in the
+  session store, not in any workspace. Neither is a personal workspace, and no agent reads them for anybody else.
 
 The rules that make this true, and what changing any of them costs, are in
 [`POLICIES.md`](POLICIES.md). The sentence above is DERIVED from those rules, not typed: change a

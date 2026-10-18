@@ -8,8 +8,7 @@ first run is refused rather than never.
 from __future__ import annotations
 
 from control_plane import routine_needs
-from control_plane import workspace_routines as wr
-from tests.test_routines import _FakeScheduler, _app, _write
+from tests.test_routine_flows import _as, world, flows  # noqa: F401 — fixtures
 
 
 def test_a_prompt_that_reads_mail_or_the_calendar_needs_a_person():
@@ -37,36 +36,40 @@ def test_the_detector_is_conservative():
         assert routine_needs.needs_person(prompt) == [], prompt
 
 
-def test_the_create_route_saves_and_warns_never_refuses():
-    scheduler = _FakeScheduler()
-    client, _ = _app(scheduler)
-    r = client.post("/api/routines", json={"name": "Inbox watch", "cron": "*/10 * * * *",
+def test_the_create_route_saves_and_warns_never_refuses(world, flows):  # noqa: F811
+    client, _, _ = world
+    r = client.post("/api/routines", json={"name": "Inbox watch", "cron": "*/15 * * * *",
                                            "prompt": "Check my email and flag anything urgent.",
-                                           "run_now": False},
-                    headers={"X-User-Id": "u_jane"})
+                                           "run_now": False}, headers=_as())
     assert r.status_code == 201, r.text
     body = r.json()
-    assert len(scheduler.jobs) == 1, "a routine that needs a person is still saved"
+    assert any(f["name"] == "Inbox-watch" for f in flows.rows), "still saved, as a flow"
     assert body["needs_person"] == ["mail"]
     assert "Ask in chat" in body["warning"]
-
     plain = client.post("/api/routines", json={"name": "Brief", "cron": "0 9 * * *",
                                                "prompt": "Write the brief.", "run_now": False},
-                        headers={"X-User-Id": "u_jane"}).json()
+                        headers=_as()).json()
     assert plain["needs_person"] == [] and "warning" not in plain
+    cards = {c["name"]: c for c in client.get("/api/routines", headers=_as()).json()["routines"]}
+    assert cards["Inbox-watch"]["needs_person"] == ["mail"]
+    assert cards["Brief"]["needs_person"] == []
 
 
-def test_the_list_route_marks_workspace_and_api_routines(tmp_path):
-    root = tmp_path / "workspaces"
-    _write(root / "u_jane" / "routines" / "inbox.md",
-           "---\nenabled: true\ncron: '*/10 * * * *'\nprompt: Check my inbox.\n---\n")
-    _write(root / "u_jane" / "routines" / "brief.md",
-           "---\nenabled: true\ncron: '0 9 * * *'\nprompt: Write the brief.\n---\n")
-    scheduler = _FakeScheduler()
-    wr.reconcile_workspace_routines("u_jane", scheduler=scheduler, invocations_url="http://x/invocations",
-                                    workspaces_dir=root)
-    cards = {c["name"]: c for c in wr.routine_cards_for_subject("u_jane", jobs=scheduler.list_jobs(),
-                                                                 workspaces_dir=root)}
-    assert cards["inbox"]["needs_person"] == ["mail"]
-    assert "refused" in cards["inbox"]["warning"]
-    assert cards["brief"]["needs_person"] == [] and "warning" not in cards["brief"]
+def test_a_routine_made_in_a_chat_runs_with_that_chats_scope(world, flows):  # noqa: F811
+    """Founder 2026-10-15: a routine made in a chat that works in a shared workspace ran with
+    Personal as its target and every private workspace readable. It inherits the chat's scope."""
+    from control_plane import identity_token, routine_flows as rf, workspace_attach as attach
+    client, _, root = world
+    a = attach.create_workspace(root, "7", name="FINOS research").slug
+    me = _as()
+    assert client.post("/api/chat/target", json={"session": "pchat-r", "workspace": a}, headers=me).status_code == 200
+    claims = {"sub": "7", "email": "ada@example.com",
+              "delegation": {"regime": "human", "workspaces": "*", "unit": "agent-7-chat-pchat-r-g1"}}
+    from tests.test_routine_flows import KEY
+    turn = {identity_token.HEADER: identity_token.sign(KEY, claims)}
+    r = client.post("/api/routines", json={"name": "Research loop", "cron": "17 * * * *",
+                                           "prompt": "One research iteration.", "run_now": False}, headers=turn)
+    assert r.status_code == 201, r.text
+    thread = rf.thread_session(r.json()["flow"]["scope"], r.json()["flow"]["name"])
+    v = client.get(f"/api/workspace/states?session={thread}", headers=me).json()
+    assert v["chat"]["target"] == a

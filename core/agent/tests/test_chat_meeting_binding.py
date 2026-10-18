@@ -189,7 +189,7 @@ class _SendingReader:
     def __init__(self, events):
         self.events = events
 
-    def read(self, unit_id, resume=None):
+    def read(self, unit_id, resume=None, fresh=False):
         yield from self.events
 
 
@@ -273,3 +273,79 @@ def test_an_index_that_refuses_the_write_does_not_cost_the_person_their_turn(sta
     r = _turn(client, "pchat-abc")
     assert r.status_code == 200
     assert '"path": "meeting:118"' in r.text and "turn-complete" in r.text
+
+
+# ── 4. THE CHAT IS THE MEETING'S SESSION (founder decision, 2026-10-13) ──────────────────────────
+# Everything that addresses the meeting by its own name (`meet-<row>`: the post-meeting report, the
+# meeting page's chat, its live context) lands in the chat that sent the bot. A meeting started
+# outside any chat (calendar auto-join, API, admin) keeps its own chat, as before.
+
+def test_a_post_meeting_turn_addressed_to_meet_row_lands_in_the_chat_that_sent_the_bot(stack):
+    client = _client(stack, SEND_TURN)
+    _turn(client, "pchat-sender")
+    later = _client(stack, [{"type": "message-delta", "text": "Notes from the call."},
+                            {"type": "turn-complete"}])
+    r = later.post("/api/chat", json={"prompt": "process the meeting", "session": "meet-118"},
+                   headers={"X-User-Id": "u_priya"})
+    assert r.status_code == 200
+    sessions = {s["session"] for s in
+                client.get("/api/sessions", headers={"X-User-Id": "u_priya"}).json()["sessions"]}
+    assert sessions == {"pchat-sender"}, "no separate meet-118 chat is made"
+    assert stack["sessions"].meeting_chat("u_priya", "118") == "pchat-sender"
+
+
+def test_a_meeting_started_outside_any_chat_keeps_its_own_chat(stack):
+    client = _client(stack, [{"type": "message-delta", "text": "Notes."}, {"type": "turn-complete"}])
+    r = client.post("/api/chat", json={"prompt": "process the meeting", "session": "meet-205"},
+                    headers={"X-User-Id": "u_priya"})
+    assert r.status_code == 200
+    sessions = {s["session"] for s in
+                client.get("/api/sessions", headers={"X-User-Id": "u_priya"}).json()["sessions"]}
+    assert sessions == {"meet-205"}
+
+
+def test_another_person_addressing_the_meeting_is_never_sent_into_my_chat(stack):
+    client = _client(stack, SEND_TURN)
+    _turn(client, "pchat-sender")
+    assert stack["sessions"].meeting_chat("u_other", "118") == ""
+
+
+def test_the_bound_meeting_is_the_turn_context_of_its_chat(stack, monkeypatch):
+    """The live transcript grounds the chat the meeting was started from: a turn there that names no
+    focus of its own is focused on the bound meeting (the access check still decides what folds)."""
+    from control_plane.routers import chats as chats_mod
+
+    seen = []
+    real = chats_mod._context_grounding
+
+    def spy(body, *a, **k):
+        seen.append(body.context.focus if body.context is not None else body.active)
+        return real(body, *a, **k)
+
+    monkeypatch.setattr(chats_mod, "_context_grounding", spy)
+    client = _client(stack, SEND_TURN)
+    _turn(client, "pchat-sender")
+    _turn(_client(stack, [{"type": "turn-complete"}]), "pchat-sender", prompt="what did they say?")
+    focus = seen[-1]
+    focus = focus if isinstance(focus, dict) else focus.model_dump()
+    assert focus.get("kind") == "meeting" and str(focus.get("meeting_id")) == "118"
+
+
+def test_a_voice_note_started_from_a_chat_binds_to_that_chat(stack, monkeypatch):
+    """The recorder makes the meeting row; the terminal then binds it to the chat it was started
+    from (`POST /api/chat/meeting`), exactly as a bot sent from that chat binds."""
+    from control_plane.routers import chats as chats_mod
+
+    monkeypatch.setattr(chats_mod, "meeting_access_check",
+                        lambda lookup, root: (lambda subject, mid, **k: {"id": mid} if mid == "301" else None))
+    client = _client(stack, [{"type": "turn-complete"}])
+    _turn(client, "pchat-notes", prompt="hello")
+    r = client.post("/api/chat/meeting", json={"session": "pchat-notes", "meeting": "301"},
+                    headers={"X-User-Id": "u_priya"})
+    assert r.status_code == 200, r.text
+    rows = {s["session"]: s for s in client.get("/api/sessions", headers={"X-User-Id": "u_priya"}).json()["sessions"]}
+    assert rows["pchat-notes"]["meeting"] == "301"
+    assert stack["sessions"].meeting_chat("u_priya", "301") == "pchat-notes"
+    refused = client.post("/api/chat/meeting", json={"session": "pchat-notes", "meeting": "999"},
+                          headers={"X-User-Id": "u_priya"})
+    assert refused.status_code == 404, "a meeting the person cannot read is never bound"

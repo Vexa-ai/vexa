@@ -156,8 +156,8 @@ Say what the words mean, because the name is the argument:
 - a person's own space is their **personal workspace**, and a group has a **group workspace**;
 - **a personal workspace is company knowledge held by one person** — not private from the company. The company's
   agents may read it for a meeting that person is in;
-- what stays genuinely private is `_system` — their chats, sessions and settings. That is not a personal workspace
-  and no agent reads it for anybody else.
+- what stays genuinely private is `_system` — their identity and settings — and their chats, which are kept in the
+  session store, not in any workspace. Neither is a personal workspace and no agent reads them for anybody else.
 
 Write the platform's own stance into `STRUCTURE.md` under who can see what FIRST, as the default,
 then WALK `POLICIES.md` with them. That file is already in `_global`, seeded with every rule

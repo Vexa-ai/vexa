@@ -99,7 +99,7 @@ def test_the_retired_subject_list_grants_nothing(identity, monkeypatch):
 # ── the app, over fakes ──────────────────────────────────────────────────────────────────────────
 
 class _Reader:
-    def read(self, unit_id, resume=None):
+    def read(self, unit_id, resume=None, fresh=False):
         yield {"type": "turn-complete"}
 
 

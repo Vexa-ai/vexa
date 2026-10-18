@@ -35,7 +35,9 @@ import time
 from typing import Callable, Iterable, Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from shared.units import delegation_key, inbox_cursor_key, input_topic, output_topic
+from shared import stream_bounds
+from shared.units import (delegation_key, inbox_cursor_key, input_topic, output_topic, send_now_key,
+                          stop_key)
 
 logger = logging.getLogger("agent_api.workload_redis")
 
@@ -89,6 +91,15 @@ def acl_rules(unit_id: str, password: str, *, read_only_input: bool = True) -> l
             + [read_only + _glob_literal(inp)]
             + [f"~{_glob_literal(k)}" for k in (out, cursor)]
             + [read_only + _glob_literal(delegation_key(unit_id))]
+            # session bundles travel BY REFERENCE (shared.stream_bounds): agent-api writes the IN
+            # copy (read-only here), the worker writes its hand-back
+            + [read_only + _glob_literal(stream_bounds.bundle_key(unit_id, "")) + "*"]
+            + [f"~{_glob_literal(stream_bounds.handback_key(unit_id, ''))}*"]
+            # SEND NOW: agent-api names the queued message to run next; the worker reads it and
+            # clears it, so read-write (#1783 — without it every Send now was refused unseen)
+            + [f"~{_glob_literal(send_now_key(unit_id))}"]
+            # STOP: agent-api writes the press, the worker reads and clears it (live 2026-10-15)
+            + [f"~{_glob_literal(stop_key(unit_id))}"]
             + ["resetchannels", "-@all"]
             + [f"+{c}" for c in WORKER_COMMANDS])
 

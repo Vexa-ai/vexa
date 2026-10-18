@@ -36,14 +36,14 @@ def test_the_create_preset_imperative_is_not_a_name():
 # ── F205 — a quoted title is not a name the turn is introducing ───────────────────────────────────
 
 def test_a_quoted_web_page_title_is_not_a_name():
-    """Live repro: a tool result surfaced finos.org's "This Week At FINOS: Week Of August 17,
+    """Live repro: a tool result surfaced lumen.org's "This Week At LUMEN: Week Of August 17,
     2026" newsletter page, and the model's own prose quoted that headline back. The extractor
     read the quoted fragment "Week Of August" as a name with no page."""
-    text = ('I found finos.org\'s "This Week At FINOS: Week Of August 17, 2026" newsletter page, '
+    text = ('I found lumen.org\'s "This Week At LUMEN: Week Of August 17, 2026" newsletter page, '
             "which does not mention Zenith SIG.")
     out = E.candidate_names(text, mask_linked=False)
     assert "Week Of August" not in out, out
-    assert "This Week At FINOS" not in out, out
+    assert "This Week At LUMEN" not in out, out
     # ...and an unquoted real name in the same sentence still comes through.
     assert "Zenith SIG" in out, out
 
@@ -176,13 +176,13 @@ def _page(root, kind, slug, title, aliases=None):
 
 
 def test_so_vexam_is_not_a_new_page(tmp_path):
-    """Live repro: the write-back phase read "So Vexam, which is the Finos project" out of a
+    """Live repro: the write-back phase read "So Vexam, which is the Lumen project" out of a
     meeting transcript and created `kg/entities/project/so-vexam.md` — a page whose own body says
     it is not a distinct project. "So" is the sentence opener; "Vexam" is how speech recognition
     spelled Vexa, which already has a page."""
     _page(tmp_path, "company", "vexa", "Vexa")
-    _page(tmp_path, "project", "finos", "FINOS")
-    text = "So Vexam, which is the Finos project, is what we want to put in front of the TSC."
+    _page(tmp_path, "project", "lumen", "LUMEN")
+    text = "So Vexam, which is the Lumen project, is what we want to put in front of the TSC."
     assert E.missing_names([tmp_path], [text]) == []
 
 
@@ -213,8 +213,8 @@ def test_a_one_letter_variant_of_an_existing_page_is_that_page(tmp_path):
     assert E.missing_names([tmp_path], ["Robyn Vale chairs it now."]) == []
     assert E._shadows("vexam", "vexa") is True
     # a recorded variant (an alias) is an exact match
-    _page(tmp_path, "project", "finos", "FINOS", aliases=["Fino Project"])
-    assert E.missing_names([tmp_path], ["Fino Project met on Thursday."]) == []
+    _page(tmp_path, "project", "lumen", "LUMEN", aliases=["Lume Project"])
+    assert E.missing_names([tmp_path], ["Lume Project met on Thursday."]) == []
 
 
 def test_near_variant_has_a_floor_and_does_not_swallow_different_names(tmp_path):

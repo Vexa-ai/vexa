@@ -246,3 +246,23 @@ def test_asking_for_nothing_makes_no_request(monkeypatch):
 
     monkeypatch.setattr(watch, "_get", never)
     assert watch.bodies([]) == []
+
+
+def test_a_persons_own_flow_pages_land_on_their_desk_and_never_in_global(tmp_path, monkeypatch):
+    """ADR-0046 decision 10 — the per-person mirror: one page per version of a person's own flow,
+    in `<their desk>/flows/`, written by the same writer under the same filename rule."""
+    from control_plane import flow_pages_watch as w
+    (tmp_path / "126").mkdir()
+    body = "# brief\n"
+    pages = {"user:126": [{"file": "brief@1.md", "flow": "brief", "version": 1,
+                           "status": "active", "etag": w.etag(body), "body": body}]}
+    monkeypatch.setattr(w, "user_scopes", lambda: ["user:126", "user:999"])
+    monkeypatch.setattr(w, "index", lambda scope="instance": [
+        {k: v for k, v in p.items() if k != "body"} for p in pages.get(scope, [])])
+    monkeypatch.setattr(w, "bodies", lambda files, scope="instance": [
+        p for p in pages.get(scope, []) if p["file"] in files])
+    written = w.reconcile_people(tmp_path)
+    assert written == ["126/brief@1.md"]
+    assert (tmp_path / "126" / "flows" / "brief@1.md").read_text() == body
+    assert not (tmp_path / "999").exists(), "no desk, no mirror — nothing is created for it"
+    assert w.reconcile_people(tmp_path) == [], "bytes before write"

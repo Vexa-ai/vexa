@@ -1,6 +1,6 @@
 [project]
 name = "vexa-credential-broker"
-version = "0.13.2"
+version = "0.13.3"
 description = "The Connections credential broker: holds third-party credentials behind signed role assertions (credential-broker.v1) and uses them on the caller's behalf without returning them."
 requires-python = ">=3.11"
 dependencies = [

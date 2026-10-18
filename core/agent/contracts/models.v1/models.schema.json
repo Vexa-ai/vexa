@@ -190,6 +190,17 @@
         "access": {
           "$ref": "#/$defs/Access"
         },
+        "allowed_subjects": {
+          "description": "Open to these people only: each item is an exact sign-in address (compared case-insensitively) or a subject id. Everyone else neither sees the model nor can run it by naming it (not_permitted). For a model on a credential that belongs to one person, such as a personal subscription. Applies on top of access. Absent: the entry is open as access says.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 320
+          }
+        },
         "default": {
           "description": "The model a person runs on before they pick one. At most one entry.",
           "type": "boolean"
@@ -306,7 +317,7 @@
       }
     },
     "ModelList": {
-      "description": "GET /api/models: the models the caller may pick. default is the model the caller runs on before picking (their own default, else the catalog's, else the first listed; null when the list is empty). selected is the named chat's own pick, present when the request named a chat (null: the chat follows the default). selected_effort is the named chat's own effort pick, present with selected (null: the model's default_effort, or none when it has no effort control).",
+      "description": "GET /api/models: the models the caller may pick. default is the model the caller runs on before picking (the model they last picked in any chat, else their own Settings default, else the catalog's, else the first listed — each only while it is open to them; null when the list is empty). default_effort is the effort a new chat starts at: the one last picked with that model while the model still offers it (null: the model's default_effort). selected is the named chat's own pick, present when the request named a chat (null: the chat follows the default). selected_effort is the named chat's own effort pick, present with selected (null: the model's default_effort, or none when it has no effort control).",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -340,6 +351,16 @@
             }
           ]
         },
+        "default_effort": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "selected_effort": {
           "oneOf": [
             {
@@ -349,6 +370,13 @@
               "type": "null"
             }
           ]
+        },
+        "running": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Asked for a chat: the model its worker was started on (the model the last turn ran on); null before any turn."
         }
       }
     }

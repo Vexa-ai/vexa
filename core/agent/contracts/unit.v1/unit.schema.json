@@ -5,8 +5,8 @@
   "description": "The DISPATCH — the one backend object (one run of an agent), composed of the seven primitives. The Scheduler fires it; the Runtime spawns an isolated container, mounts the granted workspace LIST + brokers creds; the Agent (runner) runs from a start point and streams on its derived Stream `unit:<id>:out`. The envelope carries WHO it acts for and who launched it (identity: subject · launcher · signed token), WHICH agent runs (runner), WHICH workspaces it mounts at what access (workspaces[{id,mode}] — mode is the write-access source of truth), WHICH tools it may call (tools — each auto|gate per its tool.v1 descriptor), WHY it fired (trigger — informs the DERIVED input-trust), what it is grounded in (context), and WHAT to do (start: an entry point or a resumed session). `trust` (all-ro && irreversible-gated) and `output` (`unit:<id>:out`) are DERIVED, never stored. There is no `lifecycle` — the Runtime reaps on idle and continuity is the session file in the workspace. No tenancy beyond subject (ADR-0003). Supersedes the flat MVP shape and the meeting-only invoke.v1.",
   "$defs": {
     "Trigger": {
-      "description": "Why the dispatch fired — an input to the Scheduler, recorded for provenance + to DERIVE input-trust (message = you, in chat ⇒ trusted ⇒ rw; event/transcription from an external source ⇒ untrusted ⇒ propose-only). message = a user turn (chat, now); scheduled = a schedule entry fired (routine); event = an Integration published an event (e.g. email.received); transcription = a live transcript stream beat / session start (the in-meeting agent).",
-      "enum": ["message", "scheduled", "event", "transcription"]
+      "description": "Why the dispatch fired — an input to the Scheduler, recorded for provenance + to DERIVE input-trust (message = you, in chat ⇒ trusted ⇒ rw; event/transcription from an external source ⇒ untrusted ⇒ propose-only). message = a user turn (chat, now); scheduled = a schedule entry fired (routine); event = an Integration published an event (e.g. email.received); transcription = a live transcript stream beat / session start (the in-meeting agent); signal = a meeting.signal woke the meeting's agent in the meeting's chat (untrusted: it writes only the meeting's page and its listening brief, everything else is proposed).",
+      "enum": ["message", "scheduled", "event", "transcription", "signal"]
     },
     "Mode": {
       "description": "Workspace access mode — the SOURCE OF TRUTH for write access (governance). ro = materialized read-only; rw = synced back to the bucket on commit.",
@@ -275,6 +275,37 @@
         "detail": { "type": "string" },
         "fault": { "$ref": "#/$defs/Fault" }
       }
+    },
+    "SessionBundle": {
+      "description": "ADR-0048: a conversation, carried on a chat turn's message as `session_bundle`. `id` is the session; `version` is the transcript version these files are; `files` maps a plain relative path under the harness's continuity root to its bytes, base64. The pointer and the turn records are named `.claude/sessions/conversation.session` and `.claude/sessions/conversation.turns.jsonl` whatever the chat is called locally. A worker that already holds a newer version ignores an older one, unless `replace` is set: agent-api sets it when the store refused this conversation's last hand-back, so the worker's copy is ahead of a head that never took it and gives way to these files.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "files"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "version": { "type": "integer", "minimum": 0 },
+        "files": { "$ref": "#/$defs/SessionFiles" },
+        "replace": { "const": true }
+      }
+    },
+    "SessionBundleEvent": {
+      "description": "ADR-0048: the conversation handed back on the unit's output stream before `turn-complete`. agent-api saves `files` as version `base` + 1 only while `base` is still the head; otherwise the version is refused and logged, never merged. agent-api never relays this event to a client.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "session_id", "base", "files"],
+      "properties": {
+        "type": { "const": "session-bundle" },
+        "session_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "base": { "type": "integer", "minimum": 0 },
+        "turn_id": { "type": "string" },
+        "files": { "$ref": "#/$defs/SessionFiles" }
+      }
+    },
+    "SessionFiles": {
+      "description": "A conversation's files: plain relative paths (no `.` or `..` component) to base64 bytes.",
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z0-9._-][A-Za-z0-9._@+=-]*(/[A-Za-z0-9._-][A-Za-z0-9._@+=-]*)*$" },
+      "additionalProperties": { "type": "string", "contentEncoding": "base64" }
     }
   }
 }

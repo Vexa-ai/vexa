@@ -10,8 +10,8 @@ for the caller that cannot reach flows directly — the worker's auto-filer (no 
 worker container). A person's report reaches it the same way: they tell the chat agent, and the
 agent files it (the terminal's own "Report this" control was removed, founder 2026-10-11). The
 route still accepts `reporter: "person"` bodies from any authenticated caller.
-The rig posts straight to flows now too (`deploy/dogfood/rig/vexa_control_mcp.py`'s
-`report_friction`); this route is not its door any more.
+The one MCP's `report_friction` posts straight to flows (`core/flows/mcp.tools.v1.json`); this
+route is not its door.
 
 `shared/friction.py`'s `normalize()` still does the shape validation, clipping and redaction —
 one contract, two producers (worker / this route) — it just no longer feeds a store,

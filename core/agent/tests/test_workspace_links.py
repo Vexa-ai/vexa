@@ -188,7 +188,7 @@ def test_not_yours_gives_a_title_and_no_url_and_is_not_an_error(world):
     assert r["title"] == "Robin Vale"      # derived from the ref, never read out of the tree
     assert r["url"] is None
     assert r["writable"] is False
-    assert r["workspace"] == "grp"              # the name the greyed chip says you don't have
+    assert r["workspace"] is None               # a not-yours answer names no workspace
 
 
 def test_a_colleagues_desk_is_readable_and_not_writable(world):

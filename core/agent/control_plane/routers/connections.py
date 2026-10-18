@@ -1,12 +1,18 @@
 """Agent-facing connection requests/status. Human OAuth routes are never proxied here."""
 import os
+import re
+import time
+from contextvars import ContextVar
 from typing import Literal
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
-from control_plane import broker_client, identity_token
+from control_plane import broker_client, connection_policy, identity_token
+from control_plane import ceiling
+from control_plane.ceiling import is_unwatched, require_private
+from control_plane import private_taint
 from control_plane.connection_setup_schema import SetupSpec, allowed_keys
 
 
@@ -34,10 +40,15 @@ class _NamedRefusalRoute(APIRoute):
         handler = super().get_route_handler()
 
         async def named(request):
+            # One budget for every broker call this tool makes (`call_broker`). Set here, in the
+            # request's own task, so the endpoint's worker thread inherits it with the context.
+            held = _DEADLINE.set(_now() + BROKER_BUDGET_S)
             try:
                 return await handler(request)
             except RequestValidationError as exc:
                 return JSONResponse(status_code=422, content={'detail': _named_refusal(exc.errors())})
+            finally:
+                _DEADLINE.reset(held)
         return named
 
 class ConnectionRequest(BaseModel):
@@ -69,13 +80,114 @@ class AccountRead(BaseModel):
     limit: int = Field(default=10,ge=1,le=20)
 
 
+_EMAIL = Field(min_length=3, max_length=320)
+_GOOGLE_ID = r'^(|[a-zA-Z0-9_-]{1,128})$'
+
+
+class DraftAttachment(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    path: str = Field(min_length=1, max_length=1000,
+                      description='a file path inside a workspace the user can read, e.g. reports/q3.pdf')
+    slug: str = Field(default='', max_length=200,
+                      description='the workspace the file is in; empty for the user\'s own primary workspace')
+
+
 class GmailDraft(BaseModel):
     model_config=ConfigDict(extra='forbid')
     connection_id: str = Field(default='',pattern=r'^(|[a-f0-9]{32})$')
-    request_id: str = Field(pattern=r'^[a-zA-Z0-9-]{8,80}$')
-    recipient: str = Field(min_length=3,max_length=320)
-    subject: str = Field(max_length=500)
-    body: str = Field(min_length=1,max_length=50000)
+    request_id: str = Field(pattern=r'^[a-zA-Z0-9-]{8,80}$',
+                            description='8-80 letters/digits/hyphens, unique per draft; reuse it only to retry the same draft')
+    recipient: str = Field(min_length=3,max_length=320, description='the To address, one bare address')
+    subject: str = Field(default='', max_length=500, description='single line; for a reply leave empty or omit it to use "Re: <original subject>"')
+    body: str = Field(min_length=1,max_length=50000, description='plain text body')
+    cc: list[str] = Field(default_factory=list, max_length=20, description='bare addresses')
+    bcc: list[str] = Field(default_factory=list, max_length=20, description='bare addresses')
+    thread_id: str = Field(default='', pattern=_GOOGLE_ID,
+                           description='reply in this Gmail thread (thread id from gmail_search/gmail_read)')
+    in_reply_to: str = Field(default='', pattern=_GOOGLE_ID,
+                             description='the Gmail message id replied to; empty = the thread\'s last message')
+    attachments: list[DraftAttachment] = Field(default_factory=list, max_length=10,
+                                               description='workspace files to attach, only when policy allows it')
+
+
+class GmailDraftUpdate(GmailDraft):
+    draft_id: str = Field(pattern=r'^[a-zA-Z0-9_-]{1,128}$',
+                          description='the draft_id gmail_draft_create returned; other drafts are refused')
+
+
+class CalendarTimeIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    date_time: str = Field(default='', max_length=40,
+                           description='ISO 8601 date-time, e.g. 2026-10-20T10:00:00; with an offset or a time_zone')
+    date: str = Field(default='', pattern=r'^(|\d{4}-\d{2}-\d{2})$', description='all-day events: YYYY-MM-DD')
+    time_zone: str = Field(default='', max_length=64, description='IANA zone, e.g. Europe/Lisbon')
+
+
+_REQUEST_ID = Field(pattern=r'^[a-zA-Z0-9-]{8,80}$',
+                    description='8-80 letters/digits/hyphens, unique per change; reuse it only to retry the same change')
+_CALENDAR_ID = Field(default='primary', min_length=1, max_length=256, pattern=r'^[^\s/?#]+$',
+                     description='calendar id; primary is the user\'s own calendar')
+_EVENT_ID = Field(pattern=r'^[a-v0-9_]{5,1024}$', description='an event id from calendar_events')
+_NOTIFY = Field(default=False, description='ask Google to email attendees; true when the user asked to invite them '
+                                            '(policy calendar_notify_attendees, off by default, decides)')
+
+
+class CalendarEventCreate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    connection_id: str = Field(default='', pattern=r'^(|[a-f0-9]{32})$')
+    request_id: str = _REQUEST_ID
+    calendar_id: str = _CALENDAR_ID
+    title: str = Field(min_length=1, max_length=1024)
+    start: CalendarTimeIn
+    end: CalendarTimeIn
+    description: str = Field(default='', max_length=8000)
+    location: str = Field(default='', max_length=1024)
+    attendees: list[str] = Field(default_factory=list, max_length=100, description='bare email addresses')
+    conference: bool = Field(default=False, description='add a Google Meet link')
+    notify: bool = _NOTIFY
+
+
+class CalendarEventUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    connection_id: str = Field(default='', pattern=r'^(|[a-f0-9]{32})$')
+    request_id: str = _REQUEST_ID
+    calendar_id: str = _CALENDAR_ID
+    event_id: str = _EVENT_ID
+    title: str | None = Field(default=None, max_length=1024)
+    start: CalendarTimeIn | None = None
+    end: CalendarTimeIn | None = None
+    description: str | None = Field(default=None, max_length=8000)
+    location: str | None = Field(default=None, max_length=1024)
+    attendees: list[str] | None = Field(default=None, max_length=100,
+                                        description='the complete new attendee list; omit to keep it')
+    conference: bool = Field(default=False, description='add a Google Meet link if the event has none')
+    notify: bool = _NOTIFY
+
+
+class CalendarEventCancel(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    connection_id: str = Field(default='', pattern=r'^(|[a-f0-9]{32})$')
+    request_id: str = _REQUEST_ID
+    calendar_id: str = _CALENDAR_ID
+    event_id: str = _EVENT_ID
+    notify: bool = _NOTIFY
+
+
+_ACTION = Literal['gmail.search', 'gmail.read', 'gmail.thread', 'calendar.events', 'gmail.draft',
+                  'gmail.draft.update', 'calendar.event.create', 'calendar.event.update', 'calendar.event.cancel']
+
+
+class PolicyNarrowing(BaseModel):
+    """The user's own narrower setting. Every key optional; omitted = as the administrator allows."""
+    model_config = ConfigDict(extra='forbid')
+    connection_actions: list[_ACTION] | None = Field(default=None, description='actions allowed while the user is present')
+    connection_actions_unattended: list[_ACTION] | None = Field(default=None, description='actions allowed in background routines')
+    calendar_notify_attendees: bool | None = None
+    calendar_attendee_domains: Literal['any'] | list[str] | None = None
+    calendar_ids: Literal['any'] | list[str] | None = None
+    draft_recipient_domains: Literal['any'] | list[str] | None = None
+    draft_attachments: bool | None = None
+    draft_attachment_max_kb: int | None = Field(default=None, ge=0, le=20480)
 
 
 class CustomCall(BaseModel):
@@ -99,13 +211,61 @@ INSTRUCTIONS = {
     'reconnect_required': ("The account's authorization is no longer accepted. Call connection_request for this "
                            "provider so the person can reconnect in the Connections panel; do not retry this tool "
                            "until they have."),
+    'connection_replaced': ("The person deleted this connection and created the one named in replaced_by in its "
+                            "place. Use replaced_by as connection_id from now on (and in any routine that names "
+                            "the old one); do not ask the person to reconnect."),
+    'connection_deleted': ("The person deleted this connection. Call connections_status for the current ones; if "
+                           "none fits, call connection_request so they can connect it again."),
+    'not_ready': ("No account of this kind is ready: the one named in the message waits for the person. Call "
+                  "connection_request for this provider so the Connections panel opens, and tell the person to "
+                  "finish that setup there; do not retry this tool until they have."),
+    'not_connected': ("No account of this kind is connected. Call connection_request for this provider so the "
+                      "person can connect one in the Connections panel."),
 }
 REASONS = tuple(INSTRUCTIONS)
+#: How a provider is named in a sentence to the person.
+_KIND = {'google_email': 'Gmail', 'google_calendar': 'Google Calendar'}
 
 
-def connection_fault(status: int, reason: str, message: str) -> HTTPException:
-    """A failure the agent can act on: ``{reason, message, instruction}`` (P18: typed, never opaque)."""
-    return HTTPException(status, {'reason': reason, 'message': message, 'instruction': INSTRUCTIONS[reason]})
+def connection_fault(status: int, reason: str, message: str, *, hop: str = '') -> HTTPException:
+    """A failure the agent can act on: ``{reason, message, instruction}`` (P18: typed, never opaque),
+    and ``hop`` — which hop failed — when it is known."""
+    detail = {'reason': reason, 'message': message, 'instruction': INSTRUCTIONS[reason]}
+    if hop:
+        detail['hop'] = hop
+    return HTTPException(status, detail)
+
+
+#: THE HOPS ARE ORDERED (Vexa-ai/vexa#1783, frictions 2026-10-13): every inner hop gives up before
+#: the one that called it, so the hop that was slow is the one that says so. The gateway forwards to
+#: agent-api for 30 s (gateway.adapters.FORWARD_TIMEOUT_S); every broker call one tool makes shares
+#: this budget, which ends first; the broker's own call to a connected service ends sooner still.
+BROKER_BUDGET_S = 25.0
+#: Pauses between attempts. Only a request that is safe to send again is sent again (`call_broker`).
+_RETRY_PAUSES_S = (0.25, 0.75)
+#: An attempt with less time than this left is not started: it could only time out.
+_MIN_ATTEMPT_S = 1.0
+_DEADLINE: ContextVar = ContextVar('connections_broker_deadline', default=None)
+
+#: Which hop failed, said in every fault (`connection_fault(hop=…)`).
+HOP_BROKER = 'agent-api → credential-broker'
+HOP_STORE = 'credential-broker → credential store'
+HOP_UPSTREAM = 'credential-broker → connected service'
+
+_SUCCESSOR_ID = re.compile(r'\b[a-f0-9]{32}\b')
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
+def _retry_sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _remaining() -> float:
+    deadline = _DEADLINE.get()
+    return BROKER_BUDGET_S if deadline is None else deadline - _now()
 
 
 def call_broker(actor, method, path, payload=None, *, identity):
@@ -114,49 +274,118 @@ def call_broker(actor, method, path, payload=None, *, identity):
     ``identity`` is the gateway's signature over ``actor`` (gateway-identity.v1), forwarded
     unchanged; the broker acts for ``actor`` only when it names them.
 
+    Time: each attempt is given what is left of the tool's budget (``BROKER_BUDGET_S``, shared by
+    every call one request makes), so agent-api answers before the gateway's forward gives up.
+
+    Sent again, at most twice, only when that is safe: a GET after any transport failure or a broker
+    502/503; any method when no connection opened (nothing reached the broker). A POST that may have
+    reached the broker is never repeated — it may have side effects.
+
     The answer when it is not 200:
-    * 400/404/422, and a 409 the broker gives no reason for: passed through with the broker's sentence
+    * 400/404/409/422 without a typed reason: passed through with the broker's sentence
       (an argument or a state the agent corrects);
-    * a typed failure, ``{reason, message, instruction}`` (``INSTRUCTIONS``):
+    * 410: the connection was deleted — ``connection_replaced`` with ``replaced_by`` when the
+      person re-created it, else ``connection_deleted``;
+    * a typed failure, ``{reason, message, instruction, hop}`` (``INSTRUCTIONS``):
       - ``reconnect_required`` / ``provider_error`` — the broker's 409 with that reason;
       - ``store_unavailable`` / ``provider_error`` — the broker's 502/503, keeping its status;
-      - ``broker_unreachable`` (503) — no answer, an answer that is not the broker's, or a broker that
-        refused agent-api itself (a deployment fault, never the person's).
+      - ``broker_unreachable`` — 504 when the broker did not answer within the budget, else 503: no
+        answer, an answer that is not the broker's, or a broker that refused agent-api itself (a
+        deployment fault, never the person's).
     Every outage is also logged by broker_client as one ``broker_fault`` line (with the reason when
     the broker answered)."""
     def fail(kind, reason, *, status=None):
         broker_client.fault(kind, role='agent', method=method, path=path, status=status, reason=reason)
 
-    try:
-        response = broker_client.request(
-            base_url=os.environ.get('VEXA_CONNECTIONS_BROKER_URL', ''),
-            key_file=os.environ.get('VEXA_CONNECTIONS_AGENT_KEY_FILE', ''),
-            role='agent', actor=actor, method=method, path=path, payload=payload, identity=identity)
-        if response.status_code == 200:
+    def again(attempt, *, safe):
+        if not safe or attempt >= len(_RETRY_PAUSES_S):
+            return False
+        pause = _RETRY_PAUSES_S[attempt]
+        if _remaining() - pause < _MIN_ATTEMPT_S:
+            return False
+        _retry_sleep(pause)
+        return True
+
+    attempt = 0
+    while True:
+        left = _remaining()
+        if left < _MIN_ATTEMPT_S:
+            fail('budget', 'broker_unreachable')
+            raise connection_fault(504, 'broker_unreachable', _late_sentence(), hop=HOP_BROKER)
+        try:
+            response = broker_client.request(
+                base_url=os.environ.get('VEXA_CONNECTIONS_BROKER_URL', ''),
+                key_file=os.environ.get('VEXA_CONNECTIONS_AGENT_KEY_FILE', ''),
+                role='agent', actor=actor, method=method, path=path, payload=payload, identity=identity,
+                timeout=min(left, BROKER_BUDGET_S))
+        except broker_client.BrokerFault as exc:
+            if exc.kind == 'config':
+                raise connection_fault(503, 'broker_unreachable', 'Connections are not configured on this deployment',
+                                       hop=HOP_BROKER) from None
+            if again(attempt, safe=method == 'GET' or exc.unsent):
+                attempt += 1
+                continue
+            if exc.timed_out:
+                raise connection_fault(504, 'broker_unreachable', _late_sentence(), hop=HOP_BROKER) from None
+            raise connection_fault(503, 'broker_unreachable', 'Connection service unavailable', hop=HOP_BROKER) from None
+        if response.status_code in (502, 503) and again(attempt, safe=method == 'GET'):
+            attempt += 1
+            continue
+        break
+
+    if response.status_code == 200:
+        try:
             return broker_client.json_of(response, role='agent', method=method, path=path)
-        if response.status_code in (400, 404, 409, 422):
+        except broker_client.BrokerFault:
+            raise connection_fault(503, 'broker_unreachable', 'Connection service unavailable', hop=HOP_BROKER) from None
+    if response.status_code == 410:
+        return _gone(response)
+    if response.status_code in (400, 404, 409, 422):
+        try:
             body = broker_client.json_of(response, role='agent', method=method, path=path)
-            detail = body.get('detail') if isinstance(body, dict) else None
-            sentence = detail if isinstance(detail, str) else 'Invalid connection request'
-            reason = body.get('reason') if isinstance(body, dict) else None
-            if response.status_code == 409 and reason in ('reconnect_required', 'provider_error'):
-                raise connection_fault(409, reason, sentence)
-            raise HTTPException(response.status_code, sentence)
-        if response.status_code in (502, 503):
-            try:
-                body = response.json()
-            except ValueError:
-                body = {}
-            reason = body.get('reason') if isinstance(body, dict) else None
-            reason = reason if reason in ('store_unavailable', 'provider_error') else 'provider_error'
-            fail('http_%d' % response.status_code, reason, status=response.status_code)
-            raise connection_fault(response.status_code, reason, broker_client.outage_sentence(response))
-        fail('http_%d' % response.status_code, 'broker_unreachable', status=response.status_code)
-        raise connection_fault(503, 'broker_unreachable', 'Connection service unavailable')
-    except broker_client.BrokerFault as exc:
-        if exc.kind == 'config':
-            raise connection_fault(503, 'broker_unreachable', 'Connections are not configured on this deployment') from None
-        raise connection_fault(503, 'broker_unreachable', 'Connection service unavailable') from None
+        except broker_client.BrokerFault:
+            raise connection_fault(503, 'broker_unreachable', 'Connection service unavailable', hop=HOP_BROKER) from None
+        detail = body.get('detail') if isinstance(body, dict) else None
+        sentence = detail if isinstance(detail, str) else 'Invalid connection request'
+        reason = body.get('reason') if isinstance(body, dict) else None
+        if response.status_code == 409 and reason in ('reconnect_required', 'provider_error'):
+            raise connection_fault(409, reason, sentence, hop=HOP_UPSTREAM)
+        raise HTTPException(response.status_code, sentence)
+    if response.status_code in (502, 503):
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        reason = body.get('reason') if isinstance(body, dict) else None
+        reason = reason if reason in ('store_unavailable', 'provider_error') else 'provider_error'
+        fail('http_%d' % response.status_code, reason, status=response.status_code)
+        raise connection_fault(response.status_code, reason, broker_client.outage_sentence(response),
+                               hop=HOP_STORE if reason == 'store_unavailable' else HOP_UPSTREAM)
+    fail('http_%d' % response.status_code, 'broker_unreachable', status=response.status_code)
+    raise connection_fault(503, 'broker_unreachable', 'Connection service unavailable', hop=HOP_BROKER)
+
+
+def _late_sentence() -> str:
+    return (f"Vexa's connection service did not answer within {int(BROKER_BUDGET_S)} s "
+            "(agent-api → credential broker). This is Vexa's own service, not the connected account.")
+
+
+def _gone(response):
+    """The broker's 410: the connection was deleted. Its sentence names the connection the person
+    re-created in its place, if any; that id is the broker's own, never something we were sent."""
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    sentence = body.get('detail') if isinstance(body, dict) and isinstance(body.get('detail'), str) else ''
+    successor = _SUCCESSOR_ID.search(sentence)
+    if successor:
+        detail = {'reason': 'connection_replaced', 'message': sentence, 'replaced_by': successor.group(0),
+                  'instruction': INSTRUCTIONS['connection_replaced']}
+    else:
+        detail = {'reason': 'connection_deleted', 'message': sentence or 'This connection was deleted',
+                  'instruction': INSTRUCTIONS['connection_deleted']}
+    raise HTTPException(410, detail)
 
 
 class ResearchReceipt(BaseModel):
@@ -251,8 +480,133 @@ def signed_identity(request: Request) -> str:
     return token
 
 
-def build(*, subject_of, wsr=None, **_):
-    router=APIRouter(route_class=_NamedRefusalRoute)
+#: Workspace files a draft may carry, by extension, and the type each is attached as.
+ATTACHMENT_TYPES = {'.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                    '.txt': 'text/plain', '.csv': 'text/csv', '.md': 'text/markdown'}
+
+#: The routes the connection policy decides — declared once, in `connection_policy.ROUTES`.
+POLICY_ROUTES = connection_policy.ROUTES
+
+_REFUSED = {
+    'connection_actions': ('This deployment\'s policy (connection_actions) does not allow {action}. Nothing was done. '
+                           'Tell the user; do not try another way.'),
+    'connection_actions_unattended': ('This runs without a person in the loop, and the policy '
+                                      '(connection_actions_unattended) does not allow {action} then. Nothing was done. '
+                                      'Record what you wanted to do and stop; do not retry another way.'),
+}
+
+
+def policy_refusal(key: str, action: str, *, mine: bool = False, why: str = '') -> HTTPException:
+    """403, naming the policy key. ``mine``: the user's own narrower setting refused it.
+
+    AN UNATTENDED REFUSAL NAMES ITS REMEDY. When the key is ``connection_actions_unattended`` the
+    one thing that would let the action run is a person in the loop, so the body is the shared
+    ``human_session_required`` refusal (``remedy: ask_in_chat`` and the sentence the agent relays)
+    — the refusal a worker reads from every other service — with the policy key alongside. A
+    worker with nobody present is told what works instead of only that the policy said no."""
+    if key == 'connection_actions_unattended' and not why:
+        return HTTPException(403, {**identity_token.REFUSAL, 'policy_key': key,
+                                   'setting': 'user' if mine else 'deployment'})
+    if why:
+        text = f'Refused by policy {key}: {why}. Nothing was done. Tell the user; do not try another way.'
+    elif mine:
+        text = (f'The user\'s own setting ({key}) does not allow {action}. Nothing was done. Tell the user; '
+                f'they can change it in Connections.')
+    else:
+        text = _REFUSED[key].format(action=action)
+    return HTTPException(403, {'status': 'refused', 'reason': 'policy', 'policy_key': key,
+                               'setting': 'user' if mine else 'deployment', 'instruction': text})
+
+
+#: The routes that READ the person's private sources (mail, calendar, a connected service). A session
+#: that called one is marked, and its page writes into a workspace other people read wait for the
+#: person's confirmation (`private_taint`).
+PRIVATE_READS = ('/api/connections/read', '/api/connections/gmail/search', '/api/connections/gmail/inbox',
+                 '/api/connections/gmail/read', '/api/connections/gmail/thread',
+                 '/api/connections/calendar/events', '/api/connections/service/call',
+                 '/api/onboarding/research')
+
+
+def _mark_private_read(request: Request) -> None:
+    path = request.url.path
+    if path in PRIVATE_READS and ceiling.is_delegated(request):
+        unit = identity_token.session_of(request.headers)
+        source = path.rsplit('/api/connections/', 1)[-1].split('/')[0] if '/api/connections/' in path else 'research'
+        private_taint.mark(unit, {'gmail': 'mail', 'calendar': 'calendar', 'service': 'connected service',
+                                  'read': 'connected service'}.get(source, source))
+
+
+def build(*, subject_of, wsr=None, settings=None, _global_root=None, _read_target=None, **_):
+    # A TURN OTHER PEOPLE READ (ADR-0048 decision 4) reaches none of this: every route here reads or
+    # spends something only its person may see, so the whole router refuses a shared turn's worker.
+    router=APIRouter(route_class=_NamedRefusalRoute,
+                     dependencies=[Depends(require_private), Depends(_mark_private_read)])
+
+    def _global_dir():
+        """`_global`, where POLICIES.md is — the same directory every worker mounts."""
+        if _global_root is not None:
+            return _global_root()
+        if settings is not None and wsr is not None:
+            from control_plane import system_mounts
+            return system_mounts.global_root(settings, wsr.root)
+        return None
+
+    def _admin_policy() -> dict:
+        try:
+            return connection_policy.read(_global_dir())
+        except connection_policy.PolicyUnreadable as exc:
+            raise HTTPException(409, {'status': 'refused', 'reason': 'policy_unreadable', 'policy_key': exc.key,
+                                      'instruction': f'The connection policy in _global/POLICIES.md cannot be read '
+                                                     f'({exc.key}: {exc.why}). Nothing was done. Tell the user an '
+                                                     f'administrator must correct it.'}) from None
+
+    def _authorize(request: Request, actor: str, signed: str, action: str):
+        """THE POLICY, decided before the broker is asked: the administrator's answer first (so a
+        worker the deployment refuses never reaches the broker), then narrowed by the user's own
+        setting. Returns (the ActionPolicy the broker enforces again, the effective answers)."""
+        unattended = is_unwatched(request)
+        admin = _admin_policy()
+        key = connection_policy.allowed(admin, action, unattended=unattended)
+        if key:
+            raise policy_refusal(key, action)
+        mine = call_broker(actor, 'GET', '/api/preferences', identity=signed)
+        effective = connection_policy.narrow(admin, mine if isinstance(mine, dict) else {})
+        key = connection_policy.allowed(effective, action, unattended=unattended)
+        if key:
+            raise policy_refusal(key, action, mine=True)
+        return connection_policy.forwarded(effective, action, unattended=unattended), effective
+
+    def _attachments(request: Request, items, effective: dict) -> list:
+        """Workspace files the user can read, as the broker's Attachment shape. Refused unless policy
+        allows attachments; the size cap is checked before a byte is read."""
+        if not items:
+            return []
+        if not effective['draft_attachments']:
+            raise policy_refusal('draft_attachments', 'gmail.draft', why='drafts may not carry attachments')
+        if wsr is None or _read_target is None:
+            raise HTTPException(503, 'Workspace files are unavailable on this deployment')
+        import base64
+        from pathlib import PurePosixPath
+        from workspaces.shared import workspace_paths as wpaths
+        cap, total, out = int(effective['draft_attachment_max_kb']) * 1024, 0, []
+        for item in items:
+            ctype = ATTACHMENT_TYPES.get(PurePosixPath(item.path).suffix.lower())
+            if not ctype:
+                raise HTTPException(422, 'attachments: only PDF, PNG, JPEG, TXT, CSV and Markdown files can be attached')
+            base = _read_target(request, item.slug or None)
+            st = wpaths.stat_inside(base, item.path)
+            if st is None:
+                raise HTTPException(404, 'attachments: file not found in that workspace')
+            if total + st.st_size > cap:
+                raise policy_refusal('draft_attachment_max_kb', 'gmail.draft',
+                                     why=f'attachments may total at most {cap // 1024} KB')
+            data = wpaths.read_bytes_inside(base, item.path, max_bytes=cap - total)
+            if data is None:
+                raise HTTPException(404, 'attachments: file not found in that workspace')
+            total += len(data)
+            out.append({'filename': PurePosixPath(item.path).name[:200], 'content_type': ctype,
+                        'data': base64.b64encode(data).decode()})
+        return out
     # A person in the loop: the verbs that read a mailbox, spend a stored credential or ask for
     # consent refuse a worker dispatched without one. They are declared `person` in
     # `core/agent/routes.v1.json` and refused by the app's one gate (`route_policy.py`) before any
@@ -275,9 +629,16 @@ def build(*, subject_of, wsr=None, **_):
         again after that explanation.
 
         For custom_secret, name the service in label (setup has no service or name key) and put in setup
-        only: endpoint (exact HTTPS URL), header (Authorization or X-API-Key), scheme (bearer/raw/telegram),
-        method (GET/POST), secret_label, documentation_url, oauth, and fields=[{name,label,location:query|body}]
-        for missing values. Any other key is refused and the refusal names it.
+        only: endpoint (exact HTTPS URL), header (Authorization or X-API-Key), scheme (bearer/raw/telegram/prefix),
+        prefix (scheme=prefix only), method (GET/POST), secret_label, documentation_url, oauth, and
+        fields=[{name,label,location:query|body}] for missing values. Any other key is refused and the refusal names it.
+        scheme sets how the credential is sent in header: bearer sends "Bearer <secret>", raw sends the secret
+        alone, prefix sends "<prefix> <secret>" for a service whose documentation names another word.
+        Discord bots use scheme=prefix, prefix="Bot", header=Authorization, secret_label="Bot token" and an exact
+        endpoint under https://discord.com/api/v10/ — e.g. /channels/<numeric channel id>/messages with method=POST
+        to post (ask the person for the channel id; the endpoint is fixed, nothing in it is filled in later).
+        To fix a connection that answers 401 because of the wrong scheme, request it again with the same label
+        and the corrected setup; the person saves the token again.
         Never put secret values in setup. Derive configuration from provider documentation; never guess endpoints or credentials.
         For OAuth authorization-code services, add oauth={authorization_url,token_url,scopes:[...],token_auth:"client_secret_post"|"client_secret_basic"}, documentation_url, and use scheme=bearer/header=Authorization.
         The shared secure form collects client ID and client secret, shows the redirect URI and starts consent. Never treat an OAuth client secret as an API access token.
@@ -326,19 +687,34 @@ def build(*, subject_of, wsr=None, **_):
         return {'connections': [{k: row[k] for k in _STATUS_FIELDS if k in row} for row in rows]}
 
     def _ready(actor, signed, provider, connection_id):
+        """The account a tool acts on: the one named, if it is ready; else the person's only READY
+        account of this kind. An unfinished or broken setup (awaiting_user, disconnected, error) is
+        never a candidate and never in the way of the ready one. Several ready ones need a choice;
+        none ready names the setup that waits for the person (Vexa-ai/vexa#1783)."""
         rows=call_broker(actor,'GET','/api/connections',identity=signed)['connections']
-        ready=[c for c in rows if c['provider']==provider and c['status']=='ready' and (not connection_id or c['id']==connection_id)]
-        if len(ready)!=1:
-            raise HTTPException(409,'Choose a ready connection_id from connections_status; multiple accounts require an explicit selection')
-        return ready[0]['id']
+        mine=[c for c in rows if c['provider']==provider]
+        ready=[c for c in mine if c['status']=='ready' and (not connection_id or c['id']==connection_id)]
+        if len(ready)==1:
+            return ready[0]['id']
+        if not connection_id and not ready:
+            waiting=[c for c in mine if c['status']!='ready']
+            if not waiting:
+                raise HTTPException(409,{'reason':'not_connected','message':f'No {_KIND.get(provider, provider)} account is connected.',
+                                         'instruction':INSTRUCTIONS['not_connected']})
+            named=', '.join(f"'{c.get('label') or _KIND.get(provider, provider)}' ({c['id']}, {c['status']})" for c in waiting)
+            raise HTTPException(409,{'reason':'not_ready','message':(f'No {_KIND.get(provider, provider)} account is ready. '
+                                     f'Waiting for the person: {named}. They finish it in Connections.'),
+                                     'instruction':INSTRUCTIONS['not_ready']})
+        raise HTTPException(409,'Choose a ready connection_id from connections_status; multiple accounts require an explicit selection')
 
     def _read(request: Request, payload: dict, connection_id: str):
         actor=subject_of(request)
         signed=signed_identity(request)
+        policy, _ = _authorize(request, actor, signed, payload['action'])
         provider='google_calendar' if payload['action']=='calendar.events' else 'google_email'
         try:
             return call_broker(actor,'POST','/api/connections/'+_ready(actor, signed, provider, connection_id)+'/read',
-                               payload,identity=signed)
+                               {**payload, 'policy': policy},identity=signed)
         except HTTPException as exc:
             if isinstance(exc.detail, dict):    # typed: it carries its own instruction
                 raise
@@ -390,22 +766,143 @@ def build(*, subject_of, wsr=None, **_):
         A failure carries reason: reconnect_required means call connection_request for this provider; store_unavailable, broker_unreachable and provider_error are outages or refusals that reconnecting does not fix, so say what failed and do not retry the same call."""
         return _read(request, {'action':'calendar.events','time_min':body.time_min,'time_max':body.time_max,'limit':body.limit,'page_token':body.page_token}, body.connection_id)
 
-    @router.post('/api/connections/gmail/draft')
-    def draft(request: Request, body: GmailDraft):
-        """Save an unsent Gmail draft when the user asks. This NEVER sends email.
-        For multiple mailboxes pass the connection_id from connections_status. Supply one recipient, subject and plain text body. Use a unique request_id
-        (8-80 letters/digits/hyphens) and reuse that SAME ID for retries of the same draft.
-        A permission_required result opens Connections: user must grant compose permission.
-        Never claim a draft exists unless status is draft_created. Do not retry unknown outcomes.
-        A failure carries reason: reconnect_required means call connection_request for this provider; store_unavailable, broker_unreachable and provider_error are outages or refusals that reconnecting does not fix, so say what failed and do not retry the same call."""
+    def _mailbox(actor, signed, connection_id):
+        try:
+            return _ready(actor, signed, 'google_email', connection_id)
+        except HTTPException as exc:   # only "no single ready mailbox" is the person's to fix; an outage keeps its status
+            raise (exc if exc.status_code != 409 or isinstance(exc.detail, dict)
+                   else HTTPException(409,'Choose a ready Gmail connection_id from connections_status')) from None
+
+    def _draft(request: Request, body: GmailDraft, action: str, path: str):
         actor=subject_of(request)
         signed=signed_identity(request)
+        policy, effective = _authorize(request, actor, signed, action)
+        cid=_mailbox(actor, signed, body.connection_id)
+        payload=body.model_dump(exclude={'connection_id','attachments'})
+        payload['attachments']=_attachments(request, body.attachments, effective)
+        payload['policy']=policy
+        return call_broker(actor,'POST','/api/connections/'+cid+path,payload,identity=signed)
+
+    @router.post('/api/connections/gmail/draft')
+    def draft(request: Request, body: GmailDraft):
+        """Save an unsent Gmail draft when the user asks. This NEVER sends email; the user sends it from Gmail.
+        For multiple mailboxes pass the connection_id from connections_status. Give one recipient, a subject and a
+        plain text body; cc and bcc take bare addresses. To reply, pass thread_id (and optionally in_reply_to, the
+        message replied to) from gmail_search or gmail_read: the draft lands in that conversation with the correct
+        reply headers and a "Re:" subject. attachments are workspace files, only when the policy allows them.
+        Use a unique request_id and reuse that SAME ID for retries of the same draft.
+        A permission_required result opens Connections: the user must grant compose permission.
+        A refusal naming policy_key is this deployment's or the user's policy: tell the user, do not work around it.
+        Never claim a draft exists unless status is draft_created. Do not retry unknown outcomes.
+        A failure carries reason: reconnect_required means call connection_request for this provider; store_unavailable, broker_unreachable and provider_error are outages or refusals that reconnecting does not fix, so say what failed and do not retry the same call."""
+        return _draft(request, body, 'gmail.draft', '/draft')
+
+    @router.post('/api/connections/gmail/draft/update')
+    def draft_update(request: Request, body: GmailDraftUpdate):
+        """Replace the content of a Gmail draft Vexa created earlier (the draft_id from gmail_draft_create). This
+        NEVER sends email. Drafts the user wrote themselves, or that another mailbox created, are refused.
+        Send the complete new content: recipient, subject, body, cc, bcc and attachments replace what the draft had.
+        Use a new request_id for each change and reuse it only to retry that change.
+        Never claim the draft changed unless status is draft_updated."""
+        return _draft(request, body, 'gmail.draft.update', '/draft-update')
+
+    def _calendar(request: Request, body, action: str, fields: dict):
+        actor=subject_of(request)
+        signed=signed_identity(request)
+        policy, _ = _authorize(request, actor, signed, action)
+        # Attendees are emailed only where the policy allows it (calendar_notify_attendees, off by
+        # default); refused here, before the broker is asked, and again by the broker.
+        if body.notify and not policy.get('notify_attendees'):
+            raise policy_refusal('calendar_notify_attendees', action,
+                                 why='agents may not ask Google to email attendees')
         try:
-            cid=_ready(actor, signed, 'google_email', body.connection_id)
-        except HTTPException as exc:   # only "no single ready mailbox" is the person's to fix; an outage keeps its status
-            raise (exc if exc.status_code != 409 else HTTPException(409,'Choose a ready Gmail connection_id from connections_status')) from None
-        return call_broker(actor,'POST','/api/connections/'+cid+'/draft',body.model_dump(exclude={'connection_id'}),
-                           identity=signed)
+            cid=_ready(actor, signed, 'google_calendar', body.connection_id)
+        except HTTPException as exc:
+            raise (exc if exc.status_code != 409 or isinstance(exc.detail, dict)
+                   else HTTPException(409,'Choose a ready Google Calendar connection_id from connections_status')) from None
+        payload={'request_id': body.request_id, 'action': action, 'calendar_id': body.calendar_id,
+                 'notify': body.notify, **fields, 'policy': policy}
+        return call_broker(actor,'POST','/api/connections/'+cid+'/calendar-event',payload,identity=signed)
+
+    _CALENDAR_RULES = ('A permission_required result means the user must use Enable calendar changes in Connections; '
+                       'nothing was changed. A refusal naming policy_key is this deployment\'s or the user\'s policy: '
+                       'tell the user, do not work around it. Attendees are not emailed unless notify is true, the user '
+                       'asked for it, and policy allows it. If the outcome is unknown, tell the user to check their '
+                       'calendar; do not retry.')
+
+    @router.post('/api/connections/calendar/event/create')
+    def calendar_event_create(request: Request, body: CalendarEventCreate):
+        """Create an event on the user's connected Google Calendar, only when the user asked for it. Give a title,
+        start and end (date_time with an offset or a time_zone, or date for all-day), and optionally description,
+        location, attendees (bare addresses) and conference=true for a Google Meet link. When the user asks to invite
+        people, set notify=true so Google sends them the invitation, if the calendar_notify_attendees policy allows it
+        (off by default: then the event is created only without notify, and the user sends the invitation). When the meeting belongs to a workspace, put the
+        workspace's join link (workspace_invite_link_create) on its own line in description — it lets the attendees
+        join the workspace, and Vexa files the meeting there. Use a unique request_id
+        and reuse it only to retry the same event; a retry returns the first result.
+        Never claim the event exists unless status is event_created."""
+        return _calendar(request, body, 'calendar.event.create',
+                         body.model_dump(include={'title', 'start', 'end', 'description', 'location', 'attendees',
+                                                  'conference'}))
+
+    @router.post('/api/connections/calendar/event/update')
+    def calendar_event_update(request: Request, body: CalendarEventUpdate):
+        """Change an event on the user's Google Calendar, only when the user asked for it. event_id must come from
+        calendar_events; an id that does not resolve, or an event the user cannot edit (they do not organize it and
+        guests may not modify it), is refused. Only the fields given change; attendees replaces the whole list.
+        Use a new request_id per change. Never claim the change was made unless status is event_updated."""
+        return _calendar(request, body, 'calendar.event.update',
+                         {**body.model_dump(include={'title', 'start', 'end', 'description', 'location', 'attendees'}),
+                          'event_id': body.event_id, 'conference': body.conference})
+
+    @router.post('/api/connections/calendar/event/cancel')
+    def calendar_event_cancel(request: Request, body: CalendarEventCancel):
+        """Cancel (delete) an event the user organizes on their Google Calendar, only when the user asked for it.
+        event_id must come from calendar_events; events the user does not organize are refused. Attendees are
+        not told unless notify is true. Use a new request_id; never claim it was cancelled unless status is
+        event_cancelled."""
+        return _calendar(request, body, 'calendar.event.cancel', {'event_id': body.event_id})
+
+    @router.get('/api/connections/policy')
+    def connection_policy_get(request: Request):
+        """Read what this user's agent may do with their connected Gmail and Google Calendar: the deployment's
+        policy (set by the administrator in _global/POLICIES.md), the user's own narrower setting, and the
+        effective answer. Use it to explain a refusal that named a policy_key."""
+        actor=subject_of(request)
+        admin=_admin_policy()
+        mine=call_broker(actor,'GET','/api/preferences',identity=signed_identity(request))
+        return {'deployment': connection_policy.public(admin), 'user': mine,
+                'effective': connection_policy.public(connection_policy.narrow(admin, mine))}
+
+    @router.put('/api/connections/policy')
+    def connection_policy_set(request: Request, body: PolicyNarrowing):
+        """Save the user's own, narrower setting for what their agent may do with Gmail and Google Calendar, only
+        when the user asked. Keys sent replace the stored ones; keys omitted keep theirs. The user can only
+        narrow: a value that allows more than the deployment's policy is refused, naming the key.
+        Actions: gmail.search, gmail.read, gmail.thread, calendar.events, gmail.draft, gmail.draft.update,
+        calendar.event.create, calendar.event.update, calendar.event.cancel.
+        Only the user's own client may save it: an agent is always refused, and should tell the user
+        to change it in Connections."""
+        # The person's own word. A worker in a watched chat may still be steered by what it read,
+        # so every delegated caller is refused, whatever its regime (ADR-0040, 2026-10-13).
+        ceiling.refuse_delegated(request, reason='person_setting',
+                                 instruction='Only the user can change their own connection setting, in '
+                                             'Connections. Nothing was saved. Tell the user what to change.')
+        actor=subject_of(request)
+        signed=signed_identity(request)
+        admin=_admin_policy()
+        current=call_broker(actor,'GET','/api/preferences',identity=signed)
+        merged={**(current if isinstance(current, dict) else {}), **body.model_dump(exclude_unset=True)}
+        merged={k: v for k, v in merged.items() if v is not None}
+        try:
+            connection_policy.check_narrowing(admin, merged)
+        except connection_policy.Widening as exc:
+            raise HTTPException(422, {'status': 'refused', 'reason': 'widening', 'policy_key': exc.key,
+                                      'instruction': f'{exc.key}: {exc.why}. The user can only narrow what this '
+                                                     f'deployment allows; nothing was saved.'}) from None
+        saved=call_broker(actor,'POST','/api/preferences',merged,identity=signed)
+        return {'status': 'saved', 'user': saved,
+                'effective': connection_policy.public(connection_policy.narrow(admin, saved))}
 
     @router.post('/api/connections/service/call')
     def service_call(request: Request, body: CustomCall):
@@ -445,7 +942,9 @@ def build(*, subject_of, wsr=None, **_):
             if not ids or len(selected) != len(ids):
                 raise HTTPException(409, 'Select ready email/calendar accounts owned by this user')
         def read(cid, payload):
-            return call_broker(actor, 'POST', '/api/connections/'+cid+'/read', payload, identity=signed)
+            policy, _ = _authorize(request, actor, signed, payload['action'])
+            return call_broker(actor, 'POST', '/api/connections/'+cid+'/read', {**payload, 'policy': policy},
+                               identity=signed)
         try:
             return Research(wsr.workspace_dir(actor), read).run(body.action, connections=selected,
                 batch_id=body.batch_id, receipts=[r.model_dump() for r in body.receipts])

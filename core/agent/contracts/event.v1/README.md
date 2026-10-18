@@ -11,3 +11,12 @@ default plan registered for the event `name`, e.g. Inbox-triage for `email.recei
 
 **Status: UNSEALED** (stub) — sealed in the MVP3 event/tool MVP. `gate:schema` validates its goldens
 (`Event.email`, `Event.meeting`) against `#/$defs/Event`.
+
+## `target` and `data` (meeting.signal, additive, re-sealed)
+
+`target: {chat}` runs the turn **in a named chat**: the ingress routes it to that chat's `-signal`
+sibling unit with the chat's own conversation, queued behind any running turn, and the reply lands in
+the chat. Such a turn is unit.v1 trigger `signal`, untrusted: it writes only the meeting's page and its
+`listen:` brief, and everything else is proposed. `data` carries a `meeting.signal` buffer (`meeting_row`,
+`buffer[]` of confirmed lines with per-label scores, `score`, `reason`, `brief_version`). The ingress
+fences it into the turn as quoted data after the plan, never as part of it. Golden: `Event.signal`.

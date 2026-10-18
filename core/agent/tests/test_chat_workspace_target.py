@@ -361,12 +361,12 @@ TARGETED = {"targeted": "bank-4040f6", "role": "owner"}
 CREATED = {"created": "grp-copperline", "name": "Copperline Effects"}
 
 
-def test_the_verb_that_moves_the_target_emits_the_focus_event():
-    """ONE VOCABULARY. A `focus` says *"this workspace is where this conversation is working"*, and
-    that has always meant both halves — it is in the mount set, and it is where writes go. Two event
-    kinds for one sentence is how a chip and a record come to disagree."""
+def test_the_old_verb_no_longer_moves_the_target():
+    """UI DECISION 6b (founder 2026-10-15): the agent PROPOSES where a chat writes and only the
+    person's click switches it, so `workspace_target` no longer earns a `focus` — a `targeted` answer
+    from an older server still decodes, but the harness does not route the verb there any more."""
     assert _workspace_focus(json.dumps(TARGETED)) == {"type": "focus", "workspace": "bank-4040f6"}
-    assert "mcp__vexa__workspace_target" in _FOCUS_TOOLS
+    assert "mcp__vexa__workspace_target" not in _FOCUS_TOOLS
 
 
 def test_a_refused_target_moves_nothing():
@@ -375,21 +375,25 @@ def test_a_refused_target_moves_nothing():
     assert _workspace_focus(json.dumps({"targeted": "grp/../_global"})) is None
 
 
-def test_the_harness_emits_it_after_the_tool_result_and_only_on_success():
+def test_the_harness_emits_a_proposal_after_the_tool_result_and_only_on_success():
+    """…and what the harness DOES emit for the agent's ask is the inline proposal (UI decision 6b)."""
+    proposal = {"ui_action": "propose_target", "proposed": "bank-4040f6", "name": "Example Bank",
+                "current": "", "current_name": "Personal", "reason": "the request is about the bank"}
+
     def _use(cid="c1"):
         return json.dumps({"type": "assistant", "message": {"content": [
-            {"type": "tool_use", "name": "mcp__vexa__workspace_target",
-             "input": {"slug": "bank-4040f6"}, "id": cid}]}})
+            {"type": "tool_use", "name": "mcp__vexa__propose_write_target",
+             "input": {"workspace": "Example Bank", "reason": "the request is about the bank"}, "id": cid}]}})
 
     def _result(payload, err=False):
         return json.dumps({"type": "user", "message": {"content": [
             {"type": "tool_result", "tool_use_id": "c1", "is_error": err,
              "content": json.dumps(payload)}]}})
 
-    ok = list(parse_stream_json(iter([_use(), _result(TARGETED)])))
-    assert [e["type"] for e in ok] == ["tool-call", "tool-result", "focus"]
+    ok = list(parse_stream_json(iter([_use(), _result(proposal)])))
+    assert [e["type"] for e in ok] == ["tool-call", "tool-result", "propose-target"]
     assert ok[-1]["workspace"] == "bank-4040f6"
-    bad = list(parse_stream_json(iter([_use(), _result(TARGETED, err=True)])))
+    bad = list(parse_stream_json(iter([_use(), _result(proposal, err=True)])))
     assert [e["type"] for e in bad] == ["tool-call", "tool-result"]
 
 
@@ -437,7 +441,7 @@ class _Reader:
     def __init__(self, events):
         self.events = events
 
-    def read(self, unit_id, resume=None):
+    def read(self, unit_id, resume=None, fresh=False):
         yield from self.events
 
 

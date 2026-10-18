@@ -10,7 +10,8 @@ MECHANICAL, AND THAT IS THE WHOLE DESIGN. No model call happens in here. The ext
 went past and nothing was created" (decision 24.3) — so a term a chip offers and a page the
 write-back phase would write are the same population by construction. Two extractors would have
 drifted the first time either was tuned, and the drift would have shown up as a chip that opens
-nothing.
+nothing. ONE ADDITION (2026-10-14): one-word names said mid-sentence ("ask Maria", "Siemens wants")
+— see `_one_word_names`. A meeting that names people by first name came back with no terms at all.
 
 ``known`` is answered by the ENTITY INDEX of the reader's mounted workspaces, not by a search: the
 question is "does a page for this exist where this reader can read it", and the index is exactly
@@ -31,8 +32,11 @@ agent, and a cursor for the next call — never a join key across two readers.
 from __future__ import annotations
 
 import datetime as _dt
+import re
 
-from workspaces.shared.entities import KINDS, candidate_names, slugify, strip_leading_noise
+from workspaces.shared.entities import (KINDS, LEADING_SPEECH_NOISE, candidate_names, slugify,
+                                        strip_leading_noise)
+from workspaces.shared import entities as _entities
 
 # `kg/entities/<kind>/<stem>.md` — the one shape `entity_upsert` writes and the one shape this
 # reads. Anything else in the tree is not an entity page, however much it looks like one.
@@ -59,6 +63,48 @@ ENTITIES_PREFIX = "kg/entities/"
 # drift would show up as a chip for a name the write-back refuses, or the other way round.
 
 
+# ── one-word names ───────────────────────────────────────────────────────────────────────────────
+#
+# ⚠ THE DEFECT THIS FIXES (friction, 2026-10-13): `transcript_terms` answered NO terms for a meeting
+# that plainly named people and companies. Speech names people by FIRST name ("ask Maria") and
+# companies by ONE word ("Siemens wants the pilot"); the two-word floor `candidate_names` holds —
+# right for choosing which PAGE to write, measured on notes — saw none of them, so a whole meeting
+# came back empty. A chip list is not a page list: a LOOK publishes nothing and the agent chooses
+# with `keep`, so a one-word candidate costs one more line in a list, never a chip nobody judged.
+#
+# The signal is the one an ASR transcript carries reliably: a capital letter in the MIDDLE of a
+# sentence. A capital at a sentence's head is grammar, so a word seen only there is not a name —
+# unless the same word is also said mid-sentence somewhere in the meeting, and then every line
+# that said it counts. Letters are Unicode, as in `entities._WORD`: "Дмитрий" and "Яндекс" are
+# names the same way "Maria" is. A script with no letter case (CJK, Arabic) carries no such
+# signal and is out of reach of any lexical rule.
+_SINGLE_WORD = re.compile(r"[^\W\d_][\w'’\-]*")
+_SENTENCE_END = re.compile(r"[.!?…]\s*$")
+_POSSESSIVE_TAIL = re.compile(r"[’']s$")
+
+# Words capitalised mid-sentence that name a time, a courtesy or a language, never a thing a page
+# would be about. Short on purpose: anything missed is one line in an unpublished list.
+_NOT_A_ONE_WORD_NAME = frozenset({
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "january", "february", "march", "april", "may", "june", "july", "august", "september",
+    "october", "november", "december", "ok", "okay", "hi", "hello", "hey", "thanks", "please",
+    "sorry", "mr", "mrs", "ms", "dr", "sir", "english", "ai",
+}) | LEADING_SPEECH_NOISE | {w.lower() for w in _entities._LEADING_NOT_A_NAME}
+
+
+def _one_word_names(text: str, covered: set):
+    """``(word, mid_sentence)`` for every capitalised single word in ``text`` that is not part of a
+    longer name this segment already gave (``covered``) and not a known non-name."""
+    for m in _SINGLE_WORD.finditer(text):
+        word = _POSSESSIVE_TAIL.sub("", m.group(0).rstrip("'’-"))
+        if len(word) < 2 or not word[0].isupper() or word in covered:
+            continue
+        if word.lower().replace("’", "'") in _NOT_A_ONE_WORD_NAME:
+            continue
+        head = text[:m.start()]
+        yield word, bool(head.strip()) and not _SENTENCE_END.search(head)
+
+
 def extract_terms(segments) -> list[dict]:
     """The proper names these segments said, in order of first appearance, each with where it was said.
 
@@ -73,23 +119,44 @@ def extract_terms(segments) -> list[dict]:
     """
     order: list[str] = []
     seen: dict[str, dict] = {}
+    heads: list[tuple] = []   # (word, sid, at) seen only at a sentence's head, so far
+
+    def sighting(name, sid, at):
+        row = seen.get(name)
+        if row is None:
+            row = {"term": name, "segments": [], "first_at": at}
+            seen[name] = row
+            order.append(name)
+        if sid is not None and sid not in row["segments"]:
+            row["segments"].append(sid)
+        return row
+
     for seg in segments or []:
         text = str((seg or {}).get("text") or "")
         if not text.strip():
             continue
         sid = (seg or {}).get("id")
         at = (seg or {}).get("at")
+        covered: set = set()
         for raw in candidate_names(text, mask_linked=False):
             name = strip_leading_noise(raw)
             if not name:
                 continue
-            row = seen.get(name)
-            if row is None:
-                row = {"term": name, "segments": [], "first_at": at}
-                seen[name] = row
-                order.append(name)
-            if sid is not None and sid not in row["segments"]:
-                row["segments"].append(sid)
+            covered.update(name.split())
+            sighting(name, sid, at)
+        for word, mid in _one_word_names(text, covered):
+            if mid:
+                sighting(word, sid, at)
+            else:
+                heads.append((word, sid, at))
+    # A word said at a sentence's head counts once the meeting has also said it mid-sentence.
+    for word, sid, at in heads:
+        row = seen.get(word)
+        if row is None:
+            continue
+        sighting(word, sid, at)
+        if at is not None and (row["first_at"] is None or str(at) < str(row["first_at"])):
+            row["first_at"] = at
     return _merge_prefixes([seen[n] for n in order])
 
 
@@ -106,7 +173,11 @@ def _merge_prefixes(rows: list[dict]) -> list[dict]:
         # first-match fold would put "James" onto a row that is itself folded away, and its
         # sightings would vanish with it. Folding straight onto the longest spelling makes the
         # chain flat and the operation order-independent.
-        cands = [t for t in terms if t != row["term"] and t.startswith(row["term"])]
+        # A ONE-WORD term folds only at a word boundary: "Ana" is "Ana Lima", never "Anacorp".
+        # A multi-word one keeps the character fold, so ASR's "James Hol" still finds "James
+        # Hollister".
+        stem = row["term"] if " " in row["term"] else row["term"] + " "
+        cands = [t for t in terms if t != row["term"] and t.startswith(stem)]
         longer = max(cands, key=len) if cands else None
         if longer is None:
             out.append(row)

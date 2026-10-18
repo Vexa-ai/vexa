@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from control_plane import orgs as _orgs
 from control_plane.workspace_attach import STORE_DIRNAME, _slot
 from shared.gitexec import run_git
 from workspaces.shared import workspace_paths as wpaths
@@ -198,6 +199,28 @@ class TouchLog:
             rows[member] = when
             for stale in sorted(rows, key=rows.get)[:max(0, len(rows) - TOUCH_MAX)]:
                 rows.pop(stale, None)
+
+    def forget(self, desk_id: str, match) -> int:
+        """Drop every entry ``match(workspace_id, path)`` says yes to (a forget, Vexa-ai/vexa#1783);
+        returns how many went."""
+        gone = 0
+        if self._redis is not None:
+            try:
+                members = self._redis.zrange(self._key(desk_id), 0, -1)
+            except Exception:  # noqa: BLE001
+                return 0
+            for member in members:
+                wid, _, path = str(member).partition("/")
+                if match(wid, path):
+                    gone += int(self._redis.zrem(self._key(desk_id), member) or 0)
+        else:
+            rows = self._mem.get(desk_id, {})
+            for member in list(rows):
+                wid, _, path = member.partition("/")
+                if match(wid, path):
+                    rows.pop(member, None)
+                    gone += 1
+        return gone
 
     def recent(self, desk_id: str, limit: int = TOUCH_MIRROR_MAX) -> list[dict]:
         """Most recently opened first, `[{workspace, path, at}]`."""
@@ -376,6 +399,10 @@ def sync_workspace(root, slug: str, *, registry: WorkspaceRegistry, kind: Option
         "name": (name or prev.get("name") or _default_name(slug, kind)),
         "owner": (owner if owner is not None else prev.get("owner")) or (slug if kind == "desk" else None),
         "created": rec.get("created", ""),
+        # The org it belongs to (architecture A1): the tree's own `workspace.json` `org` when it
+        # names one, else what the index already held, else the default org. No workspace file is
+        # rewritten to say "default" — the absence of an org IS the default org (`orgs.py`).
+        "org": str(rec.get("org") or prev.get("org") or _orgs.DEFAULT_ORG_ID),
     })
 
 
@@ -480,7 +507,7 @@ def private_owner(record: Optional[dict], root=None) -> Optional[str]:
 
 
 def access_for(record: Optional[dict], subject: str, *, root=None,
-               is_member: Optional[MemberCheck] = None) -> str:
+               is_member: Optional[MemberCheck] = None, viewer_org: Optional[str] = None) -> str:
     """``readable`` | ``not-yours`` | ``gone`` for one reader and one workspace.
 
     ``gone`` means the registry has no record, or it has one and the tree it points at is no longer
@@ -507,6 +534,18 @@ def access_for(record: Optional[dict], subject: str, *, root=None,
         return ACCESS_GONE
     if root is not None and not addressable(record, root):
         return ACCESS_GONE              # a platform directory, or a row pointing somewhere else
+    # THE ORG BOUNDARY (architecture A1). A viewer who names their org never reads another org's
+    # workspace, whatever its kind — not even a desk or `_global`, which the rest of this function
+    # opens to "any signed-in member of this instance". A caller that names no org gets the viewer's
+    # org from identity (`orgs.viewer_org`), so every caller enforces it. With one org per install
+    # every viewer and every workspace is in the default org, so no answer changes today. The
+    # install's own `_global` (no org stamped) is every org's policy layer under A1 and stays readable.
+    if viewer_org is None:
+        viewer_org = _orgs.viewer_org(subject)      # the directory, when identity is wired
+    unstamped_global = (record.get("kind") == "global"
+                        and str(record.get("org") or _orgs.DEFAULT_ORG_ID) == _orgs.DEFAULT_ORG_ID)
+    if viewer_org is not None and not unstamped_global and viewer_org != _orgs.record_org(record):
+        return ACCESS_NOT_YOURS
     owner = private_owner(record, root)
     if owner is not None:               # a tree in its owner's private store: theirs alone
         return ACCESS_READABLE if str(subject or "").strip() == owner else ACCESS_NOT_YOURS
@@ -525,7 +564,7 @@ def access_for(record: Optional[dict], subject: str, *, root=None,
 
 
 def writable_for(record: Optional[dict], subject: str, *, root=None,
-                 is_member: Optional[MemberCheck] = None) -> bool:
+                 is_member: Optional[MemberCheck] = None, viewer_org: Optional[str] = None) -> bool:
     """May this reader WRITE here? The other half of the desk's shape.
 
     A desk: its OWNER, and nobody else — that is what makes "readable by everyone, writable by one"
@@ -536,7 +575,8 @@ def writable_for(record: Optional[dict], subject: str, *, root=None,
     Reported alongside `access` rather than folded into it because they are genuinely two answers,
     and a client that cannot tell them apart either hides an editor a person may use or offers one
     that will 403."""
-    if not record or access_for(record, subject, root=root, is_member=is_member) != ACCESS_READABLE:
+    if not record or access_for(record, subject, root=root, is_member=is_member,
+                                viewer_org=viewer_org) != ACCESS_READABLE:
         return False
     if private_owner(record, root) is not None:
         return True                     # readable above means the caller is its owner
@@ -601,6 +641,18 @@ def rename_audited(registry: WorkspaceRegistry, workspace_id: str, name: str, *,
                          "renames": [*(rec.get("renames") or []), entry][-RENAME_AUDIT_MAX:]})
 
 
+def not_yours_view(*, workspace_id: str = "", slug: str = "") -> dict:
+    """The ``not-yours`` answer for a reader with no claim on the workspace: the access and only what
+    the caller supplied — the id or slug it asked about. No name, no kind and no other identifier: a
+    workspace's name is the group's own business, and a reader outside it learns that it exists and
+    that it is not theirs, nothing more. The terminal renders it as a greyed chip with no title."""
+    out = {"id": workspace_id or None, "name": None, "kind": None, "access": ACCESS_NOT_YOURS,
+           "writable": False}
+    if slug:
+        out["slug"] = slug
+    return out
+
+
 def view(record: Optional[dict], access: str, *, workspace_id: str = "", writable: bool = False) -> dict:
     """The wire shape of ``GET /api/workspaces/{id}``: ``{id, name, kind, access}``.
 
@@ -613,3 +665,34 @@ def view(record: Optional[dict], access: str, *, workspace_id: str = "", writabl
     return {"id": record.get("id", workspace_id), "name": record.get("name"),
             "kind": record.get("kind"), "slug": record.get("slug"), "access": access,
             "writable": bool(writable)}
+
+
+def readers_covered(target: Optional[dict], dest: Optional[dict], *, root=None,
+                    is_member: Optional[MemberCheck] = None, members=None) -> bool:
+    """May a page in ``target`` link by id into ``dest``? Only when EVERY reader of ``target`` can
+    read ``dest`` (friction 2026-10-14: a page written into a new shared workspace was linked into
+    the writer's private workspaces, which the other member could not open).
+
+    ``members(slug) -> [subject]`` lists a group's members. A desk and the company layer are read by
+    every member of the instance, so a page there links by id only into workspaces everyone reads.
+    Anything uncertain answers False: the link then stays ``[[Name]]`` in the page's own workspace,
+    and the reader's resolver decides at read time."""
+    if not target or not dest:
+        return False
+    if access_for(dest, "\x00anyone", root=root, is_member=None) == ACCESS_READABLE:
+        return True                                     # the org tier, or a desk: everyone reads it
+    owner = private_owner(target, root)
+    if owner is not None:
+        readers = [owner]
+    elif target.get("kind") in ("desk", "global") or target.get("slug") == GLOBAL_SLUG:
+        return False                                    # everyone reads target; dest is narrower
+    else:
+        try:
+            readers = list(members(str(target.get("slug") or ""))) if members else []
+        except Exception:  # noqa: BLE001 — an unreadable roster never widens a link
+            return False
+        if target.get("owner"):
+            readers.append(str(target["owner"]))
+        if not readers:
+            return False
+    return all(access_for(dest, r, root=root, is_member=is_member) == ACCESS_READABLE for r in readers)

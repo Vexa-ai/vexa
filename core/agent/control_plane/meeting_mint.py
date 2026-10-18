@@ -43,6 +43,7 @@ import urllib.request
 from pathlib import Path
 
 from control_plane import meeting_note
+from shared import obs
 from workspaces.shared import workspace_paths as wpaths
 
 logger = logging.getLogger("agent_api.meeting_mint")
@@ -157,8 +158,63 @@ def mint(workspaces_root, subject: str, row, *, path: str = "", record=None) -> 
     proposed = str(path or "").strip()
     rel = next((p for p in (proposed, recorded) if p and meeting_note.is_note_path(p)),
                "") or compose(row)
-    desk = Path(workspaces_root) / str(subject)
+    # THE NOTE'S HOME (#1783): the person's primary active workspace — Personal, or the chat's
+    # workspace when Personal is switched off or deleted. Never a workspace they took away.
+    try:
+        desk = meeting_note.home_dir(workspaces_root, subject)
+    except Exception:  # noqa: BLE001 — NoHome: Personal hidden; adopt below, or refuse
+        desk = None
     created = False
+    # A NOTE THAT IS ALREADY SOMEWHERE IS THE NOTE. A meeting has one: a report in another of the
+    # person's workspaces (or in a Personal workspace they switched off) is not shadowed by a fresh,
+    # empty page in the home.
+    #
+    # A PAGE IN THE HOME THAT NAMES THIS MEETING IS ADOPTED (founder, 2026-10-15: an agenda page his
+    # agent wrote before the call, with `native:` or `meeting:` naming it) — under its own name, and
+    # recorded on the row, so the post-meeting report lands in it too rather than in a second file.
+    #
+    # THE BINDING IS EXACT (founder, 2026-10-15: "why not map page to meeting reliably?"): a page that
+    # names this meeting by identity — `meeting:`, `native:`, `meeting_url:` or `calendar_event:` in
+    # its frontmatter, written there by `meeting_attach_page` or by whoever wrote it for this meeting
+    # — is ADOPTED, wherever among the person's workspaces it is, and recorded on the row with its
+    # workspace, so the sidebar, Update notes and the post-meeting report all go to that one page.
+    rec_path, rec_ws = meeting_note.recorded_place(row)
+    places = meeting_note.note_places(workspaces_root, subject)
+    for place in places:
+        if place["hidden"]:
+            continue
+        if rec_path and rec_ws and place["slug"] == rec_ws and wpaths.is_file_inside(place["dir"], rec_path):
+            return {"path": rec_path, "created": False, "workspace": place["slug"]}
+    for place in places:
+        if place["hidden"]:
+            continue
+        there = meeting_note.resolve_exact_in(place["dir"], row)
+        if not there:
+            continue
+        if place["dir"] == desk:
+            if not rec_path:
+                rel = there       # in the home: the ordinary path below keeps it and records it
+            break
+        if record is not None:
+            try:
+                record(str(subject), facts["id"], there, place["slug"])
+            except TypeError:                       # a recorder that predates the workspace
+                if not place["slug"]:
+                    record(str(subject), facts["id"], there)
+            except Exception:  # noqa: BLE001 — the page is found; the record is bookkeeping
+                logger.exception("recording the adopted page for meeting %s failed", facts["id"])
+        return {"path": there, "created": False, "workspace": place["slug"], "adopted": True}
+    # a page an older lookup finds elsewhere (a title, a switched-off Personal) is shown, not shadowed
+    for place in places:
+        if place["dir"] == desk:
+            continue
+        there = meeting_note.resolve_in(place["dir"], row)
+        if there:
+            return {"path": there, "created": False, "workspace": place["slug"],
+                    **({"readonly": True} if place["hidden"] else {})}
+    if desk is None:
+        # NO HOME (Personal hidden): nothing is created in a workspace picked by order (#1783)
+        return {"path": None, "created": False, "refused": "no workspace to write to"}
     # NOFOLLOW: the desk is a work tree the model's tools can write. A real page already there is
     # the reader's and is left alone; a link at the page, or on the way to it, is never treated as
     # the page and never written through (a link at the page is replaced; one on the way refuses).
@@ -192,6 +248,32 @@ def _commit(desk: Path, rel: str) -> None:
         logger.exception("committing the minted meeting page %s failed", rel)
 
 
+def http_annotator(meeting_api_url: str, *, internal_secret: str = ""):
+    """``(subject, meeting_id, metadata: dict) -> bool``: an owner-scoped, merge-only annotate of the
+    meeting row's metadata as ``subject`` (the same door `http_recorder` uses, for any keys). A call
+    started in a room records ``room`` and ``workspace`` on its row this way (rooms, R1 1.2). Never
+    raises."""
+    base = (meeting_api_url or "").rstrip("/")
+
+    def _annotate(subject: str, meeting_id, metadata: dict) -> bool:
+        if not base or not subject or not str(meeting_id).isdigit() or not metadata:
+            return False
+        req = urllib.request.Request(
+            f"{base}/meetings/{int(meeting_id)}/annotate", data=json.dumps({"metadata": metadata}).encode(),
+            method="POST",
+            headers={"X-User-Id": str(subject), "Content-Type": "application/json",
+                     **({"X-Internal-Secret": internal_secret} if internal_secret else {}),
+                     **obs.trace_headers()})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return 200 <= int(resp.status) < 300
+        except Exception as exc:  # noqa: BLE001 — the call is bound; its row's annotation is the extra
+            logger.warning("annotating meeting %s failed (%s)", meeting_id, exc)
+            return False
+
+    return _annotate
+
+
 def http_recorder(meeting_api_url: str, *, internal_secret: str = ""):
     """The default recorder: `POST {meeting_api_url}/meetings/{id}/annotate` as the caller — its
     `X-User-Id` over the internal tier (`X-Internal-Secret`), the only unsigned identity meeting-api
@@ -207,14 +289,16 @@ def http_recorder(meeting_api_url: str, *, internal_secret: str = ""):
     falls back to composing the path as it does today — one degraded meeting, not a failed turn."""
     base = (meeting_api_url or "").rstrip("/")
 
-    def _record(subject: str, meeting_id, path: str) -> bool:
+    def _record(subject: str, meeting_id, path: str, workspace: str = "") -> bool:
         if not base or not subject or not str(meeting_id).isdigit():
             return False
-        body = json.dumps({"metadata": {meeting_note.NOTE_PATH_KEY: str(path)}}).encode()
+        body = json.dumps({"metadata": {meeting_note.NOTE_PATH_KEY: str(path),
+                                        meeting_note.NOTE_WORKSPACE_KEY: str(workspace or "")}}).encode()
         req = urllib.request.Request(
             f"{base}/meetings/{int(meeting_id)}/annotate", data=body, method="POST",
             headers={"X-User-Id": str(subject), "Content-Type": "application/json",
-                     **({"X-Internal-Secret": internal_secret} if internal_secret else {})})
+                     **({"X-Internal-Secret": internal_secret} if internal_secret else {}),
+                     **obs.trace_headers()})
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return 200 <= int(resp.status) < 300

@@ -61,10 +61,29 @@ def scrubbed_git_env() -> dict[str, str]:
 # identity token is a bearer secret the subprocess has no use for. The model DOES need its MODEL
 # credentials (ANTHROPIC_*/CLAUDE_CODE_OAUTH_TOKEN) to talk to the provider, so those are
 # deliberately absent here — this is the tight denylist of vars the model has no legitimate reason to hold.
+#
+# Every credential the worker PROCESS holds for its own use is listed, not just the data-plane ones:
+# what the CLI's environment carries, the model's shell carries. The audit of a worker's environment
+# (dispatch's stamped env + runtime_kernel.workload_env.WORKER_FORWARD_ENV) finds these credentials;
+# the ones KEPT are the model-provider credentials the CLI itself sends (CLAUDE_CODE_OAUTH_TOKEN,
+# ANTHROPIC_API_KEY / _AUTH_TOKEN, OPENAI_API_KEY, CODEX_API_KEY). tests/test_access_harness_env.py.
 _HARNESS_SUBPROCESS_DENY_VARS = ("REDIS_URL", "VEXA_AGENT_IDENTITY_TOKEN",
                                  # the unit's input-stream key (shared/unit_input.py): whoever holds it
                                  # can put a message on the worker's input as its owner
-                                 "VEXA_UNIT_IN_KEY")
+                                 "VEXA_UNIT_IN_KEY",
+                                 # flows-api's timeline key is deployment-wide and its route names the
+                                 # subject it answers for; the worker reads it in-process
+                                 # (shared/timeline.py) to build its own temporal block
+                                 "VEXA_FLOWS_TIMELINE_KEY",
+                                 # the toolbelt's bearer: the CLI reads it from the private attachment
+                                 # file (worker/engine.py write_mcp_config), never from its environment
+                                 "VEXA_MCP_DELEGATION_TOKEN",
+                                 # the operator's search endpoint key: WebSearch/WebFetch run in-process
+                                 # (llm/web_tools.py)
+                                 "VEXA_SEARCH_API_KEY",
+                                 # the openai-agent harness's model key: that harness runs in-process,
+                                 # and no CLI reads it
+                                 "VEXA_LLM_API_KEY")
 
 
 def harness_subprocess_env() -> dict[str, str]:
@@ -825,6 +844,43 @@ def _staged_policy_deletions(work: Path, env: dict) -> set[str]:
     return {ln.strip() for ln in raw.splitlines() if ln.strip()}
 
 
+_DRAWER_DIR = "uploads"
+
+
+def _redact_staged_identifiers(work: Path, env) -> dict:
+    """Replace identifiers in staged text files on disk, re-stage them, and return ``{kind: n}``."""
+    from shared import sensitive
+    try:
+        names = _git(work, "diff", "--cached", "--name-only", "--diff-filter=AM", "-z", env=env)
+    except subprocess.CalledProcessError:
+        return {}
+    kinds: dict = {}
+    for rel in [n for n in names.split("\0") if n]:
+        try:
+            raw = wpaths.read_bytes_inside(work, rel)
+        except Exception:  # noqa: BLE001 — unreadable through the nofollow door: leave it be
+            continue
+        if raw is None or len(raw) > 2_000_000 or b"\0" in raw[:8000]:
+            continue
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        found = sensitive.find(text)
+        if not found:
+            continue
+        clean, _n = sensitive.redact(text)
+        try:
+            wpaths.write_text_inside(work, rel, clean)
+        except Exception:  # noqa: BLE001 — a file we cannot rewrite is not committed at all
+            _git(work, "rm", "-q", "--cached", "--", rel, env=env)
+            continue
+        _git(work, "add", "--", rel, env=env)
+        for k, n in found.items():
+            kinds[k] = kinds.get(k, 0) + n
+    return kinds
+
+
 def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]],
                   policy_removed: Iterable[str] = ()) -> Optional[str]:
     """Commit ``work`` if its tree changed, attributed to ``author`` (committer = platform). Returns the
@@ -849,12 +905,23 @@ def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]]
     # everything under ``.`` and then dropping `.claude` from the index is rc-0 in both worlds
     # (with and without a `.gitignore`) and stages `.claude` in neither. ``git rm --cached
     # --ignore-unmatch`` is the same idiom ``_revert_policy_writes`` already uses above.
-    content_pathspec = (".", ":(exclude).claude")
+    # THE ATTACHMENT DRAWER IS NOT KNOWLEDGE (Vexa-ai/vexa#1783). `uploads/` holds what a person
+    # dropped into a chat for the turn to read once; sweeping it into history made a power of
+    # attorney part of the workspace forever (commit d4218da on app.dev, while the agent truthfully
+    # said it had saved nothing). It stays on disk for the turn and out of every commit, the same
+    # way `.claude` does. A page that should keep a file references `assets/`.
+    content_pathspec = (".", ":(exclude).claude", f":(exclude){_DRAWER_DIR}")
     if not _git(work, "status", "--porcelain", "--", *content_pathspec):
         return None
     env = _commit_env(author)
     _git(work, "add", "-A", "--", ".", env=env)
     _git(work, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", _CONTINUITY_DIR, env=env)
+    _git(work, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", _DRAWER_DIR, env=env)
+    # NO IDENTIFIERS IN THE KNOWLEDGE (Vexa-ai/vexa#1783). A turn's own native file writes never pass
+    # the page route's guard, so the commit seam is the one place every write crosses. A staged text
+    # file holding a government id, a card or account number or a credential has those spans
+    # replaced with `[removed]` before it is committed; the commit body says which KINDS, never what.
+    removed_kinds = _redact_staged_identifiers(work, env)
     # NEVER RECORD A DELETION OF A `policy/` PATH THIS TURN DID NOT MAKE (Vexa-ai/vexa#1645).
     # `git add -A` stages the tree AS IT FINDS IT, so anything another writer's file happened not to
     # be at that instant is committed as a deletion by whichever turn runs next — which is exactly how
@@ -874,8 +941,13 @@ def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]]
     # SUBJECT from the tree; the agent's sentence, if there is one, as the BODY. Two `-m` flags is
     # git's own subject/body split, so `--oneline` shows the change and `git show` still carries
     # what the agent said about it — nothing is lost, it is filed where a reader expects it.
+    if not _git(work, "diff", "--cached", "--name-only", env=env).strip():
+        return None   # nothing but the drawer or runtime plumbing changed
     subject = _change_subject(work, env)
     body = (message or "").strip()
+    if removed_kinds:
+        said = ", ".join(f"{k} ({n})" for k, n in sorted(removed_kinds.items()))
+        body = (body + "\n\n" if body else "") + f"Removed before commit: {said}."
     args = ["commit", "-m", subject]
     if body:
         args += ["-m", body]
@@ -925,8 +997,19 @@ def run_harness_turn(
     commit: bool = True,
     author: Optional[tuple[str, str]] = None,
     extra_mounts: Optional[Iterable[Path | str]] = None,
+    private_guard=None,
+    confirm_text: str = "",
+    note_home: Optional[Path | str] = None,
 ) -> Iterator[dict]:
     """Run one harness turn over ``work``, streaming normalized UnitEvents, then commit EACH mount.
+
+    ``note_home`` is the mount meetings' notes live in (``<root>/<owner>``, see
+    ``llm.meeting_note_home``): a note this turn wrote into any other mount is folded into the one
+    there before anything is committed, so a meeting keeps exactly one note.
+
+    ``private_guard`` (``llm.private_writes.Guard``) is the leak rule on writes: a session that read
+    the person's private sources has its change to a workspace other people read withheld at the
+    commit, and ``confirm_text`` (the person's words) releases what they confirmed.
 
     The workspace is a FREE ZONE: governance is PROMPT-ONLY (workspace conventions guide the
     agent). After the turn, for EVERY writable mount in the active set (``work`` first, then each of
@@ -971,6 +1054,10 @@ def run_harness_turn(
     if commit:
         for _mount in mounts:
             policy_baselines[str(_mount.resolve())] = _policy_head_sha(_mount)
+    if commit and private_guard is not None:
+        released = private_guard.release_confirmed(confirm_text)
+        if released:
+            yield {"type": "write-released", "released": released}
     done: Optional[dict] = None
     # Held in a NAME, not consumed inline, so the `finally` below has something to close. A caller
     # may stop reading this turn mid-stream — the write-back phase's budget does exactly that — and
@@ -981,6 +1068,8 @@ def run_harness_turn(
         for ev in stream:
             if ev.get("type") == "done":
                 done = ev
+            if private_guard is not None:
+                private_guard.observe(ev)
             yield ev
     finally:
         close_event_stream(stream)
@@ -989,6 +1078,21 @@ def run_harness_turn(
         return
 
     msg = commit_message or ((done or {}).get("reply") or "agent turn")
+    # ONE NOTE PER MEETING (#1783): a native file write of a meeting's note into the chat's own
+    # workspace is folded into the note the meeting view reads, and the stray copy removed, BEFORE
+    # any mount commits — so the change lands once, where it is seen.
+    from llm.meeting_note_home import redirect_stray_notes  # noqa: PLC0415
+    home = Path(note_home) if note_home else None
+    moved = redirect_stray_notes(home, mounts) if home is not None else []
+    if moved:
+        yield {"type": "note-redirected", "notes": moved}
+        if str(home.resolve()) not in {str(m.resolve()) for m in mounts}:
+            try:
+                sha = _commit_mount(home, message=msg, author=author)
+            except subprocess.CalledProcessError:
+                sha = None
+            if sha:
+                yield {"type": "commit", "sha": sha}
     # Per-mount: (1) rebuild policy/ from THIS mount's pre-turn baseline — the security guard, applied to
     # every workspace mount so no agent-authored policy/ change survives anywhere (a no-op on a mount with
     # no policy/); (2) commit the mount's remaining (legitimate) changes, authored by the principal. Each
@@ -1002,6 +1106,16 @@ def run_harness_turn(
             reverted = []
         if reverted:
             yield {"type": "policy-reverted", "paths": reverted}
+        if private_guard is not None:
+            try:
+                held = private_guard.hold(mount)
+            except (OSError, ValueError, subprocess.CalledProcessError):
+                logging.getLogger(__name__).exception("private-write guard failed on %s — nothing committed there", mount.name)
+                continue
+            if held:
+                from llm.private_writes import withheld_line  # noqa: PLC0415
+                yield {"type": "write-withheld", **held}
+                yield {"type": "message-delta", "text": withheld_line(held)}
         try:
             # The guard's own removals are the ONLY `policy/` deletions this commit may record.
             sha = _commit_mount(mount, message=msg, author=author, policy_removed=reverted)

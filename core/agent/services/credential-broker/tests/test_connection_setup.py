@@ -75,8 +75,9 @@ def test_delete_owner_human_only_hides_and_disables(signed, connection):
     assert signed("human", "POST", path + "/delete", actor="other").status_code == 404
     assert signed("human", "POST", path + "/delete").json() == {"connection_id": cid, "status": "deleted"}
     assert cid not in signed("agent", "GET", "/api/connections").text
-    assert signed("agent", "POST", path + "/request").status_code == 404
-    assert signed("human", "POST", path + "/custom-secret", {"value": "fixture"}).status_code == 404
+    # Its owner is told it was deleted (410, test_connection_reliability), never a bare 404.
+    assert signed("agent", "POST", path + "/request").status_code == 410
+    assert signed("human", "POST", path + "/custom-secret", {"value": "fixture"}).status_code == 410
 
 
 def test_invalid_spec_and_foreign_owner_refused(signed, connection):

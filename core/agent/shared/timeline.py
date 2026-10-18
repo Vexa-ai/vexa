@@ -31,7 +31,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
+from datetime import datetime, timezone
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -45,6 +47,10 @@ AHEAD = int(os.environ.get("VEXA_TIMELINE_AHEAD", "5"))
 
 # subject -> (expires_at, rendered block). "" is a legitimate cached value: see COST above.
 _CACHE: dict[str, tuple[float, str]] = {}
+# subject -> the person's zone as the route answered it ("" = unset). Lets the `Now` line be
+# re-rendered at TURN time while the events stay cached for a minute (Vexa-ai/vexa#1783).
+_ZONE: dict[str, str] = {}
+_NOW_LINE = re.compile(r"\*\*Now: [^\n]*?\.\*\*")
 
 
 def _api() -> str:
@@ -79,7 +85,22 @@ def fetch(uid: str, *, back: int = BACK, ahead: int = AHEAD, timeout: float = TI
         log.debug("timeline unavailable for %s: %s: %s", uid, type(e).__name__, e)
         return ""
     text = body.get("text") if isinstance(body, dict) else None
+    if isinstance(body, dict) and isinstance(body.get("timezone"), str):
+        tz = body["timezone"]
+        unset = body.get("timezone_set") is False or (
+            "timezone_set" not in body and tz.upper() == "UTC")
+        _ZONE[str(uid)] = "" if unset else tz
     return text if isinstance(text, str) else ""
+
+
+def refresh_now(block: str, tz: str, now: float) -> str:
+    """The block's `**Now: …**` line, re-spelt for THIS instant with the one clock
+    (`shared.clock_line.now_label`). The events are a minute old at most; now never is."""
+    from shared.clock_line import now_label
+    if not block:
+        return block
+    label = now_label(tz, datetime.fromtimestamp(float(now), timezone.utc))
+    return _NOW_LINE.sub(lambda _m: f"**Now: {label}.**", block, count=1)
 
 
 def timeline_preamble(uid: str = "", *, now: float | None = None) -> str:
@@ -95,10 +116,12 @@ def timeline_preamble(uid: str = "", *, now: float | None = None) -> str:
     now = time.time() if now is None else float(now)
     hit = _CACHE.get(uid)
     if hit and hit[0] > now:
-        return hit[1]
-    block = fetch(uid)
-    _CACHE[uid] = (now + CACHE_TTL_S, block)
-    return block
+        block = hit[1]
+    else:
+        block = fetch(uid)
+        _CACHE[uid] = (now + CACHE_TTL_S, block)
+    # Only a zone the route told us is re-rendered; a block whose zone is unknown is passed through.
+    return refresh_now(block, _ZONE[uid], now) if uid in _ZONE else block
 
 
 def invalidate(uid: str = "") -> None:
@@ -106,5 +129,7 @@ def invalidate(uid: str = "") -> None:
     made the timeline wrong (a meeting booked, a report sent) and wants the next turn to see it."""
     if uid:
         _CACHE.pop(str(uid), None)
+        _ZONE.pop(str(uid), None)
     else:
         _CACHE.clear()
+        _ZONE.clear()

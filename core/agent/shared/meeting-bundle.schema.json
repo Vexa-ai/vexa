@@ -86,6 +86,38 @@
           "type": "array",
           "maxItems": 16,
           "items": {"$ref": "#/$defs/MediaPart"}
+        },
+        "context": {"$ref": "#/$defs/MeetingContext"}
+      }
+    },
+    "MeetingContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional (format 1.1): what the meeting was, for whoever reads the bundle later. Provenance only: an importer never reuses an id here. A URL carries no query and no fragment, so no join or invite token.",
+      "properties": {
+        "duration_seconds": {"type": ["number", "null"], "minimum": 0},
+        "meeting_url": {"type": ["string", "null"], "maxLength": 512, "pattern": "^https://[^?#\\s]+$"},
+        "calendar_event_id": {"type": ["string", "null"], "maxLength": 256},
+        "workspace_id": {"type": ["string", "null"], "maxLength": 128},
+        "language": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "language": {"type": ["string", "null"], "pattern": "^[a-z]{2,3}$"},
+            "allowed_languages": {"type": "array", "maxItems": 16, "items": {"type": "string", "pattern": "^[a-z]{2,3}$"}},
+            "source": {"type": ["string", "null"], "maxLength": 32}
+          }
+        },
+        "bot": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "requested_at": {"type": ["string", "null"], "format": "date-time"},
+            "joined_at": {"type": ["string", "null"], "format": "date-time"},
+            "admitted_at": {"type": ["string", "null"], "format": "date-time"},
+            "left_at": {"type": ["string", "null"], "format": "date-time"},
+            "exit_reason": {"type": ["string", "null"], "maxLength": 64}
+          }
         }
       }
     },

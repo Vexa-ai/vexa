@@ -44,6 +44,12 @@ def build(**d) -> APIRouter:
         subject_of(request)  # identity gate (P20)
         chat_model = settings.agent_model or "default"
         return {"chat_model": chat_model, "agent_model": chat_model}
+    def _last_pick(subject):
+        """The person's last pick in any chat — what a new chat starts on. Unreadable = none."""
+        try:
+            return sess.remembered_pick(subject)
+        except Exception:  # noqa: BLE001 — an unreadable memory is the default
+            return ("", "")
     @router.get("/api/models/catalog")
     def models_catalog(request: Request, session: Optional[SessionId] = None):
         """The models you may pick on this deployment (``models.v1`` ModelList): each one's name,
@@ -68,10 +74,22 @@ def build(**d) -> APIRouter:
         if catalog.empty:
             return {"models": [], "default": None,
                     **({"selected": None, "selected_effort": None} if with_selected else {})}
-        ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {})
-        return catalog.listing(ctx, admin=lambda: dispatcher.is_admin(subject),
-                               selected=selected, with_selected=with_selected,
-                               selected_effort=selected_effort)
+        ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {},
+                                         last_pick=_last_pick(subject))
+        listing = catalog.listing(ctx, admin=lambda: dispatcher.is_admin(subject),
+                                  person=lambda: dispatcher.identities(subject),
+                                  selected=selected, with_selected=with_selected,
+                                  selected_effort=selected_effort)
+        if with_selected:
+            # WHAT THE CHAT'S WORKER RUNS (0.13.3): the model its current unit was started on — the
+            # model the last turn ran on — or null before any. The composer shows this, and "switching
+            # to <selected> on your next message" while the two differ.
+            try:
+                uid = units.chat_unit_id(subject, name, sess.mount_gen(subject, name))
+                listing["running"] = dispatcher.running_model(uid)
+            except Exception:  # noqa: BLE001 — unknown is null, never a failed listing
+                listing["running"] = None
+        return listing
     @router.get("/api/admin/overview")
     def admin_overview(request: Request):
         """Read-only infra + pipeline introspection for the terminal's hidden admin panel: every
@@ -109,6 +127,18 @@ def build(**d) -> APIRouter:
                 overview["meetings_error"] = redact_secrets(f"{type(e).__name__}: {e}", redis_url)
         else:
             overview["meetings_error"] = "no redis_url configured"
+        # THE LLM SPEND CAP (llm_budget.py): the deployment's spend against its caps, and the 80% /
+        # 100% notices of the current periods.
+        budget = getattr(request.app.state, "llm_budget", None)
+        if budget is not None:
+            try:
+                org = budget.spent("")
+                overview["llm_budget"] = {
+                    "org": {period: {"spent_usd": round(v[0], 4), "cap_usd": v[1], "resets_at": v[2]}
+                            for (scope, period), v in org.items() if scope == "org"},
+                    "notices": budget.notices(20)}
+            except Exception as e:  # noqa: BLE001 — typed partial failure, like the sections above
+                overview["llm_budget_error"] = type(e).__name__
         return overview
     @router.post("/api/admin/probe")
     def admin_probe(request: Request):
@@ -209,7 +239,8 @@ def build(**d) -> APIRouter:
             ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {})
             try:
                 route = dispatcher.catalog.route(str(model or "").strip(), ctx,
-                                                 admin=lambda: dispatcher.is_admin(subject))
+                                                 admin=lambda: dispatcher.is_admin(subject),
+                                                 person=lambda: dispatcher.identities(subject))
             except model_providers.ModelChoiceFault as fault:
                 return {"ok": False, "summary": fault.sentence(), "mode": "catalog",
                         "route": "catalog", "fault": fault.as_dict()}

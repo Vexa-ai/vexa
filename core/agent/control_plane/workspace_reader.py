@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from datetime import datetime
 from typing import Iterator, Optional
 
 from workspaces.shared import workspace_paths as wpaths
@@ -19,6 +20,10 @@ def _tool_op(name: str, args: Optional[dict] = None) -> dict:
     Mirrors the frontend ``toolOp`` so the loaded history reads the same as a live turn — including the
     touched ``file`` (+``wrote``) that powers the transcript's actionable file chips."""
     t = (name or "").lower()
+    if t == "skill":
+        # The harness's Skill tool: a step that LOADS instructions, named by the skill it loaded.
+        skill = (args or {}).get("skill")
+        return {"label": "skill", **({"skill": skill} if isinstance(skill, str) and skill else {})}
     if any(k in t for k in ("read", "cat", "open")) and "edit" not in t:
         label = "read"
     elif any(k in t for k in ("search", "grep", "find", "glob")):
@@ -134,7 +139,8 @@ def _real_subdirs(ws: Path, parts: "tuple[str, ...]") -> Iterator[str]:
 # ``shared/marks.py``; the worker reads the same constant under its historical name WRITEBACK_MARK.
 # Everything from a marked prompt until the next thing a person actually said is bookkeeping the
 # founder was never meant to read back as his own conversation.
-from shared.marks import PHASE_MARK, act_label  # noqa: E402 — re-export under this module's long-standing name
+from shared import attachments as attachments_mod  # noqa: E402
+from shared.marks import PHASE_MARK, act_label, is_signal_turn, read_message_mark  # noqa: E402 — re-export under this module's long-standing name
 
 # …and the salvage for a turn dispatched BEFORE any of those marks existed (Vexa-ai/vexa#1605):
 # a flow's composed kick names its own kind in its first bracket, which is the only thing a
@@ -146,6 +152,19 @@ from shared.chat_label import composed_label  # noqa: E402 — see shared/chat_l
 # Dropping it WITHOUT flushing the open agent turn also re-joins the answer it interrupted, which is
 # what the reader was always meant to show: one reply, not two halves with machinery between them.
 _HARNESS_CONTINUE = "Continue from where you left off."
+
+# A SKILL'S BODY IS NOT SPEECH. When the agent calls the harness's Skill tool, Claude Code writes the
+# skill's whole text into the transcript as a `user`-role line (flagged `isMeta`) that opens with this
+# line. It is the harness injecting instructions, and it renders as a step of the agent's turn.
+_SKILL_BASE_RE = re.compile(r"\ABase directory for this skill:\s*(\S+)")
+
+
+def _skill_injection(text: str) -> Optional[str]:
+    """The skill name when this user-role line is a loaded skill's body, else None."""
+    m = _SKILL_BASE_RE.match(text.lstrip())
+    if not m:
+        return None
+    return m.group(1).rstrip("/").rsplit("/", 1)[-1] or "skill"
 
 
 def _user_text_index(roots: "list[Path]", session: str) -> list[dict]:
@@ -256,6 +275,175 @@ def _commit_records(raw: str, viewer_email: Optional[str]) -> list[dict]:
     return out
 
 
+def _line_at(obj: dict) -> Optional[float]:
+    """When a transcript line was written (its ISO `timestamp`), epoch seconds; None if it has none."""
+    ts = obj.get("timestamp")
+    if not isinstance(ts, str):
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def parse_history(raw: str, records: list) -> list[dict]:
+    """The terminal-renderable turns of one harness transcript (``raw``, JSONL) given the worker's
+    ``{key, user_text}`` records for the thread. Shared by the workspace layout (``history``) and the
+    session store (ADR-0048), so both render one conversation the same way."""
+    turns: list[dict] = []
+    cur_agent: Optional[dict] = None  # the open agent turn we accumulate text/ops onto
+    # The person's own words for each turn, keyed by the digest of the composed prompt (F47).
+    by_key = {r["key"]: r["user_text"] for r in records}
+    unused = list(records)
+    # Are we inside a write-back phase exchange (F51)? Set by a marked prompt, cleared by the
+    # next thing a person actually said. While it is on, the agent's replies are bookkeeping.
+    in_phase = False
+
+    def flush_agent() -> None:
+        nonlocal cur_agent
+        if cur_agent is None:
+            return
+        open_turn, cur_agent = cur_agent, None
+        if in_phase:
+            return  # the phase's reply — nobody was ever shown it, and nobody asked for it
+        # An agent turn with neither prose nor a single operation is not a turn: it is the
+        # residue of a beat that produced nothing, and it rendered as an empty grey card.
+        if not open_turn["text"].strip() and not open_turn["ops"]:
+            return
+        turns.append(open_turn)
+
+    def human_words(stored: str) -> Optional[str]:
+        """What the person typed for a stored prompt, or None if nothing recorded it.
+
+        Exact first: the digest of the bytes the harness was handed. The suffix pass behind it
+        is belt — it costs one comparison and it survives a harness that ever decorates the
+        prompt on its way into the transcript — and it is still a MACHINE test (is this recorded
+        string the tail of that stored one), never a reading of what either says."""
+        hit = by_key.get(hashlib.sha256(stored.encode("utf-8")).hexdigest())
+        if hit is not None:
+            return hit
+        for rec in unused:
+            ut = rec["user_text"]
+            if ut and stored.endswith(ut):
+                unused.remove(rec)
+                return ut
+        return None
+
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        kind = obj.get("type")
+        msg = obj.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+
+        if kind == "user":
+            # A real user prompt is a plain string or a content list with text blocks. A list that is
+            # ONLY tool_results belongs to the preceding agent turn (a tool round-trip) — skip it.
+            is_tool_result = (
+                isinstance(content, list)
+                and content
+                and all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+            )
+            if is_tool_result:
+                continue
+            text = _block_text(content)
+            if not text.strip():
+                continue
+            # The harness nudging itself is not speech (F51). No flush: the open agent turn keeps
+            # accumulating, so the answer this interrupted comes back as ONE reply.
+            if text.strip() == _HARNESS_CONTINUE:
+                continue
+            # HARNESS INJECTIONS ARE NOT SPEECH either: a loaded skill's body, or any line the
+            # harness itself flags `isMeta`. Same no-flush rule — the agent's turn carries on, and a
+            # skill becomes the step "Loaded skill · <name>" on it, once.
+            skill = _skill_injection(text)
+            if skill is not None or obj.get("isMeta"):
+                if skill is not None:
+                    if cur_agent is None:
+                        cur_agent = {"role": "agent", "text": "", "ops": []}
+                    ops = cur_agent["ops"]
+                    named = [o for o in ops if o.get("label") == "skill" and o.get("skill") == skill]
+                    unnamed = [o for o in ops if o.get("label") == "skill" and not o.get("skill")]
+                    if unnamed and not named:
+                        unnamed[-1]["skill"] = skill
+                    elif not named:
+                        ops.append({"label": "skill", "skill": skill})
+                continue
+            flush_agent()
+            if PHASE_MARK in text:
+                in_phase = True   # …and everything the agent says until the next real prompt
+                continue
+            in_phase = False
+            turn: dict = {"role": "user", "text": text}
+            # A MEETING SIGNAL'S WAKE (transcript signals): the terminal shows "From the meeting" and
+            # hides the composed wake prompt, read off this field rather than the text.
+            if is_signal_turn(text):
+                turn["trigger"] = "signal"
+            # WHEN it was said — a shared chat draws people's lines between the turns by it.
+            if (at := _line_at(obj)) is not None:
+                turn["at"] = at
+            # `user_text` is the person's own words as a FIELD; `text` stays the stored prompt so
+            # a record written before the field existed still reaches the terminal's fallback.
+            #
+            # AN ACT IS ITS LABEL, WHATEVER WAS RECORDED (Vexa-ai/vexa#1588). A marked act's
+            # `user_text` was the composed preset until the worker learned better, and those
+            # records are in people's own transcripts and are not ours to rewrite. The mark is
+            # in the stored prompt, so the label is derivable here on every read — which also
+            # covers a worker one release behind a terminal that already sends intents.
+            said = act_label(text)
+            if said is None:
+                said = human_words(text)
+                # …AND A RECORD WRITTEN BEFORE THE MARK IS STILL NOT SPEECH (#1605). A flow
+                # dispatched the founder's post-meeting turn; the worker recorded the whole
+                # composed kick as his half, because on a turn nobody typed there IS no other
+                # half to record. `composed_label` reads the kind that kick opens with — the one
+                # thing left in the record that says a machine wrote it — and answers "" for
+                # everything else, so a sentence somebody typed stays their sentence.
+                if said is not None:
+                    said = composed_label(said) or said
+            # WHAT WAS ATTACHED IS A FIELD, AND NEVER PART OF THE WORDS (founder, 2026-10-13). The
+            # mark (and the `Attached files:` lines older turns carry) is read off the stored prompt,
+            # so a turn recorded before the worker stripped it still renders as thumbnails.
+            files = attachments_mod.read(text)
+            if files:
+                turn["attachments"] = files
+                if said is not None:
+                    said = attachments_mod.strip(said)
+                else:   # no record: the terminal strips the stored prompt — hand it one without the block
+                    turn["text"] = attachments_mod.strip(text)
+            elif said is not None and attachments_mod.MARK_OPEN in said:
+                said = attachments_mod.strip(said)
+            if said is not None:
+                turn["user_text"] = said
+            # ANOTHER AGENT WROTE THIS (ADR-0046 decision 13) — who, and the thread to answer.
+            sent = read_message_mark(text)
+            if sent is not None:
+                turn["from_agent"] = {"uid": sent["uid"], "thread": sent["thread"],
+                                      "label": sent["label"]}
+            turns.append(turn)
+        elif kind == "assistant":
+            if not isinstance(content, list):
+                continue
+            if cur_agent is None:
+                cur_agent = {"role": "agent", "text": "", "ops": []}
+            if "at" not in cur_agent and (at := _line_at(obj)) is not None:
+                cur_agent["at"] = at
+            cur_agent["text"] += _block_text(content)
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_use":
+                    cur_agent["ops"].append(_tool_op(b.get("name", ""), b.get("input") if isinstance(b.get("input"), dict) else None))
+        # all other line kinds (queue-operation/last-prompt/custom-title/mode/attachment/system …) are meta — skip
+    flush_agent()
+    return turns
+
+
 class WorkspaceReader:
     def __init__(self, workspaces_dir: str) -> None:
         self._root = Path(workspaces_dir)
@@ -272,6 +460,14 @@ class WorkspaceReader:
     @property
     def root(self) -> Path:
         return self._root
+
+    def home_dir(self, subject: str) -> Path:
+        """The person's HOME (``workspace_attach.home_dir``): where a write that names no workspace
+        lands — Personal while it is on, the first active workspace once it is off. ``workspace_dir``
+        stays the seed slot itself, for the few callers that mean exactly that directory."""
+        from control_plane.workspace_attach import home_dir  # noqa: PLC0415
+        self._ws(subject)                                     # same traversal guard (ValueError)
+        return home_dir(self._root, subject)
 
     def _ws(self, subject: str) -> Path:
         ws = (self._root / subject).resolve()
@@ -367,8 +563,9 @@ class WorkspaceReader:
 
     def _continuity_roots(self, subject: str, extra_roots: "list[str | Path] | None" = None) -> list[Path]:
         """Every workspace dir a thread's continuity (pointer + transcript) may live in, in preference
-        order: the PRIVATE SYSTEM tier (``<root>/.system/<subject>`` — where the worker anchors chats
-        now), the subject's own workspace (the legacy location), then any caller-supplied mount dirs —
+        order: the PRIVATE SYSTEM tier (``<root>/.system/<subject>`` — where the worker anchored chats
+        before the session store; with the store on nothing new lands there), the subject's own
+        workspace (the legacy location), then any caller-supplied mount dirs —
         the turn's cwd FOLLOWS the active set under the flat model, so chats recorded before the
         _system anchoring landed sit under whichever workspace was mounted first (e.g. a shared one).
         Non-existent and out-of-root candidates are silently dropped."""
@@ -467,117 +664,7 @@ class WorkspaceReader:
         if raw is None:
             return []
 
-        turns: list[dict] = []
-        cur_agent: Optional[dict] = None  # the open agent turn we accumulate text/ops onto
-        # The person's own words for each turn, keyed by the digest of the composed prompt (F47).
-        records = _user_text_index(roots, session)
-        by_key = {r["key"]: r["user_text"] for r in records}
-        unused = list(records)
-        # Are we inside a write-back phase exchange (F51)? Set by a marked prompt, cleared by the
-        # next thing a person actually said. While it is on, the agent's replies are bookkeeping.
-        in_phase = False
-
-        def flush_agent() -> None:
-            nonlocal cur_agent
-            if cur_agent is None:
-                return
-            open_turn, cur_agent = cur_agent, None
-            if in_phase:
-                return  # the phase's reply — nobody was ever shown it, and nobody asked for it
-            # An agent turn with neither prose nor a single operation is not a turn: it is the
-            # residue of a beat that produced nothing, and it rendered as an empty grey card.
-            if not open_turn["text"].strip() and not open_turn["ops"]:
-                return
-            turns.append(open_turn)
-
-        def human_words(stored: str) -> Optional[str]:
-            """What the person typed for a stored prompt, or None if nothing recorded it.
-
-            Exact first: the digest of the bytes the harness was handed. The suffix pass behind it
-            is belt — it costs one comparison and it survives a harness that ever decorates the
-            prompt on its way into the transcript — and it is still a MACHINE test (is this recorded
-            string the tail of that stored one), never a reading of what either says."""
-            hit = by_key.get(hashlib.sha256(stored.encode("utf-8")).hexdigest())
-            if hit is not None:
-                return hit
-            for rec in unused:
-                ut = rec["user_text"]
-                if ut and stored.endswith(ut):
-                    unused.remove(rec)
-                    return ut
-            return None
-
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            if not isinstance(obj, dict):
-                continue
-            kind = obj.get("type")
-            msg = obj.get("message")
-            content = msg.get("content") if isinstance(msg, dict) else None
-
-            if kind == "user":
-                # A real user prompt is a plain string or a content list with text blocks. A list that is
-                # ONLY tool_results belongs to the preceding agent turn (a tool round-trip) — skip it.
-                is_tool_result = (
-                    isinstance(content, list)
-                    and content
-                    and all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
-                )
-                if is_tool_result:
-                    continue
-                text = _block_text(content)
-                if not text.strip():
-                    continue
-                # The harness nudging itself is not speech (F51). No flush: the open agent turn keeps
-                # accumulating, so the answer this interrupted comes back as ONE reply.
-                if text.strip() == _HARNESS_CONTINUE:
-                    continue
-                flush_agent()
-                if PHASE_MARK in text:
-                    in_phase = True   # …and everything the agent says until the next real prompt
-                    continue
-                in_phase = False
-                turn: dict = {"role": "user", "text": text}
-                # `user_text` is the person's own words as a FIELD; `text` stays the stored prompt so
-                # a record written before the field existed still reaches the terminal's fallback.
-                #
-                # AN ACT IS ITS LABEL, WHATEVER WAS RECORDED (Vexa-ai/vexa#1588). A marked act's
-                # `user_text` was the composed preset until the worker learned better, and those
-                # records are in people's own transcripts and are not ours to rewrite. The mark is
-                # in the stored prompt, so the label is derivable here on every read — which also
-                # covers a worker one release behind a terminal that already sends intents.
-                said = act_label(text)
-                if said is None:
-                    said = human_words(text)
-                    # …AND A RECORD WRITTEN BEFORE THE MARK IS STILL NOT SPEECH (#1605). A flow
-                    # dispatched the founder's post-meeting turn; the worker recorded the whole
-                    # composed kick as his half, because on a turn nobody typed there IS no other
-                    # half to record. `composed_label` reads the kind that kick opens with — the one
-                    # thing left in the record that says a machine wrote it — and answers "" for
-                    # everything else, so a sentence somebody typed stays their sentence.
-                    if said is not None:
-                        said = composed_label(said) or said
-                if said is not None:
-                    turn["user_text"] = said
-                turns.append(turn)
-            elif kind == "assistant":
-                if not isinstance(content, list):
-                    continue
-                if cur_agent is None:
-                    cur_agent = {"role": "agent", "text": "", "ops": []}
-                cur_agent["text"] += _block_text(content)
-                for b in content:
-                    if isinstance(b, dict) and b.get("type") == "tool_use":
-                        cur_agent["ops"].append(_tool_op(b.get("name", ""), b.get("input") if isinstance(b.get("input"), dict) else None))
-            # all other line kinds (queue-operation/last-prompt/custom-title/mode/attachment/system …) are meta — skip
-        flush_agent()
-        return turns
+        return parse_history(raw, _user_text_index(roots, session))
 
     def drop_session(self, subject: str, session: str) -> bool:
         """Delete a chat thread's continuity file (``.claude/sessions/<session>.session``) so a future
@@ -777,3 +864,20 @@ class WorkspaceReader:
             return {"before": before, "after": after, "reset": False,
                     "detail": (r.stderr or r.stdout or "reset failed").strip()[:300]}
         return {"before": before, "after": after, "reset": True, "detail": ""}
+
+
+def home_of(reader, subject: str, *, for_read: bool = False):
+    """``reader.home_dir(subject)`` — the person's home (#1783) — for any reader; one that predates
+    ``home_dir`` (a test's stand-in) answers with its ``workspace_dir``. A WRITE with no home raises
+    ``NoHome`` (the app answers 409 saying so); ``for_read`` answers the desk's own directory instead,
+    so a file the person put there earlier can still be read."""
+    fn = getattr(reader, "home_dir", None)
+    if not callable(fn):
+        return reader.workspace_dir(subject)
+    try:
+        return fn(subject)
+    except Exception as e:  # noqa: BLE001
+        from control_plane.workspace_attach import NoHome  # noqa: PLC0415
+        if for_read and isinstance(e, NoHome):
+            return reader.workspace_dir(subject)
+        raise

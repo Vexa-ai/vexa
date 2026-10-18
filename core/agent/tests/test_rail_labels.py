@@ -171,7 +171,7 @@ class _FakeIdentity:
 
 
 class _FakeReader:
-    def read(self, unit_id, resume=None):
+    def read(self, unit_id, resume=None, fresh=False):
         yield {"type": "turn-complete"}
 
 
@@ -248,9 +248,9 @@ def test_the_founders_rail_reads_as_names(client, stack):
     assert labels["pchat-comp"] == "what's my company called?"
     assert labels["scaffold-SC2"] == "setup global"
     # the meetings: the one a person titled takes that title even over a machinery row title; the
-    # one nobody titled keeps the session's own, because the server holds no better answer
+    # one nobody titled is named by the one rule (UI decisions 14) — never "Google Meet · cqb-egsq-vmt"
     assert labels["meet-38"] == "DNA TSC 2026-09-04"
-    assert labels["meet-41"] == "Google Meet · cqb-egsq-vmt"
+    assert labels["meet-41"] == "Call with Vexa"
     # …and the whole rail, as one statement
     assert not any(chat_label.is_machinery_label(v) for v in labels.values())
 
@@ -327,3 +327,24 @@ def test_a_name_already_on_a_row_is_still_written_once_and_never_again(client, s
     stack["sessions"].upsert("u_dmitry", "pchat-named", title="Pricing for Northwind")
     assert _turn(client, "pchat-named", "and what about the DNA call?").status_code == 200
     assert stack["sessions"].list("u_dmitry")[0]["title"] == "Pricing for Northwind"
+
+
+def test_an_untitled_chat_is_named_when_the_rail_is_listed_and_a_persons_name_is_never_replaced(client, stack, monkeypatch):
+    """Founder 2026-10-15: "otherwise most chats will read New chat". Listing the rail names a chat
+    that has been answered and has no name; a name the person gave stays."""
+    from control_plane import chat_autotitle, workspace_reader
+    chat_autotitle.reset()
+    real = chat_autotitle.schedule
+    monkeypatch.setattr(chat_autotitle, "schedule", lambda *a, **k: real(*a, **{**k, "run": lambda f: f()}))
+    exchange = [{"role": "user", "text": "draft the sponsor package for the Lisbon meetup"},
+                {"role": "agent", "text": "Here is a one-page package with three tiers."}]
+    monkeypatch.setattr(workspace_reader.WorkspaceReader, "history", lambda self, subject, session, extra_roots=None: exchange)
+    sess = stack["sessions"]
+    sess.upsert("u_dmitry", "pchat-new", title="")
+    sess.upsert("u_dmitry", "pchat-mine", title="")
+    sess.name("u_dmitry", "pchat-mine", "My own name", human=True)
+    client.get("/api/sessions", headers={"X-User-Id": "u_dmitry"})
+    rows = {r["session"]: r for r in client.get("/api/sessions", headers={"X-User-Id": "u_dmitry"}).json()["sessions"]}
+    assert rows["pchat-new"]["label"] == "Draft the sponsor package for the"
+    assert rows["pchat-mine"]["label"] == "My own name"
+    chat_autotitle.reset()

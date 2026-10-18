@@ -285,3 +285,23 @@ def test_the_index_survives_a_page_somebody_hand_edited():
     hand = "# Asset sources\n\nDmitry's note: the logo came off their press kit.\n"
     out = assets.record_source(hand, "assets/logo.png", "https://a.example/1.png")
     assert "Dmitry's note" in out and "`assets/logo.png`" in out
+
+
+EVIL_SVG = (b'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" onload="alert(1)">'
+            b'<script>fetch("/api/auth/me")</script>'
+            b'<foreignObject><iframe xmlns="http://www.w3.org/1999/xhtml" src="https://evil.example/"></iframe></foreignObject>'
+            b'<image xlink:href="https://evil.example/beacon.png"/></svg>')
+
+
+def test_a_malicious_svg_is_served_as_a_picture_that_can_run_nothing(tmp_path):
+    """Founder 2026-10-15: "you need to render svg files" — and the file is the agent's or a
+    stranger's. Served as image/svg+xml under a sandboxing CSP with nothing allowed: no script, no
+    foreignObject frame, no external reference loads, even opened directly; never sniffed."""
+    _write(tmp_path, "u_jane", "notes/assets/vexum.svg", EVIL_SVG)
+    r = _app(tmp_path).get("/api/workspace/asset", params={"subject": "u_jane", "path": "notes/assets/vexum.svg"})
+    assert r.status_code == 200 and r.content == EVIL_SVG
+    assert r.headers["content-type"].split(";")[0] == "image/svg+xml"
+    csp = r.headers["content-security-policy"]
+    assert "default-src 'none'" in csp and "sandbox" in csp            # no script, no frame, no fetch
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["content-disposition"].startswith("inline")

@@ -26,6 +26,13 @@ control-plane = [
     # gateway-identity.v1: verifies the gateway's Ed25519 signature with its public key (control plane only;
     # the worker never sees an identity token). Apache-2.0 OR BSD-3-Clause.
     "cryptography>=50.0.1,<51",
+    # ADR-0048: the session store's Postgres driver (control_plane/session_store.py), imported only
+    # when VEXA_SESSIONS_DB_URL names Postgres. BSD-3-Clause, pure Python — the driver flows uses;
+    # the LGPL drivers stay out.
+    "pg8000>=1.31.5,<2",
+    # ADR-0048 / ADR-0038: transcript versions go to the session store's own S3 bucket through boto3,
+    # the client meeting-api uses for recordings (Apache-2.0).
+    "boto3>=1.35,<2",
 ]
 # worker image (claude-in-container) — base only; claude-code is an npm global, not a pip dep.
 worker = []

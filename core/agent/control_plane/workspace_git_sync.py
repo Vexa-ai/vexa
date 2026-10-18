@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -46,11 +46,11 @@ SYNC_PUSH_REMOTE = "vexa-sync"
 _HOME_REMOTES = ("origin", PUBLISH_REMOTE)
 
 
-def _push_with_pat(wsp: Path, url: str, branch: str, token: str) -> str:
+def _push_with_pat(wsp: Path, url: str, branch: str, token: str, force: bool = False) -> str:
     """The https half of the push: the PAT rides the URL for the network op and is scrubbed after
     (``push_with_token``), and a diverged remote is reported rather than forced over."""
     try:
-        return push_with_token(wsp, url, branch, token, remote=SYNC_PUSH_REMOTE)
+        return push_with_token(wsp, url, branch, token, remote=SYNC_PUSH_REMOTE, force=force)
     except GitPushError as exc:  # already token-redacted (P15)
         msg = str(exc)
         if "non-fast-forward" in msg or "fetch first" in msg or "rejected" in msg:
@@ -201,7 +201,8 @@ class PushResult:
     head_sha: str
 
 
-def push_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optional[dict] = None) -> PushResult:
+def push_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optional[dict] = None,
+                force: bool = False) -> PushResult:
     """Push the current branch to the workspace's home remote (origin / vexa-publish), full history,
     fast-forward only. A diverged remote fails loud (no force).
 
@@ -227,8 +228,8 @@ def push_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optiona
     _git(wsp, "rev-parse", "--verify", "HEAD", token=token, ssh_env=ssh_env)  # at least one commit, or fail loud
     if over_ssh:
         # No remote is written and no credential touches the URL — the key is in the environment.
-        pushed = _git(wsp, "push", "--quiet", url, f"HEAD:refs/heads/{branch}", ssh_env=ssh_env,
-                      check=False, url=url)
+        pushed = _git(wsp, "push", "--quiet", *(["--force"] if force else []), url,
+                      f"HEAD:refs/heads/{branch}", ssh_env=ssh_env, check=False, url=url)
         if pushed.returncode != 0:
             err = (pushed.stderr or "").strip()
             if "non-fast-forward" in err or "fetch first" in err or "rejected" in err:
@@ -237,7 +238,7 @@ def push_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optiona
             raise RemoteSyncError(_redacted(f"git push failed: {err}", None))
         head_sha = _git(wsp, "rev-parse", "HEAD", ssh_env=ssh_env).stdout.strip()
     else:
-        head_sha = _push_with_pat(wsp, url, branch, token)
+        head_sha = _push_with_pat(wsp, url, branch, token, force=force)
     # The ff push succeeded, so the home ref now equals HEAD — advance the tracking ref locally so the
     # panel's ahead/behind reflects the push without a follow-up fetch.
     _git(wsp, "update-ref", f"refs/remotes/{remote}/{branch}", head_sha, check=False)
@@ -253,9 +254,12 @@ class PullResult:
     head_sha: str
     updated: bool       # HEAD moved (there were remote commits we fast-forwarded to)
     behind_before: int  # how many commits we were behind before the pull
+    merged: bool = False            # a divergence was reconciled with a merge commit (merge=True)
+    conflicts: list = field(default_factory=list)  # the files a refused merge would have conflicted on
 
 
-def pull_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optional[dict] = None) -> PullResult:
+def pull_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optional[dict] = None,
+                merge: bool = False) -> PullResult:
     """Fetch the home branch and FAST-FORWARD only. No merge commit, no rebase, no force: a divergence
     (local commits the remote lacks) is reported as a conflict for the user to resolve. The ``token``
     (optional — public repos need none) is used for the fetch ONLY and NEVER persisted: we fetch from the
@@ -287,11 +291,32 @@ def pull_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optiona
     parts = rl.stdout.split()
     behind_before = int(parts[0]) if len(parts) == 2 else 0
     ahead_local = int(parts[1]) if len(parts) == 2 else 0
+    if ahead_local > 0 and merge and behind_before > 0:
+        # RECONCILE, ASKED FOR (Vexa-ai/vexa#1783): merge the remote in — never a rebase, never a force.
+        # A conflict changes NOTHING (the merge is aborted) and names the files, so the person decides.
+        m = _git(wsp, "-c", "user.name=vexa-platform", "-c", "user.email=platform@vexa.local",
+                 "merge", "--no-ff", "--no-edit", "-m", f"Merge {remote}/{branch}", "FETCH_HEAD",
+                 token=token, check=False)
+        if m.returncode != 0:
+            conflicts = sorted(p for p in _git(wsp, "diff", "--name-only", "--diff-filter=U",
+                                               check=False).stdout.split() if p)
+            _git(wsp, "merge", "--abort", check=False)
+            return PullResult(remote=remote, url=_display_url(url), branch=branch, head_sha=before,
+                              updated=False, behind_before=behind_before, merged=False,
+                              conflicts=list(conflicts) or ["(merge refused)"])
+        after = _git(wsp, "rev-parse", "HEAD").stdout.strip()
+        log.info("workspace pull+merge subject-ws=%s remote=%s ref=%s", wsp.name, remote, branch)
+        return PullResult(remote=remote, url=_display_url(url), branch=branch, head_sha=after,
+                          updated=True, behind_before=behind_before, merged=True, conflicts=[])
+    if ahead_local > 0 and behind_before == 0:
+        return PullResult(remote=remote, url=_display_url(url), branch=branch, head_sha=before,
+                          updated=False, behind_before=0)          # nothing to pull: push instead
     if ahead_local > 0:
         # Local has commits the remote doesn't → not a fast-forward. Refuse (no auto-merge / rebase / force).
         raise RemoteSyncError(
             "cannot fast-forward — this workspace has local commits the remote doesn't have. "
-            "Push them (or resolve the divergence) instead of pulling over them."
+            "Pull with merge=true to merge the remote in (a conflict changes nothing and names the "
+            "files), then push."
         )
     merged = _git(wsp, "merge", "--ff-only", "FETCH_HEAD", token=token, check=False)
     if merged.returncode != 0:
@@ -300,3 +325,170 @@ def pull_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optiona
     log.info("workspace pull subject-ws=%s remote=%s ref=%s updated=%s", wsp.name, remote, branch, before != after)
     return PullResult(remote=remote, url=_display_url(url), branch=branch, head_sha=after,
                       updated=before != after, behind_before=behind_before)
+
+
+# ── LOOK, DON'T TOUCH: the fetch-and-report half of a sync ─────────────────────────────────────────
+#
+# `pull_origin` fetches AND fast-forwards, so the only way an agent could learn "what is ahead, what
+# is behind" was to change the branch. `fetch_status` is the other half on its own: it fetches the
+# home branch into the REMOTE-TRACKING ref and nothing else — never the working tree, never the
+# index, never a local branch — then reports both sides of the difference. The agent's sandbox has
+# no git of its own (the workspace `.git` belongs to the platform), so this is how it looks.
+
+#: How many commits each side lists. The counts are always exact; only the listing is capped.
+STATUS_COMMIT_LIMIT = 50
+#: How many uncommitted paths are named. The counts are always exact.
+STATUS_PATH_LIMIT = 30
+
+_MISSING_REMOTE_REF = re.compile(r"couldn't find remote ref|could not find remote ref", re.I)
+
+
+class SyncRefused(RemoteSyncError):
+    """A status look that could not happen, with a KIND an agent can act on:
+
+    * ``no_remote``     — the workspace has no GitHub home (attach or publish one first);
+    * ``detached``      — HEAD is not on a branch, so there is nothing to compare;
+    * ``no_credential`` — the repository refused us (add the deploy key or save a token);
+    * ``network``       — the home could not be reached; ``previous_fetch_at`` says when it last was.
+    """
+
+    def __init__(self, kind: str, message: str, *, previous_fetch_at: Optional[str] = None):
+        super().__init__(message)
+        self.kind = kind
+        self.previous_fetch_at = previous_fetch_at
+
+
+@dataclass(frozen=True)
+class FetchStatus:
+    remote: str
+    url: str                      # token-free home URL
+    branch: str
+    upstream: Optional[str]       # "<remote>/<branch>", or None when the home has no such branch
+    ahead: int                    # local commits the home does not have (→ workspace_push)
+    behind: int                   # home commits this workspace does not have (→ workspace_pull)
+    local_commits: list           # [{sha, subject, files}] newest first, capped at STATUS_COMMIT_LIMIT
+    remote_commits: list          # same shape, the home's side
+    uncommitted: dict             # {staged, modified, untracked, paths[], more}
+    fetched_at: str               # ISO-8601 UTC of this fetch
+    previous_fetch_at: Optional[str]  # the fetch before this one, if any
+
+
+def _iso(ts: float) -> str:
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _last_fetch_at(ws: Path) -> Optional[str]:
+    """When this workspace last fetched — git's own marker, ``FETCH_HEAD``, which every fetch writes."""
+    marker = ws / ".git" / "FETCH_HEAD"
+    try:
+        return _iso(marker.stat().st_mtime)
+    except OSError:
+        return None
+
+
+def _commits(ws: Path, rng: str, limit: int) -> list:
+    """``[{sha, subject, files}]`` for ``rng`` (``a..b`` or a single rev), newest first."""
+    proc = _git(ws, "log", f"-n{limit}", "--format=%x1e%H%x1f%s", "--name-only", rng, check=False)
+    out = []
+    for chunk in proc.stdout.split("\x1e"):
+        if not chunk.strip():
+            continue
+        head, _, rest = chunk.partition("\n")
+        sha, _, subject = head.partition("\x1f")
+        out.append({"sha": sha.strip(), "subject": subject.strip(),
+                    "files": sum(1 for line in rest.splitlines() if line.strip())})
+    return out
+
+
+def _count(ws: Path, rng: str) -> int:
+    proc = _git(ws, "rev-list", "--count", rng, check=False)
+    try:
+        return int(proc.stdout.strip() or 0)
+    except ValueError:
+        return 0
+
+
+def _uncommitted(ws: Path) -> dict:
+    """Counts of staged / modified / untracked paths plus the first few names. Read with optional
+    locks OFF, so even git's index stat-refresh is not written — this look leaves `.git` as it was."""
+    proc = run_git(ws, "status", "--porcelain=v1", "-z", "--untracked-files=all",
+                   env={"GIT_OPTIONAL_LOCKS": "0"})
+    staged = modified = untracked = 0
+    paths: list = []
+    entries = proc.stdout.split("\0") if proc.returncode == 0 else []
+    i = 0
+    while i < len(entries):
+        e = entries[i]
+        i += 1
+        if len(e) < 4:
+            continue
+        x, y, path = e[0], e[1], e[3:]
+        if x in "RC":
+            i += 1                      # a rename carries its source as the next entry
+        if x == "?" and y == "?":
+            untracked += 1
+        else:
+            if x not in " ?":
+                staged += 1
+            if y not in " ?":
+                modified += 1
+        paths.append(path)
+    shown = paths[:STATUS_PATH_LIMIT]
+    return {"staged": staged, "modified": modified, "untracked": untracked,
+            "paths": shown, "more": len(paths) - len(shown)}
+
+
+def fetch_status(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optional[dict] = None,
+                 auth_failure=None, clock=None) -> FetchStatus:
+    """Fetch the home branch into ``refs/remotes/<home>/<branch>`` ONLY and report the difference.
+
+    Unchanged by this call: the working tree, the index, every local branch and HEAD. The credential
+    is the one a pull would use (``token`` over https, the deploy key's ``ssh_env`` over ssh) and is
+    never persisted — the fetch is from the authenticated URL as an argument (P15). A failure is a
+    :class:`SyncRefused` with a kind; ``auth_failure`` (a predicate on the redacted error) decides
+    ``no_credential`` vs ``network``."""
+    import time as _time
+    wsp = Path(ws)
+    home = home_remote(wsp)
+    if home is None:
+        raise SyncRefused("no_remote", "this workspace has no GitHub home yet — attach or publish a repository first")
+    remote, url = home
+    assert_fetchable(url)                       # read back from `.git/config` — see push_origin
+    branch = _current_branch(wsp)
+    if not branch:
+        raise SyncRefused("detached", "the workspace is on a detached HEAD — there is no branch to compare")
+    previous = _last_fetch_at(wsp)
+    token = (token or "").strip() or None
+    if ssh_env and _is_ssh_url(url):
+        token = None
+    auth_url = embed_token(url, token)
+    tracking = f"refs/remotes/{remote}/{branch}"
+    # A refspec into the TRACKING ref: git refuses to fetch into a checked-out branch anyway, and
+    # nothing here names one. No merge, no checkout, no reset follows.
+    fetch = _git(wsp, "fetch", "--quiet", "--no-tags", auth_url, f"+refs/heads/{branch}:{tracking}",
+                 token=token, ssh_env=ssh_env, check=False, url=url)
+    fetched_at = _iso(clock() if clock else _time.time())
+    upstream: Optional[str] = f"{remote}/{branch}"
+    if fetch.returncode != 0:
+        err = _redacted((fetch.stderr or "").strip(), token)
+        if _MISSING_REMOTE_REF.search(err):
+            upstream = None             # the home has no such branch: everything here is ahead
+        else:
+            is_auth = auth_failure(err) if auth_failure else False
+            raise SyncRefused("no_credential" if is_auth else "network",
+                              f"fetch from {remote} failed: {err}", previous_fetch_at=previous)
+    if upstream is None or _tracking_ref(wsp, remote, branch) is None:
+        upstream = None
+        ahead, behind = _count(wsp, "HEAD"), 0
+        local = _commits(wsp, "HEAD", STATUS_COMMIT_LIMIT)
+        theirs: list = []
+    else:
+        ahead, behind = _ahead_behind(wsp, tracking)
+        local = _commits(wsp, f"{tracking}..HEAD", STATUS_COMMIT_LIMIT) if ahead else []
+        theirs = _commits(wsp, f"HEAD..{tracking}", STATUS_COMMIT_LIMIT) if behind else []
+    log.info("workspace status subject-ws=%s remote=%s ref=%s ahead=%s behind=%s",
+             wsp.name, remote, branch, ahead, behind)   # metadata only (P15)
+    return FetchStatus(remote=remote, url=_display_url(url), branch=branch, upstream=upstream,
+                       ahead=ahead, behind=behind, local_commits=local, remote_commits=theirs,
+                       uncommitted=_uncommitted(wsp), fetched_at=fetched_at, previous_fetch_at=previous)

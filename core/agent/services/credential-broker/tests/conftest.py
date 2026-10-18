@@ -1,4 +1,4 @@
-"""Fixtures: a broker over a temporary state dir, three role keys, and an in-memory store.
+"""Fixtures: a broker over a temporary state dir, four role keys, and an in-memory store.
 
 `signed(role, method, path, body)` signs a request exactly as the real callers do, with the
 vendored credential-broker.v1 signer; an agent- or git-role request also carries the gateway's
@@ -92,7 +92,7 @@ def write_keys(root: Path) -> dict:
     pub = root / "identity-public-key.pem"
     pub.write_bytes(identity_token.public_key_pem(GATEWAY_KEY))
     files["identity"] = str(pub)
-    for role in ("agent", "human", "git"):
+    for role in ("agent", "human", "git", "bots", "sensors", "signals"):
         p = root / f"{role}.key"
         p.write_text(f"fixture-{role}-key-" + "0123456789abcdef" * 3 + "\n")
         files[role] = str(p)
@@ -111,7 +111,7 @@ def store() -> FakeStore:
 
 @pytest.fixture
 def settings(tmp_path, keys) -> Settings:
-    return Settings(state_dir=tmp_path / "state", key_files={r: keys[r] for r in ("agent", "human", "git")},
+    return Settings(state_dir=tmp_path / "state", key_files={r: keys[r] for r in ("agent", "human", "git", "bots", "sensors", "signals")},
                     store="local", store_key_file="unused",
                     google_client_id=GOOGLE["client_id"], google_client_secret=GOOGLE["client_secret"],
                     product_redirect=REDIRECT, identity_public_key_file=keys["identity"])

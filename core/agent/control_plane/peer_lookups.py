@@ -12,6 +12,8 @@ import json
 import logging
 from typing import Callable
 
+from shared import obs
+
 logger = logging.getLogger("agent_api.api")
 
 
@@ -64,7 +66,7 @@ def _http_email_subject_lookup(admin_api_url: str, internal_secret: str, admin_t
     state = {"internal_route": True}   # flipped off the first time the narrow door 404s
 
     def _get(url: str, headers: dict) -> "dict | None":
-        req = urllib.request.Request(url, headers=headers)
+        req = urllib.request.Request(url, headers={**headers, **obs.trace_headers()})
         with urllib.request.urlopen(req, timeout=5) as resp:   # noqa: S310 — internal service URL
             if resp.status != 200:
                 return None
@@ -134,7 +136,7 @@ def _http_meeting_owner_lookup(meeting_api_url: str, internal_secret: str = ""):
             return None  # non-numeric row id can't be an owned meeting row → fail closed
         # AS the caller, over the internal tier: meeting-api believes an asserted X-User-Id only from
         # the gateway's signature or from a service presenting X-Internal-Secret.
-        headers = {"X-User-Id": str(user_id)}
+        headers = {"X-User-Id": str(user_id), **obs.trace_headers()}
         if internal_secret:
             headers["X-Internal-Secret"] = internal_secret
         ws = ",".join(str(w).strip() for w in (workspaces or []) if str(w).strip())
@@ -169,7 +171,7 @@ def _http_meeting_transcript_lookup(meeting_api_url: str, internal_secret: str =
     def _read(user_id: str, meeting_id: str, workspaces=None) -> "list | None":
         if not base or not user_id or not str(meeting_id).isdigit():
             return None
-        headers = {"X-User-Id": str(user_id)}
+        headers = {"X-User-Id": str(user_id), **obs.trace_headers()}
         if internal_secret:
             headers["X-Internal-Secret"] = internal_secret
         ws = ",".join(str(w).strip() for w in (workspaces or []) if str(w).strip())

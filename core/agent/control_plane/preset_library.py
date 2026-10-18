@@ -49,6 +49,8 @@ Only the definition of "does not exist" widens from one root to two.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -71,6 +73,36 @@ DEFAULT_IMAGE_ASKS_DIR = "/app/behavior/asks"
 #: Operator override, for a deployment that mounts the library from somewhere else. Mirrors
 #: `VEXA_WORKSPACE_SEEDS_DIR`, which does the same job for `behavior/workspaces`.
 ENV_IMAGE_ASKS_DIR = "VEXA_PRESET_LIBRARY_DIR"
+
+
+def _load_superseded() -> dict:
+    """`{preset file name: {sha256 of every EARLIER version this product shipped}}`.
+
+    An existing `_global/asks/` file whose bytes match one of these was never edited by anyone: it is
+    an older copy of ours, written by an earlier top-up, and the top-up brings it up to date. A file
+    matching no shipped version is the admin's and is never touched. Generated from git history by
+    `scripts/preset-superseded.py`; the current version of a preset is never in the table (a test
+    holds that), so a refreshed file is not refreshed again and stays editable.
+
+    Measured 2026-10-13 on app.dev: Extend still named a tool that does not exist and mandated
+    company pages in `_global`, a month after the repo's preset was corrected, because the copy in
+    `_global/asks/` was the one a top-up wrote before the fix and existence was the whole test."""
+    try:
+        raw = json.loads((Path(__file__).with_name("preset_superseded.json")).read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(k): {str(h) for h in v} for k, v in raw.items() if isinstance(v, list)}
+
+
+SUPERSEDED: dict = _load_superseded()
+
+
+def _is_superseded_copy(global_root, rel: str, name: str) -> bool:
+    known = SUPERSEDED.get(name)
+    if not known:
+        return False
+    data = wpaths.read_bytes_inside(global_root, rel, max_bytes=1 << 20)
+    return data is not None and hashlib.sha256(data).hexdigest() in known
 
 
 def image_asks_dir() -> Optional[Path]:
@@ -115,7 +147,8 @@ def summary(added: list[str]) -> str:
 
 
 def top_up(global_root: "str | Path", image_dir: "str | Path | None" = None) -> list[str]:
-    """Copy every preset the image ships that `_global/asks/` does NOT already have. ADDITIVE ONLY.
+    """Copy every preset the image ships that `_global/asks/` does NOT already have. ADDITIVE ONLY —
+    except a file that is an unedited copy of an earlier shipped version, which is refreshed.
 
     Returns the names actually added, in order, and logs ONE line per file — a deploy that changed
     what every agent in the company reads should say so in its own log, by name, rather than being
@@ -139,14 +172,25 @@ def top_up(global_root: "str | Path", image_dir: "str | Path | None" = None) -> 
         rel = f"{ASKS_DIRNAME}/{f.name}"
         # EXISTENCE IS THE WHOLE TEST. Not mtime, not size, not content — a file that is there is
         # the admin's, and a deploy must not be able to revert their edit.
+        #
+        # ...WITH ONE EXCEPTION: a file byte-identical to an EARLIER version this product shipped
+        # (`SUPERSEDED`). Nobody edited it — a human edit changes the bytes — so replacing it reverts
+        # nothing and only stops the deployment reading text the product has since corrected.
+        refresh = False
         if wpaths.is_file_inside(global_root, rel):
-            continue
+            if not _is_superseded_copy(global_root, rel, f.name):
+                continue
+            refresh = True
         try:
             wpaths.copy_file_inside(f, global_root, rel)
         except (OSError, ValueError) as e:   # ValueError: a link in the way (PathRefused)
             logger.warning("preset_library: could not add %s to %s (%s)", f.name, dst, e)
             continue
         added.append(f.name)
+        if refresh:
+            logger.info("preset_library: refreshed %s in %s — it was an unedited copy of an earlier "
+                        "version this product shipped", f.name, dst)
+            continue
         logger.info("preset_library: added %s to %s — it is in this image and was not on the "
                     "store; an admin may edit it there", f.name, dst)
     if not added:

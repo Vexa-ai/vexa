@@ -19,6 +19,7 @@ from fastapi import HTTPException
 
 from control_plane.repo_ref import normalize
 from control_plane.workspace_attach import _safe_subject_dir
+from shared import git_provider
 from shared.atomic_json import write_json_atomic
 from shared.git_redaction import redact
 
@@ -35,10 +36,10 @@ def _store(root: str | Path, subject: str) -> Path:
 
 
 def ssh_form(url: str) -> str | None:
-    """The deploy-key (SSH) form of a GitHub https URL, or None for any other URL."""
-    if url.startswith('https://github.com/'):
-        return url.replace('https://github.com/', 'git@github.com:', 1)
-    return None
+    """The deploy-key (SSH) form of an https URL on a configured git provider, or None."""
+    provider = git_provider.for_url(url) if url.startswith('https://') else None
+    path = provider.repo_path(url) if provider else None
+    return provider.ssh_url(path) if path else None
 
 
 def repository_url(repo: str, *, use_deploy_key: bool) -> str:

@@ -285,6 +285,43 @@ _CONTINUE_LABEL = "Continue"
 _CONTINUE_INSTRUCTION = "continue where you stopped"
 
 
+#: AT THE BUDGET, A REPORT — NOT A SILENT CUT (Vexa-ai/vexa#1783). Friction 2026-10-13: a chat turn
+#: stopped at 40 of 40 calls and "answered with whatever it had", usually nothing. So a CHAT turn
+#: that reaches its tool-call budget gets one more round with NO tools offered, asking for what it
+#: did and what is left. The report is the reply; its `Left:` list becomes the Continue act's
+#: instruction, so pressing Continue starts the next turn with the remaining work (the client
+#: already renders `done.act` as a chip — no new component).
+_WRAP_UP = (
+    "This turn has reached its tool-call budget ({calls} tool calls), so no more tools run in it. "
+    "Do not call any tool. Write a short progress report for the person, in their language: one "
+    "line saying you stopped at this turn's step limit, then a list under the heading `Done:` of "
+    "what you finished, then a list under the heading `Left:` of what remains, each item one short "
+    "line specific enough to carry on from. Keep the two headings exactly as written. Nothing else."
+)
+_WRAP_UP_FALLBACK = ("I stopped at this turn's step limit after {calls} steps, before finishing. "
+                     "Press Continue to carry on from where I stopped.")
+_LEFT_HEADING = re.compile(r"(?im)^[ \t>*_#-]*left[ \t*_]*:[ \t*_]*(.*)$")
+_LEFT_MAX_CHARS = 1200
+
+
+def _left_of(report: str) -> str:
+    """The `Left:` list of a wrap-up report, or "" — everything after the heading up to the next
+    `Something:` heading or the end, trimmed."""
+    m = _LEFT_HEADING.search(report or "")
+    if not m:
+        return ""
+    rest = (m.group(1) + "\n" + report[m.end():]).strip()
+    stop = re.search(r"(?m)^[ \t*_#]*[A-Z][A-Za-z ]{1,30}:[ \t*_]*$", rest)
+    if stop:
+        rest = rest[:stop.start()]
+    return rest.strip()[:_LEFT_MAX_CHARS]
+
+
+def _continue_instruction(report: str) -> str:
+    left = _left_of(report)
+    return (f"{_CONTINUE_INSTRUCTION}. What was left:\n{left}" if left else _CONTINUE_INSTRUCTION)
+
+
 def _stopped_line(reason: str, calls: int, budget: int, seconds: float) -> str:
     """THE LINE IN THE BUBBLE for a turn that ended on a budget (Vexa-ai/vexa#1622).
 
@@ -302,6 +339,36 @@ def _stopped_line(reason: str, calls: int, budget: int, seconds: float) -> str:
     return f"stopped at the time budget after {calls} steps ({seconds:.0f}s)"
 
 
+def _images_on(base: str = "") -> bool:
+    """Does this endpoint take pictures? ``VEXA_LLM_IMAGES`` = ``on`` | ``off``; unset, only
+    OpenAI's own API is assumed to — a self-hosted model that cannot read an image refuses the whole
+    request, and the exact path is in the text either way."""
+    v = os.environ.get("VEXA_LLM_IMAGES", "").strip().lower()
+    if v in ("on", "1", "true"):
+        return True
+    if v in ("off", "0", "false"):
+        return False
+    return "api.openai.com" in str(base or "")
+
+
+def _user_content(prompt: str, base: str = ""):
+    """The user message content: the text, plus each attached picture as an ``image_url`` data URL
+    when the endpoint takes images (``shared/attachments.py``). The transcript keeps the text only,
+    so a resumed conversation never re-sends an old picture."""
+    if not _images_on(base):
+        return prompt
+    from shared import attachments  # noqa: PLC0415 — the worker image carries `shared/`
+    import base64  # noqa: PLC0415
+
+    parts: list[dict] = []
+    for item in attachments.images(prompt):
+        data = attachments.read_image(item)
+        if data is not None:
+            parts.append({"type": "image_url", "image_url": {
+                "url": f"data:{item['type']};base64,{base64.b64encode(data).decode('ascii')}"}})
+    return [{"type": "text", "text": prompt}, *parts] if parts else prompt
+
+
 def _continue_window(messages: list[dict], prompt: str, calls: int, said: str) -> list[dict]:
     """The message list a continuation window starts from: the original brief, then the checkpoint.
 
@@ -317,12 +384,16 @@ def _continue_window(messages: list[dict], prompt: str, calls: int, said: str) -
     return seed
 
 
+_IMAGE_DATA = re.compile(r"data:image/[a-z]+;base64,[A-Za-z0-9+/=]+")
+
+
 def _est_tokens(obj: object) -> int:
     """A chars/4 estimate. Deliberately crude and deliberately LOCAL: a tokenizer would be a model
     dependency in a module that must stay liftable, and the budget it guards is a safety margin on a
     shared box, not an accounting figure."""
     try:
-        return max(1, len(json.dumps(obj, default=str)) // 4)
+        # an attached picture is ~1k tokens to the model whatever its base64 length
+        return max(1, len(_IMAGE_DATA.sub("data:image", json.dumps(obj, default=str))) // 4)
     except (TypeError, ValueError):
         return 1
 
@@ -1073,6 +1144,50 @@ def trim_messages(messages: list[dict], budget: int) -> tuple[list[dict], int]:
 _SHORTENED = "\n\n[…earlier reply shortened to fit the model's context]"
 
 
+class _TurnUsage:
+    """The model calls of one turn, summed for its `done` (`usage`)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.prompt = self.completion = 0
+        self.cost = 0.0
+        self.costed = True        # every call reported its own cost
+        self.estimated = False
+        self.model = ""
+
+    def add(self, reported: Optional[dict], messages, text: str, calls, model: str) -> None:
+        self.calls += 1
+        self.model = model or self.model
+        def _int(v) -> int:
+            try:
+                return max(0, int(v or 0))
+            except (TypeError, ValueError):
+                return 0
+        if reported:
+            self.prompt += _int(reported.get("prompt_tokens"))
+            self.completion += _int(reported.get("completion_tokens"))
+            try:
+                self.cost += float(reported["cost"])
+            except (KeyError, TypeError, ValueError):
+                self.costed = False
+        else:
+            self.prompt += _est_tokens(messages)
+            self.completion += max(1, len(str(text or "") + json.dumps(calls or [], default=str)) // 4)
+            self.costed = False
+            self.estimated = True
+
+    def summary(self) -> dict:
+        out: dict = {"prompt_tokens": self.prompt, "completion_tokens": self.completion}
+        if self.costed:
+            out["cost"] = round(self.cost, 8)
+        out["calls"] = self.calls
+        if self.model:
+            out["model"] = self.model
+        if self.estimated:
+            out["estimated"] = True
+        return out
+
+
 # ── the harness ─────────────────────────────────────────────────────────────────────────────────
 
 def _failed_done(reply: str, sid: str, exc: BaseException, *, keep_reply: bool = False) -> dict:
@@ -1185,6 +1300,15 @@ class OpenAIAgentHarness:
                  session: Optional[str] = None, model: Optional[str] = None,
                  mcp_config: Optional[str] = None) -> Iterator[dict]:
         sid = session or uuid.uuid4().hex
+        # WHAT THIS TURN'S MODEL CALLS USED, carried on its `done` as `usage` — the spend cap's input
+        # (control_plane/llm_budget.py). Additive: a consumer that does not read it sees no change.
+        self._usage = _TurnUsage()
+        for ev in self._run_turn(work, prompt, allowed_tools, session, sid, model, mcp_config):
+            if ev.get("type") == "done" and self._usage.calls:
+                ev = {**ev, "usage": self._usage.summary()}
+            yield ev
+
+    def _run_turn(self, work, prompt, allowed_tools, session, sid, model, mcp_config) -> Iterator[dict]:
         try:
             yield from self._loop(Path(work), prompt, set(allowed_tools), session, sid, model,
                                   mcp_config)
@@ -1214,7 +1338,7 @@ class OpenAIAgentHarness:
             yield {"type": "done", "reply": "unknown session", "sessionId": sid, "ok": False}
             return
         messages: list[dict] = store.messages() if resume else []
-        messages.append({"role": "user", "content": prompt})
+        messages.append({"role": "user", "content": _user_content(prompt, self._base)})
         store.record_user(prompt)
 
         servers, mcp_index = _load_mcp(mcp_config, http_client=self._mcp_http)
@@ -1401,6 +1525,9 @@ class OpenAIAgentHarness:
                         calls_made, window_calls, truncation, over_budget = 0, 0, "", False
                         continue
                     reply = text
+                    if truncation == "tool-call budget" and kind == "chat" and not is_job:
+                        reply = yield from self._wrap_up(messages, target, store, total_calls,
+                                                         ctx_budget)
                     break
             # THE TURN'S OWN VERDICT. `ok` is False only when the turn did not finish its own
             # reasoning — it hit a budget — because that reply is partial and acting on it as if it
@@ -1422,7 +1549,8 @@ class OpenAIAgentHarness:
                 # THE ACT THE BUBBLE OFFERS. Named here rather than in the client because the
                 # harness is the only thing that knows the turn did not finish its own reasoning;
                 # the client's job is to render a control and post the instruction back.
-                done["act"] = {"label": _CONTINUE_LABEL, "instruction": _CONTINUE_INSTRUCTION}
+                done["act"] = {"label": _CONTINUE_LABEL,
+                               "instruction": _continue_instruction(reply)}
             elif refusals.ended:
                 # Not a budget stop, so no Continue act: continuing would be refused the same way.
                 r = refusals.ended
@@ -1458,6 +1586,31 @@ class OpenAIAgentHarness:
         return False, (f"no tool named {name} is attached to this turn — the attached tools are "
                        f"{sorted(attached)}")
 
+    def _wrap_up(self, messages: list[dict], target: str, store, calls: int, ctx_budget: int):
+        """One tool-less round for the progress report (see ``_WRAP_UP``). Yields its deltas and
+        RETURNS the report; any failure returns the fixed line, so the turn still ends saying so.
+        The ask itself is machinery and is not recorded; the report is."""
+        ask = {"role": "user", "content": _WRAP_UP.format(calls=calls)}
+        text = ""
+        try:
+            sent, _ = trim_messages([*messages, ask], ctx_budget)
+            for ev in self._complete(sent, [], target):
+                if "__final__" in ev:
+                    text = str(ev["__final__"].get("content") or "") or text
+                    break
+                if ev.get("type") == "message-delta":
+                    text += ev.get("text", "")
+                    yield ev
+        except Exception as exc:  # noqa: BLE001 — the report is a courtesy; the stop line is not
+            log.warning("budget wrap-up round failed: %s: %s", type(exc).__name__, exc)
+            text = ""
+        text = text.strip()
+        if not text:
+            text = _WRAP_UP_FALLBACK.format(calls=calls)
+            yield {"type": "message-delta", "text": text}
+        store.record_assistant(text, [], {"role": "assistant", "content": text})
+        return text
+
     def _complete(self, messages: list[dict], specs: list[dict], model: str) -> Iterator[dict]:
         """One `chat/completions` round trip. Yields ``message-delta`` events while the text
         streams, then a single ``{"__final__": <assistant message>}``."""
@@ -1476,7 +1629,15 @@ class OpenAIAgentHarness:
             yield from self._complete_blocking(body, headers)
             return
         body = {**body, "stream": True}
+        # THE CALL'S USAGE, on the stream's last chunk (OpenAI's `stream_options`, which OpenRouter,
+        # vLLM and LiteLLM honour). An operator whose endpoint refuses the field removes it with
+        # `"stream_options": null` in VEXA_LLM_EXTRA_BODY; the call is then estimated.
+        if "stream_options" not in self._extra:
+            body["stream_options"] = {"include_usage": True}
+        elif body.get("stream_options") is None:
+            body.pop("stream_options", None)
         acc_text, acc_calls = "", {}
+        reported: Optional[dict] = None
         try:
             with self._client.stream("POST", f"{self._base}/chat/completions", json=body,
                                      headers=headers) as r:
@@ -1499,6 +1660,8 @@ class OpenAIAgentHarness:
                     # context overflow, an upstream 5xx). The old loop looked only for `delta`, so
                     # such a frame was skipped and the turn ended with an empty successful reply —
                     # the person saw the agent say nothing and nothing anywhere said why.
+                    if isinstance(chunk.get("usage"), dict):
+                        reported = chunk["usage"]
                     err = chunk.get("error")
                     if err:
                         detail = err.get("message") if isinstance(err, dict) else str(err)
@@ -1533,6 +1696,7 @@ class OpenAIAgentHarness:
                             slot["function"]["arguments"] += fn["arguments"]
         except httpx.HTTPError as exc:
             raise self._transport_error(exc, model) from exc
+        self._count(reported, messages, acc_text, acc_calls, model)
         # F90: A STREAM THAT SAID NOTHING is a failure, not an empty answer. A truncated connection,
         # a model that emitted only reasoning tokens (the Qwen thinking case VEXA_LLM_EXTRA_BODY
         # exists to switch off), a `[DONE]` with no content — all reached `done.ok=True` with an
@@ -1554,14 +1718,25 @@ class OpenAIAgentHarness:
         if r.status_code >= 400:
             self._raise_http(r, str(body.get("model") or ""), tools_sent=bool(body.get("tools")))
         try:
-            msg = ((r.json().get("choices") or [{}])[0] or {}).get("message") or {}
+            payload = r.json()
+            msg = ((payload.get("choices") or [{}])[0] or {}).get("message") or {}
         except (ValueError, AttributeError, TypeError) as exc:
             raise LLMError(f"malformed completion payload from {self._base}: {exc}") from exc
+        self._count(payload.get("usage") if isinstance(payload.get("usage"), dict) else None,
+                    body.get("messages") or [], str(msg.get("content") or ""), msg.get("tool_calls"),
+                    str(body.get("model") or ""))
         text = str(msg.get("content") or "")
         if text:
             yield {"type": "message-delta", "text": text}
         yield {"__final__": {"role": "assistant", "content": text,
                              **({"tool_calls": msg["tool_calls"]} if msg.get("tool_calls") else {})}}
+
+    def _count(self, reported: Optional[dict], messages, text: str, calls, model: str) -> None:
+        """Add one call to the turn's usage: what the endpoint reported, else a chars/4 estimate of
+        what was sent and received (never zero — an unreported call is not a free one)."""
+        usage = getattr(self, "_usage", None)
+        if usage is not None:
+            usage.add(reported, messages, text, calls, model)
 
     def _tool_calling_fault(self, text: str, model: str, *,
                             first: bool) -> Optional[provider_faults.ProviderFault]:

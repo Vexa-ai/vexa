@@ -149,7 +149,7 @@ def test_a_new_company_page_is_created_from_the_company_template(stack):
     assert _put(c, ADMIN_ACCOUNT, "kg/templates/company.md", _company_template()).status_code == 200
     r = _entity(c, ADMIN_ACCOUNT, "Acme", section="Risk")
     assert r.status_code == 200, r.text
-    assert "Risk" in r.json()["sections"] and r.json()["template"] == "company"
+    assert "Risk" in r.json()["sections"] and r.json()["template"].startswith("_global/kg/templates/")
     page = (stack["root"] / "_global" / "kg" / "entities" / "company" / "acme.md").read_text()
     assert "## Risk" in page
     risk = page.split("## Risk", 1)[1].split("## ", 1)[0]

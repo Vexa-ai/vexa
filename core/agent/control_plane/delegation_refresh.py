@@ -109,6 +109,9 @@ class Refresher:
         token = delegation.mint_delegation(
             self._secret, subject=str(claims["sub"]), regime=str(scope.get("regime")),
             workspaces=scope.get("workspaces"), target=str(claims.get("target") or ""),
+            unit=unit_id, shared=delegation.is_shared(scope),     # a shared turn's ceiling is re-minted whole
+            grants=scope.get("grants") if isinstance(scope.get("grants"), list) else None,
+            flow=str(scope.get("flow") or ""),                     # …and a routine's grants with it
             ttl_sec=int(self._ttl()), now=int(now))
         fresh = delegation.verify_delegation(self._secret, token, now=int(now))
         dr.record(client, unit_id=unit_id, jti=str(fresh["jti"]), exp=int(fresh["exp"]), now=now,

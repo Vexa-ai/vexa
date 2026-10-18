@@ -73,9 +73,16 @@ ENV_IMAGE_SEED_DIR = "VEXA_GLOBAL_SEED_DIR"
 ENV_IMAGE_MAIL_DIR = "VEXA_GLOBAL_MAIL_DIR"
 ENV_IMAGE_TEMPLATES_DIR = "VEXA_GLOBAL_TEMPLATES_DIR"
 
+#: Where the image keeps the WORKSPACE templates (event organization, client project, …). They land
+#: in `_global/workspace-templates/`, where the admin account edits them from chat; a deploy adds a
+#: new one and never overwrites an edited one (founder 2026-10-14). `workspace_templates` reads them.
+DEFAULT_IMAGE_WORKSPACE_TEMPLATES_DIR = "/app/behavior/workspace-templates"
+ENV_IMAGE_WORKSPACE_TEMPLATES_DIR = "VEXA_WORKSPACE_TEMPLATES_DIR"
+
 #: The live directory name each source lands in, relative to `_global`. Empty string = the root.
 MAIL_DIRNAME = "mail"
 TEMPLATES_DIRNAME = "kg/templates"
+WORKSPACE_TEMPLATES_DIRNAME = "workspace-templates"
 
 
 def _dir(env_name: str, default: str) -> Optional[Path]:
@@ -101,6 +108,11 @@ def image_templates_dir() -> Optional[Path]:
     return _dir(ENV_IMAGE_TEMPLATES_DIR, DEFAULT_IMAGE_TEMPLATES_DIR)
 
 
+def image_workspace_templates_dir() -> Optional[Path]:
+    """The image's copy of the workspace templates, or None when this build carries none."""
+    return _dir(ENV_IMAGE_WORKSPACE_TEMPLATES_DIR, DEFAULT_IMAGE_WORKSPACE_TEMPLATES_DIR)
+
+
 def sources() -> list[tuple[Path, str]]:
     """(source directory, destination relative to `_global`) for every tree this module carries."""
     out: list[tuple[Path, str]] = []
@@ -113,6 +125,9 @@ def sources() -> list[tuple[Path, str]]:
     templates = image_templates_dir()
     if templates is not None:
         out.append((templates, TEMPLATES_DIRNAME))
+    wtemplates = image_workspace_templates_dir()
+    if wtemplates is not None:
+        out.append((wtemplates, WORKSPACE_TEMPLATES_DIRNAME))
     return out
 
 

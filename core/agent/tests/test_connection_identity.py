@@ -35,7 +35,11 @@ def test_generic_link_does_not_erase_distinct_relations(tmp_path):
     assert '— works here' in text and '— advises' in text
 
 
-def test_combined_field_is_rejected_without_writes(tmp_path):
-    with pytest.raises(E.EntityMalformed):
-        E.upsert_entity(tmp_path,'company','Design Studio',['Design work.'],'fixture',fields={'people':'Dana Pike; Juan (design partner)'})
-    assert not list(tmp_path.rglob('*.md'))
+def test_a_combined_field_is_filed_as_written_and_links_each_name(tmp_path):
+    """A FIELD is prose (Vexa-ai/vexa#1783): refusing the whole call made the agent strip its own
+    write-back. `connections` (above) stays one-name-per-entry; a field's names are each linked."""
+    r=E.upsert_entity(tmp_path,'company','Design Studio',['Design work.'],'fixture',fields={'people':'Dana Pike; Juan (design partner)'})
+    text=(tmp_path/r['path']).read_text()
+    assert 'Dana Pike; Juan (design partner)' in text
+    assert '[[Dana Pike]]' in text and '[[Juan]]' in text
+    assert '[[Dana Pike; Juan' not in text

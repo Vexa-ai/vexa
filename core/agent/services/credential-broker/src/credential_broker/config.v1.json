@@ -28,6 +28,27 @@
       "targets": ["compose", "helm"]
     },
     {
+      "key": "VEXA_CONNECTIONS_BOTS_KEY_FILE",
+      "class": "capability",
+      "capability": "bot_accounts",
+      "description": "file holding the bots role's assertion key. meeting-api holds the same file (VEXA_BOT_ACCOUNTS_KEY_FILE) to keep saved signed-in bot browser profiles here; no other process does",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_SENSORS_KEY_FILE",
+      "class": "capability",
+      "capability": "sensors",
+      "description": "file holding the sensors role's assertion key. flows' sensor pool holds the same file (VEXA_FLOWS_SENSORS_KEY_FILE) to read a person's connected calendar's changes (read-only, ADR-0050); no other process does. Unset: no sensor reads anything through the broker",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_SIGNALS_KEY_FILE",
+      "class": "capability",
+      "capability": "signals",
+      "description": "file holding the signals role's assertion key. The transcript-signals service holds the same file (VEXA_SIGNALS_BROKER_KEY_FILE) to read the signal model's key the company policy names (`service/signals/<name>` only); no other process does. Unset: no signal model can be keyed through the broker",
+      "targets": ["compose", "helm"]
+    },
+    {
       "key": "VEXA_CONNECTIONS_STATE_DIR",
       "class": "defaulted",
       "default": "/state",
@@ -99,9 +120,24 @@
       "when_unconfigured": "authorizing a Gmail or Calendar connection answers 409 'Provider application is not configured on this deployment'; custom-secret connections are unaffected"
     },
     "git_store": {
-      "description": "agent-api's Git credential store may keep saved tokens and deploy keys in this broker",
+      "description": "agent-api's Git credential store: saved tokens and deploy keys are kept in this broker, their only store",
       "mode": "all",
-      "when_unconfigured": "POST /api/internal/git-secret refuses every caller (403); agent-api keeps Git credentials in its own encrypted store"
+      "when_unconfigured": "POST /api/internal/git-secret refuses every caller (403), so agent-api cannot save or use a Git token or deploy key and answers Git operations that need one with a typed refusal"
+    },
+    "bot_accounts": {
+      "description": "meeting-api may keep bot accounts — saved signed-in browser profiles (ADR-0049) — in this broker",
+      "mode": "all",
+      "when_unconfigured": "POST /api/internal/bot-account refuses every caller (a bots assertion 401, any other role 403); meeting-api offers no bot accounts"
+    },
+    "sensors": {
+      "description": "flows' sensor pool may read a person's connected calendar's changes through this broker (ADR-0050), read-only",
+      "mode": "all",
+      "when_unconfigured": "POST /api/internal/sensor/calendar-changes refuses every caller (a sensors assertion 401, any other role 403); no calendar sensor runs"
+    },
+    "signals": {
+      "description": "the transcript-signals service may read the signal model's key the company policy names (`broker:signals/<name>`) from this broker",
+      "mode": "all",
+      "when_unconfigured": "POST /api/internal/signals/model-key refuses every caller (a signals assertion 401, any other role 403); signals runs only with a keyless model endpoint"
     }
   }
 }

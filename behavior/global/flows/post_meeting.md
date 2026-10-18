@@ -1,21 +1,21 @@
 ---
 kind: flow
 flow: post_meeting
-version: 4
+version: 5
 trigger: meeting.completed
-steps: 4
+steps: 5
 generated: from the code that runs it — edits here are overwritten
 ---
 
 # post_meeting
 
-Runs when **`meeting.completed`** happens, in 4 steps. This page is written from the code — the docstrings below are the ones in the image that is running, and the Python at the foot is that code verbatim.
+Runs when **`meeting.completed`** happens, in 5 steps. This page is written from the code — the docstrings below are the ones in the image that is running, and the Python at the foot is that code verbatim.
 
 | | |
 |---|---|
 | **trigger** | `meeting.completed` |
-| **version** | 4 — a step list changes by adding a version, never by editing one in place |
-| **mails** | `(composed in the step, from no template)`, `attendee-head` |
+| **version** | 5 — a step list changes by adding a version, never by editing one in place |
+| **mails** | `attendee-head` |
 | **rules it honours** | [`report_to_participants`](../POLICIES.md#report_to_participants), [`external_participants`](../POLICIES.md#external_participants), [`minutes_mail`](../POLICIES.md#minutes_mail), [`attendee_domains`](../POLICIES.md#attendee_domains), [`data_statement`](../POLICIES.md#data_statement) |
 
 ## The steps, in order
@@ -36,7 +36,6 @@ Send the committed note VERBATIM in the body + the feedback ask + ONE link into 
 - **reads:** refs.{uid,organizer,title,meeting_id}
 - **effect:** one notification
 - **domains:** without **agent** it runs anyway, with less to work with · without **meetings** the reaction ends there, saying so
-- **mails:** `(composed in the step, from no template)`
 - **rules it honours:** [`report_to_participants`](../POLICIES.md#report_to_participants), [`minutes_mail`](../POLICIES.md#minutes_mail), [`data_statement`](../POLICIES.md#data_statement)
 
 ### 3. `email_attendees`
@@ -50,7 +49,15 @@ Every inside-domain ATTENDEE gets the follow-up plus ONE button into a chat the 
 - **mails:** `attendee-head`
 - **rules it honours:** [`report_to_participants`](../POLICIES.md#report_to_participants), [`external_participants`](../POLICIES.md#external_participants), [`attendee_domains`](../POLICIES.md#attendee_domains)
 
-### 4. `drop_to_attendees`
+### 4. `propose_call_changes`
+
+Prior: process_meeting{report}. Effect: proposals in the call's session. Result: {proposed, session} or {skipped}.
+
+- **effect:** proposals in the call's session
+- **result:** {proposed, session} or {skipped}
+- **domains:** without **agent** this step is skipped and the flow carries on · without **meetings** the reaction ends there, saying so
+
+### 5. `drop_to_attendees`
 
 The meeting's ARTEFACT into every desk in the room — the organiser's included. Plain code, no agent turn, no LLM (founder decisions 20 and 22).
 
@@ -367,7 +374,10 @@ def email_minutes(ctx: StepCtx):
         provenance={"flow": "post_meeting", "step": "email_minutes",
                     "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                     "minted_by": str(ctx.refs["uid"])})
-    mid = notify(organizer, f"Minutes: {_mail_title(ctx)}", body, link=link)
+    mid = mail("minutes", organizer, f"Minutes: {_mail_title(ctx)}", body, link=link, db=db,
+               uid=str(ctx.refs["uid"]))
+    if mid is None:
+        return Done({"skipped": "mail.minutes is off"})
     mx.register_thread(db, mid, ctx.refs["uid"], f"meet-{ctx.refs['meeting_id']}")
     # AND EVERYONE ELSE IN THE WORKSPACE THIS MEETING BELONGS TO. A meeting bound to a workspace
     # is the GROUP's, so its write-up is the group's too — mailing it to the requester alone is
@@ -561,7 +571,9 @@ def email_attendees(ctx: StepCtx):
         # off, which is how the double-splice went unnoticed), and the "—\nOpen it and ask
         # anything about the meeting:" trailer. Four elements were approved; this is four.
         try:
-            notify(a, subject, body, link=link)
+            if not mail("attendee-report", a, subject, body, link=link, db=db,
+                        uid=str(ctx.refs.get("uid") or "")):
+                continue
             sent.append(a)
             ctx.scratch["sent"] = sent
             drops.append({"to": a, "link": link})
@@ -594,6 +606,49 @@ def email_attendees(ctx: StepCtx):
     return Done({"sent": len(sent), "followup": "on", "to": sent, "meeting_id": mid,
                  "drops": drops,               # what drop_to_attendees writes, per person
                  "failed": failed})
+```
+
+</ViewSource>
+
+<ViewSource step="propose_call_changes">
+
+```python
+@reg.step(needs=("agent", "meetings"), absent={"agent": "skip"})
+def propose_call_changes(ctx: StepCtx):
+    """Prior: process_meeting{report}. Effect: proposals in the call's session.
+    Result: {proposed, session} or {skipped}."""
+    sid = _call_session(ctx)
+    if not sid:
+        return Done({"skipped": "not a call held in a session"})
+    pm = ctx.prior.get("process_meeting") or {}
+    report = _readable(pm.get("report") or "").strip()
+    if not report:
+        return Done({"proposed": 0, "session": sid, "skipped": "there is no report to propose"})
+    uid = str(ctx.refs["uid"])
+    mid = ctx.refs.get("meeting_id")
+    if ctx.scratch.get("call_proposed"):
+        return Done({"proposed": ctx.scratch["call_proposed"], "session": sid})
+    title = _mail_title(ctx)
+    day = _meeting_stamp(ctx, uid)[:10]
+    entity_path = _note_path(ctx, uid, title)
+    filename = entity_path.rsplit("/", 1)[-1]
+    organizer = _organizer_address(ctx) or ""
+    roster = [str(a).strip().lower() for a in (ctx.refs.get("participants") or []) if str(a).strip()]
+    page = _drop_entity(title=title, day=day, entity_id=filename[:-3] if filename.endswith(".md") else filename,
+                        date_prose=_meeting_date(ctx, uid), organizer=organizer, participants=roster,
+                        report=report, link="", meeting_id=str(mid or ""),
+                        native=str(ctx.refs.get("native") or "").strip())
+    ag.propose_session_change(uid, sid, kind="page", body=page, title=title,
+                              workspace=uid, path=entity_path, meeting_id=mid)
+    count = 1
+    for bullet in committed_bullets(report):
+        text = bullet.replace("[[", "").replace("]]", "").strip()
+        if text:
+            ag.propose_session_change(uid, sid, kind="commitment", body=text, title=title,
+                                      meeting_id=mid)
+            count += 1
+    ctx.scratch["call_proposed"] = count
+    return Done({"proposed": count, "session": sid, "entity": entity_path})
 ```
 
 </ViewSource>
@@ -662,6 +717,9 @@ def drop_to_attendees(ctx: StepCtx):
 
     Prior: process_meeting{report}, email_attendees{drops}, email_minutes{link}
     Effect: N desk writes · Result: {dropped, to, failed, entity, proposed}."""
+    if _call_session(ctx):
+        return Done({"dropped": 0, "to": [], "failed": [],
+                     "skipped": "a call's changes wait for its owner (propose_call_changes)"})
     pm = ctx.prior.get("process_meeting") or {}
     report = _readable(pm.get("report") or "").strip()
     if not report:
@@ -740,7 +798,10 @@ def drop_to_attendees(ctx: StepCtx):
                 link=d.get("link") or "", meeting_id=str(mid or ""), native=native),
                 # A page this person has already grown keeps everything but its report region
                 # (#1598). Their words are not this step's to overwrite.
-                report=report)
+                report=report, title=title,
+                # THE ORGANISER'S PAGE IS THE ONE THE ROW RECORDS, in the workspace it records
+                # (#1783): an agenda page adopted in another of their workspaces gets the report.
+                slug=(_recorded_note_workspace(ctx, uid) or None) if their_uid == uid else None)
             _write_if_changed(their_uid, index_path, _index_entry(
                 ws_file(their_uid, index_path), title, filename, day))
             # AND WHAT THEY OWE, ONTO THEIR SHORT LIST (Vexa-ai/vexa#1614). The report is the

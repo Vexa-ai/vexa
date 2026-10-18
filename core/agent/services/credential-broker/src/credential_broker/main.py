@@ -58,6 +58,7 @@ def build_app(env: Optional[Mapping[str, str]] = None) -> FastAPI:
             pass
     store = build_store(settings)
     log_event("broker_started", fields={"store": store.name, "git_store": bool(settings.key_files.get("git")),
+                                        "bot_accounts": bool(settings.key_files.get("bots")),
                                         "google_oauth": bool(settings.google_client_id and settings.product_redirect)})
     return create_app(Broker(settings, store))
 

@@ -14,6 +14,13 @@ import pytest
 from control_plane import git_credentials, workspace_credentials as wcreds
 from shared.token_destination import embed_token
 
+
+@pytest.fixture(autouse=True)
+def _git_broker(git_broker):
+    """Saved Git credentials live in the credential broker (in memory here)."""
+    return git_broker
+
+
 SAVED = "ghp_" + "S" * 36
 TYPED = "ghp_" + "T" * 36
 
@@ -24,7 +31,7 @@ def saved_token(monkeypatch):
 
 
 def _token(tmp_path, url, explicit=None):
-    with wcreds.for_workspace(tmp_path, key="k", repo_url=url, subject="u1",
+    with wcreds.for_workspace(tmp_path, key="user-u1", repo_url=url, subject="u1",
                               explicit_token=explicit) as cred:
         return cred.token
 
@@ -80,9 +87,9 @@ def test_a_clone_url_carries_a_credential_only_over_https():
 
 
 def test_the_capability_line_reports_a_saved_token_only_where_it_would_be_used(tmp_path, saved_token):
-    assert wcreds.home_capability(tmp_path, key="k", remote="origin",
+    assert wcreds.home_capability(tmp_path, key="user-u1", remote="origin",
                                   url="https://github.com/acme/kg", subject="u1").endswith("saved token")
-    assert wcreds.home_capability(tmp_path, key="k", remote="origin",
+    assert wcreds.home_capability(tmp_path, key="user-u1", remote="origin",
                                   url="https://gitlab.example.com/acme/kg",
                                   subject="u1").endswith("no credential yet")
 

@@ -30,7 +30,7 @@ ROW = "118"
 NOTE = "kg/entities/meeting/2026-10-09-1401-zoom-meeting-88410021706.md"
 ROW_DATA = {"id": int(ROW), "platform": "zoom", "native_meeting_id": "88410021706",
             "start_time": "2026-10-09T14:01:00Z", "created_at": "2026-10-09T13:58:00Z",
-            "data": {"title": "Campbell"}}
+            "data": {"title": "Acme"}}
 
 
 def _as(subject: str) -> dict:
@@ -71,7 +71,7 @@ def test_a_notes_page_link_is_answered_as_the_meeting(client):
     assert row["kind"] == "meeting"
     assert row["access"] == ACCESS_READABLE
     # the meeting's own name — never the file's, never the page's "Zoom meeting"
-    assert row["title"] == "Campbell"
+    assert row["title"] == "Acme"
     assert row["at"] == "2026-10-09T14:01:00Z"
     assert row["meeting"] == {"id": ROW, "platform": "zoom", "native": "88410021706"}
     assert (OWNER, ROW) in asked
@@ -81,7 +81,7 @@ def test_every_spelling_of_the_notes_path_is_the_same_meeting(client):
     c, _ = client
     for ref in (f"./{NOTE}", f"/workspaces/{OWNER}/{NOTE}"):
         row = _resolve(c, OWNER, ref)
-        assert row["kind"] == "meeting" and row["title"] == "Campbell", ref
+        assert row["kind"] == "meeting" and row["title"] == "Acme", ref
 
 
 def test_a_reader_the_meeting_is_not_answered_to_gets_no_title(client):
@@ -92,7 +92,7 @@ def test_a_reader_the_meeting_is_not_answered_to_gets_no_title(client):
     assert row["access"] == ACCESS_NOT_YOURS
     assert row["title"] == ""
     assert "meeting" not in row and "at" not in row
-    assert "Campbell" not in str(row)
+    assert "Acme" not in str(row)
     assert (STRANGER, ROW) in asked     # it was ASKED, under the stranger's identity
 
 

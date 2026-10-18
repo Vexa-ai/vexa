@@ -413,7 +413,7 @@ def test_a_room_reaches_the_worker_env_as_read_only_mounts(tmp_path):
 # ── the HTTP surface: who may ask for a room at all ───────────────────────────────────────────────
 
 class _FakeReader:
-    def read(self, unit_id, *, resume=None):
+    def read(self, unit_id, *, resume=None, fresh=False):
         yield {"type": "message-delta", "text": "ok"}
         yield {"type": "turn-complete"}
 

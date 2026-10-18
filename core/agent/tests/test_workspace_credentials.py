@@ -8,8 +8,8 @@ The answer is that we do not take one, and these tests hold each half of that:
     token's last-4;
   * the REFUSAL — a credential smuggled into a chat-facing tool argument is rejected.
 
-The three assertions that PARSE THE RIG live beside it, in `deploy/dogfood/rig/tests/`: a test under
-`core/` that reads a file under `deploy/` makes the domains and the lane inseparable.
+The git verbs the one MCP serves take no token argument at all; the manifest refuses a
+credential-shaped one (`core/gateway/services/mcp/tests/test_rig_parity_ports.py`).
 """
 from __future__ import annotations
 
@@ -23,9 +23,8 @@ from control_plane import workspace_credentials as wc
 
 
 @pytest.fixture(autouse=True)
-def _no_ambient_key(monkeypatch):
-    from control_plane import secret_store
-    monkeypatch.delenv(secret_store.ENV_KEY_NAME, raising=False)
+def _broker(git_broker):
+    return git_broker
 
 
 # ── which credential, and in what order ────────────────────────────────────────────────────────────
@@ -135,6 +134,5 @@ def test_only_an_authorisation_refusal_triggers_the_deploy_key_answer(message, a
     assert wc.is_auth_failure(message) is auth
 
 
-# The three assertions that read the RIG's source moved to `deploy/dogfood/rig/tests/` — beside
-# the file they parse. A test under `core/` that reads a file under `deploy/` makes the domains
-# and the lane inseparable: merging `core/` would drag the rig with it.
+# A test under `core/` never reads a file under `deploy/`: that would make the domains and the
+# lane inseparable (`test_no_deploy_reads.py`).

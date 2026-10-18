@@ -39,8 +39,9 @@ lives in the cookbook layer *above* both domains, never inside this one. See
 | spawns-over | runtime | `runtime/contracts/runtime.v1` (profile `agent`) | worker `env`: mounted workspaces, token, redis topics, `start`, and the toolbelt (`VEXA_MCP_URL` = the gateway's `/mcp`, a per-dispatch delegation token) |
 | produces | workspace | `workspaces/contracts/workspace.v1` (git repo) | typed `kg/entities/*` with `EntityFrontmatter` |
 | publishes | gateway / surfaces | `gateway/contracts/ws.v1` (redis `unit:<id>:out`, mode `card`) | turn events + `proactive-card.v1` outputs |
-| calls | scheduler | `schedule.v1` (a `routine.v1` `kind:scheduled` compiles to a cron job) | a `unit.v1` Invocation as the cron body, signed in the job's request headers |
+| calls | scheduler | `schedule.v1` — only the one-time routine migration lists and cancels old routine jobs (ADR-0046) | nothing new is armed: a routine is a person's own flow |
 | calls | credential broker (this domain's own service) | `contracts/credential-broker.v1`, roles `agent` and `git` | Connections requests and results, each agent-role call with the gateway's `X-Vexa-Identity` for the person forwarded unchanged; never a stored credential |
+| owns | Postgres · S3 | `agent_session*` tables (`control_plane/session_store.py`, schema of record `_DDL`; role and tables made by `control_plane/session_schema.py init` on the migrations path) · the `vexa-sessions` bucket (`control_plane/session_blobs.py`, boto3) | the session store (ADR-0048): conversations, participants and transcript versions. agent-api logs in as its own role and uses a key scoped to its own bucket; `session_access.py` (the two gates and the leak rule), `session_turn.py` (gate, speak rule, leak rule per message), `session_sync.py` (hand-in and save-back), `session_migrate.py` (old layout → store), `worker/session_carry.py` (the worker side), `routers/sessions.py` (participants) |
 
 ## Contracts
 **Owns:** [`unit.v1`](contracts/unit.v1) · [`routine.v1`](contracts/routine.v1) ·
@@ -66,7 +67,7 @@ domain, PRD decision 47 step 1 — still sealed in `contracts.seal.json`, now un
 - ✅ delivered — one `unit.v1` Dispatcher; every trigger (message/scheduled/event/transcription) → one path
 - ✅ delivered — chat dispatch, warm-session resume, workspace git commit (`workspace.v1`)
 - ✅ delivered — generic event ingress (`event.v1` → `unit.v1`) and tool mechanism (`tool.v1` → `--allowedTools` + injected MCP)
-- ✅ delivered — routines: `routine.v1` `kind:scheduled` compiles to a `schedule.v1` cron job
+- ✅ delivered — routines are a person's own flows (ADR-0046): old `routines/*.md` files and routine jobs are converted once at startup; `/api/routines` is a deprecated adapter onto flows until 0.14.0
 - 🗑 removed (PRD decision 34) — the live in-meeting copilot (transcript stream → propose-only
   beats → `proactive-card.v1`) and the `processed-notes.v1` stream it produced. The product runs no
   model calls of its own beside the agent; a meeting reaches the agent over the MCP.

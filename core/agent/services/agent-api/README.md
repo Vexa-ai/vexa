@@ -17,7 +17,7 @@ Python because the agent domain is the LLM/tooling + runtime ecosystem (P13).
 | consumes | gateway / terminal | `POST /invocations` | a `unit.v1` dispatch → one `runtime.v1` agent spawn |
 | consumes | gateway / terminal | `POST /api/chat` (SSE), `/api/chat/reset`, `GET /api/sessions` | a chat now-dispatch; SSE view of `unit:<id>:out` |
 | consumes | any integration | `POST /events` | an `event.v1` → `unit.v1` (carried plan) → dispatch |
-| consumes | terminal | `POST /api/routines`, `GET /api/routines`, `DELETE /api/routines/{id}` | a `routine.v1` → a `schedule.v1` cron job |
+| consumes | terminal | `POST /api/routines`, `GET /api/routines`, `DELETE /api/routines/{id}` | deprecated adapter onto the person's flows (flows-api) until 0.14.0 |
 | consumes | bridge / terminal | `POST /api/meeting/{bot,stop}`, `GET /api/meetings/live`, `GET /api/meeting/stream` | send/stop the bot; SSE relay of the meeting's transcript stream |
 | consumes | terminal | `GET /api/workspace/{tree,file,git}` | workspace tree, file content, git state |
 | calls | runtime kernel | `runtime.v1` (Dispatcher → RuntimePort) | the worker container `env` (repo URL + scoped token) |
@@ -29,7 +29,7 @@ Python because the agent domain is the LLM/tooling + runtime ecosystem (P13).
 
 **Owns:** `core/agent/contracts/unit.v1`, `event.v1`, `invoke.v1`, `routine.v1`, `tool.v1`,
 `task.v1`, `proactive-card.v1`, `workspace.v1` (the agent domain's contracts).
-**Consumes:** `core/runtime/contracts/runtime.v1` + `schedule.v1`, `core/meetings/contracts/transcript.v1`,
+**Consumes:** `core/runtime/contracts/runtime.v1` + `schedule.v1` (the one-time routine migration only), `core/meetings/contracts/transcript.v1`,
 `core/identity/contracts/identity.v1`, `core/gateway/contracts/api.v1`. Schemas are read by path and
 jsonschema-validated — never importing neighbour code. All sealed in `contracts.seal.json` (repo root).
 
@@ -48,7 +48,7 @@ uv run pytest -q        # uv manages this package's own venv/deps
 
 - ✅ delivered — `/invocations` dispatch sink → `runtime.v1` spawn
 - ✅ delivered — `/api/chat` SSE relay of `unit:<id>:out`, `/api/chat/reset`, `/api/sessions`
-- ✅ delivered — `/api/routines` CRUD → `schedule.v1` cron jobs
+- ✅ delivered — routines are flows: `/api/routines` is a deprecated adapter onto flows-api until 0.14.0
 - ✅ delivered — `/events` generic ingress (`event.v1` → `unit.v1`)
 - ✅ delivered — `/api/meeting/{bot,stop,stream}`, `/api/meetings/live` live-meeting surface
 - ✅ delivered — `transcription_watcher`: register the live meeting and end it from the collector's verified `tc:meeting:{row}` feed (raw `transcription_segments` entries only say which feed to read)

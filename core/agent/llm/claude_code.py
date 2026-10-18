@@ -15,6 +15,7 @@ only; other runners declare their own.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -31,11 +32,35 @@ from llm import workspace_paths as wpaths
 from llm.ports import (HarnessExec, close_event_stream, harness_identity_kwargs, harness_subprocess_env,
                        max_output_tokens)
 from llm.claude_skills import _link_skills_into_home
+from llm import proctree
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS,
                              _FETCH_TOOLS, _bot_artifact, _fetched_source, _open_event, _published_terms, _short,
                              _workspace_focus, _written_artifact)
 
 logger = logging.getLogger("llm.claude_code")
+
+
+def _usage_of(result: dict) -> Optional[dict]:
+    """The CLI `result`'s cost and tokens, or None when it reported neither."""
+    u = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+
+    def _int(v) -> int:
+        try:
+            return max(0, int(v or 0))
+        except (TypeError, ValueError):
+            return 0
+    prompt = sum(_int(u.get(k)) for k in ("input_tokens", "cache_creation_input_tokens",
+                                          "cache_read_input_tokens"))
+    out: dict = {}
+    try:
+        if result.get("total_cost_usd") is not None:
+            out["cost"] = float(result["total_cost_usd"])
+    except (TypeError, ValueError):
+        pass
+    if not out and not prompt and not _int(u.get("output_tokens")):
+        return None
+    out.update(prompt_tokens=prompt, completion_tokens=_int(u.get("output_tokens")), calls=1)
+    return out
 
 
 def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
@@ -215,6 +240,11 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                     "sessionId": obj.get("session_id"),
                     "ok": obj.get("is_error") is not True and obj.get("subtype") != "error",
                 }
+                # WHAT THE TURN COST, as the CLI reports it — the spend cap's input
+                # (control_plane/llm_budget.py). Additive on `done`.
+                spent = _usage_of(obj)
+                if spent:
+                    done["usage"] = spent
                 if done["ok"] and api_error and str(reply or "").strip() in ("", api_error.strip()):
                     done["ok"] = False      # a "success" whose only answer was the provider's refusal
                 fault = (_provider_fault(str(reply or "") or api_error, sdk_error, model_id,
@@ -294,6 +324,19 @@ def _provider_fault(text: str, sdk_error: str, model: str,
 #: The settings every launch adds on top of the user scope: no hooks run in the worker.
 NO_HOOKS_SETTINGS = json.dumps({"disableAllHooks": True})
 
+#: THE AGENT DOES NOT READ ITS OWN TRANSCRIPTS (live app.dev 2026-10-15). The CLI's conversation
+#: files — this session's under HOME, the person's older ones under their private `_system` mount —
+#: hold every past turn, every tool output and whatever credential ever passed through a chat, and
+#: they are large: a `grep` over them ran 14+ minutes and held the conversation. The CLI must read
+#: and write them itself (same user as its tools), so the boundary is a rule, not a mode: the file
+#: tools are denied here, and every shell command goes through `shell_guard.sh`, which refuses a
+#: command naming them.
+TRANSCRIPT_DENY_RULES = tuple(
+    f"{tool}({pattern})"
+    for tool in ("Read", "Edit")
+    for pattern in ("~/.claude/projects/**", "//tmp/.vexa-session/**", "//tmp/.vexa-session-local/**",
+                    "//workspaces/**/.claude/projects/**", "//workspaces/.system/**/.claude/projects/**"))
+
 
 def build_argv(
     prompt: str,
@@ -354,6 +397,7 @@ def build_argv(
         argv += ["--allowedTools", ",".join(tools)]
     if mcp_config:
         argv += ["--mcp-config", mcp_config, "--strict-mcp-config"]
+    argv += ["--disallowedTools", ",".join(TRANSCRIPT_DENY_RULES)]
     if session:
         argv += ["--resume", session]
     if model:
@@ -379,7 +423,17 @@ def midturn_enabled() -> bool:
 
 
 def _user_message_json(text: str) -> str:
-    return json.dumps({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}})
+    """One stream-json user message. A picture the person attached rides as an IMAGE block after
+    the text (``shared/attachments.py``), so the model sees it rather than being told a path."""
+    from shared import attachments  # noqa: PLC0415 — the worker image carries `shared/`
+
+    content: list[dict] = [{"type": "text", "text": text}]
+    for item in attachments.images(text):
+        data = attachments.read_image(item)
+        if data is not None:
+            content.append({"type": "image", "source": {"type": "base64", "media_type": item["type"],
+                                                        "data": base64.b64encode(data).decode("ascii")}})
+    return json.dumps({"type": "user", "message": {"role": "user", "content": content}})
 
 
 def inject_user_message(text: str) -> bool:
@@ -409,7 +463,78 @@ def _cli_env() -> dict[str, str]:
     cap = max_output_tokens()
     if cap is not None:
         env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(cap)
+    env.update(shell_guard_env())
     return env
+
+
+#: Every shell tool call runs through this (``CLAUDE_CODE_SHELL_PREFIX``): a wall-clock limit and
+#: the transcript refusal. Next to this module in the worker image (``/app/llm``).
+SHELL_GUARD = Path(__file__).with_name("shell_guard.sh")
+SHELL_TIMEOUT_ENV = "VEXA_SHELL_TIMEOUT_SEC"
+SHELL_TIMEOUT_DEFAULT = 120
+SHELL_TIMEOUT_CEILING = 3600
+
+
+def shell_timeout_sec() -> int:
+    """The shell tool's wall-clock limit for this turn: ``VEXA_SHELL_TIMEOUT_SEC`` (stamped by
+    agent-api from the policy key ``shell_timeout_sec``), else 120 s. Never "no limit": a value that
+    is not a whole number from 1 to 3600 is the default."""
+    raw = (os.environ.get(SHELL_TIMEOUT_ENV) or "").strip()
+    if raw.isdigit() and 0 < int(raw) <= SHELL_TIMEOUT_CEILING:
+        return int(raw)
+    return SHELL_TIMEOUT_DEFAULT
+
+
+def shell_guard_env() -> dict[str, str]:
+    """WHAT BOUNDS THE MODEL'S SHELL (live app.dev 2026-10-15). The CLI's own Bash timeout does not
+    stop a command: CLI 2.1.293 MOVES it to the background ("did not complete within its 120s
+    timeout and was moved to the background") and the turn then waits on it. So:
+
+      · ``CLAUDE_CODE_SHELL_PREFIX`` = ``shell_guard.sh`` — each command runs under ``timeout`` (its
+        whole process group is killed at the limit) and the model is told in words it timed out;
+      · the CLI's own timers sit 30 s behind the guard's, so the guard is always the one that fires;
+      · ``CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`` — nothing outlives its call in the background, so a
+        turn never waits on a task nobody can see."""
+    limit = shell_timeout_sec()
+    env = {SHELL_TIMEOUT_ENV: str(limit),
+           "BASH_DEFAULT_TIMEOUT_MS": str((limit + 30) * 1000),
+           "BASH_MAX_TIMEOUT_MS": str((limit + 30) * 1000),
+           "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
+    if os.access(SHELL_GUARD, os.X_OK):
+        env["CLAUDE_CODE_SHELL_PREFIX"] = str(SHELL_GUARD)
+    return env
+
+
+# ── THE RUNNING TURN, STOPPABLE FROM ANOTHER THREAD ──────────────────────────────────────────────
+# The worker's turn loop reads the CLI's stdout and only looks up between events; a tool that prints
+# nothing for 14 minutes gives it no "between". Stop therefore acts on the PROCESS from the worker's
+# stop watcher thread: the CLI and every process of its turn (``proctree``) are killed, stdout hits
+# EOF, and the loop ends the turn as stopped.
+_PROC_LOCK = _threading.Lock()
+_ACTIVE_PROC = None   # the running turn's CLI Popen
+
+
+def _set_active(proc) -> None:
+    global _ACTIVE_PROC
+    with _PROC_LOCK:
+        _ACTIVE_PROC = proc
+
+
+def _clear_active(proc) -> None:
+    global _ACTIVE_PROC
+    with _PROC_LOCK:
+        if _ACTIVE_PROC is proc:
+            _ACTIVE_PROC = None
+
+
+def stop_running_turn() -> bool:
+    """Kill the running turn's CLI and every process of its turn. False when no turn is running."""
+    with _PROC_LOCK:
+        proc = _ACTIVE_PROC
+    if proc is None or proc.poll() is not None:
+        return False
+    proctree.kill_tree(proc.pid)
+    return True
 
 
 def _reap_grace() -> float:
@@ -442,6 +567,8 @@ def _reap(proc, grace: "float | None" = None) -> None:
     try:
         proc.wait(timeout=grace)
     except subprocess.TimeoutExpired:
+        # the CLI AND its tools: `proc.kill()` alone left a `bash -l` and its grep running
+        proctree.kill_tree(proc.pid)
         proc.kill()
         proc.wait()
     except TypeError:
@@ -457,12 +584,19 @@ def _exec_subprocess_stdin(argv: list[str], cwd: str, first_message: str, *,
     ``inject_user_message``."""
     global _ACTIVE_STDIN
     proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, bufsize=1,
+                            stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True,
                             env=_cli_env(), **harness_identity_kwargs())
     assert proc.stdout is not None and proc.stdin is not None
+    _set_active(proc)
     try:
-        proc.stdin.write(_user_message_json(first_message) + "\n")
-        proc.stdin.flush()
+        try:
+            proc.stdin.write(_user_message_json(first_message) + "\n")
+            proc.stdin.flush()
+        except BrokenPipeError:
+            # The CLI exited before reading its prompt — it refused its arguments (a stale `--resume`
+            # id is the usual one) and printed why. Read that answer below rather than crash: the
+            # turn's caller heals a refused resume by running again without one.
+            injectable = False
         if injectable:
             with _STDIN_LOCK:
                 _ACTIVE_STDIN = proc.stdin
@@ -483,6 +617,7 @@ def _exec_subprocess_stdin(argv: list[str], cwd: str, first_message: str, *,
         except Exception:  # noqa: BLE001
             pass
         _reap(proc)
+        _clear_active(proc)
 
 
 def _exec_subprocess(argv: list[str], cwd: str) -> Iterator[str]:
@@ -494,8 +629,9 @@ def _exec_subprocess(argv: list[str], cwd: str) -> Iterator[str]:
     # harness_identity_kwargs: the CLI — and so the model's tools — run as the tools user, not as
     # the worker (llm/ports.py).
     proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                            env=_cli_env(), **harness_identity_kwargs())
+                            start_new_session=True, env=_cli_env(), **harness_identity_kwargs())
     assert proc.stdout is not None
+    _set_active(proc)
     try:
         yield from proc.stdout
     finally:
@@ -504,6 +640,7 @@ def _exec_subprocess(argv: list[str], cwd: str) -> Iterator[str]:
         except Exception:  # noqa: BLE001
             pass
         _reap(proc)
+        _clear_active(proc)
 
 
 def _nofollow_dirs(base: Path, *names: str) -> Optional[Path]:
@@ -623,6 +760,25 @@ def credential_conflict_fault() -> dict:
     }
 
 
+#: A transcript larger than this is counted whole, unread (it is over any resume budget anyway).
+_TRANSCRIPT_SCAN_MAX_BYTES = 32 << 20
+
+
+def _bookkeeping_bytes(data: bytes) -> int:
+    """The bytes of the CLI's ``attachment`` records in a transcript (newline included)."""
+    total = 0
+    for line in data.splitlines(keepends=True):
+        if b'"attachment"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and obj.get("type") == "attachment":
+            total += len(line)
+    return total
+
+
 class ClaudeCodeHarness:
     """``HarnessPort`` adapter for the Claude Code CLI. ``exec_fn`` is injectable for tests."""
 
@@ -657,14 +813,29 @@ class ClaudeCodeHarness:
         _link_skills_into_home(work)
 
     def transcript_bytes(self, work: Path, session_id: str) -> int:
-        """The stored size of this session's transcript under ``work/.claude/projects``, reached
-        without following a link (``workspace_paths``): a linked folder or file is not this chat's."""
+        """The size of this session's CONVERSATION under ``work/.claude/projects``, reached without
+        following a link (``workspace_paths``): a linked folder or file is not this chat's.
+
+        THE CLI'S OWN BOOKKEEPING IS NOT HISTORY (#1783, live 2026-10-15). The CLI writes
+        ``attachment`` records into the transcript — a prompt snapshot, the instructions, the skill
+        and tool listings — about 600 KB at the start of every session, and none of it is the
+        history a resume re-sends. Counted, it spent the 1 MB resume budget after two to four turns
+        and every busy chat restarted on a fresh session. Those lines are left out; anything that
+        is not one (another record, a line that is not JSON) counts in full."""
         total = 0
         name = f"{session_id}.jsonl"
         for slug in wpaths.list_dirs_inside(work, ".claude/projects", allow=(".claude",)):
-            st = wpaths.stat_inside(work, f".claude/projects/{slug}/{name}", allow=(".claude",))
-            if st is not None and stat.S_ISREG(st.st_mode):
-                total += st.st_size
+            rel = f".claude/projects/{slug}/{name}"
+            st = wpaths.stat_inside(work, rel, allow=(".claude",))
+            if st is None or not stat.S_ISREG(st.st_mode):
+                continue
+            size = st.st_size
+            if size <= _TRANSCRIPT_SCAN_MAX_BYTES:
+                data = wpaths.read_bytes_inside(work, rel, max_bytes=_TRANSCRIPT_SCAN_MAX_BYTES,
+                                                allow=(".claude",))
+                if data is not None:
+                    size = len(data) - _bookkeeping_bytes(data)
+            total += size
         return total
 
     def preflight(self) -> Optional[str]:
@@ -675,3 +846,6 @@ class ClaudeCodeHarness:
 
     def inject_user_message(self, text: str) -> bool:
         return inject_user_message(text)
+
+    def stop_running_turn(self) -> bool:
+        return stop_running_turn()

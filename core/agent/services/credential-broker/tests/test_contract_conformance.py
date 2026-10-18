@@ -23,6 +23,11 @@ MODELS = {
     "CustomSecretRequest": models.CustomSecretBody, "OAuthApplicationRequest": models.OAuthApplicationBody,
     "AccountReadRequest": models.AccountReadBody, "GmailDraftRequest": models.GmailDraftBody,
     "CustomCallRequest": models.CustomCallBody, "GitSecretRequest": models.GitSecretBody,
+    "GmailDraftUpdateRequest": models.GmailDraftUpdateBody, "CalendarEventRequest": models.CalendarEventBody,
+    "AuthorizeRequest": models.AuthorizeBody,
+    "BotAccountRequest": models.BotAccountBody,
+    "CalendarChangesRequest": models.CalendarChangesBody,
+    "SignalsModelKeyRequest": models.SignalsModelKeyBody,
 }
 
 
@@ -62,7 +67,7 @@ def test_registered_routes_equal_the_contract(client):
 def test_each_route_refuses_roles_it_does_not_grant(signed, route):
     path = route["path"].replace("{cid}", CID)
     body = {} if route["method"] == "POST" else None
-    for role in {"agent", "human", "git"} - set(route["roles"]):
+    for role in {"agent", "human", "git", "bots"} - set(route["roles"]):
         r = signed(role, route["method"], path, body, actor="2")
         assert r.status_code in (403, 422), (role, r.status_code)
         if r.status_code == 422:      # body validation runs first; with a valid body it is still 403
@@ -75,7 +80,7 @@ def test_request_goldens_are_accepted_by_the_route_models(name):
     MODELS[shape].model_validate(golden(name))
 
 
-def test_responses_conform(signed, connection, ready, store, client):
+def test_responses_conform(signed, connection, ready, store, client, broker):
     conforms("Health", client.get("/health").json())
     conforms("Readiness", client.get("/ready").json())
     r = signed("agent", "POST", "/api/setup", golden("SetupRequest.custom-secret.json"))
@@ -102,7 +107,35 @@ def test_responses_conform(signed, connection, ready, store, client):
         conforms("AccountReadResponse", signed("agent", "POST", f"/api/connections/{gmail}/read", golden("AccountReadRequest.gmail-search.json")).json())
     with patch.object(providers, "create_gmail_draft", return_value=golden("GmailDraftResponse.created.json")):
         conforms("GmailDraftResponse", signed("agent", "POST", f"/api/connections/{gmail}/draft", golden("GmailDraftRequest.reply.json")).json())
+    broker.sql("INSERT INTO drafts VALUES (?,?,?,?)", ("draft", OWNER, gmail, 0))
+    with patch.object(providers, "create_gmail_draft", return_value=golden("GmailDraftResponse.updated.json")):
+        conforms("GmailDraftResponse", signed("agent", "POST", f"/api/connections/{gmail}/draft-update",
+                                               {**golden("GmailDraftUpdateRequest.update.json"), "draft_id": "draft"}).json())
+    calendar = connection("google_calendar")
+    conforms("AuthorizeResponse", signed("human", "POST", f"/api/connections/{calendar}/authorize",
+                                         golden("AuthorizeRequest.calendar-write.json")).json())
+    store.put(calendar, {"owner": OWNER, "value": {"access_token": "t", "expires_at": 9e12, "scope": ""}})
+    ready(calendar)
+    conforms("CalendarEventResponse", signed("agent", "POST", f"/api/connections/{calendar}/calendar-event",
+                                             golden("CalendarEventRequest.create.json")).json())
+    store.put(calendar, {"owner": OWNER, "value": {"access_token": "t", "expires_at": 9e12,
+                                                   "scope": providers.CALENDAR_WRITE_SCOPE}})
+    ready(calendar, version=2)
+    with patch.object(providers, "write_calendar_event", return_value=golden("CalendarEventResponse.created.json")):
+        conforms("CalendarEventResponse", signed("agent", "POST", f"/api/connections/{calendar}/calendar-event",
+                                                 golden("CalendarEventRequest.create.json")).json())
+    conforms("ActionPreferences", signed("agent", "POST", "/api/preferences", golden("ActionPreferences.narrowed.json")).json())
+    conforms("ActionPreferences", signed("agent", "GET", "/api/preferences").json())
+    conforms("ConnectionList", signed("agent", "GET", "/api/connections").json())
     git = signed("git", "POST", "/api/internal/git-secret", golden("GitSecretRequest.put.json"), actor="42")
     conforms("GitSecretResponse", git.json())
+    bot = golden("BotAccountRequest.put.json")
+    conforms("BotAccountResponse", signed("bots", "POST", "/api/internal/bot-account", bot, actor="meeting-api").json())
+    listed = signed("bots", "POST", "/api/internal/bot-account", golden("BotAccountRequest.list.json"), actor="meeting-api")
+    conforms("BotAccountResponse", listed.json())
+    got = signed("bots", "POST", "/api/internal/bot-account", {"action": "get", "id": bot["id"]}, actor="meeting-api")
+    conforms("BotAccountResponse", got.json())
+    gone = signed("bots", "POST", "/api/internal/bot-account", {"action": "delete", "id": bot["id"]}, actor="meeting-api")
+    conforms("BotAccountResponse", gone.json())
     refused = signed("human", "GET", "/api/connections", at=1)
     conforms("Error", refused.json())

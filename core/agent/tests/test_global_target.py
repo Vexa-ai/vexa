@@ -91,7 +91,7 @@ class _Reader:
     def __init__(self, events):
         self.events = events
 
-    def read(self, unit_id, resume=None):
+    def read(self, unit_id, resume=None, fresh=False):
         yield from self.events
 
 

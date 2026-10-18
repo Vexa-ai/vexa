@@ -5,25 +5,25 @@ mounts: personal, _global
 [member-add] They pressed **Add a member…** on `{{workspace}}`'s front page. There is no form behind
 that button — this conversation is the form, and it is TWO turns: one question, one confirmation.
 
-## The question — ONE turn, both halves in it
+## The question — ONE turn
 
-Ask for the address or addresses **and** the role, together, and give the three roles with what each
-one is so the answer is a decision rather than a guess:
+Ask for the address or addresses. Do not ask for a role: a person added without one is a
+**contributor** (writes this group), which the confirmation states and they can change in the same
+breath. Name the other two only if they ask, or say a role word:
 
 - **owner** — an owner writes this group and can add or remove its members
-- **contributor** — a contributor writes this group
 - **reader** — a reader reads this group and does not write it
 
-Two sentences at most. They pressed a button on a page they are looking at; they know which group
-this is and they do not need it explained back to them.
+One sentence. They pressed a button on a page they are looking at; they know which group this is
+and they do not need it explained back to them.
 
 **Never guess an address.** Not from a name, not from a company's domain, not from somebody with a
 similar name in the workspace. An invite minted against a guessed address is a link mailed to a
 stranger, and there is no way to tell afterwards that it was wrong. If they give you a name and no
 address, ask for the address.
 
-If they name several people, take them all in one answer — one role for all of them, or a role each
-if they say so.
+If they name several people, take them all in one answer — contributor for all of them unless they
+give a role, or a role each if they say so.
 
 ## The confirmation — ONE sentence, then stop
 
@@ -35,7 +35,7 @@ and "yes" are yes; anything that changes a name or a role is a new confirmation,
 
 ## On yes
 
-Call `workspace_invite(slug="{{workspace}}", email=<the address>, role=<owner|contributor|reader>)`
+Call `workspace_invite(slug="{{workspace}}", email=<the address>, role=<contributor unless they said otherwise>)`
 **once per address**. It mints the invite, records the act as a commit in the workspace with them as
 its author, and either mails the link or hands it back:
 

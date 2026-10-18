@@ -61,7 +61,7 @@ class _ModelConfig:
 
 
 class _Reader:
-    def read(self, unit_id, resume=None):
+    def read(self, unit_id, resume=None, fresh=False):
         yield {"type": "turn-complete"}
 
 
@@ -134,6 +134,8 @@ def test_picking_a_model_stores_it_and_the_chat_lists_it(stack):
     assert r.status_code == 200 and r.json() == {"ok": True, "session": "s1", "model": "claude",
                                                  "effort": None, "changed": True}
     assert c.get("/api/models/catalog?session=s1", headers=_as(MEMBER)).json()["selected"] == "claude"
+    # a chat is listed once somebody wrote in it (#1783): a pick alone lists nothing
+    stack["sessions"].upsert(MEMBER, "s1", title="Pricing prep")
     row = next(x for x in c.get("/api/sessions", headers=_as(MEMBER)).json()["sessions"]
                if x["session"] == "s1")
     assert row["model"] == "claude"
@@ -373,3 +375,112 @@ def test_an_effort_with_no_model_is_checked_against_the_persons_default(stack):
     assert bad.status_code == 422 and bad.json()["fault"]["model"] == "qwen3-32b"
     ok = c.post("/api/chat/model", json={"session": "s1", "model": "", "effort": "high"}, headers=_as(MEMBER))
     assert ok.status_code == 200 and stack["sessions"].effort(MEMBER, "s1") == "high"
+
+
+# ── the last pick is the person's default for new chats (founder 2026-10-13) ──────────────────
+
+def _pick(c, who, session, model, effort=None):
+    body = {"session": session, "model": model, **({"effort": effort} if effort else {})}
+    return c.post("/api/chat/model", json=body, headers=_as(who))
+
+
+def _listing(c, who, session):
+    return c.get(f"/api/models/catalog?session={session}", headers=_as(who)).json()
+
+
+def test_the_last_model_picked_is_the_default_of_a_new_chat(stack):
+    c = stack["client"]
+    assert _pick(c, MEMBER, "s1", "claude").status_code == 200
+    fresh = _listing(c, MEMBER, "s2")
+    assert (fresh["default"], fresh["selected"], fresh["default_effort"]) == ("claude", None, None)
+
+
+def test_the_last_effort_picked_rides_with_the_model_into_a_new_chat(stack):
+    c = stack["client"]
+    _pick(c, MEMBER, "s1", "claude")
+    assert _pick(c, MEMBER, "s1", "claude", "low").status_code == 200
+    fresh = _listing(c, MEMBER, "s2")
+    assert (fresh["default"], fresh["default_effort"]) == ("claude", "low")
+    # the memory is the person's, on the server: another person's new chat is untouched
+    assert _listing(c, ADMIN, "s2")["default"] == "qwen3-32b"
+
+
+def test_a_new_chats_first_turn_runs_on_the_remembered_model_and_effort(stack):
+    c = stack["client"]
+    _pick(c, MEMBER, "s1", "claude", "low")
+    assert _turn(c, MEMBER, "s2").status_code == 200
+    env = stack["runtime"].envs[-1]
+    assert (env["VEXA_AGENT_MODEL"], env["VEXA_AGENT_EFFORT"]) == ("claude-sonnet-4-6", "low")
+    # the chat now holds what it ran on, so a later pick elsewhere does not move it
+    assert (stack["sessions"].model(MEMBER, "s2"), stack["sessions"].effort(MEMBER, "s2")) == ("claude", "low")
+
+
+def test_an_existing_chat_keeps_the_model_it_was_last_used_with(stack):
+    c = stack["client"]
+    assert _turn(c, MEMBER, "s0").status_code == 200              # runs on the catalog default
+    assert stack["runtime"].envs[-1]["VEXA_AGENT_MODEL"] == "Qwen/Qwen3-32B"
+    _pick(c, MEMBER, "s1", "claude", "high")                       # the default moves
+    assert _turn(c, MEMBER, "s0").status_code == 200
+    assert stack["runtime"].envs[-1]["VEXA_AGENT_MODEL"] == "Qwen/Qwen3-32B"
+    assert _listing(c, MEMBER, "s0")["selected"] == "qwen3-32b"
+
+
+def test_holding_the_model_a_chat_ran_on_costs_no_cold_start(stack):
+    c = stack["client"]
+    _turn(c, MEMBER, "s2")
+    _turn(c, MEMBER, "s2")
+    first, second = stack["runtime"].spawned[-2:]
+    assert first == second
+
+
+def test_switching_inside_a_chat_moves_that_chat_and_the_default(stack):
+    c = stack["client"]
+    _pick(c, MEMBER, "s1", "claude", "max")
+    _pick(c, MEMBER, "s1", "qwen3-32b", "high")
+    assert (_listing(c, MEMBER, "s1")["selected"], _listing(c, MEMBER, "s1")["selected_effort"]) == ("qwen3-32b", "high")
+    fresh = _listing(c, MEMBER, "s9")
+    assert (fresh["default"], fresh["default_effort"]) == ("qwen3-32b", "high")
+
+
+def test_a_refused_pick_and_follow_my_default_leave_the_memory_alone(stack):
+    c = stack["client"]
+    _pick(c, MEMBER, "s1", "claude", "low")
+    assert _pick(c, MEMBER, "s1", "or-sonnet").status_code == 403
+    assert _pick(c, MEMBER, "s1", "claude", "none").status_code == 422
+    assert _pick(c, MEMBER, "s1", "").status_code == 200
+    fresh = _listing(c, MEMBER, "s2")
+    assert (fresh["default"], fresh["default_effort"]) == ("claude", "low")
+
+
+@pytest.mark.parametrize("model", ["or-sonnet", "retired-model"])
+def test_a_remembered_model_no_longer_open_falls_back_silently(stack, model):
+    """The catalog changed (or the entry closed) under the memory: the new chat shows the catalog's
+    default and its first turn runs on it — never a refusal, never the closed model."""
+    stack["sessions"].remember_pick(MEMBER, model, "low")
+    c = stack["client"]
+    fresh = _listing(c, MEMBER, "s2")
+    assert (fresh["default"], fresh["default_effort"]) == ("qwen3-32b", None)
+    assert _turn(c, MEMBER, "s2").status_code == 200
+    assert stack["runtime"].envs[-1]["VEXA_AGENT_MODEL"] == "Qwen/Qwen3-32B"
+
+
+def test_a_remembered_model_falls_back_to_the_persons_settings_default_before_the_catalogs(stack):
+    stack["model_config"].by_subject[MEMBER] = {"default_model": "claude"}
+    stack["sessions"].remember_pick(MEMBER, "retired-model", "")
+    assert _listing(stack["client"], MEMBER, "s2")["default"] == "claude"
+
+
+def test_a_remembered_effort_the_model_does_not_offer_falls_back_to_its_own(stack):
+    stack["sessions"].remember_pick(MEMBER, "qwen3-32b", "low")      # qwen offers none | high
+    c = stack["client"]
+    fresh = _listing(c, MEMBER, "s2")
+    assert (fresh["default"], fresh["default_effort"]) == ("qwen3-32b", None)
+    assert _turn(c, MEMBER, "s2").status_code == 200
+    assert stack["sessions"].effort(MEMBER, "s2") == ""
+
+
+def test_the_listing_with_a_remembered_effort_is_a_valid_model_list(stack):
+    import contracts
+    c = stack["client"]
+    _pick(c, MEMBER, "s1", "claude", "low")
+    contracts.validate_model_list(_listing(c, MEMBER, "s2"))

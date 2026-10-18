@@ -1123,3 +1123,53 @@ def test_compaction_never_drops_or_shortens_a_persons_message_or_the_latest_exch
     sent_ids = {c["id"] for m in sent for c in (m.get("tool_calls") or [])}
     answered = {m["tool_call_id"] for m in sent if m["role"] == "tool"}
     assert sent_ids == answered                                   # never an orphan (F88)
+
+
+# ── at the budget, a progress report and a Continue that carries what is left (#1783) ───────────
+
+def test_a_chat_turn_at_its_budget_reports_progress_instead_of_a_silent_cut(tmp_path, monkeypatch,
+                                                                            _plain_turn):
+    """Friction 2026-10-13: a chat turn stopped at 40 of 40 calls and "answered with whatever it
+    had". Now one more round, with NO tools, asks the model for what it did and what is left; that
+    report is the reply, and Continue starts the next turn with the remaining work."""
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "1")
+    report = ("I stopped at this turn's step limit.\n\nDone:\n- read the three meeting notes\n\n"
+              "Left:\n- write the summary page\n- link it from the desk")
+    seen = []
+    h = _harness(_server([_msg("", [("a", "Glob", {"pattern": "*"})]),
+                          _msg("", [("b", "Glob", {"pattern": "*"})]),
+                          _msg(report)], seen))
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "summarise the notes", allowed_tools=["Glob"])
+    done = evs[-1]
+    assert done["type"] == "done" and done["ok"] is False
+    assert done["reply"] == report
+    assert any(e["type"] == "message-delta" and "Left:" in e.get("text", "") for e in evs)
+    # the wrap-up round offered no tools and said why it was asked
+    last = seen[-1]
+    assert not last.get("tools")
+    assert "budget" in last["messages"][-1]["content"] and "left" in last["messages"][-1]["content"].lower()
+    # Continue carries the remaining work, not just "continue"
+    assert done["act"]["label"] == "Continue"
+    assert "write the summary page" in done["act"]["instruction"]
+    assert "link it from the desk" in done["act"]["instruction"]
+    assert done["reason"] == "stopped at the tool-call budget after 1 of 1 steps"
+
+
+def test_a_wrap_up_that_fails_still_ends_the_turn_with_a_line(tmp_path, monkeypatch, _plain_turn):
+    monkeypatch.setenv("VEXA_AGENT_MAX_TOOL_CALLS", "1")
+    state = {"n": 0}
+
+    def handler(request):
+        state["n"] += 1
+        if state["n"] >= 3:
+            return httpx.Response(500, json={"error": "down"})
+        return _server([_msg("", [("c%d" % state["n"], "Glob", {"pattern": "*"})])])(request)
+
+    h = _harness(handler)
+    h.prepare(tmp_path)
+    evs = _events(h, tmp_path, "go", allowed_tools=["Glob"])
+    done = evs[-1]
+    assert done["type"] == "done" and done["ok"] is False
+    assert "step limit" in done["reply"] and "Continue" in done["reply"]
+    assert done["act"]["instruction"] == "continue where you stopped"

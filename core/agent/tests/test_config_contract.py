@@ -37,8 +37,9 @@ def _fresh_probe_cache():
 def test_declaration_loads_and_is_internally_consistent():
     decl = cp.load_declaration()
     assert decl["service"] == "agent-api"
-    assert set(decl["capabilities"]) == {"bot_gateway", "model_inference", "connections",
-                                         "git_credential_broker", "worker_toolbelt"}
+    assert set(decl["capabilities"]) == {"bot_gateway", "model_inference", "connections", "calls",
+                                         "git_credential_broker", "worker_toolbelt",
+                                         "session_store"}
     assert decl["capabilities"]["worker_toolbelt"]["mode"] == "all"
     assert decl["capabilities"]["model_inference"]["mode"] == "any"
 
@@ -331,7 +332,24 @@ def test_the_qwen_lane_dials_are_declared():
 # 107: +1 VEXA_MODEL_CATALOG — the operator's model catalog (ADR-0043, models.v1 Catalog).
 # 108: +1 VEXA_AGENT_MAX_OUTPUT_TOKENS — the output cap every harness reads (claude-code maps it onto
 # CLAUDE_CODE_MAX_OUTPUT_TOKENS, openai-agent sends it as max_tokens).
-EXPECTED_DECLARED_KEYS = 108
+# 109: +1 VEXA_GIT_PROVIDERS — self-hosted git hosts and the provider each runs (GitLab remotes).
+# 108: -1 VEXA_ENV — it decided only whether agent-api's own credential store could generate its key;
+# that store is retired (Git credentials live in the credential broker, #1783), so agent-api no
+# longer reads the profile word. VEXA_SECRETS_KEY stays, deprecated, to move what older builds kept.
+# 109: +1 VEXA_TRACE_ID — the trace a dispatch runs under, stamped on the worker's env (#1783).
+# 123: +14 the session store (ADR-0048) — database and sessions-bucket keys.
+# 127: +4 calls (LiveKit browser URL, internal URL, key and secret).
+# 129: the session store's own role and bucket (its user, password and scoped key), less
+# VEXA_SESSIONS_STORE_DIR — transcripts go to S3 only; there is no directory store.
+# 130: +1 VEXA_CRM_REFERENCES_POLL_S — workspace links to CRM records, published per commit (ADR-0047).
+# 131: +1 VEXA_LLM_IMAGES — whether the openai-agent harness sends attached pictures as images.
+# 132: +1 VEXA_FEATURES — the install's switched-on unproven features (control_plane/features.py).
+# 133: +1 VEXA_SESSION_STORE — the worker keeps no conversation under a mount with the store on.
+# 134: +1 VEXA_AGENT_ALLOW — who agent-api serves the agent tier to (control_plane/agent_admission.py).
+# 135: +1 VEXA_HOME_MEDIA_DIR — where the home stream keeps its media (home-stream-live).
+# 136: +1 VEXA_LLM_KILL_SWITCH — the spend cap's off switch (llm-spend-cap, prod-0133).
+# 137: +1 VEXA_WORKSPACE_NAMES — the person's workspaces by name, for the write-target hint (UI decision 6b).
+EXPECTED_DECLARED_KEYS = 138
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

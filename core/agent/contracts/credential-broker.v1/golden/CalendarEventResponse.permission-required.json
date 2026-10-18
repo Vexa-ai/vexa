@@ -1,0 +1,6 @@
+{
+  "status": "permission_required",
+  "ui_action": "open_connections",
+  "permission": "calendar_write",
+  "instruction": "Use Enable calendar changes in Connections and approve the additional Google permission. Nothing was changed. Do not construct a link."
+}
