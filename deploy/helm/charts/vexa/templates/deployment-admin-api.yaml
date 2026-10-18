@@ -32,9 +32,6 @@ spec:
       {{- with include "vexa.extraCA.initContainer" . }}
       initContainers:{{ . | trim | nindent 8 }}
       {{- end }}
-      {{- with include "vexa.extraCA.volumes" . }}
-      volumes:{{ . | trim | nindent 8 }}
-      {{- end }}
       containers:
         - name: admin-api
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
@@ -43,9 +40,6 @@ spec:
           ports:
             - name: http
               containerPort: 8001
-          {{- with include "vexa.extraCA.mounts" . }}
-          volumeMounts:{{ . | trim | nindent 12 }}
-          {{- end }}
           env:
             # identity answers `public_profiles` from the install's features (by name only)
             - name: VEXA_FEATURES
@@ -173,8 +167,10 @@ spec:
             {{- with .Values.adminApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if or $photos $oidcCa }}
+          {{- $xcaMounts := include "vexa.extraCA.mounts" . | trim }}
+          {{- if or $photos $oidcCa $xcaMounts }}
           volumeMounts:
+            {{- with $xcaMounts }}{{ . | nindent 12 }}{{ end }}
             {{- if $photos }}
             - name: s3-client
               mountPath: /etc/vexa/s3
@@ -214,8 +210,10 @@ spec:
             timeoutSeconds: 5
           resources:
             {{- toYaml .Values.adminApi.resources | nindent 12 }}
-      {{- if or $photos $oidcCa }}
+      {{- $xcaVolumes := include "vexa.extraCA.volumes" . | trim }}
+      {{- if or $photos $oidcCa $xcaVolumes }}
       volumes:
+        {{- with $xcaVolumes }}{{ . | nindent 8 }}{{ end }}
         {{- if $photos }}
         - name: s3-client
           configMap:
