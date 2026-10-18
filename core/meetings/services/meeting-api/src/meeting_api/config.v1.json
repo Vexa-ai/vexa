@@ -184,6 +184,18 @@
    "description": "server-side bot participant name used by POST /bots when bot_name is omitted"
   },
   {
+   "key": "DEFAULT_TRANSCRIPTION_LANGUAGE",
+   "class": "defaulted",
+   "default": "(unset — no deployment default; a person's default or auto-detection applies)",
+   "description": "the deployment's default transcription language (transcription-language.v1 DeploymentDefault): one code such as `de`. With DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES set it must be one of that list, and is the language a window detected outside the list falls back to. Applies to every spawn whose request and person set no language. A value the contract refuses stops the boot"
+  },
+  {
+   "key": "DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES",
+   "class": "defaulted",
+   "default": "(unset — detection is not restricted)",
+   "description": "the deployment's default list of languages detection is restricted to (transcription-language.v1 DeploymentDefault), comma-separated with no spaces, e.g. `de,en`. A value the contract refuses stops the boot"
+  },
+  {
    "key": "TRANSCRIPTION_SERVICE_URL",
    "class": "capability",
    "capability": "stt",
@@ -651,6 +663,20 @@
    "targets": []
   },
   {
+   "key": "VEXA_CALENDAR_FEED_ALLOW",
+   "class": "defaulted",
+   "default": "(empty — no internal feed is reachable)",
+   "targets": ["compose", "helm"],
+   "description": "operator allowance for calendar feeds served inside a private network: exact host names and IP networks (CIDR), comma- or space-separated (cal.corp.example, 10.20.0.0/16). The ICS fetch's pinned transport admits an address inside a listed network, or any non-reserved address a listed name resolves to; everything else stays refused by the outbound URL guard (deploy/contracts/outbound-url.v1). Loopback, link-local/cloud metadata, unspecified, multicast and reserved addresses are never admitted, and an entry overlapping them, a wildcard, a URL or a malformed name refuses the boot. Calendar feeds only: customer webhooks never read it. admin-api reads the same key when a feed is saved."
+  },
+  {
+   "key": "VEXA_AUTO_JOIN_BLOCK",
+   "class": "defaulted",
+   "default": "(empty — no deployment-wide block)",
+   "targets": ["compose", "helm"],
+   "description": "the deployment's auto-join block list: domains (matching themselves and subdomains) and exact email addresses, comma- or space-separated. The auto-join sweep never spawns a bot for a planned meeting whose organiser, an invitee or the meeting link's host matches; it stamps the reason on the row (data.auto_join_error). Each owner's own list (auto_join_block, PUT /user/calendar, delivered on bot-context) applies on top. A malformed entry refuses the boot. Manual POST /bots is not affected."
+  },
+  {
    "key": "PIPELINE_TICK_STALE_S",
    "class": "defaulted",
    "default": "120",
@@ -726,6 +752,13 @@
    "default": "600",
    "description": "O-TEL-1: minimum tape age (s) before the budget janitor may evict it — the in-flight-upload guard, so a sweep firing mid-teardown can never half-delete a tape whose parts are still arriving",
    "targets": []
+  },
+  {
+   "key": "VEXA_CAPTURE_SIGNAL_DEFAULT",
+   "class": "defaulted",
+   "default": "true (the Helm chart sets false)",
+   "targets": ["helm"],
+   "description": "whether a bot tapes its raw captured signal (audio, captions, speaker events) to the bucket under signal/ when identity gives no answer for its owner (unreachable, or an admin-api that predates the field). admin-api reads the same key as its last tier (user > platform setting > this), so a reachable identity already carries it. Unset or empty = true, the compose and Lite behaviour; the Helm chart sets it from diagnostics.captureSignal, default false. Anything but a recognized boolean (true/1/yes/on, false/0/no/off) refuses the boot: whether meetings are taped is a data-protection decision a typo must not make."
   },
   {
    "key": "VEXA_FLOWS_API_URL",

@@ -88,6 +88,7 @@ export const KIND_LABEL: Readonly<Record<FaultKind, string>> = {
   access_expired: "tool access expired",
   tools_unconfined: "could not confine the model's tools",
   credential_conflict: "another model credential is mounted",
+  no_tool_calling: "cannot call tools",
 };
 
 /** A label table read with a source or kind a newer server may send and this release cannot know. */

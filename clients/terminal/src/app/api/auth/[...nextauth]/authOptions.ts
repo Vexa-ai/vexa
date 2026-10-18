@@ -1,4 +1,4 @@
-/** NextAuth config for the terminal's OAuth broker (Google + Microsoft). Kept in its own module because
+/** NextAuth config for the terminal's OAuth broker (Google, Microsoft, and a generic OIDC issuer). Kept in its own module because
  *  an App Router `route.ts` may only export HTTP handlers — re-exporting `authOptions` from there fails
  *  Next's route-type check. NextAuth owns ONLY the OAuth dance; the terminal's auth contract is the
  *  httpOnly `vexa-token` + `vexa-user-info` cookies (read by server.mjs's WS proxy, api/proxyAuth.ts,
@@ -8,6 +8,9 @@
  *
  *  Providers self-gate on env presence, so a deploy with no OAuth creds simply exposes no providers
  *  (the email debug login still works). Credentials come from vexa-secrets (see .env.local).
+ *
+ *  The generic OIDC provider (`oidc`, ../oidcConfig.mjs) is registered when `VEXA_OIDC_ISSUER` is set.
+ *  `VEXA_SIGNIN_METHODS` can leave any provider out; a provider left out is not registered at all.
  */
 import { type AuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
@@ -15,11 +18,56 @@ import AzureADProvider from "next-auth/providers/azure-ad";
 import { cookies } from "next/headers";
 import { AUTH_COOKIE, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold } from "../adminApi";
 import { SIGNIN_ERROR_NOT_ALLOWED, SIGNIN_ERROR_UNAVAILABLE, SIGNIN_ERROR_UNVERIFIED } from "../../../signinRefusal";
-import { verifiedProviderIdentity } from "../providerIdentity";
+import { oidcDisplayName, verifiedProviderIdentity } from "../providerIdentity";
+import { rootCertificates } from "node:tls";
+import { OIDC_PROVIDER_ID, oidcConfig, signinMethodEnabled } from "../oidcConfig.mjs";
 
-const isGoogleEnabled = () => !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+const isGoogleEnabled = () =>
+  !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) && signinMethodEnabled("google");
 const isMicrosoftEnabled = () =>
-  !!(process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET);
+  !!(process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET) && signinMethodEnabled("microsoft");
+
+/** The providers NextAuth may complete a sign-in for. The callback refuses any other. */
+const SIGNIN_PROVIDERS = new Set(["google", "microsoft", OIDC_PROVIDER_ID]);
+
+/** The generic OIDC provider, or nothing.
+ *
+ *  - Endpoints and signing keys come from the issuer's discovery document (`wellKnown`).
+ *  - `idToken: true`: openid-client verifies the ID token (signature against the issuer's JWKS,
+ *    `iss`, `aud` = our client id, expiry, and the `nonce` this sign-in sent) and the profile is read
+ *    from the token's claims. The userinfo endpoint is never called — ADFS's answers only `sub`.
+ *  - PKCE, state and nonce are all checked.
+ *  - A custom CA bundle (an internal PKI) is ADDED to Node's public roots for openid-client's
+ *    requests. openid-client keeps one set of HTTP defaults for every provider, so replacing the
+ *    roots would break Google and Microsoft; adding to them does not.
+ */
+function oidcProviders() {
+  if (!signinMethodEnabled(OIDC_PROVIDER_ID)) return [];
+  const cfg = oidcConfig(process.env);
+  if (!cfg.enabled) return [];
+  return [
+    {
+      id: OIDC_PROVIDER_ID,
+      name: cfg.displayName,
+      type: "oauth" as const,
+      wellKnown: cfg.wellKnown,
+      clientId: cfg.clientId,
+      clientSecret: cfg.clientSecret,
+      authorization: { params: { scope: cfg.scopes, ...(cfg.resource ? { resource: cfg.resource } : {}) } },
+      idToken: true,
+      checks: ["pkce", "state", "nonce"] as ("pkce" | "state" | "nonce")[],
+      ...(cfg.ca ? { httpOptions: { ca: [...rootCertificates, ...cfg.ca], timeout: 10000 } } : {}),
+      profile(claims: Record<string, unknown>) {
+        const email = claims[cfg.emailClaim];
+        return {
+          id: String(claims.sub ?? ""),
+          email: typeof email === "string" ? email : null,
+          name: oidcDisplayName(claims, cfg.nameClaim),
+        };
+      },
+    },
+  ];
+}
 
 /** Secure cookies behind HTTPS, mirroring the login route's isSecureRequest(). */
 function isSecureRequest(): boolean {
@@ -84,6 +132,7 @@ export const authOptions: AuthOptions = {
           }),
         ]
       : []),
+    ...oidcProviders(),
   ],
   session: { strategy: "jwt" },
   secret: process.env.NEXTAUTH_SECRET,
@@ -95,11 +144,14 @@ export const authOptions: AuthOptions = {
      *  `vexa-user-info` cookies, reusing the admin-api find-or-create+mint flow. Deny on any failure. */
     async signIn({ user, account, profile }) {
       const provider = account?.provider;
-      if ((provider !== "google" && provider !== "microsoft") || !user.email) return false;
+      if (!provider || !SIGNIN_PROVIDERS.has(provider)) return false;
 
       // THE ADDRESS IS ONLY USABLE WHEN THE PROVIDER VERIFIED IT (../providerIdentity.ts): accounts
-      // here are keyed by email, so Google must say `email_verified`, and Microsoft must be this
-      // instance's pinned tenant or carry `xms_edov`. Decided before admin-api is asked anything.
+      // here are keyed by email, so Google must say `email_verified`, Microsoft must be this
+      // instance's pinned tenant or carry `xms_edov`, and the generic OIDC token must come from the
+      // configured issuer (plus `email_verified` when the operator requires it). Decided before
+      // admin-api is asked anything. The address is taken from the verified identity, never from
+      // NextAuth's `user`.
       const identity = verifiedProviderIdentity(provider, {
         account: account as unknown as Record<string, unknown>,
         profile: profile as unknown as Record<string, unknown> | undefined,
@@ -123,7 +175,7 @@ export const authOptions: AuthOptions = {
       if (!result.ok) {
         if (result.refused === "not-allowed") {
           // eslint-disable-next-line no-console
-          console.info(`[terminal-auth] ${provider} sign-in refused: ${user.email} is not allowed to sign in`);
+          console.info(`[terminal-auth] ${provider} sign-in refused: ${identity.email} is not allowed to sign in`);
           return `/?error=${SIGNIN_ERROR_NOT_ALLOWED}`;
         }
         if (result.refused === "unavailable") {
@@ -132,7 +184,7 @@ export const authOptions: AuthOptions = {
           return `/?error=${SIGNIN_ERROR_UNAVAILABLE}`;
         }
         // eslint-disable-next-line no-console
-        console.error(`[terminal-auth] ${provider} sign-in failed for ${user.email}: ${result.error}`);
+        console.error(`[terminal-auth] ${provider} sign-in failed for ${identity.email}: ${result.error}`);
         return false;
       }
 

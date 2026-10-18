@@ -16,7 +16,7 @@ never by sender. Cursor is durable (mail_cursor row) — restarts resume, never 
 WHICH inbox this is stops at `inbox.get_inbox()` — routing, admission and dedup below are
 source-blind by design:
 
-    VEXA_MAIL_INBOX = imap     (default) — IMAP against imap.gmail.com, behaviour unchanged
+    VEXA_MAIL_INBOX = imap     (default) — IMAP; Gmail preset, or VEXA_MAIL_IMAP_* for any server
                     = mailpit           — the dev stack's mail double (REST only, no IMAP)
     VEXA_MAILPIT_URL           — mailpit's HTTP base (default http://127.0.0.1:8025)
     VEXA_MAIL_ADDR             — the address this inbox answers as; mailpit filters on it
@@ -41,8 +41,10 @@ import flows_config as cfg
 from flows import Registry, SystemClock, admit, postgres_db
 from flows_defs import production
 from flows_integrations import mail_policy, outlook
+from flows_integrations import mailbox_status
 from flows_integrations.inbox import get_inbox
 from flows_steps.common import db_url
+from flows_steps.mail_transport import MailTransportError
 
 POLL_SECONDS = 12
 
@@ -512,18 +514,46 @@ def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
     return (kind, n)
 
 
+def _boot(db, inbox) -> str:
+    """The persisted cursor, or — first boot — the CURRENT inbox tail, anchored (history is never
+    replayed). Reaches the mail server on first boot, so it fails the same typed way a poll does."""
+    cursor = inbox.restore(db)
+    if cursor is None:
+        cursor = sys.argv[1] if len(sys.argv) > 1 else inbox.tail_cursor()
+        inbox.anchor(db, cursor)
+    return cursor
+
+
 def main() -> int:
     db = postgres_db(db_url())
     clock = SystemClock()
     reg = Registry()
     production.build(reg, db)     # the matcher needs the flow triggers; steps unused here
-    inbox = get_inbox()
+    status = mailbox_status.Reporter()
+    try:
+        inbox = get_inbox()
+    except MailTransportError as e:
+        # A setting that can never work (an unknown TLS mode, a non-numeric port). Reported where
+        # the probe reads it, then the process stops: there is nothing to retry.
+        status.fault(e)
+        return 2
 
-    cursor = inbox.restore(db)
-    if cursor is None:
-        # first boot: anchor at the CURRENT inbox tail — history is never replayed
-        cursor = sys.argv[1] if len(sys.argv) > 1 else inbox.tail_cursor()
-        inbox.anchor(db, cursor)
+    # THE MAILBOX NEVER CRASH-LOOPS ON A MAIL-SERVER FAULT. A wrong password, an untrusted
+    # certificate or an unreachable host used to escape `main` on first boot (a restart loop that
+    # reads as a broken deployment) and, after it, became one `poll hiccup` line per poll. Now each
+    # is a typed fault (`flows_steps.mail_transport`): logged once when it starts and when it
+    # clears, written where the readiness probe reads it, and retried on the poll cadence — so
+    # the pod stays up, reports NotReady with the reason, and recovers by itself once the
+    # Exchange side is fixed.
+    cursor = None
+    while cursor is None:
+        try:
+            cursor = _boot(db, inbox)
+        except MailTransportError as e:
+            status.fault(e)
+            time.sleep(POLL_SECONDS)
+    # NOT `status.ok` here: a cursor restored from the database proves nothing about the mail
+    # server. Readiness turns green on the first poll that actually reached it.
     print(f"mailbox integration up · inbox {inbox.name} · cursor {cursor!r}", flush=True)
 
     from flows_steps.common import ensure_platform_user, platform_user_id
@@ -552,6 +582,9 @@ def main() -> int:
                     print(f"{kind} {msg.frm} {msg.subject[:40]!r} → admitted {n}", flush=True)
                 cursor = msg.cursor
                 inbox.commit(db, msg)
+            status.ok(inbox.name)
+        except MailTransportError as e:
+            status.fault(e)
         except Exception as e:  # noqa: BLE001
             print(f"poll hiccup: {type(e).__name__}: {e}", flush=True)
         time.sleep(POLL_SECONDS)

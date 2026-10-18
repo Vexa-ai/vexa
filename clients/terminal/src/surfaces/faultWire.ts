@@ -10,7 +10,7 @@ export type FaultSource = (typeof FAULT_SOURCES)[number];
 
 export const FAULT_KINDS = {
   runtime: ["spawn_refused", "quota_exceeded", "unauthorized", "refused", "not_found", "unreachable", "unavailable", "bad_response"],
-  "model-provider": ["unpaid", "unauthorized", "rate_limited", "unavailable", "refused"],
+  "model-provider": ["unpaid", "unauthorized", "rate_limited", "unavailable", "refused", "no_tool_calling"],
   "vexa-tools": ["access_expired"],
   "agent-worker": ["tools_unconfined", "credential_conflict"],
   "agent-api": ["internal", "unavailable"],

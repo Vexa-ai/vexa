@@ -27,6 +27,8 @@ import { presentError } from "./apiClient";
 import { refreshMeetings } from "./liveMeetings";
 import { listCalendars, createCalendar, syncCalendar, type CalendarSyncStamp } from "./plannedApi";
 import { prepDraftTabDescriptor } from "./meetingPrep";
+import { SpawnLanguagePicker } from "./TranscriptionLanguagePicker";
+import { DEFAULT_CHOICE, choiceProblem, languageSpawnFields, type LanguageChoice } from "./transcriptionLanguage";
 
 /** The success line after a connect: lead with what the sync actually FOUND. */
 export function connectOutcome(stamp: CalendarSyncStamp): { ok: boolean; text: string } {
@@ -156,20 +158,23 @@ function DropBotInline() {
   const [sent, setSent] = useState<null | "sending" | "ok" | "err">(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [denial, setDenial] = useState<ServiceDenialPresentation | null>(null);
+  const [language, setLanguage] = useState<LanguageChoice>(DEFAULT_CHOICE);
   const send = async () => {
     const u = url.trim();
     if (!u || sent === "sending") return;
     const parsed = parseMeetingInput(u, await getJitsiHosts());
     if (!parsed) { setSent("err"); setMsg("That doesn't look like a Meet / Zoom / Teams / Jitsi link."); setDenial(null); return; }
+    const languageProblem = choiceProblem(language);
+    if (languageProblem) { setSent("err"); setMsg(languageProblem); setDenial(null); return; }
     setSent("sending"); setMsg(null); setDenial(null);
     try {
       const r = await fetch("/api/bots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform: parsed.platform, native_meeting_id: parsed.native_meeting_id, meeting_url: u, bot_name: defaultBotName() }),
+        body: JSON.stringify({ platform: parsed.platform, native_meeting_id: parsed.native_meeting_id, meeting_url: u, bot_name: defaultBotName(), ...languageSpawnFields(language) }),
       });
       if (r.ok) {
-        setSent("ok"); setUrl("");
+        setSent("ok"); setUrl(""); setLanguage(DEFAULT_CHOICE);
         refreshMeetings(); setTimeout(refreshMeetings, 2000); setTimeout(refreshMeetings, 6000);
       } else {
         setSent("err");
@@ -197,6 +202,7 @@ function DropBotInline() {
           {sent === "sending" ? "…" : "Send bot"}
         </button>
       </div>
+      <SpawnLanguagePicker value={language} onChange={setLanguage} disabled={sent === "sending"} />
       {sent === "ok" && <div style={{ fontSize: 11, color: "var(--green)", lineHeight: 1.4 }}>Bot sent — admit it in the meeting.</div>}
       {denial
         ? <ServiceDenialPanel presentation={denial} onRetry={() => void send()} />

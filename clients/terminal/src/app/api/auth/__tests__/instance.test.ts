@@ -80,7 +80,7 @@ describe("/api/auth/instance — the login surface's claim-screen switch", () =>
   it("no admin anywhere → admin_exists false (claim screen shows)", async () => {
     stubAdminApi({ adminExists: false });
     const res = await instanceRoute();
-    expect(await res.json()).toEqual({ admin_exists: false });
+    expect(await res.json()).toEqual({ admin_exists: false, email_link: true });
   });
 
   it("is admin-api's answer alone — an admin list in the terminal's environment is not consulted", async () => {
@@ -88,19 +88,19 @@ describe("/api/auth/instance — the login surface's claim-screen switch", () =>
     process.env.VEXA_ADMIN_EMAILS = "dmitry@vexa.ai";
     stubAdminApi({ adminExists: false });
     const res = await instanceRoute();
-    expect(await res.json()).toEqual({ admin_exists: false });
+    expect(await res.json()).toEqual({ admin_exists: false, email_link: true });
   });
 
   it("probe unreachable → fails safe to plain sign-in", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("ECONNREFUSED"); }));
     const res = await instanceRoute();
-    expect(await res.json()).toEqual({ admin_exists: true });
+    expect(await res.json()).toEqual({ admin_exists: true, email_link: true });
   });
 
   it("carries no company-layer state and no company name (founder ruling 2026-10-08)", async () => {
     stubAdminApi({ adminExists: true, company: "Acme GmbH" });
     const body = await (await instanceRoute()).json();
-    expect(body).toEqual({ admin_exists: true });
+    expect(body).toEqual({ admin_exists: true, email_link: true });
     expect(JSON.stringify(body)).not.toContain("Acme");
   });
 });

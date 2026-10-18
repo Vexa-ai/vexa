@@ -66,6 +66,18 @@ class InMemoryMeetingRepo:
         rows.sort(key=lambda m: m.get("id") or 0, reverse=True)   # newest first, as the SQL does
         return rows
 
+    async def find_active_rows_bound(self, platform, native_meeting_id, workspace_ids) -> list:
+        wanted = set(workspace_ids or [])
+        rows = [
+            dict(m) for m in self._meetings.values()
+            if m["platform"] == platform
+            and m["native_meeting_id"] == native_meeting_id
+            and m["status"] not in ("completed", "failed")
+            and (m.get("data") or {}).get("workspace_id") in wanted
+        ]
+        rows.sort(key=lambda m: m.get("id") or 0, reverse=True)
+        return rows
+
     async def find_active_by_userdata(self, userdata_s3_path) -> Optional[dict]:
         for m in self._meetings.values():
             if (

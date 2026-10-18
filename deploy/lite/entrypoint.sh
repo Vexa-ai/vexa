@@ -103,6 +103,9 @@ unset RUNTIME_API_TOKEN
 # The worker toolbelt: agent-api signs each worker's delegation token, admin-api verifies it.
 export VEXA_MCP_DELEGATION_SECRET="${VEXA_MCP_DELEGATION_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 export DEFAULT_BOT_NAME="${DEFAULT_BOT_NAME:-Vexa}"
+# The deployment's default transcription language (empty = none): a code, and/or a comma list.
+export DEFAULT_TRANSCRIPTION_LANGUAGE="${DEFAULT_TRANSCRIPTION_LANGUAGE:-}"
+export DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES="${DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES:-}"
 
 # Optional Google Meet speaker-stream tuning. Empty values preserve bot defaults; the runtime
 # profile forwards configured values to every spawned bot process.

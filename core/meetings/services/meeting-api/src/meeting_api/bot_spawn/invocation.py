@@ -93,6 +93,7 @@ def build_invocation(
     native_meeting_id: Optional[str],
     connection_id: str,
     language: Optional[str] = None,
+    allowed_languages: Optional[list[str]] = None,
     task: Optional[str] = None,
     transcription_tier: str = "realtime",
     redis_url: str,
@@ -136,6 +137,9 @@ def build_invocation(
         "meeting_id": meeting_id,
         "redisUrl": redis_url,
         "language": language,
+        # transcription-language.v1's list (restricted detection). Empty is the same as absent, so
+        # it is stripped with the Nones and an auto or forced bot carries no list at all.
+        "allowedLanguages": list(allowed_languages) if allowed_languages else None,
         "task": task,
         "transcriptionTier": transcription_tier,
         "transcribeEnabled": transcribe_enabled,

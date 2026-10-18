@@ -27,6 +27,7 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   contract lifecycle.v1
   contract service-authority.v1
   contract session-profile.v1
+  contract transcription-language.v1
   contract transcript.v1
   contract webhook.v1
   service transcription

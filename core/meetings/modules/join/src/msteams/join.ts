@@ -21,6 +21,7 @@ import {
   meetingOriginHost,
   redactUrl,
 } from "./auth-redirect";
+import { TeamsPreJoinBlockedError, teamsDisplayNameDisallowedChars } from "./prejoin-blocked";
 
 // NOTE vs the monolith: the WebRTC remote-audio hook and the voice-agent
 // virtual-camera flow are RECORDING/HOST concerns and stay outside this brick.
@@ -158,6 +159,55 @@ async function waitForTeamsPreJoinReadiness(
   return false;
 }
 
+/** How long a visible "Join now" may stay disabled after the name is filled before the join stops.
+ *  Teams enables it within a frame of a valid name; the budget only absorbs a slow render. */
+const JOIN_NOW_ENABLE_BUDGET_MS = 10000;
+
+/** In-page read of Teams' own pre-join validation text (plain string: runs in the browser). */
+const READ_TEAMS_PREJOIN_VALIDATION = `(() => {
+  const text = (document.body && document.body.innerText) || "";
+  const line = text.split("\\n").map((l) => l.trim()).find((l) => /can only include/i.test(l));
+  return line ? line.slice(0, 200) : null;
+})()`;
+
+async function isLocatorEnabled(locator: any): Promise<boolean> {
+  // A stand-in Page without isEnabled cannot report a disabled button; treat it as enabled so
+  // only positive evidence (a real disabled button) stops the join.
+  if (typeof locator?.isEnabled !== "function") return true;
+  try {
+    return await locator.isEnabled();
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * The pre-join gate (#1780). A visible "Join now" that stays DISABLED after the display name was
+ * entered means Teams refused the name (or something else on the pre-join): the bot cannot join.
+ * Throw a typed terminal naming it, instead of letting the click time out quietly and the
+ * admission wait read that visible button as a lobby. See prejoin-blocked.ts.
+ *
+ * The AV-confirm modal (#467) can also hold the button disabled; it is dismissed here before the
+ * verdict, so only a button that is still disabled with nothing left to dismiss stops the join.
+ */
+async function assertTeamsJoinNowEnabled(page: Page, joinNowButton: any, botName: string): Promise<void> {
+  const start = Date.now();
+  while (true) {
+    if (await isLocatorEnabled(joinNowButton)) return;
+    if (Date.now() - start >= JOIN_NOW_ENABLE_BUDGET_MS) break;
+    await dismissTeamsAvConfirmModal(page);
+    await page.waitForTimeout(500);
+  }
+  let teamsMessage: string | null = null;
+  try {
+    const read = await page.evaluate(READ_TEAMS_PREJOIN_VALIDATION);
+    teamsMessage = typeof read === "string" && read ? read : null;
+  } catch {}
+  const err = new TeamsPreJoinBlockedError(botName, teamsMessage);
+  log(`❌ ${err.message}`);
+  throw err;
+}
+
 export async function joinMicrosoftTeams(
   page: Page,
   meetingUrl: string,
@@ -218,6 +268,13 @@ export async function joinMicrosoftTeams(
     await nameInput.waitFor({ timeout: 5000 });
     await nameInput.fill(botName);
     log(`✅ Display name set to "${botName}"`);
+    const disallowed = teamsDisplayNameDisallowedChars(botName);
+    if (disallowed.length) {
+      log(
+        `⚠️ Display name contains characters Teams does not allow (${disallowed.join(" ")}); ` +
+        `Teams accepts letters, numbers, spaces and - ' . _ @ — expect "Join now" to stay disabled`,
+      );
+    }
   } catch (error) {
     log("ℹ️ Display name input not found, continuing...");
   }
@@ -280,11 +337,12 @@ export async function joinMicrosoftTeams(
   }
 
   log("Step 6: Clicking 'Join now' to enter the meeting...");
+  // Use the more specific "Join now" selector first to avoid ambiguity
+  const joinNowButton = page.locator('button:has-text("Join now")').first();
+  const joinNowVisible = await joinNowButton.isVisible().catch(() => false);
+  // Present but disabled is not "not found": it is Teams refusing the pre-join. Terminal (#1780).
+  if (joinNowVisible) await assertTeamsJoinNowEnabled(page, joinNowButton, botName);
   try {
-    // Use the more specific "Join now" selector first to avoid ambiguity
-    const joinNowButton = page.locator('button:has-text("Join now")').first();
-    const joinNowVisible = await joinNowButton.isVisible().catch(() => false);
-
     if (joinNowVisible) {
       await joinNowButton.click();
       log("✅ Clicked 'Join now' button");
@@ -297,8 +355,10 @@ export async function joinMicrosoftTeams(
     }
     // Brief wait for Teams to start processing the join request
     await page.waitForTimeout(1000);
-  } catch (error) {
-    log("⚠️ Join button not found — bot may not be able to enter the meeting");
+  } catch (error: any) {
+    // Keep Playwright's reason: "not found" and "found but not clickable" read the same otherwise.
+    const reason = String(error?.message || error).split("\n")[0];
+    log(`⚠️ Join button not found or not clickable — bot may not be able to enter the meeting (${reason})`);
   }
 
   // Step 6c: Handle the post-"Join now" AV-confirmation modal (Vexa-ai/vexa#467).

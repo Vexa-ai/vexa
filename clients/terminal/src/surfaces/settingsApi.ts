@@ -17,6 +17,8 @@ export type TranscriptionPrefs = {
   url?: string | null;
   token_set?: boolean;
   token?: string | null; // masked on read — write-only in the clear
+  language?: string | null;      // the default transcription language (null = the deployment's)
+  allowed_languages?: string[];  // the default "a few languages" list (see transcriptionLanguage.ts)
 };
 
 /** Global platform settings carry the SAME fields unmasked (admin tier). */
@@ -46,7 +48,9 @@ export async function getTranscriptionPrefs(): Promise<TranscriptionPrefs> {
   return jsonOrThrow(await fetch("/api/user/transcription", { cache: "no-store" }));
 }
 
-export async function setTranscriptionPrefs(update: { url?: string; token?: string }): Promise<TranscriptionPrefs> {
+/** `language: ""` and `allowed_languages: []` clear the default back to the deployment's; a 422
+ *  carries the server's reason in `detail`. */
+export async function setTranscriptionPrefs(update: { url?: string; token?: string; language?: string; allowed_languages?: string[] }): Promise<TranscriptionPrefs> {
   return jsonOrThrow(await fetch("/api/user/transcription", {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update),
   }));

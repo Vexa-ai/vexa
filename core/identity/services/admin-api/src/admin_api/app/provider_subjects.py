@@ -7,7 +7,12 @@ only stable thing about a Google account. So the first OAuth sign-in to an accou
 provider's stable subject on it, and every later one through that provider must carry the same:
 
     users.data["provider_subjects"] = {"google": "google:<sub>",
-                                       "microsoft": "microsoft:<tid>:<oid>"}
+                                       "microsoft": "microsoft:<tid>:<oid>",
+                                       "oidc": "oidc:<sha256 hex of issuer and sub>"}
+
+The generic OIDC door (ADFS, Keycloak) hashes the issuer with ``sub`` because ``sub`` is unique only
+within its issuer and an ADFS ``sub`` is base64; the hash gives one fixed alphabet, and a different
+issuer never produces the same subject.
 
 One subject per provider. A sign-in carrying a different subject for an already-bound provider is
 refused (signin.v1 ``ProviderSubjectBindRequest``; the door is ``PUT
@@ -24,7 +29,7 @@ DATA_KEY = "provider_subjects"
 
 _GUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 #: The subjects the terminal's providerIdentity.ts produces, and nothing else.
-SUBJECT_RE = re.compile(rf"^(?:google:[A-Za-z0-9._-]{{1,255}}|microsoft:{_GUID}:{_GUID})$")
+SUBJECT_RE = re.compile(rf"^(?:google:[A-Za-z0-9._-]{{1,255}}|microsoft:{_GUID}:{_GUID}|oidc:[0-9a-f]{{64}})$")
 
 
 class Mismatch(Exception):

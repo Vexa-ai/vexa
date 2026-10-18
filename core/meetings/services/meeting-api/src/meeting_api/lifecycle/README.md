@@ -42,6 +42,10 @@ parent's FM-003 discipline). `active → joining` (and any re-open of a terminal
 - `stop.py` (P3b) — the user-stop path: `request_stop(record, publisher, meeting_id)` sets
   `stop_requested` + publishes the `bot_commands:meeting:{id}` `{action:"leave"}` command;
   `classify_user_stop` / `stop_event_for` resolve the bot's exit to an ATTRIBUTED terminal.
+- `reconfigure_router.py` — `PUT /bots/{platform}/{native_meeting_id}/config`: the live language
+  change (transcription-language.v1). Owner, or an owner/contributor of the bound workspace (role read
+  from identity); publishes an acts.v1 `reconfigure` and stores `data.transcription_language` only when a
+  bot received it (409 otherwise).
 - `retry.py` (P3d) — `JoinRetryController` + the transient/permanent taxonomy
   (`classify_retry` / `is_transient`): on a TRANSIENT join-failure schedule a fresh re-spawn (a new
   `meeting_session`) through the runtime scheduler with bounded exponential backoff; a PERMANENT

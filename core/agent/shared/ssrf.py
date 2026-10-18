@@ -30,6 +30,16 @@ THREE RULES, applied together:
 A host name is refused before any lookup when it can only name this deployment: ``localhost`` and
 anything under ``.localhost``, a cloud metadata name, or a single label (``redis``, ``admin-api`` —
 a name with no dot resolves only inside the deployment's own network).
+
+ONE NARROW EXCEPTION, and only an operator can make it: an ``OperatorAllowance`` (parsed from a
+deployment env value by ``parse_allowance``, never from anything a user supplies) names internal
+hosts or networks that ONE kind of fetch may reach — calendar feeds served inside a corporate
+network, for example. A caller passes it explicitly (``allow=``); every other caller is unchanged.
+It never admits loopback, link-local (cloud metadata), unspecified, multicast or reserved addresses,
+or a deployment-only or metadata host name: ``parse_allowance`` refuses an entry that would, and the
+check refuses such an address even when an entry seems to cover it. A listed host name may resolve
+to private addresses; any other host is still held to public ones, and the pin and connect-time
+re-check apply exactly as before.
 """
 from __future__ import annotations
 
@@ -219,32 +229,129 @@ def resolve_host(hostname: str) -> List[str]:
     return ips
 
 
-def _checked(host: str, resolver: Optional[Resolver], what: str) -> List[str]:
-    """The address(es) ``host`` is dialled at, every one checked — or ``SSRFError``."""
+#: What no allowance can admit, whatever an operator writes: the addresses that reach this host or
+#: its cloud rather than another machine on the corporate network.
+_NEVER_ALLOWED_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "0.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "100.100.100.200/32", "224.0.0.0/4",
+    "240.0.0.0/4", "::/128", "::1/128", "fe80::/10", "fd00:ec2::254/128", "ff00::/8",
+))
+
+_HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def is_never_allowed_ip(addr: Union[str, IPAddress]) -> bool:
+    """True for an address no ``OperatorAllowance`` may admit (loopback, link-local and cloud
+    metadata, unspecified, multicast, reserved) — read through every IPv4 address it carries."""
+    ip = addr if isinstance(addr, (ipaddress.IPv4Address, ipaddress.IPv6Address)) else literal_address(str(addr))
+    if ip is None:
+        return True
+    if ip.version == 6 and any(is_never_allowed_ip(v4) for v4 in embedded_ipv4(ip)):
+        return True
+    return any(ip.version == net.version and ip in net for net in _NEVER_ALLOWED_NETWORKS)
+
+
+class OperatorAllowance:
+    """Internal hosts and networks an OPERATOR has named for one kind of fetch.
+
+    * ``hosts`` — exact host names (lowercase, no wildcard). A listed name may be a single label and
+      may resolve to private addresses; it may never resolve to a never-allowed one.
+    * ``networks`` — IP networks whose addresses may be reached, by literal or by a resolved name.
+
+    Built only by ``parse_allowance`` from deployment configuration. An empty allowance admits
+    nothing, which is the same as passing none."""
+
+    __slots__ = ("hosts", "networks")
+
+    def __init__(self, hosts=(), networks=()):
+        self.hosts = frozenset(h.lower() for h in hosts)
+        self.networks = tuple(networks)
+
+    def __bool__(self) -> bool:
+        return bool(self.hosts or self.networks)
+
+    def __repr__(self) -> str:
+        return f"OperatorAllowance(hosts={sorted(self.hosts)!r}, networks={[str(n) for n in self.networks]!r})"
+
+    def admits_host(self, host: str) -> bool:
+        return (host or "").strip().rstrip(".").lower() in self.hosts
+
+    def admits_ip(self, addr: Union[str, IPAddress], *, host: str = "") -> bool:
+        """May a connection to ``addr`` (reached through ``host``, when one was named) go ahead?"""
+        ip = addr if isinstance(addr, (ipaddress.IPv4Address, ipaddress.IPv6Address)) else literal_address(str(addr))
+        if ip is None or is_never_allowed_ip(ip):
+            return False
+        if host and self.admits_host(host):
+            return True
+        return any(ip.version == net.version and ip in net for net in self.networks)
+
+
+def parse_allowance(raw: Optional[str], *, what: str = "allowance") -> OperatorAllowance:
+    """Parse an operator's comma- or space-separated list of host names and IP networks (CIDR, or
+    a single address) into an ``OperatorAllowance``, or raise ``ValueError`` naming the bad entry.
+
+    Refused: a wildcard, a URL or port, a malformed name, ``localhost``/``*.localhost`` and the cloud
+    metadata names, a network with host bits set, and any network that overlaps a never-allowed
+    range (so ``0.0.0.0/0``, ``127.0.0.0/8`` and ``169.254.0.0/16`` cannot be listed). ``what``
+    names the setting in the message. Empty or ``None`` → an empty allowance."""
+    hosts: List[str] = []
+    networks: list = []
+    for entry in re.split(r"[\s,]+", (raw or "").strip()):
+        if not entry:
+            continue
+        item = entry.lower().rstrip(".")
+        if "/" in item or ":" in item or re.fullmatch(r"[0-9.]+", item):
+            try:
+                net = ipaddress.ip_network(item, strict=True)
+            except ValueError:
+                raise ValueError(f"{what}: {entry!r} is not an IP network (write it as a CIDR with no "
+                                 "host bits, such as 10.20.0.0/16, or a single address)") from None
+            if any(net.version == bad.version and net.overlaps(bad) for bad in _NEVER_ALLOWED_NETWORKS):
+                raise ValueError(f"{what}: {entry!r} overlaps loopback, link-local (cloud metadata), "
+                                 "unspecified, multicast or reserved addresses, which are never allowed")
+            networks.append(net)
+            continue
+        if "*" in item or any(c in item for c in ":/@?#[]"):
+            raise ValueError(f"{what}: {entry!r} must be an exact host name or an IP network — no "
+                             "wildcard, scheme, port or path")
+        if item in _BLOCKED_HOSTNAMES or item.endswith(".localhost") or item == "localhost":
+            raise ValueError(f"{what}: {entry!r} names this host or a cloud metadata service and is "
+                             "never allowed")
+        if len(item) > 253 or not all(_HOST_LABEL.fullmatch(label) for label in item.split(".")):
+            raise ValueError(f"{what}: {entry!r} is not a valid host name")
+        hosts.append(item)
+    return OperatorAllowance(hosts, networks)
+
+
+def _checked(host: str, resolver: Optional[Resolver], what: str,
+             allow: Optional[OperatorAllowance] = None) -> List[str]:
+    """The address(es) ``host`` is dialled at, every one checked — or ``SSRFError``. ``allow`` is
+    an operator's allowance for this kind of fetch (see ``OperatorAllowance``); ``None`` is the
+    rule with no exception."""
     refused = f"{what} cannot target internal or private networks"
     literal = literal_address(host)
     if literal is not None:
-        if is_blocked_ip(literal):
+        if is_blocked_ip(literal) and not (allow and allow.admits_ip(literal)):
             raise SSRFError(refused)
         return [str(literal)]
-    if is_blocked_hostname(host):
+    if is_blocked_hostname(host) and not (allow and allow.admits_host(host)):
         raise SSRFError(refused)
     ips = (resolver or resolve_host)(host)
     if not ips:
         raise SSRFError(f"{what} hostname could not be resolved")
-    if any(is_blocked_ip(ip) for ip in ips):
+    if any(is_blocked_ip(ip) and not (allow and allow.admits_ip(ip, host=host)) for ip in ips):
         raise SSRFError(refused)
     return [str(literal_address(ip)) for ip in ips]
 
 
 def validate_url(url: str, resolver: Optional[Resolver] = None, *, what: str = "URL",
-                 resolve: bool = True) -> PinnedURL:
+                 resolve: bool = True, allow: Optional[OperatorAllowance] = None) -> PinnedURL:
     """Check ``url`` and return a ``PinnedURL``, or raise ``SSRFError``.
 
     http(s) only, a host, and every address the host reaches checked (rule 1). ``resolver`` replaces
     DNS (tests); ``resolve=False`` checks the URL as written — scheme, literal address, host name —
     without a lookup, for a WRITE that only stores the URL (the fetch that follows resolves and
-    pins). ``what`` names the URL in the message the person sees."""
+    pins). ``what`` names the URL in the message the person sees. ``allow`` is an operator's
+    allowance for this kind of fetch, never a user's (see ``OperatorAllowance``)."""
     try:
         parts = urlsplit((url or "").strip())
         port = parts.port
@@ -256,10 +363,14 @@ def validate_url(url: str, resolver: Optional[Resolver] = None, *, what: str = "
     if not host:
         raise SSRFError(f"{what} must have a valid hostname")
     if resolve:
-        ips = _checked(host, resolver, what)
+        ips = _checked(host, resolver, what, allow)
     else:
         literal = literal_address(host)
-        if (literal is not None and is_blocked_ip(literal)) or (literal is None and is_blocked_hostname(host)):
+        if literal is not None:
+            refused = is_blocked_ip(literal) and not (allow and allow.admits_ip(literal))
+        else:
+            refused = is_blocked_hostname(host) and not (allow and allow.admits_host(host))
+        if refused:
             raise SSRFError(f"{what} cannot target internal or private networks")
         ips = [str(literal)] if literal is not None else []
     return PinnedURL(url, host=host, port=port, scheme=parts.scheme.lower(), pinned_ips=ips)
@@ -270,15 +381,17 @@ def validate_webhook_url(url: str, resolver: Optional[Resolver] = None) -> Pinne
     return validate_url(url, resolver, what="Webhook URL")
 
 
-def revalidate_at_connect(hostname: str, resolver: Optional[Resolver] = None) -> List[str]:
+def revalidate_at_connect(hostname: str, resolver: Optional[Resolver] = None,
+                          allow: Optional[OperatorAllowance] = None) -> List[str]:
     """Re-resolve and re-check ``hostname`` at the moment of dialling; the checked address(es)."""
-    return _checked((hostname or "").lower(), resolver, "URL")
+    return _checked((hostname or "").lower(), resolver, "URL", allow)
 
 
-def _pin(request: Any, resolver: Optional[Resolver]) -> None:
+def _pin(request: Any, resolver: Optional[Resolver],
+         allow: Optional[OperatorAllowance] = None) -> None:
     """Point ``request`` at a checked address, keeping the original Host header and TLS SNI."""
     host = request.url.host
-    ips = revalidate_at_connect(host, resolver)
+    ips = revalidate_at_connect(host, resolver, allow)
     if literal_address(host) is not None:
         return                                   # a literal address, already checked: dial as is
     request.headers.setdefault("Host", request.url.netloc.decode("ascii"))
@@ -287,15 +400,17 @@ def _pin(request: Any, resolver: Optional[Resolver]) -> None:
     request.url = request.url.copy_with(host=ips[0])
 
 
-def build_pinned_transport(inner: Any = None, resolver: Optional[Resolver] = None) -> Any:
-    """An ``httpx.AsyncBaseTransport`` that checks and pins every request it sends (rule 3)."""
+def build_pinned_transport(inner: Any = None, resolver: Optional[Resolver] = None,
+                           allow: Optional[OperatorAllowance] = None) -> Any:
+    """An ``httpx.AsyncBaseTransport`` that checks and pins every request it sends (rule 3).
+    ``allow`` is an operator's allowance for the one kind of fetch this transport serves."""
     import httpx
 
     base = inner if inner is not None else httpx.AsyncHTTPTransport()
 
     class _PinnedTransport(httpx.AsyncBaseTransport):
         async def handle_async_request(self, request: "httpx.Request") -> "httpx.Response":
-            _pin(request, resolver)
+            _pin(request, resolver, allow)
             return await base.handle_async_request(request)
 
         async def aclose(self) -> None:
@@ -304,7 +419,8 @@ def build_pinned_transport(inner: Any = None, resolver: Optional[Resolver] = Non
     return _PinnedTransport()
 
 
-def build_pinned_sync_transport(inner: Any = None, resolver: Optional[Resolver] = None) -> Any:
+def build_pinned_sync_transport(inner: Any = None, resolver: Optional[Resolver] = None,
+                                allow: Optional[OperatorAllowance] = None) -> Any:
     """The same, as an ``httpx.BaseTransport`` for a synchronous client."""
     import httpx
 
@@ -312,7 +428,7 @@ def build_pinned_sync_transport(inner: Any = None, resolver: Optional[Resolver] 
 
     class _PinnedSyncTransport(httpx.BaseTransport):
         def handle_request(self, request: "httpx.Request") -> "httpx.Response":
-            _pin(request, resolver)
+            _pin(request, resolver, allow)
             return base.handle_request(request)
 
         def close(self) -> None:

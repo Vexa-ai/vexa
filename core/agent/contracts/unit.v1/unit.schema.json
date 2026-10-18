@@ -182,8 +182,8 @@
       "enum": ["spawn_refused", "quota_exceeded", "unauthorized", "refused", "not_found", "unreachable", "unavailable", "bad_response"]
     },
     "ModelProviderFaultKind": {
-      "description": "unpaid — out of credit or quota (402, or the provider's own words) · unauthorized — the credential was refused (401/403) · rate_limited — 429 · unavailable — 5xx, 529, a timeout or a transport failure · refused — any other 4xx.",
-      "enum": ["unpaid", "unauthorized", "rate_limited", "unavailable", "refused"]
+      "description": "unpaid — out of credit or quota (402, or the provider's own words) · unauthorized — the credential was refused (401/403) · rate_limited — 429 · unavailable — 5xx, 529, a timeout or a transport failure · refused — any other 4xx · no_tool_calling — the endpoint and model do not do function calling (the server refused the turn's tools, dropped them, or the model answered with tool calls written as text), so the turn cannot use any tool (core/agent/llm/faults.py).",
+      "enum": ["unpaid", "unauthorized", "rate_limited", "unavailable", "refused", "no_tool_calling"]
     },
     "VexaToolsFaultKind": {
       "description": "access_expired — the turn ran past its delegation token, and the Vexa tool calls it made after that were refused.",

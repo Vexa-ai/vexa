@@ -25,6 +25,7 @@ const addFormats = addFormatsDefault as unknown as (ajv: Ajv) => Ajv;
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SpeakerStreamManagerConfig } from '@vexa/gmeet-pipeline';
+import { settingProblem } from './transcription-language.js';
 
 export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi';
 export type TranscriptionTier = 'realtime' | 'deferred';
@@ -140,6 +141,12 @@ export function parseInvocation(raw: string | undefined): Invocation {
   const { ajv, validate } = validator();
   if (!validate(data)) {
     throw new InvocationError(`invocation.v1: VEXA_BOT_CONFIG failed validation — ${ajv.errorsText(validate.errors)}`);
+  }
+  // The language pair is a transcription-language.v1 setting: codes, and a language that belongs
+  // to a non-empty list. The schema types the fields; the pair's meaning is checked here.
+  const languageProblem = settingProblem(data as Invocation);
+  if (languageProblem) {
+    throw new InvocationError(`invocation.v1: VEXA_BOT_CONFIG transcription language — ${languageProblem}`);
   }
   return data as Invocation;
 }

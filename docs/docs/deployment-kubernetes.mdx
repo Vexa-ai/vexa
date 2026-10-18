@@ -68,6 +68,11 @@ value its own Secret already holds, or generates one on first install. It refuse
 full list of what such a render must supply is under
 [One-time steps after upgrading](/deployment#one-time-steps-after-upgrading).
 
+**The chat agent's meeting tools** (send the bot, read the transcript, stop it) are deployed by
+default. The agent also needs a model that does tool calling: for a self-hosted or LiteLLM model, set
+`models.runner`, `models.llmBaseUrl` and `secrets.llmApiKey`. See
+[Agent tools on Kubernetes](/deployment-helm-agent-tools).
+
 `values-staging.yaml` and `values-test.yaml` show environment overlays. Chart tests
 (`helm lint` + template tests) live under `deploy/helm/tests/`.
 
@@ -179,6 +184,81 @@ these steps.
 `helm rollback` to the MinIO-era revision recreates the StatefulSet, which attaches the retained PVC
 again and serves the objects on it — provided the MinIO images that revision names can still be
 pulled. Recordings made after the upgrade are in your bucket, not on that volume.
+
+## Captured-signal tapes (off by default)
+
+A bot can tee its raw captured stream (audio, captions, speaker events) to your bucket under
+`signal/`, so a meeting can be replayed when a transcription defect is debugged. On Kubernetes this
+is **off by default**: a bot spawned by this chart tapes nothing unless you turn it on.
+
+```yaml
+diagnostics:
+  captureSignal: "false"   # the default; "true" tapes every meeting unless a setting below says no
+```
+
+| Value | Default | Meaning |
+|---|---|---|
+| `diagnostics.captureSignal` | `"false"` | The deployment's default for taping. `"true"` or `"false"`; any other value stops `helm install` and `helm template` with a message naming the value. |
+
+The value is also listed in the [Helm chart README](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md#configuration-that-matters),
+and the variable it sets, `VEXA_CAPTURE_SIGNAL_DEFAULT`, in [Configuration](/configuration#captured-signal-tapes).
+
+The chart value is the last word only when nobody has said otherwise. An administrator can change
+it without a redeploy, for every account (`PUT /internal/settings/diagnostics` with
+`{"capture_signal": "true"}` or `"false"`; an empty string clears it) or for one account
+(`diagnostics.capture_signal` on the user record). Order of precedence: the account's setting, then
+the platform setting, then `diagnostics.captureSignal`.
+
+**Limits.** The switch decides whether new bots tape; a bot already in a meeting keeps the decision
+it started with. Tapes already in the bucket are not deleted by turning the switch off; delete them
+under `signal/` in your bucket, or with the meeting (the delete control erases a meeting's tapes).
+
+**What you see when it goes wrong.** admin-api and meeting-api refuse to start when
+`VEXA_CAPTURE_SIGNAL_DEFAULT` holds anything but a boolean (`true`/`1`/`yes`/`on`,
+`false`/`0`/`no`/`off`), naming the variable in the log. The chart never renders such a value.
+
+### How it works
+
+1. The chart renders `diagnostics.captureSignal` into `VEXA_CAPTURE_SIGNAL_DEFAULT` on admin-api and
+   on meeting-api (`vexa.captureSignalDefault` in `_helpers.tpl`, which refuses any other value).
+2. When meeting-api spawns a bot (`POST /bots`, or the calendar auto-join sweep), it asks identity
+   for the owner's spawn context: `GET /internal/users/{id}/bot-context` on admin-api.
+3. admin-api answers `capture_signal` as a real boolean, always: the account's
+   `diagnostics.capture_signal`, else the platform setting `diagnostics.capture_signal`, else
+   `VEXA_CAPTURE_SIGNAL_DEFAULT` (`_resolve_capture_signal`).
+4. meeting-api takes that boolean as final. If it got no boolean (identity unreachable, or an older
+   admin-api), it falls back to its own `VEXA_CAPTURE_SIGNAL_DEFAULT`, so on this chart a blip
+   cannot switch taping on (`_capture_signal_from_context`).
+5. The decision travels to the bot as `captureSignalEnabled` in its invocation. With `false`, the bot
+   records no tape and uploads nothing under `signal/`.
+
+Ownership: the account and platform settings are written only by admin-api (identity); the decision
+for one spawn is made once, by meeting-api, from that answer; the tape object is written only through
+meeting-api's upload route. Configuration lives in the chart value above and in the two services'
+`config.v1.json` declarations (`VEXA_CAPTURE_SIGNAL_DEFAULT`, class `defaulted`, target `helm`).
+Compose and Lite do not set the key, so their default stays on.
+
+### Why it complies
+
+| Rule | How | Gate |
+|---|---|---|
+| P14: config is a validated contract, delivered by env, validated at boot | One env key on each service, declared in `config.v1.json`; an unrecognized value refuses the boot; the chart refuses it at render | `gate:config-contract`, `gate:helm` |
+| P15: user data is protected by default | Raw meeting audio is not copied to storage on Kubernetes unless an operator decides so | `gate:helm` (`diagnostics.captureSignal` assertions) |
+| P18: fail loud | A typo stops the render or the boot, naming the value, rather than choosing a side | ungated: reviewed; covered by tests |
+| P23: one writer per carrier | The settings stay identity's; meeting-api reads them through the existing bot-context door and adds no copy | `gate:dataflow` |
+| P2: couple only through contracts | meeting-api reads admin-api's answer over the internal edge; no import crosses services | `gate:isolation-py` |
+
+**Security.** Only an operator can change the deployment value (chart values) and only an
+administrator can change the platform or per-account setting (internal-secret route, admin user
+record); no user route writes either. Deny tests:
+`test_an_unreachable_identity_does_not_turn_tapes_on_where_the_deployment_said_off`,
+`test_no_boolean_answer_falls_to_the_deployment_default_off` and
+`test_a_typo_in_the_switch_refuses_the_boot` (meeting-api, `tests/test_capture_signal_default.py`);
+`test_the_deployment_default_off_means_nothing_is_taped_when_nothing_is_configured` and
+`test_a_typo_in_the_switch_is_refused` (admin-api, `tests/test_capture_signal_default.py`);
+`test_bot_context_answers_off_on_a_deployment_whose_default_is_off` (admin-api,
+`tests/test_capture_signal.py`, against Postgres); and the `diagnostics.captureSignal` block in
+`deploy/helm/tests/test_template.sh`.
 
 ## The runtime on Kubernetes
 
@@ -539,6 +619,13 @@ The terminal uses a provider's email only when the provider verified it: Google 
 `email_verified`, and a Microsoft sign-in must come from the pinned tenant, or — with `common` — carry
 the `xms_edov` claim (Entra admin center → App registrations → your app → Token configuration → Add
 optional claim → ID → `xms_edov`). Anything else is refused with a sentence on the sign-in card.
+
+### Sign-in through your own identity provider (ADFS, Keycloak)
+
+The chart has first-class values for a generic OpenID Connect provider — `terminal.oidc` (issuer,
+client id, the client secret from an existing Secret, an optional CA bundle) and
+`terminal.signinMethods` to offer only that door. The full guide, with the checklist for your
+identity-provider team, is [Sign-in with your own identity provider](/sign-in-oidc).
 
 ### Who may sign in
 

@@ -114,7 +114,7 @@ differently-named entries are self-serve keys the user minted and are never prun
 
 ## Who may sign in to the terminal
 
-The terminal's sign-in doors — the emailed link, Google and Microsoft — each end by creating an
+The terminal's sign-in doors — the emailed link, Google, Microsoft and your own OIDC provider — each end by creating an
 account and minting a `terminal-login` key for it, so they are gated on **who** the address is, not
 only on proof that the person holds it. A sign-in is admitted only for:
 
@@ -166,6 +166,15 @@ warning at boot whenever sign-in is open.
   through the same provider with a different subject is refused, even for the same address.
 - After sign-in the browser returns only to a path on this instance or a URL on its exact origin.
 
+### Your own identity provider (OIDC)
+
+- ADFS, Keycloak or any OpenID Connect provider, configured by issuer URL, client id and secret.
+  Setup, the checklist for your IdP team, and the failure modes: [Sign-in with your own identity
+  provider](/sign-in-oidc).
+- The address comes from the verified ID token of the configured issuer; the account is bound to
+  that identity like the Google and Microsoft ones.
+- `VEXA_SIGNIN_METHODS` chooses which doors the card offers (for example only `oidc`).
+
 ### What a person sees
 
 | Situation | What the terminal shows |
@@ -173,7 +182,7 @@ warning at boot whenever sign-in is open.
 | Address not admitted | The email form still answers "check your email"; nothing is mailed. The redeem page and the OAuth return show one sentence that names no list. |
 | The link was already used, expired, or altered | The redeem page says which (`410` or `400`) and offers a new link. |
 | admin-api cannot be reached | New sign-ins are refused (`503`); existing sessions keep working. If the link's single-use record cannot be checked, the link is not spent and works again later; if the account step fails after that check, the page says the link was used and asks for a new one. |
-| Another Google or Microsoft identity for an account already bound to one | Refused with the same sentence. |
+| Another Google, Microsoft or OIDC identity for an account already bound to one | Refused with the same sentence. |
 | No public URL configured (`NEXTAUTH_URL` / `TERMINAL_URL`) | The email form answers `503` and nothing is mailed. |
 
 ## How it works
@@ -202,8 +211,8 @@ record, the redeemed-link records and the provider bindings (`users.data.provide
 terminal stores nothing but the two cookies.
 
 **Configuration.** admin-api (`admin_api/config.v1.json`): `VEXA_SIGNIN_ALLOW`, `VEXA_ADMIN_EMAILS`,
-`REDIS_URL`, `INTERNAL_API_SECRET`. Terminal: `TERMINAL_TRUSTED_PROXIES` and `VEXA_MAIL_SMTP_*` are
-declared in `clients/terminal/config.v1.json`; `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `MAGIC_LINK_SECRET`,
+`REDIS_URL`, `INTERNAL_API_SECRET`. Terminal: `TERMINAL_TRUSTED_PROXIES`, `VEXA_MAIL_SMTP_*`, the
+OIDC provider's `VEXA_OIDC_*` and `VEXA_SIGNIN_METHODS` are declared in `clients/terminal/config.v1.json`; `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `MAGIC_LINK_SECRET`,
 `MAGIC_LINK_TTL_SECONDS`, `MAGIC_LINK_RATE_*` and the `GOOGLE_CLIENT_*` / `MICROSOFT_*` provider keys
 are read from the terminal's environment. See [Configuration](/configuration).
 
@@ -216,7 +225,7 @@ are read from the terminal's environment. See [Configuration](/configuration).
 | P2, P4 — couple through sealed contracts | The terminal and admin-api meet only through `signin.v1` (admission, the claim, link redemption, provider binding); its reason vocabularies are generated into both sides. | `gate:schema`, `gate:contract-version` |
 | P6 — one front door | The terminal calls admin-api's internal routes through one client (`adminApi.ts`). | `gate:domain-doors` |
 | P23 — one writer per carrier | admin-api alone writes users, tokens, the allow-list, the redeemed-link records and the bindings; the terminal holds no list and no ledger. | `gate:dataflow`, `gate:calm` |
-| P14 — config is a validated contract | admin-api's keys and the terminal's mail and proxy keys are declared in `config.v1.json`; the terminal's NextAuth and link keys are not yet. | `gate:config-contract` (declared keys) |
+| P14 — config is a validated contract | admin-api's keys and the terminal's mail, proxy, OIDC and sign-in-method keys are declared in `config.v1.json`; the terminal's NextAuth and link keys are not yet. | `gate:config-contract` (declared keys) |
 | P18 — fail loud | An unreachable admin-api, a store that cannot be written or a missing public URL refuses with `503`; nothing signs in silently. | ungated: reviewed |
 | P20 — default-deny | Admission, link redemption and binding all refuse unless admin-api answers yes. | ungated: reviewed; deny tests below |
 

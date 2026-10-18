@@ -143,6 +143,129 @@ manage, they read it from there by name instead (an explicit env entry wins over
 {{- end -}}
 {{- end -}}
 
+{{/*
+THE BOT MAILBOX (flows.mail) — invite-by-email against any IMAP server, Gmail being only the preset.
+Nil-safe throughout: `helm upgrade --reuse-values` renders with the PREVIOUS chart's values, which
+have no imap/smtp/ca blocks at all.
+
+vexa.flowsMailboxEnabled — "true" when the flows-mailbox Deployment renders. An explicit bool in
+flows.mail.enabled wins; unset, it is on exactly when an address is set (what an install that set
+one already ran).
+*/}}
+{{- define "vexa.flowsMailboxEnabled" -}}
+{{- $m := .Values.flows.mail | default dict -}}
+{{- if kindIs "bool" $m.enabled -}}
+{{- if $m.enabled -}}true{{- end -}}
+{{- else if $m.address -}}true{{- end -}}
+{{- end -}}
+
+{{/* The Secret carrying the mailbox passwords, when the operator manages it; refuses both. */}}
+{{- define "vexa.flowsMailExistingSecret" -}}
+{{- $m := .Values.flows.mail | default dict -}}
+{{- if and $m.existingSecret $m.appPassword -}}
+{{- fail "flows.mail.appPassword and flows.mail.existingSecret are both set — keep one: the password in values, or the Secret that carries VEXA_MAIL_APP_PASSWORD" -}}
+{{- end -}}
+{{- $m.existingSecret | default "" -}}
+{{- end -}}
+
+{{/* Where the CA bundle is mounted in every flows container, when one is named. */}}
+{{- define "vexa.flowsMailCaPath" -}}/etc/vexa/mail-ca/ca.pem{{- end -}}
+
+{{- define "vexa.flowsMailCa" -}}
+{{- $ca := (.Values.flows.mail | default dict).ca | default dict -}}
+{{- if and $ca.configMapName $ca.secretName -}}
+{{- fail "flows.mail.ca: set configMapName or secretName, not both" -}}
+{{- end -}}
+configMap: {{ $ca.configMapName | default "" | quote }}
+secret: {{ $ca.secretName | default "" | quote }}
+key: {{ $ca.key | default "ca.crt" | quote }}
+{{- end -}}
+
+{{/*
+vexa.flowsMailEnv — the mail settings every flows container reads (the worker SENDS, the mailbox
+READS, flows-api reports the capability). Rendered as explicit env entries, which win over the
+flows Secret's envFrom. SMTP falls back to terminal.mail when flows.mail.smtp.host is empty: the
+deployment has ONE relay and an operator configures it once.
+*/}}
+{{- define "vexa.flowsMailEnv" -}}
+{{- $m := .Values.flows.mail | default dict -}}
+{{- $imap := $m.imap | default dict -}}
+{{- $own := $m.smtp | default dict -}}
+{{- $term := (.Values.terminal | default dict).mail | default dict -}}
+{{- $smtp := $own -}}
+{{- if not $own.host -}}
+{{- $smtp = dict "host" $term.smtpHost "port" $term.smtpPort "user" $term.user "secure" $term.secure "tlsInsecure" $term.tlsInsecure "tls" $own.tls -}}
+{{- end -}}
+{{- $ca := include "vexa.flowsMailCa" . | fromYaml -}}
+{{- $existing := include "vexa.flowsMailExistingSecret" . -}}
+- name: VEXA_MAIL_IMAP_HOST
+  value: {{ $imap.host | default "" | toString | quote }}
+- name: VEXA_MAIL_IMAP_PORT
+  value: {{ $imap.port | default "" | toString | quote }}
+- name: VEXA_MAIL_IMAP_TLS
+  value: {{ $imap.tls | default "" | toString | quote }}
+- name: VEXA_MAIL_IMAP_USER
+  value: {{ $imap.user | default "" | toString | quote }}
+- name: VEXA_MAIL_IMAP_FOLDER
+  value: {{ $imap.folder | default "" | toString | quote }}
+- name: VEXA_MAIL_SMTP_HOST
+  value: {{ $smtp.host | default "" | toString | quote }}
+- name: VEXA_MAIL_SMTP_PORT
+  value: {{ $smtp.port | default "" | toString | quote }}
+- name: VEXA_MAIL_SMTP_TLS
+  value: {{ $smtp.tls | default "" | toString | quote }}
+- name: VEXA_MAIL_SMTP_USER
+  value: {{ $smtp.user | default "" | toString | quote }}
+- name: VEXA_MAIL_SMTP_SECURE
+  value: {{ $smtp.secure | default "" | toString | quote }}
+- name: VEXA_MAIL_SMTP_TLS_INSECURE
+  value: {{ $smtp.tlsInsecure | default "" | toString | quote }}
+- name: VEXA_MAIL_SMTP_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ $existing | default (include "vexa.adminTokenSecretName" .) | quote }}
+      key: VEXA_MAIL_SMTP_PASSWORD
+      optional: true
+{{- if $existing }}
+- name: VEXA_MAIL_APP_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ $existing | quote }}
+      key: VEXA_MAIL_APP_PASSWORD
+{{- end }}
+{{- if or $ca.configMap $ca.secret }}
+- name: VEXA_MAIL_IMAP_CA_FILE
+  value: {{ include "vexa.flowsMailCaPath" . | quote }}
+- name: VEXA_MAIL_SMTP_CA_FILE
+  value: {{ include "vexa.flowsMailCaPath" . | quote }}
+{{- end }}
+{{- end -}}
+
+{{/* The CA bundle's volume and mount (nothing when no bundle is named). */}}
+{{- define "vexa.flowsMailCaVolume" -}}
+{{- $ca := include "vexa.flowsMailCa" . | fromYaml -}}
+{{- if $ca.configMap }}
+- name: mail-ca
+  configMap:
+    name: {{ $ca.configMap | quote }}
+    items: [{key: {{ $ca.key | quote }}, path: ca.pem}]
+{{- else if $ca.secret }}
+- name: mail-ca
+  secret:
+    secretName: {{ $ca.secret | quote }}
+    items: [{key: {{ $ca.key | quote }}, path: ca.pem}]
+{{- end }}
+{{- end -}}
+
+{{- define "vexa.flowsMailCaMount" -}}
+{{- $ca := include "vexa.flowsMailCa" . | fromYaml -}}
+{{- if or $ca.configMap $ca.secret }}
+- name: mail-ca
+  mountPath: /etc/vexa/mail-ca
+  readOnly: true
+{{- end }}
+{{- end -}}
+
 {{- define "vexa.adminTokenSecretName" -}}
 {{- if .Values.secrets.existingSecretName -}}
 {{- .Values.secrets.existingSecretName -}}
@@ -190,12 +313,17 @@ vexaai/vexa-bot:v012
 {{- end -}}
 {{- end -}}
 
-{{/* The agent-worker image ref (AGENT_WORKER_IMAGE; the dedicated worker build — core/agent/worker/Dockerfile — NOT the agent-api image). */}}
+{{/* The agent-worker image ref (AGENT_WORKER_IMAGE; the dedicated worker build — core/agent/worker/Dockerfile — NOT the agent-api image).
+global.imageTag replaces the TAG only: the repository is runtime.agentWorkerImage's, so an install that
+mirrors the images (Harbor, a GitLab registry) and pins one tag gets its workers from the mirror, like
+every other image. It used to be the literal `vexaai/v012-agent-worker:<tag>`, so a mirrored install
+spawned every chat worker from Docker Hub and, offline, none started. */}}
 {{- define "vexa.agentWorkerImage" -}}
+{{- $img := .Values.runtime.agentWorkerImage | default "vexaai/v012-agent-worker:v012" -}}
 {{- if .Values.global.imageTag -}}
-{{- printf "vexaai/v012-agent-worker:%s" .Values.global.imageTag -}}
+{{- printf "%s:%s" (regexReplaceAll "(@sha256:[a-f0-9]+|:[^:/]+)$" $img "") .Values.global.imageTag -}}
 {{- else -}}
-{{- .Values.runtime.agentWorkerImage | default "vexaai/v012-agent-worker:v012" -}}
+{{- $img -}}
 {{- end -}}
 {{- end -}}
 
@@ -476,4 +604,20 @@ securityContext:
 {{- else if hasPrefix "https://" (.Values.terminal.publicUrl | default "") -}}
 {{- printf "%s/api/auth/callback/google" (trimSuffix "/" .Values.terminal.publicUrl) -}}
 {{- end -}}
+{{- end -}}
+
+{{- /*
+vexa.captureSignalDefault — VEXA_CAPTURE_SIGNAL_DEFAULT for admin-api and meeting-api, from
+diagnostics.captureSignal: "true" or "false", nothing else. Default "false": a bot spawned by this
+chart tapes no captured signal (raw audio, captions, speaker events) unless the operator turns it
+on. A value that is neither stops the render rather than reaching a service that would refuse to
+boot on it.
+*/ -}}
+{{- define "vexa.captureSignalDefault" -}}
+{{- $raw := (.Values.diagnostics | default dict).captureSignal -}}
+{{- $v := ternary "false" (toString $raw | lower) (kindIs "invalid" $raw) -}}
+{{- if not (has $v (list "true" "false")) -}}
+{{- fail (printf "diagnostics.captureSignal must be \"true\" or \"false\" (got %q)" (toString $raw)) -}}
+{{- end -}}
+{{- $v -}}
 {{- end -}}

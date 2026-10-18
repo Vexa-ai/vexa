@@ -78,6 +78,12 @@ spec:
             # Mirrors compose (docker-compose.yml ADMIN_API_URL=http://admin-api:8001).
             - name: ADMIN_API_URL
               value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+            # calendar.internalFeedAllow: internal hosts/networks calendar feeds may be fetched from.
+            - name: VEXA_CALENDAR_FEED_ALLOW
+              value: {{ (.Values.calendar | default dict).internalFeedAllow | default "" | quote }}
+            # calendar.autoJoinBlock: domains/addresses auto-join never joins, for every account.
+            - name: VEXA_AUTO_JOIN_BLOCK
+              value: {{ (.Values.calendar | default dict).autoJoinBlock | default "" | quote }}
             - name: INTERNAL_API_SECRET
               valueFrom:
                 secretKeyRef:
@@ -104,6 +110,10 @@ spec:
               value: {{ .Values.meetingApi.defaultBotName | default "" | quote }}
             - name: TRANSCRIPTION_SERVICE_URL
               value: {{ .Values.meetingApi.transcriptionServiceUrl | default "" | quote }}
+            - name: DEFAULT_TRANSCRIPTION_LANGUAGE
+              value: {{ .Values.meetingApi.transcriptionLanguage | default "" | quote }}
+            - name: DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES
+              value: {{ join "," (.Values.meetingApi.transcriptionAllowedLanguages | default list) | quote }}
             - name: TRANSCRIPTION_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -129,6 +139,9 @@ spec:
               value: {{ .Values.meetingApi.systemWebhookAllowPrivateHttp | default "false" | quote }}
             - name: VEXA_SYSTEM_WEBHOOK_TIMEOUT_S
               value: {{ .Values.meetingApi.systemWebhookTimeoutSeconds | default "10" | quote }}
+            # diagnostics.captureSignal (default "false"): no captured-signal tape unless turned on.
+            - name: VEXA_CAPTURE_SIGNAL_DEFAULT
+              value: {{ include "vexa.captureSignalDefault" . | quote }}
             # Object storage: storage.s3, the operator's own bucket (vexa.storage.validate refuses to
             # render without it). meeting-api's own names for it: S3_ENDPOINT/S3_*_KEY are the
             # explicit S3 settings; MINIO_BUCKET is the bucket it reads first, and MINIO_ACCESS_KEY/

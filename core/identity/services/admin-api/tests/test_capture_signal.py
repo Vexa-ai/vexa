@@ -112,3 +112,21 @@ def test_bot_context_carries_capture_signal_and_honors_the_kill_switch(client):
     assert client.get("/internal/settings/diagnostics", headers=_internal()).json()["value"] == {}
     assert client.get(f"/internal/users/{uid}/bot-context",
                       headers=_internal()).json()["capture_signal"] is True
+
+
+@requires_docker
+def test_bot_context_answers_off_on_a_deployment_whose_default_is_off(client, monkeypatch):
+    # The Helm chart's shape: VEXA_CAPTURE_SIGNAL_DEFAULT=false. Nothing configured → the edge says
+    # false, and meeting-api spawns the bot without a tape. An operator's explicit platform ON still
+    # reaches the response, and clearing it returns to the deployment's OFF, not to ON.
+    monkeypatch.setenv("VEXA_CAPTURE_SIGNAL_DEFAULT", "false")
+    uid = client.post("/admin/users", headers=_admin(),
+                      json={"email": "capture-off@vexa.ai"}).json()["id"]
+    assert client.get(f"/internal/users/{uid}/bot-context",
+                      headers=_internal()).json()["capture_signal"] is False
+    client.put("/internal/settings/diagnostics", headers=_internal(), json={"capture_signal": "true"})
+    assert client.get(f"/internal/users/{uid}/bot-context",
+                      headers=_internal()).json()["capture_signal"] is True
+    client.put("/internal/settings/diagnostics", headers=_internal(), json={"capture_signal": ""})
+    assert client.get(f"/internal/users/{uid}/bot-context",
+                      headers=_internal()).json()["capture_signal"] is False

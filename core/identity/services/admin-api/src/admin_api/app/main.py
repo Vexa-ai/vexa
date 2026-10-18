@@ -47,6 +47,7 @@ from . import platform_settings as platform_settings_mod
 from . import provider_subjects as provider_subjects_mod
 from . import signin_links as signin_links_mod
 from . import validate as validate_mod
+from . import transcription_language as transcription_language_mod
 from .platform_settings import (MODELS_FIELDS, TRANSCRIPTION_FIELDS, apply_config_update,
                                 read_platform_setting, validate_config_fields)
 from .internal_tier import check_internal, check_internal_no_dev_bypass
@@ -247,6 +248,9 @@ class CalendarUpdate(BaseModel):
     ics_url: Optional[str] = None
     auto_join: Optional[bool] = None
     bot_name: Optional[str] = None
+    # Domains / addresses auto-join must never join (organiser, invitee or meeting-link host).
+    # ``[]`` clears; absent leaves it as it is.
+    auto_join_block: Optional[List[str]] = None
 
 
 class CalendarCreate(BaseModel):
@@ -342,6 +346,11 @@ class ModelPrefsUpdate(BaseModel):
 class TranscriptionPrefsUpdate(BaseModel):
     url: Optional[str] = None
     token: Optional[str] = None
+    # The person's default transcription language (transcription-language.v1 UserPreferenceUpdate):
+    # a code, or "" to clear; a list of codes, or [] to clear. Typed loosely on purpose — the
+    # contract's rulebook (`transcription_language.apply`) refuses with a message naming the fix.
+    language: Optional[Any] = None
+    allowed_languages: Optional[Any] = None
 
 
 def _masked_feed(connection: dict, *, prefix: str = "") -> dict:
@@ -416,19 +425,42 @@ def _as_flag(value) -> Optional[bool]:
     return None
 
 
-def _resolve_capture_signal(user_data: dict, platform_diagnostics: dict) -> bool:
-    """Whether this user's bots tee the captured-signal tape: user > platform_settings > DEFAULT ON.
+#: The deployment's default for the captured-signal tape, the last tier below. meeting-api reads
+#: the same key for the case where it gets no answer from here. The Helm chart sets it to false.
+CAPTURE_SIGNAL_DEFAULT_ENV = "VEXA_CAPTURE_SIGNAL_DEFAULT"
 
-    DEFAULT ON is the product decision, not an accident of config: prod meetings are the fixture
-    source, so absence of any flag means capture. The flag exists to STOP collection fleet-wide with
-    no redeploy (``PUT /internal/settings/diagnostics {"capture_signal": "false"}``), and per-user
-    (``users.data["diagnostics"]["capture_signal"]``) for an account that must not be taped.
+
+def capture_signal_default(raw: Optional[str] = None) -> bool:
+    """``VEXA_CAPTURE_SIGNAL_DEFAULT`` as a boolean: unset or empty is ``True`` (compose and Lite,
+    unchanged); a recognized value is honoured; anything else raises ``ValueError``, which the boot
+    turns into a refusal (``__main__``). ``raw`` is the test seam."""
+    value = os.getenv(CAPTURE_SIGNAL_DEFAULT_ENV) if raw is None else raw
+    if value is None or not value.strip():
+        return True
+    flag = _as_flag(value)
+    if flag is None:
+        raise ValueError(f"{CAPTURE_SIGNAL_DEFAULT_ENV}={value!r} is not a recognized boolean "
+                         f"({'/'.join(_FLAG_TRUE)} / {'/'.join(_FLAG_FALSE)})")
+    return flag
+
+
+def _resolve_capture_signal(user_data: dict, platform_diagnostics: dict,
+                            deployment_default: Optional[bool] = None) -> bool:
+    """Whether this user's bots tee the captured-signal tape: user > platform_settings > the
+    deployment default (``VEXA_CAPTURE_SIGNAL_DEFAULT``; unset = ON).
+
+    ON where nothing is configured is the product decision for compose and Lite: prod meetings are
+    the fixture source. The Helm chart ships the deployment default OFF, so an enterprise install
+    tapes nothing unless an operator turns it on. The flags exist to change collection fleet-wide
+    with no redeploy (``PUT /internal/settings/diagnostics {"capture_signal": "false"}``), and
+    per-user (``users.data["diagnostics"]["capture_signal"]``) for one account.
+    ``deployment_default`` is the test seam; ``None`` reads the environment.
     """
     for source in (user_data.get("diagnostics") or {}, platform_diagnostics or {}):
         flag = _as_flag(source.get("capture_signal") if isinstance(source, dict) else None)
         if flag is not None:
             return flag
-    return True
+    return capture_signal_default() if deployment_default is None else deployment_default
 
 
 # ── the admin claim, at module level so the boot hook can issue a code before any request ─────────
@@ -823,7 +855,7 @@ def create_app() -> FastAPI:
     # --- user tier: calendar-sync self-serve (writes to user.data JSONB, like webhook) ---
     from .calendars import (MAX_CALENDAR_CONNECTIONS, connections_from_data,
                             masked_connection, new_connection, store_connections,
-                            validate_bot_name, validate_ics_url)
+                            validate_auto_join_block, validate_bot_name, validate_ics_url)
 
     async def _save_calendar_connections(user: User, db: AsyncSession,
                                          connections: list[dict]) -> None:
@@ -942,6 +974,16 @@ def create_app() -> FastAPI:
                     current["deleted"] = True
         if calendar_update.auto_join is not None and current is not None:
             current["auto_join"] = bool(calendar_update.auto_join)
+        if "auto_join_block" in calendar_update.model_fields_set:
+            data = dict(user.data or {})
+            block = validate_auto_join_block(calendar_update.auto_join_block or [])
+            if block:
+                data["auto_join_block"] = block
+            else:
+                data.pop("auto_join_block", None)
+            from sqlalchemy.orm import attributes
+            user.data = data
+            attributes.flag_modified(user, "data")
         await _save_calendar_connections(user, db, connections)
         return await get_user_calendar(user)  # the masked read-back shape
 
@@ -957,15 +999,18 @@ def create_app() -> FastAPI:
             "ics_url_masked": masked["ics_url_masked"] if masked else None,
             "auto_join": masked["auto_join"] if masked else True,
             "bot_name": data.get("calendar_bot_name") or "Vexa",
+            "auto_join_block": list(data.get("auto_join_block") or []),
         }
 
     # --- user tier: model + transcription self-serve prefs (users.data JSONB, like webhook) ---
     async def _put_user_prefs(update_fields: dict, data_key: str, user: User,
-                              db: AsyncSession) -> dict:
+                              db: AsyncSession, *, language_fields: Optional[dict] = None) -> dict:
         from sqlalchemy.orm import attributes
         cleaned = validate_config_fields(update_fields)
         data = dict(user.data or {})
         data[data_key] = apply_config_update(data.get(data_key) or {}, cleaned)
+        if language_fields:
+            data[data_key] = transcription_language_mod.apply(data[data_key], language_fields)
         if not data[data_key]:
             data.pop(data_key, None)  # fully cleared → back to platform/env defaults
         user.data = data
@@ -1023,7 +1068,17 @@ def create_app() -> FastAPI:
                 validate_url(url, what="url", resolve=False)
             except SSRFError as exc:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
-        await _put_user_prefs(update.model_dump(exclude_unset=True), "transcription_prefs", user, db)
+        fields = update.model_dump(exclude_unset=True)
+        language_fields = {k: fields.pop(k) for k in ("language", "allowed_languages") if k in fields}
+        if language_fields:
+            # Checked against the WHOLE stored default before anything is written, so a change to
+            # one half that breaks the rule with the other half is refused, not half-applied.
+            stored = (user.data if isinstance(user.data, dict) else {}).get("transcription_prefs") or {}
+            try:
+                transcription_language_mod.apply(stored, language_fields)
+            except transcription_language_mod.Refused as refused:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(refused))
+        await _put_user_prefs(fields, "transcription_prefs", user, db, language_fields=language_fields)
         return await get_user_transcription(user)
 
     @app.get("/user/transcription")
@@ -1034,6 +1089,7 @@ def create_app() -> FastAPI:
             "url": prefs.get("url"),
             "token_set": bool(prefs.get("token")),
             "token": _mask_secret(prefs.get("token")),
+            **transcription_language_mod.read(prefs),
         }
 
     app.include_router(validate_mod.router)  # POST /internal/validate — the gateway's authz oracle
@@ -1469,6 +1525,9 @@ def create_app() -> FastAPI:
         resp: dict = {
             "max_concurrent": user.max_concurrent_bots,
             "bot_name": data.get("calendar_bot_name") or "Vexa",
+            # The owner's auto-join block list, enforced by meeting-api's sweep. Always stated, so
+            # the sweep never has to tell "no list" from "an older identity".
+            "auto_join_block": list(data.get("auto_join_block") or []),
         }
         # Fixture collection (O-TEL-1): whether this spawn tapes its raw captured-signal stream.
         # ALWAYS present in the response — a missing key downstream is indistinguishable from an
@@ -1503,6 +1562,11 @@ def create_app() -> FastAPI:
                 platform_transcription,
                 TRANSCRIPTION_FIELDS,
             )
+        # The person's default transcription language (transcription-language.v1 user tier), only
+        # when they set one; meetings decides its precedence against the request and the deployment.
+        language = transcription_language_mod.for_bot_context(user_transcription)
+        if language:
+            resp["transcription_language"] = language
         if transcription:
             # Ownership follows the URL that will actually serve this spawn. This non-secret
             # discriminator crosses only the internal bot-context edge; the URL/token remain

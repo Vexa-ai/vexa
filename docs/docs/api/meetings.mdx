@@ -245,13 +245,17 @@ request/response schemas, compatibility endpoints, error statuses, and metadata 
 <ParamField body="platform" type="string" required>`google_meet` · `zoom` · `teams`</ParamField>
 <ParamField body="native_meeting_id" type="string" required>The meeting id from the join URL (e.g. `abc-defg-hij`).</ParamField>
 <ParamField body="bot_name" type="string">Display name the bot uses in the call. Defaults to `Vexa`.</ParamField>
-<ParamField body="language" type="string">ISO code (e.g. `en`). **Omitted** = auto mode: each STT
-window's language is detected independently and stamped on its segments' `language` field. **Set** =
-forced mode: every STT call is pinned to this code and every segment carries it. Granularity is the
-transcription window (a few seconds of one speaker's audio), not word-level; in auto mode a
-low-confidence detection on the Zoom/Teams (mixed-audio) lane discards the window rather than
-guessing. Undetermined windows yield `language: null`. (0.10's `allowed_languages` is not part of
-the 0.12 API.)</ParamField>
+<ParamField body="language" type="string">Language code (e.g. `de`). **Set** = every STT call is pinned
+to this code and every segment carries it. `"auto"` = each window's language is detected independently,
+overriding the person's and the deployment's default. **Omitted** = the person's default (Settings), then
+the deployment's, then auto. With `allowed_languages`, it must be one of them and is the fallback.
+Granularity is the transcription window (a few seconds of one speaker's audio), not word-level; in auto
+mode a low-confidence detection on the mixed-audio lane discards the window rather than guessing.
+Undetermined windows yield `language: null`. See [Transcription language](/how-to/transcription-language).</ParamField>
+<ParamField body="allowed_languages" type="string[]">Codes detection is restricted to (e.g. `["de","en"]`,
+at most 16): a window detected outside the list is transcribed again in `language`, or in the first
+entry. The meeting stores the setting it runs with as `data.transcription_language`
+(`{language, allowed_languages, source}`). A refused value is `422`.</ParamField>
 <ParamField body="task" type="string">`transcribe` (default) or `translate`.</ParamField>
 <ParamField body="transcribe_enabled" type="boolean">Whether this spawn should request transcription. **Resolution:** an explicit value wins; else the deployment env `TRANSCRIBE_ENABLED`; else `true`. Non-boolean values (other than the common string forms `true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off`) are refused with `422` (`transcribe_enabled must be a boolean`). When the resolved value is `true` and no STT backend is configured, `POST /bots` answers **503** with a detail naming the unset keys, e.g. `no transcription backend configured — set it in Settings or environment variables TRANSCRIPTION_SERVICE_URL + TRANSCRIPTION_SERVICE_TOKEN`. "Settings" there means [`PUT /user/transcription`](/api/settings#transcription-backend). Set `false` for **capture-only** (bot may still join; no STT client is constructed).</ParamField>
 <ParamField body="recording_enabled" type="boolean">Whether this spawn should persist an **audio** recording (see [Recordings](/how-to/recordings) — there is no video recording path). Same resolution pattern as `transcribe_enabled` against env `RECORDING_ENABLED` (default `true` at the env resolver; the service default when callers omit it follows the request/env chain). Capture-only (`transcribe_enabled=false`) is **not** the same as recorded — recording is gated separately.</ParamField>
@@ -342,11 +346,17 @@ Both forms return the meeting record alongside its `segments` — `id`, `platfor
 
 ## Manage the bot
 
-```bash Update config — PUT /bots/{platform}/{native_meeting_id}/config
+```bash Change the language — PUT /bots/{platform}/{native_meeting_id}/config
 curl -X PUT "$API_BASE/bots/google_meet/abc-defg-hij/config" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"language":"es","task":"translate"}'
+  -d '{"language":"de"}'
 ```
+
+The body (`language`, `allowed_languages`) replaces the running setting: an omitted field is cleared, so
+both `null` is auto. `202` with `{meeting_id, platform, native_meeting_id, transcription_language}` once
+the bot received it; `409` when the bot is not listening yet (nothing changed); `403` unless you own the
+meeting or are an owner or contributor of its workspace. Details:
+[Transcription language](/how-to/transcription-language#change-it-during-the-meeting).
 
 ```bash Stop / leave — DELETE /bots/{platform}/{native_meeting_id}
 curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij" -H "X-API-Key: $API_KEY"
@@ -365,9 +375,8 @@ curl -X POST "$API_BASE/bots/google_meet/abc-defg-hij/speak" \
 ```
 
 <Note>
-**Config** (`PUT …/config`, change language/task mid-call) and **speak** (`POST …/speak`, TTS into the
-call) ride the live bot-control plane and are not yet wired in the v0.12 open-core stack — they currently
-return `404`. Send-a-bot, stop, **running bots** (`GET /bots/status`), list, and transcripts are live.
+**Speak** (`POST …/speak`, TTS into the call) rides the live bot-control plane and is not yet wired in
+the open-core stack — it returns `404`. Everything else above is live.
 </Note>
 
 ```bash List meetings — GET /meetings

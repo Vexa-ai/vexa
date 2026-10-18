@@ -150,6 +150,12 @@ secrets:
   anthropicAuthToken: ""
   anthropicBaseUrl: ""
   claudeCodeOauthToken: ""
+  # The openai-agent harness's bearer token for models.llmBaseUrl (VEXA_LLM_API_KEY) — a LiteLLM
+  # virtual key, say. It is also what tells agent-api a model credential is configured: with no key
+  # here and none of the ANTHROPIC_* / OAuth ones, every chat turn is refused before it starts, so an
+  # endpoint that needs no key still takes a placeholder value. With existingSecretName, carry
+  # VEXA_LLM_API_KEY.
+  llmApiKey: ""
 
 # ---------- Shared backing config ----------
 database:
@@ -201,6 +207,27 @@ storage:
       secretName: ""
       key: ca.crt
 
+# Captured-signal tapes: a bot can tee its raw captured stream (audio, captions, speaker events) to
+# your bucket under signal/, for replaying a meeting when debugging transcription. OFF by default on
+# Kubernetes: nothing is taped unless you set captureSignal "true" here, or switch it on fleet-wide
+# (PUT /internal/settings/diagnostics) or for one account. It sets VEXA_CAPTURE_SIGNAL_DEFAULT on
+# admin-api and meeting-api; an explicit platform or per-user setting still wins over it.
+diagnostics:
+  captureSignal: "false"
+
+# Calendars (docs: /calendar-integration#enterprise-settings). Both are operator settings; no user
+# can change or widen them.
+calendar:
+  # Internal hosts and networks a calendar (ICS) feed may be served from — a feed inside your
+  # corporate network. Exact host names and CIDRs, comma-separated: "cal.corp.example, 10.20.0.0/16".
+  # Loopback, link-local/cloud metadata and other reserved ranges are never allowed (the services
+  # refuse to start on such an entry). Applies to calendar feeds only, never to webhooks.
+  internalFeedAllow: ""
+  # Domains and addresses the calendar auto-join must never join, for every account: a meeting whose
+  # organiser, an invitee or the meeting link's host matches is skipped and marked on the meeting.
+  # "gated.example, ceo@partner.example". Each person can add their own (PUT /user/calendar).
+  autoJoinBlock: ""
+
 # Model ids brokered into agents/bots (empty ⇒ provider default). Mirrors compose ANTHROPIC_*/VEXA_*.
 models:
   anthropicModel: ""
@@ -208,6 +235,17 @@ models:
   anthropicSonnetModel: ""
   anthropicHaikuModel: ""
   agentModel: ""        # VEXA_AGENT_MODEL
+  # THE AGENT HARNESS AND ITS OWN ENDPOINT (docs/docs/deployment/helm-agent-tools.mdx). Empty keeps
+  # the default harness, claude-code, which speaks the Anthropic dialect through ANTHROPIC_* below.
+  # A self-hosted or proxied model that speaks the OpenAI dialect (vLLM, LiteLLM in front of GLM,
+  # Qwen, Llama…) takes runner "openai-agent" and llmBaseUrl; its key, if it needs one, goes in
+  # secrets.llmApiKey. The model MUST do tool calling (function calling): every turn — sending the
+  # bot, reading a transcript, writing a page — is a tool call, and a model served without it ends
+  # each turn with the typed fault `model-provider / no_tool_calling`.
+  runner: ""            # VEXA_RUNNER: "" (claude-code) | openai-agent | codex
+  llmBaseUrl: ""        # VEXA_LLM_BASE_URL, e.g. http://litellm.ai.svc:4000/v1 — the /v1 base
+  llmExtraBody: ""      # VEXA_LLM_EXTRA_BODY: a JSON object merged into every request, e.g.
+                        # '{"chat_template_kwargs":{"enable_thinking":false}}' for a Qwen
 
 # ============ Components ============
 
@@ -380,6 +418,13 @@ meetingApi:
   defaultBotName: "Vexa"    # the bot's display name; the terminal omits bot_name so this is what
                             # participants see. Blank it to get the service's VexaBot-{random}.
   transcriptionServiceUrl: ""   # STT endpoint the spawned bot transcribes against (empty ⇒ capture only)
+  # The deployment's default transcription language (docs: /how-to/transcription-language). Used by
+  # every bot whose request and person set none. transcriptionLanguage: one code ("de"), or "" for
+  # none. transcriptionAllowedLanguages: the codes detection is restricted to (["de", "en"]); when
+  # both are set the language must be in the list and is the fallback for a window detected outside
+  # it. A value meeting-api refuses stops its boot, naming the fix.
+  transcriptionLanguage: ""
+  transcriptionAllowedLanguages: []
   # Optional service-authority.v1 adapter JSON. Empty preserves stock OSS allow-all. A configured
   # authority must use failure_policy=closed and mode=enforce|observe; the secret lives under
   # secrets.serviceAuthoritySecret or the existing Secret key VEXA_SERVICE_AUTHORITY_SECRET.
@@ -573,6 +618,13 @@ agentApi:
   # budget with a Continue act instead. agent-api validates both at boot and stamps them into workers.
   autoContinueChat: "1"
   maxChatContinuations: "4"
+  # Self-hosted git hosts and the provider each runs, so a token typed for a clone, pull, push or
+  # publish is sent in the shape that host expects: comma-separated <host>=<provider>, provider one of
+  # github (the bare token), gitlab (oauth2:<token>) or basic:<username> (<username>:<token>).
+  # A gitlab host is also the one place besides github.com where publish may CREATE a repository.
+  # Unlisted hosts keep GitHub's form. A malformed value stops agent-api at boot.
+  # Example: "gitlab.example.com=gitlab,git.example.org=basic:svc-vexa"
+  gitProviders: ""
   extraEnv: []
 
 # ---------- Connections: the credential broker (credential-broker.v1, ADR-0040) ----------
@@ -654,6 +706,34 @@ terminal:
     user: ""
     secure: ""
     tlsInsecure: ""
+  # Sign-in through the organisation's own OpenID Connect provider (ADFS, Keycloak). Off unless
+  # `issuer` is set. Register this redirect URI at the provider: <publicUrl>/api/auth/callback/oidc
+  # (publicUrl must be set). The terminal pod needs HTTPS egress to the issuer. A half-filled block
+  # does not deploy a login without its door: the terminal refuses to start and names the missing key.
+  # Operator guide: docs/docs/sign-in-oidc.mdx.
+  oidc:
+    issuer: ""                # e.g. https://adfs.example.com/adfs or https://keycloak.example.com/realms/corp
+    clientId: ""
+    # The client secret is read from a Secret you create (never from values):
+    #   kubectl create secret generic vexa-oidc --from-literal=client-secret=...
+    existingSecret: ""
+    existingSecretKey: client-secret
+    scopes: ""                # empty = "openid email profile"; ADFS: "openid email profile allatclaims"
+    resource: ""              # ADFS: the Web API identifier (usually = clientId); others: leave empty
+    displayName: ""           # the button reads "Continue with <displayName>"; empty = "Single sign-on"
+    emailClaim: ""            # empty = "email" (ADFS without an email rule: "upn")
+    nameClaim: ""             # empty = "name"
+    requireEmailVerified: ""  # "1" = refuse unless the ID token says email_verified: true
+    # The CA chain the provider's TLS certificate is issued under, when it is an internal PKI. Name a
+    # ConfigMap OR a Secret holding the PEM bundle under `key`; it is added to the public roots.
+    caBundle:
+      configMap: ""
+      secret: ""
+      key: ca.crt
+  # Which sign-in doors to offer: a comma-separated subset of google, microsoft, oidc, email.
+  # Empty = every configured door. "oidc" alone hides the emailed link and any Google/Microsoft
+  # provider; a door left out is not registered at all (its routes refuse).
+  signinMethods: ""
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 1000m, memory: 1Gi }
@@ -839,9 +919,48 @@ flows:
   # Setting both apiKey and existingSecret is refused.
   apiKey: ""
   existingSecret: ""
+  # THE BOT MAILBOX — invite-by-email. Full operator page: docs/docs/flows/mailbox.mdx.
   mail:
-    address: ""
+    # Run the flows-mailbox Deployment (IMAP poll → invites). Unset (null) = on exactly when
+    # `address` is set, which is what an existing install already gets; true/false says so outright.
+    enabled: null
+    address: ""                       # the address the bot mailbox answers as (VEXA_MAIL_ADDR)
+    # The mailbox password (VEXA_MAIL_APP_PASSWORD): the IMAP login's password, and Gmail SMTP's.
+    # Prefer existingSecret so it never sits in values.
     appPassword: ""
+    # A Secret YOU manage carrying VEXA_MAIL_APP_PASSWORD and, optionally, VEXA_MAIL_SMTP_PASSWORD
+    # (the relay login's password). Set → the chart renders neither into its own Secret and every
+    # flows container reads them from this one by name. Setting it with appPassword is refused.
+    existingSecret: ""
+    # IMAP — where invites are read. Every empty value is the Gmail preset (imap.gmail.com, 993,
+    # implicit TLS, login = address, folder INBOX, system CA store). On-premises Exchange: host,
+    # tls "tls" (993) or "starttls" (143), user when the login is not the address
+    # (DOMAIN\user or the UPN), and ca for an internal CA. tls "none" = cleartext, lab only.
+    imap:
+      host: ""
+      port: ""
+      tls: ""                         # tls | starttls | none
+      user: ""
+      folder: ""
+    # SMTP — how the bot sends RSVPs, acknowledgements and minutes. Empty host = the deployment's
+    # relay in terminal.mail (one relay for every sender); both empty = Gmail with appPassword.
+    # tls: auto (implicit with secure "1", else STARTTLS whenever offered) | tls | starttls
+    # (required) | none. user + VEXA_MAIL_SMTP_PASSWORD (existingSecret, or secrets.mailSmtpPassword)
+    # = AUTH LOGIN, only ever over TLS.
+    smtp:
+      host: ""
+      port: ""
+      tls: ""
+      user: ""
+      secure: ""
+      tlsInsecure: ""                 # "1" skips the certificate check — development only
+    # An internal CA bundle (PEM) both wires trust INSTEAD of the system store. Name a ConfigMap or a
+    # Secret you manage (one, not both) and the key holding the bundle; it is mounted read-only into the flows
+    # pods and VEXA_MAIL_IMAP_CA_FILE / VEXA_MAIL_SMTP_CA_FILE point at it.
+    ca:
+      configMapName: ""
+      secretName: ""
+      key: ca.crt
     # WHO THE MAILBOX WILL ACT FOR. A sender who is neither a known user nor inside this list
     # gets no account, no agent turn and no model call — one quarantine row (R-B12).
     # EMPTY IS NOT "EVERYONE": it means the mailbox's own domain, exactly as an unset attendee

@@ -12,6 +12,7 @@ import { Icon } from "../ui-kit";
 import { GitHubTokenCard, TokensPanel } from "./tokens";
 import { ApiError, presentError } from "./apiClient";
 import { CalendarConnectionsPanel } from "./calendarConnections";
+import { TranscriptionLanguageSettings } from "./TranscriptionLanguagePicker";
 import { allowLines, getModelPrefs, setModelPrefs, getTranscriptionPrefs, setTranscriptionPrefs, getGlobalSetting, setGlobalSetting, getSigninAllow, setSigninAllow, testModels, testTranscription, type ConfigTestResult, type SigninAllow } from "./settingsApi";
 
 type SectionId = "calendar" | "models" | "tokens" | "github" | "signin" | "account";
@@ -186,6 +187,8 @@ function ModelsSection() {
       <ConfigForm fields={transcriptionFields} load={async () => asStrings(await getTranscriptionPrefs())}
         save={async (u) => asStrings(await setTranscriptionPrefs(u))} />
       <TestRow label="Test transcription backend" run={testTranscription} />
+      <div style={head}>Transcription language</div>
+      <TranscriptionLanguageSettings />
       {globalAdmin && <>
         <div style={{ ...head, marginTop: 22, color: "var(--accent)" }}>Global defaults (admin — every user without own settings)</div>
         <ConfigForm fields={modelFields} load={async () => (await getGlobalSetting("models")) ?? {}}

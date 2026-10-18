@@ -1262,12 +1262,13 @@ const CONFIG_ADOPTED = [
     // family here and its keys to the declaration. The sign-in mail family came first: it was a
     // second, unprefixed SMTP family next to flows' declared one, pinned only by a one-off test.
     // Connections (the broker's human role) came second; its keys target compose and Helm, because
-    // Lite carries no Connections.
+    // Lite carries no Connections. The generic OIDC sign-in door (`VEXA_OIDC_*`) and the operator's
+    // choice of doors (`VEXA_SIGNIN_METHODS`) came third, on compose and Helm.
     service: "terminal",
     decl: "clients/terminal/config.v1.json",
     preflight: null,
     scan: [], scanTs: ["clients/terminal/src", "clients/terminal/server.mjs"],
-    families: ["VEXA_MAIL_SMTP_", "VEXA_CONNECTIONS_"],
+    families: ["VEXA_MAIL_SMTP_", "VEXA_CONNECTIONS_", "VEXA_OIDC_", "VEXA_SIGNIN_METHODS"],
     compose: "terminal", helm: ["deployment-terminal.yaml"], lite: "terminal",
   },
 ];

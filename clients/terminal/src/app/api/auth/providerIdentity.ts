@@ -13,14 +13,25 @@
  *    refused. A tenant named by domain rather than id is single-tenant at the authority and is not
  *    compared again here.
  *
- *  The stable subject (`google:<sub>`, `microsoft:<tid>:<oid>`) is returned with the email, and the
+ *  - **Generic OIDC** (`oidc`, ADFS / Keycloak, `./oidcConfig.mjs`) — the claims come from the ID token
+ *    the token endpoint returned, which openid-client has already verified against the issuer's keys,
+ *    our client id and this sign-in's nonce. Its `iss` must also be the configured issuer, it must
+ *    carry a `sub`, and the address is read from the configured claim (`VEXA_OIDC_EMAIL_CLAIM`,
+ *    default `email`). The issuer is the operator's own directory, so its word on the address is
+ *    taken, as with a pinned Microsoft tenant; with `VEXA_OIDC_REQUIRE_EMAIL_VERIFIED=1` the token
+ *    must also say `email_verified: true`.
+ *
+ *  The stable subject (`google:<sub>`, `microsoft:<tid>:<oid>`, `oidc:<sha256(iss, sub)>`) is
+ *  returned with the email, and the
  *  account is BOUND to it (`findOrCreateUserToken` → admin-api `PUT /internal/users/{id}/provider-subject`):
  *  the first sign-in through a provider records the subject, and a later one with another subject is
  *  refused — so inside a pinned tenant, an administrator who writes somebody's address into another
  *  user's `email` does not reach that account.
  */
 
+import { createHash } from "node:crypto";
 import { isWellFormedEmail } from "./emailAddress";
+import { OIDC_PROVIDER_ID, oidcConfig } from "./oidcConfig.mjs";
 
 export type ProviderIdentity =
   | { ok: true; email: string; subject: string }
@@ -50,9 +61,46 @@ export function jwtClaims(token: unknown): Claims | null {
   }
 }
 
-function emailOf(claims: Claims): string | null {
-  const email = str(claims.email).toLowerCase();
+function emailOf(claims: Claims, claim = "email"): string | null {
+  const email = str(claims[claim]).toLowerCase();
   return isWellFormedEmail(email) ? email : null;
+}
+
+/** What to call the person, from an OIDC token's claims: the configured name claim, else
+ *  `given_name family_name`, else nothing (the caller falls back to the address). */
+export function oidcDisplayName(claims: Claims, nameClaim = "name"): string | null {
+  const named = str(claims[nameClaim]);
+  if (named) return named.slice(0, 200);
+  const joined = [str(claims.given_name), str(claims.family_name)].filter(Boolean).join(" ");
+  return joined ? joined.slice(0, 200) : null;
+}
+
+/** The binding subject for an OIDC identity. `sub` is only unique within its issuer, and an ADFS
+ *  `sub` is a base64 string, so both are hashed into one fixed-alphabet value: the same person at the
+ *  same issuer always gives the same subject, and a different issuer never does. */
+export function oidcSubject(iss: string, sub: string): string {
+  return `oidc:${createHash("sha256").update(`${iss}\n${sub}`).digest("hex")}`;
+}
+
+const stripSlash = (u: string) => u.replace(/\/+$/, "");
+
+function oidc(account: Claims | null | undefined, env: Record<string, string | undefined>): ProviderIdentity {
+  const cfg = oidcConfig(env);
+  if (!cfg.enabled) return { ok: false, why: "generic OIDC sign-in is not configured" };
+  const claims = jwtClaims(account?.id_token);
+  if (!claims) return { ok: false, why: "no ID token from the OIDC provider" };
+  const iss = str(claims.iss);
+  if (!iss || stripSlash(iss) !== stripSlash(cfg.issuer)) {
+    return { ok: false, why: "the ID token was issued by another issuer" };
+  }
+  const sub = str(claims.sub);
+  if (!sub) return { ok: false, why: "the ID token carries no subject" };
+  if (cfg.requireEmailVerified && claims.email_verified !== true && claims.email_verified !== "true") {
+    return { ok: false, why: "the OIDC provider has not verified this email address" };
+  }
+  const email = emailOf(claims, cfg.emailClaim);
+  if (!email) return { ok: false, why: `the ID token carries no email address in the ${cfg.emailClaim} claim` };
+  return { ok: true, email, subject: oidcSubject(stripSlash(iss), sub) };
 }
 
 function google(profile: Claims | undefined): ProviderIdentity {
@@ -92,5 +140,6 @@ export function verifiedProviderIdentity(
 ): ProviderIdentity {
   if (provider === "google") return google(input.profile);
   if (provider === "microsoft") return microsoft(input.account, env);
+  if (provider === OIDC_PROVIDER_ID) return oidc(input.account, env);
   return { ok: false, why: `unknown provider ${provider ?? "(none)"}` };
 }

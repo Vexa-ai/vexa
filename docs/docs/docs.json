@@ -29,6 +29,7 @@
           "how-to/overview",
           "how-to/calendar-sync",
           "how-to/send-a-bot",
+          "how-to/transcription-language",
           "how-to/stream-transcript",
           "how-to/custom-stt",
           "how-to/recordings",
@@ -45,7 +46,8 @@
           "flows/vocabulary",
           "flows/examples",
           "flows/developing",
-          "flows/operations"
+          "flows/operations",
+          "flows/mailbox"
         ]
       },
       {
@@ -125,6 +127,8 @@
           "deployment",
           "deployment-lite",
           "deployment-kubernetes",
+          "sign-in-oidc",
+          "deployment-helm-agent-tools",
           "configuration",
           "connections",
           "upgrade-from-minio",

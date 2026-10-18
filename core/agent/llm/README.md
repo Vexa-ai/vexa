@@ -144,7 +144,9 @@ openai-agent reads no file and sends no credential to a keyless endpoint.
 - **A provider failure ends the turn TYPED** (P18): `faults.py` is the one model-provider fault —
   `ProviderFault{source: "model-provider", kind, provider, model, status, detail, remedy}`, `kind` one
   of `unpaid` (402) · `unauthorized` (401/403) · `rate_limited` (429) · `unavailable` (5xx, timeout)
-  · `refused` (other 4xx). Every harness and provider adapter builds it with `faults.classify` and puts
+  · `refused` (other 4xx) · `no_tool_calling` (the endpoint refused the turn's tools, dropped them, or
+  the model wrote its call as text — `openai_agent.py` reads all three, the last two with a forced
+  `tool_choice: "required"` check run once per endpoint and model per process). Every harness and provider adapter builds it with `faults.classify` and puts
   it on the failed `done` as `fault` (additive); import it, never define a second one. Codex passes the
   kind its own `codexErrorInfo` label names; claude-code's refusal to start a turn beside another
   model credential is the worker's, not the provider's (`source: "agent-worker"`). A first `done` that

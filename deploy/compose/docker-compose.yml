@@ -202,6 +202,8 @@ services:
       # admin exists. The admin can add more in the terminal's Settings → Sign-in; the effective list
       # is both. See .env.example.
       - VEXA_SIGNIN_ALLOW=${VEXA_SIGNIN_ALLOW:-}
+      # Internal calendar-feed hosts/networks (operator only; see .env.example).
+      - VEXA_CALENDAR_FEED_ALLOW=${VEXA_CALENDAR_FEED_ALLOW:-}
       # The administrators, comma-separated exact addresses. They may always sign in, they are the
       # admins (the terminal's admin panel included), and naming them closes the admin claim. Set it
       # before first boot whenever the terminal is reachable from outside. Read by admin-api only:
@@ -405,6 +407,10 @@ services:
       # it); `production` makes an unset VEXA_SECRETS_KEY a refusal naming the fix.
       - VEXA_SECRETS_KEY=${VEXA_SECRETS_KEY:-}
       - VEXA_ENV=${VEXA_ENV:-development}
+      # Self-hosted git hosts and the provider each runs, so a typed token is presented the way the
+      # host expects: `gitlab.example.com=gitlab,git.example.org=basic:svc-user`. Unlisted hosts keep
+      # GitHub's bare-token form. A malformed value stops agent-api at boot.
+      - VEXA_GIT_PROVIDERS=${VEXA_GIT_PROVIDERS:-}
       # Lane M: the users.data.memberships[] index mirror over the admin-api internal edge
       # (policy/members.json in the workspace git repo stays authoritative; this is the listing cache).
       - VEXA_ADMIN_API_URL=http://admin-api:8001
@@ -585,6 +591,9 @@ services:
       # (/internal/users/{id}/bot-context) and calendar sync discovers connected ICS feeds
       # (/internal/calendar-configs). Unset -> calendar sync no-ops, auto-join spawns uncapped.
       - ADMIN_API_URL=http://admin-api:8001
+      # Internal calendar-feed hosts/networks, and the deployment's auto-join block list (see .env.example).
+      - VEXA_CALENDAR_FEED_ALLOW=${VEXA_CALENDAR_FEED_ALLOW:-}
+      - VEXA_AUTO_JOIN_BLOCK=${VEXA_AUTO_JOIN_BLOCK:-}
       # ADMIN_TOKEN is the SAME admin secret admin-api holds (admin-api gets ADMIN_API_TOKEN=${ADMIN_TOKEN}).
       # meeting-api derives the MeetingToken key from it (HMAC-SHA256 under "vexa/meeting-token/v1") and
       # signs (mint) AND verifies (callbacks, uploads, stream entries) with that key, never with the
@@ -600,6 +609,11 @@ services:
       - TRANSCRIPTION_SERVICE_URL=${TRANSCRIPTION_SERVICE_URL:-}
       - TRANSCRIPTION_SERVICE_TOKEN=${TRANSCRIPTION_SERVICE_TOKEN:-}
       - TRANSCRIPTION_MODEL=${TRANSCRIPTION_MODEL:-}
+      # The deployment's default transcription language, for bots whose request and person set
+      # none: one code (de) and/or the codes detection is restricted to (de,en). A refused value
+      # stops meeting-api's boot naming the fix.
+      - DEFAULT_TRANSCRIPTION_LANGUAGE=${DEFAULT_TRANSCRIPTION_LANGUAGE:-}
+      - DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES=${DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES:-}
       # Deployment-level defaults for a spawn's transcribe/recording flags when the request does not
       # say (config.v1 `defaulted` keys). TRANSCRIBE_ENABLED=false makes a no-STT deployment spawn
       # capture-only bots instead of 503-ing every default POST /bots.
@@ -847,6 +861,16 @@ services:
       - VEXA_MAIL_SMTP_TLS_INSECURE=${VEXA_MAIL_SMTP_TLS_INSECURE:-}
       - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
       - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
+      # the relay's TLS policy and trust, and the IMAP endpoint — every default is the Gmail preset;
+      # a *_CA_FILE is a path INSIDE the container (mount the bundle in an override)
+      - VEXA_MAIL_SMTP_TLS=${VEXA_MAIL_SMTP_TLS:-auto}
+      - VEXA_MAIL_SMTP_CA_FILE=${VEXA_MAIL_SMTP_CA_FILE:-}
+      - VEXA_MAIL_IMAP_HOST=${VEXA_MAIL_IMAP_HOST:-imap.gmail.com}
+      - VEXA_MAIL_IMAP_PORT=${VEXA_MAIL_IMAP_PORT:-}
+      - VEXA_MAIL_IMAP_TLS=${VEXA_MAIL_IMAP_TLS:-tls}
+      - VEXA_MAIL_IMAP_USER=${VEXA_MAIL_IMAP_USER:-}
+      - VEXA_MAIL_IMAP_FOLDER=${VEXA_MAIL_IMAP_FOLDER:-INBOX}
+      - VEXA_MAIL_IMAP_CA_FILE=${VEXA_MAIL_IMAP_CA_FILE:-}
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
@@ -964,6 +988,16 @@ services:
       - VEXA_MAIL_SMTP_TLS_INSECURE=${VEXA_MAIL_SMTP_TLS_INSECURE:-}
       - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
       - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
+      # the relay's TLS policy and trust, and the IMAP endpoint — every default is the Gmail preset;
+      # a *_CA_FILE is a path INSIDE the container (mount the bundle in an override)
+      - VEXA_MAIL_SMTP_TLS=${VEXA_MAIL_SMTP_TLS:-auto}
+      - VEXA_MAIL_SMTP_CA_FILE=${VEXA_MAIL_SMTP_CA_FILE:-}
+      - VEXA_MAIL_IMAP_HOST=${VEXA_MAIL_IMAP_HOST:-imap.gmail.com}
+      - VEXA_MAIL_IMAP_PORT=${VEXA_MAIL_IMAP_PORT:-}
+      - VEXA_MAIL_IMAP_TLS=${VEXA_MAIL_IMAP_TLS:-tls}
+      - VEXA_MAIL_IMAP_USER=${VEXA_MAIL_IMAP_USER:-}
+      - VEXA_MAIL_IMAP_FOLDER=${VEXA_MAIL_IMAP_FOLDER:-INBOX}
+      - VEXA_MAIL_IMAP_CA_FILE=${VEXA_MAIL_IMAP_CA_FILE:-}
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
@@ -1081,6 +1115,16 @@ services:
       - VEXA_MAIL_SMTP_TLS_INSECURE=${VEXA_MAIL_SMTP_TLS_INSECURE:-}
       - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
       - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
+      # the relay's TLS policy and trust, and the IMAP endpoint — every default is the Gmail preset;
+      # a *_CA_FILE is a path INSIDE the container (mount the bundle in an override)
+      - VEXA_MAIL_SMTP_TLS=${VEXA_MAIL_SMTP_TLS:-auto}
+      - VEXA_MAIL_SMTP_CA_FILE=${VEXA_MAIL_SMTP_CA_FILE:-}
+      - VEXA_MAIL_IMAP_HOST=${VEXA_MAIL_IMAP_HOST:-imap.gmail.com}
+      - VEXA_MAIL_IMAP_PORT=${VEXA_MAIL_IMAP_PORT:-}
+      - VEXA_MAIL_IMAP_TLS=${VEXA_MAIL_IMAP_TLS:-tls}
+      - VEXA_MAIL_IMAP_USER=${VEXA_MAIL_IMAP_USER:-}
+      - VEXA_MAIL_IMAP_FOLDER=${VEXA_MAIL_IMAP_FOLDER:-INBOX}
+      - VEXA_MAIL_IMAP_CA_FILE=${VEXA_MAIL_IMAP_CA_FILE:-}
       - VEXA_MAILPIT_URL=${VEXA_MAILPIT_URL:-}
       - VEXA_MAILPIT_LOOKBACK_S=${VEXA_MAILPIT_LOOKBACK_S:-300}
       - VEXA_NOTIFY_CHANNEL=${VEXA_NOTIFY_CHANNEL:-smtp}
@@ -1304,6 +1348,23 @@ services:
       # tenant, but only sign-ins whose ID token carries `xms_edov: true` (an optional claim to add in
       # the app registration). Google sign-ins need a verified email.
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-common}
+      # Generic OpenID Connect sign-in (ADFS, Keycloak; clients/terminal/config.v1.json VEXA_OIDC_*).
+      # Set the issuer to turn it on; then the client id and secret are required or the terminal
+      # refuses to start. Register ${NEXTAUTH_URL}/api/auth/callback/oidc at the provider. For an
+      # internal PKI, mount the CA bundle in a docker-compose.override.yml and name it here.
+      # Guide: docs/docs/sign-in-oidc.mdx.
+      - VEXA_OIDC_ISSUER=${VEXA_OIDC_ISSUER:-}
+      - VEXA_OIDC_CLIENT_ID=${VEXA_OIDC_CLIENT_ID:-}
+      - VEXA_OIDC_CLIENT_SECRET=${VEXA_OIDC_CLIENT_SECRET:-}
+      - VEXA_OIDC_SCOPES=${VEXA_OIDC_SCOPES:-}
+      - VEXA_OIDC_RESOURCE=${VEXA_OIDC_RESOURCE:-}
+      - VEXA_OIDC_DISPLAY_NAME=${VEXA_OIDC_DISPLAY_NAME:-}
+      - VEXA_OIDC_CA_FILE=${VEXA_OIDC_CA_FILE:-}
+      - VEXA_OIDC_EMAIL_CLAIM=${VEXA_OIDC_EMAIL_CLAIM:-}
+      - VEXA_OIDC_NAME_CLAIM=${VEXA_OIDC_NAME_CLAIM:-}
+      - VEXA_OIDC_REQUIRE_EMAIL_VERIFIED=${VEXA_OIDC_REQUIRE_EMAIL_VERIFIED:-}
+      # Which sign-in doors to offer: a subset of google,microsoft,oidc,email (empty = all configured).
+      - VEXA_SIGNIN_METHODS=${VEXA_SIGNIN_METHODS:-}
       # Sign-in link mail (clients/terminal/src/app/api/auth/mailer.ts) goes through the deployment's
       # mail relay — the VEXA_MAIL_SMTP_* family flows sends through too (declared in
       # clients/terminal/config.v1.json). Unset, the mailer dials localhost:1025 inside THIS

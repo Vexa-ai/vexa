@@ -7,6 +7,7 @@
 import { useSyncExternalStore } from "react";
 import type { MeetingMock, TranscriptLine } from "./meetingModel";
 import { onGatewayWSConnected, onMeetingStatus } from "./gatewayWS";
+import { readMeetingLanguage } from "./transcriptionLanguage";
 
 /** A row from meeting-api GET /meetings (live AND past). */
 export interface MeetingRowDTO {
@@ -35,6 +36,8 @@ export interface MeetingRowDTO {
     // row itself is kept as history. Its shape is api.v1's `ArtifactDeletion`
     // (core/gateway/contracts/api.v1), and `artifactsDeleted` below is its one reader here.
     artifact_deletion?: { state: "pending" | "completed"; [extra: string]: unknown } | null;
+    // the language setting the bot runs with, and where it came from; rewritten on every live switch
+    transcription_language?: { language?: string | null; allowed_languages?: string[] | null; source?: string } | null;
   } | null;
 }
 
@@ -160,6 +163,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     has_recording: !!(d.data?.recordings?.length),
     docs: d.data?.docs ?? [],
     artifacts_deleted: artifactsDeleted(d),
+    transcription_language: readMeetingLanguage(d.data?.transcription_language),
     participants: [],
     mentioned: [],
     actions: [],
@@ -207,7 +211,7 @@ async function snapshotOnce() {
     const seen = new Set<string>();
     const next = (list || []).map(toMock).filter((m) => !seen.has(m.id) && (seen.add(m.id), true));
     const key = (m: MeetingMock[]) => m.map((x) =>
-      `${x.id}|${x.live_status}|${x.has_recording}|${x.artifacts_deleted ? "deleted" : ""}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}`,
+      `${x.id}|${x.live_status}|${x.has_recording}|${x.artifacts_deleted ? "deleted" : ""}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}|${JSON.stringify(x.transcription_language ?? null)}`,
     ).join(",");
     const wasLoaded = loaded;
     loaded = true;
