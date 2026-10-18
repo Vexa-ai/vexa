@@ -7,7 +7,7 @@ import { setChatActivity } from "./chatActivity";
 /** Chat — the persistent right-rail agent window. Streams a real agent turn over /api/chat (SSE) into the
  *  turn timeline, surfacing each tool-call as a visible operation (read/search/edit/git/web) with status,
  *  then the message + commit / rejection badge. The composer carries the active center-tab reference. */
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ClipboardEvent, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ClipboardEvent, type ReactNode } from "react";
 import { minutesOnly } from "../platform/mode";
 import { useFeature } from "../platform/features";
 import { liveMeetingsNow } from "./liveMeetings";
@@ -29,7 +29,9 @@ import { sessionTitle, type SessionSummary } from "./sessions";
 import { faultTone } from "./faults";
 import { knownAsMentionable, listKnownPeople, listMentionable, listSessions, sessionRoomLines, type MentionablePerson } from "./sessionsApi";
 import { activeMention, callInviteDraft, insertMention, insertReference, mentionsInText, pickerRows, type Mention, type PickerRow } from "./mentions";
-import { checkShare, shareWith, type ShareCheck } from "./shareFlow";
+import { checkRoomTags, checkShare, shareWith, type ShareCheck } from "./shareFlow";
+import type { TagAnswer } from "./roomPeopleApi";
+import { TagCards } from "./TagCard";
 import { MentionChips, MentionChoice, MentionPicker, ShareConfirm } from "./MentionUI";
 import { joinInterim, streamChatTurn, type ChatPhase } from "./chatStream";
 import { readFault } from "./faults";
@@ -53,9 +55,14 @@ import { FolderImportedCards, useFolderImportedCards } from "./FolderImport";
 import { requestFolderImport } from "./folderDrop";
 import { PasteChip, UserMessage, isLongPaste, withPastes } from "./pastedText";
 import { RefChip } from "../ui-kit/RefChip";
+import { AskSessionProvider } from "../ui-kit/InlineCard";
+import { Button as KitButton } from "../ui-kit/primitives/Button";
 import { ModelChip } from "./usage/ModelChip";
 import { NEW_CHAT_AT_LEVEL_EVENT } from "../platform/events";
-import { pastedRefs, splitRefs } from "../ui-kit/universalRefs";
+import { splitRefs } from "../ui-kit/universalRefs";
+import { longPressProps, meetingLinkIn, pasteToChip, raiseMessageActions, referenceFromPaste, sendVexa } from "./reference";
+/** The conversation a message line belongs to, for its reference (`message:<session>/<seq>`). */
+const MessageScope = createContext<string | null>(null);
 import { ATTACHMENT_ACCEPT, AttachmentTray, FileDropZone, ImagePreview, MessageAttachments, attachmentSrc, attachmentsMark, originalName, pastedFiles, refusalFor, uploadAttachment, type ComposerAttachment, type MessageAttachment, type UploadedWorkspaceFile } from "./attachments";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
@@ -634,7 +641,7 @@ export function ChatConversation({ turns, busy, empty, jobs = [], room, onContin
       {groupRepeats(interleave(turns, room?.lines ?? [])).map((x) => x.kind === "repeat"
         ? <RepeatLine key={`r-${x.lines[0].seq}`} lines={x.lines} who={roomWho(room!, x.lines[0].author)} />
         : x.kind === "line"
-        ? <PersonLine key={`l-${x.line.seq}`} who={roomWho(room!, x.line.author)} mine={x.line.author === room!.you}>
+        ? <PersonLine key={`l-${x.line.seq}`} seq={x.line.seq} who={roomWho(room!, x.line.author)} mine={x.line.author === room!.you}>
             <ReferenceText text={shownWords(x.line.text)} />
           </PersonLine>
         : ((t: Turn, i: number) => t.role === "user"
@@ -956,9 +963,11 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const micDictRef = useRef<ComposerDictation | null>(null);   // the box's dictation, while the mic streams
   // LONG PASTES, COLLAPSED (`pastedText.tsx`): each one a chip above the box until the message goes.
   const [pastes, setPastes] = useState<string[]>([]);
+  // S7: a pasted meeting link offers "Send Vexa" (7gg / 7t)
+  const [meetingOffer, setMeetingOffer] = useState<ReturnType<typeof meetingLinkIn>>(null);
   // Every send path clears the box through here; a send while the mic streams also hands the sent
   // text over, so it is not shown again (see micDictRef).
-  const clearInput = () => { setValue(""); setPastes([]); micDictRef.current?.sent(); };
+  const clearInput = () => { setValue(""); setPastes([]); setMeetingOffer(null); micDictRef.current?.sent(); };
   // ADR-0048 — @-mentions: who the picker may offer, who was picked into this message, where the
   // caret is (the picker reads the `@query` before it), and the one question Enter may ask.
   const [mentionPeople, setMentionPeople] = useState<{ people: MentionablePerson[]; agents: { name: string }[] } | null>(null);
@@ -978,6 +987,10 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   // HOSTED PLANS PICK A LEVEL 1–5 at the chat's start, not a model (`levels`; off: the full picker)
   const levelsOn = useFeature("levels");
   const [confirm, setConfirm] = useState<{ check: ShareCheck; text: string; busy: boolean; error?: string } | null>(null);
+  // THE TAG CARDS (0.13.4 S4, D21): in a room, a mention of someone outside it posts the message and
+  // shows the tagger — only the tagger — one card per person (rooms/TagCard.tsx)
+  const [tagCards, setTagCards] = useState<TagAnswer[]>([]);
+  useEffect(() => { setTagCards([]); }, [session]);
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   // The model picker's effort levels, offered in the "⋯" menu when the composer is narrow.
   const [effortItems, setEffortItems] = useState<MenuItem[] | null>(null);
@@ -2088,6 +2101,9 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     //  rather than left as a trap for the next person who wonders why it never fires. The admin
     //  conversation is a SCAFFOLD (`kind: "admin-setup"`), opened and grounded from its record.
     void send(displayText, prompt, referenceSource, { mentions: mentionIds, ...(sentFiles.length ? { attachments: sentFiles } : {}) });
+    if (thisRoom?.room && live.length && !opts.plain) {
+      void checkRoomTags(session, live).then((cards) => { if (cards.length) setTagCards((c) => [...c, ...cards]); });
+    }
     // INVITED TO A CALL: the call starts (or is joined) here, and everyone in the chat is rung
     if (live.some((m) => m.intent === "call")) window.dispatchEvent(new CustomEvent(CALL_START_EVENT, { detail: { session } }));
     clearInput();
@@ -2169,14 +2185,15 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     if (files.length === 0) {
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (isLongPaste(text)) { e.preventDefault(); setPastes((p) => [...p, text]); return; }
-      // A PASTED LINK TO ANYTHING OURS becomes its chip (#1783): `…/r/chat/<id>` → `[[chat:<id>]]`.
-      const chips = pastedRefs(text);
+      // A PASTED LINK TO ANYTHING OURS becomes its live chip (#1783, 7gg): `…/r/chat/<id>` → `[[chat:<id>]]`,
+      // and a copied reference (its HTML flavour) too. Two edits, so ⌘Z brings the link back (S7).
+      const chips = e.clipboardData ? referenceFromPaste(e.clipboardData) : null;
       if (chips !== null) {
         e.preventDefault();
-        const el = e.currentTarget;
-        const from = el.selectionStart ?? value.length, to = el.selectionEnd ?? value.length;
-        setValue(value.slice(0, from) + chips + value.slice(to));
+        setValue(pasteToChip(e.currentTarget, text, chips));
+        return;
       }
+      setMeetingOffer(meetingLinkIn(text));
       return;
     }
     e.preventDefault();
@@ -2219,6 +2236,9 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             window.dispatchEvent(new CustomEvent(CALL_START_EVENT, { detail: { session } }));
             window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { session, prompt: d.prompt, display: d.say } }));
           }} />
+      )}
+      {tagCards.length > 0 && (
+        <TagCards session={session} answers={tagCards} onDismiss={(i) => setTagCards((c) => c.filter((_x, j) => j !== i))} />
       )}
       {confirm && confirm.check.kind === "confirm" && (
         <ShareConfirm people={confirm.check.people} owner={confirm.check.owner} preview={confirm.check.preview}
@@ -2274,6 +2294,9 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         )}
         <ComposerReferences text={value} />
         <MentionChips mentions={shownMentions} onRemove={(m) => setPicked((prev) => prev.filter((x) => x.subject !== m.subject))} />
+        {meetingOffer && <div className="vx-paste-tray" data-send-vexa="">
+          <KitButton size="sm" onClick={() => { const m = meetingOffer; setMeetingOffer(null); void sendVexa(m); }}>Send Vexa to this meeting</KitButton>
+          <KitButton size="sm" variant="ghost" aria-label="Dismiss" onClick={() => setMeetingOffer(null)}>×</KitButton></div>}
         {pastes.length > 0 && <div className="vx-paste-tray">{pastes.map((t, i) => (
           <PasteChip key={i} text={t} onRemove={() => setPastes((p) => p.filter((_, j) => j !== i))}
             onEdit={() => { setPastes((p) => p.filter((_, j) => j !== i)); setValue((v) => (v ? `${v}\n\n${t}` : t)); inputRef.current?.focus(); }} />
@@ -2373,6 +2396,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     <FileDropZone onFiles={addFiles} onFolders={folderDropOn ? (entries) => requestFolderImport({ kind: "entries", entries, into: null }) : undefined}>
     {preview?.previewUrl && <ImagePreview attachment={preview} onClose={() => setPreview(null)} />}
     <ComposerSlotProvider value={composerSlot}>
+    <AskSessionProvider value={session}>{/* 7g: an ```ask card in this chat opens its pending item here (S5) */}
     <AgentWindow top={<ChatHeader subject={subject} session={session} onSelectSession={selectSession} onNewChat={newChat} onClose={() => layout.toggleRight()} />} scrollRef={scrollRef} composer={composerInline ? null : composer}>
       {/* THE EMPTY STATE. The centered "What organisation are you? / Just the name is enough — I'll
           research the rest…" card that used to sit here is DELETED (F37): it was the pre-scaffold
@@ -2384,7 +2408,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       {/* THE READING COLUMN (founder 2026-10-15: "comfy readability"): a conversation reads in a
           centred ~70-character column; the empty home keeps its own width */}
       <div className={turns.length || room?.lines.length ? "vx-read-col" : undefined}>
-      <ChatConversation turns={turns} busy={busy || loading} jobs={chatState.jobs} room={room} onContinue={continueTurn} onStopRunning={(t) => stopTurn(t.failed?.fault.session || session)} onDecide={decideTarget} onRetryRow={(j) => { void retryRow(j); }} onSendNow={async (j) => { const ok = await sendNow(session, j.id); void refreshPending(); return ok; }}
+      <MessageScope.Provider value={session}><ChatConversation turns={turns} busy={busy || loading} jobs={chatState.jobs} room={room} onContinue={continueTurn} onStopRunning={(t) => stopTurn(t.failed?.fault.session || session)} onDecide={decideTarget} onRetryRow={(j) => { void retryRow(j); }} onSendNow={async (j) => { const ok = await sendNow(session, j.id); void refreshPending(); return ok; }}
         onEditQueued={async (j) => {
           if (!(await withdrawQueued(session, j.id))) { void refreshPending(); return; }
           updateChatState(chatKey, (s) => ({ ...s, turns: s.turns.filter((t) => t.id !== j.id) }));
@@ -2406,7 +2430,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             {/* NOT while the history is still loading: a chip that appears and then vanishes under
                 an arriving conversation is worse than one that arrives a beat late. */}
             {!loading && emptyExtra}
-          </div>} />
+          </div>} /></MessageScope.Provider>
       </div>
       <BundleImportCards cards={bundleImports.cards} onDismiss={bundleImports.dismiss} />
       <FolderImportedCards cards={folderCards.cards} />
@@ -2422,6 +2446,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         </div>
       )}
     </AgentWindow>
+    </AskSessionProvider>
     </ComposerSlotProvider>
     </FileDropZone>
   );
@@ -2608,9 +2633,12 @@ export function groupRepeats(items: Streamed[]): (Streamed | { kind: "repeat"; l
 const hhmm = (sec: number) => new Date(sec * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 /** A line a PERSON wrote in a shared chat: mine on the right, like my own messages; anybody else's
  *  on the left as a bubble with their initials and name (founder 2026-10-15). */
-function PersonLine({ who, mine, repeat, children }: { who: string; mine: boolean; repeat?: boolean; children: ReactNode }) {
+function PersonLine({ who, mine, repeat, seq, children }: { who: string; mine: boolean; repeat?: boolean; seq?: number; children: ReactNode }) {
+  // S7 (7gg, phone pass): long-press a message → Copy reference / Share (the native sheet on a phone)
+  const session = useContext(MessageScope);
+  const press = longPressProps(() => { if (session && seq !== undefined) raiseMessageActions({ kind: "message", id: `${session}/${seq}` }); });
   return (
-    <div data-turn={repeat ? "repeat" : "line"} className={mine ? "vx-turn vx-turn-mine" : "vx-turn vx-turn-other"}>
+    <div data-turn={repeat ? "repeat" : "line"} className={mine ? "vx-turn vx-turn-mine" : "vx-turn vx-turn-other"} {...press}>
       {mine ? <div data-turn-who="" className="vx-sr">{who}</div>
         : <Identity kind="person" id={who} name={who} size={24} className="vx-turn-avatar" />}
       <div className="vx-turn-other-body">

@@ -13,6 +13,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { HOME_TARGET_EVENT } from "../../../platform/events";
 import { Identity } from "../../../ui-kit/Identity";
+import { featureOn, useFeature } from "../../../platform/features";
+import { X } from "lucide-react";
 
 export const PERSONAL = "personal";
 let target = PERSONAL;
@@ -20,11 +22,23 @@ const subs = new Set<() => void>();
 if (typeof window !== "undefined") {
   window.addEventListener(HOME_TARGET_EVENT, (e) => {
     target = String((e as CustomEvent<{ workspace?: string }>).detail?.workspace || "") || PERSONAL;
+    if (target === PERSONAL) focus = false;
     subs.forEach((f) => f());
   });
 }
 const sub = (f: () => void) => { subs.add(f); return () => { subs.delete(f); }; };
 const snap = () => target;
+
+/** FOCUS IS SEPARATE FROM THE TARGET (UI 7i/7t/7x, `shell2`): opening a workspace aims the home at it
+ *  and leaves the home full; only a workspace's own "New chat" collapses the home to the focused
+ *  input. Clearing the target (the chip's ×, or "+ New") ends focus. */
+let focus = false;
+const focusSnap = () => focus;
+export function setHomeFocus(on: boolean): void { focus = on; subs.forEach((f) => f()); }
+export function useHomeFocus(): boolean { return useSyncExternalStore(sub, focusSnap, focusSnap); }
+/** Record where the home writes without firing the shell's writer — the shell already aimed the
+ *  draft itself (a workspace's "New chat"). */
+export function noteHomeTarget(slug: string): void { target = slug || PERSONAL; if (target === PERSONAL) focus = false; subs.forEach((f) => f()); }
 
 /** The workspace the home composer writes to, as the cards last aimed it ("personal" by default). */
 export function useHomeTarget(): string { return useSyncExternalStore(sub, snap, snap); }
@@ -40,6 +54,9 @@ export function aimHome(slug: string): void {
 /** A CARD CLICK SETS THE TARGET (UI decisions; founder 2026-10-16): the first click aims the home's
  *  chat at the workspace, a click on the card already aimed resets it to Personal. */
 export function toggleHomeTarget(slug: string): void {
+  // shell2 (UI 7x): the target FOLLOWS the workspace you open — a second click never un-aims it;
+  // the chip's × and "+ New" are the way back to My desk
+  if (featureOn("shell2")) { aimHome(slug); return; }
   aimHome(target === slug && slug !== PERSONAL ? PERSONAL : slug);
 }
 
@@ -48,7 +65,7 @@ export function homeTargetAct(frontChatId: string | undefined, draftId: string |
 }
 
 /** Test seam. */
-export function resetHomeTarget(): void { target = PERSONAL; subs.forEach((f) => f()); }
+export function resetHomeTarget(): void { target = PERSONAL; focus = false; subs.forEach((f) => f()); }
 
 /** A stable hue per workspace (Personal warm by default), so the same workspace always has one colour. */
 export function wsHue(slug: string | undefined): number {
@@ -76,6 +93,10 @@ export function stickySpacer(stuck: boolean, unstuckHeight: number, height: numb
 
 export function HomeComposer({ children, nameOf }: { children: ReactNode; nameOf: (slug: string) => string }) {
   const slug = useHomeTarget();
+  // shell2: the composer does not stick (it covered the Now strip on a phone), and its target chip
+  // carries the × that clears it back to My desk
+  const shell2 = useFeature("shell2");
+  const focused = useHomeFocus();
   const sentinel = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const [stuck, setStuck] = useState(false);
@@ -86,7 +107,7 @@ export function HomeComposer({ children, nameOf }: { children: ReactNode; nameOf
     const el = sentinel.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
     const io = new IntersectionObserver(([e]) => {
-      const next = !e.isIntersecting;
+      const next = !e.isIntersecting && !featureOn("shell2");
       // remember the full height at the moment it sticks, before it folds
       if (next && !stuckRef.current && box.current) unstuckH.current = box.current.getBoundingClientRect().height;
       stuckRef.current = next;
@@ -112,7 +133,9 @@ export function HomeComposer({ children, nameOf }: { children: ReactNode; nameOf
     <div ref={sentinel} className="vx-hc-sentinel" aria-hidden />
     <div ref={box} data-home-composer="" data-home-target={slug} className="vx-home-composer vx-hc" data-stuck={stuck ? "" : undefined}
       style={{ "--hc-h": String(wsHue(slug)) } as CSSProperties}>
-      <div className="vx-hc-to" aria-live="polite"><WsMark slug={slug} name={name} size={16} /><span>→ {name}</span></div>
+      <div className="vx-hc-to" aria-live="polite"><WsMark slug={slug} name={name} size={16} /><span>→ {name}</span>
+        {shell2 && (slug !== PERSONAL || focused) && <button type="button" className="vx-hc-clear" aria-label={`Clear the target ${name}`} title="Back to My desk"
+          onClick={() => aimHome(PERSONAL)}><X size={12} strokeWidth={2} aria-hidden /></button>}</div>
       {children}
     </div>
     {spacer > 0 && <div className="vx-hc-spacer" aria-hidden style={{ height: spacer }} />}

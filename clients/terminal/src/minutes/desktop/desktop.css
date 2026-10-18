@@ -155,3 +155,12 @@
   .vx-desk-section[data-span] { grid-column: auto; }
   .vx-kh-grid, .vx-pk-grid, .vx-dk-grid { grid-template-columns: 1fr; }
 }
+
+/* D35: the merge card ("are these accounts all yours?"), above the desk bar; wraps at 360px */
+.vx-person-merge { display: flex; flex-direction: column; gap: 8px; font-size: var(--text-xs); color: var(--t2); padding: 10px 12px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); max-width: 100%; }
+.vx-person-merge-says { color: var(--t1); line-height: 1.45; }
+.vx-person-merge-options { border: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.vx-person-merge-legend { color: var(--t3); padding: 0; margin-bottom: 2px; }
+.vx-person-merge-option { display: flex; align-items: center; gap: 6px; min-height: 32px; }
+.vx-person-merge-option > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.vx-person-merge-acts { display: flex; gap: 6px; flex-wrap: wrap; }

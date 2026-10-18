@@ -98,6 +98,7 @@ a.vx-trunc:hover { text-decoration: underline; }
   white-space: nowrap;
   justify-content: center;
 }
+.vx-menu-trigger[data-variant="chip"][data-control="sm"] { height: var(--control-sm); }
 .vx-menu-trigger:hover, .vx-menu-trigger[aria-expanded="true"] { background: var(--surface-3); color: var(--text-1); }
 .vx-menu-trigger[data-variant="chip"] {
   height: 24px;

@@ -15,6 +15,7 @@
  *  Decision 26.3's greyed chip is untouched where it was ruled: on a LINK someone followed, in
  *  `ui-kit/WsLink`, where "not yours" answers a question the reader asked. A listing asks nothing.
  */
+import { deskName } from "./vocabulary";
 import type { ActiveMount, Membership } from "../data/workspaceApi";
 import { listSharedMemberships, listWorkspaceTree, readActiveSet, readWorkspaceById } from "../data/workspaceApi";
 import { GLOBAL_SLUG, humanPaths } from "./machinery";
@@ -74,7 +75,7 @@ export function buildWorkspaces(src: {
   }
   const home = active.find((m) => isHomeMount(m, src.subject));
   // PERSONAL IS ALWAYS "Personal" (Vexa-ai/vexa#1783): the desk row never borrows a repo's name.
-  const desk: NavWorkspace = { key: "desk", slug: undefined, kind: "desk", name: "Personal" };
+  const desk: NavWorkspace = { key: "desk", slug: undefined, kind: "desk", name: deskName() };
 
   // The company layer is not an everyday account's row (founder, 2026-10-13): `_global` is reached
   // in the Company profile only (ADR-0049), where it is the one row (the branch above).

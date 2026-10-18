@@ -4,6 +4,7 @@
  *  heading, and under it one quiet line saying where the page lives: the workspace's name, then
  *  each folder, every segment opening that folder in Files. No icon band; on a narrow panel the
  *  line truncates from the left, so the folder nearest the page stays readable. */
+import { deskName } from "./vocabulary";
 import { WorkspaceName } from "../ui-kit/WsLink";
 import { splitLeadingH1 } from "./workspaceFrontPage";
 
@@ -37,7 +38,7 @@ export function PagePath({ path, slug, onFolder, reads, file }: {
     <nav className="vx-pagehead-path" aria-label="Where this page lives" data-page-path="">
       <span className="vx-pagehead-trail">
         <button type="button" className="vx-pagehead-seg" data-path-seg="" onClick={() => onFolder("")}>
-          {slug ? <WorkspaceName slug={slug} /> : "Personal"}
+          {slug ? <WorkspaceName slug={slug} /> : deskName()}
         </button>
         {dirs.map((d, i) => (
           <span key={i} className="vx-pagehead-step">

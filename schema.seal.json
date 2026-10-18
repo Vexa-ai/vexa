@@ -30,6 +30,7 @@
       "room": "room TEXT NOT NULL",
       "session_id": "session_id TEXT NOT NULL",
       "share_token": "share_token TEXT NOT NULL",
+      "shared_with": "shared_with TEXT",
       "started": "started DOUBLE PRECISION NOT NULL"
     },
     "agent_session_call_change": {
@@ -105,6 +106,7 @@
       "actor": "actor TEXT NOT NULL",
       "actor_name": "actor_name TEXT NOT NULL DEFAULT ''",
       "created": "created DOUBLE PRECISION NOT NULL",
+      "expires_at": "expires_at DOUBLE PRECISION",
       "id": "id TEXT PRIMARY KEY",
       "kind": "kind TEXT NOT NULL",
       "object_id": "object_id TEXT NOT NULL",
@@ -140,6 +142,7 @@
       "workspace": "workspace TEXT"
     },
     "agent_session_room": {
+      "agent_on": "agent_on INTEGER",
       "created_by": "created_by TEXT",
       "cross_org": "cross_org INTEGER",
       "level": "level TEXT",
@@ -148,6 +151,8 @@
       "org_id": "org_id TEXT",
       "proactivity": "proactivity TEXT NOT NULL",
       "session_id": "session_id TEXT PRIMARY KEY",
+      "switch_asks": "switch_asks TEXT",
+      "transcribe": "transcribe INTEGER",
       "updated": "updated DOUBLE PRECISION NOT NULL",
       "visibility": "visibility TEXT NOT NULL",
       "workspace": "workspace TEXT"
@@ -231,6 +236,45 @@
     }
   },
   "core/flows/schema.sql": {
+    "delivery": {
+      "CONSTRAINT delivery_stage CHECK (stage IN ('armed','notified','digest','done'))": "CONSTRAINT delivery_stage CHECK (stage IN ('armed','notified','digest','done'))",
+      "PRIMARY KEY (person, ref)": "PRIMARY KEY (person, ref)",
+      "armed_at": "armed_at DOUBLE PRECISION NOT NULL",
+      "attempts": "attempts INTEGER NOT NULL",
+      "digested_at": "digested_at DOUBLE PRECISION",
+      "emailed_at": "emailed_at DOUBLE PRECISION",
+      "kind": "kind TEXT NOT NULL",
+      "link": "link TEXT NOT NULL",
+      "names": "names TEXT",
+      "notice_id": "notice_id TEXT",
+      "notified_at": "notified_at DOUBLE PRECISION",
+      "org": "org TEXT NOT NULL",
+      "outcome": "outcome TEXT",
+      "owner": "owner TEXT NOT NULL",
+      "person": "person TEXT NOT NULL",
+      "ref": "ref TEXT NOT NULL",
+      "room": "room TEXT NOT NULL",
+      "stage": "stage TEXT NOT NULL",
+      "updated_at": "updated_at DOUBLE PRECISION NOT NULL",
+      "version": "version INTEGER NOT NULL",
+      "wake_at": "wake_at DOUBLE PRECISION NOT NULL",
+      "workspace": "workspace TEXT NOT NULL"
+    },
+    "delivery_send": {
+      "CONSTRAINT delivery_send_kind CHECK (kind IN ('single','digest'))": "CONSTRAINT delivery_send_kind CHECK (kind IN ('single','digest'))",
+      "CONSTRAINT delivery_send_status CHECK (status IN ('sending','sent','failed'))": "CONSTRAINT delivery_send_status CHECK (status IN ('sending','sent','failed'))",
+      "PRIMARY KEY (id)": "PRIMARY KEY (id)",
+      "at": "at DOUBLE PRECISION NOT NULL",
+      "channel": "channel TEXT NOT NULL",
+      "day": "day TEXT NOT NULL",
+      "handle": "handle TEXT",
+      "id": "id TEXT NOT NULL",
+      "kind": "kind TEXT NOT NULL",
+      "person": "person TEXT NOT NULL",
+      "reason": "reason TEXT",
+      "refs": "refs TEXT NOT NULL",
+      "status": "status TEXT NOT NULL"
+    },
     "effect_receipt": {
       "CONSTRAINT receipt_state CHECK (state IN ('reserved','confirmed','failed'))": "CONSTRAINT receipt_state CHECK (state IN ('reserved','confirmed','failed'))",
       "FOREIGN KEY(reaction_id) REFERENCES reaction (reaction_id)": "FOREIGN KEY(reaction_id) REFERENCES reaction (reaction_id)",
@@ -410,11 +454,26 @@
       "created_at": "Column(DateTime, server_default=func.now())",
       "expires_at": "Column(DateTime, nullable=True)",
       "id": "Column(Integer, primary_key=True, index=True)",
+      "kind": "Column(String(16), nullable=False, server_default=text(\"'key'\"))",
       "last_used_at": "Column(DateTime, nullable=True)",
       "name": "Column(String(255), nullable=True)",
       "scopes": "Column(ARRAY(Text), nullable=False, server_default=text(\"'{}'::text[]\"))",
       "token": "Column(String(255), unique=True, index=True, nullable=False)",
       "user_id": "Column(Integer, ForeignKey('users.id'), nullable=False, index=True)"
+    },
+    "invites": {
+      "created_at": "Column(String(40), nullable=True)",
+      "created_by": "Column(String(128), nullable=True)",
+      "data": "Column(JSONB, nullable=False, server_default=text(\"'{}'::jsonb\"), default=lambda: {})",
+      "expires_at": "Column(BigInteger, nullable=False)",
+      "id": "Column(String(32), primary_key=True)",
+      "max_uses": "Column(Integer, nullable=False, server_default='1', default=1)",
+      "mode": "Column(String(16), nullable=False, server_default=text(\"'open'\"), default='open')",
+      "resource": "Column(String(160), nullable=False, index=True)",
+      "revoked": "Column(Boolean, nullable=False, server_default=text('false'), default=False)",
+      "role": "Column(String(16), nullable=False)",
+      "token_hash": "Column(String(64), nullable=False, unique=True)",
+      "uses": "Column(Integer, nullable=False, server_default='0', default=0)"
     },
     "meeting_sessions": {
       "id": "Column(Integer, primary_key=True, index=True)",
@@ -434,6 +493,15 @@
       "status": "Column(String(50), nullable=False, default='requested', index=True)",
       "updated_at": "Column(DateTime, server_default=func.now(), onupdate=func.now())",
       "user_id": "Column(Integer, nullable=False, index=True)"
+    },
+    "memberships": {
+      "added_at": "Column(String(40), nullable=True)",
+      "added_by": "Column(String(128), nullable=True)",
+      "data": "Column(JSONB, nullable=False, server_default=text(\"'{}'::jsonb\"), default=lambda: {})",
+      "position": "Column(Integer, nullable=False, server_default='0', default=0)",
+      "principal_id": "Column(String(128), primary_key=True)",
+      "resource": "Column(String(160), primary_key=True, index=True)",
+      "role": "Column(String(16), nullable=False)"
     },
     "org_members": {
       "created_at": "Column(DateTime, server_default=func.now(), default=func.now())",
@@ -467,6 +535,14 @@
       "updated_at": "Column(DateTime, server_default=func.now(), onupdate=func.now())",
       "value": "Column(JSONB, nullable=False, server_default=text(\"'{}'::jsonb\"), default=lambda: {})"
     },
+    "principals": {
+      "bills_to": "Column(Integer, ForeignKey('users.id', ondelete='RESTRICT'), nullable=True)",
+      "created_at": "Column(DateTime, server_default=func.now(), default=func.now())",
+      "id": "Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), primary_key=True)",
+      "kind": "Column(String(16), nullable=False, server_default=text(\"'workspace'\"), default='workspace')",
+      "status": "Column(String(16), nullable=False, server_default=text(\"'active'\"), default='active')",
+      "workspace_id": "Column(String(255), nullable=True)"
+    },
     "transcriptions": {
       "created_at": "Column(DateTime, default=datetime.utcnow)",
       "end_time": "Column(Float, nullable=False)",
@@ -488,6 +564,17 @@
       "max_concurrent_bots": "Column(Integer, nullable=False, server_default='3', default=3)",
       "name": "Column(String(100))",
       "org_id": "Column(String(64), nullable=False, server_default=text(\"'default'\"), default=DEFAULT_ORG_ID)"
+    },
+    "workspaces": {
+      "archived_at": "Column(DateTime, nullable=True)",
+      "connections": "Column(JSONB, nullable=False, server_default=text(\"'[]'::jsonb\"), default=lambda: [])",
+      "id": "Column(String(128), primary_key=True)",
+      "kind": "Column(String(16), nullable=False, server_default=text(\"'normal'\"), default='normal')",
+      "org_id": "Column(String(64), nullable=False, server_default=text(\"'default'\"), default=DEFAULT_ORG_ID)",
+      "owner": "Column(String(128), nullable=True)",
+      "slug": "Column(String(128), nullable=False, unique=True)",
+      "updated_at": "Column(DateTime, server_default=func.now(), default=func.now())",
+      "visibility": "Column(String(16), nullable=False, server_default=text(\"'closed'\"), default='closed')"
     }
   },
   "core/meetings/services/meeting-api/src/meeting_api/sessions/models.py": {

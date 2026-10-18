@@ -105,9 +105,17 @@ function alertInBackground(n: Notice): void {
   try {
     if (!alerts.hidden()) return;
     if (alerts.permission() === "granted") alerts.show(n);
-    alerts.chime();
+    if (!noticeSound) alerts.chime();
   } catch { /* an alert is a courtesy; the bell has it */ }
 }
+
+// ── the person's sounds (0.13.4 S6) ──────────────────────────────────────────────────────────
+/** When installed (`./noticeSounds`), it decides the sound of every NEW notice by the person's
+ *  policy (`platform/sounds.soundFor`) and the background chime above steps aside, so a notice never
+ *  sounds twice. Not installed → the behaviour above, unchanged. */
+export type NoticeSound = (n: Notice) => void;
+let noticeSound: NoticeSound | null = null;
+export function setNoticeSound(fn: NoticeSound | null): void { noticeSound = fn; }
 
 /** May the bell offer to turn background alerts on? Once: never again after the person answered. */
 export function alertsAskable(): boolean {
@@ -127,7 +135,10 @@ export async function answerAlerts(yes: boolean): Promise<void> {
  *  A new one also reaches a person whose tab is in the background (browser alert + soft chime). */
 export function receive(n: Notice): void {
   const had = state.items.find((x) => x.id === n.id);
-  if (!had && !n.read) alertInBackground(n);
+  if (!had && !n.read) {
+    alertInBackground(n);
+    try { noticeSound?.(n); } catch { /* a sound is a courtesy */ }
+  }
   const items = [n, ...state.items.filter((x) => x.id !== n.id)].slice(0, 100);
   const unread = state.unread + (had && !had.read ? 0 : n.read ? 0 : 1);
   let toasts = [n, ...state.toasts.filter((x) => x.id !== n.id)];

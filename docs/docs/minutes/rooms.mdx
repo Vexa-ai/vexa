@@ -1,0 +1,223 @@
+---
+title: "Rooms, tagging and rooms of two"
+description: "Who is in a room, what @mentioning someone does, the room of two behind Message, the Vexa and transcription switches, and ringing."
+---
+
+A **chat** has exactly one person: you and your agent. A **room** is shared: it lives in a workspace,
+holds no one's personal data, and Vexa in it runs as the workspace, never as any one person. Two people
+talking is a room too, a **room of two**.
+
+## What you can do
+
+### See who is in a room
+
+The people beside the room's name open the **members panel**:
+
+- **In #room**: each member, how they got there ("added by Dmitry"), and whether they have opened
+  it yet. Someone who never opened it shows a faded face.
+- **Invited, not on Vexa yet**: people invited from this room, and when the invite runs out.
+- **In the workspace, not here** (closed rooms): each workspace member who is not in the room, with **Add**.
+
+An **open room** includes every member of its workspace. Leaving the workspace takes you out of its
+open rooms. A **closed room** has only the people added to it.
+
+### Tag someone with @
+
+Tagging someone posts your message. **A mention never changes who has access by itself**: if it
+would, only you get a card, and nothing happens until you answer it.
+
+| You tag | What happens |
+|---|---|
+| A room member | They are mentioned and notified. No card. |
+| A workspace member who is not in the room | A card only you see: **Add and tell them** · **Yes, and always for this workspace** · **Just mention**. |
+| Someone outside the workspace (a contact, or someone from another of your workspaces) | A card: **Invite and tell them** · **Just mention**. The invite is for the workspace and this room, bound to their address, as a contributor (a reader if you are one). They land in the room after they accept. |
+| An address nobody knows | The same invite card. Your workspace's policy decides between a guest seat and an invite; guest seats are not available yet, so it is an invite. |
+
+**"Always"** adds one readable line to the workspace's policy: *"In Harbor AI Meetup, when Dmitry
+@mentions a workspace member who isn't in the room, add them and tell them."* If you own the workspace,
+the line applies at once. Otherwise it goes to the owner to approve in the app. Once it is in force,
+tagging a workspace member adds them without a card, and a one-line receipt offers **Undo**.
+
+"Always" is never offered for bringing someone new into a workspace. That is decided person by person.
+
+### Invite without writing a message
+
+**Invite** in the room's header opens the same picker: type a name or an address. Each pick produces
+the same card as a tag.
+
+### Message a person
+
+**Message** on a person opens your room of two with them, creating it the first time. The same two
+people always land in the same room. Vexa is there with no access to either person's own data;
+personal questions get "ask me in your chat". A room of two holds exactly two people.
+
+### Start a call and ring people
+
+**Start call** in a room rings the room's members, and only them:
+
+- In a **closed room**, everyone in it is rung.
+- In an **open room**, members who opened the room in the last 30 days are rung. The others see the
+  live call on the workspace page and can join, but they are not rung.
+- Someone added while the call is live is rung at once.
+- If nobody else is in the room, the call says so and how to ring someone.
+
+Joining a call no longer gives you its transcript automatically. The call's owner shares it with each
+person explicitly. A room's call notes land in the room, which its members already read.
+
+### Switch Vexa or transcription off
+
+The room's **⋯** menu has two switches:
+
+- **Vexa in this room**: off means no agent replies, no listening, and no cards proposed from the room.
+- **Transcribe calls**: off means calls here have audio only, with no transcript or notes.
+
+| Room | Turning a switch off | Turning it back on |
+|---|---|---|
+| Room of two | Either person | Needs both: your request becomes a card for the other person (**Turn on** · **Keep off**) |
+| Bigger room | The room's owner or a workspace owner | The same |
+
+A workspace's policy can lock either switch; the menu then says which rule locks it. When either
+switch is off, a small indicator sits beside the room's name.
+
+On a phone (below 520 px), the header shows the name, the people and **⋯**. Start call, Invite and
+both switches move into **⋯**.
+
+### Shared chats became rooms
+
+Chats with more than one person were retired in 0.13.4. Existing ones moved once, and everyone in each
+got one notice:
+
+- **Two people**: the chat became their room of two. If they already had one, it became a second room beside it.
+- **Three or more**: a closed room in the workspace the chat wrote to, with the same people.
+- **A chat that wrote to no workspace**: not moved; its owner is asked to choose a workspace.
+
+History and links are unchanged.
+
+## Limits and errors
+
+| You see | Why | What to do |
+|---|---|---|
+| "A room of two has exactly two people" | You tagged or invited a third person in a room of two | Start a room in a workspace |
+| "In this room its owners change the switches" | You are a member of a bigger room | Ask an owner |
+| "… is locked … by policy" | The workspace's policy locks that switch | Ask the workspace's owner |
+| "Calls in this room are not transcribed" | Transcribe calls is off | Start the call without a transcript, or ask to turn it back on |
+| No card after a tag | The person is already in the room | Nothing: they are notified |
+
+## How it works
+
+### Who is in a room (D36)
+
+agent-api decides who is in a room. The session store's participant rows are kept as a
+**projection** only (read marks, your sidebar, who opened the room recently); they never decide access.
+For every session that has a room row, the room-membership resolver (`control_plane/room_membership.py`)
+answers each access check:
+
+- **Open room**: derived from the workspace's roster in the identity registry. A workspace member is a
+  room member (every member takes part; a reader's turn still runs read-only). The room's maker stays
+  its owner while they are in the workspace.
+- **Closed room**: explicit `room:<session id>` rows in the identity registry's `memberships` table,
+  written through admin-api's `/internal/registry/rooms/{id}/members` doors. Without identity, the file
+  backend keeps `<root>/.rooms/<id>.json`, outside every workspace mount.
+- **Migration**: a closed room with no registry rows yet adopts its participant rows once, while
+  `VEXA_POLICY_LEGACY_READ` is on.
+- **Fail closed**: a roster or row set that cannot be read means no membership.
+
+Closing an open room writes rows for the people who were following it. Opening a closed room drops its rows.
+
+### Tagging (D21)
+
+The composer posts the message, then asks `POST /api/rooms/{session}/tag` for each person the message
+mentions. The server answers the case and the exact card. The card's buttons call
+`POST /api/rooms/{session}/members`, which every delegated caller is refused.
+
+- **A workspace member** is added: registry row first for a closed room, then the projection, a
+  `room_added` notice, a system line, and a ring if a call is live.
+- **"Always"** builds the workspace's new rule list and records it as a `policy` proposal (the S1
+  proposal mechanism, I15). The owner's own click from a browser session applies it with
+  `Approved-by` and `On-behalf-of` trailers. The rule is `{"action": "room.mention_adds_member",
+  "principals": [<tagger>]}`, evaluated by the one policy evaluator.
+- **Everyone else** gets a workspace invite (`membership_acts.invite`, restricted to the address,
+  role capped at the tagger's), carrying the room as pending membership. Accepting the invite adds
+  them to that room.
+- **Guest seats** are refused by the platform floor (`floor.no-guest-seats`) until audience-limited
+  mounts exist. Decision 9's seeded default, invite, is what happens.
+
+### Rooms of two (FD4)
+
+`POST /api/rooms/direct` finds or creates the pair's hidden workspace. Its id is
+`pair-<sha256 of the two account ids, ordered>`, so a race cannot make two. Both people are owners;
+the room's `created_by` (who pays) is the person who opened it. The workspace records `kind: pair`
+in the registry. A pair workspace is never in the membership index, a workspace list, a mount or the
+people directory. Every membership grant refuses a third person.
+
+### Switches
+
+The switches are columns on the room row (`agent_on`, `transcribe`, plus waiting turn-on asks), and
+`control_plane/room_switches.py` decides who may change them:
+
+- Who may switch is a default policy line: either person in a room of two, owners in a bigger room.
+- A workspace DENY rule on `room.switch.<vexa|transcribe>.<on|off>` locks a switch.
+
+They are enforced where each effect starts:
+
+- with Vexa off, `session_turn.plan_turn` starts no turn, the `room.signal` door refuses with
+  `room_vexa_off`, and the listen brief wakes on nothing;
+- with transcription off, binding a transcribed call answers 409.
+
+### Ringing
+
+`control_plane/room_ring.py` sends each rung member a live `ring` frame on their own channel and a
+`call_started` notice that expires after 30 minutes. Who counts is `room_membership.ringable`. The
+tuning line for open rooms is `VEXA_ROOM_RING_DERIVED_DAYS` (default 30).
+
+### Configuration
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `VEXA_ROOM_RING_DERIVED_DAYS` | `30` | An open room rings members who opened it within this many days |
+| `VEXA_POLICY_LEGACY_READ` | `1` | While on, a closed room adopts its participant rows once (set to `0` after every instance has started on 0.13.4) |
+
+The one-time shared-chat migration is `POST /internal/rooms/migrate-shared-chats?dry_run=true` on the
+internal tier: run it as a dry run, read the report, then run it with `dry_run=false`.
+
+## Why it complies
+
+### Architecture
+
+| Rule | How | Gate |
+|---|---|---|
+| **P20** complete mediation | Every room access check asks one resolver; the participant projection grants nothing | deny tests below |
+| **P23** one writer | Closed-room rows have one writer (identity, through agent-api's registry port); the projection is agent-api's | `gate:dataflow` |
+| **ADR-0042 / FD3** fail closed | An unreadable roster, room row set or rule set refuses | `test_an_unreadable_room_registry_refuses` |
+| **R9** a mention never changes access | A tag only classifies; every grant is a separate person's click | `test_case2_…`, deny 29 |
+| **R12** behaviours are policy lines | Guest vs invite is a floor line; switches are default lines a workspace can lock; ringing derived members is a tuning line | `test_in_a_bigger_room_owners_switch_and_policy_can_lock` |
+| **P18** fail loud | Locks answer 423 naming the rule; refusals carry the server's own sentence | tests |
+
+### Security
+
+- **No directory oracle (M1).** The @ picker leaves out undiscoverable members and shows readers names
+  only (deny test 16). An invite by address answers the same whether or not the address has an
+  account. The unauthenticated invite preview shows the workspace's name and terms (and, for an
+  invite bound to an address, that address, so the page can prefill it); never its purpose or the
+  sender's address. The signed-in confirm card shows the sender.
+- **Only a person mints an invite (H3).** Every door that mints an invite or a join link
+  (`/api/workspace/invites`, `/api/workspace/invite`, `/api/workspace/invite-link`, `/api/join-links`,
+  and the tag card's invite) takes only a person's session: no delegation token of any regime, a
+  person's own watched chat agent included, and no API key without the browser scope. An agent
+  proposes; the person's click on the card is the act. When S5's signed cards land, the agent's
+  proposal becomes an invitation card the person signs with the session credential (D13), and the
+  platform mints only after that signature.
+- **No inherited transcript (M8).** Joining a call does not redeem its transcript share. The owner
+  shares it per person (`POST /api/sessions/{s}/call/share`).
+- **Agents never add people (deny test 29).** An agent-composed mention (`origin: agent`, or any
+  delegated caller) is never offered "always", never acts on an existing line (`floor.agent-mentions-never-add`),
+  and the add route refuses every delegated caller.
+- **Vexa off means nothing runs (deny test 25).** No turn, signal or card proposal from a room with Vexa off.
+- **Pair workspaces stay private to the pair.** They are hidden from every enumeration, and a third
+  member is refused at the one grant function.
+
+## Related
+
+- [Shared chats](/minutes/shared-chats): the retired two-person chat model and the shared-turn boundary
+- [Calls](/minutes/calls)
+- [Workspaces](/minutes/workspaces)

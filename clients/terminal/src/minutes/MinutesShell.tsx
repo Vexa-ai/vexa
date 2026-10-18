@@ -13,7 +13,15 @@
  *
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { ROUTINES_CHANGED_EVENT } from "./RoutineBar";
-import { COMPANY_WORD, WORKSPACE_WORD } from "./vocabulary";
+import { COMPANY_WORD, WORKSPACE_WORD, deskName } from "./vocabulary";
+import { closeCentre, useCentre } from "./shell2/centre";
+import { CentrePane } from "./shell2/CentrePane";
+import { setMe } from "./shell2/me";
+import { isPersonPath } from "./shell2/personOpen";
+import { BottomBar } from "./shell2/BottomBar";
+import { StripNav } from "./shell2/StripNav";
+import { useBackCloses } from "./shell2/useBackCloses";
+import { CHAT_ABOUT_EVENT, consumeKeepPanel, rememberAbout, setKnownChats, type Artifact as AboutArtifact } from "./shell2/about";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ARTIFACT_EVENT, CHOOSE_TARGET_EVENT, CHAT_ARTIFACTS_EVENT, ASK_CHAT_EVENT, CALL_START_EVENT, CHAT_TOUCHED_EVENT, OPEN_SESSION_EVENT, FOCUS_WORKSPACE_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, PAGE_REMOVED_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT, OPEN_WORKSPACE_FILES_EVENT, useService } from "../platform";
 import { LEVEL_SET_EVENT, NEW_CHAT_AT_LEVEL_EVENT } from "../platform";
@@ -37,6 +45,7 @@ import { ContextBar, GLOBAL_MOUNT } from "./ContextBar";
 import { featureOn, useFeature } from "../platform/features";
 import { workspaceLabel } from "../ui-kit/wsLinks";
 import { RoomHeader } from "./rooms/RoomHeader";
+import { MessageActionsHost } from "./readme/ObjectActions";
 import { BrowseRoomsDialog, NewRoomDialog } from "./rooms/RoomDialogs";
 import { leaveRoom } from "../surfaces/roomsApi";
 import { refreshRoom, useRoom } from "../surfaces/roomState";
@@ -49,9 +58,9 @@ import { chatArtifacts, writesOf, type ChatArtifact } from "./chatArtifacts";
 import type { ScopeView } from "../data/workspaceApi";
 import { ChatRoutines, retireRoutine, routineOfOpenChat } from "./RoutineBar";
 import { OPEN_CHAT_EVENT } from "../surfaces/agent-window";
-import { HOME_TARGET_EVENT, NEW_CHAT_AT_EVENT, NEW_ROOM_EVENT } from "../platform/events";
+import { HOME_TARGET_EVENT, NEW_CHAT_AT_EVENT, NEW_ROOM_EVENT, START_MEETING_EVENT } from "../platform/events";
 import { NEW_WORKSPACE_KICK } from "./desktop/home2/StatusCard";
-import { homeTargetAct } from "./desktop/home2/HomeTarget";
+import { PERSONAL as HOME_PERSONAL, aimHome, homeTargetAct, noteHomeTarget, setHomeFocus } from "./desktop/home2/HomeTarget";
 import { WORKSPACE_PAGE_WIDE_EVENT, isWorkspacePagePath } from "./desktop/home2/workspaceView";
 import { ConnectionsPanel, CONNECTIONS_CLOSE } from "./ConnectionsPanel";
 import { dropRemovedPage } from "./pageDelete";
@@ -367,6 +376,9 @@ export function MinutesShell() {
         setEmail(who);
         // a voice note is the person's own voice: its lines carry their name, not the bot's "Speaker"
         const name = ((d?.user as { name?: string } | undefined)?.name ?? "").trim();
+        // shell2: who "you" are, so the people surfaces say "you" and never list you
+        const u = (d?.user ?? {}) as { id?: string | number; sub?: string };
+        setMe({ name, email: who, subject: u.id != null ? String(u.id) : u.sub ?? "" });
         speakerRef.current = name || (who ? who.split("@")[0] : "") || undefined;
         // No identity means no server rail to wait for: the stored one is all there is, so the
         // list has settled. Without this a `/w/` link would wait forever for a fetch never made.
@@ -471,13 +483,44 @@ export function MinutesShell() {
   // R1 FLAGS: `rooms` — rooms made in a workspace, chats private; `home2` — the sidebar by workspace
   const roomsOn = useFeature("rooms");
   const home2 = useFeature("home2");
+  // SHELL2 (0.13.4 UI-1): the approved shell — one-list sidebar, Inbox and Meetings in the centre,
+  // My desk, outlined primaries, the phone fixes. Its CSS hangs off `data-shell2` on the root element
+  // so menus, drawers and sheets (portals outside the shell) follow it too.
+  const shell2 = useFeature("shell2") && home2;
+  useEffect(() => {
+    try { document.documentElement.toggleAttribute("data-shell2", shell2); } catch { /* no document */ }
+  }, [shell2]);
+  const centreList = useCentre();
+  // focus belongs to the new chat it was set for: a stored chat coming to the front ends it
+  useEffect(() => { if (draftRef.current?.id !== sel.chatId) setHomeFocus(false); }, [sel.chatId]);
+  const pagesFullRef = useRef(false);
+  useEffect(() => { if (shell2) setKnownChats(allChats.map((c) => ({ id: c.id, label: c.label }))); }, [shell2, allChats]);
+  // RIGHT → LEFT (UI 7h): "Chat about this" — a chat in the centre with the artifact attached, the
+  // panel holding its place; the artifact remembers the chat so the button then reads "Resume chat"
+  useEffect(() => {
+    const on = (e: Event) => {
+      const a = (e as CustomEvent<AboutArtifact>).detail;
+      if (!a?.key) return;
+      const ws = a.slug && a.slug !== "personal" ? a.slug : "";
+      const c = startDraftRef.current(ws);
+      rememberAbout(a.key, c.id);
+      // the new chat is the focused input for that artifact's workspace — not the whole home
+      noteHomeTarget(ws || HOME_PERSONAL); setHomeFocus(true);
+      window.setTimeout(() => {
+        window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { mode: "draft", prompt: `About ${a.kind === "meeting" ? "the meeting" : "the page"} “${a.label}”${a.kind === "page" ? ` (${a.slug || "personal"}/${a.path})` : ""}: ` } }));
+        window.dispatchEvent(new CustomEvent("vexa:terminal:focus-chat"));
+      }, 80);
+    };
+    window.addEventListener(CHAT_ABOUT_EVENT, on);
+    return () => window.removeEventListener(CHAT_ABOUT_EVENT, on);
+  }, []);
   // THE SIDEBAR BY WORKSPACE (home2): Pinned · one group per workspace · Hidden, and no folders. A
   // chat lives in the group of the workspace it writes to; one with no workspace lives in Personal.
   const railFolders = useMemo<RailFolders>(() => {
     // UI 7e (founder 2026-10-16): chats are grouped by the person's FOLDERS, not by workspace
     if (!home2 || folders.served) return folders;
     const base = withRoutineState(railRows(allChats, listedMeetings), routineStates);
-    const wss = [{ slug: "personal", name: "Personal" }, ...writable.filter((w) => w.slug !== "personal")];
+    const wss = [{ slug: "personal", name: deskName() }, ...writable.filter((w) => w.slug !== "personal")];
     const known = new Set(wss.map((w) => w.slug));
     const filings: Record<string, string> = {};
     for (const row of base) {
@@ -582,6 +625,9 @@ export function MinutesShell() {
   const setPagesOpenRef = useRef(shell.setPagesOpen);
   setPagesOpenRef.current = shell.setPagesOpen;
   const L = shell.layout;
+  // shell2 (mobile G2): system back closes the drawer or the pages sheet before it leaves the app
+  useBackCloses(shell2 && L.railKind === "drawer" && shell.drawerOpen, () => shell.setRailOpen(false), "drawer");
+  useBackCloses(shell2 && (L.pagesKind === "sheet" || L.pagesKind === "fullscreen") && shell.sheetOpen, () => shell.setPagesOpen(false), "sheet");
   const [connectionsMode,setConnectionsMode] = useState<'page'|'panel'|null>(null);
   const connectionsOpen=connectionsMode!==null;
   // `openPage` is a stable callback; it reaches the CURRENT layout controls through this ref.
@@ -609,6 +655,8 @@ export function MinutesShell() {
    *  what lets the artifacts effect trust that `sel.chatId` and `pages` describe the same chat. */
   const openChat = useCallback(async (c: ChatRec, how: { front?: "meeting" } = {}) => {
     window.dispatchEvent(new Event(CONNECTIONS_CLOSE));
+    // shell2: a conversation coming to the centre closes an open list (Inbox, Meetings)
+    closeCentre();
     const m = c.meeting ? meetings.find((x) => String(x.id) === c.meeting) : undefined;
     // BOUND TO A ROW THIS CLIENT HAS NEVER LISTED — the bot the chat sent moments ago. Ask the list
     // for it instead of laying the room out as though the meeting did not exist; `pagesForPhase`
@@ -734,6 +782,15 @@ export function MinutesShell() {
       workspaces: c.workspaces,
       target: c.target,
     });
+    // shell2 (UI 7h/7i): A CHAT OPENED FROM THE RIGHT PANEL changes only the centre — the panel keeps
+    // its view, scroll and open sections ("Chat about this", "Resume chat", a connected chat)
+    if (featureOn("shell2") && consumeKeepPanel()) {
+      setNotice(null); readerChoseFocus.current = false;
+      // on a phone the panel is a full-screen sheet over the centre: the chat must be SEEN, so the
+      // sheet steps aside (it keeps its place, and comes back as it was)
+      if (pagesFullRef.current) setPagesOpenRef.current(false);
+      return;
+    }
     setPages(list);
     setListing(null);
     // CLOSED UNTIL SOMETHING IS HERE (founder 2026-10-15): a chat with nothing of its own opened
@@ -1082,6 +1139,19 @@ export function MinutesShell() {
     const c = addChat("Thinking out loud", ["personal", "_global"]);
     void enterCall(c.id, c.label).catch(() => { /* the dock says why the call did not start */ });
   };
+  // START A MEETING (shell2, the Meetings page, UI 7w): a chat of its own with a call in it, in My
+  // desk — "a meeting can be just a meeting", filed later. The list closes: the call is in front.
+  const startMeetingRef = useRef<() => void>(() => undefined);
+  startMeetingRef.current = () => {
+    closeCentre();
+    const c = addChat("Meeting", ["personal", "_global"]);
+    void enterCall(c.id, c.label).catch(() => { /* the dock says why the call did not start */ });
+  };
+  useEffect(() => {
+    const on = () => startMeetingRef.current();
+    window.addEventListener(START_MEETING_EVENT, on);
+    return () => window.removeEventListener(START_MEETING_EVENT, on);
+  }, []);
   const runHomePrompt = (card: Card, prompt: string, label: string) => {
     const p: Proposal = { id: `home-${card.id}`, kind: "home", label, kick: homePrompt(prompt, card.id), say: prompt, title: cardTitle(card) };
     sendFeedback(card, "click", { people: cardPeople(card), title: cardTitle(card) });
@@ -1625,8 +1695,13 @@ export function MinutesShell() {
   // chip and guard decide that), and the aim opens a new draft there instead.
   useEffect(() => {
     const on = (e: Event) => {
-      const wid = String((e as CustomEvent<{ workspace?: string }>).detail?.workspace ?? "").trim();
-      if (homeTargetAct(selRef.current.chatId, draftRef.current?.id) === "new-draft") { startDraftRef.current(wid); return; }
+      const d = (e as CustomEvent<{ workspace?: string; onlyHome?: boolean }>).detail ?? {};
+      const wid = String(d.workspace ?? "").trim();
+      if (homeTargetAct(selRef.current.chatId, draftRef.current?.id) === "new-draft") {
+        // `onlyHome` (shell2, opening a workspace from the panel): a stored chat stays in front (7d)
+        if (d.onlyHome) return;
+        startDraftRef.current(wid); return;
+      }
       if (wid) setWorkspacesRef.current((ws) => (ws.includes(wid) ? ws : [...ws, wid]));
       setChatTargetRef.current(wid, { justMounted: true });
     };
@@ -1640,6 +1715,9 @@ export function MinutesShell() {
       const d = (e as CustomEvent<{ workspace?: string; draft?: string }>).detail ?? {};
       const wid = String(d.workspace ?? "").trim();
       const c = startDraftRef.current(wid === "personal" ? "" : wid);
+      // shell2 (UI 7t): a workspace's own "New chat" is the ONE way into focus — the home collapses to
+      // the input for that workspace; the target chip's × brings the full home back
+      if (featureOn("shell2") && wid && wid !== "personal") { noteHomeTarget(wid); setHomeFocus(true); }
       window.setTimeout(() => {
         if (d.draft) window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { prompt: d.draft, mode: "draft" } }));
         window.dispatchEvent(new CustomEvent("vexa:terminal:focus-chat"));
@@ -1718,6 +1796,8 @@ export function MinutesShell() {
     if (docKind === "meeting") { setDocBody(null); return; }
     // a workspace's page (home2) is drawn from components, not read as a file
     if (isWorkspacePagePath(docPath)) { setDocBody(null); return; }
+    // shell2: a person is drawn from the people read, not read as a file
+    if (isPersonPath(docPath)) { setDocBody(null); return; }
     // mock bodies short-circuit the fetch entirely — no request is made for a fabricated page
     if (mock) {
       const canned = mockBody(docPath, Date.now() - mockStart.current);
@@ -2316,7 +2396,14 @@ export function MinutesShell() {
       onNewRoom={roomsOn ? () => { if (inDrawer) shell.closeOverlays(); setRoomDialog({ kind: "new" }); } : undefined}
       onBrowseRooms={roomsOn ? () => { if (inDrawer) shell.closeOverlays(); setRoomDialog({ kind: "browse" }); } : undefined}
       selKey={selKey} onSelect={(r) => { if (inDrawer) shell.closeOverlays(); void openRow(r); }}
-      onHome={home2 ? () => { if (inDrawer) shell.closeOverlays(); goHome(); } : undefined}
+      onHome={home2 ? () => {
+        if (inDrawer) shell.closeOverlays();
+        goHome();
+        // shell2 (UI 7t): "+ New" always opens the FULL home aimed at My desk — a remembered target or
+        // focus never carries over
+        if (shell2) { closeCentre(); window.setTimeout(() => aimHome(HOME_PERSONAL), 0); }
+      } : undefined}
+      onNavigate={inDrawer ? () => shell.closeOverlays() : undefined}
       onNewWorkspace={home2 ? () => { if (inDrawer) shell.closeOverlays(); goHome(); window.setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { prompt: NEW_WORKSPACE_KICK, display: "Set up a new workspace" } })), 80); } : undefined}
       onNewChat={() => { if (inDrawer) shell.closeOverlays(); startDraft(); }} onDeleteChat={(id, o) => void deleteChat(id, o)} onMove={reorder}
       onDeleteChats={(ids) => void (async () => { for (const id of ids) await deleteChat(id, { retireRoutine: false }); })()}
@@ -2355,7 +2442,7 @@ export function MinutesShell() {
     const shared = writable.filter((w) => memberships.some((m) => m.workspace_id === w.slug));
     return shared.length ? shared : writable.filter((w) => w.slug !== "personal");
   }, [writable, memberships]);
-  const wsName = (slug: string) => writable.find((w) => w.slug === slug)?.name ?? (slug === "personal" || !slug ? "Personal" : slug);
+  const wsName = (slug: string) => (slug === "personal" || !slug) ? deskName() : writable.find((w) => w.slug === slug)?.name ?? slug;
   const [roomDialog, setRoomDialog] = useState<null | { kind: "new" | "take" | "browse"; workspace?: string; name?: string; from?: string }>(null);
   const setRoomDialogRef = useRef(setRoomDialog);
   const [activityOpen, setActivityOpen] = useState(false);
@@ -2378,14 +2465,19 @@ export function MinutesShell() {
     </span>
   ) : null;
   const pagesOverlay = L.pagesKind === "sheet" || L.pagesKind === "fullscreen";
+  pagesFullRef.current = L.pagesKind === "fullscreen";
+  // shell2 ON A PHONE: the bottom bar (decision 10), and system back closing the drawer or the sheet
+  const bottomBar = shell2 && L.mode === "single";
   const sheetForm = L.pagesKind === "sheet" ? "overlay" : L.pagesKind === "fullscreen" ? "fullscreen" : "inline";
 
   return (
     <div ref={shellRef} data-shell-mode={L.mode} data-rail={L.railKind} data-pages={L.pagesKind}
-      style={{ position: "relative", display: "grid", gridTemplateColumns: L.columns, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, minWidth: 0, overflow: "clip", background: surface.rail }}>
+      style={{ position: "relative", display: "grid", gridTemplateColumns: L.columns, gridTemplateRows: `${T.headerH}px 1fr${bottomBar ? " auto" : ""}`, height: "100%", minHeight: 0, minWidth: 0, overflow: "clip", background: surface.rail }}>
       <NotificationToasts />
       {L.railKind === "docked" ? railBody(false)
-        : L.railKind === "strip" ? <RailStrip open={shell.drawerOpen} onOpen={() => shell.setRailOpen(true)} onNewChat={startDraft} />
+        : L.railKind === "strip" ? <RailStrip open={shell.drawerOpen} onOpen={() => shell.setRailOpen(true)}
+          onNewChat={shell2 ? () => { closeCentre(); goHome(); window.setTimeout(() => aimHome(HOME_PERSONAL), 0); } : startDraft}
+          extra={shell2 ? <StripNav /> : undefined} />
         : null}
       {L.railKind !== "docked" && (
         <Drawer open={shell.drawerOpen} onClose={() => shell.setRailOpen(false)} width={L.widths.drawer} label="Chats">
@@ -2401,6 +2493,7 @@ export function MinutesShell() {
           it says what to do, and it can be dismissed (it also goes by itself). */}
       {orderError && <RailToast message={orderError} onDismiss={() => setOrderError("")} />}
       <div style={{display:connectionsMode==='page'&&!pagesOverlay?"none":"contents"}}>
+      <MessageActionsHost />
       {inRoom && room ? <RoomHeader session={sel.chatId} label={sel.label} room={room} workspaceName={wsName(room.workspace)}
         onRename={renameChat} onThinkPrivately={thinkPrivately}
         onLeave={() => {
@@ -2521,6 +2614,12 @@ export function MinutesShell() {
         </div>
         </BlocksProvider>
       </main>
+      {/* SHELL2 (UI 7k): the Inbox or Meetings, in the centre column over the conversation — its own
+          header (the menu control in single mode), drawn after <main> so it paints above it, and
+          below the pages sheet, so a card or a meeting opened from the list is never hidden */}
+      {shell2 && centreList && <CentrePane kind={centreList}
+        leading={L.railKind === "drawer" ? <ShellToggle kind="rail" open={shell.drawerOpen} onClick={() => shell.setRailOpen(!shell.drawerOpen)} /> : undefined}
+        trailing={pagesOverlay ? <ShellToggle kind="pages" open={shell.sheetOpen} onClick={() => shell.setPagesOpen(!shell.sheetOpen)} /> : undefined} />}
       </div>
       {/* the pages panel's resize handle — a docked panel only: a folded or overlaid one has no
           edge to drag. */}
@@ -2548,10 +2647,13 @@ export function MinutesShell() {
               canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}
               body={docBody} notice={notice} onSaved={() => setDocNonce((n) => n + 1)}
               onCollapse={() => shell.setPagesOpen(false)}
-              artifacts={artifactsHere} onArtifact={openChatArtifact}
+              artifacts={artifactsHere} onArtifact={openChatArtifact} phone={L.pagesKind === "fullscreen"}
               collapseLabel={pagesOverlay ? "Back to the conversation" : undefined} /></BlocksProvider>
           </Sheet>}
       </div>
+      {bottomBar && <BottomBar home={draft?.id === sel.chatId} chatsOpen={shell.drawerOpen}
+        onHome={() => { shell.closeOverlays(); closeCentre(); goHome(); window.setTimeout(() => aimHome(HOME_PERSONAL), 0); }}
+ />}
     </div>
   );
 }

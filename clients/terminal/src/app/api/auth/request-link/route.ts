@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
   // RATE LIMITED (../linkRateLimit.ts), before anything costs an admin-api call or a mail. Over the
   // client limit: a 429 that says nothing about the address. Over the address limit: the same 200 as
   // always, and nothing is sent — the mailbox is not flooded, and the answer reveals nothing.
-  const verdict = takeLinkRequest(request.headers.get(CLIENT_ADDRESS_HEADER) || "unknown", normalized);
+  const verdict = await takeLinkRequest(request.headers.get(CLIENT_ADDRESS_HEADER) || "unknown", normalized);
   if (verdict === "client-limited") {
     return NextResponse.json({ error: "Too many sign-in requests. Try again in a few minutes." },
       { status: 429, headers: { ...NO_STORE, "Retry-After": "60" } });

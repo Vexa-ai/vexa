@@ -8,6 +8,9 @@ import { gatewayPost } from "./desk";
 export type CardIn = {
   id: string; title: string; state: string; next: string | null; waiting: string | null; due: string | null;
   workspaces: string[]; members: { subject: string; status: string }[];
+  /** S5 (D11): the structured next actor (a person id) and whether the card is still open — the
+   *  attention rule matches on these, the same predicate as crm's /card/inbox. */
+  next_actor: string | null; open: boolean;
 };
 
 const MAX_CARDS = 100;
@@ -21,6 +24,7 @@ export function cardsIn(raw: unknown): CardIn[] {
     const o = c as Record<string, unknown>;
     out.push({
       id: String(o.id), title: str(o.title) ?? "", state: str(o.state) ?? "", next: str(o.next), waiting: str(o.waiting), due: str(o.due),
+      next_actor: typeof o.next_actor === "string" ? o.next_actor.slice(0, 128) : null, open: o.open !== false,
       workspaces: (Array.isArray(o.workspaces) ? o.workspaces : []).filter((w): w is string => typeof w === "string").slice(0, 20),
       members: (Array.isArray(o.members) ? o.members : [])
         .filter((m): m is { subject: string; status?: unknown } => !!m && typeof (m as { subject?: unknown }).subject === "string")

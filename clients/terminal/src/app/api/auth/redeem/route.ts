@@ -38,19 +38,12 @@ import { redeemMagicToken, safeNext, verifyMagicToken, type VerifyFailure } from
 import { SIGNIN_NOT_ALLOWED, SIGNIN_UNAVAILABLE } from "../../../signinRefusal";
 import { signinMethodEnabled } from "../oidcConfig.mjs";
 import { captureSigninPhoto } from "../signinPhoto";
+import { isSecureRequest, sameOriginPost } from "../sameOrigin";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
 const NO_STORE = { "Cache-Control": "no-store, no-cache, must-revalidate" } as const;
-
-/** Mirrors login/ and the OAuth signIn callback: cookies are Secure iff the deploy is HTTPS. */
-function isSecureRequest(): boolean {
-  return (
-    (process.env.TERMINAL_URL || "").startsWith("https://") ||
-    (process.env.NEXTAUTH_URL || "").startsWith("https://")
-  );
-}
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -62,9 +55,9 @@ function card(title: string, inner: string, status: number): NextResponse {
 <meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer">
 <style>
  :root{color-scheme:dark light}
- body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
+ body{margin:0;min-height:100vh;min-height:100dvh;overflow-x:hidden;display:flex;align-items:center;justify-content:center;
       background:#0d0f12;color:#e6e8eb;font:14px/1.55 ui-sans-serif,system-ui,-apple-system,sans-serif}
- .card{width:340px;background:#15181d;border:1px solid #262b33;border-radius:12px;padding:24px;
+ .card{width:340px;max-width:calc(100vw - 32px);box-sizing:border-box;background:#15181d;border:1px solid #262b33;border-radius:12px;padding:24px;
        box-shadow:0 8px 32px rgba(0,0,0,.3)}
  h1{margin:0 0 10px;font-size:15px;font-weight:600}
  p{margin:0 0 16px;font-size:12.5px;color:#9aa3af}
@@ -110,32 +103,6 @@ function refusal(reason: VerifyFailure): NextResponse {
 
 function closedDoor(): NextResponse {
   return page("Email sign-in is not offered here", "Sign in with one of the options on the sign-in page.", 404, "Back to sign-in");
-}
-
-/** This instance's own origins: the configured public URL(s) and the one the request arrived on. */
-function ownOrigins(request: NextRequest): Set<string> {
-  const out = new Set<string>();
-  for (const u of [process.env.TERMINAL_URL, process.env.NEXTAUTH_URL]) {
-    try { if (u) out.add(new URL(u).origin); } catch { /* not a URL — ignored */ }
-  }
-  const h = request.headers;
-  const host = h?.get("x-forwarded-host") || h?.get("host");
-  if (host) {
-    const proto = (h?.get("x-forwarded-proto") || request.nextUrl.protocol.replace(/:$/, "") || "https").split(",")[0].trim();
-    out.add(`${proto}://${host.split(",")[0].trim()}`);
-  }
-  try { out.add(request.nextUrl.origin); } catch { /* ignored */ }
-  return out;
-}
-
-/** CSRF guard for the POST: only this instance's own page may press the button. */
-function sameOriginPost(request: NextRequest): boolean {
-  const h = request.headers;
-  const site = h?.get("sec-fetch-site");
-  const origin = h?.get("origin");
-  if (site && site !== "same-origin") return false;
-  if (origin) return origin !== "null" && ownOrigins(request).has(origin);
-  return site === "same-origin";
 }
 
 /** WHERE A SIGN-IN LANDS (F42, founder ruling 2026-09-02; amended Vexa-ai/vexa#1591).

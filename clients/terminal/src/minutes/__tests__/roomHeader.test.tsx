@@ -30,7 +30,10 @@ describe("RoomHeader", () => {
     expect(screen.getByLabelText("Open room")).toBeTruthy();
     expect(screen.getByText("Launch plan")).toBeTruthy();
     expect(screen.getByText(/Product planning/).textContent).toContain("Product planning");
-    expect(document.querySelector(".vx-rh-sub")!.textContent).toBe("Product planning · 3 members · Vexa speaks up when it matters");
+    // 0.13.4 S4 (7z): how many are in it moved into the people pill beside Start call and Invite
+    expect(document.querySelector(".vx-rh-sub")!.textContent).toBe("Product planning · Vexa speaks up when it matters");
+    expect(screen.getByRole("button", { name: /3 members/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Invite/ })).toBeTruthy();
     expect(screen.queryByText(/writes to/i)).toBeNull();
   });
   it("while the room's agent works on something nobody here asked for, the line says \"Vexa is checking…\"", () => {

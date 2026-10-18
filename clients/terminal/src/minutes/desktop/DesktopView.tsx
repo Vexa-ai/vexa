@@ -25,6 +25,8 @@ import { useFeature } from "../../platform/features";
 import type { WorkspaceItem } from "../../platform/desktop";
 import { HomeCards } from "./home2/StatusCard";
 import { NowStrip } from "./home2/NowStrip";
+import { useHomeFocus, useHomeTarget } from "./home2/HomeTarget";
+import { PersonMergeCard } from "../PersonMergeCard";
 
 const DRAG_TYPE = "application/x-vexa-desk";
 type Payload = { type: "section"; id: string } | { type: "tile"; section: string; ref: string };
@@ -212,8 +214,16 @@ export function DesktopView({ desktop }: { desktop: Desktop }) {
     || desktop.sections.some((s) => s.id === "cards" && s.items.length > 0));
   useEffect(() => { if (anyCards) void loadPeople(); }, [anyCards]);
   const titleOf = (id: string) => desktop.sections.find((s) => s.id === id)?.title ?? id;
+  // shell2 (UI 7i/7t): FOCUS — after a workspace's "New chat" the home is only the input for that
+  // workspace (above): no grid, no Now strip, no files. The × on the target chip brings it back.
+  const shell2 = useFeature("shell2");
+  const target = useHomeTarget();
+  const focused = useHomeFocus();
+  if (shell2 && home2 && focused) return <div className="vx-desk vx-desk-focus" data-desktop="" data-home-focus={target} />;
   return (
     <div className="vx-desk" data-desktop="" data-version={desktop.version}>
+      {/* D35: "are these accounts all yours?" — only when this person has a merge card waiting */}
+      <PersonMergeCard />
       {(desktop.proposals.length > 0 || cardProposals.length > 0 || invites.length > 0 || desktop.filters.length > 0 || restorable.length > 0) && (
         <div className="vx-desk-bar">
           {desktop.proposals.map((p) => (

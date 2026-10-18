@@ -34,6 +34,16 @@ export function labelOf(p: MentionablePerson): string {
   return first.replace(/[^\p{L}\p{N}._-]/gu, "") || p.subject;
 }
 
+/** "2 accounts" when one human confirmed several logins as theirs (D35: the picker lists Persons);
+ *  "2 accounts?" while that is only the records' guess — a hint, and a grant then reaches only the
+ *  account picked. "" for one login. The server sends `accounts_confirmed` as `accountsConfirmed`
+ *  on the known set and as `accounts_confirmed` on the mentionable set. */
+export function accountsLabel(p: Pick<MentionablePerson, "accounts" | "accountsConfirmed"> & { accounts_confirmed?: boolean }): string {
+  const n = Number(p.accounts || 0);
+  if (n <= 1) return "";
+  return (p.accountsConfirmed ?? p.accounts_confirmed) ? `${n} accounts` : `${n} accounts?`;
+}
+
 /** The rows the picker shows for `query`: agents first when they match, then people whose name or
  *  address contains it. Never anyone the server did not list. */
 export function pickerRows(people: MentionablePerson[], agents: { name: string }[], query: string): PickerRow[] {

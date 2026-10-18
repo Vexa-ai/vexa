@@ -15,18 +15,24 @@
  *  executable MDX on its own); an action outside the allow-list is its plain label; a view source
  *  outside the list is nothing. Pure, so every rule is provable without a browser. */
 
+import { ACCEPTED_VERBS, VERBS, canonicalVerb } from "../../readme/grammar";
+
 export const REF_KINDS = ["room", "chat", "call", "file", "person", "card", "routine", "workspace"] as const;
 export type RefKind = (typeof REF_KINDS)[number];
 export const BADGES = ["status", "needs-you", "working-here", "members", "upcoming"] as const;
 export type Badge = (typeof BADGES)[number];
 
-/** The founder's allow-list. Each runs as the person who clicked, through their own routes. */
-export const ACTION_VERBS = ["run-routine", "start-call", "join-call", "new-chat", "accept-proposal", "prepare", "move-card", "schedule-call"] as const;
-export type ActionVerb = (typeof ACTION_VERBS)[number];
+/** The allow-list is THE ONE VERB REGISTRY (PRD 0.13.4 D17, `../../readme/grammar.ts`): the old
+ *  `[[action:…]]` verbs and the README's `{{verb …}}` actions are one table; old spellings are aliases.
+ *  Each runs as the person who clicked, through their own routes. */
+export const ACTION_VERBS: readonly string[] = ACCEPTED_VERBS;
+export type ActionVerb = string;
 /** Acts with an effect beyond the person's own screen (other people see it, mail goes out, a shared
- *  record changes) are confirmed first. */
-const CONFIRMED: ReadonlySet<string> = new Set(["run-routine", "start-call", "accept-proposal", "move-card", "schedule-call"]);
-export const actionNeedsConfirm = (verb: string): boolean => CONFIRMED.has(verb);
+ *  record changes) are confirmed first — the registry says which. */
+export const actionNeedsConfirm = (verb: string): boolean => {
+  const v = canonicalVerb(verb);
+  return v ? VERBS[v].confirm : false;
+};
 
 export const VIEW_SOURCES = ["pages", "crm.card", "meetings", "rooms"] as const;
 export type ViewSource = (typeof VIEW_SOURCES)[number];

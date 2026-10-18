@@ -35,7 +35,11 @@ const RECENT_CAP = 8;
 import { NotificationBell } from "./NotificationBell";
 import { ContextMenu, type ContextMenuItem } from "../ui-kit/ContextMenu";
 import { RAIL_SHORTCUTS, isTypingTarget, matchesShortcut, shortcutAria, shortcutLabel, type Shortcut } from "../ui-kit/shortcuts";
-import { Button, ConfirmDialog, Dialog, IconButton, Input, Menu } from "../ui-kit";
+import { Button, ConfirmDialog, Dialog, IconButton, Input, Menu, Tabs } from "../ui-kit";
+import { SidebarNav } from "./shell2/SidebarNav";
+import { PairFace, isPairRoom, pairPeerOf } from "./shell2/pairRooms";
+import { usePresence } from "./shell2/PeoplePage";
+import { refreshRoom } from "../surfaces/roomState";
 import { ImportMeetingButton } from "../surfaces/MeetingBundleActions";
 import { clearVoiceNoteError, clock, stopVoiceNote, useVoiceNote } from "./voiceNote";
 import { useFeature } from "../platform/features";
@@ -102,6 +106,19 @@ function ActivityDot({ r }: { r: Row }) {
   return <span className="vx-dot vx-rail-dot" data-tone={r.live ? "success" : undefined} data-kind={r.meetingId ? "meeting" : "chat"} aria-hidden />;
 }
 
+/** shell2: a room of two is named by the other person, with their face, presence and unread count */
+function RowTitle({ r, pair }: { r: Row; pair: boolean }) {
+  const peer = pair ? pairPeerOf(r) : null;
+  const presenceOf = usePresence();
+  const unread = r.unread ?? 0;
+  if (!pair || !peer) return <span className="vx-row2-title">{displayLabel(r)}</span>;
+  return <>
+    <PairFace peer={peer} presence={presenceOf(peer.principal)} />
+    <span className="vx-row2-title" data-pair-room="">{peer.name}</span>
+    {unread > 0 && <span className="vx-s2-unread" aria-label={`${unread} unread`}>{unread}</span>}
+  </>;
+}
+
 /** How many rows a section shows before "Show N more". The selected row always shows. */
 export const SECTION_CAP = 8;
 /** How long a finger rests on a row before it lifts for dragging (a phone's long-press). */
@@ -138,6 +155,8 @@ export function Rail(p: {
   onBrowseRooms?: () => void;
   /** home2: back to the home page (the Home entry and the Chats title) */
   onHome?: () => void;
+  /** shell2: a nav row was used inside the drawer (the drawer closes) */
+  onNavigate?: () => void;
   /** home2: the + New menu's New workspace */
   onNewWorkspace?: () => void;
   onFolderRename?: (id: string, name: string) => void;
@@ -174,6 +193,28 @@ export function Rail(p: {
   const roomsOn = useFeature("rooms");
   const home2 = useFeature("home2");
   const sharingOn = useFeature("shared_chats") && !roomsOn;
+  // SHELL2 (UI 7k/7x, founder 2026-10-17): the sidebar is ONE list — + New · Inbox · Meetings — with
+  // the chat list under it, filtered All · Rooms · Routines (remembered per browser). Routines are a
+  // filter, not a group; meetings are not chats (they live on the Meetings page).
+  const shell2 = useFeature("shell2") && home2 && !!p.onHome;
+  const [railFilter, setRailFilterState] = useState<"all" | "rooms" | "routines">(() => {
+    try { const v = localStorage.getItem("vexa.rail.filter"); return v === "rooms" || v === "routines" ? v : "all"; } catch { return "all"; }
+  });
+  // shell2 + S4: which shared chats are rooms of two is the room read's to say — read each once
+  const sharedIds = shell2 && roomsOn ? p.rows.filter((r) => r.shared && r.chatId).map((r) => r.chatId as string).slice(0, 60).join("|") : "";
+  const readRooms = useRef(new Set<string>());
+  useEffect(() => {
+    for (const id of sharedIds ? sharedIds.split("|") : []) {
+      if (readRooms.current.has(id)) continue;
+      readRooms.current.add(id);
+      void refreshRoom(id);
+    }
+  }, [sharedIds]);
+  const setRailFilter = (k: string) => {
+    const v = k === "rooms" || k === "routines" ? k : "all";
+    setRailFilterState(v);
+    try { localStorage.setItem("vexa.rail.filter", v); } catch { /* storage off: the filter is not remembered */ }
+  };
   const [naming, setNaming] = useState<{ id: string | null; name: string; then?: string[] } | null>(null);
   const [dissolving, setDissolving] = useState<RailFolder | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -391,8 +432,8 @@ export function Rail(p: {
         <button data-chat-row className="vx-row2-main" title={rowDate(r.when)} aria-current={on || undefined} aria-pressed={picking || picked.length ? isPicked : undefined} onClick={(e) => rowClick(e, r)}>
           {picking && !isPicked && <input type="checkbox" className="vx-rail-check" checked={false} readOnly tabIndex={-1} aria-hidden />}
           {isPicked && <span className="vx-rail-picked" aria-hidden><Check size={11} strokeWidth={2.25} /></span>}
-          <ActivityDot r={r} />
-          <span className="vx-row2-title">{displayLabel(r)}</span>
+          {!(shell2 && isPairRoom(r.chatId, r.visibility)) && <ActivityDot r={r} />}
+          {shell2 ? <RowTitle r={r} pair={isPairRoom(r.chatId, r.visibility)} /> : <span className="vx-row2-title">{displayLabel(r)}</span>}
           {/* ONE ICON, NO TEXT CHIPS (founder 2026-10-14: "total mess here" — his shared routine row read
               "ait · ⏱ routine · shared · live" and its name was gone). A call, a voice note, a chat
               with other people in it, a routine's thread: one glyph, in that order, its meaning on
@@ -423,13 +464,23 @@ export function Rail(p: {
   // ── SECTIONS ─────────────────────────────────────────────────────────────────────────────
   // HOME2: inside a workspace's group — rooms, then your chats, then calls and voice notes
   const rank = (r: Row) => (r.shared ? 0 : r.kind === "call" || r.kind === "voice" ? 2 : 1);
-  const ordered = home2 ? [0, 1, 2].flatMap((k) => p.rows.filter((r) => rank(r) === k)) : p.rows;
-  const baseGroups = sections(ordered.map((r) => ({ ...r, folder: sectionOf(r) })), folders);
+  // SHELL2: the list holds chats, rooms and routines — no meetings or voice notes (the Meetings page
+  // has them; a live call is reached through its room) — narrowed by the filter
+  const chatRows = shell2 ? p.rows.filter((r) => !r.meetingId && r.kind !== "call" && r.kind !== "voice") : p.rows;
+  const railRows = !shell2 || railFilter === "all" ? chatRows : chatRows.filter((r) => (railFilter === "rooms" ? !!r.shared : !!r.routine));
+  const ordered = home2 ? [0, 1, 2].flatMap((k) => railRows.filter((r) => rank(r) === k)) : railRows;
+  // under the filter there is no separate Routines group: a routine's chat sits where any chat would
+  const sec = (r: Row & { folder?: string }) => { const f = sectionOf(r); return shell2 && f === ROUTINES ? UNGROUPED : f; };
+  const baseGroups = sections(ordered.map((r) => ({ ...r, folder: sec(r) })), folders);
   // UI 7e (founder 2026-10-16): Pinned → RECENT (the newest chats across everything, so the last chat
   // is always the top row, filed or not) → the person's folders → the rest → Hidden.
-  const groups = home2 ? (() => {
+  // shell2 + S4: under the Rooms filter, the rooms of two sit together under "People"
+  const PEOPLE_SEC = "people-rooms";
+  const pairRows = shell2 && railFilter === "rooms" ? railRows.filter((r) => isPairRoom(r.chatId, r.visibility) && !r.hidden) : [];
+  const pairKeys = new Set(pairRows.map((r) => r.key));
+  const groups0 = home2 ? (() => {
     const by = (id: string) => baseGroups.find((g) => g.folder.id === id);
-    const recent = p.rows.filter((r) => !r.hidden && sectionOf(r) !== HIDDEN).slice().sort((x, y) => (y.when || 0) - (x.when || 0)).slice(0, RECENT_CAP);
+    const recent = railRows.filter((r) => !r.hidden && sectionOf(r) !== HIDDEN).slice().sort((x, y) => (y.when || 0) - (x.when || 0)).slice(0, RECENT_CAP);
     const recentKeys = new Set(recent.map((r) => r.key));
     const rest = by(UNGROUPED);
     return [
@@ -437,10 +488,14 @@ export function Rail(p: {
       { folder: { id: RECENT, name: "Recent", builtin: true, collapsed: false } as RailFolder, rows: recent },
       ...baseGroups.filter((g) => !g.folder.builtin && !g.folder.id.startsWith("ws:")),
       ...(rest ? [{ folder: { ...rest.folder, name: "Other chats" }, rows: rest.rows.filter((r) => !recentKeys.has(r.key)) }] : []),
-      ...baseGroups.filter((g) => g.folder.id === ROUTINES || g.folder.id === SHARED),
+      ...baseGroups.filter((g) => (g.folder.id === ROUTINES && !shell2) || g.folder.id === SHARED),
       ...(by(HIDDEN) ? [by(HIDDEN)!] : []),
     ];
   })() : baseGroups;
+  const groups = pairRows.length
+    ? [{ folder: { id: PEOPLE_SEC, name: "People", builtin: true, collapsed: false } as RailFolder, rows: pairRows },
+      ...groups0.map((g) => ({ ...g, rows: g.rows.filter((r) => !pairKeys.has(r.key)) }))]
+    : groups0;
   const section = ({ folder, rows }: { folder: RailFolder; rows: (Row & { folder?: string })[] }) => {
     // THE LAYOUT NEVER MOVES UNDER A DRAG: which sections are drawn does not depend on whether
     // something is being dragged, so the place a finger or pointer aims at stays where it was. Every
@@ -460,7 +515,7 @@ export function Rail(p: {
     const toggle = () => { const next = !shut; setFolded((m) => ({ ...m, [folder.id]: next })); p.onFolderCollapse?.(folder.id, next); };
     return (
       <section key={folder.id} className="vx-rail-section" data-section={folder.id} aria-label={sectionName(folder)}
-        data-over={over === folder.id ? "" : undefined} {...(folder.id === RECENT ? {} : dropProps({ folder: folder.id }))}>
+        data-over={over === folder.id ? "" : undefined} {...(folder.id === RECENT || folder.id === "people-rooms" ? {} : dropProps({ folder: folder.id }))}>
         <div className="vx-rail-section-head" {...dragProps({ kind: "folder", key: folder.id }, !folder.builtin && !!p.onFolderMove)}>
           <button type="button" className="vx-rail-section-toggle" aria-expanded={!shut} onClick={toggle}>
             {shut ? <ChevronRight size={12} strokeWidth={1.75} aria-hidden /> : <ChevronDown size={12} strokeWidth={1.75} aria-hidden />}
@@ -522,7 +577,16 @@ export function Rail(p: {
 
   return (
     <nav ref={navRef} className="vx-pane vx-rail" data-pane="rail" data-dragging={drag ? "" : undefined} style={{ gridRow: "1 / 3", gridColumn: 1 }} aria-label="Chats">
-      {home2 && p.onHome ? (
+      {shell2 ? (
+        // SHELL2: no header row — the list starts with + New · Inbox · Meetings, then the filter
+        <><div className="vx-s2-top"><SidebarNav onNew={p.onHome!} onNavigate={p.onNavigate} /><VoiceNoteLive /></div>
+          <div className="vx-s2-filter" data-rail-filter="">
+            <Tabs label="Show chats" value={railFilter} onChange={setRailFilter} items={[
+              { key: "all", label: <>All<span className="vx-s2-tabcount">{chatRows.filter((r) => !r.hidden).length}</span></> },
+              { key: "rooms", label: <>Rooms<span className="vx-s2-tabcount">{chatRows.filter((r) => r.shared && !r.hidden).length}</span></> },
+              { key: "routines", label: <>Routines<span className="vx-s2-tabcount">{chatRows.filter((r) => r.routine && !r.hidden).length}</span></> }]} />
+          </div></>
+      ) : home2 && p.onHome ? (
         // UI 7e (founder 2026-10-16): ONE entry in the header — "+ New", which is home (a fresh chat
         // whose empty view is the home). Notifications live in the home's "Needs you"; rooms are
         // reached from their workspace.
@@ -650,7 +714,9 @@ export function Rail(p: {
 /** THE RAIL, FOLDED (guidelines §3.1): a 48px icon strip — open the chat list, start a chat. Where
  *  the rail cannot dock (compact and narrow windows) the first opens it as a drawer over the
  *  conversation; where it can, it docks it again. Either way the reader's own choice is untouched. */
-export function RailStrip({ open, onOpen, onNewChat }: { open: boolean; onOpen: () => void; onNewChat: () => void }) {
+export function RailStrip({ open, onOpen, onNewChat, extra }: { open: boolean; onOpen: () => void; onNewChat: () => void;
+  /** shell2: the strip's own Inbox and Meetings, so a narrow window still reaches them in one click */
+  extra?: React.ReactNode }) {
   return (
     <nav className="vx-rail-strip" data-pane="rail-strip" aria-label="Chats">
       <IconButton label="Show the chat list" size="md" aria-expanded={open} data-expand="left" onClick={onOpen}>
@@ -659,6 +725,7 @@ export function RailStrip({ open, onOpen, onNewChat }: { open: boolean; onOpen: 
       <IconButton label="New chat" size="md" onClick={onNewChat}>
         <Plus size={16} strokeWidth={1.75} />
       </IconButton>
+      {extra}
     </nav>
   );
 }

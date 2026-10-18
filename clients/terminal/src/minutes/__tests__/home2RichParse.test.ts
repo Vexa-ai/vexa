@@ -53,8 +53,9 @@ describe("parseAction", () => {
     expect(parseAction("[[action:delete-workspace:alpha | Delete]]")).toBeNull();
     expect(parseAction("[[action:fetch:https://evil | x]]")).toBeNull();
   });
-  it("has exactly the founder's allow-list", () => {
-    expect([...ACTION_VERBS].sort()).toEqual(["accept-proposal", "join-call", "move-card", "new-chat", "prepare", "run-routine", "schedule-call", "start-call"]);
+  it("is the one verb registry: the founder's allow-list plus the README actions (D17)", () => {
+    expect([...ACTION_VERBS].sort()).toEqual(["accept-proposal", "ask", "invite", "join-call", "move-card", "new-chat", "new-room",
+      "prepare", "run", "run-routine", "schedule", "schedule-call", "start-call"]);
   });
   it("asks confirmation for anything with an external effect", () => {
     expect(actionNeedsConfirm("run-routine")).toBe(true);

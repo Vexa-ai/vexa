@@ -9,3 +9,8 @@ Public profiles and the directory (R4). These are behind the `public_profiles` s
 - `profileApi.ts` holds the calls:
   - identity's `/api/user/profile*`, `/api/user/directory/*` and `/api/user/company-verification*`;
   - crm-api's `profile/read` and `profile/link` through `/api/crm`.
+
+**Retiring (PRD 0.13.4 D35, 2026-10-17).** The person's own profile is now their claimed CRM record,
+with one writer (crm-api `/person/profile`); `profileApi.ts` maps this editor onto it, and its public
+page is `/p/<handle>`. Identity's profile accepts no writes; its directory search still reads it for
+one release.

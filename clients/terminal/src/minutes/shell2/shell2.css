@@ -1,0 +1,153 @@
+/* SHELL2 (0.13.4 UI-1) — the approved shell. Tokens only; every rule here is scoped to the shell2
+ * surfaces or to `:root[data-shell2]`, so with the feature off nothing changes. */
+
+/* ── the top of the sidebar: one list (+ New · Inbox · Meetings) and the chat filter ─────────── */
+.vx-s2-top { display: flex; align-items: flex-start; gap: var(--space-1); padding: var(--space-2) var(--space-2) 0; }
+.vx-s2-nav { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.vx-s2-count { display: inline-flex; align-items: center; min-width: 20px; justify-content: center; padding: 0 var(--space-1_5);
+  border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent-text); font-size: var(--text-xs); font-weight: var(--weight-medium); }
+.vx-s2-filter { padding: var(--space-1) var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }
+.vx-s2-filter .vx-tabs { gap: var(--space-1); }
+.vx-s2-filter .vx-tab { min-width: 0; padding: 0 var(--space-2); flex: none; }
+.vx-s2-tabcount { margin-left: var(--space-1); color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+/* ── a list in the centre (Inbox, Meetings): over the conversation's column, its own header ──── */
+.vx-s2-centre { position: relative; z-index: var(--z-sticky); grid-row: 1 / 3; grid-column: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface-1); }
+.vx-s2-centre-title { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.vx-s2-centre-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+
+/* ── the home: the target chip's ×, and focus ─────────────────────────────────────────────────── */
+.vx-hc-clear { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-left: var(--space-0_5);
+  border: 0; border-radius: var(--radius-md); background: none; color: var(--text-3); cursor: pointer; }
+.vx-hc-clear:hover { background: var(--surface-3); color: var(--text-1); }
+.vx-hc-clear:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* ── sentence case everywhere the shell draws a section name (UI 7x: no uppercase eyebrows) ──── */
+:root[data-shell2] .vx-kh-h, :root[data-shell2] .vx-rp-needs h5, :root[data-shell2] .vx-rp-tile figcaption,
+:root[data-shell2] .vx-wsp-sec-h, :root[data-shell2] .vx-wsp-need-k { text-transform: none; letter-spacing: 0; }
+
+/* ── the centre lists' page: one left edge, capped at 880px ───────────────────────────────────── */
+.vx-s2-page { max-width: 880px; margin: 0 auto; padding: var(--space-4) var(--space-6) var(--space-12); display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
+.vx-s2-pagehead { display: flex; align-items: center; gap: var(--space-3); min-height: var(--control-md); }
+.vx-s2-pagecount { font-size: var(--text-sm); color: var(--text-3); }
+.vx-s2-sec { display: flex; flex-direction: column; gap: var(--space-0_5); min-width: 0; }
+.vx-s2-sec > .vx-label { margin: 0 0 var(--space-1); }
+.vx-s2-group { display: flex; flex-direction: column; gap: var(--space-0_5); margin-top: var(--space-3); min-width: 0; }
+.vx-s2-group > .vx-label { margin: 0 0 var(--space-1); }
+.vx-s2-note { margin: 0; font-size: var(--text-sm); color: var(--text-3); }
+.vx-s2-send { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-1); }
+.vx-s2-send-row { display: flex; align-items: flex-end; gap: var(--space-2); min-width: 0; }
+.vx-s2-send-row > .vx-field { flex: 1; min-width: 0; }
+.vx-s2-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.vx-s2-tools > .vx-field { flex: 1 1 220px; min-width: 0; }
+
+/* a row with interactive cells after it (a switch, a verb, ⋯): the cells sit outside the row's button */
+.vx-s2-mrow, .vx-s2-need { min-width: 0; }
+
+/* ── NO SOLID FILLS (UI 7r, founder 2026-10-17: "we probably do not want a full fill anywhere") ──
+ * The one emphasised control in a view is OUTLINED: accent border and accent text, a light accent
+ * tint on hover and focus. Counts and badges are accent text on a tint, never a solid pill. */
+:root[data-shell2] :is(.vx-kh-btn-primary, .vx-blk-btn.primary, .vx-notice-act[data-primary], .vx-icard-send, .vx-dk-stage[data-current]) {
+  background: transparent; color: var(--accent-text); border: 1px solid var(--accent);
+}
+:root[data-shell2] :is(.vx-kh-btn-primary, .vx-blk-btn.primary, .vx-notice-act[data-primary], .vx-icard-send):is(:hover:not(:disabled), :focus-visible) {
+  background: var(--accent-tint);
+}
+:root[data-shell2] :is(.vx-notice-count, .vx-dk-new, .vx-dk-step[data-current], .vx-rp-unread) { background: var(--accent-tint); color: var(--accent-text); }
+:root[data-shell2] .vx-icard-chip:active { background: var(--accent-tint); color: var(--accent-text); }
+/* status follows the same rule: tint plus text */
+:root[data-shell2] .vx-btn[data-variant="danger"] { background: var(--danger-tint); color: var(--danger-text); border: 1px solid var(--danger); }
+
+/* ── the Now strip on the kit rows ─────────────────────────────────────────────────────────────── */
+.vx-s2-now { display: flex; flex-direction: column; gap: var(--space-0_5); }
+.vx-s2-now-more { align-self: flex-start; margin: var(--space-1) 0 0 var(--space-2); padding: 0 var(--space-2); min-height: var(--control-xs); border: 0; border-radius: var(--radius-md);
+  background: none; color: var(--text-2); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+.vx-s2-now-more:hover { background: var(--surface-3); color: var(--text-1); }
+.vx-s2-now-more:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* ── Connected (7p): one clickable row per connected thing, a quiet relation prefix ──────────── */
+.vx-s2-connected { display: flex; flex-direction: column; gap: var(--space-0_5); margin-top: var(--space-6); padding-top: var(--space-3); border-top: 1px solid var(--border-subtle); }
+.vx-s2-connected > .vx-label { margin: 0 0 var(--space-1); }
+.vx-s2-conn-pre { color: var(--text-3); }
+.vx-mv-about { display: inline-flex; }
+
+/* ── the phone: bottom bar (decision 10), sheet chrome (‹ Back), touch rules ─────────────────── */
+.vx-s2-bottom { grid-row: 3; grid-column: 1 / -1; display: flex; align-items: stretch; border-top: 1px solid var(--border-subtle); background: var(--surface-0);
+  padding-bottom: env(safe-area-inset-bottom); position: relative; z-index: var(--z-sticky); }
+.vx-s2-tab { flex: 1; min-width: 0; min-height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-0_5);
+  border: 0; background: none; color: var(--text-3); font: inherit; font-size: var(--text-xs); cursor: pointer; }
+.vx-s2-tab[aria-current] { color: var(--text-1); box-shadow: inset 0 2px 0 var(--accent); }
+.vx-s2-tab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.vx-s2-tab-i { position: relative; display: inline-flex; }
+.vx-s2-tab-badge { position: absolute; top: -6px; right: -12px; min-width: 16px; height: 16px; padding: 0 var(--space-1); border-radius: var(--radius-sm);
+  background: var(--accent-tint); color: var(--accent-text); font-style: normal; font-size: var(--text-xs); line-height: 16px; text-align: center; }
+.vx-s2-back { display: inline-flex; align-items: center; gap: var(--space-0_5); min-height: 44px; padding: 0 var(--space-2) 0 var(--space-1); flex: none;
+  border: 0; border-radius: var(--radius-md); background: none; color: var(--text-1); font: inherit; font-size: var(--text-md); cursor: pointer; }
+.vx-s2-back:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.vx-s2-sheet-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-md); font-weight: var(--weight-semibold); color: var(--text-1); }
+/* on touch, a page row's own actions are shown, never invisible-but-tappable (R11); the rail keeps
+ * its long-press menu and its quiet rows */
+@media (hover: none) { :root[data-shell2] .vx-row2[data-size="md"]:not([data-overlay-actions]) .vx-row2-actions { opacity: 1; } }
+/* a narrow centre list: a tighter page */
+@container (max-width: 559px) {
+  .vx-s2-page { padding: var(--space-3) var(--space-3) var(--space-8); gap: var(--space-4); }
+  .vx-s2-send-row { flex-wrap: wrap; }
+  .vx-s2-send-row > .vx-btn { width: 100%; justify-content: center; }
+}
+
+/* ── people (founder 2026-10-17): the list, the faces with names, the person panel ───────────── */
+.vx-s2-scope .vx-tab { min-width: 0; }
+.vx-s2-face { position: relative; display: inline-flex; }
+.vx-s2-face[data-presence="now"]::after { content: ""; position: absolute; right: -1px; bottom: -1px; width: 7px; height: 7px; border-radius: var(--radius-full);
+  background: var(--success); box-shadow: 0 0 0 2px var(--surface-1); }
+/* workspace chips in a person row: at most two WHOLE chips + "+N"; each chip caps its width and
+ * truncates its own label (whole, with its name in the tooltip) — the cell never clips a chip */
+.vx-s2-chips { display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--space-1); width: 100%; min-width: 0; }
+.vx-s2-chip { display: inline-flex; flex: 0 1 auto; min-width: 0; max-width: 96px; }
+.vx-s2-chip > .vx-entity { min-width: 0; max-width: 100%; }
+.vx-s2-chips[data-chips="1"] .vx-s2-chip, .vx-s2-chips[data-chips="2"] .vx-s2-chip { max-width: 112px; }
+.vx-s2-chip-more { display: inline-flex; flex: none; }
+.vx-s2-chip-more[data-more="narrow"] { display: none; }
+.vx-s2-faces { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.vx-s2-faces-names { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.vx-s2-wsppl { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; font-size: var(--text-sm); color: var(--text-2); }
+.vx-s2-wsppl-names { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-s2-online { font-weight: var(--weight-medium); color: var(--success-text); }
+.vx-s2-lastchange { margin-top: var(--space-1); }
+.vx-s2-wsp-people { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.vx-s2-wsp-last { margin: var(--space-1) 0 0; }
+.vx-s2-linkbtn { min-height: var(--control-xs); padding: 0 var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-md); background: none;
+  color: var(--text-2); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+.vx-s2-linkbtn:hover { border-color: var(--border-control); color: var(--text-1); }
+.vx-s2-linkbtn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.vx-s2-pp { display: flex; flex-direction: column; gap: var(--space-5); padding: var(--space-5) var(--space-5) var(--space-12); min-width: 0; }
+.vx-s2-pp-head { display: flex; align-items: flex-start; gap: var(--space-4); flex-wrap: wrap; }
+.vx-s2-pp-id { flex: 1 1 200px; min-width: 0; }
+.vx-s2-pp-id h1 { margin: 0; font-size: var(--text-xl); font-weight: var(--weight-semibold); color: var(--text-1); }
+.vx-s2-pp-line { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; margin: var(--space-1) 0 0; font-size: var(--text-sm); color: var(--text-2); }
+.vx-s2-pp-presence { margin: var(--space-1) 0 0; font-size: var(--text-sm); color: var(--text-3); }
+.vx-s2-pp-presence[data-presence="online"] { color: var(--success-text); }
+.vx-s2-pp-acts { display: flex; gap: var(--space-2); flex-wrap: wrap; flex-basis: 100%; }
+.vx-s2-pp-about { display: flex; flex-direction: column; gap: var(--space-2); }
+.vx-s2-pp-bio { margin: 0; font-size: var(--text-md); color: var(--text-1); }
+.vx-s2-pp-links { display: flex; gap: var(--space-3); }
+.vx-s2-pp-links .vx-link { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; color: var(--text-2); }
+.vx-s2-pp-notes { padding-top: var(--space-4); border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: var(--space-2); }
+.vx-s2-pp-notes dl { margin: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.vx-s2-pp-notes dl > div { display: flex; gap: var(--space-3); font-size: var(--text-sm); }
+.vx-s2-pp-notes dt { flex: none; width: 120px; color: var(--text-3); }
+.vx-s2-pp-notes dd { margin: 0; min-width: 0; color: var(--text-1); }
+.vx-s2-only { margin-left: var(--space-2); font-size: var(--text-xs); color: var(--warning-text); }
+/* a phone-width pane: the person row keeps its name; the shared workspaces are in the panel */
+/* a narrow pane: one chip and "+N" (the second chip and the wide count step aside) */
+@container (max-width: 759px) {
+  .vx-s2-person .vx-row2-cell[data-w="240"] { width: 144px; }
+  .vx-s2-person .vx-s2-chip[data-nth="1"], .vx-s2-person .vx-s2-chip-more[data-more="wide"] { display: none; }
+  .vx-s2-person .vx-s2-chip-more[data-more="narrow"] { display: inline-flex; }
+  .vx-s2-person .vx-s2-chip { max-width: 104px; }
+}
+/* a phone-width pane: the person row keeps its name; the shared workspaces are in the panel */
+@container (max-width: 479px) { .vx-s2-person .vx-row2-cell[data-w="240"] { display: none; } }
+/* a room of two in the sidebar: the other person's unread count, tinted text */
+.vx-s2-unread { flex: none; min-width: 18px; padding: 0 var(--space-1); border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent-text);
+  font-size: var(--text-xs); font-weight: var(--weight-medium); text-align: center; }

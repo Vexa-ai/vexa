@@ -7,6 +7,7 @@
 import { useSyncExternalStore } from "react";
 import { getCall, joinCall, startCall, type CallJoin } from "../surfaces/callsApi";
 import { readScope } from "../data/workspaceApi";
+import { roomOf } from "../surfaces/roomState";
 
 export interface ActiveCall {
   /** the chat the call belongs to (its id as the rail knows it) */
@@ -26,6 +27,9 @@ export interface CallDeps {
 /** An incognito chat (the profile chip) — its call starts no transcriber. Unreadable → not incognito:
  *  the server's own default (transcribed, with the notice every participant sees) applies. */
 export async function chatIsIncognito(session: string): Promise<boolean> {
+  // A ROOM WITH "TRANSCRIBE CALLS" OFF (UI 7hh, 0.13.4 S4): its calls have audio only. The server
+  // refuses a transcribed call there, so the call starts quiet.
+  if (roomOf(session)?.transcribe === false) return true;
   try { return (await readScope(session, false)).chat?.profile === "incognito"; } catch { return false; }
 }
 export const liveCallDeps: CallDeps = { getCall, startCall, joinCall, incognito: chatIsIncognito };

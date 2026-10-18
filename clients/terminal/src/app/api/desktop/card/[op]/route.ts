@@ -15,7 +15,14 @@ const UPSTREAM: Record<string, string> = {
   members: "/crm/card/members",
   membership: "/crm/card/membership",
   list: "/crm/card/list",
+  // 0.13.4 S6: the nudge landing tells crm-api the card was rendered (body {card}); that is what
+  // suppresses the pending email nudge. Best effort on the client.
+  seen: "/crm/card/seen",
   review: "/crm/review",
+  // the card core (0.13.4 S5): the Inbox read, seen-in-view (D14), the decision nonce and the decision (D13)
+  inbox: "/crm/card/inbox",
+  nonce: "/crm/card/nonce",
+  decide: "/crm/card/decide",
 };
 
 export async function POST(req: Request, ctx: { params: Promise<{ op: string }> }): Promise<Response> {

@@ -62,6 +62,11 @@ import { ROOM_LINES_REFRESH, stopRoomShow, useRoomShow } from "./roomShow";
 import { toast } from "../ui-kit/primitives/Toast";
 import { useFeature } from "../platform/features";
 import { RichPage } from "./desktop/home2/RichPage";
+import { ChatAboutButton } from "./shell2/ChatAbout";
+import { Connected } from "./shell2/Connected";
+import { PersonPanel } from "./shell2/PersonPanel";
+import { isPersonPath } from "./shell2/personOpen";
+import { artifactOf } from "./shell2/about";
 import { LiveTable } from "./desktop/home2/LiveTable";
 import { hasRichSyntax } from "./desktop/home2/richParse";
 import { WorkspacePage, isWorkspacePagePath } from "./desktop/home2/WorkspacePage";
@@ -135,6 +140,8 @@ export function PagesPanel(p: {
   onArtifact?: (a: ChatArtifact) => void;
   /** The fold control's name where folding really closes a sheet ("Back to the conversation"). */
   collapseLabel?: string;
+  /** shell2: the panel is a full-screen sheet on a phone (‹ Back chrome, no tab strip) */
+  phone?: boolean;
 }) {
   // THE TRANSCRIPT TAB IS NOT A DOCUMENT. It renders the meeting canvas the workbench registers —
   // the same component a meetings-list click opens, which fetches by row id and streams live
@@ -185,6 +192,8 @@ export function PagesPanel(p: {
   const showOn = useFeature("call_show");
   // home2 (R3): pages using the rich grammar are drawn live, and plain tables can be searched and sorted
   const richOn = useFeature("home2");
+  const shell2 = useFeature("shell2");
+  const phoneHead = shell2 && !!p.phone && !!p.onCollapse;
   const canShow = !!inCall && showOn && !!p.docSlug && p.docSlug !== "personal" && p.docSlug !== "_global";
   // SHOW TO ROOM (JTBD-1, rooms): in a room with no in-app call, the page opens in every member's panel
   const roomShow = useRoomShow(p.roomSession);
@@ -250,6 +259,13 @@ export function PagesPanel(p: {
       {/* The header band never scrolls sideways (guidelines §3.4): the tab strip inside it does,
           with a fade and an overflow menu, and everything else here is a fixed-size control. */}
       <div className="vx-pane vx-pages-head" data-pane="pages-header" style={{ gridRow: 1, gridColumn: 3 }}>
+        {phoneHead ? <>
+          {/* shell2, SINGLE MODE (mobile fix 7; decision 10): the sheet's chrome is ‹ Back at the top
+              left, the title, and the page's own ⋯ below — no tab strip, file navigator or pin.
+              System back closes it too. */}
+          <button type="button" className="vx-s2-back" data-sheet-back="" onClick={p.onCollapse}><ChevronLeft size={18} strokeWidth={1.75} aria-hidden />Back</button>
+          <span className="vx-s2-sheet-title" title={p.pages.find(tabOn)?.label ?? ""}>{p.pages.find(tabOn)?.label ?? (listing ? "Files" : "")}</span>
+        </> : <>
         {/* where you have BEEN, at the panel's left edge — the reading order of a document surface
             starts here (Obsidian, and the old terminal, both put them exactly there). */}
         {/* the navigator's toggle — the panel's leftmost control, because the rail it opens is the
@@ -315,6 +331,7 @@ export function PagesPanel(p: {
             of them — which leaves this row to do the one job it is named for. */}
         {/* outside the tab scroller (`flex: none`), so it never scrolls out of reach */}
         {p.onCollapse && <CollapseButton side="right" onClick={p.onCollapse} label={p.collapseLabel} />}
+        </>}
       </div>
       <div className="vx-pane vx-pages" data-pane="pages" style={{ gridRow: 2, gridColumn: 3 }}>
         {/* The rail sits INSIDE the panel, under the shared header band — beside the open file, the
@@ -360,6 +377,9 @@ export function PagesPanel(p: {
         <div ref={docBox} data-doc-body className="vx-doc-body" data-flush={canvas || (mode === "edit" && !listing) ? "" : undefined} data-canvas={canvas ? "" : undefined}>
           {doc && !p.notice && p.body !== null && mode === "view" && (
             <span className="vx-doc-more">
+              {/* shell2 (UI 7h, 7q): "Chat about this" / "Resume chat · n" sits in the page's own actions,
+                  never in the tab bar (navigation only) */}
+              {shell2 && (() => { const a = artifactOf(p.docSlug, p.docPath ?? "", p.docKind, p.pages.find(tabOn)?.label ?? pageTitle(p.docPath ?? "")); return a ? <ChatAboutButton key={a.key} a={a} /> : null; })()}
               <Menu label="Page actions" align="end" triggerData={{ "data-doc-more": "" }}
                 trigger={<MoreHorizontal size={15} strokeWidth={1.75} aria-hidden />}
                 items={[
@@ -400,6 +420,8 @@ export function PagesPanel(p: {
             // home2 (R3): a workspace's own page, built from components (the README stays a document)
             : richOn && isWorkspacePagePath(p.docPath)
               ? <WorkspacePage slug={p.docSlug} />
+            : shell2 && isPersonPath(p.docPath)
+              ? <PersonPanel path={p.docPath ?? ""} />
             : home
               ? <ChatArtifactList items={p.artifacts ?? []} onOpen={(a) => p.onArtifact?.(a)} onAllFiles={() => showNav(true)} />
             : listing
@@ -471,6 +493,8 @@ export function PagesPanel(p: {
               document that exists: an empty page offers Create instead, and a canvas has no page to
               extend at all. */}
           {/* …never on a meeting's note file (UI decisions 9): the meeting's sidebar is where it grows */}
+          {/* shell2 (UI 7p): Connected — the chats about this page, each one clickable row */}
+          {shell2 && doc && !p.notice && p.body !== null && mode === "view" && (() => { const a = artifactOf(p.docSlug, p.docPath ?? "", p.docKind, ""); return a ? <Connected key={a.key} a={a} /> : null; })()}
           {doc && !p.notice && p.body !== null && mode === "view" && !docMeeting && (
             <ExtendPageButton workspace={p.docSlug} path={p.docPath} />
           )}

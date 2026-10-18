@@ -33,6 +33,10 @@ export interface RoomSettings {
   agent_turn?: "thinking" | "nothing" | null;
   /** the room's model (a catalog id), one for everybody in it; empty or absent = the deployment default */
   level?: string | null;
+  /** "Vexa in this room" (0.13.4 S4, UI 7hh): absent from an older server = on */
+  agent_on?: boolean;
+  /** "Transcribe calls": false = calls here have audio only */
+  transcribe?: boolean;
 }
 
 /** A room as a workspace lists it. `member` = you are in it; an open room you are not in can be joined. */

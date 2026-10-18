@@ -125,3 +125,6 @@ export const ROOM_SHOWING_EVENT = "vexa:terminal:room-showing";
 
 /** "New room" (a workspace page, the + New menu): make a room in `{workspace}` (founder 2026-10-16). */
 export const NEW_ROOM_EVENT = "vexa:terminal:new-room";
+/** START A MEETING (shell2, the Meetings page, UI 7w): a new chat with a call in it, filed in My desk
+ *  — "a call can be just a call", filed later. The shell owns the chat and the call. */
+export const START_MEETING_EVENT = "vexa:terminal:start-meeting";

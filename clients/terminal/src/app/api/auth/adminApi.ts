@@ -423,12 +423,17 @@ async function claimCodeFromRequest(): Promise<string | undefined> {
  *  not literally say `admitted: true` with a reason we know — all refuse. Admission is positive
  *  evidence or nothing. Sessions that already exist never pass through here, so an outage stops
  *  new sign-ins and nothing else. */
-export async function signinAdmission(email: string): Promise<SigninAdmission> {
+export async function signinAdmission(email: string, opts: { viaInvite?: boolean } = {}): Promise<SigninAdmission> {
   const normalized = (email || "").trim().toLowerCase();
   const claimCode = await claimCodeFromRequest();
+  // `via_invite` (PRD 0.13.4 S2) is said ONLY by the join POST, after agent-api spent the sign-in
+  // half of an invite this deployment mailed to this exact address. admin-api decides what it means.
+  const body: Record<string, unknown> = { email: normalized };
+  if (claimCode) body.claim_code = claimCode;
+  if (opts.viaInvite) body.via_invite = true;
   const res = await internalRequest<{ admitted?: unknown; why?: unknown }>("/internal/signin-admission", {
     method: "POST",
-    body: JSON.stringify(claimCode ? { email: normalized, claim_code: claimCode } : { email: normalized }),
+    body: JSON.stringify(body),
   });
   if (!res.ok || !res.data) {
     return { admitted: false, why: "unavailable", detail: res.error || `admin-api returned ${res.status}` };
@@ -541,6 +546,71 @@ export function mintUserToken(
     `/admin/users/${encodeURIComponent(String(userId))}/tokens?${q.toString()}`,
     { method: "POST" },
   );
+}
+
+/** The session mint's answer (`POST /internal/sessions`, admin-api `app/sessions.py`). */
+export interface AdminMintedSession {
+  token: string;
+  id: number;
+  user_id?: number;
+  scopes?: string[];
+  credential_class: "session";
+}
+
+/** Mint the SESSION credential for a signed-in browser (PRD 0.13.4 D13): admin-api's
+ *  `POST /internal/sessions`, the one door that writes `api_tokens.kind = 'session'`. It needs the
+ *  internal tier (`VEXA_INTERNAL_API_SECRET`) AND the terminal's own second secret
+ *  (`VEXA_TERMINAL_SESSION_SECRET` as `X-Terminal-Session-Secret`), which no other service holds —
+ *  so a decision that must be the person's own act (a policy change, a routine's activation) can ask
+ *  for `credential_class == "session"` and know a self-serve key with `browser` is not one.
+ *
+ *  `unavailable` is true when this deployment cannot mint sessions yet — the secret is unset here,
+ *  or admin-api answers 404 (an older identity) or 503 (its secret is unset) — so the caller may fall
+ *  back to an ordinary key. Any other failure is a real refusal and is not marked unavailable. */
+export async function mintSessionToken(
+  userId: string | number,
+  opts: { name?: string; expiresIn?: number } = {},
+): Promise<AdminResult<AdminMintedSession> & { unavailable?: boolean }> {
+  const sessionSecret = process.env.VEXA_TERMINAL_SESSION_SECRET || "";
+  if (!sessionSecret) {
+    return { ok: false, status: 503, unavailable: true, error: "VEXA_TERMINAL_SESSION_SECRET is not set" };
+  }
+  const body: Record<string, unknown> = { user_id: Number(userId), name: opts.name ?? TERMINAL_LOGIN_TOKEN_NAME };
+  if (opts.expiresIn && opts.expiresIn > 0) body.expires_in = opts.expiresIn;
+  const res = await internalRequest<AdminMintedSession>("/internal/sessions", {
+    method: "POST",
+    headers: { "X-Terminal-Session-Secret": sessionSecret },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    return { ...res, unavailable: res.status === 404 || res.status === 503 };
+  }
+  // Positive evidence: only an answer that SAYS it is a session counts as one.
+  if (!res.data?.token || res.data.credential_class !== "session") {
+    return { ok: false, status: 502, error: "admin-api's session mint did not answer a session" };
+  }
+  return res;
+}
+
+/** The sign-in's credential: a SESSION when this deployment can mint one; otherwise — the secret is
+ *  unset, or admin-api is older (404) or unconfigured (503) — the old `bot,tx,browser` login KEY,
+ *  with a warning. Sign-in keeps working either way; with the key, every decision that needs a
+ *  session is refused (fail closed). Both carry the `terminal-login` name, so the prune bounds both. */
+export async function mintLoginToken(userId: string | number): Promise<AdminResult<{ token: string; id: number }>> {
+  const session = await mintSessionToken(userId);
+  if (session.ok && session.data) {
+    return { ok: true, status: session.status, data: { token: session.data.token, id: session.data.id } };
+  }
+  if (!session.unavailable) {
+    return { ok: false, status: session.status || 500, error: session.error || "Failed to mint the session" };
+  }
+  console.warn(`[terminal-auth] session credential unavailable (${session.error || session.status}); `
+    + "signing in with an ordinary key — decisions that need a session will be refused");
+  const minted = await mintUserToken(userId, { scopes: ["bot", "tx", "browser"], name: TERMINAL_LOGIN_TOKEN_NAME });
+  if (!minted.ok || !minted.data?.token) {
+    return { ok: false, status: minted.status || 500, error: minted.error || "Failed to mint API token" };
+  }
+  return { ok: true, status: minted.status, data: { token: minted.data.token, id: minted.data.id } };
 }
 
 export function revokeToken(tokenId: string | number): Promise<AdminResult<void>> {
@@ -729,9 +799,9 @@ export type SigninRefused = { ok: false; status: number; error: string; refused:
  *  forget. */
 export async function findOrCreateUserToken(
   email: string,
-  opts: { subject?: string; emailVerifiedVia?: string } = {},
+  opts: { subject?: string; emailVerifiedVia?: string; viaInvite?: boolean } = {},
 ): Promise<{ ok: true; user: AdminUser; token: string } | SigninRefused | { ok: false; status: number; error: string; refused?: undefined }> {
-  const admission = await signinAdmission(email);
+  const admission = await signinAdmission(email, { viaInvite: opts.viaInvite });
   if (!admission.admitted) {
     return admission.why === "unavailable"
       ? { ok: false, status: 503, error: `sign-in admission unavailable: ${admission.detail ?? "admin-api did not answer"}`, refused: "unavailable" }
@@ -775,10 +845,11 @@ export async function findOrCreateUserToken(
     try { await recordEmailVerified(user.id, opts.emailVerifiedVia); } catch { /* best-effort */ }
   }
 
-  // Mint the login token with a stable `terminal-login` name so it is distinguishable from
+  // Mint the login credential with a stable `terminal-login` name so it is distinguishable from
   // user-created self-serve tokens and can be bounded (find-or-create used to mint unconditionally
-  // with no name and no cap → one live token per sign-in, forever).
-  const minted = await mintUserToken(user.id, { scopes: ["bot", "tx", "browser"], name: TERMINAL_LOGIN_TOKEN_NAME });
+  // with no name and no cap → one live token per sign-in, forever). It is a SESSION (D13) when the
+  // deployment can mint one, and the old login key otherwise (`mintLoginToken`).
+  const minted = await mintLoginToken(user.id);
   if (!minted.ok || !minted.data?.token) {
     return { ok: false, status: minted.status || 500, error: minted.error || "Failed to mint API token" };
   }
@@ -794,4 +865,72 @@ export async function findOrCreateUserToken(
     await provisionUserWorkspace(minted.data.token);
   }
   return { ok: true, user, token: minted.data.token };
+}
+
+
+// ── shared rate limits (PRD 0.13.4 M6) ─────────────────────────────────────────────────────────
+/** Count one request against admin-api's shared window (`POST /internal/rate/take`, signin.v1):
+ *  `allowed`, `limited`, or `unavailable` when the store could not answer — the caller then keeps
+ *  its own process-local count, so a Redis outage never closes the sign-in door. */
+export async function rateTake(key: string, limit: number, windowSec: number): Promise<"allowed" | "limited" | "unavailable"> {
+  const res = await internalRequest<{ allowed?: unknown }>("/internal/rate/take", {
+    method: "POST",
+    body: JSON.stringify({ key, limit, window_sec: windowSec }),
+  });
+  if (!res.ok || !res.data) return "unavailable";
+  return res.data.allowed === true ? "allowed" : res.data.allowed === false ? "limited" : "unavailable";
+}
+
+// ── the mailed invite that signs its one address in (PRD 0.13.4 S2) ─────────────────────────────
+export type InviteSigninClaim =
+  | { ok: true; email: string; workspaceId: string; room: { id: string; title: string } | null }
+  | { ok: false; reason: "used" | "not-a-signin-link" | "unknown" | "unavailable" };
+
+/** Spend the sign-in half of a mailed invite, ONCE (agent-api `POST /internal/invites/signin-claim`,
+ *  internal tier). Only the join page's POST calls this — never a GET. */
+export async function claimInviteSignin(token: string): Promise<InviteSigninClaim> {
+  const base = (process.env.AGENT_API_URL || "").replace(/\/$/, "");
+  const secret = process.env.VEXA_INTERNAL_API_SECRET || "";
+  if (!base || !secret) return { ok: false, reason: "unavailable" };
+  try {
+    const res = await fetch(`${base}/internal/invites/signin-claim`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Internal-Secret": secret },
+      body: JSON.stringify({ token }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.status === 410) return { ok: false, reason: "used" };
+    if (res.status === 409) return { ok: false, reason: "not-a-signin-link" };
+    if (res.status === 404) return { ok: false, reason: "unknown" };
+    if (!res.ok) return { ok: false, reason: "unavailable" };
+    const d = (await res.json().catch(() => ({}))) as { email?: unknown; workspace_id?: unknown; room?: { id?: unknown; title?: unknown } | null };
+    const email = typeof d.email === "string" ? d.email.trim().toLowerCase() : "";
+    if (!email) return { ok: false, reason: "unavailable" };
+    const room = d.room && typeof d.room.id === "string" && d.room.id
+      ? { id: d.room.id, title: typeof d.room.title === "string" ? d.room.title : "" } : null;
+    return { ok: true, email, workspaceId: typeof d.workspace_id === "string" ? d.workspace_id : "", room };
+  } catch {
+    return { ok: false, reason: "unavailable" };
+  }
+}
+
+/** Redeem an invite AS the person just signed in (their own API key, through the gateway — the same
+ *  authenticated accept every other door uses, so agent-api checks their verified address itself). */
+export async function acceptInviteAs(apiToken: string, inviteToken: string): Promise<{ ok: true; workspaceId: string; room: { id: string } | null } | { ok: false; status: number }> {
+  try {
+    const res = await fetch(`${GATEWAY_URL}/agent/workspace/invites/accept`, {
+      method: "POST",
+      headers: { "X-API-Key": apiToken, "Content-Type": "application/json" },
+      body: JSON.stringify({ token: inviteToken }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!res.ok) return { ok: false, status: res.status };
+    const d = (await res.json().catch(() => ({}))) as { workspace_id?: unknown; room?: { id?: unknown } | null };
+    const room = d.room && typeof d.room.id === "string" && d.room.id ? { id: d.room.id } : null;
+    return { ok: true, workspaceId: typeof d.workspace_id === "string" ? d.workspace_id : "", room };
+  } catch {
+    return { ok: false, status: 0 };
+  }
 }

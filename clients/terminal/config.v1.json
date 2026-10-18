@@ -67,6 +67,24 @@
       "targets": ["compose", "helm", "lite"]
     },
     {
+      "key": "VEXA_MAIL_RECIPIENT_ALLOW",
+      "class": "defaulted",
+      "default": "(unset — no restriction)",
+      "description": "Shared with flows (PRD 0.13.4 S2): a comma list of exact addresses and domains. When set, the terminal's own mailer sends nothing to anybody else — the message goes to the capture double (VEXA_MAIL_CAPTURE_SMTP) and is logged mail_diverted, with no content.",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_PASSWORD_REF",
+      "class": "defaulted",
+      "default": "(unset)",
+      "description": "The relay password by reference, broker:mail/<name> (PRD 0.13.4 S2). The credential broker holds it and only flows reads it; with a ref and no raw VEXA_MAIL_SMTP_PASSWORD the terminal does not send to an authenticated relay itself — sign-in links go through flows (POST /mail/sign-in).",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "VEXA_MAIL_SMTP_SECURE",
       "class": "defaulted",
       "default": "0",
@@ -192,6 +210,14 @@
       "default": "(unset — every configured method)",
       "description": "Which sign-in doors this instance offers: a comma-separated subset of google, microsoft, oidc, email. A method left out is not registered (its routes refuse), not merely hidden. An unknown entry, or oidc without VEXA_OIDC_ISSUER, refuses to start.",
       "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_TERMINAL_SESSION_SECRET",
+      "class": "defaulted",
+      "default": "(unset — sign-in mints an ordinary login key, and every decision that needs a session is refused)",
+      "secret": true,
+      "description": "The terminal's own second secret for admin-api's POST /internal/sessions (src/app/api/auth/adminApi.ts mintSessionToken, PRD 0.13.4 D13): with it, sign-in mints the SESSION credential (credential_class=session) a policy change or a routine's activation requires; a self-serve key with the browser scope is not one. The same value admin-api holds. Unset here, or an admin-api that answers 404/503, and sign-in falls back to the old bot,tx,browser key with a warning.",
+      "targets": ["compose", "helm", "lite"]
     },
     {
       "key": "VEXA_ADMIN_ACCOUNT",

@@ -135,6 +135,12 @@ export interface MentionablePerson {
   /** the people set (`/api/people/known`): their stable key, whether they are a Vexa account (can be
    *  invited into a chat or rung into a call), their page on the caller's desk, how they are known */
   key?: string; vexa?: boolean; page?: string | null; how?: string[]; howWords?: string; role?: string;
+  /** D35 (one Person, many addresses): how many logins this one human has, when more than one. The
+   *  row is the Person; a grant to them reaches every one of those accounts until they merge them. */
+  accounts?: number;
+  /** the person confirmed those logins as theirs; until then "2 accounts?" is a hint and a grant
+   *  reaches only the account picked */
+  accountsConfirmed?: boolean;
 }
 
 /** A person the caller has interacted with (`GET /api/people/known`), for the home's People strip and
@@ -142,6 +148,9 @@ export interface MentionablePerson {
 export interface KnownPerson {
   key: string; name: string; subject: string | null; vexa: boolean; how: string[]; how_words: string;
   last: number | null; page: string | null;
+  /** D35: the human's logins, when more than one (the row is one Person) */
+  accounts?: number;
+  accounts_confirmed?: boolean;
   person: { name: string; initials?: string; avatar?: string; photo?: string; logo?: string; role?: string; email?: string; presence?: string };
 }
 export async function listKnownPeople(q = ""): Promise<{ people: KnownPerson[]; count: number }> {
@@ -151,7 +160,8 @@ export async function listKnownPeople(q = ""): Promise<{ people: KnownPerson[]; 
 /** The known people as @-picker rows: a Vexa account by its id, anyone else as a reference. */
 export function knownAsMentionable(rows: KnownPerson[]): MentionablePerson[] {
   return rows.map((r) => ({ subject: r.subject ?? "", name: r.name, email: r.person.email, key: r.key, vexa: r.vexa && !!r.subject,
-    page: r.page, how: r.how, howWords: r.how_words, role: r.person.role }));
+    page: r.page, how: r.how, howWords: r.how_words, role: r.person.role,
+    ...(r.accounts && r.accounts > 1 ? { accounts: r.accounts, accountsConfirmed: !!r.accounts_confirmed } : {}) }));
 }
 
 /** The people (and agents) the composer's @ picker offers. The server answers only people the caller

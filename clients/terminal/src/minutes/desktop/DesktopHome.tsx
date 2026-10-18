@@ -7,7 +7,10 @@
  *  shell's own rule for when the home shows at all (the new chat in front, its offer unspent).
  *
  *  The desktop is read fresh each time the home appears; nothing about it is kept in this browser. */
-import { useEffect, type ReactNode } from "react";
+import { deskName } from "../vocabulary";
+import { featureOn } from "../../platform/features";
+import { useEffect, useRef, type ReactNode } from "react";
+import { useHomeFocus } from "./home2/HomeTarget";
 import { useFeature } from "../../platform/features";
 import { useComposerSlot } from "../../surfaces/composerSlot";
 import { Toaster } from "../../ui-kit/primitives/Toast";
@@ -25,11 +28,29 @@ function DesktopPage({ greeting, starters, extra }: { greeting: Greeting; starte
   const { desktop } = useDesktopState();
   // home2 (R3): the composer sticks and wears the colour of where it writes
   const home2 = useFeature("home2");
-  const nameOf = (slug: string) => (desktop?.sections.find((s) => s.id === "workspaces")?.items
-    .find((i) => i.kind === "workspace" && ((i as { slug?: string }).slug || "personal") === slug) as { name?: string } | undefined)?.name ?? (slug === "personal" ? "Personal" : slug);
+  const nameOf = (slug: string) => slug === "personal" && featureOn("shell2") ? deskName() : (desktop?.sections.find((s) => s.id === "workspaces")?.items
+    .find((i) => i.kind === "workspace" && ((i as { slug?: string }).slug || "personal") === slug) as { name?: string } | undefined)?.name ?? (slug === "personal" ? deskName() : slug);
+  // shell2: in focus (a workspace's "New chat") the home is the input alone — no starters, no strip
+  const shell2 = featureOn("shell2");
+  const focused = useHomeFocus() && shell2;
+  // shell2 (mobile G1): THE HOME OPENS AT THE TOP. The conversation's "scroll to the latest" ran on the
+  // home too, so a phone opened on Files, under the composer and the Now strip. Once the home is
+  // laid out (and once more after the desktop arrives), its scroller goes back to the top.
+  const box = useRef<HTMLElement>(null);
+  const loaded = !!desktop;
+  useEffect(() => {
+    if (!shell2) return;
+    const top = () => {
+      for (let el = box.current?.parentElement; el; el = el.parentElement) {
+        if (el.scrollHeight > el.clientHeight && /(auto|scroll)/.test(getComputedStyle(el).overflowY)) { el.scrollTop = 0; break; }
+      }
+    };
+    const a = requestAnimationFrame(() => { top(); requestAnimationFrame(top); });
+    return () => cancelAnimationFrame(a);
+  }, [shell2, loaded]);
   return (
-    <section data-home data-desktop-home="" className="vx-home vx-desk-home" aria-label="Home">
-      {(greeting?.title || greeting?.text) && (
+    <section ref={box} data-home data-desktop-home="" className="vx-home vx-desk-home" aria-label="Home">
+      {!focused && (greeting?.title || greeting?.text) && (
         <header className="vx-home-greet">
           {greeting.title && <h2>{greeting.title}</h2>}
           {greeting.text && <p>{greeting.text}</p>}
@@ -38,8 +59,8 @@ function DesktopPage({ greeting, starters, extra }: { greeting: Greeting; starte
       {composer && (home2
         ? <HomeComposer nameOf={nameOf}>{composer}</HomeComposer>
         : <div data-home-composer className="vx-home-composer">{composer}</div>)}
-      {starters && <div data-home-starters className="vx-home-starters">{starters}</div>}
-      {extra}
+      {starters && !focused && <div data-home-starters className="vx-home-starters">{starters}</div>}
+      {!focused && extra}
       {desktop && <DesktopView desktop={desktop} />}
     </section>
   );

@@ -3,11 +3,12 @@
  *
  *  The server answers for THIS reader (`universalRefs.resolveUniversalRef`):
  *    readable     the object's own label; a click opens it where it lives
- *    not-yours    "No access" — nothing about the object, not even the label the writer typed — and
+ *    not-yours    "Restricted" — nothing about the object, not even the label the writer typed — and
  *                 "Request access", which tells its owner
  *    unavailable  "Unavailable" (the access decision cannot tell not-yours from gone)
  *    gone         "Not found"
  *    grant        a join link: what it lets the holder into; a click opens the join page */
+import { openSuppliedCard } from "./shellProvided";
 import { useEffect, useState } from "react";
 import { Icon } from "./index";
 import type { RefAnswer } from "../data/workspaceApi";
@@ -15,16 +16,25 @@ import { parseUniversalRef, resolveUniversalRef } from "./universalRefs";
 import { OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, OPEN_SESSION_EVENT } from "../platform";
 
 const ICON: Record<string, string> = {
-  workspace: "folder", chat: "msg", page: "file", entity: "tag", meeting: "cal", flow: "zap", sensor: "radio", join: "link",
+  workspace: "folder", chat: "msg", room: "msg", message: "msg", page: "file", file: "file", entity: "tag", meeting: "cal",
+  flow: "zap", routine: "zap", sensor: "radio", join: "link", card: "tag", person: "user", query: "search", series: "cal",
 };
 
 export function openRef(a: RefAnswer): void {
   const o = (a.open ?? {}) as Record<string, string | number | undefined>;
-  if (o.chat) { window.dispatchEvent(new CustomEvent(OPEN_SESSION_EVENT, { detail: { session: String(o.chat) } })); return; }
-  if (o.path) { window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { path: String(o.path), slug: o.slug ? String(o.slug) : undefined } })); return; }
+  // the anchor says WHERE inside (a meeting moment, a transcript line, a heading, a message)
+  const anchor = o.anchor ? String(o.anchor) : undefined;
+  if (o.chat) { window.dispatchEvent(new CustomEvent(OPEN_SESSION_EVENT, { detail: { session: String(o.chat), ...(o.message ? { message: String(o.message) } : {}) } })); return; }
+  if (o.card) { openSuppliedCard(String(o.card)); return; }
+  if (o.path) { window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { path: String(o.path), slug: o.slug ? String(o.slug) : undefined, ...(anchor ? { anchor } : {}) } })); return; }
   if (o.join) { window.location.assign(`/join/${o.join}`); return; }
   // a meeting opens on the right; the chat in the centre stays (founder rule 2026-10-16)
-  if (o.meeting !== undefined) { window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref: String(o.meeting) } })); return; }
+  if (o.meeting !== undefined) {
+    const t = anchor?.startsWith("t=") ? anchor.slice(2) : undefined;
+    const line = anchor && /^L\d+$/.test(anchor) ? anchor : undefined;
+    window.dispatchEvent(new CustomEvent(OPEN_MEETING_EVENT, { detail: { ref: String(o.meeting), ...(t ? { at: t } : {}), ...(line ? { line } : {}) } }));
+    return;
+  }
   window.location.assign(a.url || "/");
 }
 
@@ -62,7 +72,7 @@ export function RefChip({ text }: { text: string }) {
     };
     return (
       <span className="vx-chip vx-entity vx-inline-chip" data-missing="" data-static="" aria-disabled="true">
-        {icon}<span className="vx-chip-label">No access</span>
+        {icon}<span className="vx-chip-label">Restricted</span>
         {a.request_access && (asked === "yes"
           ? <span className="vx-ref-asked">Access requested</span>
           : <button type="button" className="vx-ref-ask" disabled={asked === "sending"} onClick={() => void ask()}>Request access</button>)}

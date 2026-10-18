@@ -10,6 +10,7 @@ import {
   addParticipant, listParticipants, sharePreview, type ShareHistory, type SharePreview,
 } from "./sessionsApi";
 import type { Mention } from "./mentions";
+import { tagPerson, type TagAnswer } from "./roomPeopleApi";
 
 export type ShareCheck =
   | { kind: "send" }
@@ -66,4 +67,23 @@ export async function shareWith(session: string, people: Mention[], history: Sha
     first = false;
   }
   return target;
+}
+
+// ── ROOMS (0.13.4 S4, D21): a mention never silently changes who has access ─────────────────────
+/** After a message that @-mentions people is posted IN A ROOM: what each tag does, from the server's
+ *  four cases. A room member is only mentioned (nothing to show); anyone else yields the card only the
+ *  tagger sees; a tagger's own "always" line answers `added_by_rule` (shown as a receipt with Undo).
+ *  A server without the route (404/503) or a refusal shows nothing — the message is already sent. */
+export async function checkRoomTags(session: string, mentions: Mention[],
+                                    api: { tagPerson: typeof tagPerson } = { tagPerson }): Promise<TagAnswer[]> {
+  const out: TagAnswer[] = [];
+  for (const m of mentions) {
+    try {
+      const a = await api.tagPerson(session, { subject: m.subject, name: m.name });
+      if (a.case === "added_by_rule" || a.card) out.push({ ...a, name: a.name || m.name });
+    } catch {
+      /* the message went; a card that cannot be built is not shown */
+    }
+  }
+  return out;
 }

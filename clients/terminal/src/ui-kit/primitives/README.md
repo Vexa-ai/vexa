@@ -13,10 +13,11 @@ primitive, so surfaces decide *what* appears and *where*, never colour, size, ra
 - `Fold` — two forms of one control, switched by a container query at 280/360/400/520/560px.
 - `OverflowStrip` — a scrolling tab row with fade edges and an overflow menu of every tab.
 - `Button`, `IconButton` (label required, `pressed` toggles), `Spinner`, `StatusDot`, `Kbd`.
-- `Badge` (static), `Tag` (static), `Chip` (interactive), `EntityChip` — never the same shape.
+- `Badge` (static), `Tag` (static), `Chip` (interactive; `pressed` for a toggle filter), `EntityChip` (a `workspace` kind with its own mark) — never the same shape.
+- `Switch` — an on/off setting that applies at once (`role=switch`; on is outline and tint).
 - `Input`, `Textarea` (label above, error linked by `aria-describedby`), `Select` (a Menu).
 - `Tabs` (WAI-ARIA, roving tabindex), `Breadcrumb` (middle collapses into a menu).
-- `ListRow`, `PanelHeader`, `Card`.
+- `ListRow` (28px, or `size="md"` 36px for a page list; a muted `detail`; `trailing` cells; two lines below 560px of pane; hover `overlayActions` never drawn on touch — R11), `RowCell` (fixed column widths from a closed set), `RowActions` (a suggestion slot that opens on tap, one verb in a fixed 104px column, ⋯ with the rest), `PanelHeader`, `Card`.
 - `Dialog`, `ConfirmDialog` (replaces `window.confirm`; the button names the act).
 - `EmptyState`, `Skeleton`, `ErrorState` (typed fault + Details), `Tooltip`, `Popover`, `Toaster`/`toast` (sonner).
 - `ExternalLink` (http/https only, `noopener noreferrer`), `Code`, `SecretReveal` (masked, never in an attribute).

@@ -1,0 +1,3 @@
+/* /join: the quiet text buttons under Join ("Not now", "Not you? Use another address"; D26, D35).
+   A touch-sized target for the phone pass: 44px tall, the label wraps at 360px. */
+.vx-join-quiet { background: none; border: none; color: var(--t3); font-size: 12px; padding: 12px 0; min-height: 44px; cursor: pointer; align-self: flex-start; text-align: left; }

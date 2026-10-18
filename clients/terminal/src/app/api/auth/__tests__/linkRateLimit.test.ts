@@ -21,6 +21,9 @@ const admission = vi.fn(async (url: string) =>
     ? new Response(JSON.stringify({ admitted: true, why: "allow-list" }), { status: 200 })
     : new Response("nope", { status: 500 }));
 
+/** Calls that ASK admin-api whether an address may sign in — the rate counter's own calls aside. */
+const admissionCalls = () => admission.mock.calls.filter((c) => String(c[0]).includes("/internal/signin-admission")).length;
+
 async function ask(email: string, client = "203.0.113.7") {
   const req = {
     json: async () => ({ email }),
@@ -55,7 +58,7 @@ describe("per email address", () => {
     expect(sixth.status).toBe(200);
     expect(await sixth.json()).toEqual({ ok: true });
     expect(sendMail).toHaveBeenCalledTimes(5);
-    expect(admission).toHaveBeenCalledTimes(5);
+    expect(admissionCalls()).toBe(5);
   });
 
   it("counts each address on its own", async () => {
@@ -73,19 +76,19 @@ describe("per client address", () => {
     const over = await ask("user20@example.com");
     expect(over.status).toBe(429);
     expect(over.headers.get("retry-after")).toBeTruthy();
-    expect(admission).not.toHaveBeenCalled();
+    expect(admissionCalls()).toBe(0);
     expect(sendMail).not.toHaveBeenCalled();
     expect((await ask("user21@example.com", "203.0.113.8")).status).toBe(200);
   });
 
-  it("the limits and the window can be set", () => {
+  it("the limits and the window can be set", async () => {
     vi.stubEnv("MAGIC_LINK_RATE_PER_IP", "2");
     vi.stubEnv("MAGIC_LINK_RATE_WINDOW_SECONDS", "60");
     const t = 1_700_000_000_000;
-    expect(takeLinkRequest("c", "a@x.io", t)).toBe("ok");
-    expect(takeLinkRequest("c", "b@x.io", t)).toBe("ok");
-    expect(takeLinkRequest("c", "c@x.io", t)).toBe("client-limited");
-    expect(takeLinkRequest("c", "d@x.io", t + 61_000)).toBe("ok");
+    expect(await takeLinkRequest("c", "a@x.io", t)).toBe("ok");
+    expect(await takeLinkRequest("c", "b@x.io", t)).toBe("ok");
+    expect(await takeLinkRequest("c", "c@x.io", t)).toBe("client-limited");
+    expect(await takeLinkRequest("c", "d@x.io", t + 61_000)).toBe("ok");
   });
 });
 
@@ -135,5 +138,30 @@ describe("the client address", () => {
                   socket: { remoteAddress: "203.0.113.7" } };
     stampClientAddress(req, []);
     expect(req.headers[CLIENT_ADDRESS_HEADER]).toBe("203.0.113.7");
+  });
+});
+
+
+describe("the shared count (PRD 0.13.4 M6)", () => {
+  it("asks admin-api's shared window first, so every replica sees one limit", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/internal/rate/take")) {
+        const body = JSON.parse(String(init?.body || "{}"));
+        seen.push(body.key);
+        return new Response(JSON.stringify({ allowed: !body.key.startsWith("link-ip:"), count: 20 }), { status: 200 });
+      }
+      return admission(url);
+    }));
+    const res = await ask("someone@example.com", "203.0.113.50");
+    expect(res.status).toBe(429);
+    expect(seen).toEqual(["link-ip:203.0.113.50"]);
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  it("falls back to its own count when the shared store cannot answer", async () => {
+    // the default fetch answers 500 for /internal/rate/take: the local count decides, as before
+    for (let i = 0; i < 5; i++) expect((await ask("cy@example.com", `198.51.100.${i}`)).status).toBe(200);
+    expect(sendMail).toHaveBeenCalledTimes(5);
   });
 });

@@ -5,6 +5,7 @@
 .vx-mention-row[aria-selected="true"] { background: var(--panel2); }
 .vx-mention-handle { color: var(--accent); min-width: 80px; }
 .vx-mention-says { color: var(--t3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-mention-accounts { flex: none; color: var(--t3); font-size: 11px; border: 1px solid var(--line2); border-radius: 999px; padding: 0 6px; white-space: nowrap; }
 .vx-mention-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .vx-mention-chip {
   display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--accent);

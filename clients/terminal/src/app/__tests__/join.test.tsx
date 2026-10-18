@@ -31,6 +31,12 @@ import {
   roleSentence,
   type InvitePreview,
   joinPathFor,
+  joinPage,
+  maskAddress,
+  oneClickNote,
+  roomOrWorkspacePath,
+  NOT_YOU,
+  signedInLine,
 } from "../join/joinState";
 
 // next-auth's client helper reaches for a session endpoint on import-time use; the page only ever
@@ -210,9 +216,13 @@ describe("the join page", () => {
     expect(signInMock).toHaveBeenCalledWith("google", { callbackUrl: `/join?i=${TOKEN}` });
   });
 
-  it("redeems immediately for a visitor who is already signed in", async () => {
+  it("asks a signed-in visitor to confirm, showing workspace, role and sender — never redeems on load (D26)", async () => {
     const calls = stub({ meStatus: 200 });
     render(<JoinPage />);
+    const btn = await screen.findByTestId("join-confirm");
+    expect(screen.getByTestId("join-sentence").textContent).toBe(inviteSentence(preview()));
+    expect(calls.some((c) => c.url.startsWith("/api/workspace/invites/accept"))).toBe(false);
+    fireEvent.click(btn);
     await waitFor(() =>
       expect(calls.some((c) => c.url.startsWith("/api/workspace/invites/accept"))).toBe(true));
     const accept = calls.find((c) => c.url.startsWith("/api/workspace/invites/accept"))!;
@@ -243,7 +253,22 @@ describe("the join page", () => {
   it("says WHICH address, when a signed-in person is not the one the invite named", async () => {
     stub({ meStatus: 200, acceptStatus: 403 });
     render(<JoinPage />);
+    fireEvent.click(await screen.findByTestId("join-confirm"));
     await waitFor(() => expect(screen.getByTestId("join-refused").textContent).toBe(refusal("wrong-address")));
+    // the other address may be the one it named: "Not you?" is offered with the refusal (D35)
+    expect(screen.getByTestId("join-not-you").textContent).toBe(NOT_YOU);
+  });
+
+  it("says who is signed in and offers another address before anything joins (D35)", async () => {
+    const calls = stub({ meStatus: 200 });
+    render(<JoinPage />);
+    expect((await screen.findByTestId("join-signed-in-as")).textContent).toBe(signedInLine("jsmith@example.com"));
+    fireEvent.click(screen.getByTestId("join-not-you"));
+    // signed out, back at the sign-in door on this same invite, and nothing was redeemed
+    await screen.findByTestId("join-email");
+    expect(calls.some((c) => c.url.startsWith("/api/auth/logout") && c.method === "POST")).toBe(true);
+    expect(calls.some((c) => c.url.startsWith("/api/workspace/invites/accept"))).toBe(false);
+    expect(screen.queryByTestId("join-confirm")).toBeNull();
   });
 
   it("accepts the older ?invite= spelling of the parameter", async () => {
@@ -270,5 +295,79 @@ describe("the path spelling of a link (#1783)", () => {
     expect(joinPathFor("abc_DEF-123")).toBe("/join?i=abc_DEF-123");
     expect(joinPathFor("")).toBe("/join");
     expect(joinPathFor("%E0%A4%A")).toBe("/join?i=%25E0%25A4%25A");
+  });
+});
+
+
+// ── PRD 0.13.4 S2: one click from the invite mail, and a phone ─────────────────────────────────
+describe("the one-click join (S2)", () => {
+  it("offers ONE button that posts to the join route — and opening the page posts nothing", async () => {
+    const calls = stub({ meStatus: 401, previewBody: preview({ signin: true }) });
+    render(<JoinPage />);
+    const form = (await screen.findByTestId("join-one-click")) as HTMLFormElement;
+    expect(form.getAttribute("method")).toBe("post");
+    expect(form.getAttribute("action")).toBe("/api/join/accept");
+    expect((form.querySelector('input[name="i"]') as HTMLInputElement).value).toBe(TOKEN);
+    expect(screen.getByTestId("join-one-click-button").textContent).toBe("Join pilot");
+    expect(form.textContent).toContain("j…@example.com");
+    // the scanner property: rendering the page is reads only — no POST, no accept, no sign-in
+    expect(calls.every((c) => c.method === "GET")).toBe(true);
+    expect(calls.some((c) => c.url.startsWith("/api/workspace/invites/accept"))).toBe(false);
+    // one act on the page: the emailed-link form is not offered beside it
+    expect(screen.queryByTestId("join-email")).toBeNull();
+  });
+
+  it("names the room when the invite lands in one", async () => {
+    stub({ meStatus: 401, previewBody: preview({ signin: true, room: { id: "s-room", title: "#test" } }) });
+    render(<JoinPage />);
+    expect((await screen.findByTestId("join-one-click-button")).textContent).toBe("Join #test");
+    expect(screen.getByTestId("join-sentence").textContent).toContain("invited you to #test in pilot");
+  });
+
+  it("falls back to the emailed sign-in link when the one-click came back (n=signin)", async () => {
+    window.history.replaceState({}, "", `/join?i=${TOKEN}&n=signin`);
+    stub({ meStatus: 401, previewBody: preview({ signin: true }) });
+    render(<JoinPage />);
+    expect(await screen.findByTestId("join-email")).toBeTruthy();
+    expect(screen.queryByTestId("join-one-click")).toBeNull();
+    expect(screen.getByTestId("join-note").textContent).toBe(oneClickNote("signin"));
+  });
+
+  it("an invite that does not sign in keeps the ordinary sign-in", async () => {
+    stub({ meStatus: 401, previewBody: preview({ signin: false }) });
+    render(<JoinPage />);
+    expect(await screen.findByTestId("join-email")).toBeTruthy();
+    expect(screen.queryByTestId("join-one-click")).toBeNull();
+  });
+
+  it("has a ‹ Back on every screen, including a refusal", async () => {
+    stub({ meStatus: 401, previewBody: preview({ valid: false, reason: "expired" }) });
+    render(<JoinPage />);
+    await screen.findByTestId("join-refused");
+    expect(screen.getByTestId("join-back").textContent).toContain("Back");
+  });
+
+  it("fits a 390px phone: the card fills the width inside a gutter and nothing is wider than it", async () => {
+    stub({ meStatus: 401, previewBody: preview({ signin: true }) });
+    render(<JoinPage />);
+    const card = await screen.findByTestId("join-card");
+    const shell = card.parentElement as HTMLElement;
+    expect(shell.style.overflowX).toBe("hidden");
+    expect(shell.className).toContain("p-4");          // --space-4: the 16px gutter
+    expect(card.style.width).toBe("100%");
+    expect(card.style.maxWidth).toBe("360px");
+    const btn = screen.getByTestId("join-one-click-button") as HTMLElement;
+    expect(btn.style.width).toBe("100%");
+    expect(btn.style.minHeight).toBe("44px");
+  });
+
+  it("the pure parts: landing, the page, the mask", () => {
+    expect(roomOrWorkspacePath("ws1", { id: "s 1" })).toBe("/r/chat/s%201");
+    expect(roomOrWorkspacePath("ws1", null)).toBe("/w/ws1");
+    expect(roomOrWorkspacePath("", null, "slug")).toBe("/w/slug");
+    expect(joinPage("t1", "signin")).toBe("/join?i=t1&n=signin");
+    expect(joinPage("")).toBe("/join");
+    expect(maskAddress("maria@oenb.at")).toBe("m…@oenb.at");
+    expect(maskAddress("nope")).toBe("");
   });
 });

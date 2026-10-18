@@ -374,6 +374,7 @@
 .vx-icard-free { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border-subtle); border-radius: 999px; padding: 2px 4px 2px 12px; }
 .vx-icard-free input { flex: 1; min-width: 0; border: 0; background: none; font: inherit; color: var(--text-1); outline: none; }
 .vx-icard-send { padding: 4px 10px; border-radius: 999px; border: 0; background: var(--accent); color: var(--surface-1); font: inherit; cursor: pointer; }
+.vx-icard-err { margin: 0; font-size: var(--text-xs); color: var(--danger-text); }
 /* the sidebar + New: one quiet line, the primary entry by placement, not by fill (founder 2026-10-16) */
 .vx-rail-new { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; white-space: nowrap; flex: none; align-self: center; background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-1); font: inherit; font-size: var(--text-sm); font-weight: 600; cursor: pointer; }
 .vx-rail-new:hover, .vx-rail-new:focus-visible { background: var(--border-subtle); }

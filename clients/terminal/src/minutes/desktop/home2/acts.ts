@@ -11,7 +11,11 @@
  *  An act with an effect beyond the person's own screen is confirmed first (`confirm`). The page
  *  action verbs are the fixed allow-list in `richParse.ACTION_VERBS`; nothing else is executable. */
 import { WORKSPACE_IMAGE_CHANGED } from "../../../platform/identity";
-import { ASK_CHAT_EVENT, CALL_START_EVENT, OPEN_MEETING_EVENT, OPEN_SESSION_EVENT } from "../../../platform/events";
+import { ASK_CHAT_EVENT, CALL_START_EVENT, NEW_ROOM_EVENT, OPEN_MEETING_EVENT, OPEN_SESSION_EVENT } from "../../../platform/events";
+import { canonicalVerb } from "../../readme/grammar";
+
+/** The README's `{{invite}}` action asks the workspace page to open its Invite dialog. */
+export const INVITE_EVENT = "vexa:workspace-invite";
 import { VIEW_NAVIGATE_EVENT, viewSlotFor } from "../../roomView";
 import { openCard, readCard, updateCard } from "../cardsApi";
 import { toast } from "../../../ui-kit/primitives/Toast";
@@ -154,8 +158,9 @@ async function startCallPlan(target: string, workspace: string | undefined): Pro
  *  the chat shows is exactly what is sent. `null` = refused (said in a toast). */
 export async function planPageAction(verb: ActionVerb, target: string, workspace?: string): Promise<Plan | null> {
   const ws = workspace && workspace !== DESK ? workspace : DESK;
-  switch (verb) {
-    case "run-routine": {
+  // one registry (D17): `run-routine` is `run`, `schedule-call` is `schedule`
+  switch (canonicalVerb(verb)) {
+    case "run": {
       if (!ROUTINE_ID.test(target)) return refused();
       const routine = await resolveRef(`routine:${target}`, ws);
       if (!routine) return refused();
@@ -180,7 +185,13 @@ export async function planPageAction(verb: ActionVerb, target: string, workspace
     }
     case "new-chat": return { run: () => askAgent(target || "", { draft: true }) };
     case "prepare": return { run: () => askAgent(`Prepare me for ${target || "the next call"}: fill its agenda and what I should know.`, { draft: true }) };
-    case "schedule-call": return {
+    case "new-room": return {
+      confirm: { title: `Make a room${target ? ` “${target}”` : ""}?`, consequence: "Everyone in this workspace can find and join it.", confirmLabel: "Make the room", tone: "primary" },
+      run: () => { window.dispatchEvent(new CustomEvent(NEW_ROOM_EVENT, { detail: { workspace: ws === DESK ? undefined : ws, name: target || undefined } })); },
+    };
+    case "invite": return { run: () => { window.dispatchEvent(new CustomEvent(INVITE_EVENT, { detail: { workspace: ws, role: target || undefined } })); } };
+    case "ask": return { run: () => askAgent(target || "", { draft: true }) };
+    case "schedule": return {
       // the agent drafts it; the person sends the words and its own tool confirms the invite
       confirm: { title: "Schedule a call?", consequence: "Vexa drafts the invitation in your chat; nothing is sent until you send it.", confirmLabel: "Draft it", tone: "primary" },
       run: () => askAgent(`Schedule a call${target ? ` for ${target}` : ""}: find a time that suits everyone and draft the invitation.`, { draft: true }),

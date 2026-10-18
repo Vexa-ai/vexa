@@ -12,6 +12,7 @@ import { SettingsDialog } from "./SettingsDialog";
 import { Identity } from "../ui-kit/Identity";
 import { PHOTO_CHANGED_EVENT, changeOwnPhoto, photoUrl, readOwnPhoto, type OwnPhoto } from "../surfaces/personPhotoApi";
 import { useFeature } from "../platform/features";
+import { openMyProfile } from "./shell2/personOpen";
 import { Modal } from "../ui-kit/Modal";
 import { DirectorySearch } from "../surfaces/profile/PublicProfile";
 import { applyCachedAppearance, refreshAppearance } from "../platform/appearance";
@@ -51,6 +52,7 @@ export function AccountBadge() {
   const [directory, setDirectory] = useState(false);
   const profilesOn = useFeature("public_profiles");
   const openOn = useFeature("open_workspaces");
+  const shell2 = useFeature("shell2");
   // THE PERSON'S APPEARANCE (Settings → Appearance): the last one this browser saw at once, then the
   // server's, and again whenever the window comes back (they may have changed it on another device)
   useEffect(() => {
@@ -129,6 +131,12 @@ export function AccountBadge() {
     <div ref={box} className="vx-acct">
       {open && (
         <div role="menu" data-acct="menu" className="vx-menu vx-acct-menu">
+          {/* shell2: your own profile opens like anyone's — the person panel, with Edit */}
+          {shell2 && !company && (
+            <button role="menuitem" data-acct="profile" className="vx-menu-item" onClick={() => { setOpen(false); openMyProfile(name); }}>
+              <span className="vx-menu-icon" aria-hidden><Icon name="user" size={14} /></span><span className="vx-menu-label">Your profile</span>
+            </button>
+          )}
           {me?.can_work_as_company === true && !company && (
             <button role="menuitem" data-acct="company" className="vx-menu-item" onClick={() => flip("company")}>
               <span className="vx-menu-icon" aria-hidden><Icon name="building" size={14} /></span><span className="vx-menu-label">Switch to Company</span>

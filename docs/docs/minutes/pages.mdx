@@ -335,13 +335,17 @@ authored `vexa-terminal`.
 
 ### References to anything: `/r/<kind>/<id>` and `[[kind:id]]`
 
-Every workspace, chat, page, entity, meeting, flow and sensor has one reference: the link
-`https://<your Vexa>/r/<kind>/<id>`, which you can paste anywhere (a chat, an email, a calendar event,
+Every object has one reference — workspace, room, chat, message, page (and a heading), file, entity,
+meeting (and a moment or a transcript line), card, person, routine, sensor, query (a list) and calendar
+series: the link `https://<your Vexa>/r/<kind>/<id>`, which you can paste anywhere (a chat, an email, a calendar event,
 another app), and the chip `[[kind:id|label]]` the agent writes in a reply. A join link (`/join/<token>`)
-is a reference that also lets the holder in.
+is a reference that also lets the holder in. A place inside an object rides along as an anchor:
+`[[meeting:153@00:12:30]]` (`/r/meeting/153#t=00:12:30`) opens the call at that moment for everyone
+who can open the call, `[[meeting:153#L42]]` at a transcript line, `[[page:<id>/notes.md#venue]]` at a
+heading. A reference never grants access: each reader sees what their own access allows.
 
 Opening a reference asks the server what it points at **for you, now**. If you can open it, the chip
-shows its name and opens it. If you cannot, it says **No access** and offers **Request access**, which
+shows its name and opens it. If you cannot, it says **Restricted**, with no name, and offers **Request access**, which
 tells the owner who asked. If it no longer exists, it says **Not found**. Pasting a reference link into
 the composer turns it into a chip. A `[[Title]]` chip is found by the server's own spelling rule, so a
 name with accents (`[[mühlemann+popp AG]]`) opens its page. The agent uses `ref_resolve` before it
@@ -483,3 +487,50 @@ drafting a schedule) is said in your own chat, and scheduling is only ever a dra
   "a private room"), never its name and never the label the writer typed.
 - **Confirmed when it reaches others.** Running a routine, starting a call, accepting a proposal,
   moving a card and scheduling a call ask first.
+
+## The workspace page is its README (`readme_page`)
+
+With the `readme_page` feature on (it needs `home2`), a workspace's page is its README, drawn below the
+fixed header **for each viewer**. The README in git holds placeholders; the server fills them for
+whoever is looking.
+
+| Write | You see |
+|---|---|
+| `{{waiting-on-you}}` · `{{people}}` · `{{rooms}}` · `{{routines}}` · `{{commitments}}` · `{{waiting-on-others}}` · `{{meetings}}` · `{{files}}` · `{{pinned}}` · `{{changes-since}}` (each takes `limit=`; `meetings` takes `when=upcoming\|past\|live`, `files` `folder=`, `commitments` `status=`) | a live list on the kit's rows, with "Show N more" |
+| `{{crm company="OeNB"}}` · `{{crm people company=OeNB}}` · `{{crm deals stage=negotiation}}` · `{{crm timeline person="Marvin Hinz" limit=5}}` | CRM data with your own CRM access; a field only you may see is marked **only you see this** |
+| `{{card <id>}}` · `{{cards status=open}}` · `[[card:<id>\|words]]` | live cards; a claim citing a card shows proven, pending or stale once the card service answers it |
+| `{{new-chat prompt="…"}}` · `{{new-room name=…}}` · `{{schedule title=… every=…}}` · `{{invite role=…}}` · `{{ask "…"}}` · `{{run routine=…}}` | a button; one you cannot use is disabled with the reason |
+
+A new workspace starts from a default README: what waits on you, the people, rooms, routines and
+commitments, then a short "how to use this workspace". The workspace's agent may rearrange it;
+when you and the agent change the same lines, your edit wins.
+
+**Copy reference** is on every object's ⋯ (and ⌘⇧C): it copies the reference and its link. Paste it
+in Vexa and it becomes a live chip (⌘Z brings the link back); paste it anywhere else and it is a link.
+A pasted meeting link offers **Send Vexa**. **Share** (on a meeting, page, card, room or message) is
+"Send to…" a room or a person: you see the object exactly as it will appear and, only when someone
+there cannot open it, one line saying so. Lists have **Copy link**: whoever opens it sees their own
+list. **Pin for everyone** puts an item in a room's Pinned strip or a workspace's `{{pinned}}`, with who
+pinned it and when. On a phone, long-press a message for Copy reference or Share.
+
+### How it works
+
+`POST /api/desktop/page` (the terminal's BFF) reads the page's source, asks crm-api with **your** key
+for each `{{crm …}}` block (`/crm/blocks/read`) and each card block, then asks agent-api
+(`POST /api/desktop/page`) to render. agent-api parses the one grammar
+(`core/agent/control_plane/page_grammar.py`, mirrored by `clients/terminal/src/minutes/readme/grammar.ts`;
+both run `page_grammar.cases.json`), reads each list from its owner for you (the attention read model,
+the roster, the routines, the meetings, the tree, the pins in `.vexa/workspace.yaml`), resolves every
+reference through the one resolver, and composes a render tree (`page_render.py`). Nothing is stored and
+no model is called. Share posts the reference as a message (`POST /api/sessions/<room>/messages`);
+`POST /api/refs/audience` says who there could not open it. Pins: `GET`/`POST /api/pins`.
+
+### Why it complies
+
+| Rule | How | Gate |
+|---|---|---|
+| **Restricted is absent** (deny test 22) | a row you may not see never reaches the render; a block with no visible row — and the README's heading over it — renders nothing; no totals, no "N hidden" | `gate:python`: `core/crm/tests/test_blocks.py::test_deny_22_hidden_records_change_nothing`, `core/agent/tests/test_page_render.py::test_deny_22_hidden_records_render_byte_identical` |
+| **Git holds placeholders only** (deny test 23) | rendering writes nothing; an exported render carries a mark the page write path refuses | `test_s7_page_route.py::test_render_never_commits_and_a_resolved_render_cannot_be_committed` |
+| **A reference never grants** (deny test 27, D18/D19) | every kind answers through its object's own access decision; a reader without access gets no name and never the writer's label; Share and pins send references, never grants | `test_s7_refs.py::test_deny_27_*`, `test_audience_names_who_cannot_open_and_never_grants`, `test_pins_are_shared_and_resolved_per_viewer` |
+| **Actions never run on render** | an action is a descriptor; it runs on a click, as you, confirmed when it reaches others | `test_page_render.py::test_actions_are_descriptors_and_respect_the_viewers_role`; `readme.test.tsx` |
+| **Personal stays personal** (converged §16) | waiting-on-you, what changed and only-you CRM fields are marked personal; `public_view` drops them for anything others see; the route is person-only | `test_public_view_drops_everything_personal`, `test_shared_routes.py` |

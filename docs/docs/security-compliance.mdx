@@ -177,8 +177,10 @@ read-only (the mount table is the one source), and an event agent may write none
 5. **The token is refreshed while the worker runs.** The token lives for
    `VEXA_MCP_DELEGATION_TTL_SEC` when set, else `VEXA_CHAT_IDLE_TIMEOUT_SEC` + 900 s (1800 s at
    the defaults).
-   Once half its life has passed, agent-api mints a new one for the same person, regime and ceiling,
-   and the worker uses it from its next turn. The replaced token keeps working until its own expiry,
+   Once half its life has passed, agent-api mints a new one for the same person, regime, ceiling
+   and audience, and the worker uses it from its next turn. The new token is published only when
+   its scope equals the old one exactly; otherwise the worker keeps its current token until it
+   expires, and its tools then fail loud. The replaced token keeps working until its own expiry,
    so a turn that started with it has 900 s of headroom at the default. A worker that has stopped
    gets no new token, and its tokens are revoked.
 6. **A turn that outlives its tool access fails loud.** Its Vexa tool calls are refused and the turn
@@ -205,6 +207,183 @@ Deny tests:
 | flows-api | `core/flows/tests/test_subject_bearer.py` | `test_a_worker_with_nobody_in_the_loop_is_refused_every_person_only_verb`, `test_a_worker_with_nobody_in_the_loop_still_reads_and_reports`, `test_every_route_a_person_reaches_is_classified_for_a_worker` |
 | Token refresh | `core/agent/tests/test_delegation_refresh.py` | `test_a_unit_alive_past_the_ttl_keeps_its_tools`, `test_a_stopped_unit_is_never_refreshed_and_its_token_is_refused`, `test_end_to_end_a_turn_that_outlives_its_token_fails_loud` |
 | Skills and hooks | `core/agent/tests/test_llm_claude_code.py`, `core/agent/tests/test_claude_skills_staging.py` | `test_build_argv_turns_every_hook_off`, `test_a_workspace_skill_grants_no_tools_and_registers_no_hooks`, `test_a_platform_skill_keeps_its_name_over_a_workspace_copy`, `test_a_workspace_skill_past_the_turns_budget_is_not_staged` |
+
+## Private data stays out of shared surfaces
+
+A chat agent may read the person's private data: CRM records, meeting transcripts, mail, the
+calendar, a connected service, the person-wide views (follow-ups, home, notifications, chats).
+What it read must not reach a page, a message or a card that other people read unless the person
+decides to share it.
+
+### How it works
+
+1. **A read says what it returned.** Each service labels its answer with `X-Vexa-Privacy`: CRM
+   answers `private; class=crm`; meeting-api answers `private; class=transcript` for transcripts,
+   meetings, recordings and in-call chat; agent-api labels its connection and person-wide routes.
+   Anything else answers `none`. **An answer with no label counts as private.**
+2. **The edge marks the session in Redis.** When a worker's request returns private data, the
+   gateway records the source on the worker's unit and on its conversation, with a 12-hour TTL. For
+   CRM and flows tools, which the MCP calls directly, the MCP reports the label to the gateway. The
+   gateway takes the unit from the identity it signed, not from the caller. If the mark cannot be
+   written, the data is not returned (`503 privacy_mark_unavailable`).
+3. **The mark outlives the process.** A restart, a second agent-api replica, a worker's idle exit
+   and a new mount generation all read the same mark. The mark is shared across the conversation,
+   so the routine and signal units of the same chat see it too. The worker's Redis user may read
+   the mark and may not clear it.
+4. **Every write into a surface other people read is held.** The hold covers these writes from a
+   marked session:
+   - page writes, uploads and assets;
+   - renames and moves;
+   - a workspace's name and purpose;
+   - a message into a conversation someone else reads;
+   - a notice to other people and a room message;
+   - CRM writes and card proposals to a board.
+
+   It also covers the agent's own file writes at the end of a turn. A commit into a shared
+   workspace from a marked session gets a fixed body, never the agent's reply. A write to the
+   person's own desk is not held.
+5. **When the mark cannot be read, the write is held.** This covers an unreachable store, a worker
+   request with no unit and a service that received no mark. The person sees a held state with a
+   typed fault, `held_private_egress`, and its source `unverifiable`.
+6. **Held content is encrypted in agent-api.** It is stored with AES-GCM under a key derived from
+   the deployment's internal secret, bound to the person and the code, and expires after 3 days.
+   No held content is stored on a desk or a mount. Older `.vexa/held-writes/` files are moved off
+   every desk at boot (a post-meeting room mounts no attendee desk, decision 3). Only the person can list,
+   open or discard held items (`GET /agent/held`); workers are refused.
+7. **The person releases a held write.** The person replies `confirm <code>` in their own chat,
+   which releases that one write once. A worker's held file write is then written by agent-api
+   before the next turn runs. An agent cannot confirm its own write.
+
+### Why it complies
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| P20: every access is checked, default deny | The data is labelled where it is served, an unlabelled answer is private, and the hold runs in the service that owns each surface, not in the model's judgement | `gate:python` |
+| P23: one writer per fact | The gateway and agent-api write the mark. The worker writes only its own observation key, and agent-api alone keeps held content | `gate:python` |
+| P18: no silent failure | An unreadable mark holds the write, a mark that cannot be written refuses the read, and each case answers with a typed fault | `gate:python` |
+| ADR-0042, H7 | Held content is encrypted at rest, bound to its person and never on a mount another run can read | `gate:python` |
+
+Deny tests:
+
+| Protection | Test file | Tests |
+|---|---|---|
+| Reads mark the session, persisted | `core/agent/tests/test_sec_deny_policy_taint.py` | `test_private_read_marks_session_private`, `test_private_mark_survives_restart`, `test_agent_message_from_marked_session_is_held`, `test_post_meeting_run_cannot_read_other_attendees_held_writes` |
+| Labels, restart, fail closed, held store, every surface | `core/agent/tests/test_d6_privacy_taint.py` | 17 tests |
+| The worker's commit seam | `core/agent/tests/test_private_writes_commit.py` | `test_an_unreadable_mark_holds`, `test_the_mark_survives_a_worker_idle_exit`, `test_the_commit_body_of_a_marked_session_is_never_the_reply`, `test_a_roster_edited_by_the_turn_does_not_shrink_its_audience` |
+| The edge | `core/gateway/services/gateway/tests/test_privacy_mark.py`, `core/gateway/services/mcp/tests/test_privacy_report.py` | all |
+| CRM writes and cards | `core/crm/tests/test_privacy_hold.py` | all |
+
+## Untrusted triggers: routines, mail and room calls
+
+Some agent turns are started by something other than the person typing in their own chat: a
+routine an agent wrote, an email, or speech on a call. Text from those sources can carry
+instructions. These turns read, and they **propose**; a person decides.
+
+### How it works
+
+1. **An agent proposes a routine; the person turns it on.** A flow submitted by an agent turn
+   (any delegated worker) is filed as a draft, whatever `activate` it sent, and the answer says
+   `awaiting_approval: true`. Activating or resuming a flow from an agent turn is refused with
+   `403 person_approval_required`. Pausing and retiring stay open to it. The person turns the
+   routine on from their Routines board, with their own session. Routine files from before flows
+   are migrated as paused unless an approval record covers their exact bytes.
+2. **Mail is a person only when its domain says so.** Before the mailbox treats a `From:` as a
+   known user, a reply on a known thread or a colleague inside the allowed domains, it reads the
+   receiving mail server's verdict in `Authentication-Results`. It needs a DMARC pass for the
+   `From:` domain, or, when the domain publishes no DMARC policy, a DKIM or SPF pass aligned with
+   it. Only the topmost `Authentication-Results` header counts, because the receiving server adds
+   its own on top. Set `VEXA_FLOWS_MAIL_AUTHSERV_ID` (for example `mx.google.com`) to accept only
+   your own server's verdict. A mail that fails is quarantined like a stranger's (`unauthenticated_mail`).
+3. **A turn an email started proposes only.** It runs on its own worker with every workspace
+   mounted read-only. It may write one file, the thread's reply `mail_outbox/<session>.md`, which
+   flows mails back. Anything else it wants to change, it proposes.
+4. **A room's call speaks into a turn that proposes.** A room's signal turn (Vexa woken by speech on
+   the room's call, or by the room's messages) reads the room's workspace and its connected open
+   workspaces. It writes only the call's note; every other write is refused (`signal_scope`) and
+   becomes a proposal.
+5. **Everyone on the call counts in the audience.** Each person on the room's live call must be a
+   member of the room's workspace. Anyone who cannot be placed, or a call whose participants cannot
+   be read, makes the audience `cross_org`, so CRM reads return public fields only.
+6. **The room's grant is read every turn.** The room's roster, connected workspaces, the speaker's
+   role and the audience are read again on each turn. The worker's id carries a digest of that
+   grant, so any change starts a new worker with new mounts and a new token.
+7. **A meeting write-up reads no attendee's desk.** The post-meeting report is written from the
+   transcript, the room's workspace and what was shared explicitly. No other attendee's personal
+   workspace is mounted, whoever the invite names.
+
+### Why it complies
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| P20: every access is checked, default deny | Arming a flow, writing a page from a signal or mail turn, and acting for a `From:` are checked at the service that owns them (flows-api, agent-api `signal_scope`, the mailbox), never in a prompt | `gate:python` |
+| R7: no implicit rights | A routine runs only after its person turns it on; a write by an untrusted turn is a proposal | `gate:python` |
+| P23: one writer per fact | The audience is computed once per turn by `room_principal.resolve`; the refreshed token is the same scope or none | `gate:python` |
+
+Deny tests (security review 2026-10-17):
+
+| Protection | Test file | Tests |
+|---|---|---|
+| Agent routines are proposals (deny test 14) | `core/flows/tests/test_sec_deny_2026_10_17.py`, `core/agent/tests/test_sec_deny_policy_taint.py` | `test_agent_created_flow_is_inactive_until_person_approves`, `test_agent_cannot_activate_flow_without_session_approval`, `test_routine_without_an_approval_record_is_not_stood_behind` |
+| Mail needs DMARC (deny test 11) | `core/flows/tests/test_sec_deny_2026_10_17.py` | `test_inbound_mail_without_dmarc_pass_is_quarantined` |
+| Room signal turns propose (deny test 10) | `core/agent/tests/test_sec_deny_rooms.py` | `test_room_signal_turn_cannot_write_pages_directly` |
+| Audience survives refresh (deny test 4) | `core/agent/tests/test_sec_deny_rooms.py` | `test_cross_org_room_token_keeps_audience_after_refresh` |
+| No attendee desk in a write-up (deny test 9) | `core/agent/tests/test_sec_deny_policy_taint.py` | `test_post_meeting_run_cannot_read_other_attendees_held_writes` |
+| The rest of this section | `core/flows/tests/test_s1e_security_floor.py`, `core/agent/tests/test_s1e_security_floor.py` | every test in both files |
+
+## Decisions on cards: who moves an obligation
+
+A card is the one unit of obligation: a commitment, an approval, a question (and asks, invitations
+and policy changes, which follow the approval or question shape). Agents offer cards; only the person
+whose move it is moves one, from their own signed-in app.
+
+### How it works
+
+- **One next actor.** Every open card of a kind names exactly one person whose move it is, the
+  person waiting on it, and when Vexa next checks it. Its route comes from a seeded template:
+  a commitment is proposed, accepted, delivered with evidence, confirmed by the person waiting, then
+  closed; an approval is opened, decided, executed with an effect receipt, then closed; a question is
+  asked, answered, used, then closed. An organisation can rename the stages; it cannot change who
+  passes a gate.
+- **Taken is not passed.** A card is first *offered* to its next actor. Only their acceptance moves
+  custody, and a gate passes only when its owner confirms it: a delivery is the doer's claim, the
+  confirmation is the waiting person's.
+- **A decision is a record.** Each gate decision is an append-only revision of the card that carries
+  the action, the credential it was made with, a server nonce bound to that person and that card at
+  that revision, and the hash of the card face they saw. A replayed nonce, a nonce minted for someone
+  else, a card that changed since it was shown, or a face with a field hidden from the signer is
+  refused.
+- **Only the app decides.** Decisions, their nonces and "seen" take the credential the app's sign-in
+  mints. Any API key, a browser-scoped one included, and any agent token is refused.
+- **Seen means seen.** A card counts as seen only when the app rendered it in view, never when it was
+  delivered or fetched. The person waiting sees that it was seen only if the organisation turns that on.
+- **In-chat questions are pending items.** When an agent asks you to choose or confirm in a chat, your
+  press answers a pending item bound to the exact card the agent wrote, once.
+- **Facts name their audience.** When a card changes, the CRM computes who the change reaches (the next
+  actor, the person waiting, the card's members and the rooms whose boards hold it), seals that into
+  the fact, and sends only lifecycle fields — never the card's title or content. Flows starts a
+  person's routine only for a fact about them or one sealed with them in its audience.
+
+### Why it complies
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| R6: taken is not passed | Custody moves only on the next actor's acknowledgement; a gate passes only on its owner's action, and "executed" needs a receipt reference (`crm/card_templates.py`) | `gate:python` |
+| R10: an agent proposes, a person decides | An agent's card of a kind is offered and never moved by it; `/card/decide` refuses every delegation | `gate:python` |
+| P21: report state from evidence | "Seen" is written only by `/card/seen` from the app, on render | `gate:python` |
+| P23: one writer per carrier | crm-api writes cards, decision records and seen; agent-api writes pending asks and notices (a notice is a notification row with an expiry) | `gate:dataflow` |
+| H9: audit | A write's audit row is written in the same transaction as the write; a read's before the answer leaves | `gate:python` |
+| D8: who a fact reaches | The producer seals owner, visibility and audience into `event.v2`; flows admits by subject or audience and refuses an unverified envelope | `gate:schema` |
+
+Deny tests (security review 2026-10-17):
+
+| Protection | Test file | Tests |
+|---|---|---|
+| No API key reviews or signs (deny test 12) | `core/crm/tests/test_sec_deny_2026_10_17.py` | `test_api_key_cannot_review_card`, `test_api_key_cannot_sign_a_card` |
+| An in-chat answer is bound, not replayable, not delegated (deny test 13) | `core/agent/tests/test_sec_deny_policy_taint.py` | `test_inline_card_decision_requires_browser_session` |
+| A locked field blocks that viewer's signature (deny test 17) | `core/crm/tests/test_sec_deny_2026_10_17.py`, `core/crm/tests/test_card_lifecycle.py` | `test_card_with_locked_field_cannot_be_signed_by_that_viewer`, `test_a_locked_field_blocks_the_viewers_decision` |
+| Room search audited with ids, on-behalf-of and workspace (deny test 18) | `core/crm/tests/test_sec_deny_2026_10_17.py`, `core/crm/tests/test_card_lifecycle.py` | `test_room_crm_search_audits_record_ids_and_on_behalf_of`, `test_a_write_that_cannot_audit_does_not_commit` |
+| A card fact reaches its audience only (deny test 19) | `core/flows/tests/test_d8_audience.py` | every test in the file |
+| The rest of this section | `core/crm/tests/test_card_lifecycle.py`, `core/agent/tests/test_s5_asks.py`, `core/agent/tests/test_notice_expiry.py` | every test in those files |
 
 ## Tracing a session
 

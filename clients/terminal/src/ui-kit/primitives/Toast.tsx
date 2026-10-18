@@ -12,3 +12,5 @@ export function Toaster() {
 export const toast = (message: string, opts?: { undo?: () => void; action?: { label: string; onClick: () => void } }) =>
   sonnerToast(message, opts?.undo ? { action: { label: "Undo", onClick: opts.undo } }
     : opts?.action ? { action: { label: opts.action.label, onClick: opts.action.onClick } } : undefined);
+/** Take a toast down early — e.g. its Undo was pressed somewhere else on the page. */
+export const dismissToast = (id: string | number) => { sonnerToast.dismiss(id); };

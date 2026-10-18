@@ -6,6 +6,8 @@ import { useId, type InputHTMLAttributes, type TextareaHTMLAttributes } from "re
 import { AlertCircle } from "lucide-react";
 
 type Common = { label: string; hideLabel?: boolean; error?: string; hint?: string };
+/** control height: md 32px (forms), sm 28px (a filter bar) */
+type Ctl = { control?: "sm" | "md" };
 
 function Wrap({ id, label, hideLabel, error, hint, children }: Common & { id: string; children: React.ReactNode }) {
   return (
@@ -19,10 +21,10 @@ function Wrap({ id, label, hideLabel, error, hint, children }: Common & { id: st
 }
 const describedBy = (id: string, error?: string, hint?: string) => (error ? `${id}-err` : hint ? `${id}-hint` : undefined);
 
-export function Input({ label, hideLabel, error, hint, ...rest }: Common & Omit<InputHTMLAttributes<HTMLInputElement>, "style" | "className">) {
+export function Input({ label, hideLabel, error, hint, control, ...rest }: Common & Ctl & Omit<InputHTMLAttributes<HTMLInputElement>, "style" | "className">) {
   const id = useId();
   return <Wrap id={id} label={label} hideLabel={hideLabel} error={error} hint={hint}>
-    <input id={id} className="vx-input" aria-invalid={error ? true : undefined} aria-describedby={describedBy(id, error, hint)} {...rest} />
+    <input id={id} className="vx-input" data-control={control === "sm" ? "sm" : undefined} aria-invalid={error ? true : undefined} aria-describedby={describedBy(id, error, hint)} {...rest} />
   </Wrap>;
 }
 export function Textarea({ label, hideLabel, error, hint, ...rest }: Common & Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "style" | "className">) {

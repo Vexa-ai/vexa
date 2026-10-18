@@ -45,6 +45,23 @@ export type CardView = {
   /** placed or joined since the person last opened it */
   new?: boolean;
 };
+/** The card core (0.13.4 S5, D12–D14): who it waits on, its gates, and what THIS viewer may do — the
+ *  card as crm-api's `inbox` / `read` / `decide` answer it (`CoreCard`). Kept apart from `CardView`
+ *  because the desktop's `CardItem` already uses `kind` as its item discriminator. */
+export type CardKind = "ask" | "approval" | "question" | "commitment" | "invitation" | "policy_change";
+export type CardAction = "acknowledge" | "decline" | "deliver" | "confirm" | "decide" | "answer" | "use";
+export type CardDecision = { revision: number; action: string; by: string; at: string; credential_class?: string };
+export type CardCore = {
+  kind?: CardKind | null; next_actor?: string | null; requester?: string | null; next_check_at?: string | null;
+  chain?: { blocks: string[]; blocked_by: string[] }; origin?: string | null; open?: boolean;
+  handoff?: { phase: "offered" | "acknowledged" | null; since: string | null };
+  gates?: { name: string; state: "done" | "current" | "ahead"; by: string | null; at: string | null }[];
+  viewer?: { role: "next_actor" | "requester" | "member" | "watcher"; seen: boolean; actions: CardAction[] };
+  decisions?: CardDecision[]; last_decision?: { action: string; by: string; at: string } | null;
+  /** a triage routine's suggestion, when one exists — shown as an icon with its reason */
+  triage?: { by: string; suggest: string; because: string } | null;
+};
+export type CoreCard = Omit<CardView, "kind"> & CardCore;
 export type CardProposal = {
   id: string; kind: "create" | "change"; card?: { id: string; title: string } | null; title: string;
   workspace: string | null; fields: Record<string, unknown>; reason: string; author_kind: "agent" | "person" | string;

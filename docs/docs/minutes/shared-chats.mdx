@@ -3,6 +3,12 @@ title: "Shared chats"
 description: "Add people to a chat, how the agent behaves with more than one person in it, and how conversations are stored apart from workspaces."
 ---
 
+<Note>
+**0.13.4: a chat has one person; two or more people talk in a room.** Existing shared chats move once
+to a room of two or a closed room. See [Rooms, tagging and rooms of two](/minutes/rooms). This page
+still describes the shared-turn boundary rooms run under.
+</Note>
+
 A chat is a conversation. Vexa keeps every conversation in its session store, apart from all of your
 workspaces: no workspace, not even your private `_system`, holds a chat, so you can add people to one
 without sharing anything else. Adding someone shares the conversation and nothing else:
@@ -122,6 +128,11 @@ Everyone in the chat reads every answer, so in a chat with other people the agen
 workspaces **every** participant can read. Your Personal workspace and your private `_system` workspace are never
 used there. If your question needs something only you can read, the agent says it can't use it here
 and offers to answer in your private chat.
+
+In a shared chat or a room the agent has a short, fixed list of tools: read and write pages in the
+room's workspace, show a page on the room's call, and tell the time. Anything about one person (their
+follow-ups, contacts, notifications, usage, other chats, home) is not on that list. Ask for it in your
+private chat.
 
 To use one specific page anyway, share it for that message (the `share` field of
 [`POST /agent/chat`](/api/agent), `workspace/path`, up to five). The page is read with your access and
@@ -252,6 +263,73 @@ browser only orders them. A person who is not in the chat gets `404` from both
 Tests: `core/agent/tests/test_history_turn_times.py`;
 `clients/terminal/src/surfaces/__tests__/sharedConversation.test.tsx`, `repeatedNotices.test.tsx`;
 `clients/terminal/src/minutes/__tests__/startersOnlyNew.test.ts`.
+
+### Which routes a shared turn reaches (default-deny, D3)
+
+A turn other people read carries `scope.shared` on its delegation token: a shared chat's turn or a
+room's. Every route in every domain's `routes.v1.json` declares whether such a token may reach it,
+with `"shared": "allow"` or `"shared": "refuse"`. This covers agent, meetings, identity, crm and the
+MCP edge's own rows. In agent-api, every `verbs` row behind the forward carries the declaration too.
+
+- **The gateway is the boundary.** It refuses a shared delegation, or a workspace principal, on
+  every row not declared `allow`, before anything is forwarded (`gateway/app.py`, `delegation.py`).
+  A worker can read its own bearer and call the gateway directly, so this check matters more than
+  what the model is offered.
+- **Each service checks again.**
+  - agent-api runs `SHARED_GATE` (`control_plane/route_policy.py`) on the route the request
+    matched.
+  - identity's person doors (settings, workspace regime, profile, photo) refuse a shared token.
+  - flows-api and meeting-api already refused shared tokens.
+- **What the model is offered narrows too.** This is a narrowing for the model, not a control.
+  - The MCP edge shows a shared caller only the tools whose manifest entry says `shared: allow`.
+    agent-api stamps each tool from its table.
+  - The worker of a shared turn attaches only `worker/mcp_tools.v1.json` `shared_tools`, never the
+    bare `mcp__vexa` prefix.
+- **Every refusal** answers the one `shared_conversation` body.
+- **CI checks the declarations.** It fails when a row lacks one (`routes.v1/validate.mjs`), or when
+  agent-api serves a route with none (`tests/test_shared_routes.py`). The gateway's cases are
+  generated from every domain's re-entry rows (`tests/test_shared_routes_edge.py`).
+
+agent-api allows 14 routes:
+
+- the room workspace's pages: tree, read, write, entity, asset fetch, purpose, icon;
+- showing or highlighting on the room's call;
+- proposing a claim (`POST /api/claims`; reading the claim book stays refused);
+- the clock and the model catalog;
+- the worker's friction report.
+
+Other domains allow:
+
+- meetings: sending a bot, and reading one meeting's transcript. Both are still checked against the
+  room's ceiling in the route.
+- crm: reads (`/crm/read`, card list, card read), filtered for shared callers by crm-api.
+- the MCP front door.
+
+Everything person-wide is `refuse`, for example people follow-ups, contacts, the claim book,
+workspace states, home, notifications, usage, other chats, references, the person's meetings, and
+every identity settings or profile door.
+
+### A room runs as its workspace (D2)
+
+A room's turn can run as its workspace's own principal instead of the workspace owner's account.
+
+- **The principal.** identity keeps one numeric principal of kind `workspace` per workspace (the
+  `principals` table, MIGRATION-0009). Its id is a dedicated account that owns nothing of a
+  person's, and it names the account its spend `bills_to`.
+- **The token.** agent-api asks identity for the principal
+  (`POST /internal/principals/workspace`). It then mints the room's token with that id as `sub`,
+  plus `principal_kind: "workspace"`, `principal_workspace` and the speaker as `on_behalf_of`.
+- **The minter's refusals.** It refuses a workspace token without `shared`, with
+  `workspaces: "*"` or with grants.
+- **identity's checks.** identity checks the claims against its table and answers `bills_to`. It
+  never answers a workspace principal as the admin.
+- **The gateway** signs these into `x-user-principal-kind`, `x-user-principal-workspace`,
+  `x-user-delegation-on-behalf-of` and `x-user-bills-to`.
+- **Every service** reads a workspace principal as shared, even if the flag is missing.
+
+This is off by default in 0.13.4 (`VEXA_ROOM_WS_PRINCIPAL=false`). With it off, a room's token is
+the owner's account, narrowed by the room's ceiling, `shared` and the table above. With it on and
+identity unreachable, the room's turn gets no toolbelt. It never falls back to the owner.
 
 ### Private sources and shared writes
 
@@ -390,8 +468,8 @@ workspaces, narrowed to what everyone in the chat can read.
   still write.
 - A conversation never reaches a workspace volume or a browser; workers never hold object-store
   credentials. With the store on, a worker keeps a turn's harness state in a private folder outside
-  every mount, and the agent reads another chat only through `chats_search` and `chat_read`, which
-  apply these rules; there is no chat file under any mount for it to find.
+  every mount, and a private turn reads another chat only through `chats_search` and `chat_read`;
+  a shared turn is refused both (D3). There is no chat file under any mount for it to find.
 - agent-api holds neither the database's admin credential nor the recordings bucket's key: its role
   reads and writes the `agent_session*` tables only, and its key reaches its own bucket only.
 - Bundle paths are plain relative paths; anything else is refused, never repaired.
@@ -409,10 +487,22 @@ workspaces, narrowed to what everyone in the chat can read.
 - A routine's runs in a shared chat are shared turns: the routine cannot read its owner's private
   connections there, and only its owner can change or stop it.
 
+- A shared or room token reaches only the rows every domain's `routes.v1.json` declares
+  `shared: allow`. This is default-deny, enforced at the gateway, and checked again in agent-api,
+  identity, flows-api and meeting-api. A new route is refused to shared tokens until it is declared,
+  and CI fails until it is (D3).
+- With `VEXA_ROOM_WS_PRINCIPAL` on, a room's turn has no person's account to reach for. It runs as
+  the workspace's own numeric principal, and the owner only pays (D2).
+
 **Deny tests.**
 
 | Test | Proves |
 |---|---|
+| `core/agent/tests/test_shared_routes.py` · `test_every_served_route_declares_shared`, `test_an_undeclared_route_fails_the_check`, `test_the_allow_set_is_exactly_the_reviewed_one`, `test_a_shared_token_is_refused_on_every_route_not_declared_allow`, `test_a_workspace_principal_is_refused_even_without_the_shared_header`, `test_the_served_tool_manifest_stamps_every_tool_from_the_same_table`, `test_a_shared_worker_attaches_named_tools_only_and_never_the_bare_prefix` | D3: every route declares `shared`; a shared token is refused every route not declared `allow`; the MCP manifest and the worker apply the same table |
+| `core/agent/tests/test_sec_deny_rooms.py` · `test_room_turn_cannot_read_owner_person_wide_routes`, `test_room_turn_toolbelt_offers_no_person_wide_tool`, `test_room_turn_token_is_the_workspace_principal_when_switched_on`, `test_room_member_text_is_fenced_in_mention_turn` | C1 (security review 2026-10-17): a room's turn reads none of the owner's person-wide routes, is offered no person-wide tool, runs as the workspace principal when switched on (and gets no token when identity cannot name it), and other members' text is fenced as untrusted (M3) |
+| `core/gateway/services/gateway/tests/test_shared_routes_edge.py` | D3 at the gateway: every row of every domain declares `shared`; a shared delegation or a workspace principal is refused on every re-entry row not declared `allow`, with nothing forwarded; identity's settings doors refuse a room token |
+| `core/gateway/services/mcp/tests/test_sec_deny_shared_toolbelt.py` | the MCP edge shows a shared caller no person-wide tool |
+| `core/agent/tests/test_workspace_principal.py`; `core/identity/services/admin-api/tests/test_workspace_principal.py` | D2: the minter's refusals, the refresh carrying the principal and the audience, identity's table checks, the principal is never the admin, and identity's person doors refuse a shared or workspace token |
 | `core/agent/tests/test_session_turn.py` · `test_the_leak_rule_founder_scenario`, `test_a_non_participant_is_refused`, `test_a_viewer_cannot_post` | the leak rule and the session gate |
 | `core/agent/tests/test_session_access.py` · `test_a_shared_turn_mounts_only_the_intersection_and_its_tools_reach_no_further` | mounts and the tools' ceiling |
 | `core/agent/tests/test_session_routes.py` · `test_a_member_adding_someone_starts_their_own_chat_and_outsiders_get_404`, `test_the_stream_never_relays_the_conversation_to_the_browser` | the routes |

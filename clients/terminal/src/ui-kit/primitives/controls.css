@@ -19,8 +19,11 @@
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 .vx-btn[data-size="md"] { height: var(--control-md); padding: 0 12px; font-size: var(--text-md); }
-.vx-btn[data-variant="primary"] { background: var(--accent); color: var(--on-accent); }
-.vx-btn[data-variant="primary"]:hover:not(:disabled) { background: var(--accent-hover); }
+/* PRIMARY IS AN OUTLINE, NEVER A FILL (UI 7r, founder 2026-10-17: "we probably do not want a full fill
+ * anywhere"): accent border and accent text, a light accent tint on hover and focus. The accent as
+ * text is held to 4.5:1 on every surface and as a boundary to 3:1 (tokens.pairs.json). */
+.vx-btn[data-variant="primary"] { background: transparent; color: var(--accent-text); border-color: var(--accent); }
+.vx-btn[data-variant="primary"]:hover:not(:disabled), .vx-btn[data-variant="primary"]:focus-visible { background: var(--accent-tint); }
 .vx-btn[data-variant="secondary"] { background: var(--surface-2); color: var(--text-1); border-color: var(--border-control); }
 .vx-btn[data-variant="secondary"]:hover:not(:disabled) { background: var(--surface-3); }
 .vx-btn[data-variant="ghost"]:hover:not(:disabled) { background: var(--surface-3); color: var(--text-1); }
@@ -29,7 +32,8 @@
 .vx-btn[data-variant="danger-ghost"]:hover:not(:disabled) { background: var(--danger-tint); }
 .vx-btn:active:not(:disabled) { transform: translateY(0.5px); }
 .vx-btn:disabled { color: var(--text-disabled); cursor: default; }
-.vx-btn[data-variant="primary"]:disabled, .vx-btn[data-variant="danger"]:disabled { background: var(--surface-3); }
+.vx-btn[data-variant="primary"]:disabled { background: transparent; border-color: var(--border); }
+.vx-btn[data-variant="danger"]:disabled { background: var(--surface-3); }
 .vx-btn-icon { display: inline-flex; width: var(--icon-md); height: var(--icon-md); align-items: center; justify-content: center; }
 .vx-iconbtn { padding: 0; width: var(--control-sm); }
 .vx-iconbtn[data-size="xs"] { width: var(--control-xs); height: var(--control-xs); }
@@ -90,6 +94,7 @@
   height: var(--control-md); padding: 0 10px; border-radius: var(--radius-md); border: 1px solid var(--border-control);
   background: var(--surface-2); color: var(--text-1); font: inherit; font-size: var(--text-md); min-width: 0;
 }
+.vx-input[data-control="sm"] { height: var(--control-sm); font-size: var(--text-sm); }
 .vx-input::placeholder { color: var(--text-3); }
 .vx-input:focus-visible { border-color: var(--accent); }
 .vx-field[data-invalid] .vx-input { border-color: var(--danger); }
@@ -123,6 +128,66 @@
 .vx-row2-meta { flex: none; font-size: var(--text-xs); color: var(--text-3); font-variant-numeric: tabular-nums; }
 .vx-row2-actions { display: inline-flex; gap: var(--space-0_5); padding-right: var(--space-1); opacity: 0; }
 .vx-row2:hover .vx-row2-actions, .vx-row2:focus-within .vx-row2-actions { opacity: 1; }
+/* the dense page row (size md, 36px) and its columns: title · muted detail · RowCell columns */
+.vx-row2[data-size="md"] .vx-row2-main { height: 36px; }
+.vx-row2[data-strong] .vx-row2-title { color: var(--text-1); font-weight: var(--weight-medium); }
+.vx-row2[data-size="md"] .vx-row2-meta { display: inline-flex; align-items: center; gap: var(--space-3); font-size: var(--text-sm); }
+.vx-row2-trail { display: inline-flex; align-items: center; flex: none; gap: var(--space-3); padding: 0 var(--space-2) 0 var(--space-1); font-size: var(--text-sm); color: var(--text-3); }
+.vx-row2-lead:has(> .vx-avs) { width: 20px; }
+.vx-row2-title:has(> .vx-row2-name) { display: flex; align-items: baseline; gap: var(--space-2); }
+/* the title holds its words; the muted context gives way first */
+.vx-row2-name { flex: 0 1 auto; min-width: min(100%, 9em); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-row2-detail { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); font-weight: var(--weight-regular); }
+.vx-row2[data-overlay-actions] .vx-row2-actions { position: absolute; right: 0; top: 0; bottom: 0; display: none; align-items: center; padding: 0 var(--space-2); background: var(--surface-3); border-radius: var(--radius-md); opacity: 1; }
+.vx-row2[data-overlay-actions]:hover .vx-row2-actions, .vx-row2[data-overlay-actions]:focus-within .vx-row2-actions { display: inline-flex; }
+/* R11 (PRD 0.13.4, mobile flow 3): ON TOUCH A FIRST TAP NEVER REVEALS AN ACTION UNDER THE FINGER.
+ * `:hover` and `:focus-within` apply at touch-start, so a revealed Decline sat over the title and
+ * took the tap. Without a hovering pointer, hover-revealed actions are not drawn; ⋯ holds them. */
+@media (hover: none) {
+  .vx-row2[data-overlay-actions] .vx-row2-actions,
+  .vx-row2[data-overlay-actions]:hover .vx-row2-actions,
+  .vx-row2[data-overlay-actions]:focus-within .vx-row2-actions { display: none !important; }
+}
+.vx-row2-cell { display: inline-flex; align-items: center; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-variant-numeric: tabular-nums; flex: none; }
+.vx-row2-cell[data-align="end"] { justify-content: flex-end; }
+.vx-row2-cell[data-w="16"] { width: 16px; justify-content: center; }
+.vx-row2-cell[data-w="24"] { width: 24px; justify-content: center; }
+.vx-row2-cell[data-w="28"] { width: 28px; justify-content: center; }
+.vx-row2-cell[data-w="52"] { width: 52px; }
+.vx-row2-cell[data-w="64"] { width: 64px; }
+.vx-row2-cell[data-w="72"] { width: 72px; }
+.vx-row2-cell[data-w="88"] { width: 88px; }
+.vx-row2-cell[data-w="104"] { width: 104px; }
+.vx-row2-cell[data-w="140"] { width: 140px; }
+.vx-row2-cell[data-w="240"] { width: 240px; }
+.vx-row2-cell[data-w="160"] { width: 160px; }
+.vx-row2-cell > .vx-entity { max-width: 100%; }
+.vx-row2-cell:has(button) { overflow: visible; }
+/* the verb column: every row's button the same width, its label centred */
+.vx-row2-cell[data-w="104"] > .vx-btn { min-width: 96px; justify-content: center; }
+.vx-row2-hint { position: relative; display: inline-flex; }
+.vx-row2-hint-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: var(--radius-md); background: none; color: var(--text-3); cursor: pointer; }
+.vx-row2-hint-btn:hover, .vx-row2-hint-btn[aria-expanded="true"] { background: var(--surface-3); color: var(--text-1); }
+.vx-row2-hint-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.vx-row2-hint .vx-popover { right: 0; top: 100%; max-width: 280px; }
+.vx-row2-hint-text { margin: 0; padding: var(--space-2) var(--space-3); font-size: var(--text-sm); color: var(--text-2); white-space: normal; }
+.vx-row2[data-narrow-detail] .vx-row2-detail { display: none; }
+/* TWO LINES IN A NARROW PANE (below 760px of pane; mobile fix 3; §5 truncation never hides meaning): the title takes the
+ * first line and wraps to two; the detail and the secondary columns move under it; faces drop. */
+@container (max-width: 759px) {
+  .vx-row2[data-size="md"] { align-items: flex-start; }
+  .vx-row2[data-size="md"] .vx-row2-main { height: auto; min-height: 36px; padding-top: var(--space-1_5); padding-bottom: var(--space-1_5); align-items: flex-start; }
+  .vx-row2[data-size="md"] .vx-row2-title:has(> .vx-row2-name) { flex-direction: column; gap: var(--space-0_5); }
+  .vx-row2[data-size="md"] .vx-row2-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; min-width: 0; }
+  .vx-row2[data-size="md"] .vx-row2-detail { flex: none; max-width: 100%; }
+  .vx-row2[data-narrow-detail] .vx-row2-detail { display: block; }
+  .vx-row2[data-size="md"] .vx-row2-meta { display: none; }
+  .vx-row2[data-size="md"] .vx-row2-trail { gap: var(--space-1); padding-top: var(--space-1); }
+  .vx-row2-cell[data-hide-narrow], .vx-row2-cell[data-w="24"]:empty { display: none; }
+  /* the verb is sized to its label on a phone, so the title keeps the width */
+  .vx-row2-cell[data-w="104"] { width: auto; }
+  .vx-row2-cell[data-w="104"] > .vx-btn { min-width: 0; }
+}
 .vx-panelhead { display: flex; align-items: center; gap: var(--space-2); height: 44px; padding: 0 var(--space-4); border-bottom: 1px solid var(--border-subtle); min-width: 0; }
 .vx-panelhead[data-inset="rail"] { padding: 0 var(--space-3); }
 .vx-panelhead-title { font-size: var(--text-md); font-weight: var(--weight-semibold); color: var(--text-1); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -242,3 +307,13 @@ span.vx-label { display: inline; }
 .vx-auth-quiet { align-self: flex-start; background: none; border: none; padding: 0; font: inherit; font-size: var(--text-xs); color: var(--text-3); text-decoration: underline; cursor: pointer; }
 .vx-auth-quiet:hover { color: var(--text-1); }
 .vx-auth-quiet:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* Switch: role=switch, its label is its name, a 24px target, a focus ring; on = outline and tint */
+.vx-switch { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--control-xs); padding: 0 var(--space-1); border: 0; background: none; color: var(--text-2); font: inherit; font-size: var(--text-sm); cursor: pointer; border-radius: var(--radius-md); white-space: nowrap; }
+.vx-switch:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.vx-switch:disabled { color: var(--text-disabled); cursor: default; }
+.vx-switch-track { position: relative; width: 28px; height: 16px; border-radius: var(--radius-full); background: var(--surface-3); border: 1px solid var(--border-control); flex: none; transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
+.vx-switch-thumb { position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: var(--radius-full); background: var(--text-2); transition: left var(--dur-fast) var(--ease-out); }
+.vx-switch[aria-checked="true"] { color: var(--text-1); }
+.vx-switch[aria-checked="true"] .vx-switch-track { background: var(--accent-tint); border-color: var(--accent); }
+.vx-switch[aria-checked="true"] .vx-switch-thumb { left: 14px; background: var(--accent); }

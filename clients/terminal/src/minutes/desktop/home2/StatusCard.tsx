@@ -12,6 +12,7 @@
  *  never written to) and opens the workspace's view in the RIGHT panel — documents never open in the
  *  centre (UI decision 7c). What needs you and what is working come from the attention read model
  *  (E1) exactly as the server sent them; nothing is decided here. */
+import { workspaceDisplayName } from "../../vocabulary";
 import { humanStatus } from "./humanStatus";
 import { createReorder } from "./homeReorder";
 import { toast } from "../../../ui-kit/primitives/Toast";
@@ -29,6 +30,9 @@ import { workspaceAttention, useAttention, type LiveCall, type Need, type Work, 
 import { aimHome, toggleHomeTarget, useHomeTarget, wsHue, WsMark } from "./HomeTarget";
 import { openWorkspaceView } from "./workspaceView";
 import { homeOrder, setSettings, useWorkspaceSettings } from "./settingsApi";
+import { useFeature } from "../../../platform/features";
+import { PeopleLine, lastChange } from "../../shell2/WorkspacePeople";
+import { nameOrYou } from "../../shell2/me";
 import "./home2.css";
 
 const fire = (name: string, detail: unknown) => window.dispatchEvent(new CustomEvent(name, { detail }));
@@ -44,6 +48,13 @@ export function useNeedAct(): [(n: Need) => Promise<void>, ReactNode] {
   return [run, dialog];
 }
 
+/** shell2: "who waits on you" — the person first, when the server names one the sentence does not */
+function whoLead(n: Need): string {
+  const by = (n as { by?: unknown }).by ?? n.act.by;
+  if (typeof by !== "string" || !by.trim() || n.text.includes(by)) return "";
+  return `${nameOrYou(by.trim())} · `;
+}
+
 /** "Needs you": at most `max`, each with its act in place. */
 export function NeedsList({ needs, act, max = 2 }: { needs: Need[]; act: (n: Need) => void; max?: number }) {
   return <ul className="vx-scard-needs" data-needs="">{needs.slice(0, max).map((n) => {
@@ -52,7 +63,7 @@ export function NeedsList({ needs, act, max = 2 }: { needs: Need[]; act: (n: Nee
       {/* a proposed image is shown before it is used (mock 12b): the server serves the proposal */}
       {identity && <img className="vx-scard-prop" alt="" width={20} height={20}
         src={`/api/workspaces/${encodeURIComponent(String(n.act.slug))}/identity/icon?proposal=1`} />}
-      <span className="vx-scard-need" title={humanStatus(n.text)}>{humanStatus(n.text)}</span>
+      <span className="vx-scard-need" title={humanStatus(n.text)}>{whoLead(n)}{humanStatus(n.text)}</span>
       <button type="button" className="vx-pb-act vx-pb-act-go" data-tile-inner="" onClick={(e) => { e.stopPropagation(); act(n); }}>{n.act.label}</button>
       {identity && <button type="button" className="vx-pb-act" data-tile-inner=""
         onClick={(e) => { e.stopPropagation(); void resolveProposal(n.act, false); }}>Decline</button>}
@@ -77,8 +88,11 @@ export function WorkingChips({ live, a, onRoutine, maxRoutines }: { live: LiveCa
   </div>;
 }
 
-export function StatusCard({ w, drag }: { w: WorkspaceItem; drag: TileDrag }) {
-  const slug = w.slug || "personal";
+export function StatusCard({ w: given, drag }: { w: WorkspaceItem; drag: TileDrag }) {
+  const shell2 = useFeature("shell2");
+  const slug = given.slug || "personal";
+  // "My desk" (UI 7y, shell2): the personal workspace's display name, whatever the server called it
+  const w = slug === "personal" ? { ...given, name: workspaceDisplayName(slug, given.name) } : given;
   const { data } = useAttention();
   const a = workspaceAttention(data, slug);
   const [act, dialog] = useNeedAct();
@@ -124,12 +138,17 @@ export function StatusCard({ w, drag }: { w: WorkspaceItem; drag: TileDrag }) {
             ]} />
           </span>
         </div>
+        {/* shell2: the people first — named faces with presence — then what waits, then who changed it */}
+        {shell2 && w.members.length > 0 && <div className="vx-s2-scard-people" data-card-people=""><PeopleLine members={w.members} max={3} /></div>}
         {/* ONE STATUS LINE (founder 2026-10-16): the most important thing, or that nothing needs you */}
         {a.needs.length > 0
           ? <NeedsList needs={a.needs} act={(n) => void act(n)} max={1} />
           : live ? null : <div className="vx-scard-calm" data-calm="">Nothing needs you</div>}
         <WorkingChips live={live} a={a} onRoutine={() => { void openWorkspaceView(w); }} maxRoutines={2} />
-        {w.members.length > 0 && <div className="vx-scard-foot" data-card-foot=""><span className="vx-scard-people" data-tile-inner=""><Badges people={w.members} /></span></div>}
+        {/* shell2 (founder 2026-10-17: "a workspace is about the people around it"): named faces with
+            presence first, then who changed it last — counts come second */}
+        {shell2 && lastChange(w.last_activity as { line: string; at: number; by?: string } | null) && <div className="vx-scard-calm vx-s2-lastchange" data-last-change="">{lastChange(w.last_activity as { line: string; at: number; by?: string } | null)}</div>}
+        {!shell2 && w.members.length > 0 && <div className="vx-scard-foot" data-card-foot=""><span className="vx-scard-people" data-tile-inner=""><Badges people={w.members} /></span></div>}
       </div>
       {dialog}
     </article>

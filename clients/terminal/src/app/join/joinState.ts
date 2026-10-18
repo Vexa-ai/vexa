@@ -32,6 +32,10 @@ export interface InvitePreview {
   valid: boolean;
   /** Why not, when `valid` is false: "expired" · "used_up" · "revoked". */
   reason?: string | null;
+  /** The room the invite lands in (PRD 0.13.4 S2), or null for the workspace itself. */
+  room?: { id: string; title?: string } | null;
+  /** The link itself signs its one address in, now (a mailed invite, inside its window). */
+  signin?: boolean;
 }
 
 /** The screen the page is on. `preview` is the only one that offers a way in. */
@@ -77,7 +81,9 @@ export function inviterName(sharedBy?: string | null): string {
 /** The one sentence at the top of the card:
  *  *Dmitry invited you to Example Bank as a contributor: you can read and write its pages.* */
 export function inviteSentence(p: InvitePreview): string {
-  const where = (p.name || p.workspace_id || "a workspace").trim();
+  const ws = (p.name || p.workspace_id || "a workspace").trim();
+  const room = (p.room?.title || "").trim();
+  const where = room ? `${room} in ${ws}` : ws;
   return `${inviterName(p.shared_by)} invited you to ${where} as a ${p.role}: ${roleSentence(p.role)}.`;
 }
 
@@ -171,4 +177,65 @@ export function joinPathFor(token: string): string {
   }
   t = t.trim();
   return t ? `/join?i=${encodeURIComponent(t)}` : "/join";
+}
+
+/** The join page for `token`, with an optional note (`n=`) saying why the one-click came back:
+ *  `signin` — the link no longer signs in (spent, out of its window, or never a sign-in link), so
+ *  the page offers the emailed sign-in link; `unavailable` — it could not be checked just now. */
+export function joinPage(token: string, note?: string): string {
+  const q = new URLSearchParams();
+  if (token) q.set("i", token);
+  if (note) q.set("n", note);
+  const s = q.toString();
+  return s ? `/join?${s}` : "/join";
+}
+
+/** Where a joined person lands (PRD 0.13.4 S2): the room the invite named, else the workspace. */
+export function roomOrWorkspacePath(workspaceId?: string | null, room?: { id?: string } | null, slug?: string | null): string {
+  if (room?.id) return `/r/chat/${encodeURIComponent(room.id)}`;
+  return landingPath(workspaceId, slug);
+}
+
+/** The one sentence under a refusal that came back from the one-click (`n=`), or "". */
+export function oneClickNote(note?: string | null): string {
+  switch (note) {
+    case "signin":
+      return "This link can no longer sign you in by itself. Sign in below and the invite is still yours to accept.";
+    case "unavailable":
+      return "We could not finish just now. Try again in a moment, or sign in below.";
+    case "crosssite":
+      return "Press Join on this page to use the invite.";
+    case "rate":
+      return "Too many attempts. Wait a few minutes, then try again.";
+    case "notallowed":
+      return "This address is not allowed to sign in to this Vexa. Ask whoever invited you, or its administrator.";
+    default:
+      return "";
+  }
+}
+
+/** The address a person recognises as theirs, not enough for anyone else to learn it:
+ *  `maria@oenb.at` → `m…@oenb.at`. */
+export function maskAddress(email?: string | null): string {
+  const e = (email || "").trim();
+  const at = e.lastIndexOf("@");
+  if (at <= 0) return "";
+  return `${e[0]}…${e.slice(at)}`;
+}
+
+/** "Not you?" (PRD 0.13.4 D35, S3). One human may sign in with several addresses, and the browser
+ *  that opened the link may hold the wrong one — a work session on a link sent to the personal
+ *  address, or someone else's session on a shared machine. The page says who is signed in and offers
+ *  the other door BEFORE anything joins. */
+export const NOT_YOU = "Not you? Use another address";
+
+/** The line above Join: who this browser is signed in as, or "" when it cannot say. */
+export function signedInLine(email?: string | null): string {
+  const e = String(email || "").trim();
+  return e ? `Signed in as ${e}` : "";
+}
+
+/** A refusal the other address may fix: offer "Not you?" with it. */
+export function notYouHelps(kind: RefusalKind, signedIn: boolean): boolean {
+  return signedIn && kind === "wrong-address";
 }

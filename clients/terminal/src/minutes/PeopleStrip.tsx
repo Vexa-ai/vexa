@@ -7,6 +7,8 @@
  *  a person with no page shows how they are known (the agent makes the page when asked). */
 import { useEffect, useMemo, useState } from "react";
 import { OPEN_ENTITY_EVENT } from "../platform";
+import { featureOn } from "../platform/features";
+import { openPerson } from "./shell2/personOpen";
 import { Avatar } from "../ui-kit";
 import { useHoverCard } from "../ui-kit/hoverCard";
 import { hoverStory } from "../ui-kit/hoverFacts";
@@ -17,6 +19,8 @@ export const STRIP_MAX = 12;
 const HOW_LABEL: Record<string, string> = { met: "Met", chat: "Chatted", workspace: "Shares a workspace", mail: "Emailed", page: "Has a page" };
 
 function openPage(p: KnownPerson) {
+  // shell2: a person opens the person panel (their profile, what you share), not a file
+  if (featureOn("shell2")) { openPerson({ key: p.key, subject: p.subject, email: p.person.email, name: p.name }); return; }
   if (!p.page) return;
   window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { path: p.page } }));
 }

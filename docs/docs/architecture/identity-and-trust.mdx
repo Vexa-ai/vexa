@@ -81,13 +81,51 @@ the published token and publishes the new one only if the runtime reports the pr
 With `REDIS_WORKLOAD_ACL=shared`, every worker shares the service connection, so no token is published
 to Redis at all; the unit keeps its boot token, unrefreshed, until it expires.
 
+### A room's turn as its workspace (D2)
+
+A room's turn can run as its workspace's own principal instead of the workspace owner's account.
+This needs `VEXA_ROOM_WS_PRINCIPAL` on in agent-api; it is off by default in 0.13.4.
+
+1. **The principal.** identity keeps one numeric principal of kind `workspace` per workspace
+   (admin-api `principals`, MIGRATION-0009). Its id is a dedicated account row
+   (`ws-<id>@principal.invalid`, no key, no sign-in, no bots) that owns nothing of a person's. The
+   row names the account the principal `bills_to`, which is the owner's pool. agent-api gets the id
+   from `POST /internal/principals/workspace` (internal tier, idempotent, cached), and fails closed
+   if identity cannot answer.
+2. **The token.** `sub` is the principal's id. `principal_kind: "workspace"`,
+   `principal_workspace` and `on_behalf_of` (the speaker) say what it is. The minter refuses a
+   workspace principal without `shared`, with `workspaces: "*"`, with grants, or naming itself as
+   the speaker. It refuses the claims on a person's token, so every person token stays
+   byte-identical.
+3. **identity.** identity answers a workspace token only when its claims match the table: kind,
+   workspace, and an `active` status.
+   - `user_id` is the principal's own id. Every service that coerces a subject to `int` keeps
+     working, and none of them reaches a member's things.
+   - `delegation.bills_to` is the payer.
+   - `person_is_admin` is false.
+   - Its workspaces are its own and those its ceiling mounts.
+4. **The gateway** signs these into `x-user-principal-kind`, `x-user-principal-workspace`,
+   `x-user-delegation-on-behalf-of` and `x-user-bills-to` (gateway-identity.v1).
+5. **The services.** The gateway, agent-api, the MCP edge, crm-api, flows-api and meeting-api read
+   a workspace principal as shared even when `shared` is missing. crm-api never reads one as an
+   admin.
+
+### Shared tokens, at the edge (D3)
+
+The gateway refuses any delegation whose turn other people read on every routes.v1 row not declared
+`"shared": "allow"`. That covers a shared chat's or a room's token, and a workspace principal. The
+check runs before the request is forwarded, across every domain. The services behind it keep their
+own checks. The MCP edge's tool filter only narrows what the model is offered: a worker can present
+its bearer to the gateway directly.
+
 ### Refresh
 
 A warm unit (a conversation that keeps going, a background job) can outlive one token.
 
 1. Every 30 s, agent-api's reaper reads its unit records, then the runtime's live set.
 2. For each unit still running, once half of the current token's life has passed, agent-api mints a
-   new token with the same `sub`, regime, ceiling and `target`, a new `jti` and a full lifetime
+   new token with the same `sub`, regime, ceiling (`shared` and `audience` included), `target` and,
+   for a workspace principal, `on_behalf_of` and `bills_to`, a new `jti` and a full lifetime
    (`control_plane/delegation_refresh.py`). It re-mints from `vexa:delegation:current:<id>`, its own
    record, never from the worker's copy.
 3. It records the new token (so it is revoked with the unit) and publishes it to

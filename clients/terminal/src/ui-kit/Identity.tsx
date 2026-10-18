@@ -113,3 +113,36 @@ export function IdentityStack({ items, max = 4, size = 22 }: { items: IdentityIt
     </span>
   );
 }
+
+/** PERSON PHOTOS BY NAME: the people reads that carry a photo (identity's photo route — an upload,
+ *  else the sign-in picture, else Gravatar) register it here, so every face drawn from a bare name
+ *  (an AvatarStack, a person chip) shows the photo; no entry → the monogram. */
+const PHOTOS = new Map<string, string>();
+export function registerPersonPhotos(m: Record<string, string>): void { for (const [k, v] of Object.entries(m)) if (v) PHOTOS.set(k.trim().toLowerCase(), v); }
+export const personPhoto = (name: string): string | undefined => PHOTOS.get(name.trim().toLowerCase());
+
+/** AvatarStack (guidelines §4): the one way to show who was there — 20px faces through Identity
+ *  (a photo when one is registered, else the monogram), at most `max` then "+N", a 2px ring in the
+ *  surface colour, never clipped. The names are its accessible name and tooltip. */
+export function AvatarStack({ names, max = 3, onOpen, label }: { names: string[]; max?: number;
+  /** each face opens that person (a button named by them); without it the stack is one image */
+  onOpen?: (name: string) => void;
+  /** how a name reads (yourself as "you"); defaults to the name */
+  label?: (name: string) => string }) {
+  const shown = names.slice(0, max);
+  const more = names.length - shown.length;
+  const say = (n: string) => (label ? label(n) : n);
+  const face = (n: string) => { const src = personPhoto(n); return <Identity key={n} kind="person" id={n} name={n} size={20} user={!!src} src={src} />; };
+  if (onOpen) return (
+    <span className="vx-avs" role="group" aria-label={names.map(say).join(", ")}>
+      {shown.map((n) => <button key={n} type="button" className="vx-avs-btn" title={say(n)} aria-label={say(n)} onClick={(e) => { e.stopPropagation(); onOpen(n); }}>{face(n)}</button>)}
+      {more > 0 && <span className="vx-id vx-id-more vx-avs-more" title={names.slice(max).map(say).join(", ")} aria-hidden>+{more}</span>}
+    </span>
+  );
+  return (
+    <span className="vx-avs" role="img" aria-label={names.map(say).join(", ")} title={names.map(say).join(", ")}>
+      {shown.map(face)}
+      {more > 0 && <span className="vx-id vx-id-more vx-avs-more" aria-hidden>+{more}</span>}
+    </span>
+  );
+}

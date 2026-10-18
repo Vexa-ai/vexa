@@ -6,7 +6,7 @@
  *  nothing else: an old SMTP_* name configures nothing.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mailerConfig } from "../mailer";
+import { mailerConfig, recipientAllowed, sendMail } from "../mailer";
 
 const FAMILY = ["HOST", "PORT", "FROM", "USER", "PASSWORD", "SECURE", "TLS_INSECURE"].map((k) => `VEXA_MAIL_SMTP_${k}`);
 const LEGACY = ["SMTP_HOST", "SMTP_PORT", "SMTP_FROM", "SMTP_USER", "SMTP_PASS", "SMTP_SECURE", "SMTP_TLS_INSECURE"];
@@ -55,5 +55,48 @@ describe("mailerConfig", () => {
       host: "localhost", port: 1025, from: "Vexa <no-reply@vexa.ai>",
       user: undefined, pass: undefined, secure: false, insecureTls: false,
     });
+  });
+});
+
+
+describe("a brokered relay password (PRD 0.13.4 S2)", () => {
+  it("the terminal does not try an authenticated relay whose password only flows can read", async () => {
+    vi.stubEnv("VEXA_MAIL_SMTP_HOST", "smtp.example.test");
+    vi.stubEnv("VEXA_MAIL_SMTP_USER", "sender@example.test");
+    vi.stubEnv("VEXA_MAIL_SMTP_PASSWORD", "");
+    vi.stubEnv("VEXA_MAIL_SMTP_PASSWORD_REF", "broker:mail/smtp");
+    expect(mailerConfig().brokered).toBe(true);
+    await expect(sendMail({ to: "a@b.example", subject: "s", text: "t" })).rejects.toThrow(/credential broker/);
+  });
+});
+
+
+describe("the recipient allowlist (PRD 0.13.4 S2)", () => {
+  it("matches exact addresses and domains; unset allows everyone", () => {
+    const env = { VEXA_MAIL_RECIPIENT_ALLOW: "dmitry@vexa.ai, @team.example.org" } as unknown as NodeJS.ProcessEnv;
+    expect(recipientAllowed("Dmitry <dmitry@vexa.ai>", env)).toBe(true);
+    expect(recipientAllowed("a@team.example.org", env)).toBe(true);
+    expect(recipientAllowed("marvin@bank.example-customer.org", env)).toBe(false);
+    expect(recipientAllowed("dmitry@vexa.ai.evil.org", env)).toBe(false);
+    expect(recipientAllowed("anyone@x.org", {} as NodeJS.ProcessEnv)).toBe(true);
+  });
+
+  it("a recipient off the list is never handed to the brokered relay: it is diverted (and logged)", async () => {
+    vi.stubEnv("VEXA_MAIL_SMTP_HOST", "smtp.example.test");
+    vi.stubEnv("VEXA_MAIL_SMTP_USER", "sender@example.test");
+    vi.stubEnv("VEXA_MAIL_SMTP_PASSWORD", "");
+    vi.stubEnv("VEXA_MAIL_SMTP_PASSWORD_REF", "broker:mail/smtp");
+    vi.stubEnv("VEXA_MAIL_RECIPIENT_ALLOW", "dmitry@vexa.ai");
+    vi.stubEnv("VEXA_MAIL_CAPTURE_SMTP", "127.0.0.1:1");    // nothing listens: the connect fails, nothing is sent
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // the brokered-relay refusal would throw "credential broker"; a diverted send goes to the capture
+    // address instead, which here refuses the connection
+    await expect(sendMail({ to: "outsider@partner-org.net", subject: "Secret", text: "body" }, 2000))
+      .rejects.not.toThrow(/credential broker/);
+    const logged = warn.mock.calls.map((c) => String(c[0])).join(" ");
+    expect(logged).toContain("mail_diverted to_domain=partner-org.net");
+    expect(logged).not.toContain("Secret");
+    // an allowed recipient still meets the brokered-relay rule
+    await expect(sendMail({ to: "dmitry@vexa.ai", subject: "s", text: "t" })).rejects.toThrow(/credential broker/);
   });
 });

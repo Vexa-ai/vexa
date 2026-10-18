@@ -28,17 +28,22 @@ export const SWITCHABLE = [
   "shared_chats", "notifications", "calls", "crm", "browser_bots", "folder_drop",
   "chat_history_tools", "calendar_write", "workspace_forget", "agent_messages",
   "home_stream", "people", "event_agents", "desktop", "call_show", "desktop_cards", "transcript_signals",
+  // S7 (0.13.4): the workspace page is its README, rendered per viewer; shared pins. Needs home2.
+  "readme_page",
   // R1 + R3 (2026-10-16): rooms made in a workspace, chats private; home2 = the new home, the
   // workspace page and the sidebar by workspace
   "rooms", "home2",
   "usage", "levels",
   "public_profiles", "open_workspaces",
+  // UI-1 (0.13.4): the approved shell — one-list sidebar, Inbox and Meetings in the centre, My desk,
+  // the kit's rows, outlined primaries, two-way panels, the phone fixes. Needs home2.
+  "shell2",
 ] as const;
 export type FeatureName = (typeof SWITCHABLE)[number];
 /** Switched on only BY NAME — never by "all" (the server's `explicit` features): they change what
  *  people already rely on (rooms; the new home and the sidebar by workspace), so a test or an install
  *  that asks for "all" keeps today's behaviour. */
-export const EXPLICIT: readonly string[] = ["rooms", "home2"];
+export const EXPLICIT: readonly string[] = ["rooms", "home2", "shell2", "readme_page"];
 
 /** FAIL CLOSED: on only when the server's answer names it on. A server that does not know the name
  *  (not registered yet, or one release behind) answers nothing about it, and that reads as OFF. */

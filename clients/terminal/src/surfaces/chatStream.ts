@@ -400,6 +400,46 @@ function takeLines(buf: string): [string[], string] {
  * aborts, or the hard timeout elapses with no output. Throws only on a fetch/reader error that is NOT an
  * abort (the caller maps that to a visible message).
  */
+/** What a signal turn answers when it has nothing to say (friction 6; `core/agent/shared/marks.py`
+ *  QUIET_REPLY). The server's history already drops it; this keeps the LIVE stream from painting it. */
+export const QUIET_REPLY = "[vexa-quiet]";
+
+/** One turn's delta filter: a reply that is (or opens with) `QUIET_REPLY` shows nothing at all, and
+ *  the marker is stripped from any other reply. A tail that could still become the marker is held
+ *  until the next delta decides it; `flush` hands back whatever was held when the turn ends. */
+export function quietDeltas(): { push: (text: string) => string; flush: () => string } {
+  const marker = QUIET_REPLY.toLowerCase();
+  let held = "";
+  let decided = false;
+  let muted = false;
+  const strip = (s: string) => s.replace(/\[vexa-quiet\]/gi, "");
+  return {
+    push(text: string): string {
+      if (muted) return "";
+      let s = held + text;
+      held = "";
+      if (!decided) {
+        const lead = s.trimStart().toLowerCase();
+        if (!lead || (lead.length < marker.length && marker.startsWith(lead))) { held = s; return ""; }
+        if (lead.startsWith(marker)) { muted = true; return ""; }
+        decided = true;
+      }
+      s = strip(s);
+      const low = s.toLowerCase();
+      for (let k = Math.min(marker.length - 1, s.length); k > 0; k--) {
+        if (marker.startsWith(low.slice(s.length - k))) { held = s.slice(s.length - k); s = s.slice(0, s.length - k); break; }
+      }
+      return s;
+    },
+    flush(): string {
+      if (muted) return "";
+      const out = held;
+      held = "";
+      return out;
+    },
+  };
+}
+
 export async function streamChatTurn(
   req: ChatStreamRequest,
   cb: ChatStreamCallbacks,
@@ -421,6 +461,8 @@ export async function streamChatTurn(
 
   let sawVisibleOutput = false;
   let terminal = false;
+  const quiet = quietDeltas();
+  const flushQuiet = () => { const t = quiet.flush(); if (t) cb.onDelta(t); };
   /** THE MESSAGE IS QUEUED behind this chat's own running turn (the meeting recap, a routine): the
    *  server's sentence, held until the turn is accepted — the server runs it next, so the client
    *  never retries (live app.dev 2026-10-15: three 409s while the recap ran). */
@@ -688,7 +730,7 @@ export async function streamChatTurn(
             cb.onAccepted?.();
             break;
           case "message-delta":
-            if (ev.text) { sawVisibleOutput = true; cb.onDelta(ev.text); }
+            if (ev.text) { sawVisibleOutput = true; const shown = quiet.push(ev.text); if (shown) cb.onDelta(shown); }
             break;
           case "tool-call":
             if (ev.callId && ev.tool) toolByCall.set(ev.callId, ev.tool);
@@ -760,6 +802,7 @@ export async function streamChatTurn(
             cb.onRejected();
             break;
           case "turn-complete":
+            flushQuiet();
             // …unless this turn spawned a job. The turn IS over — that is why the job exists — but
             // the connection is now the job's, and calling it finished here would give up on
             // everything it has left to say. `RedisStreamReader` makes the same exception, in the
@@ -772,6 +815,7 @@ export async function streamChatTurn(
             if (myJobs.size === 0 && openTurns.size === 0) terminal = true;
             break;
           case "done": {
+            flushQuiet();
             if (endsView(ev)) terminal = true;
             if (typeof ev.compacted === "number" && ev.compacted > 0) cb.onCompacted?.(ev.compacted);
             // A FAILED TURN THAT NAMES ITS FAULT (P18) — the provider's 402, its refused key. It

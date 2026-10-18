@@ -19,6 +19,8 @@
  *  without the secret, because a capability-gated read needs no other credential.
  */
 import { NextResponse, type NextRequest } from "next/server";
+import { CLIENT_ADDRESS_HEADER } from "../../auth/clientAddress.mjs";
+import { takeJoinRequest } from "../../auth/linkRateLimit";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -29,6 +31,11 @@ export async function GET(request: NextRequest) {
   const token = request.nextUrl.searchParams.get("i") || "";
   if (!token) {
     return NextResponse.json({ error: "no_token" }, { status: 400, headers: NO_STORE });
+  }
+  // COUNTED PER CLIENT ADDRESS, the same for every replica (PRD 0.13.4 M6): a token is a capability,
+  // and an unlimited preview is an unlimited guessing oracle for one.
+  if (!(await takeJoinRequest(request.headers.get(CLIENT_ADDRESS_HEADER) || "unknown"))) {
+    return NextResponse.json({ error: "rate_limited" }, { status: 429, headers: { ...NO_STORE, "Retry-After": "60" } });
   }
   const base = (process.env.AGENT_API_URL || "").replace(/\/$/, "");
   if (!base) {

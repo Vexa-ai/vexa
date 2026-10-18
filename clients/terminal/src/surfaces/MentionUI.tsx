@@ -7,7 +7,7 @@
  *  chat starts with them), what its history read that only the owner may, what the newcomers do not see, and — for a routine's chat — which of
  *  the owner's private reads its runs would lose. Three answers: share and send, send without
  *  sharing (the names go as plain text; nobody is told), or cancel (nothing is sent). */
-import { joinNames, type Mention, type PickerRow } from "./mentions";
+import { accountsLabel, joinNames, type Mention, type PickerRow } from "./mentions";
 import type { SharePreview } from "./sessionsApi";
 import { Identity } from "../ui-kit/Identity";
 import { personPhotoUrl } from "../platform/identity";
@@ -28,6 +28,10 @@ export function MentionPicker({ rows, active, onPick }: { rows: PickerRow[]; act
           <span className="vx-mention-says">
             {r.kind === "agent" ? "the agent — answers this message" : (r.person.name && r.person.name !== r.label ? `${r.person.name} · ` : "") + (r.person.email || "")}
           </span>
+          {r.kind === "person" && accountsLabel(r.person) && (
+            <span className="vx-mention-accounts" data-accounts={r.person.accounts}
+              title={accountsLabel(r.person).endsWith("?") ? "These sign-ins may be one person; until they confirm, adding them adds this one only" : "One person, several sign-ins: adding them adds every one"}>{accountsLabel(r.person)}</span>
+          )}
         </div>
       ))}
     </div>

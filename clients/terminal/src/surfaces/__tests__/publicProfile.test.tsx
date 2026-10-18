@@ -28,27 +28,44 @@ beforeEach(() => setFeatureOverride("all"));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); setFeatureOverride("all"); });
 
 describe("Settings · Public profile (13a)", () => {
-  it("shows each field with its own public switch and how many orgs link, never which", async () => {
-    server({ "GET /api/user/profile": () => own(true) });
+  // ONE WRITER (PRD 0.13.4 D35): the editor reads and writes the claimed profile (/api/person/profile);
+  // identity's retired profile answers only the company verification, and is never written.
+  const claimed = (published: boolean) => ({ claimed: true, record_id: "r-jonas", published, handle: published ? "h-jonas-0123456789" : null,
+    public_fields: ["display_name", "headline", "company"],
+    fields: { display_name: "Jonas Weber", headline: "Head of Workplace IT", company: "NWB", bio: "Runs the Exchange team." } });
+
+  it("shows each field with its own public switch, from the claimed profile", async () => {
+    server({ "POST /api/person/profile": (b) => (b.action === "read" ? claimed(true) : {}), "GET /api/user/profile": () => own(true) });
     render(<PublicProfileSettings />);
-    expect(await screen.findByText("Linked by 3 orgs")).toBeTruthy();
-    expect(screen.getByText(/You can see how many, never which, and never their notes/)).toBeTruthy();
-    const bio = document.querySelector('[data-field="bio"] input[type=checkbox]') as HTMLInputElement;
+    const bio = (await screen.findByText("Short bio")).closest("[data-field]")!.querySelector("input[type=checkbox]") as HTMLInputElement;
     expect(bio.checked).toBe(false);
+    const role = document.querySelector('[data-field="role"] input[type=checkbox]') as HTMLInputElement;
+    expect(role.checked).toBe(true);
   });
 
-  it("publishes the edited fields, and withdraws", async () => {
-    const calls = server({ "GET /api/user/profile": () => own(false, 0), "PUT /api/user/profile": () => own(true, 0),
-      "POST /api/user/profile/withdraw": () => own(false, 0) });
+  it("publishes the edited fields to the claimed profile, and withdraws; identity's profile is never written", async () => {
+    let published = false;
+    const calls = server({
+      "POST /api/person/profile": (b) => {
+        if (b.action === "publish") published = !!b.public;
+        return b.action === "read" ? claimed(published) : { status: "saved" };
+      },
+      "GET /api/user/profile": () => own(false, 0),
+    });
     render(<PublicProfileSettings />);
     const bio = (await screen.findByText("Short bio")).closest("[data-field]")!.querySelector("input[type=checkbox]")!;
     fireEvent.click(bio);
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Publish changes" })); });
-    const put = calls.find((c) => c.method === "PUT")!.body as { fields: Record<string, { public: boolean }>; publish: boolean };
-    expect(put.publish).toBe(true);
-    expect(put.fields.bio.public).toBe(true);
+    const posts = calls.filter((c) => c.url === "/api/person/profile").map((c) => c.body as Record<string, unknown>);
+    const edit = posts.find((b) => b.action === "edit")!;
+    expect((edit.fields as Record<string, unknown>).bio).toBe("Runs the Exchange team.");
+    const pub = posts.find((b) => b.action === "publish")!;
+    expect(pub.public).toBe(true);
+    expect(pub.public_fields).toContain("bio");
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Withdraw profile" })); });
-    expect(calls.some((c) => c.url === "/api/user/profile/withdraw")).toBe(true);
+    expect(posts.length).toBeGreaterThan(0);
+    expect(calls.some((c) => c.url === "/api/person/profile" && (c.body as Record<string, unknown>).public === false)).toBe(true);
+    expect(calls.some((c) => c.method !== "GET" && c.url.startsWith("/api/user/profile"))).toBe(false);
     expect(screen.getByRole("status").textContent).toMatch(/Withdrawn/);
   });
 

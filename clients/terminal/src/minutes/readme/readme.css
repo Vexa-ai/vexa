@@ -1,0 +1,70 @@
+/* The README page (UI 7aa, 7v, 7x): one document, kit rows, no frames, no nested scroll, no solid fills (7r). */
+.vx-rd { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; max-width: 820px; overflow-wrap: break-word; }
+.vx-rd h2 { font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-1); margin: var(--space-2) 0 0; }
+.vx-rd-line { margin: 0; color: var(--text-1); line-height: 1.6; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
+.vx-rd-line[data-list]::before { content: "•"; color: var(--text-3); margin-right: var(--space-1); }
+.vx-rd-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 1px 6px; border-radius: 6px;
+  border: 1px solid var(--border-subtle); background: transparent; color: var(--text-1); font: inherit; font-size: var(--text-sm);
+  cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.vx-rd-chip:hover, .vx-rd-chip:focus-visible { border-color: var(--accent); }
+.vx-rd-chip[data-restricted] { color: var(--text-3); cursor: default; }
+.vx-rd-act {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 6px; font: inherit; font-size: var(--text-sm);
+  border: 1px solid var(--accent); color: var(--accent); background: transparent; cursor: pointer;
+}
+.vx-rd-act:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.vx-rd-act:disabled { border-color: var(--border); color: var(--text-3); cursor: not-allowed; }
+.vx-rd-reason { color: var(--text-3); font-size: var(--text-xs); }
+.vx-rd-block { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vx-rd-rows { display: flex; flex-direction: column; }
+.vx-rd-only { color: var(--text-3); font-size: var(--text-xs); }
+.vx-rd-quiet { color: var(--text-3); font-size: var(--text-xs); margin: 0; }
+.vx-rd-more { align-self: flex-start; background: none; border: 0; padding: 2px 0; color: var(--text-2); font-size: var(--text-xs); cursor: pointer; }
+.vx-rd-restricted { color: var(--text-3); }
+.vx-rd-crm-rec h3 { font-size: var(--text-sm); margin: 0 0 var(--space-1); color: var(--text-1); }
+.vx-rd-crm-rec h3 small { color: var(--text-3); font-weight: normal; }
+.vx-rd-crm-rec dl { display: grid; grid-template-columns: minmax(80px, max-content) 1fr; gap: 2px var(--space-3); margin: 0; font-size: var(--text-sm); }
+.vx-rd-crm-rec dt { color: var(--text-3); }
+.vx-rd-crm-rec dd { margin: 0; color: var(--text-1); }
+.vx-rd-crm-rec dd[data-only-you] { border-left: 2px solid var(--border); padding-left: 6px; }
+/* the room's Pinned strip (7ee) */
+.vx-pins { display: flex; align-items: center; gap: var(--space-2); padding: 4px var(--space-3); border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto; scrollbar-width: none; color: var(--text-3); font-size: var(--text-xs); }
+.vx-pin { display: inline-flex; align-items: center; gap: 2px; }
+.vx-pin-x { background: none; border: 0; color: var(--text-3); cursor: pointer; padding: 0 2px; }
+/* Share (D19) */
+.vx-share { display: flex; flex-direction: column; gap: var(--space-2); }
+.vx-share-q { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); color: var(--text-1); font: inherit; }
+.vx-share-opts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.vx-share-opts button { width: 100%; text-align: left; background: none; border: 0; padding: 6px 8px; border-radius: 6px; color: var(--text-1); font: inherit; cursor: pointer; }
+.vx-share-opts button:hover, .vx-share-opts button:focus-visible { background: var(--surface-2); }
+.vx-share-obj { padding: var(--space-2) 0; }
+.vx-share-line { margin: 0; color: var(--text-2); font-size: var(--text-sm); }
+/* the phone's message sheet (long-press) */
+.vx-rd-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; display: flex; flex-direction: column; gap: 2px;
+  padding: var(--space-3) 16px calc(var(--space-3) + env(safe-area-inset-bottom)); background: var(--surface-1);
+  border-top: 1px solid var(--border); box-shadow: var(--shadow-1); }
+.vx-rd-sheet button { min-height: 44px; text-align: left; background: none; border: 0; color: var(--text-1); font: inherit; font-size: var(--text-sm); }
+/* phone: 390px with a 16px gutter; the title never stacks letters */
+@media (max-width: 480px) {
+  .vx-rd { gap: var(--space-2); }
+  .vx-rd-crm-rec dl { grid-template-columns: 1fr; }
+  .vx-rd-crm-rec dt { margin-top: var(--space-1); }
+}
+/* the fixed header's title never stacks letter by letter at 390/360px (PRD §8.3 S7 phone pass) */
+.vx-wsp .vx-wsp-idt { min-width: 0; flex: 1 1 auto; }
+.vx-wsp .vx-wsp-idt h1 { overflow-wrap: break-word; word-break: normal; hyphens: auto; }
+.vx-rh-id .vx-pins { border-bottom: 0; padding: 2px 0 0; }
+.vx-rd-proof { color: var(--text-3); font-size: var(--text-xs); }
+.vx-rd-chip[data-proof="proven"] .vx-rd-proof { color: var(--success); }
+.vx-rd-chip[data-proof="stale"] .vx-rd-proof { color: var(--warning); }
+.vx-rd-claim { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+/* phone: a row's detail goes under its title, so a long detail never squeezes the name to "Dmitry Granki…" */
+@media (max-width: 480px) {
+  .vx-rd .vx-row2-main { flex-wrap: wrap; row-gap: 0; height: auto; min-height: 44px; padding-top: 4px; padding-bottom: 4px; }
+  .vx-rd .vx-row2-title { flex: 1 1 auto; min-width: 60%; }
+  .vx-rd .vx-row2-meta { flex: 1 1 100%; margin-left: 0; text-align: left; justify-content: flex-start; }
+}
+.vx-rd-scrim { position: fixed; inset: 0; z-index: 59; background: var(--scrim); }

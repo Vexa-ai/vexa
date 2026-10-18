@@ -133,18 +133,34 @@ Sign out and back in with your everyday account for everything else.
    - **contributor** — writes the workspace;
    - **reader** — reads it and does not write it.
 3. The agent creates an invite link for that address. If the person has no account here, the link is
-   emailed to them; otherwise the chat gives you the link to pass on.
+   emailed to them; otherwise it waits in their notifications in the app.
+4. To bring someone straight into a room, invite them from the room (or name it): the email says
+   "<room> in <workspace>" and the link opens that room.
+
+The invite email is a fixed template: who invited them, to which workspace or room, as what, and one
+link. It never carries a message, a page or anything said in a chat.
 
 Changing a role and removing someone work the same way, from **People** or in the chat. A workspace
 always keeps at least one owner.
 
+An invite never gives more than its sender has: a contributor can invite contributors and readers, a
+reader cannot invite above reader. Only an owner makes another owner, and only by inviting that one
+address; a link never makes an owner. An invite lasts at most a year and admits at most 1000 people.
+If its sender is later demoted or removed, the invite stops granting anything above what they hold.
+
 ### Join from an invite
 
-1. Open the link (`/join?i=…`). The page says who invited you, to which workspace, and as what.
-2. Sign in with Google, Microsoft or an emailed sign-in link. If the invite names one address, that
-   address is filled in and cannot be changed.
-3. You are added and land on the workspace's front page. If you were already signed in, this happens
-   at once.
+1. Open the link (`/join?i=…`). The page says who invited you, to which workspace or room, and as what.
+2. **From the invite email, with no account yet:** press **Join**. One click signs you in as the
+   address the invite was sent to and opens the room (or the workspace). The link does this once.
+3. Otherwise, sign in with Google, Microsoft or an emailed sign-in link. If the invite names one
+   address, that address is filled in and cannot be changed. Then press **Join**.
+4. If you were already signed in, the page still shows the workspace, the role and who sent it, and
+   waits for **Join**; **Not now** leaves without joining. Joining never changes where your chats write.
+
+Opening the link changes nothing by itself. Mail scanners and link previews that open it (Outlook,
+Teams, Defender) leave it unused; only your press on **Join** uses it. On a phone the page fits the
+screen, with **‹ Back** at the top.
 
 An invite link works for **one person, for seven days**, and only for the address it names. Invites made
 by the agent during a chat turn stay valid after the turn ends. Once an invite has expired, been used
@@ -369,8 +385,9 @@ The private tier is never shared. The company workspace is written only by the a
 
 | Data | Single writer | Where |
 |---|---|---|
-| Workspace files and roster (`policy/members.json`) | agent-api | the workspace's git repository |
-| Invites (hashes only) | agent-api | `.invites/` beside the workspaces, outside every workspace |
+| Workspace files | agent-api | the workspace's git repository |
+| Roster, visibility, connections, invites (hashes only) | admin-api, asked by agent-api | the identity database (`workspaces`, `memberships`, `invites`); without admin-api, agent-api's files `.policy/` and `.invites/` beside the workspaces, outside every workspace. A read-only mirror of the roster, visibility and connections is committed to `policy/` in the workspace |
+| Workspace policy rules | agent-api, platform only | `policy/rules.json` in the workspace's git repository |
 | Workspace ids and names | agent-api | `.vexa/workspace.json` in each workspace, plus a registry that can be rebuilt from it |
 | Membership index, users by email | admin-api | the identity database |
 | Which account is the admin account (`users.data.account`) | admin-api, when it creates the row | the identity database |
@@ -380,12 +397,96 @@ The private tier is never shared. The company workspace is written only by the a
 | Git tokens and deploy keys | the credential broker (agent-api's `git` role) | its encrypted store |
 | Connections, consent state, audit | the credential broker | its encrypted store |
 
+### Membership and policy
+
+The roster, a workspace's visibility (open or closed), its connections and its invites are **who may
+enter a workspace**. Since 0.13.4 they are rows in the identity database: `workspaces`, `memberships`
+(an account × `workspace:<id>` or, for a closed room, `room:<id>` × a role) and `invites` (only each
+token's SHA-256). admin-api is their one writer; agent-api reads and writes them through its port,
+`/internal/registry/*` on the internal tier. A person is their CRM record; a membership names their
+account. Git keeps a workspace's content, and its `policy/` rule files stay platform-only.
+
+A deployment without admin-api keeps the same records in files beside the workspaces
+(`.policy/<workspace>/`, `.invites/`), outside every workspace. Either way they go through one
+interface (`PolicyStore` in `control_plane/workspace_membership.py`), and no agent turn reaches them:
+the runtime mounts one folder per workspace and never the folder above them.
+
+1. **Reading a role.** Every membership check (`is_member`, `require_role`) reads the registry. The
+   workspace's own `policy/members.json` is a mirror the platform writes with each change, committed
+   with the person who decided as author. Nothing reads the mirror to decide access.
+2. **Writing in a workspace.** `policy/` is a reserved folder for every caller route
+   (`workspace_paths.RESERVED_DIRS`): the page editor, uploads, moves and links refuse it. The page
+   editor answers `403`. Only the membership and policy code writes it, and only the mirror.
+3. **Syncing with a repository.** A pull whose remote side changes anything under `policy/` is refused
+   before anything is merged, and the workspace stays as it was.
+4. **Changing policy.** Opening or closing a workspace and connecting or disconnecting another
+   workspace go through the policy evaluator (`control_plane/policy_decide.py`, also served inside the
+   deployment as `POST /internal/policy/decide`). It answers `{decision, rule}`, where `rule` is the
+   deciding rule's id and the hash of its rule set. Platform rules come first, then the workspace's
+   own rules (`policy/rules.json`, platform-only). A deny beats any allow, and nothing allowing is a
+   deny. A policy change is applied only for the workspace's **owner in a browser session**; an agent,
+   even one its owner is watching, and an API key without the browser scope cannot change policy
+   directly.
+5. **Agents change policy with permission.** An agent (or a contributor) proposes a change —
+   visibility, connecting or disconnecting a workspace, a member's role or removal, or the rule file —
+   with `POST /api/workspace/policy/proposals` (`workspace`, `session`, `change`, `value`, `reason`).
+   The proposal is recorded in the session proposal store, owned by the workspace's owner, and
+   nothing changes. The owner sees it in `GET /api/workspace/policy/proposals` and approves
+   (`…/{id}/approve`) or declines (`…/{id}/decline`) from the app. On approval the platform applies
+   it through the evaluator and the registry (or writes `policy/rules.json`), and the policy commit
+   carries `Approved-by: <account> (proposal <id>)` and `On-behalf-of: <proposer>`. A decline changes
+   nothing. A later release's signed policy card wraps this same proposal.
+6. **Failing closed.** A registry that does not answer, or a record that cannot be read, refuses
+   (`503 policy_unreadable`): it never reads as "no members" or "open". An unreadable visibility is closed; an unreadable rule set
+   refuses every policy decision.
+7. **Migration.** When agent-api starts, it copies every workspace's existing records into the
+   registry, once: its `.policy/` files if it has them, else its `policy/members.json`,
+   `visibility.json` and `connections.json`, and its invites from `.invites/` (or an old
+   `policy/invites.json`). A workspace not yet copied is copied on its first read. After that the
+   registry alone answers. Set `VEXA_POLICY_LEGACY_READ=0` on agent-api
+   to stop reading old in-workspace files altogether once every instance has started on 0.13.4.
+   Un-sharing or deleting a workspace removes its rows (and any old files).
+
+### Invites by email (0.13.4)
+
+1. **Mint.** `workspace_invite` (`POST /api/workspace/invite`, optional `room`) mints an invite
+   restricted to the one address, at most one use, seven days. A `room` must be a room of that
+   workspace that the inviter is in.
+2. **Mail.** An address with no account here is published to flows as `workspace.invited`; flows
+   renders the fixed `workspace-invite` template (`behavior/mail/workspace-invite.md`: inviter, place,
+   role, the role's sentence) and appends the link as the last line. The refs carry no field a
+   message could travel in.
+3. **The link signs in, only when we mailed it.** When the deployment says it delivers mail
+   (`GET /mail/delivery` → `delivered`), the invite gets a sign-in window — the company policy line
+   `invite_signin_days` in `_global/POLICIES.md` (default 7, at most 30; `0` turns it off), never past
+   the invite's expiry — and the link is **not** returned to the inviter or their agent. A link handed back
+   to the inviter (captured mail, no mail, an internal address) never signs anybody in.
+4. **The click.** The join page's **Join** is a plain form POST to the terminal's
+   `/api/join/accept`. Same-origin only and counted per client address, it asks agent-api
+   `POST /internal/invites/signin-claim` (internal tier) to spend the sign-in half once, asks admin-api
+   to admit the address `via_invite`, finds or creates the account, accepts the invite as that person
+   through the gateway, joins the room, and answers 303 to `/r/chat/<room>` or `/w/<workspace>` with
+   the session cookies. A spent or expired sign-in falls back to the page's emailed sign-in link.
+5. **Nothing on GET.** The page, `GET /api/join/preview`, `GET` and `HEAD` of `/api/join/accept` are
+   reads. The emailed sign-in link is the same: `GET /api/auth/redeem` asks, `POST` signs in.
+6. **No token at rest in a notice.** An invite notification stores `invite:<workspace>/<id>`; the
+   act resolves it on the server, still bound to the invitee's verified address. Rows written before
+   0.13.4 are rewritten when agent-api starts.
+7. **Nobody off the list.** With `VEXA_MAIL_RECIPIENT_ALLOW` set, every message to a recipient not
+   on it — invite, sign-in link, nudge, digest, recap, RSVP — is diverted to the capture double and
+   logged `mail_diverted` with no content.
+8. **Shared limits.** Link requests, the invite preview and the join POST are counted in admin-api's
+   Redis (`POST /internal/rate/take`) for every terminal replica, falling back to a local count if
+   Redis does not answer. Redeems, sign-in claims and roster writes take a Redis lock per workspace
+   (`vexa:ws-lock:<workspace>`) as well as the process lock.
+
 ### Routes
 
 | Browser calls (terminal) | Goes to |
 |---|---|
 | `GET /api/workspaces/{id}`, `/api/workspaces/by-slug/{slug}`, `/api/workspace/members`, `/api/workspaces/{slug}/git/last-change`, `/api/workspace/git-remote-status` | agent-api, through the gateway's `/agent/*` |
 | `GET /api/join/preview` | agent-api `/api/workspace/invites/preview` (no user key) |
+| `POST /api/join/accept` (form `i`) | agent-api `/internal/invites/signin-claim` (internal tier), admin-api `/internal/signin-admission` (`via_invite`), then the invite accept through the gateway as the new session |
 | `POST /api/workspace/invites/accept` | agent-api, through the gateway |
 | `POST /api/workspace/import`, `GET /api/workspace/import/{op}/status` | agent-api, through the gateway |
 | `GET`, `POST /api/workspace/{slug}/deploy-key`, `/api/workspace/git-token` | agent-api, through the gateway |
@@ -398,7 +499,13 @@ The private tier is never shared. The company workspace is written only by the a
 
 ### Configuration
 
-`VEXA_UI_URL` on agent-api (no invite is made without it). `VEXA_GIT_PROVIDERS` on agent-api (Helm
+`VEXA_UI_URL` on agent-api (no invite is made without it). Outbound mail is per install: flows'
+`VEXA_MAIL_SMTP_HOST`, `_PORT`, `_USER`, `_FROM` and the password by reference,
+`VEXA_MAIL_SMTP_PASSWORD_REF=broker:mail/<name>` (stored once with
+`python -m credential_broker.mail_secret put <name>` in the broker container; see
+[Configuration](/configuration)). `VEXA_SIGNIN_INVITES_ADMIT` on admin-api (default `1`): `0` stops a
+mailed invite from admitting a new address. `VEXA_POLICY_LEGACY_READ` on agent-api
+(default `1`): `0` stops adopting old in-workspace policy files (see Membership and policy). `VEXA_GIT_PROVIDERS` on agent-api (Helm
 `agentApi.gitProviders`) registers self-hosted git hosts; it is validated when agent-api starts.
 `VEXA_ADMIN_ACCOUNT` on admin-api names the admin account (compose `.env`, Helm
 `adminApi.adminAccount`, Lite `-e`); see [Configuration](/configuration). agent-api's old
@@ -435,6 +542,53 @@ Covered by `core/agent/tests/test_new_person_and_sharing.py`.
 | **P14** validate at boot | a malformed `VEXA_ADMIN_ACCOUNT` (a domain, `*`, more than five addresses) stops admin-api from starting; a named address that already has an everyday account is logged at boot | `admin-api tests/test_admin_account.py` |
 | **P23** one writer per carrier (join links) | agent-api alone writes the invite store, the host's `workspace_joined_via_link` notice and the `workspace.joined_via_link` flows carrier; flows only consumes the carrier | `gate:dataflow`, `gate:schema` |
 | **P4** published schemas (join links) | the carrier is declared in the sealed `flows.v1`, the notice kind in the sealed `ws.v1`, the three tools in `mcp.tools.v1` and `routes.v1` | `gate:schema`, `gate:contract-version` |
+
+### Membership and policy
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P20** authorize every access | a role is read only from the policy store outside every workspace; `policy/` is reserved for every caller route; a remote sync cannot change it; an invite never outranks its sender, an owner is made only by an owner's invite to a named address, and an invite is checked again against its sender's role when redeemed | deny tests below |
+| **P23** one writer per carrier | admin-api is the one writer of the registry tables; agent-api's membership code is their only caller and the only writer of the `policy/` mirror; every other route is refused, and a pull is refused | deny tests below; `core/identity/services/admin-api/tests/test_workspace_registry_pg.py`; `gate:dataflow` |
+| **P2** contracts · **P6** one front door | agent-api has no database: it reaches the registry only through admin-api's internal tier (`AdminApiPolicyStore`), as it already does for the membership index | `test_the_http_port_maps_the_registry_doors`, `test_every_registry_door_needs_the_internal_secret` |
+| **P18** fail loud | an unreadable store answers `503 policy_unreadable`; an unreadable rule set answers `refuse`; a refused pull names the files | `test_an_unreadable_store_refuses_instead_of_answering_empty`, `test_an_unreadable_rule_set_refuses` |
+| **R7** a person decides | joining needs a click on a page that shows the workspace, the role and the sender; joining never moves where the person's chats write; an agent's policy change is a proposal the owner approves from a browser session, recorded as `Approved-by` / `On-behalf-of` | deny tests below |
+
+Deny tests, all passing:
+
+- **C3 / deny 5** `core/agent/tests/test_sec_deny_policy_taint.py` ·
+  `test_contributor_cannot_write_policy_files[members, visibility, connections]`,
+  `test_contributors_watched_agent_cannot_write_policy_files`,
+  `test_contributor_cannot_become_owner_through_the_page_route`.
+- **C3 / deny 6** `test_contributor_cannot_mint_owner_invite`,
+  `test_invite_uses_and_expiry_are_capped[max_uses, expires_in_sec]`.
+- **H4 / deny 15 (server half)** `test_invite_accept_does_not_change_write_target`; the client half
+  is `clients/terminal/src/app/__tests__/join.test.tsx` · *asks a signed-in visitor to confirm*.
+- **Deny 28** `core/agent/tests/test_s1a_policy_store.py` ·
+  `test_deny_28_a_pull_that_changes_policy_is_refused`.
+- **Deny 20 (evaluator)** `test_an_unreadable_rule_set_refuses`, `test_deny_beats_allow_across_levels`,
+  `test_owner_session_may_change_policy_and_nobody_else`; the routes:
+  `core/agent/tests/test_r1_rooms.py` · `test_only_an_open_workspace_connects_and_only_its_owner_opens_it`.
+- **Policy with permission** `test_an_agent_proposal_changes_nothing_until_the_owner_approves`,
+  `test_approval_by_a_non_owner_or_a_non_browser_credential_is_refused`, `test_a_decline_changes_nothing`,
+  `test_a_direct_agent_write_is_still_refused`, `test_rules_land_in_git_with_the_trailers`.
+- **Migration** `test_legacy_roster_is_read_and_adopted_into_the_store`,
+  `test_after_adoption_a_tree_edit_confers_nothing`, `test_writing_one_file_migrates_the_others_first`,
+  `test_legacy_read_off_ignores_unmigrated_trees`,
+  `test_boot_moves_trees_interim_files_and_invites_into_the_registry`, `test_a_down_registry_refuses`.
+
+### Invites by email
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **R7** a person decides | the link is spent only by a POST from the join page's button; a GET, a HEAD or a preview changes nothing, so a mail scanner cannot use it | `test_a_mail_scanner_opening_the_link_changes_nothing`; `clients/terminal/src/app/api/join/__tests__/accept.test.ts` · *a mail scanner opening the link changes nothing*; `join.test.tsx` · *opening the page posts nothing* |
+| **P20** authorize every access | the sign-in half exists only on an invite this deployment mailed to its one address; the inviter never receives that link; it is spent once under the workspace lock; the accept still checks the verified address | `test_a_mailed_invite_signs_in_and_the_inviter_never_holds_that_link`, `test_the_sign_in_half_is_spent_once`, `test_captured_mail_never_signs_in`, `test_a_link_handed_to_the_inviter_never_signs_in`, `test_the_sign_in_window_closes` |
+| **D15 / M4** template-only mail | the invite mail is a fixed template; refs carry no message field and the step reads only declared fields | `core/flows/tests/test_workspace_invite_mail.py` · `test_s2_no_message_content_can_reach_the_mail`, `test_s2_template_names_the_room_role_and_inviter_and_carries_one_link` |
+| **P14** secrets by reference | the relay password is `broker:mail/<name>`, read by flows with its broker key, audited by name, never logged | `core/flows/tests/test_mail_secret_ref.py`; `core/agent/services/credential-broker/tests/test_mail_credential.py` |
+| **M2** no token at rest | an invite notification stores the invite id; old rows are rewritten at start | `test_an_invite_notification_stores_the_invite_id_not_the_token`, `test_old_rows_holding_a_token_are_rewritten` |
+| **M6** shared limits | rate counts in admin-api's Redis; a Redis lock per workspace | `core/identity/services/admin-api/tests/test_rate_take.py`; `test_the_redis_lock_serialises_two_holders_and_is_taken_once_per_thread`; `linkRateLimit.test.ts` · *the shared count* |
+
+Still open, and named: a watched agent can still mint invites up to its person's role
+(`test_watched_agent_cannot_mint_invite`, H3, lands with the session credential).
 
 ### Security
 

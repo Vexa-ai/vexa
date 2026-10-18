@@ -1,6 +1,7 @@
-/** Public profiles (R4, feature `public_profiles`): the person's own profile and the directory are
- *  identity's (`/api/user/profile*`, `/api/user/directory/*` → the gateway → admin-api); a contact's
- *  link to a profile is crm-api's (`/api/crm` operations `profile/read`, `profile/link`). */
+/** Profiles. The person's own profile is their CLAIMED CRM record (`/api/person/profile`, D35; one
+ *  writer). Identity's R4 profile (`/api/user/profile*`) is retired: read-only for one release, its
+ *  directory search (`/api/user/directory/*`) and a contact's link (`/api/crm` `profile/read`,
+ *  `profile/link`) still read it until they move too. */
 
 export const PROFILE_FIELDS = ["name", "photo", "role", "company", "links", "bio"] as const;
 export type ProfileFieldName = (typeof PROFILE_FIELDS)[number];
@@ -32,10 +33,66 @@ const asOwn = (x: OwnProfile): OwnProfile => {
   if (!x || typeof x !== "object" || !x.fields || typeof x.fields !== "object") throw new Error("Public profiles are not available here.");
   return x;
 };
-export const readOwnProfile = () => call<OwnProfile>("/api/user/profile").then(asOwn);
-export const saveOwnProfile = (fields: Partial<Record<ProfileFieldName, OwnField>>, publish?: boolean) =>
-  call<OwnProfile>("/api/user/profile", { method: "PUT", body: JSON.stringify({ fields, ...(publish === undefined ? {} : { publish }) }) }).then(asOwn);
-export const withdrawOwnProfile = () => call<OwnProfile>("/api/user/profile/withdraw", { method: "POST" }).then(asOwn);
+// ── ONE WRITER (PRD 0.13.4 D35, 2026-10-17) ─────────────────────────────────────────────────────
+// The profile is the person's CLAIMED CRM record now (`/api/person/profile`); identity's profile
+// above is retired (its writes answer 410). This editor keeps its shape and maps onto the claimed
+// profile: name → display_name, role → headline, links → the LinkedIn/GitHub/X/website slots. Company
+// verification stays identity's (read from its retired profile read for one release).
+const TO_NEW: Partial<Record<ProfileFieldName, string>> = { name: "display_name", photo: "photo", role: "headline", company: "company", bio: "bio" };
+const LINK_SLOTS = ["linkedin", "github", "x", "website"] as const;
+type ClaimedProfile = { claimed: boolean; fields: Record<string, unknown>; public_fields: string[]; published: boolean; handle: string | null };
+
+const personProfile = <T,>(body: object) => call<T>("/api/person/profile", { method: "POST", body: JSON.stringify(body) });
+
+function toOwn(x: ClaimedProfile, verification: OwnProfile["company_verification"]): OwnProfile {
+  if (!x || typeof x !== "object" || !x.fields) throw new Error("Profiles are not available here.");
+  const pub = new Set(x.public_fields || []);
+  const fields = {} as Record<ProfileFieldName, OwnField>;
+  for (const k of PROFILE_FIELDS) {
+    if (k === "links") {
+      const l = (x.fields.links || {}) as Record<string, string>;
+      fields.links = { value: LINK_SLOTS.map((s) => l[s]).filter(Boolean) as string[], public: pub.has("links") };
+    } else {
+      const n = TO_NEW[k]!;
+      fields[k] = { value: String(x.fields[n] ?? ""), public: pub.has(n) };
+    }
+  }
+  return { handle: x.published ? x.handle : null, published: !!x.published, linked_by: 0, fields, company_verification: verification };
+}
+
+function linksFor(urls: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const u of urls) {
+    let host = "";
+    try { host = new URL(u).hostname.toLowerCase(); } catch { continue; }
+    const slot = host.endsWith("linkedin.com") ? "linkedin" : host.endsWith("github.com") ? "github"
+      : (host.endsWith("x.com") || host.endsWith("twitter.com")) ? "x" : "website";
+    if (!out[slot]) out[slot] = u;
+  }
+  return out;
+}
+
+async function verification(): Promise<OwnProfile["company_verification"]> {
+  try { return (await call<{ company_verification?: OwnProfile["company_verification"] }>("/api/user/profile")).company_verification ?? null; }
+  catch { return null; }
+}
+
+export const readOwnProfile = async () => toOwn(await personProfile<ClaimedProfile>({ action: "read" }), await verification());
+export async function saveOwnProfile(fields: Partial<Record<ProfileFieldName, OwnField>>, publish?: boolean): Promise<OwnProfile> {
+  const next: Record<string, unknown> = {};
+  const pub: string[] = [];
+  for (const [k, f] of Object.entries(fields) as [ProfileFieldName, OwnField][]) {
+    if (!f) continue;
+    if (k === "links") { next.links = linksFor(Array.isArray(f.value) ? f.value : [String(f.value)]); if (f.public) pub.push("links"); continue; }
+    const n = TO_NEW[k]; if (!n) continue;
+    next[n] = Array.isArray(f.value) ? f.value[0] ?? "" : f.value;
+    if (f.public) pub.push(n);
+  }
+  await personProfile({ action: "edit", fields: next });
+  if (publish !== undefined) await personProfile({ action: "publish", public: publish, public_fields: pub });
+  return readOwnProfile();
+}
+export const withdrawOwnProfile = async () => { await personProfile({ action: "publish", public: false }); return readOwnProfile(); };
 export const startCompanyVerification = (domain: string) =>
   call<{ domain: string; txt: string; how: string }>("/api/user/company-verification", { method: "POST", body: JSON.stringify({ domain }) });
 export const checkCompanyVerification = () =>

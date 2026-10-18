@@ -1,3 +1,4 @@
+import { featureOn } from "../platform/features";
 /** vocabulary — the words the product uses for its own surfaces, in ONE place.
  *
  *  Founder, 2026-09-02: a person's own workspace is a **DESK** — a personal desk, and a group desk
@@ -23,6 +24,18 @@
  *  now **Personal** ("your personal workspace" in a sentence); slugs, ids and fields still say
  *  `desk` where they did. */
 export const WORKSPACE_WORD = "Personal";
+
+/** "MY DESK", NOT "PERSONAL" (UI 7y, founder 2026-10-17; feature `shell2`): the personal workspace is
+ *  DISPLAYED as "My desk" everywhere a person reads it — the target chip, "writes to My desk", cards,
+ *  the tree. The slug stays `personal` (and `seed` for the older mount); only the display changes. */
+export const DESK_DISPLAY = "My desk";
+export const deskName = (): string => (featureOn("shell2") ? DESK_DISPLAY : WORKSPACE_WORD);
+/** Is this slug the person's own desk (`personal`, the older `seed`, or none)? */
+export const isDeskSlug = (slug?: string | null): boolean => !slug || slug === "personal" || slug === "seed";
+/** A workspace's name as a person reads it: the desk is "My desk" under `shell2` whatever the
+ *  server called it; any other workspace keeps its own name. */
+export const workspaceDisplayName = (slug: string | null | undefined, name?: string | null): string =>
+  isDeskSlug(slug) ? (featureOn("shell2") ? DESK_DISPLAY : (name || WORKSPACE_WORD)) : (name || String(slug));
 
 /** What the ORGANISATION TIER (`_global`) is called where a person sees it — the header chip an
  *  admin can aim a chat at, and the `+` menu entry that puts it there (Vexa-ai/vexa#1616).

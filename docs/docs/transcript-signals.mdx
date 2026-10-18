@@ -57,6 +57,11 @@ whether the agent should react.
 3. **The cheap model.** Every other message is scored against the room's brief and `known:`, exactly
    as a meeting line is, and adds to the running score.
 
+A room's signal turn runs as the room's workspace agent and **proposes**: it reads the room's
+workspace, writes only the call's note, and offers every other change as a proposal. Anyone on the
+room's call who is not a member of the workspace makes the turn's audience `cross_org`. See
+[Security → Untrusted triggers](/security-compliance#untrusted-triggers-routines-mail-and-room-calls).
+
 The agent's own messages are never buffered and never scored; they are only context for the messages
 that follow them. A room wakes with the same `meeting.signal` event, with `source: {kind: chat, id:
 <session>}` and `session` in place of `meeting_row`.
@@ -110,6 +115,9 @@ woken twice for it.
 | `{adapter: jev, route: typesafe/jev-1.13, secret_ref: broker:signals/<name>}` | Typesafe Jev through OpenRouter | OpenRouter and Typesafe |
 | `{adapter: jev, route: "typesafe:jev-latest", secret_ref: broker:signals/<name>}` | Typesafe Jev directly | Typesafe |
 | `{adapter: openai-compatible, route: <model>, base_url: https://<your LiteLLM>/v1, secret_ref: none}` | your own model | nowhere outside your network |
+| `{adapter: openai-compatible, route: qwen3.8-27b, base_url: http://<your vLLM>/v1, secret_ref: none, thinking: off}` | your own reasoning model, with its thinking switched off (`chat_template_kwargs.enable_thinking: false`) | nowhere outside your network |
+
+`thinking: off|on` applies to the `openai-compatible` adapter only. Leave it out to use the server's own default.
 
 ### Caps
 

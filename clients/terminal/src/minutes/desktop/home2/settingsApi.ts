@@ -1,17 +1,17 @@
 /** THE PERSON'S OWN SETTINGS ABOUT EACH WORKSPACE (#1783, R3 3.4). Founder-approved rule: per-person
  *  state about a workspace lives on the CRM `member_of` relation, written only by crm-api, in the
  *  person's own CRM — never in browser storage, never in an agent-api table. This module holds the
- *  last answer for this tab and writes through `/api/desktop/workspace-settings`; a change is shown at
+ *  last answer for this tab and writes through `/api/desktop/workspace-settings`. The notification
+ *  level is NOT here: it lives in the identity notification policy (`notificationPolicy.ts`, S6); a change is shown at
  *  once and rolled back if crm-api refuses it. */
 import { useEffect, useSyncExternalStore } from "react";
 import { toast } from "../../../ui-kit/primitives/Toast";
 
-export type Notify = "all" | "mentions" | "none";
 export type WorkspaceSettings = {
-  pinned: boolean; hidden: boolean; muted: boolean; notify: Notify; room_order: string[];
+  pinned: boolean; hidden: boolean; muted: boolean; room_order: string[];
   level: number | null; collapsed: string[]; updated_at: string | null;
 };
-export const DEFAULT_SETTINGS: WorkspaceSettings = { pinned: false, hidden: false, muted: false, notify: "all", room_order: [], level: null, collapsed: [], updated_at: null };
+export const DEFAULT_SETTINGS: WorkspaceSettings = { pinned: false, hidden: false, muted: false, room_order: [], level: null, collapsed: [], updated_at: null };
 
 type State = { phase: "idle" | "loading" | "ready" | "off"; all: Record<string, WorkspaceSettings> };
 let state: State = { phase: "idle", all: {} };

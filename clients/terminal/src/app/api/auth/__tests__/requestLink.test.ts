@@ -117,7 +117,9 @@ describe("the link is built only from a configured public URL", () => {
     );
     expect(res.status).toBe(503);
     expect(sendMail).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
+    // nothing but the shared rate counter (M6) was asked — no admission, no flows
+    const calls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(calls.filter((c) => !String(c[0]).includes("/internal/rate/take"))).toEqual([]);
   });
 
   it.each(["terminal.test", "javascript:alert(1)", "ftp://terminal.test", "https://user:pw@terminal.test", "https://"])(

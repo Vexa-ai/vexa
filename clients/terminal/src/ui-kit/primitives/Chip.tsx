@@ -5,7 +5,7 @@
  *  border) is a token the reader acts on — open, target, remove. No uppercase, no accent on badges
  *  or tags, no dashed borders: an "add" chip is a ghost chip with a plus. */
 import type { ReactNode } from "react";
-import { Building2, CalendarClock, FileText, User, X } from "lucide-react";
+import { Building2, CalendarClock, FileText, LayoutGrid, User, X } from "lucide-react";
 import type { Tone } from "./Spinner";
 
 export function Badge({ tone = "neutral", dot, children }: { tone?: Exclude<Tone, "accent">; dot?: boolean; children: ReactNode }) {
@@ -14,13 +14,15 @@ export function Badge({ tone = "neutral", dot, children }: { tone?: Exclude<Tone
 export function Tag({ children }: { children: ReactNode }) {
   return <span className="vx-tag">{children}</span>;
 }
-export function Chip({ children, icon, selected, ghost, onClick, onRemove, removeLabel, title, data }: {
-  children: ReactNode; icon?: ReactNode; selected?: boolean; ghost?: boolean;
+export function Chip({ children, icon, selected, pressed, ghost, onClick, onRemove, removeLabel, title, data }: {
+  children: ReactNode; icon?: ReactNode; selected?: boolean;
+  /** a toggle filter: `aria-pressed`, drawn as selected */
+  pressed?: boolean; ghost?: boolean;
   onClick?: () => void; onRemove?: () => void; removeLabel?: string; title?: string; data?: Record<string, string>;
 }) {
   return (
-    <span className="vx-chip" data-selected={selected ? "" : undefined} data-ghost={ghost ? "" : undefined} {...data}>
-      <button type="button" className="vx-chip-main" onClick={onClick} title={title} aria-current={selected || undefined}>
+    <span className="vx-chip" data-selected={selected || pressed ? "" : undefined} data-ghost={ghost ? "" : undefined} {...data}>
+      <button type="button" className="vx-chip-main" onClick={onClick} title={title} aria-current={selected || undefined} aria-pressed={pressed === undefined ? undefined : pressed}>
         {icon && <span className="vx-chip-icon" aria-hidden>{icon}</span>}
         <span className="vx-chip-label">{children}</span>
       </button>
@@ -34,14 +36,16 @@ export function Chip({ children, icon, selected, ghost, onClick, onRemove, remov
 }
 const ENTITY_ICON = {
   person: <User size={14} strokeWidth={1.75} />, company: <Building2 size={14} strokeWidth={1.75} />,
-  meeting: <CalendarClock size={14} strokeWidth={1.75} />, doc: <FileText size={14} strokeWidth={1.75} />,
+  meeting: <CalendarClock size={14} strokeWidth={1.75} />, doc: <FileText size={14} strokeWidth={1.75} />, workspace: <LayoutGrid size={14} strokeWidth={1.75} />,
 };
-export function EntityChip({ kind, children, onOpen, title }: {
-  kind: "person" | "company" | "meeting" | "doc"; children: ReactNode; onOpen: () => void; title?: string;
+export function EntityChip({ kind, children, onOpen, title, icon }: {
+  kind: "person" | "company" | "meeting" | "doc" | "workspace"; children: ReactNode; onOpen: () => void; title?: string;
+  /** the entity's own face (a workspace's mark) in place of the type icon */
+  icon?: ReactNode;
 }) {
   return (
     <button type="button" className="vx-chip vx-entity" data-kind={kind} onClick={onOpen} title={title}>
-      <span className="vx-chip-icon" aria-hidden>{ENTITY_ICON[kind]}</span>
+      <span className="vx-chip-icon" aria-hidden>{icon ?? ENTITY_ICON[kind]}</span>
       <span className="vx-chip-label">{children}</span>
     </button>
   );

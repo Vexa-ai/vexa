@@ -22,6 +22,8 @@
  *  The chat bound to the meeting stays beside this view; nothing here replaces it. */
 import { SelectionAct, referenceInChat } from "../minutes/ExtendAction";
 import "./meetingView.css";
+import { ChatAboutButton } from "../minutes/shell2/ChatAbout";
+import { meetingDisplayName } from "../minutes/callsList";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { ChevronDown, ChevronUp, Copy, Check, MessageSquareText, Search, X } from "lucide-react";
 import { WORKSPACE_COMMIT_EVENT, useService } from "../platform";
@@ -505,6 +507,8 @@ function MeetingViewBody({ meetingId }: { meetingId: string }) {
   const speakers = [...new Set(transcript.segments.map((s) => (s.speaker ?? "").trim()).filter(Boolean))];
   const noteBody = notes.phase === "ready" ? notes.body : "";
   const brief = useMemo(() => (noteBody ? readListenBrief(noteBody) : null), [noteBody]);
+  // shell2 (UI 7h, 7q): "Chat about this" / "Resume chat" in the meeting's own header
+  const shell2 = useFeature("shell2");
   return (
     <div data-meeting-view={meetingId} className="vx-mv-root"
       style={{ position: "relative", height: "100%", flex: "1 1 0%", width: "100%", display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, "--mv-inset": `${MEETING_VIEW_INSET}px` } as CSSProperties}>
@@ -516,6 +520,7 @@ function MeetingViewBody({ meetingId }: { meetingId: string }) {
             speakers={speakers}
             notesAct={<NotesControl meetingId={meetingId} notes={notes} lines={transcriptLines(transcript.segments)} liveNote={liveNote} />}
             onEditNotes={notes.phase === "ready" && !notes.readonly && !liveNote ? () => window.dispatchEvent(new CustomEvent(EDIT_NOTE_EVENT, { detail: { meetingId } })) : undefined}>
+            {shell2 && <div className="vx-mv-about"><ChatAboutButton a={{ key: `meeting:${meetingId}`, path: `meeting:${meetingId}`, label: chatNameForMeeting(meetingId) || (row ? meetingDisplayName(row) : "the meeting"), kind: "meeting", slug: row?.workspace_id }} /></div>}
             <div className="vx-mv-recorder"><MeetingControls meetingId={meetingId} showBot={false} showDelete={false} /></div>
           </MeetingViewHeader>
         </div>

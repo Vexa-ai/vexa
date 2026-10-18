@@ -15,6 +15,8 @@
  *  Scaffolded chats are untouched: a chat that carries `artifacts[]` renders those, and this is
  *  only the fallback.
  */
+import { deskName } from "./vocabulary";
+import { featureOn } from "../platform/features";
 import { readActiveSet } from "../data/workspaceApi";
 import { primeWorkspaceNames, workspaceBySlug, workspaceLabel } from "../ui-kit/wsLinks";
 import { WORKSPACE_WORD } from "./vocabulary";
@@ -30,11 +32,11 @@ export const PERSONAL = "personal";
 export async function deskLabel(): Promise<string> {
   try {
     const { subject } = await readActiveSet();
-    if (!subject) return WORKSPACE_WORD;
+    if (!subject) return deskName();
     const rec = await workspaceBySlug(String(subject));
-    return rec?.name || WORKSPACE_WORD;
+    return featureOn("shell2") ? deskName() : rec?.name || WORKSPACE_WORD;
   } catch {
-    return WORKSPACE_WORD;                      // the panel must open even when the mount table does not
+    return deskName();                          // the panel must open even when the mount table does not
   }
 }
 

@@ -22,7 +22,7 @@ afterEach(cleanup);
 
 describe("the grammar", () => {
   it("reads a URL from any host and a chip, for every kind", () => {
-    for (const kind of ["workspace", "chat", "page", "entity", "meeting", "flow", "sensor"]) {
+    for (const kind of ["workspace", "chat", "page", "entity", "meeting", "flow", "sensor", "room", "message", "routine", "person", "series"]) {
       const id = kind === "page" ? "abcdefghij/kg/entities/company/muhlemann-popp-ag.md" : "x1";
       const u = parseUniversalRef(`https://app.dev.vexa.ai${refUrl(kind, id)}`);
       expect(u).toEqual({ kind, id, label: undefined });
@@ -36,6 +36,13 @@ describe("the grammar", () => {
     const parts = splitRefs("see [[chat:c1|Board]] and https://app.dev.vexa.ai/r/meeting/147.");
     expect(parts.map((p) => p.kind)).toEqual(["text", "ref", "text", "ref", "text"]);
     expect(parts[3]).toMatchObject({ kind: "ref", ref: { kind: "meeting", id: "147" } });
+  });
+
+  it("keeps a meeting moment and a heading as the anchor", () => {
+    expect(parseUniversalRef("[[meeting:147@0:12:30]]")).toEqual({ kind: "meeting", id: "147", label: undefined, anchor: "t=00:12:30" });
+    expect(parseUniversalRef("https://app.dev.vexa.ai/r/meeting/147#t=00:12:30")).toEqual({ kind: "meeting", id: "147", label: undefined, anchor: "t=00:12:30" });
+    expect(parseUniversalRef("[[call:147]]")).toEqual({ kind: "meeting", id: "147", label: undefined });
+    expect(pastedRefs("https://app.dev.vexa.ai/r/meeting/147#t=00:12:30")).toBe("[[meeting:147@00:12:30]]");
   });
 
   it("a pasted link becomes a chip; other text is left alone", () => {
@@ -56,7 +63,7 @@ describe("RefChip — the server's answer for this reader", () => {
   it("not yours: says so, names nothing, and offers to ask the owner", async () => {
     answers["[[chat:c2|Secret title]]"] = { access: "not-yours", kind: "chat", id: "c2", label: null, open: null, request_access: true, url: "/r/chat/c2" };
     render(<RefChip text="[[chat:c2|Secret title]]" />);
-    expect(await screen.findByText("No access")).toBeTruthy();
+    expect(await screen.findByText("Restricted")).toBeTruthy();
     expect(screen.queryByText("Secret title")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Request access" }));
     await waitFor(() => expect(requested).toEqual(["[[chat:c2|Secret title]]"]));

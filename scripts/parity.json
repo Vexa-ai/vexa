@@ -73,6 +73,26 @@
       ]
     },
     {
+      "id": "fact-envelope",
+      "fact": "event.v2's sealed fact envelope: canonical form, per-producer key, seal and verify (who a fact reaches, D8)",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/flows/contracts/event.v2/fact_envelope.py",
+      "how_to_agree": "edit the contract's fact_envelope.py and copy it VERBATIM over every vendored copy; the crm outbox suite and the flows D8 suite must stay green",
+      "why": "crm seals (the outbox) and flows verifies (POST /events) in two separately-built images that may not import each other (P2). A verifier that drifts from its sealer refuses every card fact — and the crm outbox then stalls on the first refused row — or accepts an envelope it should not, which would let a forged audience start another person's routine. The bytes are compared so neither can happen quietly.",
+      "sites": [
+        {
+          "path": "core/flows/contracts/event.v2/fact_envelope.py"
+        },
+        {
+          "path": "core/crm/src/crm/fact_envelope.py"
+        },
+        {
+          "path": "core/flows/src/flows/fact_envelope.py"
+        }
+      ]
+    },
+    {
       "id": "config-preflight",
       "fact": "the config.v1 boot preflight",
       "kind": "file-bytes",

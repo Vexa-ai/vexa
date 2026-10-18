@@ -76,6 +76,12 @@ export type Chat = {
    *  "shared" chip and for the built-in Shared with me section. Absent on the reader's own chats. */
   owner?: string;
   ownerName?: string;
+  /** a ROOM's kind, from the chat list (S4 x UI-1): `open` · `closed` · `direct` (a room of two) */
+  visibility?: string;
+  /** a room of two: the OTHER person, and the reader's unread count — named on the list, so the rail
+   *  needs no members read per room */
+  pairPeer?: { principal: string; name: string };
+  unread?: number;
   nameSource?: "human" | "agent";
   meeting?: string;           // the meeting row id this chat is about (string form of MeetingMock.id)
   workspaces: string[];       // the mount set — what a PROJECT used to own
@@ -300,6 +306,10 @@ export type Row = {
    *  Shared with me. */
   shared?: boolean;
   sharedBy?: string;
+  /** a room's kind, the other person of a room of two and its unread count (from the chat list) */
+  visibility?: string;
+  pairPeer?: { principal: string; name: string };
+  unread?: number;
   /** a call or a voice note — the rail's one icon for the row (founder 2026-10-14: no text chips) */
   kind?: "call" | "voice";
 };
@@ -364,6 +374,9 @@ export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now(
       concern: c.concern,
       ...(c.shared || c.owner ? { shared: true } : {}),
       ...(c.owner ? { sharedBy: c.ownerName || "" } : {}),
+      ...(c.visibility ? { visibility: c.visibility } : {}),
+      ...(c.pairPeer ? { pairPeer: c.pairPeer } : {}),
+      ...(typeof c.unread === "number" ? { unread: c.unread } : {}),
       ...(rowKind(m) ? { kind: rowKind(m) } : {}),
     });
   }
@@ -459,6 +472,11 @@ export type ServerSession = {
   /** the account that owns a chat somebody added the reader to, and its name (#1783) */
   owner?: string | null;
   owner_name?: string | null;
+  /** a room's kind (`direct` = a room of two), its other person and the reader's unread count */
+  visibility?: string | null;
+  other_subject?: string | null;
+  other_name?: string | null;
+  unread?: number | null;
 };
 
 /** The meeting a session id names, or null. The inverse of `meetingChatId`.
@@ -544,6 +562,10 @@ export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat
       ...(r.role ? { role: r.role } : {}),
       ...(r.role && r.role !== "owner" && typeof r.owner === "string" && r.owner
         ? { owner: r.owner, ownerName: typeof r.owner_name === "string" ? r.owner_name : "" } : {}),
+      ...(typeof r.visibility === "string" && r.visibility ? { visibility: r.visibility } : {}),
+      ...(typeof r.other_subject === "string" && r.other_subject
+        ? { pairPeer: { principal: r.other_subject, name: typeof r.other_name === "string" && r.other_name ? r.other_name : r.other_subject } } : {}),
+      ...(typeof r.unread === "number" ? { unread: r.unread } : {}),
       createdAt: created,
       lastActivityAt: whenMs(r.last_active) || created,
     });
@@ -603,6 +625,9 @@ export function mergeChats(local: Chat[], server: Chat[], hidden: string[] = [])
       role: s.role ?? l.role,
       owner: s.owner ?? l.owner,
       ownerName: s.ownerName ?? l.ownerName,
+      visibility: s.visibility ?? l.visibility,
+      pairPeer: s.pairPeer ?? l.pairPeer,
+      unread: s.unread ?? l.unread,
       createdAt: Math.min(l.createdAt || s.createdAt, s.createdAt || l.createdAt),
       lastActivityAt: Math.max(l.lastActivityAt || 0, s.lastActivityAt || 0),
     });

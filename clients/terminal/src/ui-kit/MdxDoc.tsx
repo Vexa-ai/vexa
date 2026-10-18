@@ -12,6 +12,7 @@
  */
 "use client";
 import { InlineCard, parseInlineCard } from "./InlineCard";
+import { suppliedCardInline } from "./shellProvided";
 import { createContext, isValidElement, useContext, useEffect, useMemo, useState, type ComponentType, type CSSProperties, type ReactNode } from "react";
 import * as runtime from "react/jsx-runtime";
 import { evaluate } from "@mdx-js/mdx";
@@ -177,6 +178,7 @@ const htmlComponents = {
     if (fence && isMermaidFence(fence.lang)) return <MermaidDiagram source={fence.source} />;
     // THE INLINE CARD (UI 7g): an agent asks or asks to confirm with a ```ask fence
     if (fence && fence.lang === "ask") { const spec = parseInlineCard(fence.source); if (spec) return <InlineCard spec={spec} />; }
+    if (fence && fence.lang === "card") { const CardInline = suppliedCardInline(); if (CardInline) return <CardInline source={fence.source} />; }   // a crm card inline (0.13.4 S5, 7q)
     // A BLOCK FENCE (the shared block vocabulary home, pages and chat render — #1783): drawn by the
     // registered block renderer; a build without one shows the fence as code.
     if (fence && isBlockFence(fence.lang)) {

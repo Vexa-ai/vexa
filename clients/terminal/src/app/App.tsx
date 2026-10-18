@@ -34,11 +34,16 @@ import "../surfaces";
 import "../canvas/register";   // the canvas registers its views by kind; it sits above surfaces/
 import "../minutes/register";  // the minutes shell's page acts and GitHub card, by kind; above surfaces/ too
 import { provideDocIntentPoster } from "../ui-kit/docIntents";
+import { provideCardInline, provideCardOpener } from "../ui-kit/shellProvided";
+import { CardInline } from "../minutes/cards/CardInline";
 
 // A rendered document's acts (an image's "Find it") go through the minutes shell's `postIntent`.
 // The ui-kit sits below that shell, so the composition root supplies the door; the shell still loads
 // only when the act is pressed, as it did when the ui-kit reached it by `import()` itself.
 provideDocIntentPoster((intent) => import("../minutes/extend").then((m) => m.postIntent(intent)));
+// the shell parts a rendered document needs (S5 inline card, S7 card reference) — supplied, not imported by the ui-kit
+provideCardInline(CardInline);
+provideCardOpener((card) => import("../minutes/desktop/cardsApi").then((m) => m.openCard(card)));
 
 const roleLabel = (role: string) => (role === "viewer" ? "read-only" : "read & write");
 

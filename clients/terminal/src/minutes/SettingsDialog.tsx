@@ -12,8 +12,32 @@ import {
 } from "../platform/appearance";
 import { PublicProfileSettings } from "../surfaces/profile/PublicProfile";
 import { useFeature } from "../platform/features";
+import { Tabs } from "../ui-kit/primitives/Tabs";
+import { NotificationSettings } from "./NotificationSettings";
+import "./notifySettings.css";
 
-export function SettingsDialog({ onClose }: { onClose: () => void }) {
+/** Two tabs (0.13.4 S6): General (photo, appearance, public profile) · Notifications. The strip
+ *  scrolls sideways on its own on a phone; the page never does. */
+export function SettingsDialog({ onClose, initialTab = "general", loadPlaces }: {
+  onClose: () => void; initialTab?: "general" | "notifications";
+  /** where the per-room list comes from (fixtures and the browser check pass their own) */
+  loadPlaces?: Parameters<typeof NotificationSettings>[0]["loadPlaces"];
+}) {
+  const [tab, setTab] = useState<string>(initialTab);
+  return (
+    <Modal title="Settings" onClose={onClose} width={tab === "notifications" ? 560 : 460}>
+      <div className="vx-settings-tabs">
+        <Tabs label="Settings sections" value={tab} onChange={setTab}
+          items={[{ key: "general", label: "General" }, { key: "notifications", label: "Notifications" }]} />
+      </div>
+      {tab === "notifications"
+        ? <div className="vx-settings-scroll"><NotificationSettings {...(loadPlaces ? { loadPlaces } : {})} /></div>
+        : <GeneralSettings />}
+    </Modal>
+  );
+}
+
+function GeneralSettings() {
   const profilesOn = useFeature("public_profiles");
   const [read, setRead] = useState<AppearanceRead | null>(null);
   const [a, setA] = useState<Appearance | null>(null);
@@ -31,7 +55,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
   const adjusted = a ? deriveAccent(accentSeeds(a.accent)[theme], theme).adjusted : false;
   const fromCompany = read && Object.keys(read.user ?? {}).length === 0;
   return (
-    <Modal title="Settings" onClose={onClose} width={460}>
+    <>
       <div className="vx-settings" data-settings="">
         <ProfilePhoto />
         <div className="vx-settings-h">Appearance</div>
@@ -90,6 +114,6 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           <PublicProfileSettings />
         </>}
       </div>
-    </Modal>
+    </>
   );
 }

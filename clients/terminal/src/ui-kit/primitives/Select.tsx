@@ -4,12 +4,14 @@
 import { ChevronDown } from "lucide-react";
 import { Menu } from "./Menu";
 
-export function Select<T extends string>({ label, value, options, onChange }: {
+export function Select<T extends string>({ label, value, options, onChange, control }: {
   label: string; value: T; options: { value: T; label: string }[]; onChange: (v: T) => void;
+  /** sm = 28px, to sit in a filter bar beside a small Input */
+  control?: "sm";
 }) {
   const cur = options.find((o) => o.value === value);
   return (
-    <Menu label={label} variant="chip" title={`${label}: ${cur?.label ?? ""}`}
+    <Menu label={label} variant="chip" title={`${label}: ${cur?.label ?? ""}`} triggerData={control ? { "data-control": control } : undefined}
       trigger={<><span className="vx-select-value">{cur?.label ?? label}</span><ChevronDown size={14} strokeWidth={1.75} aria-hidden /></>}
       items={options.map((o) => ({ key: o.value, label: o.label, checked: o.value === value, onSelect: () => onChange(o.value) }))} />
   );

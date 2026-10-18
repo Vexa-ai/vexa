@@ -10,6 +10,8 @@
  *  and makes it with its profile tools on yes. No per-workspace toggles: scope is set in the chat.
  *
  *  It is a MIRROR of the server: it re-reads whenever a scope verb answers (`surfaces/scopeEvents`). */
+import { DESK_DISPLAY, deskName } from "./vocabulary";
+import { featureOn } from "../platform/features";
 import { Identity } from "../ui-kit/Identity";
 import { useCallback, useEffect, useState } from "react";
 import { ChevronDown } from "lucide-react";
@@ -40,7 +42,7 @@ const title = (name: string) => name[0].toUpperCase() + name.slice(1);
 
 function nameOf(v: ScopeView | null, slug: string | null): string {
   if (!slug) return "nowhere";
-  if (slug === DESK) return v?.workspaces.find((w) => w.kind === "personal")?.name ?? "Personal";
+  if (slug === DESK) return featureOn("shell2") ? DESK_DISPLAY : v?.workspaces.find((w) => w.kind === "personal")?.name ?? deskName();
   const w = v?.workspaces.find((x) => x.slug === slug);
   return w ? shownName(w) : slug;
 }

@@ -42,7 +42,7 @@ describe("POST /api/desktop/attention", () => {
     expect((i2.headers as Record<string, string>)["X-API-Key"]).toBe("person-key");
     expect(JSON.parse(String(i2.body))).toEqual({
       workspace: "alpha",
-      cards: [{ id: "k1", title: "Renewal", state: "proposal", next: "Send terms", waiting: "u7", due: null, workspaces: ["alpha"], members: [{ subject: "u7", status: "member" }] }],
+      cards: [{ id: "k1", title: "Renewal", state: "proposal", next: "Send terms", waiting: "u7", due: null, workspaces: ["alpha"], members: [{ subject: "u7", status: "member" }], next_actor: null, open: true }],
     });
   });
 

@@ -6,6 +6,14 @@ are always one person's own agent (founder 2026-10-15). The server side is agent
 `routers/rooms.py`; the data access is `surfaces/roomsApi.ts`, and the room state every reader shares
 is `surfaces/roomState.ts`.
 
+- **0.13.4 S4 (rooms and tagging).** `RoomHeader.tsx` now draws 7z: # name · workspace chip · people
+  pill · Start call · Invite · ⋯, with the two switches ("Vexa in this room", "Transcribe calls") in ⋯
+  and a quiet indicator when either is off; a room of two gets the other person's face and name instead.
+  Below 520px of header width it folds to name · people · ⋯. `MembersPanel.tsx` is the right sheet the
+  people pill opens (members, invited, the workspace's others with Add) and the Invite picker;
+  `roomSwitches.tsx` reads and flips the switches and draws the other person's consent card. The tag
+  card itself is `surfaces/TagCard.tsx` (the composer shows it), its data access
+  `surfaces/roomPeopleApi.ts`; `roomPeople.css` styles the pill, indicators and panel.
 - `RoomHeader.tsx` — the room's header, cut to essentials: the workspace's mark, # or a lock and the
   name, one quiet line (workspace · members · Vexa's setting), then members, Call and "…". The "…"
   holds Vexa's setting, Schedule a call, Context, Think privately, Activity, Room settings and Leave. A room has no

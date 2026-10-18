@@ -4,7 +4,7 @@
  *  The reason vocabularies of the sign-in admission wire (signin.v1), shared with admin-api's
  *  core/identity/services/admin-api/src/admin_api/app/signin_wire.py, generated from the same schema. */
 
-export const ADMITTED_REASONS = ["admin", "admin-email", "admin-account", "existing-user", "allow-list", "claim-code"] as const;
+export const ADMITTED_REASONS = ["admin", "admin-email", "admin-account", "existing-user", "allow-list", "claim-code", "invited"] as const;
 export type AdmittedReason = (typeof ADMITTED_REASONS)[number];
 
 export const REFUSED_REASONS = ["not-allowed"] as const;

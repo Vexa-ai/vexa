@@ -54,9 +54,17 @@ admits a fact. Three populations:
 
 | sender | what happens |
 |---|---|
-| an existing user | routed as before |
-| an address inside the domain allow-list | provisioned and served as before |
-| anybody else | no account, no agent turn, no model call — one `mail_quarantine` row |
+| an existing user, authenticated by their domain | routed as before; the turn replies and proposes only |
+| an address inside the domain allow-list, authenticated by its domain | provisioned and served as before |
+| anybody else, and any `From:` its domain did not authenticate | no account, no agent turn, no model call — one `mail_quarantine` row |
+
+**A `From:` is a person only when its domain says so.** The mailbox reads the receiving server's
+verdict in the topmost `Authentication-Results` header and needs a DMARC pass for the `From:`
+domain, or a DKIM or SPF pass aligned with it when the domain publishes no DMARC policy. A failing
+mail is quarantined as `unauthenticated_mail`. A mail server that writes no
+`Authentication-Results` (the dev stack's mailpit) therefore admits no user mail. The turn an
+admitted mail starts writes only its reply file and proposes everything else. See
+[Security → Untrusted triggers](/security-compliance#untrusted-triggers-routines-mail-and-room-calls).
 
 **An empty allow-list is the mailbox's own domain, not everyone.** The allow-list resolves in this
 order: `mail_domains` in `_global/POLICIES.md` (the [admin account](/minutes/admin-account#flows--mail)
@@ -77,6 +85,7 @@ the organizer is known.
 | key | default | what it does |
 |---|---|---|
 | `VEXA_FLOWS_MAIL_DOMAINS` | the mailbox's own domain | who may be provisioned and answered |
+| `VEXA_FLOWS_MAIL_AUTHSERV_ID` | unset (the topmost verdict counts) | the receiving server whose `Authentication-Results` verdict counts, e.g. `mx.google.com` |
 | `VEXA_FLOWS_MAIL_QUARANTINE_REPLY` | off | `1` answers a quarantined sender once with a fixed line — no model, no account |
 | `VEXA_FLOWS_MAIL_RATE_PER_SENDER` | `12` | mail-triggered agent turns one sender may cause per window |
 | `VEXA_FLOWS_MAIL_RATE_GLOBAL` | `120` | mail-triggered agent turns the deployment may run per window |

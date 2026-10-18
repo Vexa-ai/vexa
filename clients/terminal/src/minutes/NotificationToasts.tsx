@@ -9,6 +9,7 @@ import { useNotifications } from "./NotificationBell";
 import { NoticeActs } from "./NoticeActs";
 import { useFeature } from "../platform/features";
 import { readableSentence } from "./callsList";
+import { EnableSoundsPrompt } from "./EnableSounds";
 
 /** Hidden while `notifications` is switched off (`platform/features`). */
 export function NotificationToasts() {
@@ -19,6 +20,7 @@ function ToastStack() {
   const { toasts } = useNotifications();
   return (
     <div className="vx-toasts" role="status" aria-live="polite" data-toasts={toasts.length || undefined}>
+      <EnableSoundsPrompt />
       {toasts.map((n) => (
         <div key={n.id} className="vx-notice-toast" data-toast={n.kind}>
           <div className="vx-notice-toast-top">

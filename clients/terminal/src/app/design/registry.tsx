@@ -6,7 +6,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Bell, FileText, Pin, Plus, Search, X } from "lucide-react";
 import {
-  Badge, Breadcrumb, Button, Identity, IdentityStack, Card, Checkbox, Chip, ChipRow, Code, ConfirmDialog, DateText, Dialog, Drawer, EmptyState, EntityChip,
+  AvatarStack, Badge, Breadcrumb, Button, Identity, IdentityStack, RowActions, RowCell, Switch, Card, Checkbox, Chip, ChipRow, Code, ConfirmDialog, DateText, Dialog, Drawer, EmptyState, EntityChip,
   ErrorState, ExternalLink, Fold, Icon, IconButton, Input, Kbd, KeyValue, ListRow, Menu, OverflowStrip, PanelHeader,
   Popover, SecretReveal, SectionLabel, Select, Sheet, Skeleton, SourceList, Spinner, Splitter, StatusDot, Tabs, Tag, Textarea, Toaster,
   Tooltip, Truncate, kvValue, toast,
@@ -89,6 +89,11 @@ function CheckboxDemo() {
   return <Row><Checkbox checked={on} onChange={() => setOn((v) => !v)} label="Example option" /> Example option</Row>;
 }
 
+function SwitchDemo() {
+  const [on, setOn] = useState(true);
+  return <Row><Switch checked={on} onChange={setOn} label="Vexa joins" /><Switch checked={false} onChange={() => undefined} label="Off" /><Switch checked onChange={() => undefined} label="Disabled" disabled /></Row>;
+}
+
 export const REGISTRY: Entry[] = [
   { id: "button", title: "Button", components: ["Button"], note: "primary is the view's one action; danger only confirms a destructive dialog.",
     demo: () => <><Row>{(["primary", "secondary", "ghost", "danger", "danger-ghost"] as const).map((v) => <Button key={v} variant={v}>{v === "primary" ? "Send" : v === "danger" ? "Delete chat" : v === "danger-ghost" ? "Delete…" : v === "ghost" ? "Cancel" : "Connect calendar"}</Button>)}</Row>
@@ -98,6 +103,7 @@ export const REGISTRY: Entry[] = [
       <IconButton label="Pin this tab" pressed><Pin size={16} strokeWidth={1.75} /></IconButton><IconButton label="Notifications" variant="secondary"><Bell size={16} strokeWidth={1.75} /></IconButton></Row> },
   { id: "icon", title: "Icon (legacy set)", components: ["Icon"], note: "The original SVG icon set; new code uses lucide.",
     demo: () => <Row>{["file", "cal", "mic", "send", "folder", "pin", "copy"].map((n) => <Icon key={n} name={n} size={16} />)}</Row> },
+  { id: "switch", title: "Switch", components: ["Switch"], note: "An on/off setting that applies at once; its label is its name. On is the accent as outline and tint, never a badge.", demo: () => <SwitchDemo /> },
   { id: "checkbox", title: "Checkbox", components: ["Checkbox"], note: "A real role=checkbox; Space and Enter toggle.", demo: () => <CheckboxDemo /> },
   { id: "status", title: "Spinner, StatusDot, Kbd", components: ["Spinner", "StatusDot", "Kbd"], note: "A dot always has its word; a spinner always sits beside a label.",
     demo: () => <Row><Spinner /> <StatusDot tone="success" label="Live" /><StatusDot tone="warning" label="Joining" /><StatusDot label="Held" /><Kbd>⌘K</Kbd></Row> },
@@ -119,9 +125,11 @@ export const REGISTRY: Entry[] = [
   { id: "breadcrumb", title: "Breadcrumb", components: ["Breadcrumb"], note: "Names, not slugs; the middle collapses past four.",
     demo: () => <div className="vx-cat-col"><Breadcrumb items={[{ key: "a", label: "personal", onSelect: () => {} }, { key: "b", label: "meetings", onSelect: () => {} }, { key: "c", label: "Weekly sync" }]} />
       <Breadcrumb items={["personal", "kg", "entities", "companies", "notes", "Example Company"].map((l, i, a) => ({ key: l, label: l, onSelect: i < a.length - 1 ? () => {} : undefined }))} /></div> },
-  { id: "rows", title: "ListRow, PanelHeader, Card", components: ["ListRow", "PanelHeader", "Card"], note: "Selected is a fill, weight and a bar — never colour alone.",
+  { id: "rows", title: "ListRow, RowCell, RowActions, PanelHeader, Card", components: ["ListRow", "RowCell", "RowActions", "PanelHeader", "Card"], note: "Selected is a fill, weight and a bar — never colour alone. A page list uses size md (36px): a muted detail after the title, fixed RowCell columns, and RowActions — a suggestion slot, one verb in a fixed column, ⋯. Below 760px of pane the row takes two lines.", widths: [360, 960],
     demo: () => <div className="vx-cat-col"><PanelHeader title="Chats" actions={<IconButton label="New chat"><Plus size={16} strokeWidth={1.75} /></IconButton>} inset="rail" />
       <ListRow title="Weekly sync" meta="6:29 PM" selected leading={<span className="vx-dot" data-tone="success" />} /><ListRow title="Pricing questions" meta="Yesterday" actions={<IconButton label="Delete chat" size="xs"><X size={14} strokeWidth={1.75} /></IconButton>} />
+      <ListRow size="md" strong title="Weekly sync" detail="Product planning" meta={<><RowCell w={64} align="end">10:00 AM</RowCell><RowCell w={52}>30 min</RowCell></>} trailing={<><RowCell w={72} align="end" hideNarrow><AvatarStack names={["Jane Smith", "Ada Lovelace", "Grace Hopper", "Alan Turing"]} /></RowCell><RowCell w={140} align="end"><Switch checked onChange={() => undefined} label="Vexa joins" /></RowCell></>} />
+      <ListRow size="md" strong title="Approve the example change" detail="Example workspace · Oct 9" trailing={<RowActions hint={{ text: "Suggested: approve, because it matches an earlier rule" }} verb={{ label: "Approve", onClick: () => undefined }} more={[{ key: "open", label: "Open", onSelect: () => undefined }, { key: "decline", label: "Decline", separatorBefore: true, onSelect: () => undefined }]} />} />
       <Card title="Workspace" actions={<Button variant="ghost">Open</Button>}>Shared with 3 people. Last changed Thursday.</Card><Card onOpen={() => {}} raised>An interactive card is one button.</Card></div> },
   { id: "dialog", title: "Dialog, ConfirmDialog", components: ["Dialog", "ConfirmDialog"], note: "Replaces window.confirm. The confirm names the act. Focus moves in once, on open; focusConfirm starts on the act, so Enter confirms.", demo: () => <DialogDemo /> },
   { id: "states", title: "EmptyState, Skeleton, ErrorState", components: ["EmptyState", "Skeleton", "ErrorState"], note: "Loading, empty, error and content never look alike (P18).",
@@ -131,10 +139,11 @@ export const REGISTRY: Entry[] = [
     demo: () => <Row><Tooltip text="Copies the page's markdown"><Button>Hover or focus me</Button></Tooltip><Button onClick={() => toast("Workspace shared")}>Show a toast</Button><Toaster /></Row> },
   { id: "keyvalue", title: "KeyValue", components: ["KeyValue"], note: "Two columns from 360px of pane width; stacked below. Never breaks a word.", widths: [320, 480, 720],
     demo: () => <KeyValue items={Object.entries(PROPERTIES).map(([key, value]) => ({ key, value: kvValue(value) }))} /> },
-  { id: "identity", title: "Identity, IdentityStack", components: ["Identity", "IdentityStack"], note: "One face for people, companies, workspaces and agents: the stored image, else a monogram on a colour from the id. A CRM non-user is initials plus a company badge.", widths: [320],
+  { id: "identity", title: "Identity, IdentityStack, AvatarStack", components: ["Identity", "IdentityStack", "AvatarStack"], note: "One face for people, companies, workspaces and agents: the stored image, else a monogram on a colour from the id. A CRM non-user is initials plus a company badge.", widths: [320],
     demo: () => <div className="vx-cat-col"><Row><Identity kind="workspace" id="garden-x1" name="Garden" size={40} /><Identity kind="company" id="acme" name="Acme Widgets" size={32} />
       <Identity kind="person" id="u1" name="Jane Smith" user size={28} /><Identity kind="person" id="p2" name="Ada Lovelace" size={28} /><Identity kind="agent" id="digest" name="Morning digest" size={28} /></Row>
-      <Row><IdentityStack items={["Jane Smith", "Ada Lovelace", "Grace Hopper", "Alan Turing", "Kurt Gödel"].map((n) => ({ kind: "person" as const, id: n, name: n }))} /></Row></div> },
+      <Row><IdentityStack items={["Jane Smith", "Ada Lovelace", "Grace Hopper", "Alan Turing", "Kurt Gödel"].map((n) => ({ kind: "person" as const, id: n, name: n }))} /></Row>
+      <Row><AvatarStack names={["Jane Smith", "Ada Lovelace", "Grace Hopper", "Alan Turing", "Kurt Gödel"]} /><AvatarStack names={["Jane Smith", "Ada Lovelace"]} /></Row></div> },
   { id: "truncate", title: "Truncate, DateText", components: ["Truncate", "DateText"], note: "One line, an ellipsis, the full value on hover. Dates never split.", widths: [320],
     demo: () => <div className="vx-cat-col"><Truncate text={EMAIL} href={`mailto:${EMAIL}`} /><Truncate text={URL_LONG} href={URL_LONG} /><Truncate text={PATH_LONG} mode="middle" />
       <Row><DateText value="2026-10-09" /><DateText value={new Date(Date.now() - 3600_000)} /><DateText value="2025-03-14T10:00:00Z" /></Row></div> },
