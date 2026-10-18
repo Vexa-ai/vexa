@@ -1126,16 +1126,19 @@ def build(**d) -> APIRouter:
         return [(m.slug, m.path) for m in ms]
 
     def _route_record(subject: str, session: str, plan, receipt: dict, said: str = "", line: str = "") -> None:
-        """THE ROUTE RECEIPT, durably: one obs line, the chat's own record (its last receipts on the
-        session index), and — when the router answered — the person's words and its line as the
-        chat's messages, so the conversation reads naturally on reload."""
+        """THE ROUTE RECEIPT, durably: one obs line and an entry in the session's own log
+        (``SessionStore.add_receipt`` — arch review V5: no store of its own), and — when the router
+        answered — the person's words and its line as the chat's messages, so the conversation reads
+        naturally on reload."""
         from shared import obs  # noqa: PLC0415
         obs.log_event("intent_route", user_id=subject, session=session, fields=receipt)
+        if plan is None or session_store is None:
+            return
         try:
-            sess.record_route(subject, session, receipt)
+            session_store.add_receipt(plan.row["id"], receipt)
         except Exception:  # noqa: BLE001 — the receipt outranks nothing
-            logger.warning("route receipt not stored on the chat (session=%s)", session)
-        if not line or plan is None or session_store is None:
+            logger.warning("route receipt not stored in the session log (session=%s)", session)
+        if not line:
             return
         try:
             if said:

@@ -304,8 +304,9 @@ until switched on; `features: {intent_router: off}` in `_global/POLICIES.md` tur
 first. Only a short message that names a call, open, invite or schedule word and fits no rule is put to
 a small model (`model_intent_router`, else `model_home`), which must answer within 0.7 s with confidence
 0.8 or more; its spend is counted as usage kind `route`. Every routed message leaves a receipt (route,
-confidence, latency, source, executed or fell through): an `intent_route` log line, the chat's last 50
-receipts, and a `route` event at the head of the chat's stream.
+confidence, latency, source, executed or fell through): an `intent_route` log line, an entry in the
+session's own log (the newest 50, never shown as a chat line or heard by the agent), and a `route` event
+at the head of the chat's stream.
 
 ## Why it complies
 

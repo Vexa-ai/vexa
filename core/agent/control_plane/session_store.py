@@ -720,7 +720,8 @@ class SessionStore:
             if r is None:
                 return 0
             n = self._x("SELECT COUNT(*) FROM agent_session_note WHERE session_id = ? AND author <> ? "
-                        "AND created > ?", (session_id, principal, float(r[0]))).fetchone()
+                        "AND author <> ? AND created > ?",
+                        (session_id, principal, self.RECEIPT_AUTHOR, float(r[0]))).fetchone()
         return int(n[0]) if n else 0
 
     def humans(self, session_id: str) -> list[str]:
@@ -920,11 +921,44 @@ class SessionStore:
             self._x("UPDATE agent_session SET last_active = ? WHERE id = ?", (now, session_id))
         return {"seq": seq, "author": author, "text": text, "created": now}
 
+    #: THE ROUTE RECEIPT'S AUTHOR (QB-5, arch review V5): a receipt is an entry in the session's own
+    #: log — no store of its own. Written heard, never read as a chat line, never counted unread.
+    RECEIPT_AUTHOR = "vexa:route"
+    RECEIPTS_KEPT = 50
+
+    def add_receipt(self, session_id: str, receipt: dict) -> None:
+        """Record one route receipt (the fast intent router: route, confidence, latency, source,
+        outcome) in the session's log. Only the newest :data:`RECEIPTS_KEPT` stay."""
+        text = json.dumps(dict(receipt), sort_keys=True)[: self.NOTE_MAX]
+        with self._tx():
+            r = self._x("SELECT COALESCE(MAX(seq), 0) FROM agent_session_note WHERE session_id = ?",
+                        (session_id,)).fetchone()
+            seq = int(r[0] or 0) + 1
+            self._x("INSERT INTO agent_session_note (session_id, seq, author, text, created, heard) "
+                    "VALUES (?, ?, ?, ?, ?, 1)", (session_id, seq, self.RECEIPT_AUTHOR, text, time.time()))
+            kept = self._x("SELECT seq FROM agent_session_note WHERE session_id = ? AND author = ? "
+                           "ORDER BY seq DESC", (session_id, self.RECEIPT_AUTHOR)).fetchall()
+            for (o,) in kept[self.RECEIPTS_KEPT:]:
+                self._x("DELETE FROM agent_session_note WHERE session_id = ? AND seq = ?", (session_id, int(o)))
+
+    def receipts(self, session_id: str) -> list[dict]:
+        """The session's route receipts, oldest first."""
+        with self._lock:
+            rows = self._x("SELECT text FROM agent_session_note WHERE session_id = ? AND author = ? ORDER BY seq",
+                           (session_id, self.RECEIPT_AUTHOR)).fetchall()
+        out = []
+        for (t,) in rows:
+            try:
+                out.append(json.loads(t))
+            except ValueError:
+                continue
+        return out
+
     def notes(self, session_id: str, *, limit: int = 500) -> list[dict]:
         with self._lock:
             rows = self._x("SELECT seq, author, text, created, heard FROM agent_session_note "
-                           "WHERE session_id = ? ORDER BY seq DESC LIMIT ?",
-                           (session_id, int(limit))).fetchall()
+                           "WHERE session_id = ? AND author <> ? ORDER BY seq DESC LIMIT ?",
+                           (session_id, self.RECEIPT_AUTHOR, int(limit))).fetchall()
         return [{"seq": int(r[0]), "author": r[1], "text": r[2], "created": float(r[3]),
                  "heard": bool(r[4])} for r in reversed(rows)]
 
@@ -932,7 +966,8 @@ class SessionStore:
         """The messages the agent has not heard yet, oldest first, marked heard."""
         with self._tx():
             rows = self._x("SELECT seq, author, text, created FROM agent_session_note "
-                           "WHERE session_id = ? AND heard = 0 ORDER BY seq", (session_id,)).fetchall()
+                           "WHERE session_id = ? AND heard = 0 AND author <> ? ORDER BY seq",
+                           (session_id, self.RECEIPT_AUTHOR)).fetchall()
             self._x("UPDATE agent_session_note SET heard = 1 WHERE session_id = ? AND heard = 0",
                     (session_id,))
         return [{"seq": int(r[0]), "author": r[1], "text": r[2], "created": float(r[3])} for r in rows]

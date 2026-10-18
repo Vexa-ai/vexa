@@ -255,12 +255,15 @@ def test_call_person_runs_directly_with_no_turn_and_the_terminal_joins(w):
     assert f"[[room:{sid}]]" in line["text"]
     assert not w.dispatched                                     # no agent turn at all
     assert len(w.meetings.calls) == 1 and w.store.active_call(sid)["owner"] == "alice"
-    # the receipt lives on the chat's record, and the conversation reads naturally on reload
-    receipts = w.sessions.routes("alice", "c-1")
-    assert receipts[-1]["route"] == "call_person" and receipts[-1]["executed"] is True
+    # the receipt is an entry in the session's own log (arch review V5: no store of its own), and the
+    # conversation reads naturally on reload — the receipt is never a chat line, never heard, never unread
     row = w.store.by_name("alice", "c-1")
+    receipts = w.store.receipts(row["id"])
+    assert receipts[-1]["route"] == "call_person" and receipts[-1]["executed"] is True
     texts = [(n["author"], n["text"]) for n in w.store.notes(row["id"])]
     assert ("alice", "call tester-b") in texts and any(a == "vexa" and "Calling" in t for a, t in texts)
+    assert all(a != w.store.RECEIPT_AUTHOR for a, _t in texts)
+    assert all(n["author"] != w.store.RECEIPT_AUTHOR for n in w.store.take_unheard(row["id"]))
 
 
 def test_a_retry_of_the_same_message_replays_and_never_calls_twice(w):
@@ -308,10 +311,24 @@ def test_calls_feature_off_falls_through(tmp_path, monkeypatch):
     rig.store.close()
 
 
+def _receipts(rig) -> list:
+    row = rig.store.by_name("alice", "c-1")
+    return rig.store.receipts(row["id"]) if row else []
+
+
+def test_receipts_are_session_log_entries_kept_to_the_newest_fifty(w):
+    row = w.store.create("alice", name="c-log")
+    for i in range(55):
+        w.store.add_receipt(row["id"], {"route": "none", "i": i})
+    got = w.store.receipts(row["id"])
+    assert len(got) == w.store.RECEIPTS_KEPT and got[0]["i"] == 5 and got[-1]["i"] == 54
+    assert w.store.notes(row["id"]) == [] and w.store.take_unheard(row["id"]) == []
+
+
 def test_a_submission_nobody_watches_is_never_routed(w):
     r = _say(w, "call tester-b", path="/api/chat/submit")
     assert r.status_code == 200 and len(w.dispatched) == 1 and not w.meetings.calls
-    assert not w.sessions.routes("alice", "c-1")
+    assert not _receipts(w)
 
 
 def test_a_turn_other_people_read_is_never_routed(w):
@@ -370,7 +387,7 @@ def test_the_switch_off_by_policy_means_no_routing_at_all(tmp_path, monkeypatch)
     rig = _rig(tmp_path, monkeypatch, policies="features: {intent_router: off}")
     ev = _events(_say(rig, "call tester-b"))
     assert not any(e.get("type") == "route" for e in ev)
-    assert len(rig.dispatched) == 1 and not rig.meetings.calls and not rig.sessions.routes("alice", "c-1")
+    assert len(rig.dispatched) == 1 and not rig.meetings.calls and not _receipts(rig)
     rig.store.close()
 
 

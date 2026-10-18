@@ -649,7 +649,6 @@ class _Sessions:
         self._redis = redis_client
         self._mem: dict[str, dict[str, dict]] = {}  # subject → {session → {created,last_active,title}}
         self._marks: dict[str, dict[str, str]] = {}  # subject → {"p:<row>" | "h:<row>" → "1"}
-        self._routes: dict[tuple, list] = {}          # (subject, session) → route receipts (QB-5)
 
     # ── redis key helpers ──
     @staticmethod
@@ -765,40 +764,6 @@ class _Sessions:
         if self._redis is not None:
             return dict(self._redis.hgetall(self._meta_key(subject, session)) or {})
         return dict(self._mem.get(subject, {}).get(session) or {})
-
-    #: How many route receipts one chat keeps (the fast intent router, QB-5): the newest last.
-    ROUTES_KEPT = 50
-
-    @staticmethod
-    def _routes_key(subject: str, session: str) -> str:
-        return f"agent:session-routes:{subject}:{session}"
-
-    def record_route(self, subject: str, session: str, receipt: dict) -> None:
-        """THE ROUTE RECEIPT OF ONE MESSAGE (QB-5): what the fast intent router decided — route,
-        confidence, latency, source, and whether it ran the action or handed the message to the
-        agent — kept beside the chat's record (the last :data:`ROUTES_KEPT`). A key of its own, never
-        a field of the chat's meta: a receipt written before a chat's first turn must not make the
-        chat look already created."""
-        if self._redis is not None:
-            k = self._routes_key(subject, session)
-            self._redis.rpush(k, json.dumps(dict(receipt)))
-            self._redis.ltrim(k, -self.ROUTES_KEPT, -1)
-            return
-        kept = self._routes.setdefault((subject, session), [])
-        kept.append(dict(receipt))
-        del kept[:-self.ROUTES_KEPT]
-
-    def routes(self, subject: str, session: str) -> list:
-        """The chat's route receipts, oldest first."""
-        if self._redis is not None:
-            out = []
-            for raw in self._redis.lrange(self._routes_key(subject, session), 0, -1) or []:
-                try:
-                    out.append(json.loads(raw))
-                except ValueError:
-                    continue
-            return out
-        return list(self._routes.get((subject, session)) or [])
 
     def set_agent_chain(self, subject: str, session: str, chain: list) -> None:
         """THE ORIGIN CHAIN OF THE LAST AGENT MESSAGE DELIVERED INTO THIS THREAD (ADR-0046 decision
@@ -1563,10 +1528,8 @@ class _Sessions:
         if self._redis is not None:
             self._redis.srem(self._ids_key(subject), session)
             self._redis.delete(self._meta_key(subject, session))
-            self._redis.delete(self._routes_key(subject, session))
             return
         self._mem.get(subject, {}).pop(session, None)
-        self._routes.pop((subject, session), None)
 
 
 # P21 (ADR 0027 family — the panel's stale-live finding): a registry entry is "live" only while
