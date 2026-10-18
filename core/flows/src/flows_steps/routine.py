@@ -218,6 +218,19 @@ def refusal_line(refused: dict) -> str:
     return f"{lead} ({reason})."
 
 
+#: agent-api's reason for a write held for the person's confirmation (private_taint.REASON).
+HELD_REASON = "private_sources_to_shared"
+
+
+def held_line(refused: dict) -> str:
+    """One calm line for writes held for the person: what is waiting, and that it is theirs to say."""
+    n = int(refused.get("count") or 1)
+    what = "1 write is" if n == 1 else f"{n} writes are"
+    return (f"Ran. {what} waiting for your approval: it carries what this run read from your "
+            "private mail or calls into a workspace other people read. Approve it in this chat, or "
+            "leave it and nothing is shared.")
+
+
 def _turn_outcome(uid: str, session: str, turn_id: str, after: str = "") -> tuple[int, object]:
     q = urllib.parse.urlencode({"session": session, "turn_id": turn_id,
                                 **({"after": after} if after else {})})
@@ -327,6 +340,19 @@ def await_outcome(ctx: StepCtx, posted: dict, db=None):
             _notice_once(ctx, uid, session, f"Paused: {text}")
             raise StepError(f"refused: {SHARED_REASON} ({tool_base(refused.get('tool') or '')}) "
                             "— the routine is paused", retryable=False)
+    if refused and refused.get("reason") == HELD_REASON:
+        # A HELD WRITE IS NOT A REFUSED RUN (app.dev 2026-10-18, uid 2 `ait-lisbon-freshness`). The
+        # run read the person's private mail or calls and wrote into a workspace other people read;
+        # that one write is held, encrypted, for the person's own confirm (D6, agent-api
+        # `private_taint.py`). Everything else the run did landed. Ending it `failed` told the
+        # person the routine "does not work" after a 45-minute run that worked, and counted toward
+        # pausing it. It ends done, with one line that says what is waiting for them and where.
+        _notice_once(ctx, uid, session, held_line(refused))
+        acted = {tool_base(t) for t in (out.get("acted") or [])}
+        return Done({**posted, "outcome": {"ok": True, "acted": sorted(acted),
+                                           "held": tool_base(refused.get("tool") or ""),
+                                           "held_count": int(refused.get("count") or 1)}},
+                    provider_ref=session)
     if refused and refused.get("reason"):
         _notice_once(ctx, uid, session, refusal_line(refused))
         raise StepError(f"refused: {refused.get('reason')} ({tool_base(refused.get('tool') or '')})",

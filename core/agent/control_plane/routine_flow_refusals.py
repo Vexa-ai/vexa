@@ -35,6 +35,10 @@ log = logging.getLogger(__name__)
 #: Consecutive runs refused for the same reason before a routine is paused.
 THRESHOLD = 3
 _LOCK = threading.Lock()
+#: Outcomes stamped as ``refused`` that are not a refusal of the run: a write HELD for the person's
+#: own confirm (`private_taint.REASON`) is waiting on them, and everything else the run did landed.
+#: Counting it paused a routine that worked (app.dev 2026-10-18, `ait-lisbon-freshness`).
+NOT_REFUSALS = frozenset({"private_sources_to_shared"})
 
 
 def count_runs(entry: dict, events: list) -> dict:
@@ -47,6 +51,8 @@ def count_runs(entry: dict, events: list) -> dict:
         if not isinstance(ev, dict) or ev.get("type") != "done":
             continue
         reason = str((ev.get("refused") or {}).get("reason") or "")
+        if reason in NOT_REFUSALS:
+            reason = ""
         if not reason:
             out["reason"], out["count"] = "", 0
         elif reason == out["reason"]:

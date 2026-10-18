@@ -164,3 +164,14 @@ def test_a_sinks_event_card_is_a_line_and_never_a_routine_mark(world):  # noqa: 
     rows = client.get("/api/sessions", headers=_as()).json()
     rows = rows.get("sessions", rows) if isinstance(rows, dict) else rows
     assert not any(x.get("session") == "pchat-s" and x.get("routine") for x in rows)
+
+
+def test_a_held_write_is_not_a_refusal_and_never_counts_toward_a_pause():
+    """app.dev 2026-10-18: a routine that maintains a shared workspace from the person's mail holds
+    its write for their confirm on every run. That is waiting on the person, not a refused run."""
+    held = {"type": "done", "refused": {"tool": "entity_upsert", "reason": "private_sources_to_shared"}}
+    refused = {"type": "done", "refused": {"tool": "gmail_search", "reason": "human_session_required"}}
+    out = rfr.count_runs({}, [("1-0", held), ("2-0", held), ("3-0", held)])
+    assert out["count"] == 0 and out["reason"] == "" and out["cursor"] == "3-0"
+    out = rfr.count_runs({}, [("1-0", refused), ("2-0", held), ("3-0", refused)])
+    assert out == {"reason": "human_session_required", "count": 1, "cursor": "3-0"}

@@ -390,8 +390,12 @@ def room_order(uid: str, meeting_id, participants: list, names: dict,
 
 
 def _phrases(text: str, n: int = 6) -> set:
+    # WORDS IN ANY SCRIPT (app.dev 2026-10-18). `[a-z0-9']` saw no word in a Russian or Portuguese
+    # transcript, so its phrase set was empty, nothing could ever intersect it, and every report on
+    # a non-English meeting was refused as "not grounded" — after the agent had read the transcript
+    # and quoted it verbatim. `\w` is Unicode in Python 3; `_` is not a word character of speech.
     import re as _re
-    ws = _re.findall(r"[a-z0-9']+", (text or "").lower())
+    ws = [w for w in _re.findall(r"[\w']+", (text or "").lower()) if w.strip("_'")]
     return {" ".join(ws[i:i + n]) for i in range(len(ws) - n + 1)
             if any(len(w) >= 6 for w in ws[i:i + n])}
 
@@ -405,7 +409,13 @@ def grounded_in(note: str, transcript: str) -> bool:
     meeting with no captured speech must still be writable."""
     if not transcript.strip():
         return True
-    return bool(_phrases(note) & _phrases(transcript))
+    said = _phrases(transcript)
+    if not said:
+        # NOTHING IN IT CAN BE QUOTED: a test call of fillers and single words carries no six-word
+        # run with a content word, so no note could ever match it. That is the same absence of
+        # evidence as an empty transcript, not evidence of fabrication.
+        return True
+    return bool(_phrases(note) & said)
 
 
 def await_start(ctx: StepCtx):
