@@ -278,14 +278,15 @@ def _norm(s: str) -> str:
     return re.sub(r"[\s_-]+", " ", str(s or "").strip().strip("'\"").lower()).strip()
 
 
-def _names_of(page) -> set:
-    names = {_norm(page.stem)}
-    try:
-        with open(page, encoding="utf-8", errors="replace") as fh:
-            head = fh.read(4096)
-    except OSError:
-        return names
-    if not head.startswith("---"):
+def _names_of(base, rel: str) -> set:
+    """The names a page answers to: its file name, and its front matter's title, id and aliases.
+    Read through ``workspace_paths`` (never following a link out of the work tree)."""
+    from workspaces.shared import workspace_paths as _wpaths  # noqa: PLC0415
+
+    stem = rel.rsplit("/", 1)[-1][:-3] if rel.endswith(".md") else rel.rsplit("/", 1)[-1]
+    names = {_norm(stem)}
+    head = _wpaths.read_head_inside(base, rel, 4096)
+    if not head or not head.startswith("---"):
         return names
     for line in head.split("\n---", 1)[0].splitlines()[1:]:
         m = _TITLE.match(line)
@@ -305,7 +306,7 @@ def find_pages(mounts: list[tuple[str, str]], query: str) -> list[dict]:
     """The knowledge-graph pages (``kg/entities/<kind>/<name>.md``) whose file name, title, id or an
     alias IS ``query`` (case and separators aside), across ``mounts`` = ``[(workspace slug, dir)]`` —
     the mounts the person's own turn would read, nothing wider. ``[{workspace, path, title}]``."""
-    from pathlib import Path  # noqa: PLC0415
+    from workspaces.shared import workspace_paths as _wpaths  # noqa: PLC0415
 
     want = _norm(query)
     if not want:
@@ -313,18 +314,16 @@ def find_pages(mounts: list[tuple[str, str]], query: str) -> list[dict]:
     out: list[dict] = []
     seen = 0
     for slug, base in mounts:
-        root = Path(base) / "kg" / "entities"
-        if not root.is_dir():
-            continue
-        for page in sorted(root.glob("*/*.md")):
-            seen += 1
-            if seen > MAX_PAGES:
-                return out
-            if page.is_symlink() or page.name.lower() in ("index.md", "readme.md"):
-                continue
-            if want in _names_of(page):
-                rel = page.relative_to(Path(base)).as_posix()
-                out.append({"workspace": slug, "path": rel, "title": page.stem.replace("-", " ")})
+        for kind in _wpaths.list_dirs_inside(base, "kg/entities"):
+            for name in _wpaths.list_files_inside(base, f"kg/entities/{kind}", suffix=".md"):
+                seen += 1
+                if seen > MAX_PAGES:
+                    return out
+                if name.lower() in ("index.md", "readme.md"):
+                    continue
+                rel = f"kg/entities/{kind}/{name}"
+                if want in _names_of(base, rel):
+                    out.append({"workspace": slug, "path": rel, "title": name[:-3].replace("-", " ")})
     return out
 
 

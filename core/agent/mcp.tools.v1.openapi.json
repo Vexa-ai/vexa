@@ -510,6 +510,12 @@
       "CallBody": {
         "additionalProperties": false,
         "properties": {
+          "fresh": {
+            "default": false,
+            "description": "the person's own \"Start a new one\" after being asked to rejoin: end the call already live there (only their own, and only when nobody else is in it) and start another. Ignored from an agent.",
+            "title": "Fresh",
+            "type": "boolean"
+          },
           "person": {
             "anyOf": [
               {

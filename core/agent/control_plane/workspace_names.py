@@ -53,9 +53,11 @@ class Ambiguous(Exception):
 
 def _empty(path: Path) -> Optional[bool]:
     """True when a private workspace holds nothing but its seed commit — its own identity file
-    (`.vexa/`) does not count as content."""
+    (`.vexa/`) does not count as content, nor does the standard icon picked at birth (README
+    `glyph:`, committed as `workspace icon: …` by workspace_icon.assign_glyph)."""
     try:
-        out = run_git(path, "rev-list", "--count", "HEAD", "--", ".", ":(exclude).vexa", timeout=5)
+        out = run_git(path, "rev-list", "--count", "--invert-grep", "--grep=^workspace icon: ", "HEAD",
+                      "--", ".", ":(exclude).vexa", timeout=5)
     except Exception:  # noqa: BLE001
         return None
     if out.returncode != 0:

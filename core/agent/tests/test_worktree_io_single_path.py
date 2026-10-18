@@ -97,6 +97,8 @@ ALLOW = {
                "workspaces/store/repostore.py::_temp_file",
                "workspaces/store/client.py::_temp",
                "workspaces/store/client.py::WorkerCache.after"),
+    "agent/control_plane/workspace_glyph.py::_doc":
+        "the glyph table shipped next to the module (workspace_glyphs.json), never a work tree",
     "agent/control_plane/model_prices.py::load_snapshot":
         "the price snapshot shipped next to the module (model_prices.snapshot.json), never a work tree",
     "agent/llm/proctree.py::_table":
