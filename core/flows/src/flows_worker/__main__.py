@@ -3,6 +3,7 @@ Postgres. Run N replicas freely (SKIP LOCKED). A step-duration watchdog enforces
 law the live witness taught us."""
 from __future__ import annotations
 
+import logging
 import sys
 import time
 from pathlib import Path
@@ -24,6 +25,33 @@ from flows_steps.common import db_url, require_internal_secret
 POLL_S = 1.0
 SLOW_STEP_S = 8.0
 
+_log = logging.getLogger("flows_worker")
+
+#: Errors that mean THE CODE IS WRONG, not that the world is: a retry next tick fails the same way,
+#: forever. A pass that hits one must say so at error level with the traceback — on 2026-10-14 an
+#: undefined name in the keyed pass was printed as "keyed pass failed: NameError" on every due row
+#: and no keyed schedule (the bot one minute before a meeting) ever fired.
+CODE_ERRORS = (NameError, AttributeError, TypeError, ImportError, SyntaxError, KeyError, IndexError)
+
+
+class PassFailed(RuntimeError):
+    """One reconciliation pass failed this tick. Raised to the tick, never out of the worker."""
+
+
+def guarded(name: str, fn, *args, **kwargs):
+    """Run one reconciliation pass. A failure fails THIS PASS loudly — error level, traceback, a
+    `BUG` marker when the error is a code error — and raises `PassFailed` so the tick records it;
+    the loop catches that and goes on. Nothing is swallowed into a one-word print."""
+    try:
+        return fn(*args, **kwargs)
+    except CODE_ERRORS as exc:
+        _log.error("BUG: %s pass failed with a code error (%s: %s) — it will fail the same way every "
+                   "tick until the code is fixed", name, type(exc).__name__, exc, exc_info=True)
+        raise PassFailed(name) from exc
+    except Exception as exc:  # noqa: BLE001 — the pass failed; the tick says so, the worker lives
+        _log.error("%s pass failed (%s: %s)", name, type(exc).__name__, exc, exc_info=True)
+        raise PassFailed(name) from exc
+
 
 def admission_limits() -> dict:
     """The loop guard and the per-person daily cap, from `config.v1` (ADR-0046 decisions 8, 9)."""
@@ -32,6 +60,15 @@ def admission_limits() -> dict:
             # live from `_global/POLICIES.md` (`routine_runs_per_day`), the env as the install default
             "runs_per_day": policies.company_quota("routine_runs_per_day", "VEXA_FLOWS_USER_RUNS_PER_DAY"),
             "messages_per_day": flows_config.get_int("VEXA_FLOWS_USER_MESSAGES_PER_DAY")}
+
+
+def keyed_pass(db, reg, clock, limits: "dict | None" = None) -> int:
+    """KEYED SCHEDULES (ADR-0050): one pending fire per key — the bot one minute before a meeting,
+    moved by every update, called off by a cancel — fired here like a slot. The daily cap is the
+    same admission check every other run takes."""
+    limits = admission_limits() if limits is None else limits
+    return keyed.fire_due(db, reg, clock, admissible=lambda f, refs: admissible(
+        db, f, clock, event_type=keyed.KEYED_EVENT, subject_refs=refs, **limits))
 
 
 def main() -> int:
@@ -92,25 +129,30 @@ def main() -> int:
                              **admission_limits())
             if fired:
                 print(f"fired {fired} schedule slot(s)", flush=True)
-            # KEYED SCHEDULES (ADR-0050): one pending fire per key — the bot one minute before a
-            # meeting, moved by every update, called off by a cancel — fired here like a slot.
+            # KEYED SCHEDULES (ADR-0050): see `keyed_pass`. A failure fails this pass loudly
+            # (`guarded`) and the tick goes on to the sensors.
+            failed: list[str] = []
             try:
-                kfired = keyed.fire_due(db, reg, clock, admissible=lambda f, refs: admissible(
-                    db, f, clock, event_type=keyed.KEYED_EVENT, subject_refs=refs, **limits))
+                kfired = guarded("keyed", keyed_pass, db, reg, clock)
                 if kfired:
                     print(f"fired {kfired} keyed schedule(s)", flush=True)
-            except Exception as exc:  # noqa: BLE001 — a keyed pass never stops the loop
-                print(f"keyed pass failed: {type(exc).__name__}", flush=True)
+            except PassFailed as exc:
+                failed.append(str(exc))
             # SENSORS (ADR-0050 decision 6): every enabled sensor whose check is due reads its
             # provider's changes through the broker, filters them and admits them as events.
-            try:
+            def _sensor_pass():
                 from flows_sensors import pool as _sensors
                 from flows_sensors.calendar import KINDS as _kinds
-                ticked = _sensors.run_due(db, _kinds, emit)
+                return _sensors.run_due(db, _kinds, emit)
+            try:
+                ticked = guarded("sensor", _sensor_pass)
                 if ticked:
                     print(f"ticked {len(ticked)} sensor(s)", flush=True)
-            except Exception as exc:  # noqa: BLE001 — a sensor pass never stops the loop
-                print(f"sensor pass failed: {type(exc).__name__}", flush=True)
+            except PassFailed as exc:
+                failed.append(str(exc))
+            if failed:
+                _log.error("reconciliation tick FAILED: %s pass(es) raised (traceback above)",
+                           ", ".join(failed))
             # THE DELIVERY GATE (PRD 0.13.4 D15, S6): in-app first, one email after the idle window,
             # then the digest — stopping the moment crm says the item is seen. Off unless declared.
             if flows_config.get_bool("VEXA_FLOWS_NUDGES"):

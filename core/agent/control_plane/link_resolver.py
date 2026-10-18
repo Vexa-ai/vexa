@@ -28,6 +28,7 @@ from control_plane import workspace_ids as ids_mod
 from workspaces.shared.entities import ENTITIES_DIR, KINDS, split_frontmatter
 from workspaces.shared.links import Ref, canonical_url, parse_ref
 from workspaces.shared.workspace_paths import PathRefused, is_inside, relative_parts
+from workspaces.shared import links as links_mod
 from workspaces.shared import workspace_paths as wpaths
 
 # Titles a resolver may show for a page it is not allowed to open. Deriving one from the ref is the
@@ -319,7 +320,11 @@ def resolve(ref_text: str, *, subject: str, root, registry: ids_mod.WorkspaceReg
     rel = _find(ws_root, ref) if ws_root.is_dir() else None
     if rel is None and ref.workspace is None and ws_root.is_dir():
         rel = _find_loose(ws_root, ref.target, cache)
-    if rel is None and ref.workspace is None:
+    # A BARE PATH IS NEVER LOOKED FOR ELSEWHERE (founder ruling 2026-10-18: "we do not want to guess
+    # which readme this should open"). `README.md` is in every workspace, so searching the others for
+    # it picks a stranger's copy; a path names its workspace (`[[page:<ws>/<path>]]`) or it is read
+    # only in the one the caller is in. A bare TITLE still is looked for (#1783): an entity's name.
+    if rel is None and ref.workspace is None and not links_mod.is_bare_path(ref.target):
         far = _across(ref_text, ref.target, subject=subject, root=root, registry=registry, here=rec,
                       is_member=is_member, within=within, cache=cache)
         if far is not None:

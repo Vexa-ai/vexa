@@ -2,7 +2,7 @@
  *  relative markdown links). Proves the two bugs that made shared-workspace links dead:
  *  slug-blind wikilink resolution and unresolved `../` relative paths. */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { normalizeDocPath, resolveDocRef, entitySlug, invalidateDocLinkCaches } from "../docLinks";
+import { normalizeDocPath, resolveDocRef, docPathExists, entitySlug, invalidateDocLinkCaches } from "../docLinks";
 
 const trees: Record<string, string[]> = {};
 let active: { slug: string }[] = [];
@@ -152,28 +152,41 @@ describe("resolveDocRef — paths", () => {
   });
 });
 
-describe("resolveDocRef — active set outranks the legacy no-slug read (ADR-0028)", () => {
-  it("finds a path in an ACTIVE mount before the seed-slot (no-slug) tree", async () => {
-    // the seed slot holds a DEACTIVATED workspace's tree with the same file — active wins
+describe("resolveDocRef — a path names its workspace, or opens nothing (founder ruling 2026-10-18)", () => {
+  it("a BARE path in a chat (no page around it) resolves to nothing — never the _global README", async () => {
+    // the founder's bug: `README.md` in a Narrative chat opened "The organisation › README.md"
+    trees["_global"] = ["README.md"];
+    trees["narrative"] = ["README.md", "narratives.md"];
     trees[""] = ["README.md"];
-    trees["three"] = ["README.md"];
-    active = [{ slug: "three" }];
-    const r = await resolveDocRef({ path: "README.md" }, {});
-    expect(r).toEqual({ path: "README.md", slug: "three" });
+    active = [{ slug: "narrative" }];
+    expect(await resolveDocRef({ path: "README.md" }, {})).toBeUndefined();
+    expect(await resolveDocRef({ path: "narratives.md" }, {})).toBeUndefined();
+    expect(await docPathExists("README.md", {})).toBe(false);
   });
-  it("wikilinks search active mounts before the no-slug tree", async () => {
+  it("a bare path INSIDE a page reads that page's workspace only — no search over _global or the mounts", async () => {
+    trees["_global"] = ["kg/notes.md"];
+    trees["three"] = ["kg/notes.md"];
+    active = [{ slug: "three" }];
+    trees["dna"] = [];
+    const r = await resolveDocRef({ path: "kg/notes.md" }, { path: "README.md", slug: "dna" });
+    expect(r).toEqual({ path: "kg/notes.md", slug: "dna" });       // the page's own room, "(not found)"
+    expect(await docPathExists("kg/notes.md", { path: "README.md", slug: "dna" })).toBe(false);
+  });
+  it("a QUALIFIED path opens the workspace it names", async () => {
+    trees["_global"] = ["README.md"];
+    trees["narrative"] = ["README.md"];
+    active = [{ slug: "narrative" }];
+    expect(await resolveDocRef({ path: "/workspaces/narrative/README.md" }, {}))
+      .toEqual({ path: "README.md", slug: "narrative" });
+    expect(await resolveDocRef({ path: "README.md", slug: "narrative", exact: true }, {}))
+      .toEqual({ path: "README.md", slug: "narrative" });
+  });
+  it("wikilinks (entity names) still search active mounts before the no-slug tree (#1783)", async () => {
     trees[""] = ["kg/entities/person/jane-liu.md"];
     trees["three"] = ["kg/entities/person/jane-liu.md"];
     active = [{ slug: "three" }];
     const r = await resolveDocRef({ wikilink: "Jane Liu" }, {});
     expect(r?.slug).toBe("three");
-  });
-  it("still falls back to the no-slug tree when no active mount has the file", async () => {
-    trees[""] = ["kg/notes.md"];
-    active = [{ slug: "three" }];
-    trees["three"] = [];
-    const r = await resolveDocRef({ path: "kg/notes.md" }, {});
-    expect(r).toEqual({ path: "kg/notes.md", slug: undefined });
   });
 });
 
@@ -186,13 +199,13 @@ describe("resolveDocRef — worker-visible absolute paths (chat links)", () => {
   });
   it("translates a home-mount path to its kg/ tail", async () => {
     trees[""] = ["kg/entities/person/x.md"];
-    const r = await resolveDocRef({ path: "/workspaces/user1/kg/entities/person/x.md" }, {});
+    const r = await resolveDocRef({ path: "/workspaces/u/kg/entities/person/x.md" }, {});   // `u` = the subject
     expect(r).toEqual({ path: "kg/entities/person/x.md", slug: undefined });
   });
-  it("falls back to home when the attached slug's tree doesn't have the file", async () => {
+  it("stays in the attached slug when its tree doesn't have the file — never another room's copy", async () => {
     trees["dna"] = [];
     trees[""] = ["kg/notes.md"];
     const r = await resolveDocRef({ path: "/w/.attached/u/dna/kg/notes.md" }, {});
-    expect(r).toEqual({ path: "kg/notes.md", slug: undefined });
+    expect(r).toEqual({ path: "kg/notes.md", slug: "dna" });
   });
 });

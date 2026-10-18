@@ -7,7 +7,8 @@
  *  bar; otherwise the bar stays one line. No transcript here: it lives in the meeting sidebar.
  *  Props in, callbacks out — the LiveKit room (CallRoom) and the UI lab both feed it. */
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AudioLines, Maximize2, Mic, MicOff, MonitorUp, MoreHorizontal, PhoneOff, Video, VideoOff } from "lucide-react";
+import { AudioLines, Maximize2, Mic, MicOff, MonitorUp, MoreHorizontal, PhoneOff, PhoneOutgoing, Video, VideoOff } from "lucide-react";
+import { Button } from "../../ui-kit/primitives/Button";
 import type { CallPerson, ScreenShare } from "./types";
 import { clock } from "./types";
 import { Roster, VexaMark } from "./People";
@@ -138,8 +139,24 @@ export function CallJoinBar({ name, transcribed, listener, mic, onMic, onJoin, o
         {!listener && extra}
         {!listener && <Icon label={mic ? "Join with the microphone on" : "Join muted"} tone={mic ? undefined : "off"} onClick={onMic} data="mic">{mic ? <Mic size={15} /> : <MicOff size={15} />}</Icon>}
         <button type="button" className="vx-cb-text" onClick={onCancel}>Cancel</button>
-        <button type="button" className="vx-cb-text" data-tone="join" data-call="prejoin-join" onClick={onJoin}>Join</button>
+        {/* JOIN IS THE ONE PRIMARY ACTION, outlined with a green live dot — never a solid fill (UI 7r/7x) */}
+        <Button variant="primary" size="sm" data-call="prejoin-join" icon={<span className="vx-cb-livedot" />} onClick={onJoin}>Join</Button>
       </div>
+    </div>
+  );
+}
+
+/** AN OUTGOING CALL (call-person-autojoin): the person asked the agent to call someone, is already in
+ *  the call, and nobody else has joined yet. One quiet line under the bar — whom they are calling —
+ *  and Cancel, which leaves the call (an emptied call ends on its own). Kit Button, no fill (UI 7r). */
+export function CallOutgoing({ to, onCancel }: { to: string; onCancel: () => void }) {
+  return (
+    <div className="vx-cb-outgoing" data-call="outgoing">
+      <span className="vx-cb-quiet" role="status" aria-live="polite">
+        <PhoneOutgoing size={12} aria-hidden /> Calling {to}…
+      </span>
+      <span className="vx-cb-gap" />
+      <Button variant="secondary" size="sm" data-call="outgoing-cancel" onClick={onCancel}>Cancel</Button>
     </div>
   );
 }

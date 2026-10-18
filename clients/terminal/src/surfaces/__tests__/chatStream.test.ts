@@ -596,7 +596,7 @@ describe("streamChatTurn — tool results", () => {
     cb.onToolResult = (tool, r) => { seen.push([tool, r]); };
     await streamChatTurn({ prompt: "sign in", session: "s1", active: undefined }, cb,
       { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
-    expect(seen).toEqual([["mcp__vexa__browser_session_open", { ok: true, result }]]);
+    expect(seen).toEqual([["mcp__vexa__browser_session_open", { ok: true, result, callId: "c1" }]]);
   });
 
   it("falls back to the summary when the harness sends no full result", async () => {
@@ -610,7 +610,44 @@ describe("streamChatTurn — tool results", () => {
     cb.onToolResult = (tool, r) => { seen.push([tool, r]); };
     await streamChatTurn({ prompt: "x", session: "s1", active: undefined }, cb,
       { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
-    expect(seen).toEqual([["Read", { ok: false, result: "denied" }]]);
+    expect(seen).toEqual([["Read", { ok: false, result: "denied", callId: "c2" }]]);
+  });
+
+  // held-label-rooms-1018: "✓ Wrote · 7 steps" over a reply saying nothing was written
+  it("hands on how the call ended and a held write's card fields", async () => {
+    const held = { code: "a8nv7c", workspace: "oenb", workspace_name: "OeNB × Vexa pilot", path: "README.md",
+                   readers: ["ana"], sources: ["gmail"] };
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "tool-call", tool: "mcp__vexa__workspace_write", callId: "w1", args: { path: "README.md" } }, "1-0"),
+      ev({ type: "tool-result", callId: "w1", ok: false, summary: "Error: HTTP 409: {\"detail\": {\"refu", outcome: "held", held }, "2-0"),
+      ev({ type: "tool-call", tool: "Read", callId: "r1" }, "3-0"),
+      ev({ type: "tool-result", callId: "r1", ok: false, summary: "boom", outcome: "bogus" }, "4-0"),
+      ev({ type: "turn-complete" }, "5-0"),
+    ]));
+    const { cb } = recorder();
+    const calls: unknown[] = [];
+    const seen: unknown[] = [];
+    cb.onTool = (tool, _args, callId) => { calls.push([tool, callId]); };
+    cb.onToolResult = (tool, r) => { seen.push([tool, r]); };
+    await streamChatTurn({ prompt: "x", session: "s1", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+    expect(calls).toEqual([["mcp__vexa__workspace_write", "w1"], ["Read", "r1"]]);
+    expect(seen[0]).toEqual(["mcp__vexa__workspace_write", { ok: false, result: "Error: HTTP 409: {\"detail\": {\"refu", callId: "w1", outcome: "held", held }]);
+    // an outcome this browser does not know is dropped, never guessed
+    expect(seen[1]).toEqual(["Read", { ok: false, result: "boom", callId: "r1" }]);
+  });
+
+  it("reads write-withheld: the files a commit kept back", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "write-withheld", workspace: "oenb", paths: ["README.md"], code: "k3m9pq", readers: ["ana"], sources: ["gmail"], ref: "x" }, "1-0"),
+      ev({ type: "turn-complete" }, "2-0"),
+    ]));
+    const { cb } = recorder();
+    const seen: unknown[] = [];
+    cb.onWithheld = (w) => { seen.push(w); };
+    await streamChatTurn({ prompt: "x", session: "s1", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+    expect(seen).toEqual([{ workspace: "oenb", paths: ["README.md"], code: "k3m9pq", readers: ["ana"], sources: ["gmail"] }]);
   });
 });
 

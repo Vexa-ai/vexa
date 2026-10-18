@@ -732,6 +732,44 @@ agentApi:
   # a storageClassName that supports it (NFS/Longhorn; ODF CephFS on OpenShift) — set both, or pin
   # every worker to agent-api's node. See deploy/helm/README.md.
   workspaces:
+    # Where workspace repositories live. volume (default): the PVC below is the truth. s3: an
+    # S3-compatible bucket is the single durable truth (hosted: a dedicated bucket on Linode Object
+    # Storage; on-prem: the bucket your object store provides); agent-api and workers keep only an
+    # emptyDir cache, a write is acknowledged only once it is durable in the bucket, and agent-api
+    # self-tests the bucket at boot and refuses to start on a misconfiguration. Workers never get a
+    # bucket credential. Switching: run the migration Job (s3.migrate) first. See deploy/helm/README.md.
+    backend: volume
+    cacheSizeLimit: ""          # s3: sizeLimit of agent-api's emptyDir cache (e.g. 20Gi); empty = none
+    workerCacheSize: ""         # s3: sizeLimit of each worker's emptyDir cache (e.g. 2Gi); empty = none
+    # s3: agent-api loads a workspace on first use and evicts least-recently-used ones (each is a
+    # published generation, re-hydrated on its next use) to stay under this many bytes. Set it
+    # comfortably below cacheSizeLimit (e.g. 16000000000 for a 20Gi limit). "0" = never evict.
+    cacheMaxBytes: "0"
+    s3:
+      endpoint: ""              # a full URL: https://us-sea-1.linodeobjects.com, https://s3.corp.example
+      bucket: ""                # REQUIRED for s3: the workspaces bucket — never storage.s3.bucket
+      prefix: workspaces/       # every object is written under this prefix
+      region: ""                # optional SigV4 region; empty signs as us-east-1
+      forcePathStyle: true      # path-style (https://host/bucket/key); false = virtual-hosted
+      # REQUIRED for s3: a Secret holding a static key scoped to this bucket (ListBucket on the
+      # prefix, Get/Put/DeleteObject; GetBucketVersioning optional). Never the recordings key.
+      existingSecret: ""
+      accessKeyIdKey: AWS_ACCESS_KEY_ID
+      secretAccessKeyKey: AWS_SECRET_ACCESS_KEY
+      # A private CA for an https endpoint: a ConfigMap OR a Secret in the release namespace, and the
+      # key holding the PEM bundle.
+      caBundle:
+        configMapName: ""
+        secretName: ""
+        key: ca.crt
+      # Keep rendering the old agent-workspaces claim after switching to s3, so the switch never
+      # deletes the volume before it is migrated and verified. Set false once you have removed it.
+      keepVolumeClaim: true
+      # The one-shot copy volume → bucket with verification (a Job mounting the claim read-only).
+      # Scale agent-api to 0 (or keep backend: volume) while it runs; switch backend to s3 after it
+      # reports ok. See deploy/helm/README.md "Moving workspaces to S3".
+      migrate:
+        enabled: false
     size: 5Gi
     storageClassName: ""
     accessMode: ReadWriteOnce

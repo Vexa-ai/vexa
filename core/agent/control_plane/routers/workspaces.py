@@ -60,6 +60,7 @@ from control_plane.workspace_purpose import read_purpose, write_purpose
 from fastapi import APIRouter, Body, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from pathlib import Path
 from workspaces.shared import entities as entities_mod
+from workspaces.shared import links as links_mod
 from workspaces.shared import workspace_paths as wpaths
 from shared import asset_source as assets_mod
 from shared import friction as friction_mod
@@ -754,7 +755,9 @@ def build(**d) -> APIRouter:
                 run_git(target, "-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local",
                         "commit", "-m", f"edit {rel} (terminal page editor)" + (f"\n\n{notice}" if notice else ""))
         _record_call_change(request, slug, target, rel, _before, content)
-        out = {"path": rel, "written": True,
+        # THE FILE'S REFERENCE, qualified (founder ruling 2026-10-18): the agent names what it wrote
+        # with this, never a bare path — `README.md` is in every workspace.
+        out = {"path": rel, "written": True, "ref": links_mod.page_ref(slug or str(subject), rel),
                **({"connection_policy_changed": request.state.connection_policy_changed} if notice else {})}
         if merged:
             out["merged"] = True
@@ -1224,7 +1227,8 @@ def build(**d) -> APIRouter:
                              *[new for _old, new in moved], *tracked],
                     subject_path=result["path"], created=bool(result.get("created")),
                     author=(str(subject), f"{subject}@vexa.local"))
-            return {**result, "index": index_rel, "commit": sha}
+            ref = links_mod.page_ref(slug or str(subject), result["path"]) if result.get("path") else None
+            return {**result, "index": index_rel, "commit": sha, **({"ref": ref} if ref else {})}
     @router.get("/api/workspace/git")
     def ws_git(request: Request, slug: Optional[str] = None):
         """Author-attributed source-control state (branch · working changes · recent commits) of a

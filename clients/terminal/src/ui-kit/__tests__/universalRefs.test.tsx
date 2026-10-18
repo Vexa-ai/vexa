@@ -75,3 +75,15 @@ describe("RefChip — the server's answer for this reader", () => {
     expect(await screen.findByText("Not found")).toBeTruthy();
   });
 });
+
+describe("a [[kind:id]] wikilink is a universal reference before it is a qualified page", () => {
+  // deploy-57: call_person writes `[[room:s-…]]`; read as `<slug>:<target>` it asked for a page in
+  // a workspace called "room" and drew as missing text instead of the room's chip.
+  it("[[room:s-…]] renders the room chip the server names", async () => {
+    const { Wikilink } = await import("../docLinks");
+    answers["[[room:s-ed8ddc9d]]"] = { access: "readable", kind: "room", id: "s-ed8ddc9d", label: "tester-b", open: { chat: "s-ed8ddc9d" }, request_access: false, url: "/r/room/s-ed8ddc9d" };
+    const { container } = render(<Wikilink title="room:s-ed8ddc9d" />);
+    expect(await screen.findByText("tester-b")).toBeTruthy();
+    expect(container.querySelector(".vx-ws-missing")).toBeNull();
+  });
+});

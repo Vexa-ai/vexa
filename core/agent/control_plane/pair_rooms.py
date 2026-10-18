@@ -138,5 +138,24 @@ def is_pair_room(store, root: Path, session_id: str) -> bool:
     return bool(room) and bool(room.get("workspace")) and m.is_pair(root, room["workspace"])
 
 
+def peer_name(store, root: Path, session_id: str, viewer: str, index_list) -> Optional[str]:
+    """WHAT A ROOM OF TWO IS CALLED, FOR ONE OF ITS TWO PEOPLE: the other person's name (UI 7ii,
+    humans by name) — the name the rail gives the same room (``people_directory.name_of``), else the
+    one sentences use (``front_page.display_name``). None for any other session, for a room whose
+    other person is not known yet, and when no name can be read."""
+    try:
+        if not is_pair_room(store, root, session_id):
+            return None
+        other = next((str(h) for h in store.humans(session_id) if str(h) != str(viewer)), None)
+        if not other:
+            return None
+        from control_plane import front_page, people_directory  # noqa: PLC0415 — module-load order
+        return (people_directory.name_of(Path(root), other, index_list)
+                or front_page.display_name(Path(root), other) or None)
+    except Exception:  # noqa: BLE001 — a room without its person's name keeps its own label
+        log.warning("room of two: the other person's name could not be read for %s", session_id)
+        return None
+
+
 __all__ = ["KIND", "NO_INDEX", "PAIR_PREFIX", "assert_not_pair", "ensure_pair_workspace", "find_room",
-           "is_pair", "is_pair_room", "open_room", "pair_id", "people"]
+           "is_pair", "is_pair_room", "open_room", "pair_id", "peer_name", "people"]

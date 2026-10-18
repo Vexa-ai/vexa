@@ -50,6 +50,8 @@ DATA + APIs only.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import hashlib
 import json
 import logging
@@ -764,6 +766,48 @@ _STORE: PolicyStore = _FILE_STORE
 #: Workspaces this process has seen in the store — so a listing never asks the backend again.
 _KNOWN: set[tuple[str, str]] = set()
 
+#: ONE READ SCOPE (2026-10-18): inside ``read_scope()`` a workspace found to have nothing to adopt,
+#: and whether a workspace is a pair, are remembered until the scope ends. Neither depends on who is
+#: asking, so a request that enumerates several people's memberships (the chat list names every
+#: other person on it) scans the host's folders once instead of once per person. Outside a scope
+#: nothing is remembered.
+_SCOPE: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar("membership_read_scope", default=None)
+
+
+@contextlib.contextmanager
+def read_scope():
+    """Remember subject-independent policy reads until the block ends (re-entrant)."""
+    if _SCOPE.get() is not None:
+        yield
+        return
+    token = _SCOPE.set({})
+    try:
+        yield
+    finally:
+        _SCOPE.reset(token)
+
+
+def scope_memo(key: tuple, compute):
+    """``compute()`` once per read scope for ``key`` (e.g. every roster on the host, or one person's
+    mount set — the key names whose); outside a scope it is simply called. A policy write inside the scope forgets every
+    memo, so a request that writes and then reads sees its own write."""
+    scope = _SCOPE.get()
+    if scope is None:
+        return compute()
+    k = ("memo", *key)
+    if k in scope:
+        return scope[k]
+    value = compute()
+    scope[k] = value
+    return value
+
+
+def _scope_forget() -> None:
+    scope = _SCOPE.get()
+    if scope:
+        for k in [k for k in scope if k and k[0] == "memo"]:
+            del scope[k]
+
 
 def set_policy_store(store: Optional[PolicyStore]) -> None:
     """Choose the backend (agent-api's composition root: the identity registry when admin-api is
@@ -804,13 +848,20 @@ def room_store_drop(root: Path, room_id: str) -> bool:
 def is_pair(root: Path, workspace_id: str) -> bool:
     """Is ``workspace_id`` the hidden workspace behind a room of two (0.13.4 FD4)? A store that cannot
     answer says no here; the membership reads that follow refuse on their own (FD3)."""
+    scope = _SCOPE.get()
+    key = ("pair", str(root), str(workspace_id or ""))
+    if scope is not None and key in scope:
+        return scope[key]
     try:
         if not wpaths.is_workspace_name(str(workspace_id or "")):
             return False
         v = _call(_STORE.get, Path(root), workspace_id, "kind")
     except MembershipError:
         return False
-    return isinstance(v, dict) and v.get("kind") == "pair"
+    got = isinstance(v, dict) and v.get("kind") == "pair"
+    if scope is not None:
+        scope[key] = got
+    return got
 
 
 def store_get(root: Path, workspace_id: str, name: str):
@@ -820,6 +871,7 @@ def store_get(root: Path, workspace_id: str, name: str):
 def store_put(root: Path, workspace_id: str, name: str, value) -> None:
     _call(_STORE.put, Path(root), workspace_id, name, value)
     _KNOWN.add((str(root), workspace_id))
+    _scope_forget()
 
 
 def _legacy_read() -> bool:
@@ -886,6 +938,17 @@ def _ensure_migrated(root: Path, workspace_id: str) -> bool:
     root = Path(root)
     if policy_in_store(root, workspace_id):
         return True
+    scope = _SCOPE.get()
+    key = ("unadoptable", str(root), workspace_id)
+    if scope is not None and key in scope:
+        return False
+    adopted = _adopt(root, workspace_id)
+    if scope is not None and not adopted:
+        scope[key] = True
+    return adopted
+
+
+def _adopt(root: Path, workspace_id: str) -> bool:
     with _ws_lock(workspace_id):
         if policy_in_store(root, workspace_id):
             return True
@@ -946,6 +1009,7 @@ def drop_policy_store(root: Path, workspace_id: str) -> bool:
     one's. True when there was something to drop."""
     _store_rel(workspace_id)
     _KNOWN.discard((str(root), workspace_id))
+    _scope_forget()
     dropped = bool(_call(_STORE.drop, Path(root), workspace_id))
     if _STORE is not _FILE_STORE:                       # and the interim files, so nothing re-adopts them
         dropped = _FILE_STORE.drop(Path(root), workspace_id) or dropped

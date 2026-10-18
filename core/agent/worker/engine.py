@@ -396,6 +396,14 @@ _IMPERATIVE_PATTERNS: tuple[tuple["re.Pattern[str]", str, str], ...] = (
      "join the meeting"),
     (re.compile(r"\bstop\s+record(ing)?\b", re.I), "stop_bot", "stop recording"),
     (re.compile(r"\bstop\s+(the\s+)?bot\b", re.I), "stop_bot", "stop the bot"),
+    # "CALL <PERSON>" (founder bug 2026-10-18): "Call tester-b" was answered "Vexa can't place a call"
+    # and a Google Meet link. Vexa has its own calls; `call_person` starts one in the room of two.
+    # A sentence that STARTS with call/ring someone, or asks to start a call with someone.
+    (re.compile(r"^\W*(?:(?:please|pls|can\s+you|could\s+you|now)\s+)*(?:call|ring|phone)\s+"
+                r"(?!(?:the|a|an|it|this|that|me|back|off|out|for|of|in|on|to|up)\b)@?[\w.+-]", re.I),
+     "call_person", "call <person>"),
+    (re.compile(r"\bstart\s+(?:a\s+)?(?:vexa\s+)?call\s+with\s+\S", re.I), "call_person",
+     "start a call with <person>"),
 )
 
 
@@ -448,7 +456,7 @@ def imperative_preamble(prompt: str) -> str:
         "## An operational imperative is in this message — act on it FIRST",
         "",
         "The person's own words below name at least one of: send or stop the bot, join the "
-        "meeting, stop recording. Call the matching tool NOW, before any onboarding question, any "
+        "meeting, stop recording, call a person. Call the matching tool NOW, before any onboarding question, any "
         "`propose` call, any web search, and before the write-back phase. Answer with what the tool "
         "actually returned — never a scaffold question, a search, or a description of what you would "
         "do, in its place.",
@@ -538,14 +546,19 @@ def kg_links_preamble(mounts: "list[dict] | None" = None) -> str:
         " client renders it as a meeting chip with the meeting's current title and date, and a click"
         " opens the meeting. Never name a meeting by its notes filename"
         " (`kg/entities/meeting/<date>-<slug>.md`): that is a file, not the meeting.\n"
-        "- Reference other workspace files by their path in backticks (e.g. `kg/dashboards/plan.md`)"
-        " or a markdown link — both are clickable.\n"
+        # Founder ruling 2026-10-18: "we must require full paths to specific workspaces, we do not
+        # want to guess which readme this should open" — a reply's `README.md` chip opened the
+        # company README instead of the Narrative workspace's one it had just written.
+        "- Reference a FILE as `[[page:<workspace-slug>/<path>]]` — e.g. `[[page:narrative/README.md]]`"
+        " — ALWAYS with its workspace, even the one you are working in. A bare path (`README.md`,"
+        " `kg/dashboards/plan.md`) is NOT a link: every workspace has a README, so the client shows a"
+        " bare path as plain text and never guesses. A write tool's answer carries the file's `ref`"
+        " — copy it.\n"
         "- Name a WORKSPACE by its slug (e.g. `vexa-team-3183d1`) or link its README"
-        " (`<slug>/README.md`) — the client makes the name open that README, which is the"
+        " (`[[page:<slug>/README.md]]`) — the client makes the name open that README, which is the"
         " workspace's dashboard. Never introduce a workspace in bold with nothing behind it.\n"
-        "- Write paths workspace-RELATIVE (`README.md`, `kg/entities/person/jane-liu.md`). Never"
-        " paste the absolute mount path you see on disk (`/workspaces/…`) — it is your filesystem,"
-        " not the reader's, and it says nothing they can use.\n"
+        "- Never paste the absolute mount path you see on disk (`/workspaces/…`) — it is your"
+        " filesystem, not the reader's, and it says nothing they can use.\n"
         "- Put the reference OUTSIDE code fences and never backtick a `[[wikilink]]` — a fenced"
         " block is literal text and renders dead.\n"
         # PRD decision 26.2. The rule is stated here AND enforced in `shared/entities.py` on the
@@ -1016,8 +1029,8 @@ def mounts_preamble(mounts: list[dict], target: str = "") -> str:
         # addressed to a human never does.
         "When you READ OR WRITE a file, always use ABSOLUTE paths under the mount you intend — do"
         " not guess or invent mount paths. This is about file operations only: in the text of your"
-        " REPLY, reference workspaces and docs by name or workspace-relative path (see § Referencing"
-        " knowledge) — a mount path pasted into a sentence is your filesystem, not the reader's.",
+        " REPLY, name a workspace by name and a file as `[[page:<workspace-slug>/<path>]]` (see §"
+        " Referencing knowledge) — a mount path pasted into a sentence is your filesystem, not the reader's.",
         "",
     ]
     return "\n".join(lines)
@@ -2466,7 +2479,7 @@ def run_turn_over_workspace(
     turn_prompt = (seed + link_note + imperative_preamble(prompt)
                    + thread_preamble(session if session_continuity else "")
                    + mcp_status_note + voice_preamble() + friction_preamble() + kg_links_preamble(mounts)
-                   + page_verbs_preamble() + connections_preamble() + CHATS_PREAMBLE
+                   + page_verbs_preamble() + connections_preamble() + CALLS_PREAMBLE + CHATS_PREAMBLE
                    + mounts_preamble(mounts, active_target())
                    + write_target_preamble(prompt, active_target())
                    + entity_index_preamble(mounts) + timeline_preamble()
@@ -2620,6 +2633,18 @@ def _express_lane(mcp_config: "str | None"):
 
 #: HOW THE PERSON'S OTHER CHATS ARE READ (founder, 2026-10-13): through the two tools that apply
 #: the session rules, never by looking for files — there are none to find under a mount.
+#: VEXA CALLS EXIST (founder bug 2026-10-18). The meetings MCP's own instructions describe only a bot
+#: sent into somebody else's meeting, so without this a turn told "Call tester-b" concluded that Vexa
+#: cannot place a call and offered a Google Meet link. Named in every turn's prompt because the tools
+#: arrive deferred: a verb the prompt never mentions is one the model does not go looking for.
+CALLS_PREAMBLE = ("## Calls\n\nVexa has its own calls. To call, ring or start a call with someone the person "
+                  "names, use `call_person` (person = the @-mention's account id, or the name they said): it "
+                  "opens their room of two, starts a Vexa call there and rings them in the app. Answer in one "
+                  "line with the room reference it returns. If it cannot tell who they mean, ask ONE short "
+                  "question. Never answer that Vexa cannot place a call, and never offer a calendar or Meet "
+                  "link in its place. Sending a bot into an existing Meet, Teams or Zoom link is a different "
+                  "thing (`request_meeting_bot`).\n\n")
+
 CHATS_PREAMBLE = ("## The person's other chats\n\nChats are kept in the session store, apart from every "
                   "workspace (`_system` included). To find or read another of the person's chats, use "
                   "`chats_search` and `chat_read`; without those tools, say you cannot read other chats here. "
@@ -3375,6 +3400,14 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     # Every line this worker emits names the unit it runs as — the session (logevent.v1).
     obs.configure("agent-worker")
     obs.set_session(shared_units.unit_of_topic(os.environ.get("VEXA_UNIT_IN_TOPIC", "")) or None)
+    # THE S3 WORKSPACE BACKEND (WS-S3): this container's /workspaces is an emptyDir. Hydrate only
+    # this dispatch's mounts from agent-api, and push every commit back before it counts — the
+    # turn's commit event comes after the change is durable in the bucket. A hydrate that fails
+    # stops the worker (P18). On the volume backend this is None and nothing changes.
+    from workspaces.store import client as ws_store_client  # noqa: PLC0415
+
+    _boot_token = (os.environ.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
+    ws_cache = ws_store_client.boot(lambda: _boot_token)
     work = Path(os.environ.get("VEXA_WORKSPACE_PATH", "/workspace"))
     model = os.environ.get("VEXA_AGENT_MODEL") or None
     # Boot preflight (WS1b): if a credential prefix and its base-url host obviously disagree, log a
@@ -3424,6 +3457,8 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         path=mcp_cfg, url=(os.environ.get("VEXA_MCP_URL") or "").strip(),
         token=DelegationRefresh.take())
     use_token_source(refresh_delegation.current)
+    if ws_cache is not None:
+        ws_cache.client.token = refresh_delegation.current
 
     _unit = shared_units.unit_of_topic(os.environ["VEXA_UNIT_IN_TOPIC"])
 
@@ -3434,6 +3469,8 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         usage rides its `done` to agent-api, which counts it (`llm_budget`, one writer)."""
         def call(*args, **kwargs):
             refresh_delegation()
+            if ws_cache is not None:
+                ws_cache.freshen()      # a route may have written a mount since the last turn
             exp = tool_access.token_exp(refresh_delegation.current())
             return count_usage(tool_access.watch(fn(*args, **kwargs), exp), client, _unit)
         return call

@@ -353,7 +353,11 @@ def test_the_qwen_lane_dials_are_declared():
 # 138 was the base's count, its own note missing here).
 # 140: +1 from s3-person (CRM_API_URL for person resolution, S3) at integration.
 # 141: +1 VEXA_ROOM_RING_DERIVED_DAYS (S4 D36 tuning line), at integration.
-EXPECTED_DECLARED_KEYS = 141
+# 148: +10 the s3 workspace backend (WS-S3): VEXA_WORKSPACE_BACKEND, VEXA_WORKSPACE_S3_{ENDPOINT,BUCKET,
+#      PREFIX,REGION,PATH_STYLE,CA_BUNDLE,ACCESS_KEY,SECRET_KEY}, VEXA_WORKSPACE_LOCK_TTL_MS.
+# 150: +2 VEXA_WORKSPACE_CACHE_MAX_BYTES, VEXA_WORKSPACE_CACHE_MIN_IDLE_S (WS-S3 lazy cache, LRU eviction).
+# 153: the integration line's 141 + WS-S3's 12 (int-next).
+EXPECTED_DECLARED_KEYS = 153
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

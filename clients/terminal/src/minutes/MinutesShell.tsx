@@ -23,7 +23,7 @@ import { StripNav } from "./shell2/StripNav";
 import { useBackCloses } from "./shell2/useBackCloses";
 import { CHAT_ABOUT_EVENT, consumeKeepPanel, rememberAbout, setKnownChats, type Artifact as AboutArtifact } from "./shell2/about";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ARTIFACT_EVENT, CHOOSE_TARGET_EVENT, CHAT_ARTIFACTS_EVENT, ASK_CHAT_EVENT, CALL_START_EVENT, CHAT_TOUCHED_EVENT, OPEN_SESSION_EVENT, FOCUS_WORKSPACE_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, PAGE_REMOVED_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT, OPEN_WORKSPACE_FILES_EVENT, useService } from "../platform";
+import { ARTIFACT_EVENT, CHOOSE_TARGET_EVENT, CHAT_ARTIFACTS_EVENT, ASK_CHAT_EVENT, CALL_PLACED_EVENT, CALL_START_EVENT, CHAT_TOUCHED_EVENT, OPEN_SESSION_EVENT, FOCUS_WORKSPACE_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, PAGE_REMOVED_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT, OPEN_WORKSPACE_FILES_EVENT, useService } from "../platform";
 import { LEVEL_SET_EVENT, NEW_CHAT_AT_LEVEL_EVENT } from "../platform";
 import { Chat } from "../surfaces/chat";
 import { ensureMeetingKnown, refreshMeetings, useLiveMeetings } from "../surfaces/liveMeetings";
@@ -91,7 +91,7 @@ import { pauseVoiceNote as pauseNote, stopVoiceNote as stopNote, voiceNoteState 
 import type { ContextMenuItem } from "../ui-kit/ContextMenu";
 import { NotificationToasts } from "./NotificationToasts";
 import { HOME_FRAME_EVENT, RAIL_CHANGED_EVENT, startRailFrames } from "./notifications";
-import { resolveDocRef } from "../ui-kit/docLinks";
+import { metaOfOpen, resolveDocRef } from "../ui-kit/docLinks";
 import { SURFACE_RECORD_LIVE, syncSurface } from "../surfaces/surfaceSync";
 import { Rail, RailStrip } from "./Rail";
 import { ScaffoldRefusalCard } from "./ScaffoldRefusalCard";
@@ -116,6 +116,7 @@ import { EdgeHandle, ShellToggle } from "./Collapse";
 import { Drawer, Sheet, Splitter, useShellLayout } from "../ui-kit";
 import { CallDock } from "./CallDock";
 import { enterCall } from "./callState";
+import { joinPlacedCall, livePlacedDeps } from "./callPlaced";
 import { browserSessionFromOpenPath, openBrowserSession } from "./browserSession";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
 import { T, surface, type as ty } from "./tokens";
@@ -1024,6 +1025,17 @@ export function MinutesShell() {
     window.addEventListener(OPEN_SESSION_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_SESSION_EVENT, onOpen);
   }, [openSharedSession]);
+  // THE AGENT CALLED SOMEONE FOR THIS PERSON ("Call tester-b", call-person-autojoin): open the room
+  // and join as the caller at once, shown as their outgoing call with Cancel. The chat raises this
+  // only in the view that placed the call; `joinPlacedCall` re-reads the call and acts only when the
+  // viewer owns it. meeting-api ends a call nobody joins within 30 s — this is what keeps it alive.
+  useEffect(() => {
+    const onPlaced = (e: Event) => {
+      void joinPlacedCall((e as CustomEvent).detail, { ...livePlacedDeps, open: openSharedSession });
+    };
+    window.addEventListener(CALL_PLACED_EVENT, onPlaced);
+    return () => window.removeEventListener(CALL_PLACED_EVENT, onPlaced);
+  }, [openSharedSession]);
 
   // Refresh server-authored names without disturbing selection or reader-owned pages.
   useEffect(() => {
@@ -1853,7 +1865,8 @@ export function MinutesShell() {
   useEffect(() => {
     const onEntity = async (e: Event) => {
       const d = (e as CustomEvent<{ path?: string; wikilink?: string; slug?: string; docPath?: string; exact?: boolean }>).detail || {};
-      const r = await resolveDocRef(d, { path: d.docPath, slug: d.slug }).catch(() => null);
+      // only the context the event carries: no `slug` key is "no workspace named", never the home one
+      const r = await resolveDocRef(d, metaOfOpen(d)).catch(() => null);
       // NEVER A DEAD CLICK: an unresolved link opens its canonical path anyway, so the panel
       // answers with the empty state instead of the click vanishing (pageForDocRef).
       const pg = pageForDocRef(d, r);

@@ -28,7 +28,13 @@ export function sameOriginPost(request: NextRequest): boolean {
   const site = h?.get("sec-fetch-site");
   const origin = h?.get("origin");
   if (site && site !== "same-origin") return false;
-  if (origin) return origin !== "null" && ownOrigins(request).has(origin);
+  // `Origin: null` with `Sec-Fetch-Site: same-origin` is a real browser posting the sign-in page's own
+  // form: the page carries `<meta name="referrer" content="no-referrer">`, and under that policy a
+  // browser serialises a POST's Origin as "null" (Fetch § origin header). Sec-Fetch-Site is set by the
+  // browser and no page can forge it; an opaque origin from a sandbox or data: URL is never
+  // same-origin. Refusing it locked every real browser out of the emailed link (hotfix 2026-10-18).
+  if (origin === "null") return site === "same-origin";
+  if (origin) return ownOrigins(request).has(origin);
   return site === "same-origin";
 }
 

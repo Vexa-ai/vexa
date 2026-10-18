@@ -58,6 +58,8 @@ COPY core/agent/routes.v1.json ./routes.v1.json
 # `workspaces` a package under PYTHONPATH=/app.
 COPY core/workspaces/__init__.py ./workspaces/__init__.py
 COPY core/workspaces/shared ./workspaces/shared
+# WS-S3: the s3 workspace backend (agent-api: the store; worker: the stdlib client)
+COPY core/workspaces/store ./workspaces/store
 # The registry of workspace templates (the control plane validates/seeds from one — Phase 6).
 # workspace-seeds/<name>/ — one validated seed per subdir (today: default, finos).
 COPY behavior/workspaces ./workspace-seeds

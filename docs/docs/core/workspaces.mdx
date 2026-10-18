@@ -60,7 +60,7 @@ not reachable, so a prompt injection cannot read or write it. Read-only roles (v
 | Backend | Mechanism |
 |---|---|
 | **docker** | One bind per mount: a named-volume store rides the Mounts API's `VolumeOptions.Subpath` (**requires engine ≥ v26** — older engines fail the container create loudly); a host-path store joins the subpath (no version requirement). The whole-store root bind is never emitted. |
-| **k8s** | One `volumeMount` per mount against the single store PVC — native `subPath` + `readOnly` (no version caveat). |
+| **k8s** | One `volumeMount` per mount against the single store PVC — native `subPath` + `readOnly` (no version caveat). With the s3 backend: a private `emptyDir` holding only the dispatch's mounts, fetched through agent-api. |
 | **lite (process)** | POSIX: workers drop to a **per-subject uid** (`100000+id`), private/system tiers are `0700`-owned, each shared workspace gets its own **gid** (persisted registry, joined as a supplementary group), per-subject `HOME`/`TMPDIR`, and a **default-deny sweep** seals never-dispatched tenants' dirs on every apply. Unavailable conditions (non-root runtime, non-numeric subject) degrade **loudly** to shared-trust. |
 
 There is **no opt-out knob** — strict is the only mode. Known lite limitation: within a shared
@@ -438,6 +438,55 @@ verbs, each a route in `routers/workspaces.py`:
    fast-forward only. Both are `person` verbs; `workspace_status` is not, because it changes nothing a
    person sees.
 
+### Where repositories live: a volume or S3
+
+`VEXA_WORKSPACE_BACKEND` (Helm `agentApi.workspaces.backend`) is `volume` by default: the tree under
+`VEXA_WORKSPACES_DIR` on the `agent-workspaces` volume is the truth, and workers mount it. With `s3`,
+an S3-compatible bucket is the **single durable truth** and every pod copy is a disposable cache
+(`core/workspaces/store`):
+
+1. **Boot.** agent-api writes, reads and deletes a probe object, then probes conditional PUT and bucket
+   versioning (`objects.self_test`). A failed probe stops the boot with a sentence naming the endpoint,
+   the bucket and the failed call. It loads the platform files and `_global`. Every other workspace
+   becomes a stub: its folders, empty placeholders for HEAD's files, and a marker. The boot drops
+   anything cached that the bucket does not hold and installs the observers on `gitexec` and
+   `workspace_paths`.
+1. **First use.** The first access to a stub through `workspace_paths` or `gitexec` (the only ways
+   agent-api reaches a work tree) hydrates it. It is built beside the stub and swapped in by rename.
+   The least recently used workspaces are evicted back to stubs to keep the cache under
+   `VEXA_WORKSPACE_CACHE_MAX_BYTES`. Eviction never takes `_global`, a workspace in use or locked,
+   one with uncommitted changes, or one whose refs are not the published generation's.
+2. **A write from a route.** Every git command that can move a ref (`commit`, `merge`, `reset`,
+   `clone`, …) passes the observer: it takes the workspace's Redis lock, checks the cache is at the
+   bucket's current generation (refreshing it when clean), lets git run, then publishes the new refs as
+   generation N+1: a git bundle (incremental, compacted after 32) and a manifest
+   `repos/<path>/@/gen/<N+1>-<fence>.json`. Before the PUT it re-reads the current generation and
+   refuses if that moved or carries a newer fencing token: this writer outlived its lock. After the
+   PUT it acknowledges only if its object is alone at N+1. Only then can the route answer.
+   A publish that fails puts the files it changed back to the last durable generation and the route
+   answers 503 (`workspace_store_unavailable`), or 409 (`workspace_changed`) when another writer got
+   there first.
+3. **What is not a git command.** A platform file at the store root (attach state, `.policy/`, import
+   status) written or removed through `workspace_paths`, `atomic_json` or a by-name writer's
+   `notify_written` is in the bucket before the call returns, on any thread. A change the bucket did
+   not take is reverted and the call raises (503). Trees moved whole inside a request are mirrored by
+   `CacheSync` before the response leaves. A 30-second pass only reconciles and evicts.
+4. **A worker.** Its `/workspaces` is an `emptyDir` (`VEXA_WORKSPACE_MOUNT_SOURCE=emptyDir:` on the
+   runtime). At boot it fetches only its dispatch's mounts from `GET /agent/workspace-store/fetch`
+   through the gateway with its delegation token; before each turn it fetches what changed. Each
+   commit in a writable mount is pushed to `POST /agent/workspace-store/push` before `run_git` returns,
+   so the turn's commit event comes after agent-api has made it durable. A refused push un-commits
+   locally and the turn reports the write as not saved.
+
+The guard needs no conditional PUT: the per-workspace lock, a monotonically increasing fencing token
+stamped into every generation, and one key per (generation, token) with "alone at its generation" as
+the condition for acknowledging. Readers take the highest generation and, within it, the lowest token.
+Conditional PUT is only reported. Linode Object Storage closes the connection on a conditional PUT to
+an existing key (probed 2026-10-17). `/health` reports
+`workspace_store: {backend, bucket, conditional_put, versioning, guard, last_error}`. Moving an existing
+volume into a bucket is `python -m workspaces.store.migrate` (the Helm migration Job), which verifies
+every repository from a fresh cache before the switch.
+
 **Every path from outside goes through one rule.** `core/workspaces/shared/workspace_paths.py` answers
 whether a name or path stays inside a workspace:
 
@@ -482,7 +531,8 @@ users (Lite's per-tenant UID), it makes itself non-dumpable instead.
 
 | Data | Only writer | Where |
 |---|---|---|
-| Workspace trees and their Git history | agent-api (routes, imports) and the worker (turn commits) for the workspaces mounted to it | `VEXA_WORKSPACES_DIR` |
+| Workspace trees and their Git history | agent-api (routes, imports) and the worker (turn commits) for the workspaces mounted to it; with `s3`, the worker's commits land through agent-api's push route | `VEXA_WORKSPACES_DIR` (volume), or the workspaces bucket with that directory as a cache (s3) |
+| Workspace generations and bundles (s3) | agent-api, `core/workspaces/store/repostore.py`, under the workspace's Redis lock | `repos/<path>/@/` in the workspaces bucket |
 | Workspace id | the platform, through `shared/workspace_id.py` | `.vexa/workspace.json` in each tree |
 | Workspace registry (id → slug, folder, name, owner) | agent-api, `control_plane/workspace_ids.py` | Redis, or memory; rebuildable from the trees except display names |
 | Member list | agent-api, `workspace_membership.policy_commit` | `policy/members.json` in the workspace |
@@ -513,6 +563,9 @@ users (Lite's per-tenant UID), it makes itself non-dumpable instead.
 | P18 (fail loud) | A refused path raises; it never returns a value a caller could ignore. A broker outage stops Git operations instead of falling back. A path the tools user cannot get stops the turn. | `gate:python` (tests below) |
 | P20 (authorize every access) | Every route resolves a slug or id only inside the caller's own store or a workspace they belong to; roles are checked against `policy/members.json`. | `gate:python` (tests below) |
 | P12 | `core/workspaces/README.md` and every folder below it. | `gate:readme` |
+| One durable truth (s3 backend) | No write is acknowledged before its commit and refs are in the bucket: the `gitexec` ref observer publishes inside `run_git`, `CacheSync` runs before a state-changing response leaves, a worker's commit returns only after agent-api's push answered. A pod's cache is rebuilt from the bucket and anything it held that the bucket does not is dropped. | `gate:python`: `test_workspace_store.py`, `test_workspace_store_service.py` |
+| No write after the response has begun (s3 backend) | A store write after `http.response.start` raises `write_after_response_started` (`StreamGuard`); the one sanctioned write in a streamed body, the meeting page minted before its event, runs in `durable_in_stream()`. Size and mtime of a work-tree path are read through `workspace_paths.stat_inside`, which hydrates an evicted workspace first. | `gate:python`: `test_no_store_write_in_a_streamed_body.py` (scan of every streamed body, runtime guard, stat on a stub, the bare-stat gate) |
+| P18 (fail loud), s3 backend | A bucket that fails the boot self-test stops agent-api with the failed call named. A bucket or lock service that is down refuses writes (503) and reverts the change; it never queues one for later. | `gate:python` (tests below) |
 | P18 (fail loud), entity pages | A company-tier write by a non-admin is a `403` with one sentence, never a silent write elsewhere; the brief tells the agent where to write instead. A source is never silently split or duplicated. | `gate:python`: `test_entity_source_list.py` |
 
 ### Security
@@ -526,6 +579,11 @@ users (Lite's per-tenant UID), it makes itself non-dumpable instead.
   store; every path against the four refusals. A lookup creates nothing.
 - **In the worker.** The worker's filesystem holds only the turn's mounts. The model's tools run as
   `vexa-tools`, cannot write `.git`, and cannot change the member list.
+- **The bucket (s3 backend).** Only agent-api holds the bucket key, a static key scoped to the
+  workspaces bucket. A worker fetches and pushes only the mounts its own dispatch recorded
+  (`wsstore:unit:<unit>`), pushes only writable ones, fast-forward only; a pushed commit range that
+  touches `policy/`, `.vexa/` or `.git` is refused (`403 reserved_path`), and every pushed object is
+  fsck'd and fetched through `gitexec`.
 - **Credentials.** A Git token or deploy key is never returned to the browser or the agent, never
   written into a remote URL or `.git/config`, and never accepted from chat text.
 
@@ -541,6 +599,7 @@ Deny tests, all in `core/agent/tests/`:
 | The tools user cannot write the repository | `test_worker_git_writeback.py`: `test_the_grant_never_opens_git_and_closes_what_an_earlier_grant_opened`, `test_a_work_tree_root_is_sticky_and_nothing_else_is`, `test_a_hook_planted_in_git_does_not_run_at_write_back` · `test_tools_user_cannot_swap_git.py`: `test_the_tools_user_cannot_swap_git_and_can_still_do_its_work` (runs in the worker image) |
 | Entity sources stay whole; the company tier is admin-only; the assistant is not a write-back subject | `test_entity_source_list.py`: `test_a_comma_inside_a_source_does_not_split_it`, `test_the_same_source_twice_is_recorded_once`, `test_a_page_split_by_the_old_writer_heals_on_the_next_upsert`, `test_the_frontmatter_is_still_yaml_other_readers_parse` · `test_writeback_not_the_assistant.py`: `test_the_model_answering_is_not_a_writeback_candidate`, `test_a_person_or_company_that_starts_with_the_same_word_is_kept` · `test_global_root.py`: `test_a_non_admin_company_tier_write_is_refused_and_nothing_lands` |
 | Looking at GitHub changes nothing, and only for members | `test_workspace_status.py`: `test_status_fetches_and_reports_both_sides_without_moving_the_branch_or_the_tree`, `test_a_member_sees_what_is_behind_and_the_workspace_is_unchanged`, `test_a_non_member_is_refused_and_nothing_is_fetched` |
+| The s3 backend: durable before acknowledged, scoped pushes | `test_workspace_store_lazy.py`: `test_a_background_platform_write_is_in_the_bucket_before_it_returns`, `test_a_platform_write_the_bucket_refuses_fails_and_is_not_kept`, `test_an_acknowledged_write_survives_eviction_and_a_dead_pod` · `test_workspace_store.py`: `test_a_writer_stalled_past_its_lock_ttl_is_refused_by_the_fence`, `test_two_writers_racing_for_one_generation_cannot_both_be_acknowledged`, `test_an_acknowledged_write_survives_the_pod`, `test_a_write_the_bucket_did_not_take_is_refused_and_not_kept`, `test_two_writers_on_one_workspace_one_loses_cleanly`, `test_a_pushed_range_that_touches_policy_is_refused`, `test_a_worker_push_that_fails_is_not_kept_as_saved` · `test_workspace_store_service.py`: `test_a_worker_fetches_only_the_mounts_its_dispatch_recorded`, `test_a_push_touching_policy_is_refused_at_the_write_path`, `test_a_state_changing_response_waits_for_the_bucket`. Every deny test above also passes with `VEXA_TEST_WORKSPACE_BACKEND=s3`, which puts the s3 write path under every git command the suite runs |
 | Git credentials only for the signed person | `test_git_store_identity.py`: `test_the_request_s_signed_person_is_the_actor_and_the_signature_is_forwarded`, `test_without_a_signed_person_nothing_is_sent` · `test_git_broker_store.py`: `test_unavailable_never_falls_back_or_deletes` |
 | agent-api keeps no Git credential at rest | `test_one_credential_store.py`: `test_with_the_broker_agent_api_holds_nothing_at_rest`, `test_saving_a_token_without_the_broker_is_refused_and_writes_nothing`, `test_a_saved_credential_the_broker_cannot_take_is_a_refusal_not_an_anonymous_run`, `test_agent_api_has_no_way_left_to_seal_a_credential` · broker `test_git_legacy_import.py`: `test_everything_moves_is_read_back_and_the_old_store_is_gone` |
 

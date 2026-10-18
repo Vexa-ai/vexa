@@ -49,9 +49,15 @@ def build(**d) -> APIRouter:
         # process; the runtime's /health carries the credentials-file probe for the mount mechanics.
         from control_plane.config_preflight import capability_health
 
+        from control_plane import workspace_store_service  # noqa: PLC0415
+
+        body = {"status": "ok" if ok else "degraded", "service": "agent-api", "checks": {"dispatcher": ok},
+                "capabilities": capability_health()}
+        store = workspace_store_service.health()
+        if store is not None:
+            body["workspace_store"] = store   # backend, bucket, conditional_put, versioning, last_error
         return JSONResponse(
-            {"status": "ok" if ok else "degraded", "service": "agent-api", "checks": {"dispatcher": ok},
-             "capabilities": capability_health()},
+            body,
             status_code=200 if ok else 503,
         )
     @router.get("/api/version")

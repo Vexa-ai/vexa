@@ -21,8 +21,12 @@
 
 /* richer pages (#1783): tasks, relative dates, anchors, outline, callout titles, Mentioned in */
 .vx-task { display: inline-flex; align-items: center; gap: var(--space-1); vertical-align: middle; margin-right: var(--space-1); }
-.vx-task-box { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.vx-task { position: relative; }
+/* the native box stays for focus, keyboard and the accessible name, drawn invisible over the outlined
+   one: a checked native checkbox is a SOLID accent fill, which 7r rules out */
+.vx-task-box { position: absolute; inset: 0; width: 14px; height: 14px; margin: 0; opacity: 0; cursor: pointer; }
 .vx-task-box:disabled { cursor: default; }
+.vx-task-box:focus-visible + .vx-checkbox { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .vx-task[data-done] + * { color: var(--text-3); }
 .vx-task-err { font-size: var(--text-xs); color: var(--danger-text); }
 .vx-task-ask { margin-left: var(--space-1); background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 var(--space-1); font: inherit; font-size: var(--text-xs); color: var(--text-3); cursor: pointer; opacity: 0; }
@@ -45,3 +49,46 @@ li:hover > .vx-task-ask, li:focus-within > .vx-task-ask, p:hover > .vx-task-ask,
 .vx-copyable-btn { background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 var(--space-1); font: inherit; font-size: var(--text-xs); color: var(--text-3); cursor: pointer; }
 .vx-copyable-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .vx-chip-meta { margin-left: var(--space-1); font-size: var(--text-xs); color: var(--text-3); }
+
+/* Mintlify components on a page (docBlocks.tsx, 2026-10-18). No solid fills (UI 7r): tinted rules,
+   outlined discs and boxes, tinted text. */
+.vx-checkbox { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 14px; height: 14px; border: 1px solid var(--border-control); border-radius: var(--radius-sm); background: transparent; color: var(--accent-text); vertical-align: -2px; }
+.vx-checkbox[data-checked] { border-color: var(--accent); }
+.vx-task-item { list-style: none; margin-left: calc(-1 * var(--space-4)); display: flex; align-items: baseline; gap: var(--space-1_5); }
+.vx-task-item[data-done] > .vx-task-text { color: var(--text-3); }
+.vx-doc-callout { display: flex; gap: var(--space-2); margin: var(--space-2) 0 var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--border-subtle); border-left: 2px solid var(--info); border-radius: var(--radius-md); background: transparent; line-height: 1.55; }
+.vx-doc-callout-icon { flex: none; margin-top: var(--space-0_5); color: var(--info-text); }
+.vx-doc-callout-body { min-width: 0; color: var(--text-2); }
+.vx-doc-callout-body > :last-child { margin-bottom: 0; }
+.vx-doc-callout[data-tone="warning"] { border-left-color: var(--warning); }
+.vx-doc-callout[data-tone="warning"] .vx-doc-callout-icon { color: var(--warning-text); }
+.vx-doc-callout[data-tone="tip"], .vx-doc-callout[data-tone="success"] { border-left-color: var(--success); }
+.vx-doc-callout[data-tone="tip"] .vx-doc-callout-icon, .vx-doc-callout[data-tone="success"] .vx-doc-callout-icon { color: var(--success-text); }
+.vx-doc-callout[data-tone="danger"] { border-left-color: var(--danger); }
+.vx-doc-callout[data-tone="danger"] .vx-doc-callout-icon { color: var(--danger-text); }
+.vx-doc-callout[data-tone="neutral"] { border-left-color: var(--border); }
+.vx-doc-callout[data-tone="neutral"] .vx-doc-callout-icon { color: var(--text-3); }
+.vx-prose ol.vx-doc-steps, ol.vx-doc-steps { list-style: none; margin: var(--space-2) 0 var(--space-3); padding: 0; display: flex; flex-direction: column; gap: 0; }
+.vx-doc-step { display: flex; gap: var(--space-3); }
+.vx-doc-step-rail { display: flex; flex-direction: column; align-items: center; flex: none; }
+.vx-doc-step-rail::after { content: ""; width: 1px; flex: 1; background: var(--border-subtle); }
+.vx-doc-step:last-child .vx-doc-step-rail::after { display: none; }
+.vx-doc-step-n { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 1px solid var(--border-control); border-radius: var(--radius-full); background: transparent; color: var(--text-1); font-size: var(--text-xs); font-weight: var(--weight-semibold); }
+.vx-doc-step-body { min-width: 0; flex: 1; padding-bottom: var(--space-3); }
+.vx-doc-step-title { color: var(--text-1); font-weight: var(--weight-semibold); line-height: 22px; margin-bottom: var(--space-1); }
+.vx-doc-step-content { color: var(--text-2); line-height: 1.55; }
+.vx-doc-tabs, .vx-doc-codegroup { margin: var(--space-2) 0 var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden; }
+.vx-doc-tabs > .vx-tabs, .vx-doc-codegroup > .vx-tabs { padding: 0 var(--space-2); border-bottom: 1px solid var(--border-subtle); }
+.vx-doc-tabs-panel { padding: var(--space-3); }
+.vx-doc-codegroup .vx-code-block, .vx-doc-codegroup pre { margin: 0; border: none; border-radius: 0; }
+.vx-doc-accordion-group { margin: var(--space-2) 0 var(--space-3); display: flex; flex-direction: column; gap: var(--space-1); }
+.vx-doc-accordion { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); margin: var(--space-1) 0; }
+.vx-doc-accordion > summary { cursor: pointer; padding: var(--space-1_5) var(--space-3); color: var(--text-1); font-weight: var(--weight-semibold); }
+.vx-doc-accordion > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.vx-doc-accordion-body { padding: 0 var(--space-3) var(--space-2); color: var(--text-2); }
+.vx-doc-frame { margin: var(--space-2) 0 var(--space-3); padding: var(--space-2); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); }
+.vx-doc-frame > figcaption { margin-top: var(--space-1); font-size: var(--text-xs); color: var(--text-3); }
+.vx-doc-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4); margin: var(--space-2) 0 var(--space-3); }
+.vx-doc-column { min-width: 0; }
+.vx-doc-column > :first-child { margin-top: 0; }
+.vx-rd-line .vx-checkbox { margin-right: var(--space-1_5); }

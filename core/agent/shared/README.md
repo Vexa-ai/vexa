@@ -28,6 +28,7 @@ nothing here starts a server.
 | `timeline` | the worker's `now / last / next` block, from flows-api's read-only timeline route |
 | `proposals` | the person's short list: what is worth doing now, written by whichever agent saw it |
 | `friction` | the shape of the rough-edges record |
+| `tool_outcome` | how a tool call ended (`held` by the privacy hold, `refused`, `failed`), read off its result: the `outcome` every harness's `tool-result` carries and the history's steps keep |
 | `chat_label` | the one rule that names a chat |
 | `marks` | the two chat marks, the literals three images agree on (fact-parity) |
 | `desk_readme` · `desk_now` | the desk README as a hub of links, and its `Now` section built from dated facts |

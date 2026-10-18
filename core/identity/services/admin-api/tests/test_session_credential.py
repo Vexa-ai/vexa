@@ -235,3 +235,77 @@ def test_credential_class_of_is_positive_evidence():
     assert sessions_mod.credential_class_of(APIToken(kind="session")) == "session"
     assert sessions_mod.credential_class_of(APIToken(kind="key")) == "key"
     assert sessions_mod.credential_class_of(APIToken()) == "key"
+
+
+# --- the upgrade: a browser signed in before sessions existed (hotfix 2026-10-18) ---------------
+
+def _seed(session, token, **kw):
+    row = APIToken(token=token, user_id=kw.pop("user_id", 42), scopes=kw.pop("scopes", ["bot", "tx", "browser"]),
+                   name=kw.pop("name", "terminal-login"), kind=kw.pop("kind", "key"), **kw)
+    row.id = 900 + len(session.tokens)
+    session.tokens[token] = row
+    return row
+
+
+def _upgrade(client, token, *, internal=INTERNAL, terminal=SESSION_SECRET):
+    headers = {}
+    if internal is not None:
+        headers["X-Internal-Secret"] = internal
+    if terminal is not None:
+        headers["X-Terminal-Session-Secret"] = terminal
+    return client.post("/internal/sessions/upgrade", json={"token": token}, headers=headers)
+
+
+def test_a_legacy_login_key_is_upgraded_to_a_session_and_retired(world):
+    client, session = world
+    old = _seed(session, "vxa_bot_legacy-login-key")
+    r = _upgrade(client, old.token)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["credential_class"] == "session" and body["user_id"] == 42 and body["retired"] == old.id
+    new = session.tokens[body["token"]]
+    assert new.kind == "session" and new.user_id == 42 and new.name == "terminal-login"
+    # the old key keeps working for a grace window, and — now expiring — never upgrades again
+    assert old.expires_at is not None
+    assert _upgrade(client, old.token).status_code == 409
+    assert _validate(client, body["token"]).json()["credential_class"] == "session"
+
+
+@pytest.mark.parametrize("shape", [
+    {"name": "my-script"},                       # a self-serve key
+    {"scopes": ["bot", "tx"]},                   # not the login shape
+    {"kind": "session"},                         # already a session
+])
+def test_anything_but_a_legacy_login_key_is_refused(world, shape):
+    client, session = world
+    tok = _seed(session, "vxa_bot_not-a-login-key", **shape)
+    before = len(session.tokens)
+    assert _upgrade(client, tok.token).status_code == 409
+    assert len(session.tokens) == before and tok.expires_at is None
+
+
+def test_an_unknown_token_is_not_upgraded(world):
+    client, session = world
+    assert _upgrade(client, "vxa_bot_nobody").status_code == 404
+    assert not session.tokens
+
+
+@pytest.mark.parametrize("terminal", [None, "", "wrong-secret"])
+def test_the_upgrade_needs_the_terminal_secret(world, terminal):
+    client, session = world
+    old = _seed(session, "vxa_bot_legacy-login-key")
+    assert _upgrade(client, old.token, terminal=terminal).status_code == 403
+    assert old.expires_at is None and len(session.tokens) == 1
+
+
+def test_the_upgrade_needs_the_internal_tier(world):
+    client, session = world
+    old = _seed(session, "vxa_bot_legacy-login-key")
+    assert _upgrade(client, old.token, internal=None).status_code in (401, 403)
+    assert old.expires_at is None
+
+
+def test_a_delegation_token_is_never_upgraded(world):
+    client, session = world
+    r = _upgrade(client, "vxd_" + "x" * 40)
+    assert r.status_code == 404 and not session.tokens

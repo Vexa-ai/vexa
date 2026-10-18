@@ -5,8 +5,8 @@ import { findOrCreateUserToken, mintLoginToken, mintSessionToken } from "../admi
 /**
  * D13 (0.13.4): the sign-in mints a SESSION credential through admin-api's `POST /internal/sessions`
  * (internal tier + the terminal's own `X-Terminal-Session-Secret`), and falls back to the old
- * `bot,tx,browser` login key only when the deployment cannot mint sessions yet (secret unset here,
- * admin-api 404 or 503). Synthetic fetch double; response shapes are admin-api's `app/sessions.py`.
+ * `bot,tx,browser` login key only when this terminal holds no session secret (hotfix 2026-10-18: with
+ * the secret set, an admin-api answering 404/503 fails the sign-in rather than handing out a key). Synthetic fetch double; response shapes are admin-api's `app/sessions.py`.
  */
 
 interface Call { method: string; path: string; headers: Record<string, string>; body: unknown }
@@ -101,17 +101,22 @@ describe("mintLoginToken — the sign-in's credential", () => {
     expect(keyMints()).toHaveLength(0);
   });
 
-  it.each([
-    ["the secret is unset", () => { delete process.env.VEXA_TERMINAL_SESSION_SECRET; }],
-    ["admin-api is older (404)", () => { sessionAnswer = () => new Response("", { status: 404 }); }],
-    ["admin-api has no secret (503)", () => { sessionAnswer = () => new Response("", { status: 503 }); }],
-  ])("falls back to the old login key, with a warning, when %s", async (_why, arrange) => {
-    arrange();
+  it("falls back to the old login key, with a warning, only when this terminal holds no session secret", async () => {
+    delete process.env.VEXA_TERMINAL_SESSION_SECRET;
     const r = await mintLoginToken(42);
     expect(r).toMatchObject({ ok: true, data: { token: "vxa_bot_key", id: 9 } });
     const [m] = keyMints();
     expect(m.path).toBe("/admin/users/42/tokens");
     expect(console.warn).toHaveBeenCalled();
+  });
+
+  // hotfix 2026-10-18: with the secret set, a browser is NEVER handed a key — that browser could not
+  // press a card and would never learn why.
+  it.each([404, 503])("with the secret set, an admin-api answering %i fails the sign-in instead of minting a key", async (status) => {
+    sessionAnswer = () => new Response("", { status });
+    const r = await mintLoginToken(42);
+    expect(r.ok).toBe(false);
+    expect(keyMints()).toHaveLength(0);
   });
 
   it("does not fall back on a real refusal", async () => {
@@ -123,6 +128,26 @@ describe("mintLoginToken — the sign-in's credential", () => {
 });
 
 describe("findOrCreateUserToken signs in with the session", () => {
+  it("mints a session even when the account already holds a live login key (never reuses the key)", async () => {
+    // The founder's account on app.dev: live `terminal-login` keys, used minutes ago.
+    const listed = [{ id: 469, user_id: 42, scopes: ["bot", "tx", "browser"], name: "terminal-login",
+                      created_at: new Date(Date.now() - 3600_000).toISOString().replace(/Z$/, ""),
+                      last_used_at: new Date().toISOString().replace(/Z$/, "") }];
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      const u = new URL(url);
+      if (u.pathname === "/admin/users/42/tokens" && (init?.method || "GET") === "GET") {
+        calls.push({ method: "GET", path: u.pathname, headers: {}, body: undefined });
+        return Promise.resolve(jsonRes(listed));
+      }
+      return fakeFetch(url, init);
+    }));
+    const r = await findOrCreateUserToken("ada@example.com");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.token).toBe("vxa_browser_sess");
+    expect(sessionCalls()).toHaveLength(1);
+    expect(keyMints()).toHaveLength(0);
+  });
+
   it("returns the session token and still runs the login-token prune", async () => {
     const r = await findOrCreateUserToken("ada@example.com");
     expect(r.ok).toBe(true);

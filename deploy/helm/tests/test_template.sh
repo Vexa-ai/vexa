@@ -1770,5 +1770,20 @@ tb "flows.mail.smtp.passwordRef renders the ref, the broker URL and the sensors 
   '[ "$(grep -c "name: VEXA_MAIL_SMTP_PASSWORD_REF" <<< "$REF")" = "$(grep -c "name: VEXA_MAIL_SMTP_HOST" <<< "$REF")" ] && grep -q "path: sensors/key" <<< "$REF" && grep -A1 "name: VEXA_FLOWS_SENSORS_BROKER_URL" <<< "$REF" | grep -q credential-broker'
 tb "flows.mail.recipientAllow reaches the flows pods" 'grep -A1 "name: VEXA_MAIL_RECIPIENT_ALLOW" <<< "$REF" | grep -q "dmitry@vexa.ai"'
 tb "a malformed flows.mail.smtp.passwordRef is refused" '! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.smtp.passwordRef=smtp >/dev/null 2>&1'
+# WS-S3: agentApi.workspaces.backend=s3 — the bucket is the truth, pods keep an emptyDir cache.
+WS=(--set agentApi.workspaces.backend=s3 --set agentApi.workspaces.s3.bucket=vexa-workspaces
+    --set agentApi.workspaces.s3.endpoint=https://s3.corp.example --set agentApi.workspaces.s3.existingSecret=ws-key
+    --set agentApi.workspaces.s3.caBundle.configMapName=corp-ca --set agentApi.workspaces.workerCacheSize=2Gi)
+WSA="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${WS[@]}" --show-only templates/deployment-agent-api.yaml)"
+WSR="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${WS[@]}" --show-only templates/deployment-runtime.yaml)"
+WSV="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-agent-api.yaml)"
+tb "backend volume (default) mounts the claim and sets VEXA_WORKSPACE_BACKEND=volume" 'grep -q "claimName: vexa-vexa-agent-workspaces" <<< "$WSV" && grep -A1 "name: VEXA_WORKSPACE_BACKEND" <<< "$WSV" | grep -q "\"volume\""'
+tb "backend s3: agent-api caches on an emptyDir, not the claim" 'grep -A1 "name: workspaces$" <<< "$WSA" | grep -q "emptyDir" && ! grep -q "claimName: vexa-vexa-agent-workspaces" <<< "$WSA"'
+tb "backend s3: the scoped key comes from the named Secret" 'grep -A3 "name: VEXA_WORKSPACE_S3_SECRET_KEY" <<< "$WSA" | grep -q "name: \"ws-key\""'
+tb "backend s3: a private CA bundle is mounted and named" 'grep -q "VEXA_WORKSPACE_S3_CA_BUNDLE" <<< "$WSA" && grep -q "name: \"corp-ca\"" <<< "$WSA"'
+tb "backend s3: workers get a private emptyDir from the runtime" 'grep -A1 "name: VEXA_WORKSPACE_MOUNT_SOURCE" <<< "$WSR" | grep -q "emptyDir:" && grep -A1 "RUNTIME_WORKSPACE_CACHE_SIZE" <<< "$WSR" | grep -q 2Gi'
+tb "backend s3 without a bucket refuses to render" '! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set agentApi.workspaces.backend=s3 >/dev/null 2>&1'
+tb "backend s3 refuses the recordings key" '! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${WS[@]}" --set agentApi.workspaces.s3.existingSecret=s3-fixture-credentials >/dev/null 2>&1'
+tb "the migration Job mounts the old claim read-only" 'helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${WS[@]}" --set agentApi.workspaces.s3.migrate.enabled=true --show-only templates/job-workspaces-s3-migrate.yaml | grep -B2 -A2 "claimName: vexa-vexa-agent-workspaces" | grep -q "readOnly: true"'
 
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

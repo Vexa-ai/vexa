@@ -36,8 +36,11 @@ export function useOpenEntity(): DocNavigate {
   const meta = useContext(DocMetaContext);
   return nav ?? ((detail) => {
     if (typeof window !== "undefined") {
-      const slug = "slug" in detail ? detail.slug : meta.slug;
-      window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { ...detail, slug, docPath: meta.path } }));
+      // A slug is passed only when someone NAMED one — the ref, or the page it sits in. In a chat
+      // neither did, and an absent key is how the opener tells "no workspace" from "the home
+      // workspace" (`slug: undefined`): it refuses the first rather than guessing (2026-10-18).
+      const named = "slug" in detail ? { slug: detail.slug } : "slug" in meta ? { slug: meta.slug } : {};
+      window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { ...detail, ...named, docPath: meta.path } }));
     }
   });
 }

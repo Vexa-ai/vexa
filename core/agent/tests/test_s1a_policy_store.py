@@ -581,3 +581,34 @@ def test_a_bad_proposal_is_refused_and_a_reader_cannot_propose(world):
     assert _propose(client, store, "bob", "make_me_god", None).status_code == 422
     m.grant_membership(root, "team", "vic", "viewer", added_by="alice", index=m.InMemoryMembershipIndex())
     assert _propose(client, store, "vic", "visibility", "open").status_code == 403
+
+
+def test_the_http_port_remembers_an_absent_workspace_until_this_port_writes_it(monkeypatch):
+    """perf (app.dev 2026-10-17): every enumeration asks about every directory on the host, and most
+    are people's desks the registry has never heard of. An absence is cached for `absent_ttl` (not
+    the 2 s of a present document), and a `put` through this port — the only way a workspace enters
+    the registry — drops it, so the next read sees the new workspace."""
+    from shared import adapters
+    from shared.adapters import AdminApiPolicyStore
+    port = AdminApiPolicyStore("http://registry.invalid", "s3cret", ttl=2.0, absent_ttl=30.0)
+    present = {"team": {"workspace": {}, "members": [{"subject": "alice", "role": "owner"}]}}
+    gets = []
+
+    def fake_req(method, path, body=None):
+        if method == "GET":
+            gets.append(path)
+            return present.get(path.rsplit("/", 1)[-1])
+        present[path.rsplit("/", 1)[-1]] = {"workspace": {}, "members": list((body or {}).get("members") or [])}
+        return {}
+    monkeypatch.setattr(port, "_req", fake_req)
+    clock = [1000.0]
+    monkeypatch.setattr(adapters.time, "monotonic", lambda: clock[0])
+
+    assert not port.has(None, "desk-7") and not port.has(None, "desk-7")
+    clock[0] += 10                                       # past the present-doc TTL, inside the absent one
+    assert not port.has(None, "desk-7") and gets.count("/workspaces/desk-7") == 1
+    assert port.has(None, "team")
+    clock[0] += 3
+    assert port.has(None, "team") and gets.count("/workspaces/team") == 2   # a present doc keeps 2 s
+    port.put(None, "desk-7", "members", [{"subject": "bob", "role": "owner"}])
+    assert port.has(None, "desk-7") and gets.count("/workspaces/desk-7") == 2  # the write dropped the absence

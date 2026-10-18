@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from datetime import datetime
 from typing import Iterator, Optional
 
+from shared import tool_outcome
 from workspaces.shared import workspace_paths as wpaths
 
 
@@ -41,7 +43,82 @@ def _tool_op(name: str, args: Optional[dict] = None) -> dict:
     if isinstance(fp, str) and fp:
         op["file"] = fp
         op["wrote"] = label == "edit"
+    if label == "edit":
+        written = _written_at_the_time(name, args or {})
+        if written is not None:
+            op["written"] = written
     return op
+
+
+def _written_at_the_time(name: str, args: dict) -> Optional[dict]:
+    """``{workspace, path}`` a write named WHEN IT RAN, or None — ``workspace`` None when the call left
+    it to the chat's target (not recorded, so not known afterwards).
+
+    The record behind an old message's file references (`qualified_history`): a harness write names
+    its mount (`/workspaces/<slug>/<rel>`), the page verb names its `slug` (`personal` = the desk)."""
+    fp = args.get("file_path") or args.get("notebook_path")
+    if isinstance(fp, str) and fp.startswith("/workspaces/"):
+        rest = fp[len("/workspaces/"):]
+        if rest.startswith(".attached/"):
+            parts = rest.split("/", 3)
+            return {"workspace": parts[2], "path": parts[3]} if len(parts) == 4 and parts[3] else None
+        slug, _, rel = rest.partition("/")
+        return {"workspace": slug, "path": rel} if slug and rel and not slug.startswith(".") else None
+    if isinstance(fp, str) and fp:
+        # outside every mount (`/tmp/…`) is no workspace's file; a relative one is unknowable
+        return None if fp.startswith("/") else {"workspace": None, "path": fp}
+    if str(name or "").startswith("mcp__") and isinstance(args.get("path"), str) and args.get("path"):
+        slug = str(args.get("slug") or "").strip()
+        return {"workspace": slug or None, "path": str(args["path"]).lstrip("/")}
+    return None
+
+
+#: The desk's names a page verb takes (`ceiling.DESK_ALIASES`); answered as the person's own id.
+_DESK_ALIASES = ("personal", "desk")
+
+
+def qualified_history(turns: list[dict], subject: str) -> list[dict]:
+    """An old conversation's bare file references, qualified against the ONE workspace its session
+    wrote into — the message's own context, recorded at the time (founder ruling 2026-10-18: *"we do
+    not want to guess which readme this should open"*).
+
+    Each write step carries the workspace it named when it ran (`_written_at_the_time`). When every
+    write in the session names one and the same workspace, a bare page path in an agent's reply
+    (`` `README.md` ``, ``[plan](kg/plan.md)``) becomes ``[[page:<that workspace>/<path>]]``, and each
+    write step gets its own ``ref``. A session that wrote nowhere, into two workspaces, or through a
+    write that left the workspace to the chat's target is left as it was: its bare paths stay plain
+    text, never a guess. Pure; returns new turn dicts."""
+    from workspaces.shared import links as links_mod  # noqa: PLC0415
+
+    def _ws(w: Optional[str]) -> Optional[str]:
+        return str(subject) if w in _DESK_ALIASES else w
+
+    seen: set = set()
+    unknown = False
+    for t in turns:
+        for op in (t.get("ops") or []) if t.get("role") == "agent" else []:
+            w = op.get("written")
+            if isinstance(w, dict):
+                ws = _ws(w.get("workspace"))
+                if ws:
+                    seen.add(ws)
+                else:
+                    unknown = True
+    only = next(iter(seen)) if len(seen) == 1 and not unknown and subject else None
+    out = []
+    for t in turns:
+        if t.get("role") != "agent" or (not only and not any(
+                isinstance(o.get("written"), dict) and o["written"].get("workspace") for o in t.get("ops") or [])):
+            out.append(t)
+            continue
+        ops = []
+        for op in t.get("ops") or []:
+            w = op.get("written")
+            ws = _ws(w.get("workspace")) if isinstance(w, dict) else None
+            ops.append({**op, "ref": links_mod.page_ref(ws, w["path"])} if ws and w.get("path") else op)
+        text = links_mod.qualify_bare_paths(t.get("text") or "", only) if only else t.get("text")
+        out.append({**t, "ops": ops, "text": text})
+    return out
 
 
 def _block_text(content) -> str:
@@ -315,6 +392,8 @@ def parse_history(raw: str, records: list) -> list[dict]:
         # residue of a beat that produced nothing, and it rendered as an empty grey card.
         if not open_turn["text"].strip() and not open_turn["ops"]:
             return
+        for op in open_turn["ops"]:
+            op.pop("_id", None)                # the call id pairs a result with its step; not served
         turns.append(open_turn)
 
     def human_words(stored: str) -> Optional[str]:
@@ -357,6 +436,16 @@ def parse_history(raw: str, records: list) -> list[dict]:
                 and all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
             )
             if is_tool_result:
+                # HOW EACH CALL ENDED, on its step (held-label-rooms-1018): a write the privacy hold
+                # kept reads held after a reload too, never "Wrote".
+                if cur_agent is not None:
+                    by_id = {o.get("_id"): o for o in cur_agent["ops"] if o.get("_id")}
+                    for b in content:
+                        op = by_id.get(b.get("tool_use_id"))
+                        if op is not None:
+                            ended = tool_outcome.result_outcome(not b.get("is_error", False), b.get("content"))
+                            if ended.get("outcome"):
+                                op["outcome"] = ended["outcome"]
                 continue
             text = _block_text(content)
             if not text.strip():
@@ -444,7 +533,10 @@ def parse_history(raw: str, records: list) -> list[dict]:
             cur_agent["text"] += _block_text(content)
             for b in content:
                 if isinstance(b, dict) and b.get("type") == "tool_use":
-                    cur_agent["ops"].append(_tool_op(b.get("name", ""), b.get("input") if isinstance(b.get("input"), dict) else None))
+                    op = _tool_op(b.get("name", ""), b.get("input") if isinstance(b.get("input"), dict) else None)
+                    if b.get("id"):
+                        op["_id"] = b["id"]
+                    cur_agent["ops"].append(op)
         # all other line kinds (queue-operation/last-prompt/custom-title/mode/attachment/system …) are meta — skip
     flush_agent()
     return turns
@@ -615,6 +707,34 @@ class WorkspaceReader:
             except Exception:  # noqa: BLE001 — an unreadable member list is not a membership
                 continue
             yield ws
+
+    def pointer_names(self, subject: str) -> "Optional[set[str]]":
+        """Every file name in a ``.claude/sessions`` folder ``locate_session`` could read a pointer
+        from for this subject — its continuity roots, its parked slots and every workspace at the
+        root — listed once (a SUPERSET: links followed, membership not checked). A session whose
+        ``<session>.session`` is not in it has no thread for this subject, so a caller that asks
+        about many sessions can skip ``history`` for those without sweeping the root once per
+        session (live app.dev 2026-10-18: one sweep per nameless chat was ~0.3 s of the chat list).
+        ``None`` when a folder could not be listed: then nothing may be skipped."""
+        if not _PLAIN_ID.fullmatch(subject):
+            return set()
+        dirs: list[Path] = [self._root / ".system" / subject, self._root / subject]
+        try:
+            for parent in (self._root / ".attached" / subject, self._root):
+                try:
+                    with os.scandir(parent) as it:
+                        dirs.extend(Path(e.path) for e in it)
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+            names: set[str] = set()
+            for d in dirs:
+                try:
+                    names.update(os.listdir(d / ".claude" / "sessions"))
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+            return names
+        except OSError:
+            return None
 
     def locate_session(self, subject: str, session: str,
                        extra_roots: "list[str | Path] | None" = None) -> "Optional[tuple[str, list[Path]]]":

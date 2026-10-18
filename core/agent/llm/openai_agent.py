@@ -123,7 +123,7 @@ from llm import faults as provider_faults
 # the terminal must render an openai-agent turn identically, and two copies of a closed vocabulary drift.
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
                              _open_event, _published_terms, _short, _workspace_focus, _FETCH_TOOLS, _fetched_source,
-                             _written_artifact)
+                             _written_artifact, result_outcome)
 from llm.ports import harness_subprocess_env, max_output_tokens
 from llm import jobs, web_tools
 from llm.refusal_guard import RefusalGuard
@@ -400,6 +400,10 @@ def _est_tokens(obj: object) -> int:
 
 # ── the MCP client (stdio + streamable-http), stdlib-shaped ─────────────────────────────────────
 
+class _MCPSessionGone(LLMError):
+    """A 404 to a request that carried ``Mcp-Session-Id``: the server no longer knows the session."""
+
+
 class _MCPServer:
     """One MCP server from the harness's `mcp.json`, in whichever transport it declares.
 
@@ -481,6 +485,13 @@ class _MCPServer:
             self._session_header["Mcp-Session-Id"] = sid
         if r.status_code in (401, 403):
             raise LLMAuthError(f"mcp {self.name}: {r.status_code} from {url}: {r.text[:200]}")
+        if r.status_code == 404 and self._session_header and body.get("method") != "initialize":
+            # THE SERVER FORGOT THIS SESSION (streamable-http: a 404 to a request carrying
+            # Mcp-Session-Id means "start a new one"). It happens to every warm worker when the
+            # gateway or the MCP service restarts — a deploy — and the worker then failed EVERY tool
+            # call for the rest of its life (app.dev 2026-10-17: a flow turn burned its whole
+            # 40-call budget on these 404s). `call` re-initializes once and retries.
+            raise _MCPSessionGone(f"mcp {self.name}: {r.status_code} from {url}: {r.text[:200]}")
         if r.status_code >= 400:
             raise LLMError(f"mcp {self.name}: {r.status_code} from {url}: {r.text[:200]}")
         if notify or r.status_code == 202 or not (r.content or b"").strip():
@@ -525,6 +536,13 @@ class _MCPServer:
                 self._http = httpx.Client(timeout=self._timeout)
         else:
             raise LLMConfigError(f"mcp {self.name}: unsupported transport {kind!r}")
+        self._initialize()
+        listed = self._rpc("tools/list", {})
+        self.tools = [t for t in (listed.get("tools") or []) if isinstance(t, dict) and t.get("name")]
+        return self.tools
+
+    def _initialize(self) -> None:
+        self._session_header = {}               # a new session is asked for WITHOUT the old id
         self._rpc("initialize", {"protocolVersion": "2025-03-26",
                                  "capabilities": {},
                                  "clientInfo": {"name": "vexa-openai-agent", "version": "1"}})
@@ -532,16 +550,17 @@ class _MCPServer:
             self._rpc("notifications/initialized", {}, notify=True)
         except LLMError:
             pass                                # a server that does not want the notification
-        listed = self._rpc("tools/list", {})
-        self.tools = [t for t in (listed.get("tools") or []) if isinstance(t, dict) and t.get("name")]
-        return self.tools
 
     def call(self, tool: str, args: dict) -> tuple[bool, str]:
         """``(ok, text)`` for one `tools/call`. A transport failure is a FAILED TOOL, never an
         exception out of the loop: the model is told the call failed and can choose again, which is
         the whole point of running a loop rather than a pipeline."""
         try:
-            res = self._rpc("tools/call", {"name": tool, "arguments": args})
+            try:
+                res = self._rpc("tools/call", {"name": tool, "arguments": args})
+            except _MCPSessionGone:
+                self._initialize()              # once: a second 404 is an ordinary failure
+                res = self._rpc("tools/call", {"name": tool, "arguments": args})
         except (LLMError, OSError, ValueError) as exc:
             return False, f"{type(exc).__name__}: {exc}"
         text = "".join(b.get("text", "") for b in (res.get("content") or [])
@@ -1487,9 +1506,10 @@ class OpenAIAgentHarness:
                            "callId": call["id"]}
                     ok, out = self._exec_tool(call, mcp_index, sandbox, allow)
                     out = out[:_TOOL_RESULT_MAX_CHARS]
+                    ended = result_outcome(ok, out)      # how the call ended, from what it answered
                     out, refusal_action = refusals.observe(call["name"], ok, out)
                     yield {"type": "tool-result", "callId": call["id"], "ok": ok,
-                           "summary": _short(out)}
+                           "summary": _short(out), **ended}
                     for extra in _panel_events(call, ok, out):
                         yield extra
                     store.record_tool_result(call["id"], ok, out)

@@ -648,11 +648,19 @@ class AdminApiPolicyStore:
     pinned single-replica and is the registry's only client, so its own writes are the only change.
     ``root`` is accepted and ignored: the registry is not on this filesystem."""
 
-    def __init__(self, base_url: str, internal_secret: str, *, timeout: float = 5.0, ttl: float = 2.0) -> None:
+    def __init__(self, base_url: str, internal_secret: str, *, timeout: float = 5.0, ttl: float = 2.0,
+                 absent_ttl: float = 30.0) -> None:
         self._base = base_url.rstrip("/") + "/internal/registry"
         self._secret = internal_secret
         self._timeout = timeout
         self._ttl = ttl
+        # AN ABSENT WORKSPACE IS REMEMBERED LONGER (perf, app.dev 2026-10-17). Every enumeration
+        # (`list_memberships`, the people rosters) asks about EVERY directory on the host, and most
+        # of them — people's own desks — are not in the registry at all; at a 2 s TTL that was a GET
+        # per desk per listing (~14 req/s to admin-api, ~120-190 ms per listing). A workspace only
+        # ENTERS the registry through `put` on this port, which drops the cached absence first, so a
+        # longer absence TTL cannot hide a grant this process made.
+        self._absent_ttl = max(absent_ttl, ttl)
         self._docs: dict[str, tuple[float, Optional[dict]]] = {}
 
     def _req(self, method: str, path: str, body: Optional[dict] = None):
@@ -675,7 +683,7 @@ class AdminApiPolicyStore:
 
     def _doc(self, workspace_id: str) -> Optional[dict]:
         hit = self._docs.get(workspace_id)
-        if hit is not None and time.monotonic() - hit[0] < self._ttl:
+        if hit is not None and time.monotonic() - hit[0] < (self._ttl if hit[1] is not None else self._absent_ttl):
             return hit[1]
         doc = self._req("GET", f"/workspaces/{self._q(workspace_id)}")
         self._docs[workspace_id] = (time.monotonic(), doc)

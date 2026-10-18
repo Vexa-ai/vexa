@@ -31,6 +31,7 @@ from typing import Optional
 from shared.git_redaction import redact
 from shared.adapters import GitPushError, push_with_token
 from shared.gitenv import transport_env
+from workspaces.shared import workspace_paths as wpaths
 from shared.gitexec import run_git
 from shared.token_destination import embed_token
 
@@ -402,11 +403,9 @@ def _iso(ts: float) -> str:
 
 def _last_fetch_at(ws: Path) -> Optional[str]:
     """When this workspace last fetched — git's own marker, ``FETCH_HEAD``, which every fetch writes."""
-    marker = ws / ".git" / "FETCH_HEAD"
-    try:
-        return _iso(marker.stat().st_mtime)
-    except OSError:
-        return None
+    # through workspace_paths, so an evicted workspace is hydrated before it is looked at (WS-S3)
+    st = wpaths.stat_inside(ws, ".git/FETCH_HEAD", allow=(".git",))
+    return _iso(st.st_mtime) if st is not None else None
 
 
 def _commits(ws: Path, rng: str, limit: int) -> list:

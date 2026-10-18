@@ -118,3 +118,29 @@ def test_a_token_stored_as_a_name_is_untitled_and_replaced():
                          turns_of=lambda s: EXCHANGE, name=lambda s, t, n=None, o=False: over.setdefault(s, (t, o)) is not None,
                          complete=lambda a, b: {"title": "Lisbon sponsors"}, now=NOW, run=lambda f: f())
     assert picked == ["pchat-t"] and over["pchat-t"] == ("Lisbon sponsors", True)
+
+
+def test_a_listing_reads_no_history_for_a_row_no_turn_count_could_title():
+    """perf (app.dev 2026-10-17): the rail listing read every chat's whole conversation to decide
+    whether to title it. A row `_wanted` refuses at any count is now refused without the read."""
+    read = []
+    rows = [{"session": "pchat-h", "label": "Sponsors", "name_source": "human"},
+            {"session": "pchat-n", "label": "Lisbon venue"},                       # named, not by us
+            {"session": "pchat-a", "label": "Venue", "name_source": "agent", "auto_titled_turns": 7},
+            {"session": "pchat-m", "label": "", "meeting": "41"},
+            {"session": "meet-9", "label": ""},
+            {"session": "pchat-u", "label": ""}]                                    # the one to title
+    picked = at.schedule("u1", rows, turns_of=lambda s: read.append(s) or EXCHANGE,
+                         name=lambda *a, **k: True, complete=lambda s, u: {"title": "Sponsors"},
+                         now=NOW, run=lambda f: f())
+    assert picked == ["pchat-u"] and read == ["pchat-u"]
+
+
+def test_the_history_skip_never_changes_what_is_picked():
+    """The pre-check is `_wanted` at an unbounded count, so it can only skip rows `_wanted` would refuse."""
+    rows = [{"session": "pchat-g", "label": "Venue", "name_source": "agent", "auto_titled_turns": 2},
+            {"session": "pchat-t", "label": "scaffold-JR3RNMaje4Fglgy6kNoBBeqRlY9OglldE_wHESmKc0g",
+             "name_source": "human"}]
+    six = EXCHANGE * 3
+    picked, _ = _run(rows, {"pchat-g": six, "pchat-t": EXCHANGE}, lambda s, u: {"title": "Sponsors"})
+    assert picked == ["pchat-g", "pchat-t"]

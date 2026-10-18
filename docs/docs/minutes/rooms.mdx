@@ -51,6 +51,16 @@ the same card as a tag.
 people always land in the same room. Vexa is there with no access to either person's own data;
 personal questions get "ask me in your chat". A room of two holds exactly two people.
 
+### Ask Vexa to call someone
+
+In your own chat, say **"Call Maya"** (or `@Maya`, or their address). Vexa finds Maya among the people
+you share a workspace with, opens your room of two with her, starts a Vexa call there and rings her in
+the app. The room opens and you are in the call at once, shown as calling Maya with **Cancel** until
+she joins; the ring lasts 30 seconds. If two people match,
+Vexa asks which one; if nobody you share a workspace with matches, it asks who you mean. A Vexa call
+is Vexa's own call, not a Meet or Zoom link. Sending Vexa into an existing Meet, Teams or Zoom link
+is a different thing.
+
 ### Start a call and ring people
 
 **Start call** in a room rings the room's members, and only them:
@@ -102,6 +112,9 @@ History and links are unchanged.
 | "… is locked … by policy" | The workspace's policy locks that switch | Ask the workspace's owner |
 | "Calls in this room are not transcribed" | Transcribe calls is off | Start the call without a transcript, or ask to turn it back on |
 | No card after a tag | The person is already in the room | Nothing: they are notified |
+| "Which … do you mean?" after "Call …" | More than one person you share a workspace with matches | Answer with the one you mean |
+| Vexa asks who you mean after "Call …" | Nobody you share a workspace with matches | Name them as People shows them, or give their address to invite them |
+| "Confirm …" before a call rings | This chat read your private data, and the ring is a notice to someone else | Reply with the confirm code to ring them once |
 
 ## How it works
 
@@ -149,6 +162,23 @@ mentions. The server answers the case and the exact card. The card's buttons cal
 the room's `created_by` (who pays) is the person who opened it. The workspace records `kind: pair`
 in the registry. A pair workspace is never in the membership index, a workspace list, a mount or the
 people directory. Every membership grant refuses a third person.
+
+### Calling a person
+
+`POST /api/rooms/call` (the agent's `call_person`) composes the pieces above. It matches `person` in
+the caller's directory only (account id, then a whole name or address, then a name's leading words);
+several matches answer 409 with names and shared workspaces, never an address. It finds or creates the
+room of two (`pair_rooms.open_room`), starts the call on meeting-api with the caller's own signed
+identity forwarded unchanged (so the caller's regime, scopes and bot limit apply, and the meeting is
+theirs), binds it to the room as Start call does, and rings the other person. With Transcribe calls off
+the call starts untranscribed. `room` instead of `person` calls an existing room. A call already live
+in the room is reused and the person is rung again.
+
+The answer carries `ui_action: "join_call"`. The harness turns it into a `call` event (ids and the other
+person's name only), and the terminal joins as the caller: only in the view whose own message placed
+the call, only on the live stream, and only after `GET /api/sessions/{id}/call` shows the call is still
+that one and its `owner` is the reader (`you`). The caller's join is what keeps the call past
+meeting-api's first-join window (`CALL_FIRST_JOIN_TIMEOUT_SEC`, 30 s).
 
 ### Switches
 
@@ -212,6 +242,11 @@ internal tier: run it as a dry run, read the report, then run it with `dry_run=f
 - **Agents never add people (deny test 29).** An agent-composed mention (`origin: agent`, or any
   delegated caller) is never offered "always", never acts on an existing line (`floor.agent-mentions-never-add`),
   and the add route refuses every delegated caller.
+- **Only a person in the chat calls someone.** `POST /api/rooms/call` refuses an unwatched agent
+  (`person: true`), a turn other people read, and a room's workspace principal
+  (`floor.ws-principal-never-calls-a-person`). A workspace DENY rule on `call.person` stops calls in its
+  rooms. The ring is a notice to someone else, so a chat that read private data holds it until the
+  person confirms. The request carries no text: nothing the agent writes reaches the other person.
 - **Vexa off means nothing runs (deny test 25).** No turn, signal or card proposal from a room with Vexa off.
 - **Pair workspaces stay private to the pair.** They are hidden from every enumeration, and a third
   member is refused at the one grant function.

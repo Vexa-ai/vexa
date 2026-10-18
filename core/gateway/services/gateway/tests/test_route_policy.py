@@ -245,7 +245,9 @@ def test_the_shipped_manifests_admit_the_mcp_re_entry_on_its_callback_routes_onl
 @needs_agent
 def test_the_shipped_manifests_admit_a_worker_on_the_mcp_door_and_the_friction_report_only():
     a = routes_manifest.load({"gateway", "meetings", "identity", "mcp", "agent"})
-    assert a.delegation == {k for k, d in a.owner_of.items() if d == "mcp"} | {("POST", "/agent/friction")}
+    # + the workspace store's two worker routes (WS-S3): a worker fetches and pushes its own mounts
+    assert a.delegation == {k for k, d in a.owner_of.items() if d == "mcp"} | {("POST", "/agent/friction"),
+        ("GET", "/agent/workspace-store/fetch"), ("POST", "/agent/workspace-store/push")}
     assert a.forwards == {"agent": ("/agent/", "/api/")}
 
 

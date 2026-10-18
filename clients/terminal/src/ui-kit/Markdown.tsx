@@ -7,9 +7,11 @@
  *  Intentionally a small subset — robust,
  *  not spec-complete. HTML comments never reach the page — see stripHtmlComments. */
 "use client";
-import { Fragment, type ReactNode } from "react";
+import { createContext, Fragment, useContext, type ReactNode } from "react";
 import { Card, CardGroup, InternalLink, Wikilink, isInternalHref, useOpenEntity } from "./docLinks";
 import { RefChip } from "./RefChip";
+// a bare path in a chat names no workspace (2026-10-18) — its own line, beside the renderer imports
+import { UnqualifiedPath, useIsUnqualified } from "./docLinks";
 import { DocImage } from "./docImages";
 import { MeetingChip, meetingNotePath, meetingRefOfHref } from "./MeetingChip";
 import { MermaidDiagram, isMermaidFence } from "./docDiagrams";
@@ -17,6 +19,13 @@ import { VexaFence } from "./blocks/Blocks";
 import { FENCE_LANG } from "./blocks/spec";
 import { EntityChip } from "./primitives/Chip";
 import { ExternalLink } from "./primitives/Links";
+import { CodeGroup, DOC_BLOCKS, TaskMark } from "./docBlocks";
+import { directivesToComponents, parseDocComponents, sanitizeDocHtml, taskOf, type DocNode } from "./docComponents";
+
+/** Nodes a host places in the page (the workspace README's live lines): a line `VXSLOT-<n>-VXSLOT`
+ *  draws `slots[n]` there. MdxDoc reads the same context, so a page that falls back keeps them. */
+export const SlotContext = createContext<ReactNode[]>([]);
+const SLOT_LINE = /^VXSLOT-(\d+)-VXSLOT$/;
 
 // A workspace-doc path in inline code → clickable to open the doc. Matches kg/ docs by any
 // spelling the agent uses (relative `kg/entities/x.md` or the verbatim absolute mount path
@@ -34,6 +43,9 @@ function EntityCode({ code }: { code: string }) {
 }
 function EntityCodeLink({ code }: { code: string }) {
   const openEntity = useOpenEntity();
+  // A bare path with no page around it (a chat reply) names no workspace: plain, never a guess
+  // (founder ruling 2026-10-18 — `README.md` opened the organisation's README).
+  if (useIsUnqualified(code)) return <UnqualifiedPath text={code} />;
   // A workspace document named in the text is a LINK to it, so it wears the entity chip — not mono
   // blue code that reads as code and behaves as a link (guidelines §4.5). The path is the tooltip;
   // the chip shows the file's name.
@@ -109,6 +121,11 @@ function inline(text: string): ReactNode[] {
     }
   });
   return out;
+}
+
+/** One line of inline markdown (code, emphasis, links, chips) — for a host that draws its own lines. */
+export function InlineMarkdown({ text }: { text: string }): ReactNode {
+  return <>{inline(text)}</>;
 }
 
 // bold / italic / images / links / wikilinks within a non-code segment
@@ -254,8 +271,61 @@ function tableStart(lines: string[], index: number): { header: string[]; align: 
 
 // ── block parser: split lines into headings, lists, code fences, quotes, rules, paras ──
 export function Markdown({ children, style }: { children: string; style?: React.CSSProperties }): ReactNode {
-  const src = stripHtmlComments(children ?? "");
-  const lines = src.replace(/\r\n/g, "\n").split("\n");
+  const slots = useContext(SlotContext);
+  // comments out, raw HTML loses its executable parts, `:::` blocks become components; then the
+  // components (Mintlify's closed set) become a tree and every stretch of text between them is
+  // markdown again — so `<Steps>`, `<Warning>` and friends never print as tags (2026-10-18)
+  const src = directivesToComponents(sanitizeDocHtml(stripHtmlComments(children ?? "")));
+  return <div className="vx-prose" style={style}>{renderNodes(parseDocComponents(src), slots, "n")}</div>;
+}
+
+function renderNodes(nodes: DocNode[], slots: ReactNode[], key: string): ReactNode[] {
+  return nodes.map((n, i) => (n.t === "text"
+    ? <Fragment key={`${key}${i}`}>{markdownBlocks(n.text, slots)}</Fragment>
+    : <Fragment key={`${key}${i}`}>{renderComponent(n, slots, `${key}${i}.`)}</Fragment>));
+}
+
+/** One component of the closed set, its children rendered as markdown again. */
+function renderComponent(n: Extract<DocNode, { t: "el" }>, slots: ReactNode[], key: string): ReactNode {
+  const a = n.attrs;
+  const kids = () => renderNodes(n.children, slots, key);
+  // containers whose children are items: only the element children count, text between them is layout
+  const items = () => n.children.filter((c) => c.t === "el" || c.text.trim()).map((c, i) =>
+    c.t === "el" ? <Fragment key={i}>{renderComponent(c, slots, `${key}${i}.`)}</Fragment> : <Fragment key={i}>{markdownBlocks(c.text, slots)}</Fragment>);
+  switch (n.name) {
+    case "Card": return <Card title={a.title} icon={a.icon} href={a.href}>{n.children.some((c) => c.t === "el" || c.text.trim()) ? kids() : undefined}</Card>;
+    case "CardGroup": return <CardGroup cols={Number(a.cols) || 2}>{items()}</CardGroup>;
+    case "Steps": return <DOC_BLOCKS.Steps>{items()}</DOC_BLOCKS.Steps>;
+    case "Tabs": return <DOC_BLOCKS.Tabs>{n.children.filter((c) => c.t === "el").map((c, i) =>
+      <DOC_BLOCKS.Tab key={i} title={c.t === "el" ? c.attrs.title : undefined}>{c.t === "el" ? renderNodes(c.children, slots, `${key}${i}.`) : null}</DOC_BLOCKS.Tab>)}</DOC_BLOCKS.Tabs>;
+    case "CodeGroup": {
+      // each fence is one tab, named by the text after its language (`bash title`) or the language
+      const fences = [...nodeText(n.children).matchAll(/^\s*```([^\n]*)\n([\s\S]*?)^\s*```\s*$/gm)];
+      return <CodeGroup items={fences.map((f, i) => {
+        const [lang, ...rest] = f[1].trim().split(/\s+/);
+        return { label: rest.join(" ") || lang || `Code ${i + 1}`, node: <Fragment key={i}>{markdownBlocks("```" + f[1] + "\n" + f[2] + "```", slots)}</Fragment> };
+      })} />;
+    }
+    case "Columns": {
+      // a column whose live list rendered nothing for this reader leaves no gap; none left, no grid
+      const cols = n.children.filter((c): c is Extract<DocNode, { t: "el" }> => c.t === "el" && !isBlank(c.children));
+      if (!cols.length) return null;
+      return <DOC_BLOCKS.Columns cols={a.cols}>{cols.map((c, i) => <Fragment key={i}>{renderComponent(c, slots, `${key}${i}.`)}</Fragment>)}</DOC_BLOCKS.Columns>;
+    }
+    case "Accordion": return <DOC_BLOCKS.Accordion title={a.title} defaultOpen={a.defaultOpen}>{kids()}</DOC_BLOCKS.Accordion>;
+    case "Frame": return <DOC_BLOCKS.Frame caption={a.caption}>{kids()}</DOC_BLOCKS.Frame>;
+    case "Step": case "Tab": case "Note": case "Info": case "Warning": case "Tip": case "Check": case "Danger": case "Callout": case "AccordionGroup": case "Column": {
+      const C = DOC_BLOCKS[n.name] as (p: { title?: string; children?: ReactNode }) => ReactNode;
+      return <C title={a.title}>{kids()}</C>;
+    }
+  }
+}
+const isBlank = (nodes: DocNode[]): boolean => nodes.every((c) => c.t === "text" && !c.text.trim());
+const nodeText = (nodes: DocNode[]): string => nodes.map((c) => (c.t === "text" ? c.text : nodeText(c.children))).join("");
+
+/** Markdown with no components in it → blocks. */
+function markdownBlocks(text: string, slots: ReactNode[]): ReactNode[] {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   let i = 0;
   let key = 0;
@@ -264,7 +334,14 @@ export function Markdown({ children, style }: { children: string; style?: React.
     const Tag = ordered ? "ol" : "ul";
     blocks.push(
       <Tag key={key++}>
-        {items.map((it, j) => <li key={j}>{inline(it)}</li>)}
+        {items.map((it, j) => {
+          // a GFM task (`- [x] done`) is a box, not literal brackets — read-only here: this renderer
+          // has no page file behind it (MdxDoc's Task is the one that can tick a box off)
+          const task = taskOf(it);
+          return task
+            ? <li key={j} className="vx-task-item" data-done={task.done ? "" : undefined}><TaskMark done={task.done} label={task.text} /><span className="vx-task-text">{inline(task.text)}</span></li>
+            : <li key={j}>{inline(it)}</li>;
+        })}
       </Tag>,
     );
   };
@@ -303,6 +380,10 @@ export function Markdown({ children, style }: { children: string; style?: React.
 
     // blank line
     if (/^\s*$/.test(line)) { i++; continue; }
+
+    // a node the host placed here (SlotContext)
+    const slot = SLOT_LINE.exec(line.trim());
+    if (slot) { blocks.push(<Fragment key={key++}>{slots[Number(slot[1])] ?? null}</Fragment>); i++; continue; }
 
     // horizontal rule
     if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
@@ -412,7 +493,7 @@ export function Markdown({ children, style }: { children: string; style?: React.
 
     // paragraph — gather consecutive plain lines until a blank or a block starter
     const para: string[] = [];
-    while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^\s*```/.test(lines[i]) && !/^(#{1,4})\s+/.test(lines[i]) && !/^\s*>/.test(lines[i]) && !/^\s*[-*]\s+/.test(lines[i]) && !/^\s*\d+[.)]\s+/.test(lines[i]) && !/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i]) && !CARD_BLOCK_START.test(lines[i]) && !tableStart(lines, i)) {
+    while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^\s*```/.test(lines[i]) && !/^(#{1,4})\s+/.test(lines[i]) && !/^\s*>/.test(lines[i]) && !/^\s*[-*]\s+/.test(lines[i]) && !/^\s*\d+[.)]\s+/.test(lines[i]) && !/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i]) && !CARD_BLOCK_START.test(lines[i]) && !SLOT_LINE.test(lines[i].trim()) && !tableStart(lines, i)) {
       para.push(lines[i]); i++;
     }
     blocks.push(
@@ -422,5 +503,5 @@ export function Markdown({ children, style }: { children: string; style?: React.
     );
   }
 
-  return <div className="vx-prose" style={style}>{blocks}</div>;
+  return blocks;
 }

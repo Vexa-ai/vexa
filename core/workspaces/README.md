@@ -25,6 +25,9 @@ working (see `~/dev/biz/drafts/2026-09-03-workspaces-domain-plan.md` for the ful
 - ✅ delivered (step 2) — the portable primitives (`workspace_id.py`, `workspace_paths.py`,
   `entities.py`, `links.py`) moved here from `core/agent/shared/`; zero-HTTP, stdlib+git only —
   proof that a workspace can be read/written with no service around it ("local mode").
+- ✅ built on branch `ws-s3` (0.13.4 lane WS-S3, founder decision I17) — `store/`: workspace repositories
+  in S3-compatible object storage behind `VEXA_WORKSPACE_BACKEND=s3` (default `volume`), the bucket the
+  single durable truth and every pod copy a cache. See [`store/README.md`](store/README.md).
 - ⬜ planned (steps 3-9) — the read surface, the id/link registry, the desk/flows-facing seam,
   attach/sync/publish/credentials, membership, and the cutover that makes `core/agent` a client of
   this domain through public functions instead of same-process imports.

@@ -49,9 +49,11 @@ heads per scanned workspace.
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -86,6 +88,10 @@ from shared import proposals as proposals_store
 from workspaces.shared import workspace_paths as wpaths
 
 logger = logging.getLogger("agent_api.desktop")
+
+#: The reads one desktop request starts early or fans out (flows, chat lists, git histories). Its
+#: tasks never wait on each other, so a shared pool cannot deadlock; a full pool only queues.
+_POOL = ThreadPoolExecutor(max_workers=32, thread_name_prefix="desktop-read")
 
 MAX_REFS = 100
 ACTIVITY_SCAN_MAX = 12
@@ -335,6 +341,82 @@ def build(**d) -> APIRouter:
     def _gdir() -> Path:
         return system_mounts.global_root(settings, wsr.root)
 
+    # ── ONE READ PER KIND PER REQUEST (2026-10-18: the workspace page took 15-31 s). Each route runs
+    # inside `workspace_membership.read_scope()`; these remember a person's chat lists, chat targets
+    # and room head-counts until it ends, so a page reads each once instead of once per tile/row.
+    memo = membership_mod.scope_memo
+
+    def _future(key: tuple, fn, *, early: bool = False) -> Future:
+        """``fn()``'s answer as a future, once per read scope for ``key``: started on the pool now
+        when ``early`` (it then runs beside the rest of the request), else computed here."""
+        def start() -> Future:
+            if early:
+                return _POOL.submit(contextvars.copy_context().run, fn)
+            f: Future = Future()
+            try:
+                f.set_result(fn())
+            except Exception as exc:  # noqa: BLE001 — raised again to the caller, as before
+                f.set_exception(exc)
+            return f
+        return memo(key, start)
+
+    def _list_for(subject: str) -> list[dict]:
+        return _future(("desktop.list_for", str(subject)), lambda: store.list_for(subject)).result()
+
+    def _index(subject: str) -> list[dict]:
+        return _future(("desktop.index", str(subject)), lambda: sess.list(subject)).result()
+
+    def _early_reads(subject: str, only: Optional[str]) -> None:
+        """Start the slow independent reads of an attention answer before the tiles are built:
+        flows' routines (and, for one workspace's page, its runs), the chat list, the chat index."""
+        _future(("desktop.routines", subject), lambda: _routine_rows(subject), early=True)
+        if only is not None:
+            _future(("desktop.runs", subject), lambda: _run_history(subject), early=True)
+        if store is not None:
+            _future(("desktop.list_for", subject), lambda: store.list_for(subject), early=True)
+        _future(("desktop.index", subject), lambda: sess.list(subject), early=True)
+
+    def _prefetch_targets(pairs) -> None:
+        known = memo(("desktop.targets",), dict)
+        want = list(dict.fromkeys((str(o), str(n)) for o, n in pairs if n))
+        want = [p for p in want if p not in known]
+        get = getattr(sess, "targets", None)
+        if not want or get is None:
+            return
+        try:
+            known.update(get(want))
+        except Exception:  # noqa: BLE001 — each chat is then asked on its own, as before
+            pass
+
+    def _target_of(owner, name) -> str:
+        """``sess.target`` (raises as it does), answered from the request's one batched read."""
+        known = memo(("desktop.targets",), dict)
+        key = (str(owner), str(name))
+        if key in known:
+            return known[key]
+        return sess.target(owner, name)
+
+    def _prefetch_humans(ids) -> None:
+        known = memo(("desktop.humans",), dict)
+        want = [i for i in dict.fromkeys(str(i) for i in ids if i) if i not in known]
+        get = getattr(store, "participants_of", None) if store is not None else None
+        if not want or get is None:
+            return
+        try:
+            parts = get(want)
+        except Exception:  # noqa: BLE001 — each room is then counted on its own, as before
+            return
+        for i in want:
+            known[i] = len([p for p in parts.get(i, ()) if p.get("kind") == "human"])
+
+    def _parallel(fn, items: list) -> list:
+        """``[fn(x) for x in items]`` on a few threads (each git read is a subprocess), every call in a
+        copy of this request's context so the read scope's memos are shared."""
+        if len(items) < 2:
+            return [fn(x) for x in items]
+        futs = [_POOL.submit(contextvars.copy_context().run, fn, x) for x in items]
+        return [f.result() for f in futs]
+
     def _rows(subject: str) -> list[dict]:
         memberships, _ = membership_mod.reconciled_memberships(wsr.root, subject, mindex.list)
         return names_mod.listing(wsr.root, subject, registry=workspace_registry,
@@ -401,6 +483,7 @@ def build(**d) -> APIRouter:
             tiles = [t for t in tiles if t["kind"] == "company"]
 
         dirs: dict[str, Path] = {}
+        jobs: list[tuple[dict, Path]] = []
         for i, t in enumerate(tiles):
             t["last_activity"] = None
             t["last_call"] = None
@@ -411,11 +494,18 @@ def build(**d) -> APIRouter:
             if target is None:
                 continue
             dirs[t["slug"]] = target
+            jobs.append((t, target))
+
+        def line_of(job: tuple[dict, Path]) -> Optional[dict]:
+            t, target = job
             try:
                 _, change = last_change(wsr, target, slug=t["slug"], path=None, viewer=subject, global_dir=gdir)
             except Exception:  # noqa: BLE001 — a history that cannot be read costs the line, not the page
                 change = None
-            t["last_activity"] = activity_line(change)
+            return activity_line(change)
+
+        for (t, _target_dir), line in zip(jobs, _parallel(line_of, jobs)):
+            t["last_activity"] = line
 
         return rows, shown, names, tiles, dirs
 
@@ -428,6 +518,10 @@ def build(**d) -> APIRouter:
             "The desktop is read by the person's own app. To read or change how it is arranged, use "
             "desktop_read or desktop_arrange_propose."))
         body = body or DesktopSectionsBody()
+        with membership_mod.read_scope():
+            return _sections(request, body)
+
+    def _sections(request: Request, body: DesktopSectionsBody) -> dict:
         subject = str(subject_of(request))
         email = (request.headers.get("x-user-email") or "").strip() or None
         now = time.time()
@@ -529,7 +623,7 @@ def build(**d) -> APIRouter:
                 add(str(r.get("id")), bound)
         # the chat that sent the bot, or the meeting's own chat, by where that chat works
         try:
-            chats = sess.list(subject)
+            chats = _index(subject)
         except Exception:  # noqa: BLE001
             chats = []
         for c in chats:
@@ -591,14 +685,15 @@ def build(**d) -> APIRouter:
         if store is None:
             return []
         try:
-            rows = store.list_for(subject)[:CALL_SCAN]
+            rows = _list_for(subject)[:CALL_SCAN]
         except Exception:  # noqa: BLE001
             return []
+        _prefetch_targets((r.get("owner") or "", r.get("name")) for r in rows)
         where: dict[str, tuple[str, dict]] = {}
         for row in rows:
             owner = str(row.get("owner") or "")
             try:
-                target = (sess.target(owner, row["name"]) or "").strip()
+                target = (_target_of(owner, row["name"]) or "").strip()
             except Exception:  # noqa: BLE001
                 continue
             slug = target or (DESK if owner == subject else "")
@@ -676,7 +771,7 @@ def build(**d) -> APIRouter:
 
         if visibility == "shared_chats":
             try:
-                sessions = [{**r, "shared": r.get("owner") != subject} for r in store.list_for(subject)][:200]
+                sessions = [{**r, "shared": r.get("owner") != subject} for r in _list_for(subject)][:200]
                 seen = shared_chat_presence(store, subject, sessions, now)
             except Exception:  # noqa: BLE001
                 seen = {}
@@ -697,7 +792,7 @@ def build(**d) -> APIRouter:
                     if len(chats) >= PRESENCE_MEMBERS_MAX:
                         continue
                     try:
-                        chats[who] = sess.list(who)
+                        chats[who] = _index(who)
                     except Exception:  # noqa: BLE001
                         chats[who] = []
                 newest = max((float(c.get("last_active") or 0) for c in chats[who]
@@ -845,7 +940,7 @@ def build(**d) -> APIRouter:
         if store is None:
             return []
         try:
-            return store.list_for(subject)[:SESSION_SCAN]
+            return _list_for(subject)[:SESSION_SCAN]
         except Exception:  # noqa: BLE001
             return []
 
@@ -854,7 +949,7 @@ def build(**d) -> APIRouter:
         own desk otherwise (another person's desk or a workspace closed to the viewer is never named)."""
         owner = str(row.get("owner") or "")
         try:
-            target = (sess.target(owner, row["name"]) or "").strip()
+            target = (_target_of(owner, row["name"]) or "").strip()
         except Exception:  # noqa: BLE001
             target = ""
         slug = att.home_slug(target, subject) if owner == subject else (target or "")
@@ -865,6 +960,9 @@ def build(**d) -> APIRouter:
         return row["name"] if str(row.get("owner")) == subject else row["id"]
 
     def _humans(row_id: str) -> int:
+        known = memo(("desktop.humans",), dict)
+        if str(row_id) in known:
+            return known[str(row_id)]
         try:
             return len(store.humans(row_id)) if store is not None else 1
         except Exception:  # noqa: BLE001
@@ -961,9 +1059,16 @@ def build(**d) -> APIRouter:
             require_read_in_ceiling(request, body.workspace)
         refuse_delegated(request, reason="person_only", instruction=(
             "The attention home is read by the person's own app. Use whats_waiting for what is waiting."))
-        cx = _context(request)
+        with membership_mod.read_scope():
+            cx = _context(request)
+            _early_reads(cx["subject"], body.workspace)
+            return _attention(request, body, cx,
+                              _tiles(request, cx["subject"], cx["email"], cx["gdir"], cx["admin"]))
+
+    def _attention(request: Request, body: AttentionBody, cx: dict, tiled: tuple) -> dict:
+        """The attention answer from one ``_tiles`` read — the page passes the one it already made."""
         subject, email, gdir, now = cx["subject"], cx["email"], cx["gdir"], cx["now"]
-        rows, shown, names, tiles, dirs = _tiles(request, subject, email, gdir, cx["admin"])
+        rows, shown, names, tiles, dirs = tiled
         slugs = [t["slug"] for t in tiles]
         openable = set(slugs)
         only = body.workspace
@@ -984,6 +1089,8 @@ def build(**d) -> APIRouter:
             except Exception:  # noqa: BLE001 — a list that cannot be read costs its items
                 pass
         srows = _store_rows(subject)
+        _prefetch_targets((r.get("owner") or "", r.get("name")) for r in srows)
+        _prefetch_humans(r.get("id") for r in srows)
         homes_by_chat = {r["id"]: _chat_home(r, subject, openable) for r in srows}
         # proposals after a call are NOT needs (founder ruling 2026-10-16): an ended meeting is not a
         # decision, and its post-call proposals are reviewed in that call's chat. A review item exists
@@ -1037,7 +1144,7 @@ def build(**d) -> APIRouter:
                           "homes": hs, "note": {"slug": hs[0], "path": path} if path and hs else None})
         needs += att.upcoming_needs(items, now, openable)
         # routines
-        routines = _routine_rows(subject)
+        routines = _future(("desktop.routines", subject), lambda: _routine_rows(subject)).result()
         needs += att.failed_routine_needs(routines, subject, openable)
         # a proposed workspace image (a just-created workspace's identity) waits for its owner
         id_rows = []
@@ -1102,16 +1209,27 @@ def build(**d) -> APIRouter:
         shared_names = {c["name"] for c in room_chats if str(c.get("owner")) == subject}
         chats = []
         try:
-            index = sess.list(subject)
+            index = _index(subject)
         except Exception:  # noqa: BLE001
             index = []
+        by_name: dict = {}
+        if store is not None and getattr(store, "by_names", None) is not None:
+            want = [str(c.get("session") or "") for c in index[:SESSION_SCAN]
+                    if str(c.get("session") or "") and str(c.get("session") or "") not in shared_names
+                    and att.home_slug(c.get("target"), subject) == slug]
+            try:
+                by_name = store.by_names(subject, want) if want else {}
+                by_name = {n: by_name.get(n) for n in want}
+                _prefetch_humans(r["id"] for r in by_name.values() if r is not None)
+            except Exception:  # noqa: BLE001 — each chat is then looked up on its own, as before
+                by_name = {}
         for c in index[:SESSION_SCAN]:
             name = str(c.get("session") or "")
             if not name or name in shared_names or att.home_slug(c.get("target"), subject) != slug:
                 continue
             if store is not None:
                 try:
-                    row = store.by_name(subject, name)
+                    row = by_name[name] if name in by_name else store.by_name(subject, name)
                     if row is not None and _humans(row["id"]) > 1:
                         continue
                 except Exception:  # noqa: BLE001
@@ -1125,7 +1243,8 @@ def build(**d) -> APIRouter:
                           "last_active": at})
         chats.sort(key=lambda c: c["last_active"] or 0, reverse=True)
         out_routines = []
-        history = _run_history(subject) if any(r["where"] == slug for r in routines) else None
+        history = (_future(("desktop.runs", subject), lambda: _run_history(subject)).result()
+                   if any(r["where"] == slug for r in routines) else None)
         for r in routines:
             if r["where"] != slug:
                 continue
@@ -1181,6 +1300,10 @@ def build(**d) -> APIRouter:
             require_read_in_ceiling(request, body.workspace)
         refuse_delegated(request, reason="person_only", instruction=(
             "References are resolved by the person's own app."))
+        with membership_mod.read_scope():
+            return _refs(request, body)
+
+    def _refs(request: Request, body: RefsBody) -> dict:
         cx = _context(request)
         subject, email, gdir, now = cx["subject"], cx["email"], cx["gdir"], cx["now"]
         admin = cx["admin"]
@@ -1408,13 +1531,22 @@ def build(**d) -> APIRouter:
         rel = body.path.strip().lstrip("/")
         if not rel or ".." in rel.split("/") or not rel.lower().endswith(".md"):
             raise HTTPException(status_code=400, detail="path must be a page (.md) inside the workspace")
+        with membership_mod.read_scope():
+            return _render_page(request, body, slug, rel)
+
+    def _render_page(request: Request, body: PageBody, slug: str, rel: str) -> dict:
         cx = _context(request)
         subject, email, gdir, now = cx["subject"], cx["email"], cx["gdir"], cx["now"]
-        _rows_, _shown, _names, tiles, _dirs = _tiles(request, subject, email, gdir, cx["admin"])
+        _early_reads(subject, slug)
+        tiled = _tiles(request, subject, email, gdir, cx["admin"])
+        tiles = tiled[3]
         tile = next((t for t in tiles if t["slug"] == slug), None)
         if tile is None:
             raise HTTPException(status_code=404, detail="no such workspace among yours")
-        attention = desktop_attention(request, AttentionBody(cards=body.cards, workspace=slug))
+        # ONE `_tiles` read for the page and its attention entry (it was read twice per page); the
+        # attention route's own ceiling check still runs, as it did when the page called the route
+        require_read_in_ceiling(request, slug)
+        attention = _attention(request, AttentionBody(cards=body.cards, workspace=slug), cx, tiled)
         entry = (attention.get("workspaces") or {}).get(slug) or {}
         target = _target(request, None if slug == att.DESK else slug)
         source = None

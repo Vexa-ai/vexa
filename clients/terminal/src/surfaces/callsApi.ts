@@ -16,7 +16,9 @@ export interface SessionCall {
   transcribed: boolean;
   participants: number;
 }
-export interface CallState { session_id: string; calls: boolean; call: SessionCall | null }
+/** `you` is the reader's own account id (absent on an older server): with `call.owner` it tells the
+ *  reader's own call from someone else's. */
+export interface CallState { session_id: string; calls: boolean; you?: string; call: SessionCall | null }
 export interface CallJoin { session_id: string; url: string; token: string; role: string; call: SessionCall }
 export interface Proposal {
   id: string; session_id: string; meeting_id: number | null; owner: string;

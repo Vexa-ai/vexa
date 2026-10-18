@@ -1,5 +1,5 @@
 "use client";
-import { privateApproval } from "./approvalCard";
+import { privateApproval, type PrivateApproval } from "./approvalCard";
 import { Identity } from "../ui-kit/Identity";
 import { useRoom } from "./roomState";
 import { ComposerSlotProvider } from "./composerSlot";
@@ -12,7 +12,7 @@ import { minutesOnly } from "../platform/mode";
 import { useFeature } from "../platform/features";
 import { liveMeetingsNow } from "./liveMeetings";
 import { decideProposal, type ProposalChoice } from "./targetProposal";
-import { useService, useStore, CommandServiceId, ARTIFACT_EVENT, CHOOSE_TARGET_EVENT, CHAT_ARTIFACTS_EVENT, ASK_CHAT_EVENT, CALL_START_EVENT, OPEN_SESSION_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, ONBOARDING_REPLY_SEP, ROOM_SHOWING_EVENT } from "../platform";
+import { useService, useStore, CommandServiceId, ARTIFACT_EVENT, CHOOSE_TARGET_EVENT, CHAT_ARTIFACTS_EVENT, ASK_CHAT_EVENT, CALL_PLACED_EVENT, CALL_START_EVENT, OPEN_SESSION_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, ONBOARDING_REPLY_SEP, ROOM_SHOWING_EVENT } from "../platform";
 import { LayoutServiceId, type ActiveTab } from "../platform/layout";
 import { registerCommand, type TabProps } from "../contributions";
 import { meetingsOnly } from "../platform/mode";
@@ -33,7 +33,7 @@ import { checkRoomTags, checkShare, shareWith, type ShareCheck } from "./shareFl
 import type { TagAnswer } from "./roomPeopleApi";
 import { TagCards } from "./TagCard";
 import { MentionChips, MentionChoice, MentionPicker, ShareConfirm } from "./MentionUI";
-import { joinInterim, streamChatTurn, type ChatPhase } from "./chatStream";
+import { callFromThisView, joinInterim, streamChatTurn, type ChatPhase, type HeldWrite } from "./chatStream";
 import { readFault } from "./faults";
 import { createStickToBottom, type StickToBottom } from "./stickToBottom";
 import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, writeIncludeSchedule, type FocusPayload } from "./chatContext";
@@ -117,6 +117,41 @@ function settleOps(ops: Op[]): Op[] {
     : ops;
 }
 
+/** The status a finished call leaves its step in, when the call did not simply work. */
+export function settledStatus(outcome: string | undefined, ok: boolean): Op["status"] | null {
+  if (outcome === "held") return "held";
+  if (outcome === "refused" || outcome === "failed" || !ok) return "error";
+  return null;
+}
+
+/** Mark the step a result belongs to — by its call id, else the newest step of that tool still
+ *  unsettled — with how the call ended. */
+export function markOp(ops: Op[], callId: string | undefined, tool: string, status: Op["status"]): Op[] {
+  let at = callId ? ops.findIndex((o) => o.callId === callId) : -1;
+  if (at < 0) {
+    const label = toolOp(tool).label;
+    for (let i = ops.length - 1; i >= 0; i--) {
+      if ((ops[i].status === "running" || ops[i].status === "done") && ops[i].label.split(" · ")[0] === label.split(" · ")[0]) { at = i; break; }
+    }
+  }
+  if (at < 0) return ops;
+  return ops.map((o, i) => (i === at ? { ...o, status } : o));
+}
+
+/** The steps that wrote a file the commit kept back (`paths` are relative to the workspace). */
+export function markWithheld(ops: Op[], paths: string[]): Op[] {
+  const held = (file: string) => paths.some((p) => p && (file === p || file.endsWith(`/${p}`)));
+  const hit = ops.some((o) => o.wrote && o.file && held(o.file));
+  return ops.map((o) => (o.wrote && o.file && (hit ? held(o.file) : true) && o.status !== "error" ? { ...o, status: "held" as const } : o));
+}
+
+/** The server's `held` fields as the approval card's shape. */
+export function heldApproval(h: HeldWrite): PrivateApproval | null {
+  if (!h || typeof h.code !== "string" || !h.code) return null;
+  return { code: h.code, workspace: String(h.workspace ?? ""), ...(h.workspace_name ? { name: h.workspace_name } : {}),
+           path: String(h.path ?? ""), readers: (h.readers ?? []).map(String), sources: (h.sources ?? []).map(String) };
+}
+
 /** the backend history turn shape (GET /api/sessions/:session/history).
  *
  *  `text` is what the MODEL was given: the worker's preambles, the control plane's grounding, and
@@ -131,7 +166,7 @@ type HistoryTurn =
       attachments?: { name: string; path: string; type?: string; size?: number; kind?: "image" | "file" }[];
       /** set when another agent sent this turn (ADR-0046 decision 13) */
       from_agent?: { uid?: string; thread?: string; label?: string } }
-  | { role: "agent"; text: string; ops?: { label: string; file?: string; wrote?: boolean; skill?: string }[]; commit?: string; at?: number };
+  | { role: "agent"; text: string; ops?: { label: string; file?: string; wrote?: boolean; skill?: string; outcome?: string }[]; commit?: string; at?: number };
 /** Why a turn ran, when the history says (a signal-woken turn: `"signal"`). */
 type HistoryTrigger = { trigger?: string };
 
@@ -201,12 +236,15 @@ function patchAgentTurn(key: string, agentId: string, fn: (turn: AgentTurn) => A
 
 /** map a backend op label (read/search/edit/git/web/tool) to a frontend Op (icon from opIcon) */
 const OP_VERB: Record<string, string> = { read: "Reading", search: "Searching", edit: "Writing", git: "Committing", web: "Browsing", tool: "Working", skill: "Loaded skill" };
-export function historyOp(op: { label: string; file?: string; wrote?: boolean; skill?: string }): Op {
+export function historyOp(op: { label: string; file?: string; wrote?: boolean; skill?: string; outcome?: string }): Op {
   // `skill`: a loaded skill (agent-api `workspace_reader.parse_history`) — the harness injected its
   // body as a user-role line, and it is a step of the agent's turn, never the person's words.
   const name = op.file ? op.file.split("/").filter(Boolean).pop() : op.label === "skill" ? op.skill : undefined;
   const verb = OP_VERB[op.label] ?? op.label;
-  return { icon: opIcon[op.label] ?? opIcon.tool, label: name ? `${verb} · ${name}` : verb, status: "done", file: op.file, wrote: op.wrote };
+  // `outcome`: how the call ended when it did not simply work — a held write reads held after a
+  // reload too (held-label-rooms-1018)
+  const status = settledStatus(op.outcome, true) ?? "done";
+  return { icon: opIcon[op.label] ?? opIcon.tool, label: name ? `${verb} · ${name}` : verb, status, file: op.file, wrote: op.wrote };
 }
 
 type ReferenceToken = { kind: "file" | "meeting"; value: string; raw: string };
@@ -1396,6 +1434,11 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     // patch reads it at call time, so routing is this one assignment.
     let agentId = `a-${n}`;
     const bubbles = new Map<string, string>();   // worker turn id → the agent bubble that renders it
+    // WHOSE TURN IS STREAMING HERE (call-person-autojoin): the first turn of a view that DISPATCHED
+    // the message is this person's; an attach, or a second turn on this view, may be anyone's.
+    let dispatchedTurn = !attachFrom;
+    const dispatchedTurns = new Set<string>();
+    if (!attachFrom) lastLocalSubmitRef.current = Date.now();
     const mySeq = ++sendSeqRef.current;
     const displayText = advertiseFocus ? appendReferenceToken(v, contextRef) : v.trim();
     const ctrl = new AbortController();
@@ -1467,9 +1510,10 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // rendering it twice would be the opposite failure.
           onTurn: (turnId, isNew) => {
             const known = bubbles.get(turnId);
-            if (known) { agentId = known; return true; }
-            if (!isNew) { bubbles.set(turnId, agentId); return true; }
+            if (known) { agentId = known; dispatchedTurn = dispatchedTurns.has(turnId); return true; }
+            if (!isNew) { bubbles.set(turnId, agentId); if (dispatchedTurn) dispatchedTurns.add(turnId); return true; }
             if (sendSeqRef.current !== mySeq) return false;
+            dispatchedTurn = false;
             const prev = agentId;
             patchAgentTurn(key, prev, (t) => ({ ...t, status: null }));
             const next = `a-${getChatState(key).nextId}`;
@@ -1496,6 +1540,14 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // reader. Same forwarding rule — this surface opens nothing itself.
           onOpen: (o) => window.dispatchEvent(new CustomEvent(OPEN_PAGE_EVENT, { detail: o })),
           onFocusWorkspace: (f) => window.dispatchEvent(new CustomEvent(FOCUS_WORKSPACE_EVENT, { detail: f })),
+          // THE AGENT STARTED A CALL FOR THIS PERSON ("Call tester-b"). Only the view whose own
+          // message placed it, and only live (history never streams events): the shell opens the
+          // room and joins as the caller. Every other reader of the chat sees the reply and nothing
+          // more. This surface joins nothing itself; the shell owns the call (`callPlaced.ts`).
+          onCall: (c) => {
+            if (!callFromThisView({ dispatchedTurn, lastLocalSubmitMs: lastLocalSubmitRef.current, now: Date.now() })) return;
+            window.dispatchEvent(new CustomEvent(CALL_PLACED_EVENT, { detail: c }));
+          },
           // THE AGENT ASKS TO MOVE THIS CHAT'S WRITES (UI decision 6b): the question goes on its
           // bubble with Switch / Keep. Nothing moves until the person clicks.
           onProposeTarget: (p) => patchAgentTurn(key, agentId, (t) => ({ ...t, proposal: p })),
@@ -1506,17 +1558,29 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // A sign-in browser the agent opened (`browser_session_open`): its result carries the
           // session, and the shell's live view shows it. Same forwarding rule as `onTool`.
           onToolResult: (tool, r) => {
-            // A WRITE HELD FOR THE PERSON'S APPROVAL becomes a card, not a typed code (2026-10-16)
-            const held = privateApproval(r.result);
+            // A WRITE HELD FOR THE PERSON'S APPROVAL becomes a card, not a typed code (2026-10-16).
+            // The server's `held` fields first: the result body is a short summary on most harnesses
+            // and a cut-off JSON body made no card at all.
+            const held = (r.held ? heldApproval(r.held) : null) ?? privateApproval(r.result);
             if (held) patchAgentTurn(key, agentId, (t) => ({ ...t, approval: held }));
+            // …AND ITS STEP SAYS SO (held-label-rooms-1018): held, or not done, never "Wrote".
+            const ended = settledStatus(r.outcome ?? (held ? "held" : undefined), r.ok);
+            if (ended) patchAgentTurn(key, agentId, (t) => ({ ...t, ops: markOp(t.ops, r.callId, tool, ended) }));
             const ui = r.ok ? toolResultUiEvent(tool, r.result) : null;
             if (ui) window.dispatchEvent(new CustomEvent(ui.name, { detail: ui.detail }));
           },
-          onTool: (tool, args) => {
+          // FILES THE TURN WROTE THAT ITS COMMIT KEPT BACK (D6): their steps read held, and the
+          // release is the same card a held tool write gets.
+          onWithheld: (w) => patchAgentTurn(key, agentId, (t) => ({
+            ...t, ops: markWithheld(t.ops, w.paths),
+            ...(w.code && !t.approval ? { approval: { code: w.code, workspace: w.workspace, path: w.paths.join(", "),
+                                                      readers: w.readers, sources: w.sources } } : {}),
+          })),
+          onTool: (tool, args, callId) => {
             const ui = toolUiEvent(tool);
             if (ui) window.dispatchEvent(new CustomEvent(ui, { detail: args }));
             breakBeforeNextDelta = true;      // F40 — the assistant message ended here
-            const op = toolOp(tool, args);
+            const op = { ...toolOp(tool, args), ...(callId ? { callId } : {}) };
             // The workspace tree JUST changed. Drop the doc-link caches (60s TTL) or every entity
             // chip in the reply that names this new file resolves to "not found" — which is the
             // whole reason a turn's own chips were dead on arrival.
@@ -1739,6 +1803,9 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const inFlightRef = useRef(new Set<string>());
   const rerunCatchUp = useRef(false);
   const sendSeqRef = useRef(0);
+  //  When THIS TAB last put a message of this person's on the wire (a dispatch or an inbox submit):
+  //  the one fact that lets a turn this view did not dispatch still count as theirs (`onCall`).
+  const lastLocalSubmitRef = useRef(0);
   const [catchUpTick, setCatchUpTick] = useState(0);
   useEffect(() => { cursorRef.current = ""; attachedRef.current = ""; }, [session]);
 
@@ -1762,6 +1829,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     // IN FLIGHT, NOT UNSENT: the outbox holds this copy until the ack, and a catch-up that ran in
     // between must not send it a second time (the worker may already be answering the first).
     inFlightRef.current.add(id);
+    lastLocalSubmitRef.current = Date.now();
     try {
       const view = await submitToInbox({
         id, session, prompt: wire, active, context, scaffoldId: o.scaffoldId, intent: o.intent,

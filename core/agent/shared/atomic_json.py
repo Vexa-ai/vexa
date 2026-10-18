@@ -27,3 +27,7 @@ def write_json_atomic(path: str | Path, value: Any, **dump_kwargs: Any) -> None:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+    # WS-S3: on the s3 workspace backend a platform document is in the bucket before this returns.
+    from workspaces.shared.workspace_paths import notify_written  # noqa: PLC0415
+
+    notify_written(path)

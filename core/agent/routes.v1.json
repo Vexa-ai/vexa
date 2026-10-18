@@ -411,6 +411,26 @@
       "shared": "refuse"
     },
     {
+      "method": "GET",
+      "path": "/agent/rooms/list",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "allow"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/call",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
       "method": "DELETE",
       "path": "/agent/sessions/{session}/participants/{principal}",
       "scopes": [
@@ -1084,6 +1104,26 @@
       ],
       "mcp_reentry": true,
       "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/workspace-store/fetch",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "delegation": true,
+      "shared": "allow"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/workspace-store/push",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "delegation": true,
+      "shared": "allow"
     }
   ],
   "verbs": [
@@ -1874,6 +1914,12 @@
       "shared": "refuse"
     },
     {
+      "method": "GET",
+      "path": "/agent/rooms/list",
+      "person": false,
+      "shared": "allow"
+    },
+    {
       "method": "POST",
       "path": "/agent/rooms",
       "person": false,
@@ -2338,6 +2384,12 @@
     {
       "method": "POST",
       "path": "/agent/rooms/direct",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/rooms/call",
       "person": true,
       "shared": "refuse"
     },

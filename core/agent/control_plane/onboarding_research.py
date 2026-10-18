@@ -56,6 +56,7 @@ class Research:
         audit = self.directory / (batch_id + '.json')
         audit.write_text(json.dumps({'batch': batch_id, 'receipts': receipts}))
         os.chmod(audit, 0o600)
+        wpaths.notify_written(audit)   # WS-S3: durable in the bucket before this returns
 
     def save(self, state):
         write_json_atomic(self.directory / 'state.json', state)

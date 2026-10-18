@@ -68,6 +68,8 @@ COPY core/agent/contracts ./contracts
 # `workspaces` a package under PYTHONPATH=/app.
 COPY core/workspaces/__init__.py ./workspaces/__init__.py
 COPY core/workspaces/shared ./workspaces/shared
+# WS-S3: the s3 workspace backend (agent-api: the store; worker: the stdlib client)
+COPY core/workspaces/store ./workspaces/store
 # The registry of per-person workspace templates the worker seeds new workspaces from (Phase 3) +
 # the tool registry. workspace-seeds/<name>/ — one validated seed per subdir (the repo ships `default`).
 COPY behavior/workspaces ./workspace-seeds

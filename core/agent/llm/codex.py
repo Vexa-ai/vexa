@@ -25,7 +25,7 @@ from typing import Callable, Iterable, Iterator, Optional
 # painted the person's screen or did not depending on which harness the deployment ran.
 # `llm.tool_events` owns them. One vocabulary, three harnesses.
 from llm.tool_events import (_BOT_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
-                             _published_terms, _written_artifact)
+                             _published_terms, _written_artifact, result_outcome)
 from llm import faults as provider_faults
 from llm import workspace_paths as wpaths
 from llm.ports import harness_identity_kwargs, harness_subprocess_env, tools_identity
@@ -117,8 +117,9 @@ def _tool_completed(item: dict) -> Optional[dict]:
     ok = status not in {"failed", "declined", "cancelled"} and item.get("error") in (None, "")
     summary = (item.get("aggregatedOutput") or item.get("result") or item.get("error")
                or status or "completed")
+    body = item.get("result") or item.get("error") or item.get("aggregatedOutput") or ""
     return {"type": "tool-result", "callId": item.get("id", ""), "ok": ok,
-            "summary": _short(summary)}
+            "summary": _short(summary), **result_outcome(ok, body)}
 
 
 def normalize_notification(message: dict, reply_parts: list[str]) -> list[dict]:

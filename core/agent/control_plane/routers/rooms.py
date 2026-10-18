@@ -5,6 +5,8 @@
     PATCH /api/sessions/{session}/room      a member changes proactivity, visibility or the brief
     POST  /api/rooms/{session}/join         an OPEN room's self-join (members of its workspace)
     GET   /api/rooms                        the rooms a person can see in a workspace
+    GET   /api/rooms/list                   the same rooms described for a page or an agent: people by
+                                            name, a live call, recurring meeting links (`rooms_list`)
     GET   /internal/chats/{session}/listen  the room's brief, for the signals service (internal tier)
 
 ROOMS ARE MADE IN A WORKSPACE (founder 2026-10-15): `POST /api/rooms`, open by default; chats stay
@@ -20,9 +22,9 @@ from typing import Annotated, Literal, Optional
 from fastapi import APIRouter, Body, HTTPException, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from control_plane import meeting_listen, rooms, session_sync
+from control_plane import identity_token, meeting_listen, people_directory, rooms, rooms_overview, session_sync
 from control_plane.bodies import CHAT_SESSION_PATTERN, ListenBrief
-from control_plane.ceiling import is_unwatched, refuse_delegated, require_in_ceiling
+from control_plane.ceiling import is_unwatched, refuse_delegated, require_in_ceiling, require_read_in_ceiling
 
 logger = logging.getLogger("agent_api.rooms")
 
@@ -108,6 +110,8 @@ def build(**d) -> APIRouter:
     _internal_caller = d.get("_internal_caller")
     _global_root = d.get("_global_root")
     settings = d.get("settings")
+    mindex = d.get("mindex")
+    _schedule_source = d.get("_schedule_source")
 
     def _store():
         if store is None:
@@ -591,21 +595,44 @@ def build(**d) -> APIRouter:
         """The rooms of a workspace this person can see: the open ones (for its members) and the
         ones they are in. A closed room they are not in is not listed."""
         subject = str(subject_of(request))
-        s = _store()
-        mine = {r["id"]: r for r in s.list_for(subject)}
-        out = []
-        if _is_member(workspace, subject):
-            for r in s.open_rooms(workspace):
-                out.append({**r, "visibility": "open", "member": r["id"] in mine})
-        seen = {r["id"] for r in out}
-        for sid, r in mine.items():
-            room = s.room(sid)
-            if sid in seen or not room or room.get("workspace") != workspace:
-                continue
-            out.append({"id": sid, "title": r.get("title") or "", "owner": r.get("owner"),
-                        "last_active": r.get("last_active"), "visibility": room["visibility"],
-                        "member": True})
-        return {"workspace": workspace, "rooms": out}
+        return {"workspace": workspace,
+                "rooms": rooms_overview.visible_rooms(_store(), workspace, subject, is_member=_is_member)}
+
+    @router.get("/api/rooms/list")
+    def room_overview(request: Request, workspace: Annotated[str, Query(min_length=1, max_length=200)]):
+        """THE ROOMS OF A WORKSPACE, DESCRIBED (held-label-rooms-1018): every room this reader may see
+        there — the same rule as ``GET /api/rooms`` — with its people by name, whether a call is live,
+        and the recurring meetings bound to it. A turn other people read (a room's agent, a shared
+        chat) is held to the workspace it was dispatched into and sees its OPEN rooms only, with no
+        meetings; a workspace's own agent names no other workspace."""
+        require_read_in_ceiling(request, workspace)        # before anything is looked at
+        hdrs = request.headers
+        principal = identity_token.is_workspace_principal(hdrs)
+        if principal:
+            own = (hdrs.get(identity_token.DELEGATION_HEADERS["principal_workspace"]) or "").strip()
+            if not own or workspace != own:
+                raise HTTPException(status_code=403, detail={
+                    "refused": "out_of_scope", "workspace": workspace,
+                    "why": "a workspace's agent lists only its own workspace's rooms"})
+        shared = principal or identity_token.is_shared(hdrs)
+        subject = str(subject_of(request))
+        if wsr is None:
+            raise HTTPException(status_code=503, detail={"refused": "workspaces_off"})
+
+        def _index_list(who: str) -> list:
+            return list(mindex.list(who) or []) if mindex is not None else []
+
+        def _name(who: str) -> str:
+            try:
+                return people_directory.name_of(wsr.root, str(who), _index_list)
+            except Exception:  # noqa: BLE001 — a name is a courtesy
+                return ""
+
+        meeting_rows = None
+        if not shared and callable(_schedule_source):
+            meeting_rows = lambda: _schedule_source(subject)  # noqa: E731 — the reader's own meetings
+        return rooms_overview.overview(_store(), wsr.root, workspace, subject, shared=shared,
+                                       is_member=_is_member, name_of=_name, meeting_rows=meeting_rows)
 
     @router.get("/internal/chats/{session}/listen")
     def chat_listen_internal(session: Annotated[str, Path(pattern=CHAT_SESSION_PATTERN)], request: Request,

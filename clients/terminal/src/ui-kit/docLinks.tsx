@@ -6,8 +6,13 @@
  *  each site resolved links its own way, always against the user's OWN workspace tree, so
  *  links inside a SHARED workspace's docs silently did nothing. Everything now funnels
  *  through resolveDocRef(), which is:
- *    - slug-aware: searches the doc's OWN workspace first, then every ACTIVE mount in
- *      order, then the legacy no-slug (seed-slot) read strictly last (ADR-0028);
+ *    - QUALIFIED (founder ruling 2026-10-18: "we must require full paths to specific
+ *      workspaces, we do not want to guess which readme this should open"): a PATH resolves only
+ *      in the workspace it names — a mount path, `[[page:<ws>/<path>]]`, a workspace chip — or, for
+ *      a relative link inside a page, in that page's own workspace. A bare path with no context
+ *      (`README.md` in a chat reply) resolves to NOTHING and renders as plain, unlinked text. The
+ *      search across `_global` and every mount that used to answer it is gone: it is how a chat's
+ *      `README.md` opened the organisation's README. [[Title]] entity names still search (#1783);
  *    - base-aware: relative paths normalize against the linking doc's directory;
  *    - loud: an unresolvable [[wikilink]] renders as a muted chip with a "not found"
  *      tooltip instead of a click that does nothing.
@@ -305,6 +310,34 @@ export interface DocRef { path?: string; wikilink?: string; slug?: string; exact
 export interface DocMeta { path?: string; slug?: string }
 export interface ResolvedDoc { path: string; slug?: string; type?: string }
 
+/** IS THERE A WORKSPACE THIS TEXT WAS WRITTEN IN? Inside a page there is — the page's own (its host
+ *  provides `{path, slug}`, `slug` undefined being the home workspace). In a chat there is none:
+ *  `DocMetaContext` is empty, and a bare path there names no workspace at all. */
+export function hasDocHome(meta: DocMeta): boolean {
+  return "slug" in meta || !!meta.path;
+}
+
+/** A PATH THAT NAMES NO WORKSPACE (founder ruling 2026-10-18): relative (not a mount path), in a
+ *  context with no workspace of its own. It is never resolved by searching — it renders plain. */
+export function isUnqualifiedPath(path: string, meta: DocMeta): boolean {
+  return !path.startsWith("/") && !hasDocHome(meta);
+}
+
+/** `isUnqualifiedPath` against the rendering doc's own context (hook form, for the renderers). */
+export function useIsUnqualified(path: string): boolean {
+  return isUnqualifiedPath(path, useContext(DocMetaContext));
+}
+
+/** The doc context an open-entity event CARRIES — only the keys it really has. `{slug: undefined}`
+ *  means the home workspace was named; no `slug` key means none was (a chat), and a resolver handed
+ *  `{slug: d.slug}` for the second would read it as the first. */
+export function metaOfOpen(d: { docPath?: string; slug?: string }): DocMeta {
+  return { ...(d.docPath ? { path: d.docPath } : {}), ...("slug" in d ? { slug: d.slug } : {}) };
+}
+
+/** Is this [[wikilink]] text a PATH rather than an entity's name (`README.md`, `kg/x.md`)? */
+export const isPathShaped = (t: string): boolean => /\//.test(t) || /\.(?:md|markdown|mdx)$/i.test(t.trim());
+
 /** A worker-visible ABSOLUTE mount path, as the agent quotes it in chat (engine.py
  *  mounts_preamble: "Always use ABSOLUTE paths"). Three layouts reach the client:
  *    `<root>/<subject>/<rel>`                   the private baseline    → home (no slug)
@@ -377,12 +410,13 @@ export async function docPathExists(path: string, meta: DocMeta = {}): Promise<b
   // Entity SHAPES are not documents anyone links to: `kg/templates/` holds skeletons, and a
   // skeleton must never become a live chip in a reply.
   if (/(?:^|\/)kg\/templates\//.test(root)) return false;
-  const sibling = !worker && meta.path ? normalizeDocPath(`./${path.replace(/^\.\//, "")}`, meta.path) : null;
-  for (const ws of await searchOrder(meta)) {
-    const tree = await workspaceTree(ws);
-    if (tree.includes(root) || (sibling && tree.includes(sibling))) return true;
-  }
-  return false;
+  // ONE WORKSPACE IS ASKED, the one the path names (a mount path) or the page it sits in — never a
+  // search: a bare `README.md` is in every workspace, so "found somewhere" proves nothing.
+  if (worker) return (await workspaceTree(worker.slug)).includes(worker.path);
+  if (!hasDocHome(meta)) return false;
+  const sibling = meta.path ? normalizeDocPath(`./${path.replace(/^\.\//, "")}`, meta.path) : null;
+  const tree = await workspaceTree(meta.slug);
+  return tree.includes(root) || (!!sibling && tree.includes(sibling));
 }
 
 /** Resolve any doc link to a concrete { path, slug } target, or undefined when a
@@ -416,27 +450,25 @@ export async function resolveDocRef(ref: DocRef, meta: DocMeta = {}): Promise<Re
       // `README.md` won — a link to one workspace opening another, silently and plausibly.
       // Landing on the honest empty state in the RIGHT room beats landing on the wrong room's real
       // document, and there is no third option: every workspace has a README.
-      if (await namesReachableWorkspace(worker.slug)) return { path: worker.path, slug: worker.slug };
-      // Only a slug that claims NO reachable room searches — home, an unknown root's `kg/` tail, or
-      // a legacy `.attached/<dir>/` storage name. Nothing was claimed, so nothing can be betrayed.
-      for (const ws of await searchOrder(meta)) {
-        if (ws !== worker.slug && (await workspaceTree(ws)).includes(worker.path)) return { path: worker.path, slug: ws };
-      }
+      // …AND SO DOES EVERY OTHER MOUNT PATH (2026-10-18). The search that used to follow here, for
+      // a slug claiming no reachable room (home, a legacy `.attached/<dir>/` name), was the same
+      // guess one step removed: it took the first other workspace holding a file of that name.
       return { path: worker.path, slug: worker.slug };
     }
-    // Try root-relative first, then doc-relative (authors write both `kg/x.md` and `entities/x.md`
-    // meaning a sibling) — pick whichever actually exists, searching workspaces in order.
+    // A BARE PATH IS READ IN THE PAGE IT SITS IN, OR NOWHERE (founder ruling 2026-10-18). With no
+    // page around it (a chat reply) it names no workspace: undefined, never a search — the search
+    // over `_global` and every mount is how `README.md` in a Narrative chat opened the company's.
+    if (!hasDocHome(meta)) return undefined;
+    // Root-relative first, then doc-relative (authors write both `kg/x.md` and `entities/x.md`
+    // meaning a sibling) — in THIS page's workspace only.
     const root = normalizeDocPath(ref.path, meta.path);
     const sibling = meta.path ? normalizeDocPath(`./${ref.path.replace(/^\.\//, "")}`, meta.path) : null;
-    const order = await searchOrder(meta);
-    for (const ws of order) {
-      const tree = await workspaceTree(ws);
-      if (tree.includes(root)) return { path: root, slug: ws };
-      if (sibling && tree.includes(sibling)) return { path: sibling, slug: ws };
-    }
-    // Not in any tree — still open it in the most specific workspace (the doc tab shows
-    // "(not found)", which is louder and more debuggable than a click that does nothing).
-    return { path: root, slug: order[0] };
+    const tree = await workspaceTree(meta.slug);
+    if (tree.includes(root)) return { path: root, slug: meta.slug };
+    if (sibling && tree.includes(sibling)) return { path: sibling, slug: meta.slug };
+    // Not there — still open it in the page's workspace (the doc tab shows "(not found)", which is
+    // louder and more debuggable than a click that does nothing).
+    return { path: root, slug: meta.slug };
   }
   if (ref.wikilink) {
     const re = wikilinkMatcher(ref.wikilink);
@@ -476,11 +508,27 @@ async function serverWikilink(title: string, slug?: string): Promise<ResolvedDoc
  *  changes under a mounted chip. */
 export function Wikilink({ title }: { title: string }) {
   const meta = useContext(DocMetaContext);
-  if (isWsRef(title) || isQualifiedRef(title)) return <WsLink refText={title} slug={meta.slug} />;
-  // A UNIVERSAL REFERENCE (`[[chat:<id>|…]]`, `[[page:<ws>/<path>]]`, … #1783): the server says what
-  // it is for this reader, with no access check left to the client.
+  // A UNIVERSAL REFERENCE (`[[room:<id>]]`, `[[chat:<id>|…]]`, `[[page:<ws>/<path>]]`, … #1783): the
+  // server says what it is for this reader, with no access check left to the client. It is asked
+  // FIRST: `room:s-…` also has the shape of a qualified `<slug>:<target>`, and read that way it
+  // resolved as a page in a workspace called "room" and drew as missing text (deploy-57, the
+  // `[[room:…]]` that call_person writes).
   if (parseUniversalRef(`[[${title}]]`)) return <RefChip text={`[[${title}]]`} />;
+  if (isWsRef(title) || isQualifiedRef(title)) return <WsLink refText={title} slug={meta.slug} />;
+  // `[[README.md]]` in a chat names no workspace: plain, never resolved by a search (2026-10-18)
+  if (isPathShaped(title) && !hasDocHome(meta)) return <UnqualifiedPath text={title} />;
   return <EntityWikilink title={title} />;
+}
+
+/** A PATH THAT NAMES NO WORKSPACE, shown as what it is: text, not a link (founder ruling
+ *  2026-10-18). Muted and dotted, with a tooltip saying why it does not open — never a click that
+ *  lands in whichever workspace happens to hold a file of that name. */
+export function UnqualifiedPath({ text, children }: { text: string; children?: ReactNode }) {
+  return (
+    <code className="vx-code" data-unqualified="" title={`${text} — this names no workspace, so it is not linked`}>
+      {children ?? text}
+    </code>
+  );
 }
 
 /** Rich entity chip for in-workspace [[wikilinks]] — typed pill (icon + color per entity type).
@@ -565,12 +613,15 @@ function DocPathLink({ path }: { path: string }) {
   const openEntity = useOpenEntity();
   const absolute = WORKER_PATH.test(path);
   const [live, setLive] = useState(absolute);
+  const unqualified = !absolute && isUnqualifiedPath(path, meta);
   useEffect(() => {
+    if (unqualified) { setLive(false); return; }
     if (absolute) { setLive(true); return; }
     let on = true;
     void docPathExists(path, meta).then((ok) => { if (on) setLive(ok); });
     return () => { on = false; };
-  }, [path, absolute, meta.path, meta.slug]);
+  }, [path, absolute, unqualified, meta.path, meta.slug]);
+  if (unqualified) return <UnqualifiedPath text={path} />;
   if (!live) return <code className="vx-code">{path}</code>;
   // a LIVE path is a reference you can open: the entity chip, showing the file's name (the full
   // path is the tooltip) — not blue monospace that reads as code (guidelines §4.5)
@@ -627,6 +678,8 @@ function PathLink({ href, children }: { href: string; children?: ReactNode }) {
 function LocalPathLink({ href, children }: { href: string; children?: ReactNode }) {
   const meta = useContext(DocMetaContext);
   const openEntity = useOpenEntity();
+  // `[x](README.md)` in a chat names no workspace: its text, unlinked (2026-10-18)
+  if (isUnqualifiedPath(href, meta)) return <span className="vx-unqualified" data-unqualified="" title={`${href} — this names no workspace, so it is not linked`}>{children}</span>;
   // absolute = a worker-visible mount path — pass verbatim; resolveDocRef translates it
   const path = href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path);
   return (

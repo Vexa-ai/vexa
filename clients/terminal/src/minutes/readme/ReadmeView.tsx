@@ -9,7 +9,10 @@
  *  one verb registry (`acts.planPageAction`), confirmed when it reaches beyond their screen. */
 import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
 import { Lock, Zap } from "lucide-react";
-import { Markdown } from "../../ui-kit/Markdown";
+import { InlineMarkdown, Markdown, SlotContext } from "../../ui-kit/Markdown";
+import { DocMetaContext } from "../../ui-kit/docRefs";
+import { TaskMark } from "../../ui-kit/docBlocks";
+import { taskOf } from "../../ui-kit/docComponents";
 import { ListRow } from "../../ui-kit/primitives/ListRow";
 import { humanizeKey } from "../../ui-kit/primitives/KeyValue";
 import { useConfirm } from "../../ui-kit/primitives/Dialog";
@@ -35,11 +38,34 @@ export type PageTree = { v: number; workspace: string; path: string; title?: str
 
 const fire = (name: string, detail: unknown) => window.dispatchEvent(new CustomEvent(name, { detail }));
 
-export async function readPage(workspace: string, path = "README.md", f: typeof fetch = fetch): Promise<PageTree | null> {
-  try {
-    const r = await f("/api/desktop/page", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspace, path }) });
-    return r.ok ? ((await r.json()) as PageTree) : null;
-  } catch { return null; }
+/** ONE READ PER PAGE AT A TIME (2026-10-18): every mount, pane and 30 s tick of the same page shares
+ *  the request already in flight, and an answer younger than `PAGE_FRESH_MS` is reused — five
+ *  concurrent renders of one README made the server do the same work five times. A failed read is
+ *  never kept. `force` (after an act) always reads anew. */
+const PAGE_FRESH_MS = 5_000;
+const pageReads = new Map<string, { at: number; p: Promise<PageTree | null> }>();
+
+/** Test seam. */
+export function resetPageReads(): void { pageReads.clear(); }
+
+export function readPage(workspace: string, path = "README.md", f: typeof fetch = fetch, opts: { force?: boolean } = {}): Promise<PageTree | null> {
+  const key = `${workspace}\n${path}`;
+  const hit = pageReads.get(key);
+  if (hit && !opts.force && (hit.at === 0 || Date.now() - hit.at < PAGE_FRESH_MS)) return hit.p;
+  const entry = { at: 0, p: Promise.resolve<PageTree | null>(null) };
+  entry.p = (async () => {
+    let tree: PageTree | null = null;
+    try {
+      const r = await f("/api/desktop/page", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspace, path }) });
+      tree = r.ok ? ((await r.json()) as PageTree) : null;
+    } catch { tree = null; }
+    if (pageReads.get(key) === entry) {
+      if (tree) entry.at = Date.now(); else pageReads.delete(key);
+    }
+    return tree;
+  })();
+  pageReads.set(key, entry);
+  return entry.p;
 }
 
 function Chip({ k, a, words }: { k: string; a?: RefOut; words?: string }) {
@@ -134,11 +160,40 @@ function CrmBlock({ n }: { n: Extract<Node, { t: "block" }> }) {
   </section>;
 }
 
-/** `hideTitle`: under the workspace page's fixed header the README's own `# Title` would say the
- *  name twice, so a first-line H1 equal to the page title is not drawn there. */
-export function ReadmeDoc({ tree, hideTitle = false }: { tree: PageTree; hideTitle?: boolean }) {
+/** One live line: its text is inline markdown, a list line keeps its bullet, and a task line
+ *  (`- [x] … [[person:7]]`) is a box — read-only, since the line's source is the server's. */
+function Line({ n, tree }: { n: Extract<Node, { t: "line" }>; tree: PageTree }) {
   const ws = tree.workspace;
-  const out: ReactNode[] = [];
+  const parts = [...n.parts];
+  let task: { done: boolean } | null = null;
+  const first = parts[0];
+  if (first?.t === "text") {
+    let text = n.list ? first.text.replace(/^\s*[-*]\s+/, "") : first.text;
+    const t = taskOf(text);
+    if (t) { task = { done: t.done }; text = t.text; }
+    parts[0] = { t: "text", text };
+  }
+  // a disabled action's reason is said once per line, not under every button
+  const reasons = [...new Set(n.parts.flatMap((p) => (p.t === "action" && !p.enabled && p.reason ? [p.reason] : [])))];
+  return <p className="vx-rd-line" data-list={n.list && !task ? "" : undefined} data-task={task ? (task.done ? "done" : "open") : undefined}>
+    {task && <TaskMark done={task.done} />}
+    {parts.map((p, j) =>
+      p.t === "text" ? <InlineMarkdown key={j} text={p.text} />
+        : p.t === "ref" ? <Chip key={j} k={p.key} a={tree.refs[p.key]} words={p.words} />
+          : <Action key={j} n={p} workspace={ws} quiet />)}
+    {reasons.map((r) => <small key={r} className="vx-rd-reason">{r}</small>)}</p>;
+}
+
+/** The tree as ONE document. The server cuts the page wherever a live part sits, so a component the
+ *  author opened in one stretch (`<Steps>`, `:::columns`) often closes in another; rendering each
+ *  stretch alone printed the tags (founder, 2026-10-18: "things do not render"). The stretches are
+ *  joined back and every live part takes a slot in place, so the page parses as a whole. Drawn by
+ *  the plain renderer, synchronously and with nothing fetched: MDX compilation would cost a
+ *  "rendering…" flash on every visit, and nothing on this page runs on render. */
+export function readmeSource(tree: PageTree, hideTitle = false): { source: string; slots: ReactNode[] } {
+  const parts: string[] = [];
+  const slots: ReactNode[] = [];
+  const ws = tree.workspace;
   tree.nodes.forEach((n, i) => {
     if (n.t === "md") {
       let text = n.text;
@@ -146,22 +201,32 @@ export function ReadmeDoc({ tree, hideTitle = false }: { tree: PageTree; hideTit
         const m = /^\s*#\s+(.+)\n?/.exec(text);
         if (m && m[1].trim().toLowerCase() === tree.title.trim().toLowerCase()) text = text.slice(m[0].length);
       }
-      if (text.trim()) out.push(<Markdown key={i}>{text}</Markdown>);
+      parts.push(text);
+      return;
     }
-    else if (n.t === "line") {
-      // a disabled action's reason is said once per line, not under every button
-      const reasons = [...new Set(n.parts.flatMap((p) => (p.t === "action" && !p.enabled && p.reason ? [p.reason] : [])))];
-      out.push(<p key={i} className="vx-rd-line" data-list={n.list ? "" : undefined}>{n.parts.map((p, j) =>
-        p.t === "text" ? <Fragment key={j}>{p.text}</Fragment>
-          : p.t === "ref" ? <Chip key={j} k={p.key} a={tree.refs[p.key]} words={p.words} />
-            : <Action key={j} n={p} workspace={ws} quiet />)}
-        {reasons.map((r) => <small key={r} className="vx-rd-reason">{r}</small>)}</p>);
-    }
-    else if (n.t === "action") out.push(<p key={i} className="vx-rd-line"><Action n={n} workspace={ws} /></p>);
-    else if (n.t === "block" && n.name === "crm") out.push(<CrmBlock key={i} n={n} />);
-    else if (n.t === "block") out.push(<ListBlock key={i} n={n} workspace={ws} />);
+    let node: ReactNode;
+    if (n.t === "line") node = <Line key={i} n={n} tree={tree} />;
+    else if (n.t === "action") node = <p key={i} className="vx-rd-line"><Action n={n} workspace={ws} /></p>;
+    else if (n.t === "block" && n.name === "crm") node = <CrmBlock key={i} n={n} />;
+    else node = <ListBlock key={i} n={n} workspace={ws} />;
+    parts.push(`\nVXSLOT-${slots.length}-VXSLOT\n`);
+    slots.push(node);
   });
-  return <div className="vx-rd" data-readme={ws}>{out}</div>;
+  // stretches meet on a line break: the server trims around the parts it cut out
+  return { source: parts.join("\n"), slots };
+}
+
+/** `hideTitle`: under the workspace page's fixed header the README's own `# Title` would say the
+ *  name twice, so a first-line H1 equal to the page title is not drawn there. */
+export function ReadmeDoc({ tree, hideTitle = false }: { tree: PageTree; hideTitle?: boolean }) {
+  const { source, slots } = readmeSource(tree, hideTitle);
+  // tasks show their state here and are ticked off in the page itself (Edit README / the file view,
+  // MdxDoc's Task) — this view is the server's render, with no file write behind it
+  return <div className="vx-rd" data-readme={tree.workspace}>
+    <DocMetaContext.Provider value={{ path: tree.path || "README.md", ...(tree.workspace && tree.workspace !== "personal" ? { slug: tree.workspace } : {}) }}>
+      <SlotContext.Provider value={slots}><Markdown>{source}</Markdown></SlotContext.Provider>
+    </DocMetaContext.Provider>
+  </div>;
 }
 
 /** The README under the workspace page's fixed header, refreshed when it might have changed. */

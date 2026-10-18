@@ -95,8 +95,18 @@ spec:
             # VEXA_WORKSPACES_DIR (one helper, vexa.workspacesDir); the only out-of-store source a
             # spec may name is the _global tier agent-api is configured with.
             {{- if .Values.agentApi.enabled }}
+            {{- $ws := include "vexa.workspaceStore" . | fromYaml }}
+            {{- if $ws.s3 }}
+            # backend: s3 — no claim backs the store; each worker gets a private emptyDir and hydrates
+            # only its own dispatch's mounts from agent-api (it never holds a bucket credential).
+            - name: VEXA_WORKSPACE_MOUNT_SOURCE
+              value: "emptyDir:"
+            - name: RUNTIME_WORKSPACE_CACHE_SIZE
+              value: {{ $ws.workerCacheSize | quote }}
+            {{- else }}
             - name: VEXA_WORKSPACE_MOUNT_SOURCE
               value: {{ include "vexa.componentName" (list . "agent-workspaces") | quote }}
+            {{- end }}
             {{- end }}
             - name: VEXA_WORKSPACE_MOUNT_TARGET
               value: {{ include "vexa.workspacesDir" . | quote }}

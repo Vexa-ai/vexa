@@ -30,6 +30,8 @@ import stat
 from pathlib import Path
 from typing import Optional
 
+from workspaces.shared import workspace_paths as wpaths
+
 log = logging.getLogger(__name__)
 
 SECRETS_DIRNAME = ".secrets"
@@ -191,6 +193,7 @@ def delete(root: str | Path, name: str) -> bool:
         try:
             p.unlink()
             removed = True
+            wpaths.notify_removed(p)   # WS-S3
         except OSError:
             pass
     retire_key_if_empty(root)
@@ -235,6 +238,7 @@ def retire_key_if_empty(root: str | Path) -> bool:
     try:
         (d / MASTER_KEY_FILENAME).unlink()
         gone = True
+        wpaths.notify_removed(d / MASTER_KEY_FILENAME)   # WS-S3
     except OSError:
         pass
     for sub in sorted((p for p in d.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):

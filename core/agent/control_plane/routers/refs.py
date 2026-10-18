@@ -199,8 +199,17 @@ def seams_for(request: Request, subject: str, d: dict, *, cards: Optional[list] 
                 return {"name": f.get("title") or f["name"]}, refs_mod.READABLE
         return None, refs_mod.UNAVAILABLE
 
+    def peer(cid):
+        """A room of two's other person, named as the rail names them (``pair_rooms.peer_name``)."""
+        mindex = d.get("mindex")
+        if store is None or mindex is None:
+            return None
+        from control_plane import pair_rooms  # noqa: PLC0415
+        return pair_rooms.peer_name(store, wsr.root, cid, subject, mindex.list)
+
     return refs_mod.Seams(workspace=workspace, page=page, chat=chat, meeting=meeting, join=join,
-                          message=message, card=card, person=person, flow=flow, page_workspace=page_workspace)
+                          message=message, card=card, person=person, flow=flow, page_workspace=page_workspace,
+                          peer=peer)
 
 
 def build(**d) -> APIRouter:

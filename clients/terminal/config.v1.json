@@ -216,7 +216,7 @@
       "class": "defaulted",
       "default": "(unset — sign-in mints an ordinary login key, and every decision that needs a session is refused)",
       "secret": true,
-      "description": "The terminal's own second secret for admin-api's POST /internal/sessions (src/app/api/auth/adminApi.ts mintSessionToken, PRD 0.13.4 D13): with it, sign-in mints the SESSION credential (credential_class=session) a policy change or a routine's activation requires; a self-serve key with the browser scope is not one. The same value admin-api holds. Unset here, or an admin-api that answers 404/503, and sign-in falls back to the old bot,tx,browser key with a warning.",
+      "description": "The terminal's own second secret for admin-api's POST /internal/sessions (src/app/api/auth/adminApi.ts mintSessionToken, PRD 0.13.4 D13): with it, sign-in mints the SESSION credential (credential_class=session) a policy change or a routine's activation requires; a self-serve key with the browser scope is not one. The same value admin-api holds. Set here, every sign-in ends with a session (an admin-api that cannot mint one fails the sign-in), and a browser still holding a pre-session login key is moved onto a session in place through POST /internal/sessions/upgrade (src/app/api/auth/sessionUpgrade.ts). Unset here, sign-in falls back to the old bot,tx,browser key with a warning.",
       "targets": ["compose", "helm", "lite"]
     },
     {

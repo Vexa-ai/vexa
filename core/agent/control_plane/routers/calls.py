@@ -252,9 +252,11 @@ def build(**d) -> APIRouter:
         """The session's live call, or null. Any participant may read it. A chat of the caller's own
         that has no record yet gets one here (as a first turn would): "Think out loud" starts a call
         in a new chat before anyone has typed in it (founder, 2026-10-14)."""
-        _subject, row = _row(request, session, create=True)
+        subject, row = _row(request, session, create=True)
         live = _live_call(row["id"]) if livekit is not None else None
-        return {"session_id": row["id"], "calls": livekit is not None,
+        # `you` lets the reader tell its own call from someone else's (the terminal joins a call the
+        # agent started for this person only when `call.owner == you`). Their own id, nothing more.
+        return {"session_id": row["id"], "calls": livekit is not None, "you": str(subject),
                 "call": _call_view(*live) if live else None}
 
     @router.post("/api/sessions/{session}/call/token")

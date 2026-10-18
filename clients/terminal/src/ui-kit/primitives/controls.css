@@ -271,6 +271,8 @@
 /* an entity chip inside running text: same shape, sized to the line */
 .vx-inline-chip { display: inline-flex; vertical-align: baseline; height: auto; padding: 0 var(--space-1_5); gap: var(--space-1); line-height: 1.45; font-size: 0.92em; cursor: pointer; max-width: 100%; }
 .vx-inline-chip[data-missing] { background: transparent; color: var(--text-3); }
+/* a path that names no workspace (founder ruling 2026-10-18): text, visibly not a link */
+.vx-code[data-unqualified], .vx-unqualified { color: var(--text-3); text-decoration: underline dotted; text-underline-offset: 2px; cursor: help; }
 .vx-inline-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .vx-gap-top { margin-top: var(--space-1_5); }
 /* a pressed toggle button: selected = accent tint + primary text + an accent bar (never colour alone) */

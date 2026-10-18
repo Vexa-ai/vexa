@@ -19,10 +19,11 @@ import { evaluate } from "@mdx-js/mdx";
 import remarkGfm from "remark-gfm";
 import { EntityProperties, entityProperties } from "./EntityProperties";
 import { Markdown, stripHtmlComments } from "./Markdown";
+import { DOC_BLOCKS } from "./docBlocks";
+import { directivesToComponents, sanitizeDocHtml, unknownLabel, parseAttrs } from "./docComponents";
 import { DocImage } from "./docImages";
 import { MermaidDiagram, isMermaidFence } from "./docDiagrams";
 import { ExternalLink } from "./primitives/Links";
-import { Icon } from "./index";
 import {
   Card, CardGroup, DocMetaContext, DocNavContext, DocPath, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, InternalLink,
   Wikilink, WorkspaceRef, isDistinctiveWorkspaceToken, isInternalHref, knownWorkspaces, lookupWorkspace,
@@ -51,66 +52,9 @@ function TableHost({ children }: { children?: ReactNode }) {
 
 // ── component registry (closed vocabulary — mirrors Mintlify tag names) ─────────
 
-function Callout({ tone, icon, title, children }: { tone: "blue" | "accent"; icon: string; title?: string; children?: ReactNode }) {
-  const color = tone === "blue" ? "var(--blue)" : "var(--accent)";
-  return (
-    <div className="vx-callout bd r-md bg-2 pt-2 pr-3 pb-2 pl-3 mt-2 mr-0 mb-3 ml-0 lh-normal" style={{ display: "flex", gap: 10, borderLeft: `2px solid ${color}` }}>
-      <span className="mt-0_5" style={{ color, flex: "none" }}><Icon name={icon} size={14} /></span>
-      <div className="c-2" style={{ minWidth: 0 }}>{title && <div className="vx-callout-title">{title}</div>}{children}</div>
-    </div>
-  );
-}
-// `> [!note] Title` / `> [!warning]` blocks arrive here too (richMarkdown), with their title.
-const Note = ({ title, children }: { title?: string; children?: ReactNode }) => <Callout tone="blue" icon="info" title={title}>{children}</Callout>;
-const Warning = ({ title, children }: { title?: string; children?: ReactNode }) => <Callout tone="accent" icon="alert" title={title}>{children}</Callout>;
-
-// Card + CardGroup live in ./docLinks — shared with the plain-Markdown fallback so the
-// same link-card UI renders whether or not the doc compiles as MDX.
-
-function Steps({ children }: { children?: ReactNode }) {
-  const items = Array.isArray(children) ? children : [children];
-  return (
-    <div className="mt-2 mr-0 mb-3 ml-0" style={{ display: "flex", flexDirection: "column" }}>
-      {items.filter(Boolean).map((child, i) => (
-        <div key={i} style={{ display: "flex", gap: 12 }}>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "none" }}>
-            <div className="r-lg bg-3 bd-strong c-1 t-xs fw-600" style={{ width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</div>
-            {i < items.length - 1 && <div style={{ width: 1, flex: 1, background: "var(--line)" }} />}
-          </div>
-          <div className="pb-3" style={{ minWidth: 0, flex: 1 }}>{child}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function Step({ title, children }: { title?: string; children?: ReactNode }) {
-  return (
-    <div>
-      {title && <div className="fw-600 c-1 t-sm mb-1" style={{ lineHeight: "22px" }}>{title}</div>}
-      <div className="c-2 lh-normal">{children}</div>
-    </div>
-  );
-}
-
-function Tabs({ children }: { children?: ReactNode }) {
-  const items = (Array.isArray(children) ? children : [children]).filter(Boolean) as Array<{ props?: { title?: string; children?: ReactNode } }>;
-  const [active, setActive] = useState(0);
-  return (
-    <div className="bd r-lg mt-2 mr-0 mb-3 ml-0" style={{ overflow: "hidden" }}>
-      <div className="bg-2 bd-b pt-1 pr-1_5 pb-1 pl-1_5" style={{ display: "flex", gap: 2 }}>
-        {items.map((t, i) => (
-          <button key={i} onClick={() => setActive(i)}
-            className="bd-none t-xs pt-1 pr-3 pb-1 pl-3 r-md" style={{ background: i === active ? "var(--panel2)" : "transparent", color: i === active ? "var(--t1)" : "var(--t3)", fontWeight: i === active ? 600 : 400, cursor: "pointer" }}>
-            {t.props?.title ?? `Tab ${i + 1}`}
-          </button>
-        ))}
-      </div>
-      <div className="pt-3 pr-3 pb-3 pl-3">{items[active]?.props?.children}</div>
-    </div>
-  );
-}
-const Tab = ({ children }: { title?: string; children?: ReactNode }) => <>{children}</>;
+// Note · Warning · Tip · Info · Check · Danger · Steps/Step · Tabs/Tab · Accordion · Frame · CodeGroup ·
+// Columns live in ./docBlocks — ONE set, drawn by the plain-Markdown fallback too (2026-10-18).
+// Card + CardGroup live in ./docLinks, shared with the fallback the same way.
 
 // ── standard element mapping — matches the legacy Markdown.tsx look ──────────────
 /** The `<code class="language-x">…</code>` inside a `<pre>`, if that is what this is. mdast→hast
@@ -201,7 +145,7 @@ const htmlComponents = {
 export const BLOCK_RENDERER_KIND = "doc.block";
 export const isBlockFence = (lang: string): boolean => /^(vexa|vexa-[\w-]+|blocks?(\.v\d+)?|home-card(\.v\d+)?)$/i.test(lang);
 
-export const MDX_COMPONENTS = { ...htmlComponents, DocImg: htmlComponents.img, DocA: htmlComponents.a, ViewSource, Note, Warning, Card, CardGroup, Steps, Step, Tabs, Tab, Wikilink, DocPath, WorkspaceRef, Task, TaskAsk, RelDate };
+export const MDX_COMPONENTS = { ...htmlComponents, DocImg: htmlComponents.img, DocA: htmlComponents.a, ViewSource, ...DOC_BLOCKS, Card, CardGroup, Wikilink, DocPath, WorkspaceRef, Task, TaskAsk, RelDate };
 
 // ── security: forbid executable MDX ──────────────────────────────────────────
 // kg/ markdown is agent-written from meeting transcripts and external content, so it
@@ -241,7 +185,10 @@ type JsxNode = { type?: string; name?: string | null; attributes?: { type?: stri
 function routeLiteralTags(node: JsxNode): void {
   if (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") {
     if (node.name && LITERAL_TO_COMPONENT[node.name]) node.name = LITERAL_TO_COMPONENT[node.name];
-    if (node.attributes) node.attributes = node.attributes.filter((a) => !(a?.type === "mdxJsxAttribute" && /^style$/i.test(String(a.name ?? ""))));
+    // no inline style (a CSS url() is a remote request), no `on…` handler, no script URL — on ANY tag
+    if (node.attributes) node.attributes = node.attributes.filter((a) => !(a?.type === "mdxJsxAttribute" && (
+      /^(style|on.*)$/i.test(String(a.name ?? "")) ||
+      (typeof (a as { value?: unknown }).value === "string" && /^\s*(javascript|vbscript|data):/i.test(String((a as { value?: unknown }).value))))));
   }
   for (const child of (node.children ?? []) as JsxNode[]) routeLiteralTags(child);
 }
@@ -256,7 +203,7 @@ function remarkLiteralTagsThroughComponents() {
 // 2. rewrite [[Title]] → <Wikilink title="Title" /> (after escaping, so the injected tag
 //    survives);
 // 3. rewrite a doc PATH → <DocPath path="…" /> so the file the agent names is clickable.
-const KNOWN_TAGS = "Note|Warning|CardGroup|Card|Steps|Step|Tabs|TaskAsk|Task|Tab|Wikilink|DocPath|WorkspaceRef|ViewSource|RelDate" +
+const KNOWN_TAGS = "Note|Warning|Tip|Info|Check|Danger|Callout|CardGroup|Card|Steps|Step|Tabs|TaskAsk|Task|Tab|AccordionGroup|Accordion|Frame|CodeGroup|Columns|Column|Wikilink|DocPath|WorkspaceRef|ViewSource|RelDate" +
   // no single-letter html tags (b, i): `a<b then` in prose is far likelier than a raw
   // <b> tag, and an unclosed <b would abort the compile this pass exists to save
   "|a\\b|br|blockquote|code|details|div|em|h[1-6]|hr|img|kbd|li|ol|p\\b|pre|span|strong|sub|summary|sup|table|tbody|td|th|thead|tr|ul";
@@ -271,8 +218,8 @@ export function degradeUnknownComponents(seg: string): string {
   return seg.replace(COMPONENT_TAG, (m: string, close: string, name: string, attrs: string) => {
     if (KNOWN_COMPONENTS.has(name)) return m;
     if (close) return "";
-    const title = /\btitle\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(attrs ?? "");
-    const t = title ? (title[1] ?? title[2] ?? "").trim() : "";
+    // its title (or the name a `<ParamField path="limit">` carries) stays as a bold line
+    const t = unknownLabel(parseAttrs(attrs ?? ""));
     return t ? `\n**${t}**\n\n` : "";
   });
 }
@@ -512,8 +459,9 @@ export function MdxDoc({ children, style, properties = true, outline: withOutlin
 function MdxBody({ children, style }: { children: string; style?: CSSProperties }): ReactNode {
   // Comments out BEFORE anything else looks at the source: MDX has no HTML comment, so
   // escapeUnknownTags below would turn `<!-- desk:pinned:start -->` into visible prose, and the
-  // plain-Markdown fallback reads this same string (#1590).
-  const src = stripHtmlComments(children ?? "");
+  // plain-Markdown fallback reads this same string (#1590). Then raw HTML loses its executable parts
+  // and the page grammar's `:::` blocks become the components every renderer draws (2026-10-18).
+  const src = directivesToComponents(sanitizeDocHtml(stripHtmlComments(children ?? "")));
   const rich = useMemo(() => enrichMarkdown(src), [src]);
   const taskApi = useTaskApi(rich.tasks);
   const [state, setState] = useState<CompileState>({ status: "loading" });

@@ -303,6 +303,20 @@ describe("prefetch-safe: the link is a question, the button is the act (OeNB, 20
     expect((await redeem(makeReq({ t: minted.token, next: "/" }))).status).toBe(303);
   });
 
+  // hotfix 2026-10-18: the page's no-referrer policy makes a real browser send `Origin: null` on the
+  // button's POST, with `Sec-Fetch-Site: same-origin`. That is the person's own press, not a cross-site one.
+  it("the real browser's press (Origin: null under no-referrer, Sec-Fetch-Site: same-origin) signs in", async () => {
+    vi.stubGlobal("fetch", stubAdminApi());
+    const minted = mintMagicToken("maria@oenb.at");
+    if (!minted.ok) throw new Error("mint failed");
+    const res = await redeem(makeReq({ t: minted.token, next: "/" }, { origin: "null", "sec-fetch-site": "same-origin" }));
+    expect(res.status).toBe(303);
+    expect(res.cookies.get("vexa-token")?.value).toBeTruthy();
+    const again = mintMagicToken("maria@oenb.at");
+    if (!again.ok) throw new Error("mint failed");
+    expect((await redeem(makeReq({ t: again.token, next: "/" }, { origin: "null", "sec-fetch-site": "cross-site" }))).status).toBe(403);
+  });
+
   it("an expired or forged link is refused on the GET already, and the page has no button", async () => {
     vi.stubGlobal("fetch", stubAdminApi());
     const old = mintMagicToken("maria@oenb.at", { now: Date.now() - 3_600_000, ttl: 900 });

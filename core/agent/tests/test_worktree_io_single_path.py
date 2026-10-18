@@ -79,7 +79,24 @@ def _entries(reason: str, *keys: str) -> dict:
 
 
 #: ``<path under core/>::<function qualname>`` → why what it touches is not a work tree.
+_STORE_TEMP = ("WS-S3: a git bundle staged in the process's own temp directory (tempfile.mkstemp) on its "
+               "way to or from the bucket or agent-api — never under the store or a work tree")
+
+_STORE_CACHE = ("WS-S3: the s3 backend's own cache plumbing — whole workspace trees made, swapped in by "
+                "rename, or measured (lstat sizes only, nothing opened) as units under the store root, "
+                "never a file inside one a tool can write")
+
 ALLOW = {
+    **_entries(_STORE_CACHE,
+               "workspaces/store/cache.py::tree_bytes",
+               "workspaces/store/repostore.py::RepoStore.hydrate",
+               "workspaces/store/repostore.py::RepoStore.make_stub",
+               "workspaces/store/repostore.py::_swap_in"),
+    **_entries(_STORE_TEMP,
+               "workspaces/store/repostore.py::_bundle",
+               "workspaces/store/repostore.py::_temp_file",
+               "workspaces/store/client.py::_temp",
+               "workspaces/store/client.py::WorkerCache.after"),
     "agent/control_plane/model_prices.py::load_snapshot":
         "the price snapshot shipped next to the module (model_prices.snapshot.json), never a work tree",
     "agent/llm/proctree.py::_table":
@@ -184,7 +201,8 @@ ALLOW = {
                "agent/shared/git_provider.py::GitProvider.call"),
     **_entries(_NAMES_ONLY,
                "agent/llm/openai_agent.py::run_builtin",
-               "agent/llm/ports.py::_current_policy_entries"),
+               "agent/llm/ports.py::_current_policy_entries",
+               "agent/control_plane/workspace_reader.py::WorkspaceReader.pointer_names"),
 }
 
 _PATH_ATTRS = {"read_text", "write_text", "read_bytes", "write_bytes", "unlink", "rmdir", "rename",

@@ -12,6 +12,10 @@ from __future__ import annotations
 import json
 import re
 
+# HOW A CALL ENDED (held-label-rooms-1018): `outcome` on every harness's `tool-result`, from the one
+# classifier the history reader uses too. Re-exported for the adapters.
+from shared.tool_outcome import HELD_REASON, result_outcome  # noqa: F401
+
 
 # Tools whose SUCCESS means a document now exists that the person should be looking at. The
 # vocabulary is explicit rather than a prefix match: "a tool whose name contains write" would catch
@@ -58,6 +62,12 @@ _OPEN_TOOLS = frozenset({
     # `browser-session:<id>`. Only the id crosses — the view reads its own password from meeting-api.
     "mcp__vexa__browser_session_open",
     "browser_session_open",
+    # "Call tester-b": `call_person` started a Vexa call in the room of two and answers with
+    # `ui_action: "join_call"`. Its event is a `call`, not an `open` — the caller's tab opens that room
+    # AND joins the call as the caller, because a call nobody joins ends after meeting-api's first-join
+    # window (30 s), and the caller is the one person certain to be at the screen right now.
+    "mcp__vexa__call_person",
+    "call_person",
     # "start an incognito chat" (Vexa-ai/vexa#1783): a profile verb that made a NEW chat opens it.
     "mcp__vexa__chat_profile_set",
     "chat_profile_set",
@@ -286,6 +296,8 @@ def _open_event(content: object) -> "dict | None":
         return None
     if isinstance(obj, dict) and obj.get("ui_action") == "propose_target":
         return _target_proposal(obj)
+    if isinstance(obj, dict) and obj.get("ui_action") == "join_call":
+        return _call_event(obj)
     if isinstance(obj, dict) and obj.get("ui_action") == "open_browser_session":
         sid = str(obj.get("session_id") or "")
         if len(sid) == 32 and all(c in "0123456789abcdef" for c in sid):
@@ -298,6 +310,27 @@ def _open_event(content: object) -> "dict | None":
         return None
     return {"type": "open", "target": str(obj.get("target") or ""),
             "workspace": str(obj.get("workspace") or ""), "path": path}
+
+
+_CALL_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
+
+
+def _call_event(obj: dict) -> "dict | None":
+    """The `call` event a successful `call_person` answer earns, or None.
+
+    Ids only, each checked for shape: the room of two (`chat`, its session id) and the call's LiveKit room, plus
+    the other person's display name for the "Calling …" line. Never the subject id, the share token
+    or anything the model wrote. The client re-reads the call before joining and joins only when the
+    viewer is the call's owner, so this event is a hint to act, never the authority to."""
+    sid = str(obj.get("session_id") or "")
+    call = obj.get("call") if isinstance(obj.get("call"), dict) else {}
+    room = str(call.get("room") or "")
+    if not _CALL_ID.fullmatch(sid) or not _CALL_ID.fullmatch(room):
+        return None
+    other = obj.get("with") if isinstance(obj.get("with"), dict) else {}
+    return {"type": "call", "chat": sid, "room": room,
+            "with": str(other.get("name") or "")[:200],
+            "already_live": obj.get("already_live") is True}
 
 
 def _target_proposal(obj: dict) -> "dict | None":
@@ -339,3 +372,4 @@ def _short(content: object, n: int = 80) -> str:
     s = content if isinstance(content, str) else json.dumps(content, default=str)
     s = " ".join(s.split())
     return s[:n]
+

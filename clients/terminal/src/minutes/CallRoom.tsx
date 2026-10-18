@@ -23,8 +23,8 @@ import { BlurButton, BlurNotice } from "./BlurButton";
 import { useEffect, useState } from "react";
 import { copyCallInvite, hasCallInvite, stopCallInvite } from "./callInvite";
 import { toast } from "../ui-kit/primitives/Toast";
-import type { ActiveCall } from "./callState";
-import { CallBar, CallJoinBar, type CallMenuItem } from "./callkit/CallBar";
+import { callAnswered, type ActiveCall } from "./callState";
+import { CallBar, CallJoinBar, CallOutgoing, type CallMenuItem } from "./callkit/CallBar";
 import type { CallPerson } from "./callkit/types";
 import "./calls.css";
 import { useFeature } from "../platform/features";
@@ -64,7 +64,9 @@ export function transcribedNotice(metadata: string | undefined, fallback: boolea
 export default function CallRoom(props: CallRoomProps) {
   const { call, name, onLeave } = props;
   const listener = call.join.role === "viewer";
-  const [joined, setJoined] = useState(false);
+  // THE CALLER'S OWN CALL THE AGENT JUST PLACED connects at once (`callPlaced.ts`): a call nobody
+  // joins ends within 30 s, so a Join press would arrive too late. Every other call keeps the bar.
+  const [joined, setJoined] = useState(!!call.autoJoin);
   const [mic, setMic] = useState(true);
   if (!joined) {
     return <CallJoinBar name={name} transcribed={call.join.call.transcribed !== false} listener={listener} mic={mic}
@@ -138,6 +140,12 @@ function Inside({ call, name, nameWith, onLeave, onPrivate, onName, onAddPeople,
     };
   });
   const screen = cams.find((t) => t.source === Track.Source.ScreenShare);
+  // AN OUTGOING CALL (the agent called someone for this person): "Calling <to>…" with Cancel until
+  // somebody else is in the call — then it is just the call.
+  const othersIn = people.some((p) => !p.self);
+  const session = call.session;
+  useEffect(() => { if (othersIn) callAnswered(session); }, [othersIn, session]);
+  const calling = call.outgoing && !othersIn ? call.outgoing.to : "";
   const active = speaking.find((p) => !LISTENER.test(p.identity))?.identity;
   // An untranscribed call (a private or incognito chat's) has no meeting: no notes, no transcript.
   // ADD PEOPLE BY LINK (founder 2026-10-16): this call's chat join link, a day, revocable
@@ -165,6 +173,7 @@ function Inside({ call, name, nameWith, onLeave, onPrivate, onName, onAddPeople,
       </>}
       share={screen ? { by: screen.participant.identity, byName: screen.participant.isLocal ? "You" : (screen.participant.name || "Someone"),
         title: "Screen", content: <VideoTrack trackRef={screen} /> } : null} />
+    {calling && <CallOutgoing to={calling} onCancel={onLeave} />}
     <BlurNotice />
     {/* A ROOM CALL (R1, `rooms`): Vexa has its own tile — it listens; it speaks when addressed */}
     {roomCall && transcribed && <div className="vx-ck-withvexa">

@@ -34,6 +34,8 @@ MIN_GAP_S = 15.0
 #: Re-title once when the chat has grown this many turns past its first title.
 RETITLE_AFTER = 5
 MAX_WORDS = 6
+#: A turn count no chat reaches: `_wanted(row, _ANY_TURNS)` is False only for a row no count could title.
+_ANY_TURNS = 1 << 30
 
 SYSTEM = (
     "You name a chat for a list of chats. Reply with ONE JSON object and nothing else: "
@@ -143,6 +145,13 @@ def schedule(subject: str, rows: list, *, turns_of: Callable[[str], list], name:
             break
         sid = str(row.get("session") or "")
         if (subject, sid) in _inflight:
+            continue
+        # READ A HISTORY ONLY WHEN IT CAN CHANGE THE ANSWER (perf, app.dev 2026-10-17): `_wanted` only
+        # ever asks for MORE turns, so a row it refuses even at an unbounded count — a person's name, a
+        # meeting's or a routine's chat, an agent title already re-titled — is refused without reading
+        # its whole conversation. Reading every row's history on every listing was most of the rail's
+        # cost (GET /agent/sessions p50 1.3 s, p90 9.5 s on the founder's rail).
+        if not _wanted({**row, "_subject": subject}, _ANY_TURNS):
             continue
         try:
             turns = turns_of(sid) or []

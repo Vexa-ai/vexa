@@ -238,6 +238,7 @@ def _write_json(path: Path, data: dict) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, sort_keys=True) + "\n")
     tmp.replace(path)
+    wpaths.notify_written(path)   # WS-S3: durable in the bucket before this returns
 
 
 def load_flow_state(workspaces_dir, subject: str) -> dict:
@@ -344,10 +345,9 @@ def parse_routine_file(path: Path) -> "tuple[Optional[ParsedFile], str]":
     if not prompt:
         return None, "the file names no prompt (what the routine should do)"
     parts = [prompt] + ([body.strip()] if body.strip() else [])
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
-        mtime = 0.0
+    # through workspace_paths, so an evicted workspace is hydrated before its mtime is read (WS-S3)
+    st = wpaths.stat_inside(path.parent, path.name)
+    mtime = st.st_mtime if st is not None else 0.0
     return ParsedFile(path.stem, _as_bool(fm.get("enabled")), cron, "\n\n".join(parts), mtime), ""
 
 
@@ -465,6 +465,7 @@ def _retire(workspaces_dir, subject: str, path: Path) -> str:
     dest = Path(workspaces_dir) / rel
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(data)
+    wpaths.notify_written(dest)   # WS-S3: the retired copy is durable before the original goes
     wpaths.unlink_inside(path.parent.parent, f"{ROUTINES_DIR}/{path.name}")
     return rel
 

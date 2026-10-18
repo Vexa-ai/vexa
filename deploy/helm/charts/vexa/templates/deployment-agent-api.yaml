@@ -1,6 +1,7 @@
 {{- if .Values.agentApi.enabled }}
 {{- $s3 := include "vexa.s3" . | fromYaml }}
 {{- $ss := include "vexa.agentSessions" . | fromYaml }}
+{{- $ws := include "vexa.workspaceStore" . | fromYaml }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -9,7 +10,7 @@ metadata:
     {{- include "vexa.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.agentApi.replicaCount }}
-  {{- if eq (.Values.agentApi.workspaces.accessMode | default "ReadWriteOnce") "ReadWriteMany" }}
+  {{- if and (not $ws.s3) (eq (.Values.agentApi.workspaces.accessMode | default "ReadWriteOnce") "ReadWriteMany") }}
   {{- include "vexa.deploymentStrategy" . | nindent 2 }}
   {{- else }}
   # agent-api mounts the single agent-workspaces PVC. A ReadWriteOnce volume cannot be held by two
@@ -17,7 +18,8 @@ spec:
   # Multi-Attach error — the new pod can't mount until the old one releases, and maxUnavailable:0
   # forbids the old one from leaving first. Recreate tears the old pod down before the new one
   # starts. A ReadWriteMany workspace (multi-worker dispatch) lifts the constraint and takes the
-  # shared rolling strategy instead.
+  # shared rolling strategy instead. backend: s3 keeps Recreate too: one agent-api writes the bucket
+  # at a time in 0.13.4 (the lock and generation make a second one safe by refusal, not coherent).
   strategy:
     type: Recreate
   {{- end }}
@@ -112,6 +114,37 @@ spec:
             # Equal to the runtime's VEXA_WORKSPACE_MOUNT_TARGET and to the store's mountPath below.
             - name: VEXA_WORKSPACES_DIR
               value: {{ include "vexa.workspacesDir" . | quote }}
+            # Where the repositories live (WS-S3): volume (this PVC is the truth) or s3 (the bucket is
+            # the single durable truth, VEXA_WORKSPACES_DIR an emptyDir cache, writes acknowledged only
+            # once durable; the boot self-tests the bucket and stops with a sentence on a misconfiguration).
+            - name: VEXA_WORKSPACE_BACKEND
+              value: {{ $ws.backend | quote }}
+            {{- if $ws.s3 }}
+            - name: VEXA_WORKSPACE_S3_ENDPOINT
+              value: {{ $ws.endpoint | quote }}
+            - name: VEXA_WORKSPACE_S3_BUCKET
+              value: {{ $ws.bucket | quote }}
+            - name: VEXA_WORKSPACE_S3_PREFIX
+              value: {{ $ws.prefix | quote }}
+            - name: VEXA_WORKSPACE_S3_REGION
+              value: {{ $ws.region | quote }}
+            - name: VEXA_WORKSPACE_S3_PATH_STYLE
+              value: {{ $ws.pathStyle | quote }}
+            - name: VEXA_WORKSPACE_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ws.existingSecret | quote }}
+                  key: {{ $ws.accessKeyIdKey | quote }}
+            - name: VEXA_WORKSPACE_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ws.existingSecret | quote }}
+                  key: {{ $ws.secretAccessKeyKey | quote }}
+            - name: VEXA_WORKSPACE_CACHE_MAX_BYTES
+              value: {{ $ws.cacheMaxBytes | quote }}
+            - name: VEXA_WORKSPACE_S3_CA_BUNDLE
+              value: {{ ternary (printf "/run/vexa-workspace-s3-ca/%s" $ws.caKey) "" (or (ne $ws.caConfigMap "") (ne $ws.caSecret "")) | quote }}
+            {{- end }}
             # Three-tier mount stack (AMENDMENT 4): the platform-owned GLOBAL SYSTEM workspace (_global),
             # mounted into every worker. Empty = agent-api's in-store /workspaces/_global, created empty at
             # boot (an empty _global is fine); set a path only for a separately provisioned repo. REF pins
@@ -342,6 +375,7 @@ spec:
           volumeMounts:
             - name: workspaces
               mountPath: {{ include "vexa.workspacesDir" . }}
+            {{- include "vexa.workspaceStore.caMount" . | nindent 12 }}
             - name: identity-public-key
               mountPath: /run/vexa-identity/public
               readOnly: true
@@ -374,9 +408,19 @@ spec:
           resources:
             {{- toYaml .Values.agentApi.resources | nindent 12 }}
       volumes:
+        {{- if $ws.s3 }}
+        # backend: s3 — a disposable cache, hydrated from the bucket at boot; losing it loses nothing.
+        - name: workspaces
+          emptyDir:
+            {{- if $ws.cacheSizeLimit }}
+            sizeLimit: {{ $ws.cacheSizeLimit | quote }}
+            {{- end }}
+        {{- include "vexa.workspaceStore.caVolume" . | nindent 8 }}
+        {{- else }}
         - name: workspaces
           persistentVolumeClaim:
             claimName: {{ include "vexa.componentName" (list . "agent-workspaces") }}
+        {{- end }}
         # gateway-identity.v1: the public key only — the signing key is mounted by the gateway alone.
         - name: identity-public-key
           configMap:

@@ -102,6 +102,8 @@ def test_a_member_binds_their_call_and_every_participant_sees_it(env):
         got = client.get(f"/api/sessions/{sid}/call", headers=H(who)).json()
         assert got["call"]["room"] == "call-abc123" and got["call"]["transcribed"] is True
         assert "share_token" not in json.dumps(got)
+        # each reader learns who THEY are, so the terminal can tell its own call (owner == you)
+        assert got["you"] == who and got["call"]["owner"] == "bob"
     assert client.get(f"/api/sessions/{sid}/call", headers=H("eve")).status_code == 404
 
 
@@ -232,7 +234,7 @@ def test_no_livekit_means_no_calls(tmp_path, monkeypatch):
     client = TestClient(app)
     sid = store.create("alice", name="team")["id"]
     assert client.get(f"/api/sessions/{sid}/call", headers=H("alice")).json() == {
-        "session_id": sid, "calls": False, "call": None}
+        "session_id": sid, "calls": False, "you": "alice", "call": None}
     assert client.post(f"/api/sessions/{sid}/call/token", headers=H("alice")).status_code == 503
 
 

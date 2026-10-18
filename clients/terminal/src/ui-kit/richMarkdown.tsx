@@ -15,6 +15,7 @@
  *  In a chat reply (no page behind it) the tasks are shown, not writable. */
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { DocMetaContext } from "./docRefs";
+import { TaskMark } from "./docBlocks";
 import { ASK_CHAT_EVENT } from "../platform/events";
 
 export type TaskInfo = { n: number; line: string; occurrence: number; text: string; done: boolean; kind: "box" | "tbd" };
@@ -152,6 +153,7 @@ export function Task({ n }: { n: number }) {
           catch (x) { setDone(!next); setErr(x instanceof Error ? x.message : "Couldn't save."); }
           finally { setBusy(false); }
         }} />
+      <TaskMark done={done} decorative />
       {err && <span role="alert" className="vx-task-err">{err}</span>}
     </span>
   );

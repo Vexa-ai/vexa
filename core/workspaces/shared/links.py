@@ -15,6 +15,20 @@ deliberate and it is why the agent is told to prefer ids. A page's frontmatter `
 rename of its title; a path does not survive a move. Neither survives the workspace being renamed,
 which is precisely why the WORKSPACE half is an id in both.
 
+**A FILE REFERENCE ALWAYS NAMES ITS WORKSPACE** (founder ruling 2026-10-18: *"we must require full
+paths to specific workspaces, we do not want to guess which readme this should open"*). A chat reply
+listed `README.md` beside four files it had written into the Narrative workspace; the chip opened
+the organisation's README, because a bare path was looked for in every workspace in turn and the
+company layer came first. Every workspace has a `README.md`, so a bare path is a guess by
+construction. The file reference is therefore
+
+    [[page:<workspace>/<path>]]  — `<workspace>` a slug or a workspace id (`page_ref` writes it)
+
+and a bare path (`README.md`, `kg/x.md`) is NOT a reference: no resolver searches for it, and the
+client shows it as plain, unlinked text. The one context a bare path may be read in is the context
+it was WRITTEN in: a relative link inside a page (that page's workspace), or an old chat message
+whose session wrote into exactly one workspace (`qualify_bare_paths`, applied by the history read).
+
 **A link to a workspace you do not have is not an error.** Founder: *"If a workspace is not
 available, it's okay — by design."* So this module never raises on an unresolvable ref; it returns
 what it could parse and lets the resolver say `not-yours` or `gone`. Nothing 404s inside a page.
@@ -331,3 +345,60 @@ def refs_as_urls(text: str, *, base: str) -> str:
         return f"{r.label} ({url})" if r.label else url
 
     return WIKILINK.sub(_sub, str(text or ""))
+
+
+# ── THE FILE REFERENCE (founder ruling 2026-10-18) ────────────────────────────────────────────────
+#
+# `[[page:<workspace>/<path>]]` is the one way to point at a file. These helpers write it, recognise
+# the bare spellings that are NOT one, and qualify a bare path only against a workspace the caller
+# already knows the text was written in. Nothing here searches.
+
+#: A bare, workspace-relative document path: no leading slash, no `..`, ending in a page extension.
+_BARE_DOC = re.compile(r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[\w.-]+(?:/[\w.\- ]+)*\.(?:md|markdown|mdx)$")
+#: Inline code and fences, so prose can be rewritten without touching a code block.
+_CODE_SPLIT = re.compile(r"(```[\s\S]*?```|`[^`\n]*`)")
+#: A markdown link with a relative page target: `[label](README.md)`.
+_MD_LINK = re.compile(r"(?<!!)\[([^\]\n]+)\]\(([^)\s]+)\)")
+
+
+def page_ref(workspace: str, path: str, label: Optional[str] = None) -> str:
+    """``[[page:<workspace>/<path>|label]]`` — the qualified file reference. ``workspace`` is a slug or
+    an id; a leading ``/`` on ``path`` is dropped (it is workspace-relative)."""
+    ws = str(workspace or "").strip().strip("/")
+    p = str(path or "").strip().lstrip("/")
+    if not ws or not p:
+        raise ValueError("a file reference needs a workspace and a path")
+    return ref_chip("page", f"{ws}/{p}", label=label)
+
+
+def is_bare_path(text: str) -> bool:
+    """A workspace-relative page path that names no workspace (`README.md`, `kg/x.md`)."""
+    return bool(_BARE_DOC.match(str(text or "").strip()))
+
+
+def qualify_bare_paths(text: str, workspace: str) -> str:
+    """Every bare page path in ``text`` — in inline code, or as a markdown link's target — rewritten as
+    a reference into ``workspace``. Fenced blocks are literal and stay untouched.
+
+    The CALLER vouches for ``workspace``: it must be the one context the text was written in (an old
+    message whose session wrote into exactly one workspace). This function never chooses one."""
+    ws = str(workspace or "").strip()
+    if not ws:
+        return str(text or "")
+
+    def _code(seg: str) -> str:
+        inner = seg[1:-1].strip()
+        if not is_bare_path(inner):
+            return seg
+        return page_ref(ws, inner, label=inner.rsplit("/", 1)[-1])
+
+    def _prose(seg: str) -> str:
+        def _sub(m: re.Match) -> str:
+            target = m.group(2).split("#", 1)[0]
+            return page_ref(ws, target, label=m.group(1)) if is_bare_path(target) else m.group(0)
+        return _MD_LINK.sub(_sub, seg)
+
+    parts = _CODE_SPLIT.split(str(text or ""))
+    return "".join(
+        (part if part.startswith("```") else _code(part)) if i % 2 else _prose(part)
+        for i, part in enumerate(parts))

@@ -33,6 +33,10 @@ export function pageForDocRef(
 ): Page | null {
   const named = (p: string) => (p.split("/").pop() ?? p).replace(/\.md$/i, "");
   if (resolved) return { path: resolved.path, slug: resolved.slug, label: named(resolved.path) };
+  // A RELATIVE PATH THAT NAMES NO WORKSPACE opens nothing (founder ruling 2026-10-18: "we do not
+  // want to guess which readme this should open"): no slug given, no page it sits in. Opening it
+  // "anyway" would land on the home workspace's file of that name — a guess like any other.
+  if (detail.path && !detail.path.startsWith("/") && !("slug" in detail) && !detail.docPath) return null;
   if (detail.path) {
     const path = normalizeDocPath(detail.path, detail.docPath);
     return path ? { path, slug: detail.slug, label: named(path) } : null;

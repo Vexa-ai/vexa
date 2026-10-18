@@ -40,6 +40,12 @@ EXPECTED_ALLOWED = frozenset({
     # a room reads its OWN history (int-s1); the handler refuses every other conversation to a
     # shared token or a workspace principal (`shared_conversation`, tests/test_chat_read.py)
     ("GET", "/api/chats/{session}/turns"),
+    # WS-S3: a worker fetches and pushes ONLY its own dispatch's recorded mounts (a room's worker too,
+    # on the s3 backend); the route refuses anything else whatever the token
+    ("GET", "/api/workspace-store/fetch"), ("POST", "/api/workspace-store/push"),
+    # held-label-rooms-1018: a room lists its OWN workspace's OPEN rooms (no meetings, no closed room;
+    # a workspace principal names no other workspace — tests/test_rooms_list.py)
+    ("GET", "/api/rooms/list"),
 })
 #: Person-wide routes the security review named (C1) and the PRD lists: never a shared token's.
 PERSON_WIDE = [

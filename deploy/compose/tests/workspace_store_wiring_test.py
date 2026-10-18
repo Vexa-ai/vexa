@@ -42,3 +42,10 @@ def test_agent_api_and_the_runtime_name_one_workspace_path():
 def test_the_runtimes_out_of_store_source_is_the_global_tier_only():
     runtime = _service("runtime")
     assert _env(runtime, "RUNTIME_EXTRA_MOUNT_SOURCES") == "${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-}"
+
+
+def test_the_workspace_backend_defaults_to_the_volume_on_both_sides():
+    """WS-S3: nothing changes until an operator switches both agent-api and the runtime to s3."""
+    agent_api, runtime = _service("agent-api"), _service("runtime")
+    assert _env(agent_api, "VEXA_WORKSPACE_BACKEND") == "${VEXA_WORKSPACE_BACKEND:-volume}"
+    assert _env(runtime, "VEXA_WORKSPACE_MOUNT_SOURCE").endswith("_agent-workspaces}")

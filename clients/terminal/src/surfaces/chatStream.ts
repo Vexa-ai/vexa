@@ -62,6 +62,14 @@ export type ChatStreamEvent = {
   terms?: unknown[];
   /** `sources` event: the turn's citations as `{ title, url, date?, snippet? }` (additive). */
   items?: unknown[];
+  /** `call` events only — a successful `call_person` (call-person-autojoin): the room of two
+   *  (`chat` — not `session`, which names a job's conversation), the call's LiveKit `room`, the other
+   *  person's display name (`with`), and whether the call was already live. Ids and a name; never a
+   *  subject id or a token. */
+  chat?: string;
+  room?: string;
+  with?: string;
+  already_live?: boolean;
   // A BACKGROUND JOB (Vexa-ai/vexa#1584). `job_id` is on every event a job produced, and on the
   // `job-started` the spawning turn emits; `kind`/`target`/`line` are the job's own three facts.
   //
@@ -121,6 +129,35 @@ export type ChatStreamEvent = {
 /** A proposal to move a chat's writes (UI decision 6b): the agent's ask, the person's choice. */
 export type TargetProposal = { workspace: string; name: string; current: string; currentName: string; reason: string };
 
+/** A call `call_person` started, as the `call` event names it. */
+export type PlacedCall = { session: string; room: string; with: string; alreadyLive: boolean };
+
+const CALL_ID = /^[A-Za-z0-9_-]{1,80}$/;
+/** The `call` event's fields, shape-checked, or null. The server checks them too; a client that
+ *  opens a room named by a stream event checks again rather than trusting the wire. */
+export function placedCall(ev: { chat?: unknown; room?: unknown; with?: unknown; already_live?: unknown }): PlacedCall | null {
+  const session = typeof ev.chat === "string" ? ev.chat : "";
+  const room = typeof ev.room === "string" ? ev.room : "";
+  if (!CALL_ID.test(session) || !CALL_ID.test(room)) return null;
+  return { session, room, with: typeof ev.with === "string" ? ev.with.slice(0, 200) : "", alreadyLive: ev.already_live === true };
+}
+
+/** HOW LONG A MESSAGE THIS TAB SUBMITTED STILL VOUCHES FOR A TURN it did not dispatch itself (a
+ *  mid-turn submission answered on an attached view, or on the dispatching view's second turn). */
+export const OWN_SUBMIT_WINDOW_MS = 10 * 60_000;
+
+/** IS A CALL IN THIS TURN THIS VIEWER'S OWN (call-person-autojoin)? Only the person whose message
+ *  made the agent place the call joins it — never another reader of a shared chat, and never a view
+ *  replaying history. A view that dispatched the message owns its first turn; any other turn this
+ *  view renders (an attach after a reload or from another tab, a second turn that may be someone
+ *  else's) is owned only when this tab itself submitted to the chat within `OWN_SUBMIT_WINDOW_MS`.
+ *  The shell then re-reads the call and joins only when its owner is the viewer, so a wrong "yes"
+ *  here still cannot put anyone in someone else's call. */
+export function callFromThisView(o: { dispatchedTurn: boolean; lastLocalSubmitMs: number; now: number }): boolean {
+  if (o.dispatchedTurn) return true;
+  return o.lastLocalSubmitMs > 0 && o.now - o.lastLocalSubmitMs >= 0 && o.now - o.lastLocalSubmitMs <= OWN_SUBMIT_WINDOW_MS;
+}
+
 export function ownsJob(ev: { session?: string }, session: string | undefined): boolean {
   const owner = (ev.session ?? "").trim();
   return !owner || !session || owner === session;
@@ -158,14 +195,24 @@ export function joinInterim(prev: string, next: string, afterTool: boolean): str
  *  reconnect). `null` clears the indicator (real output is flowing or the turn ended). */
 export type ChatPhase = "connecting" | "working" | "reconnecting" | "stalled" | "queued";
 
+/** How a tool call ended when it did not simply work (agent-api `llm/tool_events.result_outcome`). */
+export type ToolOutcome = "held" | "refused" | "failed";
+/** A write the privacy hold kept: the confirmation code and what the approval card shows. */
+export type HeldWrite = { code: string; workspace?: string; workspace_name?: string; path?: string; readers?: string[]; sources?: string[] };
+
 export type ChatStreamCallbacks = {
   /** an agent message-delta with non-empty text (the first one clears the "starting" placeholder) */
   onDelta: (text: string) => void;
   /** a tool-call step to show as an operation */
-  onTool: (tool: string, args?: Record<string, unknown>) => void;
+  onTool: (tool: string, args?: Record<string, unknown>, callId?: string) => void;
   /** a tool's result, paired with the tool-call that asked for it by `callId`. `result` is the
-   *  event's full `result` body when the harness sends one, else its short `summary`. */
-  onToolResult?: (tool: string, r: { ok: boolean; result: unknown }) => void;
+   *  event's full `result` body when the harness sends one, else its short `summary`. `outcome`
+   *  is how the call ended when it did not simply work (`held` by the privacy hold, `refused`,
+   *  `failed`); a held write carries the approval card's fields as `held` (held-label-rooms-1018). */
+  onToolResult?: (tool: string, r: { ok: boolean; result: unknown; callId?: string; outcome?: ToolOutcome; held?: HeldWrite }) => void;
+  /** FILES THE TURN WROTE ITSELF THAT THE PRIVACY HOLD KEPT BACK at its commit (`write-withheld`):
+   *  the tool call said ok, the commit did not land them. */
+  onWithheld?: (w: { workspace: string; paths: string[]; code?: string; readers: string[]; sources: string[] }) => void;
   /** the turn committed to the workspace (terminal) */
   onCommit: (sha: string | undefined) => void;
   /** the turn was rejected by workspace.v1 governance (terminal) */
@@ -239,6 +286,11 @@ export type ChatStreamCallbacks = {
    *  Forwarded, never stored, exactly like `onArtifact`: the focus set belongs to the CHAT RECORD
    *  and this reader owns no state. Optional so existing callers/tests need not implement it. */
   onFocusWorkspace?: (f: { workspace: string; name: string }) => void;
+  /** THE AGENT STARTED A CALL FOR THIS PERSON — a successful `call_person` ("Call tester-b").
+   *  meeting-api ends a call nobody joins within 30 s, so the caller's own view opens the room and
+   *  joins. Forwarded, never acted on here: the caller (chat.tsx) decides whether this view is the
+   *  one that placed the call, and the shell re-reads the call before joining. Optional. */
+  onCall?: (c: PlacedCall) => void;
   /** THE AGENT ASKS TO MOVE THIS CHAT'S WRITES (UI decision 6b) — `propose_write_target`. Rendered
    *  inline with Switch / Keep; nothing moves until the person clicks. */
   onProposeTarget?: (p: TargetProposal) => void;
@@ -734,11 +786,17 @@ export async function streamChatTurn(
             break;
           case "tool-call":
             if (ev.callId && ev.tool) toolByCall.set(ev.callId, ev.tool);
-            sawVisibleOutput = true; cb.onTool(ev.tool ?? "tool", (ev as { args?: Record<string, unknown> }).args);
+            sawVisibleOutput = true; cb.onTool(ev.tool ?? "tool", (ev as { args?: Record<string, unknown> }).args, ev.callId);
             break;
           case "tool-result": {
             const tool = ev.callId ? toolByCall.get(ev.callId) : undefined;
-            if (tool) cb.onToolResult?.(tool, { ok: ev.ok !== false, result: ev.result ?? ev.summary });
+            if (tool) {
+              const raw = ev as { outcome?: unknown; held?: unknown };
+              const outcome = raw.outcome === "held" || raw.outcome === "refused" || raw.outcome === "failed" ? raw.outcome : undefined;
+              const held = raw.held && typeof raw.held === "object" && typeof (raw.held as HeldWrite).code === "string" ? raw.held as HeldWrite : undefined;
+              cb.onToolResult?.(tool, { ok: ev.ok !== false, result: ev.result ?? ev.summary, callId: ev.callId,
+                                        ...(outcome ? { outcome } : {}), ...(held ? { held } : {}) });
+            }
             // THE HEADER'S SCOPE LINE follows the agent (Vexa-ai/vexa#1783): a state, target or
             // defaults verb that answered changes what the line says — it re-reads the server.
             if (tool && ev.ok !== false && isScopeTool(tool)) notifyScope();
@@ -749,6 +807,16 @@ export async function streamChatTurn(
           // document the turn had just made was the one thing not on screen. The event is
           // advisory-only here: this reader forwards it and the shell decides, because the tab set
           // belongs to the CHAT RECORD (decision 18) and this file owns no state at all.
+          // A FILE WRITE THE PRIVACY HOLD KEPT BACK at the turn's commit (D6). Its tool call said ok;
+          // without this the step under the answer still read "Wrote" (held-label-rooms-1018).
+          case "write-withheld": {
+            const w = ev as { workspace?: unknown; paths?: unknown; code?: unknown; readers?: unknown; sources?: unknown };
+            const list = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
+            cb.onWithheld?.({ workspace: String(w.workspace ?? ""), paths: list(w.paths),
+                              ...(typeof w.code === "string" && w.code ? { code: w.code } : {}),
+                              readers: list(w.readers), sources: list(w.sources) });
+            break;
+          }
           case "artifact":
             if (ev.path) cb.onArtifact?.({ workspace: ev.workspace ?? "", path: ev.path, focus: ev.focus === true, pin: ev.pin === true });
             break;
@@ -771,6 +839,13 @@ export async function streamChatTurn(
             if (ev.workspace) cb.onFocusWorkspace?.({ workspace: ev.workspace, name: ev.name ?? "" });
             notifyScope();
             break;
+          // A CALL THE AGENT STARTED FOR THIS PERSON (call-person-autojoin). Emitted by the harness
+          // off a successful `call_person` and nothing else; forwarded like every panel event.
+          case "call": {
+            const placed = placedCall(ev);
+            if (placed) cb.onCall?.(placed);
+            break;
+          }
           // THE AGENT ASKS, THE PERSON DECIDES (UI decision 6b). Nothing moves here.
           case "propose-target":
             if (ev.workspace) cb.onProposeTarget?.({

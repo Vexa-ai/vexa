@@ -245,3 +245,30 @@ def _privacy_store():
     yield client
     taint.configure(None)
     held_store.configure(None)
+
+
+# ── WS-S3: run any part of the suite with the s3 workspace backend's write path switched on ─────
+# VEXA_TEST_WORKSPACE_BACKEND=s3 installs the durable-store ref observer for the whole session over
+# pytest's temp root: every ref-moving git command any test makes, in any repository it creates,
+# takes the workspace lock, checks freshness and publishes a generation to an in-memory bucket before
+# `run_git` returns, and every file written outside a repository through workspace_paths is PUT — so a deny test that still passes proves the refusal holds on the s3 write path.
+@pytest.fixture(scope="session", autouse=True)
+def _s3_workspace_backend(tmp_path_factory):
+    if os.environ.get("VEXA_TEST_WORKSPACE_BACKEND") != "s3":
+        yield None
+        return
+    from workspaces.store.client import install_observer, install_path_observer
+    from workspaces.store.lock import WorkspaceLocks
+    from workspaces.store.objects import MemoryObjects
+    from workspaces.store.observer import CacheSync, StoreObserver
+    from workspaces.store.repostore import RepoStore
+
+    store = RepoStore(objects=MemoryObjects(conditional=False), locks=WorkspaceLocks(None),
+                      cache_root=Path(os.path.realpath(tmp_path_factory.getbasetemp())))
+    observer = StoreObserver(store, sync=CacheSync(store))   # writes outside git published too
+    install_observer(observer)
+    install_path_observer(observer)
+    yield store
+    install_observer(None)
+    install_path_observer(None)
+    assert store.repos(), "the s3 run published nothing: the observer was not on the write path"

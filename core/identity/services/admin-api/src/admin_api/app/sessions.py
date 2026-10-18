@@ -19,6 +19,15 @@ tokens` has no parameter that reaches `kind`, so it never produces one.
 
 `/internal/validate` then answers `credential_class` for every bearer: `session` for this row,
 `key` for every other API key, `delegation` for a worker's `vxd_` token.
+
+`POST /internal/sessions/upgrade {token}` (same two secrets) moves a browser that signed in BEFORE
+this door existed onto a session (hotfix 2026-10-18): its cookie still holds the old `terminal-login`
+KEY, so every decision that needs a session (a card press, D13) was refused with no way out short of
+signing in again. Only that exact legacy shape upgrades — a `key` row named `terminal-login` with
+scopes `bot,tx,browser` and no expiry, which only the sign-in ever minted (the terminal's self-serve
+`/api/tokens` refuses that name). A session, a delegation, an expiring key, any other key → 409. The
+old key is retired in the same commit: it expires after a short grace (requests already in flight
+with it still land) and, now expiring, can never be upgraded again — one key, at most one session.
 """
 from __future__ import annotations
 
@@ -26,6 +35,8 @@ import hmac
 import os
 from datetime import datetime, timedelta
 from typing import Optional
+
+from sqlalchemy import select
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -46,6 +57,9 @@ SESSION_PREFIX_SCOPE = "browser"
 SESSION_SECRET_ENV = "VEXA_TERMINAL_SESSION_SECRET"
 SESSION_SECRET_HEADER = "X-Terminal-Session-Secret"
 DEFAULT_NAME = "terminal-login"
+#: How long a retired login key keeps working after its upgrade — requests the browser already sent
+#: with it must still land; the cookie it receives carries the session from then on.
+UPGRADE_GRACE_SECONDS = 600
 
 
 class SessionMintRequest(BaseModel):
@@ -53,6 +67,19 @@ class SessionMintRequest(BaseModel):
     user_id: int = Field(..., ge=1)
     name: Optional[str] = Field(default=None, max_length=255)
     expires_in: Optional[int] = Field(default=None, gt=0)
+
+
+class SessionUpgradeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(..., min_length=1, max_length=255)
+
+
+def is_legacy_login_key(api_token: APIToken) -> bool:
+    """The exact row the sign-in minted before sessions existed — nothing else upgrades."""
+    return (getattr(api_token, "kind", None) in (None, KIND_KEY)
+            and api_token.name == DEFAULT_NAME
+            and sorted(api_token.scopes or []) == sorted(SESSION_SCOPES)
+            and api_token.expires_at is None)
 
 
 def check_session_secret(request: Request) -> None:
@@ -97,5 +124,34 @@ def build_router() -> APIRouter:
         await db.refresh(tok)
         return {"token": tok.token, "id": tok.id, "user_id": user.id, "scopes": list(SESSION_SCOPES),
                 "credential_class": KIND_SESSION}
+
+    @router.post("/internal/sessions/upgrade", include_in_schema=False, status_code=status.HTTP_201_CREATED)
+    async def upgrade_session(body: SessionUpgradeRequest, request: Request,
+                              db: AsyncSession = Depends(get_db)):
+        check_internal_no_dev_bypass(request)
+        check_session_secret(request)
+        row = (await db.execute(
+            select(APIToken, User).join(User, APIToken.user_id == User.id).where(APIToken.token == body.token)
+        )).first()
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="unknown credential")
+        old, user = row[0], row[1]
+        now = datetime.utcnow()
+        if not is_legacy_login_key(old):
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                detail={"refused": "not_a_login_key",
+                                        "note": "only a browser's pre-session sign-in key is upgraded"})
+        from . import principals as principals_mod  # noqa: PLC0415
+        if principals_mod.is_principal_account(user):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="a workspace principal holds no session")
+        old.expires_at = now + timedelta(seconds=UPGRADE_GRACE_SECONDS)
+        tok = APIToken(token=generate_prefixed_token(SESSION_PREFIX_SCOPE), user_id=user.id,
+                       scopes=list(SESSION_SCOPES), name=DEFAULT_NAME,
+                       created_at=now, kind=KIND_SESSION)
+        db.add(tok)
+        await db.commit()
+        await db.refresh(tok)
+        return {"token": tok.token, "id": tok.id, "user_id": user.id, "scopes": list(SESSION_SCOPES),
+                "credential_class": KIND_SESSION, "retired": old.id}
 
     return router

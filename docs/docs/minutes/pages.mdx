@@ -344,6 +344,16 @@ is a reference that also lets the holder in. A place inside an object rides alon
 who can open the call, `[[meeting:153#L42]]` at a transcript line, `[[page:<id>/notes.md#venue]]` at a
 heading. A reference never grants access: each reader sees what their own access allows.
 
+**A file reference always names its workspace**: `[[page:<workspace>/<path>]]`, for example
+`[[page:narrative/README.md]]` (`<workspace>` is the workspace's slug or id). Every workspace has a
+`README.md`, so a bare path names no file: in a chat, `README.md` (in backticks, as a link target or
+as `[[README.md]]`) is shown as plain text with a dotted underline and opens nothing. It is never
+looked for in other workspaces or the organisation layer. Inside a page, a relative link points into
+that page's own workspace. The agent writes qualified references. `workspace_write` and
+`entity_upsert` answer with the written file's `ref`, and the turn's `artifact` event carries one too.
+When an older reply is read back and every write in its chat went to one workspace, its bare paths
+are qualified against that workspace. Otherwise they stay plain.
+
 Opening a reference asks the server what it points at **for you, now**. If you can open it, the chip
 shows its name and opens it. If you cannot, it says **Restricted**, with no name, and offers **Request access**, which
 tells the owner who asked. If it no longer exists, it says **Not found**. Pasting a reference link into

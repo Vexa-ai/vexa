@@ -90,7 +90,10 @@ export function createUserToken(userId: string | number): Promise<AdminResult<{ 
 //    security-relevant may ever be derived from it.
 
 export type ValidatedUser =
-  | { ok: true; userId: string | number; email: string; isAdmin: boolean; adminAccount: boolean }
+  | { ok: true; userId: string | number; email: string; isAdmin: boolean; adminAccount: boolean;
+      /** identity.v1 `credential_class`: `session` (a signed-in browser, D13), `key`, `delegation`;
+       *  null when an older admin-api does not say. */
+      credentialClass?: "session" | "key" | "delegation" | null }
   | { ok: false; status: number; error: string };
 
 export async function validateAuthToken(token: string): Promise<ValidatedUser> {
@@ -113,6 +116,7 @@ export async function validateAuthToken(token: string): Promise<ValidatedUser> {
     if (!res.ok) return { ok: false, status: 503, error: `Token validation failed (admin-api returned ${res.status})` };
     const data = (await res.json()) as {
       user_id?: string | number; email?: string; is_admin?: boolean; admin_account?: boolean;
+      credential_class?: unknown;
     };
     if (data.user_id === undefined || data.user_id === null || !data.email) {
       return { ok: false, status: 502, error: "Token validation returned no identity" };
@@ -120,8 +124,10 @@ export async function validateAuthToken(token: string): Promise<ValidatedUser> {
     // `adminAccount` — the deployment's dedicated ADMIN ACCOUNT (identity.v1 `admin_account`): the
     // only account that writes `_global`, and that has nothing else. Positive evidence only: a
     // missing field (an older admin-api) is no.
+    const cc = data.credential_class;
     return { ok: true, userId: data.user_id, email: data.email, isAdmin: data.is_admin === true,
-             adminAccount: data.admin_account === true };
+             adminAccount: data.admin_account === true,
+             credentialClass: cc === "session" || cc === "key" || cc === "delegation" ? cc : null };
   } catch (err) {
     const e = err as Error;
     return { ok: false, status: 503, error: e.name === "TimeoutError" ? "Token validation timed out" : "Token validation unavailable" };
@@ -592,16 +598,19 @@ export async function mintSessionToken(
   return res;
 }
 
-/** The sign-in's credential: a SESSION when this deployment can mint one; otherwise — the secret is
- *  unset, or admin-api is older (404) or unconfigured (503) — the old `bot,tx,browser` login KEY,
- *  with a warning. Sign-in keeps working either way; with the key, every decision that needs a
- *  session is refused (fail closed). Both carry the `terminal-login` name, so the prune bounds both. */
+/** The sign-in's credential: ALWAYS a SESSION on a deployment that holds the session secret
+ *  (hotfix 2026-10-18 — a browser signed in with a key cannot press a card, and never learns why).
+ *  Only a terminal with `VEXA_TERMINAL_SESSION_SECRET` UNSET — a deployment with no session concept —
+ *  falls back to the old `bot,tx,browser` login KEY, with a warning; there every decision that needs a
+ *  session is refused (fail closed). With the secret set, an admin-api that cannot mint (404/503) fails
+ *  the sign-in rather than quietly handing the browser a key. Both carry the `terminal-login` name,
+ *  so the prune bounds both. */
 export async function mintLoginToken(userId: string | number): Promise<AdminResult<{ token: string; id: number }>> {
   const session = await mintSessionToken(userId);
   if (session.ok && session.data) {
     return { ok: true, status: session.status, data: { token: session.data.token, id: session.data.id } };
   }
-  if (!session.unavailable) {
+  if (!session.unavailable || process.env.VEXA_TERMINAL_SESSION_SECRET) {
     return { ok: false, status: session.status || 500, error: session.error || "Failed to mint the session" };
   }
   console.warn(`[terminal-auth] session credential unavailable (${session.error || session.status}); `
@@ -611,6 +620,26 @@ export async function mintLoginToken(userId: string | number): Promise<AdminResu
     return { ok: false, status: minted.status || 500, error: minted.error || "Failed to mint API token" };
   }
   return { ok: true, status: minted.status, data: { token: minted.data.token, id: minted.data.id } };
+}
+
+/** Move a browser that signed in before sessions existed onto one (hotfix 2026-10-18): admin-api's
+ *  `POST /internal/sessions/upgrade {token}` (both secrets) mints a session for the SAME user and
+ *  retires the old key, but only when `token` is the exact legacy sign-in key (`terminal-login`,
+ *  `bot,tx,browser`, no expiry) — never a self-serve key, a session or a delegation. Callers pass only
+ *  the browser's own httpOnly auth cookie (`sessionUpgrade.ts`). */
+export async function upgradeLoginSession(token: string): Promise<AdminResult<AdminMintedSession>> {
+  const sessionSecret = process.env.VEXA_TERMINAL_SESSION_SECRET || "";
+  if (!sessionSecret) return { ok: false, status: 503, error: "VEXA_TERMINAL_SESSION_SECRET is not set" };
+  const res = await internalRequest<AdminMintedSession>("/internal/sessions/upgrade", {
+    method: "POST",
+    headers: { "X-Terminal-Session-Secret": sessionSecret },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) return res;
+  if (!res.data?.token || res.data.credential_class !== "session") {
+    return { ok: false, status: 502, error: "admin-api's session upgrade did not answer a session" };
+  }
+  return res;
 }
 
 export function revokeToken(tokenId: string | number): Promise<AdminResult<void>> {

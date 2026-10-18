@@ -21,6 +21,10 @@ card, person, routine, sensor, query, series and join. A reference NEVER GRANTS:
 answered by its object's own access decision, and the anchor (``t=00:12:30``, ``L42``, a heading)
 only says where to open what the viewer may already open.
 
+A PAGE REFERENCE NAMES ITS WORKSPACE: ``page:<workspace>/<path>`` (slug or id), and ``file:`` is
+relative only to the page it sits in (``page_workspace``) — with none, it is ``gone``. Nothing here
+searches for a bare path (founder ruling 2026-10-18; `links.page_ref`, `links.is_bare_path`).
+
 NOTHING THE WRITER PUT IN THE REF IS ECHOED BACK. A chip's `|label` is the writer's hint for a
 reader with no server; the answer carries the server's label or none. Otherwise a ref could carry a
 private title to a stranger, phrased as a label.
@@ -62,6 +66,9 @@ class Seams:
     series: Optional[Callable] = None
     #: The workspace a ``file:`` reference is relative to (the page it sits in).
     page_workspace: Optional[str] = None
+    #: ``peer(session_id) -> name|None``: for a room of two, the OTHER person's name as the viewer
+    #: sees it — that is the room's label (UI 7ii, humans by name); None for any other session.
+    peer: Optional[Callable] = None
 
 
 class RefError(ValueError):
@@ -161,7 +168,10 @@ def resolve_ref(r: links.UniversalRef, seams: Seams) -> dict:
         row, readable = seams.chat(r.id)
         if row is None:
             return _answer(r, GONE)
-        return _answer(r, READABLE if readable else NOT_YOURS, label=row.get("title") or "Untitled chat",
+        # A ROOM OF TWO IS CALLED BY THE OTHER PERSON (2026-10-18: call_person's room chip read
+        # "Untitled chat" — the room's own title is empty, and its name is who it is with).
+        peer = seams.peer(row.get("id") or r.id) if readable and seams.peer is not None else None
+        return _answer(r, READABLE if readable else NOT_YOURS, label=peer or row.get("title") or "Untitled chat",
                        open_={"chat": r.id}, request=True)
     if r.kind == "meeting":
         try:

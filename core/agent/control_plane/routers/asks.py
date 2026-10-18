@@ -12,7 +12,9 @@ the person all read the same. Now:
 * ``POST /api/asks/{pending_id}/answer {nonce, content_hash, reply, text?}`` — the press. Refused to
   every delegated caller and to anything but the terminal's session credential (D13); refused unless
   the nonce matches, the content hash equals both the item's and the card as the transcript holds it
-  now, the reply is one the card offered (or free text the card allowed), and the item is still open.
+  now, the reply is one the card offered or the person's own words, and the item is still open. Any
+  card takes a typed answer (the person can always answer in their own words, up to TEXT_MAX); a
+  typed answer is bound exactly like a press — nonce, content hash, single use, session credential.
   It is decided ONCE: a replay is a 409. The answer is returned as the message the person's chat
   sends (``[answer <id> #<pending id>] …``), so the agent can see it was a bound press.
 
@@ -39,7 +41,7 @@ _FENCE = re.compile(r"```ask[ \t]*\r?\n(.*?)```", re.S)
 _ID = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
 _SESSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 LABEL_MAX = 80
-TEXT_MAX = 2000
+TEXT_MAX = 4000
 
 
 class AskOpen(BaseModel):
@@ -59,7 +61,8 @@ class AskAnswer(BaseModel):
     nonce: str = Field(min_length=16, max_length=100)
     content_hash: str = Field(min_length=64, max_length=64)
     reply: Optional[AskReply] = None
-    text: Optional[str] = Field(default=None, max_length=TEXT_MAX)
+    # Checked in the handler, not by the model, so an over-long answer is refused in plain words.
+    text: Optional[str] = Field(default=None, max_length=TEXT_MAX * 4)
 
 
 def canonical_hash(spec: dict) -> str:
@@ -195,9 +198,12 @@ def build(**d) -> APIRouter:
         label = body.reply.label.strip() if body.reply else ""
         text = (body.text or "").strip()
         if label and label not in offered(spec):
-            raise HTTPException(status_code=422, detail="not an answer this card offered")
-        if not label and not (text and spec.get("free")):
-            raise HTTPException(status_code=422, detail="an answer is one of the card's choices or its free text")
+            raise HTTPException(status_code=422, detail="That choice isn't on this card any more.")
+        if len(text) > TEXT_MAX:
+            raise HTTPException(status_code=422,
+                                detail=f"That answer is too long ({len(text)} characters). Keep it under {TEXT_MAX}.")
+        if not label and not text:
+            raise HTTPException(status_code=422, detail="Type an answer or pick one of the choices.")
         said = (body.reply.reply or label) if body.reply else ""
         answer = " — ".join(x for x in (said, text) if x)
         try:

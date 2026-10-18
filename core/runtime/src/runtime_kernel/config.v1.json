@@ -111,7 +111,7 @@
       "key": "VEXA_WORKSPACE_MOUNT_SOURCE",
       "class": "defaulted",
       "default": "(unset — no store backing: in-store workspace mounts are not bound)",
-      "description": "what backs the agent workspace store on the substrate — a host path or named volume (docker backend), the PVC claim name (k8s backend); the process backend shares the filesystem and needs none. The RUNTIME's own value: a workload spec's VEXA_WORKSPACE_MOUNT_* keys are discarded, and this is injected into every spec that declares a mount set",
+      "description": "what backs the agent workspace store on the substrate — a host path or named volume (docker backend), the PVC claim name (k8s backend); the process backend shares the filesystem and needs none. The RUNTIME's own value: a workload spec's VEXA_WORKSPACE_MOUNT_* keys are discarded, and this is injected into every spec that declares a mount set. `emptyDir:` = the s3 workspace backend: nothing backs the store on the substrate; a k8s worker gets a private emptyDir at the target and a docker worker its own filesystem, and hydrates its mounts from agent-api",
       "targets": [
         "compose",
         "helm"
@@ -126,6 +126,15 @@
         "compose",
         "helm",
         "lite"
+      ]
+    },
+    {
+      "key": "RUNTIME_WORKSPACE_CACHE_SIZE",
+      "class": "defaulted",
+      "default": "(no limit)",
+      "description": "s3 workspace backend on k8s: the sizeLimit of a worker's emptyDir workspace cache (e.g. 2Gi)",
+      "targets": [
+        "helm"
       ]
     },
     {
@@ -746,7 +755,7 @@
     {
       "key": "VEXA_AGENT_MAX_OUTPUT_TOKENS",
       "class": "defaulted",
-      "default": "(unset \u2014 each harness's own default)",
+      "default": "(unset — each harness's own default)",
       "description": "every harness: the output-token cap a model request asks for (claude-code receives it as CLAUDE_CODE_MAX_OUTPUT_TOKENS, openai-agent sends it as max_tokens; codex does not read it: Codex 0.146.0 has no setting for the model's output cap (its own max_output_tokens fields are per-tool exec budgets), so a Codex turn asks for Codex's default); empty keeps each harness's own default (the claude CLI asks for 32000). Forwarded into spawned workers",
       "targets": [
         "compose"

@@ -1,5 +1,5 @@
 {
-  "_comment": "Design ratchets (terminal design guidelines \u00a78), enforced by src/ui-kit/__tests__/styleBudget.test.ts as part of gate:ui-design. Per file: `files` = banned inline style keys (G2: colour, type, spacing, border, radius, shadow, z-index, motion), `rawColours` = hex/rgb/hsl literals outside tokens.css (G1), `outlineNone` = outline:none outside the primitives (G5). A count may only go down, and a lowered count must be written here in the same commit (UPDATE_STYLE_BUDGET=1). A file not listed has a budget of zero, so a new raw colour, a new one-off font size or a removed focus ring anywhere fails CI.",
+  "_comment": "Design ratchets (terminal design guidelines §8), enforced by src/ui-kit/__tests__/styleBudget.test.ts as part of gate:ui-design. Per file: `files` = banned inline style keys (G2: colour, type, spacing, border, radius, shadow, z-index, motion), `rawColours` = hex/rgb/hsl literals outside tokens.css (G1), `outlineNone` = outline:none outside the primitives (G5). A count may only go down, and a lowered count must be written here in the same commit (UPDATE_STYLE_BUDGET=1). A file not listed has a budget of zero, so a new raw colour, a new one-off font size or a removed focus ring anywhere fails CI.",
   "files": {
     "app/AuthGate.tsx": 3,
     "app/debug/teams-pipeline/page.tsx": 37,
@@ -53,7 +53,7 @@
     "ui-kit/docLinks.tsx": 5,
     "ui-kit/index.tsx": 6,
     "ui-kit/Markdown.tsx": 4,
-    "ui-kit/MdxDoc.tsx": 12,
+    "ui-kit/MdxDoc.tsx": 5,
     "ui-kit/Modal.tsx": 16,
     "ui-kit/policyDoc.tsx": 15,
     "ui-kit/WsLink.tsx": 1,

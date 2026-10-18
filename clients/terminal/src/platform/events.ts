@@ -106,6 +106,13 @@ export const TERMS_EVENT = "vexa:terminal:terms";
  *  and everyone already in the chat is rung (`call_started`). */
 export const CALL_START_EVENT = "vexa:terminal:call-start";
 
+/** THE AGENT STARTED A CALL FOR THIS PERSON — a successful `call_person` ("Call tester-b"),
+ *  re-emitted by the chat surface only in the view whose own message triggered it, and only live.
+ *  Detail `{ session, room, with, alreadyLive }` (`minutes/callPlaced.ts`). The shell opens the room
+ *  and joins as the caller, shown as their outgoing call with Cancel — meeting-api ends a call nobody
+ *  joins within 30 s, so waiting for the person to open the room themselves lost the call. */
+export const CALL_PLACED_EVENT = "vexa:terminal:call-placed";
+
 /** START A NEW CHAT AT A MODEL LEVEL (hosted plans, `levels`): the composer's locked "Level N" menu
  *  asks for it. `detail.level` 1–5; the shell opens a new chat and sets that level on it, then emits
  *  LEVEL_SET_EVENT so the new chat's picker shows it. */

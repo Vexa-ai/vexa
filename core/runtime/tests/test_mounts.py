@@ -351,3 +351,16 @@ def test_k8s_secret_mount_file_uses_subpath_and_keeps_dir_writable():
     c = pod_overrides(env, container_name="w", credential_mounts=True)["spec"]["containers"][0]
     assert {"name": "cred-0-codex-auth", "mountPath": "/tmp/.codex/auth.json",
             "readOnly": True, "subPath": "auth.json"} in c["volumeMounts"]
+
+
+# ── WS-S3: the s3 workspace backend — nothing backs the store on the substrate ──────────────────
+def test_the_s3_backend_binds_nothing_on_docker_and_a_private_emptydir_on_k8s(monkeypatch):
+    from runtime_kernel.mounts import EMPTYDIR_SOURCE
+
+    env = _env([{"slug": "u1", "path": "/workspaces/u1", "write": True}], source=EMPTYDIR_SOURCE)
+    assert workspace_binds(env) == []
+    monkeypatch.setenv("RUNTIME_WORKSPACE_CACHE_SIZE", "2Gi")
+    volumes, vmounts = k8s_volume_mounts(env, pvc_name=EMPTYDIR_SOURCE, store_target="/workspaces")
+    assert volumes == [{"name": "workspace-cache", "emptyDir": {"sizeLimit": "2Gi"}}]
+    assert vmounts == [{"name": "workspace-cache", "mountPath": "/workspaces"}]
+    assert not any("persistentVolumeClaim" in v for v in volumes)

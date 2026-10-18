@@ -35,7 +35,7 @@ from llm.claude_skills import _link_skills_into_home
 from llm import proctree
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS,
                              _FETCH_TOOLS, _bot_artifact, _fetched_source, _open_event, _published_terms, _short,
-                             _tool_result_text, _workspace_focus, _written_artifact)
+                             _tool_result_text, _workspace_focus, _written_artifact, result_outcome)
 from llm.private_writes import private_source
 from shared.private_fingerprint import digests_of
 
@@ -180,6 +180,8 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                             "callId": call_id,
                             "ok": ok,
                             "summary": _short(block.get("content")),
+                            # how the call ended — `held` for a write the privacy hold kept (D6)
+                            **result_outcome(ok, block.get("content")),
                         }
                         # WHAT A PRIVATE READ GAVE THE AGENT, as digests for the write guard
                         # (`llm.private_writes`; `run_harness_turn` drops them before anything else

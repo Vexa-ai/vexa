@@ -40,6 +40,14 @@ describe("pageForDocRef — an UNRESOLVED link still opens", () => {
   it("only a detail naming NOTHING opens nothing", () => {
     expect(pageForDocRef({}, null)).toBeNull();
   });
+
+  it("a bare path naming NO workspace opens nothing — not the home README (founder ruling 2026-10-18)", () => {
+    expect(pageForDocRef({ path: "README.md" }, null)).toBeNull();
+    expect(pageForDocRef({ path: "README.md" }, undefined)).toBeNull();
+    // the same path WITH its workspace opens there
+    expect(pageForDocRef({ path: "README.md", slug: "narrative" }, null))
+      .toEqual({ path: "README.md", slug: "narrative", label: "README" });
+  });
 });
 
 describe("pageForMeetingRef — a meeting ref with no row behind it", () => {

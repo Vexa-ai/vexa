@@ -76,3 +76,48 @@ def test_refused_to_a_delegated_caller_an_api_key_and_another_person(world):
     assert client.post(url, json=body, headers=_h("bob")).status_code == 404
     assert _open(client, sid, who="bob").status_code == 404
     assert client.post("/api/asks/open", json={"session": sid, "ask_id": "new-ws"}, headers=watched).status_code == 403
+
+
+def test_a_typed_answer_works_on_any_card_and_stays_bound(world):
+    """The person can always answer in their own words — the card needs no ``free`` flag — and the
+    typed answer carries the same bindings as a press: nonce, content hash, single use."""
+    client, store, *_ = world
+    assert "free" not in ASK
+    sid = _chat(store)
+    item = _open(client, sid).json()
+    url = f"/api/asks/{item['pending_id']}/answer"
+    said = "build from this one, add https://www.youtube.com/@peterdiamandis as a source"
+    forged = {"nonce": "x" * 32, "content_hash": item["content_hash"], "text": said}
+    assert client.post(url, json=forged, headers=_h("alice")).status_code == 409
+    changed = {"nonce": item["nonce"], "content_hash": "0" * 64, "text": said}
+    assert client.post(url, json=changed, headers=_h("alice")).status_code == 409
+    body = {"nonce": item["nonce"], "content_hash": item["content_hash"], "text": said}
+    a = client.post(url, json=body, headers=_h("alice"))
+    assert a.status_code == 200, a.text
+    assert a.json()["message"] == f"[answer new-ws #{item['pending_id']}] {said}"
+    assert client.post(url, json=body, headers=_h("alice")).status_code == 409   # single use
+
+
+def test_a_typed_answer_is_refused_in_plain_words_when_empty_or_too_long(world):
+    from control_plane.routers.asks import TEXT_MAX
+    client, store, *_ = world
+    sid = _chat(store)
+    item = _open(client, sid).json()
+    url = f"/api/asks/{item['pending_id']}/answer"
+    base = {"nonce": item["nonce"], "content_hash": item["content_hash"]}
+    empty = client.post(url, json={**base, "text": "   "}, headers=_h("alice"))
+    assert empty.status_code == 422 and isinstance(empty.json()["detail"], str)
+    long = client.post(url, json={**base, "text": "a" * (TEXT_MAX + 1)}, headers=_h("alice"))
+    assert long.status_code == 422 and "too long" in long.json()["detail"]
+    ok = client.post(url, json={**base, "text": "a" * TEXT_MAX}, headers=_h("alice"))
+    assert ok.status_code == 200, ok.text
+
+
+def test_an_unoffered_label_is_still_refused_even_with_text(world):
+    client, store, *_ = world
+    sid = _chat(store)
+    item = _open(client, sid).json()
+    body = {"nonce": item["nonce"], "content_hash": item["content_hash"],
+            "reply": {"label": "Delete all"}, "text": "please"}
+    r = client.post(f"/api/asks/{item['pending_id']}/answer", json=body, headers=_h("alice"))
+    assert r.status_code == 422 and isinstance(r.json()["detail"], str)

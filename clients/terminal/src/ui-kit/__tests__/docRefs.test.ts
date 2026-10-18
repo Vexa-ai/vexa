@@ -86,10 +86,13 @@ describe("bare relative paths in inline code", () => {
     expect(transformDocRefs("run `npm run dev`")).toBe("run `npm run dev`");
   });
 
-  it("goes live only when the path RESOLVES — a miss stays plain code", async () => {
+  it("goes live only when the path RESOLVES in its page's workspace — a miss stays plain code", async () => {
     trees["vexa-team-3183d1"] = ["kg/entities/company/acme.md"];
-    expect(await docPathExists("kg/entities/company/acme.md", {})).toBe(true);
-    expect(await docPathExists("kg/entities/company/ghost.md", {})).toBe(false);
+    const page = { path: "README.md", slug: "vexa-team-3183d1" };
+    expect(await docPathExists("kg/entities/company/acme.md", page)).toBe(true);
+    expect(await docPathExists("kg/entities/company/ghost.md", page)).toBe(false);
+    // in a chat (no page around it) a bare path names no workspace: never live (2026-10-18)
+    expect(await docPathExists("kg/entities/company/acme.md", {})).toBe(false);
   });
 
   it("resolves a path relative to the doc that names it", async () => {
@@ -218,13 +221,12 @@ describe("a workspace link opens THAT workspace — never a neighbour", () => {
     expect(transformDocRefs("**vexa-team-ffffff**")).toBe("**vexa-team-ffffff**");
   });
 
-  it("a slug we cannot PLACE still searches — the exact rule is about rooms the reader HAS", async () => {
-    // Deliberate, and `docLinks.test.ts` owns the older half of it ("falls back to home when the
-    // attached slug's tree doesn't have the file"). An unreachable slug names no room we could open
-    // even in principle, so a copy we can actually serve beats a dead end. The founder's defect was
-    // never this: his workspace was one he BELONGS to, and the fix is that belonging now counts.
+  it("a slug we cannot PLACE stays in the room it names — no copy from another workspace (2026-10-18)", async () => {
+    // It used to search, and `_global`'s README answered: the same guess the founder ruled out
+    // ("we do not want to guess which readme this should open"). The honest empty state of the
+    // named room beats another room's real document.
     expect(await resolveDocRef({ path: "/workspaces/vexa-team-ffffff/README.md" }, {}))
-      .toEqual({ path: "README.md", slug: "_global" });
+      .toEqual({ path: "README.md", slug: "vexa-team-ffffff" });
   });
 
   it("the PERSONAL alias is keyed on the PRIMARY MOUNT, never on the name `seed`", async () => {
@@ -242,9 +244,13 @@ describe("a workspace link opens THAT workspace — never a neighbour", () => {
     expect(lookupWorkspace("seed")).toEqual({ slug: "seed", label: "seed" });
   });
 
-  it("a cross-mount link inside a doc still SEARCHES — the exact rule constrains names, not paths", async () => {
+  it("a relative link inside a doc reads THAT doc's workspace only — never a search of the mounts (2026-10-18)", async () => {
     trees["vexa-team-3183d1"] = ["README.md", "kg/entities/person/jane.md"];
+    // a home doc linking a path that exists only in the team room opens the home room's "(not found)"
     expect(await resolveDocRef({ path: "kg/entities/person/jane.md" }, { path: "README.md" }))
+      .toEqual({ path: "kg/entities/person/jane.md", slug: undefined });
+    // the same link from a doc IN the team room opens there
+    expect(await resolveDocRef({ path: "kg/entities/person/jane.md" }, { path: "README.md", slug: "vexa-team-3183d1" }))
       .toEqual({ path: "kg/entities/person/jane.md", slug: "vexa-team-3183d1" });
   });
 });

@@ -37,7 +37,7 @@ from control_plane.api_shared import (
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
     inbox_pending, inbox_send_now, inbox_withdraw, stop_turns, logger, turn_outcome, turns_taken_after, running_turn_from, meeting_binding, target_preamble, toolbelt_preamble,
-    pinned_pages_preamble, unit_busy, workspace_focus)
+    pinned_pages_preamble, qualify_artifact, unit_busy, workspace_focus)
 from control_plane.peer_lookups import meeting_access_check
 from control_plane.bodies import CHAT_SESSION_PATTERN, ChatBody, ChatContextBody, ChatModelBody, DefaultTargetBody, ResetBody, SessionId
 from control_plane.ceiling import reads_within, refuse_delegated, require_in_ceiling
@@ -606,12 +606,28 @@ def build(**d) -> APIRouter:
                 logger.warning("meeting %s not readable for subject=%s — its page is not minted "
                                "here; the flow writes one when the meeting ends", meeting_id, subject)
                 return
-            out = meeting_mint_mod.mint(wsr.root, subject, row, record=_meeting_note_recorder)
+            # INSIDE THE STREAM, ON PURPOSE (above): the page and its commit are durable in the
+            # workspace store before the event that announces them is yielded, so that event is
+            # this write's acknowledgement (WS-S3 `durable_in_stream`).
+            from workspaces.store.observer import durable_in_stream  # noqa: PLC0415
+
+            with durable_in_stream():
+                out = meeting_mint_mod.mint(wsr.root, subject, row, record=_meeting_note_recorder)
             logger.info("meeting %s page for subject=%s: %s (%s)", meeting_id, subject,
                         out.get("path"), "minted" if out.get("created") else "already there")
         except Exception:  # noqa: BLE001 — the turn outranks its own furniture
             logger.exception("minting the page for meeting %s (subject=%s) failed",
                              meeting_id, subject)
+
+    def _qualify_artifact(ev, subject: str, session: str) -> None:
+        """The `artifact` gains its qualified ``ref`` (`api_shared.qualify_artifact`); a write that
+        named no workspace landed in this chat's target, which only agent-api knows."""
+        if not isinstance(ev, dict) or ev.get("type") != "artifact" or ev.get("ref"):
+            return
+        try:
+            qualify_artifact(ev, target=sess.target(subject, session), desk=str(subject))
+        except Exception:  # noqa: BLE001 — an unqualified artifact still opens its tab
+            logger.warning("could not qualify an artifact for session=%s", session)
 
     def _binding_watch(events, subject: str, session: str):
         """Pass the turn's events through, and record what the turn made this chat BE — the meeting
@@ -673,6 +689,7 @@ def build(**d) -> APIRouter:
                     logger.exception("binding meeting %s to subject=%s session=%s failed",
                                      bound[0], subject, session)
                 _mint_meeting_page(subject, bound[0])
+            _qualify_artifact(ev, subject, session)
             focused = workspace_focus(ev)
             if focused is not None:
                 try:
@@ -2511,8 +2528,19 @@ def build(**d) -> APIRouter:
         never a name of ours: "Chat" is the client's placeholder and a server that shipped it would
         outrank the reader's own rename in the merge."""
         subject = subject_of(request)
-        _purge_incognito(subject)
-        rows = [r for r in _labelled(subject, sess.list(subject)) if not _is_empty_chat(subject, r)]
+        # one membership read scope for the whole listing: the people it names share their scans
+        with _membership_mod.read_scope():
+            return _list_sessions(subject)
+
+    def _list_sessions(subject: str) -> dict:
+        # the index is read ONCE when the purge removes nothing (2026-10-18: it was read twice)
+        listed, attempted = sess.list(subject), []
+        _purge_incognito(subject, rows=listed, attempted=attempted)
+        if attempted:
+            listed = sess.list(subject)
+        labelled = _labelled(subject, listed)
+        turns_of = _listing_turns_of(subject, [r for r in labelled if _maybe_empty(r)])
+        rows = [r for r in labelled if not _is_empty_chat(subject, r, turns_of=turns_of)]
         # A CHAT NOBODY NAMED IS NAMED FROM WHAT WAS SAID (founder 2026-10-15): a few per listing, in
         # the background, by the cheap model within the spend cap; never over the person's own name.
         try:
@@ -2523,7 +2551,50 @@ def build(**d) -> APIRouter:
             logger.warning("auto-title scheduling failed for subject=%s", subject)
         return {"sessions": _with_stored(subject, rows)}
 
-    def _is_empty_chat(subject: str, row: dict) -> bool:
+    def _maybe_empty(row: dict) -> bool:
+        """The cheap half of ``_is_empty_chat``: could this row be empty at all?"""
+        sid = str(row.get("session") or "")
+        # a record no turn ever titled carries its own id as its title (a turn titles it, #1783)
+        if not sid or sid.startswith(_MEET_SESSION_PREFIX):
+            return False
+        if str(row.get("title") or "").strip() not in ("", sid) or (row.get("named_title") or "").strip():
+            return False
+        return not (row.get("meeting") or row.get("routine") or row.get("scaffold") or row.get("concern"))
+
+    def _listing_turns_of(subject: str, rows: "list[dict]"):
+        """``_turns_of`` for the rows of ONE listing, with what every row would read alone read once:
+        the session store's records for all of their names in one query, and the folders a thread's
+        pointer could be in listed once (``WorkspaceReader.pointer_names``). A row with no store
+        version and no pointer anywhere has no turns — the answer ``_turns_of`` gives it after
+        sweeping every workspace folder at the root, which is what made a listing with many
+        nameless chats slow (live app.dev 2026-10-18). Anything else is read exactly as before."""
+        names = [str(r.get("session") or "") for r in rows]
+        names = {n for n in names if n and not n.startswith(session_sync.STORE_ID_PREFIX)}
+        stored: "dict | None" = None
+        if session_store is not None and names:
+            try:
+                stored = session_store.by_names(subject, names)
+            except Exception:  # noqa: BLE001 — read one by one, as before
+                stored = None
+        pointers: list = []
+
+        def turns_of(sid: str) -> list:
+            if stored is None or sid.startswith(session_sync.STORE_ID_PREFIX) or sid not in names:
+                return _turns_of(subject, sid)
+            row = stored.get(sid)
+            if row is not None:
+                got = session_sync.history(session_store, row)
+                if got is not None:
+                    return got
+            if sid != "main":
+                if not pointers:
+                    pointers.append(wsr.pointer_names(subject))
+                if pointers[0] is not None and f"{sid}.session" not in pointers[0]:
+                    return []
+            return wsr.history(subject, sid)
+        return turns_of if session_store is not None else (lambda sid: _turns_of(subject, sid))
+
+    def _is_empty_chat(subject: str, row: dict, turns_of=None) -> bool:
         """A CHAT NOBODY WROTE IN IS NOT A ROW (#1783, founder 2026-10-15: "empty new chats after every
         new attempt to do something in the desktop"). Writing a draft's scope — its target, mounts or
         reads — creates its index record before anybody said anything; such a record is not listed.
@@ -2532,18 +2603,13 @@ def build(**d) -> APIRouter:
         a first message (its stored title is empty or its own id — a turn titles it), no file attached in it, and no turn in its history. Only rows
         that pass the cheap tests have their history read, so a listing reads no history for a chat
         that has a name. Fail-open: a history that cannot be read keeps the row."""
+        if not _maybe_empty(row):
+            return False
         sid = str(row.get("session") or "")
-        if not sid or sid.startswith(_MEET_SESSION_PREFIX):
-            return False
-        # a record no turn ever titled carries its own id as its title (a turn titles it, #1783)
-        if str(row.get("title") or "").strip() not in ("", sid) or (row.get("named_title") or "").strip():
-            return False
-        if row.get("meeting") or row.get("routine") or row.get("scaffold") or row.get("concern"):
-            return False
         try:
             if sess.attachments_of(subject, sid):
                 return False
-            return not _turns_of(subject, sid)
+            return not (turns_of(sid) if turns_of is not None else _turns_of(subject, sid))
         except Exception:  # noqa: BLE001 — unknown is not empty
             return False
 
@@ -2591,21 +2657,34 @@ def build(**d) -> APIRouter:
         except Exception:  # noqa: BLE001 — no policy file: the default
             return INCOGNITO_RETENTION_DAYS
 
-    def _purge_incognito(subject: str, now: "float | None" = None) -> list:
+    def _purge_incognito(subject: str, now: "float | None" = None, rows: "list | None" = None,
+                         attempted: "list | None" = None) -> list:
         """INCOGNITO CHATS ARE DELETED ON SCHEDULE: one idle longer than the company's retention is
         removed the next time the person's rail is read — conversation, index row and marks, as a
-        person's own delete would. Fail-soft: a purge that cannot run costs nothing else."""
+        person's own delete would. Fail-soft: a purge that cannot run costs nothing else.
+
+        ``rows`` is ``sess.list(subject)`` when the caller already read it; every chat the purge
+        started on is appended to ``attempted`` (then the caller's ``rows`` are stale)."""
         cutoff = (now if now is not None else time.time()) - _incognito_days() * 86400
         gone = []
+        if rows is None:
+            try:
+                rows = sess.list(subject)
+            except Exception:  # noqa: BLE001
+                return gone
+        # ONE round trip for every chat's profile, not one per chat (2026-10-18)
         try:
-            rows = sess.list(subject)
-        except Exception:  # noqa: BLE001
-            return gone
+            profile = sess.profiles(subject, [r.get("session") or "" for r in rows])
+        except Exception:  # noqa: BLE001 — asked one by one below
+            profile = {}
         for row in rows:
             s_id = row.get("session") or ""
             try:
-                if not sess.is_incognito(subject, s_id) or float(row.get("last_active") or 0) > cutoff:
+                incognito = (profile[s_id] == "incognito") if s_id in profile else sess.is_incognito(subject, s_id)
+                if not incognito or float(row.get("last_active") or 0) > cutoff:
                     continue
+                if attempted is not None:
+                    attempted.append(s_id)
                 wsr.drop_history(subject, s_id, extra_roots=[])
                 # ITS ATTACHMENTS GO WITH IT: an incognito chat's files live in `_system` only.
                 for _path, _ws in (sess.attachments_of(subject, s_id) or {}).items():
@@ -2698,8 +2777,11 @@ def build(**d) -> APIRouter:
             return rows
         by_name = {r["session"]: r for r in rows}
         out = list(rows)
+        # ONE READ PER KIND, NOT ONE PER SESSION (live app.dev 2026-10-18: 262 chats, three store
+        # reads each — participants, room, room again — were ~0.5 s of every listing).
+        people_of = session_store.participants_of([st["id"] for st in stored])
         for st in stored:
-            count = len(session_store.participants(st["id"]))
+            count = len(people_of.get(st["id"], ()))
             bound = session_store_mod.read_flow(st.get("flow"))
             if st["owner"] == subject and st["name"] in by_name:
                 by_name[st["name"]].update(session_id=st["id"], participants=count, role="owner",
@@ -2722,48 +2804,71 @@ def build(**d) -> APIRouter:
                         "role": st.get("role"), "participants": count, "shared": True})
         # WHOSE IT IS (#1783): a chat somebody else owns carries their name, so the rail can show
         # their initials on its "shared" chip. Named the way the @-mention picker names people.
+        from control_plane import people_directory, pair_rooms  # noqa: PLC0415
         names: dict = {}
+
+        def name_of(principal: str) -> str:
+            """A person's name, read once per listing however many rows carry them."""
+            if principal not in names:
+                try:
+                    names[principal] = people_directory.name_of(wsr.root, principal, mindex.list)
+                except Exception:  # noqa: BLE001 — a nameless person is still a person
+                    names[principal] = None
+            return names[principal]
+
         for r in out:
             owner = r.get("owner")
             if owner and owner != subject:
-                if owner not in names:
-                    try:
-                        from control_plane import people_directory  # noqa: PLC0415
-                        names[owner] = people_directory.name_of(wsr.root, owner, mindex.list)
-                    except Exception:  # noqa: BLE001 — a nameless owner is still an owner
-                        names[owner] = ""
-                r["owner_name"] = names[owner]
+                r["owner_name"] = name_of(owner) or ""
         # A ROOM'S ROW SAYS WHAT KIND OF ROOM IT IS (S4 x UI-1, integration): its `visibility`, and for a
         # room of two (`direct`) the OTHER person and the caller's unread count — so the sidebar names
         # it by that person without one members read per room.
+        try:
+            rooms = session_store.rooms([r["session_id"] for r in out if r.get("session_id")])
+        except Exception:  # noqa: BLE001 — rows without their room facts are still rows
+            rooms = {}
+        pairs: dict = {}
         for r in out:
             sid = r.get("session_id")
-            if not sid:
-                continue
-            try:
-                room = session_store.room(sid)
-            except Exception:  # noqa: BLE001 — a row without its room facts is still a row
-                room = None
+            room = rooms.get(sid) if sid else None
             if not room:
                 continue
-            try:
-                from control_plane import pair_rooms  # noqa: PLC0415
-                pair = bool(room.get("workspace")) and pair_rooms.is_pair(wsr.root, room["workspace"])
-            except Exception:  # noqa: BLE001
-                pair = False
+            ws = room.get("workspace")
+            if ws and ws not in pairs:
+                try:
+                    pairs[ws] = bool(pair_rooms.is_pair(wsr.root, ws))
+                except Exception:  # noqa: BLE001
+                    pairs[ws] = False
+            pair = bool(ws) and pairs[ws]
             r["visibility"] = "direct" if pair else room.get("visibility")
             if pair:
                 try:
-                    other = next((h for h in session_store.humans(sid) if str(h) != str(subject)), None)
+                    humans = [p["principal"] for p in people_of.get(sid, ()) if p["kind"] == "human"] \
+                        if sid in people_of else session_store.humans(sid)
+                    other = next((h for h in humans if str(h) != str(subject)), None)
                     if other:
-                        from control_plane import people_directory  # noqa: PLC0415
                         r["other_subject"] = str(other)
-                        r["other_name"] = people_directory.name_of(wsr.root, str(other), mindex.list)
+                        got = name_of(str(other))
+                        if got is None:
+                            raise RuntimeError("name unreadable")
+                        r["other_name"] = got
                     r["unread"] = int(session_store.unread(sid, str(subject)))
                 except Exception:  # noqa: BLE001
                     pass
         out.sort(key=lambda r: float(r.get("last_active") or 0), reverse=True)
         return out
+
+    def _qualified(turns: list, owner: str) -> list:
+        """Old messages' bare file references, qualified against the one workspace their session
+        wrote into (`workspace_reader.qualified_history`) — never fatal: the turns as stored on error.
+        ``owner`` is whose desk `personal` named when those writes ran."""
+        from control_plane.workspace_reader import qualified_history  # noqa: PLC0415
+        try:
+            return qualified_history(turns, str(owner))
+        except Exception:  # noqa: BLE001 — a reference pass outranks nothing; show what is stored
+            logger.exception("qualifying history references failed")
+            return turns
+
     @router.get("/api/sessions/{session}/history")
     def session_history(session: Annotated[str, Path(pattern=CHAT_SESSION_PATTERN)],
                         request: Request):
@@ -2796,7 +2901,8 @@ def build(**d) -> APIRouter:
                 except Exception:  # noqa: BLE001
                     refused = None
                 if stored_turns is not None or row["owner"] != subject:
-                    out = {"turns": stored_turns or [], "messages": messages, "session_id": row["id"]}
+                    out = {"turns": _qualified(stored_turns or [], row["owner"]), "messages": messages,
+                           "session_id": row["id"]}
                     if refused:
                         out["fault"] = session_sync.shown_fault(refused)
                     return out
@@ -2818,6 +2924,6 @@ def build(**d) -> APIRouter:
         except Exception:  # noqa: BLE001 — history is best-effort; a bad path → empty, never an error
             logger.exception("loading session history failed subject=%s session=%s", subject, session)
             turns = []
-        return {"turns": turns}
+        return {"turns": _qualified(turns, subject)}
 
     return router

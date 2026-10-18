@@ -23,7 +23,7 @@ import { updatesBadge, markUpdatesSeen, updatesSeenTs } from "../surfaces/update
 import { readActiveSet, readWorkspaceGit } from "../data/workspaceApi";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { Chat } from "../surfaces/chat";
-import { resolveDocRef } from "../ui-kit/docLinks";
+import { metaOfOpen, resolveDocRef } from "../ui-kit/docLinks";
 import { liveMeetingsNow } from "../surfaces/liveMeetings";
 import { firstViewPlan } from "./firstView";
 import { isOwnedPath, meetingIdFromPath, meetingPath } from "../platform/meetingRoute";
@@ -311,7 +311,7 @@ export function Workbench() {
   useEffect(() => {
     const onOpenEntity = async (e: Event) => {
       const detail = (e as CustomEvent<{ path?: string; wikilink?: string; slug?: string; docPath?: string; beside?: boolean; exact?: boolean }>).detail || {};
-      const r = await resolveDocRef(detail, { path: detail.docPath, slug: detail.slug });
+      const r = await resolveDocRef(detail, metaOfOpen(detail));   // no slug key = no workspace named (2026-10-18)
       if (!r) return;
       if (layout.store.getState().activeList === "sessions") layout.setActiveList("files");  // reveal the center
       const d = { id: r.slug ? `doc:${r.slug}:${r.path}` : `doc:${r.path}`, title: r.path.split("/").pop() ?? r.path, kind: "doc", params: { path: r.path, slug: r.slug } };

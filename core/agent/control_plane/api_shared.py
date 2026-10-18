@@ -1440,8 +1440,10 @@ class _Sessions:
         """The subject's sessions, most-recently-active first — the rail, as the server holds it."""
         rows: list[dict] = []
         if self._redis is not None:
-            for session in self._redis.smembers(self._ids_key(subject)) or set():
-                meta = self._redis.hgetall(self._meta_key(subject, session)) or {}
+            sessions = list(self._redis.smembers(self._ids_key(subject)) or set())
+            metas = self._hgetall_many([self._meta_key(subject, s) for s in sessions])
+            for session, meta in zip(sessions, metas):
+                meta = meta or {}
                 try:
                     mounts = json.loads(meta.get("workspaces") or "[]")
                 except ValueError:
@@ -1489,6 +1491,38 @@ class _Sessions:
                 })
         rows.sort(key=lambda r: r["last_active"], reverse=True)
         return rows
+
+    def targets(self, pairs) -> "dict[tuple[str, str], str]":
+        """``target`` of many chats, any owners, in one round trip: ``{(subject, session): slug}``
+        (the desktop asked once per chat it lists, 2026-10-18)."""
+        pairs = list(dict.fromkeys((str(a), str(b)) for a, b in pairs))
+        if self._redis is None:
+            return {p: self.target(*p) for p in pairs}
+        metas = self._hgetall_many([self._meta_key(a, b) for a, b in pairs])
+        return {p: ((m or {}).get("target") or "").strip() for p, m in zip(pairs, metas)}
+
+    def _hgetall_many(self, keys: "list[str]") -> list:
+        """``HGETALL`` of every key, in order, in one round trip (the rail lists every chat's record:
+        one round trip per chat was ~0.1 s of each listing on a long rail, 2026-10-18)."""
+        pipe = getattr(self._redis, "pipeline", None)
+        if pipe is None or not keys:
+            return [self._redis.hgetall(k) for k in keys]
+        p = pipe(transaction=False)
+        for k in keys:
+            p.hgetall(k)
+        return p.execute()
+
+    def profiles(self, subject: str, sessions: "list[str]") -> "dict[str, str]":
+        """``profile`` of many chats in one round trip: ``{session: profile}``."""
+        if self._redis is None:
+            return {s: self.profile(subject, s) for s in sessions}
+        pipe = getattr(self._redis, "pipeline", None)
+        if pipe is None:
+            return {s: self.profile(subject, s) for s in sessions}
+        p = pipe(transaction=False)
+        for s_ in sessions:
+            p.hget(self._meta_key(subject, s_), "profile")
+        return {s_: str(v or "") for s_, v in zip(sessions, p.execute())}
 
     def drop(self, subject: str, session: str) -> None:
         if self._redis is not None:
@@ -1617,6 +1651,33 @@ def workspace_focus(ev: object) -> "str | None":
         return None
     wid = str(ev.get("workspace") or "").strip()
     return wid if _is_slug(wid) else None
+
+
+def qualify_artifact(ev: object, *, target: str = "", desk: str = "") -> "str | None":
+    """Give a file ``artifact`` its qualified reference, ``[[page:<workspace>/<path>]]``, and return
+    it (founder ruling 2026-10-18: *"we must require full paths to specific workspaces, we do not
+    want to guess which readme this should open"*).
+
+    The worker knows the path it wrote; a write that named no workspace (`workspace_write` with no
+    `slug`) landed in the chat's ``target`` (`ceiling.write_slug`), else the person's ``desk`` — and
+    those two only agent-api knows, on the way past. The desk aliases name the desk. A meeting
+    artifact (`meeting:<row>`) is no file; it, and an event with a ``ref`` already, are left as they
+    are. Nothing else in the event changes."""
+    if not isinstance(ev, dict) or ev.get("type") != "artifact":
+        return None
+    if ev.get("ref"):
+        return str(ev["ref"])
+    path = str(ev.get("path") or "").strip()
+    if not path or ":" in path.split("/", 1)[0]:
+        return None
+    ws = str(ev.get("workspace") or "").strip() or str(target or "").strip() or str(desk or "").strip()
+    if ws in ("personal", "desk"):
+        ws = str(desk or "").strip()
+    if not ws:
+        return None
+    from workspaces.shared import links as _links  # noqa: PLC0415
+    ev["ref"] = _links.page_ref(ws, path)
+    return ev["ref"]
 
 
 # ── THE TARGET WORKSPACE, SAID IN THE PROMPT (Vexa-ai/vexa#1611) ─────────────────────────────────

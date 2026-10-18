@@ -188,7 +188,7 @@ export function WorkspacePage({ slug: given }: { slug?: string }) {
     const plan = planNeedAct(n.act, n.text);
     if (plan.confirm && !(await confirm(plan.confirm))) return;
     await plan.run();
-    const x = await readWorkspaceAttention(slug); if (x) setA(x);
+    const x = await readWorkspaceAttention(slug, { force: true }); if (x) setA(x);
   };
   const toggleWide = () => { const v = !wide; setWide(v); fire(WORKSPACE_PAGE_WIDE_EVENT, { wide: v }); };
   const live = a?.live_call ?? w?.live_call ?? null;

@@ -112,6 +112,7 @@ from control_plane.routers import routines as routers_routines
 from control_plane.routers import agent_messages as routers_agent_messages
 from control_plane.routers import held as routers_held
 from control_plane.routers import asks as routers_asks
+from control_plane.routers import person_call as routers_person_call
 from control_plane.routers import admin as routers_admin
 from control_plane.routers import meetings as routers_meetings
 from control_plane.routers import scaffolds as routers_scaffolds
@@ -129,6 +130,7 @@ from control_plane.routers import identity_media as routers_identity_media
 from control_plane.routers import desktop as routers_desktop
 from control_plane.routers import rooms as routers_rooms
 from control_plane.routers import room_people as routers_room_people
+from control_plane.routers import workspace_store as routers_workspace_store
 from control_plane.routers import connections as routers_connections
 from control_plane.routers import clock as routers_clock
 from control_plane.routers import pages as routers_pages
@@ -181,6 +183,7 @@ def create_app(
     livekit: "Optional[object]" = None,
     call_share_redeemer: "Optional[object]" = None,
     notify_publish: "Optional[Callable[[str, str], None]]" = None,
+    call_starter: "Optional[Callable]" = None,
 ) -> FastAPI:
     """Build agent-api. ``default_subject`` is for an in-process test harness only: the subject a
     request that names nobody runs as, honoured only when the app has no identity door. The
@@ -236,7 +239,13 @@ def create_app(
     # id is one nothing can link to, and a link that silently does nothing is the defect being
     # fixed — a migration nobody remembered to run would reproduce it exactly.
     try:
-        _migrated = ids_mod.migrate(wsr.root, workspace_registry)
+        # WS-S3: on the s3 backend workspaces load on first use, and every tree in the bucket came
+        # from a store this migration already ran over (new ones get their id at creation), so the
+        # walk — which would hydrate every workspace at boot — is skipped.
+        from control_plane import workspace_store_service as _ws_store_svc  # noqa: PLC0415
+
+        _migrated = ({"minted": [], "parked_minted": [], "indexed": []} if _ws_store_svc.lazy()
+                     else ids_mod.migrate(wsr.root, workspace_registry))
         if _migrated["minted"] or _migrated["parked_minted"]:
             logger.info("workspace ids: minted %d live, %d parked; %d indexed",
                         len(_migrated["minted"]), len(_migrated["parked_minted"]),
@@ -572,6 +581,14 @@ def create_app(
     #    the one Dispatcher. agent-api knows no tool/domain; the unit reaches email/calendar via its
     #    toolbelt. Email-triage, post-meeting, news all POST here (one front door, P6) ──
 
+    def _read_mounts(subject) -> list:
+        mounts = active_workspaces(wsr.root, subject)  # own actives (real .attached paths); may raise ValueError
+        try:
+            mounts = mounts + shared_active_mounts(wsr.root, subject, mindex.list(subject))
+        except Exception:  # noqa: BLE001 — a shared-mount hiccup must not break a plain own-workspace read
+            pass
+        return mounts
+
     def _read_target(request: Request, slug: Optional[str], *, write: bool = False) -> Path:
         """Resolve which workspace dir a read or write targets, returning its ABSOLUTE PATH. Default (no
         slug) = the caller's primary baseline. A `slug` addresses ANOTHER mount in the caller's active set —
@@ -662,11 +679,9 @@ def create_app(
             if d.is_dir():
                 return d
             raise HTTPException(status_code=403, detail="not authorized for this workspace")
-        mounts = active_workspaces(wsr.root, subject)  # own actives (real .attached paths); may raise ValueError
-        try:
-            mounts = mounts + shared_active_mounts(wsr.root, subject, mindex.list(subject))
-        except Exception:  # noqa: BLE001 — a shared-mount hiccup must not break a plain own-workspace read
-            pass
+        # once per membership read scope: a page resolves a dozen workspaces for one person
+        mounts = membership_mod.scope_memo(("read_mounts", str(wsr.root), str(subject)),
+                                           lambda: _read_mounts(subject))
         if not target or target == subject:
             # THE DESK, never "whatever is mounted first" (Vexa-ai/vexa#1783, founder 2026-10-15):
             # with an attached repo first in the set, "personal" used to read and WRITE that repo.
@@ -1288,7 +1303,7 @@ def create_app(
         settings=settings, stream_reader=stream_reader,
         subject_of=subject_of,
         workspace_registry=workspace_registry, workspace_touches=workspace_touches, wsr=wsr)
-    for _r in (routers_health, routers_ingress, routers_chats, routers_routines, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_sharing, routers_connections, routers_clock, routers_meeting_bundle, routers_pages, routers_sessions, routers_chat_read, routers_agent_messages, routers_calls, routers_notifications, routers_forget, routers_workspace_states, routers_workspace_templates, routers_refs, routers_pins, routers_home, routers_budgets, routers_usage, routers_levels, routers_people, routers_identity_media, routers_desktop, routers_rooms, routers_room_people, routers_held, routers_asks):
+    for _r in (routers_health, routers_ingress, routers_chats, routers_routines, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_sharing, routers_connections, routers_clock, routers_meeting_bundle, routers_pages, routers_sessions, routers_chat_read, routers_agent_messages, routers_calls, routers_notifications, routers_forget, routers_workspace_states, routers_workspace_templates, routers_refs, routers_pins, routers_home, routers_budgets, routers_usage, routers_levels, routers_people, routers_identity_media, routers_desktop, routers_rooms, routers_room_people, routers_held, routers_asks, routers_workspace_store):
         app.include_router(_r.build(**_deps))
     # WHAT A ROOM'S AGENT SAID, ONTO THE ROOM'S STREAM (rooms, `room_echo`): context for the room's
     # sensor. Only with a store and a redis, and idle while the `rooms` feature is off.
@@ -1300,6 +1315,8 @@ def create_app(
         _echo_client = _redis_for_echo.from_url(redis_url, decode_responses=True)
         _room_echo.start(lambda: _echo_client, session_store,
                          enabled=lambda: _rooms_mod.enabled_for_anyone(_global_root))
+    # "CALL <PERSON>" (call-person-1018): the agent's verb that starts a Vexa call with someone.
+    app.include_router(routers_person_call.build(**_deps, call_starter=call_starter))
     # A `verbs` row naming a route this app does not serve protects nothing — refuse the boot.
     route_policy.assert_served(app.routes)
     # D3: every route under the forward declares whether a shared (room) token may reach it.
@@ -1442,6 +1459,12 @@ def _build_production_app() -> FastAPI:
         pass
     if not catalog.empty:
         logger.info("model catalog: %d model(s) — %s", len(catalog.ids), ", ".join(catalog.ids))
+    # THE WORKSPACE STORE (WS-S3): with VEXA_WORKSPACE_BACKEND=s3 the repositories live in a bucket
+    # and VEXA_WORKSPACES_DIR is a cache. Self-tested and hydrated HERE, before anything reads the
+    # tree; a bucket that cannot be written stops the boot with a sentence (P18).
+    from control_plane import workspace_store_service
+
+    workspace_store_service.start(settings.workspaces_dir, settings.redis_url)
     dispatcher = Dispatcher(settings, runtime, identity, membership_index=membership_index,
                             model_config=model_config, workload_redis=workload_redis_client,
                             delegation_store=delegation_store, catalog=catalog)
@@ -1454,6 +1477,9 @@ def _build_production_app() -> FastAPI:
         redis_url=settings.redis_url,
         membership_index=membership_index,
     )
+    # …and no response says a write happened before the bucket has it.
+    workspace_store_service.install(app, redis_url=settings.redis_url,
+                                    workspaces_dir=settings.workspaces_dir)
     # ROUTINES ARE FLOWS (ADR-0046): what the old mechanism left — routine files and scheduler
     # jobs — moves into the person's own flows ONCE; the pass retries until it completes, then stops.
     app.state.routine_migration = start_routine_migration(

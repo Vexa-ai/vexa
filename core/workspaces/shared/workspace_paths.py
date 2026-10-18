@@ -54,6 +54,38 @@ from typing import Optional
 #: The authority itself lives outside every tree (``workspace_membership.POLICY_STORE_DIR``).
 RESERVED_DIRS = (".git", ".vexa", ".claude", "policy")
 
+# ── the durable-store seam (WS-S3) ────────────────────────────────────────────────────────────
+#: When the store is a cache of an S3 bucket, one observer sees every path this module reaches:
+#: ``access(path)`` before a folder is opened (an evicted workspace is hydrated on first use),
+#: ``written(path)`` / ``removed(path)`` after a write or a removal succeeded (a platform file
+#: outside every repository is published before the call returns; raising fails the caller). None —
+#: the volume backend — changes nothing. Writers that cannot use this module call
+#: :func:`notify_written` / :func:`notify_removed` themselves.
+_store_observer = None
+
+
+def set_store_observer(observer):
+    """Install (or, with None, remove) the store observer; returns the previous one."""
+    global _store_observer
+    previous, _store_observer = _store_observer, observer
+    return previous
+
+
+def notify_written(path) -> None:
+    """A file at ``path`` was written by a caller that could not use this module."""
+    if _store_observer is not None:
+        _store_observer.written(os.fspath(path))
+
+
+def notify_removed(path) -> None:
+    """``path`` (a file or a whole folder) was removed by a caller that could not use this module."""
+    if _store_observer is not None:
+        _store_observer.removed(os.fspath(path))
+
+
+def _joined(root, parts) -> str:
+    return os.path.join(os.fspath(root), *parts)
+
 
 class PathRefused(ValueError):
     """A caller-supplied path that does not stay inside the workspace it names.
@@ -198,6 +230,8 @@ def dir_fd_inside(root, parts, *, create: bool = False, mode: int = 0o755) -> in
     link; a symlink or non-directory on the way raises :class:`PathRefused` (``kind='symlink'``). With
     ``create`` a missing component is made (0o755) first — ``root`` itself included, so a write to a
     workspace the seed has not materialized yet still lands. The caller closes the descriptor."""
+    if _store_observer is not None:
+        _store_observer.access(_joined(root, parts))
     if create:
         Path(root).mkdir(parents=True, exist_ok=True)
     fd = _open_root(root)
@@ -308,9 +342,10 @@ def write_new_inside(root, rel: str, data, *, mode: int = 0o644, allow=()) -> bo
         finally:
             if fd >= 0:
                 os.close(fd)
-        return True
     finally:
         os.close(dir_fd)
+    notify_written(_joined(root, [*dirs, name]))
+    return True
 
 
 def read_text_inside(root, rel: str, *, max_bytes: Optional[int] = None, allow=()) -> Optional[str]:
@@ -423,6 +458,7 @@ def write_bytes_inside(root, rel: str, data: bytes, *, mode: int = 0o644, allow=
             raise
     finally:
         os.close(dir_fd)
+    notify_written(_joined(root, parts))
     return Path(root) / "/".join(parts)
 
 
@@ -452,14 +488,16 @@ def unlink_inside(root, rel: str, *, allow=()) -> bool:
         if stat.S_ISLNK(st.st_mode) or stat.S_ISREG(st.st_mode):
             try:
                 os.unlink(name, dir_fd=dir_fd)
-                return True
             except OSError:
                 return False
+        else:
+            return False
     except OSError:
-        pass
+        return False
     finally:
         os.close(dir_fd)
-    return False
+    notify_removed(_joined(root, parts))
+    return True
 
 
 
@@ -493,6 +531,7 @@ def append_text_inside(root, rel: str, text: str, *, mode: int = 0o600, allow=()
             os.close(fd)
     finally:
         os.close(dir_fd)
+    notify_written(_joined(root, parts))
 
 
 def _lstat_inside(root, rel: str, allow=()) -> "Optional[os.stat_result]":
@@ -672,6 +711,7 @@ def clear_tree_inside(root, *, keep=()) -> None:
     try:
         with os.scandir(fd) as it:
             names = [e.name for e in it if e.name not in set(keep)]
+        removed = []
         for name in names:
             try:
                 st = os.lstat(name, dir_fd=fd)
@@ -682,10 +722,13 @@ def clear_tree_inside(root, *, keep=()) -> None:
                     shutil.rmtree(name, dir_fd=fd)
                 else:
                     os.unlink(name, dir_fd=fd)
+                removed.append(name)
             except OSError:
                 continue
     finally:
         os.close(fd)
+    for name in removed:
+        notify_removed(_joined(root, [name]))
 
 
 def remove_tree(path, *, ignore_errors: bool = False) -> None:
@@ -719,8 +762,10 @@ def remove_tree(path, *, ignore_errors: bool = False) -> None:
     except OSError:
         if not ignore_errors:
             raise
+        return
     finally:
         os.close(fd)
+    notify_removed(os.fspath(p))
 
 
 def ensure_git_exclude(root, line: str) -> None:

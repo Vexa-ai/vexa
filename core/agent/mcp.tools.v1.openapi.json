@@ -451,6 +451,40 @@
         "title": "CalendarTimeIn",
         "type": "object"
       },
+      "CallBody": {
+        "additionalProperties": false,
+        "properties": {
+          "person": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "who to call: the account id an @-mention carries, their name as the person said it (\"tester-b\", \"Maya\"), or their address. Only someone the person shares a workspace with is ever matched.",
+            "title": "Person"
+          },
+          "room": {
+            "anyOf": [
+              {
+                "pattern": "^([A-Za-z0-9][A-Za-z0-9._-]{0,127})?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "instead of `person`: start the call in this existing room (its id or name) and ring its members.",
+            "title": "Room"
+          }
+        },
+        "title": "CallBody",
+        "type": "object"
+      },
       "ChatFolderCreateBody": {
         "additionalProperties": false,
         "description": "Make one of the person's own chat folders (or find the one they already have by that name).",
@@ -4190,6 +4224,41 @@
           }
         ],
         "summary": "Ref Resolve"
+      }
+    },
+    "/api/rooms/call": {
+      "post": {
+        "description": "CALL A PERSON: find them among the people you share a workspace with, open your room of\ntwo with them (made once), start a Vexa call there and ring them in the app. The answer\nnames the room and the call as references to open it. ``room`` instead calls an existing room.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CallBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "summary": "Call Person"
+      }
+    },
+    "/api/rooms/list": {
+      "get": {
+        "description": "THE ROOMS OF A WORKSPACE, DESCRIBED (held-label-rooms-1018): every room this reader may see\nthere \u2014 the same rule as ``GET /api/rooms`` \u2014 with its people by name, whether a call is live,\nand the recurring meetings bound to it. A turn other people read (a room's agent, a shared\nchat) is held to the workspace it was dispatched into and sees its OPEN rooms only, with no\nmeetings; a workspace's own agent names no other workspace.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "workspace",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Workspace",
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Room Overview"
       }
     },
     "/api/sessions/{session}/call/highlight": {

@@ -15,6 +15,17 @@ export interface ActiveCall {
   /** the shared chat's label, for the dock's header */
   label: string;
   join: CallJoin;
+  /** connect at once, without the pre-join bar — the caller's own call the agent just started
+   *  (`callPlaced.ts`): a call nobody joins ends within 30 s, so the bar's Join would come too late */
+  autoJoin?: boolean;
+  /** this person is calling someone and nobody else has joined yet: the dock shows "Calling <to>…"
+   *  with Cancel until another person is in the call */
+  outgoing?: { to: string };
+}
+
+export interface EnterOpts {
+  autoJoin?: boolean;
+  outgoing?: { to: string };
 }
 
 export interface CallDeps {
@@ -51,7 +62,7 @@ export function activeCall(): ActiveCall | null { return current; }
 
 /** Join this session's call, starting it first when there is none. One call per tab: joining another
  *  session's call leaves the current one (the dock unmounts the room). */
-export async function enterCall(session: string, label: string, deps: CallDeps = liveCallDeps): Promise<ActiveCall> {
+export async function enterCall(session: string, label: string, deps: CallDeps = liveCallDeps, opts: EnterOpts = {}): Promise<ActiveCall> {
   try {
     const state = await deps.getCall(session);
     if (!state.calls) throw new Error("Calls are not available on this deployment.");
@@ -60,7 +71,8 @@ export async function enterCall(session: string, label: string, deps: CallDeps =
       await deps.startCall(session, state.session_id, quiet ? { transcribe: false } : {});
     }
     const join = await deps.joinCall(session);
-    const next = { session, label, join };
+    const next: ActiveCall = { session, label, join,
+      ...(opts.autoJoin ? { autoJoin: true } : {}), ...(opts.outgoing ? { outgoing: opts.outgoing } : {}) };
     set(next);
     return next;
   } catch (e) {
@@ -70,3 +82,11 @@ export async function enterCall(session: string, label: string, deps: CallDeps =
 }
 
 export function leaveCall(): void { set(null); }
+
+/** Somebody else is in the call now: it is no longer an outgoing call (the "Calling …" line goes). */
+export function callAnswered(session: string): void {
+  if (current?.session === session && current.outgoing) {
+    const { outgoing: _gone, ...rest } = current;
+    set(rest, error);
+  }
+}

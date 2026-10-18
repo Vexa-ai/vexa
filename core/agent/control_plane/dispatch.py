@@ -22,6 +22,7 @@ import time
 from typing import Optional
 
 import contracts
+from control_plane import workspace_store_service as _ws_store
 from control_plane.workspace_attach import (SEED_SLOT, active_workspaces, chat_read_mounts,
                                             shared_active_mounts)
 from control_plane.workspace_membership import reconciled_memberships
@@ -1012,7 +1013,9 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
                                 if shared_scope is not None or least_privilege
                                 else _worker_cwd(root, subject, mounts, cwd_target)),  # the worker's cwd — the chat's target, else the primary baseline, or (if it's switched off) the first active normal workspace
         "VEXA_MOUNTS": json.dumps(mounts),                       # the ordered active mount set [{slug,path,role,write,primary}]
-        "VEXA_WORKSPACE_STORE_URL": settings.workspace_store_url,
+        # s3 backend (WS-S3): agent-api's store routes through the gateway — the worker hydrates
+        # its mounts from there and pushes every commit back; on the volume backend, unchanged.
+        "VEXA_WORKSPACE_STORE_URL": _ws_store.worker_url(settings) or settings.workspace_store_url,
         "REDIS_URL": settings.redis_url,
     }
     if (shared_scope is not None or least_privilege) and _writable_shared(mounts, cwd_target) is None:
@@ -1675,6 +1678,8 @@ class Dispatcher:
             # left in the person's `_system` tier is moved out of every worker's reach first.
             _archive_cli_transcripts(self._settings, str(identity["subject"]))
         self._record_delegation(uid, env)
+        # WHAT THIS UNIT MAY FETCH AND PUSH on the s3 workspace backend: its own mounts, nothing else.
+        _ws_store.record_unit_mounts(self._redis(), uid, str(identity["subject"]), env)
         if invocation.get("trigger") == "signal" or units.is_mail_unit(uid):
             # THE ONE PAGE THIS SIGNAL'S TURN MAY WRITE, recorded against its unit before anything
             # is delivered (`signal_scope`): no page, no write — every write is then a proposal.

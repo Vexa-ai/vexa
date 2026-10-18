@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from control_plane import workspace_membership as membership_mod
+from workspaces.shared import workspace_paths as wpaths
 
 TARGET_KINDS = ("workspace", "chat")
 #: Where a link is opened — the terminal's page. `/join?i=<token>` (the older spelling) still works.
@@ -164,6 +165,7 @@ def _write_chat(root: Path, chat_id: str, rows: list[dict]) -> None:
     tmp = p.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(rows, indent=2) + "\n")
     tmp.replace(p)
+    wpaths.notify_written(p)   # WS-S3: durable in the bucket before this returns
 
 
 def _chats_with_links(root: Path) -> list[str]:

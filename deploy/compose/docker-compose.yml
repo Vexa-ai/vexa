@@ -460,7 +460,9 @@ services:
       # VEXA_WORKSPACES_DIR and its mount of agent-workspaces (deploy/compose/tests hold them equal).
       # The only out-of-store source a spec may name is agent-api's _global tier, when an operator
       # keeps it outside the store (RUNTIME_EXTRA_MOUNT_SOURCES).
-      - VEXA_WORKSPACE_MOUNT_SOURCE=${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces
+      # s3 workspace backend: VEXA_WORKSPACE_RUNTIME_SOURCE=emptyDir: — workers bind nothing and
+      # hydrate their own mounts from agent-api.
+      - VEXA_WORKSPACE_MOUNT_SOURCE=${VEXA_WORKSPACE_RUNTIME_SOURCE:-${COMPOSE_PROJECT_NAME:-vexa-v012}_agent-workspaces}
       - VEXA_WORKSPACE_MOUNT_TARGET=/workspaces
       - RUNTIME_EXTRA_MOUNT_SOURCES=${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-}
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -555,6 +557,20 @@ services:
       # Unset reads as "unknown" and the bar simply never fires (PRD decision 39).
       - VEXA_BUILD_SHA=${VEXA_BUILD_SHA:-${IMAGE_TAG:-dev}}
       - VEXA_WORKSPACES_DIR=/workspaces
+      # WHERE WORKSPACE REPOSITORIES LIVE (WS-S3). volume (default): the agent-workspaces volume is
+      # the truth. s3: the bucket below is the single durable truth and the volume only a cache;
+      # a write is acknowledged once durable in the bucket, the boot self-tests the bucket and stops
+      # on a misconfiguration. Set VEXA_WORKSPACE_RUNTIME_SOURCE=emptyDir: on the runtime as well.
+      - VEXA_WORKSPACE_BACKEND=${VEXA_WORKSPACE_BACKEND:-volume}
+      - VEXA_WORKSPACE_S3_ENDPOINT=${VEXA_WORKSPACE_S3_ENDPOINT:-}
+      - VEXA_WORKSPACE_S3_BUCKET=${VEXA_WORKSPACE_S3_BUCKET:-}
+      - VEXA_WORKSPACE_S3_PREFIX=${VEXA_WORKSPACE_S3_PREFIX:-workspaces/}
+      - VEXA_WORKSPACE_S3_REGION=${VEXA_WORKSPACE_S3_REGION:-}
+      - VEXA_WORKSPACE_S3_PATH_STYLE=${VEXA_WORKSPACE_S3_PATH_STYLE:-true}
+      - VEXA_WORKSPACE_S3_CA_BUNDLE=${VEXA_WORKSPACE_S3_CA_BUNDLE:-}
+      - VEXA_WORKSPACE_S3_ACCESS_KEY=${VEXA_WORKSPACE_S3_ACCESS_KEY:-}
+      - VEXA_WORKSPACE_S3_SECRET_KEY=${VEXA_WORKSPACE_S3_SECRET_KEY:-}
+      - VEXA_WORKSPACE_CACHE_MAX_BYTES=${VEXA_WORKSPACE_CACHE_MAX_BYTES:-0}
       # DEPRECATED, migration only: the key an older build sealed saved Git tokens and deploy keys
       # with on this volume. They now live in the credential broker (below); agent-api reads this
       # only to move what is still here, and the boot log counts what is left.

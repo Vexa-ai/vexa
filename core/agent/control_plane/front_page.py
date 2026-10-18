@@ -230,6 +230,18 @@ def _head(base: Path, rel: str) -> str:
     return wpaths.read_head_inside(base, rel, _HEAD_BYTES) or ""
 
 
+def _person_heads(desk: Path) -> list[tuple[str, str]]:
+    """Every person page's head on ``desk``, read once per membership read scope (a page names the
+    same desk's owner through several addresses: one scan of their person pages per name was the
+    workspace page's largest cost after the rosters, 2026-10-18)."""
+    from control_plane.workspace_membership import scope_memo
+
+    def read() -> list[tuple[str, str]]:
+        names = wpaths.list_files_inside(desk, PERSON_DIR, suffix=".md")
+        return [(name, _head(desk, f"{PERSON_DIR}/{name}")) for name in names or ()]
+    return scope_memo(("person_heads", str(desk)), read)
+
+
 def _self_page_name(desk: Path, address: Optional[str] = None) -> Optional[str]:
     """The name on the OWNER's own person page on the desk at ``desk``.
 
@@ -241,10 +253,9 @@ def _self_page_name(desk: Path, address: Optional[str] = None) -> Optional[str]:
     ``dmitry.md`` says ``type: person / id: dmitry / title: Dmitry`` and carries no ``self:`` key at
     all. A marker that has to be there for a name to resolve is a marker whose absence silently
     renames somebody *someone*."""
-    names = wpaths.list_files_inside(desk, PERSON_DIR, suffix=".md")
-    if not names:
+    heads = _person_heads(desk)
+    if not heads:
         return None
-    heads = [(name, _head(desk, f"{PERSON_DIR}/{name}")) for name in names]
     for _page, text in heads:
         if str(front_matter(text).get("self", "")).strip().lower() not in ("true", "yes", "on"):
             continue
@@ -302,7 +313,16 @@ def local_part(address: Optional[str]) -> str:
 
 
 def _rosters(root: Path) -> list[list[dict]]:
-    """Every workspace's ``policy/members.json``, as parsed lists. Failures are simply absent."""
+    """Every workspace's ``policy/members.json``, as parsed lists. Failures are simply absent.
+
+    Read ONCE per membership read scope (`workspace_membership.read_scope`): every name on a page
+    walks this list, so without the scope a page naming N people read every roster on the host N
+    times (2026-10-18: the workspace page at 15-31 s)."""
+    from control_plane.workspace_membership import scope_memo
+    return scope_memo(("rosters", str(Path(root))), lambda: _read_rosters(root))
+
+
+def _read_rosters(root: Path) -> list[list[dict]]:
     # THROUGH `read_members` — the one reader of a member list, which reaches it without following a
     # link (a contributor's tools can write `policy/` in a shared tree). A lazy import keeps this
     # module importable on its own.
@@ -425,7 +445,19 @@ def person_name(root: Path, subject: Optional[str] = None, *, email: Optional[st
     ``subject`` may be absent: ``principal`` (a commit's ``%ae``) and ``address`` (their sign-in
     address) are resolved to one through ``subject_for_address`` first, which is the fix #1642 is
     about. ``None`` is still an answer, and the ONE caller who must not render it as *someone* asks
-    ``display_name`` instead."""
+    ``display_name`` instead.
+
+    Answered once per membership read scope for the same arguments (a page names the same people
+    on every tile, commit and chip)."""
+    from control_plane.workspace_membership import scope_memo
+    key = ("person_name", str(Path(root)), subject, email, address, principal,
+           str(global_dir) if global_dir is not None else None)
+    return scope_memo(key, lambda: _person_name(Path(root), subject, email=email, address=address,
+                                                principal=principal, global_dir=global_dir))
+
+
+def _person_name(root: Path, subject: Optional[str], *, email: Optional[str], address: Optional[str],
+                 principal: Optional[str], global_dir: Optional[Path]) -> Optional[str]:
     root = Path(root)
     sub = str(subject or "").strip()
     if not sub or not _SAFE_SUBJECT.fullmatch(sub):

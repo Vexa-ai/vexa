@@ -92,6 +92,7 @@ caller or with the internal secret, never with a credential of its own:
   codec is `shared/meeting_bundle_codec.py`, vendored verbatim from the contract.
 
 **Workspaces**
+- `workspace_store_service.py` — the s3 workspace backend at agent-api's edge (WS-S3): boot self-test and hydrate, the durable-before-answer middleware, each unit's recorded mounts.
 - `workspace_reader.py`, `workspace_ids.py` (id → where it is now), `workspace_purpose.py`,
   `system_mounts.py` (the two system tiers of the mount stack), `global_layer.py` and
   `global_seed.py` (the company layer in `_global`, and its seed), `link_resolver.py`.
@@ -136,6 +137,9 @@ never a chat.
 - `room_switches.py` — "Vexa in this room" and "Transcribe calls" (7hh): either person turns off and
   both turn on in a room of two; owners in a bigger room; a workspace DENY line locks one.
 - `room_ring.py` — a ring: a live frame plus a `call_started` notice that expires.
+- `rooms_overview.py` — a workspace's rooms as its reader may see them (`GET /api/rooms/list`, tool
+  `rooms_list`): people by name, a live call, recurring meeting links. A shared turn sees only its own
+  workspace's open rooms, with no meetings.
 - `shared_chat_migration.py` — D10: existing shared chats become a room of two or a closed room, once.
 
 ## A worker's delegation token ends with its unit

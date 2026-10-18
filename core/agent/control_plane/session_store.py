@@ -502,6 +502,20 @@ class SessionStore:
             return self._row(self._x(f"SELECT {self._COLS} FROM agent_session WHERE owner = ? AND name = ?",
                                      (owner, name)).fetchone())
 
+    def by_names(self, owner: str, names) -> "dict[str, dict]":
+        """``by_name`` for many names in one read per slice: ``{name: row}``; a name ``owner`` has
+        no session by is absent."""
+        out: dict = {}
+        for ids in self._slices(names):
+            marks = ", ".join("?" for _ in ids)
+            with self._lock:
+                rows = self._x(f"SELECT {self._COLS} FROM agent_session WHERE owner = ? AND name IN ({marks})",
+                               (owner, *ids)).fetchall()
+            for r in rows:
+                row = self._row(r)
+                out[row["name"]] = row
+        return out
+
     def list_for(self, principal: str) -> list[dict]:
         """Every session ``principal`` participates in, most recently active first, each with the
         caller's own ``role``."""
@@ -511,10 +525,12 @@ class SessionStore:
                 "FROM agent_session s JOIN agent_session_participant p ON p.session_id = s.id "
                 "WHERE p.principal = ? ORDER BY s.last_active DESC", (principal,)).fetchall()
         out = []
+        # ONE read for which of them are rooms (the chat list asked once per session, 2026-10-18)
+        rooms = self.rooms([r[0] for r in rows]) if self._room_role is not None else {}
         for r in rows:
             row = self._row(r[:10])
             row["role"] = r[10]
-            if self._room_role is not None and self.room(row["id"]) is not None:
+            if self._room_role is not None and row["id"] in rooms:
                 # a room the person left the workspace of, or was removed from, is not theirs to list
                 role = self.role_of(row["id"], principal)
                 if role is None:
@@ -641,6 +657,30 @@ class SessionStore:
         return [{"principal": r[0], "kind": r[1], "role": r[2], "added": float(r[3]),
                  **({"read_at": float(r[4])} if r[4] is not None else {})} for r in rows]
 
+    #: How many ids one ``IN (…)`` read carries; a longer list is read in slices.
+    _IN_SLICE = 500
+
+    def _slices(self, ids) -> "Iterable[list[str]]":
+        ids = list(dict.fromkeys(str(s) for s in ids if s))
+        for i in range(0, len(ids), self._IN_SLICE):
+            yield ids[i:i + self._IN_SLICE]
+
+    def participants_of(self, session_ids) -> "dict[str, list[dict]]":
+        """``participants`` for many sessions in one read per slice: ``{session_id: [...]}``, each
+        list in the order ``participants`` gives. A session with no participant is absent."""
+        out: dict = {}
+        for ids in self._slices(session_ids):
+            marks = ", ".join("?" for _ in ids)
+            with self._lock:
+                rows = self._x("SELECT session_id, principal, kind, role, added, read_at "
+                               f"FROM agent_session_participant WHERE session_id IN ({marks}) "
+                               "ORDER BY session_id, added", tuple(ids)).fetchall()
+            for r in rows:
+                out.setdefault(r[0], []).append(
+                    {"principal": r[1], "kind": r[2], "role": r[3], "added": float(r[4]),
+                     **({"read_at": float(r[5])} if r[5] is not None else {})})
+        return out
+
     def set_room_role(self, resolver) -> None:
         """Install the room-membership authority: ``resolver(store, session_id, principal,
         row_role) -> role | None``, asked for every session that has a room row. ``None`` removes it."""
@@ -740,9 +780,28 @@ class SessionStore:
     def room(self, session_id: str) -> Optional[dict]:
         """The room row of ``session_id``, or None (a one-person chat has none)."""
         with self._lock:
-            r = self._x("SELECT visibility, proactivity, workspace, listen, listen_version, updated, "
-                        "level, created_by, org_id, cross_org, agent_on, transcribe, switch_asks "
-                        "FROM agent_session_room WHERE session_id = ?", (session_id,)).fetchone()
+            r = self._x(f"SELECT {self._ROOM_COLS} FROM agent_session_room WHERE session_id = ?",
+                        (session_id,)).fetchone()
+        return self._room_of(r)
+
+    _ROOM_COLS = ("visibility, proactivity, workspace, listen, listen_version, updated, "
+                  "level, created_by, org_id, cross_org, agent_on, transcribe, switch_asks")
+
+    def rooms(self, session_ids) -> "dict[str, dict]":
+        """``room`` for many sessions in one read per slice: ``{session_id: room}``; a session that
+        is not a room is absent."""
+        out: dict = {}
+        for ids in self._slices(session_ids):
+            marks = ", ".join("?" for _ in ids)
+            with self._lock:
+                rows = self._x(f"SELECT session_id, {self._ROOM_COLS} FROM agent_session_room "
+                               f"WHERE session_id IN ({marks})", tuple(ids)).fetchall()
+            for r in rows:
+                out[r[0]] = self._room_of(r[1:])
+        return out
+
+    @staticmethod
+    def _room_of(r) -> Optional[dict]:
         if r is None:
             return None
         try:

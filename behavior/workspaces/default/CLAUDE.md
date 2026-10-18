@@ -76,9 +76,8 @@ a meeting by its notes filename (`kg/entities/meeting/<date>-<slug>.md`); a link
 as the same chip, but the filename itself means nothing to the reader.
 
 **Reference entities as `[[Title]]` everywhere — chat replies included.** The client renders
-`[[wikilinks]]` as clickable entity chips, workspace file paths (backticked or as markdown
-links) as clickable links, and a workspace's slug as a chip opening its README — in chat and in
-docs alike. A plain-text mention of a known entity is a dead end for the reader. Don't `[[link]]`
+`[[wikilinks]]` as clickable entity chips, a file reference `[[page:<workspace>/<path>]]` as a link
+to that file, and a workspace's slug as a chip opening its README — in chat and in docs alike. A plain-text mention of a known entity is a dead end for the reader. Don't `[[link]]`
 things that have no entity doc — create the entity first, or use plain text.
 
 ## `kg/` is an Open Knowledge Format bundle (OKF v0.1)
@@ -115,10 +114,13 @@ terminal: MDX components, `[[wikilinks]]` as colored entity chips, file paths as
 Writing as if for a plain-text file wastes the medium and fails the reader.
 
 **1 · Know the medium.** Pages render full MDX (registry below). Chat replies render the same on
-completion. Every `[[Entity]]` becomes a clickable chip; every backticked path (`README.md`,
-`kg/entities/person/<person-slug>.md`) becomes a link that opens the doc; every **workspace slug**
-(`vexa-team-3183d1`, `personal`) becomes a chip that opens that workspace's README. Nothing you
-name should be unclickable.
+completion. Every `[[Entity]]` becomes a clickable chip; every file reference
+`[[page:<workspace>/<path>]]` (`[[page:narrative/README.md]]`) becomes a link that opens that file;
+every **workspace slug** (`vexa-team-3183d1`, `personal`) becomes a chip that opens that workspace's
+README. **A file is always named with its workspace**, in chat and in pages: a bare path
+(`README.md`, `kg/x.md`) names no workspace, and every workspace has a `README.md`, so the client
+shows it as plain text and never guesses which one you meant. (Inside a page, a relative markdown
+link stays a link into that page's own workspace.) Nothing you name should be unclickable.
 
 Three ways to waste it, all of them silent:
 

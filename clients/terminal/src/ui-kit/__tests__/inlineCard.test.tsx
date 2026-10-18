@@ -18,7 +18,7 @@ function askApi() {
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     calls.push({ url: String(u), body });
     if (String(u).endsWith("/api/asks/open")) return new Response(JSON.stringify({ pending_id: "p-1", nonce: "n-1", content_hash: "h-1", status: "open" }), { status: 200 });
-    const said = body.reply?.reply ?? body.reply?.label;
+    const said = body.reply ? (body.reply.reply ?? body.reply.label) : body.text;   // a typed answer is `text` alone
     return new Response(JSON.stringify({ status: "answered", message: `[answer ws-who] ${said}` }), { status: 200 });
   }));
   return calls;

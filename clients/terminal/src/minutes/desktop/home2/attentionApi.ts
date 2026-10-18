@@ -43,7 +43,7 @@ const subs = new Set<() => void>();
 const emit = (next: typeof state) => { state = next; subs.forEach((f) => f()); };
 
 /** Test seam. */
-export function resetAttention(): void { inflight = null; lastRead = 0; emit({ phase: "idle", data: null }); }
+export function resetAttention(): void { inflight = null; lastRead = 0; wsReads.clear(); emit({ phase: "idle", data: null }); }
 
 async function post(body: Record<string, unknown>): Promise<{ status: number; data: Attention | null }> {
   try {
@@ -94,8 +94,25 @@ export function workspaceAttention(data: Attention | null, slug: string): Worksp
   return data?.workspaces?.[slug] ?? EMPTY;
 }
 
-/** One workspace with its richer sections (the workspace page). */
-export async function readWorkspaceAttention(slug: string): Promise<WorkspaceAttention | null> {
-  const { data } = await post({ workspace: slug });
-  return data ? data.workspaces?.[slug] ?? EMPTY : null;
+/** One workspace with its richer sections (the workspace page). ONE READ PER WORKSPACE AT A TIME
+ *  (2026-10-18): the page, each of its view blocks and every refresh share the request in flight,
+ *  and an answer younger than `WS_FRESH_MS` is reused; a failed read is never kept. `force` (after
+ *  an act) always reads anew. */
+const WS_FRESH_MS = 5_000;
+const wsReads = new Map<string, { at: number; p: Promise<WorkspaceAttention | null> }>();
+
+export function readWorkspaceAttention(slug: string, opts: { force?: boolean } = {}): Promise<WorkspaceAttention | null> {
+  const hit = wsReads.get(slug);
+  if (hit && !opts.force && (hit.at === 0 || Date.now() - hit.at < WS_FRESH_MS)) return hit.p;
+  const entry = { at: 0, p: Promise.resolve<WorkspaceAttention | null>(null) };
+  entry.p = (async () => {
+    const { data } = await post({ workspace: slug });
+    const out = data ? data.workspaces?.[slug] ?? EMPTY : null;
+    if (wsReads.get(slug) === entry) {
+      if (out) entry.at = Date.now(); else wsReads.delete(slug);
+    }
+    return out;
+  })();
+  wsReads.set(slug, entry);
+  return entry.p;
 }

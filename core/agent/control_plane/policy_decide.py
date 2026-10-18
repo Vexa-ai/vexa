@@ -67,6 +67,12 @@ GLOBAL_RULES: tuple = (
     # The room switches ("Vexa in this room", "Transcribe calls") are the room's to set by default; a
     # workspace DENY line on `room.switch.<name>.<on|off>` LOCKS one, and the lock names its rule.
     {"id": "default.room-switches", "effect": ALLOW, "action": "room.switch.*"},
+    # "CALL <PERSON>" (call-person-1018): a person, or their agent while they are in the chat, starts a
+    # Vexa call with someone they share a workspace with. A room's workspace principal never calls
+    # anyone; a workspace DENY line on `call.person` stops calls started in its rooms.
+    {"id": "floor.ws-principal-never-calls-a-person", "effect": DENY, "action": "call.person",
+     "principal_kind": ["ws"]},
+    {"id": "default.call-a-person", "effect": ALLOW, "action": "call.person"},
 )
 # THE FLOORS (D38, deny test 37): a platform deny per floor line, so no workspace allow lowers one.
 from control_plane import policy_lines as _policy_lines  # noqa: E402

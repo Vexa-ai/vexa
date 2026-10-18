@@ -655,6 +655,41 @@
       "note": "Take a person out of a chat, or leave it by naming yourself. Only the owner removes others, and the owner stays."
     },
     {
+      "name": "rooms_list",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/rooms/list"
+      },
+      "arguments": [
+        "workspace"
+      ],
+      "note": "THE ROOMS OF A WORKSPACE, when the person asks what rooms there are, who is in them, or wants them on a page: each room you may see there (its open rooms, and the closed ones the person is in) with its name, its `ref` (write it as is to link the room), its people by name, `call_live` when a call is running in it now, and the recurring meetings bound to it with their links (`recurring_meetings`, also at the top level for the workspace itself). `workspace` is the workspace's slug. A closed room the person is not in is not listed and does not exist for you; never guess one. In a room or shared chat only the workspace's open rooms are listed, without meetings."
+    },
+    {
+      "name": "call_person",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/rooms/call"
+      },
+      "arguments": [
+        "person",
+        "room"
+      ],
+      "note": "CALL SOMEONE: start a Vexa call (Vexa's own call, not Meet, Zoom or a calendar invite) with a person, when the person asks you to call, ring or start a call with them (\"Call tester-b\", \"call Maya\"). `person` is the account id an @-mention carries, or the name or address they said; only people they share a workspace with are matched. It opens your room of two with them (made once), starts the call there and rings them in the app. Reply in ONE line with the room reference it returns so the person can open the room and join; it rings for 30 s. 404 `not_in_directory` or 409 `ambiguous_person`: ask ONE short question (which person, or their email to invite) and call again with the chosen account id. Never refuse, and never offer a calendar or Meet link instead. `room` instead of `person` starts the call in an existing room and rings its members. If you are only suggesting a call the person did not ask for, offer it as a ```ask card first."
+    },
+    {
       "name": "call_show",
       "identity": "user",
       "auth": "subject",

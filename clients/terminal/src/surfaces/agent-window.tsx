@@ -21,8 +21,11 @@ import "./agentWindow.css";
 import { proposalButtons, proposalQuestion, type DecidedProposal, type ProposalChoice } from "./targetProposal";
 
 // ── the turn model ────────────────────────────────────────────────────────────────
-export type OpStatus = "running" | "done" | "error";
-export interface Op { icon: string; label: string; status: OpStatus; file?: string; wrote?: boolean }   // icon ∈ ui-kit; file = workspace doc the op touched
+/** `held`: the call ended without effect, kept for the person's approval (the privacy hold, D6). */
+export type OpStatus = "running" | "done" | "error" | "held";
+export interface Op { icon: string; label: string; status: OpStatus; file?: string; wrote?: boolean;   // icon ∈ ui-kit; file = workspace doc the op touched
+  /** the stream's id for the call, pairing its result with this step */
+  callId?: string }
 /** The live phase of an in-flight agent turn (see chatStream `ChatPhase`), plus when it began so the UI
  *  can tick an elapsed-seconds counter. Rendered as a verbose status line so the pane never looks frozen. */
 export type TurnPhase = "connecting" | "working" | "reconnecting" | "stalled" | "queued";
@@ -147,12 +150,37 @@ export function doneLabel(label: string): string {
   return label;
 }
 
+/** A STEP SAYS HOW IT ENDED (founder 2026-10-18: "✓ Wrote · 7 steps" over a reply that said
+ *  "Nothing was written. The refactored README is held"). A write the privacy hold kept reads
+ *  "Held for approval", a refused or failed write "Not written" — never the past tense of a write
+ *  that did not happen. Other steps keep their own words. */
+const WRITE_VERB = /^(Writing|Wrote)\b/;
+export function opLabel(op: Pick<Op, "label" | "status" | "wrote">): string {
+  const isWrite = !!op.wrote || WRITE_VERB.test(op.label);
+  if (op.status === "held") return WRITE_VERB.test(op.label) ? op.label.replace(WRITE_VERB, "Held for approval") : `Held for approval · ${op.label}`;
+  if (op.status === "error" && isWrite) return WRITE_VERB.test(op.label) ? op.label.replace(WRITE_VERB, "Not written") : `Not written · ${op.label}`;
+  return op.status === "done" ? doneLabel(op.label) : op.label;
+}
+
+/** THE STEP THE TURN'S LINE SHOWS. While it runs, the current one. Once it has settled, a write that
+ *  was held — else one that failed — outranks whatever ran after it: the line under an answer must
+ *  not say "Wrote" when the one write it attempted was kept back. */
+export function headerOp(ops: Op[]): Op {
+  const last = ops[ops.length - 1];
+  if (ops.some((o) => o.status === "running")) return last;
+  const latest = (pick: (o: Op) => boolean) => [...ops].reverse().find(pick);
+  return latest((o) => o.status === "held")
+    ?? latest((o) => o.status === "error" && (!!o.wrote || WRITE_VERB.test(o.label)))
+    ?? last;
+}
+
 /** THE FILES AN ANSWER IS ABOUT (founder 2026-10-16: a "README.md" chip under an answer that never
  *  mentioned it). A file the turn wrote gets a chip only when the answer names it — by file name, or
  *  by its name without the extension; a README touched on the side is not shown. */
-export function chipFiles(ops: { file?: string; wrote?: boolean }[], text: string | undefined): string[] {
+export function chipFiles(ops: { file?: string; wrote?: boolean; status?: OpStatus }[], text: string | undefined): string[] {
   const said = (text ?? "").toLowerCase();
-  const files = [...new Set(ops.filter((o) => o.wrote && o.file).map((o) => o.file as string))];
+  // a write that was held or failed made no file (held-label-rooms-1018)
+  const files = [...new Set(ops.filter((o) => o.wrote && o.file && o.status !== "held" && o.status !== "error").map((o) => o.file as string))];
   return files.filter((f) => {
     const base = (f.split("/").filter(Boolean).pop() ?? f).toLowerCase();
     const stem = base.replace(/\.[a-z0-9]+$/, "");
@@ -172,16 +200,18 @@ export function shownAttachments(t: { id: string; text?: string; attachments?: M
 
 function OpRow({ op }: { op: Op }) {
   const running = op.status === "running";
-  const color = op.status === "error" ? "var(--t3)" : op.status === "done" ? "var(--green)" : "var(--accent)";
+  const color = op.status === "error" ? "var(--t3)" : op.status === "held" ? "var(--warning-text)"
+    : op.status === "done" ? "var(--green)" : "var(--accent)";
   return (
-    <div className="f-mono t-xs lh-snug aw-op" data-running={running ? "" : undefined} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: "0 1 auto" }}>
+    <div className="f-mono t-xs lh-snug aw-op" data-running={running ? "" : undefined} data-op-status={op.status} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: "0 1 auto" }}>
       <span className="aw-tone" style={{ width: 13, flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", "--aw-tone": color } as CSSProperties}>
         {op.status === "done" ? <Icon name="check" size={13} />
           : op.status === "error" ? <Icon name="x" size={13} />
+          : op.status === "held" ? <Icon name="shield" size={13} />
           : <span className="vx-op-spin r-full aw-spin" />}
       </span>
       <span className="aw-glyph" data-tone="muted"><Icon name={op.icon} size={12} /></span>
-      <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{op.status === "done" ? doneLabel(op.label) : op.label}</span>
+      <span style={{ minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{opLabel(op)}</span>
     </div>
   );
 }
@@ -374,7 +404,7 @@ export function Conversation({ turns, busy, empty, onContinue, onStopRunning, on
               // must not grow the transcript vertically (founder ruling 2026-08-22).
               // A long step label ellipsizes; it never widens the conversation (guidelines §3.4).
               <div className="mt-0 mr-0 mb-2 ml-1" style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                <OpRow op={t.ops[t.ops.length - 1]} />
+                <OpRow op={headerOp(t.ops)} />
                 {/* F66: the count ticks from the FIRST step. It used to appear only at two, so the
                     one number that proves a long turn is moving was hidden exactly when the reader
                     starts looking for it.

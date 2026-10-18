@@ -102,7 +102,8 @@ _OWNED_ENV = frozenset({
 })
 
 #: The only ``-c`` keys a caller may add (lower-cased). Everything else is this module's.
-_CALLER_CONFIG = frozenset({"user.name", "user.email"})
+#: ``transfer.fsckobjects`` only tightens: the workspace store checks every object a worker pushes.
+_CALLER_CONFIG = frozenset({"user.name", "user.email", "transfer.fsckobjects"})
 
 # ── the repository's own config: what may stay ─────────────────────────────────────────────────
 _LOCAL_ALLOWED = re.compile(
@@ -120,6 +121,31 @@ _LOCAL_ALLOWED = re.compile(
 _DIFF_COMMANDS = frozenset({"diff", "show", "log", "whatchanged"})
 #: Subcommands that make or copy a repository rather than operate in one.
 _CREATING_COMMANDS = frozenset({"init", "clone"})
+#: Subcommands that can move a ref or make a repository's history (WS-S3): the ones a durable-store
+#: observer must see. ``checkout``/``switch`` move HEAD; ``fast-import`` rewrites history (forget).
+REF_COMMANDS = frozenset({
+    "commit", "merge", "reset", "revert", "cherry-pick", "rebase", "pull", "update-ref", "branch",
+    "tag", "checkout", "switch", "stash", "am", "fast-import", "filter-branch", "replace", "notes",
+    "clone",
+})
+
+# ── the durable-store seam (WS-S3) ────────────────────────────────────────────────────────────
+#: When the work trees are a cache of a durable store, one observer sees every ref-moving command:
+#: ``before(root, sub, rest)`` runs first and returns a token (it takes the workspace's lock and
+#: checks the cache is current; raising refuses the command), ``after(token, ok)`` runs once git has
+#: exited (it makes the new refs durable; raising fails the caller, so no write is acknowledged
+#: before the store has it). An observer with ``access(root)`` is also called before EVERY command
+#: (a workspace evicted from the cache is hydrated first). None — the volume backend — changes nothing.
+_ref_observer = None
+
+
+def set_ref_observer(observer):
+    """Install (or, with None, remove) the ref observer; returns the previous one."""
+    global _ref_observer
+    previous, _ref_observer = _ref_observer, observer
+    return previous
+
+
 #: Global options a caller may not pass — the repository is ``cwd``, and only ``cwd``.
 _FORBIDDEN_GLOBAL = ("-C", "--git-dir", "--work-tree", "--exec-path", "--namespace", "--bare",
                      "--config-env", "--super-prefix", "--attr-source", "-p", "--paginate")
@@ -493,9 +519,34 @@ def run_git(cwd: "Optional[str | os.PathLike[str]]", *args: str,
     argv += rest
     shape = {"check": check, "capture_output": capture_output, "text": text}
 
+    access = getattr(_ref_observer, "access", None)
+    if access is not None:
+        access(root)        # an evicted workspace is hydrated before git looks at it (WS-S3)
     held, reason = _check_repository(root, home)
     if reason is not None:
         return _refused(argv, root, reason, **shape)
+    observer = _ref_observer if sub in REF_COMMANDS else None
+    if observer is None:
+        return _run_checked(argv, root, home, run_env, held, sub, timeout, input, shape)
+    try:
+        token = observer.before(root, sub, tuple(rest))
+    except BaseException:
+        if held is not None:
+            held.close()
+        raise
+    ok = False
+    try:
+        proc = _run_checked(argv, root, home, run_env, held, sub, timeout, input, shape)
+        ok = proc.returncode == 0
+        return proc
+    finally:
+        observer.after(token, ok)
+
+
+def _run_checked(argv: list, root: str, home: str, run_env: dict, held, sub: str, timeout, input,
+                 shape: dict) -> subprocess.CompletedProcess:
+    """The subprocess half of :func:`run_git`, on a repository already checked (``held``)."""
+    check, capture_output, text = shape["check"], shape["capture_output"], shape["text"]
     try:
         if sub in _CREATING_COMMANDS:
             # init/clone make a repository; they are not handed one (an existing .git was still
