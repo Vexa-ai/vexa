@@ -225,6 +225,7 @@ DEFAULTS: dict = {
     "models_for": "",
     "model_rules": "",
     "model_levels": "",
+    "model_intent_router": "",
     "appearance_accent": "clay",
     "appearance_font_ui": "geist",
     "appearance_font_reading": "ui",

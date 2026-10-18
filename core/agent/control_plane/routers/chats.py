@@ -336,6 +336,7 @@ def build(**d) -> APIRouter:
     _global_root = d['_global_root']
     _meeting_note_recorder = d['_meeting_note_recorder']
     _meeting_owner_lookup = d['_meeting_owner_lookup']
+    _meeting_titler = d.get('_meeting_titler')
     _read_target = d['_read_target']
     _resolve_room = d['_resolve_room']
     _scaffold_recipient_is = d['_scaffold_recipient_is']
@@ -1048,6 +1049,172 @@ def build(**d) -> APIRouter:
                                                  where=lambda rel: _homes.get(rel) or "")
         return body.model_copy(update={"prompt": prompt}), kept
 
+    # ── THE FAST INTENT ROUTER (QB-5, AW-fast, TU-route) ─────────────────────────────────────────
+    # Before a full turn, a person's own simple ask ("call @megan", "open the OeNB page") runs its
+    # action here, through the existing verb and every guard it carries; anything unsure, complex
+    # or outbound goes to the full agent, dispatched exactly as before. `control_plane/intent_router`
+    # decides; this is the one place that acts on its answer.
+    _intent_actions = d.get('intent_actions')
+    if _intent_actions is None:
+        _intent_actions = {}
+
+    def _router_on(subject: str) -> bool:
+        from control_plane import features as _features  # noqa: PLC0415
+        try:
+            root = _global_root() if callable(_global_root) else _global_root
+        except Exception:  # noqa: BLE001
+            root = None
+        try:
+            return bool(_features.effective(root, subject=str(subject)).get("intent_router"))
+        except Exception:  # noqa: BLE001 — a switch that cannot be read is off
+            return False
+
+    def _routable(request: Request, body: ChatBody, subject: str, plan, flow_turn, stored_routine,
+                  attached, *, stream: bool) -> bool:
+        """ONLY A PERSON'S OWN, WATCHED TURN IN A CHAT NOBODY ELSE READS. Never a submission (nobody
+        is watching to join a call), a reconnect, a routine's run or thread, a press (intent,
+        scaffold), a meeting's recap, a message with attachments or shared items, or a turn other
+        people read (a room, a shared chat) — those keep every guard they have today, untouched."""
+        if not stream or request.headers.get("last-event-id"):
+            return False
+        if flow_turn is not None or stored_routine or (request.headers.get("x-vexa-flow-step") or "").strip():
+            return False
+        if identity_token.is_delegated(request.headers):
+            return False
+        if body.intent or body.scaffold_id or body.room_meeting_id or body.share or body.reply_to or attached:
+            return False
+        if plan is not None:
+            if not plan.speak or plan.scope is not None or any(str(h) != str(subject) for h in (plan.humans or [])):
+                return False
+            check = _room_check(subject)
+            if check is not None and check(plan.row["id"]):
+                return False
+        return _router_on(subject)
+
+    def _router_model(subject: str):
+        """The small model for the router's unsure step — None when no model is configured or the
+        person's budget says stop. Every call is counted (`usage` kind `route`)."""
+        from control_plane import budgets as _budgets, intent_router  # noqa: PLC0415
+        from shared import usage as _usage  # noqa: PLC0415
+        catalog = getattr(dispatcher, "catalog", None)
+        try:
+            pol = _budgets.read(_global_root() if _global_root else None)
+        except Exception:  # noqa: BLE001
+            return None
+        inner = intent_router.model_complete(catalog, pol)
+        if inner is None:
+            return None
+        ucli = _budgets.usage_client(redis_url)
+
+        def complete(system: str, user: str):
+            if _budgets.verdict(pol, _usage.rolling(ucli, subject), background=False).get("stop"):
+                return None
+            out = inner(system, user)
+            if out and out.get("_tokens"):
+                llm_budget_mod.record_local(subject, "route",
+                                            out.get("_usage") or {"prompt_tokens": int(out["_tokens"])},
+                                            fallback_client=ucli)
+            return out
+        return complete
+
+    def _router_mounts(subject: str) -> list:
+        try:
+            ms = (active_workspaces(wsr.root, subject)
+                  + shared_active_mounts(wsr.root, subject, mindex.list(subject)))
+        except Exception:  # noqa: BLE001 — no mounts, no page found: the agent answers instead
+            return []
+        return [(m.slug, m.path) for m in ms]
+
+    def _route_record(subject: str, session: str, plan, receipt: dict, said: str = "", line: str = "") -> None:
+        """THE ROUTE RECEIPT, durably: one obs line, the chat's own record (its last receipts on the
+        session index), and — when the router answered — the person's words and its line as the
+        chat's messages, so the conversation reads naturally on reload."""
+        from shared import obs  # noqa: PLC0415
+        obs.log_event("intent_route", user_id=subject, session=session, fields=receipt)
+        try:
+            sess.record_route(subject, session, receipt)
+        except Exception:  # noqa: BLE001 — the receipt outranks nothing
+            logger.warning("route receipt not stored on the chat (session=%s)", session)
+        if not line or plan is None or session_store is None:
+            return
+        try:
+            if said:
+                session_store.add_note(plan.row["id"], str(subject), said)
+            session_store.add_note(plan.row["id"], "vexa", line)
+        except Exception:  # noqa: BLE001 — the action ran; its echo in history is the extra
+            logger.warning("routed answer not written to the chat's messages (session=%s)", session)
+
+    #: (subject, session, turn id) → the events a routed turn answered with, so a client's no-cursor
+    #: retry of the same message replays the answer and never runs the action twice.
+    _ROUTED: dict = {}
+    _ROUTED_TTL_S = 600.0
+
+    def _route_turn(request: Request, body: ChatBody, subject: str, session: str, plan, said: str):
+        """``(events, receipt)`` when the router answered this message itself, else ``(None, receipt)``
+        — the full turn runs, and the receipt rides its stream. ``receipt`` is None when nothing
+        was routed at all."""
+        from fastapi import HTTPException as _HTTPExc  # noqa: PLC0415
+        from control_plane import intent_router  # noqa: PLC0415
+        now = time.time()
+        for k in [k for k, (at, _e) in _ROUTED.items() if now - at > _ROUTED_TTL_S]:
+            _ROUTED.pop(k, None)
+        key = (str(subject), session, body.turn_id) if body.turn_id else None
+        if key is not None and key in _ROUTED:
+            return _ROUTED[key][1], None
+        # the small model is looked up only when the rules are unsure (reading the policy costs a file read)
+        unsure = intent_router.rules(said)[0] is None
+        r = intent_router.route(said, {"mentions": list(body.mentions or [])},
+                                complete=_router_model(str(subject)) if unsure else None)
+        tid = body.turn_id or ""
+        events = None
+        line = ""
+        outcome = "fell_through"
+        if r.intent == "none":
+            outcome = "fell_through"
+        elif r.outbound:
+            # OUTBOUND (an invite mail, a calendar event): recognised, never run here. The full agent
+            # already asks before anything leaves; it gets the person's message unchanged.
+            outcome = "outbound_needs_approval"
+        elif r.intent == "call_person":
+            fn = _intent_actions.get("call_person")
+            if fn is None:
+                outcome = "action_unavailable"
+            else:
+                try:
+                    answer = fn(request, r.args.get("mention") or r.args.get("person", ""))
+                except _HTTPExc as exc:
+                    det = exc.detail if isinstance(exc.detail, dict) else {}
+                    outcome = f"refused:{det.get('refused') or det.get('reason') or exc.status_code}"
+                    answer = None
+                except Exception as exc:  # noqa: BLE001 — the agent answers instead
+                    outcome = f"failed:{type(exc).__name__}"
+                    answer = None
+                ev = intent_router.call_event(answer) if isinstance(answer, dict) else None
+                if ev is not None:
+                    line = intent_router.call_line(answer)
+                    events = [{"type": "message-delta", "text": line}, ev]
+                    outcome = "executed"
+        elif r.intent == "open_entity":
+            pages = intent_router.find_pages(_router_mounts(str(subject)), r.args.get("query", ""))
+            if len(pages) == 1:
+                line = intent_router.open_line(pages[0])
+                events = [{"type": "message-delta", "text": line}, intent_router.open_event(pages[0])]
+                outcome = "executed"
+            else:
+                outcome = "not_found" if not pages else "ambiguous"
+        receipt = r.receipt(executed=events is not None, outcome=outcome, turn_id=tid)
+        _route_record(str(subject), session, plan, receipt, said=said if events else "", line=line)
+        if events is None:
+            return None, receipt
+        out = [{"type": "route", **receipt}, *events, {"type": "turn-complete"}]
+        if key is not None:
+            _ROUTED[key] = (now, out)
+        try:
+            sess.upsert(subject, session, touched=True)
+        except Exception:  # noqa: BLE001 — the rail row follows on the next turn
+            pass
+        return out, receipt
+
     @router.get("/api/sessions/{session}/attachment")
     def session_attachment(session: Annotated[str, Path(pattern=CHAT_SESSION_PATTERN)], path: str,
                            request: Request,
@@ -1460,6 +1627,19 @@ def build(**d) -> APIRouter:
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                          "X-Chat-Session": session})
+        # THE FAST INTENT ROUTER (QB-5): a person's own simple ask is answered here, without a turn;
+        # anything else falls through below unchanged, carrying its route receipt on the stream.
+        _route_receipt = None
+        if _routable(request, body, subject, _plan, flow_turn, _stored_routine, _attached, stream=stream):
+            _said = str(_submitted or "")
+            _cut = _said.rfind(CONTEXT_SENTINEL)
+            _said = (_said[_cut + len(CONTEXT_SENTINEL):] if _cut >= 0 else _said).strip()
+            _routed, _route_receipt = _route_turn(request, body, subject, session, _plan, _said)
+            if _routed is not None:
+                return StreamingResponse(
+                    _sse(_routed), media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                             "X-Chat-Session": session})
         # THE MEETING ROOM (post-meeting run). Resolved and AUTHORISED here, before anything else
         # happens on this request — a refusal must cost the caller a 403, never a partially-run turn.
         # ``room`` never comes from the body: the body names a MEETING (and may PROPOSE a narrowing);
@@ -2098,8 +2278,13 @@ def build(**d) -> APIRouter:
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                          "X-Unit-Id": unit_id, "X-Chat-Session": session},
             )
+        _view = _binding_watch(_read_view(stream_reader, unit_id, resume, fresh=_fresh_turn), subject, session)
+        if _route_receipt is not None:
+            # THE RECEIPT RIDES THE STREAM (a client may show it); the turn itself is the one it always was.
+            import itertools as _it  # noqa: PLC0415
+            _view = _it.chain([{"type": "route", **_route_receipt}], _view)
         return StreamingResponse(
-            _sse(_binding_watch(_read_view(stream_reader, unit_id, resume, fresh=_fresh_turn), subject, session)),
+            _sse(_view),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                      "X-Unit-Id": unit_id, "X-Chat-Session": session},
@@ -2609,7 +2794,28 @@ def build(**d) -> APIRouter:
                                     complete=_title_model(subject))
         except Exception:  # noqa: BLE001 — a name is furniture; the rail outranks it
             logger.warning("auto-title scheduling failed for subject=%s", subject)
+        # A LIVE CALL IS RENAMED BY ITS TOPIC (founder O1, 2026-10-18): "#pilot call" becomes "#pilot ·
+        # ADFS test window" once its transcript says what it is about — same cadence, same cheap model.
+        try:
+            _rename_calls(subject)
+        except Exception:  # noqa: BLE001 — a name is furniture
+            logger.warning("call rename pass failed for subject=%s", subject)
         return {"sessions": _with_stored(subject, rows)}
+
+    def _rename_calls(subject: str) -> None:
+        """The person's own live calls, renamed by topic in the background (``call_names``)."""
+        if session_store is None or _meeting_titler is None or _meeting_owner_lookup is None:
+            return
+        calls = session_store.live_calls_owned(str(subject), limit=10)
+        if not calls:
+            return
+        from control_plane import call_names  # noqa: PLC0415
+        from control_plane.api_shared import _fold_meeting_transcript  # noqa: PLC0415
+        call_names.rename_pass(
+            str(subject), calls,
+            row_of=lambda mid: _meeting_owner_lookup(str(subject), mid),
+            transcript_of=lambda mid: _fold_meeting_transcript(redis_url, str(mid), limit=120),
+            complete=_title_model(subject), titler=_meeting_titler)
 
     def _maybe_empty(row: dict) -> bool:
         """The cheap half of ``_is_empty_chat``: could this row be empty at all?"""
@@ -2937,6 +3143,9 @@ def build(**d) -> APIRouter:
         transcript is missing or empty returns ``{turns: []}``; an invalid subject/session never 500s."""
         subject = subject_of(request)
         session = sess.chat_for(subject, session)      # a meeting started from a chat reads that chat
+        # A STORED ROW'S MESSAGES OUTLIVE THE FALLBACK (QB-5): a chat whose first message the fast
+        # intent router answered has messages and no stored version yet; they are read with it.
+        messages: list = []
         # ADR-0048: a stored conversation is read from the store; the workspace layout below is the
         # one-release fallback for a thread the store holds no version of yet.
         if session_store is not None:
@@ -2978,12 +3187,14 @@ def build(**d) -> APIRouter:
         # Only the caller's own trees and the workspaces their membership mounts are searched; a
         # session found nowhere there is not theirs, whoever else has a thread of that name.
         if wsr.locate_session(subject, session, extra_roots=extra) is None:
+            if messages:
+                return {"turns": [], "messages": messages}
             raise HTTPException(status_code=404, detail="session not found")
         try:
             turns = wsr.history(subject, session, extra_roots=extra)
         except Exception:  # noqa: BLE001 — history is best-effort; a bad path → empty, never an error
             logger.exception("loading session history failed subject=%s session=%s", subject, session)
             turns = []
-        return {"turns": _qualified(turns, subject)}
+        return {"turns": _qualified(turns, subject), **({"messages": messages} if messages else {})}
 
     return router

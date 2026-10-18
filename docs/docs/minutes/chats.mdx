@@ -50,6 +50,20 @@ If the agent cannot take a message, the row turns red: *blocked — `<source>` �
 with **Retry**. If the network dropped the message before the server saw it, your browser keeps a copy
 and re-sends it when the chat is idle or the page reloads.
 
+### Simple asks run at once
+
+In your own chat, a short message that is one simple ask is carried out without starting the agent:
+
+- *call @megan*, *call Megan*, *start a call with Megan*: the call starts and rings her, exactly as if
+  the agent had called `call_person`. The chat says *Calling Megan…* with the room.
+- *open the OeNB page*: the page opens when exactly one page in your workspaces is called that.
+
+Anything else goes to the agent as before: a question, a message with more than one request, a name
+that matches several people or nobody, a page that is not found. *Invite Ana* and *schedule a call with
+Ana* always go to the agent, which asks before anything is sent. A message that sends, posts, shares or
+deletes something is never carried out this way. Rooms, shared chats, routines and messages sent
+without watching the chat are never routed.
+
 ### Dictate a message
 
 **Dictate** (or <kbd>Cmd</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>D</kbd>) listens and writes
@@ -284,6 +298,14 @@ gateway's `/agent/*` forward. The request and event shapes are in [the agent API
 
 `GATEWAY_URL` on the terminal server. The job and tool-budget limits are worker settings
 (`VEXA_AGENT_JOB_MAX_TOOL_CALLS` and related, see `core/agent/llm/JOBS.md`).
+
+The fast intent router is the `intent_router` feature (on with `VEXA_FEATURES=all`, off in a release
+until switched on; `features: {intent_router: off}` in `_global/POLICIES.md` turns it off). Rules decide
+first. Only a short message that names a call, open, invite or schedule word and fits no rule is put to
+a small model (`model_intent_router`, else `model_home`), which must answer within 0.7 s with confidence
+0.8 or more; its spend is counted as usage kind `route`. Every routed message leaves a receipt (route,
+confidence, latency, source, executed or fell through): an `intent_route` log line, the chat's last 50
+receipts, and a `route` event at the head of the chat's stream.
 
 ## Why it complies
 

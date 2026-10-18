@@ -59,7 +59,8 @@ import type { ScopeView } from "../data/workspaceApi";
 import { ChatRoutineDrafts, ChatRoutines, retireRoutine, routineOfOpenChat, setRoutineRunning } from "./RoutineBar";
 import { draftRoutines, draftWhen, routineLabel, type RoutineCard } from "./routineDraft";
 import { OPEN_CHAT_EVENT } from "../surfaces/agent-window";
-import { HOME_TARGET_EVENT, NEW_CHAT_AT_EVENT, NEW_ROOM_EVENT, START_MEETING_EVENT } from "../platform/events";
+import { CALL_PERSON_EVENT, HOME_TARGET_EVENT, NEW_CHAT_AT_EVENT, NEW_ROOM_EVENT, START_MEETING_EVENT } from "../platform/events";
+import { callPerson } from "./shell2/StartMeeting";
 import { NEW_WORKSPACE_KICK } from "./desktop/home2/StatusCard";
 import { PERSONAL as HOME_PERSONAL, aimHome, homeTargetAct, noteHomeTarget, setHomeFocus } from "./desktop/home2/HomeTarget";
 import { WORKSPACE_PAGE_WIDE_EVENT, isWorkspacePagePath } from "./desktop/home2/workspaceView";
@@ -116,7 +117,11 @@ import { AdminHome } from "./AdminHome";
 import { EdgeHandle, ShellToggle } from "./Collapse";
 import { Drawer, Sheet, Splitter, useShellLayout } from "../ui-kit";
 import { CallDock } from "./CallDock";
-import { enterCall } from "./callState";
+import { activeCall, enterCall } from "./callState";
+import { startOrAsk, type CallContext, type LiveOwnCall } from "./callRejoin";
+import { RejoinAsk } from "./RejoinAsk";
+import { liveMeetingsNow } from "../surfaces/liveMeetings";
+import { roomOf } from "../surfaces/roomState";
 import { joinPlacedCall, livePlacedDeps } from "./callPlaced";
 import { browserSessionFromOpenPath, openBrowserSession } from "./browserSession";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
@@ -1150,21 +1155,61 @@ export function MinutesShell() {
     window.addEventListener(CALL_START_EVENT, on);
     return () => window.removeEventListener(CALL_START_EVENT, on);
   }, []);
+  // ONE LIVE CALL PER PLACE (founder O1, 2026-10-18: "Start a meeting" pressed four times made four
+  // live calls). A call about to start where one of yours is already live asks first — "<call> is
+  // still running. Rejoin it?" — and Rejoin opens that chat and joins its call (`callRejoin`).
+  const rejoinCall = (c: LiveOwnCall) => {
+    const chat = chatsRef.current.find((x) => x.id === c.session);
+    if (chat) void openChat(chat); else openSharedSession(c.session);
+    void enterCall(c.session, c.label).catch(() => { /* the dock says why the call did not start */ });
+  };
+  const guardedStart = (ctx: CallContext, start: () => void) => {
+    const a = activeCall();
+    startOrAsk(ctx, {
+      meetings: liveMeetingsNow(),
+      active: a ? { session: a.session, label: a.label, room: !!roomOf(a.session)?.room } : null,
+      start, rejoin: rejoinCall,
+    });
+  };
   const startVexaCall = (card?: Card | null) => {
     if (card) sendFeedback(card, "click", { title: cardTitle(card) });
-    const c = addChat("Thinking out loud", ["personal", "_global"]);
-    void enterCall(c.id, c.label).catch(() => { /* the dock says why the call did not start */ });
+    guardedStart({ kind: "desk" }, () => {
+      const c = addChat("Thinking out loud", ["personal", "_global"]);
+      void enterCall(c.id, c.label).catch(() => { /* the dock says why the call did not start */ });
+    });
   };
-  // START A MEETING (shell2, the Meetings page, UI 7w): a chat of its own with a call in it, in My
-  // desk — "a meeting can be just a meeting", filed later. The list closes: the call is in front.
-  const startMeetingRef = useRef<() => void>(() => undefined);
-  startMeetingRef.current = () => {
+  // START A MEETING (shell2, the Meetings page, UI 7w; founder O1 2026-10-18). The page offers who or
+  // where; what reaches here is the act: `room` starts (or rejoins) that room's call; nothing named is
+  // a call of its own in My desk. Either way a live call already there is asked about first.
+  const startMeetingRef = useRef<(d: { room?: string; label?: string }) => void>(() => undefined);
+  startMeetingRef.current = (d) => {
     closeCentre();
-    const c = addChat("Meeting", ["personal", "_global"]);
-    void enterCall(c.id, c.label).catch(() => { /* the dock says why the call did not start */ });
+    if (d.room) {
+      const room = d.room;
+      const label = d.label || "Room call";
+      guardedStart({ kind: "session", session: room }, () => {
+        const chat = chatsRef.current.find((x) => x.id === room);
+        if (chat) void openChat(chat); else openSharedSession(room);
+        void enterCall(room, label).catch(() => { /* the dock says why the call did not start */ });
+      });
+      return;
+    }
+    guardedStart({ kind: "desk" }, () => {
+      const c = addChat("Meeting", ["personal", "_global"]);
+      void enterCall(c.id, c.label).catch(() => { /* the dock says why the call did not start */ });
+    });
   };
+  // CALL A PERSON from a surface (an @-pick's "Call <name>" in a private chat): their room of two
   useEffect(() => {
-    const on = () => startMeetingRef.current();
+    const on = (e: Event) => {
+      const d = ((e as CustomEvent).detail ?? {}) as { subject?: string; name?: string };
+      if (d.subject) void callPerson({ subject: d.subject, name: d.name || d.subject }).catch(() => { /* the dock says why */ });
+    };
+    window.addEventListener(CALL_PERSON_EVENT, on);
+    return () => window.removeEventListener(CALL_PERSON_EVENT, on);
+  }, []);
+  useEffect(() => {
+    const on = (e: Event) => startMeetingRef.current(((e as CustomEvent).detail ?? {}) as { room?: string; label?: string });
     window.addEventListener(START_MEETING_EVENT, on);
     return () => window.removeEventListener(START_MEETING_EVENT, on);
   }, []);
@@ -2600,7 +2645,9 @@ export function MinutesShell() {
       )}
       <main className="vx-pane" data-pane="conversation" style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center, display: "flex", flexDirection: "column" }}>
         <DesktopToaster />
+        <RejoinAsk />
         <CallDock onOpenShared={openCallShared} onOpenPrivate={openCallPrivate}
+          floating={!!(shell2 && centreList) || (pagesOverlay && shell.sheetOpen)}
           nameOf={(sid) => { const c = allChats.find((x) => x.id === sid); return (c as { label?: string } | undefined)?.label ?? ""; }} />
         {/* A SCAFFOLD THAT WOULD NOT OPEN STATES ITSELF. Someone who clicked a real link and landed
             on an empty conversation cannot tell a spent invitation from a broken product — and the

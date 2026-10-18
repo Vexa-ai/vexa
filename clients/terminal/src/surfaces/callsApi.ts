@@ -15,6 +15,8 @@ export interface SessionCall {
   started: number;
   transcribed: boolean;
   participants: number;
+  /** who is in the call now, by name — the listener is never listed (absent on an older server) */
+  in_now?: { subject: string; name: string }[];
 }
 /** `you` is the reader's own account id (absent on an older server): with `call.owner` it tells the
  *  reader's own call from someone else's. */

@@ -61,6 +61,34 @@ Vexa asks which one; if nobody you share a workspace with matches, it asks who y
 is Vexa's own call, not a Meet or Zoom link. Sending Vexa into an existing Meet, Teams or Zoom link
 is a different thing.
 
+`@` works in your private chats too: it offers the people you share a workspace with. A pick is
+**Tag** (the agent knows who you mean; the chat stays private) or **Call Maya** (rings her in your room
+of two).
+
+### Start a meeting
+
+**Start a meeting** on the Meetings page offers three choices:
+
+- **Call a person**: the people you share a workspace with. **Call** rings them in your room of two.
+- **Start in a room**: your rooms. A room with a live call says **Rejoin**.
+- **Schedule for later**: plan the call in a room. Nothing reaches a calendar until you add it
+  yourself. Without rooms it shows as coming.
+
+A Vexa call is the default; Google Meet, Teams and Zoom are under **Other options** (paste their link
+in **Send Vexa to a meeting**).
+
+**One live call per place.** Starting a call where one of yours is already live asks first: *"Call with
+Maya is still running. Rejoin it?"* **Rejoin** joins it; **Start a new one** starts another. For a
+call with a person, a new one ends the old call only if nobody else is in it.
+
+**Names.** A call is named after who or where: "Call with Maya" in a room of two (each of you reads the
+other's name), "#pilot call" in a room. Once the call has a topic, Vexa renames it ("#pilot · ADFS test
+window") and the row says **renamed**. A name you typed is never replaced.
+
+**Live and Recent.** A live row shows who is in now, with their faces, and how long the call has run.
+When the last person leaves, the call ends on its own and moves to **Recent**: "ended when everyone left
+· 12 min".
+
 ### Start a call and ring people
 
 **Start call** in a room rings the room's members, and only them:
@@ -173,7 +201,24 @@ room of two (`pair_rooms.open_room`), starts the call on meeting-api with the ca
 identity forwarded unchanged (so the caller's regime, scopes and bot limit apply, and the meeting is
 theirs), binds it to the room as Start call does, and rings the other person. With Transcribe calls off
 the call starts untranscribed. `room` instead of `person` calls an existing room. A call already live
-in the room is reused and the person is rung again.
+in the room is reused and the person is rung again. `fresh: true` (the person's own **Start a new one**,
+ignored from an agent) ends the caller's own live call there when nobody else is in it, then starts a
+new one; otherwise 409 `still_in_call`.
+
+**Names.** Where a call starts in a room (`call_person`, or `POST /api/sessions/{id}/call` from Start
+call), agent-api writes its name on the meeting row through meeting-api's owner-scoped annotate:
+`title` "Call with <first name>" or "#<room> call", plus metadata `call_named`, `call_kind` and, for a
+room of two, `call_with` (both people, so each reads the other's name). A private chat's call is not
+named here. When the caller's chat list is read, their live calls whose title is still exactly
+`call_named` are renamed once by topic: the live transcript (`tc:meeting:{id}`) is given to the cheap
+model (`model_home`, within the spend cap) for at most five words, and the title becomes
+"#pilot · <topic>" with `call_renamed_from` recorded. No model call is spent before the transcript has
+something to name, and at most three per call.
+
+**Who is in now.** `GET /api/sessions/{id}/call` answers `call.in_now`: the room's participants by
+name, without the hidden listener. The call ends when the last person leaves: the listener leaves after
+its grace (`emptyGraceSec`, 30 s by default) and meeting-api records `completion_reason: left_alone`,
+which the Meetings page shows as "ended when everyone left".
 
 The answer carries `ui_action: "join_call"`. The harness turns it into a `call` event (ids and the other
 person's name only), and the terminal joins as the caller: only in the view whose own message placed

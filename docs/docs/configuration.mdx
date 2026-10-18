@@ -590,6 +590,7 @@ names and on/off only, never data.
 | `model_routines` · `model_home` · `model_event_agents` | `cheapest` | The models background work runs on; `cheapest` is the smallest allowed model the install offers |
 | `model_rules` | (empty) | The router's rules, task type → model (`{routines: cheapest, events: 'level:2'}`); overlays the keys above, inside `models_allowed`. `cheapest` is by market price |
 | `model_levels` | (empty) | With the `levels` switch (hosted plans): the model each level 1–5 runs on; gaps are filled from the allowed models by market price |
+| `model_intent_router` | (empty) | The small model the fast intent router asks when its rules are unsure (a catalog id or `cheapest`); empty uses `model_home`. It must answer within 0.7 s |
 
 ## Ports
 

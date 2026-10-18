@@ -151,3 +151,13 @@
 /* a room of two in the sidebar: the other person's unread count, tinted text */
 .vx-s2-unread { flex: none; min-width: 18px; padding: 0 var(--space-1); border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent-text);
   font-size: var(--text-xs); font-weight: var(--weight-medium); text-align: center; }
+
+/* ONE LIVE CALL PER PLACE (founder O1, 2026-10-18): the rejoin question and Start a meeting's choices */
+.vx-s2-rejoin { display: flex; flex-direction: column; gap: var(--space-2); }
+.vx-s2-rejoin-acts { display: flex; gap: var(--space-1); flex-wrap: wrap; }
+.vx-s2-chooser { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-2); padding: var(--space-2); border: 1px solid var(--line); border-radius: 12px; }
+.vx-s2-choice { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.vx-s2-choice > .vx-label { margin: 0; }
+.vx-s2-choice-list { display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow-y: auto; }
+.vx-s2-other { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; }
+.vx-s2-livewho { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; }

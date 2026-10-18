@@ -14,6 +14,7 @@
  *  Every function that decides something is pure and exported, the same split as `./navigatorApi`. */
 import type { MeetingMock } from "../surfaces/meetingModel";
 import { meetingPhase } from "../surfaces/meetingModel";
+import { isMe } from "./shell2/me";
 
 /** Rows rendered before "Show more". The list is already in memory; this bounds the DOM, not a fetch. */
 export const CALLS_PAGE = 30;
@@ -62,7 +63,7 @@ export function isIdentifiedPerson(name?: string | null): boolean {
   return !!n && !NOBODY.test(n);
 }
 
-type Nameable = Pick<MeetingMock, "id" | "title_custom" | "platform" | "native_id"> & Partial<Pick<MeetingMock, "start_time" | "scheduled_at" | "created_at">> & {
+type Nameable = Pick<MeetingMock, "id" | "title_custom" | "platform" | "native_id"> & Partial<Pick<MeetingMock, "start_time" | "scheduled_at" | "created_at" | "call_with">> & {
   title?: string; participants?: { name: string }[];
 };
 
@@ -108,9 +109,25 @@ function realTitle(m: Nameable, t?: string | null): string {
  *  people in it ("Call with Valeriia") · else "Call with Vexa". Never a native or session id; the
  *  platform is an icon beside it, not part of it. Used by the Calls list, the meeting sidebar and the
  *  note's chip alike. */
+/** A CALL WITH ONE PERSON, AS EACH OF THE TWO READS IT (founder O1, 2026-10-18). The caller's row
+ *  says "Call with Megan"; Megan reads the same call as "Call with <the caller>". The topic after
+ *  " · " is kept. Any other title is returned as it is. */
+export function viewerCallTitle(title: string, callWith: { subject?: string; name?: string }[] | undefined,
+  me: (p: { subject?: string; name?: string }) => boolean = (p) => isMe({ subject: p.subject, name: p.name })): string {
+  if (!callWith || callWith.length !== 2 || !title.startsWith("Call with ")) return title;
+  const first = (n?: string) => String(n ?? "").trim().split(/\s+/)[0] ?? "";
+  const mine = callWith.find((p) => me(p));
+  const other = callWith.find((p) => p !== mine);
+  if (!mine || !other) return title;
+  const named = first(mine.name);
+  const head = `Call with ${named}`;
+  if (!named || !(title === head || title.startsWith(`${head} · `))) return title;
+  return `Call with ${first(other.name) || "them"}${title.slice(head.length)}`;
+}
+
 export function meetingDisplayName(m: Nameable, opts: { chatName?: string; people?: string[] } = {}): string {
   const own = realTitle(m, m.title_custom) || realTitle(m, m.title);
-  if (own) return own;
+  if (own) return viewerCallTitle(own, m.call_with);
   const chat = String(opts.chatName ?? "").trim();
   if (chat && !PLACEHOLDER.test(chat) && !CHAT_PLACEHOLDER.test(chat) && !looksRaw(chat)) return chat;
   if (m.platform === "voice_note") return "Voice note";

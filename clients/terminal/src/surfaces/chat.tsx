@@ -58,7 +58,7 @@ import { RefChip } from "../ui-kit/RefChip";
 import { AskSessionProvider } from "../ui-kit/InlineCard";
 import { Button as KitButton } from "../ui-kit/primitives/Button";
 import { ModelChip } from "./usage/ModelChip";
-import { NEW_CHAT_AT_LEVEL_EVENT } from "../platform/events";
+import { CALL_PERSON_EVENT, NEW_CHAT_AT_LEVEL_EVENT } from "../platform/events";
 import { splitRefs } from "../ui-kit/universalRefs";
 import { longPressProps, meetingLinkIn, pasteToChip, raiseMessageActions, referenceFromPaste, sendVexa } from "./reference";
 /** The conversation a message line belongs to, for its reference (`message:<session>/<seq>`). */
@@ -1021,7 +1021,12 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   // people to a chat with 409 chats_are_private)
   const roomsOn = useFeature("rooms");
   const thisRoom = useRoom(session, roomsOn);
-  const mentionOn = sharingOn && (!roomsOn || !!thisRoom?.room);
+  // @ IN EVERY CHAT (founder O1, 2026-10-18: he typed `call @megan` in a private chat and there was
+  // nobody to pick). In a private chat the picker offers the people who share a workspace with you —
+  // per viewer, from the server — and a pick tags them for the agent (nothing is shared) or calls
+  // them in your room of two; the chat itself stays private.
+  const mentionOn = sharingOn;
+  const privateChat = roomsOn && !thisRoom?.room;
   const folderDropOn = useFeature("folder_drop");
   // HOSTED PLANS PICK A LEVEL 1–5 at the chat's start, not a model (`levels`; off: the full picker)
   const levelsOn = useFeature("levels");
@@ -2221,7 +2226,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     // THE SAME PEOPLE AS THE HOME (founder: "all those people should be available as @"): everyone
     // the caller has interacted with, most recent first; the agents from the mention list
     Promise.all([listKnownPeople().catch(() => ({ people: [], count: 0 })), listMentionable().catch(() => ({ people: [], agents: [{ name: "vexa" }] }))])
-      .then(([known, m]) => { if (live) setMentionPeople({ people: known.people.length ? knownAsMentionable(known.people) : m.people, agents: m.agents }); });
+      .then(([known, m]) => { if (live) setMentionPeople({ people: privateChat ? m.people : known.people.length ? knownAsMentionable(known.people) : m.people, agents: m.agents }); });
     return () => { live = false; };
   }, [mq !== null, mentionPeople, mentionOn]);   // eslint-disable-line react-hooks/exhaustive-deps
   const pickRows: PickerRow[] = mq && mentionPeople && !pickClosed && mentionOn ? pickerRows(mentionPeople.people, mentionPeople.agents, mq.query) : [];
@@ -2290,11 +2295,17 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           slot goes too rather than standing empty waiting for a second reason to exist. */}
       <MentionPicker rows={pickRows} active={Math.min(pickIdx, Math.max(0, pickRows.length - 1))} onPick={pick} />
       {choice && !pickRows.length && (
-        <MentionChoice name={choice.person.name} vexa={!!(choice.person.vexa ?? choice.person.subject)}
+        <MentionChoice name={choice.person.name} vexa={!!(choice.person.vexa ?? choice.person.subject)} privateChat={privateChat}
           onChoose={(intent) => {
             const who = choice.person;
             setChoice(null);
             if (intent === "tag") return;
+            // A PRIVATE CHAT CALLS THEM IN YOUR ROOM OF TWO (founder O1): the chat is not shared, and a
+            // call already live with them is asked about first (Rejoin / Start a new one)
+            if (privateChat && intent === "call" && who.subject) {
+              window.dispatchEvent(new CustomEvent(CALL_PERSON_EVENT, { detail: { subject: who.subject, name: who.name || choice.label } }));
+              return;
+            }
             if (who.vexa ?? !!who.subject) {
               setPicked((prev) => prev.map((m) => (m.subject === who.subject ? { ...m, intent } : m)));
               return;

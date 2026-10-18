@@ -84,6 +84,11 @@ class CallBody(BaseModel):
         default=None, pattern=CHAT_SESSION_PATTERN,
         description="instead of `person`: start the call in this existing room (its id or name) and "
                     "ring its members.")
+    fresh: bool = Field(
+        default=False,
+        description="the person's own \"Start a new one\" after being asked to rejoin: end the call "
+                    "already live there (only their own, and only when nobody else is in it) and start "
+                    "another. Ignored from an agent.")
 
 
 class CallRefused(Exception):
@@ -188,6 +193,7 @@ def build(**d) -> APIRouter:
     _pc = d.get("_pc")
     _global_root = d.get("_global_root")
     _meeting_annotator = d.get("_meeting_annotator")
+    _meeting_titler = d.get("_meeting_titler")
     starter = d.get("call_starter")          # tests: a fake meeting-api
 
     def _index_list(who: str) -> list:
@@ -313,6 +319,20 @@ def build(**d) -> APIRouter:
         except Exception as exc:  # noqa: BLE001 — the call is bound; its ownership record is the extra
             logger.warning("room ownership not recorded for call meeting %s (%s)", meeting_id, type(exc).__name__)
 
+    def _name_call(subject: str, session_id: str, meeting_id, email: str) -> None:
+        """"Call with Megan" / "#pilot call" on the meeting row (call_names; founder O1 2026-10-18)."""
+        if not meeting_id or _meeting_titler is None:
+            return
+        from control_plane import call_names  # noqa: PLC0415
+        try:
+            base = call_names.base_for(_store(), session_id, subject,
+                                       is_pair=lambda ws: pair_rooms.is_pair(_root(), ws),
+                                       name_of=lambda who: _name(str(who), email if str(who) == subject else ""))
+            if base is not None:
+                call_names.name_call(_meeting_titler, subject, meeting_id, base)
+        except Exception as exc:  # noqa: BLE001 — the call is started; its name is furniture
+            logger.warning("call %s not named (%s)", meeting_id, type(exc).__name__)
+
     @router.post("/api/rooms/call")
     def call_person(request: Request, body: CallBody = Body(...)):
         """CALL A PERSON: find them among the people you share a workspace with, open your room of
@@ -372,6 +392,32 @@ def build(**d) -> APIRouter:
         with_ = ({"subject": str(other["subject"]), "name": other.get("name") or _name(str(other["subject"]))}
                  if other is not None else None)
         live = _live(sid)
+        if live is not None and body.fresh and not is_delegated(request):
+            # "START A NEW ONE" (founder O1, 2026-10-18): the person was asked to rejoin and chose a new
+            # call. Only their own call, and only one nobody else is in, is ended for it.
+            try:
+                in_room = livekit.room(live["room"]) if livekit is not None else None
+            except Exception:  # noqa: BLE001
+                in_room = None
+            others: list = []
+            unknown = False
+            if in_room is not None:
+                if in_room.get("in_now") is not None:
+                    others = [p for p in in_room["in_now"] if str(p.get("identity")) != subject]
+                else:
+                    unknown = int(in_room.get("humans", in_room.get("num_participants")) or 0) > 0
+            if str(live.get("owner")) != subject or others or unknown:
+                who = ", ".join(str(p.get("name") or "someone") for p in others) or "Someone"
+                raise HTTPException(status_code=409, detail={
+                    "refused": "still_in_call",
+                    "said": f"{who} is still in that call. Rejoin it instead."})
+            try:
+                if livekit is not None:
+                    livekit.delete_room(live["room"])
+            except Exception:  # noqa: BLE001 — the record ends either way; the room's own timeout follows
+                pass
+            s.end_call(sid, live["room"])
+            live = None
         if live is not None:
             rang = room_ring.ring(s, root, notifier, sid, caller=subject, caller_name=caller_name,
                                   title=room.get("title") or "", only=ring_to, call_room=live["room"])
@@ -394,6 +440,7 @@ def build(**d) -> APIRouter:
         call = s.bind_call(sid, room=started["room"], meeting_id=started["meeting_id"] or 0, owner=subject,
                            share_token=started["share_token"] or "")
         _own_by_room(subject, sid, room, started["meeting_id"])
+        _name_call(subject, sid, started["meeting_id"], request.headers.get("x-user-email") or "")
         rang = room_ring.ring(s, root, notifier, sid, caller=subject, caller_name=caller_name,
                               title=room.get("title") or "", only=ring_to, call_room=started["room"])
         who = with_["name"] if with_ else "the room"
@@ -405,5 +452,11 @@ def build(**d) -> APIRouter:
                 "say": (f"Calling {who}. Say that in one line with the room reference {{room_ref}} so the person "
                         f"opens it and joins; it rings for {RING_WINDOW_S} s. If `rang` is empty, nobody was "
                         "rung: say so.").replace("{room_ref}", f"[[room:{sid}]]")}
+
+    # THE FAST INTENT ROUTER'S DOOR (QB-5): the same handler, every guard included, for the chat route
+    # to run in-process when a person's own message is "call <person>". Registered, not re-implemented.
+    actions = d.get("intent_actions")
+    if isinstance(actions, dict):
+        actions["call_person"] = lambda request, person: call_person(request, CallBody(person=person))
 
     return router

@@ -26,6 +26,11 @@ type DockProps = {
   onOpenPrivate: (meetingId: number, room: string) => void;
   /** the chat's own name for a session — the dock never shows a raw id */
   nameOf?: (session: string) => string;
+  /** ANOTHER VIEW COVERS THE CONVERSATION (founder, live app.dev 2026-10-18: "call is live but I do not
+   *  have call controls here after I surfed the UI" — Meetings painted over the docked bar). The SAME
+   *  element then floats above every view as a compact bar, so the room is never unmounted and the
+   *  audio and video never drop or rejoin. One dock, always. */
+  floating?: boolean;
 };
 
 /** Hidden while `calls` is switched off (`platform/features`). */
@@ -45,7 +50,7 @@ function mentionInComposer() {
   box.focus();
 }
 
-function CallDockBody({ onOpenShared, onOpenPrivate, nameOf }: DockProps) {
+function CallDockBody({ onOpenShared, onOpenPrivate, nameOf, floating }: DockProps) {
   const { current } = useActiveCall();
   const show = useFeature("call_show");
   if (!current) return null;
@@ -59,7 +64,8 @@ function CallDockBody({ onOpenShared, onOpenPrivate, nameOf }: DockProps) {
   // DOCKED, NOT FLOATING (live app.dev: the call card covered the meeting's transcript drawer): it is
   // the top of the conversation column.
   return (
-    <aside aria-label={`Call: ${name}`} data-call="dock" className="vx-calldock vx-calldock-docked">
+    <aside aria-label={`Call: ${name}`} data-call="dock" data-floating={floating ? "" : undefined}
+      className={`vx-calldock ${floating ? "vx-calldock-floating" : "vx-calldock-docked"}`}>
       <Suspense fallback={<div className="vx-call-meta">Connecting…</div>}>
         <CallRoom call={c} name={name} nameWith={nameWith} onLeave={leaveCall} onName={() => onOpenShared(c.session)}
           onPrivate={() => { if (c.join.call.meeting_id) onOpenPrivate(c.join.call.meeting_id, c.join.call.room); }}

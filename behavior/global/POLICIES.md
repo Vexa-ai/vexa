@@ -88,6 +88,7 @@ model_event_agents: cheapest
 models_for:
 model_rules:
 model_levels:
+model_intent_router:
 appearance_accent: clay
 appearance_font_ui: geist
 appearance_font_reading: ui
@@ -733,7 +734,8 @@ its routes answer `feature_disabled`. On again, it is all there again.
 variable `VEXA_FEATURES`: empty (the release default) means every feature below is off, and a dev
 stack sets `all`. One line here overrides it per feature, read on every request:
 `features: {calls: on, notifications: off}`. The names are `shared_chats`, `notifications`, `calls`,
-`folder_drop`, `chat_history_tools`, `calendar_write`, `workspace_forget` and `agent_messages`.
+`folder_drop`, `chat_history_tools`, `calendar_write`, `workspace_forget`, `agent_messages` and
+`intent_router` (the fast intent router: simple asks run without a full agent turn).
 `crm`, `browser_bots`, `desktop` (which needs `crm`) and `desktop_cards` (which needs `crm` and `desktop`) run in services that do not read this
 file, so only the install switches them. A name that is not a feature is logged and ignored. **Adversarial.** Switching a feature on
 here puts something unproven in front of every person on this deployment. Switching one off hides
@@ -866,6 +868,7 @@ not offer shows as *unavailable* in Company mode and is skipped.
 - `models_for` — who may use which model: `model-id=all|someone@company.com|@company.com|group:name; …`. Empty: each catalog entry's own `allowed_subjects` still apply (their one-time seed).
 - `model_rules` — the router's rules, one task type to one model: `{routines: cheapest, events: 'level:2', home: cheapest, chat: <id>}`. A value is `cheapest` (the allowed model with the lowest market price), a catalog id, or `level:N`. It overlays `model_chat_default`, `model_routines`, `model_event_agents` and `model_home`; a rule naming a model `models_allowed` leaves out routes to the person's default, never around the policy. Empty: those four keys decide, as before.
 - `model_levels` — for hosted plans (the `levels` feature): the model each level 1 (fastest) to 5 (most capable) runs on, `{1: <id>, 3: <id>, 5: <id>}`. A level left out, or naming a model that is not allowed, is filled from the allowed models ordered by market price. Empty: all five come from that order.
+- `model_intent_router` — the small model the fast intent router (the `intent_router` feature) asks when its rules cannot tell whether a short message is one simple ask: a catalog id or `cheapest`. Empty: `model_home`. It must answer within 0.7 s or the message goes to the full agent.
 
 ## What the agent may spend on model calls
 

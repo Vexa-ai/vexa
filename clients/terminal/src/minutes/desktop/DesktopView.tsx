@@ -198,6 +198,7 @@ function HiddenWorkspaces({ count }: { count: number }) {
 
 export function DesktopView({ desktop }: { desktop: Desktop }) {
   const home2 = useFeature("home2");
+  const shell2Home = useFeature("shell2");
   const ids = desktop.sections.map((s) => s.id);
   const shown = desktop.sections.filter((s) => !s.hidden);
   const cardsOn = !!desktop.cards_on;
@@ -252,7 +253,8 @@ export function DesktopView({ desktop }: { desktop: Desktop }) {
           </span>
         </div>
       )}
-      {home2 && <NowStrip workspaces={workspaceItems} />}
+      {/* every live meeting at the top (founder O1, 2026-10-18): on shell2's Home as well as home2's */}
+      {(home2 || shell2Home) && <NowStrip workspaces={workspaceItems} />}
       <div className="vx-desk-sections">
         {shownSections.map((s) => <Section key={s.id} s={s} ids={ids} />)}
       </div>

@@ -35,6 +35,8 @@ THE KEYS (one line each, also documented in POLICIES.md):
                                    (chat · routines · events · home); overlays the four keys above
     model_levels                   hosted levels 1–5 → catalog ids: `{1: <id>, …, 5: <id>}`; a gap is
                                    filled from the allowed models by market price
+    model_intent_router            the small model the fast intent router asks when its rules are unsure
+                                   (a catalog id or `cheapest`; empty: `model_home`)
 """
 from __future__ import annotations
 
@@ -70,6 +72,8 @@ STR_KEYS = {
     # levels 1–5 table hosted plans pick from (the `levels` feature). Both empty by default.
     "model_rules": ("", ""),
     "model_levels": ("", ""),
+    # THE FAST INTENT ROUTER (QB-5, `intent_router`): its small model; empty falls back to `model_home`.
+    "model_intent_router": ("VEXA_MODEL_INTENT_ROUTER", ""),
     # THE COMPANY'S APPEARANCE DEFAULT (Settings → Appearance): what a person sees until they pick
     # their own. No environment variable — the company layer is the one place it is set.
     "appearance_accent": ("", ""),
@@ -193,7 +197,7 @@ def model_status(p: dict, available: Iterable[str]) -> list:
     """Every model the policy names, and whether the install offers it — `unavailable`, never a crash."""
     have = set(available)
     named = set(allowed_list(p) or []) | set((models_for(p) or {}).keys())
-    for k in ("model_chat_default", "model_routines", "model_home", "model_event_agents"):
+    for k in ("model_chat_default", "model_routines", "model_home", "model_event_agents", "model_intent_router"):
         v = str(p.get(k) or "")
         if v and v != "cheapest":
             named.add(v)

@@ -178,6 +178,7 @@ def create_app(
     email_subject_lookup: "Optional[object]" = None,
     meeting_note_recorder: "Optional[object]" = None,
     meeting_annotator: "Optional[object]" = None,
+    meeting_titler: "Optional[object]" = None,
     default_subject: str = "",
     session_store: "Optional[object]" = None,
     livekit: "Optional[object]" = None,
@@ -507,6 +508,9 @@ def create_app(
     # annotate on meeting-api; injectable for L2 tests, the same seam style as the two above. The
     # path stops being a thing two services each compose — whoever mints records, everybody reads.
     _meeting_annotator = meeting_annotator or meeting_mint_mod.http_annotator(
+        settings.meeting_api_url if settings is not None else "", internal_secret=_internal_secret_value)
+    # A CALL'S NAME (who or where, then its topic: call_names, founder O1 2026-10-18) — the same door.
+    _meeting_titler = meeting_titler or meeting_mint_mod.http_titler(
         settings.meeting_api_url if settings is not None else "", internal_secret=_internal_secret_value)
     _meeting_note_recorder = meeting_note_recorder or meeting_mint_mod.http_recorder(
         settings.meeting_api_url if settings is not None else "", internal_secret=_internal_secret_value)
@@ -1302,7 +1306,7 @@ def create_app(
         _global_root=_global_root, _global_store=_global_store,
         _internal_caller=_internal_caller, _manage_dir=_manage_dir,
         _meeting_note_recorder=_meeting_note_recorder, _meeting_annotator=_meeting_annotator,
-        _meeting_owner_lookup=_meeting_owner_lookup,
+        _meeting_titler=_meeting_titler, _meeting_owner_lookup=_meeting_owner_lookup,
         _meeting_transcript_lookup=_meeting_transcript_lookup, _member_error=_member_error, _pc=_pc,
         _read_target=_read_target, _repo=_repo, _require_shared_write=_require_shared_write,
         _resolve_room=_resolve_room, _scaffold_is_for=_scaffold_is_for,
@@ -1312,7 +1316,7 @@ def create_app(
         _ws_is_member=_ws_is_member, _ws_sync=_ws_sync, _ws_lookup=_ws_lookup, dispatcher=dispatcher,
         invocations_url=invocations_url, live=live, mindex=mindex,
         redis_url=redis_url, scaffolds=scaffolds, scheduler=scheduler, sess=sess,
-        session_store=session_store, notifier=notifier, invite_doors={}, livekit=livekit, call_share_redeemer=call_share_redeemer,
+        session_store=session_store, notifier=notifier, invite_doors={}, intent_actions={}, livekit=livekit, call_share_redeemer=call_share_redeemer,
         settings=settings, stream_reader=stream_reader,
         subject_of=subject_of,
         workspace_registry=workspace_registry, workspace_touches=workspace_touches, wsr=wsr)

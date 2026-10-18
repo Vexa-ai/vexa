@@ -115,12 +115,16 @@ export function ShareConfirm({ people, owner, preview, busy, error, onShare, onS
  *  choice after the chip, a tag unless the person picks otherwise. Inviting into the chat is for a
  *  Vexa account (and asks before sharing); a call rings a Vexa account, and for anyone else the
  *  agent drafts the invitation with the call's link for the person to send. */
-export function MentionChoice({ name, vexa, onChoose }: { name: string; vexa: boolean; onChoose: (i: "tag" | "chat" | "call") => void }) {
+export function MentionChoice({ name, vexa, onChoose, privateChat = false }: { name: string; vexa: boolean; onChoose: (i: "tag" | "chat" | "call") => void;
+  /** a private chat (founder O1, 2026-10-18): it is never shared from here, so no "Invite to this chat";
+   *  a call rings them in your room of two */
+  privateChat?: boolean }) {
+  const first = String(name ?? "").trim().split(/\s+/)[0] || name;
   return (
     <div role="group" aria-label={`What to do with ${name}`} className="vx-mention-choice" data-mention-choice="">
       <button type="button" data-choice="tag" className="vx-mention-choice-btn" onClick={() => onChoose("tag")}>Tag</button>
-      {vexa && <button type="button" data-choice="chat" className="vx-mention-choice-btn" onClick={() => onChoose("chat")}>Invite to this chat</button>}
-      <button type="button" data-choice="call" className="vx-mention-choice-btn" onClick={() => onChoose("call")}>Invite to a call</button>
+      {vexa && !privateChat && <button type="button" data-choice="chat" className="vx-mention-choice-btn" onClick={() => onChoose("chat")}>Invite to this chat</button>}
+      <button type="button" data-choice="call" className="vx-mention-choice-btn" onClick={() => onChoose("call")}>{privateChat && vexa ? `Call ${first}` : "Invite to a call"}</button>
     </div>
   );
 }

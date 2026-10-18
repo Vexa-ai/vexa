@@ -49,3 +49,13 @@
 .vx-show-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 ::highlight(vexa-show) { background-color: var(--accent-tint); color: inherit; }
 [data-show-highlight] { background: var(--accent-tint); border-radius: var(--radius-sm); }
+
+/* THE DOCK FLOATS WHEN ANOTHER VIEW COVERS THE CONVERSATION (founder, live app.dev 2026-10-18): the same
+   element, so the room stays connected; a compact bar above Meetings, Inbox, People and the pages sheet,
+   below popovers and dialogs. Kit surface and a line, no solid fill (7r). */
+.vx-calldock-floating { position: fixed; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  z-index: var(--z-drawer); width: min(760px, calc(100vw - 32px)); max-height: 40vh; overflow: visible; box-sizing: border-box;
+  padding: 6px 12px; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-2); }
+@media (max-width: 520px) {
+  .vx-calldock-floating { left: 16px; right: 16px; width: auto; transform: none; bottom: calc(8px + env(safe-area-inset-bottom)); padding: 4px 8px; }
+}

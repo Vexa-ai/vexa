@@ -118,6 +118,7 @@ def build(**d) -> APIRouter:
     mindex = d.get("mindex")
     sess = d.get("sess")
     _meeting_annotator = d.get("_meeting_annotator")
+    _meeting_titler = d.get("_meeting_titler")
     _global_root = d.get("_global_root")
 
     def _store():
@@ -152,7 +153,10 @@ def build(**d) -> APIRouter:
         return {"room": call["room"], "meeting_id": call["meeting_id"] or None, "owner": call["owner"],
                 "url": _livekit().url, "started": call["started"],
                 "transcribed": bool(meta.get("transcribed", True)),
-                "participants": room.get("num_participants", 0)}
+                "participants": room.get("num_participants", 0),
+                # who is in it now, by name (the listener is hidden and not here): the live row's faces
+                "in_now": [{"subject": p.get("identity") or "", "name": p.get("name") or ""}
+                           for p in (room.get("in_now") or [])][:12]}
 
     def _live_call(session_id: str) -> Optional[tuple[dict, dict]]:
         s = _store()
@@ -192,6 +196,25 @@ def build(**d) -> APIRouter:
             logger.warning("room ownership not recorded for call meeting %s (%s)", meeting_id,
                            type(exc).__name__)
 
+    def _name_call(subject, session_id: str, meeting_id, email: str = "") -> None:
+        """A CALL IS NAMED AFTER WHO OR WHERE (founder O1, 2026-10-18): "Call with Megan" in a room of
+        two, "#pilot call" in a named room; a private chat's call keeps the meeting rule's name. Never
+        fails the bind."""
+        if not meeting_id or _meeting_titler is None:
+            return
+        from control_plane import call_names, pair_rooms, people_directory  # noqa: PLC0415
+        try:
+            base = call_names.base_for(
+                _store(), session_id, str(subject),
+                is_pair=lambda ws: pair_rooms.is_pair(wsr.root, ws),
+                name_of=lambda who: people_directory.name_of(
+                    wsr.root, str(who), mindex.list if mindex else (lambda _s: []),
+                    email if str(who) == str(subject) else ""))
+            if base is not None:
+                call_names.name_call(_meeting_titler, str(subject), meeting_id, base)
+        except Exception as exc:  # noqa: BLE001 — the call is bound; its name is furniture
+            logger.warning("call %s not named (%s)", meeting_id, type(exc).__name__)
+
     @router.post("/api/sessions/{session}/call")
     def bind_call(session: SessionPath, body: BindCallBody, request: Request):
         """Bind the caller's call to this session. The room must exist and its metadata (written by
@@ -222,6 +245,7 @@ def build(**d) -> APIRouter:
         call = _store().bind_call(row["id"], room=body.room, meeting_id=body.meeting_id or 0, owner=str(subject),
                                   share_token=body.share_token or "")
         _own_by_room(subject, row, body.meeting_id)
+        _name_call(subject, row["id"], body.meeting_id, request.headers.get("x-user-email") or "")
         rang: list = []
         if notifier is not None:
             try:

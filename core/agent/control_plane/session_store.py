@@ -1108,6 +1108,14 @@ class SessionStore:
                            "ORDER BY started DESC LIMIT ?", (*ids, int(limit))).fetchall()
         return [self._call(r) for r in rows]
 
+    def live_calls_owned(self, owner: str, *, limit: int = 20) -> list[dict]:
+        """The calls ``owner`` started that have not ended, newest first (the topic rename pass,
+        ``call_names``)."""
+        with self._lock:
+            rows = self._x(f"SELECT {self._CALL_COLS} FROM agent_session_call WHERE owner = ? AND ended IS NULL "
+                           "ORDER BY started DESC LIMIT ?", (str(owner), int(limit))).fetchall()
+        return [c for c in (self._call(r) for r in rows) if c]
+
     def call_by_meeting(self, meeting_id: int) -> Optional[dict]:
         with self._lock:
             return self._call(self._x(f"SELECT {self._CALL_COLS} FROM agent_session_call "

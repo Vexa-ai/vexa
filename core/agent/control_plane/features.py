@@ -205,6 +205,16 @@ FEATURES: dict[str, dict] = {
         "explicit": True,
         "elsewhere": "the terminal shows no directory and no Make open",
     },
+    # THE FAST INTENT ROUTER (QB-5, AW-fast, TU-route): before a full turn, a person's own simple ask
+    # ("call @megan", "open the OeNB page") runs its action directly; anything unsure, complex or
+    # outbound goes to the full agent unchanged. In `all` (app.dev runs it); off in a release until
+    # proven; the company layer turns it off with `features: {intent_router: off}`. No route of its
+    # own: it lives inside `POST /api/chat`, which reads this switch per message.
+    "intent_router": {
+        "summary": "the fast intent router: simple asks (call a person, open a page) run without a full agent turn",
+        "routes": [],
+        "elsewhere": "off: every message is a full agent turn, as before",
+    },
     # Built on bbb, not in this release. Registered so they are off the moment they land; each adds
     # its routes here when it does.
     "home_stream": {"summary": "the home stream on a new chat", "routes": []},

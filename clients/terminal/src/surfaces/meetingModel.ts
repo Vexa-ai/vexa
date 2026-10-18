@@ -39,6 +39,12 @@ export interface MeetingMock {
   docs?: { workspace: string; path: string; title?: string; kind?: string }[];  // connected workspace docs (data.docs)
   artifacts_deleted?: boolean;  // its owner deleted the transcript + recordings (data.artifact_deletion)
   transcription_language?: MeetingLanguage;  // the language setting the bot runs with (data.transcription_language)
+  // A VEXA CALL (founder O1, 2026-10-18) — see liveMeetings `callFields`
+  call_session?: string;        // the session (s-…) the call is held in (data.session_id)
+  call_room?: string;           // the room it belongs to, when it was started in one (data.metadata.room)
+  completion_reason?: string;   // why it ended (data.completion_reason): `left_alone` = everyone left
+  renamed_from?: string;        // its who-or-where name before the topic renamed it (data.metadata.call_renamed_from)
+  call_with?: { subject: string; name: string }[];  // a call with one person: both of them
 }
 
 // ── meeting lifecycle phase (design-spec meeting-lifecycle-v2) ──────────────────────

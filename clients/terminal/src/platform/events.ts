@@ -135,3 +135,7 @@ export const NEW_ROOM_EVENT = "vexa:terminal:new-room";
 /** START A MEETING (shell2, the Meetings page, UI 7w): a new chat with a call in it, filed in My desk
  *  — "a call can be just a call", filed later. The shell owns the chat and the call. */
 export const START_MEETING_EVENT = "vexa:terminal:start-meeting";
+/** CALL A PERSON (founder O1, 2026-10-18): `detail` {subject, name}. Raised by a surface that cannot
+ *  reach the shell (an @-pick's "Call <name>" in a private chat); the shell rings them in the room of
+ *  two, asking to rejoin first when a call with them is already live (`shell2/StartMeeting.callPerson`). */
+export const CALL_PERSON_EVENT = "vexa:terminal:call-person";

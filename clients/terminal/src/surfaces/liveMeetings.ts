@@ -45,6 +45,12 @@ export interface MeetingRowDTO {
     artifact_deletion?: { state: "pending" | "completed"; [extra: string]: unknown } | null;
     // the language setting the bot runs with, and where it came from; rewritten on every live switch
     transcription_language?: { language?: string | null; allowed_languages?: string[] | null; source?: string } | null;
+    // A VEXA CALL (founder O1, 2026-10-18): the session it is held in, why it ended, and what it is
+    // called — who or where (`call_named`), renamed by its topic (`call_renamed_from`)
+    session_id?: string | null;
+    completion_reason?: string | null;
+    metadata?: { room?: string; call_named?: string; call_renamed_from?: string; call_kind?: string;
+      call_with?: { subject?: string; name?: string }[]; [extra: string]: unknown } | null;
   } | null;
 }
 
@@ -153,6 +159,23 @@ function fallbackTitle(platform: string, _native?: string | null): string {
   return word[platform] ?? "Meeting";
 }
 
+/** A Vexa call's own fields, read once here (founder O1, 2026-10-18): its session, its room, why it
+ *  ended, what it was called before its topic renamed it, and — for a call with one person — both of
+ *  them, so each side reads "Call with <the other>". */
+export function vexaCallFields(d: MeetingRowDTO): Partial<MeetingMock> {
+  if (d.platform !== "vexa_call") return {};
+  const meta = d.data?.metadata ?? {};
+  const out: Partial<MeetingMock> = {};
+  if (typeof d.data?.session_id === "string" && d.data.session_id) out.call_session = d.data.session_id;
+  if (typeof meta.room === "string" && meta.room) out.call_room = meta.room;
+  if (typeof d.data?.completion_reason === "string" && d.data.completion_reason) out.completion_reason = d.data.completion_reason;
+  if (typeof meta.call_renamed_from === "string" && meta.call_renamed_from) out.renamed_from = meta.call_renamed_from;
+  if (meta.call_kind === "person" && Array.isArray(meta.call_with)) {
+    out.call_with = meta.call_with.map((p) => ({ subject: String(p?.subject ?? ""), name: String(p?.name ?? "") })).filter((p) => p.name || p.subject);
+  }
+  return out;
+}
+
 function toMock(d: MeetingRowDTO): MeetingMock {
   const raw = displayStatus(d);
   const live = LIVE_STATUSES.has(d.status);
@@ -194,6 +217,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     docs: d.data?.docs ?? [],
     artifacts_deleted: artifactsDeleted(d),
     transcription_language: readMeetingLanguage(d.data?.transcription_language),
+    ...vexaCallFields(d),
     participants: [],
     mentioned: [],
     actions: [],

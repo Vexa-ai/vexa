@@ -274,6 +274,33 @@ def http_annotator(meeting_api_url: str, *, internal_secret: str = ""):
     return _annotate
 
 
+def http_titler(meeting_api_url: str, *, internal_secret: str = ""):
+    """``(subject, meeting_id, title, metadata=None) -> bool``: the owner-scoped annotate of a meeting's
+    TITLE (and merge-only metadata) as ``subject`` — how a call is named after who or where and renamed
+    by its topic (``call_names``). Never raises; no meeting service configured → False."""
+    base = (meeting_api_url or "").rstrip("/")
+
+    def _title(subject: str, meeting_id, title: str, metadata: Optional[dict] = None) -> bool:
+        if not base or not subject or not str(meeting_id).isdigit() or not str(title or "").strip():
+            return False
+        body: dict = {"title": str(title).strip()[:512]}
+        if metadata:
+            body["metadata"] = metadata
+        req = urllib.request.Request(
+            f"{base}/meetings/{int(meeting_id)}/annotate", data=json.dumps(body).encode(), method="POST",
+            headers={"X-User-Id": str(subject), "Content-Type": "application/json",
+                     **({"X-Internal-Secret": internal_secret} if internal_secret else {}),
+                     **obs.trace_headers()})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return 200 <= int(resp.status) < 300
+        except Exception as exc:  # noqa: BLE001 — the call runs; its name is furniture
+            logger.warning("naming meeting %s failed (%s)", meeting_id, exc)
+            return False
+
+    return _title
+
+
 def http_recorder(meeting_api_url: str, *, internal_secret: str = ""):
     """The default recorder: `POST {meeting_api_url}/meetings/{id}/annotate` as the caller — its
     `X-User-Id` over the internal tier (`X-Internal-Secret`), the only unsigned identity meeting-api

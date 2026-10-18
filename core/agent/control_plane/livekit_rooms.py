@@ -101,12 +101,23 @@ class LiveKit:
                 out = {"name": name, "metadata": parse_metadata(r.get("metadata")),
                        "num_participants": int(r.get("num_participants") or 0)}
                 if out["num_participants"]:
-                    out["humans"] = self._humans(name)
+                    people = self._people(name)
+                    # unknown: count everyone, never end a call on a failed read
+                    out["humans"] = len(people) if people is not None else 10 ** 6
+                    if people is not None:
+                        out["in_now"] = people
                 return out
         return None
 
     def _humans(self, room: str) -> int:
         """The PEOPLE in a room: every participant but the hidden ones (the call's listener)."""
+        people = self._people(room)
+        return len(people) if people is not None else 10 ** 6
+
+    def _people(self, room: str) -> Optional[list]:
+        """Who is in a room now — ``[{identity, name}]`` for every participant but the hidden ones (the
+        call's listener) — or None when the room service could not be read. The Meetings page's live
+        row shows them ("in now", founder O1 2026-10-18)."""
         import httpx
 
         try:
@@ -115,9 +126,10 @@ class LiveKit:
                               headers={"Authorization": f"Bearer {self._admin_token(room)}"})
             resp.raise_for_status()
             ps = (resp.json() or {}).get("participants") or []
-        except Exception:  # noqa: BLE001 — unknown: count everyone, never end a call on a failed read
-            return 10 ** 6
-        return sum(1 for p in ps if not ((p.get("permission") or {}).get("hidden")))
+        except Exception:  # noqa: BLE001
+            return None
+        return [{"identity": str(p.get("identity") or ""), "name": str(p.get("name") or p.get("identity") or "")}
+                for p in ps if not ((p.get("permission") or {}).get("hidden"))]
 
     def delete_room(self, room: str) -> bool:
         """End a call's room (Twirp ``DeleteRoom``): everyone in it is disconnected."""
