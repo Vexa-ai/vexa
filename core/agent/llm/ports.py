@@ -721,7 +721,7 @@ def _unlink_in_tree(work: Path, rel: str) -> None:
     never followed — the link itself is what ``added`` names and removes, not a file in whatever it
     points at. A directory component that is a link (or any resolution error) simply stops the walk;
     the top-level ``policy`` symlink is handled by the leaf branch below."""
-    wpaths.unlink_inside(work, rel)
+    wpaths.unlink_inside(work, rel, allow=(_POLICY_DIR,))   # the guard removes what a turn put in policy/ (reserved, D5)
 
 
 def _revert_policy_writes(work: Path, base_sha: Optional[str]) -> list[str]:
@@ -1058,6 +1058,9 @@ def run_harness_turn(
         released = private_guard.release_confirmed(confirm_text)
         if released:
             yield {"type": "write-released", "released": released}
+        # SAID BEFORE IT WRITES (friction 1, app.dev 2026-10-16): what the last turn did not save,
+        # and — while the session is marked — where its file writes will be held and what to use.
+        prompt = private_guard.preamble(mounts) + prompt
     done: Optional[dict] = None
     # Held in a NAME, not consumed inline, so the `finally` below has something to close. A caller
     # may stop reading this turn mid-stream — the write-back phase's budget does exactly that — and
@@ -1066,16 +1069,26 @@ def run_harness_turn(
                               model=model, mcp_config=mcp_config)
     try:
         for ev in stream:
-            if ev.get("type") == "done":
-                done = ev
             if private_guard is not None:
                 private_guard.observe(ev)
+            if "private_digests" in ev:
+                # the guard's alone: digests of what a private read said never leave the turn
+                ev = {k: v for k, v in ev.items() if k != "private_digests"}
+            if ev.get("type") == "done":
+                # HELD BACK until the commit phase below has run: a write it withholds is said
+                # INSIDE the turn, before `done`, and rides on it (friction 1) — never after the
+                # turn has ended, where nothing shows it.
+                done = ev
+                continue
             yield ev
     finally:
         close_event_stream(stream)
 
     if not commit:
+        if done is not None:
+            yield done
         return
+    withheld: list[dict] = []
 
     msg = commit_message or ((done or {}).get("reply") or "agent turn")
     # ONE NOTE PER MEETING (#1783): a native file write of a meeting's note into the chat's own
@@ -1087,8 +1100,21 @@ def run_harness_turn(
     if moved:
         yield {"type": "note-redirected", "notes": moved}
         if str(home.resolve()) not in {str(m.resolve()) for m in mounts}:
+            held_home = None
+            if private_guard is not None:
+                try:
+                    held_home = private_guard.hold(home)
+                except (OSError, ValueError, subprocess.CalledProcessError):
+                    held_home = {"failed": True}
+            if held_home:
+                if not held_home.get("failed"):
+                    from llm.private_writes import withheld_line  # noqa: PLC0415
+                    yield {"type": "write-withheld", **held_home}
+                    yield {"type": "message-delta", "text": withheld_line(held_home)}
             try:
-                sha = _commit_mount(home, message=msg, author=author)
+                home_msg = private_guard.commit_message(home, msg) if private_guard is not None else msg
+                sha = None if (held_home or {}).get("failed") else _commit_mount(home, message=home_msg,
+                                                                                author=author)
             except subprocess.CalledProcessError:
                 sha = None
             if sha:
@@ -1114,12 +1140,21 @@ def run_harness_turn(
                 continue
             if held:
                 from llm.private_writes import withheld_line  # noqa: PLC0415
+                withheld.append(held)
                 yield {"type": "write-withheld", **held}
                 yield {"type": "message-delta", "text": withheld_line(held)}
         try:
             # The guard's own removals are the ONLY `policy/` deletions this commit may record.
-            sha = _commit_mount(mount, message=msg, author=author, policy_removed=reverted)
+            # A marked session's body never reaches a mount other people read (D6): a fixed one does.
+            mount_msg = private_guard.commit_message(mount, msg) if private_guard is not None else msg
+            sha = _commit_mount(mount, message=mount_msg, author=author, policy_removed=reverted)
         except subprocess.CalledProcessError:
             continue  # one mount's commit failing must not abort the rest of the set
         if sha:
             yield {"type": "commit", "sha": sha}
+    if done is not None:
+        if withheld:
+            from llm.private_writes import withheld_line  # noqa: PLC0415
+            done = {**done, "withheld": withheld,
+                    "reply": str(done.get("reply") or "") + "".join(withheld_line(h) for h in withheld)}
+        yield done

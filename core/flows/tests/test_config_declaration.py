@@ -134,7 +134,8 @@ def test_the_mail_capability_names_its_keys_in_one_place():
     makes a half-configured mailbox visible as one thing rather than four rows apart."""
     assert set(cfg.MAIL_KEYS) <= set(cfg.DECLARED)
     readers = ((SRC / "flows_steps" / "emailx.py").read_text()
-               + (SRC / "flows_steps" / "mail_transport.py").read_text())
+               + (SRC / "flows_steps" / "mail_transport.py").read_text()
+               + (SRC / "flows_steps" / "mail_secret.py").read_text())
     for key in cfg.MAIL_KEYS:
         assert key in readers, f"{key} is grouped under the mail capability but nothing reads it"
 

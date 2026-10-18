@@ -2,6 +2,7 @@
 
     GET /api/people/followups   people the caller owes something, ranked (tool ``people_followups``)
     GET /api/people/discover    people worth knowing, inside what the caller may see (tool ``people_discover``)
+    GET /api/people/peers       every human the caller shares a workspace with, once each (the People list)
 
 The same items reach the new-chat home: ``build`` registers a ``people`` candidate source with the
 home's composer (``home_sources.register_source``), so follow-ups and discoveries are ranked into the
@@ -16,9 +17,10 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
-from control_plane import home, home_sources, people, people_directory
+from control_plane import home, home_sources, identity_token, people, people_directory, person_resolution, room_principal
 from control_plane import workspace_membership as membership_mod
 from control_plane.routers.home import _queue_waiting
 from workspaces.shared import workspace_paths as wpaths
@@ -46,13 +48,27 @@ def build(**d) -> APIRouter:
     def _index(w: str) -> list:
         return list(mindex.list(w) or []) if mindex is not None else []
 
-    def _colleagues(owner: str) -> list:
+    persons = d.get("person_resolver") or person_resolution.default()
+
+    def _colleagues_raw(owner: str) -> list:
+        """The directory rule, one row per account: who the caller shares a workspace with."""
         try:
             if colleagues_of is not None:
                 return list(colleagues_of(owner))
             return people_directory.mentionable(wsr.root, owner, _index) if wsr is not None else []
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _colleagues(owner: str) -> list:
+        try:
+            if colleagues_of is not None:
+                rows = list(colleagues_of(owner))
+            else:
+                rows = people_directory.mentionable(wsr.root, owner, _index) if wsr is not None else []
         except Exception:  # noqa: BLE001 — an unreadable directory names nobody
             return []
+        # D35: one row per Person (the picker and the People strip), "2 accounts" when several logins
+        return person_resolution.group_people(rows, persons)
 
     def _self_email(owner: str, hint: str = "") -> str:
         if hint:
@@ -193,6 +209,41 @@ def build(**d) -> APIRouter:
         introductions between two of the caller's contacts who met them about the same subject."""
         return _answer(request, "discover", limit)
 
+    @router.post("/api/people/me/accounts-merged")
+    def accounts_merged(request: Request):
+        """D35: the person confirmed on their merge card, from every login, that these accounts are all
+        theirs. Each of their accounts now gets the workspaces any of them is in (up to contributor),
+        so either address opens them. A person's own act (``person: true`` in routes.v1); nothing
+        happens unless the CRM says the person merged them."""
+        owner = str(subject_of(request))
+        if wsr is None or mindex is None:
+            return {"merged": False, "granted": 0}
+        return person_resolution.union_memberships(wsr.root, owner, request.headers.get("x-user-email") or "",
+                                                   mindex, persons)
+
+    @router.get("/api/people/{person}/profile")
+    def profile(person: str, request: Request):
+        """D35: a person's profile (their claimed CRM record's person-owned fields) under the directory
+        rule — the caller themself, or someone they share a workspace with. Anyone else is answered
+        exactly like someone with no profile. Never an org field."""
+        owner = str(subject_of(request))
+        email = request.headers.get("x-user-email") or ""
+        if person != owner:
+            row = next((p for p in _colleagues_raw(owner) if str(p.get("subject")) == person), None)
+            if row is None:
+                return {"subject": person, "profile": None}
+            email = str(row.get("email") or "")
+        return {"subject": person, "profile": persons.profiles([{"subject": person, "email": email}]).get(person)}
+
+    @router.get("/api/profiles/public/{handle}")
+    def public_profile(handle: str):
+        """A public profile page (``/p/<handle>``): capability-gated by the handle the person published,
+        no account needed; only the fields the person marked public. 404 otherwise."""
+        page = persons.public_profile(handle)
+        if page is None:
+            raise HTTPException(status_code=404, detail="no public profile")
+        return page
+
     @router.get("/api/people/known")
     def known(request: Request, limit: int = Query(default=200, ge=1, le=500),
               q: str = Query(default="", max_length=80)):
@@ -212,6 +263,30 @@ def build(**d) -> APIRouter:
         if needle:
             rows = [r for r in rows if needle in " ".join(str(x or "") for x in (
                 r["name"], r["person"].get("email"), r["person"].get("role"))).lower()]
+        return {"people": rows[:limit], "count": len(rows)}
+
+    @router.get("/api/people/peers")
+    def peers(request: Request, limit: int = Query(default=500, ge=1, le=2000)):
+        """EVERY HUMAN THE CALLER SHARES A WORKSPACE WITH (Slack-like; founder 2026-10-17, UI-1 People):
+        the union of the members of every group workspace the caller is a member of — the authoritative
+        rosters (``policy/members.json``), the same set the @ picker may add — each once, with their
+        role in each shared workspace. Nobody outside those rosters is named; people seen only in the
+        CRM are the CRM's to show, per the caller's CRM access.
+
+        ``shared: refuse``: a worker whose answer other people read (a room's turn, any
+        ``delegation.shared`` token) is refused with :data:`identity_token.SHARED_REFUSAL`, so a room
+        cannot enumerate the people of its members' other workspaces."""
+        headers = request.headers
+        if identity_token.is_shared(headers) or room_principal.is_room_unit(identity_token.session_of(headers)):
+            return JSONResponse(identity_token.SHARED_REFUSAL, status_code=403)
+        owner = str(subject_of(request))
+        rows = []
+        for p in _colleagues(owner):
+            ws = [w for w in (p.get("workspaces") or []) if w]
+            if not ws:
+                continue
+            rows.append({"subject": p.get("subject"), "name": p.get("name") or "", "email": p.get("email") or "",
+                         "workspaces": ws, "roles": dict(p.get("roles") or {})})
         return {"people": rows[:limit], "count": len(rows)}
 
     return router

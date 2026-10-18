@@ -145,6 +145,16 @@
       ]
     },
     {
+      "key": "VEXA_FACT_SEAL_SECRET",
+      "class": "capability",
+      "description": "The secret event.v2 fact envelopes are sealed under (PRD 0.13.4 D8). `POST /events` verifies a producer's envelope with HMAC-SHA256 under a per-producer key derived from it (`fact_envelope.producer_key`); an envelope that does not verify is refused 403 `envelope_unverified`. UNSET: INTERNAL_API_SECRET is used, which every producer on the internal tier already holds; set it (to the same value on every producer, e.g. crm's outbox) to give the seal its own rotation.",
+      "capability": "fact_seal_key",
+      "secret": true,
+      "targets": [
+        "compose"
+      ]
+    },
+    {
       "key": "VEXA_FLOWS_ADMIN_API_URL",
       "class": "required-explicit",
       "description": "identity's admin tier. NO HOST-PORT DEFAULT: `http://localhost:18057` is not 'unconfigured', it is A DIFFERENT DEPLOYMENT'S admin-api on any host running two stacks — found live 2026-09-03. A deployment default may name the SERVICE and lives in the deploy surface, never in code.",
@@ -267,6 +277,24 @@
       "description": "AUTH LOGIN password for a set relay; used only together with VEXA_MAIL_SMTP_USER.",
       "default": "",
       "secret": true,
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_RECIPIENT_ALLOW",
+      "class": "defaulted",
+      "description": "A comma list of exact addresses and domains (@example.org or example.org). When set, any message to a recipient not on it is NOT sent: it is diverted to the capture double (VEXA_MAIL_CAPTURE_SMTP) and logged as mail_diverted with no content. Every mail kind and channel (SMTP, Graph, RSVP). Unset: no restriction.",
+      "default": "",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MAIL_SMTP_PASSWORD_REF",
+      "class": "defaulted",
+      "description": "The relay password BY REFERENCE: broker:mail/<name>, read from the credential broker with the flows broker key (VEXA_FLOWS_SENSORS_BROKER_URL + VEXA_FLOWS_SENSORS_KEY_FILE). When set it is the only source; VEXA_MAIL_SMTP_PASSWORD is ignored. The operator stores the value once: python -m credential_broker.mail_secret put <name> (stdin) in the broker container.",
+      "default": "",
       "targets": [
         "compose"
       ]
@@ -501,6 +529,13 @@
       ]
     },
     {
+      "key": "VEXA_FLOWS_MAIL_AUTHSERV_ID",
+      "class": "capability",
+      "description": "The authserv-id this mailbox's own receiving server writes in Authentication-Results (e.g. mx.google.com). Set, only a verdict naming it counts; unset, the topmost one counts. A From: its domain did not vouch for (no DMARC pass, no aligned DKIM or SPF pass) is treated as a stranger's (D25).",
+      "capability": "mail_intake_policy",
+      "targets": []
+    },
+    {
       "key": "VEXA_FLOWS_MAIL_QUARANTINE_REPLY",
       "class": "capability",
       "description": "`1` answers a quarantined stranger ONCE with a fixed one-line template. Default off: any automatic reply to an unverified sender is a reflector.",
@@ -577,6 +612,33 @@
       "class": "capability",
       "description": "Extra Jitsi hosts a meeting link may live on, beyond meet.jit.si. The SAME setting meeting-api and the MCP service read — two parsers that disagree about what a link is accept different meetings.",
       "capability": "jitsi_hosts",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_NUDGES",
+      "class": "capability",
+      "description": "The delivery gate's worker pass (PRD 0.13.4 D15, S6). Unset is off: nothing is nudged outside the Inbox. `1` turns it on; the pack `flows_defs.nudges` arms the items.",
+      "capability": "nudges",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN",
+      "class": "defaulted",
+      "description": "The global floor under a person's idle window: no nudge email sooner than this many minutes after the in-app notice, whatever the person set.",
+      "default": "5",
+      "targets": [
+        "compose"
+      ]
+    },
+    {
+      "key": "VEXA_FLOWS_NUDGE_BUDGET_CEILING",
+      "class": "defaulted",
+      "description": "The global ceiling over a person's attention budget (deliveries outside the Inbox per local day, D32). The person's rule sets the cap below it; the floor is 1.",
+      "default": "12",
       "targets": [
         "compose"
       ]
@@ -693,9 +755,17 @@
       "description": "A narrower credential for `GET /timeline` than the operator key.",
       "when_unconfigured": "The timeline stays readable, by the operator key only."
     },
+    "fact_seal_key": {
+      "description": "A seal secret for event.v2 fact envelopes distinct from the internal-tier secret (D8).",
+      "when_unconfigured": "Envelopes are sealed and verified under INTERNAL_API_SECRET. Facts still admit by subject ∪ audience; only the key's rotation is shared with the internal tier."
+    },
     "crm_domain": {
       "description": "This deployment carries the optional CRM (ADR-0047): the flows_defs.crm pack hands workspace references to it.",
       "when_unconfigured": "The crm_references step answers `not_present`. A deployment without the CRM is a product, not a degraded state."
+    },
+    "nudges": {
+      "description": "The delivery gate (PRD 0.13.4 D15, S6): a card or room item waiting on a person reaches them in-app first, then one email after the idle window, then the digest, stopping the moment it is seen.",
+      "when_unconfigured": "No nudge leaves the Inbox. The Inbox itself is unchanged: it reads crm."
     },
     "agent_domain": {
       "description": "This deployment carries the agent domain (PRD decision 40.7: identity is the one shared dependency; meetings, agents and flows work independently and in any configuration).",

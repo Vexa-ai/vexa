@@ -6,5 +6,6 @@
   "max_concurrent": 0,
   "email": "admin@example.com",
   "is_admin": false,
-  "admin_account": true
+  "admin_account": true,
+  "credential_class": "key"
 }

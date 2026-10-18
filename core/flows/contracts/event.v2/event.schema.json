@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/event.v2",
+  "title": "event.v2",
+  "description": "A producer's fact into flows (`POST /events`) carrying a SEALED fact envelope (PRD 0.13.4 D8): the producing domain computes who the fact reaches (`audience`), whose it is (`owner`) and at what visibility, and seals it with a per-producer HMAC. flows strips any `_audience`/`_owner`/`_visibility`/`_lifecycle` a caller puts in `refs`, verifies the envelope (`fact_envelope.verify`), and admits a person's flow when the person is the subject (`refs.uid`) or in the audience. Refs are references, never bodies (M5); the envelope's keys are enumerated and a card's lifecycle coordination fields are the only card fields it may carry (C8). The seal itself is checked by `fact_envelope.py`, not by this schema.",
+  "$defs": {
+    "ShortString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "Lifecycle": {
+      "description": "A card's coordination fields — the ONLY card fields a fact may carry (C8). Never a title, a summary or any other content.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "$ref": "#/$defs/ShortString" },
+        "state": { "$ref": "#/$defs/ShortString" },
+        "next_actor": { "$ref": "#/$defs/ShortString" },
+        "next_check_at": { "$ref": "#/$defs/ShortString" },
+        "handoff": { "$ref": "#/$defs/ShortString" }
+      }
+    },
+    "Envelope": {
+      "description": "The sealed fact envelope. `sig` = hex HMAC-SHA256 over the canonical JSON (sorted keys, compact separators, UTF-8) of the envelope without `sig`, keyed by HMAC-SHA256(secret, \"vexa-fact-envelope:\" + producer).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["v", "producer", "object", "owner", "visibility", "audience", "sig"],
+      "properties": {
+        "v": { "const": 2 },
+        "producer": { "$ref": "#/$defs/ShortString", "description": "The producing domain; flows admits `crm`, `meetings`, `agent`." },
+        "object": { "$ref": "#/$defs/ShortString", "description": "What the fact is about: `card`, `record`, ..." },
+        "owner": { "$ref": "#/$defs/ShortString", "description": "The person id who owns the object." },
+        "visibility": { "enum": ["members", "workspace", "owner"] },
+        "audience": {
+          "type": "array",
+          "maxItems": 200,
+          "items": { "$ref": "#/$defs/ShortString" },
+          "description": "Person ids the fact reaches, and `ws:<slug>` for a workspace principal (which never matches a person)."
+        },
+        "lifecycle": { "$ref": "#/$defs/Lifecycle" },
+        "sig": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "Event": {
+      "description": "The `POST /events` body a sealing producer sends.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_type", "source_event_id", "refs"],
+      "properties": {
+        "event_type": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "source_event_id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "refs": {
+          "type": "object",
+          "description": "References only (M5). The keys `_audience`, `_owner`, `_visibility`, `_lifecycle` are reserved: flows drops them from every caller and sets them only from a verified envelope.",
+          "not": {
+            "anyOf": [
+              { "required": ["_audience"] }, { "required": ["_owner"] },
+              { "required": ["_visibility"] }, { "required": ["_lifecycle"] }
+            ]
+          }
+        },
+        "envelope": { "$ref": "#/$defs/Envelope" }
+      }
+    }
+  }
+}

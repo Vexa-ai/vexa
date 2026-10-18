@@ -157,16 +157,20 @@ DEFAULTS: dict[str, str] = {
     #
     # BYTE-FOR-BYTE `behavior/mail/workspace-invite.md`, on the same terms as `attendee-head`:
     # `test_the_baked_defaults_match_the_files_in_behavior_mail` reads both, for every template.
+    # {{place}} (PRD 0.13.4 S2) is the workspace, or "<room> in <workspace>" when the invite names a
+    # room — composed by the step from two names, so a template can say where without a URL and
+    # without any content: there is no message token, and none can be added (the step passes only
+    # the declared fields). {{workspace_name}} is still filled for an admin's older override.
     "workspace-invite": (
-        "subject: {{inviter}} invited you to {{workspace_name}}\n"
+        "subject: {{inviter}} invited you to {{place}}\n"
         "---\n"
         "I am Vexa, the meeting assistant at {{company}}. {{service}}\n"
         "\n"
-        "{{inviter}} invited you to {{workspace_name}} as a {{role}}. {{role_sentence}}\n"
+        "{{inviter}} invited you to {{place}} as a {{role}}. {{role_sentence}}\n"
         "\n"
         "{{visibility}}\n"
         "\n"
-        "The link below is yours alone — it signs you in, so please do not forward it.\n"
+        "The link below is yours alone — one click signs you in and opens it, so please do not forward it.\n"
     ),
     # BYTE-FOR-BYTE `behavior/mail/meeting-share.md`. Read by `mail_meeting_share` with two tokens
     # of its own, `{{inviter}}` and `{{title}}`; no URL — the step appends the link.

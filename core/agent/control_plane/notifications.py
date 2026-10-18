@@ -56,6 +56,8 @@ from __future__ import annotations
 
 from control_plane import display_name
 import json
+import re
+import urllib.parse
 import logging
 import time
 import uuid
@@ -66,11 +68,17 @@ logger = logging.getLogger("agent_api.notifications")
 KINDS = ("chat_added", "chat_shared", "chat_mentioned", "workspace_invited", "workspace_added",
          "invite_accepted", "invite_declined", "workspace_joined_via_link", "routine_posted",
          "call_started", "agent", "meeting_shared", "bot_scheduled", "bot_joined", "access_requested", "budget", "llm_budget",
-         "folders_migrated")
+         "folders_migrated", "room_added", "room_switch_ask", "chats_migrated",
+         "card_waiting", "card_slipped", "delivery_failed")
 #: The kinds another domain may hand in over the internal tier — meeting facts only. A chat or
 #: workspace notice is written by the agent-api route that performs the act, never from outside.
 MEETING_KINDS = ("meeting_shared", "bot_scheduled", "bot_joined")
-OBJECT_KINDS = ("chat", "workspace", "meeting", "record", "invite", "page", "none")
+#: The delivery gate's kinds (PRD 0.13.4 D15, S6): flows names a card that waits on the person (or
+#: slipped), or tells the person waiting that the nudge could not be delivered. Internal tier only,
+#: and the words are composed here from the two names like every other row — never a message.
+NUDGE_KINDS = ("card_waiting", "card_slipped", "delivery_failed")
+INTERNAL_KINDS = MEETING_KINDS + NUDGE_KINDS
+OBJECT_KINDS = ("chat", "workspace", "meeting", "record", "invite", "page", "card", "none")
 #: The words, by kind: ``{actor}`` and ``{object}`` are the only two holes.
 _TEXT = {
     "chat_added": "{actor} added you to the chat “{object}”",
@@ -93,6 +101,15 @@ _TEXT = {
     "llm_budget": "AI usage reached {object}",
     # the folders migration (rooms, R1): the object IS the sentence, written by agent-api
     "folders_migrated": "{object}",
+    # rooms and tagging (0.13.4 S4): an add from a tag card, and the other person's consent card
+    "room_added": "{actor} added you to “{object}”",
+    "room_switch_ask": "{actor} asks to turn a switch back on in “{object}”",
+    # the shared-chat migration (D10): the object IS the sentence, written by agent-api
+    "chats_migrated": "{object}",
+    # the delivery gate (S6): a card's title and who is waiting — nothing else
+    "card_waiting": "{actor} is waiting on you: “{object}”",
+    "card_slipped": "“{object}” is past its date",
+    "delivery_failed": "Couldn't deliver the nudge for “{object}” by email",
 }
 #: THE AGENT'S OWN NOTICE (`notify`, founder: "agents need tooling to use that"). Its text is the
 #: agent's one line — the one kind whose words are not composed here — so it is bounded and posted
@@ -110,6 +127,24 @@ KEEP = 500
 #: this window refreshes that row instead of stacking a duplicate — ten mentions are one line.
 COALESCE_SEC = 600
 LIST_MAX = 200
+#: D16 (PRD 0.13.4): A NOTICE IS A NOTIFICATION ROW WITH AN EXPIRY. It is passing information that
+#: needs nothing (never a card, never routed); once ``expires_at`` passes it is gone from every read —
+#: listed, counted, fetched — and the next write sweeps it. ``None`` keeps a row until KEEP pushes it
+#: out (invites and other acts that wait for an answer). A caller may set its own ``expires_in``.
+DAY = 86_400.0
+DEFAULT_TTL = {"agent": 7 * DAY, "call_started": 1 * DAY, "routine_posted": 7 * DAY, "chat_mentioned": 14 * DAY}
+TTL_MAX = 90 * DAY
+
+
+def expiry(kind: str, now: float, expires_in: Optional[float] = None) -> Optional[float]:
+    """When a notice of ``kind`` written ``now`` expires: the caller's ``expires_in`` (clamped to
+    1 s..TTL_MAX), else the kind's default, else never (None)."""
+    ttl = DEFAULT_TTL.get(kind) if expires_in is None else max(1.0, min(float(expires_in), TTL_MAX))
+    return None if ttl is None else now + ttl
+
+
+#: The predicate every read adds: the row has not expired.
+LIVE = "(expires_at IS NULL OR expires_at > ?)"
 
 
 def channel(recipient: str) -> str:
@@ -136,14 +171,40 @@ def text_for(kind: str, actor_name: str, object_name: str) -> str:
 
 def _public(r) -> dict:
     return {"id": r[0], "kind": r[2], "actor": {"id": r[3], "name": r[4]},
-            "object": {"kind": r[5], "id": r[6], "name": r[7], **({"url": r[8]} if r[8] else {})},
+            "object": {"kind": r[5], "id": r[6], "name": r[7],
+                       **({"url": r[8]} if r[8] and not is_invite_ref(r[8]) else {})},
             "text": r[9], "created": float(r[10]), "read": r[11] is not None,
             "actions": actions_for(r[2], r[12], bool(r[8])), **({"state": r[12]} if r[12] else {})}
 
 
+#: AN INVITE NOTICE STORES THE INVITE'S ID, NEVER ITS TOKEN (PRD 0.13.4 M2, security review: "the
+#: plaintext invite token is stored in a notification row"). The ``url`` column of a
+#: ``workspace_invited`` row holds ``invite:<workspace>/<invite id>``; the act resolves it
+#: server-side, and the public row carries no url for it (there is nothing for a client to follow).
+#: Rows written before 0.13.4 still hold ``/join?i=<token>``; ``scrub_invite_tokens`` rewrites them.
+INVITE_REF_PREFIX = "invite:"
+_INVITE_REF = re.compile(r"^invite:([A-Za-z0-9._-]{1,128})/([A-Za-z0-9]{1,64})$")
+
+
+def invite_ref(workspace: str, invite_id: str) -> Optional[str]:
+    """The stored reference to one invite, or None when either half is missing."""
+    ref = f"{INVITE_REF_PREFIX}{workspace}/{invite_id}"
+    return ref if _INVITE_REF.match(ref) else None
+
+
+def parse_invite_ref(ref: str) -> Optional[tuple[str, str]]:
+    m = _INVITE_REF.match(str(ref or ""))
+    return (m.group(1), m.group(2)) if m else None
+
+
+def is_invite_ref(url) -> bool:
+    return bool(url) and str(url).startswith(INVITE_REF_PREFIX)
+
+
 #: WHAT A NOTICE LETS ITS RECIPIENT DO, inline in the toast and the list (founder 2026-10-13: an
 #: invite he could not accept from its notification). `open` goes to the object; the others are acts.
-ACTIONS = {"workspace_invited": ("accept", "decline"), "call_started": ("join", "decline")}
+ACTIONS = {"workspace_invited": ("accept", "decline"), "call_started": ("join", "decline"),
+           "room_switch_ask": ("accept", "decline")}
 
 
 def actions_for(kind: str, acted, has_url: bool) -> list:
@@ -186,16 +247,19 @@ class Notifier:
 
     # ── writing ──────────────────────────────────────────────────────────────────────────────
     def emit(self, recipients: Iterable[str], *, kind: str, actor: str, actor_name: str = "",
-             object_kind: str, object_id: str, object_name: str = "", url: Optional[str] = None) -> list[dict]:
+             object_kind: str, object_id: str, object_name: str = "", url: Optional[str] = None,
+             expires_in: Optional[float] = None) -> list[dict]:
         """Store one row per recipient (never the actor themself) and publish it to them. Returns the
-        rows written. Never raises: the act this reports has already happened."""
+        rows written. Never raises: the act this reports has already happened. ``expires_in``: a notice
+        worth showing only for so long (a ring, while its call can still be live) — past it, it is
+        neither listed nor counted."""
         try:
             if kind not in KINDS or object_kind not in OBJECT_KINDS or not object_id:
                 raise ValueError(f"not a notification: {kind}/{object_kind}")
             text = text_for(kind, actor_name, object_name)
             who = [str(r) for r in dict.fromkeys(recipients or []) if r and str(r) != str(actor)]
             out = [self._write(r, kind, str(actor), _name(actor_name, ""), object_kind, str(object_id),
-                               _name(object_name, ""), url, text) for r in who]
+                               _name(object_name, ""), url, text, expires_in) for r in who]
         except Exception as exc:  # noqa: BLE001 — a notification never fails its act
             logger.warning("notification %s not recorded (%s)", kind, type(exc).__name__)
             return []
@@ -203,20 +267,25 @@ class Notifier:
             self._send(r, {"type": "notification", "notification": row})
         return out
 
-    def _write(self, recipient, kind, actor, actor_name, object_kind, object_id, object_name, url, text) -> dict:
+    def _write(self, recipient, kind, actor, actor_name, object_kind, object_id, object_name, url, text,
+               expires_in=None) -> dict:
         s, now = self._store, self._clock()
+        until = expiry(kind, now, expires_in)
         with s._tx():
+            s._x("DELETE FROM agent_session_notification WHERE recipient = ? AND expires_at IS NOT NULL "
+                 "AND expires_at <= ?", (recipient, now))
             same = s._x(f"SELECT {_COLS} FROM agent_session_notification WHERE recipient = ? AND kind = ? "
                         "AND actor = ? AND object_id = ? AND read_at IS NULL AND created >= ? "
                         "ORDER BY created DESC", (recipient, kind, actor, object_id, now - COALESCE_SEC)).fetchone()
             if same is not None:
-                s._x("UPDATE agent_session_notification SET created = ?, text = ?, object_name = ?, actor_name = ? "
-                     "WHERE id = ?", (now, text, object_name, actor_name, same[0]))
+                s._x("UPDATE agent_session_notification SET created = ?, text = ?, object_name = ?, actor_name = ?, "
+                     "expires_at = ? WHERE id = ?", (now, text, object_name, actor_name, until, same[0]))
                 nid = same[0]
             else:
                 nid = f"n-{uuid.uuid4().hex[:16]}"
                 s._x(f"INSERT INTO agent_session_notification ({_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
                      (nid, recipient, kind, actor, actor_name, object_kind, object_id, object_name, url, text, now))
+                s._x("UPDATE agent_session_notification SET expires_at = ? WHERE id = ?", (until, nid))
                 old = s._x("SELECT id FROM agent_session_notification WHERE recipient = ? AND read_at IS NOT NULL "
                            "ORDER BY created DESC", (recipient,)).fetchall()
                 total = s._x("SELECT COUNT(*) FROM agent_session_notification WHERE recipient = ?",
@@ -228,11 +297,14 @@ class Notifier:
                     s._x("DELETE FROM agent_session_notification WHERE id = ?", (oid,))
                     over -= 1
             row = s._x(f"SELECT {_COLS} FROM agent_session_notification WHERE id = ?", (nid,)).fetchone()
-        return _public(row)
+        out = _public(row)
+        if expires_in is not None and until is not None:
+            out["expires_at"] = until        # a notice asked to expire says when (a ring, S4)
+        return out
 
     def agent_post(self, owner: str, recipients: list, *, text: str, source: str, source_name: str,
                    object_kind: str, object_id: str, object_name: str = "", url: Optional[str] = None,
-                   run_unit: str = "") -> dict:
+                   run_unit: str = "", expires_in: Optional[float] = None) -> dict:
         """The agent's own notice (`notify`), as ``owner``'s agent. The caller has checked who may
         receive it; this enforces the budget: AGENT_PER_HOUR per owner, one per routine run
         (``run_unit``), and identical text to one person within COALESCE_SEC posted once.
@@ -259,6 +331,8 @@ class Notifier:
                      "VALUES (?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
                      (nid, r, actor, _name(source_name, "Your agent"), object_kind, str(object_id),
                       _name(object_name, ""), url, text, now, run_unit or source))
+                s._x("UPDATE agent_session_notification SET expires_at = ? WHERE id = ?",
+                     (expiry("agent", now, expires_in), nid))
                 used += 1
                 posted.append(r)
                 rows.append((r, _public(s._x(f"SELECT {_COLS} FROM agent_session_notification WHERE id = ?",
@@ -286,13 +360,40 @@ class Notifier:
         except Exception as exc:  # noqa: BLE001 — the row is stored; the next load shows it
             logger.warning("notification publish failed (%s)", type(exc).__name__)
 
+    def scrub_invite_tokens(self, resolve: Callable[[str], Optional[tuple]]) -> int:
+        """M2 MIGRATION: rewrite every ``workspace_invited`` row that still stores a ``/join?i=<token>``
+        link into ``invite:<ws>/<id>``. ``resolve(token)`` answers ``(workspace, invite id)`` or None;
+        a token nothing resolves is dropped (the row then offers no Accept — the invite is gone).
+        Idempotent; returns how many rows changed. Never raises."""
+        changed = 0
+        try:
+            s = self._store
+            with s._tx():
+                rows = s._x("SELECT id, url FROM agent_session_notification WHERE kind = 'workspace_invited' "
+                            "AND url IS NOT NULL AND url NOT LIKE 'invite:%'").fetchall()
+                for nid, url in rows:
+                    m = re.search(r"[?&]i=([^&#]+)", str(url or ""))
+                    new = None
+                    if m:
+                        try:
+                            got = resolve(urllib.parse.unquote(m.group(1)))
+                        except Exception:  # noqa: BLE001 — an unreadable store resolves nothing
+                            got = None
+                        if got:
+                            new = invite_ref(str(got[0]), str(got[1]))
+                    s._x("UPDATE agent_session_notification SET url = ? WHERE id = ?", (new, nid))
+                    changed += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("invite-token scrub of notifications failed (%s)", type(exc).__name__)
+        return changed
+
     # ── reading (always the caller's own rows) ───────────────────────────────────────────────
     def get(self, recipient: str, nid: str) -> Optional[dict]:
         """One of the recipient's own rows with its stored link (``_url``), or None — never another's."""
         s = self._store
         with s._lock:
-            r = s._x(f"SELECT {_COLS} FROM agent_session_notification WHERE id = ? AND recipient = ?",
-                     (str(nid), str(recipient))).fetchone()
+            r = s._x(f"SELECT {_COLS} FROM agent_session_notification WHERE id = ? AND recipient = ? AND {LIVE}",
+                     (str(nid), str(recipient), self._clock())).fetchone()
         return None if r is None else {**_public(r), "_url": r[8]}
 
     def settle(self, recipient: str, nid: str, acted: Optional[str]) -> dict:
@@ -312,16 +413,16 @@ class Notifier:
     def unread_count(self, recipient: str) -> int:
         s = self._store
         with s._lock:
-            return int(s._x("SELECT COUNT(*) FROM agent_session_notification WHERE recipient = ? AND read_at IS NULL",
-                            (str(recipient),)).fetchone()[0])
+            return int(s._x(f"SELECT COUNT(*) FROM agent_session_notification WHERE recipient = ? AND read_at IS NULL "
+                            f"AND {LIVE}", (str(recipient), self._clock())).fetchone()[0])
 
     def listing(self, recipient: str, *, unread_only: bool = False, limit: int = 50,
                 before: Optional[float] = None) -> dict:
         """``{notifications: [...newest first], unread: n}`` — the caller's own rows only."""
         s = self._store
         limit = max(1, min(int(limit or 50), LIST_MAX))
-        sql = f"SELECT {_COLS} FROM agent_session_notification WHERE recipient = ?"
-        args: list = [str(recipient)]
+        sql = f"SELECT {_COLS} FROM agent_session_notification WHERE recipient = ? AND {LIVE}"
+        args: list = [str(recipient), self._clock()]
         if unread_only:
             sql += " AND read_at IS NULL"
         if before is not None:
@@ -332,6 +433,19 @@ class Notifier:
         with s._lock:
             rows = s._x(sql, args).fetchall()
         return {"notifications": [_public(r) for r in rows], "unread": self.unread_count(recipient)}
+
+    def state(self, recipient: str, ids: Iterable[str]) -> dict:
+        """Read state of some of ONE recipient's rows, for the delivery gate (S6): ``{id: {read,
+        acted}}``. A row that is not theirs, or no longer stored, is absent — never another person's."""
+        want = [str(i) for i in dict.fromkeys(ids or []) if i][:200]
+        if not want:
+            return {}
+        s = self._store
+        marks = ",".join("?" for _ in want)
+        with s._tx():
+            rows = s._x(f"SELECT id, read_at, acted FROM agent_session_notification WHERE recipient = ? "
+                        f"AND id IN ({marks})", (str(recipient), *want)).fetchall()
+        return {r[0]: {"read": r[1] is not None, "acted": r[2]} for r in rows}
 
     def mark_read(self, recipient: str, ids: Optional[Iterable[str]] = None, *, every: bool = False) -> dict:
         """Mark the caller's own rows read: the named ``ids`` (an id that is not theirs is not

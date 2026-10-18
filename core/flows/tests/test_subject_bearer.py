@@ -119,8 +119,8 @@ def identity(monkeypatch):
 
     ident = Identity()
     ident.set({
-        "anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["legacy"]}),
-        "ben-key": (200, {"user_id": 512, "email": "ben@vexa.test", "scopes": ["legacy"]}),
+        "anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["legacy"], "credential_class": "session"}),
+        "ben-key": (200, {"user_id": 512, "email": "ben@vexa.test", "scopes": ["legacy"], "credential_class": "session"}),
     })
     return ident
 
@@ -402,7 +402,7 @@ def queue_subject(monkeypatch):
     here; `tests/test_queue_waiting.py` owns what the projection answers."""
     asked = []
 
-    def waiting(_db, *, subject, flows, limit, identity=None):
+    def waiting(_db, *, subject, flows, limit, identity=None, room=None):
         # `identity=` is B1: the route hands the projection the (uid, email) pair it already
         # resolved from the caller's own credential, rather than making it re-ask admin-api for a
         # fact `/internal/validate` returned on the way in.
@@ -478,7 +478,7 @@ UNWATCHED = ["autonomous", "", "root", None, ...]
 @pytest.fixture
 def workers(identity):
     """Anna's own key, plus one worker token acting for Anna per regime."""
-    table = {"anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["legacy"]}),
+    table = {"anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["legacy"], "credential_class": "session"}),
              "vxd_human": _worker_answer("human"),
              "vxd_human_upper": _worker_answer(" Human ")}
     for i, regime in enumerate(UNWATCHED):
@@ -647,16 +647,25 @@ def test_the_refusal_is_the_one_every_service_answers_with():
 # filing a friction report into Vexa's own sink, with the body every service answers it with.
 
 SHARED_OPEN = {("POST", "/friction")}
+#: …and the one route that ANSWERS a shared turn with less instead of refusing it (friction 7,
+#: 2026-10-16): `whats_waiting`, narrowed to what every reader of the room can see.
+SHARED_NARROWED = {("GET", "/queue/waiting")}
 
 
 @pytest.fixture
 def shared_workers(identity):
-    table = {"anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["legacy"]}),
+    table = {"anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["legacy"], "credential_class": "session"}),
              "vxd_shared": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["bot"],
                                   "is_admin": False, "person_is_admin": False,
                                   "delegation": {"regime": "human", "workspaces": ["team"],
                                                  "shared": True}}),
-             "vxd_private": _worker_answer("human")}
+             "vxd_private": _worker_answer("human"),
+             # D2: a room's turn as the WORKSPACE principal; refused even if `shared` went missing
+             "vxd_room": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["bot", "tx"],
+                                "is_admin": False, "person_is_admin": False,
+                                "delegation": {"regime": "human", "workspaces": ["team"],
+                                               "principal_kind": "workspace", "principal_workspace": "team",
+                                               "on_behalf_of": "127", "bills_to": 126}})}
     identity.set(table)
     return identity
 
@@ -664,14 +673,17 @@ def shared_workers(identity):
 def test_a_shared_workers_caller_says_so(monkeypatch, shared_workers):
     monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://admin-api:8001")
     assert subject_auth.resolve("vxd_shared", secret="s").is_shared
+    assert subject_auth.resolve("vxd_room", secret="s").is_shared, "a workspace principal is shared (D2)"
     assert not subject_auth.resolve("vxd_private", secret="s").is_shared
     assert not subject_auth.resolve("anna-key", secret="s").is_shared
 
 
-@pytest.mark.parametrize("method,path", sorted(set(fa.DELEGATED_REACH) - SHARED_OPEN))
-def test_a_shared_turn_is_refused_every_flows_route(client, shared_workers, monkeypatch, method, path):
+@pytest.mark.parametrize("method,path", sorted(set(fa.DELEGATED_REACH) - SHARED_OPEN - SHARED_NARROWED))
+@pytest.mark.parametrize("token", ["vxd_shared", "vxd_room"])
+def test_a_shared_turn_is_refused_every_flows_route(client, shared_workers, monkeypatch, method, path,
+                                                     token):
     monkeypatch.setattr(fa, "fetch_meetings", lambda uid: [])
-    r = _call(client, method, path, "vxd_shared")
+    r = _call(client, method, path, token)
     assert r.status_code == 403, f"{method} {path} -> {r.status_code}: {r.text[:200]}"
     assert r.json()["detail"] == subject_auth.SHARED_REFUSAL
     assert fa.db.execute(
@@ -686,6 +698,70 @@ def test_a_private_turn_is_not_refused_by_the_shared_rule(client, shared_workers
     detail = r.json().get("detail") if r.headers.get("content-type", "").startswith(
         "application/json") and isinstance(r.json(), dict) else None
     assert detail != subject_auth.SHARED_REFUSAL
+
+
+#: Anna's queue as the room sees it: the two private rows above (her standup, her invite) plus one
+#: item scoped to the room's workspace `team`, one to a workspace the room cannot read, and one to
+#: her own home (the workspace named by her uid) — which is private however it is spelled.
+ROOM_ROWS = {
+    "r-anna-team": {"uid": "126", "workspace": "team", "title": "Team retro"},
+    "r-anna-elsewhere": {"uid": "126", "workspace": "board", "title": "Board prep"},
+    "r-anna-home": {"uid": "126", "workspace": "126", "title": "Anna's own notes"},
+    "r-anna-mail": {"organizer": "anna@vexa.test", "workspace": "", "title": "Anna's private mail"},
+}
+
+
+def _seed_room_rows():
+    for rid, refs in ROOM_ROWS.items():
+        fa.db.execute(
+            """INSERT INTO reaction (reaction_id, source_event_id, event_type, subject_refs,
+                                     flow, flow_version, step, status, attempt, next_run_at,
+                                     reason, created_at, updated_at)
+               VALUES (:rid,:sid,'meeting.completed',:refs,'post_meeting',1,'email_minutes',
+                       'admitted',0,0,NULL,:c,:c)""",
+            {"rid": rid, "sid": f"{rid}::post_meeting", "refs": json.dumps(refs), "c": T0})
+
+
+def test_a_shared_turn_gets_the_room_scoped_queue_not_a_refusal(client, shared_workers):
+    """Friction 7 (live 12:42): `whats_waiting` in a room answers with what every reader of the
+    room can see — items scoped to a workspace on the shared ceiling — instead of 403."""
+    _seed_room_rows()
+    r = client.get("/queue/waiting", headers=bearer("vxd_shared"))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["scope"] == "room"
+    assert {x["id"] for x in body["items"]} == {"r-anna-team"}
+    assert body["waiting"] == 1
+
+
+def test_the_room_scoped_queue_never_carries_the_persons_private_items(client, shared_workers):
+    """THE LEAK RULE (ADR-0048 decision 4): nothing of the person's private queue — her meetings,
+    invites, mail, home-workspace items, other workspaces — and not even how many were withheld."""
+    _seed_room_rows()
+    body = client.get("/queue/waiting", headers=bearer("vxd_shared")).json()
+    text = json.dumps(body)
+    for private in ("r-anna-uid", "r-anna-email", "r-anna-elsewhere", "r-anna-home", "r-anna-mail",
+                    "standup", "Anna's invite", "Board prep", "own notes", "private mail"):
+        assert private not in text, private
+    assert body["quiet"] == 0 and "withheld" not in body
+    # …and the same person in her private chat still sees her whole queue
+    whole = client.get("/queue/waiting", headers=bearer("anna-key")).json()
+    assert {"r-anna-uid", "r-anna-email", "r-anna-team", "r-anna-home"} <= {x["id"] for x in whole["items"]}
+    assert "scope" not in whole
+
+
+def test_a_shared_turn_with_no_readable_workspace_sees_an_empty_queue(client, identity):
+    """FAILS CLOSED: a shared ceiling that names no workspace (or `*`, never a shared answer) gets
+    nothing, not the person's queue."""
+    for ws in ([], "*", None):
+        identity.set({"vxd_shared": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["bot"],
+                                           "delegation": {"regime": "human", "workspaces": ws,
+                                                          "shared": True}})})
+        _seed_room_rows() if not fa.db.execute(
+            "SELECT 1 FROM reaction WHERE reaction_id='r-anna-team'") else None
+        r = client.get("/queue/waiting", headers=bearer("vxd_shared"))
+        assert r.status_code == 200, r.text
+        assert r.json()["items"] == [] and r.json()["scope"] == "room"
 
 
 def test_the_shared_refusal_is_the_one_every_service_answers_with():

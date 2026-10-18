@@ -89,6 +89,9 @@ spec:
             # ADR-0047 d5: each workspace's record links, published per commit.
             - name: VEXA_CRM_REFERENCES_POLL_S
               value: {{ .Values.crm.referencesPollSeconds | quote }}
+            # PRD 0.13.4 D35: which Person each account resolves to (POST /internal/persons).
+            - name: CRM_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "crm-api") }}:8300"
             {{- end }}
             - name: VEXA_FLOWS_API_KEY
               valueFrom:

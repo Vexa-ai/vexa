@@ -879,16 +879,16 @@ def test_omitting_platform_searches_everything(client, gateway, auth):
 
 
 # --- a typo must not look like success ---------------------------------------
-# FastAPI ignores unknown query params, so `get_meeting_transcript(limit=2)` — no such parameter —
+# FastAPI ignores unknown query params, so `get_meeting_transcript(limit=2)` — before `limit` existed —
 # returned 200 with the argument dropped. For an agent that is the worst failure available: the
 # wrong answer is indistinguishable from the right one.
 
 def test_an_unknown_argument_is_refused(client, gateway, auth):
     before = len(gateway.requests)
     r = client.get("/meeting-transcript",
-                   params={"native_meeting_id": "abc-defg-hij", "limit": 2}, headers=auth)
+                   params={"native_meeting_id": "abc-defg-hij", "page_size": 2}, headers=auth)
     assert r.status_code == 422
-    assert "limit" in r.text
+    assert "page_size" in r.text
     assert len(gateway.requests) == before, "an unknown argument must not reach the gateway"
 
 
@@ -950,3 +950,73 @@ def test_a_short_transcript_is_one_complete_page(client, gateway, auth):
     _transcript_route(gateway, 3)
     body = client.get("/meeting-transcript?native_meeting_id=abc-defg-hij", headers=auth).json()
     assert body["complete"] is True and "note" not in body
+
+
+# --- the caller chooses the page: `limit` and an upper bound `until_index` -------------------
+# Friction (2026-10-16): one get_meeting_transcript answer was 54 KB. The default page of 200 is
+# still too big for a caller that wants a slice; `limit` sizes the page and `until_index` stops it
+# at a fixed point, and the answer says whether more remains and where to resume.
+
+def _get(client, auth, qs):
+    return client.get(f"/meeting-transcript?native_meeting_id=abc-defg-hij&{qs}", headers=auth)
+
+
+def test_limit_sizes_the_page_and_says_where_to_resume(client, gateway, auth):
+    _transcript_route(gateway, 10)
+    body = _get(client, auth, "limit=3").json()
+    assert [s["text"] for s in body["segments"]] == ["line 0", "line 1", "line 2"]
+    assert body["next_index"] == 3 and body["has_more"] is True and body["complete"] is False
+    assert body["total_segments"] == 10
+    assert "since_index=3" in body["note"]
+
+
+def test_limit_with_since_index_pages_through_the_whole_transcript(client, gateway, auth):
+    _transcript_route(gateway, 7)
+    seen, nxt = [], 0
+    for _ in range(10):
+        page = _get(client, auth, f"since_index={nxt}&limit=3").json()
+        seen += [s["text"] for s in page["segments"]]
+        nxt = page["next_index"]
+        if not page["has_more"]:
+            break
+    assert seen == [f"line {i}" for i in range(7)]
+    assert page["complete"] is True and "note" not in page
+
+
+def test_until_index_is_an_exclusive_upper_bound(client, gateway, auth):
+    _transcript_route(gateway, 10)
+    body = _get(client, auth, "since_index=2&until_index=5").json()
+    assert [s["text"] for s in body["segments"]] == ["line 2", "line 3", "line 4"]
+    assert body["until_index"] == 5 and body["next_index"] == 5
+    # The asked-for range is whole, but the transcript is not: say so, without claiming it ended.
+    assert body["has_more"] is False and body["complete"] is False
+
+
+def test_limit_and_until_index_together_stop_at_the_nearer_bound(client, gateway, auth):
+    _transcript_route(gateway, 10)
+    body = _get(client, auth, "until_index=8&limit=2").json()
+    assert [s["text"] for s in body["segments"]] == ["line 0", "line 1"]
+    assert body["has_more"] is True and body["next_index"] == 2
+    assert "since_index=2" in body["note"] and "until_index=8" in body["note"]
+
+
+def test_until_index_past_the_end_is_clamped(client, gateway, auth):
+    _transcript_route(gateway, 4)
+    body = _get(client, auth, "until_index=99").json()
+    assert len(body["segments"]) == 4 and body["complete"] is True and body["has_more"] is False
+    assert body["until_index"] == 4
+
+
+def test_the_default_page_is_reported_as_a_cap(client, gateway, auth):
+    _transcript_route(gateway, 250)
+    body = _get(client, auth, "since_index=0").json()
+    assert len(body["segments"]) == 200 and body["has_more"] is True
+    assert body["limit"] == 200
+
+
+def test_paging_bounds_are_validated(client, gateway, auth):
+    _transcript_route(gateway, 4)
+    assert _get(client, auth, "limit=0").status_code == 422
+    assert _get(client, auth, "limit=201").status_code == 422
+    assert _get(client, auth, "until_index=-1").status_code == 422
+    assert _get(client, auth, "since_index=5&until_index=3").status_code == 422

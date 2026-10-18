@@ -117,6 +117,19 @@ def test_a_shared_turn_is_refused_the_person_s_meetings(client, method, path, bo
     assert r.json()["detail"] == SHARED_REFUSAL
 
 
+@pytest.mark.parametrize("method,path,body", SHARED_READS)
+def test_a_workspace_principal_is_refused_the_payer_s_meetings(client, method, path, body):
+    """D2: a room's turn as the workspace principal reads none of its payer's meetings (`sub` 7 stands
+    in for any account here) — even with the `shared` flag missing."""
+    from meeting_api.identity_token import SHARED_REFUSAL
+
+    r = _send(client, method, path, body,
+              _signed(regime="human", workspaces=["ws_1"], principal_kind="workspace",
+                      principal_workspace="ws_1", on_behalf_of="8", bills_to=7))
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"] == SHARED_REFUSAL
+
+
 def test_a_private_turn_still_reads_its_person_s_meetings(client):
     r = client.get("/meetings", headers=_signed(regime="human", workspaces="*"))
     assert r.status_code == 200
@@ -194,3 +207,26 @@ def test_a_routine_without_the_grant_is_still_refused(client):
                     _signed(regime="autonomous", workspaces=["7"], grants=["bot.request"])):
         r = _send(client, "POST", "/bots", GATED[0][2], headers)
         assert r.status_code == 403 and r.json()["detail"] == REFUSAL
+
+
+# ── int-s1: a room's bot is keyed to its payer (D2) ──────────────────────────────────────────────
+def test_a_workspace_principals_bot_is_keyed_to_its_payer(client, monkeypatch):
+    """A room's turn runs as the workspace principal (its own account runs no bot). A bot it sends
+    into its own workspace is the payer's (`bills_to`): row, concurrency count and spend."""
+    from meeting_api.bot_spawn import router as spawn_router
+
+    seen = {}
+
+    async def fake_request_bot(*_a, **kw):
+        seen.update(kw)
+        return {"id": 1, "status": "requested"}
+    monkeypatch.setattr(spawn_router, "request_bot", fake_request_bot)
+    claims = {"sub": "900", "scopes": ["bot", "tx"], "limits": 2, "workspaces": ["ws_1"],
+              "writable_workspaces": ["ws_1"],
+              "delegation": {"regime": "human", "workspaces": ["ws_1"], "shared": True,
+                             "principal_kind": "workspace", "principal_workspace": "ws_1",
+                             "on_behalf_of": "8", "bills_to": 7}}
+    r = _send(client, "POST", "/bots",
+              {"platform": "google_meet", "native_meeting_id": "abc-defg-hij", "workspace_id": "ws_1"},
+              {identity_token.HEADER: identity_token.sign(KEY, claims)})
+    assert seen.get("user_id") == 7, (r.status_code, r.text[:300], seen.get("user_id"))

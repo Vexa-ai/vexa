@@ -16,5 +16,6 @@
   "workspaces": [
     "ws_team_1"
   ],
-  "admin_account": false
+  "admin_account": false,
+  "credential_class": "key"
 }

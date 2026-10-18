@@ -36,6 +36,7 @@ from typing import Callable, Iterable, Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from shared import stream_bounds
+from shared import taint as taint_mod
 from shared.units import (delegation_key, inbox_cursor_key, input_topic, output_topic, send_now_key,
                           stop_key)
 
@@ -49,7 +50,7 @@ MODE_SHARED = "shared"
 _LABEL = b"vexa-workload-redis.v1"
 #: The commands a worker sends. Connection-level ones (AUTH, and CLIENT SETINFO which redis-py
 #: tolerates being refused) need no grant.
-WORKER_COMMANDS = ("xadd", "xread", "xrange", "xrevrange", "set", "get", "ping")
+WORKER_COMMANDS = ("xadd", "xread", "xrange", "xrevrange", "set", "get", "ping", "hgetall", "hset", "expire")
 #: A user younger than this is never swept: its dispatch may not have reached the runtime yet.
 SWEEP_GRACE_SEC = 15 * 60
 
@@ -100,6 +101,10 @@ def acl_rules(unit_id: str, password: str, *, read_only_input: bool = True) -> l
             + [f"~{_glob_literal(send_now_key(unit_id))}"]
             # STOP: agent-api writes the press, the worker reads and clears it (live 2026-10-15)
             + [f"~{_glob_literal(stop_key(unit_id))}"]
+            # THE PRIVACY MARK (D6, `shared.taint`): the edge's marks on this unit and its
+            # conversation are read-only here; the worker writes only its own observations
+            + [read_only + _glob_literal(k) for k in taint_mod.keys_for(unit_id)[:2]]
+            + [f"~{_glob_literal(taint_mod.keys_for(unit_id)[2])}"]
             + ["resetchannels", "-@all"]
             + [f"+{c}" for c in WORKER_COMMANDS])
 

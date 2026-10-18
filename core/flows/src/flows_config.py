@@ -61,6 +61,12 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "capability", None,
         "a read-only key that opens the timeline projection and nothing else. Unset = only the "
         "operator key opens it."),
+    "VEXA_FACT_SEAL_SECRET": (
+        "capability", None,
+        "the secret event.v2 fact envelopes are sealed under (D8): `POST /events` verifies a "
+        "producer's envelope with HMAC-SHA256 keyed per producer from it. Read through "
+        "`fact_envelope.SEAL_SECRET_ENV`. Unset = INTERNAL_API_SECRET, which every producer on the "
+        "internal tier already holds; set it to give the seal its own rotation."),
 
     # ── service endpoints: THE DOORS ────────────────────────────────────────
     #
@@ -181,6 +187,8 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     "VEXA_MAIL_SMTP_TLS_INSECURE": ("defaulted", "0", "1 = skip the relay's certificate check under _SECURE; development only."),
     "VEXA_MAIL_SMTP_USER": ("defaulted", "", "AUTH LOGIN user for a set relay; used only with VEXA_MAIL_SMTP_PASSWORD."),
     "VEXA_MAIL_SMTP_PASSWORD": ("defaulted", "", "AUTH LOGIN password for a set relay, a P14 SECRET; used only with VEXA_MAIL_SMTP_USER."),
+    "VEXA_MAIL_RECIPIENT_ALLOW": ("defaulted", "", "a comma list of exact addresses and domains; when set, mail to anybody else is diverted to the capture double (VEXA_MAIL_CAPTURE_SMTP) and logged `mail_diverted`, never sent (PRD 0.13.4 S2). Unset: no restriction."),
+    "VEXA_MAIL_SMTP_PASSWORD_REF": ("defaulted", "", "the relay password BY REFERENCE, `broker:mail/<name>` — read from the credential broker with the flows broker key (PRD 0.13.4 S2); when set it is the only source and VEXA_MAIL_SMTP_PASSWORD is ignored."),
     # THE IMAP ENDPOINT and the relay's TLS policy — `flows_steps/mail_transport.py`. Every default
     # is the Gmail preset, so a deployment that names none of these behaves exactly as before.
     "VEXA_MAIL_IMAP_HOST": ("defaulted", "imap.gmail.com",
@@ -261,6 +269,12 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "it means the mailbox's own domain, exactly as `VEXA_FLOWS_ATTENDEE_DOMAINS` unset means "
         "the organizer's. A sender who is neither a known user nor inside it gets no account, no "
         "agent turn and no model spend — only a quarantine row."),
+    "VEXA_FLOWS_MAIL_AUTHSERV_ID": (
+        "capability", None,
+        "the authserv-id this mailbox's own receiving server writes in `Authentication-Results` "
+        "(e.g. `mx.google.com`). Set, only a verdict naming it counts; unset, the topmost one counts "
+        "(the receiving server prepends its own). A mail whose `From:` the domain did not vouch "
+        "for (no DMARC pass, no aligned DKIM or SPF pass) is treated as a stranger's (D25)."),
     "VEXA_FLOWS_MAIL_QUARANTINE_REPLY": (
         "capability", None,
         "`1` answers a quarantined stranger ONCE with a fixed one-line template — no model, no "
@@ -318,6 +332,20 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "pack and starts without it reacts to none of that pack's events, silently, for as long "
         "as nobody looks."),
     "VEXA_JITSI_HOSTS": ("capability", None, "extra Jitsi hosts a meeting link may live on, beyond meet.jit.si."),
+    # ── nudges: the delivery gate (PRD 0.13.4 D15, D32; S6) ─────────────────
+    "VEXA_FLOWS_NUDGES": (
+        "capability", None,
+        "the delivery gate's worker pass (flows_delivery.run). UNSET IS OFF: no card or room item "
+        "is nudged outside the Inbox, and the in-app Inbox is unchanged (it reads crm). `1` turns "
+        "it on; the pack `flows_defs.nudges` arms the items."),
+    "VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN": (
+        "defaulted", "5",
+        "the global FLOOR under a person's idle window: no email for an item sooner than this many "
+        "minutes after its in-app notice, whatever the person set (D15 tuning line, global floor)."),
+    "VEXA_FLOWS_NUDGE_BUDGET_CEILING": (
+        "defaulted", "12",
+        "the global CEILING over a person's attention budget: deliveries outside the Inbox per "
+        "local day (D32). The person's rule sets the cap below it; the floor is 1."),
     "VEXA_FLOWS_USER_KEY_TTL_S": (
         "defaulted", "900",
         "how long a minted gateway token lives AND how long this process reuses it. One 20-person "
@@ -334,14 +362,15 @@ DECLARED: dict[str, tuple[str, object, str]] = {
 #: store; a service that reads a secret store itself is the shape decision 18(c) removed.
 SECRETS = frozenset({
     "INTERNAL_API_SECRET", "VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SECRET",
-    "VEXA_FLOWS_ADMIN_KEY", "VEXA_FLOWS_API_KEY", "VEXA_FLOWS_TIMELINE_KEY",
+    "VEXA_FLOWS_ADMIN_KEY", "VEXA_FLOWS_API_KEY", "VEXA_FLOWS_TIMELINE_KEY", "VEXA_FACT_SEAL_SECRET",
     "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_PASSWORD",
 })
 
 #: The mail capability's keys, in one place so a half-declared control is visible as one.
 MAIL_KEYS = ("VEXA_MAIL_ADDR", "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_HOST",
              "VEXA_MAIL_SMTP_PORT", "VEXA_MAIL_SMTP_SECURE", "VEXA_MAIL_SMTP_TLS_INSECURE",
-             "VEXA_MAIL_SMTP_USER", "VEXA_MAIL_SMTP_PASSWORD", "VEXA_MAIL_SMTP_TLS",
+             "VEXA_MAIL_SMTP_USER", "VEXA_MAIL_SMTP_PASSWORD", "VEXA_MAIL_SMTP_PASSWORD_REF",
+             "VEXA_MAIL_RECIPIENT_ALLOW", "VEXA_MAIL_SMTP_TLS",
              "VEXA_MAIL_SMTP_CA_FILE", "VEXA_MAIL_IMAP_HOST", "VEXA_MAIL_IMAP_PORT",
              "VEXA_MAIL_IMAP_TLS", "VEXA_MAIL_IMAP_USER", "VEXA_MAIL_IMAP_FOLDER",
              "VEXA_MAIL_IMAP_CA_FILE", "VEXA_MAIL_SMTP_FROM", "VEXA_MAIL_REPLY_TO",

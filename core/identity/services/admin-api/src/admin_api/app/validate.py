@@ -94,10 +94,17 @@ class DelegationCeiling(BaseModel):
     # the unattended verbs its person granted it, and the routine they belong to; omitted when none
     grants: Optional[List[str]] = None
     flow: Optional[str] = None
+    # D2 (0.13.4): the token named a WORKSPACE principal (a room's turn); `user_id` is then that
+    # principal's own id, `bills_to` the account it debits. Omitted for a person's worker.
+    principal_kind: Optional[Literal["workspace"]] = None
+    principal_workspace: Optional[str] = None
+    on_behalf_of: Optional[str] = None
+    bills_to: Optional[int] = None
 
 
 class ValidatedIdentity(BaseModel):
-    """Who the bearer is. The first five fields are always present; the rest only when they apply."""
+    """Who the bearer is. The first five fields and `credential_class` are always present; the rest
+    only when they apply."""
     user_id: int
     scopes: List[str]
     max_concurrent: int
@@ -128,6 +135,11 @@ class ValidatedIdentity(BaseModel):
     # worker is never the account; `person_admin_account` says whether its person is.
     admin_account: Optional[bool] = None
     person_admin_account: Optional[bool] = None
+    # THE CREDENTIAL CLASS (D13, MIGRATION-0010) — always stated, positive evidence: `session` for the
+    # terminal's signed-in browser (minted only by `POST /internal/sessions`), `key` for every other
+    # API key (legacy rows included), `delegation` for a worker's `vxd_` token. A decision that must
+    # be a person's own act asks for `session`; a resolver that finds it missing reads "not one".
+    credential_class: Literal["session", "key", "delegation"]
 
 
 def identity_of(user: User, *, scopes: List[str], is_admin: bool) -> Dict[str, Any]:
@@ -186,6 +198,25 @@ async def _validate_delegation(token: str, db: AsyncSession) -> Dict[str, Any]:
     except (TypeError, ValueError):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: malformed")
     ceiling = _ceiling(claims.get("scope"))
+    # WHO THE TOKEN ACTS AS (D2): a person, or a WORKSPACE principal (a room's turn). A workspace
+    # principal's `sub` is its own numeric id — an account row that owns nothing of a person's — so
+    # every service keyed on an account keeps working and none of them reaches a member's things.
+    # The claims must agree with identity's table (kind, workspace, active, a payer that exists).
+    principal = delegation_mod.principal_of(claims)
+    is_ws = principal["kind"] == delegation_mod.PRINCIPAL_KIND_WORKSPACE
+    ws_row = None
+    if is_ws:
+        from . import principals as principals_mod  # noqa: PLC0415
+        ws_row = await principals_mod.lookup(db, uid)
+        if (ws_row is None or ws_row.kind != principals_mod.KIND_WORKSPACE
+                or ws_row.status != principals_mod.STATUS_ACTIVE
+                or ws_row.workspace_id != principal["workspace"] or not ws_row.bills_to
+                or not principal["on_behalf_of"] or not ceiling.get("shared")
+                or not isinstance(ceiling.get("workspaces"), list) or "grants" in ceiling):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: principal")
+    elif claims.get("principal_kind") is not None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: principal")
+    ceiling_subject = str(uid)
     user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: no such user")
@@ -197,14 +228,35 @@ async def _validate_delegation(token: str, db: AsyncSession) -> Dict[str, Any]:
     # resolvers apply; `"*"` (a person in the loop) keeps every membership.
     if "workspaces" in resp:
         resp["workspaces"] = [w for w in resp["workspaces"] if delegation_mod.ceiling_reads(
-            ceiling["workspaces"], w, subject=str(uid))]
+            ceiling["workspaces"], w, subject=ceiling_subject)]
     # The WRITE set is narrowed by the ceiling's own rule (`ceiling_allows`), never by the read
     # result: reads also include what every subject reads (`_global`), and a worker must not be
     # able to put a meeting into `_global` because its person happens to edit it (R1801-7).
     if "writable_workspaces" in resp:
         resp["writable_workspaces"] = [w for w in resp["writable_workspaces"] if delegation_mod.ceiling_allows(
-            ceiling["workspaces"], w, subject=str(uid))]
+            ceiling["workspaces"], w, subject=ceiling_subject)]
+    if is_ws:
+        # A workspace principal's account holds no membership rows: it reads its own workspace and
+        # what its ceiling mounts read-only, and writes its workspace only if the ceiling does.
+        listed = [str(w) for w in ceiling["workspaces"]]
+        reads = [w[len(delegation_mod.READ_ONLY_PREFIX):] if w.startswith(delegation_mod.READ_ONLY_PREFIX) else w
+                 for w in listed]
+        resp["workspaces"] = sorted(set(reads))
+        writable = [w for w in listed if not w.startswith(delegation_mod.READ_ONLY_PREFIX)]
+        if writable:
+            resp["writable_workspaces"] = sorted(set(writable))
+        else:
+            resp.pop("writable_workspaces", None)
     resp["delegation"] = ceiling
+    if is_ws:
+        resp["delegation"]["principal_kind"] = delegation_mod.PRINCIPAL_KIND_WORKSPACE
+        resp["delegation"]["principal_workspace"] = ws_row.workspace_id
+        resp["delegation"]["on_behalf_of"] = principal["on_behalf_of"]
+        resp["delegation"]["bills_to"] = int(ws_row.bills_to)
+        # A ROOM'S BOTS ARE ITS PAYER'S (int-s1): meeting-api keys a principal's bot to `bills_to`,
+        # so the concurrency cap it pre-checks is the payer's, never the principal account's 0.
+        payer = (await db.execute(select(User).where(User.id == int(ws_row.bills_to)))).scalar_one_or_none()
+        resp["max_concurrent"] = int(payer.max_concurrent_bots) if payer is not None else 0
     if claims.get("target"):
         resp["delegation"]["target"] = str(claims["target"])
     # THE SESSION, from inside the signature (Vexa-ai/vexa#1783): the unit agent-api minted the token
@@ -213,11 +265,13 @@ async def _validate_delegation(token: str, db: AsyncSession) -> Dict[str, Any]:
         resp["delegation"]["unit"] = claims["unit"].strip()
         obs.set_session(resp["delegation"]["unit"])
     obs.log_event("delegation_validated", audience="system", user_id=str(uid),
-                  fields={"regime": ceiling["regime"]})
-    resp["person_is_admin"] = signin_allow.is_admin(
+                  fields={"regime": ceiling["regime"], **({"principal_kind": "workspace"} if is_ws else {})})
+    # A WORKSPACE IS NEVER THE ADMIN (D2): the payer's admin bit is not the room's to borrow.
+    resp["person_is_admin"] = False if is_ws else signin_allow.is_admin(
         user.email, user.data, signin_allow.admin_emails()[0])
-    resp["person_admin_account"] = bool(resp["admin_account"])
+    resp["person_admin_account"] = False if is_ws else bool(resp["admin_account"])
     resp["admin_account"] = False
+    resp["credential_class"] = "delegation"
     return resp
 
 
@@ -330,6 +384,11 @@ async def validate_token(payload: ValidateRequest, request: Request,
     if not row:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=INVALID_TOKEN)
     api_token, user = row
+    # A WORKSPACE PRINCIPAL's account (D2) is never a key holder: nothing mints one, and a row that
+    # somehow carries one is refused rather than answered as a person.
+    from . import principals as principals_mod  # noqa: PLC0415
+    if principals_mod.is_principal_account(user):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=INVALID_TOKEN)
 
     if api_token.expires_at is not None and api_token.expires_at < datetime.utcnow():
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Token expired")
@@ -338,4 +397,7 @@ async def validate_token(payload: ValidateRequest, request: Request,
 
     scopes = list(api_token.scopes) if api_token.scopes else ["legacy"]
     is_admin = signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0])
-    return ValidatedIdentity.model_validate(identity_of(user, scopes=scopes, is_admin=is_admin))
+    from .sessions import credential_class_of  # noqa: PLC0415
+    resp = identity_of(user, scopes=scopes, is_admin=is_admin)
+    resp["credential_class"] = credential_class_of(api_token)
+    return ValidatedIdentity.model_validate(resp)

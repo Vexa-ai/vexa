@@ -12,7 +12,8 @@
       "scopes": [
         "bot"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -20,35 +21,40 @@
       "scopes": [
         "bot"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
       "path": "/bot-accounts/sessions/{session_id}",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/bot-accounts/sessions/{session_id}",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/bot-accounts/sessions/{session_id}/view/{path:path}",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
       "path": "/bot-accounts/{account_id}",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -56,14 +62,16 @@
       "scopes": [
         "bot"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/bots",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -71,7 +79,8 @@
       "scopes": [
         "bot"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "allow"
     },
     {
       "method": "GET",
@@ -79,7 +88,8 @@
       "scopes": [
         "bot"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
@@ -87,7 +97,8 @@
       "scopes": [
         "bot"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -95,7 +106,8 @@
       "scopes": [
         "bot"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "PUT",
@@ -103,7 +115,8 @@
       "scopes": [
         "bot"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -111,14 +124,16 @@
       "scopes": [
         "bot"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/voice-notes/{native_meeting_id}/stream",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -126,7 +141,8 @@
       "scopes": [
         "bot"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -134,21 +150,24 @@
       "scopes": [
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/meetings",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/meetings/import",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
@@ -156,7 +175,8 @@
       "scopes": [
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -164,35 +184,40 @@
       "scopes": [
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "PATCH",
       "path": "/meetings/{meeting_id}",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/meetings/{meeting_id}/export",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/meetings/{meeting_id}/export",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/meetings/{meeting_id}/ics",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -200,63 +225,72 @@
       "scopes": [
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/meetings/{meeting_id}/access",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PATCH",
       "path": "/meetings/{meeting_id}/access",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/meetings/{meeting_id}/share",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
       "path": "/meetings/{meeting_id}/share/{grant_id}",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
       "path": "/meetings/{meeting_id}/viewers/{viewer_id}",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/meetings/{meeting_id}/transcript-import",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
       "path": "/meetings/{platform}/{native_meeting_id}",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PATCH",
       "path": "/meetings/{platform}/{native_meeting_id}",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -264,14 +298,16 @@
       "scopes": [
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "PUT",
       "path": "/meetings/{platform}/{native_meeting_id}/intent",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -279,21 +315,24 @@
       "scopes": [
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/meetings/{platform}/{native_meeting_id}/share",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/meetings/{platform}/{native_meeting_id}/workspace",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -302,14 +341,16 @@
         "bot",
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
       "path": "/recordings/{recording_id}",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -318,7 +359,8 @@
         "bot",
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -326,7 +368,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -335,7 +378,8 @@
         "bot",
         "tx"
       ],
-      "upstream": "/recordings/{recording_id}/media/{media_file_id}/raw"
+      "upstream": "/recordings/{recording_id}/media/{media_file_id}/raw",
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -343,7 +387,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -351,7 +396,8 @@
       "scopes": [
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "allow"
     },
     {
       "method": "POST",
@@ -359,7 +405,8 @@
       "scopes": [
         "tx"
       ],
-      "upstream": "/meetings/{meeting_id}/share"
+      "upstream": "/meetings/{meeting_id}/share",
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -367,14 +414,16 @@
       "scopes": [
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/transcripts/share/accept",
       "scopes": [
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -382,7 +431,8 @@
       "scopes": [
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "allow"
     },
     {
       "method": "POST",
@@ -390,35 +440,40 @@
       "scopes": [
         "tx"
       ],
-      "upstream": "/meetings/{platform}/{native_meeting_id}/share"
+      "upstream": "/meetings/{platform}/{native_meeting_id}/share",
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/user/calendar/sync",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/user/calendar/sync",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/user/calendars/{calendar_id}/sync",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/user/calendars/{calendar_id}/sync",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -427,7 +482,8 @@
         "bot",
         "tx"
       ],
-      "upstream": "/webhooks/deliveries"
+      "upstream": "/webhooks/deliveries",
+      "shared": "refuse"
     }
   ]
 }

@@ -111,6 +111,13 @@ def main() -> int:
                     print(f"ticked {len(ticked)} sensor(s)", flush=True)
             except Exception as exc:  # noqa: BLE001 — a sensor pass never stops the loop
                 print(f"sensor pass failed: {type(exc).__name__}", flush=True)
+            # THE DELIVERY GATE (PRD 0.13.4 D15, S6): in-app first, one email after the idle window,
+            # then the digest — stopping the moment crm says the item is seen. Off unless declared.
+            if flows_config.get_bool("VEXA_FLOWS_NUDGES"):
+                from flows_delivery import run as _delivery
+                done = _delivery.tick(db, clock)
+                if any(v for k, v in done.items() if k in ("notified", "emailed", "digest_digests")):
+                    print(f"delivery pass: {done}", flush=True)
             # …and a fire the person's daily cap refused says so in the routine's chat, once a day.
             if common.domain_present("agent"):
                 from flows_steps import routine as _routine

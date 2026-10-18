@@ -17,7 +17,7 @@ parent keeps the ORM classes only as a legacy READ fallback guarded by
 `to_regclass('public.recordings') IS NOT NULL`, so omitting the tables is safe.
 """
 from sqlalchemy import (
-    Column, String, Text, Integer, DateTime, Float,
+    Column, String, Text, Integer, BigInteger, DateTime, Float, Boolean,
     ForeignKey, Index, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY
@@ -130,6 +130,96 @@ class User(Base):
     )
 
 
+class Principal(Base):
+    """WHO A TOKEN ACTS AS when it is not a person (MIGRATION-0009, PRD 0.13.4 D2).
+
+    A room's turn runs as its WORKSPACE, not as any member: a numeric principal of kind
+    ``workspace``, so every consumer that coerces a subject to ``int`` keeps working while nothing
+    of any person is reachable through it. The principal's id IS a ``users.id`` — a dedicated account
+    row (email ``ws-<id>@principal.invalid``, ``data.principal_kind = "workspace"``, no API key, no
+    sign-in, no bots) — so foreign keys and meters that key on an account need no second id space.
+
+    - ``kind``: ``person`` (an account acting as itself; implicit, no row is written for one) or
+      ``workspace``.
+    - ``workspace_id``: the workspace a ``workspace`` principal is the agent of; unique among them.
+    - ``bills_to``: the account its spend debits (the workspace owner's pool). identity answers it
+      beside the principal; it never widens what the principal reaches.
+    - ``status``: ``active`` or ``disabled``. identity refuses a disabled principal's tokens.
+
+    There is no persons table: the human is the CRM person record (crm-api, ADR-0047 d3)."""
+    __tablename__ = "principals"
+
+    id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    kind = Column(String(16), nullable=False, server_default=text("'workspace'"), default="workspace")
+    workspace_id = Column(String(255), nullable=True)
+    bills_to = Column(Integer, ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
+    status = Column(String(16), nullable=False, server_default=text("'active'"), default="active")
+    created_at = Column(DateTime, server_default=func.now(), default=func.now())
+
+    __table_args__ = (
+        Index("ux_principals_workspace", "workspace_id", unique=True),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# the workspace registry (MIGRATION-0009, PRD 0.13.4 D5): membership leaves git
+# --------------------------------------------------------------------------- #
+class Workspace(Base):
+    """A workspace as a governed object: who owns it, whether it is open, what it is connected to.
+
+    Identity (admin-api) is the ONE writer; agent-api reaches it over the internal tier
+    (``app/workspace_registry.py``). Git keeps a workspace's content only. ``id`` is the key every
+    membership and invite names (``workspace:<id>``) — today agent-api's workspace slug, which is
+    also stored in ``slug``. ``connections`` is the list of open workspaces this one's room agent reads
+    (``[{"workspace", "added_by", "added"}]``), kept on the row rather than in a fifth table."""
+    __tablename__ = "workspaces"
+
+    id = Column(String(128), primary_key=True)
+    slug = Column(String(128), nullable=False, unique=True)
+    org_id = Column(String(64), nullable=False, server_default=text("'default'"), default=DEFAULT_ORG_ID)
+    owner = Column(String(128), nullable=True)
+    visibility = Column(String(16), nullable=False, server_default=text("'closed'"), default="closed")
+    kind = Column(String(16), nullable=False, server_default=text("'normal'"), default="normal")
+    connections = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), default=lambda: [])
+    archived_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), default=func.now())
+
+
+class Membership(Base):
+    """A principal's role on a resource: ``workspace:<id>``, or ``room:<id>`` for a CLOSED room (an
+    open room's membership is derived from its workspace's). ``principal_id`` is an account id (the
+    person is their CRM record; there is no persons table) or, later, a ``ws:<id>`` principal.
+    ``data`` holds the roster's display extras (``email``, ``discoverable``)."""
+    __tablename__ = "memberships"
+
+    principal_id = Column(String(128), primary_key=True)
+    resource = Column(String(160), primary_key=True, index=True)
+    role = Column(String(16), nullable=False)
+    added_by = Column(String(128), nullable=True)
+    added_at = Column(String(40), nullable=True)
+    position = Column(Integer, nullable=False, server_default="0", default=0)
+    data = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})
+
+
+class Invite(Base):
+    """An invite to a resource: only the sha256 of its token is kept. ``role`` never outranks
+    ``created_by``'s role (checked by the minting service, and again at redeem)."""
+    __tablename__ = "invites"
+
+    id = Column(String(32), primary_key=True)
+    resource = Column(String(160), nullable=False, index=True)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    role = Column(String(16), nullable=False)
+    mode = Column(String(16), nullable=False, server_default=text("'open'"), default="open")
+    max_uses = Column(Integer, nullable=False, server_default="1", default=1)
+    uses = Column(Integer, nullable=False, server_default="0", default=0)
+    expires_at = Column(BigInteger, nullable=False)     # epoch seconds: past 2038, so 64-bit
+    created_by = Column(String(128), nullable=True)
+    created_at = Column(String(40), nullable=True)
+    revoked = Column(Boolean, nullable=False, server_default=text("false"), default=False)
+    data = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})
+
+
 class PlatformSetting(Base):
     """Deployment-wide runtime config, one JSONB value per key (`models`, `transcription`).
     The DB layer between per-user prefs (users.data) and the process env: services resolve
@@ -174,6 +264,9 @@ class APIToken(Base):
     created_at = Column(DateTime, server_default=func.now())
     last_used_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
+    # MIGRATION-0010 (D13): the credential class. `key` — every API key, self-serve or admin-minted;
+    # `session` — the terminal's signed-in browser, minted only by `POST /internal/sessions`.
+    kind = Column(String(16), nullable=False, server_default=text("'key'"))
 
     user = relationship("User", back_populates="api_tokens")
 

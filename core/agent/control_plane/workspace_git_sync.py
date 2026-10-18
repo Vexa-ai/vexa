@@ -258,6 +258,27 @@ class PullResult:
     conflicts: list = field(default_factory=list)  # the files a refused merge would have conflicted on
 
 
+#: The platform's own folder in a work tree (PRD 0.13.4 D5). Its authority lives in the policy store
+#: outside every tree, and the tree copy is a platform-written mirror — so a remote has no business
+#: changing it, and a pull that would is refused whole (deny test 28).
+POLICY_DIR = "policy"
+
+
+def _refuse_remote_policy(wsp: Path, token: Optional[str]) -> None:
+    """Refuse a pull whose remote side changes anything under ``policy/`` since the common ancestor.
+    Nothing has been merged yet when this runs, so a refusal changes nothing in the workspace."""
+    base = _git(wsp, "merge-base", "HEAD", "FETCH_HEAD", token=token, check=False).stdout.strip()
+    rng = (base, "FETCH_HEAD") if base else ("HEAD", "FETCH_HEAD")
+    out = _git(wsp, "diff", "--name-only", *rng, "--", POLICY_DIR, token=token, check=False)
+    touched = sorted(p for p in out.stdout.split() if p)
+    if touched:
+        log.warning("workspace pull refused subject-ws=%s: the remote changes %s", wsp.name, touched)
+        raise RemoteSyncError(
+            "refused: the remote changes policy/ (" + ", ".join(touched[:5]) + "). Members, visibility "
+            "and connections are changed only in Vexa, never by a sync — remove those commits from the "
+            "remote, then pull again.")
+
+
 def pull_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optional[dict] = None,
                 merge: bool = False) -> PullResult:
     """Fetch the home branch and FAST-FORWARD only. No merge commit, no rebase, no force: a divergence
@@ -283,6 +304,7 @@ def pull_origin(ws: str | Path, *, token: Optional[str] = None, ssh_env: Optiona
     if fetch.returncode != 0:
         raise RemoteSyncError(_redacted(f"fetch from {remote} failed: {fetch.stderr.strip()}", token))
     fetched = _git(wsp, "rev-parse", "FETCH_HEAD", token=token, ssh_env=ssh_env).stdout.strip()
+    _refuse_remote_policy(wsp, token)
     # Record the tracking ref so status stays coherent whether or not the merge fast-forwards.
     _git(wsp, "update-ref", f"refs/remotes/{remote}/{branch}", fetched, check=False)
     before = _git(wsp, "rev-parse", "HEAD", token=token, ssh_env=ssh_env).stdout.strip()

@@ -65,6 +65,11 @@ async def published_rows(db: AsyncSession) -> list:
 HANDLE_EXPR = "((data -> 'public_profile') ->> 'handle')"
 
 
+async def user_by_id(db: AsyncSession, user_id: int) -> Optional[User]:
+    """One user by id (the legacy-profile door)."""
+    return await db.get(User, user_id)
+
+
 async def user_by_handle(db: AsyncSession, handle: str, *, for_update: bool = False) -> Optional[User]:
     """The owner of a handle. Reads take no row lock; only the link write does."""
     from sqlalchemy import bindparam, text  # noqa: PLC0415
@@ -162,31 +167,40 @@ def build_router(get_person: Callable, get_person_for_update: Callable) -> APIRo
     def _data(user) -> dict:
         return dict(user.data) if isinstance(getattr(user, "data", None), dict) else {}
 
+    # ── RETIRED (PRD 0.13.4 D35, coordinator ruling 2026-10-17): THE profile is the person's claimed
+    # CRM record (crm-api `/person/profile`, terminal `/api/person/profile`, public page `/p/<handle>`).
+    # One writer: this profile's write path is closed; its reads stay for one release, marked retired,
+    # and its values move into the claimed profile when the person claims (`/internal/users/{id}/
+    # legacy-profile`, read by crm-api once, on the claim).
     @router.get("/user/profile")
     async def profile_read(user: User = Depends(get_person)):
-        """Your public profile: every field and whether it is public, whether it is published, and how
-        many organisations link a contact to it (never which)."""
-        return pp.read_own(_data(user))
+        """RETIRED, read-only for one release: your old public profile, with where it moved."""
+        return {**pp.read_own(_data(user)), "retired": True, "moved_to": pp.MOVED_TO}
 
     @router.put("/user/profile")
-    async def profile_edit(edit: ProfileEdit, user: User = Depends(get_person_for_update),
-                           db: AsyncSession = Depends(get_db)):
-        """Change your public profile field by field, and publish or unpublish it. Nothing is public
-        until published; each field is public only if you say so."""
-        try:
-            data = pp.apply(_data(user), edit.fields, publish=edit.publish)
-        except pp.Refused as r:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=r.detail)
-        await _save(user, data, db)
-        return pp.read_own(data)
+    async def profile_edit(edit: ProfileEdit, user: User = Depends(get_person_for_update)):
+        """RETIRED: the profile moved to your claimed record; this write path is closed."""
+        raise HTTPException(status.HTTP_410_GONE, detail=pp.moved())
 
     @router.post("/user/profile/withdraw")
-    async def profile_withdraw(user: User = Depends(get_person_for_update), db: AsyncSession = Depends(get_db)):
-        """Withdraw your public profile: nobody sees it, and organisations that linked it see only
-        their own data again. Your values stay for you to publish again."""
-        data = pp.withdraw(_data(user))
-        await _save(user, data, db)
-        return pp.read_own(data)
+    async def profile_withdraw(user: User = Depends(get_person_for_update)):
+        """RETIRED: switch the public page off on your claimed profile instead."""
+        raise HTTPException(status.HTTP_410_GONE, detail=pp.moved())
+
+    @router.get("/internal/users/{user_id}/legacy-profile", include_in_schema=False)
+    async def legacy_profile(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+        """The person's old profile values (their own entries, with the public flags), for crm-api to
+        carry into the record they just claimed. Internal tier only; never a public read."""
+        check_internal_no_dev_bypass(request)
+        try:
+            uid = int(user_id)
+        except ValueError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="no such user")
+        owner = await user_by_id(db, uid)
+        if owner is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="no such user")
+        own = pp.read_own(_data(owner))
+        return {"handle": own["handle"], "published": own["published"], "fields": own["fields"]}
 
     @router.post("/user/company-verification")
     async def verify_start(body: Domain, user: User = Depends(get_person_for_update),
@@ -225,14 +239,14 @@ def build_router(get_person: Callable, get_person_for_update: Callable) -> APIRo
         return {"profiles": pp.search(await published_rows(db), q)}
 
     @router.get("/user/directory/profiles/{handle}")
-    async def directory_profile(handle: str, user: User = Depends(get_person), db: AsyncSession = Depends(get_db)):
-        if not LIMITER.allow(f"u:{user.id}"):
-            return JSONResponse(status_code=429, content={"detail": "too many directory reads — try again in a minute"})
-        owner = await user_by_handle(db, handle)
-        view = pp.public_view(_data(owner), email=getattr(owner, "email", None)) if owner is not None else None
-        if view is None:
+    async def directory_profile(handle: str):
+        """RETIRED: a profile's page is `/p/<handle>` now (the claimed record's public page, which
+        keeps the handle a claim carries over). Redirects for one release."""
+        if not pp.HANDLE_RE.fullmatch(handle or ""):
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="no such profile")
-        return view
+        # the body says it too: the gateway relays the status and body, not the Location header
+        return JSONResponse(status_code=status.HTTP_308_PERMANENT_REDIRECT, headers={"Location": f"/p/{handle}"},
+                            content={"retired": True, "moved_to": f"/p/{handle}"})
 
     @router.get("/internal/profiles/{handle}", include_in_schema=False)
     async def internal_profile(handle: str, request: Request, db: AsyncSession = Depends(get_db)):

@@ -28,9 +28,9 @@ PERSON = Caller(subject='2', email='u2@acme.test', workspaces=('team',), writabl
 PRIVATE = ('Negotiation', 'p-7', 'notes/globex.md', 'domain:', 'Signed the NDA', 'crm-import',
            'Call the CFO', 'Legal review', 'Because the CFO asked', 'Bump the stage')
 
+# D4: a room (shared caller) never reads match_ids or account_id: they are absent, not blanked.
 RECORD_KEYS = {'id', 'org_id', 'object_type', 'revision', 'quarantined', 'fields', 'narrative', 'audience',
-               'card', 'href', 'links', 'actions', 'sources', 'mentioned_in', 'bound_to', 'match_ids',
-               'account_id', 'proposals'}
+               'card', 'href', 'links', 'actions', 'sources', 'mentioned_in', 'bound_to', 'proposals'}
 SNAPSHOT_KEYS = {'id', 'org_id', 'object_type', 'revision', 'quarantined', 'fields', 'narrative', 'audience'}
 
 
@@ -93,7 +93,7 @@ def test_a_cross_org_read_carries_exactly_the_listed_keys_and_blank_org_facts(st
     assert set(rec) == RECORD_KEYS
     assert rec['fields'] == {'Name': 'Globex', 'Domain': 'globex.test'}
     assert rec['narrative'] is None and rec['audience'] == 'cross_org'
-    assert rec['sources'] == [] and rec['match_ids'] == [] and rec['account_id'] is None
+    assert rec['sources'] == [] and 'match_ids' not in rec and 'account_id' not in rec
     assert rec['mentioned_in'] == [] and rec['bound_to'] == [] and rec['proposals'] == []
     assert rec['card']['layout']['sections'] == [{'title': 'Who', 'fields': [
         {'field': 'Name', 'label': '', 'format': 'text', 'currency': 'USD'},
@@ -103,12 +103,16 @@ def test_a_cross_org_read_carries_exactly_the_listed_keys_and_blank_org_facts(st
     conforms('Record', rec)
 
 
-def test_the_same_read_in_the_orgs_own_room_is_whole(store):
+def test_the_same_read_in_the_orgs_own_room_has_the_members_fields_and_no_free_text(store):
+    # D4: the org's own room reads every field its members all read (here: all of them), never the
+    # email-derived identifiers, the narrative, or a proposal's free-text reason and evidence.
     rid = _company(store)
     rec = store.get(ORG, _turn(cross_org=False), rid)
-    assert rec['sources'] and rec['match_ids'] == ['domain:globex.test']
+    assert rec['fields']['Stage'] == 'Negotiation' and rec['sources'] and 'match_ids' not in rec
     assert rec['bound_to'] == ['team'] and rec['mentioned_in'] and rec['proposals']
-    assert rec['proposals'][0]['reason'] == 'Bump the stage' and 'audience' not in rec
+    assert rec['narrative'] is None and rec['proposals'][0]['reason'] is None and 'audience' not in rec
+    # the person in their own (non-shared) read still sees all of it
+    assert store.get(ORG, ADMIN, rid)['proposals'][0]['reason'] == 'Bump the stage'
 
 
 def test_a_cross_org_history_carries_no_reason_or_evidence(store):
@@ -122,7 +126,8 @@ def test_a_cross_org_history_carries_no_reason_or_evidence(store):
                                                                                    'Domain': 'globex.test'}
     _no_private(revisions)
     own = store.history(ORG, _turn(cross_org=False), rid)['revisions']
-    assert own[0]['reason'] == 'Bump the stage'
+    assert own[0]['reason'] is None                                    # D4: no free text in any room
+    assert store.history(ORG, ADMIN, rid)['revisions'][0]['reason'] == 'Bump the stage'
 
 
 def test_a_cross_org_search_may_filter_on_public_fields_only(store):
@@ -150,11 +155,18 @@ def test_a_cross_org_search_answer_carries_exactly_the_listed_keys(store):
 # ── cards ───────────────────────────────────────────────────────────────────────────────────────
 CARD_KEYS = {'id', 'ref', 'type', 'revision', 'title', 'about', 'state', 'states', 'side_states', 'next',
              'waiting', 'summary', 'due', 'progress', 'workspaces', 'parent', 'children', 'members', 'face',
-             'movement', 'stalled', 'can', 'href', 'new'}
+             'movement', 'stalled', 'can', 'href', 'new',
+             # D11–D14 coordination: present, and blank for a cross-org room (no next actor, no
+             # requester, no decision records, no viewer actions)
+             'kind', 'next_actor', 'requester', 'next_check_at', 'chain', 'origin', 'open', 'handoff', 'gates',
+             'decisions', 'last_decision', 'viewer'}
 
 
 def _card(store):
     cards = Cards(store)
+    # the room's roster (policy/members.json, carried by the snapshot): D4 reads nothing without one
+    store.apply_workspace_snapshot(ORG, 'team', 'c0', '2026-10-16T09:00:00Z', [],
+                                   [{'subject': '2', 'role': 'contributor'}])
     made = cards.create(ORG, PERSON, 'Globex rollout', workspace='team', about='workspace:team',
                         fields={'Summary': 'Signed the NDA'})['card']
     cards.update(ORG, PERSON, made['id'], 1, fields={'Next': 'Call the CFO', 'Waiting': 'Legal review'})
@@ -172,6 +184,8 @@ def test_a_cross_org_card_read_carries_no_movement_activity_members_or_boards(st
     assert card['members'] == [] and card['workspaces'] == []
     assert card['next'] is None and card['waiting'] is None and card['summary'] is None
     assert card['state'] is None and card['about'] is None
+    assert card['next_actor'] is None and card['requester'] is None and card['decisions'] == []
+    assert card['viewer'] == {'role': 'watcher', 'seen': False, 'actions': []}
     _no_private(card)
     conforms('CardView', card)
     # the org's own room reads the card in full
@@ -182,7 +196,7 @@ def test_a_cross_org_card_read_carries_no_movement_activity_members_or_boards(st
 def test_a_cross_org_card_list_carries_projected_cards_and_no_proposals(store):
     cards, cid = _card(store)
     out = cards.list(ORG, _turn())
-    assert set(out) == {'cards', 'proposals'}
+    assert set(out) == {'cards', 'proposals', 'counts'}
     assert out['proposals'] == []
     (card,) = out['cards']
     assert set(card) == CARD_KEYS and card['id'] == cid

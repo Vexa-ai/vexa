@@ -110,6 +110,8 @@ from control_plane.routers import chats as routers_chats
 from control_plane.routers import ingress as routers_ingress
 from control_plane.routers import routines as routers_routines
 from control_plane.routers import agent_messages as routers_agent_messages
+from control_plane.routers import held as routers_held
+from control_plane.routers import asks as routers_asks
 from control_plane.routers import admin as routers_admin
 from control_plane.routers import meetings as routers_meetings
 from control_plane.routers import scaffolds as routers_scaffolds
@@ -117,6 +119,7 @@ from control_plane.routers import friction as routers_friction
 from control_plane.routers import proposals as routers_proposals
 from control_plane.routers import forget as routers_forget
 from control_plane.routers import refs as routers_refs
+from control_plane.routers import pins as routers_pins
 from control_plane.routers import home as routers_home
 from control_plane.routers import budgets as routers_budgets
 from control_plane.routers import usage as routers_usage
@@ -125,6 +128,7 @@ from control_plane.routers import people as routers_people
 from control_plane.routers import identity_media as routers_identity_media
 from control_plane.routers import desktop as routers_desktop
 from control_plane.routers import rooms as routers_rooms
+from control_plane.routers import room_people as routers_room_people
 from control_plane.routers import connections as routers_connections
 from control_plane.routers import clock as routers_clock
 from control_plane.routers import pages as routers_pages
@@ -243,6 +247,23 @@ def create_app(
     # the one place it is enforced: an app-level dependency, so it runs for the route a request
     # matched, before the handler, and no route asks for it by hand (`route_policy.py`).
     settings = dispatcher.settings if dispatcher is not None else None
+    # THE PRIVACY MARK AND WHAT IT HOLDS (D6, `shared/taint.py`, `held_store.py`): Redis, never a
+    # process dict and never a desk. Configured only when a Redis is named; without one the mark
+    # cannot be read, and every write into a surface other people read is held (fail closed).
+    if _ws_redis is not None:
+        from shared import taint as _taint_mod
+        from control_plane import held_store as _held_store_mod
+
+        _taint_mod.configure(_taint_mod.TaintStore(_ws_redis))
+        _held_secret = (settings.internal_api_secret.get_secret_value() if settings is not None else "")
+        _held_store_mod.configure(_held_store_mod.HeldStore(_ws_redis, _held_secret) if _held_secret else None)
+    # Legacy on-desk held writes (`.vexa/held-writes/`, H7) leave every desk at boot.
+    try:
+        from control_plane import held_store as _held_sweep
+
+        _held_sweep.sweep_root(Path(wsr.root))
+    except Exception:  # noqa: BLE001 — a sweep that fails is retried on the next boot and per room
+        logging.getLogger("agent_api.held_store").warning("legacy held-writes sweep did not finish", exc_info=True)
     # THE ADMIN ACCOUNT'S DOORS (founder ruling 2026-10-11), the same shape: an app-level dependency
     # over the route a request matched, declared as data in `admin_account_scope.REFUSED` — creating,
     # importing or joining a workspace, and every meeting surface. Identity answers who the admin
@@ -256,7 +277,8 @@ def create_app(
     from control_plane import signal_scope as _signal_scope  # noqa: PLC0415
     _signal_grants = _signal_scope.reader(redis_url)
     app = FastAPI(title="vexa-agent-api", version="0.12.0",
-                  dependencies=[route_policy.PERSON_GATE, Depends(_admin_account_gate),
+                  dependencies=[route_policy.PERSON_GATE, route_policy.SHARED_GATE,
+                                Depends(_admin_account_gate),
                                 Depends(_signal_scope.gate(_signal_grants))])
     # THE SESSION STORE (ADR-0048) — conversations apart from workspaces. Off unless configured;
     # with it off every chat keeps the workspace layout, byte for byte.
@@ -281,6 +303,12 @@ def create_app(
                 output_topic=units.output_topic)
             _saver.start()
         dispatcher.attach_sessions(session_store, _saver)
+    # WHO IS IN A ROOM (0.13.4 D36): an open room's members are its workspace's, a closed room's are
+    # the identity registry's `room:` rows — installed in front of the store's role check, so every
+    # existing can_read/can_write asks the authority, never the participant projection.
+    if session_store is not None and hasattr(session_store, "set_room_role"):
+        from control_plane import room_membership as _room_membership
+        _room_membership.install(session_store, lambda: wsr.root)
     # NOTIFICATIONS (#1783) live in the session store's database and go live on the recipient's own
     # redis channel, which the gateway's /ws fans in for every tab they have open. `notify_publish`
     # is a test's bus; production publishes on redis when there is one, and stores only when not.
@@ -364,6 +392,10 @@ def create_app(
         rows_for=lambda subj: workspace_names_mod.listing(
             wsr.root, subj, registry=workspace_registry, index_list=mindex.list))
     app.add_middleware(broker_client.ForwardedIdentity)
+    # EVERY ANSWER SAYS WHETHER IT IS PRIVATE (D6, `privacy_label.py`): the gateway marks a worker's
+    # session from this label; an unlabelled answer is private there.
+    from control_plane import privacy_label as privacy_label_mod
+    app.add_middleware(privacy_label_mod.PrivacyLabelMiddleware)
     # THE TRACE AND THE SESSION (logevent.v1, Vexa-ai/vexa#1783): inside the guard, so the session it
     # binds from `x-user-delegation-unit` is the one the guard rebuilt from the gateway's signature.
     app.add_middleware(obs.TraceMiddleware)
@@ -494,47 +526,23 @@ def create_app(
                       names: "Optional[dict]" = None,
                       speakers: "Optional[list[str]]" = None,
                       read_max: Optional[int] = None) -> dict:
-        """Turn a caller-named MEETING into the room this turn may read.
+        """Turn a caller-named MEETING into the post-meeting room.
 
-        The room is the post-meeting mount widening (founder ruling: a person's `personal`/desk
-        workspace is company knowledge, not private, and the post-meeting agent reads the attendees'
-        desks to write ONE shared write-up; only `_system` stays private).
+        DESKS ARE PERSONAL (founder decision 3, 2026-10-17): the write-up reads the transcript, the
+        room's workspace (the meeting's group desk) and explicit shares — never another attendee's
+        desk. `participants`, `names`, `speakers` and `read_max` are still accepted from flows (an
+        older flows sends them) and change nothing: no address becomes a mount.
 
         GATES, all fail-CLOSED, in this order:
 
-        0. CALLER TIER — the internal-tier shared secret (`X-Internal-Secret` == `VEXA_INTERNAL_API_SECRET`,
-           the same edge `/api/admin/overview` and the admin-api mirror already use). The room is a
-           FLOWS/OPERATOR capability, not an end-user one: the post-meeting run is dispatched by
-           `core/flows` talking to agent-api directly, while browser clients reach `/api/chat` through
-           the gateway and hold no internal secret. An UNCONFIGURED secret means nobody gets a room.
-           **Under the participant model this gate is also the trust boundary on WHO is in the room** —
-           see the residual below.
-        1. ENTITLEMENT — `_meeting_owner_lookup`, the EXISTING meeting access check (meeting-api
-           `GET /meetings/{id}`, which evaluates its own access union in SQL and 404s a row the
-           caller may not read). No second authorisation rule is invented for the room.
-        2. OWNERSHIP — `meeting_room.assert_owner`: the row must be the caller's OWN meeting. A
-           transcript-share recipient passes gate 1 and is refused here.
-        3. GROUP DESK — `meeting_room.group_workspace_id` reads the meeting's BOUND shared workspace
-           (`data.workspace_id`). Under decision 22 that is the ONE desk a room run may write; every
-           other desk in the stack, the dispatch subject's own included, is demoted to read-only by
-           `dispatch.build_mount_set`. The id is not a grant — the dispatcher re-reads the subject's
-           role from that workspace's own policy/members.json.
-        4. MEMBERSHIP + ORDER — `meeting_room.order_participants`: membership is the INVITE's
-           participant ADDRESSES (`room_participants`); speaking only ORDERS them, via the ICS `CN=`
-           map. Each address is resolved to a subject by `_email_subject_lookup` at mount time, and
-           only a participant who already HAS a subject and a desk is mounted. A name never admits
-           anybody, so a bad CN match costs ordering and nothing else.
-
-        THE RESIDUAL, stated because it is a real one: membership now comes from the CALLER's list,
-        so a trusted internal caller could name addresses that were not in the meeting. Gate 0 IS the
-        trust boundary on that. It is a deliberate trade — the server-held alternative
-        (`data.transcript_viewers`) is empty at post-meeting time, because nobody has clicked their
-        share link yet, which made the whole feature inert on its normal path.
-
-        Returns the room the dispatcher applies. `lookup` rides in it because address→subject
-        resolution has to happen where the mount set is built (it needs the store root and the paths
-        the subject's own stack already holds); it is an in-process callable on a dispatcher
-        argument and never crosses a wire.
+        0. CALLER TIER — the internal-tier shared secret. The room is a FLOWS/OPERATOR capability:
+           the post-meeting run is dispatched by `core/flows` talking to agent-api directly, while
+           browser clients reach `/api/chat` through the gateway and hold no internal secret.
+        1. ENTITLEMENT — `_meeting_owner_lookup`, the EXISTING meeting access check.
+        2. OWNERSHIP — `meeting_room.assert_owner`: the row must be the caller's OWN meeting.
+        3. GROUP DESK — `meeting_room.group_workspace_id` reads the meeting's BOUND shared workspace.
+           Under decision 22 that is the ONE workspace a room run may write; the dispatcher re-reads
+           the subject's role from that workspace's own member list.
         """
         secret = settings.internal_api_secret.get_secret_value() if settings is not None else ""
         provided = request.headers.get("x-internal-secret", "")
@@ -555,10 +563,7 @@ def create_app(
         # group. Returning the id grants nothing: the dispatcher still asks that workspace's own
         # policy/members.json whether THIS subject may write it.
         group = meeting_room.group_workspace_id(owned)
-        ordered = meeting_room.order_participants(participants, names=names, speakers=speakers)
-        return {"meeting_id": str(meeting_id), "ordered": ordered, "source": _ROOM_SOURCE,
-                "group_workspace_id": group, "read_max": read_max,
-                "lookup": _email_subject_lookup}
+        return {"meeting_id": str(meeting_id), "source": _ROOM_SOURCE, "group_workspace_id": group}
 
     # ── routines (MVP2) — a scheduled routine compiles to a schedule.v1 cron job whose body is a
     #    unit.v1 dispatch POSTed back to /invocations when due (the runtime owns the durable cron) ──
@@ -635,6 +640,28 @@ def create_app(
             require_in_ceiling(request, target)
         else:
             require_read_in_ceiling(request, target)
+        # A WORKSPACE PRINCIPAL (D2, a room's turn under VEXA_ROOM_WS_PRINCIPAL) is W's writer and a
+        # reader of what its ceiling mounts read-only — and nothing else: it has no desk, no home and
+        # no memberships of its own, so the person paths below would refuse it. identity matched the
+        # token's workspace to the `principals` table; the ceiling checks above already confined the
+        # slug. W must still exist in the platform's policy store (S1-A; unreadable = 503, FD3), and
+        # every write keeps the privacy hold (S1-D) — its readers are all of W's members.
+        if identity_token.is_workspace_principal(request.headers):
+            own = (request.headers.get(identity_token.DELEGATION_HEADERS["principal_workspace"]) or "").strip()
+            if not target or target in (system_mounts.SYSTEM_SLUG,) or (write and target != own):
+                raise HTTPException(status_code=403, detail="not authorized for this workspace")
+            try:
+                roster = membership_mod.read_members(wsr.root, target)
+            except MembershipError as e:
+                if e.status == 503:
+                    raise HTTPException(status_code=503, detail="policy_unreadable") from None
+                roster = []
+            if target == own and not roster:
+                raise HTTPException(status_code=403, detail="not authorized for this workspace")
+            d = membership_mod._ws_dir(wsr.root, target)
+            if d.is_dir():
+                return d
+            raise HTTPException(status_code=403, detail="not authorized for this workspace")
         mounts = active_workspaces(wsr.root, subject)  # own actives (real .attached paths); may raise ValueError
         try:
             mounts = mounts + shared_active_mounts(wsr.root, subject, mindex.list(subject))
@@ -1121,11 +1148,27 @@ def create_app(
     # ── the additive mount set (WP-A2.1): ACTIVE-SET membership over swap's park/restore machinery ──────
 
     # ── workspace membership + invites + roles (Lane M) ───────────────────────────────────────────
-    # The access layer for SHARED workspaces. Authoritative store = policy/members.json in the
-    # workspace's OWN git repo (PLATFORM-WRITE-ONLY, committed via membership_mod.policy_commit);
-    # mirror = users.data.memberships[] over the injected index. INVITES are NOT in the tree — they
-    # live at <root>/.invites/<workspace_id>.json, outside every workspace mount (Vexa-ai/vexa#1645).
-    # is_member(workspace_id, subject) -> role|None is the seam Lane A calls for mount/subscribe authz.
+    # The access layer for SHARED workspaces. Authoritative store = the platform's policy store at
+    # <root>/.policy/<workspace_id>/ (PRD 0.13.4 D5), outside every workspace mount; the tree's
+    # policy/members.json is a platform-written MIRROR (committed via membership_mod.policy_commit)
+    # that nothing reads for access, and caller routes cannot reach policy/ at all. Index =
+    # users.data.memberships[] over the injected port. INVITES live at <root>/.invites/<workspace_id>.json
+    # (Vexa-ai/vexa#1645). is_member(workspace_id, subject) -> role|None is the seam Lane A calls.
+    # Legacy in-tree rosters are adopted into the store ONCE, here at start, so the read-compatible
+    # window lasts no longer than the boot (workspace_membership.migrate_policy_store).
+    try:
+        membership_mod.migrate_policy_store(wsr.root)
+    except Exception as _exc:  # noqa: BLE001 — never block boot; each read still adopts on demand
+        logging.getLogger(__name__).warning("policy store migration at start failed: %s", _exc)
+    # M2: notification rows written before 0.13.4 hold the invite TOKEN in their link; rewrite them to
+    # the invite's id once, at start (idempotent).
+    if notifier is not None:
+        def _token_to_ref(tok: str):
+            found = membership_mod.find_invite(wsr.root, tok)
+            return (found[0], found[1].get("id")) if found else None
+        _scrubbed = notifier.scrub_invite_tokens(_token_to_ref)
+        if _scrubbed:
+            logging.getLogger(__name__).info("notifications: %d invite link(s) rewritten to invite ids", _scrubbed)
     def _pc(ws, message):
         return membership_mod.policy_commit(ws, message)
 
@@ -1245,7 +1288,7 @@ def create_app(
         settings=settings, stream_reader=stream_reader,
         subject_of=subject_of,
         workspace_registry=workspace_registry, workspace_touches=workspace_touches, wsr=wsr)
-    for _r in (routers_health, routers_ingress, routers_chats, routers_routines, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_sharing, routers_connections, routers_clock, routers_meeting_bundle, routers_pages, routers_sessions, routers_chat_read, routers_agent_messages, routers_calls, routers_notifications, routers_forget, routers_workspace_states, routers_workspace_templates, routers_refs, routers_home, routers_budgets, routers_usage, routers_levels, routers_people, routers_identity_media, routers_desktop, routers_rooms):
+    for _r in (routers_health, routers_ingress, routers_chats, routers_routines, routers_admin, routers_meetings, routers_scaffolds, routers_friction, routers_proposals, routers_workspaces, routers_sharing, routers_connections, routers_clock, routers_meeting_bundle, routers_pages, routers_sessions, routers_chat_read, routers_agent_messages, routers_calls, routers_notifications, routers_forget, routers_workspace_states, routers_workspace_templates, routers_refs, routers_pins, routers_home, routers_budgets, routers_usage, routers_levels, routers_people, routers_identity_media, routers_desktop, routers_rooms, routers_room_people, routers_held, routers_asks):
         app.include_router(_r.build(**_deps))
     # WHAT A ROOM'S AGENT SAID, ONTO THE ROOM'S STREAM (rooms, `room_echo`): context for the room's
     # sensor. Only with a store and a redis, and idle while the `rooms` feature is off.
@@ -1259,6 +1302,8 @@ def create_app(
                          enabled=lambda: _rooms_mod.enabled_for_anyone(_global_root))
     # A `verbs` row naming a route this app does not serve protects nothing — refuse the boot.
     route_policy.assert_served(app.routes)
+    # D3: every route under the forward declares whether a shared (room) token may reach it.
+    route_policy.assert_shared_declared(app.routes)
     features_mod.assert_served(app.routes)
     admin_account_scope.assert_served(app.routes)
 
@@ -1319,11 +1364,30 @@ def _build_production_app() -> FastAPI:
         membership_index = AdminApiMembershipIndex(
             settings.admin_api_url, settings.internal_api_secret.get_secret_value(),
         )
+        # THE WORKSPACE REGISTRY (PRD 0.13.4 D5): the roster, visibility, connections and invites
+        # are rows in identity's database, admin-api their one writer. Without admin-api the file
+        # backend outside every workspace mount answers (workspace_membership.FilePolicyStore).
+        from control_plane import workspace_membership as _wm  # noqa: PLC0415
+        from shared.adapters import AdminApiPolicyStore  # noqa: PLC0415
+        _wm.set_policy_store(AdminApiPolicyStore(
+            settings.admin_api_url, settings.internal_api_secret.get_secret_value()))
         # Settings → Models: per-subject effective model config (user pref > platform setting)
         # over the same internal edge; None (no admin-api) → deployment env defaults only.
         model_config = AdminApiModelConfig(
             settings.admin_api_url, settings.internal_api_secret.get_secret_value(),
         )
+    # THE SHARED WORKSPACE LOCK (PRD 0.13.4 M6): an invite redeem, a sign-in claim and every roster
+    # write serialise on a Redis key as well as the process-local lock, so a second replica cannot
+    # spend a once-only link twice. No Redis → the process-local lock alone, as before.
+    if settings.redis_url:
+        try:
+            import redis as _redis_lock_mod  # noqa: PLC0415
+            from control_plane import workspace_membership as _wm_lock  # noqa: PLC0415
+            _lock_client = _redis_lock_mod.from_url(
+                settings.redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=5)
+            _wm_lock.set_distributed_lock(lambda ws: _wm_lock.RedisWorkspaceLock(_lock_client, ws))
+        except Exception as _exc:  # noqa: BLE001 — never block boot
+            logging.getLogger(__name__).warning("shared workspace lock not installed: %s", _exc)
     # Each worker connects to Redis as its unit's own user (control_plane.workload_redis) unless
     # the deployment chose REDIS_WORKLOAD_ACL=shared. Stale users are swept against the runtime's
     # live workloads.

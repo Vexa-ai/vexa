@@ -358,6 +358,12 @@ def workspace_invite(ics: str) -> dict:
     return {}
 
 
+def _unauthenticated(frm: str, why: str) -> tuple[str, dict]:
+    """A mail whose `From:` its domain did not vouch for: quarantined like a stranger's (D25)."""
+    return ("quarantine", {"kind": mail_policy.UNAUTHENTICATED_MAIL,
+                           "reason": f"{frm} was not authenticated by its domain ({why})"})
+
+
 def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
           known_uid, is_scaffolded, allowed: set | None = None) -> tuple[str, dict] | None:
     """The routing DECISION, pure: returns (kind, payload) or None (ignore).
@@ -414,6 +420,10 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
             or any(t in frm for t in ("no-reply", "noreply", "mailer-daemon", "postmaster", "bounce")))
     ref = (headers.get("In-Reply-To") or "").strip() or \
           (headers.get("References", "").split() or [""])[-1]
+    # A `From:` IS NOT A PERSON UNTIL ITS DOMAIN VOUCHES FOR IT (D25, H6). Every branch below that
+    # acts for the address — a reply on its thread, a turn in its user's session, an account for a
+    # colleague — needs the receiving MTA's DMARC verdict (or an aligned DKIM/SPF pass) first.
+    authed, auth_why = mail_policy.sender_authenticated(frm, headers)
     hit = db.execute("SELECT subject_uid, session FROM mail_thread WHERE message_id = :m",
                      {"m": ref}) if ref else []
     forged = False
@@ -421,6 +431,8 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
         suid, session = hit[0]
         uid = known_uid(frm)
         if uid is not None and str(uid) == str(suid):
+            if not authed:
+                return _unauthenticated(frm, auth_why)
             return ("thread_reply", {"uid": suid, "session": session})
         # Not this thread's participant. The ref buys nothing; the sender is judged on their own
         # identity below, and the quarantine row that may follow says the ref was the reason.
@@ -429,9 +441,13 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
         return None
     uid = known_uid(frm)
     if uid is not None:
+        if not authed:
+            return _unauthenticated(frm, auth_why)
         return ("known_user_mail", {"uid": str(uid),
                                     "session": "main" if is_scaffolded(str(uid)) else "onboarding"})
     if mail_policy.in_allow_list(frm, self_addr, allowed):
+        if not authed:
+            return _unauthenticated(frm, auth_why)
         return ("new_sender_mail", {"session": "onboarding"})
     return ("quarantine", {
         "kind": mail_policy.THREAD_MISMATCH if forged else mail_policy.STRANGER_MAIL,
@@ -584,7 +600,11 @@ def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
         mail_policy.quarantine(db, ext_id=ext, frm=msg.frm, kind=payload["kind"],
                                reason=payload["reason"],
                                facts={"subject": msg.subject}, at=now)
-        _fixed_reply(db, msg, ext, now, reply)
+        # A DMARC FAILURE IS SPAM, ANSWERED BY A QUIET RECEIPT ONLY (decision 4, deny test 34): its
+        # `From:` is exactly what its domain did not vouch for, so a reply would go to whoever was
+        # impersonated (backscatter). The quarantine row is the receipt; no reply, notice or turn.
+        if payload["kind"] != mail_policy.UNAUTHENTICATED_MAIL:
+            _fixed_reply(db, msg, ext, now, reply)
         return ("quarantine", 0)
     # ── from here on the sender may cause an AGENT TURN, so the ceilings apply ──────────────
     limited = mail_policy.rate_check(db, msg.frm, now)

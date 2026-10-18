@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlite_double import SqliteDB  # noqa: E402
+from mail_auth_fixture import authed  # noqa: E402
 
 # The same literals test_subject_bearer.py imports flows_api with: the module captures them as
 # constants at import, and whichever test module imports first wins.
@@ -270,7 +271,7 @@ def _mail_rig():
 
 def _mail(frm="colleague@acme.test", ext="imap-uid-77"):
     return SimpleNamespace(frm=frm, body="the body text, private", subject="Private subject",
-                           headers={}, ics=None, message_id=f"<{ext}@acme.test>", ext_id=ext,
+                           headers=authed(frm), ics=None, message_id=f"<{ext}@acme.test>", ext_id=ext,
                            cursor="c1")
 
 

@@ -41,7 +41,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from control_plane import ceiling
+from control_plane import ceiling, identity_token, private_taint
 from control_plane import publish as publish_mod
 from control_plane.bodies import SessionId
 
@@ -130,6 +130,21 @@ def cross_person_deliverable(store, sender: str, target: str, thread: str) -> bo
         return False
 
 
+def _other_readers(store, sender: str, target: str, thread: str) -> list[str]:
+    """Who besides the sender reads where this message lands: the other person, or the other
+    participants of a shared conversation (`s-…`) of the sender's own. A store that cannot answer
+    for a shared conversation answers "somebody" — fail closed."""
+    if str(target) != str(sender):
+        return [str(target)]
+    from control_plane import session_sync  # noqa: PLC0415
+    if store is None or not str(thread or "").startswith(session_sync.STORE_ID_PREFIX):
+        return []
+    try:
+        return [h for h in store.humans(thread) if str(h) != str(sender)]
+    except Exception:  # noqa: BLE001
+        return ["(unknown participants)"]
+
+
 def _publish(source_event_id: str, refs: dict) -> tuple[int, dict]:
     """POST the fact to flows' intake and return its answer — unlike `publish.publish`, which
     swallows, because the sending agent is told whether its message was accepted."""
@@ -193,6 +208,14 @@ def build(**d) -> APIRouter:
                 raise HTTPException(status_code=403, detail=dict(CROSS_PERSON_REFUSAL))
             raise HTTPException(status_code=404, detail={
                 "refused": "no_such_thread", "thread": body.thread})
+        # THE PRIVACY HOLD (D6, `private_taint`): a message from a session that read the person's
+        # private data, into a conversation somebody else reads, waits for the person.
+        held = private_taint.check_egress(
+            subject=str(sender), unit=identity_token.session_of(request.headers), surface="agent_message",
+            target=f"{target}/{body.thread}", readers=_other_readers(store, sender, target, body.thread),
+            path=body.thread, content=body.text, delegated=ceiling.is_delegated(request))
+        if held is not None:
+            raise HTTPException(status_code=409, detail=held)
         routine = mine.get("routine") or None
         chain: list = []
         try:

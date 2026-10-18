@@ -36,7 +36,8 @@ the verbs that act as the person with `REFUSAL`, the body every other service an
 A WORKER WHOSE TURN OTHER PEOPLE READ (`delegation.shared`, ADR-0048 decision 4) is `Caller.is_shared`.
 A shared conversation's answer may use only what every participant can read, and a person's flows,
 reactions, timeline and queue are theirs alone, so flows-api refuses it every route but filing a
-friction report, with `SHARED_REFUSAL`.
+friction report, with `SHARED_REFUSAL` — except `GET /queue/waiting`, which answers it the room's
+subset: only items naming a workspace on its shared ceiling (`flows_queue.room_workspaces`).
 """
 from __future__ import annotations
 
@@ -130,6 +131,17 @@ class Caller:
     #: what lets it write an `instance` flow (ADR-0046 decision 5). A worker with nobody in the loop
     #: still cannot author: `POST /flows` is `PERSON_ONLY`.
     instance_admin: bool = False
+    #: THE CREDENTIAL CLASS identity answered (identity.v1 ``credential_class``, D13): ``session``
+    #: for the terminal's signed-in browser, ``key`` for every other API key, ``delegation`` for a
+    #: worker; ``""`` when identity stated none (an older identity) and for the operator and timeline
+    #: keys. Arming a person's routine needs ``session`` (``is_session``).
+    credential_class: str = ""
+
+    @property
+    def is_session(self) -> bool:
+        """A person at the terminal: their own (non-delegated) credential, and identity said it is a
+        SESSION. Positive evidence only — a key with the browser scope is not one."""
+        return self.kind == "subject" and not self.is_delegated and self.credential_class == "session"
 
     @property
     def is_delegated(self) -> bool:
@@ -150,8 +162,12 @@ class Caller:
     @property
     def is_shared(self) -> bool:
         """A worker whose answer other people read (delegation.v1 ``scope.shared``, carried by
-        identity as ``delegation.shared``). Only ``true`` counts."""
-        return self.is_delegated and (self.delegation or {}).get("shared") is True
+        identity as ``delegation.shared``). Only ``true`` counts — or a WORKSPACE principal
+        (``delegation.principal_kind`` = ``workspace``, D2: a room's turn), which is shared by construction,
+        so flows refuses it every route but ``SHARED_OPEN`` whatever its ``shared`` flag says."""
+        dlg = self.delegation or {}
+        return self.is_delegated and (dlg.get("shared") is True
+                                      or dlg.get("principal_kind") == "workspace")
 
     @property
     def flow(self) -> str:
@@ -252,8 +268,14 @@ def resolve(token: str, *, secret: str = "") -> Caller:
         is_account = body.get("admin_account") is True
     else:
         is_account = bool(delegation) and body.get("person_admin_account") is True
+    # THE CREDENTIAL CLASS (D13): a worker is `delegation` whatever the answer says; a person's own
+    # credential is what identity stated, if it is one of the two words, else nothing.
+    stated = body.get("credential_class")
+    credential_class = ("delegation" if delegation is not None
+                        else stated if stated in ("session", "key") else "")
     caller = Caller(kind="subject", uid=str(uid), email=str(body.get("email") or ""),
-                    delegation=delegation, instance_admin=is_account)
+                    delegation=delegation, instance_admin=is_account,
+                    credential_class=credential_class)
     # THE SESSION, from the one source that can vouch for it: identity verified `unit` inside the
     # delegation token's signature (logevent.v1 `session`). Never from a header the caller sent.
     flows_obs.set_user_id(caller.uid)

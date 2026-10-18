@@ -263,6 +263,63 @@ def test_a_signal_turn_may_set_only_its_own_meetings_brief(tmp_path):
     assert r.status_code == 403 and r.json()["detail"]["reason"] == "signal_scope"
 
 
+def test_a_signal_turn_may_set_its_own_meetings_brief_the_verb_its_refusal_names(tmp_path):
+    """Friction 5: the refusal names meeting_listen as allowed, so a signal turn calling it on its
+    own meeting is answered, not refused 403 signal_scope."""
+    client, _d, _rt, desk = _world(tmp_path)
+    unit = units.signal_unit_id(JANE, CHAT)
+    signal_scope.record(None, unit, {"meeting": ROW, "path": NOTE, "workspace": ""})
+    r = client.post("/api/meeting/listen", headers=_signal_worker(unit),
+                    json={"meeting": ROW, "brief": {"known": "Proxy on Tuesday."}})
+    assert r.status_code == 200, r.text
+    brief, version = meeting_listen.read_listen((desk / NOTE).read_text())
+    assert version == 1 and brief["known"] == "Proxy on Tuesday."
+
+
+def test_a_signal_whose_page_was_not_found_still_reaches_meeting_listen_for_its_meeting(tmp_path):
+    """Friction 5 (live 12:53): the refusal says meeting_listen is allowed, so a meeting signal's
+    turn is never refused it `signal_scope` for its own meeting, even when no page was located when
+    it was dispatched — the verb answers for itself (here: no page yet), and other meetings stay
+    refused."""
+    client, _d, rt, desk = _world(tmp_path)
+    (desk / NOTE).unlink()
+    r = client.post("/events", json=_signal_event(), headers=_internal())
+    assert r.status_code == 202, r.text
+    uid = rt.spawned[-1][0]
+    r = client.post("/api/meeting/listen", headers=_signal_worker(uid),
+                    json={"meeting": ROW, "brief": {"focus": "x"}})
+    assert r.status_code != 403, r.text
+    # on the integrated line the wake mints the meeting's note when none was found (ingress
+    # "THE MEETING'S NOTE IS ITS OWN ARTEFACT"); without a meeting-api the mint may not land
+    assert r.status_code == 200 or r.json()["detail"]["refused"] == "no_meeting_page", r.text
+    r = client.post("/api/meeting/listen", headers=_signal_worker(uid),
+                    json={"meeting": "222", "brief": {"focus": "x"}})
+    assert r.status_code == 403 and r.json()["detail"]["reason"] == "signal_scope"
+
+
+def test_the_signal_refusal_names_exactly_what_the_turn_may_do(tmp_path):
+    """One source of truth: every verb a signal_scope refusal names as allowed is admitted, and a turn
+    with no meeting (a room's sensor) is not told it may call meeting_listen."""
+    client, _d, _rt, desk = _world(tmp_path)
+    unit = units.signal_unit_id(JANE, CHAT)
+    signal_scope.record(None, unit, {"meeting": ROW, "path": NOTE, "workspace": ""})
+    r = client.post("/api/workspace/entity", headers=_signal_worker(unit),
+                    json={"kind": "person", "name": "Alex", "facts": ["x"]})
+    said = r.json()["detail"]["instruction"]
+    assert r.status_code == 403 and "meeting_listen" in said and NOTE in said and "propose" in said
+    for verb in signal_scope.allowed_verbs({"meeting": ROW, "path": NOTE, "workspace": ""}):
+        assert verb in said
+    room_unit = units.signal_unit_id(JANE, "room-abc")
+    signal_scope.record(None, room_unit, None)
+    for method, path, body in (("POST", "/api/workspace/entity", {"kind": "person", "name": "A", "facts": ["x"]}),
+                               ("POST", "/api/meeting/listen", {"meeting": ROW, "brief": {"focus": "x"}})):
+        r = client.request(method, path, headers=_signal_worker(room_unit), json=body)
+        assert r.status_code == 403 and r.json()["detail"]["reason"] == "signal_scope"
+        said = r.json()["detail"]["instruction"]
+        assert "meeting_listen" not in said and "propose" in said
+    assert signal_scope.allowed_verbs(None) == ("propose",)
+
+
 # ── (4) meeting_listen: shape, bounds, version; the internal read ────────────────────────────────
 
 def test_meeting_listen_keeps_addressed_to_vexa_and_bounds_the_rhythm():

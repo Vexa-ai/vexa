@@ -114,6 +114,14 @@ def test_home2_is_registered_off_explicit_needing_the_desktop():
     assert F.policy_answers("---\nfeatures: {home2: on}\n---\n")[0] == {"home2": True}
     assert F.feature_of("POST", "/api/desktop/attention") == "home2"
     assert F.feature_of("POST", "/api/desktop/refs") == "home2"
+
+
+def test_shell2_is_registered_off_explicit_needing_home2():
+    """UI-1 (0.13.4): the approved shell is client-only — no route of its own — and off by default."""
+    f = F.FEATURES["shell2"]
+    assert f.get("explicit") is True and f["needs"] == ["home2"] and f["routes"] == [] and "scope" not in f
+    assert F.install_defaults({})["shell2"] is False and F.install_defaults({F.ENV: "all"})["shell2"] is False
+    assert F.install_defaults({F.ENV: "all,home2,shell2"})["shell2"] is True
     assert F.feature_of("POST", "/api/desktop/sections") == "desktop"
 
 
@@ -143,7 +151,7 @@ def test_every_switched_feature_owns_a_tool_or_says_why():
     # desktop's agent tools are crm-api's (desktop_read / desktop_arrange*), its route here is the app's.
     # rooms is server routes only until the founder approves the room UI (its tools come with it).
     for name in SWITCHED:
-        if name not in ("calls", "desktop", "rooms", "home2"):
+        if name not in ("calls", "desktop", "rooms", "home2", "readme_page"):
             assert name in owned, name
 
 

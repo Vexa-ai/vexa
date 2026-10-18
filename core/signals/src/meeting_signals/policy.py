@@ -74,7 +74,7 @@ def parse_model(value: str) -> dict:
             data[k.strip().strip("\"'")] = v.strip().strip("\"'")
     if not isinstance(data, dict):
         raise ValueError("model_signals is not a map")
-    unknown = set(data) - {"adapter", "route", "secret_ref", "base_url"}
+    unknown = set(data) - {"adapter", "route", "secret_ref", "base_url", "thinking"}
     if unknown:
         raise ValueError(f"model_signals has unknown keys: {sorted(unknown)}")
     if data.get("adapter") not in ADAPTERS:
@@ -90,9 +90,18 @@ def parse_model(value: str) -> dict:
         raise ValueError("model_signals.base_url must be an http(s) URL")
     if base and data["adapter"] != "openai-compatible":
         raise ValueError("model_signals.base_url is for the openai-compatible adapter only")
+    # THINKING (founder decision 14, 2026-10-17): a self-hosted reasoning model (Qwen) scores in
+    # ~0.2 s with its thinking switched off. `off|on`, openai-compatible only; absent = the server's own.
+    thinking = str(data.get("thinking") or "").strip().lower()
+    if thinking and thinking not in ("off", "on"):
+        raise ValueError("model_signals.thinking must be off or on")
+    if thinking and data["adapter"] != "openai-compatible":
+        raise ValueError("model_signals.thinking is for the openai-compatible adapter only")
     out = {"adapter": data["adapter"], "route": route, "secret_ref": ref}
     if base:
         out["base_url"] = base.rstrip("/")
+    if thinking:
+        out["thinking"] = thinking
     return out
 
 

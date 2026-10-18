@@ -21,6 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from sqlite_double import SqliteDB  # noqa: E402
+from mail_auth_fixture import authed  # noqa: E402
 from flows_integrations.mailbox import route  # noqa: E402
 from flows_steps.emailx import register_thread  # noqa: E402
 
@@ -60,7 +61,7 @@ def test_invariants_hold_under_storm():
             headers["Auto-Submitted"] = "auto-replied"
         if rnd.random() < 0.1:                            # junk header noise (R6)
             headers["References"] = "".join(chr(rnd.randrange(33, 127)) for _ in range(30))
-        out = route(db, SELF, frm, headers, None, known, scaff, allowed=ALLOWED)
+        out = route(db, SELF, frm, authed(frm, headers), None, known, scaff, allowed=ALLOWED)
 
         if frm == SELF:
             assert out is None, "R5: routed our own mail"
@@ -111,7 +112,7 @@ def test_a_colleague_who_forges_a_ref_gets_their_own_session_not_the_threads():
     """The allow-listed half of R2. Ben is a real user here and `<t0@vexa.ai>` is Anna's meeting
     thread: he is answered, in HIS session, and never inside hers."""
     db, users, threads, known, scaff = rig()
-    kind, p = route(db, SELF, "ben@bank.com", {"In-Reply-To": "<t0@vexa.ai>"}, None,
+    kind, p = route(db, SELF, "ben@bank.com", authed("ben@bank.com", {"In-Reply-To": "<t0@vexa.ai>"}), None,
                     known, scaff, allowed=ALLOWED)
     assert kind == "known_user_mail"
     assert (p["uid"], p["session"]) == ("2", "onboarding")
@@ -124,7 +125,7 @@ def test_an_unset_allow_list_means_our_own_domain_never_everyone():
     db, users, threads, known, scaff = rig()
     kind, _p = route(db, SELF, "stranger@x.io", {}, None, known, scaff)      # no `allowed=`
     assert kind == "quarantine"
-    kind, p = route(db, SELF, "someone@vexa.ai", {}, None, known, scaff)     # SELF is info@vexa.ai
+    kind, p = route(db, SELF, "someone@vexa.ai", authed("someone@vexa.ai"), None, known, scaff)     # SELF is info@vexa.ai
     assert kind == "new_sender_mail" and p["session"] == "onboarding"
 
 

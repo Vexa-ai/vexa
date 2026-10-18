@@ -106,7 +106,18 @@ def from_rfc822(raw: bytes, *, cursor: str, ext_id: str) -> InboundMessage:
         message_id=(msg.get("Message-ID", "") or "").strip(),
         frm=email_mod.utils.parseaddr(msg.get("From", ""))[1].lower(),
         subject=msg.get("Subject", "") or "",
-        headers=dict(msg.items()), body=body, ics=ics)
+        headers=_headers(msg), body=body, ics=ics)
+
+
+def _headers(msg) -> dict:
+    """The headers as a dict — with the TOPMOST `Authentication-Results`, which is the one our own
+    receiving server prepended (D25). `dict(msg.items())` keeps the LAST of a repeated header, and
+    the last one is whatever the sender wrote into the message before it reached us."""
+    out = dict(msg.items())
+    ar = msg.get_all("Authentication-Results") or []
+    if ar:
+        out["Authentication-Results"] = ar[0]
+    return out
 
 
 # ---------------------------------------------------------------------------------------------

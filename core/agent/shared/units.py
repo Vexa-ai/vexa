@@ -135,6 +135,11 @@ def dispatch_id(inv: dict) -> str:
         return str(ctx["room_unit"])
     if meeting and meeting.get("session_uid"):
         return f"agent-meet-{meeting['session_uid']}-{subject}"
+    if inv["trigger"] == "scheduled" and ctx.get("session") and ctx.get("flow_kind") == "mail":
+        # A MAIL-TRIGGERED TURN (D25): untrusted text from an inbox woke it, so it runs on its own
+        # read-only sibling — never the routine's `-auto` worker, which writes. Its tools write the
+        # one reply file (`signal_scope`) and propose everything else.
+        return mail_unit_id(subject, chat_session(inv), ctx.get("mount_gen"))
     if inv["trigger"] == "scheduled" and ctx.get("session"):
         # A ROUTINE'S TURN IN ITS OWN CHAT THREAD (ADR-0046 decision 12). Same thread, same
         # per-session history as the person's turns — continuity is the session file — but its
@@ -194,6 +199,22 @@ def signal_unit_id(subject: str, session: str, mount_gen=None) -> str:
 def is_signal_unit(unit_id: str) -> bool:
     """Is this unit a chat's signal sibling? Read off the id the delegation token carries."""
     return str(unit_id or "").endswith(SIGNAL_UNIT_SUFFIX)
+
+
+#: The suffix that names a chat thread's MAIL sibling unit: a turn an inbound email started (D25).
+#: Read-only mounts; its tools write the thread's reply file (`mail_outbox/<session>.md`) only.
+MAIL_UNIT_SUFFIX = "-mail"
+
+
+def mail_unit_id(subject: str, session: str, mount_gen=None) -> str:
+    """The warm unit an inbound mail's turns run on in a chat thread — the chat's own id plus
+    `-mail`."""
+    return chat_unit_id(subject, session, mount_gen) + MAIL_UNIT_SUFFIX
+
+
+def is_mail_unit(unit_id: str) -> bool:
+    """Is this unit a chat's mail sibling? Read off the id the delegation token carries."""
+    return str(unit_id or "").endswith(MAIL_UNIT_SUFFIX)
 
 
 def chat_unit_id(subject: str, session: str, mount_gen=None) -> str:

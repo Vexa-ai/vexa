@@ -1762,4 +1762,13 @@ tb "no annotations block on the gateway Deployment by default" '! awk "/^metadat
 BS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set meetingApi.botS3ExistingSecret=bot-s3 --show-only templates/deployment-meeting-api.yaml)"
 tb "meetingApi.botS3ExistingSecret reads the bots' S3 pair from a Secret" 'grep -A3 "name: BOT_S3_ACCESS_KEY" <<< "$BS" | grep -q "name: \"bot-s3\""'
 
+# PRD 0.13.4 S2: the relay password by reference, and the recipient allowlist, reach every flows pod
+REF="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+  --set flows.mail.address=bot@example.org --set flows.mail.smtp.passwordRef=broker:mail/smtp \
+  --set flows.mail.recipientAllow=dmitry@vexa.ai --show-only templates/flows.yaml)"
+tb "flows.mail.smtp.passwordRef renders the ref, the broker URL and the sensors key on every flows pod" \
+  '[ "$(grep -c "name: VEXA_MAIL_SMTP_PASSWORD_REF" <<< "$REF")" = "$(grep -c "name: VEXA_MAIL_SMTP_HOST" <<< "$REF")" ] && grep -q "path: sensors/key" <<< "$REF" && grep -A1 "name: VEXA_FLOWS_SENSORS_BROKER_URL" <<< "$REF" | grep -q credential-broker'
+tb "flows.mail.recipientAllow reaches the flows pods" 'grep -A1 "name: VEXA_MAIL_RECIPIENT_ALLOW" <<< "$REF" | grep -q "dmitry@vexa.ai"'
+tb "a malformed flows.mail.smtp.passwordRef is refused" '! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.smtp.passwordRef=smtp >/dev/null 2>&1'
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

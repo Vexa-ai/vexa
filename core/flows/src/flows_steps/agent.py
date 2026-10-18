@@ -27,7 +27,7 @@ def history(uid: str, session: str) -> list:
 
 
 def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None,
-                  flow: str = "", step: str = "") -> int:
+                  flow: str = "", step: str = "", kind: str = "") -> int:
     """Fire an agent turn; returns the history length BEFORE it (the collect baseline).
     /api/chat is an SSE STREAM that stays open for the whole turn — a client timeout while
     the stream runs is SUCCESS, not failure (the double-dispatch bug of 2026-08-23 evening).
@@ -92,6 +92,10 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None,
     if flow and step:
         headers["X-Vexa-Flow"] = str(flow)
         headers["X-Vexa-Flow-Step"] = str(step)
+    if kind:
+        # `mail` (D25): a turn an inbound email started runs at least privilege in agent-api — it
+        # reads, writes the thread's reply file, and proposes everything else.
+        headers["X-Vexa-Flow-Kind"] = str(kind)
     if room and room.get("meeting_id"):
         body["room_meeting_id"] = str(room["meeting_id"])
         if room.get("read"):

@@ -251,3 +251,23 @@ def test_a_test_account_is_never_suggested():
         assert people.is_test_account(n)
     assert people.is_test_account("Bea", "bea@lab.test") and people.is_test_account("Al", "al@example.com")
     assert not people.is_test_account("Testarossa Lima", "t@corp.example")
+
+
+# ── people I share a workspace with (UI-1 People list) ─────────────────────────────────────────
+
+def test_peers_are_everyone_sharing_a_workspace_once_each_with_their_roles(env):
+    env["state"]["colleagues"] = [
+        {"subject": "u_bob", "name": "Bob Lee", "email": "bob@acme.example", "workspaces": ["acme", "garden"], "roles": {"acme": "owner", "garden": "member"}},
+        {"subject": "u_cy", "name": "Cy Park", "email": "cy@acme.example", "workspaces": ["acme"]},
+        {"subject": "u_nowhere", "name": "No Room", "email": "", "workspaces": []},
+    ]
+    r = env["c"].get("/api/people/peers", headers={"x-user-id": "u_ann"})
+    assert r.status_code == 200, r.text
+    rows = r.json()["people"]
+    assert [p["subject"] for p in rows] == ["u_bob", "u_cy"]
+    assert rows[0]["roles"] == {"acme": "owner", "garden": "member"} and rows[0]["workspaces"] == ["acme", "garden"]
+
+
+def test_peers_refuse_a_shared_worker_so_a_room_cannot_enumerate_people(env):
+    r = env["c"].get("/api/people/peers", headers={"x-user-id": "u_ann", "x-user-regime": "agent", "x-user-delegation-shared": "1"})
+    assert r.status_code == 403 and r.json()["reason"] == "shared_conversation"

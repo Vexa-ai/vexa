@@ -1,0 +1,9 @@
+{
+  "request_id": "fixture-person-1",
+  "recipient": "ada@example.test",
+  "subject": "Recap",
+  "body": "Updated recap",
+  "thread_id": "t1",
+  "draft_id": "r-person-wrote",
+  "replace_person_draft": true
+}

@@ -28,6 +28,7 @@ MODELS = {
     "BotAccountRequest": models.BotAccountBody,
     "CalendarChangesRequest": models.CalendarChangesBody,
     "SignalsModelKeyRequest": models.SignalsModelKeyBody,
+    "MailCredentialRequest": models.MailCredentialBody,
 }
 
 

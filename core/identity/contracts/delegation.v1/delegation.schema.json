@@ -40,14 +40,20 @@
       "type": "object",
       "required": ["sub", "aud", "scope", "iat", "exp", "jti"],
       "additionalProperties": false,
+      "dependentRequired": { "principal_kind": ["principal_workspace", "on_behalf_of"], "principal_workspace": ["principal_kind"], "on_behalf_of": ["principal_kind"] },
+      "if": { "required": ["principal_kind"] },
+      "then": { "properties": { "scope": { "required": ["shared"], "not": { "required": ["grants"] }, "properties": { "workspaces": { "type": "array" } } } } },
       "properties": {
-        "sub": { "type": "string", "minLength": 1, "description": "the person's identity user id, resolved by agent-api from the dispatch and never asserted by the worker" },
+        "sub": { "type": "string", "minLength": 1, "description": "who the worker acts as, resolved by agent-api from the dispatch and never asserted by the worker: the person's identity user id, or (D2, 0.13.4) a WORKSPACE principal's numeric id (identity's `principals`, kind `workspace`) for a room's turn — then `principal_kind`, `principal_workspace` and `on_behalf_of` are present and `scope.shared` is true" },
         "aud": { "const": "vexa-mcp", "description": "the audience pin: the token is for the MCP edge and its re-entry, nothing else" },
         "scope": { "$ref": "#/$defs/Scope" },
         "iat": { "type": "integer", "description": "issued at, unix seconds" },
         "exp": { "type": "integer", "description": "expires at, unix seconds; valid while now < exp. agent-api mints with a 3600 s lifetime" },
         "jti": { "type": "string", "minLength": 1, "description": "a random id, so a verifier that keeps a denylist can strike one token off" },
         "target": { "type": "string", "minLength": 1, "description": "the chat's target workspace: the slug a workspace verb with no slug of its own defaults to. A default, never a grant, so it is outside `scope`. Absent when there is none" },
+        "principal_kind": { "const": "workspace", "description": "D2: present when `sub` is a WORKSPACE principal's id, not a person's. identity checks it against its `principals` table (kind, workspace, status) and refuses a mismatch" },
+        "principal_workspace": { "type": "string", "minLength": 1, "description": "D2: the workspace that principal is the agent of. Present only beside `principal_kind`" },
+        "on_behalf_of": { "type": "string", "minLength": 1, "description": "D2: the person whose message the workspace principal's turn answered (the room speaker). Attribution and the write-or-propose rule; never a grant. Present only beside `principal_kind`" },
         "unit": { "type": "string", "minLength": 1, "description": "the agent unit the token was minted for — the dispatch id of a chat thread or a background job, i.e. the SESSION the worker's calls belong to. Signed so a worker cannot name another session; identity answers it (identity.v1 ValidateResponse.delegation.unit), the gateway signs it into gateway-identity.v1 delegation.unit, services log it as logevent.v1 `session` and the credential broker records it as audit.session. Correlation only, never a grant. Absent on a token minted without one" }
       }
     },
@@ -61,7 +67,7 @@
     },
     "Vector": {
       "type": "object",
-      "description": "A minting vector. Minting for subject, regime, workspaces, target, unit, shared, grants, flow and ttl_sec at now with jti and secret must produce `token` exactly (HMAC is deterministic), and `token` must decode to `header` and `claims`. The secret is published test data and authenticates nothing.",
+      "description": "A minting vector. Minting for subject, regime, workspaces, target, unit, shared, grants, flow, principal_kind, principal_workspace, on_behalf_of and ttl_sec at now with jti and secret must produce `token` exactly (HMAC is deterministic), and `token` must decode to `header` and `claims`. The secret is published test data and authenticates nothing.",
       "required": ["secret", "now", "subject", "regime", "workspaces", "ttl_sec", "jti", "header", "claims", "token"],
       "additionalProperties": false,
       "properties": {
@@ -76,6 +82,9 @@
         "audience": { "type": "string" },
         "grants": { "type": "array", "items": { "$ref": "#/$defs/Grant" } },
         "flow": { "type": "string" },
+        "principal_kind": { "type": "string" },
+        "principal_workspace": { "type": "string" },
+        "on_behalf_of": { "type": "string" },
         "ttl_sec": { "type": "integer", "minimum": 1 },
         "jti": { "type": "string" },
         "header": { "$ref": "#/$defs/Header" },

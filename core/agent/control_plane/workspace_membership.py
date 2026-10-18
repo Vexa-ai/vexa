@@ -4,14 +4,18 @@ The foundation for shared workspaces and shared meeting sessions. A workspace ow
 user **read (viewer)** or **read/write (contributor)** access; access is granted on the fly via scoped,
 single-use-by-default invite tokens (D2 in plans/shared-meeting-workspace.md).
 
-Two stores for MEMBERSHIP, written together on every change (the git file is authoritative, the index
-is derived), and a third, separate one for INVITES:
+Two stores for MEMBERSHIP, written together on every change (the policy store is authoritative, the
+index is derived), and a third, separate one for INVITES:
 
-  1. **Authoritative** — the workspace's OWN git repo at ``policy/members.json``::
+  1. **Authoritative** — the platform's POLICY STORE, ``<store-root>/.policy/<workspace_id>/members.json``
+     (with ``visibility.json`` and ``connections.json`` beside it), OUTSIDE every workspace mount
+     (PRD 0.13.4 D5 — see ``POLICY_STORE_DIR`` for why, and for the read-compatible migration)::
 
         [{"subject", "role": "owner"|"contributor"|"viewer", "added_by", "added_at"}]
 
-     Git is the source of truth: auditable, travels with the workspace, survives a DB loss (Q6).
+     The workspace's own git repo keeps a platform-written MIRROR at ``policy/members.json``, committed
+     with the deciding person as author: the audit trail, and what the worker counts readers from.
+     The mirror is never read for access, and no caller route can write it.
 
   2. **Index copy** — the user row's JSONB ``users.data.memberships[]`` = ``[{workspace_id, role, added_at}]``,
      for listing "workspaces shared with me". agent-api has no DB, so this is reached through the injected
@@ -27,8 +31,10 @@ is derived), and a third, separate one for INVITES:
      for what moved, what did not, and why — the roster is workspace knowledge and stays; an invite is
      capability material and does not belong in a tree that gets published, attached and reseeded.
 
-**policy/ is PLATFORM-WRITE-ONLY.** Agent turns must never modify ``policy/``. The membership module here IS
-the platform writer (it commits members.json directly). The worker's turn-commit path
+**policy/ is PLATFORM-WRITE-ONLY.** It is a reserved directory for every caller route
+(``workspace_paths.RESERVED_DIRS``: the page editor answers 403), an external-remote pull that changes it
+is refused (``workspace_git_sync``), and agent turns must never modify it. The membership module here IS
+the platform writer (it commits the mirror directly). The worker's turn-commit path
 (``llm/ports.run_harness_turn``) reverts any ``policy/`` change an agent turn produced before it commits,
 and — since #1645 — never deletes a ``policy/`` write the platform made while the turn ran. That is the
 enforcement seam. See ``POLICY_DIR`` (shared constant).
@@ -47,6 +53,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import threading
@@ -64,6 +71,65 @@ log = logging.getLogger(__name__)
 # guard (llm/ports imports the string, not this module — that module stays product-import-free).
 POLICY_DIR = "policy"
 MEMBERS_FILE = f"{POLICY_DIR}/members.json"
+VISIBILITY_FILE = f"{POLICY_DIR}/visibility.json"
+CONNECTIONS_FILE = f"{POLICY_DIR}/connections.json"
+#: ``policy/`` is a RESERVED directory for every caller route (``workspace_paths.RESERVED_DIRS``);
+#: this module is the platform writer of its mirror and names the folder it owns.
+_POLICY_ALLOW = (POLICY_DIR,)
+
+# ── WHERE A WORKSPACE'S POLICY LIVES NOW, AND WHY (PRD 0.13.4 D5, security review C3) ──────────────
+#
+# The roster, the visibility and the connections used to be AUTHORITATIVE in the workspace's own
+# tree (``policy/*.json``). That tree is the same directory a contributor's page editor writes and a
+# contributor's agent runs in, and on 2026-10-17 a contributor's ``PUT /api/workspace/file
+# policy/members.json`` made them owner at once: ``require_role`` read the work tree with no cache,
+# and the guard that reverts ``policy/`` edits runs only after an agent turn. Every "owners sign"
+# gate rested on that file.
+#
+# So the authority leaves the tree, exactly as the invites did for Vexa-ai/vexa#1645 (see
+# ``INVITE_STORE_DIR``): ``<store-root>/.policy/<workspace_id>/{members,visibility,connections}.json``.
+#
+# WHY THIS STORE AND NOT A DATABASE. agent-api has no database of its own (ports pattern). The two
+# alternatives were (a) the ``MembershipIndex`` port to identity admin-api — the ``users.data``
+# JSONB mirror — and (b) a new table behind a new port. (a) is keyed by SUBJECT, not by workspace,
+# carries no visibility or connections, is best-effort by contract ("a failure to update the index
+# MUST NOT lose the grant") and is unreachable in exactly the moments a fail-closed read must still
+# answer; making it authoritative would change identity's contract (S1-B's lane). (b) is a contract
+# and migration in another service for state agent-api already owns. The store-root dot-namespace is
+# what agent-api already uses for capability material (``.invites/``, ``.attached/``): every
+# enumerator skips it, and the runtime binds one subpath per mounted workspace and never the store
+# root (``runtime_kernel.mounts.workspace_binds``), so it is not merely unwritten by a worker, it is
+# not present in one. Nothing a caller route or an agent turn can reach writes it.
+#
+# THE TREE KEEPS A MIRROR. The platform still writes ``policy/*.json`` into the workspace and commits
+# it (author = the person who decided, #1632), because three readers want the roster IN the tree:
+# the worker's private-write hold counts readers there (``llm/private_writes.other_readers``), a
+# group is told from a desk by it (``workspace_ids.kind_of``), and the workspace's own history is the
+# audit of who added whom. The mirror is NEVER read for access. Editing it changes nothing.
+#
+# MIGRATION, READ-COMPATIBLE. A workspace with no store directory yet has its legacy in-tree files
+# ADOPTED once — all three together, under the workspace lock, at agent-api start
+# (``migrate_policy_store``) and on first read. After that the store answers alone. Adoption from
+# the tree is a window: a tree file written after the platform last wrote it would be believed once.
+# ``VEXA_POLICY_LEGACY_READ=0`` closes it after the release that migrated every instance.
+#
+# FAIL CLOSED (founder FD3, 2026-10-17): a store file that exists and cannot be read refuses
+# (``MembershipError`` 503, ``policy_unreadable``) — it is never "no members", never "open".
+POLICY_STORE_DIR = ".policy"
+#: What the store holds per workspace (plus ``invites``). The evaluator's rule FILES stay in git,
+#: platform-only (``read_rules``): git keeps content and rule files, the store keeps who is in.
+POLICY_NAMES = ("members", "visibility", "connections")
+_ADOPTED_NAMES = POLICY_NAMES
+#: ONE INTERFACE (``PolicyStore``) for membership policy and invites: the identity registry in a
+#: deployment, the file backend (``.policy/`` + ``.invites/``) without one.
+#: ``kind`` (0.13.4 S4, FD4): ``{"kind": "pair", "people": [a, b], "bills_to": a}`` for the hidden
+#: workspace behind a room of two; absent for an ordinary workspace. Never mirrored into the tree.
+STORE_NAMES = POLICY_NAMES + ("invites", "kind")
+#: CLOSED ROOMS' MEMBERS (0.13.4 D36): the registry's ``room:<id>`` rows. The file backend keeps
+#: them at ``<root>/.rooms/<room id>.json``, beside ``.policy/`` and outside every mount.
+ROOM_STORE_DIR = ".rooms"
+POLICY_UNREADABLE = "policy_unreadable"
+LEGACY_READ_ENV = "VEXA_POLICY_LEGACY_READ"
 
 # ── WHERE INVITES LIVE, AND WHY IT IS NOT IN THE WORKSPACE (Vexa-ai/vexa#1645) ───────────────────
 #
@@ -198,6 +264,11 @@ def role_sentence(role) -> str:
 
 DEFAULT_EXPIRES_IN_SEC = 604800  # 7 days
 DEFAULT_MAX_USES = 1
+#: THE CAPS (PRD 0.13.4 D5, security review C3/test 6). The legacy mint route had no upper bound: a
+#: contributor minted ``max_uses=1000000`` and a ten-year expiry. The bounds are the newer link
+#: door's (``join_links.MAX_MAX_USES`` / ``MAX_EXPIRES_IN_SEC``), so every door that mints agrees.
+MAX_INVITE_USES = 1000
+MAX_INVITE_EXPIRES_IN_SEC = 365 * 86400
 
 # Invite ACCESS MODES (AMENDMENT 5). ``open`` = any authenticated user with the link redeems (bounded
 # by expires_at + max_uses). ``restricted`` = redeem succeeds only if the authenticated user's VERIFIED
@@ -284,17 +355,132 @@ CommitFn = Callable[[Path, str], None]
 # a multi-replica deploy MUST additionally front this with a shared lock (redis/advisory) or make the
 # git push the CAS. Today agent-api is pinned single-replica (helm agentApi.replicaCount: 1 on an RWO
 # PVC), so the process-local lock is sufficient and this is a documented, not open, gap.
-_WS_LOCKS: dict[str, threading.Lock] = {}
+_WS_LOCKS: dict[str, "threading.RLock"] = {}
 _WS_LOCKS_GUARD = threading.Lock()
 
+#: THE SHARED HALF OF THE LOCK (PRD 0.13.4 M6, security review: "rate limits and locks are
+#: process-local"). ``None`` keeps the process-local behaviour above. agent-api's ``main()`` installs
+#: a Redis-backed factory (``RedisWorkspaceLock``) when it has a Redis, so two replicas redeeming
+#: the same invite serialise on one key instead of each trusting its own RLock. The factory takes a
+#: workspace id and returns a context manager; it is entered once per thread however deep the
+#: re-entrant local lock nests.
+_DISTRIBUTED_LOCK: Optional[Callable[[str], object]] = None
+_HELD = threading.local()
 
-def _ws_lock(workspace_id: str) -> threading.Lock:
-    """The process-local lock serializing the read-modify-write-commit of policy/ for one workspace."""
+
+def set_distributed_lock(factory: Optional[Callable[[str], object]]) -> None:
+    """Install (or, with ``None``, remove) the shared lock every ``_ws_lock`` also takes."""
+    global _DISTRIBUTED_LOCK
+    _DISTRIBUTED_LOCK = factory
+
+
+class _WsLock:
+    """``with _ws_lock(ws):`` — the process-local RLock, then the shared lock when one is installed.
+
+    The shared lock is taken by the OUTERMOST entry on a thread only (a dict of depths per thread),
+    because the local lock is re-entrant and a Redis lock is not: a nested ``read_members`` inside a
+    held ``set_role`` must not wait on itself."""
+
+    def __init__(self, workspace_id: str, local: "threading.RLock"):
+        self.workspace_id, self.local, self._shared = workspace_id, local, None
+
+    def __enter__(self):
+        self.local.acquire()
+        depth = getattr(_HELD, "depth", None)
+        if depth is None:
+            depth = _HELD.depth = {}
+        n = depth.get(self.workspace_id, 0)
+        if n == 0 and _DISTRIBUTED_LOCK is not None:
+            try:
+                shared = _DISTRIBUTED_LOCK(self.workspace_id)
+                shared.__enter__()
+            except BaseException:
+                self.local.release()
+                raise
+            depth.setdefault("_shared", {})[self.workspace_id] = shared
+        depth[self.workspace_id] = n + 1
+        return self
+
+    def __exit__(self, *exc):
+        depth = _HELD.depth
+        n = depth.get(self.workspace_id, 1) - 1
+        try:
+            if n <= 0:
+                depth.pop(self.workspace_id, None)
+                shared = depth.get("_shared", {}).pop(self.workspace_id, None)
+                if shared is not None:
+                    shared.__exit__(*exc)
+            else:
+                depth[self.workspace_id] = n
+        finally:
+            self.local.release()
+        return False
+
+    # The RLock interface a few callers and tests still use.
+    def acquire(self, *a, **k):
+        return self.local.acquire(*a, **k)
+
+    def release(self):
+        return self.local.release()
+
+
+def _ws_lock(workspace_id: str) -> _WsLock:
+    """The lock serializing the read-modify-write-commit of a workspace's policy.
+
+    RE-ENTRANT since 0.13.4 (D5): the one-time adoption of a legacy in-tree roster into the policy
+    store runs under this lock (so it cannot overwrite a platform write that landed meanwhile), and a
+    read inside a held critical section — ``set_role`` reading the roster it is about to change —
+    may be the read that adopts. SHARED since S2 (M6) when a distributed lock is installed."""
     with _WS_LOCKS_GUARD:
         lk = _WS_LOCKS.get(workspace_id)
         if lk is None:
-            lk = _WS_LOCKS[workspace_id] = threading.Lock()
-        return lk
+            lk = _WS_LOCKS[workspace_id] = threading.RLock()
+    return _WsLock(workspace_id, lk)
+
+
+class RedisWorkspaceLock:
+    """A Redis lock on ``vexa:ws-lock:<workspace>`` (SET NX PX, released only by its holder).
+
+    Waits up to ``wait_s`` and then refuses with ``MembershipError(503, policy_busy)`` rather than
+    acting unserialised — the fail-closed direction for a redeem. ``ttl_ms`` bounds a holder that
+    died mid-section."""
+
+    PREFIX = "vexa:ws-lock:"
+
+    def __init__(self, client, workspace_id: str, *, ttl_ms: int = 10_000, wait_s: float = 8.0):
+        self.client, self.key = client, self.PREFIX + str(workspace_id)
+        self.ttl_ms, self.wait_s, self.token = ttl_ms, wait_s, secrets.token_hex(12)
+
+    def __enter__(self):
+        deadline = time.monotonic() + self.wait_s
+        while True:
+            try:
+                if self.client.set(self.key, self.token, nx=True, px=self.ttl_ms):
+                    return self
+            except Exception as exc:  # noqa: BLE001 — an unreachable lock is not a lock
+                raise MembershipError(f"policy_busy: the workspace lock is unavailable "
+                                      f"({type(exc).__name__})", status=503) from None
+            if time.monotonic() >= deadline:
+                raise MembershipError("policy_busy: the workspace is being changed; try again",
+                                      status=503)
+            time.sleep(0.02)
+
+    def __exit__(self, *exc):
+        # Compare-and-delete under WATCH: only the holder's own token is removed, never a lock a
+        # later holder took after this one's TTL ran out.
+        try:
+            with self.client.pipeline() as p:
+                p.watch(self.key)
+                if p.get(self.key) == self.token:
+                    p.multi()
+                    p.delete(self.key)
+                    p.execute()
+                else:
+                    p.unwatch()
+        except Exception as e:  # noqa: BLE001 — the key expires on its own
+            log.warning("workspace lock release failed (%s); it expires in %d ms", type(e).__name__,
+                        self.ttl_ms)
+        return False
 
 
 def policy_commit(ws: Path, message: str) -> None:
@@ -400,7 +586,7 @@ def _ws_dir(root: Path, workspace_id: str) -> Path:
 # replaced, never written through, and a link planted at a folder refuses the write. A list that
 # cannot be read that way is empty: no members, never somebody else's.
 def _read_json_list(ws: Path, rel: str) -> list[dict]:
-    raw = wpaths.read_bytes_inside(ws, rel)
+    raw = wpaths.read_bytes_inside(ws, rel, allow=_POLICY_ALLOW)
     if raw is None:
         return []
     try:
@@ -413,10 +599,416 @@ def _read_json_list(ws: Path, rel: str) -> list[dict]:
 
 def _write_json_list(ws: Path, rel: str, rows: list[dict]) -> None:
     try:
-        wpaths.write_text_inside(ws, rel, json.dumps(rows, indent=2, sort_keys=False) + "\n")
+        wpaths.write_text_inside(ws, rel, json.dumps(rows, indent=2, sort_keys=False) + "\n",
+                                 allow=_POLICY_ALLOW)
     except wpaths.PathRefused as exc:
         raise MembershipError(f"{rel.rsplit('/', 1)[0]} in this workspace is not a plain folder",
                               status=409) from exc
+
+
+# ── the policy store: ONE interface, two backends ────────────────────────────────────────────────
+#
+# TARGET (coordinator, 2026-10-17, "as simple as optimal"): the identity database's registry —
+# ``workspaces``, ``memberships``, ``invites`` — with admin-api their one writer and agent-api reaching
+# them through its port (``shared.adapters.AdminApiPolicyStore``, ``admin_api/app/workspace_registry``).
+# A deployment with ``VEXA_ADMIN_API_URL`` uses it (``set_policy_store`` at boot). A deployment
+# without identity (tests, a bare single process) keeps the file backend below, outside every
+# workspace mount. Both answer the same five names: ``members`` · ``visibility`` · ``connections`` ·
+# ``invites`` (values, not bytes), plus ``has`` / ``drop`` / ``member_workspaces`` /
+# ``invite_by_hash``. Every call is wrapped: a backend that fails answers ``MembershipError`` 503
+# ``policy_unreadable`` — fail closed (FD3), never "no members".
+class PolicyStore(Protocol):
+    # rooms (S4): ``room_get`` answers None for a room the store has no rows for, never [] by guess
+    def room_get(self, root: Path, room_id: str) -> Optional[list]: ...
+    def room_put(self, root: Path, room_id: str, rows: list) -> None: ...
+    def room_drop(self, root: Path, room_id: str) -> bool: ...
+    def principal_rooms(self, root: Path, subject: str) -> list[dict]: ...
+    def has(self, root: Path, workspace_id: str) -> bool: ...
+    def get(self, root: Path, workspace_id: str, name: str): ...
+    def put(self, root: Path, workspace_id: str, name: str, value) -> None: ...
+    def drop(self, root: Path, workspace_id: str) -> bool: ...
+    def member_workspaces(self, root: Path, subject: str) -> list[dict]: ...
+    def invite_by_hash(self, root: Path, token_hash: str) -> Optional[tuple[str, dict]]: ...
+
+
+def _store_rel(workspace_id: str, name: str = "") -> str:
+    """The FILE backend's spelling: ``.policy/<workspace_id>[/<name>.json]``, and
+    ``.invites/<workspace_id>.json`` for invites."""
+    wid = str(workspace_id or "").strip()
+    if not wpaths.is_workspace_name(wid):
+        raise MembershipError("invalid workspace id", status=400)
+    if name and name not in STORE_NAMES:
+        raise ValueError(f"unknown policy record {name!r}")
+    if name == "invites":
+        return f"{INVITE_STORE_DIR}/{wid}.json"
+    return f"{POLICY_STORE_DIR}/{wid}" + (f"/{name}.json" if name else "")
+
+
+class FilePolicyStore:
+    """The file backend: ``<root>/.policy/<ws>/`` and ``<root>/.invites/<ws>.json``, beside the
+    workspaces and outside every mount (the runtime binds one subpath per workspace, never the root)."""
+
+    def has(self, root, workspace_id):
+        return wpaths.is_dir_inside(Path(root), _store_rel(workspace_id))
+
+    def get(self, root, workspace_id, name):
+        rel = _store_rel(workspace_id, name)
+        raw = wpaths.read_bytes_inside(Path(root), rel)
+        if raw is None:
+            if wpaths.stat_inside(Path(root), rel) is not None:     # a link, a folder: not ours to read
+                raise MembershipError(f"{POLICY_UNREADABLE}: {name} cannot be read", status=503)
+            return None
+        try:
+            return json.loads(raw)
+        except ValueError:
+            raise MembershipError(f"{POLICY_UNREADABLE}: {name} cannot be read", status=503) from None
+
+    def put(self, root, workspace_id, name, value):
+        try:
+            wpaths.write_text_inside(Path(root), _store_rel(workspace_id, name),
+                                     json.dumps(value, indent=2, sort_keys=False) + "\n")
+        except (wpaths.PathRefused, OSError) as exc:
+            raise MembershipError(f"{POLICY_UNREADABLE}: the policy store could not be written",
+                                  status=503) from exc
+
+    def drop(self, root, workspace_id):
+        root = Path(root)
+        dropped = False
+        for name in STORE_NAMES:
+            dropped = wpaths.unlink_inside(root, _store_rel(workspace_id, name)) or dropped
+        try:
+            os.rmdir(root / _store_rel(workspace_id))
+        except OSError:
+            pass
+        return dropped
+
+    def member_workspaces(self, root, subject):
+        out = []
+        for slug in wpaths.list_dirs_inside(Path(root), POLICY_STORE_DIR):
+            if not wpaths.is_workspace_name(slug):
+                continue
+            try:
+                rows = self.get(root, slug, "members") or []
+            except MembershipError as exc:          # unreadable: not listed (fail closed)
+                log.warning("membership listing skipped %s: %s", slug, exc)
+                continue
+            for r in rows if isinstance(rows, list) else []:
+                if isinstance(r, dict) and r.get("subject") == subject:
+                    out.append({"workspace_id": slug, "role": r.get("role"), "added_at": r.get("added_at")})
+                    break
+        return out
+
+    # ── closed rooms' members (S4, D36) ─────────────────────────────────────────────────────
+    @staticmethod
+    def _room_rel(room_id: str) -> str:
+        rid = str(room_id or "").strip()
+        if not wpaths.is_workspace_name(rid, tier=False):
+            raise MembershipError("invalid room id", status=400)
+        return f"{ROOM_STORE_DIR}/{rid}.json"
+
+    def room_get(self, root, room_id):
+        rel = self._room_rel(room_id)
+        raw = wpaths.read_bytes_inside(Path(root), rel)
+        if raw is None:
+            if wpaths.stat_inside(Path(root), rel) is not None:
+                raise MembershipError(f"{POLICY_UNREADABLE}: room members cannot be read", status=503)
+            return None
+        try:
+            rows = json.loads(raw)
+        except ValueError:
+            raise MembershipError(f"{POLICY_UNREADABLE}: room members cannot be read", status=503) from None
+        if not isinstance(rows, list):
+            raise MembershipError(f"{POLICY_UNREADABLE}: room members cannot be read", status=503)
+        return rows
+
+    def room_put(self, root, room_id, rows):
+        try:
+            wpaths.write_text_inside(Path(root), self._room_rel(room_id), json.dumps(list(rows), indent=2) + "\n")
+        except (wpaths.PathRefused, OSError) as exc:
+            raise MembershipError(f"{POLICY_UNREADABLE}: room members could not be written", status=503) from exc
+
+    def room_drop(self, root, room_id):
+        return wpaths.unlink_inside(Path(root), self._room_rel(room_id))
+
+    def principal_rooms(self, root, subject):
+        out = []
+        for name in wpaths.list_files_inside(Path(root), ROOM_STORE_DIR, suffix=".json"):
+            rid = name[:-len(".json")]
+            try:
+                rows = self.room_get(root, rid) or []
+            except MembershipError:
+                continue
+            for r in rows:
+                if isinstance(r, dict) and r.get("subject") == subject:
+                    out.append({"room_id": rid, "role": r.get("role"), "added_at": r.get("added_at")})
+                    break
+        return out
+
+    def invite_by_hash(self, root, token_hash):
+        for name in wpaths.list_files_inside(Path(root), INVITE_STORE_DIR, suffix=".json"):
+            slug = name[:-len(".json")]
+            if not wpaths.is_workspace_name(slug) or slug in RESERVED_SLUGS:
+                continue
+            try:
+                rows = self.get(root, slug, "invites") or []
+            except MembershipError:
+                continue
+            for rec in rows if isinstance(rows, list) else []:
+                if isinstance(rec, dict) and rec.get("hash") == token_hash:
+                    return slug, rec
+        return None
+
+
+_FILE_STORE = FilePolicyStore()
+_STORE: PolicyStore = _FILE_STORE
+#: Workspaces this process has seen in the store — so a listing never asks the backend again.
+_KNOWN: set[tuple[str, str]] = set()
+
+
+def set_policy_store(store: Optional[PolicyStore]) -> None:
+    """Choose the backend (agent-api's composition root: the identity registry when admin-api is
+    configured). ``None`` restores the file backend."""
+    global _STORE
+    _STORE = store if store is not None else _FILE_STORE
+    _KNOWN.clear()
+
+
+def policy_store() -> PolicyStore:
+    return _STORE
+
+
+def _call(fn, *args):
+    try:
+        return fn(*args)
+    except MembershipError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — an unreachable store refuses (FD3)
+        log.error("policy store %s failed: %s", getattr(fn, "__name__", "call"), exc)
+        raise MembershipError(f"{POLICY_UNREADABLE}: the membership store did not answer",
+                              status=503) from None
+
+
+def room_store_get(root: Path, room_id: str) -> Optional[list]:
+    """A closed room's member rows from the store, or None when it holds none (fail closed: 503)."""
+    return _call(_STORE.room_get, Path(root), room_id)
+
+
+def room_store_put(root: Path, room_id: str, rows: list) -> None:
+    _call(_STORE.room_put, Path(root), room_id, list(rows))
+
+
+def room_store_drop(root: Path, room_id: str) -> bool:
+    return bool(_call(_STORE.room_drop, Path(root), room_id))
+
+
+def is_pair(root: Path, workspace_id: str) -> bool:
+    """Is ``workspace_id`` the hidden workspace behind a room of two (0.13.4 FD4)? A store that cannot
+    answer says no here; the membership reads that follow refuse on their own (FD3)."""
+    try:
+        if not wpaths.is_workspace_name(str(workspace_id or "")):
+            return False
+        v = _call(_STORE.get, Path(root), workspace_id, "kind")
+    except MembershipError:
+        return False
+    return isinstance(v, dict) and v.get("kind") == "pair"
+
+
+def store_get(root: Path, workspace_id: str, name: str):
+    return _call(_STORE.get, Path(root), workspace_id, name)
+
+
+def store_put(root: Path, workspace_id: str, name: str, value) -> None:
+    _call(_STORE.put, Path(root), workspace_id, name, value)
+    _KNOWN.add((str(root), workspace_id))
+
+
+def _legacy_read() -> bool:
+    return os.environ.get(LEGACY_READ_ENV, "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def policy_in_store(root: Path, workspace_id: str) -> bool:
+    """True once ``workspace_id``'s policy lives in the store (migrated or written since 0.13.4)."""
+    _store_rel(workspace_id)                        # the workspace-id rule
+    if (str(root), workspace_id) in _KNOWN:
+        return True
+    if _call(_STORE.has, Path(root), workspace_id):
+        _KNOWN.add((str(root), workspace_id))
+        return True
+    return False
+
+
+def _legacy_sources(root: Path, workspace_id: str) -> dict:
+    """What an unmigrated workspace has elsewhere: the interim file store (when the backend is not
+    it) first, else the workspace tree's ``policy/*.json``; and its invites (``.invites`` file, else
+    the tree's ``policy/invites.json``). ``{name: value}``; unparseable files are skipped, said."""
+    found: dict = {}
+    if _STORE is not _FILE_STORE and _FILE_STORE.has(root, workspace_id):
+        for name in _ADOPTED_NAMES:
+            try:
+                v = _FILE_STORE.get(root, workspace_id, name)
+            except MembershipError:
+                continue
+            if v is not None:
+                found[name] = v
+    else:
+        try:
+            ws = _ws_dir(root, workspace_id)
+        except MembershipError:
+            ws = None
+        for name in _ADOPTED_NAMES if ws is not None else ():
+            raw = wpaths.read_text_inside(ws, f"{POLICY_DIR}/{name}.json", allow=_POLICY_ALLOW)
+            if raw is None:
+                continue
+            try:
+                found[name] = json.loads(raw)
+            except ValueError:
+                log.warning("policy store: legacy %s/%s.json in %s does not parse; not adopted",
+                            POLICY_DIR, name, workspace_id)
+    if _STORE is not _FILE_STORE and found:
+        try:
+            inv = _FILE_STORE.get(root, workspace_id, "invites")
+        except MembershipError:
+            inv = None
+        if inv is None:
+            try:
+                inv = _read_json_list(_ws_dir(root, workspace_id), LEGACY_INVITES_FILE) or None
+            except MembershipError:
+                inv = None
+        if isinstance(inv, list) and inv:
+            found["invites"] = inv
+    return found
+
+
+def _ensure_migrated(root: Path, workspace_id: str) -> bool:
+    """Adopt an unmigrated workspace's policy (and, for the registry, its invites) into the store,
+    once and all together. True when the store holds this workspace's policy afterwards. Under the
+    workspace lock, re-checked inside, so an adoption never overwrites a write that landed meanwhile."""
+    root = Path(root)
+    if policy_in_store(root, workspace_id):
+        return True
+    with _ws_lock(workspace_id):
+        if policy_in_store(root, workspace_id):
+            return True
+        if not _legacy_read():
+            return False
+        found = _legacy_sources(root, workspace_id)
+        if not found:
+            return False
+        for name in ("members", "visibility", "connections", "invites"):
+            if name in found:
+                store_put(root, workspace_id, name, found[name])
+        log.info("policy store: adopted %s for %s", sorted(found), workspace_id)
+        return True
+
+
+def read_policy(root: Path, workspace_id: str, name: str, default):
+    """THE ONE READER of a workspace's policy (``members`` · ``visibility`` · ``connections``).
+
+    The store answers; a workspace not yet in it has its legacy records adopted first (see the
+    header). ``default`` when the workspace has no such policy. A store that cannot answer raises
+    ``MembershipError`` 503 ``policy_unreadable`` — fail closed (FD3)."""
+    root = Path(root)
+    _store_rel(workspace_id, name)
+    if not _ensure_migrated(root, workspace_id):
+        return default
+    value = store_get(root, workspace_id, name)
+    return default if value is None else value
+
+
+def write_policy(root: Path, workspace_id: str, name: str, value, *,
+                 commit_fn: Optional[CommitFn] = None, message: str = "") -> None:
+    """THE ONE WRITER: the store (authoritative), then the tree's ``policy/<name>.json`` mirror and its
+    commit. A workspace still on legacy records is migrated first, so writing one never strands the
+    others."""
+    root = Path(root)
+    with _ws_lock(workspace_id):
+        _ensure_migrated(root, workspace_id)
+        store_put(root, workspace_id, name, value)
+        try:
+            ws = _ws_dir(root, workspace_id)
+        except MembershipError:
+            return
+        if not ws.is_dir():
+            return
+        text = json.dumps(value, indent=2, sort_keys=False) + "\n"
+        try:
+            wpaths.write_text_inside(ws, f"{POLICY_DIR}/{name}.json", text, allow=_POLICY_ALLOW)
+        except (wpaths.PathRefused, OSError) as exc:
+            # The store holds the decision; only the mirror is stale. Said, never swallowed silently.
+            log.warning("policy mirror %s/%s.json not written in %s: %s", POLICY_DIR, name, workspace_id, exc)
+            return
+        _commit(commit_fn, ws, message or f"policy: {name} for {workspace_id}")
+
+
+def drop_policy_store(root: Path, workspace_id: str) -> bool:
+    """Forget a workspace's policy and invites in the store — for a workspace that stopped being a
+    group (un-share, delete). A later workspace with the same id starts with no roster, never this
+    one's. True when there was something to drop."""
+    _store_rel(workspace_id)
+    _KNOWN.discard((str(root), workspace_id))
+    dropped = bool(_call(_STORE.drop, Path(root), workspace_id))
+    if _STORE is not _FILE_STORE:                       # and the interim files, so nothing re-adopts them
+        dropped = _FILE_STORE.drop(Path(root), workspace_id) or dropped
+    return dropped
+
+
+def read_rules(root: Path, workspace_id: str) -> list:
+    """A workspace's own policy RULES for the evaluator (``policy_decide``, D7). Rule files stay in
+    git, platform-only (``policy/rules.json``: reserved for every caller route, reverted when a turn
+    touches it). ``[]`` when there are none; ``MembershipError`` 503 when the file cannot be read."""
+    ws = _ws_dir(root, workspace_id)
+    rel = f"{POLICY_DIR}/rules.json"
+    raw = wpaths.read_text_inside(ws, rel, allow=_POLICY_ALLOW)
+    if raw is None:
+        if wpaths.stat_inside(ws, rel, allow=_POLICY_ALLOW) is not None:
+            raise MembershipError(f"{POLICY_UNREADABLE}: rules cannot be read", status=503)
+        return []
+    try:
+        rules = json.loads(raw)
+    except ValueError:
+        raise MembershipError(f"{POLICY_UNREADABLE}: rules cannot be read", status=503) from None
+    if not isinstance(rules, list):
+        raise MembershipError(f"{POLICY_UNREADABLE}: rules cannot be read", status=503)
+    return rules
+
+
+def migrate_policy_store(root: Path) -> list[str]:
+    """Adopt every workspace's legacy policy (interim files, else tree files; and their invites)
+    into the store — run once at agent-api start, so the read-compatible window lasts no longer than
+    the boot. Idempotent. Never raises. The workspace ids adopted by this call."""
+    root = Path(root)
+    adopted: list[str] = []
+    if not _legacy_read():
+        return adopted
+    try:
+        names = set(wpaths.list_dirs_inside(root, ""))
+        if _STORE is not _FILE_STORE:
+            names |= set(wpaths.list_dirs_inside(root, POLICY_STORE_DIR))
+    except Exception:  # noqa: BLE001
+        return adopted
+    for slug in sorted(names):
+        if slug.startswith(".") or slug in RESERVED_SLUGS or not wpaths.is_workspace_name(slug):
+            continue
+        try:
+            if policy_in_store(root, slug):
+                continue
+            if _ensure_migrated(root, slug):
+                adopted.append(slug)
+        except Exception as exc:  # noqa: BLE001 — one bad tree never stops the rest
+            log.warning("policy store: %s not migrated: %s", slug, exc)
+    if adopted:
+        log.info("policy store: migrated %d workspace(s)", len(adopted))
+    return adopted
+
+
+def _members(root: Path, workspace_id: str) -> list[dict]:
+    rows = read_policy(root, workspace_id, "members", [])
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def _save_members(root: Path, workspace_id: str, rows: list[dict], *,
+                  commit_fn: Optional[CommitFn], message: str) -> None:
+    write_policy(root, workspace_id, "members", rows, commit_fn=commit_fn, message=message)
 
 
 # ── the invite store (outside every workspace mount — see INVITE_STORE_DIR above) ────────────────
@@ -437,36 +1029,36 @@ def invites_path(root: Path, workspace_id: str) -> Path:
 
 
 def read_invites(root: Path, workspace_id: str) -> list[dict]:
-    """A workspace's invite records (``[]`` if none), from the store — falling back to the LEGACY
-    in-tree ``policy/invites.json`` while that workspace has no store file yet, so an invite minted
-    before the move still previews and still redeems."""
-    store = invites_path(root, workspace_id)
-    if store.exists():
-        try:
-            data = json.loads(store.read_text())
-            return data if isinstance(data, list) else []
-        except (OSError, ValueError):
-            log.warning("could not parse the invite store for %s; treating as empty", workspace_id)
-            return []
+    """A workspace's invite records (``[]`` if none), from the store. The file backend falls back to
+    the LEGACY in-tree ``policy/invites.json`` while that workspace has no invite file yet; the
+    registry adopts invites together with the roster (``_ensure_migrated``)."""
+    invites_path(root, workspace_id)                # the traversal guard, as before
+    if _STORE is not _FILE_STORE:
+        _ensure_migrated(Path(root), workspace_id)
+    rows = store_get(root, workspace_id, "invites")
+    if rows is not None:
+        return rows if isinstance(rows, list) else []
+    if _STORE is not _FILE_STORE:
+        return []
     return _read_json_list(_ws_dir(root, workspace_id), LEGACY_INVITES_FILE)
 
 
 def _write_invites(root: Path, workspace_id: str, rows: list[dict]) -> None:
     """Persist a workspace's invites. Always to the store — never back to the legacy in-tree file —
     so the first write after the move migrates whatever the fallback read."""
-    store = invites_path(root, workspace_id)
-    store.parent.mkdir(parents=True, exist_ok=True)
-    store.write_text(json.dumps(rows, indent=2, sort_keys=False) + "\n")
+    invites_path(root, workspace_id)
+    _call(_STORE.put, Path(root), workspace_id, "invites", rows)
 
 
 def drop_invites(root: Path, workspace_id: str) -> bool:
-    """Remove a workspace's invite store, so no invite minted for it can be redeemed. True when there
-    was one. For a workspace that stopped being a group (un-share)."""
-    try:
-        invites_path(root, workspace_id).unlink()
-        return True
-    except FileNotFoundError:
-        return False
+    """Remove a workspace's invites, so no invite minted for it can be redeemed. True when there
+    were any. For a workspace that stopped being a group (un-share, delete)."""
+    invites_path(root, workspace_id)
+    if _STORE is _FILE_STORE:
+        return wpaths.unlink_inside(Path(root), _store_rel(workspace_id, "invites"))
+    had = bool(store_get(root, workspace_id, "invites"))
+    _call(_STORE.put, Path(root), workspace_id, "invites", [])
+    return had
 
 
 def strip_policy(ws: Path, *, commit_fn: Optional[CommitFn] = None) -> list[str]:
@@ -477,7 +1069,8 @@ def strip_policy(ws: Path, *, commit_fn: Optional[CommitFn] = None) -> list[str]
     ``commit_fn`` says otherwise) so the tree's history records it. The relative paths removed."""
     # each removed through the folders' descriptors (``workspace_paths.unlink_inside``): a link where
     # the policy folder should be removes nothing, and a link at a file is removed itself
-    removed = [rel for rel in (MEMBERS_FILE, LEGACY_INVITES_FILE) if wpaths.unlink_inside(Path(ws), rel)]
+    removed = [rel for rel in (MEMBERS_FILE, VISIBILITY_FILE, CONNECTIONS_FILE, LEGACY_INVITES_FILE)
+               if wpaths.unlink_inside(Path(ws), rel, allow=_POLICY_ALLOW)]
     if removed:
         _commit(commit_fn or policy_commit, Path(ws), "unshare: the member list leaves with the group")
     return removed
@@ -503,9 +1096,17 @@ def find_invite(root: Path, token: str) -> Optional[tuple[str, dict]]:
     """``(workspace_id, record)`` for the invite ``token`` resolves to, or ``None``.
 
     The ONE resolver: ``preview`` and ``accept`` both call it, so a token can never resolve for one
-    and not the other. Matched on the sha256 hash — the only form persisted."""
+    and not the other. Matched on the sha256 hash — the only form persisted. The store answers first;
+    an invite still in a legacy file (read-compatible migration) is found by scanning, and its
+    workspace is adopted on the way."""
     h = hash_token(token)
+    root = Path(root)
+    hit = _call(_STORE.invite_by_hash, root, h)
+    if hit is not None:
+        return hit
     for slug in workspaces_with_invites(root):
+        if _STORE is not _FILE_STORE:
+            _ensure_migrated(root, slug)
         for rec in read_invites(root, slug):
             if rec.get("hash") == h:
                 return slug, rec
@@ -533,8 +1134,10 @@ def assert_shareable(root: Path, workspace_id: str) -> Path:
 
 # ── membership reads ────────────────────────────────────────────────────────────────────────────
 def read_members(root: Path, workspace_id: str) -> list[dict]:
-    """The authoritative member list from ``policy/members.json`` (``[]`` if none)."""
-    return _read_json_list(_ws_dir(root, workspace_id), MEMBERS_FILE)
+    """The authoritative member list (``[]`` if none) — from the policy store, never from the tree's
+    ``policy/members.json`` mirror (D5). Raises ``MembershipError`` 503 when the store cannot be read."""
+    _ws_dir(root, workspace_id)                     # the workspace-id rule, as before
+    return _members(root, workspace_id)
 
 
 def backfill_member_email(root: Path, workspace_id: str, subject: str, email: Optional[str], *,
@@ -546,15 +1149,15 @@ def backfill_member_email(root: Path, workspace_id: str, subject: str, email: Op
     _email = _normalize_email(email)
     if not _email:
         return False
-    ws = _ws_dir(root, workspace_id)
+    _ws_dir(root, workspace_id)
     with _ws_lock(workspace_id):
-        members = _read_json_list(ws, MEMBERS_FILE)
+        members = _members(root, workspace_id)
         target = next((m for m in members if m.get("subject") == subject), None)
         if target is None or target.get("email") == _email:
             return False
         target["email"] = _email
-        _write_json_list(ws, MEMBERS_FILE, members)
-        _commit(commit_fn, ws, f"policy: email for {subject} in {workspace_id}")
+        _save_members(root, workspace_id, members, commit_fn=commit_fn,
+                      message=f"policy: email for {subject} in {workspace_id}")
     return True
 
 
@@ -617,17 +1220,30 @@ def list_memberships(root: Path, subject: str) -> list[dict]:
     root = Path(root)
     if not root.exists():
         return []
-    out: list[dict] = []
-    for child in sorted(c for c in root.iterdir() if c.is_dir()):
-        slug = child.name
-        if slug.startswith(".") or slug in RESERVED_SLUGS:
-            continue
-        for member in _read_json_list(child, MEMBERS_FILE):
-            if member.get("subject") == subject:
-                out.append({"workspace_id": slug, "role": member.get("role"),
-                            "added_at": member.get("added_at")})
-                break
-    return out
+    out = list(_call(_STORE.member_workspaces, root, subject) or [])
+    seen = {r.get("workspace_id") for r in out}
+    # Read-compatible migration: a tree (or interim file) not yet adopted is adopted here, then asked.
+    if _legacy_read():
+        candidates = {c.name for c in root.iterdir() if c.is_dir()}
+        if _STORE is not _FILE_STORE:
+            candidates |= set(wpaths.list_dirs_inside(root, POLICY_STORE_DIR))
+        for slug in sorted(candidates - seen):
+            if slug.startswith(".") or slug in RESERVED_SLUGS or not wpaths.is_workspace_name(slug):
+                continue
+            try:
+                if policy_in_store(root, slug) or not _ensure_migrated(root, slug):
+                    continue
+                for member in _members(root, slug):
+                    if member.get("subject") == subject:
+                        out.append({"workspace_id": slug, "role": member.get("role"),
+                                    "added_at": member.get("added_at")})
+                        break
+            except MembershipError as exc:          # unreadable store: not listed (fail closed)
+                log.warning("membership listing skipped %s: %s", slug, exc)
+    # A PAIR WORKSPACE IS HIDDEN (0.13.4 FD4): never a workspace in a list, a mount or the people
+    # directory — its two people reach it only through their room of two.
+    out = [r for r in out if not is_pair(root, str(r.get("workspace_id") or ""))]
+    return sorted(out, key=lambda r: str(r.get("workspace_id")))
 
 
 def reconciled_memberships(root: Path, subject: str,
@@ -650,6 +1266,7 @@ def reconciled_memberships(root: Path, subject: str,
         log.warning("membership index list failed for subject=%s: %s — enumerating from policy/members.json only",
                     subject, exc)
         rows, degraded = [], True
+    rows = [r for r in rows if not (isinstance(r, dict) and is_pair(root, str(r.get("workspace_id") or "")))]
     seen = {r.get("workspace_id") for r in rows if isinstance(r, dict)}
     try:
         rows += [row for row in list_memberships(root, subject) if row["workspace_id"] not in seen]
@@ -683,7 +1300,7 @@ def ensure_owner(root: Path, workspace_id: str, owner_subject: str, *,
 def _ensure_owner_locked(root: Path, workspace_id: str, owner_subject: str, *, ws: Path,
                          index: MembershipIndex, email: Optional[str] = None,
                          commit_fn: Optional[CommitFn] = None) -> None:
-    members = _read_json_list(ws, MEMBERS_FILE)
+    members = _members(root, workspace_id)
     _email = _normalize_email(email)
     existing = next((m for m in members if m.get("subject") == owner_subject), None)
     already_owner = existing is not None and existing.get("role") == "owner"
@@ -703,8 +1320,8 @@ def _ensure_owner_locked(root: Path, workspace_id: str, owner_subject: str, *, w
         if _email:
             rec["email"] = _email
         members.append(rec)
-    _write_json_list(ws, MEMBERS_FILE, members)
-    _commit(commit_fn, ws, f"policy: owner {owner_subject} for {workspace_id}")
+    _save_members(root, workspace_id, members, commit_fn=commit_fn,
+                  message=f"policy: owner {owner_subject} for {workspace_id}")
     _index_add(index, owner_subject, workspace_id, "owner", (existing or {}).get("added_at", now))
 
 
@@ -718,8 +1335,19 @@ def grant_membership(root: Path, workspace_id: str, subject: str, role: str, *,
     role = normalize_role(role)
     if not _valid_subject(subject):
         raise MembershipError("invalid subject", status=400)
-    ws = assert_shareable(root, workspace_id)
-    members = _read_json_list(ws, MEMBERS_FILE)
+    assert_shareable(root, workspace_id)
+    with _ws_lock(workspace_id):
+        return _grant_locked(root, workspace_id, subject, role, added_by=added_by, index=index,
+                             email=email, commit_fn=commit_fn)
+
+
+def _grant_locked(root: Path, workspace_id: str, subject: str, role: str, *, added_by: str,
+                  index: MembershipIndex, email: Optional[str], commit_fn: Optional[CommitFn]) -> dict:
+    members = _members(root, workspace_id)
+    if is_pair(root, workspace_id) and not any(m.get("subject") == subject for m in members):
+        # A ROOM OF TWO HAS TWO PEOPLE (0.13.4 FD4, SF-11): a third is never granted, by any door.
+        raise MembershipError("a room of two has exactly two people; start a room in a workspace "
+                              "to talk with more", status=409)
     now = _now_iso()
     _email = _normalize_email(email)
     for m in members:
@@ -734,8 +1362,8 @@ def grant_membership(root: Path, workspace_id: str, subject: str, role: str, *,
         if _email:
             record["email"] = _email
         members.append(record)
-    _write_json_list(ws, MEMBERS_FILE, members)
-    _commit(commit_fn, ws, f"policy: {role} for {subject} in {workspace_id}")
+    _save_members(root, workspace_id, members, commit_fn=commit_fn,
+                  message=f"policy: {role} for {subject} in {workspace_id}")
     _index_add(index, subject, workspace_id, role, record.get("added_at", now))
     return dict(record)
 
@@ -746,9 +1374,9 @@ def set_role(root: Path, workspace_id: str, subject: str, role: str, *,
     layer. Refuses to demote/alter a non-member and refuses to strip the LAST owner (a workspace must
     always retain an owner)."""
     role = normalize_role(role)
-    ws = assert_shareable(root, workspace_id)
-    with _ws_lock(workspace_id):  # serialize the members.json read-modify-write (last-owner check + flip)
-        members = _read_json_list(ws, MEMBERS_FILE)
+    assert_shareable(root, workspace_id)
+    with _ws_lock(workspace_id):  # serialize the roster read-modify-write (last-owner check + flip)
+        members = _members(root, workspace_id)
         target = next((m for m in members if m.get("subject") == subject), None)
         if target is None:
             raise MembershipError("not a member", status=404)
@@ -757,8 +1385,8 @@ def set_role(root: Path, workspace_id: str, subject: str, role: str, *,
             if len(owners) <= 1:
                 raise MembershipError("cannot remove the last owner", status=409)
         target["role"] = role
-        _write_json_list(ws, MEMBERS_FILE, members)
-        _commit(commit_fn, ws, f"policy: role {subject} -> {role} in {workspace_id}")
+        _save_members(root, workspace_id, members, commit_fn=commit_fn,
+                      message=f"policy: role {subject} -> {role} in {workspace_id}")
         _index_add(index, subject, workspace_id, role, target.get("added_at", _now_iso()))
         return dict(target)
 
@@ -766,9 +1394,9 @@ def set_role(root: Path, workspace_id: str, subject: str, role: str, *,
 def remove_member(root: Path, workspace_id: str, subject: str, *,
                   index: MembershipIndex, commit_fn: Optional[CommitFn] = None) -> None:
     """Remove a member from BOTH stores. Refuses to remove the last owner."""
-    ws = assert_shareable(root, workspace_id)
-    with _ws_lock(workspace_id):  # serialize the members.json read-modify-write (last-owner check + drop)
-        members = _read_json_list(ws, MEMBERS_FILE)
+    assert_shareable(root, workspace_id)
+    with _ws_lock(workspace_id):  # serialize the roster read-modify-write (last-owner check + drop)
+        members = _members(root, workspace_id)
         target = next((m for m in members if m.get("subject") == subject), None)
         if target is None:
             return  # idempotent
@@ -777,8 +1405,8 @@ def remove_member(root: Path, workspace_id: str, subject: str, *,
             if len(owners) <= 1:
                 raise MembershipError("cannot remove the last owner", status=409)
         members = [m for m in members if m.get("subject") != subject]
-        _write_json_list(ws, MEMBERS_FILE, members)
-        _commit(commit_fn, ws, f"policy: remove {subject} from {workspace_id}")
+        _save_members(root, workspace_id, members, commit_fn=commit_fn,
+                      message=f"policy: remove {subject} from {workspace_id}")
         _index_remove(index, subject, workspace_id)
 
 
@@ -816,10 +1444,32 @@ def invite_link(ui_url: str, token: str) -> str:
     return f"{base}{JOIN_PATH}?i={urllib.parse.quote(token, safe='')}"
 
 
+def invite_role_allowed(root: Path, workspace_id: str, inviter: str, role: str, *,
+                        owner_act: bool = False) -> str:
+    """The invite role ``inviter`` may hand out in ``workspace_id``, or ``MembershipError`` 403.
+
+    Two rules (PRD 0.13.4 D5): **an invite never outranks its sender** — a contributor invites
+    contributors and readers, a reader nobody above a reader — and **an owner is made only through
+    the owner-gated act** (``owner_act=True``: ``membership_acts.invite``, behind
+    ``assert_may_manage``), never through a link or the generic mint route, whoever calls it. Checked
+    at mint and again at redeem, against the sender's role THEN, so an invite whose sender has since
+    been demoted or removed grants no more than they now hold."""
+    role = normalize_role(role)
+    if role == "owner" and not owner_act:
+        raise MembershipError("an owner is made only by an owner's own invite to a named person, "
+                              "never by a link", status=403)
+    held = is_member(root, workspace_id, inviter)
+    if held is None or _RANK.get(held, -1) < _RANK[role]:
+        raise MembershipError(f"an invite cannot give more than its sender holds ({role_word(held) or 'none'})",
+                              status=403)
+    return role
+
+
 def mint_invite(root: Path, workspace_id: str, *, role: str, created_by: str,
                 expires_in_sec: int = DEFAULT_EXPIRES_IN_SEC, max_uses: int = DEFAULT_MAX_USES,
                 mode: str = DEFAULT_INVITE_MODE, allowed_emails: Optional[list[str]] = None,
-                commit_fn: Optional[CommitFn] = None, now: Optional[float] = None) -> MintedInvite:
+                commit_fn: Optional[CommitFn] = None, now: Optional[float] = None,
+                owner_act: bool = False, room=None) -> MintedInvite:
     """Mint a scoped invite token for ``workspace_id``. Stores ONLY the token's sha256 hash + metadata in
     ``policy/invites.json``; returns the plaintext token once (the caller builds the invite URL). The
     workspace must be shareable (reserved/own-private refused).
@@ -831,16 +1481,18 @@ def mint_invite(root: Path, workspace_id: str, *, role: str, created_by: str,
     # ``if role not in INVITABLE_ROLES`` against ``("contributor",)`` and put the tuple's own repr in
     # front of a person. ``normalize_role`` refuses with the three words and what each one means.
     role = normalize_role(role)
-    if max_uses < 1:
-        raise MembershipError("max_uses must be >= 1", status=400)
-    if expires_in_sec <= 0:
-        raise MembershipError("expires_in_sec must be > 0", status=400)
+    if max_uses < 1 or max_uses > MAX_INVITE_USES:
+        raise MembershipError(f"max_uses must be between 1 and {MAX_INVITE_USES}", status=400)
+    if expires_in_sec <= 0 or expires_in_sec > MAX_INVITE_EXPIRES_IN_SEC:
+        raise MembershipError(f"expires_in_sec must be between 1 and {MAX_INVITE_EXPIRES_IN_SEC}",
+                              status=400)
     if mode not in INVITE_MODES:
         raise MembershipError(f"invite mode must be one of {INVITE_MODES}", status=400)
     emails = sorted({_normalize_email(e) for e in (allowed_emails or []) if _normalize_email(e)})
     if mode == "restricted" and not emails:
         raise MembershipError("restricted invite requires allowed_emails", status=400)
     assert_shareable(root, workspace_id)
+    invite_role_allowed(root, workspace_id, created_by, role, owner_act=owner_act)
     t = now if now is not None else time.time()
     token = secrets.token_urlsafe(32)
     invite_id = secrets.token_hex(8)
@@ -857,6 +1509,14 @@ def mint_invite(root: Path, workspace_id: str, *, role: str, created_by: str,
         "created_at": _now_iso(),
         "revoked": False,
     }
+    if owner_act:
+        rec["owner_act"] = True
+    if isinstance(room, str) and room.strip():
+        room = {"id": room}               # a tag's invite (S4, D21) names the room by id
+    if isinstance(room, dict) and str(room.get("id") or "").strip():
+        # THE ROOM THE INVITE LANDS IN (PRD 0.13.4 S2; a tag's invite, S4 D21 case 3/4): a room of this
+        # workspace, checked by the caller. Pending room membership, never a grant before they accept.
+        rec["room"] = {"id": str(room["id"]).strip()[:128], "title": str(room.get("title") or "")[:200]}
     # ONE STORE, AND IT IS NOT THE WORKSPACE REPO (Vexa-ai/vexa#1645). ``commit_fn`` is deliberately
     # not called here any more: there is nothing in the workspace tree to commit, and an invite is not
     # workspace history — the audit of who was invited lands in ``members.json`` (``added_by``) the
@@ -903,12 +1563,95 @@ def preview_invite(root: Path, token: str, *, now: Optional[float] = None) -> Op
         "created_by": rec.get("created_by"),
         "valid": reason is None,
         "reason": reason,
+        "room": dict(rec["room"]) if isinstance(rec.get("room"), dict) else None,
+        # Whether the link itself may sign its one address in, now (``signin_eligible``).
+        "signin": signin_eligible(rec, now=t),
     }
 
 
-def accept_invite(root: Path, workspace_id: str, *, token: str, subject: str,
+# ── THE LINK THAT SIGNS ITS ONE ADDRESS IN (PRD 0.13.4 S2, E1) ─────────────────────────────────
+#
+# A restricted invite to ONE address, which this deployment MAILED to that address (delivery
+# ``delivered``), proves control of the mailbox exactly as the emailed sign-in link does. So the
+# invitee with no account signs in and joins with one click on the join page, instead of asking for a
+# second mail. Three rules keep it one credential, used once, by the right person:
+#
+#   * only a mailed invite gets ``signin_until`` (``mark_invite_signin``). An invite whose link was
+#     handed back to the inviter — captured mail, no mail, an internal address — never does, so an
+#     inviter can never sign in as the person they invited;
+#   * the window is ``SIGNIN_TTL_SEC`` (and never past the invite's own expiry);
+#   * ``claim_invite_signin`` spends it ONCE, under the workspace lock, on the POST behind the
+#     join page's button — never on a GET, so a mail scanner that opens the link changes nothing.
+SIGNIN_TTL_SEC = 7 * 86400
+SIGNIN_TTL_MAX_SEC = 30 * 86400
+
+
+def signin_eligible(rec: dict, *, now: Optional[float] = None) -> bool:
+    """May this invite's link sign its one address in, now? Read-only."""
+    t = now if now is not None else time.time()
+    emails = [e for e in (rec.get("allowed_emails") or []) if str(e).strip()]
+    return bool(rec.get("mode") == "restricted" and len(emails) == 1
+                and float(rec.get("signin_until") or 0) > t
+                and not rec.get("signin_claimed") and not rec.get("revoked")
+                and int(rec.get("expires_at", 0)) >= t
+                and int(rec.get("uses", 0)) < int(rec.get("max_uses", 1)))
+
+
+def mark_invite_signin(root: Path, workspace_id: str, invite_id: str, *,
+                       ttl_sec: Optional[int] = None, now: Optional[float] = None) -> bool:
+    """Let a MAILED restricted single-address invite sign its address in for ``ttl_sec``. Returns
+    whether the mark was made (an invite that is not restricted to exactly one address is left
+    alone)."""
+    t = now if now is not None else time.time()
+    ttl = max(1, min(int(ttl_sec if ttl_sec is not None else SIGNIN_TTL_SEC), SIGNIN_TTL_MAX_SEC))
+    with _ws_lock(workspace_id):
+        invites = read_invites(root, workspace_id)
+        rec = next((i for i in invites if i.get("id") == invite_id), None)
+        if rec is None or rec.get("mode") != "restricted" or len(rec.get("allowed_emails") or []) != 1:
+            return False
+        rec["signin_until"] = int(min(t + ttl, int(rec.get("expires_at", t + ttl))))
+        _write_invites(root, workspace_id, invites)
+    return True
+
+
+def claim_invite_signin(root: Path, token: str, *, now: Optional[float] = None) -> dict:
+    """Spend the sign-in half of ``token`` ONCE. Returns ``{email, workspace_id, room, role}`` for
+    the one address it may sign in, or ``MembershipError`` (404 unknown, 410 used or out of its
+    window, 409 not a sign-in link). The membership itself is granted by the ordinary accept, as the
+    signed-in person, right after."""
+    t = now if now is not None else time.time()
+    found = find_invite(Path(root), token)
+    if found is None:
+        raise MembershipError("invalid invite", status=404)
+    slug = found[0]
+    h = hash_token(token)
+    with _ws_lock(slug):
+        invites = read_invites(root, slug)
+        rec = next((i for i in invites if i.get("hash") == h), None)
+        if rec is None:
+            raise MembershipError("invalid invite", status=404)
+        if rec.get("signin_claimed"):
+            raise MembershipError("this link has already been used to sign in", status=410)
+        if not rec.get("signin_until"):
+            raise MembershipError("this invite link does not sign anybody in", status=409)
+        if not signin_eligible(rec, now=t):
+            raise MembershipError("this link can no longer sign you in", status=410)
+        rec["signin_claimed"] = int(t)
+        _write_invites(root, slug, invites)
+        email = _normalize_email((rec.get("allowed_emails") or [""])[0])
+        return {"email": email, "workspace_id": slug, "role": rec.get("role"),
+                "room": dict(rec["room"]) if isinstance(rec.get("room"), dict) else None}
+
+
+def invite_by_id(root: Path, workspace_id: str, invite_id: str) -> Optional[dict]:
+    """The invite record ``invite_id`` of ``workspace_id`` (hash included — internal use only)."""
+    return next((i for i in read_invites(root, workspace_id) if i.get("id") == invite_id), None)
+
+
+def accept_invite(root: Path, workspace_id: str, *, token: str = "", subject: str,
                   index: MembershipIndex, subject_email: Optional[str] = None,
-                  commit_fn: Optional[CommitFn] = None, now: Optional[float] = None) -> dict:
+                  commit_fn: Optional[CommitFn] = None, now: Optional[float] = None,
+                  invite_id: str = "") -> dict:
     """Redeem ``token`` for ``subject``: validate (hash lookup, not revoked, not expired, uses<max_uses,
     AND mode==open OR subject_email ∈ allowed_emails), grant the invite's role (both stores), increment
     ``uses``. Idempotent per user — a subject who is already a member does NOT consume a use again
@@ -925,11 +1668,16 @@ def accept_invite(root: Path, workspace_id: str, *, token: str, subject: str,
     use-count check sees every prior redeem's increment. (Multi-replica: see ``_ws_lock``.)"""
     assert_shareable(root, workspace_id)
     t = now if now is not None else time.time()
-    h = hash_token(token)
+    # BY TOKEN (the link) or BY ID (the invitee's own notification, PRD 0.13.4 M2: the row stores
+    # the invite's id, never the token, and the act resolves it here — still bound to the verified
+    # address below, so an id grants nothing a token would not).
+    h = hash_token(token) if token else ""
+    if not h and not invite_id:
+        raise MembershipError("invalid invite", status=404)
     with _ws_lock(workspace_id):
         # Fresh read UNDER the lock: the authoritative uses counter, not a value read before we waited.
         invites = read_invites(root, workspace_id)
-        rec = next((i for i in invites if i.get("hash") == h), None)
+        rec = next((i for i in invites if (i.get("hash") == h if h else i.get("id") == invite_id)), None)
         if rec is None:
             raise MembershipError("invalid invite", status=404)
         if rec.get("revoked"):
@@ -948,6 +1696,17 @@ def accept_invite(root: Path, workspace_id: str, *, token: str, subject: str,
             raise MembershipError("invite fully used", status=410)
 
         role = rec.get("role", "viewer")
+        # THE SENDER'S RANK, NOW (D5): an invite never grants more than its sender holds TODAY — an
+        # owner invite a contributor minted before the caps, or one whose sender has since been
+        # demoted or removed, is refused. (``owner_act=True`` here: the rank check alone decides, so
+        # an owner's own owner invite still redeems while they are an owner.)
+        try:
+            invite_role_allowed(root, workspace_id, str(rec.get("created_by") or ""), role, owner_act=True)
+        except MembershipError as exc:
+            if already:
+                return {"workspace_id": workspace_id, "role": is_member(root, workspace_id, subject),
+                        "already_member": True}
+            raise MembershipError(f"this invite can no longer be used: {exc}", status=410) from None
         grant_membership(root, workspace_id, subject, role, added_by=rec.get("created_by", "invite"),
                          index=index, email=subject_email, commit_fn=commit_fn)
         if not already:
@@ -956,7 +1715,14 @@ def accept_invite(root: Path, workspace_id: str, *, token: str, subject: str,
             # waiter re-reads the bumped counter and a max_uses=1 invite refuses the second grant.
             rec["uses"] = int(rec.get("uses", 0)) + 1
             _write_invites(root, workspace_id, invites)
-        return {"workspace_id": workspace_id, "role": role, "already_member": already}
+        out = {"workspace_id": workspace_id, "role": role, "already_member": already}
+        rr = rec.get("room")
+        if isinstance(rr, str) and rr:
+            rr = {"id": rr, "title": ""}
+        if isinstance(rr, dict) and rr.get("id"):
+            out["room"] = dict(rr)
+            out["invited_by"] = str(rec.get("created_by") or "")
+        return out
 
 
 def revoke_invite(root: Path, workspace_id: str, invite_id: str, *,

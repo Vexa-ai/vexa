@@ -178,7 +178,7 @@ def client(monkeypatch):
     pol = _pol()
     monkeypatch.setattr(pol, "read", lambda uid: pol.resolve(None))
     monkeypatch.setattr(fa.clock, "now", lambda: T)
-    table = {"anna-key": (200, {"user_id": 126, "email": "anna@vexa.test"})}
+    table = {"anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "credential_class": "session"})}
     monkeypatch.setattr(subject_auth, "_validate", lambda base, token, secret: table.get(token, (401, {})))
     return TestClient(fa.app, raise_server_exceptions=False)
 

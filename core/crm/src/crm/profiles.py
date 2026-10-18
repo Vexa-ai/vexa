@@ -1,6 +1,10 @@
 """profiles.py — a contact LINKS to a person's published public profile (R4, registry ADR § "a CRM
 record may link to a public profile; it never copies it").
 
+RETIRING (PRD 0.13.4 D35, 2026-10-17): THE profile is now the person's claimed record
+(``person_profiles.py``). Identity's profile accepts no more writes; these live reads stay for one
+release, and ``legacy`` hands its values to the claimed profile once, on the claim.
+
 THE LINK is one relationship row on the record (``kind='links_profile'``, ``target_domain='profile'``,
 ``target_id=<handle>``), written by the store's own write path, so only someone who may change the
 record links it. At most one profile per record.
@@ -85,3 +89,18 @@ class ProfileClient:
         if r.status_code != 200:
             raise ProfileUnavailable(f'identity answered {r.status_code}')
         return True
+
+    def legacy(self, user_id: str) -> Optional[dict]:
+        """D35 retirement: the person's OLD identity profile (their own entries and public flags), read
+        once when they claim a record, to carry into it. None when there is none or identity is down:
+        a claim never waits on it."""
+        try:
+            with self._client() as c:
+                r = c.get(f'{self.base}/internal/users/{quote(str(user_id), safe="")}/legacy-profile')
+        except httpx.HTTPError:
+            return None
+        if r.status_code != 200:
+            return None
+        body = r.json()
+        return {'handle': body.get('handle'), 'published': bool(body.get('published')),
+                'fields': dict(body.get('fields') or {})}

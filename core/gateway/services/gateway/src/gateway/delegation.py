@@ -46,6 +46,22 @@ def is_delegated(client_key: str, user_data: Mapping) -> bool:
             or str(client_key).startswith(DELEGATION_TOKEN_PREFIX))
 
 
+def shared_delegation(user_data: Mapping) -> bool:
+    """Is this worker's turn read by other people? identity's answer says `delegation.shared`, or
+    names a WORKSPACE principal (`delegation.principal_kind: "workspace"`, D2), which is shared by
+    construction. An answer that is not a mapping is not one."""
+    dlg = user_data.get("delegation") if isinstance(user_data, Mapping) else None
+    if not isinstance(dlg, Mapping):
+        return False
+    return dlg.get("shared") is True or dlg.get("principal_kind") == "workspace"
+
+
+def shared_route_response() -> Response:
+    """D3: the one refusal every service gives a shared turn, given at the edge before any forward."""
+    return Response(content=json.dumps({"detail": identity_token.SHARED_REFUSAL}),
+                    status_code=403, media_type="application/json")
+
+
 def delegated_route_response() -> Response:
     return Response(
         content=json.dumps({"detail": "a worker's delegation token is accepted on /mcp only"}),

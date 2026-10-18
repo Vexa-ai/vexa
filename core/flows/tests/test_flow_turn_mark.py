@@ -108,14 +108,16 @@ def test_the_email_conversation_turn_identifies_itself(monkeypatch):
     production.build(reg, _StubDB())
     monkeypatch.setattr(production.ag, "collect_outbox", lambda uid, s, h: (None, "h0"))
     monkeypatch.setattr(production.ag, "dispatch_turn",
-                        lambda uid, s, p, room=None, flow="", step="":
-                        seen.update(flow=flow, step=step) or 0)
+                        lambda uid, s, p, room=None, flow="", step="", kind="":
+                        seen.update(flow=flow, step=step, kind=kind) or 0)
     r = Reaction("rid", "sid", "mail.reply",
                  {"uid": "7", "session": "main", "text": "thanks", "from_addr": "a@x.test"},
                  "email_chat", 1, "feedback_turn", "running", 1, 0.0, None, None, None)
     reg.steps["feedback_turn"](StepCtx(reaction=r, effect_key="k", prior={},
                                        clock_now=1_700_000_000.0, scratch={}, flow=None))
     assert (seen["flow"], seen["step"]) == ("email_chat", "feedback_turn")
+    # …and it is a MAIL turn, which agent-api runs read-only, proposing only (D25)
+    assert seen["kind"] == "mail"
 
 
 # ── the CROSS-SERVICE contract, read off the other service's source ─────────────────────────────

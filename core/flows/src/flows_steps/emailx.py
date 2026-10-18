@@ -93,6 +93,64 @@ class MailSuppressed(mt.MailTransportError):
         self.why = why
 
 
+# ── THE RECIPIENT ALLOWLIST (PRD 0.13.4 S2; founder: nothing goes to anyone without his go) ──────
+#
+# `VEXA_MAIL_RECIPIENT_ALLOW` — a comma list of exact addresses and domains (`@vexa.ai` or `vexa.ai`).
+# SET: a message to anybody not on it is NOT sent; it is DIVERTED to the capture double
+# (`VEXA_MAIL_CAPTURE_SMTP`, mailpit) and logged as `mail_diverted` — the recipient's domain and a
+# short hash of the address, never a subject, a body or a link. It holds for every message this
+# process sends, whatever the kind (invite, sign-in, nudge, digest, recap, RSVP) and whatever the
+# channel (SMTP or Graph), because every one of them leaves through `send`, `send_rsvp_accept` or
+# `notify.GraphNotifier`, and all three ask `diverted()` first. UNSET: no restriction.
+
+def recipient_allow() -> list[str]:
+    raw = flows_config.get("VEXA_MAIL_RECIPIENT_ALLOW") or ""
+    return [e.strip().lower() for e in raw.split(",") if e.strip()]
+
+
+def _bare(address: str) -> str:
+    return (email.utils.parseaddr(address or "")[1] or address or "").strip().lower()
+
+
+def recipient_allowed(to: str) -> bool:
+    """True when no allowlist is set, or `to` is on it (exact address, or its domain)."""
+    allow = recipient_allow()
+    if not allow:
+        return True
+    addr = _bare(to)
+    domain = addr.rpartition("@")[2]
+    for e in allow:
+        if "@" in e and not e.startswith("@"):
+            if addr == e:
+                return True
+        elif domain and domain == e.lstrip("@"):
+            return True
+    return False
+
+
+def diverted(to: str, *, kind: str = "") -> bool:
+    """Should this message go to the capture double instead of `to`? Logs `mail_diverted` (no
+    content) when it does."""
+    if recipient_allowed(to):
+        return False
+    import hashlib
+    import logging
+    addr = _bare(to)
+    logging.getLogger("flows.mail").warning(
+        "mail_diverted to_domain=%s to_hash=%s kind=%s — not on VEXA_MAIL_RECIPIENT_ALLOW; sent to the "
+        "capture double instead", addr.rpartition("@")[2] or "?",
+        hashlib.sha256(addr.encode()).hexdigest()[:12], kind or "-")
+    return True
+
+
+def _capture_conn():
+    host, port = _capture_addr()
+    try:
+        return smtplib.SMTP(host, port, timeout=20), False
+    except BaseException as e:  # noqa: BLE001
+        raise mt.classify(e, "smtp", host, port, phase="connect") from e
+
+
 def relay_mode() -> str:
     mode = (flows_config.get("VEXA_MAIL_RELAY") or "").strip().lower()
     if mode not in RELAY_MODES:
@@ -226,7 +284,10 @@ def _smtp():
             raise mt.classify(e, "smtp", "smtp.gmail.com", 465, phase="connect") from e
     host, port = flows_config.get("VEXA_MAIL_SMTP_HOST"), flows_config.get_int("VEXA_MAIL_SMTP_PORT")
     user = flows_config.get("VEXA_MAIL_SMTP_USER")
-    password = flows_config.get("VEXA_MAIL_SMTP_PASSWORD")
+    # BY REFERENCE when the install names one (`broker:mail/<name>`, PRD 0.13.4 S2): the password
+    # comes from the credential broker, never from this process's environment.
+    from flows_steps import mail_secret  # noqa: PLC0415
+    password = mail_secret.smtp_password(host=host, port=port) if user else ""
     mode = mt.smtp_tls_mode()
     try:
         if mode == "tls":
@@ -261,6 +322,7 @@ def _smtp():
             try:
                 conn.login(user, password)
             except BaseException as e:  # noqa: BLE001
+                mail_secret.forget()          # a refused credential is read afresh next time
                 raise mt.classify(e, "smtp", host, port, phase="login",
                                   secrets=(password,)) from e
     except BaseException:
@@ -292,14 +354,15 @@ def send(to: str, subject: str, body: str, *, in_reply_to: str | None = None) ->
     refused = relay_refusal(to)
     if refused:
         raise MailSuppressed(to, refused)
-    addr, pw = creds(login=_needs_login())
+    divert = diverted(to)
+    addr, pw = creds(login=_needs_login() and not divert)
     m = EmailMessage()
     _identity(m, addr)
     m["To"], m["Subject"] = to, header_safe(subject)
     if in_reply_to:
         m["In-Reply-To"] = m["References"] = in_reply_to
     m.set_content(body)
-    conn, needs_login = _smtp()
+    conn, needs_login = _capture_conn() if divert else _smtp()
     _deliver(conn, needs_login, addr, pw, m)
     return m["Message-ID"]
 
@@ -372,7 +435,8 @@ def send_rsvp_accept(organizer_email: str, *, ics_uid: str, start_epoch: float, 
     While the relay captures, the reply goes to the capture double over SMTP on every deployment.
     """
     from .notify import channel
-    if relay_mode() != "capture" and getattr(channel(), "name", "smtp") == "graph":
+    divert = diverted(organizer_email, kind="rsvp")
+    if not divert and relay_mode() != "capture" and getattr(channel(), "name", "smtp") == "graph":
         from flows_integrations.graph_client import client
         gc = client()
         ics = build_rsvp_ics(gc.address(), organizer_email, ics_uid=ics_uid,
@@ -382,7 +446,7 @@ def send_rsvp_accept(organizer_email: str, *, ics_uid: str, start_epoch: float, 
     refused = relay_refusal(organizer_email)
     if refused:
         raise MailSuppressed(organizer_email, refused)
-    addr, pw = creds(login=_needs_login())
+    addr, pw = creds(login=_needs_login() and not divert)
     ics = build_rsvp_ics(addr, organizer_email, ics_uid=ics_uid, start_epoch=start_epoch,
                          title=title)
     msg = MIMEMultipart("mixed")
@@ -393,6 +457,6 @@ def send_rsvp_accept(organizer_email: str, *, ics_uid: str, start_epoch: float, 
     cal = MIMEText(ics, "calendar")
     cal.set_param("method", "REPLY")
     msg.attach(cal)
-    conn, needs_login = _smtp()
+    conn, needs_login = _capture_conn() if divert else _smtp()
     _deliver(conn, needs_login, addr, pw, msg)
     return msg["Message-ID"]

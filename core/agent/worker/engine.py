@@ -502,7 +502,9 @@ def inline_card_preamble() -> str:
         "fenced ```ask block holding JSON — {\"id\": \"short-id\", \"question\": \"…\", \"chips\": [\"…\"], "
         "\"free\": true} for a question, or {\"id\", \"question\", \"summary\": [[\"label\", \"value\"]], "
         "\"primary\": {\"label\": \"…\"}, \"secondary\": {\"label\": \"…\"}} to confirm. Their answer arrives as "
-        "their own message `[answer <id>] …`. Never make the person type a code to approve something; creating, "
+        "their own message `[answer <id> #<pending>] …` — the `#<pending>` part means the person pressed the card "
+        "in the app (a bound answer); a line without it was typed, so confirm before anything irreversible. "
+        "Never make the person type a code to approve something; creating, "
         "inviting and sending happen only after their press. Never offer a card for something you have no tool "
         "for: a card is a promise that the press will do it. Name a workspace by its title (\"Family Health\"), "
         "never by its id.\n\n"
@@ -1979,8 +1981,29 @@ VEXA_MCP_SERVER = "vexa"
 # be written in comments here — why `workspace_write` is in it on zero measured calls, why
 # `entity_upsert` and the transcript chips are named rather than left to the prefix, and why the
 # list degrades safely in both directions — is in that file, beside the values it explains.
-VEXA_MCP_TOOLS = tuple(json.loads(
-    pathlib.Path(__file__).with_name("mcp_tools.v1.json").read_text(encoding="utf-8"))["tools"])
+_MCP_TOOLS_DOC = json.loads(
+    pathlib.Path(__file__).with_name("mcp_tools.v1.json").read_text(encoding="utf-8"))
+VEXA_MCP_TOOLS = tuple(_MCP_TOOLS_DOC["tools"])
+#: D3 (default-deny for shared tokens, 0.13.4): the ONLY tools a shared worker — a room's turn or a
+#: shared chat's — is offered, by name; never the bare server prefix. The tools whose agent-api
+#: route `routes.v1.json` declares `shared: allow` (held equal by `tests/test_shared_routes.py`).
+VEXA_MCP_SHARED_TOOLS = tuple(_MCP_TOOLS_DOC.get("shared_tools") or ())
+
+
+def delegation_is_shared(token: str) -> bool:
+    """Is this worker's delegation a SHARED one (other people read its answer: `scope.shared`, or a
+    workspace principal, D2)? Read off the token's claims without verifying them — the
+    worker only NARROWS on it, and every service enforces the same claim from the verified token.
+    A token that cannot be read narrows: the fail direction is closed."""
+    try:
+        import base64  # noqa: PLC0415
+        part = str(token or "").split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+    except Exception:  # noqa: BLE001 — unreadable: treat as shared, never as private
+        return True
+    scope = claims.get("scope") if isinstance(claims, dict) else None
+    return (isinstance(scope, dict) and scope.get("shared") is True) or \
+        (claims or {}).get("principal_kind") == "workspace"
 
 
 #: The verbs that act on a LIVE meeting. A post-meeting turn is offered none of them.
@@ -2197,6 +2220,10 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     # PRINTED, not logged at info: the worker configures no root logger, so an INFO record is dropped,
     # and "was the toolbelt attached?" is the first question asked of a worker's log.
     print(f"vexa MCP toolbelt attached: server={VEXA_MCP_SERVER} url={url}", file=sys.stderr, flush=True)
+    if delegation_is_shared(token):
+        # A SHARED TURN IS OFFERED ONLY ITS NAMED TOOLS (D3): no bare `mcp__vexa` prefix, which would
+        # permit every tool the server lists, and none of the person-wide ones.
+        return str(path), [f"mcp__{VEXA_MCP_SERVER}__{t}" for t in VEXA_MCP_SHARED_TOOLS]
     return str(path), [f"mcp__{VEXA_MCP_SERVER}",
                        *(f"mcp__{VEXA_MCP_SERVER}__{t}" for t in VEXA_MCP_TOOLS)]
 
@@ -3357,6 +3384,11 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     if _warn:
         log.warning("agent-api worker: %s", _warn)
     client = stream_bounds.BoundedStream(redis.from_url(os.environ["REDIS_URL"], decode_responses=True))
+    # THE PRIVACY MARK IS PERSISTED (D6): this worker reads its session's mark through its own Redis
+    # user and hands held writes to agent-api by reference, never onto a desk (`llm.private_writes`).
+    from llm import private_writes as _private_writes  # noqa: PLC0415
+    _private_writes.configure_worker(redis.from_url(os.environ["REDIS_URL"], decode_responses=True),
+                                     shared_units.unit_of_topic(os.environ.get("VEXA_UNIT_IN_TOPIC", "")))
     out_topic = os.environ["VEXA_UNIT_OUT_TOPIC"]
     idle_ms = int(os.environ.get("VEXA_IDLE_TIMEOUT_SEC", "120")) * 1000
 

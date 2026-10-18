@@ -318,6 +318,11 @@ def build(**d) -> APIRouter:
             return {"session": own["id"], "title": own.get("title") or "", "turns": page,
                     "next": since + len(page) if since + len(page) < len(turns) else None,
                     **_room_extras(own)}
+        # A ROOM READS ITS OWN HISTORY, AND ONLY THAT (int-s1, D3): the route is `shared: allow` so
+        # a room's turn can call it at all; any other conversation stays refused to every shared
+        # token and to a workspace principal, exactly as before.
+        if identity_token.is_shared(request.headers) or identity_token.is_workspace_principal(request.headers):
+            raise HTTPException(status_code=403, detail=identity_token.SHARED_REFUSAL)
         try:
             session = index.chat_for(subject, session) if index is not None else session
         except Exception:  # noqa: BLE001 — a meeting chat that cannot be mapped is read as named

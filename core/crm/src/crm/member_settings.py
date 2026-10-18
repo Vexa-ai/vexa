@@ -36,8 +36,15 @@ COLLAPSED_MAX = 20
 LEVELS = (1, 5)
 
 #: What a slug with no row reads as. Never returned for a slug the person has not set.
-DEFAULTS = {'pinned': False, 'hidden': False, 'muted': False, 'notify': 'all', 'room_order': [],
+DEFAULTS = {'pinned': False, 'hidden': False, 'muted': False, 'room_order': [],
             'level': None, 'collapsed': [], 'updated_at': None}
+#: RETIRED (PRD 0.13.4 S6, one writer): the notification level per workspace lives in the person's
+#: identity notification policy (`/user/notifications`, `rooms: ws:<slug>`), which the delivery gate
+#: reads. The `notify` column stays for the rows already there and is filled with this constant on a
+#: new row; nothing writes it, nothing answers it, and a set that names it is refused with the door.
+NOTIFY_RETIRED_FILL = 'all'
+NOTIFY_MOVED = ('settings.notify moved to the identity notification policy: Settings → Notifications '
+                '(PUT /user/notifications with rooms {"ws:<slug>": "all" | "mentions" | "none"})')
 #: The keys a set may name; `updated_at` is the server's.
 KEYS = tuple(k for k in DEFAULTS if k != 'updated_at')
 
@@ -80,6 +87,8 @@ def check_settings(settings):
     """The validated partial: only known keys, each a valid value. Empty is refused."""
     if not isinstance(settings, dict) or not settings:
         raise Invalid(f'settings must name at least one of {", ".join(KEYS)}')
+    if 'notify' in settings:
+        raise Invalid(NOTIFY_MOVED)
     unknown = sorted(set(settings) - set(KEYS))
     if unknown:
         raise Invalid(f'settings: unknown key {unknown[0]}; one of {", ".join(KEYS)}')
@@ -87,10 +96,6 @@ def check_settings(settings):
     for key, value in settings.items():
         if key in ('pinned', 'hidden', 'muted'):
             out[key] = _flag(value, key)
-        elif key == 'notify':
-            if value not in NOTIFY:
-                raise Invalid(f'settings.notify must be one of {", ".join(NOTIFY)}')
-            out[key] = value
         elif key == 'level':
             if value is not None and (not isinstance(value, int) or isinstance(value, bool)
                                       or not LEVELS[0] <= value <= LEVELS[1]):
@@ -105,7 +110,7 @@ def check_settings(settings):
 
 def _view(row):
     return {'pinned': bool(row['pinned']), 'hidden': bool(row['hidden']), 'muted': bool(row['muted']),
-            'notify': row['notify'], 'room_order': list(row['room_order'] or []), 'level': row['level'],
+            'room_order': list(row['room_order'] or []), 'level': row['level'],
             'collapsed': list(row['collapsed'] or []), 'updated_at': row['updated_at']}
 
 
@@ -146,7 +151,8 @@ class MemberSettings:
                               'updated_at': self.clock().isoformat()}
                     values = {k: merged[k] for k in DEFAULTS}
                     if row is None:
-                        c.execute(t.insert().values(org_id=org, person=person, workspace=workspace, **values))
+                        c.execute(t.insert().values(org_id=org, person=person, workspace=workspace,
+                                                    notify=NOTIFY_RETIRED_FILL, **values))
                     else:
                         c.execute(update(t).where(*where).values(**values))
                 return {'workspace': workspace, 'settings': merged}

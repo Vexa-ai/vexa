@@ -209,3 +209,21 @@ def refuse_delegated(request: Request, *, reason: str, instruction: str) -> None
     themselves. The route names its own reason and instruction."""
     if is_delegated(request):
         raise refused(request, 403, refusal(reason, instruction), reason=reason)
+
+
+#: The words every invite-minting door refuses an agent with (H3; coordinator ruling for 0.13.4 S4).
+INVITE_NEEDS_A_SESSION = ("Inviting someone is the person's signed act. Propose it as an invitation card "
+                          "(who, which workspace or room, which role) and stop; nothing is minted until "
+                          "the person signs it in the app.")
+
+
+def require_session_credential(request: Request, *, reason: str = "invite_needs_the_person",
+                               instruction: str = INVITE_NEEDS_A_SESSION) -> None:
+    """Refuse (403) unless the caller is a PERSON'S SESSION: no delegation token of any regime (a
+    watched chat agent included) and no API key without the browser scope. The doors that MINT an
+    invite or a join link take only this (security review H3, coordinator ruling 2026-10-17): an
+    agent proposes an invitation card, the person signs it, and only then is anything minted.
+    Interim credential class until S5's ``credential_class=session`` (D13)."""
+    from control_plane import policy_decide  # noqa: PLC0415
+    if policy_decide.credential_of(request.headers) != policy_decide.SESSION:
+        raise refused(request, 403, refusal(reason, instruction), reason=reason)

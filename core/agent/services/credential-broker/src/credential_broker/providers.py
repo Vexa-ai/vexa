@@ -237,6 +237,10 @@ def read_account(provider, value, action, *, query="", message_id="", time_min="
         payload = data.get("payload", {})
         headers = {h["name"].lower(): h.get("value", "")[:4000] for h in payload.get("headers", [])}
         result = {k: data.get(k) for k in ("id", "threadId", "internalDate", "snippet")}
+        # Gmail's own labels (DRAFT, SENT, INBOX, ...): an unsent draft must never read as mail that went out.
+        labels = [x for x in (data.get("labelIds") or []) if isinstance(x, str)][:50]
+        result["labels"] = labels
+        result["is_draft"] = "DRAFT" in labels
         link = gmail_web_url(account, result.get("threadId"), result.get("id"))
         if link:
             result["web_url"] = link
@@ -282,7 +286,13 @@ def read_account(provider, value, action, *, query="", message_id="", time_min="
             if isinstance(row, dict) and not row.get("threadId"):
                 row["threadId"] = data.get("id")
         more = offset + limit < len(rows)
-        return {"thread_id": data.get("id"), "messages": [message(m["id"], True, m) for m in rows[offset:offset + limit]],
+        page = [message(m["id"], True, m) for m in rows[offset:offset + limit]]
+        drafts = _thread_drafts(get, [m["id"] for m in page if m["is_draft"]])
+        for m in page:
+            if m["id"] in drafts:
+                m["draft_id"] = drafts[m["id"]]
+        return {"thread_id": data.get("id"), "messages": page,
+                "drafts": [{"draft_id": drafts[m["id"]], "message_id": m["id"]} for m in page if m["id"] in drafts],
                 "has_more": more, "next_page_token": str(offset + limit) if more else "", "total_messages": len(rows)}
     if action == "gmail.read":
         return {"message": message(message_id, True)}
@@ -317,6 +327,26 @@ def read_account(provider, value, action, *, query="", message_id="", time_min="
         return row
     return {"events": [event(e) for e in data.get("items", [])[:limit]],
             "has_more": bool(data.get("nextPageToken")), "next_page_token": data.get("nextPageToken", "")}
+
+
+def _thread_drafts(get, message_ids) -> dict:
+    """Draft id by message id for the draft messages of one thread page. Gmail names a draft by a
+    draft id distinct from its message id, and only the drafts listing maps one to the other; it is
+    read only when the page holds a draft, and for a bounded number of pages."""
+    wanted, found, token = set(message_ids), {}, ""
+    for _ in range(5):
+        if not wanted - set(found):
+            break
+        data = get("https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+                   {"maxResults": 500, **({"pageToken": token} if token else {})})
+        for d in data.get("drafts") or []:
+            mid = (d.get("message") or {}).get("id")
+            if mid in wanted and re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", str(d.get("id", ""))):
+                found[mid] = d["id"]
+        token = data.get("nextPageToken") or ""
+        if not token:
+            break
+    return found
 
 
 def reply_context(value, thread_id: str, in_reply_to: str = "", *, http) -> dict:

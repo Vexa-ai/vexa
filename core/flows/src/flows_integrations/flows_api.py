@@ -95,6 +95,8 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Reques
 from pydantic import BaseModel, Field  # noqa: E402
 
 from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
+from flows import fact_envelope  # noqa: E402 — event.v2: the sealed fact envelope (D8)
+from flows.admission import strip_sealed  # noqa: E402
 import flows_config  # noqa: E402
 import flows_obs  # noqa: E402
 import flows_pages  # noqa: E402 — the page renderer `GET /flows/pages` serves (Vexa-ai/vexa#1639)
@@ -446,6 +448,10 @@ def _reach(request: Optional[Request]) -> str:
 #: The one route a worker whose turn other people read may still reach: filing a friction report
 #: into Vexa's own sink reads nothing of its person's (ADR-0048 decision 4).
 SHARED_OPEN = {("POST", "/friction")}
+#: …and the routes that answer a shared turn with LESS instead of refusing it (friction 7,
+#: 2026-10-16): `whats_waiting` in a room answers only the items of the workspaces every reader
+#: can read (`flows_queue.room_workspaces`), never the person's own queue.
+SHARED_NARROWED = {("GET", "/queue/waiting")}
 
 
 def _route_key(request: Optional[Request]):
@@ -458,7 +464,7 @@ def _refuse_unwatched(request: Optional[Request], caller: Caller) -> Caller:
     """403 `SHARED_REFUSAL` for a worker whose turn other people read, on every route but
     `SHARED_OPEN`; 403 `REFUSAL` for a worker with nobody in the loop on a `PERSON_ONLY` route;
     else the caller."""
-    if caller.is_shared and _route_key(request) not in SHARED_OPEN:
+    if caller.is_shared and _route_key(request) not in SHARED_OPEN | SHARED_NARROWED:
         raise HTTPException(status_code=403, detail=SHARED_REFUSAL)
     if caller.is_unwatched and _reach(request) != OPEN and not _retires_itself(request, caller):
         raise HTTPException(status_code=403, detail=REFUSAL)
@@ -1020,8 +1026,10 @@ def _quota(name: str) -> int:
     return flows_config.get_int(name)
 
 
-def _check_user_flow(scope: str, sub: FlowSubmission, cron: Optional[str]) -> None:
-    """The allow-list and the quotas a PERSON's flow meets (ADR-0046 decisions 6 and 9)."""
+def _check_user_flow(scope: str, sub: FlowSubmission, cron: Optional[str], *,
+                     proposed: bool = False) -> None:
+    """The allow-list and the quotas a PERSON's flow meets (ADR-0046 decisions 6 and 9). A
+    `proposed` flow (an agent's, D24) is filed as a draft, so it meets the draft quota."""
     uid = scope[len("user:"):]
     allowed = _user_allowed_steps(uid)
     for step in sub.steps:
@@ -1042,12 +1050,12 @@ def _check_user_flow(scope: str, sub: FlowSubmission, cron: Optional[str]) -> No
     if int(held[0][0] or 0) >= USER_SCOPE_MAX_VERSIONS:
         _refuse(403, QUOTA_VERSIONS, versions=int(held[0][0]), maximum=USER_SCOPE_MAX_VERSIONS,
                 note="retire or delete old versions before submitting more")
-    if not sub.activate:
+    if not sub.activate or proposed:
         drafts = db.execute("SELECT COUNT(*) FROM flow_version WHERE scope = :sc "
                             "AND status = 'draft'", {"sc": scope})
         if int(drafts[0][0] or 0) >= USER_SCOPE_MAX_DRAFTS:
             _refuse(403, QUOTA_DRAFTS, drafts=int(drafts[0][0]), maximum=USER_SCOPE_MAX_DRAFTS)
-    if sub.activate:
+    if sub.activate and not proposed:
         rows = db.execute("SELECT DISTINCT name FROM flow_version WHERE scope = :sc "
                           "AND status = 'active'", {"sc": scope})
         active = {r[0] for r in rows}
@@ -1080,7 +1088,9 @@ def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api"),
 
     Versions are minted, never overwritten. Submitting a name that already exists in the same scope
     files the NEXT version beside it; runs already in flight keep the version they started on.
-    `activate` (default true) makes it live within about ten seconds; false files it as a draft."""
+    `activate` (default true) makes it live within about ten seconds; false files it as a draft.
+    FROM AN AGENT TURN IT IS ALWAYS A DRAFT (`awaiting_approval: true`): tell your person it is
+    waiting on their Routines board, where they read it and turn it on themselves."""
     scope = _author_scope(caller, sub.scope)
     size = len(json.dumps(sub.params, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
     if scope != "instance" and size > SUBMISSION_MAX_BYTES:
@@ -1107,8 +1117,11 @@ def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api"),
         raise HTTPException(status_code=400,
                             detail={"unknown_steps": missing, "vocabulary": sorted(vocab.steps)})
     granted: list = []
+    proposed = caller.is_delegated
+    if sub.activate and not proposed:
+        _require_session_to_arm(caller, scope)
     if scope != "instance":
-        _check_user_flow(scope, sub, cron)
+        _check_user_flow(scope, sub, cron, proposed=proposed)
         granted = _grants_for(scope, sub)
         params = {k: v for k, v in (sub.params or {}).items() if k != "grants"}
         sub.params = {**params, **({"grants": granted} if granted else {})}
@@ -1121,7 +1134,12 @@ def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api"),
     code_max = (max([v for (fn, v) in vocab.flows if fn == sub.name and (fn, v) not in
                      vocab.db_versions], default=0) if scope == "instance" else 0)
     version = max(row[0][0], code_max) + 1
-    status = "active" if sub.activate else "draft"
+    # AN AGENT PROPOSES A FLOW; A PERSON ARMS IT (D24, H8). A worker acting for a person — any
+    # delegated caller, watched or not — files a DRAFT whatever `activate` it sent. It goes live
+    # only when the person turns it on from their own session (the Routines board, through
+    # agent-api), never from an agent turn: injected text must not be able to plant a standing
+    # routine that runs every day as its owner.
+    status = "active" if (sub.activate and not proposed) else "draft"
     by = x_actor if caller.is_admin else (caller.email or f"user:{caller.uid}")
     db.execute("""INSERT INTO flow_version (scope, name, version, on_event, cron, steps, params,
                                             status, created_by, created_at)
@@ -1142,7 +1160,8 @@ def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api"),
                         {"kind": "schedule", "cron": cron} if cron
                         else {"kind": "event", "event": on_event}),
             "grants": granted, "may": _g.may_sentence(granted),
-            "live_within_s": 10 if status == "active" else None}
+            "live_within_s": 10 if status == "active" else None,
+            **({"awaiting_approval": True, "note": APPROVAL_NOTE} if proposed else {})}
 
 
 @app.get("/flows/pages")
@@ -1196,6 +1215,14 @@ class EventSubmission(BaseModel):
     event_type: str = Field(min_length=1, max_length=120)
     source_event_id: str = Field(min_length=1, max_length=200)
     refs: dict = Field(default_factory=dict)
+    # event.v2 (D8): the producer's SEALED fact envelope — who the fact reaches, signed per producer.
+    # Optional: a fact without one admits by subject only, exactly as before.
+    envelope: Optional[dict] = None
+
+
+#: The producers whose sealed envelopes the intake admits (D8). `meetings` and `agent` are listed
+#: ahead of their producers sealing, so adopting the envelope there is a producer-side change only.
+ENVELOPE_PRODUCERS = frozenset({"crm", "meetings", "agent"})
 
 
 def _actor(x_actor: str) -> str:
@@ -1243,13 +1270,21 @@ def admit_event(ev: EventSubmission, x_actor: str = Header(default="")):
         raise HTTPException(status_code=400, detail={
             "refused": "reserved_event", "note": "schedule.due is fired by the flows worker"})
     actor = _actor(x_actor)
-    refs = {**ev.refs, "admitted_by": actor}
+    # A CALLER CANNOT CLAIM AN AUDIENCE (D8): `_audience`/`_owner`/`_visibility`/`_lifecycle` come
+    # off the caller's refs first, and are set (by `admit`, from `sealed`) only from an envelope
+    # whose seal verifies. One that does not verify is refused, never admitted as if unsigned (P18).
+    refs = {**strip_sealed(ev.refs), "admitted_by": actor}
+    sealed = None
+    if ev.envelope is not None:
+        sealed = fact_envelope.verify(ev.envelope, fact_envelope.secret_from_env(), ENVELOPE_PRODUCERS)
+        if sealed is None:
+            raise HTTPException(status_code=403, detail={"refused": "envelope_unverified"})
     if ev.event_type == "thread.message":
         _check_message_policy(refs)
     refusals: list = []
     n = admit(db, vocab, clock, source_event_id=ev.source_event_id,
               event_type=ev.event_type, subject_refs=refs, refusals=refusals,
-              **_admission_limits())
+              sealed=sealed, **_admission_limits())
     flows_obs.log_event("event_admitted", fields={"event_type": ev.event_type,
                                                   "reactions_created": n, "duplicate": n == 0})
     if ev.event_type == "thread.message" and not n and refusals:
@@ -1359,6 +1394,10 @@ def admit_batch(batch: SeedBatch, x_actor: str = Header(default="")):
 
     Returns a row per meeting rather than a count: a partial success is the normal case (one bad
     url in twenty), and a bare number cannot tell an admin WHICH meeting to fix.
+
+    NO ENVELOPE HERE (event.v2, D8): a seed row is a meeting, not a producer's fact, and its refs are
+    built from fixed fields — so it can carry neither a sealed audience nor a forged one, and every
+    row admits by subject only.
     """
     vocab.refresh_from_db(db)
     if not vocab.match(batch.event_type):
@@ -1402,6 +1441,36 @@ def admit_batch(batch: SeedBatch, x_actor: str = Header(default="")):
 #: activated again, so a pause loses nothing.
 FLOW_ACTIONS = {"activate": "active", "resume": "active", "retire": "retired", "pause": "retired"}
 
+#: What an agent turn is told when it submits a flow (D24): filed, not live.
+APPROVAL_NOTE = ("Filed as a draft. A routine an agent writes runs only after your person turns it "
+                 "on themselves, from their Routines board. Tell them it is waiting there; do not "
+                 "try to activate it.")
+#: …and what it gets when it tries to arm one anyway.
+APPROVAL_REFUSAL = {
+    "refused": "person_approval_required",
+    "instruction": "Activating or resuming a flow is your person's act, from their own session. "
+                   "Tell them the routine is waiting on their Routines board; do not retry it "
+                   "another way.",
+}
+
+
+#: …and what a person's API key gets when it tries to arm one of their routines (D13): arming is
+#: done from a signed-in session, and a key — whatever its scopes — is not one.
+SESSION_REFUSAL = {
+    "refused": "session_required",
+    "instruction": "Turning a routine on is done by its person from their signed-in session (the "
+                   "Routines board). An API key cannot do it, whatever its scopes. File it with "
+                   "activate=false and turn it on from the board.",
+}
+
+
+def _require_session_to_arm(caller: Caller, target: str) -> None:
+    """A PERSON'S OWN ROUTINE IS ARMED FROM A SESSION (D13). Applies to a person's own credential on
+    a person's flow; the operator key and the instance's flows keep their own rules."""
+    if caller.kind == "subject" and not caller.is_delegated and target != "instance" \
+            and not caller.is_session:
+        raise HTTPException(status_code=403, detail=SESSION_REFUSAL)
+
 
 @app.post("/flows/{name}/{version}/{action}")
 def set_flow_status(name: str, version: int, action: str, scope: str = "",
@@ -1423,6 +1492,12 @@ def set_flow_status(name: str, version: int, action: str, scope: str = "",
                             detail="activate | retire | pause | resume | revoke_grants")
     target = _lifecycle_scope(caller, scope)
     st = FLOW_ACTIONS[action]
+    if st == "active" and caller.is_delegated:
+        # ARMING IS THE PERSON'S ACT (D24, H8). An agent turn may pause or retire a flow — a
+        # narrowing — but never activate or resume one, its own drafts included.
+        raise HTTPException(status_code=403, detail=APPROVAL_REFUSAL)
+    if st == "active":
+        _require_session_to_arm(caller, target)
     if st == "active" and target != "instance":
         rows = db.execute("SELECT steps, cron FROM flow_version WHERE scope=:sc AND name=:n "
                           "AND version=:v", {"sc": target, "n": name, "v": version})
@@ -1587,6 +1662,12 @@ def add_routine_trigger(body: TriggerAdd, x_actor: str = Header(default="api"),
                                       params={"instruction": body.instruction, "thread": body.thread}),
                        x_actor=x_actor, caller=caller)
     facts = _routine_facts(made["scope"], made["name"])
+    if made.get("awaiting_approval"):
+        # proposed by an agent turn (D24): nothing wakes until the person turns it on
+        _announce(made["scope"], made["name"], body.thread,
+                  f"Proposed a timer {body.name} for this chat. It waits on your Routines board "
+                  "until you turn it on.")
+        return {**facts, "awaiting_approval": True, "note": APPROVAL_NOTE}
     _announce(made["scope"], made["name"], body.thread,
               f"This chat now also wakes on {body.name} "
               + (f"({made['trigger'].get('cron')} UTC)." if made["trigger"].get("cron")
@@ -2817,9 +2898,13 @@ def queue_waiting(subject: str = "", limit: int = 50,
     # `/internal/validate` already returned on the way in; and when admin-api was slow or down that
     # lookup came back half-empty, which drops the whole invite lineage (it carries an organizer
     # address and no uid — `flows_timeline.model.concerns`) out of the hottest read in the product.
+    # A TURN OTHER PEOPLE READ (ADR-0048 decision 4) gets the room's subset, never the person's
+    # queue: only items naming a workspace on its shared ceiling (`SHARED_NARROWED`).
+    room = (_flows_queue.room_workspaces((caller.delegation or {}).get("workspaces"), uid=caller.uid)
+            if caller.is_shared else None)
     return _flows_queue.waiting(db, subject=who, flows=flows,
                                 limit=max(1, min(int(limit), 200)),
-                                identity=_as_me(caller))
+                                identity=_as_me(caller), room=room)
 
 
 @app.get("/queue/notices")

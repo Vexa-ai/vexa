@@ -61,6 +61,7 @@ WHY_ADMIN_ACCOUNT = "admin-account"
 WHY_EXISTING_USER = "existing-user"
 WHY_ALLOW_LIST = "allow-list"
 WHY_CLAIM_CODE = "claim-code"
+WHY_INVITED = "invited"
 WHY_NOT_ALLOWED = "not-allowed"
 
 # The claim outcomes (`may_claim` and `POST /internal/bootstrap-admin`).
@@ -269,7 +270,8 @@ def is_admin(email, data, admins: Iterable[str]) -> bool:
 def decide(email, *, user_exists: bool, is_admin: bool, admin_claimed: bool,
            allow: Iterable[str], admins: Iterable[str] = (),
            claim_code_ok: bool = False,
-           admin_accounts: Iterable[str] = ()) -> Tuple[bool, str]:
+           admin_accounts: Iterable[str] = (),
+           invited: bool = False, invites_admit: bool = True) -> Tuple[bool, str]:
     """(admitted, why). The order only decides which reason is reported, except for the last row:
     an instance nobody has claimed and nothing has been configured for admits a sign-in that holds
     the claim code, because that sign-in is the claim. `is_admin` is the claimed role on the user
@@ -291,9 +293,20 @@ def decide(email, *, user_exists: bool, is_admin: bool, admin_claimed: bool,
         return True, WHY_EXISTING_USER
     if matches(e, allow):
         return True, WHY_ALLOW_LIST
+    # AN INVITE IS A WAY IN (PRD 0.13.4 S2; founder decision 9: "the seeded default is invite").
+    # `invited` is the terminal's join POST, made only after agent-api spent the sign-in half of an
+    # invite this deployment MAILED to this exact address — the mailbox is proven and a member of a
+    # workspace asked for this person. The operator can close it (`VEXA_SIGNIN_INVITES_ADMIT=0`).
+    if invited and invites_admit:
+        return True, WHY_INVITED
     if not admin_claimed and not admins and not allow and claim_code_ok:
         return True, WHY_CLAIM_CODE
     return False, WHY_NOT_ALLOWED
+
+
+def invites_admit() -> bool:
+    """`VEXA_SIGNIN_INVITES_ADMIT` — on unless the operator set it to 0/false/off."""
+    return (os.getenv("VEXA_SIGNIN_INVITES_ADMIT", "1") or "1").strip().lower() not in ("0", "false", "off", "no")
 
 
 def may_claim(email, *, admin_claimed: bool, allow: Iterable[str],

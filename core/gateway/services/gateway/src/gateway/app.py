@@ -38,7 +38,9 @@ from fastapi import FastAPI, Path, Request, Response, WebSocket
 
 from . import identity_token, routes_manifest
 from .agent_admission import AgentAllow, refused_response as _agent_tier_refused
+from . import taint as taint_mod
 from .delegation import (McpReentry, delegated_route_response, is_delegated, reentry_unlisted_response,
+                         shared_delegation, shared_route_response,
                          reported_admin,
                          reported_admin_account)
 from .multiplex import run_multiplex
@@ -279,7 +281,7 @@ def _required_scopes(request: Request, table=None) -> Optional[FrozenSet[str]]:
 # any api-key holder. A LIST rots the moment a new authority header is added; a PREFIX rule does not,
 # which is why this matches by family and why every new internal header must be spelled into one.
 _AUTHORITY_HEADER_PREFIXES = ("x-user-", "x-internal-", "x-vexa-internal-")
-_AUTHORITY_HEADER_EXACT = frozenset({"x-admin-api-key", identity_token.HEADER})
+_AUTHORITY_HEADER_EXACT = frozenset({"x-admin-api-key", identity_token.HEADER, taint_mod.STATE_HEADER})
 
 
 def _is_authority_header(name: str) -> bool:
@@ -314,6 +316,7 @@ def create_app(
     voice_note_dialer=None,
     vnc_connect=None,
     agent_allow: Optional[str] = None,
+    taint_marker=None,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
 
@@ -331,6 +334,9 @@ def create_app(
     ``vnc_connect`` — opens the upstream websocket of a bot-account sign-in session's live view
                       (``vnc_relay.py``); ``None`` is the ``websockets`` client, a test injects a fake.
     """
+    # M7: a credential in a query string (`/ws?api_key=…`) never reaches a log line.
+    from . import log_scrub as _log_scrub  # noqa: PLC0415
+    _log_scrub.install()
     # ── WHICH DOMAINS THIS DEPLOYMENT FRONTS (PRD decisions 40.6 + 40.7) ─────────────────────
     #
     # Presence is a CONFIGURATION FACT — whether the deployment named the door — never a probe. A
@@ -397,6 +403,8 @@ def create_app(
         delegated = is_delegated(api_key, user_data)
         if delegated and not _admits_mcp_reentry(request, user_data):
             return delegated_route_response()
+        if delegated and shared_delegation(user_data) and _route_key(request) not in _assembly.shared_allow:
+            return shared_route_response()
         is_admin = reported_admin(user_data, delegated=delegated)
         admin_account = reported_admin_account(user_data, delegated=delegated)
         set_user_id(user_data["user_id"])
@@ -409,6 +417,45 @@ def create_app(
             "is_admin": is_admin,
             "admin_account": admin_account,
         }
+
+    # --- /internal/mcp/taint — the MCP reports the label of a read it made DIRECTLY (crm, flows), on
+    # its signed re-entry with the worker's own token; the unit comes from the identity this edge
+    # resolved, never from the MCP. With no `sources` it only answers the session's current mark
+    # (the MCP forwards it to the service as `X-Vexa-Taint`). Marking only: no decision here (D6).
+    @app.post("/internal/mcp/taint")
+    async def mcp_taint(request: Request):
+        api_key = request.headers.get("x-api-key")
+        if not api_key:
+            return Response(content=json.dumps({"detail": "Missing API key"}),
+                            status_code=401, media_type="application/json")
+        try:
+            user_data = await authorizer.resolve(api_key)
+        except AuthUnavailable as e:
+            return _auth_unavailable_response(e, span="auth")
+        if not user_data:
+            return Response(content=json.dumps({"detail": "Invalid API key"}),
+                            status_code=401, media_type="application/json")
+        delegated = is_delegated(api_key, user_data)
+        if not delegated:
+            return {"marked": False, "state": "none"}         # a person's own key has no session
+        if not _admits_mcp_reentry(request, user_data):
+            return delegated_route_response()
+        unit = session_of_validation(user_data)
+        if not unit:
+            return {"marked": False, "state": taint_mod.UNVERIFIABLE}
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        sources = [str(x) for x in (body.get("sources") or [])] if isinstance(body, dict) else []
+        if sources:
+            if taint_marker is None:
+                return _mark_refused()
+            try:
+                await taint_marker.mark(unit, sources)
+            except taint_mod.MarkUnavailable:
+                return _mark_refused()
+        return {"marked": bool(sources), "state": await taint_mod.state_for(taint_marker, unit)}
 
     # --- auth + identity prep, shared by the buffered REST proxy (_forward) and the streaming proxy
     # (agent chat SSE). Returns (downstream_headers, None) on success, or (None, error_Response) when
@@ -490,6 +537,17 @@ def create_app(
                 return None, reentry_unlisted_response(method, request.url.path)
             return None, delegated_route_response()
 
+        # D3 — DEFAULT-DENY FOR SHARED TOKENS, AT THE EDGE. A delegation whose turn other people read
+        # (a room's or a shared chat's, `delegation.shared`; or a workspace principal, D2) reaches only
+        # the rows its domain's routes.v1 declares `"shared": "allow"`. This is the boundary: the MCP
+        # manifest filter is a narrowing of what the model is offered, and a worker can present its
+        # bearer to this edge directly (security review H5). Each service keeps its own check too.
+        if is_delegated(client_key, user_data) and shared_delegation(user_data) \
+                and _route_key(request) not in _assembly.shared_allow:
+            log_event("request_denied_shared_route", audience="user", level="warning", span="auth",
+                      user_id=user_id, fields={"method": method, "path": request.url.path})
+            return None, shared_route_response()
+
         # Scope enforcement — DENY BY DEFAULT. Every proxied route declares its scopes in
         # ROUTE_SCOPES; an undeclared route is refused here rather than forwarded, so the failure
         # mode of forgetting a declaration is a 403 the author trips over, not an open door. (The
@@ -569,7 +627,30 @@ def create_app(
             headers.update(identity_token.headers_from_claims(
                 identity_token.claims_from_validation(user_data)))
         headers[TRACE_HEADER] = get_trace_id() or ""
+        # THE PRIVACY MARK (D6, `taint.py`): a worker's request carries its session's current mark to
+        # the service (a service with no Redis holds from it), and its answer marks the session.
+        unit = session_of_validation(user_data) if is_delegated(client_key, user_data) else None
+        if unit:
+            request.state.vexa_taint_unit = unit
+            headers[taint_mod.STATE_HEADER] = await taint_mod.state_for(taint_marker, unit)
+        elif is_delegated(client_key, user_data):
+            headers[taint_mod.STATE_HEADER] = taint_mod.UNVERIFIABLE
         return headers, None
+
+    async def _mark_answer(request: Request, status: int, label: Optional[str]) -> bool:
+        """Mark the worker's session from a forwarded answer's label. False = refuse the answer."""
+        unit = getattr(request.state, "vexa_taint_unit", None)
+        if not unit or _assembly.owner_of.get(_route_key(request)) not in taint_mod.MARKED_DOMAINS:
+            return True
+        ok = await taint_mod.mark_from_response(taint_marker, unit, status, label)
+        if not ok:
+            log_event("privacy_mark_unavailable", audience="system", level="error", span="proxy",
+                      fields={"method": request.method, "path": request.url.path})
+        return ok
+
+    def _mark_refused() -> Response:
+        return Response(content=json.dumps({"detail": taint_mod.mark_unavailable_body()}),
+                        status_code=503, media_type="application/json")
 
     # --- the REST proxy: faithful carve of main.forward_request for client (non-admin) routes.
     async def _forward(method: str, url: str, request: Request, *, api_key: Optional[str] = None
@@ -620,6 +701,9 @@ def create_app(
             span="proxy",
             fields={"method": method, "path": url, "downstream_status": resp.status_code},
         )
+
+        if not await _mark_answer(request, resp.status_code, resp.headers.get(taint_mod.LABEL_HEADER)):
+            return _mark_refused()
 
         # Return downstream body + status VERBATIM (drop hop-by-hop headers; main.py:367).
         resp_headers = resp.headers
@@ -1056,6 +1140,16 @@ def create_app(
     @app.delete("/user/photo")
     async def delete_user_photo(request: Request):
         return await _forward("DELETE", _admin("/user/photo"), request)
+    # ---- the person's notification policy (identity; PRD 0.13.4 S6 Settings → Notifications). The
+    # person's own key only: no delegation, no MCP re-entry — how a person is interrupted is theirs.
+    @app.get("/user/notifications")
+    async def get_user_notifications(request: Request):
+        return await _forward("GET", _admin("/user/notifications"), request)
+
+    @app.put("/user/notifications")
+    async def set_user_notifications(request: Request):
+        return await _forward("PUT", _admin("/user/notifications"), request)
+
     # ---- the person's PUBLIC PROFILE, company verification and the directory (R4; identity is the
     # one writer, admin-api refuses all of it unless `public_profiles` is switched on by name). ----
     @app.get("/user/profile")
@@ -1196,6 +1290,10 @@ def create_app(
             await stack.aclose()
             return _upstream_fault(url, e)
 
+        if not await _mark_answer(request, upstream.status_code,
+                                  upstream.headers.get(taint_mod.LABEL_HEADER)):
+            await stack.aclose()
+            return _mark_refused()
         media_type = upstream.headers.get("content-type") or "application/json"
         if not (200 <= upstream.status_code < 300 and media_type.startswith("text/event-stream")):
             try:

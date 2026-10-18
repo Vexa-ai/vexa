@@ -141,16 +141,22 @@ def parse_label_json(content: str, labels) -> dict:
 class OpenAICompatibleAdapter:
     name = "openai-compatible"
 
-    def __init__(self, route: str, key: Optional[str], *, base_url: str = "", transport=None):
+    def __init__(self, route: str, key: Optional[str], *, base_url: str = "", transport=None,
+                 thinking: str = ""):
         self.route, self.key, self.transport = route, key, transport
         self.base = (base_url or OPENROUTER_OPENAI).rstrip("/")
+        self.thinking = thinking
 
     def payload(self, instructions: dict, new: Line, context: list) -> dict:
         user = json.dumps({"labels": instructions, "transcript": json.loads(state_json(new, context))},
                           ensure_ascii=False)
-        return {"model": self.route, "temperature": 0, "max_tokens": 40 + OUT_TOKENS_PER_LABEL * len(instructions),
-                "response_format": {"type": "json_object"},
-                "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]}
+        out = {"model": self.route, "temperature": 0, "max_tokens": 40 + OUT_TOKENS_PER_LABEL * len(instructions),
+               "response_format": {"type": "json_object"},
+               "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]}
+        if self.thinking == "off":
+            # vLLM / SGLang chat-template switch: a reasoning model answers without thinking
+            out["chat_template_kwargs"] = {"enable_thinking": False}
+        return out
 
     async def score(self, instructions: dict, new: Line, context: list) -> Scored:
         payload = self.payload(instructions, new, context)
@@ -178,4 +184,5 @@ def build(model: dict, key: Optional[str], *, transport=None):
     """The adapter the policy's ``model_signals`` names."""
     if model["adapter"] == "jev":
         return JevAdapter(model["route"], key, transport=transport)
-    return OpenAICompatibleAdapter(model["route"], key, base_url=model.get("base_url", ""), transport=transport)
+    return OpenAICompatibleAdapter(model["route"], key, base_url=model.get("base_url", ""), transport=transport,
+                                   thinking=model.get("thinking", ""))

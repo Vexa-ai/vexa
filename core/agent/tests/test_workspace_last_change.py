@@ -327,9 +327,8 @@ def test_the_people_record_is_the_directory_for_an_ordinary_address(tmp_path):
     product writes an address and a subject on the same line of."""
     ws = _init_ws(tmp_path, "wsA")
     idx = _shared(tmp_path, "wsA", owner="176")
-    (tmp_path / "wsA" / "policy").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "wsA" / "policy" / "members.json").write_text(
-        '[{"subject": "176", "role": "owner", "email": "jsmith@example.com"}]')
+    m.write_policy(tmp_path, "wsA", "members",      # the roster's authority is the store (D5)
+                   [{"subject": "176", "role": "owner", "email": "jsmith@example.com"}])
     _uid_desk(tmp_path, "176", "me.md", SELF_PAGE)
     _commit(ws, {"kg/board.md": "# board\n"}, "wsA: kg/board.md — added",
             who=("jsmith@example.com", "jsmith@example.com"))

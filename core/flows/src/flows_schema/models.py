@@ -302,3 +302,65 @@ class Sensor(Base):
         CheckConstraint("status IN ('draft','active','degraded','stopped')", name="sensor_status"),
         Index("sensor_due", "next_due_at"),
     )
+
+
+class Delivery(Base):
+    """ONE NUDGE IN FLIGHT, per person and item (PRD 0.13.4 D15, S6) — the keyed schedule of the
+    delivery gate. An item (a card waiting on the person, a mention, a missed call, a join request, a
+    slip) is ARMED at its `next_check_at`; the worker wakes it at `wake_at`, asks crm whether it is
+    still open and unseen, and walks it in-app → (idle) one email → the digest, stopping the moment
+    it is seen or acted on (`outcome`). REFS ONLY: a card's title is fetched for the recipient at send
+    time; `names` holds a non-card item's display names (who, room, workspace) — never a message.
+    A re-arm (the card moved its check) moves `wake_at` and bumps `version`; a closed card cancels.
+    ONE WRITER: flows (`flows_delivery.store`)."""
+    __tablename__ = "delivery"
+    person: Mapped[str] = mapped_column(Text, primary_key=True)
+    ref: Mapped[str] = mapped_column(Text, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    org: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    workspace: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    room: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    owner: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    names: Mapped[str | None] = mapped_column(Text)
+    link: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    stage: Mapped[str] = mapped_column(Text, nullable=False)
+    wake_at: Mapped[float] = mapped_column(Double, nullable=False)
+    notice_id: Mapped[str | None] = mapped_column(Text)
+    outcome: Mapped[str | None] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    armed_at: Mapped[float] = mapped_column(Double, nullable=False)
+    notified_at: Mapped[float | None] = mapped_column(Double)
+    emailed_at: Mapped[float | None] = mapped_column(Double)
+    digested_at: Mapped[float | None] = mapped_column(Double)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+    __table_args__ = (
+        CheckConstraint("stage IN ('armed','notified','digest','done')", name="delivery_stage"),
+        Index("delivery_due", "stage", "wake_at"),
+        Index("delivery_person", "person", "stage"),
+    )
+
+
+class DeliverySend(Base):
+    """ONE DELIVERY OUTSIDE THE INBOX (PRD 0.13.4 D32 — the attention budget's unit). One email for
+    one item, or one digest for many, is one row; the in-app notice never is (acknowledging inside
+    the Inbox costs no budget). `day` is the recipient's LOCAL day, so the cap resets at their
+    midnight. Written `sending` BEFORE the transport is called, under a deterministic `id`
+    (`<person>|<ref>|single` or `<person>|digest|<slot>`), and flipped to `sent` after: a crash in
+    between can never send twice, which is the effect-receipt rule applied to mail. ONE WRITER: flows."""
+    __tablename__ = "delivery_send"
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    person: Mapped[str] = mapped_column(Text, nullable=False)
+    day: Mapped[str] = mapped_column(Text, nullable=False)
+    channel: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    refs: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    handle: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)
+    at: Mapped[float] = mapped_column(Double, nullable=False)
+    __table_args__ = (
+        CheckConstraint("status IN ('sending','sent','failed')", name="delivery_send_status"),
+        CheckConstraint("kind IN ('single','digest')", name="delivery_send_kind"),
+        Index("delivery_send_day", "person", "day"),
+    )

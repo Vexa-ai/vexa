@@ -55,16 +55,24 @@ class ActBody(BaseModel):
 
 class InternalNoticeBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["meeting_shared", "bot_scheduled", "bot_joined"]
+    kind: Literal["meeting_shared", "bot_scheduled", "bot_joined", "card_waiting", "card_slipped", "delivery_failed"]
     to: Optional[str] = Field(default=None, max_length=200, pattern=r"^[A-Za-z0-9][A-Za-z0-9._@+:-]{0,199}$")
     email: Optional[str] = Field(default=None, max_length=254)
     actor: Optional[str] = Field(default=None, max_length=200)
     actor_name: Optional[str] = Field(default=None, max_length=254)
-    meeting_id: str = Field(min_length=1, max_length=200)
+    meeting_id: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    #: the object a nudge kind names (a card id); meeting kinds keep `meeting_id`
+    object_id: Optional[str] = Field(default=None, min_length=1, max_length=200)
     title: Optional[str] = Field(default=None, max_length=1000)
-    object_kind: Optional[Literal["meeting", "none"]] = None
+    object_kind: Optional[Literal["meeting", "card", "none"]] = None
     #: Where Open goes: a path in this app (``/…``) only — never another origin.
     url: Optional[str] = Field(default=None, max_length=600, pattern=r"^/([^/\s][^\s]*)?$")
+
+
+class InternalNoticeState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    to: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9][A-Za-z0-9._@+:-]{0,199}$")
+    ids: list[str] = Field(default_factory=list, max_length=200)
 
 
 _LINK = re.compile(r"^(page):([A-Za-z0-9._-]{1,128})/([A-Za-z0-9._@+=/ -]{1,250})$|^(meeting):([0-9]{1,18})$")
@@ -142,6 +150,16 @@ def build(**d) -> APIRouter:
         outside = [r for r in recipients if r not in people]
         if outside:
             raise _refuse("not_a_participant", 403, "`to` names only people in this chat")
+        # THE PRIVACY HOLD (D6, `private_taint`): notice text to OTHER people from a session that
+        # read the person's private data waits for the person.
+        from control_plane import ceiling as _ceiling, private_taint  # noqa: PLC0415
+        held = private_taint.check_egress(
+            subject=str(subject), unit=unit, surface="notice",
+            target=f"notice/{','.join(sorted(recipients))}",
+            readers=[r for r in recipients if r != str(subject)], path="notice", content=body.text,
+            delegated=_ceiling.is_delegated(request))
+        if held is not None:
+            raise HTTPException(status_code=409, detail=held)
         okind, oid, oname, url = ("chat", row["id"], row.get("title") or "a chat", None) if row is not None \
             else ("none", "agent", "", None)
         if body.link:
@@ -201,21 +219,30 @@ def build(**d) -> APIRouter:
             to_open["turn"] = (row.get("_url") or "").split("turn=", 1)[1]
         acted = None
         if row["kind"] == "workspace_invited" and body.action in ("accept", "decline"):
-            token = ""
-            m = re.search(r"[?&]i=([^&#]+)", row.get("_url") or "")
-            if m:
-                token = m.group(1)
+            # THE ROW NAMES THE INVITE BY ID (PRD 0.13.4 M2); a row from before 0.13.4 still holds
+            # the link, and its token is read as before until the boot scrub has rewritten it.
+            stored = row.get("_url") or ""
+            token, ref = "", ""
+            if notifications_mod.is_invite_ref(stored):
+                ref = stored
+            else:
+                m = re.search(r"[?&]i=([^&#]+)", stored)
+                if m:
+                    token = m.group(1)
             door = invite_doors.get(body.action)
-            if not token or door is None:
+            if not (token or ref) or door is None:
                 raise HTTPException(status_code=409, detail={"refused": "not_an_action", "actions": [],
                                                              "message": "this invite can no longer be answered here"})
             if body.action == "accept":
-                done = door(request, token, ceiling=False)
+                done = door(request, token, ceiling=False, ref=ref)
                 acted = "accepted"
                 to_open = {"kind": "workspace", "id": done.get("workspace_id") or obj["id"],
                            "name": done.get("name") or obj.get("name") or ""}
+                if isinstance(done.get("room"), dict) and done["room"].get("id"):
+                    to_open = {"kind": "chat", "id": done["room"]["id"],
+                               "name": done["room"].get("title") or ""}
             else:
-                door(request, token)
+                door(request, token, ref=ref)
                 acted, to_open = "declined", None
         elif row["kind"] == "call_started" and body.action == "join":
             acted, to_open = "joined", {"kind": "call", "id": obj["id"], "name": obj.get("name") or ""}
@@ -249,10 +276,24 @@ def build(**d) -> APIRouter:
                 return {"delivered": 0}
         if not recipient:
             raise HTTPException(status_code=422, detail="name the recipient: `to` (an account id) or `email`")
-        okind = body.object_kind or "meeting"
+        nudge = body.kind in notifications_mod.NUDGE_KINDS
+        okind = body.object_kind or ("card" if nudge else "meeting")
+        oid = body.object_id if nudge else body.meeting_id
+        if not oid or (nudge and okind != "card") or (not nudge and okind == "card"):
+            raise HTTPException(status_code=422, detail="a meeting kind names meeting_id; a nudge kind names a card's object_id")
         rows = n.emit([recipient], kind=body.kind, actor=str(body.actor or "vexa"),
                       actor_name=body.actor_name or ("Vexa" if not body.actor else ""), object_kind=okind,
-                      object_id=str(body.meeting_id), object_name=body.title or "", url=body.url)
-        return {"delivered": len(rows)}
+                      object_id=str(oid), object_name=body.title or "", url=body.url)
+        return {"delivered": len(rows), "ids": [r["id"] for r in rows]}
+
+    @router.post("/internal/notifications/state")
+    def internal_notice_state(body: InternalNoticeState, request: Request):
+        """READ STATE of one person's rows, for flows' delivery gate (PRD 0.13.4 S6, deny test 30): a
+        mention read in the app is seen, and its pending email is suppressed. INTERNAL TIER ONLY.
+        Answers ``{notices: {id: {read, acted}}}``; a row that is not that person's is absent."""
+        internal = d.get("_internal_caller")
+        if internal is None or not internal(request):
+            raise HTTPException(status_code=403, detail="reading notification state is an internal-tier capability")
+        return {"notices": _n().state(str(body.to), body.ids)}
 
     return router

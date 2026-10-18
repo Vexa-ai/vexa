@@ -295,6 +295,7 @@ def build_production_app(
     )
 
     from .ratelimit import from_env as _rate_limiter_from_env
+    from .taint import TaintMarker as _TaintMarker
 
     app = create_app(
         authorizer,
@@ -308,6 +309,8 @@ def build_production_app(
         # gateway-identity.v1: the resolved identity is signed onto every forward with the key loaded
         # above, so this is never None in production.
         identity_key=identity_key,
+        # D6: the privacy mark — a worker's session marked from the label on every private read.
+        taint_marker=_TaintMarker(redis_client),
         rate_limiter=_rate_limiter_from_env(),  # WS-6: per-user DoS guard (generous defaults; env-tunable)
     )
 

@@ -226,6 +226,25 @@ deployment has ONE relay and an operator configures it once.
       name: {{ $existing | default (include "vexa.adminTokenSecretName" .) | quote }}
       key: VEXA_MAIL_SMTP_PASSWORD
       optional: true
+{{- /* THE RELAY PASSWORD BY REFERENCE (PRD 0.13.4 S2): broker:mail/<name>, read by flows from the
+credential broker with the broker's sensors key, mounted below. Set, it is the only source. */}}
+{{- if $own.passwordRef }}
+{{- if not (include "vexa.credentialBrokerEnabled" .) }}
+{{- fail "flows.mail.smtp.passwordRef needs the credential broker (agentApi.enabled and credentialBroker.enabled)" -}}
+{{- end }}
+{{- if not (regexMatch "^broker:mail/[a-z0-9][a-z0-9_.-]{0,62}$" $own.passwordRef) }}
+{{- fail "flows.mail.smtp.passwordRef must be broker:mail/<name> (lowercase name)" -}}
+{{- end }}
+- name: VEXA_MAIL_SMTP_PASSWORD_REF
+  value: {{ $own.passwordRef | quote }}
+- name: VEXA_FLOWS_SENSORS_BROKER_URL
+  value: {{ include "vexa.credentialBrokerUrl" . | quote }}
+- name: VEXA_FLOWS_SENSORS_KEY_FILE
+  value: /run/vexa-connections/sensors/key
+{{- end }}
+{{- /* The recipient allowlist (PRD 0.13.4 S2): set, mail to anybody else is diverted, never sent. */}}
+- name: VEXA_MAIL_RECIPIENT_ALLOW
+  value: {{ $m.recipientAllow | default "" | toString | quote }}
 {{- if $existing }}
 - name: VEXA_MAIL_APP_PASSWORD
   valueFrom:
@@ -244,6 +263,13 @@ deployment has ONE relay and an operator configures it once.
 {{/* The CA bundle's volume and mount (nothing when no bundle is named). */}}
 {{- define "vexa.flowsMailCaVolume" -}}
 {{- $ca := include "vexa.flowsMailCa" . | fromYaml -}}
+{{- if ((.Values.flows.mail | default dict).smtp | default dict).passwordRef }}
+- name: flows-broker-key
+  secret:
+    secretName: {{ include "vexa.credentialBrokerKeys" . | quote }}
+    defaultMode: 0440
+    items: [{key: sensors.key, path: sensors/key}]
+{{- end }}
 {{- if $ca.configMap }}
 - name: mail-ca
   configMap:
@@ -259,6 +285,11 @@ deployment has ONE relay and an operator configures it once.
 
 {{- define "vexa.flowsMailCaMount" -}}
 {{- $ca := include "vexa.flowsMailCa" . | fromYaml -}}
+{{- if ((.Values.flows.mail | default dict).smtp | default dict).passwordRef }}
+- name: flows-broker-key
+  mountPath: /run/vexa-connections
+  readOnly: true
+{{- end }}
 {{- if or $ca.configMap $ca.secret }}
 - name: mail-ca
   mountPath: /etc/vexa/mail-ca

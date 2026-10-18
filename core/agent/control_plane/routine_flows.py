@@ -154,6 +154,9 @@ def card_from_flow(subject: str, f: dict, *, state: Optional[dict] = None) -> di
     params = f.get("params") or {}
     held = ((state or {}).get(f["name"]) or {})
     running = f.get("status") == "active"
+    if f.get("status") == "draft" and not (f.get("paused_reason") or held.get("paused_reason")):
+        # PROPOSED, NOT YET ARMED (D24): an agent wrote it; it runs once the person turns it on
+        held = {**held, "paused_reason": "proposed by your agent — read it, then turn it on"}
     return {
         # WHY IT IS PAUSED: the reason flows recorded when the routine paused itself (its chat
         # became shared, Vexa-ai/vexa#1783), else the one this side wrote after repeated refusals.
@@ -355,11 +358,14 @@ def _content_hash(path: Path) -> Optional[str]:
 
 def _stood_behind(workspaces_dir, subject: str, path: Path, digest: Optional[str]) -> bool:
     """Did a PERSON stand behind these bytes under the old mechanism (their own write through
-    agent-api, or their confirmation)? The record is read, never written, here. Until that record
-    existed every file armed, so a store without it counts every file as stood behind."""
+    agent-api, or their confirmation)? The record is read, never written, here.
+
+    FAILS CLOSED (D24, H8). A store with no approvals record used to count every file as stood
+    behind, so any routine file an agent had written armed on migration. Now no record means no
+    approval: the file becomes a PAUSED flow the person reads and turns on themselves."""
     root = Path(workspaces_dir)
     if not (root / STATE_DIR / "approvals.v1.json").exists():
-        return True
+        return False
     approvals = _read_json(root / STATE_DIR / "approvals" / f"{subject}.json")
     return bool(digest) and approvals.get(path.stem) == digest
 
@@ -524,9 +530,11 @@ def _convert(subject, parsed: ParsedFile, path: Path, digest, *, client, flows: 
         if twin is not None:
             cron = (twin.get("trigger") or {}).get("cron")
             if parsed.mtime > _created(twin) and parsed.cron != cron:
+                # a newer schedule nobody stood behind is filed as a draft beside the live one,
+                # never swapped into it (D24): the person's running routine keeps its own cron
                 made = client.submit(subject, twin["name"], parsed.cron,
                                      (twin.get("params") or {}).get("instruction") or parsed.prompt,
-                                     activate=twin.get("status") == "active")
+                                     activate=twin.get("status") == "active" and stood)
                 flows[twin["name"]] = {**twin, **made}
             counts.files_merged += 1
             post_to_routine_chat(store, subject, twin["name"],

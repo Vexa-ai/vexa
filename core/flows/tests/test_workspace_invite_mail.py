@@ -160,7 +160,7 @@ def test_the_recipient_subject_and_body_are_what_the_template_renders(monkeypatc
         "",
         mailtext.VISIBILITY_SENTENCE,
         "",
-        "The link below is yours alone — it signs you in, so please do not forward it.",
+        "The link below is yours alone — one click signs you in and opens it, so please do not forward it.",
     ])
     assert "{{" not in msg["body"] and "{{" not in msg["subject"]
 
@@ -380,3 +380,42 @@ def test_the_invite_is_addressed_to_the_invitee_and_never_to_the_inviter(monkeyp
     # the inviter appears in the SUBJECT (it is their invitation) and nowhere in the addressing
     assert "admin@example.test" in ch.sent[0]["subject"]
     assert ch.sent[0]["to"] != refs["inviter"] and ch.sent[0]["to"] != refs["uid"]
+
+
+# ── PRD 0.13.4 S2 · the invite mail is a FIXED TEMPLATE: who, where, as what, one link ──────────
+def test_s2_template_names_the_room_role_and_inviter_and_carries_one_link(monkeypatch):
+    """The template test. A room invite says `<room> in <workspace>`; the body carries the role,
+    who invited, and no URL; the sent message carries the link exactly once, as its last line."""
+    reg, ch = _rig(monkeypatch)
+    reg.steps["mail_workspace_invite"](_ctx({**REFS, "room": "#launch"}))
+    msg = ch.sent[0]
+    assert msg["subject"] == "anna@bank.test invited you to #launch in Pilot"
+    assert "anna@bank.test invited you to #launch in Pilot as a contributor." in msg["body"]
+    assert "http" not in msg["body"], "a template never writes a URL"
+    whole = notify_mod.compose(msg["body"], msg["link"])
+    assert whole.count(REFS["link"]) == 1 and whole.rstrip().endswith(REFS["link"])
+    assert "{{" not in whole
+
+
+def test_s2_no_message_content_can_reach_the_mail(monkeypatch):
+    """Floor (D15, M4): there is no message token. Refs a producer might add — a note, the chat's
+    text, a page — are never read, so they cannot reach the mailbox."""
+    reg, ch = _rig(monkeypatch)
+    secret = "the board approved the merger at 41 dollars a share"
+    reg.steps["mail_workspace_invite"](_ctx({**REFS, "message": secret, "note": secret,
+                                             "text": secret, "body": secret, "title": secret}))
+    msg = ch.sent[0]
+    assert secret not in msg["subject"] and secret not in msg["body"]
+
+
+def test_s2_a_workspace_invite_without_a_room_names_the_workspace(monkeypatch):
+    reg, ch = _rig(monkeypatch)
+    reg.steps["mail_workspace_invite"](_ctx(dict(REFS)))
+    assert ch.sent[0]["subject"] == "anna@bank.test invited you to Pilot"
+
+
+def test_s2_an_admins_older_override_still_renders(monkeypatch):
+    """An override written before `{{place}}` existed uses `{{workspace_name}}`; it still fills."""
+    reg, ch = _rig(monkeypatch, override="subject: {{inviter}} → {{workspace_name}}\n---\nJoin {{workspace_name}}.")
+    reg.steps["mail_workspace_invite"](_ctx({**REFS, "room": "#launch"}))
+    assert ch.sent[0]["subject"] == "anna@bank.test → Pilot"

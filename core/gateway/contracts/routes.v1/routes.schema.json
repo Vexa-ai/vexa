@@ -226,6 +226,13 @@
           "type": "string",
           "pattern": "^(?:/(?:[^/{}]+|\\{[A-Za-z_][A-Za-z0-9_]*\\}))+$",
           "description": "the route template the edge forwards this row to on the domain's service, when it is not the row's own path; its `{name}` parameters are the row's. The domain's service reads it to know which rows reach each of its routes. A forwarded domain carries none: its forward is the one mapping"
+        },
+        "shared": {
+          "enum": [
+            "allow",
+            "refuse"
+          ],
+          "description": "D3 (default-deny for shared tokens): may a worker whose turn other people read — a delegation token carrying `scope.shared`, a room's or a shared chat's — reach this row? `allow` or `refuse`. The domain's own service enforces it from the signed delegation, once, before the route runs (agent-api `control_plane/route_policy.py`), and the MCP edge shows such a caller only the tools whose route says `allow`. A forwarded domain that declares it on one row declares it on every row and every verb, and a route its service serves that no row or verb declares is refused to a shared token (and fails the service's own CI check)"
         }
       },
       "allOf": [
@@ -323,6 +330,13 @@
         "person": {
           "type": "boolean",
           "description": "true: the verb needs a person in the loop, and the service refuses a worker dispatched without one before the route runs"
+        },
+        "shared": {
+          "enum": [
+            "allow",
+            "refuse"
+          ],
+          "description": "the same declaration for one verb behind the forward: may a shared (room or shared-chat) worker reach it. `allow` or `refuse`; see Route.shared"
         }
       }
     },

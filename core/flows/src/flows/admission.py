@@ -3,8 +3,14 @@
 Three refusals sit in front of the insert since ADR-0046, and each is logged with counts — a fact
 that started nothing must never be indistinguishable from one that started something:
 
-* SCOPE (decision 4). A person's flow is admitted only for an event whose subject is that person —
-  `refs["uid"]`. An event naming nobody, or somebody else, starts none of a person's flows.
+* SCOPE (D8, PRD 0.13.4; was decision 4). A person's flow is admitted for an event whose subject is
+  that person — `refs["uid"]` — OR whose AUDIENCE names that person — `refs["_audience"]`. The
+  audience is computed by the producing domain and sealed into an event.v2 fact envelope
+  (`fact_envelope.py`); the intake verifies the seal and only then sets `_audience` (and `_owner`,
+  `_visibility`, `_lifecycle`). `admit()` strips those keys from whatever refs it is handed unless
+  they arrive through `sealed=`, so no caller — the operator intake, a re-emitting step, the
+  mailbox — can claim an audience. `ws:<slug>` entries name a workspace principal and never match a
+  person. An event naming nobody, or somebody else, starts none of a person's flows.
 * LOOP (decision 8). An event a flow's own step emitted carries `_origin`, the chain of flows that
   produced it. It cannot start a flow already in that chain more than `loop_limit` times, nor any
   flow once the chain is `max_hops` long.
@@ -49,6 +55,49 @@ ORIGIN = "_origin"
 def subject_of(refs: dict) -> str:
     """The person an event is about — the uid every carrier that names one names it by."""
     return str((refs or {}).get("uid") or "").strip()
+
+
+#: The refs keys only a VERIFIED event.v2 envelope may set (D8). Stripped from every caller's refs.
+AUDIENCE, OWNER, VISIBILITY, LIFECYCLE = "_audience", "_owner", "_visibility", "_lifecycle"
+SEALED_KEYS = frozenset({AUDIENCE, OWNER, VISIBILITY, LIFECYCLE})
+#: A workspace principal in an audience. It is not a person and admits no person's flow.
+WORKSPACE_PREFIX = "ws:"
+
+
+def strip_sealed(refs: dict) -> dict:
+    """`refs` without the keys only a verified envelope may set — a caller cannot claim an audience."""
+    return {k: v for k, v in (refs or {}).items() if k not in SEALED_KEYS}
+
+
+def sealed_refs(envelope: dict) -> dict:
+    """The refs a VERIFIED envelope contributes (`fact_envelope.verify`'s answer, never raw input)."""
+    out = {AUDIENCE: [str(a) for a in envelope.get("audience") or []],
+           OWNER: str(envelope.get("owner") or ""),
+           VISIBILITY: str(envelope.get("visibility") or "")}
+    if envelope.get("object") == "card" and isinstance(envelope.get("lifecycle"), dict):
+        out[LIFECYCLE] = dict(envelope["lifecycle"])
+    return out
+
+
+def audience_of(refs: dict) -> list[str]:
+    """The PERSONS a sealed envelope says this fact reaches — `ws:` principals excluded."""
+    aud = (refs or {}).get(AUDIENCE) or []
+    if not isinstance(aud, list):
+        return []
+    return [str(a).strip() for a in aud
+            if isinstance(a, (str, int)) and str(a).strip() and not str(a).startswith(WORKSPACE_PREFIX)]
+
+
+def owner_of(refs: dict) -> str:
+    """Whose fact this is: the sealed `_owner` when the producer sealed one (D8), else the subject
+    (`refs.uid`) — the interim rule (BL-4) for producers that do not seal yet."""
+    return str((refs or {}).get(OWNER) or "").strip() or subject_of(refs)
+
+
+def reaches(person: str, refs: dict) -> bool:
+    """Does this fact reach `person`? Subject ∪ audience (D8)."""
+    person = str(person or "").strip()
+    return bool(person) and (subject_of(refs) == person or person in audience_of(refs))
 
 
 def origin_chain(refs: dict) -> list[str]:
@@ -142,7 +191,7 @@ def admissible(db: DB, flow: Flow, clock: Clock, *, event_type: str, subject_ref
             _refuse("quota_messages_per_day", flow, event_type, refusals)
             return False
     if flow.owner:
-        if event_type != SCHEDULE_EVENT and subject_of(subject_refs) != flow.owner:
+        if event_type != SCHEDULE_EVENT and not reaches(flow.owner, subject_refs):
             REFUSED["not_subject"] += 1          # the ordinary case for every other person's event
             return False
         if flow.steps and flow.steps[0] == "post_event_card":
@@ -180,12 +229,19 @@ def admit(db: DB, registry: Registry, clock: Clock, *, source_event_id: str,
           max_hops: int = MAX_HOPS, runs_per_day: int = RUNS_PER_DAY,
           messages_per_day: int = MESSAGES_PER_DAY, refusals: "list | None" = None,
           light_runs_per_day: int = LIGHT_RUNS_PER_DAY,
-          keyed_per_user: "int | None" = None) -> int:
+          keyed_per_user: "int | None" = None, sealed: "dict | None" = None) -> int:
     """Returns how many reactions were newly created (0 = duplicate, no matching flow, or every
     matching flow refused — see the module docstring). A flow whose trigger has a FILTER starts only
     for events that pass it; a RELATIVE trigger starts nothing here — it arms, moves or cancels its
-    keyed schedule (`flows.keyed`), which the worker fires at its time."""
+    keyed schedule (`flows.keyed`), which the worker fires at its time.
+
+    `sealed` is a VERIFIED event.v2 envelope (`fact_envelope.verify`'s answer). Only through it do
+    `_audience`/`_owner`/`_visibility`/`_lifecycle` reach the refs; the same keys in
+    `subject_refs` are dropped first, whoever sent them (D8)."""
     from . import keyed, triggers
+    subject_refs = strip_sealed(subject_refs)
+    if sealed:
+        subject_refs = {**subject_refs, **sealed_refs(sealed)}
     created = 0
     for flow in registry.match(event_type):
         spec = triggers.spec_of(flow)
@@ -220,7 +276,7 @@ def _keyed(db: DB, clock: Clock, flow: Flow, spec: dict, event_type: str, refs: 
            loop_limit: int, max_hops: int, per_user: int) -> str:
     """A relative trigger's event: arm, move or cancel the pending fire for its key."""
     from . import keyed, triggers
-    if flow.owner and subject_of(refs) != flow.owner:
+    if flow.owner and not reaches(flow.owner, refs):
         REFUSED["not_subject"] += 1
         return "not_subject"
     chain = origin_chain(refs)

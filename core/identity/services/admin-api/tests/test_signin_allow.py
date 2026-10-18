@@ -518,7 +518,8 @@ def test_every_reason_the_rule_can_give_is_in_the_contract():
     terminal's signinWire.ts comes from. A reason the rule returns that the contract does not know
     would be refused by the terminal without anyone saying why."""
     from admin_api.app import signin_wire
-    admitted = {sa.WHY_ADMIN, sa.WHY_ADMIN_EMAIL, sa.WHY_ADMIN_ACCOUNT, sa.WHY_EXISTING_USER, sa.WHY_ALLOW_LIST, sa.WHY_CLAIM_CODE}
+    admitted = {sa.WHY_ADMIN, sa.WHY_ADMIN_EMAIL, sa.WHY_ADMIN_ACCOUNT, sa.WHY_EXISTING_USER, sa.WHY_ALLOW_LIST, sa.WHY_CLAIM_CODE,
+                sa.WHY_INVITED}
     assert admitted == set(signin_wire.ADMITTED_REASONS)
     assert {sa.WHY_NOT_ALLOWED} == set(signin_wire.REFUSED_REASONS)
     assert {sa.CLAIMED, sa.CLAIM_ADMIN_EXISTS, sa.CLAIM_BAD_CODE, sa.CLAIM_NOT_ALLOWED} == set(signin_wire.CLAIM_REASONS)
@@ -624,3 +625,33 @@ def test_the_wildcard_is_not_an_admin(monkeypatch):
     monkeypatch.setenv("VEXA_ADMIN_EMAILS", "*")
     valid, problems = sa.admin_emails()
     assert valid == [] and problems
+
+
+# ── PRD 0.13.4 S2: a mailed invite is a way in ────────────────────────────────────────────────
+def test_an_invited_address_is_admitted_only_with_the_invite_and_the_switch_on():
+    base = dict(user_exists=False, is_admin=False, admin_claimed=True, allow=["@vexa.ai"])
+    assert sa.decide("valeriia@fresh.test", **base) == (False, sa.WHY_NOT_ALLOWED)
+    assert sa.decide("valeriia@fresh.test", invited=True, **base) == (True, sa.WHY_INVITED)
+    assert sa.decide("valeriia@fresh.test", invited=True, invites_admit=False, **base) == (False, sa.WHY_NOT_ALLOWED)
+    # an existing user is still reported as existing, invite or not
+    assert sa.decide("valeriia@fresh.test", invited=True, **{**base, "user_exists": True})[1] == sa.WHY_EXISTING_USER
+
+
+@pytest.mark.parametrize("raw,on", [("", True), ("1", True), ("true", True), ("0", False), ("off", False),
+                                    ("false", False)])
+def test_the_invite_switch_reads_the_env(monkeypatch, raw, on):
+    monkeypatch.setenv("VEXA_SIGNIN_INVITES_ADMIT", raw)
+    assert sa.invites_admit() is on
+
+
+def test_the_admission_route_admits_a_via_invite_sign_in(make_client, monkeypatch):
+    monkeypatch.delenv("VEXA_SIGNIN_INVITES_ADMIT", raising=False)
+    c = make_client(FakeDB(users={"member@example.com"}))
+    r = c.post("/internal/signin-admission", headers={"X-Internal-Secret": SECRET},
+               json={"email": "fresh@other.test", "via_invite": True})
+    assert r.status_code == 200 and r.json() == {"admitted": True, "why": "invited"}
+    assert _ask(c, "fresh@other.test").json() == {"admitted": False, "why": "not-allowed"}
+    monkeypatch.setenv("VEXA_SIGNIN_INVITES_ADMIT", "0")
+    r = c.post("/internal/signin-admission", headers={"X-Internal-Secret": SECRET},
+               json={"email": "fresh@other.test", "via_invite": True})
+    assert r.json() == {"admitted": False, "why": "not-allowed"}

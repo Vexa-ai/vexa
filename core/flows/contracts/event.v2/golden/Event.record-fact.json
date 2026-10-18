@@ -1,0 +1,22 @@
+{
+  "event_type": "crm.record.changed",
+  "source_event_id": "3f1e8c55-2d4a-4c1b-8e77-0a9b6c5d4e22",
+  "refs": {
+    "org_id": "org-acme",
+    "record_id": "rec-42",
+    "revision": 4,
+    "uid": "11"
+  },
+  "envelope": {
+    "v": 2,
+    "producer": "crm",
+    "object": "record",
+    "owner": "11",
+    "visibility": "workspace",
+    "audience": [
+      "11",
+      "ws:sales"
+    ],
+    "sig": "f0bb284badda7f2e817e552cd442db500d5fd435c40b90d0d2c9f8e5d5d4603e"
+  }
+}

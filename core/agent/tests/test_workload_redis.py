@@ -66,14 +66,19 @@ def test_the_rules_name_the_units_three_keys_and_nothing_else():
         # clears. Without it the worker's GET was refused, silently, and "Send now" did nothing.
         "~unit:agent-7-chat-a\\*b:send-now",
         # STOP (live 2026-10-15): agent-api writes the press, the worker reads and clears it.
-        "~unit:agent-7-chat-a\\*b:stop"]
+        "~unit:agent-7-chat-a\\*b:stop",
+        # THE PRIVACY MARK (D6): the edge's marks read-only, the worker's own observations read-write
+        "%R~vexa:taint:unit:agent-7-chat-a\\*b", "%R~vexa:taint:session:agent-7-chat-a\\*b",
+        "~vexa:taint:wsession:agent-7-chat-a\\*b"]
     legacy = wr.acl_rules("agent-7-chat-a*b", "pw", read_only_input=False)
     assert [r for r in legacy if "~" in r] == [
         "~unit:agent-7-chat-a\\*b:in", "~unit:agent-7-chat-a\\*b:out", "~unit:agent-7-chat-a\\*b:cursor",
         "~unit:agent-7-chat-a\\*b:delegation",
         "~unit:agent-7-chat-a\\*b:bundle:*", "~unit:agent-7-chat-a\\*b:handback:*",
         "~unit:agent-7-chat-a\\*b:send-now",
-        "~unit:agent-7-chat-a\\*b:stop"]
+        "~unit:agent-7-chat-a\\*b:stop",
+        "~vexa:taint:unit:agent-7-chat-a\\*b", "~vexa:taint:session:agent-7-chat-a\\*b",
+        "~vexa:taint:wsession:agent-7-chat-a\\*b"]
     assert "resetchannels" in rules and "-@all" in rules
     assert sorted(r[1:] for r in rules if r.startswith("+")) == sorted(wr.WORKER_COMMANDS)
     assert not any(r.startswith("&") or r in ("+@all", "~*", "allkeys", "allchannels") for r in rules)

@@ -40,7 +40,10 @@ def test_minting_the_inputs_reproduces_the_token(path):
                               ttl_sec=v["ttl_sec"], now=v["now"], jti=v["jti"],
                               shared=v.get("shared", False), audience=v.get("audience", ""),
                               grants=v.get("grants"),
-                              flow=v.get("flow", ""))
+                              flow=v.get("flow", ""),
+                              principal_kind=v.get("principal_kind", ""),
+                              principal_workspace=v.get("principal_workspace", ""),
+                              on_behalf_of=v.get("on_behalf_of", ""))
     assert token == v["token"]
     assert d.verify_delegation(v["secret"], token, now=v["now"]) == v["claims"]
 

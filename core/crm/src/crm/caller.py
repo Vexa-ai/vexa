@@ -51,6 +51,11 @@ class Caller:
     #: The CRM org this caller is served from: set by crm-api per request (``orgs.OrgResolver``),
     #: the install org unless the caller is an individual with ``personal_crm`` on. Empty = unset.
     org: str = ""
+    #: D13: how this caller proved itself, as identity answered it (identity.v1 ``credential_class``):
+    #: ``session`` — the terminal's sign-in, the only credential a decision or the seen relation takes;
+    #: ``key`` — any API key, a browser-scoped one included; ``delegation`` — a worker's token. Empty
+    #: when unknown (an older identity, a bare subject), which is never ``session``.
+    credential_class: str = ""
     extra: dict = field(default_factory=dict, hash=False, compare=False)
 
     @property
@@ -87,14 +92,35 @@ def from_validate(token: str, body: dict, *, trace: str = "") -> Caller:
     dlg = body.get("delegation")
     delegated = isinstance(dlg, dict) or str(token).startswith(DELEGATION_TOKEN_PREFIX)
     dlg = dlg if isinstance(dlg, dict) else {}
-    admin = bool(body.get("is_admin")) or (delegated and bool(body.get("person_is_admin")))
+    # PRINCIPAL-KIND HOOK (S1-B, PRD D2), wired at integration (int-s1): a WORKSPACE principal (a
+    # room's turn; `user_id` is its own numeric account, `delegation.principal_kind == "workspace"`)
+    # is shared by construction, even if `shared` is missing, and never the admin. Every field right
+    # in store.py keys off `caller.shared`, so a principal reads the room policy (the members'
+    # intersection), never the org default (deny test 36).
+    ws_principal = dlg.get("principal_kind") == "workspace"
+    principal_workspace = str(dlg.get("principal_workspace") or "").strip() if ws_principal else ""
+    shared = dlg.get("shared") is True or ws_principal
+    # D4: a shared (room) caller is NEVER a CRM administrator, whoever its person is. The room's
+    # field rights are computed from its members and the field classification (field_classes.py).
+    person_admin = (bool(body.get("is_admin")) or (delegated and bool(body.get("person_is_admin")))) \
+        and not ws_principal
+    admin = person_admin and not shared
     workspaces = tuple(str(w) for w in (body.get("workspaces") or []) if str(w))
     writable = tuple(str(w) for w in (body.get("writable_workspaces") or []) if str(w) in workspaces)
+    on_behalf_of = str(dlg.get("on_behalf_of") or body.get("on_behalf_of") or "").strip()
+    # D13: positive evidence only — a delegation is a delegation whatever the body says.
+    credential_class = "delegation" if delegated else (
+        str(body.get("credential_class") or "") if body.get("credential_class") in ("session", "key") else "")
     return Caller(subject=str(uid), email=str(body.get("email") or "").strip().lower(), is_admin=admin,
                   workspaces=workspaces, writable=writable, delegated=delegated,
-                  regime=str(dlg.get("regime") or "").strip().lower(), shared=dlg.get("shared") is True,
-                  cross_org=dlg.get("shared") is True and dlg.get("audience") == "cross_org",
-                  session=str(dlg.get("unit") or ""), trace=trace)
+                  regime=str(dlg.get("regime") or "").strip().lower(), shared=shared,
+                  cross_org=shared and dlg.get("audience") == "cross_org",
+                  session=str(dlg.get("unit") or ""), trace=trace, credential_class=credential_class,
+                  # `person_admin` only decides WHICH refusal a room gets (store._rights); never a grant.
+                  extra={**({"on_behalf_of": on_behalf_of} if on_behalf_of else {}),
+                         **({"person_admin": True} if shared and person_admin else {}),
+                         **({"principal_kind": "workspace", "principal_workspace": principal_workspace}
+                            if ws_principal else {})})
 
 
 def resolve(base: str, secret: str, token: str, *, trace: str = "", transport=None) -> Caller:
@@ -134,6 +160,13 @@ SHARED_REFUSAL = {
     "instruction": "Other people read this conversation, so its answer may use only what every one "
                    "of them can read. Say you cannot use it here, and offer to answer in the "
                    "person's private chat; do not retry it another way.",
+}
+SESSION_REFUSAL = {
+    "status": "refused",
+    "reason": "session_required",
+    "instruction": "A decision is made by the person at their own terminal, signed in — never with an API "
+                   "key or an agent's token. Tell them it is waiting on them and give them the link; do not "
+                   "retry it another way.",
 }
 CONFIRM_REFUSAL = {
     "status": "refused",

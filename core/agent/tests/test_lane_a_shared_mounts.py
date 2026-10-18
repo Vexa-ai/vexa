@@ -61,7 +61,7 @@ def _client(root: Path, index=None):
 
 
 def _h(subject: str) -> dict:
-    return {"X-User-Id": subject}
+    return {"X-User-Id": subject, "x-user-credential-class": "session"}   # a person at the terminal (S5 D13)
 
 
 def _grant(root, ws_id, owner, subject=None, role="contributor"):

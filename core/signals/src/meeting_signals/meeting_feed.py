@@ -48,10 +48,16 @@ def feed(row: str) -> str:
     return f"tc:meeting:{row}"
 
 
-#: THE RULE TIER ON THE UNFINISHED TRANSCRIPT: Vexa named at the start of a clause ("Vexa, …",
-#: "ok vexa …", "… . Vexa can you"), "@vexa", or the "To Vexa" tag. Heard on an interim it wakes
-#: at once, with no model call; anything else on an interim waits for its final.
-_ADDRESS = re.compile(r"(?:^|[.!?;:,]\s*|\b(?:hey|hi|ok|okay|so|and|but|please|well)\s+)vexa\b(?!['’]s)"
+#: THE RULE TIER: Vexa named at the start of a clause ("Vexa, …", "ok vexa …", "… . Vexa can you"),
+#: "@vexa", or the "To Vexa" tag. Heard on an interim it wakes at once; on a FINAL it is marked
+#: addressed too, so being addressed by name never depends on the signal model (app.dev 2026-10-17,
+#: meeting 153: every model call answered 402, and "Векса, привет" on a final was sent to it, refused,
+#: and buffered unscored until the call ended). The name as a Russian transcript spells it — "Векса",
+#: "Вексе" (the vocative the ASR writes), "Вэкса" — counts like the Latin one; the other case forms
+#: ("у Вексы", "Вексой") are mentions, not an address, and stay with the model.
+_NAME = r"(?:vexa\b(?!['’]s)|в[еэ]кс[аеэ]?(?!\w))"
+_LEAD = r"(?:hey|hi|ok|okay|so|and|but|please|well|привет|эй|ну|ок|окей|слушай|скажи|пожалуйста)"
+_ADDRESS = re.compile(rf"(?:^|[.!?;:,]\s*|(?<!\w){_LEAD}\s+){_NAME}"
                       r"|@vexa\b|\bto\s+vexa\b", re.IGNORECASE)
 
 
@@ -88,6 +94,8 @@ def parse(entry_id: str, fields: dict) -> Item:
     line = Line(str(s.get("segment_id") or entry_id), str(s.get("speaker") or "Unknown speaker"), text, start, end)
     if interim:
         return Item(entry_id, "line", line=line, mode="addressed", interim=True)
+    if addresses_vexa(text):
+        return Item(entry_id, "line", line=line, mode="addressed")
     return Item(entry_id, "line", line=line)
 
 

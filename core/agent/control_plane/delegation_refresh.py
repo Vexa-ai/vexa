@@ -8,7 +8,8 @@ would lose its vexa MCP tools at the token's ``exp``.
 WHAT HAPPENS, every reaper sweep, for each unit the runtime still runs:
 
 1. Once half of the current token's life has passed (``REFRESH_AT``), agent-api mints a new token
-   for the same person, regime, ceiling and target, with a new ``jti`` and a full lifetime. It
+   for the same person, regime, ceiling, target and audience, with a new ``jti`` and a full
+   lifetime — and publishes it only when its scope equals the held one exactly (D27). It
    re-mints from ITS OWN record of the current token (``delegation_revocation.CURRENT_PREFIX``, a key
    no worker can reach), verified with its own key, never from anything a worker can write.
 2. The new token is recorded against the unit (so it is revoked when the unit ends) and published
@@ -112,8 +113,25 @@ class Refresher:
             unit=unit_id, shared=delegation.is_shared(scope),     # a shared turn's ceiling is re-minted whole
             grants=scope.get("grants") if isinstance(scope.get("grants"), list) else None,
             flow=str(scope.get("flow") or ""),                     # …and a routine's grants with it
+            # WHO READS A ROOM'S ANSWER rides the refresh too (D27, H2): it used to be dropped, so
+            # half a lifetime in a cross-org room's CRM reads came back with every field — and a
+            # workspace principal's speaker and payer (D2)
+            audience=str(scope.get("audience") or ""),
+            principal_kind=str(claims.get("principal_kind") or ""),
+            principal_workspace=str(claims.get("principal_workspace") or ""),
+            on_behalf_of=str(claims.get("on_behalf_of") or ""),
             ttl_sec=int(self._ttl()), now=int(now))
         fresh = delegation.verify_delegation(self._secret, token, now=int(now))
+        # THE SCOPE IS RE-MINTED WHOLE OR NOT AT ALL (D27). A refresh is a new lifetime for the SAME
+        # authority; a scope key this mint does not carry would be a narrowing silently lifted. So
+        # the new scope must equal the old one exactly — otherwise nothing is published, and the
+        # unit keeps its current token until `exp`, when its tools fail loud.
+        if (fresh.get("scope") or {}) != scope or str(fresh.get("sub")) != str(claims["sub"]) \
+                or str(fresh.get("target") or "") != str(claims.get("target") or ""):
+            logger.warning("delegation token of unit=%s NOT refreshed: the re-minted scope differs "
+                           "from the held one (%s)", unit_id,
+                           sorted(set(scope) ^ set(fresh.get("scope") or {})))
+            return None
         dr.record(client, unit_id=unit_id, jti=str(fresh["jti"]), exp=int(fresh["exp"]), now=now,
                   awaiting_spawn=False)
         publish(client, unit_id=unit_id, token=token, exp=int(fresh["exp"]), now=now)

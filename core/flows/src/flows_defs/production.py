@@ -678,6 +678,186 @@ def propose_commitments(their_uid, address: str, name: str, report: str,
         return 0
 
 
+# ── the report's follow-ups as CARDS (PRD 0.13.4 S5, E2) ──────────────────────────────────────────
+#
+# The founder's S5 check: "after a 3-minute call with Valeriia, two commitment cards appear". The
+# write-up already writes `Committed` (attributed: "- Valeriia — send the venue contract by Friday")
+# and `Open`. Plain code, no model, the same reading as the short-list chips above: one card per
+# follow-up — a COMMITMENT to the person who committed (the owner position names an attendee), a
+# QUESTION to the meeting's owner when nobody clearly owns it (a Committed bullet with no attendee
+# as its owner, or an Open item). Offered AS THE ROOM'S WORKSPACE PRINCIPAL through crm-api's
+# internal offer door (`card_propose`'s own path), origin `meeting:<id>`, due when the bullet states
+# one. The page then CITES each card (`[[card:<id>]]`, S7 renders it) instead of restating it.
+CARDS_PER_MEETING = 12
+_OPEN_HEADING = _re.compile(r"\A#{1,6}\s*(?:open|open questions)\b", _re.I)
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+_ISO_DAY = _re.compile(r"\b(20\d\d-\d\d-\d\d)\b")
+_CARD_REF = _re.compile(r"\[\[card:[A-Za-z0-9_.:-]+\]\]")
+
+
+def _section_bullets(report: str, heading) -> list:
+    out, inside = [], False
+    for line in str(report or "").splitlines():
+        stripped = line.strip()
+        if heading.match(stripped):
+            inside = True
+            continue
+        if not inside:
+            continue
+        if _ANY_HEADING.match(stripped) or stripped in ("---", "***", "___"):
+            break
+        m = _BULLET.match(line)
+        if m and m.group(1).strip():
+            out.append(m.group(1).strip())
+    return out
+
+
+def due_from(text: str, day: str) -> "str | None":
+    """A due date the follow-up STATES, relative to the meeting's day (YYYY-MM-DD): an ISO date,
+    "today", "tomorrow", or a weekday ("by Friday" — the next one after the meeting day). Nothing
+    else is guessed: a card with no stated date has no due date."""
+    from datetime import date, timedelta
+    low = str(text or "").lower()
+    m = _ISO_DAY.search(low)
+    if m:
+        return m.group(1)
+    try:
+        base = date.fromisoformat(str(day or "")[:10])
+    except ValueError:
+        return None
+    if _re.search(r"\btoday\b|\bend of (?:the )?day\b|\beod\b", low):
+        return base.isoformat()
+    if _re.search(r"\btomorrow\b", low):
+        return (base + timedelta(days=1)).isoformat()
+    for n, name in enumerate(_WEEKDAYS):
+        if _re.search(rf"\b{name}\b", low):
+            ahead = (n - base.weekday()) % 7 or 7
+            return (base + timedelta(days=ahead)).isoformat()
+    return None
+
+
+def _owner_uid(bullet: str, people: list) -> "tuple[str, str]":
+    """(uid, the job) when the bullet's OWNER position names one attendee, else ("", bullet).
+    `people` is [(uid, address, name)]. The owner position, not anywhere in the sentence — the same
+    asymmetry as `commitments_for`: a card to the wrong person is worse than a question."""
+    text = bullet.replace("[[", "").replace("]]", "").strip()
+    text = _CARD_REF.sub("", text).strip()
+    parts = _OWNER_SPLIT.split(text, maxsplit=1)
+    owner = parts[0].strip().lower() if len(parts) > 1 else ""
+    job = parts[1].strip() if len(parts) > 1 else text
+    hits = []
+    for uid, address, name in people:
+        forms = _who(address, name)
+        if owner and any(_re.search(rf"(?<![\w.@+-]){_re.escape(f)}(?![\w.@+-])", owner) for f in forms):
+            hits.append(uid)
+        elif not owner and any(text.lower().startswith(f) for f in forms):
+            hit = next(f for f in forms if text.lower().startswith(f))
+            hits.append(uid)
+            job = text[len(hit):].lstrip(" ,;:-—–").strip()
+    if len(set(hits)) == 1 and job:
+        return hits[0], job[0].upper() + job[1:]
+    return "", text[0].upper() + text[1:] if text else ""
+
+
+def plan_meeting_cards(report: str, people: list, owner_uid: str, day: str) -> list:
+    """The cards a report's follow-ups become: [{title, kind, next_actor, requester, due}]. A
+    Committed bullet whose owner is one attendee → a commitment to them, the meeting owner waiting;
+    any other Committed bullet, and every Open item → a question to the meeting owner. Bullets that
+    already cite a card are skipped (a re-run never offers twice)."""
+    out = []
+    for bullet in _section_bullets(report, _COMMITTED_HEADING):
+        if _CARD_REF.search(bullet):
+            continue
+        uid, job = _owner_uid(bullet, people)
+        if not job:
+            continue
+        if uid:
+            out.append({"title": job[:200], "kind": "commitment", "next_actor": uid, "requester": owner_uid,
+                        "due": due_from(job, day), "_bullet": bullet})
+        else:
+            out.append({"title": f"Who owns this? {job}"[:200], "kind": "question", "next_actor": owner_uid,
+                        "requester": owner_uid, "due": due_from(job, day), "_bullet": bullet})
+    for bullet in _section_bullets(report, _OPEN_HEADING):
+        if _CARD_REF.search(bullet):
+            continue
+        text = bullet.replace("[[", "").replace("]]", "").strip()
+        if text:
+            out.append({"title": text[:200], "kind": "question", "next_actor": owner_uid, "requester": owner_uid,
+                        "due": due_from(text, day), "_bullet": bullet})
+    return out[:CARDS_PER_MEETING]
+
+
+def cite_cards(report: str, cited: list) -> str:
+    """The report with each follow-up bullet citing its card: `- Valeriia — send … [[card:<id>]]`.
+    The bullet's words stay; the card is the obligation, the page cites it (converged §14)."""
+    lines = str(report or "").splitlines()
+    todo = [(c["_bullet"], c["id"]) for c in cited if c.get("id") and c.get("_bullet")]
+    for n, line in enumerate(lines):
+        m = _BULLET.match(line)
+        if not m or _CARD_REF.search(line):
+            continue
+        for k, (bullet, cid) in enumerate(todo):
+            if m.group(1).strip() == bullet:
+                lines[n] = line.rstrip() + f" [[card:{cid}]]"
+                todo.pop(k)
+                break
+    return "\n".join(lines) + ("\n" if str(report or "").endswith("\n") else "")
+
+
+def _room_principal(workspace: str, bills_to: str) -> str:
+    """The room's workspace principal id (identity's internal door, idempotent); "" when unavailable."""
+    from flows_steps.common import http, require_internal_secret
+    try:
+        code, out = http("POST", f"{_common._door('VEXA_FLOWS_ADMIN_API_URL')}/internal/principals/workspace",
+                         {"X-Internal-Secret": require_internal_secret()},
+                         {"workspace_id": workspace, "bills_to": int(bills_to)}, timeout=10)
+    except Exception:  # noqa: BLE001 — no principal, no cards: never the owner's account instead
+        return ""
+    return str((out or {}).get("id") or "") if code == 200 and isinstance(out, dict) else ""
+
+
+def offer_meeting_cards(report: str, people: list, owner_uid: str, workspace: str, meeting_id, day: str,
+                        title: str = "") -> "tuple[str, list]":
+    """Offer the report's follow-ups as cards and return (the report citing them, the cards).
+
+    AS THE ROOM'S WORKSPACE PRINCIPAL (D2): a room has no person to act as. A meeting with no room
+    workspace has no principal, so it offers nothing (logged) — never as the owner's own account.
+    With no CRM deployed (`VEXA_FLOWS_CRM_API_URL` unset) nothing is offered. NEVER RAISES: a card
+    that was not offered must not cost anyone the meeting's record."""
+    import flows_config
+    from flows_steps.common import http, require_internal_secret
+    plan = plan_meeting_cards(report, people, owner_uid, day)
+    base = flows_config.get("VEXA_FLOWS_CRM_API_URL").rstrip("/")
+    if not plan or not base:
+        return report, []
+    if not workspace:
+        logger.info("meeting %s: %d follow-up card(s) not offered — no room workspace, so no principal",
+                  meeting_id, len(plan))
+        return report, []
+    try:
+        principal = _room_principal(workspace, owner_uid)
+        if not principal:
+            logger.warning("meeting %s: no workspace principal for %s; cards not offered", meeting_id, workspace)
+            return report, []
+        body = {"principal": principal, "workspace": workspace, "on_behalf_of": str(owner_uid),
+                "session": f"meet-{meeting_id}", "origin": f"meeting:{meeting_id}",
+                "reason": f"Said in {title or 'the meeting'}"[:500],
+                "cards": [{k: v for k, v in c.items() if not k.startswith("_") and v not in (None, "")}
+                          | {"about": f"meeting:{meeting_id}"} for c in plan]}
+        code, out = http("POST", f"{base}/internal/cards/offer", {"X-Internal-Secret": require_internal_secret()},
+                         body, timeout=20)
+        if code != 200 or not isinstance(out, dict):
+            logger.warning("meeting %s: crm answered %s to the card offer", meeting_id, code)
+            return report, []
+        made = out.get("cards") or []
+        cited = [{**p, "id": m.get("id")} for p, m in zip(plan, made)]
+        return cite_cards(report, cited), cited
+    except Exception as e:  # noqa: BLE001 — see the docstring
+        _common.swallowed("flows_defs.production.offer_meeting_cards", "the follow-up cards were not offered",
+                          e, uid=str(owner_uid))
+        return report, []
+
+
 #: The folder every meeting's page lives in, on every desk — named once because the two functions
 #: below both need it and `drop_to_attendees` writes into it.
 _NOTE_DIR = "kg/entities/meeting"
@@ -1443,10 +1623,10 @@ def build(reg: Registry, db) -> None:
         still cannot ground it the reaction FAILS LOUDLY rather than mailing a report nobody can
         trace to the meeting.
 
-        THE ROOM. The turn may READ the desks of the people on the invite, prioritised by speaking
-        time and capped by `room_read_max`. Flows proposes; agent-api verifies, resolves each
-        address to a subject, and mounts only those who already have a desk — so nothing here
-        mounts anything and no account is ever minted for the room.
+        THE ROOM READS NO ATTENDEE'S DESK (founder decision 3, 2026-10-17): desks are personal.
+        The report is written from the transcript, the room's workspace (the group, below) and what
+        was shared explicitly. The invite's participants still travel on the post, and agent-api
+        mounts none of them — nothing here mounts anything and no account is minted for the room.
 
         THE GROUP, and ONLY when there is one: the group desk is mounted read/write and this turn
         MAINTAINS it — its people, decisions, open items, README — rather than appending an
@@ -2674,6 +2854,25 @@ def build(reg: Registry, db) -> None:
                  for a in roster if a != organizer.lower()]
         entity_id = filename[:-3] if filename.endswith(".md") else filename
         native = str(ctx.refs.get("native") or "").strip()
+        # THE FOLLOW-UPS AS CARDS (S5, E2), before any page is written, so every copy of the page
+        # cites the same cards. Once per run (scratch), and idempotent at crm-api on a re-run.
+        import flows_config as _fc
+        if "cited_report" in ctx.scratch:
+            report = ctx.scratch["cited_report"]
+        elif _fc.get("VEXA_FLOWS_CRM_API_URL"):          # no CRM deployed: no cards, no extra lookups
+            names_ = {str(k).strip().lower(): str(v or "") for k, v in (ctx.refs.get("participant_names") or {}).items()}
+            people = []
+            for a in roster:
+                try:
+                    people.append((str(uid) if a == organizer.lower() else ensure_platform_user(a), a, names_.get(a, "")))
+                except Exception:  # noqa: BLE001 — an unresolvable attendee owns no card
+                    continue
+            report, offered_cards = offer_meeting_cards(
+                report, people, str(uid), _recorded_note_workspace(ctx, uid) or str(ctx.refs.get("workspace") or ""),
+                mid, day, title)
+            ctx.scratch["cited_report"] = report
+            ctx.scratch["cards"] = [{"id": c.get("id"), "kind": c.get("kind"), "next_actor": c.get("next_actor")}
+                                    for c in offered_cards]
         body = _drop_entity(title=title, day=day, entity_id=entity_id, date_prose=date_prose,
                             organizer=organizer, participants=roster, report=report, link="",
                             meeting_id=str(mid or ""), native=native)
@@ -2721,6 +2920,7 @@ def build(reg: Registry, db) -> None:
         if done:
             return Done({"dropped": len(done), "to": done, "failed": failed,
                          "entity": entity_path, "meeting_id": mid, "proposed": proposed,
+                         "cards": ctx.scratch.get("cards") or [],
                          # every copy is these bytes plus that person's own link
                          "bytes": len(body)})
         raise StepError(

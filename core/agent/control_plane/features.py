@@ -136,6 +136,19 @@ FEATURES: dict[str, dict] = {
         "routes": [("POST", r"^/api/desktop/(attention|refs)/?$")],
         "elsewhere": "the terminal shows the desktop home, the README and the folder sidebar",
     },
+    # SHELL2 (0.13.4 lane UI-1, founder-approved mock `cards-mock-live`): the one-list sidebar
+    # (+ New · Inbox · Meetings, the All · Rooms · Routines filter), Inbox and Meetings as lists in
+    # the centre, "My desk" for the personal workspace, the kit's list rows, outlined primaries, two-way
+    # panels and the phone fixes. Client-only: it renders data the existing routes already serve, so
+    # it has no route of its own. Needs `home2`. EXPLICIT: not in `all` — it changes the sidebar people
+    # rely on, so it is on by name (`VEXA_FEATURES=all,home2,shell2`) or by the company layer.
+    "shell2": {
+        "summary": "the approved shell: one-list sidebar, Inbox and Meetings in the centre, My desk, the phone fixes",
+        "explicit": True,
+        "needs": ["home2"],
+        "routes": [],
+        "elsewhere": "the terminal shows the home2 sidebar and the meetings in the file panel",
+    },
     # CARDS ON THE DESKTOP (desktop D2, ADR desktop-cards). Install scope; needs `crm` and `desktop`.
     # Cards are CRM records, so every route and tool is crm-api's; agent-api serves none of it.
     "desktop_cards": {
@@ -144,6 +157,16 @@ FEATURES: dict[str, dict] = {
         "needs": ["crm", "desktop"],
         "routes": [],
         "elsewhere": "crm-api refuses /card/* and the desk read carries no cards; the MCP lists no card_* tool; the terminal shows no Cards section and no Make a card",
+    },
+    # THE README PAGE (0.13.4 S7, PRD D17–D20, UI 7aa/7cc/7ee/7gg): the workspace page is its README,
+    # rendered per viewer on the server (`POST /api/desktop/page`), with shared pins (`/api/pins`).
+    # Needs `home2`. EXPLICIT: it replaces the workspace page people rely on, so it is on by name.
+    "readme_page": {
+        "summary": "the workspace page is its README, rendered for each viewer, with shared pins",
+        "explicit": True,
+        "needs": ["home2"],
+        "routes": [("POST", r"^/api/desktop/page/?$"), ("GET", r"^/api/pins/?$"), ("POST", r"^/api/pins/?$")],
+        "elsewhere": "the terminal shows the home2 workspace page (status block over the README)",
     },
     # VEXA CREDITS (PLAN-8H 6.2, decision G1): credits at market cost x the markup, 5-hour and weekly
     # windows, the usage meter, extra usage (data only). Off: nothing is debited or refused by window.

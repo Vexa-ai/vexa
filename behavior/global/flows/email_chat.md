@@ -59,16 +59,20 @@ def feedback_turn(ctx: StepCtx):
         ctx.scratch["prev_hash"] = p.ag.collect_outbox(uid, session, None)[1]
         p.ag.dispatch_turn(
             uid, session,
-            "[email-reply] The participant replied by email. Process it: update the workspace "
-            "where it changes facts (feedback on minutes → amend the note; onboarding answers → "
-            "continue the discovery loop and remember the .scaffolded acceptance). Then answer "
-            f"them. DELIVERY CONTRACT: write your answer to the file mail_outbox/{session}.md "
-            "(overwrite fully) — that file is emailed verbatim, plain text."
+            "[email-reply] The participant replied by email. Read it and answer them. This turn "
+            "was started by an email, so it changes nothing itself: where the email changes "
+            "facts (feedback on minutes, onboarding answers), PROPOSE the change with `propose` "
+            "for the person to accept. DELIVERY CONTRACT: write your answer with workspace_write "
+            f"to mail_outbox/{session}.md (overwrite fully) — the one file this turn may write; "
+            "it is emailed verbatim, plain text."
             + _untrusted_mail(ctx.refs.get("from_addr") or ctx.refs.get("organizer") or "",
                               ctx.refs["text"]),
             # NOBODY TYPED THIS EITHER (Vexa-ai/vexa#1605): the person wrote an EMAIL, and the
             # instruction block wrapped around it is ours. agent-api marks it from these two.
-            flow=ctx.reaction.flow, step=ctx.reaction.step)
+            flow=ctx.reaction.flow, step=ctx.reaction.step,
+            # A MAIL-TRIGGERED TURN PROPOSES ONLY (D25): agent-api runs it read-only, its one
+            # write the reply file above.
+            kind="mail")
         ctx.scratch["dispatched"] = True
         return Wait(seconds=10)
     reply, h = p.ag.collect_outbox(uid, session, ctx.scratch.get("prev_hash"))

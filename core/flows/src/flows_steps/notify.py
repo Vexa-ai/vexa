@@ -82,6 +82,10 @@ class GraphNotifier:
 
     def send(self, to: str, subject: str, body: str, *, link: Optional[str] = None,
              in_reply_to: Optional[str] = None) -> str:
+        from . import emailx as mx
+        if mx.diverted(to):
+            # NOT ON THE ALLOWLIST: never through the tenant's mailbox — the capture double instead.
+            return mx.send(to, subject, compose(body, link), in_reply_to=in_reply_to)
         from flows_integrations.graph_client import client
         return client().send(to, subject, compose(body, link), in_reply_to=in_reply_to)
 

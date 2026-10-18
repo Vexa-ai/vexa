@@ -383,7 +383,8 @@ def build(**d) -> APIRouter:
         if concern:
             turn["concern"] = concern
         _kind = (request.headers.get("x-vexa-flow-kind") or "").strip()
-        if _kind in ("event_agent", "sink"):
+        # `mail`: a turn an inbound email started (D25) — it reads, writes its reply file, proposes.
+        if _kind in ("event_agent", "sink", "mail"):
             turn["kind"] = _kind
         stage = (request.headers.get("x-vexa-concern-stage") or "").strip()
         if stage:
@@ -816,7 +817,11 @@ def build(**d) -> APIRouter:
             if not sid and session:
                 found = session_sync.resolve(session_store, str(subject), session, create=False)
                 sid = (found or {}).get("id") or ""
-            p = _rp.resolve(session_store, wsr.root, sid, speaker=str(subject)) if sid else None
+            # the room's grant and audience, read afresh this turn — its live call's people included
+            # (D27); a changed grant is a different unit (`RoomPrincipal.grant_hash`)
+            p = _rp.resolve(session_store, wsr.root, sid, speaker=str(subject),
+                            call_lookup=(lambda mid: _meeting_owner_lookup(str(subject), mid))
+                            if _meeting_owner_lookup is not None else None) if sid else None
             # THE OWNER'S ACCOUNT HAS ROOMS TOO: the turn runs on the owner's authority and pool, so
             # the per-account switch is read for them as well as for the speaker.
             if p is not None and not _rooms_on(p.owner):
@@ -1231,6 +1236,12 @@ def build(**d) -> APIRouter:
             # a delegated caller, so an agent cannot confirm its own write.
             from control_plane import private_taint  # noqa: PLC0415
             private_taint.confirm_from_text(str(subject_of(request)), body.prompt or "")
+            # …and a FILE write the worker held is written by the platform now, before the turn
+            # runs: the held content lives encrypted in agent-api, never on the worker's desk (D6).
+            try:
+                private_taint.release_confirmed_files(str(subject_of(request)), body.prompt or "", wsr.root)
+            except Exception:  # noqa: BLE001 — a release that fails stays held; the turn still runs
+                logger.warning("held file release failed", exc_info=True)
         if (request.headers.get("x-vexa-flow-step") or "").strip() == "stage":
             # A CONCERN CHAT MOVES STAGE (opened → active → waiting → resolved → archived): stored on
             # the chat (the rail and the home read it) and said in one line. Internal tier only.
@@ -1560,6 +1571,9 @@ def build(**d) -> APIRouter:
         if _plan is not None and _plan.gen:
             # a shared session's narrowed mounts live on their own warm unit, one per intersection
             ctx = {**ctx, "mount_gen": f"{_gen or 0}{_plan.gen}"}
+        if (flow_turn or {}).get("kind") == "mail":
+            # AN EMAIL'S TURN RUNS ON ITS OWN READ-ONLY SIBLING (D25, `units.mail_unit_id`)
+            ctx = {**ctx, "flow_kind": "mail"}
         # Read ONCE, fail-soft, and used twice: it names the target in the prompt below and it is
         # what `build_unit_env` points the cwd and the delegation token at. An index that cannot
         # answer costs the turn its target line, never the turn.
@@ -1855,7 +1869,12 @@ def build(**d) -> APIRouter:
                         effort=_effort,
                         shared_scope=(_plan.scope if _plan is not None else None),
                         # AN EVENT AGENT'S TURN reads and proposes, nothing more (ADR-0046 d12).
-                        least_privilege=(flow_turn or {}).get("kind") == "event_agent",
+                        # …AND SO DOES A TURN AN INBOUND EMAIL STARTED (D25): it writes one page,
+                        # the thread's reply file flows mails back (`signal_scope`), nothing else.
+                        least_privilege=(flow_turn or {}).get("kind") in ("event_agent", "mail"),
+                        **({"signal_page": {"meeting": "", "workspace": "",
+                                            "path": f"mail_outbox/{session}.md"}}
+                           if (flow_turn or {}).get("kind") == "mail" else {}),
                         **({"routine_grants": (f"{flow_turn['scope']}/{flow_turn['flow']}",
                                                flow_turn["grants"])}
                            if (flow_turn or {}).get("grants") else {}),
@@ -1867,6 +1886,10 @@ def build(**d) -> APIRouter:
                         inbox={"id": body.turn_id or "", "display": _queued_display(_submitted),
                                "kind": _intent_kind, "target": _intent_target,
                                "at": round(time.time(), 3)})
+                if (flow_turn or {}).get("kind") == "mail":
+                    # the reply file lives on the person's own desk, where flows reads it back: no
+                    # chat target may redirect the one write this turn is allowed (D25)
+                    _dispatch_kwargs.update(target="")
                 if _room_p is not None:
                     _dispatch_kwargs.update(room_principal=_room_p, shared_scope=None, reads=None, room=None,
                                             no_target=not _room_p.writable,
@@ -2710,6 +2733,35 @@ def build(**d) -> APIRouter:
                     except Exception:  # noqa: BLE001 — a nameless owner is still an owner
                         names[owner] = ""
                 r["owner_name"] = names[owner]
+        # A ROOM'S ROW SAYS WHAT KIND OF ROOM IT IS (S4 x UI-1, integration): its `visibility`, and for a
+        # room of two (`direct`) the OTHER person and the caller's unread count — so the sidebar names
+        # it by that person without one members read per room.
+        for r in out:
+            sid = r.get("session_id")
+            if not sid:
+                continue
+            try:
+                room = session_store.room(sid)
+            except Exception:  # noqa: BLE001 — a row without its room facts is still a row
+                room = None
+            if not room:
+                continue
+            try:
+                from control_plane import pair_rooms  # noqa: PLC0415
+                pair = bool(room.get("workspace")) and pair_rooms.is_pair(wsr.root, room["workspace"])
+            except Exception:  # noqa: BLE001
+                pair = False
+            r["visibility"] = "direct" if pair else room.get("visibility")
+            if pair:
+                try:
+                    other = next((h for h in session_store.humans(sid) if str(h) != str(subject)), None)
+                    if other:
+                        from control_plane import people_directory  # noqa: PLC0415
+                        r["other_subject"] = str(other)
+                        r["other_name"] = people_directory.name_of(wsr.root, str(other), mindex.list)
+                    r["unread"] = int(session_store.unread(sid, str(subject)))
+                except Exception:  # noqa: BLE001
+                    pass
         out.sort(key=lambda r: float(r.get("last_active") or 0), reverse=True)
         return out
     @router.get("/api/sessions/{session}/history")

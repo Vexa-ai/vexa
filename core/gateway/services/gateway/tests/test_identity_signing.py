@@ -54,6 +54,48 @@ def test_a_client_supplied_signature_never_reaches_the_downstream():
     assert identity_token.verify(VERIFY_KEY, fwd[identity_token.HEADER])["sub"] == "7"
 
 
+@pytest.mark.parametrize("cls", ["session", "key"])
+def test_the_credential_class_is_stamped_from_validate(cls):
+    """D13: identity's `credential_class` rides signed and as `x-user-credential-class`."""
+    client, downstream = _client(user={**USER, "credential_class": cls})
+    client.get("/meetings", headers=AUTH)
+    fwd = downstream.last["headers"]
+    assert identity_token.verify(VERIFY_KEY, fwd[identity_token.HEADER])["credential_class"] == cls
+    assert fwd["x-user-credential-class"] == cls
+    assert identity_token.credential_class_of(fwd) == cls
+
+
+@pytest.mark.parametrize("cls", [None, "", "admin", "Session "])
+def test_a_credential_class_outside_the_three_words_is_not_carried(cls):
+    user = {**USER, "credential_class": cls} if cls is not None else dict(USER)
+    client, downstream = _client(user=user)
+    client.get("/meetings", headers=AUTH)
+    fwd = downstream.last["headers"]
+    assert "credential_class" not in identity_token.verify(VERIFY_KEY, fwd[identity_token.HEADER])
+    assert "x-user-credential-class" not in fwd
+    assert identity_token.credential_class_of(fwd) == ""
+
+
+@pytest.mark.parametrize("key", [SIGNING_KEY, None])
+def test_a_client_sent_credential_class_is_stripped(key):
+    """`x-user-credential-class` is an `x-user-*` authority header: a client can never claim a session."""
+    from gateway.app import _is_authority_header
+    assert _is_authority_header("X-User-Credential-Class")
+    client, downstream = _client(key=key, user={**USER, "credential_class": "key"})
+    client.get("/meetings", headers={**AUTH, "X-User-Credential-Class": "session"})
+    assert downstream.last["headers"]["x-user-credential-class"] == "key"
+    client, downstream = _client(key=key)          # identity stated no class at all
+    client.get("/meetings", headers={**AUTH, "x-user-credential-class": "session"})
+    assert "x-user-credential-class" not in downstream.last["headers"]
+
+
+def test_a_delegated_identity_always_reads_delegation():
+    assert identity_token.credential_class_of(
+        {"x-user-regime": "human", "x-user-credential-class": "session"}) == "delegation"
+    assert identity_token.credential_class_of({"x-user-credential-class": "session"}) == "session"
+    assert identity_token.credential_class_of({}) == ""
+
+
 def test_a_limit_of_zero_is_carried_as_zero():
     """0 bots is a real limit (quota depleted) — it must not collapse into 'no limit'."""
     client, downstream = _client(user={**USER, "max_concurrent": 0})

@@ -123,6 +123,8 @@ CASES = [
     ("PUT", "/user/workspace-regime", "/user/workspace-regime"),
     ("GET", "/user/photo", "/user/photo"),
     ("PUT", "/user/photo", "/user/photo"),
+    ("GET", "/user/notifications", "/user/notifications"),
+    ("PUT", "/user/notifications", "/user/notifications"),
     ("DELETE", "/user/photo", "/user/photo"),
     ("GET", "/user/profile", "/user/profile"),
     ("PUT", "/user/profile", "/user/profile"),
@@ -155,6 +157,7 @@ CASES = [
     ("POST", "/agent/workspace/invite-link", "/agent/workspace/invite-link"),
     ("GET", "/agent/workspace/invite-links", "/agent/workspace/invite-links"),
     ("POST", "/agent/workspace/invite-link/revoke", "/agent/workspace/invite-link/revoke"),
+    ("POST", "/agent/workspace/policy/proposals", "/agent/workspace/policy/proposals"),
     ("GET", "/agent/refs/resolve", "/agent/refs/resolve"),
     ("GET", "/agent/home/history", "/agent/home/history"),
     ("GET", "/agent/home/customer", "/agent/home/customer"),
@@ -449,9 +452,11 @@ def test_matrix_covers_every_declared_route():
 
 
 def test_unscoped_routes_are_identity_only():
-    """The escape hatch stays small and deliberate: only /health (the LB probe) and /auth/me (who
-    am I) may carry no scope, and neither forwards anything downstream."""
-    assert UNSCOPED_ROUTES == frozenset({("GET", "/health"), ("GET", "/auth/me")})
+    """The escape hatch stays small and deliberate: only /health (the LB probe), /auth/me (who
+    am I) and /internal/mcp/taint (the MCP's privacy-label report, D6) may carry no scope, and none
+    forwards anything downstream."""
+    assert UNSCOPED_ROUTES == frozenset({("GET", "/health"), ("GET", "/auth/me"),
+                                         ("POST", "/internal/mcp/taint")})
 
 
 def test_scope_lookup_denies_when_the_matched_route_is_unknowable():

@@ -152,3 +152,12 @@ Every environment key this brick reads is declared once in `src/flows_config.py`
 `tests/test_config_declaration.py` asserts BOTH directions — nothing read that is not declared,
 and nothing declared that nothing reads. `core/flows` is not yet one of the five `config.v1`
 adopted services (seam backlog B7/B9); this table is what makes that adoption a transcription.
+
+## Nudges are flows (PRD 0.13.4 S6, D15)
+
+`src/flows_delivery/` is the one delivery gate: a card or room item waiting on a person is armed in
+`delivery` at its `next_check_at` (pack `flows_defs.nudges`), and the worker pass (`VEXA_FLOWS_NUDGES=1`)
+walks it in-app → one email after the person's idle window → the digest, stopping the moment crm says
+it was seen or acted on. Every delivery outside the Inbox is one `delivery_send` row — the attention
+budget's unit (D32), reserved before the send so a crash never sends twice. Bodies are fixed templates
+(title, who, one "Open to decide" link); content keys are refused. Full page: `docs/docs/minutes/nudges.mdx`.

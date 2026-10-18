@@ -24,9 +24,25 @@ def _worker(unit: str) -> dict:
     return {identity_token.HEADER: identity_token.sign(KEY, claims)}
 
 
+#: What the person's mail gave the session (friction 2, 2026-10-16: a write is held for what it
+#: carries from the private sources, so the mail here holds the facts the writes below carry).
+MAIL = {"messages": [{"id": "m1", "subject": "Invoice unpaid",
+                      "snippet": "Venue Co: the meetup invoice is unpaid, €615 due Friday."}]}
+
+
+def _fake_broker(actor, method, path, payload=None, *, identity):
+    if path == "/api/connections":
+        return {"connections": [{"id": "c1", "provider": "google_email", "status": "ready"}]}
+    if path == "/api/preferences":
+        return {}
+    return MAIL
+
+
 @pytest.fixture
 def setup(monkeypatch, tmp_path):
     private_taint.reset()
+    from control_plane.routers import connections as conn_mod  # noqa: PLC0415
+    monkeypatch.setattr(conn_mod, "call_broker", _fake_broker)
     client = _build(monkeypatch, tmp_path)
     r = client.post("/api/workspace/shared/new", json={"name": "Meetup"}, headers=_person())
     assert r.status_code == 201, r.text
@@ -45,7 +61,7 @@ def _read_mail(client, unit):
                 headers=_worker(unit))
 
 
-def _write(client, unit, ws, path="kg/entities/project/meetup.md", content="# Meetup\n\nInvoice unpaid.\n"):
+def _write(client, unit, ws, path="kg/entities/project/meetup.md", content="# Meetup\n\nInvoice unpaid: €615.\n"):
     return client.put("/api/workspace/file", json={"slug": ws, "path": path, "content": content},
                       headers=_worker(unit))
 
@@ -108,7 +124,8 @@ def test_the_person_confirms_that_one_write_once(setup):
     assert _write(client, "u1", ws).status_code == 200
     assert list(root.rglob("meetup.md"))
     # one confirmation, one write
-    assert _write(client, "u1", ws, content="# Meetup\n\nMore.\n").status_code == 409
+    # (what the page already says is not held again: the next private detail is)
+    assert _write(client, "u1", ws, content="# Meetup\n\nInvoice unpaid: €615.\nHost: Venue Co.\n").status_code == 409
     # a confirmation names one page: another page in the same workspace still waits
     assert _write(client, "u1", ws, path="other.md").status_code == 409
 

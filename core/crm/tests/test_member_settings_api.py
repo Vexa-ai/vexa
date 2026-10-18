@@ -51,7 +51,7 @@ def test_read_set_read_and_both_are_audited(store):
     r = client.post('/desk/workspaces/set', json={'workspace': 'growth', 'settings': {'muted': True}}, headers=as_('me'))
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body['workspace'] == 'growth' and body['settings']['muted'] is True and body['settings']['notify'] == 'all'
+    assert body['workspace'] == 'growth' and body['settings']['muted'] is True and 'notify' not in body['settings']
     assert body['settings']['updated_at']
     r = client.post('/desk/workspaces/set', json={'workspace': 'growth', 'settings': {'level': 2, 'room_order': ['c1']}},
                     headers=as_('me'))

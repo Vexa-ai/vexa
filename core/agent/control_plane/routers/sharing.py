@@ -18,13 +18,15 @@ from control_plane import global_layer
 from control_plane import join_links
 from control_plane import membership_acts
 from control_plane import people_directory
+from control_plane import person_resolution
 from control_plane import publish as publish_mod
 from control_plane import system_mounts
 from control_plane import workspace_names as workspace_names_mod
 from control_plane import workspace_membership as membership_mod
+from control_plane.notifications import invite_ref as notifications_ref, parse_invite_ref
 from control_plane.api_shared import logger
 from control_plane.bodies import (
-    InviteAcceptBody, InviteCreateBody, InviteLinkCreateBody, InviteLinkRevokeBody,
+    InviteAcceptBody, InviteSigninClaimBody, InviteCreateBody, InviteLinkCreateBody, InviteLinkRevokeBody,
     JoinLinkCreateBody, JoinLinkRevokeBody, RoleSetBody, SharedNewBody, WorkspaceInviteBody,
     WorkspaceMemberAddBody, WorkspaceMembershipBody)
 from control_plane.ceiling import reads_within, require_in_ceiling
@@ -33,6 +35,20 @@ from control_plane.workspace_attach import (
     own_private_slot, workspace_slot_dir)
 from control_plane.workspace_membership import MembershipError
 from control_plane.workspace_purpose import read_purpose
+from control_plane import policy_decide as _pd_mod
+from control_plane import policy_proposals as _pp
+from control_plane.ceiling import refuse_delegated, require_session_credential
+from pydantic import BaseModel as _BaseModel
+
+
+class PolicyProposeBody(_BaseModel):
+    """An agent (or a person) proposing one policy change: the exact change and why."""
+    model_config = {"extra": "forbid"}
+    workspace: str
+    session: str
+    change: str
+    value: object = None
+    reason: str = ""
 
 
 def build(**d) -> APIRouter:
@@ -135,6 +151,7 @@ def build(**d) -> APIRouter:
             except Exception:  # noqa: BLE001
                 pass
         membership_mod.drop_invites(wsr.root, workspace_id)   # …and no pending invite reopens it
+        membership_mod.drop_policy_store(wsr.root, workspace_id)   # …nor a roster a later id would inherit
         # The tree moved into the caller's private store and stopped being a group. Its id did NOT
         # change — un-sharing is an administrative act, not a new workspace — so every link into it
         # keeps resolving, and for everyone else it now answers `not-yours`, which is the truth: a
@@ -185,6 +202,108 @@ def build(**d) -> APIRouter:
             logger.exception("shared-workspace create failed for subject=%s", subject)
             raise HTTPException(status_code=500, detail="could not create shared workspace")
         return {"workspace_id": wid, "role": "owner", "name": body.name}
+    @router.post("/internal/policy/decide")
+    def policy_decide_route(request: Request, body: _pd_mod.DecideBody = Body(...)):
+        """THE ONE POLICY EVALUATOR's door (PRD 0.13.4 D7, S1 stub): ``{principal, action, workspace,
+        role?, credential?, principal_kind?}`` → ``{decision, rule, reason}``, ``rule`` = ``id@sha``.
+        Internal tier only. Fail closed (FD3): an unreadable rule set answers ``refuse`` /
+        ``policy_unreadable``; deny beats allow; nothing allowing is a deny."""
+        _pd = _pd_mod
+        internal = d.get("_internal_caller")
+        if internal is None or not internal(request):
+            raise HTTPException(status_code=403, detail="the policy evaluator is an internal-tier door")
+        role = body.role
+        if role is None and body.workspace and body.principal:
+            try:
+                role = membership_mod.is_member(wsr.root, body.workspace, body.principal)
+            except MembershipError:
+                return _pd.Decision(_pd.REFUSE, "store", _pd.POLICY_UNREADABLE).as_dict()
+        ask = _pd.Ask(principal=body.principal, action=body.action, workspace=body.workspace, role=role,
+                      credential=body.credential or _pd.DELEGATED, principal_kind=body.principal_kind)
+        return _pd.decide(ask, root=wsr.root).as_dict()
+
+    # ── POLICY CHANGES WITH PERMISSION (PRD 0.13.4 D5; founder: "agents CAN change policy, with
+    #    permission") — propose → the owner approves in a browser session → the platform applies. ──
+    def _policy_store():
+        if session_store is None:
+            raise HTTPException(status_code=503, detail="proposals need the session store")
+        return session_store
+
+    @router.post("/api/workspace/policy/proposals", status_code=201)
+    def policy_propose(request: Request, body: PolicyProposeBody = Body(...)):
+        """Propose one change to a workspace's policy — visibility, a connection, a member's role or
+        removal, or its rule file — with the exact change and the reason. Nothing changes: the
+        workspace's owner approves or declines it in the app. An agent may call this; a direct write
+        to policy stays refused."""
+        require_in_ceiling(request, body.workspace)
+        subject = str(subject_of(request))
+        store = _policy_store()
+        try:
+            membership_mod.require_role(wsr.root, body.workspace, subject, "contributor")
+            value = _pp.normalize(body.change, body.value)
+            owner = _pp.owner_of(wsr.root, body.workspace)
+        except MembershipError as exc:
+            raise _member_error(exc)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        if not owner:
+            raise HTTPException(status_code=409, detail="this workspace has no owner to decide")
+        if store.get(body.session) is None or not store.can_read(body.session, subject):
+            raise HTTPException(status_code=404, detail="session not found")
+        try:
+            p = store.propose(body.session, owner=owner, kind="policy", workspace=body.workspace,
+                              title=f"{body.change}: {body.workspace}"[:300],
+                              body=_pp.body_of(body.change, value, reason=body.reason,
+                                               on_behalf_of=_pp.proposer_of(request.headers, subject)))
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        return {"proposal": p, "decides": owner,
+                "said": f"Proposed to the owner of {body.workspace}; nothing changes until they approve."}
+
+    @router.get("/api/workspace/policy/proposals")
+    def policy_proposals(request: Request):
+        """The policy proposals waiting for the caller's decision."""
+        return {"proposals": _policy_store().proposals_for(str(subject_of(request)), "policy")}
+
+    def _policy_decide(request: Request, proposal_id: str, *, approve: bool) -> dict:
+        # A PERSON, IN THE APP (interim until S5's signed card wraps this same proposal): never a
+        # delegated caller of any regime, never an API key whatever its scopes — a SESSION (D13).
+        refuse_delegated(request, reason="policy_approval_is_a_person",
+                         instruction="Approving a policy change is the owner's act in the app. Say what is "
+                                     "waiting and stop.")
+        if approve and _pd_mod.credential_of(request.headers) != _pd_mod.SESSION:
+            raise HTTPException(status_code=403, detail="policy changes are approved from a signed-in session")
+        subject = str(subject_of(request))
+        store = _policy_store()
+        p = store.proposal(proposal_id)
+        if p is None or p["kind"] != "policy" or p["owner"] != subject:
+            raise HTTPException(status_code=404, detail="proposal not found")
+        if p["status"] != "open":
+            raise HTTPException(status_code=409, detail="already_decided")
+        applied = None
+        if approve:
+            try:
+                applied = _pp.apply(wsr.root, p, approver=subject,
+                                    approver_email=request.headers.get("x-user-email") or "",
+                                    credential=_pd_mod.credential_of(request.headers), index=mindex)
+            except MembershipError as exc:
+                raise _member_error(exc)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from None
+        done = store.decide(proposal_id, subject, accept=approve)
+        return {"proposal": done, "applied": applied}
+
+    @router.post("/api/workspace/policy/proposals/{proposal_id}/approve")
+    def policy_approve(proposal_id: str, request: Request):
+        """The workspace's owner approves a policy proposal; the platform applies it, recording
+        ``Approved-by`` and ``On-behalf-of``."""
+        return _policy_decide(request, proposal_id, approve=True)
+
+    @router.post("/api/workspace/policy/proposals/{proposal_id}/decline")
+    def policy_decline(proposal_id: str, request: Request):
+        """The owner declines; nothing changes."""
+        return _policy_decide(request, proposal_id, approve=False)
+
     @router.post("/api/workspace/invites", status_code=201)
     def ws_invite_create(request: Request, body: InviteCreateBody = Body(...)):
         """Mint a scoped invite token for a shared workspace. Auth: owner OR contributor of the target.
@@ -192,6 +311,7 @@ def build(**d) -> APIRouter:
         its hash is persisted, in the invite store at <root>/.invites/<workspace_id>.json — the one
         file `invites/preview` and `invites/accept` read (Vexa-ai/vexa#1645)."""
         require_in_ceiling(request, body.workspace_id)
+        require_session_credential(request)   # H3: an agent proposes a card; only a person's session mints
         subject = subject_of(request)
         # AN ADDRESS BINDS THE INVITE (Vexa-ai/vexa#1635). `allowed_emails` names who this is for, so
         # it decides the mode — it is not a hint that a separate flag has to agree with. Asking for
@@ -248,6 +368,19 @@ def build(**d) -> APIRouter:
             # Revoked, expired or used up: the reason only, so the page can say which.
             return {"valid": False, "reason": info.get("reason")}
         wsid = info["workspace_id"]
+        rec = workspace_registry.by_slug(wsid) or {}
+        if not str(request.headers.get("x-user-id") or "").strip():
+            # NOBODY SIGNED IN (security review M1, 0.13.4 S4): the link's holder learns the
+            # workspace's NAME and the terms — never its purpose or the sender's address. A bound
+            # invite still names the address it is for (the holder's own; the page prefills and locks
+            # it, #1635). The signed-in confirm card (D26) shows the sender.
+            return {"workspace_id": wsid, "id": rec.get("id"), "name": rec.get("name") or wsid,
+                    "role": info["role"], "mode": info["mode"], "expires_at": info["expires_at"],
+                    "restricted_to": (info.get("allowed_emails") or []) if info["mode"] == "restricted" else [],
+                    "valid": info["valid"], "reason": info["reason"],
+                    # the room the link lands in, as the mail named it, and whether the link itself
+                    # signs its one address in (S2) — the page needs both before anyone signs in
+                    "room": info.get("room"), "signin": bool(info.get("signin"))}
         # Human context for the card: the workspace's purpose + who shared it (their email when we've
         # stored it — see the members roster; else the opaque subject as a last resort).
         purpose = read_purpose(membership_mod._ws_dir(wsr.root, wsid))
@@ -268,13 +401,25 @@ def build(**d) -> APIRouter:
             # Only for a bound invite: an open one has nothing to prefill and nothing to disclose.
             "restricted_to": (info.get("allowed_emails") or []) if info["mode"] == "restricted" else [],
             "shared_by": shared_by, "valid": info["valid"], "reason": info["reason"],
+            # The room the link lands in (S2) and whether the link itself signs its one address in.
+            "room": info.get("room"), "signin": bool(info.get("signin")),
         }
     # ACCEPT AND DECLINE ARE ONE ACT EACH, reached from two doors (#1783): the join page and the
     # invite's own notification (`POST /api/notifications/act`, the `notifications_act` tool). Both
     # call these, so the gate, the redeem and the `invite_accepted` / `invite_declined` notice to the
     # inviter have one writer. `ceiling=False` is the notification's door: joining is the person's
     # own act on their own invite, asked for in a watched turn, and reads nothing in this dispatch.
-    def accept_token(request: Request, token: str, *, ceiling: bool = True) -> dict:
+    def _resolve_invite(token: str, ref: str):
+        """``(workspace, record)`` for a token or an ``invite:<ws>/<id>`` notification ref, or None."""
+        if ref:
+            parsed = parse_invite_ref(ref)
+            if parsed is None:
+                return None
+            rec = membership_mod.invite_by_id(wsr.root, parsed[0], parsed[1])
+            return (parsed[0], rec) if rec is not None else None
+        return membership_mod.find_invite(wsr.root, token)
+
+    def accept_token(request: Request, token: str = "", *, ceiling: bool = True, ref: str = "") -> dict:
         subject = subject_of(request)
         # SECURITY BOUNDARY: X-User-Email is the caller's VERIFIED email because agent-api's identity
         # door (gateway-identity.v1, see the TOPOLOGY BOUNDARY note in create_app) rebuilds every x-user-*
@@ -283,7 +428,7 @@ def build(**d) -> APIRouter:
         subject_email = request.headers.get("x-user-email")
         # Resolve which shared workspace this token belongs to by hash (never trust a client-declared
         # id) — through `find_invite`, the SAME resolver `invites/preview` uses.
-        found = membership_mod.find_invite(wsr.root, token)
+        found = _resolve_invite(token, ref)
         if found is None:
             raise HTTPException(status_code=404, detail="invalid invite")
         target_ws = found[0]
@@ -293,7 +438,7 @@ def build(**d) -> APIRouter:
         try:
             result = membership_mod.accept_invite(
                 wsr.root, target_ws, token=token, subject=subject, subject_email=subject_email,
-                index=mindex, commit_fn=_pc,
+                index=mindex, commit_fn=_pc, invite_id=("" if token else str(found[1].get("id") or "")),
             )
         except MembershipError as exc:
             raise _member_error(exc)
@@ -306,15 +451,48 @@ def build(**d) -> APIRouter:
                     request=request, actor=subject, slug=target_ws)
             if via_link:
                 _joined_fact(subject, subject_email, target_ws, found[1])
-        # SHARED WORK, BOUND TO THIS WORKSPACE (Vexa-ai/vexa#1783): the person's next new chat starts
-        # in the "shared work" profile with {{workspace}} = this workspace — a profile, not a rule.
-        try:
-            from control_plane import workspace_attach as _attach  # noqa: PLC0415
-            _attach.queue_profile(wsr.root, subject, _attach.SHARED_WORK, {_attach.WORKSPACE_VAR: target_ws})
-        except Exception:  # noqa: BLE001 — the join happened; the profile is the extra
-            logger.warning("shared work not queued for subject=%s", subject)
+        # ACCEPTING NEVER MOVES THE PERSON'S WRITE TARGET (PRD 0.13.4 D26, security review H4).
+        # It used to queue the "shared work" profile bound to this workspace, so one link opened by
+        # a signed-in person sent their NEXT chat's writes into a workspace the sender reads. Only
+        # the person switches where their chat writes; the join adds the workspace, nothing more.
+        # A TAG'S INVITE LANDS IN ITS ROOM (0.13.4 D21 case 3): the pending room membership the
+        # tagger's card recorded on the invite applies now, and only to a room of this workspace.
+        _room = result.get("room")
+        room_id = str((_room.get("id") if isinstance(_room, dict) else _room) or "")
+        invited_by = str(result.pop("invited_by", "") or "")
+        if room_id and session_store is not None:
+            try:
+                from control_plane import room_membership  # noqa: PLC0415
+                room = session_store.room(room_id)
+                if room is not None and room.get("workspace") == target_ws:
+                    room_membership.add(session_store, wsr.root, room_id, str(subject), actor=invited_by or "invite")
+            except Exception as exc:  # noqa: BLE001 — the workspace join happened; the room is the extra
+                logger.warning("pending room membership not applied (%s)", type(exc).__name__)
         rec = workspace_registry.by_slug(target_ws) or {}
-        return {**result, "name": rec.get("name") or target_ws}
+        room = _join_invited_room(subject, target_ws, result.get("room"))
+        out = {**result, "name": rec.get("name") or target_ws}
+        if room:
+            out["room"] = room
+        else:
+            out.pop("room", None)
+        return out
+
+    def _join_invited_room(subject: str, workspace: str, room) -> "dict | None":
+        """THE ROOM AN INVITE LANDS IN (PRD 0.13.4 S2). After the workspace join, the person joins
+        the room the invite named — only when it is still a room of that workspace. Never raises:
+        the workspace join happened; a room that went away just lands them on the workspace."""
+        if not isinstance(room, dict) or not room.get("id") or session_store is None:
+            return None
+        try:
+            row = session_store.room(str(room["id"]))
+            if not row or str(row.get("workspace") or "") != workspace:
+                return None
+            if session_store.role_of(str(room["id"]), subject) is None:
+                session_store.join(str(room["id"]), subject)
+            return {"id": str(room["id"]), "title": str(room.get("title") or "")}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("invite room join skipped (%s)", type(exc).__name__)
+            return None
 
     def _joined_fact(subject: str, email, slug: str, rec: dict) -> None:
         """Hand `workspace.joined_via_link` to flows (never raises; the join already happened)."""
@@ -329,10 +507,10 @@ def build(**d) -> APIRouter:
         except Exception as exc:  # noqa: BLE001
             logger.warning("workspace.joined_via_link not published (%s)", type(exc).__name__)
 
-    def decline_token(request: Request, token: str) -> dict:
+    def decline_token(request: Request, token: str = "", *, ref: str = "") -> dict:
         subject = subject_of(request)
         email = str(request.headers.get("x-user-email") or "").strip().lower()
-        found = membership_mod.find_invite(wsr.root, token)
+        found = _resolve_invite(token, ref)
         if found is None:
             raise HTTPException(status_code=404, detail="invalid invite")
         target_ws, rec = found
@@ -351,6 +529,20 @@ def build(**d) -> APIRouter:
     invite_doors = d.get("invite_doors")
     if isinstance(invite_doors, dict):
         invite_doors.update(accept=accept_token, decline=decline_token)
+
+    @router.post("/internal/invites/signin-claim")
+    def ws_invite_signin_claim(request: Request, body: InviteSigninClaimBody = Body(...)):
+        """SPEND THE SIGN-IN HALF of a mailed invite link, once (PRD 0.13.4 S2) — internal tier, the
+        terminal's join POST only. Answers ``{email, workspace_id, room, role}``: the one address the
+        terminal may sign in. 404 unknown · 409 not a sign-in link · 410 already used or out of its
+        window. A GET never reaches this; the join page's button does."""
+        internal = d.get("_internal_caller")
+        if internal is None or not internal(request):
+            raise HTTPException(status_code=403, detail="the invite sign-in claim is an internal-tier door")
+        try:
+            return membership_mod.claim_invite_signin(wsr.root, body.token)
+        except MembershipError as exc:
+            raise _member_error(exc)
 
     @router.post("/api/workspace/invites/accept")
     def ws_invite_accept(request: Request, body: InviteAcceptBody = Body(...)):
@@ -483,6 +675,29 @@ def build(**d) -> APIRouter:
         # policy: the rig prints `detail` to the agent, which says it to the person.
         return HTTPException(status_code=exc.status, detail=str(exc))
 
+    def _invite_signin_ttl() -> int:
+        """The company's policy line `invite_signin_days` (`_global/POLICIES.md`, default 7; 0 =
+        a mailed link never signs in by itself), in seconds. An unreadable policy is the default."""
+        try:
+            from control_plane import budgets as _budgets  # noqa: PLC0415
+            return int(_budgets.read(_global_dir()).get("invite_signin_days", 7)) * 86400
+        except Exception:  # noqa: BLE001
+            return membership_mod.SIGNIN_TTL_SEC
+
+    def _invite_room(subject: str, slug: str, room_id) -> "dict | None":
+        """The room an invite names, checked: a room of THIS workspace that the inviter is in. 422
+        otherwise — an invite into a room the inviter cannot see would disclose its title."""
+        rid = str(room_id or "").strip()
+        if not rid:
+            return None
+        row = session_store.room(rid) if session_store is not None else None
+        if not row or str(row.get("workspace") or "") != slug or session_store.role_of(rid, subject) is None:
+            raise HTTPException(status_code=422, detail={
+                "refused": "not_a_room_here",
+                "said": "that room is not one of this workspace's rooms you are in — invite to the workspace instead"})
+        got = session_store.get(rid) or {}
+        return {"id": rid, "title": str(got.get("title") or "")}
+
     @router.post("/api/workspace/invite")
     def ws_invite_person(request: Request, body: WorkspaceInviteBody = Body(...)):
         """Invite ONE address to a workspace as one of `owner · contributor · reader` — the verb
@@ -502,6 +717,7 @@ def build(**d) -> APIRouter:
         already knows gets it handed back for the agent to give them in the chat they are in, and
         every other address is published to the mail carrier. The answer says which happened."""
         require_in_ceiling(request, body.slug)
+        require_session_credential(request)   # H3: an agent proposes a card; only a person's session mints
         subject = subject_of(request)
         try:
             slug, shared_now = _share_own(request, subject, body.slug)
@@ -509,6 +725,7 @@ def build(**d) -> APIRouter:
                 wsr.root, slug, subject,
                 is_admin=bool(global_layer.is_admin_account(settings, str(subject))))
             rec = workspace_registry.by_slug(slug) or {}
+            room = _invite_room(subject, slug, body.room)
             answer = membership_acts.invite(
                 wsr.root, slug, email=body.email, role=body.role, inviter=subject,
                 inviter_email=request.headers.get("x-user-email") or "",
@@ -516,7 +733,8 @@ def build(**d) -> APIRouter:
                 index=mindex, ui_url=(settings.ui_url if settings is not None else ""),
                 commit_fn=_act_commit(request, subject),
                 resolve_subject=_email_subject_lookup,
-                mail=publish_mod.publish_invite, mail_delivery=publish_mod.mail_delivery)
+                mail=publish_mod.publish_invite, mail_delivery=publish_mod.mail_delivery,
+                room=room, signin_ttl_sec=_invite_signin_ttl())
             answer = {**answer, "workspace_id": slug, "shared_now": shared_now}
             if shared_now:
                 answer["said"] = (f"{body.slug} is now a shared workspace, addressed as {slug}, with "
@@ -533,9 +751,12 @@ def build(**d) -> APIRouter:
                 invitee = _email_subject_lookup(str(done.get("email") or "")) if _email_subject_lookup else None
             except Exception:  # noqa: BLE001
                 invitee = None
-            _notify(invitee, kind="workspace_invited", request=request, actor=subject,
-                    slug=str(done.get("workspace_id") or body.slug),
-                    url=done.get("link"))
+            # THE ROW HOLDS THE INVITE'S ID, NEVER ITS TOKEN (PRD 0.13.4 M2): a notification row is
+            # a database row, and a token in it is a credential at rest. `POST /api/notifications/act`
+            # resolves the id server-side, still bound to the invitee's verified address.
+            wsid = str(done.get("workspace_id") or body.slug)
+            _notify(invitee, kind="workspace_invited", request=request, actor=subject, slug=wsid,
+                    url=notifications_ref(wsid, str(done.get("invite_id") or "")))
         return done
 
     @router.post("/api/workspace/membership")
@@ -611,6 +832,22 @@ def build(**d) -> APIRouter:
             raise _member_error(exc)
         if done.get("added"):
             _notify(done.get("subject"), kind="workspace_added", request=request, actor=subject, slug=slug)
+        # D35: a member is a Person — every other account THEY CONFIRMED as theirs gets the same
+        # role; an unconfirmed link gets nothing. Fails toward fewer: no CRM answer, no extra account.
+        persons = d.get("person_resolver") or person_resolution.default()
+        for other in person_resolution.linked_accounts(str(done.get("subject") or ""), done.get("email") or "",
+                                                       resolver=persons)[1:]:
+            if other == subject:
+                continue
+            try:
+                more = membership_acts.add_member(
+                    wsr.root, slug, person=other, role=body.role, actor=subject, index=mindex,
+                    commit_fn=_act_commit(request, subject), resolve_subject=_email_subject_lookup,
+                    known_people=lambda o=other: [{"subject": o, "email": ""}])
+            except (membership_acts.ActRefused, MembershipError):
+                continue
+            if more.get("added"):
+                _notify(other, kind="workspace_added", request=request, actor=subject, slug=slug)
         return done
 
     # ── LINKS (#1783): a workspace link N people can join by; chats get the same mechanism ───────
@@ -639,6 +876,7 @@ def build(**d) -> APIRouter:
         the person; it cannot be read back later. List links with workspace_invite_links and stop one
         with workspace_invite_link_revoke. Each time someone joins, the person is notified."""
         require_in_ceiling(request, body.slug)
+        require_session_credential(request)   # H3: an agent proposes a card; only a person's session mints
         subject = subject_of(request)
         role = _LINK_ROLES.get(str(body.role or "").strip().lower())
         if role is None:
@@ -703,6 +941,7 @@ def build(**d) -> APIRouter:
     @router.post("/api/join-links", status_code=201)
     def join_link_create(request: Request, body: JoinLinkCreateBody = Body(...)):
         """Create a link that lets up to `max_uses` people join a chat."""
+        require_session_credential(request)   # H3: an agent proposes a card; only a person's session mints
         subject = subject_of(request)
         if body.target_kind != "chat":
             raise HTTPException(status_code=400, detail="workspace links: POST /api/workspace/invite-link")

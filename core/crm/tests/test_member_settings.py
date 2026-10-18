@@ -56,7 +56,7 @@ def test_the_table_is_the_relations_own_and_crm_api_may_write_it():
     assert {'pinned', 'hidden', 'muted', 'notify', 'room_order', 'level', 'collapsed', 'updated_at'} <= set(t.c.keys())
     assert t.c.level.nullable and not t.c.notify.nullable
     assert migrate.WRITES['crm_member_settings'] == 'INSERT, UPDATE'
-    assert s.SCHEMA_VERSION == 5
+    assert s.SCHEMA_VERSION >= 5          # 6: field classes + audit columns (D4)
 
 
 def test_an_existing_v4_database_upgrades_to_v5_and_keeps_its_rows():
@@ -72,7 +72,7 @@ def test_an_existing_v4_database_upgrades_to_v5_and_keeps_its_rows():
         migrate.tables_and_version(c)
     assert 'crm_member_settings' in set(inspect(engine).get_table_names())
     with engine.connect() as c:
-        assert c.execute(text('SELECT version FROM crm_schema')).scalar_one() == 5
+        assert c.execute(text('SELECT version FROM crm_schema')).scalar_one() == s.SCHEMA_VERSION
         assert c.execute(select(s.workspace_rosters)).first() is not None
 
 
@@ -87,7 +87,7 @@ def test_a_roster_snapshot_never_touches_a_persons_settings(ms):
 
 def test_nothing_set_reads_empty_and_the_defaults_are_the_documented_ones(ms):
     assert ms.read(ORG, ME) == {'workspaces': {}}
-    assert DEFAULTS == {'pinned': False, 'hidden': False, 'muted': False, 'notify': 'all', 'room_order': [],
+    assert DEFAULTS == {'pinned': False, 'hidden': False, 'muted': False, 'room_order': [],
                         'level': None, 'collapsed': [], 'updated_at': None}
     conforms('WorkspaceSettingsMap', ms.read(ORG, ME))
 
@@ -96,8 +96,8 @@ def test_a_partial_set_merges_onto_the_defaults_and_then_onto_what_is_there(ms):
     r = ms.set(ORG, ME, 'growth', {'muted': True})
     assert r == {'workspace': 'growth', 'settings': {**DEFAULTS, 'muted': True, 'updated_at': '2026-10-16T09:00:00+00:00'}}
     conforms('WorkspaceSettingsResult', r)
-    r = ms.set(ORG, ME, 'growth', {'pinned': True, 'notify': 'mentions', 'room_order': ['c1', 'c2'], 'level': 3})
-    assert r['settings'] == {**DEFAULTS, 'muted': True, 'pinned': True, 'notify': 'mentions',
+    r = ms.set(ORG, ME, 'growth', {'pinned': True, 'room_order': ['c1', 'c2'], 'level': 3})
+    assert r['settings'] == {**DEFAULTS, 'muted': True, 'pinned': True,
                              'room_order': ['c1', 'c2'], 'level': 3, 'updated_at': '2026-10-16T09:00:00+00:00'}
     r = ms.set(ORG, ME, 'growth', {'level': None, 'collapsed': ['done']})
     assert r['settings']['level'] is None and r['settings']['collapsed'] == ['done'] and r['settings']['pinned']

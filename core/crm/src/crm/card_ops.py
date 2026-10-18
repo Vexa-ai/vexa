@@ -25,7 +25,10 @@ Its movement and activity are the record's own revisions; nothing else is stored
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+import secrets
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -35,6 +38,7 @@ from uuid import uuid4
 from sqlalchemy import delete, select, update
 
 from . import card_face
+from . import card_templates as tpl
 from . import features
 from . import schema as s
 from .caller import Caller, as_caller
@@ -50,7 +54,24 @@ LIST_MAX = 50
 TITLE_MAX = 200
 REASON_MAX = 500
 #: The fields a person or a proposal may set on a card. State moves only by `transition`.
-EDITABLE = ('Title', 'About', 'Next', 'Waiting', 'Summary', 'Due', 'Progress', 'Checklist', 'Parent', 'Face')
+EDITABLE = ('Title', 'About', 'Next', 'Waiting', 'Summary', 'Due', 'Progress', 'Checklist', 'Parent', 'Face',
+            # D11: the lifecycle coordination fields a person (or a proposal) may set. The handoff phase,
+            # an answer, evidence and a receipt are written only by a gate (``decide``).
+            'Kind', 'NextActor', 'Requester', 'NextCheckAt', 'Chain', 'Origin')
+#: Written only by a gate decision (D12), never by an edit or a proposal.
+GATE_ONLY = ('Handoff', 'HandoffSince', 'Answer', 'Evidence', 'Receipt')
+#: How long a decision nonce lives (D13): long enough to read the card, short enough not to linger.
+NONCE_TTL = timedelta(minutes=15)
+#: An open card of a kind is checked again this long after its last move unless its due date is
+#: sooner (the D11 invariant: no open card floats without a ``NextCheckAt``). `_global` policy
+#: `card_check_hours` (1..720) tunes it.
+CHECK_AFTER = timedelta(hours=24)
+#: "Due soon" in the inbox counts: due within this many days.
+DUE_SOON = timedelta(days=3)
+_PERSON = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.:@\-]{0,127}$')
+_ORIGIN = re.compile(r'^(session:[A-Za-z0-9._:\-]{1,128}|meeting:[A-Za-z0-9._:\-]{1,128}|'
+                     r'message:[A-Za-z0-9._:\-]{1,128}/[A-Za-z0-9._:\-]{1,128})$')
+_REF = re.compile(r'^[a-z]+:[^\x00-\x1f\x7f]{1,290}$')
 
 _ID = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.:\-]{0,127}$')
 _SLUG = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,127}$')
@@ -66,6 +87,10 @@ PROPOSE_CARD = _refusal(
     'propose_instead',
     'You may not make or change a card yourself. Call card_propose (a new card) or card_update_propose '
     '(a change or a stage move) with a one-line reason; a person accepts it. Do not retry it another way.')
+SESSION_REQUIRED = _refusal(
+    'session_required',
+    "A decision on a card is made by the person at their own terminal, signed in — never with an API key "
+    "or an agent's token. Tell them it is waiting on them and give the card's link.")
 MEMBERS_PERSON_ONLY = _refusal(
     'person_confirmation_required',
     "Only a person adds or removes a card's members, or accepts being added. Tell them, and give the "
@@ -170,14 +195,54 @@ class Cards:
         return self.store.engine
 
     # ── policy ────────────────────────────────────────────────────────────────────────────────
-    def lifecycle(self, object_type):
-        attrs = {}
-        if self.policy_text is not None:
-            try:
-                attrs = front_matter(self.policy_text() or '')
-            except Exception:  # noqa: BLE001
-                attrs = {}
+    def _attrs(self):
+        if self.policy_text is None:
+            return {}
+        try:
+            return front_matter(self.policy_text() or '') or {}
+        except Exception:  # noqa: BLE001 — an unreadable policy is the defaults
+            return {}
+
+    def lifecycle(self, object_type, kind=None):
+        """The stages a card moves through: its KIND's seeded template (D11) when it has one, else its
+        type's ``lifecycles.<type>`` line."""
+        template = self.template(kind)
+        if template is not None:
+            return {'stages': list(template['stages']), 'side': list(template['side'])}
+        attrs = self._attrs()
         return parse_lifecycle(attrs.get('lifecycles.' + str(object_type).lower()) or attrs.get('lifecycles.card'))
+
+    def template(self, kind):
+        """A card kind's lifecycle template (``card_templates``), with the org's renamed stages if
+        ``_global/POLICIES.md`` restates them (``card_templates.<kind>``); None for no kind."""
+        if not kind or kind not in tpl.KINDS:
+            return None
+        line = self._attrs().get('card_templates.' + str(kind)) or self._attrs().get(
+            'card_templates.' + tpl.KIND_TEMPLATE[kind])
+        override = parse_lifecycle(line) if line else None
+        return tpl.template_for(kind, override)
+
+    def check_after(self):
+        value = str(self._attrs().get('card_check_hours', '')).strip()
+        return timedelta(hours=int(value)) if value.isdigit() and 1 <= int(value) <= 720 else CHECK_AFTER
+
+    def seen_visible_to_sender(self):
+        """D14/N-7: whether a card's sender sees that its next actor has seen it — a policy line,
+        default off (``card_seen_visible_to_sender: true`` in ``_global/POLICIES.md``)."""
+        return str(self._attrs().get('card_seen_visible_to_sender', '')).strip().lower() == 'true'
+
+    def next_check(self, due=None, now=None):
+        """The next check of an open card: its due date when that is sooner, else the check interval."""
+        now = now or self.clock()
+        at = now + self.check_after()
+        if isinstance(due, str) and re.match(r'^\d{4}-\d{2}-\d{2}', due):
+            try:
+                d = datetime.fromisoformat(due[:10]).replace(tzinfo=timezone.utc)
+                if now < d < at:
+                    at = d
+            except ValueError:
+                pass
+        return at.isoformat()
 
     def stalled_after(self):
         attrs = {}
@@ -208,20 +273,63 @@ class Cards:
         return timedelta(days=(limits or self.limits())['card_proposal_ttl_days'])
 
     # ── the write-path hook (store._card_fields) ───────────────────────────────────────────────
+    #: Set while a gate decision writes (``decide``): the only writer of a kind card's stage and of
+    #: the gate-only fields. Thread-local, because one Cards object serves concurrent requests.
+    _gate = threading.local()
+
     def normalise_fields(self, object_type, fields, before):
         fields = dict(fields or {})
+        prior = (before or {}) if isinstance(before, dict) else {}
+        gate_write = bool(getattr(self._gate, 'on', False))
         if 'Face' in fields:
             fields['Face'] = card_face.sanitize(fields['Face'])
         if fields.get('About'):
             check_about(fields['About'])
-        life = self.lifecycle(object_type)
+        if not gate_write and set(fields) & set(GATE_ONLY):
+            raise CRMError('A card\'s handoff, answer, evidence and receipt change only through its gates (decide)')
+        kind = fields.get('Kind', prior.get('Kind'))
+        if prior.get('Kind') and 'Kind' in fields and fields['Kind'] != prior.get('Kind'):
+            raise CRMError("A card's kind does not change; make a new card")
+        if kind is not None and kind not in tpl.KINDS:
+            raise CRMError(f'Kind is one of {", ".join(tpl.KINDS)}')
+        template = self.template(kind)
+        life = self.lifecycle(object_type, kind)
         states = life['stages'] + life['side']
         if 'State' in fields:
             if fields['State'] not in states:
                 raise CRMError(f'"{_clip(fields["State"], 60)}" is not a stage of this card type; '
                                f'its stages are {", ".join(states)}')
+            if template is not None and before is not None and not gate_write \
+                    and fields['State'] != prior.get('State'):
+                raise CRMError('A card of this kind moves only through its gates (decide), by the person whose move it is')
         elif before is None:
             fields['State'] = life['stages'][0]
+        for key in ('NextActor', 'Requester'):
+            if fields.get(key) is not None:
+                value = str(fields[key]).strip()
+                if not _PERSON.fullmatch(value):
+                    raise CRMError(f'{key} is a person id')
+                fields[key] = value
+        if fields.get('Origin') is not None and not _ORIGIN.fullmatch(str(fields['Origin'])):
+            raise CRMError('Origin is session:<id>, meeting:<id> or message:<session>/<message id>')
+        if 'Chain' in fields:
+            chain = fields['Chain'] if isinstance(fields['Chain'], dict) else {}
+            fields['Chain'] = {k: [str(x) for x in (chain.get(k) or []) if _ID.fullmatch(str(x))][:20]
+                               for k in ('blocks', 'blocked_by')}
+        if template is not None:
+            merged = {**prior, **fields}
+            if before is None:
+                if not merged.get('NextActor'):
+                    raise CRMError('A card of a kind names its next actor (NextActor: a person id)')
+                fields.setdefault('Handoff', 'offered')
+                fields.setdefault('HandoffSince', self.clock().isoformat())
+            elif not gate_write and 'NextActor' in fields and fields['NextActor'] != prior.get('NextActor'):
+                # reassigned: a new offer to the new next actor, never custody by assignment (D12)
+                fields['Handoff'] = 'offered'
+                fields['HandoffSince'] = self.clock().isoformat()
+            state = merged.get('State') or fields.get('State')
+            if tpl.is_open(template, state) and not merged.get('NextCheckAt'):
+                fields['NextCheckAt'] = self.next_check(merged.get('Due'))
         return fields
 
     # ── reading one card ──────────────────────────────────────────────────────────────────────
@@ -288,11 +396,14 @@ class Cards:
         caller = policy.get('_caller') or as_caller(policy.get('subject_id', ''))
         cross_org = bool(getattr(caller, 'cross_org', False))
         visible = store._visible(policy, row)
-        readable = set(store._rights(policy, row, 'read'))
+        readable = store._view(policy, row).readable      # D4: the face locks what the field view omits
         if cross_org:
             readable = public_fields(policy, row['object_type'])
         f = visible['fields']
-        life = self.lifecycle(row['object_type'])
+        raw = row['fields'] or {}
+        kind = raw.get('Kind') if raw.get('Kind') in tpl.KINDS else None
+        template = self.template(kind)
+        life = self.lifecycle(row['object_type'], kind)
         can_write = False
         try:
             can_write = bool(store._rights(policy, row, 'write')) and not caller.delegated
@@ -356,8 +467,76 @@ class Cards:
             'can': {'edit': can_write, 'transition': can_write, 'review': can_write, 'members': can_write},
             'href': '/crm?' + urlencode({'record': row['id']}),
         }
+        out.update(self._coordination(c, org, row, raw, kind, template, caller, cross_org, state))
         if activity:
             out['activity'] = [self._movement(rev, readable) for rev in revs]
+        return out
+
+    # ── D11–D14: the coordination a viewer reads, whatever their field rights ───────────────────
+    def _decisions(self, c, org, record_id):
+        """The card's decision records, newest first (D13): each revision a gate decision wrote."""
+        r = s.revisions
+        rows = c.execute(select(r.c.revision, r.c.decision, r.c.actor_id, r.c.created_at, r.c.credential_class)
+                         .where(r.c.org_id == org, r.c.record_id == record_id, r.c.decision != '')
+                         .order_by(r.c.revision.desc()).limit(50)).all()
+        return [{'revision': rv, 'action': d, 'by': by, 'at': at, 'credential_class': cc} for rv, d, by, at, cc in rows]
+
+    def _seen_at(self, c, org, person, record_id):
+        if not person:
+            return None
+        return c.execute(select(s.card_seen.c.seen_at).where(
+            s.card_seen.c.org_id == org, s.card_seen.c.person == person,
+            s.card_seen.c.record_id == record_id)).scalar_one_or_none()
+
+    def _coordination(self, c, org, row, raw, kind, template, caller, cross_org, state):
+        """The lifecycle coordination fields (D8's enumerated class: kind, state, next actor, next
+        check, handoff) and the viewer's own position on the card. They are what a card fact carries
+        and what routing needs, so they are read whoever may read the card — never its content. A room
+        with people from outside the org reads none of them."""
+        blank = {'kind': kind, 'next_actor': None, 'requester': None, 'next_check_at': None,
+                 'chain': {'blocks': [], 'blocked_by': []}, 'origin': None, 'open': True,
+                 'handoff': {'phase': None, 'since': None}, 'gates': [], 'decisions': [], 'last_decision': None,
+                 'viewer': {'role': 'watcher', 'seen': False, 'actions': []}}
+        if cross_org:
+            return blank
+        me = '' if (caller.delegated or caller.internal) else str(caller.subject or '')
+        next_actor = raw.get('NextActor') or None
+        requester = raw.get('Requester') or (row['owner_id'] if template is not None else None)
+        decisions = self._decisions(c, org, row['id'])
+        chain = raw.get('Chain') if isinstance(raw.get('Chain'), dict) else {}
+        out = {
+            'kind': kind, 'next_actor': next_actor, 'requester': requester,
+            'next_check_at': raw.get('NextCheckAt') or None,
+            'chain': {'blocks': list(chain.get('blocks') or []), 'blocked_by': list(chain.get('blocked_by') or [])},
+            'origin': raw.get('Origin') or None,
+            'handoff': {'phase': raw.get('Handoff') or None, 'since': raw.get('HandoffSince') or None},
+            'decisions': decisions,
+            'last_decision': ({'action': decisions[0]['action'], 'by': decisions[0]['by'], 'at': decisions[0]['at']}
+                              if decisions else None),
+        }
+        if template is None:
+            out.update({'open': True, 'gates': [], 'viewer': {
+                'role': 'member' if me and me in {m['subject'] for m in self._members(c, org, row['id'])} else 'watcher',
+                'seen': bool(self._seen_at(c, org, me, row['id'])), 'actions': []}})
+            return out
+        out['open'] = tpl.is_open(template, state)
+        out['gates'] = tpl.gate_strip(template, state, decisions)
+        if me and me == next_actor:
+            role = 'next_actor'
+        elif me and me == requester:
+            role = 'requester'
+        elif me and me in {m['subject'] for m in self._members(c, org, row['id'])}:
+            role = 'member'
+        else:
+            role = 'watcher'
+        seen_at = self._seen_at(c, org, me, row['id'])
+        since = raw.get('HandoffSince') or ''
+        out['viewer'] = {'role': role, 'seen': bool(seen_at) and (not since or str(seen_at) >= since),
+                         'actions': tpl.actions_for(template, state, raw.get('Handoff'), me, next_actor, requester)}
+        # whether the next actor has seen it: theirs to know; the sender's only by policy (N-7)
+        if role == 'next_actor' or (role == 'requester' and self.seen_visible_to_sender()):
+            na_seen = self._seen_at(c, org, next_actor, row['id'])
+            out['handoff']['seen'] = bool(na_seen) and (not since or str(na_seen) >= since)
         return out
 
     def readable(self, c, org, caller, record_id):
@@ -370,21 +549,190 @@ class Cards:
             return False
 
     def read(self, org, actor, card):
-        """One card with its activity. The person opening it (never an agent reading it) marks it seen,
-        so its "New" clears for them."""
+        """One card with its activity. Reading never marks it seen (D14, P21): only the terminal's
+        render in view does, through ``seen``."""
         caller = as_caller(actor)
-        with self.engine.begin() as c:
+        with self.engine.connect() as c:
             policy = self.store._policy(c, org, caller)
             row = self._card_row(c, org, card)
-            out = self.view(c, org, policy, row, activity=True)
-            if not caller.delegated and not caller.internal and caller.subject:
-                t, now = s.card_seen, self.clock().isoformat()
-                where = (t.c.org_id == org, t.c.person == caller.subject, t.c.record_id == row['id'])
-                if c.execute(select(t.c.seen_at).where(*where)).first() is None:
-                    c.execute(t.insert().values(org_id=org, person=caller.subject, record_id=row['id'], seen_at=now))
-                else:
-                    c.execute(update(t).where(*where).values(seen_at=now))
-            return out
+            return self.view(c, org, policy, row, activity=True)
+
+    @staticmethod
+    def _require_session(caller):
+        """D13: decisions and the seen relation take the terminal's session credential — never an API
+        key (a browser-scoped one included), never a delegation token, never the internal tier."""
+        if caller.delegated or caller.internal or not caller.subject \
+                or getattr(caller, 'credential_class', '') != 'session':
+            raise Refused(SESSION_REQUIRED)
+
+    def seen(self, org, actor, card):
+        """D14: the person's terminal rendered this card in view. The ONE writer of ``crm_card_seen``;
+        written on render, never on delivery or a fetch (P21)."""
+        caller = as_caller(actor)
+        self._require_session(caller)
+        with self.store.begin() as c:
+            policy = self.store._policy(c, org, caller)
+            row = self._card_row(c, org, card)
+            self.store._visible(policy, row)
+            t, now = s.card_seen, self.clock().isoformat()
+            where = (t.c.org_id == org, t.c.person == caller.subject, t.c.record_id == row['id'])
+            if c.execute(select(t.c.seen_at).where(*where)).first() is None:
+                c.execute(t.insert().values(org_id=org, person=caller.subject, record_id=row['id'], seen_at=now))
+            else:
+                c.execute(update(t).where(*where).values(seen_at=now))
+            return {'card': row['id'], 'seen_at': now}
+
+    # ── D13: the decision record ──────────────────────────────────────────────────────────────
+    @staticmethod
+    def canonical(view):
+        """The card as its signer saw it, canonically: what the decision binds to. Everything on the
+        face this viewer reads, plus the coordination that says what they are deciding."""
+        keep = ('id', 'revision', 'type', 'kind', 'title', 'state', 'next_actor', 'requester', 'due', 'summary',
+                'next', 'waiting', 'about', 'face', 'chain')
+        return {k: view.get(k) for k in keep}
+
+    @classmethod
+    def content_hash(cls, view):
+        blob = json.dumps(cls.canonical(view), sort_keys=True, separators=(',', ':'), default=str)
+        return hashlib.sha256(blob.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def _locked(view):
+        return [b.get('label') or 'a field' for b in view.get('face') or [] if b.get('type') == 'locked']
+
+    def nonce(self, org, actor, card):
+        """A server nonce bound to this person, this card at this revision, and the content hash of
+        the face they are shown now. Spent by exactly one decision."""
+        caller = as_caller(actor)
+        self._require_session(caller)
+        with self.store.begin() as c:
+            policy = self.store._policy(c, org, caller)
+            row = self._card_row(c, org, card)
+            view = self.view(c, org, policy, row)
+            now = self.clock()
+            value = secrets.token_urlsafe(24)
+            digest = self.content_hash(view)
+            c.execute(s.card_nonces.insert().values(
+                org_id=org, nonce=value, record_id=row['id'], person=caller.subject, revision=row['revision'],
+                content_hash=digest, created_at=now.isoformat(), expires_at=(now + NONCE_TTL).isoformat(), used_at=None))
+            return {'card': row['id'], 'nonce': value, 'content_hash': digest, 'revision': row['revision'],
+                    'expires_at': (now + NONCE_TTL).isoformat(), 'actions': view['viewer']['actions']}
+
+    def decide(self, org, actor, card, action, nonce, content_hash, evidence=None, receipt=None, answer=None,
+               reason=None):
+        """A gate decision (D12) as a decision record (D13): one append-only revision carrying the
+        action, ``credential_class=session``, the nonce and the content hash.
+
+        Refused unless: the caller holds the session credential; the action is one this viewer may
+        take now (they are the next actor, the gate accepts the card's stage); no field on their face
+        is locked (deny test 17: you sign only what you can read); the nonce was minted for them, for
+        this card at this revision, is unspent and unexpired; and the content hash equals both the
+        nonce's and the face they read now. A gate that needs evidence, a receipt or an answer gets
+        it or is refused. The authority is the template, so field write rights do not apply."""
+        caller = as_caller(actor)
+        self._require_session(caller)
+        action = str(action or '')
+        with self.store.begin() as c:
+            policy = self.store._policy(c, org, caller)
+            row = self._card_row(c, org, card)
+            raw = row['fields'] or {}
+            template = self.template(raw.get('Kind'))
+            if template is None:
+                raise CRMError('This card has no lifecycle template; it moves with update, not decide')
+            view = self.view(c, org, policy, row)
+            if action not in view['viewer']['actions']:
+                raise Forbidden('This decision is not yours to make on this card now')
+            locked = self._locked(view)
+            if locked:
+                raise Forbidden('You cannot sign a card with a field hidden from you: ' + ', '.join(locked[:3]))
+            n = s.card_nonces
+            got = c.execute(select(n).where(n.c.org_id == org, n.c.nonce == str(nonce or '')).with_for_update()
+                            ).mappings().first()
+            now = self.clock()
+            if got is None or got['person'] != caller.subject or got['record_id'] != row['id'] \
+                    or got['used_at'] is not None or _at(got['expires_at']) <= now:
+                raise Conflict('This decision is not bound to a live pending item; read the card again')
+            if got['revision'] != row['revision']:
+                raise Conflict('The card changed since you read it; read it again')
+            digest = self.content_hash(view)
+            if not (secrets.compare_digest(str(content_hash or ''), digest)
+                    and secrets.compare_digest(got['content_hash'], digest)):
+                raise Conflict('The card you saw is not the card now; read it again')
+            spent = c.execute(update(n).where(n.c.org_id == org, n.c.nonce == got['nonce'], n.c.used_at.is_(None))
+                              .values(used_at=now.isoformat())).rowcount
+            if spent != 1:
+                raise Conflict('This decision was already made')
+            gate = template['gates'][action]
+            patch = {}
+            if gate.get('needs') == 'evidence':
+                refs = [str(e).strip() for e in (evidence if isinstance(evidence, list) else [evidence]) if str(e or '').strip()]
+                if not refs or not all(_REF.fullmatch(r) for r in refs):
+                    raise CRMError('Delivering cites evidence: one or more references (page:…, meeting:…, crm:…)')
+                patch['Evidence'] = refs[:10]
+            if gate.get('needs') == 'receipt':
+                if not receipt or not _REF.fullmatch(str(receipt)):
+                    raise CRMError('Executed needs the effect receipt reference')
+                patch['Receipt'] = str(receipt)
+            if gate.get('needs') == 'answer':
+                text = _clip(answer, 500)
+                if not text:
+                    raise CRMError('An answer is needed')
+                patch['Answer'] = text
+            if gate.get('to'):
+                patch['State'] = gate['to']
+            stamp = now.isoformat()
+            then = gate.get('then')
+            if then == tpl.REQUESTER:
+                patch['NextActor'] = view['requester']
+                patch['Handoff'] = 'offered'
+                patch['HandoffSince'] = stamp
+            elif then == tpl.NOBODY:
+                patch['NextActor'] = None
+                patch['Handoff'] = None
+                patch['HandoffSince'] = stamp
+                patch['NextCheckAt'] = None
+            else:                       # SAME: the next actor keeps it, now acknowledged
+                patch['Handoff'] = 'acknowledged'
+                patch['HandoffSince'] = stamp
+            if then != tpl.NOBODY:
+                patch['NextCheckAt'] = self.next_check(raw.get('Due'), now)
+            words = tpl.DONE_WORDS[action]
+            record = {'decision': action, 'credential_class': 'session', 'nonce': got['nonce'], 'content_hash': digest}
+            evidence_trail = [{'decision': action, 'reason': _clip(reason, REASON_MAX)}] if reason else []
+            self._gate.on = True
+            try:
+                self._apply(c, org, caller.subject, row, patch, words, evidence_trail, record)
+            finally:
+                self._gate.on = False
+            if patch.get('NextActor'):
+                self._ensure_member(c, org, row['id'], patch['NextActor'], caller.subject)
+            policy = self.store._policy(c, org, caller)
+            fresh = self.view(c, org, policy, self._card_row(c, org, row['id']), activity=True)
+            return {'status': 'saved', 'card': fresh,
+                    'decision': {'action': action, 'by': caller.subject, 'at': stamp, 'revision': fresh['revision'],
+                                 'credential_class': 'session', 'content_hash': digest}}
+
+    def _apply(self, c, org, actor, row, patch, reason, evidence, decision):
+        """Write a gate's patch as one revision. The template authorised it, so field write rights
+        are not consulted; the schema and the lifecycle still are."""
+        store = self.store
+        fields = self.normalise_fields(row['object_type'], patch, row['fields'])
+        after = {**row, 'fields': {**row['fields'], **fields}, 'revision': row['revision'] + 1}
+        store._validate(store._definition(c, org, row['object_type']), after['fields'])
+        changed = c.execute(update(s.records).where(s.records.c.org_id == org, s.records.c.id == row['id'],
+                                                    s.records.c.revision == row['revision']).values(**after)).rowcount
+        if changed != 1:
+            raise Conflict('The card changed since you read it; read it again')
+        store._sync_relationships(c, after)
+        store._revision(c, org, actor, row, after, reason, evidence, decision=decision)
+
+    def _ensure_member(self, c, org, record_id, subject, by):
+        m = s.card_members
+        have = c.execute(select(m.c.status).where(m.c.org_id == org, m.c.record_id == record_id,
+                                                  m.c.subject == subject)).scalar_one_or_none()
+        if have is None:
+            c.execute(m.insert().values(org_id=org, record_id=record_id, subject=subject, status='member',
+                                        added_by=by, added_at=self.clock().isoformat()))
 
     # ── the person's own verbs ────────────────────────────────────────────────────────────────
     def _new_fields(self, title, about, parent, fields, face):
@@ -415,14 +763,18 @@ class Cards:
                    narrative=narrative or '', quarantined=False, deleted=False)
         c.execute(s.records.insert().values(**row))
         store._sync_relationships(c, row)
-        store._revision(c, org, owner, None, row, reason, evidence)
         now = self.clock().isoformat()
-        for subject in dict.fromkeys(members):
+        # D11: a card of a kind is shared with its next actor and the person waiting on it, so both
+        # read it; membership comes BEFORE the revision so the fact's audience names them (D8).
+        parties = [fields.get('NextActor'), fields.get('Requester')] if fields.get('Kind') else []
+        for subject in dict.fromkeys([*members, *[p for p in parties if p]]):
             c.execute(s.card_members.insert().values(org_id=org, record_id=record_id, subject=subject,
                                                      status='member', added_by=owner, added_at=now))
         if workspace:
             c.execute(s.workspace_bindings.insert().values(org_id=org, workspace=workspace, record_id=record_id,
                                                            created_by=owner, created_at=now))
+        store.audit_names(record_id)
+        store._revision(c, org, owner, None, row, reason, evidence)
         return record_id
 
     def _check_parent(self, c, org, policy, parent):
@@ -437,7 +789,7 @@ class Cards:
         caller = as_caller(actor)
         if caller.delegated or caller.internal or not caller.subject:
             raise Refused(PROPOSE_CARD)
-        with self.engine.begin() as c:
+        with self.store.begin() as c:
             policy = self.store._policy(c, org, caller)
             if workspace:
                 workspace = check_workspace(workspace)
@@ -445,6 +797,8 @@ class Cards:
                     raise Forbidden('A card goes on the board of a workspace you can write')
             self._check_parent(c, org, policy, parent)
             data = self._new_fields(title, about, parent, fields, face)
+            if data.get('Kind'):
+                data.setdefault('Requester', caller.subject)
             record_id = self._insert(c, org, caller.subject, type or DEFAULT_TYPE, data, narrative,
                                      'Made the card', [], workspace, [caller.subject])
             policy = self.store._policy(c, org, caller)
@@ -455,7 +809,7 @@ class Cards:
         if caller.delegated or caller.internal or not caller.subject:
             raise Refused(PROPOSE_CARD)
         patch = self._patch(fields, face, transition)
-        with self.engine.begin() as c:
+        with self.store.begin() as c:
             policy = self.store._policy(c, org, caller)
             row = self._card_row(c, org, card)
             if 'Parent' in patch:
@@ -491,20 +845,24 @@ class Cards:
         if not subject or len(subject) > 128 or _CONTROL.search(subject):
             raise CRMError('A member is a person id')
         m = s.card_members
-        with self.engine.begin() as c:
+        with self.store.begin() as c:
             policy = self.store._policy(c, org, caller)
             row = self._card_row(c, org, card)
             self.store._visible(policy, row)
             leaving = not add and subject == caller.subject
             if not leaving:
                 self.store._rights(policy, row, 'write')
-            have = c.execute(select(m.c.status).where(m.c.org_id == org, m.c.record_id == row['id'],
-                                                      m.c.subject == subject)).scalar_one_or_none()
-            if add and have is None:
-                c.execute(m.insert().values(org_id=org, record_id=row['id'], subject=subject, status='invited',
-                                            added_by=caller.subject, added_at=self.clock().isoformat()))
-            elif not add and have is not None:
-                c.execute(delete(m).where(m.c.org_id == org, m.c.record_id == row['id'], m.c.subject == subject))
+            # D35: a card member is a Person — adding or removing one reaches every account linked
+            # to them (persons.py), until the person merges them. Leaving is the one account's own.
+            who = [subject] if leaving else self.store.persons.linked_accounts(c, org, subject)
+            for one in who:
+                have = c.execute(select(m.c.status).where(m.c.org_id == org, m.c.record_id == row['id'],
+                                                          m.c.subject == one)).scalar_one_or_none()
+                if add and have is None and (one == subject or one != caller.subject):
+                    c.execute(m.insert().values(org_id=org, record_id=row['id'], subject=one, status='invited',
+                                                added_by=caller.subject, added_at=self.clock().isoformat()))
+                elif not add and have is not None:
+                    c.execute(delete(m).where(m.c.org_id == org, m.c.record_id == row['id'], m.c.subject == one))
             return {'members': self._members(c, org, row['id'])}
 
     def membership(self, org, actor, card, accept):
@@ -512,7 +870,7 @@ class Cards:
         if caller.delegated or caller.internal or not caller.subject:
             raise Refused(MEMBERS_PERSON_ONLY)
         m = s.card_members
-        with self.engine.begin() as c:
+        with self.store.begin() as c:
             have = c.execute(select(m.c.status).where(m.c.org_id == org, m.c.record_id == str(card),
                                                       m.c.subject == caller.subject)).scalar_one_or_none()
             if have is None:
@@ -563,7 +921,9 @@ class Cards:
         if caller.internal or not caller.subject:
             raise Refused(PROPOSE_CARD)
         reason = self._reason(reason)
-        with self.engine.begin() as c:
+        if (fields or {}).get('Kind'):
+            return self._offer(org, caller, title, workspace, about, type, parent, fields, face, reason)
+        with self.store.begin() as c:
             policy = self.store._policy(c, org, caller)
             if workspace:
                 workspace = check_workspace(workspace)
@@ -585,13 +945,80 @@ class Cards:
                 evidence=[], reason=reason, status='pending'))
             return {'status': 'proposed', 'proposal_id': pid}
 
+    def _offered_today(self, c, org, caller):
+        r = s.revisions
+        since = (self.clock() - timedelta(days=1)).isoformat()
+        n = 0
+        for (evidence,) in c.execute(select(r.c.evidence).where(r.c.org_id == org, r.c.revision == 1,
+                                                                 r.c.actor_id == caller.subject, r.c.created_at > since)):
+            if any(isinstance(e, dict) and e.get('proposal') == 'offer' and e.get('session') == caller.session
+                   for e in evidence or []):
+                n += 1
+        return n
+
+    def _offer(self, org, caller, title, workspace, about, type, parent, fields, face, reason):
+        """D11/R10: an agent's card OF A KIND is made in its first stage and OFFERED to its next actor
+        — the card itself is the proposal, and only that person's acknowledgement (a decision record,
+        D13) moves it. The agent never moves it after. Capped per session per day like proposals."""
+        with self.store.begin() as c:
+            policy = self.store._policy(c, org, caller)
+            if workspace:
+                workspace = check_workspace(workspace)
+                if workspace not in set(caller.workspaces):
+                    raise Forbidden('Propose a card only into a workspace you work in')
+            self._check_parent(c, org, policy, parent)
+            limits = self.limits()
+            if caller.delegated and self._offered_today(c, org, caller) >= limits['card_proposals_per_agent_per_day']:
+                raise Refused(daily_full(limits['card_proposals_per_agent_per_day']))
+            data = self._new_fields(title, about, parent, fields, face)
+            on_behalf = str((caller.extra or {}).get('on_behalf_of') or '').strip()
+            data.setdefault('Requester', on_behalf or caller.subject)
+            trail = [{'proposal': 'offer', 'author': caller.subject, 'author_kind': caller.kind, 'session': caller.session}]
+            record_id = self._insert(c, org, caller.subject, type or DEFAULT_TYPE, data, None, reason, trail,
+                                     workspace, [])
+            policy = self.store._policy(c, org, caller)
+            try:
+                return {'status': 'offered', 'card': self.view(c, org, policy, self._card_row(c, org, record_id))}
+            except (NotFound, SharedRefused):
+                return {'status': 'offered', 'card': None, 'record_id': record_id}
+
+    def offer_many(self, org, actor, workspace, origin, specs, reason):
+        """Offer several cards of a kind from one origin (a meeting's follow-ups), idempotently: a card
+        with the same origin, title and next actor already offered by this caller is returned, not made
+        again — a retried post-meeting run never doubles a card. Each goes through ``_offer``, the
+        path ``card_propose`` takes, so the caps and the rules are the same."""
+        caller = as_caller(actor)
+        out = []
+        with self.engine.connect() as c:
+            r = s.records
+            have = {}
+            for rid, f in c.execute(select(r.c.id, r.c.fields).where(r.c.org_id == org, r.c.owner_id == caller.subject,
+                                                                     r.c.deleted == False)):  # noqa: E712
+                f = f or {}
+                if f.get('Origin') == origin and f.get('Kind'):
+                    have[(f.get('Title'), f.get('NextActor'))] = rid
+        for spec in specs:
+            fields = {k: v for k, v in (spec.get('fields') or {}).items()}
+            fields['Origin'] = origin
+            title = _clip(spec.get('title'), TITLE_MAX)
+            key = (title, fields.get('NextActor'))
+            if key in have:
+                out.append({'id': have[key], 'title': title, 'kind': fields.get('Kind'), 'existing': True})
+                continue
+            res = self._offer(org, caller, title, workspace, spec.get('about'), DEFAULT_TYPE, None, fields, None,
+                              self._reason(spec.get('reason') or reason))
+            rid = (res.get('card') or {}).get('id') or res.get('record_id')
+            have[key] = rid
+            out.append({'id': rid, 'title': title, 'kind': fields.get('Kind'), 'existing': False})
+        return {'cards': out}
+
     def update_propose(self, org, actor, card, expected_revision, fields=None, face=None, transition=None, reason=''):
         caller = as_caller(actor)
         if caller.internal or not caller.subject:
             raise Refused(PROPOSE_CARD)
         reason = self._reason(reason)
         patch = self._patch(fields, face, transition)
-        with self.engine.begin() as c:
+        with self.store.begin() as c:
             policy = self.store._policy(c, org, caller)
             row = self._card_row(c, org, card)
             self.store._visible(policy, row)
@@ -638,6 +1065,11 @@ class Cards:
         self.store._rights(policy, row, 'write')
         if not accept:
             return {'status': 'rejected', 'proposal_id': p['id']}
+        # deny test 17 (D13): accepting is signing — refused to a reviewer for whom a field on the
+        # card's face is locked; you sign only what you can read.
+        locked = self._locked(self.view(c, org, policy, self._card_row(c, org, row['id'])))
+        if locked:
+            raise Forbidden('You cannot sign a card with a field hidden from you: ' + ', '.join(locked[:3]))
         out = self.store._edit(c, org, caller.subject, policy, p['record_id'], p['base_revision'],
                                p['patch']['fields'], p['patch'].get('narrative'), p['reason'],
                                list(p['evidence'] or []) + trail)
@@ -711,7 +1143,44 @@ class Cards:
             if state:
                 views = [v for v in views if v['state'] == state]
             views.sort(key=lambda v: (v['movement'] or {}).get('at') or '', reverse=True)
-            return {'cards': views[:limit], 'proposals': self._reviewable(c, org, caller, policy, workspace)}
+            me = '' if caller.delegated else caller.subject
+            return {'cards': views[:limit], 'proposals': self._reviewable(c, org, caller, policy, workspace),
+                    'counts': self.counts(views, me)}
+
+    # ── the inbox: one predicate for the Now strip, the Inbox and a room (S5 check) ────────────
+    @staticmethod
+    def waits_on(view, me):
+        """An open card whose next actor is this person. THE predicate every count uses."""
+        return bool(me) and view.get('open', True) and view.get('next_actor') == me
+
+    def counts(self, views, me):
+        now = self.clock()
+        soon = (now + DUE_SOON).date().isoformat()
+        def due_soon(v):
+            return bool(v.get('due')) and v.get('open', True) and str(v['due'])[:10] <= soon \
+                and (v.get('next_actor') == me or v.get('requester') == me)
+        return {'waiting_on_me': sum(1 for v in views if self.waits_on(v, me)),
+                'due_soon': sum(1 for v in views if me and due_soon(v)),
+                'i_wait_on': sum(1 for v in views if me and v.get('open', True) and v.get('kind')
+                                 and v.get('requester') == me and v.get('next_actor') not in (None, me))}
+
+    def inbox(self, org, actor):
+        """The person's Inbox: open cards waiting on them (next actor = them), soonest check first,
+        with the counts the Now strip, the Inbox and a room badge all read. A person's own view; an
+        agent reads cards through card_list."""
+        caller = as_caller(actor)
+        if caller.delegated or caller.internal or not caller.subject:
+            raise Refused(MEMBERS_PERSON_ONLY)
+        with self.engine.connect() as c:
+            try:
+                policy = self.store._policy(c, org, caller)
+            except Forbidden:
+                return {'items': [], 'counts': {'waiting_on_me': 0, 'due_soon': 0, 'i_wait_on': 0}}
+            ids = {k for k, v in policy.get('_members', {}).items() if v in ('member', 'invited')}
+            views = self._views(c, org, policy, sorted(ids))
+            items = [v for v in views if self.waits_on(v, caller.subject)]
+            items.sort(key=lambda v: (v.get('next_check_at') or '9999', v.get('due') or '9999', v['title'].casefold()))
+            return {'items': items[:LIST_MAX], 'counts': self.counts(views, caller.subject)}
 
     def desk(self, org, actor, placements, layout):
         """The desk's card part: cards I am a member of or placed (minus member cards I took off),

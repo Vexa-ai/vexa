@@ -8,7 +8,8 @@ def client_for(store):
         token=__import__('json').loads(request.content)['token']
         if token=='down': return httpx.Response(503)
         if token not in ['owner','reader','agent']: return httpx.Response(401)
-        return httpx.Response(200,json={'user_id':token})
+        # a person at their terminal: the session credential (D13), so decision routes reach validation
+        return httpx.Response(200,json={'user_id':token,'credential_class':'session'})
     identity=Identity('http://identity','internal-test-only',httpx.MockTransport(resolve))
     return TestClient(create_app(store,identity,"one"))
 

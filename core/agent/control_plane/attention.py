@@ -21,11 +21,13 @@ NEEDS YOU, by kind, each from its one owner:
   mention   an UNREAD `chat_mentioned` notification (feature `notifications`) from a chat the viewer
             can STILL read (`store.can_read`) — act `{kind: open-session, session, notification}`; the
             terminal marks it read with `POST /api/notifications/read {"ids": [notification]}`.
-  card      a crm-api card the terminal passed in (`cards`, the desk read's cards) that WAITS ON YOU:
-            crm encodes that in one free-text field, `waiting` ("who or what it waits on"), so a card
-            waits on you when you are one of its members (member or invited) AND its `waiting` names
-            you — your subject, your email, your email's local part or your display name, matched
-            whole, case-insensitively. It lives in the first of its workspaces you can open; a card
+  card      a crm-api card the terminal passed in (`cards`, the desk read's cards) that WAITS ON YOU.
+            Since S5 (PRD 0.13.4 D11) a card carries a STRUCTURED `next_actor` (a person id): an open
+            card waits on you when its `next_actor` is your subject — the same predicate crm-api's
+            `/card/inbox` counts with, so the home never disagrees with the Inbox. A legacy card with
+            no `next_actor` keeps the old rule: you are one of its members (member or invited) AND its
+            free-text `waiting` names you — your subject, your email, your email's local part or your
+            display name, matched whole, case-insensitively. It lives in the first of its workspaces you can open; a card
             whose workspaces are all closed to you is DROPPED (the body never widens access); no
             workspace is the desk. Act `{kind: open-card, card}`.
   upcoming  a meeting in the viewer's own meetings list starting within `UPCOMING_SEC`. Act `prepare`
@@ -214,8 +216,14 @@ def _norm(s) -> str:
 
 
 def waits_on(card: dict, me: Iterable[str]) -> bool:
-    """crm's `waiting` names the viewer (whole-token match on any of their identifiers), and the
+    """The card's structured next actor is the viewer (D11); for a legacy card with none, crm's
+    free-text `waiting` names the viewer (whole-token match on any of their identifiers) and the
     viewer is on the card."""
+    me = list(me)
+    if card.get("next_actor"):
+        # `me[0]` is the viewer's subject (`card_needs` callers pass it first); the person id is the
+        # only identifier a structured next actor is compared with — never a name or an address.
+        return card.get("open", True) is not False and bool(me) and str(card["next_actor"]) == str(me[0])
     names = {_norm(m) for m in me if _norm(m)}
     member = any(str(m.get("subject")) in names or _norm(m.get("subject")) in names
                  for m in card.get("members") or [] if isinstance(m, dict))

@@ -27,7 +27,13 @@ Every module in this folder, by concern. `routers/` holds the routes, one module
   dependency, applies `require_person` to the route a request matched. A row naming a route the app
   does not serve refuses the boot, and so does a destructive or membership route with no flag (any
   DELETE, and any other write whose path has a `MEMBERSHIP_SEGMENTS` segment, less the internal-only
-  `NOT_A_WORKER_DOOR`).
+  `NOT_A_WORKER_DOOR`). It also holds D3, default-deny for shared tokens. Every row and verb
+  declares `"shared": "allow"|"refuse"`. `SHARED_GATE` refuses a shared or workspace-principal
+  caller, with `SHARED_REFUSAL`, on every route not declared `allow`. `assert_shared_declared` makes
+  the boot (and `tests/test_shared_routes.py`) fail on a served route with no declaration.
+- `workspace_principal.py` — D2: asks identity (`POST /internal/principals/workspace`) for the
+  workspace's numeric principal a room's turn runs as when `VEXA_ROOM_WS_PRINCIPAL` is on; cached,
+  fails closed.
 - `version.py` — what is serving, one unauthenticated fact.
 - `admin_panel.py` — read-only infrastructure and meeting-pipeline introspection for the hidden admin
   panel.
@@ -45,6 +51,15 @@ Every module in this folder, by concern. `routers/` holds the routes, one module
 caller or with the internal secret, never with a credential of its own:
 - `peer_lookups.py` — meeting access and transcript (meeting-api) and email → subject (admin-api), for
   the live feed's ownership gate and the post-meeting room; fails closed.
+- `person_resolution.py` — one Person, many addresses (PRD 0.13.4 D35): which CRM Person each
+  account resolves to by its verified address (crm-api `POST /internal/persons`, internal secret,
+  `CRM_API_URL`). The @ picker and the People strip list a Person once ("2 accounts"), a chat or
+  workspace grant reaches only the accounts the person confirmed as theirs (never an unconfirmed
+  link), invites and nudges go to `primary_address`, and after
+  the person's own merge card `union_memberships` opens each workspace to every login. Profiles
+  (a claimed record's person-owned fields) are read through it under the directory rule
+  (`GET /api/people/{person}/profile`) and for a published public page (`GET /api/profiles/public/{handle}`,
+  no account). Off without a CRM; fails toward fewer grants.
 - `meeting_mint.py` (meeting-api annotate), `schedule_digest.py` (meeting-api meetings list),
   `global_layer.py` (admin-api is-admin), `publish.py` (flows-api events), the membership index
   `api.py` builds (admin-api), `routers/clock.py` and `routers/admin.py` (admin-api), and
@@ -111,6 +126,18 @@ never a chat.
   `<workspaces>/.sessions-retired/<run>/` (no mount names it), `--restore` puts them back.
 - The agent reads other chats only with `chats_search` and `chat_read` (`routers/chat_read.py`).
 
+**Rooms: who is in them and how people get in (0.13.4 S4).** A chat has one person; a room is shared.
+- `room_membership.py` — D36: the one authority on who is in a room, installed in front of
+  `SessionStore.role_of`. An open room's members are its workspace's (derived); a closed room's are the
+  identity registry's `room:<id>` rows. The participant rows are a projection (read marks, the rail,
+  who opened it). `ringable` is who a room call rings.
+- `pair_rooms.py` — FD4: the room of two behind "Message", backed by a hidden pair workspace
+  (deterministic id, both owners, a third person refused, never in a list or a mount).
+- `room_switches.py` — "Vexa in this room" and "Transcribe calls" (7hh): either person turns off and
+  both turn on in a room of two; owners in a bigger room; a workspace DENY line locks one.
+- `room_ring.py` — a ring: a live frame plus a `call_started` notice that expires.
+- `shared_chat_migration.py` — D10: existing shared chats become a room of two or a closed room, once.
+
 ## A worker's delegation token ends with its unit
 
 `delegation_revocation.py`. Each dispatch's delegation token (`shared/delegation.py`) is recorded
@@ -150,15 +177,35 @@ contributor > viewer`, said to people as owner, contributor and reader. An owner
 removes members; a contributor writes; a reader reads. An invite may be minted for any of the three
 (`INVITABLE_ROLES = ROLE_WORDS`). `POST /api/workspace/invite` (one address, the agent's
 `workspace_invite`) is owner-only; `POST /api/workspace/invites` (a link) needs owner or contributor;
-removing members and changing roles is owner-only.
+removing members and changing roles is owner-only. **An invite never outranks its sender**, an
+**owner is made only by the owner-gated act** (`membership_acts.invite`, `owner_act=True`), and
+`max_uses ≤ 1000`, expiry ≤ 365 days on every mint door (PRD 0.13.4 D5). Redeem re-checks the sender's
+role at that moment, so a demoted sender's links grant no more than they now hold, and accepting
+never queues a profile — the person's write target is unchanged (D26).
 
-**Two stores, written together (git is authoritative, the index is derived):**
-- **Authoritative** — the workspace's OWN git repo at `policy/members.json`
-  (`[{subject, role: owner|contributor|viewer, added_by, added_at}]`). Auditable, travels with the
-  workspace, survives a DB loss. **Invites are not here** — they are at
-  `<store-root>/.invites/<workspace_id>.json` (only the sha256 **hash** of each token, with
-  `{id, role, mode, allowed_emails, expires_at, max_uses, uses, revoked, …}`), outside every workspace
-  mount; see the write-guard section below for what moved and why.
+**Invites by email (PRD 0.13.4 S2).** `workspace_invite` may name a `room` of the workspace (the
+inviter must be in it); the mail says "<room> in <workspace>" and the accept joins the room. When the
+deployment says it delivers mail, a restricted one-address invite gets `signin_until`
+(`mark_invite_signin`, 7 days) and its link is not handed back to the inviter: that link alone signs
+its address in, once, through the terminal's join POST and `POST /internal/invites/signin-claim`
+(`claim_invite_signin`, internal tier, under the workspace lock). A preview never spends it. An
+invite notification stores `invite:<ws>/<id>`, never the token (M2; legacy rows are rewritten at
+start by `Notifier.scrub_invite_tokens`). With Redis, `_ws_lock` also takes `RedisWorkspaceLock`
+(`vexa:ws-lock:<ws>`, M6), so a second replica cannot spend a once-only link twice.
+
+**Two stores, written together (the policy store is authoritative, the index is derived):**
+- **Authoritative** — the WORKSPACE REGISTRY in identity's database (`workspaces`, `memberships`,
+  `invites`; admin-api the one writer, MIGRATION-0009, PRD 0.13.4 D5), reached through the
+  `PolicyStore` port (`shared.adapters.AdminApiPolicyStore`, `/internal/registry/*`). Without
+  `VEXA_ADMIN_API_URL` the file backend answers (`<store-root>/.policy/<ws>/` + `.invites/`), outside
+  every mount. `read_policy` / `write_policy` / `read_invites` are the only readers and writers.
+  Legacy records (interim files, else the tree's `policy/*.json`) are adopted once — at start
+  (`migrate_policy_store`) and on first read; `VEXA_POLICY_LEGACY_READ=0` stops it. A store that does
+  not answer refuses, `503 policy_unreadable` (FD3). The workspace keeps a platform-written MIRROR at
+  `policy/members.json` (audit trail, the worker's reader count) that nothing reads for access;
+  evaluator rules stay in git at `policy/rules.json`, platform-only. Invites keep only the sha256 **hash** of each token, with
+  `{id, role, mode, allowed_emails, expires_at, max_uses, uses, revoked, …}`, in the same store;
+  see the write-guard section below for why they left the tree first.
 - **Index** — `users.data.memberships[]` (`[{workspace_id, role, added_at}]`) for "workspaces shared
   with me". agent-api has no DB, so this is reached through the injected `MembershipIndex` port
   (real adapter → identity admin-api `/internal/users/{id}/memberships`; an in-memory fake in tests,
@@ -206,6 +253,18 @@ and transcript-subscribe-by-membership. This lane provides membership DATA + API
 touch the mount set / dispatch.
 
 ### policy/ is PLATFORM-WRITE-ONLY (the write-guard mechanism, Q3)
+
+Since 0.13.4 (D5) three more walls stand in front of the guard below: `policy` is in
+`workspace_paths.RESERVED_DIRS`, so every caller route refuses it (the page editor answers 403); a pull
+whose remote changes `policy/` is refused (`workspace_git_sync._refuse_remote_policy`); and the tree is
+only a mirror — authority is the policy store. A policy CHANGE (visibility, connections) goes through
+`policy_decide.py` (D7 stub, `POST /internal/policy/decide` → `{decision, rule@sha}`, deny beats allow,
+fail closed) — applied only for the workspace's owner in a browser session. **Agents change policy
+with permission** (`policy_proposals.py`): `POST /api/workspace/policy/proposals` records a `policy`
+proposal (the exact change + reason) in the session proposal store, owned by the workspace's owner;
+`…/{id}/approve` (owner, browser session, never delegated) applies it through the evaluator and the
+registry with `Approved-by` / `On-behalf-of` trailers; `…/decline` changes nothing. S5's signed card
+wraps this same proposal.
 
 `policy/` (members.json) is written ONLY by the control plane
 (`workspace_membership.policy_commit` — stages + commits just `policy/` with the platform identity as

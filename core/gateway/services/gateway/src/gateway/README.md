@@ -21,6 +21,13 @@ The production edge logic, injectable. Modules:
 - **`paths.py`** — path parameters and catch-all tails, re-encoded as opaque segments or refused
   before any downstream hop.
 - **`routes_manifest.py`** — assembles the route table from each deployed domain's `routes.v1.json`.
+- **D3 at the edge** (`app.py` `_authorize`, `delegation.py` `shared_delegation`): a delegation
+  whose turn other people read (or a workspace principal) is refused, with `shared_conversation`,
+  on every routes.v1 row not declared `"shared": "allow"`, in every domain, before any forward.
+  `routes_manifest.Assembly.shared_allow` holds the allowed rows.
+- **`log_scrub.py`** — M7: a logging filter on the uvicorn loggers that redacts a credential query
+  value (`api_key`, `token`, …) before any access or WebSocket line is formatted. `create_app`
+  installs it. The `?api_key=` parameter itself is still accepted (ws.v1).
 - **`identity_token.py`** — vendored `gateway-identity.v1`: signs the resolved identity onto every
   forward (byte-identical to the contract's canonical copy).
 - **`ratelimit.py`** / **`edge_guard.py`** — the per-user request rate limit and the opt-in

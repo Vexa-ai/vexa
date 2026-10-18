@@ -128,8 +128,10 @@ class GmailDraftBody(Strict):
 
 
 class GmailDraftUpdateBody(GmailDraftBody):
-    """Replace the content of a draft this broker created for this person."""
+    """Replace the content of a draft this broker created for this person, or (with
+    ``replace_person_draft``) a draft the person wrote in this mailbox, when they asked for it."""
     draft_id: str = Field(pattern=GOOGLE_ID)
+    replace_person_draft: bool = False
 
 
 class CalendarTime(Strict):
@@ -230,6 +232,11 @@ class CalendarChangesBody(Strict):
     owner: str = Field(min_length=1, max_length=64)
     connection_id: Optional[str] = Field(default=None, max_length=64)
     cursor: Optional[str] = Field(default=None, max_length=4096)
+
+
+class MailCredentialBody(Strict):
+    """credential-broker.v1 `MailCredentialRequest`: which outbound-mail credential the install names."""
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9_.-]{0,62}$")
 
 
 class SignalsModelKeyBody(Strict):

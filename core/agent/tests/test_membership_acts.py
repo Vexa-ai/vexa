@@ -93,7 +93,7 @@ def _client(root: Path, *, admins: str = "", index=None, known=None) -> TestClie
 
 
 def _h(subject: str, email: str = "") -> dict:
-    h = {"X-User-Id": subject}
+    h = {"X-User-Id": subject, "x-user-credential-class": "session"}   # a person at the terminal (S5 D13)
     if email:
         h["X-User-Email"] = email
     return h
@@ -203,7 +203,10 @@ def test_an_external_address_is_mailed_through_the_carrier(tmp_path):
     assert out["role_sentence"] == m.ROLE_SENTENCES["contributor"]
     fact = sent[0]
     assert fact["email"] == NEW_MAIL and fact["workspace"] == WS
-    assert fact["link"] == out["link"] and fact["link"].startswith("https://app.example.test/join?i=")
+    assert fact["link"].startswith("https://app.example.test/join?i=")
+    # no delivery answer (`mail_delivery` absent) is not "delivered": the link stays the inviter's
+    # to pass on and it does NOT sign anybody in (S2)
+    assert out["link"] == fact["link"] and out["signs_in"] is False
     assert fact["uid"] == OWNER and fact["inviter"] == OWNER_MAIL
 
 
@@ -539,7 +542,7 @@ def test_the_route_body_is_a_named_model_so_the_verb_could_be_bound(tmp_path):
     the assembled edge because they take a bare `body: dict`. A verb written today with one would
     have joined that list on the day it shipped."""
     from control_plane.bodies import WorkspaceInviteBody, WorkspaceMembershipBody
-    assert set(WorkspaceInviteBody.model_fields) == {"slug", "email", "role"}
+    assert set(WorkspaceInviteBody.model_fields) == {"slug", "email", "role", "room"}
     assert set(WorkspaceMembershipBody.model_fields) == {"slug", "email", "role"}
     # contributor, not reader (Vexa-ai/vexa#1783): "share X with Y" names no role, and asking for
     # one every time was the friction.

@@ -86,6 +86,14 @@ def build(**d) -> APIRouter:
         # with `feature_disabled` — "not enabled for this account" — before the route runs.
         on = {n: features_mod.on_for_anyone(_root(), n) for n in features_mod.FEATURES}
         manifest["tools"] = features_mod.visible_tools(manifest.get("tools") or [], on)
+        # D3: each tool says whether a SHARED caller (a room's or a shared chat's delegation) may be
+        # shown it — read off the same `routes.v1.json` table this app's own gate enforces, so the
+        # MCP edge and agent-api cannot disagree. An undeclared route is `refuse`.
+        from control_plane import route_policy  # noqa: PLC0415
+        for tool in manifest["tools"]:
+            route = tool.get("route") or {}
+            key = (str(route.get("method") or "").upper(), str(route.get("path") or ""))
+            tool["shared"] = "allow" if key in route_policy.SHARED_ALLOWED else "refuse"
         return manifest
 
     @router.get("/api/features")

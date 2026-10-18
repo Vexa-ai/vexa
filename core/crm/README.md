@@ -53,6 +53,101 @@ allow-list of keys (`store.CROSS_ORG_KEYS`; any other key is empty). A search ma
 fields only. A card answers its title, no movement, activity, members or boards, and the card list
 no proposals. Pinned by `tests/test_cross_org_audience.py` and `tests/test_cross_org_answers.py`.
 
+### Field classes and what a room reads (D4, 0.13.4)
+
+**How it works.** Every field of every type has a class in `crm_field_classes` (`src/crm/field_classes.py`):
+`private` (the record's owner only), `org` (the CRM policy decides, as before) or `ws` (also shareable to
+the rooms of the listed workspaces). `$narrative` and `$match_ids` are classified like fields. The
+migrations path seeds the stable types' classes (`bootstrap.DEFAULT_CLASSES`): contact history and
+email-derived data private (`LastContact`, fields named like it or marked `x-source: email`,
+`$match_ids`), company basics and the rest `org`. A field with no row takes the same rule, and a
+property's `x-class` in its definition wins over the name rule. An administrator may change a row;
+crm-api's role only reads the table. Every read path takes its fields from one place,
+`Store._view`: get, search, name lookup, history, links, proposals, describe and card faces.
+
+A **shared caller** (a room turn, a shared chat, later the `ws:` principal) is never an administrator,
+whatever the person behind it holds. What it reads of a record is set by the organisation's
+`room_fields` policy key. The default, `intersection` (interim, until a classification UI exists), gives
+the fields every current member of its workspaces may read on that record (the roster the workspace
+snapshot carries), minus private fields, minus fields shared only with other workspaces, plus fields
+shared with this one. `classified` gives only the fields shared with this workspace. A narrative or
+identifiers reach a room only when classified `ws` for it, and revision or proposal reasons and
+evidence never do. `bound_to` lists only bindings inside the caller's ceiling unless an administrator
+reads in person. Every audited operation records `principal` (`ws:<slug>` for a room), `on_behalf_of`
+and `workspace`, and a search records the ids it returned.
+
+**Why it complies.** A restricted field is absent from the answer, not nulled, so its absence is
+indistinguishable from an empty field, and a filter on it is refused, so a search cannot reveal which
+records hold a value. A room answers only what its least-entitled member could read, so asking the room
+agent never widens anyone's view, and the owner's admin rights never reach it. The failure direction is
+closed: a room with no roster, a member with no CRM membership, or an unreadable `room_fields` value
+yields fewer fields, never more. Pinned by `tests/test_field_classes.py` and deny tests 3 and 18 in
+`tests/test_sec_deny_2026_10_17.py`. **Open:** the audit row is still written after the operation in
+its own transaction (H9 asks for the same transaction), and is not hash-chained.
+
+### One Person, many addresses (D35, 0.13.4)
+
+**How it works.** There is no persons table: the human is the organisation's Person record, and its
+match identifiers say which addresses are theirs (`src/crm/persons.py`). A signed-in account resolves
+to its Person by the address identity verified for it (`email:<address>`), and only failing that by
+the record it is attached to. When that Person already has another account attached, the new one is
+**linked**, not given a second record: an `account:<id>` match identifier on the same Person. The
+picker shows the Person once, hinting "2 accounts?" until the person confirms. **Grants follow only
+confirmed links** (coordinator ruling 2026-10-17): a card member here, or a chat participant or a
+workspace member in agent-api (which reads `confirmed` from `POST /internal/persons`), reaches the
+account picked and the accounts the person confirmed together with it, never an unconfirmed link. A Person with two or more linked accounts the person has not confirmed together gets a
+**merge card**: a `crm_change_proposals` row with the statuses `merge_offered`, `merge_confirmed` or
+`merge_declined`. Every linked account confirms it from its own signed-in session (`POST /person/merge`),
+and the person chooses the primary address there; invites and nudges go to it. A person may also say
+another address is theirs (`action: offer`); that card completes only when that address's account
+confirms. Declining splits the Person: every account but the record's own goes back to a record of its
+own, with its address. `POST /person/me` is the person's own view.
+
+**Why it complies.** Nothing merges automatically, and no administrator, agent or worker can merge
+accounts for a person: the card is refused to a delegated or internal caller, an account not on the
+card is answered as if the card did not exist, `crm_review` cannot accept it (its statuses are not
+`pending`), and `account:` identifiers cannot be written through `crm_change`. A merge needs every
+account's own sign-in, so naming someone else's address grants nothing, and the `offer` answer is the
+same whether or not that address has an account. Account links are match identifiers, so the `$match_ids`
+field class (D4, private) keeps them from every other viewer and every room; the person's own view
+shows their signed-in address in full and every other address masked (`v•••@example.org`). agent-api
+shows other people only a count: the ids and addresses of accounts the viewer does not share a workspace
+with never leave the CRM. Pinned by `tests/test_persons.py`. A wrong address that someone put in a Person's
+match identifiers receives none of that Person's grants: links count for grants only after every login
+confirmed them from its own session.
+
+### Profiles are claimed Person records (D35, founder addition)
+
+**How it works.** A signed-in person claims the Person record that matches their verified address in
+their home org's CRM (`src/crm/person_profiles.py`, table `crm_profiles`, schema version 7). It happens
+on its own at sign-in when exactly one record matches (a match identifier, or a Person whose `Email`
+is that address); with several, `POST /person/profile` (`action: read`) lists them as a claim card and
+`action: claim` takes the one the person picks. The claim is one-to-one: the row is keyed by the record
+and unique per account, and a second login of the same human joins the claimed Person through the merge
+card instead of claiming another record. The person's **profile fields** (display name, photo, headline,
+company, bio, location, time zone, links to LinkedIn, GitHub, X or a website, contact preferences) live
+on that row and are edited only by them (`action: edit`). The org's fields stay on the record, under the
+CRM policy and the field classes. agent-api reads profiles for people who share a workspace with the
+reader (`POST /internal/profiles`, the directory rule applied there). The public page `/p/<handle>`
+(`action: publish`) is off until the person switches it on and shows only the fields they mark public
+(`POST /internal/profiles/public`). `action: unclaim` keeps the record and the values, clears the
+claim and the public page, and the fields are the org's again; that account is not claimed back on its
+next sign-in. `action: import` is the seam for an importer the person starts (none ships).
+**It is THE profile** (one writer): identity's earlier public profile (R4) accepts no more writes
+(410, naming where it moved), answers reads marked `retired` for one release, and its page
+`/user/directory/profiles/<handle>` answers 308 to `/p/<handle>`. On a claim, crm-api reads that old
+profile once (`ProfileClient.legacy`, identity `GET /internal/users/{id}/legacy-profile`) and carries
+the person's entries and public flags into the still-empty claimed profile, keeping the old handle;
+the public page stays off until the person switches it on.
+
+**Why it complies.** A claim needs the address identity verified, and moves nothing from the org to the
+person: the profile starts empty, and the claim card shows only each candidate's name. No profile
+answer reads the record's fields or narrative, so contact history, notes, deals and cadence can never
+appear in a directory read or on a public page. An edit by anyone but the claimant, by a worker or by an
+administrator is refused; an unclaimed profile is edited by whoever may write the record. Links are
+https on the network's own domain, stored as given; nothing is fetched or imported. Pinned by
+`tests/test_person_profiles.py`.
+
 ## Operations
 
 | MCP tool | HTTP | Purpose |
@@ -73,6 +168,10 @@ no proposals. Pinned by `tests/test_cross_org_audience.py` and `tests/test_cross
 | — | POST `/card/read` · `/card/create` · `/card/update` · `/card/members` · `/card/membership` | The person's own card verbs: read with activity, make, change or move, share, accept being added |
 | — | POST `/internal/references` | A workspace's references and roster at one commit (internal secret) |
 | — | POST `/internal/accounts` | Attach an account to its person (internal secret) |
+| — | POST `/person/profile` | The person's own profile: read, edit, claim, unclaim, publish, import (D35) |
+| — | POST `/internal/profiles` · `/internal/profiles/public` | Profile fields for agent-api's directory; a published public page (internal secret) |
+| — | POST `/person/me` · `/person/merge` | The person's own Person and merge card: confirm, decline, primary, offer (D35; a person's own credential) |
+| — | POST `/internal/persons` | Each account's Person, its linked accounts and the primary address (internal secret; agent-api) |
 
 **Cards (desktop D2, `src/crm/card_ops.py`).** A card is a record of a card type (`"x-card": true`;
 bootstrap adds `Card`). Its `State` stays on the lifecycle `_global/POLICIES.md` declares
@@ -118,6 +217,14 @@ The stable event ID makes redelivery idempotent. Failed or unhandled events rema
 pending. Only org, record, revision and actor references leave CRM; no account
 fields are copied into Flows. The initial pack records a workflow receipt. It
 neither sends messages nor starts an autonomous agent with implicit CRM rights.
+
+Since event.v2 (PRD 0.13.4 D8) a revision's event also carries a fact envelope
+(who it reaches: owner, visibility, audience, and a card's lifecycle fields kind,
+state, next_actor, next_check_at, handoff). The outbox seals it with the `crm`
+producer key derived from `VEXA_FACT_SEAL_SECRET` (falling back to
+`INTERNAL_API_SECRET`); flows-api must resolve the same secret or it refuses the
+fact 403 and the row stays pending. No title, summary or other field value is in
+the envelope (`crm/fact_envelope.py`, vendored from `core/flows/contracts/event.v2`).
 
 Native meetings retain their transcripts. Agent proposals cite the meeting ID
 as evidence. Meeting linkage grants no CRM permission. Mounted workspaces retain

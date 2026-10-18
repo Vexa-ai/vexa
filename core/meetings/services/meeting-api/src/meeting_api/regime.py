@@ -68,7 +68,9 @@ def refuse_shared(request: HTTPConnection) -> None:
     sync — is its person's, so none of it may reach an answer every participant reads. Installed on
     the app, so every route is covered and none asks for it by hand — a socket too (it takes the
     connection, not a Request, and refuses a socket by closing it with policy violation)."""
-    if identity_token.is_shared(request.headers):
+    # A WORKSPACE principal (D2: a room's turn) is shared by construction, so a missing
+    # `shared` header never reads as a private turn here.
+    if identity_token.is_shared(request.headers) or identity_token.is_workspace_principal(request.headers):
         # ONE EXCEPTION (#1783, collaboration rehearsal 2026-10-14): sending a bot from a chat its
         # members share, into a meeting bound to a workspace they all read. That meeting is the
         # workspace's, not the person's, so the leak rule has nothing to keep from the others. The

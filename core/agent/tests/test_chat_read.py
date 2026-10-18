@@ -90,10 +90,14 @@ def test_a_shared_turn_reads_only_chats_every_participant_can_read(env):
     both = _conv(store, "ana", "Both of us", [("budget", "ok")], members=["bob"])
     mine = _conv(store, "ana", "Mine only", [("budget too", "ok")])
     shared = _as("ana", regime="human", workspaces=["team"], shared=True, unit=f"agent-ana-chat-{here}")
-    found = {h["session"] for h in client.get("/api/chats/search", params={"query": "budget"}, headers=shared).json()["chats"]}
-    assert found == {both}
-    r = client.get(f"/api/chats/{mine}/turns", headers=shared)
+    # D3 (0.13.4): chat search and chat reads are person-wide routes, refused to every shared token
+    # before the route runs — even a chat every participant could read (`routes.v1.json` shared).
+    r = client.get("/api/chats/search", params={"query": "budget"}, headers=shared)
     assert r.status_code == 403 and r.json()["detail"]["reason"] == "shared_conversation"
+    assert both not in r.text
+    for sid in (mine, both):
+        r = client.get(f"/api/chats/{sid}/turns", headers=shared)
+        assert r.status_code == 403 and r.json()["detail"]["reason"] == "shared_conversation"
 
 
 def test_a_run_with_nobody_in_the_loop_reads_only_its_owner_s_own_chats(env):
@@ -198,7 +202,8 @@ def test_an_old_layout_chat_is_nobody_else_s_and_not_for_a_shared_turn(env2):
     shared = _as("ana", regime="human", workspaces=["team"], shared=True, unit=f"agent-ana-chat-{here}")
     r = client.get("/api/chats/pchat-old2/turns", headers=shared)
     assert r.status_code == 403 and r.json()["detail"]["reason"] == "shared_conversation"
-    assert client.get("/api/chats/search", params={"query": "private"}, headers=shared).json()["chats"] == []
+    r = client.get("/api/chats/search", params={"query": "private"}, headers=shared)
+    assert r.status_code == 403 and "private words" not in r.text
 
 
 def test_a_turn_reads_as_the_person_s_words_never_the_context_line(env2):
@@ -232,6 +237,9 @@ def _room(store, owner, title, members, notes=()):
 
 
 def test_a_room_turn_reads_its_own_room_and_never_another(env):
+    """int-s1 (0.13.4): `chat_read` is `shared: allow` so a room's turn reads its OWN room — its
+    turns and its people's messages — and every other conversation stays refused to a shared token
+    (`shared_conversation`)."""
     client, store = env
     here = _room(store, "ana", "Pilot room", ["bob"], notes=[("bob", "We agreed the pilot starts on the 3rd.")])
     other = _room(store, "ana", "Board room", ["carol"], notes=[("carol", "Salary bands are confidential.")])
@@ -243,5 +251,5 @@ def test_a_room_turn_reads_its_own_room_and_never_another(env):
     assert [t["text"] for t in body["turns"]] == ["earlier question", "earlier answer"]
     assert [(m["author"], m["text"]) for m in body["messages"]] == [("bob", "We agreed the pilot starts on the 3rd.")]
     r = client.get(f"/api/chats/{other}/turns", headers=turn)
-    assert r.status_code in (403, 404)
+    assert r.status_code == 403 and r.json()["detail"]["reason"] == "shared_conversation", r.text
     assert "Salary" not in r.text

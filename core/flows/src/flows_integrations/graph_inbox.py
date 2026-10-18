@@ -143,6 +143,14 @@ class GraphInbox(Inbox):
         a `$select` that names it — `graph_client.SELECT` does."""
         headers = {h.get("name", ""): h.get("value", "")
                    for h in (m.get("internetMessageHeaders") or []) if isinstance(h, dict)}
+        # THE TOPMOST `Authentication-Results` is the receiving server's own verdict (D25); a later
+        # one in the list came with the message and the comprehension above would keep it.
+        first_ar = next((h.get("value", "") for h in (m.get("internetMessageHeaders") or [])
+                         if isinstance(h, dict)
+                         and str(h.get("name", "")).lower() == "authentication-results"), None)
+        if first_ar is not None:
+            headers = {k: v for k, v in headers.items() if k.lower() != "authentication-results"}
+            headers["Authentication-Results"] = first_ar
         frm = ((m.get("from") or {}).get("emailAddress") or {}).get("address", "").lower()
         ics = None
         if m.get("hasAttachments"):

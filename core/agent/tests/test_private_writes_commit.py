@@ -2,8 +2,9 @@
 
 A turn that read the person's mail and then wrote, with its own file tools, into a workspace another
 member reads: that change is not committed, the workspace is put back, the turn says what it held
-and the code that releases it, and the person's `confirm <code>` writes it once. A turn that read
-nothing private, or that wrote only to the person's own desk, commits as before.
+and the code that releases it, and the held content goes to agent-api by reference — never onto a
+desk (H7). The person's `confirm <code>` has agent-api write it once. A turn that read nothing
+private, or that wrote only to the person's own desk, commits as before.
 """
 from __future__ import annotations
 
@@ -56,7 +57,14 @@ def _setup(tmp_path):
     shared = _repo(tmp_path / "meetup", members=[{"subject": OWNER, "role": "owner"},
                                                  {"subject": "8", "role": "contributor",
                                                   "email": "val@example.com"}])
-    return desk, shared, Guard(OWNER, desk)
+    handed: dict = {}
+
+    def handback(code, payload):
+        handed[code] = payload
+        return f"unit:u1:handback:held-{code}"
+    guard = Guard(OWNER, unit="", handback=handback)
+    guard.handed = handed
+    return desk, shared, guard
 
 
 def _turn(guard, desk, shared, tool, text="facts", confirm=""):
@@ -92,8 +100,10 @@ def test_a_turn_that_read_mail_is_held_from_the_shared_workspace(tmp_path):
     assert not (shared / "kg/entities/project/meetup.md").exists()
     assert subprocess.run(["git", "-C", str(shared), "status", "--porcelain"], capture_output=True,
                           text=True).stdout == ""
-    # waiting on the person's own desk, out of its history
-    assert (desk / ".vexa/held-writes" / f"{held[0]['code']}.json").exists()
+    # NOT on any desk (H7): handed to agent-api by reference, which keeps it encrypted
+    assert not (desk / ".vexa").exists()
+    assert held[0]["ref"].endswith(held[0]["code"])
+    assert list(guard.handed[held[0]["code"]]["files"]) == ["kg/entities/project/meetup.md"]
     assert _log(desk) == 1
 
 
@@ -114,15 +124,74 @@ def test_the_mark_outlives_the_turn(tmp_path):
     assert _log(shared) == 1
 
 
-def test_the_person_confirms_and_it_is_written_once(tmp_path):
+def test_the_commit_body_of_a_marked_session_is_never_the_reply(tmp_path):
+    """D6: a commit body is a multi-reader surface. A marked session committing to a shared mount
+    (here: the confirmed release already in HEAD, a later unheld file is impossible) carries a fixed
+    body; on the person's own desk the reply stays."""
+    from llm.private_writes import NEUTRAL_BODY
     desk, shared, guard = _setup(tmp_path)
-    code = next(e for e in _turn(guard, desk, shared, "mcp__vexa__gmail_search", text="invoice unpaid")
-                if e["type"] == "write-withheld")["code"]
-    h = _Harness(None, [])
-    events = list(run_harness_turn(desk, "go", h, extra_mounts=[shared], private_guard=guard,
-                                   confirm_text=f"yes confirm {code}", author=AUTHOR))
-    assert any(e["type"] == "write-released" for e in events)
-    assert not any(e["type"] == "write-withheld" for e in events)
+    guard.observe({"type": "tool-call", "tool": "mcp__vexa__crm_read"})
+    assert guard.commit_message(shared, "the invoice is unpaid") == NEUTRAL_BODY
+    assert guard.commit_message(desk, "the invoice is unpaid") == "the invoice is unpaid"
+
+
+def test_a_roster_edited_by_the_turn_does_not_shrink_its_audience(tmp_path):
+    """The readers come from HEAD's roster joined with the work tree's (SF-8)."""
+    from llm.private_writes import other_readers
+    _desk, shared, _guard = _setup(tmp_path)
+    (shared / "policy" / "members.json").write_text(json.dumps([{"subject": OWNER, "role": "owner"}]))
+    assert other_readers(shared, OWNER) == ["val@example.com"]
+
+
+def test_an_unreadable_mark_holds(tmp_path):
+    """Fail closed: a worker whose Redis cannot be read treats the session as having read private data."""
+    class _Down:
+        def read(self, unit):
+            raise RuntimeError("redis down")
+
+        def mark(self, *a, **k):
+            raise RuntimeError("redis down")
+    desk, shared, guard = _setup(tmp_path)
+    guard.store, guard.unit = _Down(), "agent-7-chat-main"
+    events = _turn(guard, desk, shared, None, text="anything")
+    held = [e for e in events if e["type"] == "write-withheld"]
+    assert held and held[0]["sources"] == ["unverifiable"]
+    assert _log(shared) == 1
+
+
+def test_the_mark_survives_a_worker_idle_exit(tmp_path):
+    """The edge's mark lives in Redis: a NEW worker (fresh Guard, nothing observed) still holds."""
+    import fakeredis
+    from shared.taint import TaintStore
+    client = fakeredis.FakeRedis(decode_responses=True)
+    TaintStore(client).mark("agent-7-chat-main", ["crm"])          # written by the gateway edge
+    desk, shared, guard = _setup(tmp_path)
+    guard.store, guard.unit = TaintStore(client), "agent-7-chat-main-g2"   # a respawn, new mount gen
+    events = _turn(guard, desk, shared, None)
+    held = [e for e in events if e["type"] == "write-withheld"]
+    assert held and held[0]["sources"] == ["crm"]
+    # and the worker's own observation persists for the next worker of the conversation
+    guard.observe({"type": "tool-call", "tool": "mcp__personal__list_transactions"})
+    fresh = Guard(OWNER, unit="agent-7-chat-main-auto", store=TaintStore(client))
+    assert "connected service (personal)" in fresh.sources()
+
+
+def test_the_person_confirms_and_agent_api_writes_it_once(tmp_path, _privacy_store):
+    """The release is agent-api's: the session saver took the hand-back into the encrypted store,
+    and the person's `confirm <code>` writes the files and commits them before the turn runs."""
+    from control_plane import held_store, private_taint
+    from control_plane.session_sync import _take_held
+    desk, shared, guard = _setup(tmp_path)
+    ev = next(e for e in _turn(guard, desk, shared, "mcp__vexa__gmail_search", text="invoice unpaid")
+              if e["type"] == "write-withheld")
+    code = ev["code"]
+    _privacy_store.set(ev["ref"].replace("u1", "u1"), json.dumps(guard.handed[code]))
+    assert _take_held(_privacy_store, OWNER, "u1", ev)
+    assert _privacy_store.get(ev["ref"]) is None                 # the plaintext hand-back is gone
+    raw = _privacy_store.get(held_store.item_key(OWNER, code))
+    assert raw and "invoice unpaid" not in raw and "meetup.md" not in raw   # encrypted at rest
+    released = private_taint.release_confirmed_files(OWNER, f"yes confirm {code}", tmp_path)
+    assert released and released[0]["paths"] == ["kg/entities/project/meetup.md"]
     assert (shared / "kg/entities/project/meetup.md").read_text() == "invoice unpaid"
     assert _log(shared) == 2
-    assert not (desk / ".vexa/held-writes" / f"{code}.json").exists()
+    assert private_taint.release_confirmed_files(OWNER, f"confirm {code}", tmp_path) == []   # once

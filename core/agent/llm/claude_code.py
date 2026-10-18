@@ -35,7 +35,9 @@ from llm.claude_skills import _link_skills_into_home
 from llm import proctree
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS,
                              _FETCH_TOOLS, _bot_artifact, _fetched_source, _open_event, _published_terms, _short,
-                             _workspace_focus, _written_artifact)
+                             _tool_result_text, _workspace_focus, _written_artifact)
+from llm.private_writes import private_source
+from shared.private_fingerprint import digests_of
 
 logger = logging.getLogger("llm.claude_code")
 
@@ -93,6 +95,7 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
     # callIds of in-flight `workspace_new` calls — same discipline again (Vexa-ai/vexa#1603).
     pending_focus: set[str] = set()
     pending_fetches: dict[str, dict] = {}   # call id -> the fetch's args (its URL), until the result
+    pending_private: set[str] = set()       # call ids of private reads (`private_writes.private_source`)
     # THE PROVIDER'S FAILURE, WHEREVER THE CLI PUT IT (P18). The CLI reports a provider refusal —
     # OpenRouter's 402, out of credit — as a synthetic assistant message (`API Error: 402 {…}`,
     # sometimes labelled `error: "billing_error"`), then a `result` with `is_error`; and when it dies
@@ -159,6 +162,8 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                             pending_focus.add(call_id)
                         elif tool_name in _FETCH_TOOLS:
                             pending_fetches[call_id] = block.get("input", {}) or {}
+                        if private_source(tool_name):
+                            pending_private.add(call_id)
                         yield {
                             "type": "tool-call",
                             "tool": tool_name,
@@ -170,12 +175,19 @@ def parse_stream_json(lines: Iterable[str]) -> Iterator[dict]:
                     if block.get("type") == "tool_result":
                         call_id = block.get("tool_use_id", "")
                         ok = not block.get("is_error", False)
-                        yield {
+                        result = {
                             "type": "tool-result",
                             "callId": call_id,
                             "ok": ok,
                             "summary": _short(block.get("content")),
                         }
+                        # WHAT A PRIVATE READ GAVE THE AGENT, as digests for the write guard
+                        # (`llm.private_writes`; `run_harness_turn` drops them before anything else
+                        # sees the event). The text itself never rides on the event.
+                        if call_id in pending_private:
+                            pending_private.discard(call_id)
+                            result["private_digests"] = digests_of(_tool_result_text(block.get("content")))
+                        yield result
                         # ONLY ON SUCCESS. A failed write must not open a tab: the file is not there,
                         # and a tab on a path that does not exist is exactly the "page that can never
                         # load" this stream is careful about elsewhere. `pop` either way, so a failed

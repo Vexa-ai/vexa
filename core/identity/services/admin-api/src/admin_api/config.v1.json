@@ -28,6 +28,22 @@
    ]
   },
   {
+   "key": "VEXA_TERMINAL_SESSION_SECRET",
+   "class": "defaulted",
+   "default": "(unset — POST /internal/sessions answers 503 and no session credential is minted)",
+   "secret": true,
+   "description": "the terminal's own second secret for POST /internal/sessions (app/sessions.py, PRD 0.13.4 D13), the one door that mints the `session` credential class (api_tokens.kind = 'session'). Compared in constant time with the X-Terminal-Session-Secret header, beside the internal tier. INTERNAL_API_SECRET alone is shared by every service in the deployment; this one only the terminal holds, so a compromised peer cannot mint a person's session. Unset, the terminal's sign-in falls back to an ordinary key and every decision that needs a session is refused (fail closed). Set the same value on the terminal.",
+   "forbidden_values": [
+     "vexa-internal-secret",
+     "lite-internal-secret",
+     "changeme",
+     "change-me",
+     "CHANGE-ME",
+     "default",
+     "secret"
+   ]
+  },
+  {
    "key": "ADMIN_API_TOKEN",
    "class": "defaulted",
    "default": "(unset — the admin surface then answers 500 'Admin authentication is not configured')",
@@ -171,6 +187,13 @@
    "default": "(empty — only existing users and admins may sign in, plus the holder of the admin claim code while nothing is configured and no admin has been claimed)",
    "description": "The deployment's seed for the terminal sign-in allow-list (Vexa-ai/vexa#1783): comma-separated exact addresses and @domain entries, e.g. \"@example.com,alice@example.org\". A sign-in through any terminal door (emailed link, Google, Microsoft) is admitted only for an existing user, an admin, or an address on the effective list = these entries + the admin-edited `signin.allow` platform setting. A non-empty list also closes the unclaimed-instance door: only an address on it may sign in or claim the admin role. A malformed entry refuses the boot, naming the entry (app/signin_allow.py boot_problems). Read on every POST /internal/signin-admission and /internal/bootstrap-admin (app/signin_allow.py), so a change applies on restart with no migration. Removing an entry does not remove an account that already exists: existing users stay admitted.",
    "targets": ["compose", "helm", "lite"]
+  },
+  {
+   "key": "VEXA_SIGNIN_INVITES_ADMIT",
+   "class": "defaulted",
+   "default": "1",
+   "description": "Whether a workspace invite this deployment MAILED admits its one address to sign in (PRD 0.13.4 S2). On (default): the invitee's one click on the join page signs in a new account — the terminal asks POST /internal/signin-admission with via_invite only after agent-api spent the invite's sign-in half. 0/false/off: only existing users, admins and the allow-list sign in, and an invitee outside them is refused like any stranger.",
+   "targets": ["compose"]
   },
   {
    "key": "VEXA_ADMIN_EMAILS",

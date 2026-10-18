@@ -53,6 +53,9 @@ INT_KEYS = {
     "home_compose_per_day": ("VEXA_HOME_COMPOSE_PER_DAY", 14, 0, 500),
     "home_expand_per_day": ("VEXA_HOME_EXPAND_PER_DAY", 40, 0, 1000),
     "event_agent_runs_per_day": ("VEXA_EVENT_AGENT_RUNS_PER_DAY", 30, 0, 10_000),
+    # PRD 0.13.4 S2: how many days a MAILED invite's link signs its one address in with one click
+    # (never past the invite's own expiry). 0 = invite links never sign anybody in.
+    "invite_signin_days": ("", 7, 0, 30),
 }
 TRUST = ("read", "draft", "act")
 STR_KEYS = {

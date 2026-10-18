@@ -69,7 +69,7 @@ def test_a_shared_turn_may_still_name_its_shared_scope(client):
 
 # ── a meeting reference in a shared turn ──────────────────────────────────────────────────────────
 
-def test_a_meeting_ref_in_a_shared_turn_is_unavailable_unless_everyone_reads_it(monkeypatch, tmp_path):
+def test_a_meeting_ref_in_a_shared_turn_is_refused_before_the_route_runs(monkeypatch, tmp_path):
     from fastapi.testclient import TestClient
 
     from control_plane.api import _Sessions, create_app
@@ -111,10 +111,10 @@ def test_a_meeting_ref_in_a_shared_turn_is_unavailable_unless_everyone_reads_it(
             "X-User-Delegation-Unit": f"agent-u_alice-chat-{chat['id']}"}
     private = c.get("/api/refs/resolve", params={"ref": "/r/meeting/147"}, headers=base).json()
     assert private["access"] == "readable"
-    shared = c.get("/api/refs/resolve", params={"ref": "/r/meeting/147"},
-                   headers={**base, "X-User-Delegation-Shared": "1"}).json()
-    assert shared["access"] == "unavailable" and "Private" not in str(shared)
-    both = c.get("/api/refs/resolve", params={"ref": "/r/meeting/148"},
-                 headers={**base, "X-User-Delegation-Shared": "1"}).json()
-    assert both["access"] == "readable", both
+    # D3 (0.13.4): resolving a reference answers with the caller's (the owner's) access, so it is
+    # refused to every shared token before the route runs — even for a meeting both people read.
+    for ref in ("/r/meeting/147", "/r/meeting/148"):
+        r = c.get("/api/refs/resolve", params={"ref": ref}, headers={**base, "X-User-Delegation-Shared": "1"})
+        assert r.status_code == 403 and r.json()["detail"]["reason"] == "shared_conversation"
+        assert "Private" not in r.text and "Team call" not in r.text
     store.close()

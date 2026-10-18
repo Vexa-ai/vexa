@@ -1,0 +1,13 @@
+{
+  "user_id": 42,
+  "scopes": [
+    "bot",
+    "tx",
+    "browser"
+  ],
+  "max_concurrent": 3,
+  "email": "jane@example.com",
+  "is_admin": false,
+  "admin_account": false,
+  "credential_class": "session"
+}

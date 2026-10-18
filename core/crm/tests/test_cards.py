@@ -7,6 +7,7 @@ card is about. A workspace's board is the cards it references. Faces are compose
 face profile, sanitised on the server and resolved per viewer, so no viewer sees a field through a
 face that they could not read on the record.
 """
+import dataclasses
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -408,7 +409,7 @@ def test_stalled_follows_the_global_policy_and_defaults_to_fourteen_days(store, 
         assert odd.stalled_after() == timedelta(days=14)
 
 
-def test_new_clears_when_the_viewer_opens_the_card(cards):
+def test_new_clears_when_the_viewer_sees_the_card(cards):
     card = make(cards, workspace='sales', title='Board card')
     assert cards.list(ORG, ANA, workspace='sales')['cards'][0]['new'] is False      # my own card
     assert cards.list(ORG, BO, workspace='sales')['cards'][0]['new'] is True
@@ -416,5 +417,9 @@ def test_new_clears_when_the_viewer_opens_the_card(cards):
     assert cards.list(ORG, BO, workspace='sales')['cards'][0]['new'] is True
     cards.read(ORG, agent(uid='8'), card['id'])                                     # an agent reading is not the person opening
     assert cards.list(ORG, BO, workspace='sales')['cards'][0]['new'] is True
-    cards.read(ORG, BO, card['id'])
+    cards.read(ORG, BO, card['id'])                                                 # reading is not seeing (D14, P21)
+    assert cards.list(ORG, BO, workspace='sales')['cards'][0]['new'] is True
+    with pytest.raises(Refused):                                                    # an API key never writes seen
+        cards.seen(ORG, BO, card['id'])
+    cards.seen(ORG, dataclasses.replace(BO, credential_class='session'), card['id'])   # the terminal's render in view
     assert cards.list(ORG, BO, workspace='sales')['cards'][0]['new'] is False

@@ -1,9 +1,10 @@
-"""The post-meeting MEETING ROOM — the read-only mounts of a meeting's other attendees.
+"""The post-meeting MEETING ROOM — and, since founder decision 3 (2026-10-17), what it no longer does.
 
-The room widens what ONE agent turn may read, so every test here is about the boundary rather than
-the feature: who may open a room, whose workspaces land in it, that they land READ-ONLY, that nobody
-else's _system is ever reachable, that a caller cannot name its way into somebody's desk, and
-that a dispatch which names no meeting is byte-identical to before.
+DESKS ARE PERSONAL. The write-up reads the transcript, the room's workspace (the meeting's group
+desk) and explicit shares; it never mounts another attendee's desk, whatever the invite or the
+transcript names. Every test here is about the boundary: who may open a room, that no attendee's
+desk lands in it, that the subject's own desk is read-only on a room run, that the group desk is
+the one writable workspace, and that a dispatch which names no meeting is byte-identical to before.
 
 Backend-free (fakes / tmp dirs, no docker/kubectl/meeting-api) — the mount plumbing is proven offline.
 """
@@ -19,8 +20,7 @@ from fastapi.testclient import TestClient
 from control_plane import meeting_room
 from control_plane.api import create_app
 from control_plane.dispatch import Dispatcher, build_mount_set
-from control_plane.meeting_room import (MAX_ROOM_READ, RoomRefused, assert_owner,
-                                        order_participants, resolve_desks, room_mounts)
+from control_plane.meeting_room import RoomRefused, assert_owner
 from shared.config import load_settings
 
 INTERNAL_SECRET = "s3cr3t-internal"
@@ -95,174 +95,13 @@ def test_the_owner_passes():
     assert assert_owner(_row("u_owner"), requester="u_owner") is None
 
 
-# ── gate 4 + ordering: membership is the invite; speaking only sorts ─────────────────────────────
+# ── decision 3: the room module has no desk-mounting door left ───────────────────────────────────
 
-NAMES = {"a@x.test": "Alice Ant", "b@x.test": "Bob Bee", "c@x.test": "Carol Cat"}
-
-
-def test_membership_is_the_invite_in_invite_order_when_nothing_matches():
-    """Rule 5: a total name-match failure degrades to invite order — never to an empty room."""
-    got = order_participants(["a@x.test", "b@x.test"], names=NAMES, speakers=["Nobody At All"])
-    assert got == [("a@x.test", "unmatched-invite-order"), ("b@x.test", "unmatched-invite-order")]
-
-
-def test_speakers_lead_in_speaking_order_then_the_rest_in_invite_order():
-    got = order_participants(["a@x.test", "b@x.test", "c@x.test"], names=NAMES,
-                             speakers=["Carol Cat", "Alice Ant"])
-    assert got == [("c@x.test", "matched-and-spoke"), ("a@x.test", "matched-and-spoke"),
-                   ("b@x.test", "unmatched-invite-order")]
-
-
-def test_a_speaker_who_was_not_invited_is_not_in_the_room():
-    """THE property: a NAME never admits anybody. Mallory spoke; she was not invited; she is out."""
-    got = order_participants(["a@x.test"], names={**NAMES, "m@evil.test": "Mallory Vex"},
-                             speakers=["Mallory Vex", "Alice Ant"])
-    assert got == [("a@x.test", "matched-and-spoke")]
-
-
-def test_name_matching_is_forgiving_about_case_and_spacing_only():
-    got = order_participants(["a@x.test", "b@x.test"], names=NAMES,
-                             speakers=["  alice   ANT "])
-    assert got[0] == ("a@x.test", "matched-and-spoke")
-
-
-def test_two_invitees_sharing_a_display_name_steal_nothing_from_each_other():
-    """The ambiguity we refuse to resolve: neither gets the slot, both fall to invite order."""
-    got = order_participants(["a@x.test", "b@x.test"],
-                             names={"a@x.test": "Sam Smith", "b@x.test": "Sam Smith"},
-                             speakers=["Sam Smith"])
-    assert [w for _, w in got[1:]] == ["unmatched-invite-order"]
-    assert {a for a, _ in got} == {"a@x.test", "b@x.test"}
-
-
-def test_addresses_are_case_folded_and_deduplicated_in_invite_order():
-    assert order_participants(["B@X.test", "a@x.test", "b@x.test"]) == [
-        ("b@x.test", "unmatched-invite-order"), ("a@x.test", "unmatched-invite-order")]
-
-
-def test_junk_shapes_in_the_participant_list_authorise_nothing():
-    assert order_participants([None, True, {"email": "a@x.test"}, "", "a@x.test"]) == [
-        ("a@x.test", "unmatched-invite-order")]
-
-
-def test_no_participants_is_an_empty_room_not_an_error():
-    assert order_participants(None) == [] and order_participants([]) == []
-
-
-# ── resolution: subject AND desk must already exist ──────────────────────────────────────────────
-
-def _book(**kw):
-    return lambda address: kw.get(address.replace("@", "_at_").replace(".", "_"))
-
-
-def test_only_participants_with_a_subject_and_a_desk_are_mounted(tmp_path):
-    root = tmp_path / "ws"; _seed(root, "u_bob")
-    directory = {"bob@x.test": "u_bob", "dave@x.test": "u_dave", "eve@x.test": None}
-    ordered = [("bob@x.test", "matched-and-spoke"), ("dave@x.test", "unmatched-invite-order"),
-               ("eve@x.test", "unmatched-invite-order")]
-    mounts, audit = resolve_desks(str(root), ordered, lookup=directory.get, meeting_id="42")
-    assert [m["slug"] for m in mounts] == ["room:u_bob"]
-    assert audit == [
-        {"address": "bob@x.test", "subject": "u_bob", "why": "matched-and-spoke"},
-        {"address": "dave@x.test", "subject": "u_dave", "why": "skipped-no-desk"},
-        {"address": "eve@x.test", "subject": None, "why": "skipped-no-subject"},
-    ]
-    assert not (root / "u_dave").exists()      # a mount NEVER creates somebody's desk
-
-
-def test_the_mount_carries_the_address_and_the_why(tmp_path):
-    root = tmp_path / "ws"; _seed(root, "u_bob")
-    mounts, _ = resolve_desks(str(root), [("bob@x.test", "matched-and-spoke")],
-                              lookup={"bob@x.test": "u_bob"}.get, meeting_id="42")
-    assert mounts[0]["room"] == {"meeting_id": "42", "subject": "u_bob",
-                                 "address": "bob@x.test", "why": "matched-and-spoke"}
-
-
-def test_the_cap_bounds_the_desks_actually_mounted(tmp_path):
-    root = tmp_path / "ws"
-    people = [f"p{i}@x.test" for i in range(40)]
-    directory = {}
-    for i, a in enumerate(people):
-        directory[a] = f"u_{i}"
-        _seed(root, f"u_{i}")
-    ordered = [(a, "unmatched-invite-order") for a in people]
-    mounts, audit = resolve_desks(str(root), ordered, lookup=directory.get, meeting_id="42")
-    assert len(mounts) == 12                                   # DEFAULT_ROOM_READ_MAX
-    assert len(mounts) == meeting_room.DEFAULT_ROOM_READ_MAX
-    assert {r["why"] for r in audit[12:]} == {"skipped-over-cap"}   # everything past it is audited
-    assert len(resolve_desks(str(root), ordered, lookup=directory.get,
-                             meeting_id="42", cap=3)[0]) == 3
-    # a caller may lower the cap, never raise it past the server ceiling
-    assert len(resolve_desks(str(root), ordered, lookup=directory.get,
-                             meeting_id="42", cap=10_000)[0]) == MAX_ROOM_READ
-
-
-def test_a_resolver_that_raises_skips_that_person_not_the_turn(tmp_path):
-    root = tmp_path / "ws"; _seed(root, "u_bob")
-
-    def flaky(address):
-        if address == "boom@x.test":
-            raise OSError("admin-api down")
-        return "u_bob"
-
-    mounts, audit = resolve_desks(str(root), [("boom@x.test", "unmatched-invite-order"),
-                                              ("bob@x.test", "unmatched-invite-order")],
-                                  lookup=flaky, meeting_id="42")
-    assert [m["slug"] for m in mounts] == ["room:u_bob"]
-    assert audit[0]["why"] == "skipped-no-subject"
-
-
-# ── the mounts themselves ────────────────────────────────────────────────────────────────────────
-
-def test_room_mounts_are_read_only_and_never_primary(tmp_path):
-    root = tmp_path / "ws"; _seed(root, "u_bob")
-    mounts = room_mounts(str(root), ["u_bob"], meeting_id="42")
-    assert len(mounts) == 1
-    m = mounts[0]
-    assert m["write"] is False and m["primary"] is False and m["role"] == "room"
-    assert m["slug"] == "room:u_bob" and m["path"] == str(root / "u_bob")
-    assert m["room"] == {"meeting_id": "42", "subject": "u_bob"}
-
-
-def test_a_room_mount_never_creates_the_attendees_workspace(tmp_path):
-    """An attendee who has never onboarded is simply absent from the room — a post-meeting read
-    must not mint somebody a workspace as a side effect."""
-    root = tmp_path / "ws"; root.mkdir()
-    assert room_mounts(str(root), ["u_never_seen"], meeting_id="42") == []
-    assert not (root / "u_never_seen").exists()
-
-
-def test_a_room_mount_never_shadows_the_subjects_own_stack(tmp_path):
-    root = tmp_path / "ws"; _seed(root, "u_bob")
-    taken = {str(root / "u_bob")}
-    assert room_mounts(str(root), ["u_bob"], meeting_id="42", taken_paths=taken) == []
-
-
-def test_one_attendee_with_a_broken_store_does_not_lose_the_others(tmp_path, monkeypatch):
-    root = tmp_path / "ws"; _seed(root, "u_bob"); _seed(root, "u_carol")
-    real = meeting_room.active_workspaces
-
-    def flaky(r, subject):
-        if subject == "u_bob":
-            raise OSError("store hiccup")
-        return real(r, subject)
-
-    monkeypatch.setattr(meeting_room, "active_workspaces", flaky)
-    slugs = [m["slug"] for m in room_mounts(str(root), ["u_bob", "u_carol"], meeting_id="42")]
-    assert slugs == ["room:u_carol"]
-
-
-def test_no_other_subjects_system_workspace_is_ever_mounted(tmp_path):
-    """_system is the ONE tier that stays private. It lives at <root>/.system/<subject> and
-    active_workspaces refuses a dot-name, so the room cannot reach it — asserted, not assumed."""
-    from control_plane.system_mounts import ensure_system_workspace
-    root = tmp_path / "ws"; _seed(root, "u_bob")
-    bob_system = ensure_system_workspace(str(root), "u_bob")
-    mounts = room_mounts(str(root), ["u_bob", ".system", "../.."], meeting_id="42")
-    paths = {m["path"] for m in mounts}
-    assert str(bob_system) not in paths
-    assert all("/.system/" not in p for p in paths)
-    assert paths == {str(root / "u_bob")}
+def test_the_room_module_has_no_way_to_mount_an_attendees_desk():
+    """`room_mounts`, `resolve_desks` and `order_participants` are gone: nothing in the room turns
+    an address, a name or a subject into another person's desk."""
+    for gone in ("room_mounts", "resolve_desks", "order_participants", "ROOM_ROLE"):
+        assert not hasattr(meeting_room, gone), gone
 
 
 # ── composition into the mount STACK ─────────────────────────────────────────────────────────────
@@ -275,34 +114,20 @@ def test_the_stack_is_unchanged_when_no_room_is_named(tmp_path):
     assert [m["role"] for m in build_mount_set(settings, "u_owner")] == ["global", "private", "system"]
 
 
-def test_room_mounts_sit_between_the_active_set_and_system(tmp_path):
+def test_a_room_mounts_no_attendees_desk(tmp_path):
+    """Decision 3: naming attendees who all have desks adds none of them to the stack."""
     root = tmp_path / "ws"
     for s in ("u_owner", "u_bob", "u_carol"):
         _seed(root, s)
     settings = _settings(tmp_path, root)
     stack = build_mount_set(settings, "u_owner",
                             room=_room(desks=[("b@x.test", "u_bob"), ("c@x.test", "u_carol")]))
-    assert [m["role"] for m in stack] == ["global", "private", "room", "room", "system"]
-    rooms = [m for m in stack if m["role"] == "room"]
-    assert [m["slug"] for m in rooms] == ["room:u_bob", "room:u_carol"]
-    assert all(m["write"] is False for m in rooms)
-    # the ROOM is read-only, and so is the subject's own desk on a room run (Vexa-ai/vexa#1606) —
-    # decision 22 is enforced by the mount, not by a guard that fails the report afterwards
+    assert [m["role"] for m in stack] == ["global", "private", "system"]
+    assert not any(str(root / "u_bob") == m["path"] or str(root / "u_carol") == m["path"]
+                   for m in stack)
+    # the subject's own desk is read-only on a room run (Vexa-ai/vexa#1606, decision 22)
     assert stack[1]["role"] == "private" and stack[1]["write"] is False
     assert stack[-1]["write"] is True          # _system is not a desk: chat continuity anchors there
-
-
-def test_a_broken_room_never_kills_the_dispatch(tmp_path, monkeypatch):
-    root = tmp_path / "ws"; _seed(root, "u_owner")
-    settings = _settings(tmp_path, root)
-    import control_plane.dispatch as disp
-
-    def boom(*a, **k):
-        raise OSError("store gone")
-
-    monkeypatch.setattr(disp, "resolve_desks", boom)
-    stack = build_mount_set(settings, "u_owner", room=_room(desks=[("b@x.test", "u_bob")]))
-    assert [m["role"] for m in stack] == ["global", "private", "system"]
 
 
 def test_the_runtime_binds_a_room_mount_read_only(tmp_path):
@@ -389,7 +214,7 @@ def test_a_room_does_not_widen_the_workers_delegation_token(tmp_path):
     assert with_room[2] == [{"id": "u_owner", "mode": "rw"}]        # no attendee was granted
 
 
-def test_a_room_reaches_the_worker_env_as_read_only_mounts(tmp_path):
+def test_a_room_reaches_the_worker_env_with_no_attendees_desk(tmp_path):
     root = tmp_path / "ws"
     for s in ("u_owner", "u_bob"):
         _seed(root, s)
@@ -397,17 +222,12 @@ def test_a_room_reaches_the_worker_env_as_read_only_mounts(tmp_path):
     d = Dispatcher(settings, _FakeRuntime(), _FakeIdentity())
     d.dispatch(_inv(), room=_room(desks=[("b@x.test", "u_bob")]))
     mounts = json.loads(d._runtime.spawned[-1][2]["VEXA_MOUNTS"])
-    room = [m for m in mounts if m["role"] == "room"]
-    assert [m["slug"] for m in room] == ["room:u_bob"]
-    assert room[0]["write"] is False
-    # A ROOM NEVER BECOMES THE HOME — and neither does a read-only desk. This used to assert the cwd
-    # was the subject's own desk; with every desk read-only on a room run (Vexa-ai/vexa#1606) the
-    # cwd is the `_system` tier, which is writable by contract and is not a desk. F59's property is
-    # asserted as itself here: whatever the cwd is, the turn can write it.
+    assert not any(m["role"] == "room" for m in mounts)
+    assert not any(m["path"] == str(root / "u_bob") for m in mounts)
+    # with every desk read-only on a room run the cwd is the `_system` tier, writable by contract
     cwd = d._runtime.spawned[-1][2]["VEXA_WORKSPACE_PATH"]
     at_cwd = next(m for m in mounts if m["path"] == cwd)
     assert at_cwd["role"] == "system" and at_cwd["write"] is True
-    assert not any(m["role"] == "room" and m["path"] == cwd for m in mounts)
 
 
 # ── the HTTP surface: who may ask for a room at all ───────────────────────────────────────────────
@@ -474,45 +294,20 @@ def test_an_unconfigured_internal_secret_means_nobody_gets_a_room(tmp_path):
     assert r.status_code == 403
 
 
-def test_the_internal_caller_gets_the_invites_participants_as_desks(tmp_path):
+def test_the_invites_participants_never_become_desks(tmp_path):
+    """Decision 3: flows still sends the invite's participants, names and speakers; none of them
+    mounts anything, and no attendee's workspace is created."""
     c, runtime = _client(tmp_path, {("u_owner", "42"): _row("u_owner")})
     r = c.post("/api/chat", json={
         "prompt": "write it up", "session": "m42", "room_meeting_id": "42",
-        "room_participants": ["bob@acme.test", "carol@acme.test"]},
+        "room_participants": ["bob@acme.test", "carol@acme.test", "dave@acme.test"],
+        "room_participant_names": {"bob@acme.test": "Bob Stone"},
+        "room_speakers": ["Bob Stone"]},
         headers={"X-User-Id": "u_owner", "X-Internal-Secret": INTERNAL_SECRET})
     assert r.status_code == 200
-    rooms = [m for m in _mounts_of(runtime) if m["role"] == "room"]
-    assert [m["slug"] for m in rooms] == ["room:u_bob", "room:u_carol"]
-    assert all(m["write"] is False for m in rooms)
-
-
-def test_speaking_reorders_the_room_it_never_admits_anyone(tmp_path):
-    """THE safety property of the participant model. Carol spoke most, so she leads; Mallory is
-    named as a SPEAKER but is not in the invite, so she is not in the room at all."""
-    c, runtime = _client(tmp_path, {("u_owner", "42"): _row("u_owner")})
-    r = c.post("/api/chat", json={
-        "prompt": "go", "session": "m42", "room_meeting_id": "42",
-        "room_participants": ["bob@acme.test", "carol@acme.test"],
-        "room_participant_names": {"bob@acme.test": "Bob Stone", "carol@acme.test": "Carol Vane",
-                                   "mallory@evil.test": "Mallory Vex"},
-        "room_speakers": ["Mallory Vex", "carol  vane", "Bob Stone"]},
-        headers={"X-User-Id": "u_owner", "X-Internal-Secret": INTERNAL_SECRET})
-    assert r.status_code == 200
-    rooms = [m for m in _mounts_of(runtime) if m["role"] == "room"]
-    assert [m["slug"] for m in rooms] == ["room:u_carol", "room:u_bob"]   # speaking time orders
-    assert not any(m["slug"] == "room:u_mallory" for m in rooms)          # a NAME admits nobody
-    assert [m["room"]["why"] for m in rooms] == ["matched-and-spoke"] * 2
-
-
-def test_a_participant_with_no_account_is_skipped_never_created(tmp_path):
-    """drop_to_attendees makes their desk afterwards; the mount path never does."""
-    c, runtime = _client(tmp_path, {("u_owner", "42"): _row("u_owner")})
-    c.post("/api/chat", json={
-        "prompt": "go", "session": "m42", "room_meeting_id": "42",
-        "room_participants": ["nobody@acme.test", "dave@acme.test", "bob@acme.test"]},
-        headers={"X-User-Id": "u_owner", "X-Internal-Secret": INTERNAL_SECRET})
-    rooms = [m for m in _mounts_of(runtime) if m["role"] == "room"]
-    assert [m["slug"] for m in rooms] == ["room:u_bob"]     # no account, and no desk, both skipped
+    mounts = _mounts_of(runtime)
+    assert [m["role"] for m in mounts] == ["global", "private", "system"]
+    assert not any(m["path"].endswith(("/u_bob", "/u_carol")) for m in mounts)
     assert not (tmp_path / "ws" / "u_dave_no_desk").exists()
 
 
@@ -585,8 +380,7 @@ def test_the_room_and_the_subjects_own_desk_are_both_read_only(tmp_path):
         _seed(root, s)
     settings = _settings(tmp_path, root)
     stack = build_mount_set(settings, "u_owner", room=_room(desks=[("b@x.test", "u_bob")]))
-    rooms = [m for m in stack if m["role"] == "room"]
-    assert rooms and all(m["write"] is False for m in rooms)
+    assert not any(m["role"] == "room" for m in stack), "decision 3: no attendee's desk"
     own = next(m for m in stack if m["role"] == "private")
     assert own["write"] is False, "decision 22 is a mount mode now, not a check after the fact"
     assert own["primary"] is False
@@ -616,7 +410,7 @@ def test_a_non_admin_subjects_post_meeting_dispatch_can_start(tmp_path):
         desks=[("b@x.test", "u_bob"), ("c@x.test", "u_carol")], group="g_acme"))
     by = {m["slug"]: m for m in stack}
     own = next(m for m in stack if m["role"] == "private")
-    assert all(by[f"room:{s}"]["write"] is False for s in ("u_bob", "u_carol"))   # the room: ro
+    assert not any(f"room:{s}" in by for s in ("u_bob", "u_carol"))   # decision 3: no attendee desk
     assert by["g_acme"]["write"] is True                       # the group: rw when present
     assert by["g_acme"]["primary"] is True                     # ...and it is the cwd
     assert own["primary"] is False

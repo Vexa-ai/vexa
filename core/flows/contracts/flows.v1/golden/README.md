@@ -47,3 +47,8 @@ _Governed by `docs/docs/governance/architecture.mdx` (P1–P12). This folder own
 `Carrier.thread-message.json` (ADR-0046 decision 13) is the ninth: one agent writing to another. The
 case it pins is a carrier whose refs carry the facts a POLICY decides on (`shared`,
 `sender_routine`) beside the addresses, so the intake can refuse a message by naming the rule.
+
+`Carrier.crm-record-changed.json` (PRD 0.13.4 D8) is the first carrier owned by `crm`, and the case
+it pins is a fact whose REACH is not its subject: `uid` is the actor, and who else the fact reaches
+travels in the sealed event.v2 envelope beside the refs (`../../event.v2/`), never in the refs a
+caller controls.

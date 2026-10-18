@@ -170,6 +170,9 @@ def test_every_hand_written_tool_lands_on_a_row_that_admits_the_re_entry(monkeyp
 def test_every_flagged_meetings_and_gateway_row_is_one_a_tool_calls(monkeypatch):
     domains = ("gateway", "meetings")
     called = {_row_for(m, p, domains) for m, p in _hand_written_calls(monkeypatch)}
+    # D6: the privacy report is called by every DIRECT assembled tool behind the gateway, not by a
+    # hand-written one; `test_privacy_report.py` drives that call.
+    called.add(_row_for("POST", "/internal/mcp/taint", domains))
     assert _flagged(domains) == called, {"flagged, never called": sorted(_flagged(domains) - called),
                                          "called, not flagged": sorted(called - _flagged(domains))}
 

@@ -75,7 +75,7 @@ def clean(monkeypatch):
     routine = {"regime": "autonomous", "workspaces": ["126"], "grants": ["flow.retire_self"],
                "flow": "user:126/bot-at-1213"}
     table = {
-        "anna-key": (200, {"user_id": 126, "email": "anna@vexa.test"}),
+        "anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "credential_class": "session"}),
         "root-key": (200, {"user_id": 1, "email": "root@vexa.test", "admin_account": True}),
         "vxd_anna_chat": (200, {"user_id": 126, "email": "anna@vexa.test",
                                 "delegation": {"regime": "human", "workspaces": "*"}}),

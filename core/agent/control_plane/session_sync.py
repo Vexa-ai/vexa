@@ -34,6 +34,34 @@ WATCH_TTL_S = 3600.0
 POLL_S = 0.5
 
 
+
+def _take_held(r, subject, unit_id: str, ev: dict) -> bool:
+    """A WRITE THE WORKER HELD (D6, H7) comes by reference: agent-api takes it into its encrypted
+    store under the person the unit's session is bound to, and deletes the plaintext hand-back. The
+    reference must be this unit's own hand-back key — a worker cannot point at another unit's."""
+    from control_plane import held_store  # noqa: PLC0415
+    ref = str(ev.get("ref") or "")
+    code = str(ev.get("code") or "")
+    if not subject or not code or not ref.startswith(stream_bounds.handback_key(unit_id, "")):
+        return False
+    try:
+        raw = r.get(ref)
+        payload = json.loads(raw) if raw else None
+    except Exception:  # noqa: BLE001 — expired or unreadable: nothing kept, the person asks again
+        payload = None
+    store = held_store.current()
+    kept = False
+    if isinstance(payload, dict) and store is not None:
+        kept = store.put(str(subject), code, surface="page", kind="files",
+                         sources=payload.get("sources") or ev.get("sources") or [],
+                         payload={"workspace": payload.get("workspace") or ev.get("workspace"),
+                                  "files": payload.get("files") or {}})
+    try:
+        r.delete(ref)
+    except Exception:  # noqa: BLE001 — it expires on its own (HANDBACK_TTL_SEC)
+        pass
+    return kept
+
 class SessionUnavailable(RuntimeError):
     """The store could not answer for a session whose readers it alone knows — a store id, or a
     thread with other people in it. Such a turn is refused (503), never run on the old layout with
@@ -514,6 +542,8 @@ class SessionSaver:
                             cur = self._watch.get(uid)
                             if cur is not None:
                                 cur["base"] = max(int(cur["base"]), int(version))
+                elif t == "write-withheld" and ev.get("ref"):
+                    _take_held(self._r, w.get("subject"), uid, ev)
                 elif t == "turn-complete":
                     done += 1
             with self._lock:

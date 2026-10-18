@@ -138,7 +138,10 @@ def test_files_and_jobs_become_the_persons_flows_once(world, flows):
     client, scheduler, root = world
     assert len(scheduler.jobs) == 2
     first = rf.migrate(scheduler=scheduler, workspaces_dir=root)
-    assert first.files_converted == 1 and first.jobs_converted == 1 and first.failures == 0
+    # NO APPROVALS RECORD MEANS NOBODY STOOD BEHIND THE FILE (D24, fails closed): it becomes a
+    # PAUSED flow the person turns on, never a live one
+    assert first.files_paused == 1 and first.files_converted == 0
+    assert first.jobs_converted == 1 and first.failures == 0
     assert scheduler.jobs == [], "the jobs the old mechanism armed are cancelled"
     names = {(r["scope"], r["name"], r["trigger"]["cron"]) for r in flows.rows}
     assert names == {("user:7", "brief", "0 9 * * *"), ("user:7", "inbox", "0 12 * * 1-5")}

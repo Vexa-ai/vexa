@@ -205,6 +205,9 @@ DEFAULTS: dict = {
     "home_compose_per_day": "14",
     "home_expand_per_day": "40",
     "event_agent_runs_per_day": "30",
+    # PRD 0.13.4 S2: days a mailed invite's link signs its one address in (agent-api's invite act
+    # reads it through `budgets`; 0 = never, at most 30).
+    "invite_signin_days": 7,
     "event_agent_max_trust": "draft",
     "model_chat_default": "",
     "models_allowed": "all",

@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..collector.meeting_link import parse_meeting_url
+from .. import identity_token
 from ..regime import require_person_or_granted, shared_bot_workspace
 from ..workspace_write import require_writable, writable_workspaces
 from ..service_authority import (
@@ -297,6 +298,21 @@ def build_router(
     ):
         user_id = _resolve_user_id(x_user_id)
         max_concurrent = _resolve_max_concurrent(x_user_limits)
+        # A ROOM'S BOT IS KEYED TO ITS PAYER (int-s1, D2): a workspace principal's own account owns
+        # nothing and may run no bot (`max_concurrent_bots` 0), so the bot — its row, its concurrency
+        # count and its spend — is the account the principal bills to (`x-user-bills-to`, signed by
+        # the gateway from identity's `principals` table). The principal and its workspace ride on the
+        # meeting's data; `shared_bot_workspace` below still binds the bot to a workspace in the
+        # room's ceiling, never to the payer's private meetings. identity answers the payer's cap.
+        room_principal = None
+        if identity_token.is_workspace_principal(request.headers):
+            payer = (request.headers.get(identity_token.DELEGATION_HEADERS["bills_to"]) or "").strip()
+            if not payer.isdigit():
+                raise HTTPException(status_code=403, detail="a workspace principal with no payer runs no bot")
+            room_principal = {"principal": str(user_id),
+                              "principal_workspace": (request.headers.get(
+                                  identity_token.DELEGATION_HEADERS["principal_workspace"]) or "").strip()}
+            user_id = int(payer)
         # Per-user webhook config the gateway forwarded from identity (persisted into meeting.data).
         webhook_events = None
         if x_user_webhook_events:
@@ -636,6 +652,11 @@ def build_router(
             if prepared_call is not None:
                 from ..calls import record_meeting
                 await record_meeting(calls, prepared_call, int(meeting["id"]))
+            if room_principal is not None:
+                logging.getLogger(__name__).info(
+                    "room bot: meeting=%s keyed to payer=%s for principal=%s workspace=%s",
+                    meeting.get("id"), user_id, room_principal["principal"],
+                    room_principal["principal_workspace"])
         except LanguageRefused as e:
             raise HTTPException(status_code=422, detail=str(e))
         except TranscriptionNotConfigured as e:

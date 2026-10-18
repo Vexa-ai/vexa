@@ -105,7 +105,8 @@ def test_a_meeting_is_discovered_scored_woken_and_ended():
         return r, calls, sent
 
     r, calls, sent = asyncio.run(go())
-    assert calls == ["good morning everyone", "vexa, please write that down", "we decide to go with option b"]
+    # the final that addresses Vexa is the rule tier's (no model call); the others are scored
+    assert calls == ["good morning everyone", "we decide to go with option b"]
     reasons = [s["data"]["reason"] for s in sent]
     assert reasons == ["addressed", "end"]
     first = sent[0]
@@ -303,6 +304,58 @@ def test_an_unaddressed_interim_is_neither_scored_nor_buffered():
             {"speaker": "A", "text": text, "start": 1, "end": 2, "completed": False, "segment_id": "x"}]})})
         assert item.kind == "line" and item.mode == "addressed" and item.interim, text
 
+
+
+# -- BEING ADDRESSED NEVER WAITS FOR THE MODEL (app.dev 2026-10-17, meeting 153) -------------------
+# A room call in Russian: "Векса, привет" arrived only on a FINAL (its interims read "Яксаааа.",
+# "Привет."), the rule tier knew only the Latin name and only interims, and every model call answered
+# 402 Payment Required — so the line was buffered unscored and the room heard nothing until the end.
+
+def test_a_final_addressing_vexa_by_its_russian_name_is_addressed_without_the_model():
+    from meeting_signals.meeting_feed import parse
+
+    def final(text):
+        return parse("1-0", {"payload": json.dumps({"type": "transcription", "segments": [
+            {"speaker": "A", "text": text, "start": 1, "end": 2, "completed": True, "segment_id": "x"}]})})
+
+    for text in ("Ты меня слышишь, ты не будешь на меня реагировать сейчас. Векса, привет. Вексе, вексе.",
+                 "Векса, что мы решили?", "привет вэкса", "Vexa, note that", "ok vexa what did we decide"):
+        item = final(text)
+        assert item.kind == "line" and item.mode == "addressed" and not item.interim, text
+    for text in ("и чат, и рум, и звонок, и векс.", "у Вексы есть комнаты", "Vexa's rooms are new",
+                 "we decide to go with option b"):
+        assert final(text).mode == "score", text
+
+
+def refusing_model(calls):
+    def handler(req):
+        calls.append(json.loads(req.content)["messages"][1]["content"])
+        return httpx.Response(402, json={"error": {"message": "Payment Required"}})
+    return httpx.MockTransport(handler)
+
+
+def test_an_address_on_a_final_wakes_the_room_while_the_model_refuses_every_call():
+    async def go():
+        r = fakeredis.FakeAsyncRedis(decode_responses=True)
+        calls, sent = [], []
+        src = MeetingFeed(r, BriefReader("http://agent", "s", transport=agent(ON)), consumer="A")
+        runner = Runner(r, [src], KeySource(env={}), FlowsEmitter("http://flows", "s", transport=flows(sent)),
+                        me="A", usd_per_mtok=2.0, model_transport=refusing_model(calls))
+        await hint(r, src)
+        await speak(r, "s-1", "Нашел звонок. У нас есть", 0.0, 8.0, completed=True)
+        await speak(r, "s-2", "Ты меня слышишь, ты не будешь на меня реагировать сейчас. Векса, привет.",
+                    30.0, 41.0, completed=True)
+        await runner.discover_once()
+        await runner.supervise_once()
+        assert await until(lambda: _len(sent, 1))              # woken DURING the call, not at its end
+        await end(r)
+        await asyncio.wait_for(runner.tasks[f"meeting:{ROW}"], 10)
+        return calls, sent
+
+    calls, sent = asyncio.run(go())
+    assert sent[0]["data"]["reason"] == "addressed"
+    assert "Векса, привет." in sent[0]["data"]["buffer"][-1]["text"]
+    assert len(calls) == 1                                       # only the unaddressed line went to the model
 
 
 # -- COALESCE: while the chat's signal turn is still running, new lines wait in ONE pending wake ---

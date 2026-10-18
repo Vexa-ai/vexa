@@ -13,6 +13,7 @@ from control_plane.workspace_reader import home_of
 
 from shared import sensitive as sensitive_mod
 from control_plane import claims as claims_mod
+from control_plane import page_grammar as page_grammar_mod
 from control_plane import deploy_keys as deploy_keys_mod
 from control_plane.routers import folder_import as folder_import_routes
 from control_plane import front_page as front_page_mod
@@ -277,6 +278,8 @@ def build(**d) -> APIRouter:
                 raise HTTPException(status_code=400, detail="invalid filename") from None
             pending.append((content, stored_name, f"{folder}/{stored_name}",
                             (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]))
+        for content, _n, path, _o in pending:
+            _hold_private(request, subject, home or None, path, ws, content=content, surface="asset")
         uploaded: list[dict] = []
         for content, stored_name, path, original in pending:
             # NOFOLLOW: a link planted at `uploads/`/`assets/` refuses, one at the name is replaced
@@ -305,8 +308,14 @@ def build(**d) -> APIRouter:
         twice is a permission check that will disagree with itself. One caller was already enough
         to make it worth a name; three is not a choice."""
         try:
-            wpaths.relative_parts(rel)   # absolute · `..` · `.git`/`.vexa` — one rule, every route
+            wpaths.relative_parts(rel)   # absolute · `..` · `.git`/`.vexa`/`policy` — one rule, every route
         except wpaths.PathRefused as exc:
+            # `policy/` IS THE PLATFORM'S (D5, security review C3): the roster, visibility and
+            # connections. A refusal there is about authority, not about the path's shape — 403.
+            if exc.kind == "reserved" and wpaths.is_platform_policy_path(rel):
+                raise HTTPException(status_code=403, detail=(
+                    "policy/ is written only by the platform — change members with "
+                    "workspace_membership or the members panel")) from None
             raise HTTPException(status_code=400, detail=str(exc)) from None
         # `kg/templates/` is the SHAPE of an entity, not one. It is hidden from every tree, so a tab
         # can only be open on it deliberately — and a save from that tab would silently rewrite the
@@ -343,6 +352,14 @@ def build(**d) -> APIRouter:
     folder_import_routes.mount(router, subject_of=subject_of, wsr=wsr, settings=settings, write_dir=_write_dir)
 
     def _refuse_sensitive(values: list[str]) -> None:
+        # GIT HOLDS PLACEHOLDERS ONLY (PRD 0.13.4 D17, deny test 23): a page rendered for a viewer
+        # (`page_render.to_markdown` stamps it) is never committed back as the page.
+        if any(page_grammar_mod.contains_resolved(str(v)) for v in values if v):
+            logger.warning(json.dumps({"event": "resolved_render_write_refused"}))
+            raise HTTPException(status_code=422, detail={
+                "refused": "resolved_placeholders",
+                "said": ("This text is a page as one person saw it, with its placeholders already filled in. "
+                         "Pages keep the placeholders ({{…}} and [[kind:id]]); edit the page's source instead.")})
         kinds = sensitive_mod.find_all(str(v) for v in values if v)
         if kinds:
             logger.warning(json.dumps({"event": "sensitive_write_refused", "kinds": kinds}))
@@ -415,6 +432,7 @@ def build(**d) -> APIRouter:
         a customer's workspace with no provenance at all."""
         subject = subject_of(request)
         target = _write_dir(request, subject, rel, slug)
+        _hold_private(request, subject, slug, rel, target, content=content, surface="asset")
         if len(content) > assets_mod.MAX_ASSET_BYTES:
             raise HTTPException(status_code=413,
                                 detail=f"{rel} exceeds {assets_mod.MAX_ASSET_BYTES // (1024 * 1024)}MB")
@@ -537,9 +555,15 @@ def build(**d) -> APIRouter:
         if content is None:
             raise HTTPException(status_code=404, detail="not found")
         return {"path": path, "content": content}
-    def _hold_private(request: Request, subject, slug, rel: str, target: Path) -> None:
-        """A PAGE WRITE FROM A SESSION THAT READ THE PERSON'S PRIVATE SOURCES into a workspace other
-        people read waits for the person (`private_taint`): 409 with a confirmation code."""
+    def _hold_private(request: Request, subject, slug, rel: str, target: Path, *,
+                      content=None, surface: str = "page", before: str = "",
+                      text: Optional[str] = None) -> None:
+        """A WRITE FROM A SESSION THAT READ THE PERSON'S PRIVATE DATA into a workspace other people
+        read — a page, an upload or asset, a filename, the workspace's name or purpose — waits for
+        the person (`private_taint`, D6): 409 with a typed fault and a confirmation code; what it
+        would have written is kept encrypted for the person's share card, never on a mount. When
+        the session's reads were fingerprinted, only a write whose added text (``content`` or
+        ``text`` over ``before``) carries something from them is held (frictions 1+2)."""
         if not ceiling_mod.is_delegated(request):
             return
         ws = str(slug or Path(target).name)
@@ -547,9 +571,14 @@ def build(**d) -> APIRouter:
             ws_name = str((workspace_registry.by_slug(ws) or {}).get("name") or "")
         except Exception:  # noqa: BLE001 — a name is a courtesy
             ws_name = ""
-        held = private_taint.check_write(
-            subject=str(subject), unit=identity_token.session_of(request.headers),
-            workspace=ws, path=rel, ws_dir=Path(target), workspace_name=ws_name)
+        if isinstance(content, (bytes, bytearray)):
+            import base64 as _b64  # noqa: PLC0415
+            content = {"base64": _b64.b64encode(bytes(content)).decode()}
+        held = private_taint.check_egress(
+            subject=str(subject), unit=identity_token.session_of(request.headers), surface=surface,
+            target=f"{ws}/{rel}", readers=private_taint.other_readers(Path(target), str(subject)),
+            workspace=ws, name=ws_name, path=rel, content=content, delegated=True,
+            before=before, text=text)
         if held is not None:
             raise HTTPException(status_code=409, detail=held)
 
@@ -695,7 +724,11 @@ def build(**d) -> APIRouter:
             if problems:
                 raise HTTPException(status_code=422, detail={
                     "refused": "not a usable template", "path": rel, "problems": problems})
-        _hold_private(request, subject, slug, rel, target)
+        try:
+            _before_text = wpaths.read_text_inside(target, rel) or ""
+        except (wpaths.PathRefused, OSError, ValueError):
+            _before_text = ""
+        _hold_private(request, subject, slug, rel, target, content=content, before=_before_text)
         notice = _policy_change(request, subject, target, rel, content)
         # TWO WRITERS ON ONE PAGE (#1783): read-merge-write-commit under one lock, and a write that
         # started from an older version is merged with what landed since (`page_merge`).
@@ -1045,6 +1078,10 @@ def build(**d) -> APIRouter:
         if (sbase / srel) == (dbase / drel):
             raise HTTPException(status_code=400, detail="the page is already there")
         same_workspace = src.resolve() == dst.resolve()
+        # A NAME IS CONTENT TOO (D6): the new filename lands where the destination's readers see it,
+        # and the page itself lands there when it crosses workspaces.
+        _hold_private(request, subject, dst_slug, dst_rel, dst, surface="filename",
+                      content=None if same_workspace else content)
         text = content.decode("utf-8", "replace")
         notice = " · ".join(n for n in (
             _policy_change(request, subject, src, src_rel, _pointer_stub(dst_rel) if same_workspace and
@@ -1131,7 +1168,10 @@ def build(**d) -> APIRouter:
             except MembershipError:
                 pass  # not shared — _read_target 403s anything outside the active set
         target = global_target or _read_target(request, slug, write=True)
-        _hold_private(request, subject, slug, f"kg/entities/{kind}/{name}", target)
+        _hold_private(request, subject, slug, f"kg/entities/{kind}/{name}", target,
+                      content=body.model_dump() if hasattr(body, "model_dump") else None,
+                      text="\n".join([name, summary, *facts, *questions, source,
+                                       *[str(v) for v in (body.fields or {}).values()]]))
         # ONE WRITER AT A TIME PER WORKSPACE: two parallel upserts of pages that link each other
         # merged into duplicate `## Connected` chips (a real workspace, 2026-10-14).
         with page_merge.write_lock(target):
@@ -1582,6 +1622,16 @@ def build(**d) -> APIRouter:
         that it happened at all is to have written it down."""
         _id_in_ceiling(request, workspace_id)
         subject = subject_of(request)
+        # A WORKSPACE'S NAME IS READ BY EVERY MEMBER (D6): held like a page write.
+        _rec0 = workspace_registry.get(workspace_id) or {}
+        _slug0 = str(_rec0.get("slug") or workspace_id)
+        try:
+            _dir0 = membership_mod._ws_dir(Path(wsr.root), _slug0)
+        except Exception:  # noqa: BLE001 — an unresolvable workspace has no roster to read
+            _dir0 = None
+        if _dir0 is not None:
+            _hold_private(request, subject, _slug0, ".vexa/name", _dir0, surface="workspace_name",
+                          content=str(body.get("name") or ""))
         try:
             rec = ids_mod.rename_audited(
                 workspace_registry, workspace_id, str(body.get("name") or ""), by=str(subject),
@@ -2171,6 +2221,8 @@ def build(**d) -> APIRouter:
         """Set (or clear) a workspace's PURPOSE — stored in the workspace + committed so it travels when
         shared and feeds the mount preamble. Returns the normalized purpose actually stored."""
         ws = _manage_dir(request, body.slug)
+        _hold_private(request, subject_of(request), body.slug, ".vexa/purpose", ws, surface="purpose",
+                      content=body.purpose)
         return {"purpose": write_purpose(ws, body.purpose)}
     @router.post("/api/workspace/shared/{workspace_id}/attach")
     def ws_shared_attach(workspace_id: str, request: Request, body: SharedAttachBody = Body(default=SharedAttachBody())):
@@ -2346,6 +2398,7 @@ def build(**d) -> APIRouter:
             except Exception:  # noqa: BLE001
                 pass
         membership_mod.drop_invites(wsr.root, slug)
+        membership_mod.drop_policy_store(wsr.root, slug)   # the roster does not outlive the tree (D5)
         try:
             rec = workspace_registry.by_slug(slug)
             if rec and rec.get("id"):

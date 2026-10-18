@@ -196,12 +196,19 @@ def entity_slug_index(root, *, workspace_id: str, kinds=None, slugify=None) -> d
 # A JOIN LINK (`/join/<token>`, `control_plane.join_links`) is a reference too, of kind `join`: one
 # that carries a grant. It is recognised here so a calendar body yields it with the others.
 
-REF_KINDS = ("workspace", "chat", "page", "entity", "meeting", "flow", "sensor")
+#: One form for every object (PRD 0.13.4 D18, UI 7gg). `control_plane/page_grammar.py` uses this list.
+REF_KINDS = ("workspace", "room", "chat", "page", "file", "entity", "meeting", "card", "person",
+             "routine", "sensor", "message", "query", "series", "flow")
+#: Older spellings that name the same kind (the rich-README `call:`; `flow:` stays its own kind here
+#: because the resolver answers flows and routines through the same seam).
+REF_KIND_ALIASES = {"call": "meeting"}
 REF_PATH = "/r/"
-_KIND_ALT = "|".join(REF_KINDS)
-_REF_ID = r"[^\s<>\"'#?|\]\[]{1,300}"
-REF_URL = re.compile(r"(?:https?://[^\s/<>\"']+)?/r/(" + _KIND_ALT + r")/(" + _REF_ID + r")")
-_REF_CHIP = re.compile(r"^(" + _KIND_ALT + r"):(" + _REF_ID + r")$")
+_KIND_ALT = "|".join(REF_KINDS + tuple(REF_KIND_ALIASES))
+_REF_ID = r"[^\s<>\"'#|\]\[]{1,300}"
+_REF_URL_ID = r"[^\s<>\"'#?|\]\[]{1,300}"
+REF_URL = re.compile(r"(?:https?://[^\s/<>\"']+)?/r/(" + _KIND_ALT + r")/(" + _REF_URL_ID + r")(?:#([\w=:.-]{1,120}))?")
+_REF_CHIP = re.compile(r"^(" + _KIND_ALT + r"):(" + _REF_ID + r")(?:#([\w=:.-]{1,120}))?$")
+_CHIP_TIME = re.compile(r"^(.+?)@((?:\d{1,2}:)?\d{1,2}:\d{2})$")
 _JOIN_URL = re.compile(r"https?://[^\s/<>\"']+/join(?:/([A-Za-z0-9_-]{40,64})|\?i=([A-Za-z0-9_-]{40,64}))")
 _TRAILING = ".,;:!)"
 
@@ -211,6 +218,27 @@ class UniversalRef:
     kind: str                  # one of REF_KINDS, or "join"
     id: str
     label: Optional[str] = None
+    #: A place inside the object (D18): ``t=00:12:30`` (a meeting moment), ``L42`` (a transcript
+    #: line), a heading slug (a page). Never part of the access decision: the object decides.
+    anchor: Optional[str] = None
+
+
+def _anchor(kind: str, rid: str, frag: Optional[str]) -> tuple[str, Optional[str]]:
+    """Split ``153@00:12:30`` into the id and ``t=00:12:30``; keep a ``#fragment`` as given."""
+    a = (frag or "").strip() or None
+    if kind == "meeting":
+        m = _CHIP_TIME.match(rid)
+        if m:
+            rid, a = m.group(1), "t=" + m.group(2)
+    if a and a.startswith("t="):
+        parts = [int(x) for x in a[2:].split(":") if x.isdigit()]
+        if len(parts) in (2, 3) and parts[-1] < 60:
+            h, mi, se = ([0] + parts)[-3:]
+            total = h * 3600 + mi * 60 + se
+            a = f"t={total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"
+        else:
+            a = None
+    return rid, a
 
 
 def _clean_id(raw: str) -> Optional[str]:
@@ -220,16 +248,20 @@ def _clean_id(raw: str) -> Optional[str]:
     return i
 
 
-def ref_url(kind: str, ref_id: str, *, base: str = "") -> str:
-    """``<base>/r/<kind>/<id>`` — the one URL for any object."""
+def ref_url(kind: str, ref_id: str, *, base: str = "", anchor: Optional[str] = None) -> str:
+    """``<base>/r/<kind>/<id>[#anchor]`` — the one URL for any object."""
     from urllib.parse import quote
 
-    return f"{str(base or '').rstrip('/')}{REF_PATH}{kind}/{quote(str(ref_id), safe='/-_.~')}"
+    url = f"{str(base or '').rstrip('/')}{REF_PATH}{kind}/{quote(str(ref_id), safe='/-_.~@:')}"
+    return url + (f"#{anchor}" if anchor else "")
 
 
-def ref_chip(kind: str, ref_id: str, label: Optional[str] = None) -> str:
-    """``[[kind:id|label]]`` — the chip the agent writes."""
-    return f"[[{kind}:{ref_id}|{label}]]" if label else f"[[{kind}:{ref_id}]]"
+def ref_chip(kind: str, ref_id: str, label: Optional[str] = None, anchor: Optional[str] = None) -> str:
+    """``[[kind:id|label]]`` — the chip the agent writes (a meeting moment as ``id@hh:mm:ss``)."""
+    rid = str(ref_id)
+    if anchor:
+        rid += f"@{anchor[2:]}" if kind == "meeting" and anchor.startswith("t=") else f"#{anchor}"
+    return f"[[{kind}:{rid}|{label}]]" if label else f"[[{kind}:{rid}]]"
 
 
 def parse_universal(text: str) -> Optional[UniversalRef]:
@@ -242,12 +274,17 @@ def parse_universal(text: str) -> Optional[UniversalRef]:
     inner, label = (m.group(1).strip(), (m.group(2) or "").strip() or None) if m else (t, None)
     c = _REF_CHIP.match(inner)
     if c:
-        i = _clean_id(c.group(2))
-        return UniversalRef(c.group(1), i, label) if i else None
+        kind = REF_KIND_ALIASES.get(c.group(1), c.group(1))
+        rid, anchor = _anchor(kind, c.group(2), c.group(3))
+        i = _clean_id(rid)
+        return UniversalRef(kind, i, label, anchor) if i else None
+    frag = t.split("#", 1)[1] if "#" in t else None
     u = REF_URL.fullmatch(t.split("#", 1)[0].split("?", 1)[0])
     if u:
-        i = _clean_id(unquote(u.group(2)))
-        return UniversalRef(u.group(1), i) if i else None
+        kind = REF_KIND_ALIASES.get(u.group(1), u.group(1))
+        rid, anchor = _anchor(kind, unquote(u.group(2)), frag)
+        i = _clean_id(rid)
+        return UniversalRef(kind, i, None, anchor) if i else None
     j = _JOIN_URL.fullmatch(t)
     if j:
         return UniversalRef("join", j.group(1) or j.group(2))
@@ -267,9 +304,11 @@ def universal_refs_in(text: str) -> list[UniversalRef]:
     for m in REF_URL.finditer(s):
         if s[max(0, m.start() - 2):m.start()] == "[[":
             continue
-        i = _clean_id(unquote(m.group(2)))
+        kind = REF_KIND_ALIASES.get(m.group(1), m.group(1))
+        rid, anchor = _anchor(kind, unquote(m.group(2)), m.group(3))
+        i = _clean_id(rid)
         if i:
-            hits.append((m.start(), UniversalRef(m.group(1), i)))
+            hits.append((m.start(), UniversalRef(kind, i, None, anchor)))
     for m in _JOIN_URL.finditer(s):
         hits.append((m.start(), UniversalRef("join", m.group(1) or m.group(2))))
     out: list[UniversalRef] = []
@@ -288,7 +327,7 @@ def refs_as_urls(text: str, *, base: str) -> str:
         r = parse_universal(m.group(0))
         if not r or r.kind == "join":
             return m.group(0)
-        url = ref_url(r.kind, r.id, base=base)
+        url = ref_url(r.kind, r.id, base=base, anchor=r.anchor)
         return f"{r.label} ({url})" if r.label else url
 
     return WIKILINK.sub(_sub, str(text or ""))

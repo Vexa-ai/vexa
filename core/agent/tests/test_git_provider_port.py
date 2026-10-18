@@ -152,6 +152,7 @@ ALLOWED = {
     "core/agent/shared/git_provider_github.py": "the GitHub adapter",
     "clients/terminal/src/data/gitProviders.ts": "the terminal's built-in GitHub default",
     "clients/terminal/src/minutes/connectionHosts.ts": "custom-secret API host suggestions, not git hosting",
+    "clients/terminal/src/surfaces/profile/profileApi.ts": "a profile link's slot (a GitHub profile URL), not git hosting (S3)",
 }
 SCANNED = ("core/agent/control_plane", "core/agent/shared", "core/agent/worker", "clients/terminal/src")
 

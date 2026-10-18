@@ -428,7 +428,7 @@ def _validate_platform(tool: str, platform: Optional[str], *,
 async def reject_unknown_arguments(request: Request) -> None:
     """Refuse query parameters the route does not declare.
 
-    FastAPI ignores extras, so `get_meeting_transcript(limit=2)` — no such parameter — returned
+    FastAPI ignores extras, so `get_meeting_transcript(limit=2)` — before `limit` existed — returned
     200 with the argument silently dropped. For an agent that is the worst failure mode available:
     a typo'd or hallucinated parameter looks like it worked, and the wrong answer is indistinguishable
     from the right one. Named near-misses are called out, because the commonest cause is a caller
@@ -520,7 +520,8 @@ The canonical flow:
      expect a delay between `requested` and `active`.
   3. get_meeting_transcript(platform, native_meeting_id) → segments, WHILE the meeting runs.
      Poll it to follow a live meeting; pass `since_index` to get only what is new since your last
-     call instead of re-reading the whole transcript.
+     call instead of re-reading the whole transcript. Answers come in pages (`limit`, default 200;
+     `until_index` caps the range): while `has_more` is true, call again with since_index=next_index.
   4. stop_bot(platform, native_meeting_id) when you are done.
 
 Identity: every tool returns `platform` + `native_meeting_id`, and every tool accepts those same \
@@ -874,6 +875,24 @@ def create_app(
                 "previous call to follow a live meeting without re-reading what you already have."
             ),
         ),
+        limit: Optional[int] = Query(
+            None,
+            ge=1,
+            le=TRANSCRIPT_PAGE,
+            description=(
+                f"Most segments to return in this page (1-{TRANSCRIPT_PAGE}, default "
+                f"{TRANSCRIPT_PAGE}). Ask for a small page when you only need part of a long "
+                "meeting; `has_more` and `next_index` tell you how to get the rest."
+            ),
+        ),
+        until_index: Optional[int] = Query(
+            None,
+            ge=0,
+            description=(
+                "Stop before this segment index (exclusive upper bound). With `since_index` it "
+                "reads one fixed range, e.g. since_index=100&until_index=150."
+            ),
+        ),
         meeting_id: Optional[str] = Query(None, deprecated=True, description=_LEGACY_ID_DESC),
         meeting_platform: Optional[str] = Query(None, deprecated=True, description=_LEGACY_PLATFORM_DESC),
         api_key: str = Depends(get_api_key),
@@ -889,7 +908,20 @@ def create_app(
 
         To follow a live meeting cheaply, pass `since_index` = the `next_index` from your previous
         call; you get only what has been said since, instead of the whole transcript every time.
+
+        Paging: one answer carries at most `limit` segments (default and maximum 200) from
+        `since_index` up to, not including, `until_index`. `has_more` is true when the range you
+        asked for continues past this page; call again with since_index=`next_index` (same
+        `until_index`) to get the rest. `complete` is true only when you have reached the end of
+        the whole transcript. Never summarise from a page while `has_more` or `complete` says
+        there is more.
         """
+        if since_index is not None and until_index is not None and until_index < since_index:
+            raise HTTPException(
+                status_code=422,
+                detail=(f"get_meeting_transcript: until_index ({until_index}) is before "
+                        f"since_index ({since_index}); until_index is an exclusive upper bound."),
+            )
         if meeting_db_id is not None:
             url = f"{base_url}/transcripts/by-id/{path_segment(meeting_db_id)}"
         else:
@@ -912,20 +944,31 @@ def create_app(
                 segments = result[key]
                 total = len(segments)
                 start = min(since_index, total) if since_index is not None else 0
+                stop = min(until_index, total) if until_index is not None else total
+                page = limit if limit is not None else TRANSCRIPT_PAGE
                 # ONE PAGE AT A TIME (a real call, 2026-10-14): a 538-segment transcript in one
                 # answer was cut by the caller's harness, and the notes written from it stopped
                 # half way and said "not discussed" about what was said after the cut. A page is
-                # at most TRANSCRIPT_PAGE segments; `next_index` is where the next page starts.
-                end = min(total, start + TRANSCRIPT_PAGE)
+                # at most `limit` (default TRANSCRIPT_PAGE) segments, ending no later than
+                # `until_index`; `next_index` is where the next page starts.
+                end = min(stop, start + page)
+                has_more = end < stop
                 result = {**result, key: segments[start:end], "total_segments": total,
-                          "next_index": end, "complete": end >= total}
-                if end < total:
+                          "next_index": end, "has_more": has_more, "complete": end >= total}
+                if has_more:
+                    bound = f"&until_index={until_index}" if until_index is not None else ""
                     result["note"] = (
-                        f"Segments {start}-{end - 1} of {total}. This is NOT the whole transcript: "
-                        f"call again with since_index={end} until complete is true before you "
-                        "summarise it, and never say something was not discussed from a part of it.")
+                        f"Segments {start}-{end - 1} of {total}. This is NOT the whole "
+                        f"{'range you asked for' if until_index is not None else 'transcript'}: "
+                        f"call again with since_index={end}{bound} until has_more is false before "
+                        "you summarise it, and never say something was not discussed from a part "
+                        "of it.")
                 if since_index is not None:
                     result["since_index"] = start
+                if until_index is not None:
+                    result["until_index"] = stop
+                if limit is not None or has_more:
+                    result["limit"] = page
         return result
 
     @app.get("/transcript-search", operation_id="search_transcripts")
@@ -1473,7 +1516,12 @@ def create_app(
     # the call path, so a refused call is answered, and then rendered by every wrapper below, exactly
     # as a call to a tool that does not exist. Unset: nothing is filtered.
     from . import visibility as visibility_mod
-    visibility_mod.install(mcp, visibility_env)
+    # D3: a shared caller (a room's or a shared chat's delegation) is shown only the tools whose
+    # domain manifest says `shared: allow`; read off the live assembly, so a late domain's join too.
+    def _shared_tools():
+        asm = getattr(app.state, "assembly", None)
+        return [t.name for t in (getattr(asm, "tools", None) or []) if getattr(t, "shared", "") == "allow"]
+    visibility_mod.install(mcp, visibility_env, shared_source=_shared_tools)
 
     # A stringified array/object argument is read as the value it spells, BEFORE the library's
     # schema check refuses it with a message the agent cannot act on (`arguments.py`).

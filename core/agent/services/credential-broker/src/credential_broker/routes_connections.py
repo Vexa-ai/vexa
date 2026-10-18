@@ -3,7 +3,8 @@ connection.
 
 * Lifecycle — list, request setup, prepare a custom service, the human saves (a secret, an OAuth
   application), consent (authorize and the Google callback), disconnect and delete.
-* Use — account reads, Gmail drafts (create, reply in a thread, update one this broker created),
+* Use — account reads, Gmail drafts (create, reply in a thread, update one this broker created, or
+  one the person wrote when the call says replace_person_draft),
   Google Calendar changes (create, update, cancel) and custom-service calls, each audited before it
   acts and held to the connection policy agent-api forwards (`action_policy`). A write (a draft, a
   calendar change) is refused to a worker without a person in the loop whatever policy it forwards;
@@ -409,6 +410,9 @@ def build(b: Broker) -> APIRouter:
         first result when this request id already ran. Raises 409 on reuse with other input, and on
         a first attempt whose outcome is unknown."""
         content = body.model_dump(exclude={"policy"})
+        if content.get("replace_person_draft") is False:
+            # Added 2026-10: an update fingerprinted before the flag existed still matches its retry.
+            content.pop("replace_person_draft")
         fingerprint = hmac.new(b.hmac_key, (kind + ":" + json.dumps(content, sort_keys=True)).encode(),
                                hashlib.sha256).hexdigest()
         legacy = fingerprint
@@ -455,8 +459,16 @@ def build(b: Broker) -> APIRouter:
                 return prior
             if update and not b.sql("SELECT 1 FROM drafts WHERE draft_id=? AND actor=? AND connection=?",
                                     (body.draft_id, who["actor"], cid), one=True):
-                b.audit(who, cid, kind, "refused", operation=body.request_id)
-                raise HTTPException(409, "Only drafts Vexa created in this mailbox can be updated")
+                # A draft Vexa did not create is the person's own words. It is replaced only when the
+                # call says so explicitly (replace_person_draft: the person asked, in their own chat);
+                # identity() above already refused a shared session and one without a person in the
+                # loop. The PUT is in this connection's own mailbox, so another mailbox's id is a 404.
+                if not body.replace_person_draft:
+                    b.audit(who, cid, kind, "refused", operation=body.request_id)
+                    raise HTTPException(409, "Only drafts Vexa created in this mailbox can be updated by default. "
+                                             "If the person asked in this chat to replace their own draft, retry "
+                                             "with replace_person_draft true; otherwise create a new draft")
+                b.audit(who, cid, kind, "person_draft_replace_requested", operation=body.request_id)
             try:
                 action_policy.require_domains([body.recipient, *body.cc, *body.bcc], policy.recipient_domains,
                                               "draft_recipient_domains")

@@ -11,6 +11,7 @@
   "tools": [
     {
       "name": "crm_describe",
+      "shared": "allow",
       "identity": "user",
       "auth": "subject",
       "requires": [
@@ -27,6 +28,7 @@
     },
     {
       "name": "crm_search",
+      "shared": "allow",
       "identity": "user",
       "auth": "subject",
       "requires": [
@@ -46,6 +48,7 @@
     },
     {
       "name": "crm_read",
+      "shared": "allow",
       "identity": "user",
       "auth": "subject",
       "requires": [
@@ -244,6 +247,7 @@
     },
     {
       "name": "card_list",
+      "shared": "allow",
       "identity": "user",
       "auth": "subject",
       "requires": [
@@ -285,7 +289,7 @@
         "face",
         "reason"
       ],
-      "note": "Any agent turn, watched or not: a proposed card (a change proposal with no record yet). A person accepts it with their own credential (crm_review): a writer of the workspace it was proposed into, or the person the agent acted for. Capped by card_proposals_pending_max / card_proposals_per_agent_per_day, expires after card_proposal_ttl_days."
+      "note": "Any agent turn, watched or not: a proposed card (a change proposal with no record yet). A person accepts it with their own credential (crm_review): a writer of the workspace it was proposed into, or the person the agent acted for. Capped by card_proposals_pending_max / card_proposals_per_agent_per_day, expires after card_proposal_ttl_days. S5 (PRD 0.13.4 D11): with fields.Kind (commitment, approval, question, ask, invitation, policy_change) and fields.NextActor the card is made at once in its template's first stage and OFFERED to its next actor (status 'offered'): the card is the proposal, only that person's acknowledgement moves it, and the agent never moves it after. Capped by card_proposals_per_agent_per_day."
     },
     {
       "name": "card_update_propose",
@@ -308,6 +312,13 @@
         "reason"
       ],
       "note": "A change or a stage move, always a proposal a member accepts (founder 2026-10-15, desktop ADR Q3: an agent never moves a card's stage)."
+    }
+  ],
+  "publishes_events": [
+    {
+      "event": "crm.record.changed",
+      "status": "published today",
+      "triggers": "crm_change_log v1 (a reference receipt, flows_defs/crm.py) and any person's routine on this event; since event.v2 (D8) the crm outbox seals an envelope whose audience reaches the next actor and the card's members, not only the actor"
     }
   ]
 }

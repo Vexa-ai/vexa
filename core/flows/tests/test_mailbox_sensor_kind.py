@@ -23,6 +23,7 @@ from flows_sensors import pool  # noqa: E402
 from flows_sensors.base import SensorRow  # noqa: E402
 from flows_sensors.mailbox import MailboxSensor  # noqa: E402
 from sqlite_double import SqliteDB  # noqa: E402
+from mail_auth_fixture import authed  # noqa: E402
 
 NOW = 1_900_000_000.0          # 2030-03-17
 SELF = "info@vexa.ai"
@@ -40,7 +41,7 @@ def _ics(uid="evt-1", start="20300320T100000Z", organizer="host@vexa.ai", method
 
 def _msg(n, frm="host@vexa.ai", ics=None, headers=None, subject="Invitation"):
     return InboundMessage(cursor=str(n), ext_id=str(n), message_id=f"<in-{n}@mail>", frm=frm,
-                          subject=subject, headers=dict(headers or {}), body="text", ics=ics)
+                          subject=subject, headers=authed(frm, headers), body="text", ics=ics)
 
 
 class _Inbox:

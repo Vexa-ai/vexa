@@ -62,8 +62,9 @@ def test_decline_from_the_notice_revokes_the_invite_and_tells_the_inviter(env):
     assert r.json()["open"] is None and r.json()["notification"]["state"] == "declined"
     assert r.json()["notification"]["actions"] == []
     assert [x["kind"] for x in _mine(client, ALICE)["notifications"]] == ["invite_declined"]
-    token = n["object"]["url"].split("i=", 1)[1]
-    assert client.post("/api/workspace/invites/accept", json={"token": token}, headers=_h(DAVE)).status_code == 410
+    # the row holds no token (M2): the invite is gone, so accepting it again from the notice is refused
+    assert "url" not in n["object"]
+    assert _act(client, DAVE, n["id"], "accept").status_code == 409
 
 
 def test_nobody_acts_on_another_persons_notice(env):

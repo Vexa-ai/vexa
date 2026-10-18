@@ -149,6 +149,24 @@ def build(**d) -> APIRouter:
                              instruction="Rooms are changed by the people in them. Say what you would "
                                          "change and stop.")
 
+    def _policy_change(request: Request, workspace_id: str, role) -> None:
+        """A change to a workspace's POLICY (visibility, connections) goes through the one evaluator
+        (``policy_decide``, D7). INTERIM until S5's signed card: the workspace's owner, from a SESSION
+        credential (D13) — no delegation token of any regime, no API key whatever its scopes. A store that
+        cannot be read refuses (503, FD3)."""
+        from control_plane import policy_decide as _pd  # noqa: PLC0415
+        out = _pd.decide(_pd.Ask(principal=str(subject_of(request)), action="policy.change",
+                                 workspace=workspace_id, role=role,
+                                 credential=_pd.credential_of(request.headers)),
+                         root=wsr.root)
+        if out.decision == _pd.REFUSE:
+            raise HTTPException(status_code=503, detail={"refused": _pd.POLICY_UNREADABLE, "rule": out.rule})
+        if not out.allowed:
+            raise HTTPException(status_code=403, detail={
+                "refused": "policy_change_needs_the_owner_in_a_browser_session", "rule": out.rule,
+                "note": "Visibility and connections are changed by the workspace's owner, from the app. "
+                        "Say what you would change and stop."})
+
     def _say(row: dict, text: str) -> None:
         try:
             _store().add_note(row["id"], rooms.AGENT_AUTHOR, text)
@@ -217,8 +235,17 @@ def build(**d) -> APIRouter:
             from control_plane import model_providers  # noqa: PLC0415
             if not model_providers.is_model_id(body.level):
                 raise HTTPException(status_code=422, detail={"refused": "not_a_model_id", "level": body.level})
+        from control_plane import pair_rooms, room_membership  # noqa: PLC0415
+        if body.visibility and body.visibility != cur["visibility"] and pair_rooms.is_pair_room(s, wsr.root, row["id"]):
+            raise HTTPException(status_code=409, detail={"refused": "room_of_two",
+                                                         "said": "A room of two is always just the two of you."})
+        if body.visibility == "closed" and cur["visibility"] == "open" and ws:
+            # OPEN → CLOSED (D36): the people who were following it stay, as explicit rows
+            room_membership.seed(s, wsr.root, row["id"], keep=lambda who: _is_member(ws, who))
         out = s.put_room(row["id"], proactivity=body.proactivity, visibility=body.visibility,
                          listen=listen, workspace=ws or None, level=body.level)
+        if body.visibility == "open" and cur["visibility"] != "open":
+            room_membership.forget(wsr.root, row["id"])          # now derived from the workspace
         if body.level is not None and body.level != cur["level"]:
             _say(row, f"This room now runs on {body.level or 'the default model'} (from its next turn).")
         if body.proactivity and body.proactivity != cur["proactivity"]:
@@ -247,11 +274,19 @@ def build(**d) -> APIRouter:
         if stranger:
             raise HTTPException(status_code=403, detail={"refused": "not_a_workspace_member",
                                                          "who": stranger})
+        from control_plane import pair_rooms, room_membership  # noqa: PLC0415
+        if pair_rooms.is_pair(wsr.root, ws):
+            raise HTTPException(status_code=409, detail={"refused": "room_of_two",
+                                                         "said": "A room of two has its one room."})
         row = s.create(subject, title=body.name.strip(), workspaces=[ws])
         s.put_room(row["id"], visibility=body.visibility, proactivity=rooms.DEFAULT_PROACTIVITY,
                    workspace=ws, created_by=subject)
+        # WHO IS IN IT (D36): an open room's members are its workspace's (the rows below only record
+        # who was brought in); a closed room's are explicit registry rows, the maker's first
+        if body.visibility == "closed":
+            room_membership.seed(s, wsr.root, row["id"])
         for m in members:
-            s.join(row["id"], m)
+            room_membership.add(s, wsr.root, row["id"], m, actor=subject)
         return {"session_id": row["id"], "name": row["title"], **rooms.settings(s, row["id"])}
 
     @router.post("/api/rooms/{session}/join")
@@ -264,7 +299,9 @@ def build(**d) -> APIRouter:
         row = s.get(session) if session.startswith(session_sync.STORE_ID_PREFIX) else None
         if row is None or not rooms.visible_to(s, row["id"], subject, is_member=_is_member):
             raise HTTPException(status_code=404, detail="session not found")
-        if s.can_read(row["id"], subject):
+        # AN OPEN ROOM'S MEMBERS ARE ITS WORKSPACE'S (D36): "joining" is following it — the room is
+        # in your rail from now on, and a call in it rings you (the ring window counts from here)
+        if s.row_role(row["id"], subject) is not None:
             return {"session_id": row["id"], "joined": False, **rooms.settings(s, row["id"])}
         if not rooms.can_join(s, row["id"], subject, is_member=_is_member):
             raise HTTPException(status_code=404, detail="session not found")
@@ -283,6 +320,10 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=409, detail={"refused": "not_a_room",
                                                          "said": "This is a private chat, not a room."})
         from control_plane.session_store import SessionDenied  # noqa: PLC0415
+        from control_plane import pair_rooms as _pr  # noqa: PLC0415
+        if _pr.is_pair_room(s, wsr.root, row["id"]):
+            raise HTTPException(status_code=409, detail={
+                "refused": "room_of_two", "said": "A room of two is left by muting it, not leaving it."})
         handed_to = ""
         if s.role_of(row["id"], subject) == "owner":
             nxt = next((p["principal"] for p in s.participants(row["id"])
@@ -294,8 +335,12 @@ def build(**d) -> APIRouter:
                             "Add someone and hand it on first (POST /api/rooms/{session}/hand-on)."})
             s.hand_on(row["id"], subject, nxt)
             handed_to = nxt
+        from control_plane import pair_rooms, room_membership  # noqa: PLC0415
+        if handed_to:
+            room_membership.set_owner(s, wsr.root, row["id"], subject, handed_to)
         try:
-            left = s.remove_participant(row["id"], subject, subject)
+            # a closed room: its registry row goes; an open room: only the following (it is derived)
+            left = room_membership.remove(s, wsr.root, row["id"], subject)
         except SessionDenied as exc:
             raise HTTPException(status_code=403, detail={
                 "refused": exc.reason, "said": f"You could not leave this room ({exc.reason})."}) from None
@@ -320,6 +365,8 @@ def build(**d) -> APIRouter:
             said = {"not_session_owner": "Only the room's owner can hand it on.",
                     "not_a_member": "The room can be handed on only to one of its members."}.get(exc.reason, exc.reason)
             raise HTTPException(status_code=403, detail={"refused": exc.reason, "said": said}) from None
+        from control_plane import room_membership  # noqa: PLC0415
+        room_membership.set_owner(s, wsr.root, row["id"], subject, body.to)
         _say(row, f"The room was handed on to {body.to}.")
         return {"session_id": row["id"], "owner": body.to,
                 "members": [{"principal": p["principal"], "role": p["role"]} for p in s.participants(row["id"])]}
@@ -331,9 +378,14 @@ def build(**d) -> APIRouter:
         s = _store()
         if s.room(row["id"]) is None:
             raise HTTPException(status_code=409, detail={"refused": "not_a_room"})
+        from control_plane import room_membership  # noqa: PLC0415
+        try:
+            mem = room_membership.members(s, wsr.root, row["id"])
+        except Exception:  # noqa: BLE001 — an unreadable roster names nobody (FD3)
+            raise HTTPException(status_code=503, detail={"refused": "policy_unreadable"}) from None
         return {"session_id": row["id"],
-                "members": [{"principal": p["principal"], "kind": p["kind"], "role": p["role"]}
-                            for p in s.participants(row["id"])]}
+                "members": [{"principal": x["principal"], "kind": x["kind"], "role": x["role"],
+                             "derived": x["derived"]} for x in mem]}
 
     # ── a workspace's open state and its connected open workspaces (C1's read grant) ───────────
 
@@ -365,6 +417,7 @@ def build(**d) -> APIRouter:
         role = _ws_role(request, workspace_id)
         if role not in ("owner", "contributor"):
             raise HTTPException(status_code=403, detail={"refused": "not_a_workspace_writer"})
+        _policy_change(request, workspace_id, role)      # connections are policy (D5): the owner's
         require_in_ceiling(request, body.workspace)
         from control_plane import room_principal as _rp, workspace_membership  # noqa: PLC0415
         try:
@@ -382,8 +435,10 @@ def build(**d) -> APIRouter:
         """Stop reading a connected workspace."""
         require_in_ceiling(request, workspace_id, body.workspace)   # the ceiling before anything else
         _person_only(request)
-        if _ws_role(request, workspace_id) not in ("owner", "contributor"):
+        role = _ws_role(request, workspace_id)
+        if role not in ("owner", "contributor"):
             raise HTTPException(status_code=403, detail={"refused": "not_a_workspace_writer"})
+        _policy_change(request, workspace_id, role)
         from control_plane import room_principal as _rp, workspace_membership  # noqa: PLC0415
         return {"workspace": workspace_id,
                 "connected": _rp.disconnect(wsr.root, workspace_id, body.workspace,
@@ -395,8 +450,10 @@ def build(**d) -> APIRouter:
         """Open a workspace (other workspaces' rooms may connect it and read it) or close it. Owner only."""
         require_in_ceiling(request, workspace_id)       # the ceiling before anything else
         _person_only(request)
-        if _ws_role(request, workspace_id) != "owner":
+        role = _ws_role(request, workspace_id)
+        if role != "owner":
             raise HTTPException(status_code=403, detail={"refused": "not_the_workspace_owner"})
+        _policy_change(request, workspace_id, role)
         from control_plane import room_principal as _rp, workspace_membership  # noqa: PLC0415
         return {"workspace": workspace_id,
                 "visibility": _rp.set_visibility(wsr.root, workspace_id, body.visibility,
@@ -572,10 +629,14 @@ def build(**d) -> APIRouter:
         st = rooms.settings(s, row["id"])
         # what the people chose (proactivity) applied to what the agent wrote (the brief)
         brief = rooms.effective_brief(st["listen"] or meeting_listen.default_brief(pol), st["proactivity"])
+        if not st.get("agent_on", True):
+            brief = {**brief, "labels": [{**lab, "wake": False} for lab in (brief.get("labels") or [])]}
         return {"brief": brief, "version": st["listen_version"], "default": not st["listen"],
                 "workspace": st["workspace"], "page_path": "", "chat_session": row["id"],
                 "subject": subject, "room": st["room"], "humans": st["humans"],
                 "visibility": st["visibility"], "proactivity": st["proactivity"],
+                # "Vexa in this room" off (S4): the sensor stands down — nothing to score, nothing to wake
+                "agent_on": st.get("agent_on", True),
                 "stream": rooms.stream_key(row["id"]),
                 "policy": {k: pol[k] for k in ("transcript_signals", "model_signals",
                                                 "signals_wakes_per_meeting",

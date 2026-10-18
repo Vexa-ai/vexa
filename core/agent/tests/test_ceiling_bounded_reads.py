@@ -39,7 +39,7 @@ SEGMENTS = [
 
 
 def _me(subject: str = ME) -> dict:
-    return {"X-User-Id": subject, "X-User-Email": f"{subject}@example.com"}
+    return {"X-User-Id": subject, "X-User-Email": f"{subject}@example.com", "x-user-credential-class": "session"}
 
 
 def _worker(*workspaces: str, regime: str = "autonomous") -> dict:

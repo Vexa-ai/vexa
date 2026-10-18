@@ -67,7 +67,12 @@ def stream_key(session_id: str) -> str:
 
 
 def humans(store, session_id: str) -> int:
+    """How many people are in it: the room-membership authority's count when installed (an open
+    room's members are its workspace's, D36), else the participant rows."""
     try:
+        fn = getattr(store, "_room_members", None)
+        if fn is not None and store.room(session_id) is not None:
+            return sum(1 for x in fn(session_id) if x.get("kind") == "human")
         return len(store.humans(session_id))
     except Exception:  # noqa: BLE001 — a store that cannot answer is not a room
         return 0
@@ -96,7 +101,11 @@ def settings(store, session_id: str) -> dict:
             "level": (row or {}).get("level") or "",
             "write_target": (row or {}).get("workspace") or "",
             "created_by": (row or {}).get("created_by") or "",
-            "cross_org": bool((row or {}).get("cross_org"))}
+            "cross_org": bool((row or {}).get("cross_org")),
+            # THE TWO SWITCHES (S4, UI 7hh): on unless switched off; the asks waiting for consent
+            "agent_on": (row or {}).get("agent_on", True) is not False,
+            "transcribe": (row or {}).get("transcribe", True) is not False,
+            "switch_asks": (row or {}).get("switch_asks") or {}}
 
 
 _CLIENTS: dict = {}

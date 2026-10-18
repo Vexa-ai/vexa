@@ -11,42 +11,48 @@
       "path": "/user/calendar",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PUT",
       "path": "/user/calendar",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
       "path": "/user/calendars",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
       "path": "/user/calendars",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
       "path": "/user/calendars/{calendar_id}",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PATCH",
       "path": "/user/calendars/{calendar_id}",
       "scopes": [
         "bot"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -54,7 +60,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PUT",
@@ -62,7 +69,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -70,7 +78,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PUT",
@@ -78,7 +87,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -86,7 +96,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PUT",
@@ -94,7 +105,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -103,7 +115,8 @@
         "bot",
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "PUT",
@@ -112,7 +125,8 @@
         "bot",
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -121,7 +135,8 @@
         "bot",
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "PUT",
@@ -130,7 +145,8 @@
         "bot",
         "tx"
       ],
-      "mcp_reentry": true
+      "mcp_reentry": true,
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -138,7 +154,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PUT",
@@ -146,7 +163,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "DELETE",
@@ -154,7 +172,26 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/user/notifications",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "PUT",
+      "path": "/user/notifications",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -162,7 +199,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "PUT",
@@ -170,7 +208,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -178,7 +217,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -186,7 +226,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -194,7 +235,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -202,7 +244,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "GET",
@@ -210,7 +253,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     }
   ]
 }

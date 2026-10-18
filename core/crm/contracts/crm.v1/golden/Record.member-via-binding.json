@@ -30,9 +30,5 @@
   "bound_to": [
     "sales"
   ],
-  "match_ids": [
-    "domain:globex.test"
-  ],
-  "account_id": null,
   "proposals": []
 }

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from . import schema as s
+from .field_classes import default_classes
 
 ENTITY_TYPES = ('Person', 'Company', 'Deal', 'Project')
 
@@ -58,12 +59,48 @@ DEFINITIONS = {
                  'description': "The card's face: blocks.v1 face-profile blocks, sanitised on write"}}},
 }
 
+#: PRD 0.13.4 D11: the card as the one unit of obligation. Its KIND picks a seeded lifecycle template
+#: (``card_templates.py``); every open card of a kind has exactly one structured next actor (a person
+#: id, replacing free-text ``Waiting`` for routing) and a ``NextCheckAt`` the flows worker wakes on;
+#: ``Chain`` links blockers; ``Origin`` names the chat or message it came from. ``Handoff`` is the
+#: two-phase custody of the current gate (D12): ``offered`` to the next actor until they
+#: ``acknowledged`` it. ``Answer``/``Evidence``/``Receipt`` are what a gate needs (a question's
+#: answer, a delivery's evidence refs, an approval's effect receipt). Added to an existing org's
+#: Card definition additively (``upgrade_card_definition``).
+_NULL_STR = lambda n, d: {'type': ['string', 'null'], 'maxLength': n, 'description': d}  # noqa: E731
+CARD_LIFECYCLE_PROPERTIES = {
+    'Kind': {'type': ['string', 'null'], 'enum': ['ask', 'approval', 'question', 'commitment', 'invitation',
+                                                  'policy_change', None],
+             'description': 'What obligation this card is: it picks the seeded lifecycle template'},
+    'NextActor': _NULL_STR(128, 'The person id whose move it is (the one next actor of an open card)'),
+    'Requester': _NULL_STR(128, 'The person id waiting on the card: who confirms a delivery or uses an answer'),
+    'NextCheckAt': _NULL_STR(40, 'ISO time the flows worker next checks the card (D11 invariant)'),
+    'Handoff': {'type': ['string', 'null'], 'enum': ['offered', 'acknowledged', None],
+                'description': 'Custody of the current gate: offered to the next actor, then acknowledged (D12)'},
+    'HandoffSince': _NULL_STR(40, 'When the current handoff phase began'),
+    'Chain': {'type': 'object', 'additionalProperties': False, 'properties': {
+        'blocks': {'type': 'array', 'maxItems': 20, 'items': {'type': 'string', 'maxLength': 128}},
+        'blocked_by': {'type': 'array', 'maxItems': 20, 'items': {'type': 'string', 'maxLength': 128}}},
+        'description': 'Cards this one blocks and is blocked by'},
+    'Origin': _NULL_STR(300, 'Where the card came from: session:<id> or message:<session>/<message id>'),
+    'Answer': _NULL_STR(500, "A question's answer, given at the answer gate"),
+    'Evidence': {'type': 'array', 'maxItems': 10, 'items': {'type': 'string', 'maxLength': 300},
+                 'description': 'References a delivery cites (a page, a meeting, a commit)'},
+    'Receipt': _NULL_STR(300, "The effect receipt an approval's executed gate needs"),
+}
+DEFINITIONS['Card']['properties'].update(CARD_LIFECYCLE_PROPERTIES)
+
 #: A signed-in member's rights when no policy names them (decision 6, a default the founder may
 #: strike): they create entities and read and write the ones they own; everything else reaches them
 #: through a workspace binding or a policy an administrator writes.
 DEFAULT_POLICY = {'active': True, 'objects': {
     kind: {'read': 'own', 'read_fields': ['*'], 'write': 'own', 'write_fields': ['*'], 'create': True}
     for kind in ENTITY_TYPES}}
+
+
+#: The seeded field classes of the stable entity types (``field_classes.default_classes``): contact
+#: history and email-derived data private, company basics and the rest org.
+DEFAULT_CLASSES = default_classes({k: DEFINITIONS[k] for k in ENTITY_TYPES})
 
 
 def bootstrap_org(engine, org, name, default_policy=None):
@@ -81,7 +118,37 @@ def bootstrap_org(engine, org, name, default_policy=None):
                                                              s.object_types.c.name == kind)).scalar_one_or_none() is None:
                 c.execute(s.object_types.insert().values(org_id=org, name=kind, definition=definition))
                 created.append(kind)
+        # D4: the field classification of the stable types, as seeded policy an administrator may
+        # change. Only missing rows are written; a class someone set is never overwritten.
+        fc = s.field_classes
+        have = {(k, f) for k, f in c.execute(select(fc.c.object_type, fc.c.field).where(fc.c.org_id == org)).all()}
+        now = datetime.now(timezone.utc).isoformat()
+        seeded = 0
+        for row in DEFAULT_CLASSES:
+            if (row['object_type'], row['field']) not in have:
+                c.execute(fc.insert().values(org_id=org, set_by='seed', set_at=now, **row))
+                seeded += 1
+        if seeded:
+            created.append('field_classes')
     return created
+
+
+def upgrade_card_definition(engine, org):
+    """Add the D11 lifecycle properties to an org's existing ``Card`` definition — additively: a
+    property an administrator already defined is left exactly as it is, nothing is removed, and an
+    org with no Card type is untouched. Run by the migrations path after ``bootstrap_org``."""
+    with engine.begin() as c:
+        row = c.execute(select(s.object_types.c.definition).where(
+            s.object_types.c.org_id == org, s.object_types.c.name == 'Card')).scalar_one_or_none()
+        if not isinstance(row, dict):
+            return False
+        props = dict(row.get('properties') or {})
+        missing = {k: v for k, v in CARD_LIFECYCLE_PROPERTIES.items() if k not in props}
+        if not missing:
+            return False
+        c.execute(s.object_types.update().where(s.object_types.c.org_id == org, s.object_types.c.name == 'Card')
+                  .values(definition={**row, 'properties': {**props, **missing}}))
+        return True
 
 
 def ensure_personal_org(engine, org, name):

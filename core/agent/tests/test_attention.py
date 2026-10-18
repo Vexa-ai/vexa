@@ -310,3 +310,13 @@ def test_an_identity_proposal_is_a_need_on_that_workspace_for_its_owner_only():
     n = out[0]
     assert n["kind"] == "proposal" and n["act"]["source"] == "identity" and n["act"]["slug"] == "kestrel"
     assert n["act"]["label"] == "Use" and "Kestrel pilot" in n["text"]
+
+
+# ── S5 (PRD 0.13.4 D11): the structured next actor decides, the same predicate as crm's inbox ──
+def test_a_card_with_a_next_actor_waits_on_exactly_that_person():
+    me = ["u1", "u1@example.test", "ana kovacs"]                  # the subject first
+    mine = {**_card("c1", ws=["ws-a"]), "next_actor": "u1", "open": True}
+    theirs = {**_card("c2", waiting="Ana Kovacs", ws=["ws-a"]), "next_actor": "u2", "open": True}
+    done = {**_card("c3", ws=["ws-a"]), "next_actor": "u1", "open": False}
+    named = {**_card("c4", ws=["ws-a"]), "next_actor": "ana kovacs", "open": True}   # a name is not an id
+    assert [n["act"]["card"] for n in A.card_needs([mine, theirs, done, named], me, OPEN)] == ["c1"]

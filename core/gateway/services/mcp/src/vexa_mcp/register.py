@@ -62,6 +62,7 @@ from fastapi.responses import JSONResponse
 
 from . import obs as obs_mod
 from . import reentry as reentry_mod
+from . import taint as taint_mod
 from .bind import BoundTool
 from .paths import path_segment
 
@@ -354,6 +355,8 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
             headers.update(reentry_mod.headers())
         else:
             url = f"{base}{path}"
+            # D6: a DIRECT call carries the session's privacy mark to the domain (`taint.py`).
+            headers[taint_mod.STATE_HEADER] = await taint_mod.state(gateway_url, key, transport)
         try:
             # The forward crosses the gateway, whose buffered leg allows 30 s; a tool that waits
             # less than its own door gives up on calls the door would have answered (a mailbox
@@ -372,6 +375,11 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
             raise HTTPException(status_code=503, detail=f"{bt.tool.domain} is unreachable: {e}")
         if r.status_code >= 500:
             _upstream_failed(bt, method, status=r.status_code)
+        # D6: a direct read's label is reported to the gateway, which marks the session; an answer
+        # whose mark cannot be recorded is withheld. (A forwarded call was marked at the gateway.)
+        if not (bt.tool.forward and gateway_url) and 200 <= r.status_code < 300:
+            if not await taint_mod.report(gateway_url, key, r.headers.get(taint_mod.LABEL_HEADER), transport):
+                return JSONResponse(status_code=503, content={"detail": taint_mod.withheld_body()})
         # THE DOMAIN'S OWN ANSWER, UNCHANGED. A 403 from flows is flows' answer and an agent needs
         # to see it; rewriting it here would turn "you may not do that" into "we are broken".
         try:

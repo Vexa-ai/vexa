@@ -27,7 +27,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import assertion, identity_token, providers, routes_bots, routes_connections, routes_git, routes_sensors, routes_signals
+from . import assertion, identity_token, providers, routes_bots, routes_connections, routes_git, routes_mail, routes_sensors, routes_signals
 from .broker import Broker, route_of, shared, signed_session, unwatched
 from .faults import UpstreamFault
 from .obs import TraceMiddleware, log_event, set_session
@@ -143,4 +143,5 @@ def create_app(broker: Broker) -> FastAPI:
     app.include_router(routes_bots.build(b))
     app.include_router(routes_sensors.build(b))
     app.include_router(routes_signals.build(b))
+    app.include_router(routes_mail.build(b))
     return app

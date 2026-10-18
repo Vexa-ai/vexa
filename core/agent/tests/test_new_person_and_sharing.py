@@ -42,7 +42,7 @@ def _client(root: Path) -> TestClient:
 
 
 def _me(subject: str = ME, email: str = MY_EMAIL) -> dict:
-    return {"X-User-Id": subject, "x-user-email": email}
+    return {"X-User-Id": subject, "x-user-email": email, "x-user-credential-class": "session"}
 
 
 import pytest

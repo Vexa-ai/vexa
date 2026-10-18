@@ -13,7 +13,8 @@
         "bot",
         "tx"
       ],
-      "delegation": true
+      "delegation": true,
+      "shared": "allow"
     },
     {
       "method": "GET",
@@ -22,7 +23,8 @@
         "bot",
         "tx"
       ],
-      "delegation": true
+      "delegation": true,
+      "shared": "allow"
     },
     {
       "method": "OPTIONS",
@@ -31,7 +33,8 @@
         "bot",
         "tx"
       ],
-      "delegation": true
+      "delegation": true,
+      "shared": "allow"
     },
     {
       "method": "PATCH",
@@ -40,7 +43,8 @@
         "bot",
         "tx"
       ],
-      "delegation": true
+      "delegation": true,
+      "shared": "allow"
     },
     {
       "method": "POST",
@@ -49,7 +53,8 @@
         "bot",
         "tx"
       ],
-      "delegation": true
+      "delegation": true,
+      "shared": "allow"
     },
     {
       "method": "PUT",
@@ -58,7 +63,8 @@
         "bot",
         "tx"
       ],
-      "delegation": true
+      "delegation": true,
+      "shared": "allow"
     },
     {
       "method": "DELETE",
@@ -67,7 +73,8 @@
         "bot",
         "tx"
       ],
-      "delegation": true
+      "delegation": true,
+      "shared": "allow"
     },
     {
       "method": "GET",
@@ -76,7 +83,8 @@
         "bot",
         "tx"
       ],
-      "delegation": true
+      "delegation": true,
+      "shared": "allow"
     },
     {
       "method": "OPTIONS",
@@ -85,7 +93,8 @@
         "bot",
         "tx"
       ],
-      "delegation": true
+      "delegation": true,
+      "shared": "allow"
     },
     {
       "method": "PATCH",
@@ -94,7 +103,8 @@
         "bot",
         "tx"
       ],
-      "delegation": true
+      "delegation": true,
+      "shared": "allow"
     },
     {
       "method": "POST",
@@ -103,7 +113,8 @@
         "bot",
         "tx"
       ],
-      "delegation": true
+      "delegation": true,
+      "shared": "allow"
     },
     {
       "method": "PUT",
@@ -112,7 +123,8 @@
         "bot",
         "tx"
       ],
-      "delegation": true
+      "delegation": true,
+      "shared": "allow"
     }
   ]
 }

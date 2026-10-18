@@ -88,6 +88,13 @@ def build(**d) -> APIRouter:
     wsr = d.get('wsr')
     mindex = d.get('mindex')
     _meeting_owner_lookup = d.get('_meeting_owner_lookup')
+
+    def _call_row(subject: str):
+        """``meeting_id -> meetings row`` as ``subject`` may read it — how a room's live call is
+        read for its audience (D27). ``None`` without a lookup: an unknown call, cross_org."""
+        if _meeting_owner_lookup is None:
+            return None
+        return lambda mid: _meeting_owner_lookup(subject, mid)
     _meeting_note_recorder = d.get('_meeting_note_recorder')
 
     def _internal_secret() -> str:
@@ -421,13 +428,18 @@ def build(**d) -> APIRouter:
             st = _rooms.settings(session_store, room_id)
             if not st["room"]:
                 raise _refuse(request, 409, "not_a_room", "a private chat is not woken by a room's sensor")
+            if not st.get("agent_on", True):
+                # "VEXA IN THIS ROOM" IS OFF (S4, deny test 25): no signal wakes it, addressed or not
+                raise _refuse(request, 409, "room_vexa_off",
+                              "the people in this room switched Vexa off; nothing is woken")
             if st["proactivity"] == "off" and str(data.get("reason") or "") != "addressed":
                 # OFF MEANS ADDRESSED ONLY: being spoken to still wakes the agent
                 raise _refuse(request, 409, "room_proactivity_off",
                               "the people in this room switched Vexa's proactivity off; only being "
                               "addressed wakes it")
             from control_plane import room_principal as _rpm  # noqa: PLC0415
-            room_p = _rpm.resolve(session_store, wsr.root, room_id, speaker=subject) if wsr is not None else None
+            room_p = (_rpm.resolve(session_store, wsr.root, room_id, speaker=subject,
+                                   call_lookup=_call_row(subject)) if wsr is not None else None)
             if room_p is None:
                 raise _refuse(request, 409, "room_has_no_workspace",
                               "a room's sensor wakes its workspace's agent; this room has none")
@@ -458,8 +470,10 @@ def build(**d) -> APIRouter:
                         "meeting %s: note not minted for a signal (%s)", row, type(exc).__name__)
                 place = meeting_listen.locate(wsr.root, subject, mrow)
             wake_key = row
+            # No page found yet still names the meeting: its brief (`meeting_listen`) stays reachable,
+            # and no page write is granted (`signal_scope.allowed_verbs`).
             page = ({"meeting": row, "path": place["path"], "workspace": place["workspace"]}
-                    if place is not None else None)
+                    if place is not None else {"meeting": row, "path": "", "workspace": ""})
         _cap = int(pol["signals_wakes_per_meeting"])
         _n = _wake_count(subject, wake_key)
         if _n > _cap:
@@ -486,7 +500,12 @@ def build(**d) -> APIRouter:
             try:
                 from control_plane import room_principal as _rpm2, rooms as _rooms2  # noqa: PLC0415
                 if _rooms2.is_room(session_store, chat) and _rooms2.enabled(_global_root, subject):
-                    room_p = _rpm2.resolve(session_store, wsr.root, chat, speaker=subject)
+                    # WHO IS ON THE CALL COUNTS IN THE AUDIENCE (D27): the woken meeting's own
+                    # participants, read from its row this turn
+                    room_p = _rpm2.resolve(session_store, wsr.root, chat, speaker=subject,
+                                           call_lookup=_call_row(subject),
+                                           participants=_rpm2.call_participants_of(mrow)
+                                           if isinstance(mrow, dict) else None)
             except Exception:  # noqa: BLE001 — not resolvable: the person's own signal turn
                 room_p = None
         try:

@@ -15,7 +15,7 @@ from control_plane.ceiling import is_delegated
 from fastapi import APIRouter, HTTPException, Path, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from control_plane import people_directory, room_show, rooms, session_fork, session_sync
+from control_plane import people_directory, person_resolution, room_show, rooms, session_fork, session_sync
 from control_plane.bodies import CHAT_SESSION_PATTERN
 from control_plane.session_store import SessionDenied
 
@@ -53,6 +53,8 @@ def build(**d) -> APIRouter:
     store = d.get("session_store")
     subject_of = d["subject_of"]
     lookup = d.get("_email_subject_lookup")
+    # D35: one Person, many addresses — the picker lists Persons, a grant reaches every linked account
+    persons = d.get("person_resolver") or person_resolution.default()
     wsr = d.get("wsr")
     mindex = d.get("mindex")
     notifier = d.get("notifier")
@@ -70,6 +72,20 @@ def build(**d) -> APIRouter:
         if wsr is None:
             return []
         return people_directory.mentionable(wsr.root, subject, _index_list)
+
+    def _mentionable_view(subject: str) -> list[dict]:
+        """THE PICKER'S ANSWER (security review M1, deny test 16, 0.13.4 S4): an undiscoverable member
+        is absent, and a co-member's address is shown only where the caller writes (owner or
+        contributor) in a workspace they share — a reader gets names only."""
+        out = []
+        for p in _mentionable(subject):
+            if p.get("discoverable") is False:
+                continue
+            row = {k: v for k, v in p.items() if k != "discoverable"}
+            if p.get("email") and not people_directory.sees_addresses(wsr.root, subject, p.get("workspaces") or []):
+                row["email"] = ""
+            out.append(row)
+        return out
 
     def _store():
         if store is None:
@@ -140,7 +156,7 @@ def build(**d) -> APIRouter:
         workspace the caller is a member of — nobody else — and the agents a chat may address.
         Each person carries their stable id (``subject``), so a mention names exactly one account."""
         subject = subject_of(request)
-        return {"people": _mentionable(subject),
+        return {"people": person_resolution.group_people(_mentionable_view(subject), persons),
                 "agents": [{"name": a} for a in people_directory.AGENTS]}
 
     @router.get("/api/sessions/{session}/share-preview")
@@ -217,16 +233,25 @@ def build(**d) -> APIRouter:
                     "refused": "not_a_workspace_member", "workspace": ws, "title": title,
                     "said": (f"They are not in {title}. Invite them to {title} (workspace_invite) on the "
                              "same card, then add them here.")})
+        # WHO IS IN A ROOM IS THE ROOM-MEMBERSHIP AUTHORITY'S (0.13.4 D36): a closed room's rows are
+        # written to the registry first (the maker's own seeded), the participant row is the projection
+        from control_plane import pair_rooms, room_membership  # noqa: PLC0415
+        if ws and wsr is not None and pair_rooms.is_pair(wsr.root, ws):
+            raise HTTPException(status_code=409, detail={
+                "refused": "room_of_two", "said": "A room of two has exactly two people. Start a room in a "
+                                                  "workspace to talk with more."})
         if room.get("_new"):
             if body.history == "none":
                 fresh = s.create(subject, name=None, title=row.get("title") or "Room")
                 s.put_room(fresh["id"], workspace=ws, visibility="closed")
-                s.join(fresh["id"], principal)
+                room_membership.seed(s, wsr.root, fresh["id"])
+                room_membership.add(s, wsr.root, fresh["id"], principal, actor=str(subject))
                 _notify_added(request, subject, fresh, principal, forked=True, title=fresh.get("title") or "")
                 return _view(fresh, subject)
             s.put_room(row["id"], workspace=ws, visibility="closed")
+            room_membership.seed(s, wsr.root, row["id"])
         if s.role_of(row["id"], principal) is None:
-            s.join(row["id"], principal)
+            room_membership.add(s, wsr.root, row["id"], principal, actor=str(subject))
             _notify_added(request, subject, row, principal, forked=False, title=row.get("title") or "")
         return _view(row, subject)
 
@@ -321,6 +346,18 @@ def build(**d) -> APIRouter:
                                              principal, target["id"], wid)
                 except Exception:  # noqa: BLE001 — the share happened; the binding is the extra
                     logger.warning("shared work not bound on share")
+        if kind == "human":
+            # D35: the person picked is a Person — every other account THEY CONFIRMED as theirs joins
+            # too; an unconfirmed link gets nothing. Fails toward fewer: no CRM answer, no extra account.
+            for other in person_resolution.linked_accounts(principal, resolver=persons)[1:]:
+                if other == subject or s.role_of(target["id"], other) is not None:
+                    continue
+                try:
+                    s.add_participant(target["id"], subject, other, kind=kind, role=body.role)
+                except (SessionDenied, ValueError):
+                    continue
+                _notify_added(request, subject, target, other, forked=bool(fork) or private,
+                              title=row.get("title") or "")
         return _view(target, subject)
 
     @router.delete("/api/sessions/{session}/participants/{principal}")

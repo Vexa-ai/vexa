@@ -105,7 +105,12 @@ def test_an_expired_invite_previews_as_valid_false_and_reason_only(shared):
 
 
 def test_a_valid_invite_still_previews_in_full(shared):
+    """Signed in, the confirm card (D26) shows the sender and the bound address. Nobody signed in, the
+    link's holder learns the workspace's name and the terms only (security review M1, 0.13.4 S4)."""
     root, c, minted = shared
-    p = _preview(c, minted["token"])
-    assert p["valid"] is True and p["workspace_id"] == "pilot-a1b2c3"
+    anon = _preview(c, minted["token"])
+    assert anon["valid"] is True and anon["workspace_id"] == "pilot-a1b2c3"
+    assert not {"shared_by", "purpose"} & set(anon) and anon["restricted_to"] == ["jsmith@example.com"]
+    r = c.get("/api/workspace/invites/preview", params={"token": minted["token"]}, headers=_h("u_first"))
+    p = r.json()
     assert p["shared_by"] == "jane@example.com" and p["restricted_to"] == ["jsmith@example.com"]

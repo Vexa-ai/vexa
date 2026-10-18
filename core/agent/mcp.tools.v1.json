@@ -479,7 +479,8 @@
       "arguments": [
         "slug",
         "email",
-        "role"
+        "role",
+        "room"
       ],
       "note": "Invite one address as owner, contributor or reader (Vexa-ai/vexa#1632). Owner-only. Somebody who already has an account here is added at once and told in the app (no link to hand over); anyone else gets a link, and the answer says whether it was mailed or is to be handed over."
     },
@@ -537,6 +538,27 @@
         "link_id"
       ],
       "note": "Stop one join link working, when the person asks. People who joined stay members."
+    },
+    {
+      "name": "workspace_policy_propose",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/workspace/policy/proposals"
+      },
+      "arguments": [
+        "workspace",
+        "session",
+        "change",
+        "value",
+        "reason"
+      ],
+      "note": "Propose a change to a workspace's policy (change: visibility, connect, disconnect, member_role, member_remove or rules) for its owner to approve. Nothing changes until the owner approves it in their own browser session; never say it is done."
     },
     {
       "name": "workspace_membership",
@@ -1231,6 +1253,7 @@
       },
       "arguments": [
         "draft_id",
+        "replace_person_draft",
         "recipient",
         "subject",
         "body",
@@ -1242,7 +1265,7 @@
         "in_reply_to",
         "attachments"
       ],
-      "note": "Replaces a draft Vexa created; never sends."
+      "note": "Replaces a draft Vexa created, or the person's own draft when they ask; never sends."
     },
     {
       "name": "calendar_event_create",

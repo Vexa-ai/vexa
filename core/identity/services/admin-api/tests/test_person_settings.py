@@ -73,7 +73,9 @@ def test_an_unknown_user_is_a_404_not_a_silent_default(client):
 
 def test_the_write_door_changes_what_the_read_door_serves(client):
     uid, _h = _user(client, "writer@vexa.ai")
-    assert client.get(f"/internal/users/{uid}/settings", headers=_internal()).json() == {
+    first = client.get(f"/internal/users/{uid}/settings", headers=_internal()).json()
+    first.pop("notifications", None)      # S6's notification settings ride the same answer (tested there)
+    assert first == {
         "timezone": "", "mail_minutes": True, "mail_join": False,
         "mail_rsvp": True, "mail_prep": True, "presence": True}
 

@@ -251,3 +251,4 @@ def test_a_routine_token_carries_its_grants_and_flow_on_its_ceiling(client):
         "flow": "user:42/bot-at-1213"}
     plain = delegation.mint_delegation(DLG, subject="42", regime="autonomous", workspaces=["42"])
     assert "grants" not in _validate(client, plain).json()["delegation"]
+

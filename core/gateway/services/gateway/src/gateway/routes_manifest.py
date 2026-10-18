@@ -52,6 +52,8 @@ meeting-api checks the scopes the edge checked (`meeting_api/route_scopes.py`) f
       names a parameter the row lacks
     a forward with a malformed prefix       ->  a mapping that rewrites paths nobody declared
     a forwarded row outside its forward     ->  a route the edge would have to serve by name
+    shared that is not allow|refuse         ->  a shared caller's reach read two ways (D3); a
+                                                row that declares nothing refuses a shared caller
 
 DENY-BY-DEFAULT SURVIVES THE MOVE. The assembled table is still exhaustive and still enforced as
 such by `create_app`: a registered route that no manifest declares refuses to build. What changed
@@ -97,6 +99,9 @@ class Assembly:
     mcp_reentry: Set[RouteKey] = field(default_factory=set)
     #: the literal rows relayed as server-sent events (`"stream": true`).
     stream: Set[RouteKey] = field(default_factory=set)
+    #: D3: the rows a SHARED delegation (a room's or a shared chat's turn, or a workspace principal)
+    #: may reach (`"shared": "allow"`). Every other row refuses such a caller at this edge.
+    shared_allow: Set[RouteKey] = field(default_factory=set)
     #: domain -> (edge_prefix, upstream_prefix), for each domain forwarded wholesale.
     forwards: Dict[str, Tuple[str, str]] = field(default_factory=dict)
     #: row -> the template it is forwarded to on its domain's service, for a row whose hop is not
@@ -286,6 +291,13 @@ def assemble(manifests: Iterable[dict]) -> Assembly:
                         f"{domain}: {method} {path} — upstream {upstream} names {extra}, which the "
                         "row does not match, so the edge has nothing to fill them with")
                 out.upstream[key] = upstream
+            shared = row.get("shared")
+            if shared is not None and shared not in ("allow", "refuse"):
+                raise ManifestError(
+                    f"{domain}: {method} {path} — shared must be allow or refuse (got {shared!r}); "
+                    "a shared caller's reach must read one way only")
+            if shared == "allow":
+                out.shared_allow.add(key)
             stream = _flag(domain, row, "stream")
             if forward:
                 tail = path[len(forward[0]):] if path.startswith(forward[0]) else None

@@ -17,8 +17,8 @@ CARD_ROUTES = ['/card/list', '/card/propose', '/card/update/propose', '/card/rea
 CARD_TOOLS = {'card_list', 'card_propose', 'card_update_propose'}
 
 ANSWERS = {
-    'me': {'user_id': '7', 'workspaces': ['sales'], 'writable_workspaces': ['sales']},
-    'bo': {'user_id': '8', 'workspaces': ['sales'], 'writable_workspaces': ['sales']},
+    'me': {'user_id': '7', 'credential_class': 'session', 'workspaces': ['sales'], 'writable_workspaces': ['sales']},
+    'bo': {'user_id': '8', 'credential_class': 'session', 'workspaces': ['sales'], 'writable_workspaces': ['sales']},
     'vxd_watched': {'user_id': '7', 'workspaces': ['sales'],
                     'delegation': {'regime': 'human', 'shared': False, 'unit': 'pchat-1', 'workspaces': ['sales']}},
     'vxd_routine': {'user_id': '7', 'workspaces': ['sales'],
@@ -42,7 +42,8 @@ def client_for(store):
 
 
 def as_(token):
-    return {'Authorization': f'Bearer {token}', 'x-trace-id': 'trace-' + token}
+    # `x-vexa-taint: none` is what the edge forwards for a session that read nothing private (D6)
+    return {'Authorization': f'Bearer {token}', 'x-trace-id': 'trace-' + token, 'x-vexa-taint': 'none'}
 
 
 def test_a_person_makes_moves_and_shares_a_card(store):
@@ -74,7 +75,7 @@ def test_an_agent_proposes_and_the_person_accepts_with_crm_review(store):
     assert listed['cards'] == [] and [x['title'] for x in listed['proposals']] == ['Send the deck']
     agent_review = client.post('/review', json={'proposal_id': p.json()['proposal_id'], 'accept': True},
                                headers=as_('vxd_watched'))
-    assert agent_review.status_code == 403 and agent_review.json()['reason'] == 'person_confirmation_required'
+    assert agent_review.status_code == 403 and agent_review.json()['reason'] == 'session_required'   # D13: refused at the door
     ok = client.post('/review', json={'proposal_id': p.json()['proposal_id'], 'accept': True}, headers=as_('bo'))
     assert ok.status_code == 200 and ok.json()['status'] == 'saved'
     card_id = ok.json()['record_id']

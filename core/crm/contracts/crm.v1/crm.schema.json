@@ -328,7 +328,7 @@
         },
         "bound_to": {
           "type": "array",
-          "description": "ADR-0047 d6: workspaces bound to this record whose members get derived grants \u2014 every binding for an administrator, the caller's own otherwise.",
+          "description": "ADR-0047 d6: workspaces bound to this record whose members get derived grants — every binding for an administrator, the caller's own otherwise.",
           "items": {
             "type": "string",
             "minLength": 1
@@ -336,7 +336,7 @@
         },
         "match_ids": {
           "type": "array",
-          "description": "Match identifiers (email:, domain:, calendar:) \u2014 shown to a caller who reads every field.",
+          "description": "Match identifiers (email:, domain:, calendar:) — shown to a caller who reads every field.",
           "items": {
             "type": "string",
             "pattern": "^(email|domain|calendar):.+$"
@@ -511,7 +511,8 @@
             "not_readable",
             "ref_kind_not_enabled",
             "desk_placements_max",
-            "person_only"
+            "person_only",
+            "session_required"
           ]
         },
         "instruction": {
@@ -1164,7 +1165,7 @@
         },
         "cards": {
           "type": "array",
-          "description": "Desktop D2 (desktop_cards on): the cards on this desktop \u2014 the ones the person is a member of (minus those they took off) and the ones they placed, in their order.",
+          "description": "Desktop D2 (desktop_cards on): the cards on this desktop — the ones the person is a member of (minus those they took off) and the ones they placed, in their order.",
           "items": {
             "$ref": "#/$defs/CardView"
           }
@@ -1435,7 +1436,7 @@
     "CardView": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Desktop D2: one card as one viewer may read it \u2014 a CRM record of a card type (`x-card`). Fields the viewer cannot read are null; the face is resolved for them; children count only what they read; `workspaces` are the boards referencing it that they are a member of. `activity` only on a single read (POST /card/read).",
+      "description": "Desktop D2: one card as one viewer may read it — a CRM record of a card type (`x-card`). Fields the viewer cannot read are null; the face is resolved for them; children count only what they read; `workspaces` are the boards referencing it that they are a member of. `activity` only on a single read (POST /card/read).",
       "required": [
         "id",
         "ref",
@@ -1708,7 +1709,224 @@
         },
         "new": {
           "type": "boolean",
-          "description": "This viewer has never opened the card and did not make it; clears when they open it (POST /card/read with their own key)."
+          "description": "This viewer has never opened the card and did not make it; clears when their terminal renders it in view (POST /card/seen, the session credential, D14)."
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "ask",
+            "approval",
+            "question",
+            "commitment",
+            "invitation",
+            "policy_change",
+            null
+          ],
+          "description": "D11: what obligation the card is; picks its seeded lifecycle template (card_templates.py). Null for a plain board card."
+        },
+        "next_actor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128,
+          "description": "D11: the person id whose move it is. Every open card of a kind has exactly one."
+        },
+        "requester": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128,
+          "description": "D11: the person waiting on it (confirms a delivery, uses an answer). Defaults to the card owner."
+        },
+        "next_check_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "D11: when the flows worker next checks the open card."
+        },
+        "chain": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "blocks",
+            "blocked_by"
+          ],
+          "properties": {
+            "blocks": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string"
+              }
+            },
+            "blocked_by": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "origin": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "session:<id> or message:<session>/<message id>"
+        },
+        "open": {
+          "type": "boolean"
+        },
+        "handoff": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "phase",
+            "since"
+          ],
+          "properties": {
+            "phase": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "offered",
+                "acknowledged",
+                null
+              ]
+            },
+            "since": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "seen": {
+              "type": "boolean",
+              "description": "Whether the next actor has seen it since the offer: present only to the next actor, and to the requester when policy card_seen_visible_to_sender is on (N-7)."
+            }
+          },
+          "description": "D12: custody of the current gate \u2014 offered to the next actor until acknowledged."
+        },
+        "gates": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "state",
+              "by",
+              "at"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "done",
+                  "current",
+                  "ahead"
+                ]
+              },
+              "by": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 128
+              },
+              "at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "description": "The route as a strip of gates (converged \u00a713)."
+        },
+        "decisions": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/CardDecision"
+          },
+          "description": "D13: the decision records, newest first."
+        },
+        "last_decision": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "action",
+            "by",
+            "at"
+          ],
+          "properties": {
+            "action": {
+              "type": "string"
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          }
+        },
+        "viewer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "role",
+            "seen",
+            "actions"
+          ],
+          "properties": {
+            "role": {
+              "type": "string",
+              "enum": [
+                "next_actor",
+                "requester",
+                "member",
+                "watcher"
+              ]
+            },
+            "seen": {
+              "type": "boolean"
+            },
+            "actions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "acknowledge",
+                  "decide",
+                  "answer",
+                  "deliver",
+                  "confirm",
+                  "use",
+                  "execute",
+                  "decline"
+                ]
+              }
+            }
+          },
+          "description": "This viewer's position: their role, whether they have seen it since the offer, and the gate actions they may take now (only the next actor has any)."
         }
       }
     },
@@ -1816,6 +2034,9 @@
           "items": {
             "$ref": "#/$defs/CardProposal"
           }
+        },
+        "counts": {
+          "$ref": "#/$defs/CardCounts"
         }
       }
     },
@@ -1843,13 +2064,12 @@
         "pinned",
         "hidden",
         "muted",
-        "notify",
         "room_order",
         "level",
         "collapsed",
         "updated_at"
       ],
-      "description": "One person's settings for one workspace, on the CRM member_of relation (crm_member_settings): private to the person, written only by crm-api. A slug with no row reads as the defaults (false, false, false, all, [], null, [], null). They carry no access.",
+      "description": "One person's settings for one workspace, on the CRM member_of relation (crm_member_settings): private to the person, written only by crm-api. A slug with no row reads as the defaults (false, false, false, [], null, [], null). They carry no access.",
       "properties": {
         "pinned": {
           "type": "boolean"
@@ -1866,7 +2086,9 @@
             "all",
             "mentions",
             "none"
-          ]
+          ],
+          "deprecated": true,
+          "description": "DEPRECATED (PRD 0.13.4 S6): never written or answered. A room's or workspace's notification level lives in the person's identity notification policy (GET/PUT /user/notifications, `rooms`: ws:<slug>)."
         },
         "room_order": {
           "type": "array",
@@ -1940,6 +2162,167 @@
         },
         "settings": {
           "$ref": "#/$defs/WorkspaceSettings"
+        }
+      }
+    },
+    "CardDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "action",
+        "by",
+        "at",
+        "credential_class"
+      ],
+      "description": "D13: one decision record \u2014 an append-only card revision a person wrote with the session credential, bound to a server nonce and the content hash of the face they saw.",
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "action": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "credential_class": {
+          "type": "string"
+        }
+      }
+    },
+    "CardInbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "items",
+        "counts"
+      ],
+      "description": "POST /card/inbox: the open cards waiting on this person (they are the next actor) and the counts the Now strip, the Inbox and a room badge read \u2014 one predicate.",
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/CardView"
+          }
+        },
+        "counts": {
+          "$ref": "#/$defs/CardCounts"
+        }
+      }
+    },
+    "CardCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "waiting_on_me",
+        "due_soon",
+        "i_wait_on"
+      ],
+      "properties": {
+        "waiting_on_me": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "due_soon": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "i_wait_on": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "CardNonce": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "card",
+        "nonce",
+        "content_hash",
+        "revision",
+        "expires_at",
+        "actions"
+      ],
+      "description": "POST /card/nonce: a server nonce bound to this person, this card at this revision and the content hash of the face shown now (D13).",
+      "properties": {
+        "card": {
+          "type": "string"
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 16
+        },
+        "content_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "CardDecided": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "card",
+        "decision"
+      ],
+      "properties": {
+        "status": {
+          "const": "saved"
+        },
+        "card": {
+          "$ref": "#/$defs/CardView"
+        },
+        "decision": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "action",
+            "by",
+            "at",
+            "revision",
+            "credential_class",
+            "content_hash"
+          ],
+          "properties": {
+            "action": {
+              "type": "string"
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "credential_class": {
+              "const": "session"
+            },
+            "content_hash": {
+              "type": "string"
+            }
+          }
         }
       }
     }

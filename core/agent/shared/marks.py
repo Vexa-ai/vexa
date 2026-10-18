@@ -203,6 +203,19 @@ def is_signal_turn(text: str) -> bool:
             or t.startswith(flow_mark(ROOM_SIGNAL_FLOW, SIGNAL_STEP)))
 
 
+#: What a signal turn answers when it has nothing to say (friction 6, 2026-10-16): a turn the meeting
+#: or a room's sensor woke may end SILENTLY — no text at all, or exactly this. Read only on a signal
+#: turn's reply (`quiet_reply`); a turn a person started shows whatever the agent said, as before.
+QUIET_REPLY = "[vexa-quiet]"
+_QUIET_RE = _re.compile(_re.escape(QUIET_REPLY), _re.IGNORECASE)
+
+
+def quiet_reply(text: str) -> str:
+    """A signal turn's reply with every ``QUIET_REPLY`` removed, stripped — ``""`` when the turn chose
+    to say nothing, which records no visible message."""
+    return _QUIET_RE.sub("", str(text or "")).strip()
+
+
 def message_mark(sender_uid: str, sender_thread: str, label: str) -> str:
     """The prefix a message from another agent carries — or ``""`` without a sender. The thread and
     the label are free text from another turn, so everything that could close the mark early or

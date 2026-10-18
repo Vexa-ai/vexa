@@ -273,7 +273,7 @@ def classify(ws_dir) -> str:
     if p.name == GLOBAL_SLUG:
         return "global"
     # nofollow: a `policy` linked in from another tree does not make this one a group
-    return "group" if wpaths.is_file_inside(p, _MEMBERS_FILE) else "desk"
+    return "group" if wpaths.is_file_inside(p, _MEMBERS_FILE, allow=("policy",)) else "desk"
 
 
 def _default_name(slug: str, kind: str) -> str:

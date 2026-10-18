@@ -110,6 +110,7 @@ ALLOW = {
                "agent/control_plane/identity_token.py::_write"),
     **_entries(_IMAGE,
                "agent/control_plane/route_policy.py::load",
+               "agent/control_plane/route_policy.py::load_shared",
                "agent/control_plane/routine_needs.py::person_tools",
                "agent/control_plane/routers/health.py::build.mcp_tools_manifest",
                "agent/control_plane/scaffolds.py::read_preset",
@@ -131,6 +132,7 @@ ALLOW = {
                "agent/control_plane/workspace_attach.py::_plain_state",
                "agent/control_plane/workspace_attach.py::swap_workspace",
                "agent/control_plane/workspace_attach.py::create_shared_workspace_dir",
+               "agent/control_plane/pair_rooms.py::_make_dir",
                "agent/control_plane/workspace_attach.py::ensure_workspace_shareable",
                "agent/control_plane/workspace_attach.py::ensure_workspace_private",
                "agent/control_plane/workspace_attach.py::activate_workspace",
@@ -147,10 +149,9 @@ ALLOW = {
                "agent/control_plane/folder_import.py::load",
                "agent/control_plane/folder_import.py::staging",
                "agent/control_plane/meeting_bundle.py::restore",
-               "agent/control_plane/workspace_membership.py::read_invites",
-               "agent/control_plane/workspace_membership.py::_write_invites",
-               "agent/control_plane/workspace_membership.py::drop_invites",
                "agent/control_plane/workspace_membership.py::workspaces_with_invites",
+               # the policy store's empty folder, beside the invite store, outside every work tree (D5)
+               "agent/control_plane/workspace_membership.py::FilePolicyStore.drop",
                # the chat-link store sits beside the invite store, outside every work tree (#1783)
                "agent/control_plane/join_links.py::_read_chat",
                "agent/control_plane/join_links.py::_write_chat",

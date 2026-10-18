@@ -114,6 +114,12 @@ def mail_workspace_invite(ctx: StepCtx):
     # that forgets, and it is a fallback rather than a token left standing because a mail whose
     # subject line has a hole in it is not deliverable prose.
     values["workspace_name"] = str(ctx.refs.get("workspace_name") or workspace)
+    # WHERE, in two names and no more (PRD 0.13.4 S2): the room, when the invite names one, "in"
+    # the workspace. Never a message: the refs carry no field that could hold one, and only the
+    # declared names above are read, so a producer that added one would not reach the mail.
+    room = str(ctx.refs.get("room") or "").strip()
+    values["room"] = room
+    values["place"] = f"{room} in {values['workspace_name']}" if room else values["workspace_name"]
     subject, body = p.mailtext.render("workspace-invite", uid, values)
     if not subject:
         # `mailtext._split` answers "" when a template lost its `subject:` line and says the

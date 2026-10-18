@@ -18,8 +18,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 from sqlalchemy import create_engine
 
+from . import blocks as blocks_mod
 from . import caller as caller_mod
 from . import features
+from . import privacy
 from . import profiles as profiles_mod
 from .caller import Caller
 from .orgs import PERSONAL_ORG, OrgResolver
@@ -27,7 +29,8 @@ from .card_ops import Cards, PolicyText
 from .desk import Desk
 from .member_settings import MemberSettings
 from .policies import DOOR_ENV, Policies
-from .store import CRMError, Refused, SharedRefused, Store
+from .persons import PersonError, PersonRefused
+from .store import CRMError, PENDING_AUDIT, Refused, SharedRefused, Store, check_workspace
 
 TRACE_HEADER = 'x-trace-id'
 
@@ -45,6 +48,10 @@ class Resolve(Body):
     name: str = Field(min_length=1, max_length=300)
 class Read(Body):
     record_id: str
+class BlockRead(Body):
+    workspace: str = Field(default='', max_length=128, description="The page's workspace: which fields it may see too.")
+    view: str = Field(max_length=20, description='company · person · people · deals · timeline')
+    args: dict = Field(default_factory=dict, description="The block's own arguments (company=, stage=, person=, limit=).")
 class Change(Body):
     action: Literal['create','update','propose','merge']
     idempotency_key: str = Field(default='', max_length=200, description='Required for create: stable caller-generated key reused when retrying the same request.')
@@ -85,9 +92,42 @@ class Snapshot(Body):
     committed_at: str
     references: list[Reference] = Field(default_factory=list, max_length=20000)
     members: list[Member] | None = None
+class OfferSpec(Body):
+    title: str = Field(min_length=1, max_length=200)
+    kind: Literal['commitment', 'question', 'approval', 'ask', 'invitation', 'policy_change']
+    next_actor: str = Field(min_length=1, max_length=128)
+    requester: str = Field(default='', max_length=128)
+    due: str | None = Field(default=None, pattern=r'^\d{4}-\d{2}-\d{2}$')
+    about: str | None = Field(default=None, max_length=600)
+class MeetingOffer(Body):
+    principal: str = Field(min_length=1, max_length=128, description="The room's workspace principal id (identity).")
+    workspace: str | None = Field(default=None, max_length=128)
+    on_behalf_of: str = Field(min_length=1, max_length=128, description='The person the run answers (the meeting owner).')
+    session: str = Field(min_length=1, max_length=128)
+    origin: str = Field(min_length=1, max_length=300)
+    reason: str = Field(min_length=1, max_length=500)
+    cards: list[OfferSpec] = Field(min_length=1, max_length=20)
 class Account(Body):
     subject: str = Field(min_length=1)
     email: str = ''
+class Accounts(Body):
+    accounts: list[Account] = Field(min_length=1, max_length=500)
+class PersonMe(Body):
+    pass
+class PersonProfile(Body):
+    action: Literal['read', 'edit', 'claim', 'unclaim', 'publish', 'import']
+    fields: dict = Field(default_factory=dict, description='edit: profile fields (display_name, photo, headline, company, bio, location, timezone, links, contact). An empty value removes one.')
+    record_id: str = Field(default='', max_length=100, description='claim: the record picked on the claim card; edit: an unclaimed profile (the org edits it).')
+    public: bool = Field(default=False, description='publish: switch the public page on or off.')
+    public_fields: list[str] | None = Field(default=None, max_length=20, description='publish: the profile fields the public page shows.')
+    source: str = Field(default='', max_length=40, description='import: a registered importer (none ships).')
+class Handle(Body):
+    handle: str = Field(min_length=1, max_length=64)
+class PersonMerge(Body):
+    action: Literal['confirm', 'decline', 'primary', 'offer']
+    card: str = Field(default='', max_length=100, description='The merge card id (confirm, decline).')
+    primary: str = Field(default='', max_length=32, description="An address option from the card: where invites and nudges go.")
+    address: str = Field(default='', max_length=300, description='offer: another address that is yours.')
 
 
 # ── the desk (desktop phase D1) ──────────────────────────────────────────────────────────────
@@ -130,7 +170,7 @@ class SettingsPatch(Body):
     pinned: StrictBool | None = Field(default=None, description='Pin the workspace to the top of the home.')
     hidden: StrictBool | None = Field(default=None, description="Hide it from the person's home (it stays open to them).")
     muted: StrictBool | None = Field(default=None, description='Mute it: no notifications from it.')
-    notify: Literal['all', 'mentions', 'none'] | None = Field(default=None, description='Which notifications reach the person.')
+    notify: Literal['all', 'mentions', 'none'] | None = Field(default=None, deprecated=True, description='RETIRED: refused. The notification level lives in the person\'s identity notification policy (Settings → Notifications).')
     room_order: list[str] | None = Field(default=None, max_length=100, description="Chat ids in the person's order (at most 100).")
     level: StrictInt | None = Field(default=None, ge=1, le=5, description="The person's level override for this workspace, 1..5; null follows their default.")
     collapsed: list[str] | None = Field(default=None, max_length=20, description='Section ids the person collapsed (at most 20).')
@@ -144,7 +184,11 @@ ABOUT_DESCRIPTION = ('What the card is about, as a reference: page:<workspace>/<
                      'meeting:<id> or crm:<record id>. Members of the card never get access to it through the card.')
 FIELDS_DESCRIPTION = ("Optional card fields: Next (what happens next, <=200), Waiting (who or what it waits on), Summary "
                       "(<=500), Due (YYYY-MM-DD), Progress (0..1), Checklist ([{text, done}] <=10), Title. Never State: "
-                      "a stage moves with `transition`.")
+                      "a stage moves with `transition`. AN OBLIGATION (D11): Kind (commitment | approval | question | ask | "
+                      "invitation | policy_change) with NextActor (the person id whose move it is — required with a Kind), "
+                      "Requester (the person id waiting on it; defaults to the person you act for), Due, Origin "
+                      "(session:<id> or message:<session>/<message id>) and Chain ({blocks: [card ids], blocked_by: [card ids]}). "
+                      "A card with a Kind is OFFERED to its next actor at once and only that person moves it.")
 FACE_DESCRIPTION = ("Optional face: up to 8 blocks. Structural: {type: stepper|people|movement|waiting|next|subcards|ref|status}. "
                     "Data blocks NAME a field and never carry a value: {type: metric|text|progress|due|checklist|list, "
                     "field: '<card field>', label?: '<=40 chars'}. To say something on the face, put it in a field "
@@ -197,6 +241,19 @@ class CardMembers(Body):
 class CardMembership(Body):
     card: str = Field(min_length=1, max_length=128)
     accept: bool
+class CardInbox(Body):
+    pass
+class CardRef(Body):
+    card: str = Field(min_length=1, max_length=128)
+class CardDecide(Body):
+    card: str = Field(min_length=1, max_length=128)
+    action: Literal['acknowledge', 'decline', 'deliver', 'confirm', 'decide', 'execute', 'answer', 'use']
+    nonce: str = Field(min_length=16, max_length=100, description='From POST /card/nonce, minted for this person and this face.')
+    content_hash: str = Field(min_length=64, max_length=64, description='The content hash /card/nonce answered: the face the person saw.')
+    evidence: list[str] | None = Field(default=None, max_length=10, description='deliver: references the delivery cites.')
+    receipt: str | None = Field(default=None, max_length=300, description="execute: the effect receipt reference.")
+    answer: str | None = Field(default=None, max_length=500, description='answer: the answer.')
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class Identity:
@@ -253,6 +310,15 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
         return await call_next(request)
 
     @app.middleware('http')
+    async def privacy_label(request, call_next):
+        # D6: every CRM answer is the person's private data until the field classes land (S1-C):
+        # the gateway/MCP edge marks a worker's session from this label (`privacy.py`).
+        response = await call_next(request)
+        if privacy.LABEL_HEADER not in response.headers:
+            response.headers[privacy.LABEL_HEADER] = privacy.CRM_LABEL
+        return response
+
+    @app.middleware('http')
     async def check_binding(request, call_next):
         binding = request.headers.get('x-crm-org')
         if binding is not None and binding != org_id:
@@ -265,9 +331,27 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
             return JSONResponse(status_code=exc.status, content=exc.body)
         return JSONResponse(status_code=exc.status, content={'detail': str(exc)})
 
+    @app.exception_handler(PersonError)
+    async def person_error(request, exc):
+        if isinstance(exc, PersonRefused):
+            return JSONResponse(status_code=exc.status, content=exc.body)
+        return JSONResponse(status_code=exc.status, content={'detail': str(exc)})
+
     # Which CRM org serves the caller (orgs.py): the install org, unless `personal_crm` is on and
     # identity says the caller is an individual with an org of one — their personal CRM.
     resolver = org_resolver if org_resolver is not None else OrgResolver(org_id)
+    if profiles is not None and hasattr(profiles, 'legacy'):
+        # D35 retirement: identity's old profile hands its values to the claimed profile, once
+        store.profiles.legacy = profiles.legacy
+
+    def session_person(request: Request) -> Caller:
+        """D13 (deny test 12): a decision — review, a card's gate, the seen relation, a decision nonce —
+        takes the terminal's SESSION credential: no API key (a browser-scoped one included), no
+        delegation token. Refused before anything is read."""
+        caller = person(request)
+        if caller.delegated or caller.credential_class != 'session':
+            raise Refused(caller_mod.SESSION_REFUSAL)
+        return caller
 
     def person(request: Request) -> Caller:
         caller = identity(request)
@@ -279,17 +363,46 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
             store.ensure_account(caller.org, caller)    # ADR-0047 d3: attached on sign-in
         except CRMError:
             pass                                          # a clash is the admin's to merge, not a 500
+        try:
+            # D35: the one record matching the verified address is claimed as this person's profile,
+            # and identity's retired profile's entries move into it (once, while it is empty)
+            with store.engine.begin() as c:
+                claimed = store.profiles.auto_claim(c, caller.org, caller)
+            if claimed:
+                store.profiles.carry_legacy(caller.org, caller.subject, claimed)
+        except Exception:                                 # noqa: BLE001 — a claim is never a 500
+            pass
         return caller
 
     def audited(op, caller, record_id, call):
+        """H9: every route is audited with the caller's kind, principal, the person acted for and the
+        workspace. A write path writes its row IN ITS OWN TRANSACTION (``Store.begin`` reads the pending
+        row), so no write commits without one; a read path, which commits nothing, writes it here
+        before the answer leaves, so no answer is returned without one. A refusal is audited too."""
         org = caller.org or org_id
+        pending = {'org': org, 'caller': caller, 'op': op, 'record_id': record_id or ''}
+        token = PENDING_AUDIT.set(pending)
         try:
-            result = call()
-        except CRMError as exc:
-            store.audit(org, caller, op, record_id, type(exc).__name__)
-            raise
-        store.audit(org, caller, op, record_id or (result.get('record_id', '') if isinstance(result, dict) else ''), 'ok')
-        return result
+            try:
+                result = call()
+            except CRMError as exc:
+                store.audit(org, caller, op, record_id, type(exc).__name__)
+                raise
+            if not pending.get('written'):
+                store.audit(org, caller, op, record_id or returned_ids(result), 'ok')
+            return result
+        finally:
+            PENDING_AUDIT.reset(token)
+
+    def returned_ids(result):
+        """The record ids an answer carries, comma-joined (H9: a search names what it returned)."""
+        if not isinstance(result, dict):
+            return ''
+        if result.get('record_id'):
+            return str(result['record_id'])
+        ids = [str(r.get('id')) for key in ('records', 'cards', 'rows') for r in (result.get(key) or [])
+               if isinstance(r, dict) and r.get('id')]
+        return ','.join(ids)
 
     def internal(request: Request):
         presented = request.headers.get('x-internal-secret', '')
@@ -334,8 +447,10 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
         return audited('read', caller, body.record_id, lambda: store.get(caller.org, caller, body.record_id))
 
     @app.post('/change', operation_id='crm_change')
-    def change(body: Change, caller=Depends(person)):
+    def change(request: Request, body: Change, caller=Depends(person)):
         """Create a record, change one, propose a change, or merge a duplicate into the record that survives. As an agent your changes are PROPOSALS: the result says status 'proposed', and a person accepts or rejects them on the record page — tell them it is waiting and give the record link. Updates need the revision crm_read returned; include a reason and source evidence (a meeting id, a page). Create needs an idempotency_key."""
+        # D6: a CRM write is read by the org — a marked session's write is held for the person.
+        privacy.hold(request, caller, surface='crm_write')
         if body.action == 'create':
             if not body.idempotency_key:
                 raise HTTPException(400, 'Create requires an idempotency_key')
@@ -355,7 +470,7 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
         return audited('history', caller, body.record_id, lambda: store.history(caller.org, caller, body.record_id))
 
     @app.post('/review', operation_id='crm_review')
-    def review(body: Review, caller=Depends(person)):
+    def review(body: Review, caller=Depends(session_person)):
         """Accept or reject a pending proposal — for a person with review rights using their own credential. An agent is refused with reason person_confirmation_required: point the person at the record page instead. Acceptance conflicts if the record changed since the proposal."""
         return audited('review', caller, body.proposal_id, lambda: store.review(caller.org, caller, body.proposal_id, body.accept))
 
@@ -398,7 +513,8 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
     @app.post('/profile/read', include_in_schema=False)
     def profile_read(body: Read, caller=Depends(person)):
         """The public profile this record links to, read live — or none (unlinked, or withdrawn)."""
-        rid, handle = store.profile_link_of(caller.org, caller, body.record_id)
+        rid, handle = audited('profile.read', caller, body.record_id,
+                              lambda: store.profile_link_of(caller.org, caller, body.record_id))
         if not handle:
             return {'record_id': rid, 'linked': False, 'profile': None, 'withdrawn': False}
         if profiles is None:
@@ -408,6 +524,17 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
         except profiles_mod.ProfileUnavailable as e:
             raise HTTPException(503, 'Identity service unavailable') from e
         return {'record_id': rid, 'linked': True, 'profile': prof, 'withdrawn': prof is None}
+
+    @app.post('/blocks/read', include_in_schema=False)
+    def block_read(body: BlockRead, caller=Depends(person)):
+        """A page's ``{{crm …}}`` block, for this one viewer (PRD 0.13.4 D17/D20, `blocks.py`): the
+        rows they may read, each field marked ``shared`` when the page's workspace may see it too.
+        No totals. A room is refused (it reads with crm_read under its own ceiling)."""
+        if caller.shared:
+            raise HTTPException(403, {'reason': 'person_only', 'detail': 'A page block is rendered for one person.'})
+        args = {str(k)[:40]: str(v)[:200] for k, v in list((body.args or {}).items())[:8]}
+        return audited('block.read', caller, '',
+                       lambda: blocks_mod.read_block(store, caller.org, caller, body.workspace, body.view, args))
 
     # ── the desk: the person's own desktop (placements, arrangement versions, desk proposals) ────
     @app.post('/desk/read', operation_id='desktop_read')
@@ -439,7 +566,7 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
     # ── workspace settings: the person's own pins, mute, notification level, room order, hidden, level ─
     @app.post('/desk/workspaces/read', operation_id='workspace_settings_read')
     def workspace_settings_read(body: WorkspaceSettingsRead, caller=Depends(person)):
-        """Read the person's own settings for their workspaces: pinned, hidden from home, muted, notify (all, mentions or none), room_order, level and collapsed sections, keyed by workspace slug. Only workspaces the person changed are listed; any other reads as the defaults (not pinned, not hidden, not muted, notify all, no order, no level, nothing collapsed). They are private to the person and say nothing about who else is in a workspace."""
+        """Read the person's own settings for their workspaces: pinned, hidden from home, muted, room_order, level and collapsed sections, keyed by workspace slug. Only workspaces the person changed are listed; any other reads as the defaults (not pinned, not hidden, not muted, no order, no level, nothing collapsed). They are private to the person and say nothing about who else is in a workspace."""
         return audited('desk.workspaces.read', caller, '', lambda: member_settings.read(caller.org, caller))
 
     @app.post('/desk/workspaces/set', operation_id='workspace_settings_set')
@@ -456,21 +583,50 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
                                                                     body.state, body.mine, body.limit))
 
     @app.post('/card/propose', operation_id='card_propose')
-    def card_propose(body: CardPropose, caller=Depends(person)):
+    def card_propose(request: Request, body: CardPropose, caller=Depends(person)):
         """Propose a new card — a shared, Trello-like card in the organisation's registry: a title, what it is about, a stage, what's next. It lands as a proposal: on the person's own desktop, or on a workspace's board (one you work in) for its members; a person adds it or says not now. You never make a card yourself. Give a one-line reason. Tell the person in one line that it is waiting."""
+        if body.workspace:      # onto a board its members read (the person's own desktop is theirs)
+            privacy.hold(request, caller, surface='card_proposal')
         return audited('card.propose', caller, '', lambda: cards.propose(
             caller.org, caller, body.title, body.workspace, body.about, body.type, body.parent, body.fields, body.face, body.reason))
 
     @app.post('/card/update/propose', operation_id='card_update_propose')
-    def card_update_propose(body: CardUpdatePropose, caller=Depends(person)):
+    def card_update_propose(request: Request, body: CardUpdatePropose, caller=Depends(person)):
         """Propose a change to a card: its fields (Next, Waiting, Summary, Due, Progress, Checklist, Title), its face, or a stage move (`transition`). A member accepts it; a stage never moves without a person. Pass the card's current revision and a one-line reason, and tell the person in one line that it is waiting."""
+        privacy.hold(request, caller, surface='card_proposal')
         return audited('card.update.propose', caller, body.card, lambda: cards.update_propose(
             caller.org, caller, body.card, body.expected_revision, body.fields, body.face, body.transition, body.reason))
 
     @app.post('/card/read')
     def card_read(body: CardRead, caller=Depends(person)):
-        """One card for the person, with its activity (its movement history)."""
+        """One card for the person, with its activity (its movement history). Reading never marks it
+        seen; the terminal does, on render in view (/card/seen)."""
         return audited('card.read', caller, body.card, lambda: cards.read(caller.org, caller, body.card))
+
+    # ── S5 (PRD 0.13.4 D12–D14): the inbox, the seen relation, and decisions ────────────────────
+    @app.post('/card/inbox')
+    def card_inbox(body: CardInbox, caller=Depends(person)):
+        """The person's Inbox: open cards whose next actor they are, and the counts the Now strip,
+        the Inbox and a room badge read (one predicate)."""
+        return audited('card.inbox', caller, '', lambda: cards.inbox(caller.org, caller))
+
+    @app.post('/card/seen')
+    def card_seen(body: CardRef, caller=Depends(session_person)):
+        """The terminal rendered the card in view (D14): the only writer of `seen`. Session credential only."""
+        return audited('card.seen', caller, body.card, lambda: cards.seen(caller.org, caller, body.card))
+
+    @app.post('/card/nonce')
+    def card_nonce(body: CardRef, caller=Depends(session_person)):
+        """A server nonce bound to this person, this card at its revision and the face they see (D13)."""
+        return audited('card.nonce', caller, body.card, lambda: cards.nonce(caller.org, caller, body.card))
+
+    @app.post('/card/decide')
+    def card_decide(body: CardDecide, caller=Depends(session_person)):
+        """A gate decision on a card (D12) by its next actor, recorded as a decision record (D13):
+        session credential, the nonce, and the content hash of the face they saw. Never an agent."""
+        return audited('card.decide.' + body.action, caller, body.card, lambda: cards.decide(
+            caller.org, caller, body.card, body.action, body.nonce, body.content_hash, body.evidence, body.receipt,
+            body.answer, body.reason))
 
     @app.post('/card/create')
     def card_create(body: CardCreate, caller=Depends(person)):
@@ -501,6 +657,25 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
             org_id, body.workspace, body.commit, body.committed_at, [r.model_dump() for r in body.references],
             None if body.members is None else [m.model_dump() for m in body.members]))
 
+    @app.post('/internal/cards/offer', include_in_schema=False)
+    def internal_cards_offer(body: MeetingOffer, caller=Depends(internal)):
+        """S5/E2: the post-meeting run offers the meeting's follow-ups as cards of a kind, AS THE ROOM'S
+        WORKSPACE PRINCIPAL (D2) — the caller crm-api builds here is exactly the one a room turn's
+        delegation resolves to (shared, never admin, the members' intersection), so it is the same
+        ``card_propose`` path with the same caps. Internal tier only (flows holds the secret); a
+        workspace principal never writes anything but an offer, and only the next actor moves it."""
+        ws = check_workspace(body.workspace) if body.workspace else None
+        actor = Caller(subject=body.principal, workspaces=(ws,) if ws else (), writable=(ws,) if ws else (),
+                       delegated=True, regime='autonomous', shared=bool(ws), session=body.session,
+                       trace=caller.trace, credential_class='delegation',
+                       extra={'on_behalf_of': body.on_behalf_of,
+                              **({'principal_kind': 'workspace', 'principal_workspace': ws} if ws else {})})
+        specs = [{'title': c.title, 'about': c.about, 'fields': {
+            'Kind': c.kind, 'NextActor': c.next_actor, 'Requester': c.requester or body.on_behalf_of,
+            **({'Due': c.due} if c.due else {})}} for c in body.cards]
+        return audited('card.offer', actor, '', lambda: cards.offer_many(org_id, actor, ws, body.origin, specs,
+                                                                         body.reason))
+
     @app.post('/internal/orgs/{org}/erase', include_in_schema=False)
     def erase_org(org: str, caller=Depends(internal)):
         """Erase an individual's personal CRM: the rows keyed to their org of one (``p-<id>``),
@@ -510,6 +685,73 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
         if org == org_id or not PERSONAL_ORG.fullmatch(org):
             raise HTTPException(400, 'Only an individual account\'s own CRM (p-<id>) can be erased')
         return {'org': org, **store.erase_org(org)}
+
+    # ── D35: one Person, many addresses (persons.py) ─────────────────────────────────────────
+    @app.post('/person/me', include_in_schema=False)
+    def person_me(body: PersonMe, caller=Depends(person)):
+        """The signed-in person's own Person: how many accounts answer for it, their addresses (their
+        own in full, any other masked), the primary address, and the merge card waiting for them."""
+        return audited('person.me', caller, '', lambda: store.persons.me(caller.org, caller))
+
+    @app.post('/person/merge', include_in_schema=False)
+    def person_merge(body: PersonMerge, caller=Depends(person)):
+        """The person's own act on their merge card: confirm (with the primary address), decline, change
+        the primary later, or offer another address of theirs. A person's own credential only."""
+        p = store.persons
+        if body.action == 'confirm':
+            call = lambda: p.confirm(caller.org, caller, body.card, body.primary or None)
+        elif body.action == 'decline':
+            call = lambda: p.decline(caller.org, caller, body.card)
+        elif body.action == 'primary':
+            call = lambda: p.set_primary(caller.org, caller, body.primary)
+        else:
+            call = lambda: p.offer_for_address(caller.org, caller, body.address)
+        return audited('person.merge.' + body.action, caller, body.card, call)
+
+    @app.post('/person/profile', include_in_schema=False)
+    def person_profile(body: PersonProfile, caller=Depends(person)):
+        """The person's own profile: read, edit (theirs only), claim, unclaim, the public page. A
+        person's own credential only; a worker is refused."""
+        p = store.profiles
+        org = caller.org
+
+        def _claimed(result):
+            if result.get('status') == 'claimed':
+                try:
+                    p.carry_legacy(org, caller.subject, result['record_id'])
+                except Exception:                         # noqa: BLE001 — the claim stands without it
+                    pass
+            return result
+        calls = {'read': lambda: p.mine(org, caller),
+                 'edit': lambda: p.edit(org, caller, body.fields, body.record_id or None),
+                 'claim': lambda: _claimed(p.claim(org, caller, body.record_id or None)),
+                 'unclaim': lambda: p.unclaim(org, caller),
+                 'publish': lambda: p.publish(org, caller, body.public, body.public_fields),
+                 'import': lambda: p.import_profile(org, caller, body.source)}
+        return audited('person.profile.' + body.action, caller, body.record_id, calls[body.action])
+
+    @app.post('/internal/profiles', include_in_schema=False)
+    def profiles_directory(body: Accounts, caller=Depends(internal)):
+        """Profile fields of the people agent-api's directory rule let a viewer see. Never org fields."""
+        out = store.profiles.directory(org_id, [a.model_dump() for a in body.accounts])
+        store.audit(org_id, caller, 'profiles.directory', '', 'ok')
+        return {'profiles': out}
+
+    @app.post('/internal/profiles/public', include_in_schema=False)
+    def profiles_public(body: Handle, caller=Depends(internal)):
+        """A public page: only while the person has it on, only the fields they marked public."""
+        page = store.profiles.public(body.handle)
+        if page is None:
+            raise HTTPException(404, 'No public profile')
+        return page
+
+    @app.post('/internal/persons', include_in_schema=False)
+    def persons(body: Accounts, caller=Depends(internal)):
+        """agent-api's picker and grants: each account's Person, every account linked to it and the
+        primary address. Facts for the platform, never shown to another person as they are."""
+        out = store.persons.group(org_id, [a.model_dump() for a in body.accounts])
+        store.audit(org_id, caller, 'persons', '', 'ok')
+        return {'persons': out}
 
     @app.post('/internal/accounts', include_in_schema=False)
     def accounts(body: Account, caller=Depends(internal)):

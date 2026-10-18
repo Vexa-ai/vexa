@@ -19,6 +19,7 @@
         "webhook_url": { "type": "string", "description": "the user's webhook; becomes x-user-webhook-url" },
         "webhook_secret": { "type": "string", "description": "its signing secret; becomes x-user-webhook-secret" },
         "webhook_events": { "description": "its event filter; becomes x-user-webhook-events (JSON)" },
+        "credential_class": { "enum": ["session", "key", "delegation"], "description": "the bearer's credential class as identity.v1 ValidateResponse stated it (D13, 0.13.4): session (the terminal's signed-in browser), key (every other API key) or delegation (a worker); carried only when it is one of the three words; becomes x-user-credential-class. A service reads it with identity_token.credential_class_of, which answers delegation for any delegated identity and \"\" when it is absent. A decision that must be a person's own act asks for session." },
         "delegation": { "$ref": "#/$defs/Delegation" },
         "iat": { "type": "integer", "description": "issued at, unix seconds" },
         "exp": { "type": "integer", "description": "expires at, unix seconds; a verifier refuses exp - iat > 300" }
@@ -38,13 +39,17 @@
         "target": { "type": "string", "description": "the chat's target workspace, a default and never a grant; becomes x-user-delegation-target" },
         "unit": { "type": "string", "description": "the agent unit (a chat thread or a background job) the worker runs as — the delegation token's signed `unit` claim (delegation.v1), passed on by identity. The session: services log it as logevent.v1 `session` and the credential broker records it as audit.session; correlation, never a grant; becomes x-user-delegation-unit" },
         "shared": { "const": true, "description": "the turn answers into a conversation other people read (delegation.v1 scope.shared); becomes x-user-delegation-shared: 1. A service refuses such a worker every person-wide read. Present only then" },
+        "principal_kind": { "const": "workspace", "description": "D2 (0.13.4): the worker runs as a WORKSPACE principal (a room's turn, the workspace's agent), not as any person; `sub` (x-user-id) is that principal's own numeric account, which owns nothing of a person's (identity.v1 ValidateDelegation.principal_kind). Present only beside `shared`; becomes x-user-principal-kind. A service that knows the kind refuses or narrows on it" },
+        "principal_workspace": { "type": "string", "minLength": 1, "description": "D2: the workspace that principal is the agent of. Present only beside `principal_kind`; becomes x-user-principal-workspace" },
+        "on_behalf_of": { "type": "string", "minLength": 1, "description": "D2: the person a workspace principal's turn answered (the room speaker) — attribution and the write-or-propose rule, never a grant. Present only beside `principal_kind`; becomes x-user-delegation-on-behalf-of" },
+        "bills_to": { "type": "integer", "description": "D2: the account a workspace principal's spend debits (the workspace owner's pool) — metering only, never a grant. Present only beside `principal_kind`; becomes x-user-bills-to" },
         "grants": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["bot.request", "bot.stop", "flow.retire_self"] }, "description": "a routine's delegated authority (delegation.v1 scope.grants): the unattended verbs its person granted it, sorted; becomes x-user-delegation-grants (comma-joined). A service that refuses an unwatched caller lets exactly these verbs through. Present only beside flow" },
         "flow": { "type": "string", "minLength": 1, "description": "the routine the grants belong to (delegation.v1 scope.flow, `user:<uid>/<name>`); becomes x-user-delegation-flow. Present only beside grants" }
       }
     },
     "Headers": {
       "type": "object",
-      "description": "A claims-to-headers vector: the x-user-* headers a service rebuilds from the claims in `claims_golden` (a claims-*.json beside it). Lower-cased names; scopes, workspaces and writable_workspaces comma-joined; webhook_events as JSON; limits as decimal; an absent, empty or null claim gives no header; delegation becomes x-user-regime, x-user-delegation-workspaces (\"*\" or comma-joined), x-user-delegation-target, x-user-delegation-unit, when shared, x-user-delegation-shared: 1 and, for a granted routine, x-user-delegation-grants (comma-joined) and x-user-delegation-flow.",
+      "description": "A claims-to-headers vector: the x-user-* headers a service rebuilds from the claims in `claims_golden` (a claims-*.json beside it). Lower-cased names; scopes, workspaces and writable_workspaces comma-joined; webhook_events as JSON; limits as decimal; credential_class as x-user-credential-class; an absent, empty or null claim gives no header; delegation becomes x-user-regime, x-user-delegation-workspaces (\"*\" or comma-joined), x-user-delegation-target, x-user-delegation-unit, when shared, x-user-delegation-shared: 1, for a workspace principal x-user-principal-kind, x-user-principal-workspace, x-user-delegation-on-behalf-of and x-user-bills-to, and, for a granted routine, x-user-delegation-grants (comma-joined) and x-user-delegation-flow.",
       "required": ["claims_golden", "headers"],
       "additionalProperties": false,
       "properties": {
@@ -58,7 +63,7 @@
     },
     "Reentry": {
       "type": "object",
-      "description": "A re-entry match vector, after the signature and lifetime checks have passed. `validation` is identity's /internal/validate answer for the bearer on the re-entering call (identity.v1 ValidateResponse); `signed` is the claims of the X-Vexa-Internal-Mcp-Identity token. `admitted` must equal: validation carries a delegation, AND signed.sub == str(validation.user_id), AND signed.delegation equals the delegation the gateway would sign for validation (regime, workspaces, target, unit, shared, grants, flow).",
+      "description": "A re-entry match vector, after the signature and lifetime checks have passed. `validation` is identity's /internal/validate answer for the bearer on the re-entering call (identity.v1 ValidateResponse); `signed` is the claims of the X-Vexa-Internal-Mcp-Identity token. `admitted` must equal: validation carries a delegation, AND signed.sub == str(validation.user_id), AND signed.delegation equals the delegation the gateway would sign for validation (regime, workspaces, target, unit, shared, principal_kind, principal_workspace, on_behalf_of, bills_to, grants, flow).",
       "required": ["validation", "signed", "admitted", "what"],
       "additionalProperties": false,
       "properties": {

@@ -227,3 +227,21 @@ def presence_identity(monkeypatch):
     identity_presence.reset()
     yield fake
     identity_presence.reset()
+
+
+@pytest.fixture(autouse=True)
+def _privacy_store():
+    """The privacy mark and the held store (D6) over a fresh fake Redis per test: the mark is
+    persisted in production, and a test never shares one with another. A test about the store being
+    absent or unreadable installs its own."""
+    import fakeredis
+
+    from control_plane import held_store
+    from shared import taint
+
+    client = fakeredis.FakeRedis(decode_responses=True)
+    taint.configure(taint.TaintStore(client))
+    held_store.configure(held_store.HeldStore(client, "test-internal-secret"))
+    yield client
+    taint.configure(None)
+    held_store.configure(None)

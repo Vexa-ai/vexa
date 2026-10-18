@@ -181,12 +181,19 @@ def invite(root: Path, slug: str, *, email, role, inviter: str, index,
            mail: Optional[Callable[[dict], bool]] = None,
            inviter_email: str = "", workspace_name: str = "",
            mail_delivery: Optional[Callable[[], str]] = None,
-           now: Optional[float] = None) -> dict:
+           now: Optional[float] = None, owner_act: bool = True, room=None,
+           signin_ttl_sec: Optional[int] = None) -> dict:
     """Invite ``email`` to ``slug`` as ``role``, and get it to them. The caller has already gated.
+
+    ``owner_act`` is True only behind ``assert_may_manage`` (the owner's act); a room tag (0.13.4
+    D21) passes False, so the role is capped at the tagger's own. ``room`` records the room the
+    invitee lands in once they accept (pending room membership).
 
     Returns what it DID, in the shape the verb hands back to the agent, because the agent has to say
     it in one line and must not have to infer anything: who, where, as what, what that role means,
     and whether the link was mailed or is theirs to pass on."""
+    if isinstance(room, str):
+        room = {"id": room, "title": ""} if room.strip() else None   # a tag's invite (S4) names the room by id
     address = normalize_address(email)
     lattice = normalize_role(role)
     word = role_word(lattice)
@@ -216,6 +223,9 @@ def invite(root: Path, slug: str, *, email, role, inviter: str, index,
         # button minted ``open`` because it had nobody in mind — that difference is the whole reason
         # this act exists.
         mode="restricted", allowed_emails=[address],
+        # THE OWNER-GATED ACT (D5): the only door an owner invite passes. The caller has run
+        # ``assert_may_manage`` (owner), and the invite is restricted to the one address typed.
+        owner_act=owner_act, room=room,
         commit_fn=commit_fn, now=now)
     # ONE COMPOSER (Vexa-ai/vexa#1635). This used to build `<ui>/?invite=<token>` here; the path
     # that serves an invite is `/join?i=<token>`, and it is `workspace_membership.invite_link` for
@@ -224,16 +234,22 @@ def invite(root: Path, slug: str, *, email, role, inviter: str, index,
 
     delivery = "link"
     mailed = False
+    confirmed = False          # the deployment itself said it delivers mail (never assumed)
     if not subject and mail is not None:
         # EXTERNAL: hand the fact to the carrier. `mail` returns whether it landed; a publish that
         # did not land is not an error (see `control_plane/publish.py` — a publish edge is not a
         # dependency), it just means the link is still ours to pass on, and the answer says so.
+        # THE FIXED TEMPLATE'S FIELDS AND NOTHING ELSE (PRD 0.13.4 S2, D15 floor): who invited, to
+        # which workspace or room, as what, and the one link. There is no field a message, a page or
+        # a chat line could travel in, so the mail cannot carry content whatever the caller sends.
+        room_title = str((room or {}).get("title") or "").strip()
         mailed = bool(mail({
             "uid": str(inviter), "email": address, "workspace": slug,
             "workspace_name": str(workspace_name or slug), "role": word,
             "role_sentence": role_sentence(word),
             "inviter": str(inviter_email or inviter), "link": link,
             "expires_at": int(minted.expires_at), "invite_id": minted.id,
+            **({"room": room_title} if room_title else {}),
         }))
         delivery = "mailed" if mailed else "link"
         # THE CARRIER TAKING THE FACT IS NOT A DELIVERY (founder, 2026-10-14: the agent said "the
@@ -248,7 +264,19 @@ def invite(root: Path, slug: str, *, email, role, inviter: str, index,
                 mode = "unknown"
             delivery = ("mailed" if mode == "delivered"
                         else "captured" if mode == "captured" else "sent")
+            confirmed = mode == "delivered"
 
+    signs_in = False
+    ttl = membership_mod.SIGNIN_TTL_SEC if signin_ttl_sec is None else int(signin_ttl_sec)
+    if delivery == "mailed" and confirmed and ttl > 0:
+        # A MAILED LINK SIGNS ITS ONE ADDRESS IN (S2): the mailbox is the proof, as for the emailed
+        # sign-in link. Marked only now — after the carrier took it and the deployment said it
+        # delivers — and the link is then NOT handed back below, so the inviter never holds a link
+        # that would sign them in as somebody else.
+        try:
+            signs_in = membership_mod.mark_invite_signin(root, slug, minted.id, ttl_sec=ttl, now=now)
+        except Exception as exc:  # noqa: BLE001 — the invite works; it just needs a sign-in mail
+            log.warning("invite %s could not be made to sign in (%s)", minted.id, type(exc).__name__)
     if delivery == "mailed":
         where = "mailed to them"
     elif delivery == "captured":
@@ -261,6 +289,10 @@ def invite(root: Path, slug: str, *, email, role, inviter: str, index,
     else:
         where = "theirs to open — they already have an account here"
     name = str(workspace_name or slug)
+    if room and str(room.get("title") or "").strip():
+        name = f"{str(room['title']).strip()} in {name}"
+    if signs_in:
+        where += "; one click on it signs them in and opens it"
     if subject and delivery == "link":
         # AN ACCOUNT HERE HAS IT IN THEIR BELL (the route tells them, with Accept): nothing is to be
         # sent, and the answer names the workspace, never its slug (founder test 2026-10-16).
@@ -285,14 +317,18 @@ def invite(root: Path, slug: str, *, email, role, inviter: str, index,
                  f"{len(voided)} link{'s' if len(voided) != 1 else ''} minted before it can no longer "
                  f"be redeemed; this is the only one that works.")
 
-    return {
+    out = {
         "workspace": slug, "email": address, "role": word, "role_sentence": role_sentence(word),
         "already_member": False, "invited": True,
-        "internal": bool(subject), "delivery": delivery, "link": link,
+        "internal": bool(subject), "delivery": delivery, "link": "" if signs_in else link,
+        "signs_in": signs_in,
         "invite_id": minted.id, "expires_at": int(minted.expires_at),
         "voided_earlier_links": voided,
         "said": said,
     }
+    if room and str(room.get("id") or "").strip():
+        out["room"] = {"id": str(room["id"]), "title": str(room.get("title") or "")}
+    return out
 
 
 def set_membership(root: Path, slug: str, *, email, role, actor: str, index, commit_fn=None,

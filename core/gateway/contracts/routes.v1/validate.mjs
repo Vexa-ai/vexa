@@ -13,7 +13,11 @@
  *   - a `verbs` row is strictly under the edge prefix and declared once, as agent-api's
  *     `control_plane/route_policy.py` refuses at boot;
  *   - a row's `upstream` names each `{name}` parameter once, and only parameters its own path
- *     matches, so the edge can fill the hop from what it matched.
+ *     matches, so the edge can fill the hop from what it matched;
+ *   - every manifest in the repository declares `shared` on every row (D3, enforced at the gateway);
+ *   - a manifest that declares `shared` (D3, default-deny for shared tokens) on any row or verb
+ *     declares it on every row and every verb, as agent-api's `control_plane/route_policy.py`
+ *     refuses at boot — a half-declared table reads as "allowed" wherever someone forgot.
  * Run: node validate.mjs [--check]
  */
 import Ajv2020 from "ajv/dist/2020.js";
@@ -70,6 +74,11 @@ function crossRow(doc) {
     const p = doc.forward?.edge_prefix;
     if (p && (!v.path.startsWith(p) || v.path === p)) out.push(`verbs: ${key} is outside the forward ${p}…`);
   }
+  const all = [...(doc.routes || []), ...(doc.verbs || [])];
+  if (all.some((r) => r.shared !== undefined)) {
+    for (const r of doc.routes || []) if (r.shared === undefined) out.push(`${r.method} ${r.path} declares no shared (allow|refuse) beside rows that do`);
+    for (const v of doc.verbs || []) if (v.shared === undefined) out.push(`verbs: ${v.method} ${v.path} declares no shared (allow|refuse) beside rows that do`);
+  }
   return out;
 }
 const refusals = (doc) => {
@@ -106,6 +115,10 @@ for (const p of manifests.sort()) {
   const where = relative(REPO, p);
   const r = refusals(doc);
   if (r.length) { bad(`${where}: ${r.join("; ")}`); continue; }
+  // D3: every row of every manifest in the repository says whether a shared (room / shared-chat)
+  // delegation may reach it; the gateway refuses a shared caller on every row not declared allow.
+  const undeclared = (doc.routes || []).filter((row) => row.shared === undefined).map((row) => `${row.method} ${row.path}`);
+  if (undeclared.length) { bad(`${where}: rows without shared (allow|refuse): ${undeclared.slice(0, 5).join(", ")}${undeclared.length > 5 ? " …" : ""}`); continue; }
   for (const row of doc.routes) {
     const key = `${row.method} ${row.path}`;
     if (owner.has(key)) bad(`${key} is declared by both ${owner.get(key)} and ${where}`);

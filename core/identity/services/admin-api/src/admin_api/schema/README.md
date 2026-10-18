@@ -4,7 +4,8 @@
 MeetingSession). `sync.py` is `ensure_schema()` — idempotent, additive, never-drops convergence
 (the parent's no-alembic discipline). The dead `recordings`/`media_files` tables are dropped —
 see `MIGRATION-0001-drop-recordings.md`. The org as a first-class object (`orgs`, `org_members`,
-`users.org_id`, one default org per install) is `MIGRATION-0008-orgs.md`.
+`users.org_id`, one default org per install) is `MIGRATION-0008-orgs.md`. The workspace principal (`principals`, PRD 0.13.4 D2) is
+`MIGRATION-0009-principals.md`. The workspace registry (`workspaces`, `memberships`, `invites`: who may enter a workspace, out of git) is `MIGRATION-0009-workspace-registry.md`.
 
 **Upgrade path:** the 0.10 → 0.12 convergence is validated against a full production migration
 (July 2026), together with the out-of-band steps in `MIGRATION-0002` and `MIGRATION-0005`. The

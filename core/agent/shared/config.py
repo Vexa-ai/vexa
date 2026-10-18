@@ -158,6 +158,11 @@ class Settings(BaseSettings):
     # that runs one turn and idles out. A unit that stays warm longer is handed a new token before
     # this one expires (control_plane.delegation_refresh), which its worker picks up before each turn.
     mcp_delegation_ttl_sec: Optional[int] = Field(default=None, ge=60)
+    # D2 (0.13.4): a room's turn runs as the workspace's own numeric principal (identity's
+    # `principals`; token `principal_kind=workspace`, `on_behalf_of=speaker`; identity answers the
+    # owner as `bills_to`) instead of as the workspace owner's account. Off by default until identity, crm, flows and meetings accept the kind everywhere;
+    # with it off a room token is the owner's, narrowed by its ceiling, `shared` and D3.
+    room_ws_principal: bool = False
 
     # ── secrets (never logged, committed, or in goldens) — P14 / P15 ─────────
     # Brokered, scoped identity the worker presents (ADR-0003): a port, not a raw key here.

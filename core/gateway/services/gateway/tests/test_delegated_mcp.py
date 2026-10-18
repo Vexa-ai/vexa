@@ -298,10 +298,15 @@ def test_a_shared_turn_is_signed_as_shared_and_stated_to_the_service():
     assert claims["delegation"]["shared"] is True
     assert fwd["headers"]["x-user-delegation-shared"] == "1"
     assert identity_token.is_shared(fwd["headers"])
-    r = client.get("/meetings", headers={"X-API-Key": DELEGATED,
-                                         "X-Vexa-Internal-Mcp-Identity": _reentry(shared)})
+    # D3: re-entry on a row declared `shared: allow` (one meeting's transcript) is forwarded, signed
+    # shared; a person-wide row (`/meetings`, `shared: refuse`) is refused at this edge.
+    r = client.get("/transcripts/google_meet/abc-defg-hij",
+                   headers={"X-API-Key": DELEGATED, "X-Vexa-Internal-Mcp-Identity": _reentry(shared)})
     assert r.status_code == 200
     assert downstream.last["headers"]["x-user-delegation-shared"] == "1"
+    r = client.get("/meetings", headers={"X-API-Key": DELEGATED,
+                                         "X-Vexa-Internal-Mcp-Identity": _reentry(shared)})
+    assert r.status_code == 403 and r.json()["detail"]["reason"] == "shared_conversation"
 
 
 def test_a_granted_routine_is_signed_with_its_grants_and_stated_to_the_service():

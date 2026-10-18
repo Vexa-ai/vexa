@@ -11,7 +11,8 @@ header  {"alg":"HS256","typ":"vxdlg"}
 claims  {"aud":"vexa-mcp", "exp":…, "iat":…, "jti":"…",
          "scope":{"regime":"human"|"autonomous", "workspaces":"*"|["slug",…], "shared":true?,
                   "grants":["bot.request",…]?, "flow":"user:<uid>/<name>"?},
-         "sub":"<user id>", "target":"<slug>"?, "unit":"<unit id>"?}
+         "sub":"<user id or workspace principal id>", "target":"<slug>"?, "unit":"<unit id>"?,
+         "principal_kind":"workspace"?, "principal_workspace":"<slug>"?, "on_behalf_of":"<user id>"?}
 ```
 
 Both JSON documents are canonical (keys sorted at every depth, no whitespace, ASCII-escaped);
@@ -44,6 +45,27 @@ a conversation other people read. It travels on identity's answer and the gatewa
 a person-wide read — the person's mail, calendar and other connections (credential broker,
 agent-api), their meetings, transcripts and recordings (meeting-api) — with one body,
 `reason: shared_conversation`. Absent on a private turn, whose token is byte-identical to before.
+
+**Workspace principal** (D2, 0.13.4; security review 2026-10-17 C1). A room's turn runs as its
+workspace's agent, not as any person.
+- identity keeps one numeric principal of kind `workspace` per workspace (admin-api `principals`,
+  MIGRATION-0009). Its id is a dedicated account row that owns nothing of a person's, and the row
+  names the account it bills to.
+- The token's `sub` is that id. Three claims describe it: `principal_kind: "workspace"`,
+  `principal_workspace` and `on_behalf_of` (the speaker).
+- The minter refuses a workspace principal without `shared`, with `workspaces: "*"`, with grants,
+  or naming itself as `on_behalf_of`. It refuses the three claims on a person's token, so every
+  person token stays byte-identical.
+- identity checks the claims against its table (kind, workspace, `active`) and answers
+  `delegation.principal_kind`, `principal_workspace`, `on_behalf_of` and `bills_to` beside `shared`
+  (identity.v1 `ValidateDelegation`). The gateway signs them into `x-user-principal-kind`,
+  `x-user-principal-workspace`, `x-user-delegation-on-behalf-of` and `x-user-bills-to`
+  (gateway-identity.v1).
+- agent-api asks identity for the principal (`POST /internal/principals/workspace`) and mints it
+  only while `VEXA_ROOM_WS_PRINCIPAL` is on. That switch is off by default in 0.13.4
+  (`control_plane/dispatch.py`).
+- The change is additive, so delegation.v1 is re-sealed in a `lane:contract` review rather than
+  opening a v2.
 
 **Grants** (`scope.grants` with `scope.flow`, flows phase 0) are a routine's delegated authority.
 A routine runs unwatched, so every verb that needs a person refuses it (`human_session_required`); a

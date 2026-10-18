@@ -23,7 +23,10 @@ token, with a ``vxd_`` prefix so a verifier can tell it from an API key WITHOUT 
                        "flow": "user:<uid>/<name>"},   person granted it (only with both keys)
              "iat": <unix>, "exp": <unix>, "jti": "<random>",
              "target": "<slug>",        optional: the chat's default workspace, never a grant
-             "unit": "<unit id>"}       optional: the agent unit (session) it was minted for
+             "unit": "<unit id>",       optional: the agent unit (session) it was minted for
+             "principal_kind": "workspace",  only for a workspace principal (sub is its id)
+             "principal_workspace": "<id>",  …the workspace it is the agent of
+             "on_behalf_of": "<uid>"}         …and the person whose message it answered
 
 REGIME IS THE POINT. ``human`` = a person is in the loop this turn, so the scope is SOFT: ``workspaces:
 "*"`` — everything that is already theirs, because the person can see and correct what the agent does.
@@ -39,6 +42,18 @@ answers into a conversation other people read. The regime still says whether a p
 (mail, calendar, any other connection, the person's meetings, transcripts and recordings) to such a
 token: only what every reader can read may reach the answer. Absent on every other token, which is
 therefore byte-identical to the one it has always been.
+
+A WORKSPACE PRINCIPAL (D2, 0.13.4). A room's turn runs as its workspace's agent, not as any
+person. identity keeps a numeric principal of kind ``workspace`` per workspace (admin-api
+``principals``: its id is a dedicated account row that owns nothing of any person's, and it names the
+account it ``bills_to``). The token's ``sub`` is that id — an ordinary numeric subject, so every
+consumer that coerces a subject to ``int`` keeps working — and three claims say what it is:
+``principal_kind: "workspace"``, ``principal_workspace`` (the workspace) and ``on_behalf_of`` (the
+person whose message it answered: attribution and the write-or-propose rule, never a grant). A
+workspace principal is ALWAYS ``shared`` with an explicit ceiling and no grants; the minter refuses
+anything else, and refuses the three claims on a person's token. identity checks the claims against
+its table (kind, workspace, status) and answers the payer as ``delegation.bills_to``. A verifier
+that predates the kind answers the principal's own account, which owns nothing a person owns.
 
 GRANTS ARE A ROUTINE'S DELEGATED AUTHORITY (flows phase 0, founder 2026-10-14). A routine runs with
 nobody in the loop, so the services refuse it every verb that needs a person (``human_session_required``).
@@ -228,6 +243,27 @@ def is_cross_org(scope: object) -> bool:
     return isinstance(scope, dict) and scope.get("audience") == AUDIENCE_CROSS_ORG
 
 
+#: The one non-person principal kind a token can name (D2).
+PRINCIPAL_KIND_WORKSPACE = "workspace"
+
+
+def is_workspace_principal(claims: object) -> bool:
+    """Do these verified claims (or a ceiling copied from them) name a WORKSPACE principal?"""
+    return isinstance(claims, dict) and claims.get("principal_kind") == PRINCIPAL_KIND_WORKSPACE
+
+
+def principal_of(claims: object) -> dict:
+    """Who a verified token's claims act as: ``{"kind": "workspace"|"person", "id", "workspace",
+    "on_behalf_of"}``. A person's ``workspace`` and ``on_behalf_of`` are empty."""
+    c = claims if isinstance(claims, dict) else {}
+    sub = str(c.get("sub") or "")
+    if is_workspace_principal(c):
+        return {"kind": PRINCIPAL_KIND_WORKSPACE, "id": sub,
+                "workspace": str(c.get("principal_workspace") or ""),
+                "on_behalf_of": str(c.get("on_behalf_of") or "")}
+    return {"kind": "person", "id": sub, "workspace": "", "on_behalf_of": ""}
+
+
 def is_delegation_token(token: str) -> bool:
     """Cheap discriminator — does this bearer value even claim to be a delegation token? Lets a verifier
     fall through to its OTHER token schemes without paying a parse, and without a failed parse being
@@ -250,6 +286,9 @@ def mint_delegation(
     grants: "Iterable[str] | None" = None,
     flow: str = "",
     audience: str = "",
+    principal_kind: str = "",
+    principal_workspace: str = "",
+    on_behalf_of: str = "",
 ) -> str:
     """Mint a delegation token for ``subject``. ``workspaces`` is ``"*"`` (all of theirs — only sane for
     the human regime) or an explicit list of slugs (the isolation set). Raises ``ValueError`` on a
@@ -274,7 +313,11 @@ def mint_delegation(
 
     ``grants`` and ``flow`` are a routine's delegated authority (``scope.grants``, ``scope.flow``):
     minted only for an ``autonomous`` turn and only together — a grant with no routine, or on a turn
-    a person is watching, raises ``ValueError``. Omitted when there are none."""
+    a person is watching, raises ``ValueError``. Omitted when there are none.
+
+    ``principal_kind="workspace"`` makes ``subject`` a WORKSPACE principal's numeric id (D2): it
+    needs ``principal_workspace`` and ``on_behalf_of`` (a person), ``shared``, an explicit ceiling
+    and no grants. Either of those two fields without the kind raises."""
     if not secret:
         raise ValueError("delegation secret is required (VEXA_MCP_DELEGATION_SECRET)")
     if not subject:
@@ -285,6 +328,21 @@ def mint_delegation(
         workspaces = sorted({str(w) for w in workspaces})
     elif regime == "autonomous":
         raise ValueError('an autonomous dispatch may not carry workspaces="*" — pass its isolation set')
+    if principal_kind:
+        if principal_kind != PRINCIPAL_KIND_WORKSPACE:
+            raise ValueError(f"principal_kind is {PRINCIPAL_KIND_WORKSPACE!r} or absent, got {principal_kind!r}")
+        if not str(principal_workspace or "").strip() or not str(on_behalf_of or "").strip():
+            raise ValueError("a workspace principal names its workspace and who it answered (on_behalf_of)")
+        if str(on_behalf_of).strip() == str(subject):
+            raise ValueError("on_behalf_of names the person it answered, never the principal itself")
+        if not shared:
+            raise ValueError("a workspace principal's turn is shared: pass shared=True")
+        if workspaces == "*":
+            raise ValueError('a workspace principal carries its explicit ceiling, never workspaces="*"')
+        if grants:
+            raise ValueError("a workspace principal carries no routine grants")
+    elif str(on_behalf_of or "").strip() or str(principal_workspace or "").strip():
+        raise ValueError("on_behalf_of and principal_workspace belong to a workspace principal")
     iat = int(now if now is not None else time.time())
     scope = {"regime": regime, "workspaces": workspaces}
     if shared:
@@ -316,6 +374,10 @@ def mint_delegation(
         payload["target"] = str(target).strip()
     if str(unit or "").strip():
         payload["unit"] = str(unit).strip()
+    if principal_kind:
+        payload["principal_kind"] = PRINCIPAL_KIND_WORKSPACE
+        payload["principal_workspace"] = str(principal_workspace).strip()
+        payload["on_behalf_of"] = str(on_behalf_of).strip()
     header = {"alg": "HS256", "typ": "vxdlg"}
     body = _b64u(_canon(header)) + "." + _b64u(_canon(payload))
     sig = hmac.new(_key(secret), body.encode("ascii"), hashlib.sha256).digest()

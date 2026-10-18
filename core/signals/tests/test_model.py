@@ -97,3 +97,12 @@ def test_the_evaluation_window_drops_old_context_never_the_new_line():
     state = json.loads(state_json(NEW, big))
     assert state["NEW SPEECH"][0]["segment_id"] == "s2" and len(state["PRIOR CONTEXT"]) < 30
     assert state["PRIOR CONTEXT"][-1]["segment_id"] == "c29"
+
+
+def test_thinking_off_switches_the_chat_template_off():
+    from meeting_signals.model import build
+    off = build({"adapter": "openai-compatible", "route": "qwen", "thinking": "off"}, None)
+    assert off.payload(ASKS, NEW, CTX)["chat_template_kwargs"] == {"enable_thinking": False}
+    for thinking in ("", "on"):
+        a = build({"adapter": "openai-compatible", "route": "qwen", "thinking": thinking}, None)
+        assert "chat_template_kwargs" not in a.payload(ASKS, NEW, CTX)

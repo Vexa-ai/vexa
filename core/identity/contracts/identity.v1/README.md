@@ -36,6 +36,12 @@ the internal tier (`X-Internal-Secret` = `INTERNAL_API_SECRET`).
   not `is_admin`: the instance admin is a person, and a person's chats only read `_global`. The admin
   account's `max_concurrent` is always `0` — it launches no bot. A resolver reads a missing field as
   `false`, so an older identity fails closed.
+- **`credential_class`** (D13, 0.13.4) — always stated, positive evidence: `session` for the
+  terminal's signed-in browser (admin-api `api_tokens.kind = 'session'`, minted only by
+  `POST /internal/sessions`, which needs the internal secret AND `X-Terminal-Session-Secret`),
+  `key` for every other API key (self-serve, admin-minted, legacy — a `browser` scope on a key proves
+  nothing), `delegation` for a worker. A decision that must be a person's own act asks for
+  `session`; a resolver that finds the field missing (an older identity) reads "not a session".
 - **Failures** — `503` without an internal secret outside dev mode; `403` on a wrong one; `401`
   `Missing token` · `Invalid token` · `Token expired` · `Delegation tokens are not accepted on this
   deployment` · `Invalid delegation: <reason>` (delegation.v1 `RefusalReason`; `revoked` once the
@@ -75,7 +81,8 @@ agent-api and flows-api together.
 - `ValidateResponse.api-key.json` (a key with a webhook and a membership), `ValidateResponse.admin-key.json`
   (the admin's legacy key) and `ValidateResponse.delegation.json` (an autonomous worker acting for the
   admin: `is_admin` false, `person_is_admin` true), and `ValidateResponse.admin-account.json` (the admin
-  account's own key: `admin_account` true, `max_concurrent` 0).
+  account's own key: `admin_account` true, `max_concurrent` 0), and `ValidateResponse.session.json`
+  (the terminal's signed-in browser: `credential_class` `session`).
 
 ## Validate
 `node validate.mjs [--check]` — ajv2020 + ajv-formats, every golden against its `$def` (gate:schema).

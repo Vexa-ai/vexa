@@ -1,4 +1,6 @@
 """Permission-aware record operations shared by HTTP, MCP and Minutes."""
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from uuid import uuid4, uuid5, NAMESPACE_URL
 import json
@@ -10,10 +12,18 @@ from sqlalchemy import select, update, delete, or_, false, text, func
 from . import schema as s
 from .cards import CardLayout, visible_layout
 from .caller import Caller, as_caller, REFUSAL, SHARED_REFUSAL, CONFIRM_REFUSAL
+from .field_classes import (Classes, FieldView, MATCH_IDS, NARRATIVE, PSEUDO, ROOM_RULE_KEY, ROOM_RULES,
+                            DEFAULT_ROOM_RULE, as_set, intersect)
 from .migrate import ERASE_APPEND_ONLY, erase_plan
 from .orgs import PERSONAL_ORG
 
 log = logging.getLogger('crm.store')
+
+#: H9 (PRD 0.13.4 §5.3): the audit row of the operation in flight, written IN THE SAME TRANSACTION as
+#: the operation's own writes (``Store.begin``). crm-api's ``audited`` sets it per request; a read
+#: path that commits nothing has it written by ``audited`` before the answer leaves, so no answer is
+#: ever returned without its audit row and no write commits without one.
+PENDING_AUDIT: ContextVar = ContextVar('crm_pending_audit', default=None)
 
 
 #: The fields a record shows a cross-org room (delegation.v1 ``scope.audience``): who or what it is,
@@ -105,20 +115,62 @@ class Store:
         #: — crm_change as much as the card tools — keeps a card type's State on its lifecycle and
         #: its Face sanitised, and a card's members may review its proposals.
         self.cards = None
+        #: D35 (``persons.py``): an account resolves to its Person by verified address; one Person may
+        #: answer for several accounts, and merging them is the person's own act.
+        from .persons import Persons
+        self.persons = Persons(self)
+        #: D35 founder addition (``person_profiles.py``): a profile is a claimed Person record.
+        from .person_profiles import Profiles
+        self.profiles = Profiles(self)
 
-    def _policy(self, c, org, caller):
+    @contextmanager
+    def begin(self):
+        """``engine.begin()`` that writes the pending audit row (H9) inside the same transaction,
+        just before it commits. Write paths use it; with no audit pending it is ``engine.begin()``."""
+        with self.engine.begin() as c:
+            yield c
+            pending = PENDING_AUDIT.get()
+            if pending and not pending.get('written'):
+                caller = as_caller(pending['caller'])
+                c.execute(s.audit.insert().values(
+                    org_id=pending['org'], id=str(uuid4()), at=self._now(), subject=caller.subject or '-',
+                    caller=caller.kind, session=caller.session, trace=caller.trace, op=pending['op'],
+                    record_id=str(pending.get('record_id') or ''), outcome='ok', **audit_principal(caller)))
+                pending['written'] = True
+
+    def audit_names(self, record_id):
+        """The record a write made, for its audit row (a create learns its id inside the operation)."""
+        pending = PENDING_AUDIT.get()
+        if pending and not pending.get('written') and not pending.get('record_id'):
+            pending['record_id'] = str(record_id)
+
+    def _policy(self, c, org, caller, context=True):
         caller=as_caller(caller)
-        value = c.execute(select(s.policies.c.policy).where(
-            s.policies.c.org_id == org, s.policies.c.subject_id == caller.subject)).scalar_one_or_none()
+        if (caller.extra or {}).get('principal_kind') == 'workspace':
+            # D2 + D4 (deny test 36): a WORKSPACE principal (a room's own account) has no CRM policy
+            # of its own and NEVER falls to the organisation's default. It is the room: it reaches a
+            # record only through a workspace in its ceiling (``_rights``: shared needs ``bound``),
+            # and its fields are the members' intersection (``_room_allowed``), nothing wider.
+            value = {'active': True, 'objects': {}, 'records': {}, '_principal': 'workspace'}
+        else:
+            value = c.execute(select(s.policies.c.policy).where(
+                s.policies.c.org_id == org, s.policies.c.subject_id == caller.subject)).scalar_one_or_none()
         if value is None and not caller.internal:
             # A signed-in member of the organisation with no policy of their own gets the
             # organisation's default (ADR-0047 d6) — read, never written, so no policy row appears.
             value = self.org_policy(c, org)
-        if caller.is_admin:
+        if caller.is_admin and not caller.shared:
             # An instance administrator is a CRM administrator (ADR-0047 d6: admin sees all).
             value = {**(value or {}), 'active': True, 'admin': True}
         if not value or not value.get('active', False):
             raise Forbidden('No active CRM membership')
+        if caller.shared:
+            # D4: a shared (room) caller is never an administrator or a reviewer, whatever the
+            # person behind it holds; its fields are the room's (``_view``). Whether the person is
+            # one is kept only to choose the refusal (``_rights``), never to grant.
+            person_admin = bool(value.get('admin')) or bool((caller.extra or {}).get('person_admin'))
+            value = {k: v for k, v in value.items() if k not in ('admin', 'reviewer')}
+            value['_person_admin'] = person_admin
         # Derived grants (d6): the records bound to a workspace the caller is a member of NOW, as
         # identity answered it — for a worker already narrowed to its ceiling, and in a turn other
         # people read, the participants' intersection. The roster gives the role a write needs.
@@ -136,8 +188,105 @@ class Store:
         m=s.card_members
         members=dict(c.execute(select(m.c.record_id,m.c.status).where(m.c.org_id==org,
             m.c.subject==caller.subject)).all()) if caller.subject else {}
-        return {**value, "subject_id": caller.subject, '_caller': caller, '_bound': bound, '_roles': roles,
-                '_members': members}
+        out = {**value, "subject_id": caller.subject, '_caller': caller, '_bound': bound, '_roles': roles,
+               '_members': members}
+        if context:
+            out['_classes'] = self._classes(c, org)
+            if caller.shared:
+                out['_room'] = self._room(c, org, caller)
+        return out
+
+    # ── D4: field classification and the room ceiling (field_classes.py) ─────────────────────
+    def _classes(self, c, org):
+        fc = s.field_classes
+        rows = [dict(r) for r in c.execute(select(fc.c.object_type, fc.c.field, fc.c['class'], fc.c.workspaces)
+                                           .where(fc.c.org_id == org)).mappings()]
+        defs = dict(c.execute(select(s.object_types.c.name, s.object_types.c.definition)
+                              .where(s.object_types.c.org_id == org)).all())
+        return Classes(rows, defs)
+
+    def _room(self, c, org, caller):
+        """The room a shared caller answers: its workspaces, every current member's policy (as each
+        member, never as an administrator acting for the room), and the organisation's room rule."""
+        ceiling = set(caller.workspaces)
+        roster = {}
+        if ceiling:
+            r = s.workspace_rosters
+            for workspace, subject in c.execute(select(r.c.workspace, r.c.subject).where(
+                    r.c.org_id == org, r.c.workspace.in_(ceiling))).all():
+                roster.setdefault(subject, set()).add(workspace)
+        members = {}
+        for subject, workspaces in roster.items():
+            if str(subject).startswith('ws:'):
+                continue
+            try:
+                members[subject] = self._policy(c, org, Caller(subject=subject, workspaces=tuple(sorted(workspaces))),
+                                                context=False)
+            except Forbidden:
+                members[subject] = None     # a member with no CRM membership reads nothing: so does the room
+        rule = (self.org_policy(c, org) or {}).get(ROOM_RULE_KEY, DEFAULT_ROOM_RULE)
+        if rule not in ROOM_RULES:
+            rule = 'classified'             # an unreadable rule fails closed to the narrower one
+        return {'workspaces': ceiling, 'members': members, 'rule': rule}
+
+    def _room_allowed(self, policy, kind, member_fields):
+        """(allowed, excluded, explicit) for a shared caller; ``member_fields(policy)`` is one
+        member's field set for this record or type (None = every field)."""
+        classes = policy.get('_classes') or Classes([], {})
+        room = policy.get('_room') or {'workspaces': set(), 'members': {}, 'rule': 'classified'}
+        explicit = classes.shared_with(kind, room['workspaces'])
+        if room['rule'] == 'classified':
+            return {n for n in explicit if n not in PSEUDO}, set(), explicit
+        allowed = member_fields(policy)
+        if not room['members']:
+            allowed = set()                 # no roster: no member to intersect, so nothing
+        for member in room['members'].values():
+            allowed = intersect(allowed, member_fields(member) if member is not None else set())
+        excluded = (classes.private(kind) | classes.shared_elsewhere(kind, room['workspaces'])) - explicit
+        if allowed is not None:
+            allowed |= {n for n in explicit if n not in PSEUDO}
+        return allowed, excluded, explicit
+
+    def _view(self, policy, row):
+        """What this caller reads of this record (``FieldView``), or NotFound/SharedRefused. Every read
+        path takes its fields from here: restricted fields are absent, never nulled."""
+        raw = self._rights(policy, row, 'read')
+        caller = policy.get('_caller') or as_caller(policy.get('subject_id', ''))
+        classes = policy.get('_classes') or Classes([], {})
+        kind = row['object_type']
+        props = tuple(classes.props(kind))
+        if caller.shared:
+            def fields_of(p):
+                try:
+                    return as_set(self._rights(p, row, 'read'))
+                except NotFound:
+                    return set()
+            allowed, excluded, explicit = self._room_allowed(policy, kind, fields_of)
+            return FieldView(allowed, excluded, full=False, narrative=NARRATIVE in explicit,
+                             match_ids=MATCH_IDS in explicit, props=props)
+        allowed = as_set(raw)
+        owner = bool(caller.subject) and row.get('owner_id') == caller.subject
+        excluded = set() if (policy.get('admin') or owner) else classes.private(kind)
+        full = allowed is None
+        return FieldView(allowed, excluded, full=full, narrative=full and NARRATIVE not in excluded,
+                         match_ids=full and MATCH_IDS not in excluded, props=props)
+
+    def _type_view(self, policy, kind):
+        """The fields of a type this caller may filter or lay out by (search, describe)."""
+        caller = policy.get('_caller') or as_caller(policy.get('subject_id', ''))
+        classes = policy.get('_classes') or Classes([], {})
+        props = tuple(classes.props(kind))
+        def fields_of(p):
+            if p.get('admin'):
+                return None
+            return as_set((p.get('objects', {}) or {}).get(kind, {}).get('read_fields', ['*']))
+        if caller.shared:
+            allowed, excluded, explicit = self._room_allowed(policy, kind, fields_of)
+            return FieldView(allowed, excluded, props=props)
+        allowed = None if policy.get('admin') else as_set(policy.get('objects', {}).get(kind, {}).get('read_fields', []))
+        # A private field is the owner's: filtering by it would say which records hold a value.
+        excluded = set() if policy.get('admin') else classes.private(kind)
+        return FieldView(allowed, excluded, props=props)
 
     def _definition(self, c, org, kind):
         value = c.execute(select(s.object_types.c.definition).where(
@@ -159,6 +308,9 @@ class Store:
         if policy.get('admin'):
             fields=['*']
         else:
+            if caller.shared and policy.get('_person_admin') and not bound:
+                # The speaker (an administrator) may read it in their own chat; this room may not.
+                raise SharedRefused()
             if row.get('quarantined'):
                 raise NotFound('Record not found')
             rule = policy.get('objects', {}).get(row['object_type'], {})
@@ -199,12 +351,13 @@ class Store:
         return dict(row)
 
     def _visible(self, policy, row):
-        fields = self._rights(policy, row, 'read')
+        view = self._view(policy, row)
         result = {k: row[k] for k in ('id', 'org_id', 'object_type', 'revision')}
         result['quarantined'] = row['quarantined']
-        result['fields'] = {k: v for k, v in row['fields'].items() if '*' in fields or k in fields}
-        # Narrative may contain any field: partial-field users cannot read it.
-        result['narrative'] = row['narrative'] if '*' in fields else None
+        result['fields'] = view.filter(row['fields'])
+        # Narrative may contain any field: partial-field users cannot read it, nor a room unless
+        # the narrative is classified shareable to the room's workspace (D4).
+        result['narrative'] = row['narrative'] if view.narrative else None
         caller = policy.get('_caller')
         if caller is not None and getattr(caller, 'cross_org', False):
             # A ROOM WITH PEOPLE FROM OUTSIDE THE ORG (rooms, K1): the org's private facts never reach
@@ -223,7 +376,7 @@ class Store:
 
     def configure(self, org, actor, object_type, layout=None, expected_version=0, reason=''):
         caller=as_caller(actor);actor=caller.subject
-        with self.engine.begin() as c:
+        with self.begin() as c:
             policy = self._policy(c,org,caller)
             if not policy.get('admin'):
                 raise Forbidden('CRM administrator rights required to configure shared cards')
@@ -264,7 +417,11 @@ class Store:
                     continue
                 allowed = ['*'] if policy.get('admin') else rule.get('read_fields', [])
                 definition = row['definition']
-                result.append({'object_type': kind, 'fields': {k: v for k, v in definition.get('properties', {}).items() if '*' in allowed or k in allowed}})
+                fields = {k: v for k, v in definition.get('properties', {}).items() if '*' in allowed or k in allowed}
+                if policy['_caller'].shared:
+                    view = self._type_view(policy, kind)       # D4: a room describes the room's fields
+                    fields = {k: v for k, v in fields.items() if view.has(k)}
+                result.append({'object_type': kind, 'fields': fields})
             return {'objects': result}
 
     def get(self, org, actor, record_id):
@@ -308,8 +465,13 @@ class Store:
             can_review=sees_all and not caller.delegated
             result['actions']={'can_review':can_review,'can_update':can_write and not caller.delegated and not policy.get('review_required',False),'can_propose':True}
             result['mentioned_in']=self._mentioned_in(c,org,policy,row)
-            result['bound_to']=sorted(w for w in policy.get('_bound',{}).get(record_id,set())) if not policy.get('admin') else self._bindings(c,org,record_id)
-            if '*' in self._rights(policy,row,'read'):
+            # D4: every workspace a record is bound to only for an administrator in person; a worker
+            # (and so every room) sees only the bindings inside its ceiling.
+            result['bound_to']=self._bindings(c,org,record_id) if policy.get('admin') and not caller.delegated \
+                else sorted(w for w in policy.get('_bound',{}).get(record_id,set()))
+            view=self._view(policy,row)
+            if view.match_ids:
+                # Identifiers are email-derived (private by default): absent, never blanked, otherwise.
                 result['match_ids']=sorted(m for (m,) in c.execute(select(s.match_ids.c.identifier).where(
                     s.match_ids.c.org_id==org,s.match_ids.c.record_id==record_id)).all())
                 result['account_id']=row.get('account_id')
@@ -317,14 +479,13 @@ class Store:
             query=select(s.change_proposals).where(s.change_proposals.c.org_id==org,
                 s.change_proposals.c.record_id==record_id,s.change_proposals.c.status=='pending').limit(50)
             if not sees_all:query=query.where(s.change_proposals.c.author_id==actor)
-            allowed=self._rights(policy,row,'read')
             for proposal in c.execute(query).mappings():
                 result['proposals'].append({'id':proposal['id'],'base_revision':proposal['base_revision'],
                     'author_kind':proposal['patch'].get('author_kind','person'),
-                    'fields':{k:v for k,v in proposal['patch']['fields'].items() if '*' in allowed or k in allowed},
-                    'narrative':proposal['patch'].get('narrative') if '*' in allowed else None,
-                    'reason':proposal['reason'] if '*' in allowed else None,
-                    'evidence':proposal['evidence'] if '*' in allowed else []})
+                    'fields':view.filter(proposal['patch']['fields']),
+                    'narrative':proposal['patch'].get('narrative') if view.narrative else None,
+                    'reason':proposal['reason'] if view.full else None,
+                    'evidence':proposal['evidence'] if view.full else []})
             # A room with people from outside the org: the answer's envelope too, by an allow-list.
             return cross_org_answer('record',result) if caller.cross_org else result
 
@@ -339,9 +500,12 @@ class Store:
             # A room with people from outside the org filters on public fields only: a filter on any
             # other field would answer which records hold a value the room may not read.
             public = public_fields(policy, object_type) if caller.cross_org else None
+            # D4: a room filters only on the room's fields, a person never on another owner's private
+            # field — either would answer which records hold a value the caller may not read.
+            tview = self._type_view(policy, object_type)
             for name in (filters or {}):
                 if name not in definition.get('properties', {}) or ('*' not in allowed and name not in allowed) \
-                        or (public is not None and name not in public):
+                        or not tview.has(name) or (public is not None and name not in public):
                     raise Forbidden('Filter field unavailable')
             query = select(s.records).where(s.records.c.org_id == org,
                 s.records.c.object_type == object_type, s.records.c.deleted == False).order_by(s.records.c.id)
@@ -391,6 +555,8 @@ class Store:
                         'label':target['fields'].get('Name') or ' '.join(str(target['fields'].get(k) or '') for k in ('FirstName','LastName')).strip() or target['fields'].get('Title') or target['object_type']})
             card=self._card(c,org,object_type)
             readable=set(definition.get('properties',{})) if '*' in allowed else set(allowed)
+            if caller.shared:
+                readable={n for n in definition.get('properties',{}) if tview.has(n)}
             if public is not None:readable&=public
             out={'records':result,'next_offset':offset+limit if len(rows)>limit else None,
                  'card':{**card,'layout':visible_layout(card['layout'],readable) if card['layout'] else None},
@@ -465,18 +631,48 @@ class Store:
                 c.execute(s.relationships.insert().values(org_id=org,id=str(uuid4()),record_id=row['id'],
                     kind='Description',target_domain='crm',target_id=target))
 
-    def _revision(self, c, org, actor, before, after, reason, evidence):
+    def _revision(self, c, org, actor, before, after, reason, evidence, decision=None):
+        """One append-only revision and its fact. ``decision`` (D13) makes it a decision record:
+        ``{decision, credential_class, nonce, content_hash}``."""
+        record = {k: str((decision or {}).get(k) or '') for k in ('decision', 'credential_class', 'nonce', 'content_hash')}
         c.execute(s.revisions.insert().values(org_id=org, record_id=after['id'], revision=after['revision'],
             actor_id=actor, created_at=datetime.now(timezone.utc).isoformat(), reason=reason,
-            before=before, after=after, evidence=evidence))
+            before=before, after=after, evidence=evidence, **record))
         event_id=str(uuid4())
         c.execute(s.outbox.insert().values(org_id=org, id=event_id, record_id=after['id'], revision=after['revision'],
             event={'event_type':'crm.record.changed', 'source_event_id':event_id,
-                   'subject_refs':{'org_id':org,'record_id':after['id'],'revision':after['revision'],'uid':actor}}, delivered=False))
+                   'subject_refs':{'org_id':org,'record_id':after['id'],'revision':after['revision'],'uid':actor},
+                   'envelope':self._envelope(c, org, after)}, delivered=False))
+
+    def _envelope(self, c, org, row):
+        """D8: WHO a fact reaches, computed by its producer (this store) into the fact envelope
+        (``event.v2``; the outbox seals it, flows admits by subject ∪ audience). A card's audience is
+        its next actor, its requester, its owner, its members and the principals of the workspaces
+        whose boards hold it; its envelope carries the enumerated lifecycle coordination fields and
+        NO content (C8, M5: no title, no summary, no field value). Any other record reaches its owner."""
+        fields = row.get('fields') or {}
+        is_card = bool(self._definition(c, org, row['object_type']).get('x-card'))
+        if not is_card:
+            return {'v': 2, 'producer': 'crm', 'object': 'record', 'owner': str(row['owner_id']),
+                    'visibility': 'owner', 'audience': [str(row['owner_id'])]}
+        m = s.card_members
+        members = [r for (r,) in c.execute(select(m.c.subject).where(m.c.org_id == org, m.c.record_id == row['id'])
+                                           .order_by(m.c.subject))]
+        bindings = self._bindings(c, org, row['id'])
+        people = [fields.get('NextActor'), fields.get('Requester'), row['owner_id'], *members]
+        audience = list(dict.fromkeys(str(p) for p in people if p)) + ['ws:' + w for w in bindings]
+        lifecycle = {'kind': fields.get('Kind') or '', 'state': fields.get('State') or '',
+                     'next_actor': fields.get('NextActor') or '', 'next_check_at': fields.get('NextCheckAt') or '',
+                     'handoff': fields.get('Handoff') or ''}
+        return {'v': 2, 'producer': 'crm', 'object': 'card', 'owner': str(row['owner_id']),
+                'visibility': 'workspace' if bindings else 'members', 'audience': audience[:200],
+                # an empty coordination value (no next actor on a finished card) is omitted, never sent
+                # as "" — the sealed shape takes 1..200-character strings only (event.v2)
+                'lifecycle': {k: str(v) for k, v in lifecycle.items() if v}}
 
     def create(self, org, actor, object_type, fields, narrative='', reason='', evidence=None, idempotency_key='', match=None):
         caller=as_caller(actor);actor=caller.subject
-        with self.engine.begin() as c:
+        with self.begin() as c:
             policy=self._policy(c,org,caller)
             if caller.unwatched:
                 raise Refused(REFUSAL)
@@ -505,6 +701,7 @@ class Store:
                      revision=1,fields=fields,narrative=narrative,quarantined=False,deleted=False)
             c.execute(s.records.insert().values(**row))
             self.add_match_ids(c,org,record_id,match)
+            self.audit_names(record_id)
             self._sync_relationships(c,row)
             self._revision(c,org,actor,None,row,reason,evidence or [])
             return {'status':'saved','record_id':row['id'],'revision':1}
@@ -532,7 +729,7 @@ class Store:
 
     def change(self,org,actor,record_id,expected_revision,fields,narrative=None,reason='',evidence=None,propose=False):
         caller=as_caller(actor);actor=caller.subject
-        with self.engine.begin() as c:
+        with self.begin() as c:
             policy=self._policy(c,org,caller)
             if caller.delegated and not propose:
                 # ADR-0047 d7: an agent proposes; a person accepts. Policy may let an agent with a
@@ -544,11 +741,10 @@ class Store:
                     propose=True        # desktop D2 (founder Q3): a card's stage is always a person's to accept
             if propose:
                 row=self._row(c,org,record_id)
-                visible=self._visible(policy,row)
+                view=self._view(policy,row)
                 if row['revision']!=expected_revision:
                     raise Conflict('Record changed; read the current revision')
-                allowed=self._rights(policy,row,'read')
-                if ('*' not in allowed and set(fields)-set(allowed)) or (visible['narrative'] is None and narrative is not None):
+                if any(not view.has(k) for k in fields) or (not view.narrative and narrative is not None):
                     raise Forbidden('Cannot propose changes to unreadable fields')
                 fields=self._card_fields(c,org,row['object_type'],fields,row['fields'])
                 self._validate(self._definition(c,org,row['object_type']),{**row['fields'],**fields})
@@ -567,7 +763,7 @@ class Store:
         with self.engine.connect() as c:
             policy=self._policy(c,org,caller)
             row=self._row(c,org,record_id)
-            allowed=self._rights(policy,row,'read')
+            view=self._view(policy,row)
             result=[]
             for revision in c.execute(select(s.revisions).where(s.revisions.c.org_id==org,
                     s.revisions.c.record_id==record_id).order_by(s.revisions.c.revision.desc()).limit(100)).mappings():
@@ -576,14 +772,14 @@ class Store:
                 result.append({'revision':revision['revision'],'created_at':revision['created_at'],
                     'before':self._visible(policy,revision['before']) if revision['before'] else None,
                     'after':self._visible(policy,revision['after']),
-                    'reason':revision['reason'] if '*' in allowed else None,
-                    'evidence':revision['evidence'] if '*' in allowed else []})
+                    'reason':revision['reason'] if view.full else None,
+                    'evidence':revision['evidence'] if view.full else []})
             out={'revisions':result}
             return cross_org_answer('history',out) if caller.cross_org else out
 
     def review(self,org,actor,proposal_id,accept):
         caller=as_caller(actor);actor=caller.subject
-        with self.engine.begin() as c:
+        with self.begin() as c:
             policy=self._policy(c,org,caller)
             if caller.delegated:
                 raise Refused(CONFIRM_REFUSAL)
@@ -672,16 +868,34 @@ class Store:
         return c.execute(select(s.orgs.c.default_policy).where(s.orgs.c.org_id==org)).scalar_one_or_none()
 
     def ensure_account(self, org, actor):
-        """Decision 3: attach the signed-in account to its person entity — by account id, else by the
-        account's verified email among the match identifiers, else by creating the person. Returns
-        the person's record id, or None where the organisation has no Person type yet."""
+        """Decision 3, as D35 reads it: resolve the signed-in account to its Person — by the account's
+        verified email among the match identifiers first (I10), else by the record it is attached to,
+        else by creating the person. A Person that already has another account attached gets this one
+        LINKED (``persons.link``: an ``account:`` identifier, and the merge card the person confirms),
+        never a second record. Returns the person's record id, or None where the organisation has no
+        Person type yet."""
         caller=as_caller(actor)
         if caller.internal or not caller.subject:
             return None
         with self.engine.begin() as c:
-            found=c.execute(select(s.records.c.id).where(s.records.c.org_id==org,
-                s.records.c.account_id==caller.subject)).scalar_one_or_none()
-            if found:return found
+            if caller.email:
+                matched=self.persons.resolve(c,org,'',caller.email)
+                if matched is not None:
+                    if matched['account_id']==caller.subject:
+                        self.persons.offer(c,org,matched,{caller.subject:caller.email})
+                        return matched['id']
+                    attached_elsewhere=c.execute(select(s.records.c.id).where(s.records.c.org_id==org,
+                        s.records.c.account_id==caller.subject)).scalar_one_or_none()
+                    if not matched['account_id'] and not attached_elsewhere:
+                        before=dict(matched);after={**before,'account_id':caller.subject,'revision':before['revision']+1}
+                        c.execute(update(s.records).where(s.records.c.org_id==org,s.records.c.id==matched['id'])
+                            .values(account_id=caller.subject,revision=after['revision']))
+                        self._revision(c,org,caller.subject,before,after,'Account attached on sign-in (verified email)',[])
+                        return matched['id']
+                    self.persons.link(c,org,matched,caller.subject,caller.email)
+                    return matched['id']
+            found=self.persons.resolve(c,org,caller.subject)
+            if found is not None:return found['id']
             if c.execute(select(s.object_types.c.name).where(s.object_types.c.org_id==org,
                     s.object_types.c.name=='Person')).scalar_one_or_none() is None:
                 return None
@@ -690,17 +904,6 @@ class Store:
                 found=c.execute(select(s.records.c.id).where(s.records.c.org_id==org,
                     s.records.c.account_id==caller.subject)).scalar_one_or_none()
                 if found:return found
-            if caller.email:
-                matched=c.execute(select(s.match_ids.c.record_id).where(s.match_ids.c.org_id==org,
-                    s.match_ids.c.identifier=='email:'+caller.email)).scalar_one_or_none()
-                if matched:
-                    row=c.execute(select(s.records).where(s.records.c.org_id==org,s.records.c.id==matched)).mappings().first()
-                    if row and row['object_type']=='Person' and not row['account_id'] and not row['deleted'] and not row['merged_into']:
-                        before=dict(row);after={**before,'account_id':caller.subject,'revision':before['revision']+1}
-                        c.execute(update(s.records).where(s.records.c.org_id==org,s.records.c.id==matched)
-                            .values(account_id=caller.subject,revision=after['revision']))
-                        self._revision(c,org,caller.subject,before,after,'Account attached on sign-in (verified email)',[])
-                        return matched
             record_id=str(uuid5(NAMESPACE_URL,json.dumps(['crm-account',org,caller.subject])))
             fields={'Name':caller.email or caller.subject}
             if caller.email:fields['Email']=caller.email
@@ -727,7 +930,7 @@ class Store:
         bindings move to the survivor, and every read of its id answers the survivor."""
         caller=as_caller(actor);actor=caller.subject
         if not reason.strip():raise CRMError('A merge requires a reason')
-        with self.engine.begin() as c:
+        with self.begin() as c:
             policy=self._policy(c,org,caller)
             if caller.delegated:raise Refused(CONFIRM_REFUSAL)
             loser=self._row(c,org,record_id);winner=self._row(c,org,into)
@@ -756,7 +959,7 @@ class Store:
         someone who may CHANGE the record does it, never a worker alone. One profile per record."""
         from .profiles import DOMAIN, KIND
         caller=as_caller(actor)
-        with self.engine.begin() as c:
+        with self.begin() as c:
             policy=self._policy(c,org,caller)
             row=self._row(c,org,record_id)
             self._rights(policy,row,'write')
@@ -787,7 +990,7 @@ class Store:
         grants, which end when their membership does. Binding grants nothing by itself."""
         caller=as_caller(actor);actor=caller.subject
         workspace=check_workspace(workspace)
-        with self.engine.begin() as c:
+        with self.begin() as c:
             policy=self._policy(c,org,caller)
             if not policy.get('admin'):raise Forbidden('CRM administrator rights required to bind a workspace')
             if caller.unwatched:raise Refused(REFUSAL)
@@ -811,7 +1014,7 @@ class Store:
             if not page or len(page)>500 or not record or len(record)>100:raise CRMError('A reference names a page and a record')
             refs.add((page,record))
         stamp=str(committed_at or '')
-        with self.engine.begin() as c:
+        with self.begin() as c:
             h=s.workspace_heads
             head=c.execute(select(h.c.commit,h.c.updated_at).where(h.c.org_id==org,h.c.workspace==workspace)).first()
             if head and stamp and head[1] and stamp<head[1]:
@@ -879,7 +1082,26 @@ class Store:
         caller=as_caller(actor)
         with self.engine.begin() as c:
             c.execute(s.audit.insert().values(org_id=org,id=str(uuid4()),at=self._now(),subject=caller.subject or '-',
-                caller=caller.kind,session=caller.session,trace=caller.trace,op=op,record_id=str(record_id or ''),outcome=outcome))
+                caller=caller.kind,session=caller.session,trace=caller.trace,op=op,record_id=str(record_id or ''),outcome=outcome,
+                **audit_principal(caller)))
+
+
+def audit_principal(caller):
+    """D4/H9: who a read was for. A shared caller's principal is its workspace (``ws:<slug>``; the
+    ``ws:`` subject itself once identity mints one, S1-B); a worker acts on behalf of its person (the
+    speaker once the delegation carries ``on_behalf_of``); ``workspace`` is the ceiling."""
+    subject=str(caller.subject or '')
+    ceiling=','.join(caller.workspaces)
+    if subject.startswith('ws:'):
+        principal=subject
+    elif caller.shared:
+        principal='ws:'+(caller.workspaces[0] if caller.workspaces else '-')
+    else:
+        principal=subject or ('internal' if caller.internal else '-')
+    on_behalf_of=str((caller.extra or {}).get('on_behalf_of') or '')
+    if not on_behalf_of and caller.delegated and not subject.startswith('ws:'):
+        on_behalf_of=subject
+    return {'principal':principal,'on_behalf_of':on_behalf_of,'workspace':ceiling if caller.delegated else ''}
 
 
 _WORKSPACE=__import__('re').compile(r'^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,127}$')

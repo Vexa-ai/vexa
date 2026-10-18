@@ -7,6 +7,9 @@ internal `X-Internal-Secret`) and assembles the routers below.
   admin-claim doors, the person and membership doors, bot-context and model-config.
 - `internal_tier.py` — the two `X-Internal-Secret` checks every `/internal/*` door uses (one with the
   dev-mode escape, one without).
+- `principals.py` — the workspace principal (PRD 0.13.4 D2, MIGRATION-0009): the numeric account a
+  room's turn runs as, made idempotently by `POST /internal/principals/workspace` and checked by
+  `validate.py` when a delegation token names `principal_kind: "workspace"`.
 - `validate.py` — the gateway's fail-closed authz oracle `POST /internal/validate`: an API key or a
   worker's delegation token in, one declared `ValidatedIdentity` out.
 - `delegation_revocation.py` — whether agent-api still holds a worker's delegation token live

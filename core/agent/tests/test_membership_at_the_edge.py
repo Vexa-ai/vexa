@@ -39,7 +39,7 @@ MANIFEST = json.loads((AGENT / "mcp.tools.v1.json").read_text())
 ADMIN = "u_admin"
 
 VERBS = {
-    "workspace_invite": ("POST", "/api/workspace/invite", ["slug", "email", "role"]),
+    "workspace_invite": ("POST", "/api/workspace/invite", ["slug", "email", "role", "room"]),
     "workspace_membership": ("POST", "/api/workspace/membership", ["slug", "email", "role"]),
     "workspace_members": ("GET", "/api/workspace/members", ["workspace_id"]),
     "mark_global_ready": ("POST", "/api/global/ready", []),

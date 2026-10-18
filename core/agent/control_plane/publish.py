@@ -206,6 +206,8 @@ def invite_refs(fact: dict) -> dict:
         "inviter": str(f.get("inviter") or ""),
         "link": str(f.get("link") or ""),
         "expires_at": int(f.get("expires_at") or 0),
+        # The room the invite lands in, by title, or "" for the workspace itself (S2).
+        "room": str(f.get("room") or ""),
     }
 
 

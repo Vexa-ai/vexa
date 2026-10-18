@@ -46,7 +46,8 @@ def workspaces(root: Path) -> Iterator[tuple[str, Path]]:
 
 def _shared(ws: Path) -> bool:
     try:
-        rows = json.loads(wpaths.read_text_inside(ws, "policy/members.json", max_bytes=1 << 20) or "[]")
+        rows = json.loads(wpaths.read_text_inside(ws, "policy/members.json", max_bytes=1 << 20,
+                                                  allow=("policy",)) or "[]")
     except ValueError:
         return False
     return isinstance(rows, list) and len(rows) >= 2

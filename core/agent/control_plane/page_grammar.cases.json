@@ -1,0 +1,23 @@
+{
+  "note": "The one page grammar (PRD 0.13.4 D17/D18): cases both parsers run — core/agent/tests/test_page_grammar.py and clients/terminal/src/minutes/readme/__tests__/grammar.test.ts. A case is {src, refs: [key…], blocks: [key…], verbs: [verb…], raw: false} — raw:false means no '{{' may survive into plain markdown.",
+  "cases": [
+    {"src": "See [[room:s-1]] and [[chat:abc|Old name]].", "refs": ["room:s-1", "chat:abc"], "blocks": [], "verbs": []},
+    {"src": "[[call:153]] [[flow:weekly]]", "refs": ["meeting:153", "routine:weekly"], "blocks": [], "verbs": []},
+    {"src": "At [[meeting:153@00:12:30]] and [[meeting:153#L42]]", "refs": ["meeting:153#t=00:12:30", "meeting:153#L42"], "blocks": [], "verbs": []},
+    {"src": "[[meeting:153@12:30]]", "refs": ["meeting:153#t=00:12:30"], "blocks": [], "verbs": []},
+    {"src": "[[page:abcdefghij/notes/venue.md#dates]]", "refs": ["page:abcdefghij/notes/venue.md#dates"], "blocks": [], "verbs": []},
+    {"src": "[[message:s-9/m-3]] [[query:cards?state=open]] [[series:weekly-sync]] [[person:p-1]] [[card:c-230]]", "refs": ["message:s-9/m-3", "query:cards?state=open", "series:weekly-sync", "person:p-1", "card:c-230"], "blocks": [], "verbs": []},
+    {"src": "[[page:../etc/passwd]]", "refs": [], "blocks": [], "verbs": []},
+    {"src": "[[Plain Title]] stays a wikilink", "refs": [], "blocks": [], "verbs": []},
+    {"src": "## Rooms\n{{rooms limit=5}}", "refs": [], "blocks": ["rooms limit=\"5\""], "verbs": []},
+    {"src": "{{waiting-on-you}}\n{{commitments status=open limit=3}}", "refs": [], "blocks": ["waiting-on-you", "commitments limit=\"3\" status=\"open\""], "verbs": []},
+    {"src": "{{crm company=\"OeNB\"}}", "refs": [], "blocks": ["crm company=\"OeNB\""], "verbs": []},
+    {"src": "{{crm people company=OeNB}}", "refs": [], "blocks": ["crm company=\"OeNB\" \"people\""], "verbs": []},
+    {"src": "{{new-chat prompt=\"Plan the week\"}} {{ask \"What is open?\"}}", "refs": [], "blocks": [], "verbs": ["new-chat", "ask"]},
+    {"src": "[[action:run-routine:weekly|Run it]]", "refs": [], "blocks": [], "verbs": ["run"]},
+    {"src": "[[action:delete-everything:x|Do it]]", "refs": [], "blocks": [], "verbs": [], "raw": false},
+    {"src": "{{unknown-thing x=1}} and {{ broken", "refs": [], "blocks": [], "verbs": [], "raw": false},
+    {"src": "```\n{{rooms}} [[room:s-1]]\n```", "refs": [], "blocks": [], "verbs": []},
+    {"src": "{{run routine=weekly-digest}} {{schedule title=\"Sync\" every=week}} {{invite role=contributor}} {{new-room name=\"design\"}}", "refs": [], "blocks": [], "verbs": ["run", "schedule", "invite", "new-room"]}
+  ]
+}

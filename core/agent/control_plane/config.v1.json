@@ -529,6 +529,20 @@
       "targets": []
     },
     {
+      "key": "VEXA_ROOM_WS_PRINCIPAL",
+      "class": "defaulted",
+      "default": "false",
+      "description": "D2 (0.13.4): mint a room turn's delegation token for the workspace's own numeric principal (identity's `principals`, asked over POST /internal/principals/workspace; token `principal_kind: workspace`, the speaker as `on_behalf_of`) instead of the owner's account. identity answers the owner as `bills_to`; identity unreachable means no toolbelt for the turn. Off by default: with it off a room token is the owner's, narrowed by its ceiling, `shared` and the D3 shared-route table",
+      "targets": []
+    },
+    {
+      "key": "VEXA_ROOM_RING_DERIVED_DAYS",
+      "class": "defaulted",
+      "default": "30",
+      "description": "D36 tuning line (S4): ring a DERIVED member of an open room's call only if they opened the room within this many days, so an org-wide open workspace does not ring everyone; a closed room's members are always rung",
+      "targets": []
+    },
+    {
       "key": "VEXA_MCP_DELEGATION_TOKEN",
       "class": "defaulted",
       "default": "(unset \u2014 derived per dispatch: minted by the dispatcher, never configured)",
@@ -1193,6 +1207,16 @@
       "targets": []
     },
     {
+      "key": "CRM_API_URL",
+      "class": "capability",
+      "capability": "person_resolution",
+      "description": "PRD 0.13.4 D35: crm-api's base URL, where agent-api asks POST /internal/persons (internal secret) which Person each account resolves to by its verified address (control_plane/person_resolution.py). The @ picker and the People strip then list one row per Person (\"2 accounts\"), and a chat or workspace grant to a Person reaches every account linked to it until the person merges them. Unset: there is no CRM, every account is a Person of one, exactly as before; an unreachable CRM groups nothing and grants nobody extra.",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
       "key": "VEXA_CRM_REFERENCES_POLL_S",
       "class": "defaulted",
       "default": "0",
@@ -1272,6 +1296,11 @@
       "description": "conversations are stored apart from workspaces (ADR-0048): metadata and participants in a database, transcript versions in object storage; a chat can gain participants",
       "mode": "all",
       "when_unconfigured": "chats keep the per-workspace transcript layout; /api/sessions/{id}/participants answers 503 'Shared sessions are not configured on this deployment'. On by default wherever the instance's Postgres is configured"
+    },
+    "person_resolution": {
+      "description": "one Person, many addresses (PRD 0.13.4 D35): agent-api asks crm-api which Person each account resolves to by its verified address, so the @ picker lists a Person once and a grant to the Person reaches every account linked to it",
+      "mode": "all",
+      "when_unconfigured": "every account is a Person of one: the picker lists accounts as before and a grant reaches only the account picked"
     },
     "calls": {
       "description": "calls in a session (ADR-0048 decision 6): agent-api mints participants' room tokens on the deployment's LiveKit server and binds a call to its session",

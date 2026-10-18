@@ -85,7 +85,7 @@ def test_no_instance_secret_survives_into_the_runtime():
     for secret in ("ADMIN_API_TOKEN", "INTERNAL_API_SECRET", "DB_PASSWORD", "VEXA_MCP_DELEGATION_SECRET",
                    "NEXTAUTH_SECRET", "JWT_SECRET", "MINIO_SECRET_KEY", "VEXA_SERVICE_AUTHORITY_SECRET",
                    "VEXA_SYSTEM_WEBHOOK_SECRET", "VEXA_MAIL_SMTP_PASSWORD", "VEXA_DISPATCH_SIGNING_KEY",
-                   "REDIS_PASSWORD"):
+                   "REDIS_PASSWORD", "VEXA_TERMINAL_SESSION_SECRET"):
         assert secret in inherited, f"the entrypoint no longer exports {secret}; update this test"
         assert secret not in env, f"{secret} reaches the runtime"
 

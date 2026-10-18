@@ -49,3 +49,19 @@ def test_caps_default_and_ceilings():
 
 def test_parse_model_strips_trailing_slash():
     assert parse_model('{"adapter":"openai-compatible","route":"m","base_url":"http://h/v1/"}')["base_url"] == "http://h/v1"
+
+
+# ── thinking: off|on for a self-hosted reasoning model (founder decision 14) ──────────────────
+
+def test_thinking_off_is_accepted_for_the_openai_compatible_adapter():
+    m = parse_model('{adapter: openai-compatible, route: qwen3.8-27b, secret_ref: none, '
+                    'base_url: "http://192.168.1.6:8001/v1", thinking: off}')
+    assert m["thinking"] == "off" and m["base_url"] == "http://192.168.1.6:8001/v1"
+    assert "thinking" not in parse_model('{adapter: openai-compatible, route: m, secret_ref: none}')
+
+
+@pytest.mark.parametrize("bad", ['{adapter: openai-compatible, route: m, secret_ref: none, thinking: maybe}',
+                                 '{adapter: jev, route: m, secret_ref: none, thinking: off}'])
+def test_thinking_is_off_or_on_and_only_for_openai_compatible(bad):
+    with pytest.raises(ValueError, match="thinking"):
+        parse_model(bad)

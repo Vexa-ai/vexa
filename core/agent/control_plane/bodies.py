@@ -280,9 +280,11 @@ class InviteCreateBody(BaseModel):
     """Mint a scoped invite for a shared workspace (owner/contributor only). Returns the token ONCE."""
     model_config = {"extra": "forbid"}
     workspace_id: str
-    role: str = "viewer"                 # viewer | contributor (never owner)
-    expires_in_sec: int = 604800         # 7 days
-    max_uses: int = 1
+    role: str = "viewer"                 # viewer | contributor (never owner; ≤ the caller's own role)
+    # CAPPED (D5, security review C3/test 6): the bounds of the newer link body, enforced again in
+    # ``workspace_membership.mint_invite`` for every caller that is not this route.
+    expires_in_sec: int = Field(default=604800, ge=1, le=365 * 86400)   # 7 days; at most a year
+    max_uses: int = Field(default=1, ge=1, le=1000)
     # UNSTATED by default, and the route derives it (Vexa-ai/vexa#1635). It used to default to
     # "open", which meant a caller that named `allowed_emails` and said nothing else got a link
     # ANYONE holding it could redeem — the addresses were stored and never checked, because
@@ -296,6 +298,12 @@ class InviteAcceptBody(BaseModel):
     """Redeem an invite token (any logged-in user). Idempotent per user."""
     model_config = {"extra": "forbid"}
     token: str
+
+
+class InviteSigninClaimBody(BaseModel):
+    """The terminal spends the sign-in half of a mailed invite link (internal tier, PRD 0.13.4 S2)."""
+    model_config = {"extra": "forbid"}
+    token: str = Field(min_length=8, max_length=256)
 
 
 class RoleSetBody(BaseModel):
@@ -317,6 +325,9 @@ class WorkspaceInviteBody(BaseModel):
         "owner | contributor | reader. Omitted, contributor — when the person names no role, do "
         "not ask: invite as contributor and say so in the one-line confirmation; they can change "
         "it after with `workspace_membership`."))
+    room: Optional[str] = Field(None, max_length=128, description=(
+        "optional: the id of a ROOM in this workspace to invite them into — the invite email names "
+        "the room and the link lands in it. Omitted, the invite is to the workspace."))
 
 
 class WorkspaceForgetBody(BaseModel):

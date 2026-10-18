@@ -30,6 +30,11 @@ The MCP service logic, injectable. Public surface is `__init__.py`: **`create_ap
 - **`paths.py`** — `path_segment`, the one place a caller-supplied value becomes a path segment:
   everything but the unreserved characters percent-encoded, `/` included, and a dot-only value
   encoded too, so no value can end its segment, add a query or fragment, or be resolved as `..`.
+- **`visibility.py`** — which tools a caller is shown and may call. The settings
+  `VEXA_MCP_TOOLS_ALLOW`, `_DENY` and `_COHORT` apply to ordinary callers. D3 applies to every shared
+  caller (a room's or a shared chat's delegation, or a workspace principal, `x-user-principal-kind: workspace`): it is shown only the
+  tools whose domain manifest says `shared: allow`, and nothing from a domain that has not declared.
+  This is always on, cohort included.
 - **`notices.py`** · **`tool_errors.py`** · **`streamable_http.py`** · **`identity.py`** ·
   **`config_preflight.py`** — standing notices on meeting tools, structured tool refusals, the
   streaming `/mcp` transport, the meeting-identity vocabulary, and the vendored config preflight.

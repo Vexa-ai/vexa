@@ -30,7 +30,7 @@ from control_plane import delegation_refresh, delegation_revocation, global_laye
 from control_plane import model_endpoint
 from control_plane import model_providers
 from control_plane import unit_faults
-from control_plane.meeting_room import group_desk_mount, resolve_desks
+from control_plane.meeting_room import group_desk_mount
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
 from shared.config import Settings
 from shared import delegation, obs
@@ -187,18 +187,12 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
     tiers. ``_global`` fails CLOSED because organisation context is a hard invariant; ``_system``
     remains fail-soft so a private-memory storage fault cannot suppress the user's turn.
 
-    ── THE ROOM (tier 2b, additive) ────────────────────────────────────────────────────────────────
-    ``room`` (``{"meeting_id", "subjects": [...]}``) is the post-meeting MEETING ROOM: the OTHER
-    attendees of one meeting, whose own workspaces this turn may READ. It is resolved SERVER-SIDE by
-    the caller of this function (``api._resolve_room`` — meeting entitlement + owner check + the
-    meeting's reader roster) and is NEVER anything a request body asserted; see
-    ``control_plane/meeting_room.py`` for the three gates.
-
-    Room entries are appended AFTER the subject's own active set and BEFORE ``_system``, so the
-    existing order/semantics are untouched: with ``room=None`` (every dispatch that names no meeting)
-    the stack is byte-identical to before. They are always ``write: False`` (the runtime binds them
-    ``:ro``) and ``primary: False``, they can never shadow or duplicate a path the subject's own set
-    already holds, and no other subject's ``_system`` is reachable through them.
+    ── THE ROOM MOUNTS NO OTHER PERSON'S DESK (decision 3, 2026-10-17) ────────────────────────────
+    ``room`` is the post-meeting MEETING ROOM, resolved SERVER-SIDE by ``api._resolve_room``
+    (meeting entitlement + owner check). It used to add the OTHER attendees' desks read-only —
+    chosen by the calendar invite, up to twelve of them. Founder ruling: desks are personal. The
+    write-up uses the transcript, the room's workspace (the group desk, below) and what was shared
+    explicitly, so no ``role: "room"`` mount is ever added here (``control_plane/meeting_room.py``).
 
     DECISION 22 — A ROOM RUN WRITES NO DESK. The run reads desks and writes ONE shared artefact whose
     home is the meeting row; flows distributes it into every attendee's desk afterwards, organizer
@@ -389,35 +383,13 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
                     subject, wanted, [m.get("slug") for m in active])
     stack.extend(active)
 
-    # Tier 2b — THE ROOM (read-only, additive, absent unless a meeting was named and authorised
-    # upstream). Fails SOFT: a room that cannot be materialized degrades the post-meeting turn's
-    # context, and must never be the reason the turn does not happen.
+    # Tier 2b — NO OTHER PERSON'S DESK (decision 3). A named room changes only what the subject's
+    # own stack may write (decision 22, above) and adds the meeting's group desk; attendees' desks
+    # are never mounted. Logged so "which desks could that run read?" still has an answer: none.
     if room:
-        try:
-            taken = {m["path"] for m in stack if m.get("path")}
-            extra, audit = resolve_desks(
-                settings.workspaces_dir, room.get("ordered") or [],
-                lookup=room.get("lookup") or (lambda _address: None),
-                meeting_id=str(room.get("meeting_id") or ""),
-                cap=room.get("read_max"), taken_paths=taken)
-            stack.extend(extra)
-            # OBSERVABILITY — a silent widening of what an agent may read is the thing that must
-            # never happen. THE AUDIT LINE. One row per participant — address, subject, and WHY (matched-and-spoke
-            # / unmatched-invite-order / skipped-no-subject / skipped-no-desk / skipped-over-cap).
-            # This is how anyone ever answers "which desks could that run read, and why those?" —
-            # a widening that cannot be reconstructed afterwards is a widening nobody can audit.
-            logger.info(
-                "dispatch ROOM MOUNTS subject=%s meeting=%s source=%s mounted=%s read_only=%s "
-                "group_desk=%s writable_desks=%s audit=%s",
-                subject, room.get("meeting_id"), room.get("source") or "-",
-                [m["slug"] for m in extra], all(m.get("write") is False for m in extra),
-                room.get("group_workspace_id") or "-",
-                [m["slug"] for m in stack if m.get("write") and m.get("role") not in ("global", "system")],
-                audit,
-            )
-        except Exception:  # noqa: BLE001
-            logger.warning("room mount resolution failed for subject=%s meeting=%s — running without "
-                           "the room", subject, (room or {}).get("meeting_id"), exc_info=True)
+        logger.info("dispatch ROOM subject=%s meeting=%s source=%s other_desks=none group_desk=%s",
+                    subject, room.get("meeting_id"), room.get("source") or "-",
+                    room.get("group_workspace_id") or "-")
 
     # Tier 3 — PRIVATE SYSTEM (read-write), always present (create-if-absent). A failure here degrades the
     # user's durable private-system memory — log loudly but never abort the dispatch.
@@ -974,10 +946,11 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
     # read-only, its tools writing no workspace — and agent-api lets its tools write exactly one
     # page, the meeting's own (`signal_scope`), whose workspace is the only one on its ceiling.
     #
-    # A ROOM'S SIGNAL TURN IS THE EXCEPTION (founder ruling 2026-10-16: "it can't write to its own
-    # workspace"): it runs with the room agent's scope, its workspace read-write under that
-    # workspace's grants, nobody's private context, nothing beyond the room's ceiling.
-    if (signal_page is not None or invocation.get("trigger") == "signal") and room_principal is None:
+    # A ROOM'S SIGNAL TURN IS NO EXCEPTION (D27, H1, 2026-10-17): anyone audible on the room's call
+    # — member or not — speaks into it, so it proposes and never writes W. It keeps the room's
+    # scope for READING (W and its connected open workspaces, nobody's private context) and writes
+    # only its call's note, exactly as a person's own signal turn writes only its meeting's page.
+    if signal_page is not None or invocation.get("trigger") == "signal":
         least_privilege = True
     # The ORDERED mount set (WP-A1.1 + WP-A2.1): the private baseline first, then every activated extra.
     # This list IS the worker's filesystem: the runtime binds one store subpath per entry and never the
@@ -1160,8 +1133,27 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
             # token rather than in a tool argument because the model must not have to remember it —
             # the founder's answer to *"how to softly reinforce that?"* was context, not a rule
             # somebody repeats.
+            # A ROOM'S TURN AS ITS WORKSPACE PRINCIPAL (D2, behind `VEXA_ROOM_WS_PRINCIPAL`): the
+            # token's subject is the workspace's own numeric principal (identity's `principals`), an
+            # account that owns nothing of a person's; identity answers the owner as `bills_to`. A
+            # turn with no speaker (a sensor's wake) answers the owner. Identity unreachable: no
+            # token at all (fail closed), never the owner's. Off: the owner's account, as before.
+            _ws_token = (room_principal is not None
+                         and bool(getattr(settings, "room_ws_principal", False)))
+            _token_subject, _principal_kwargs = str(subject), {}
+            if _ws_token:
+                from control_plane import workspace_principal as _wsp  # noqa: PLC0415
+                # the payer (`bills_to`): the owner; in a room of two, whoever started the turn (I20)
+                _pid = _wsp.resolve(settings, room_principal.workspace, room_principal.payer)
+                if _pid is None:
+                    raise ValueError("the workspace principal could not be resolved")
+                _token_subject = str(_pid)
+                _principal_kwargs = {"principal_kind": delegation.PRINCIPAL_KIND_WORKSPACE,
+                                     "principal_workspace": str(room_principal.workspace),
+                                     "on_behalf_of": str(room_principal.on_behalf_of or room_principal.owner)}
             env["VEXA_MCP_DELEGATION_TOKEN"] = delegation.mint_delegation(
-                mcp_secret, subject=str(subject), regime=regime, workspaces=scope_ws,
+                mcp_secret, subject=_token_subject, regime=regime, workspaces=scope_ws,
+                **_principal_kwargs,
                 ttl_sec=settings.delegation_ttl_sec(), target=str(target or "").strip(),
                 # THE SESSION rides the signature (Vexa-ai/vexa#1783): every call this worker makes
                 # through the gateway is logged under, and audited by the broker as, this unit.
@@ -1275,7 +1267,7 @@ _INTERNAL_MEETING_HINTS = frozenset({"transcript_start_id", "numeric_meeting_id"
 # the sealed Context (additionalProperties: false). ``session`` is the chat thread; ``mount_gen`` is
 # the chat's focus generation (Vexa-ai/vexa#1603) — both are read off the in-memory dispatch by
 # ``dispatch_id`` / ``build_unit_env`` and both are stripped before the contract check.
-_INTERNAL_CTX_HINTS = frozenset({"session", "mount_gen", "room_unit", "bundle_subject"})
+_INTERNAL_CTX_HINTS = frozenset({"session", "mount_gen", "room_unit", "bundle_subject", "flow_kind"})
 
 
 def _without_chat_session(invocation: dict) -> dict:
@@ -1607,8 +1599,8 @@ class Dispatcher:
                           "identity": {**invocation["identity"], "subject": room_principal.owner,
                                        "launcher": f"room:{room_principal.id}"},
                           "workspaces": [{"id": room_principal.owner,
-                                          # a sensor's wake writes W like any room turn (2026-10-16)
-                                          "mode": (("rw" if invocation.get("trigger") == "signal"
+                                          # a sensor's wake proposes, never writes (D27)
+                                          "mode": (("ro" if invocation.get("trigger") == "signal"
                                                     else invocation["workspaces"][0]["mode"])
                                                    if room_principal.writable else "ro")}],
                           "context": {**(invocation.get("context") or {}), "room_unit": unit,
@@ -1683,9 +1675,10 @@ class Dispatcher:
             # left in the person's `_system` tier is moved out of every worker's reach first.
             _archive_cli_transcripts(self._settings, str(identity["subject"]))
         self._record_delegation(uid, env)
-        if invocation.get("trigger") == "signal":
+        if invocation.get("trigger") == "signal" or units.is_mail_unit(uid):
             # THE ONE PAGE THIS SIGNAL'S TURN MAY WRITE, recorded against its unit before anything
             # is delivered (`signal_scope`): no page, no write — every write is then a proposal.
+            # A mail-triggered turn (D25) is held the same way: its one page is the reply file.
             from control_plane import signal_scope  # noqa: PLC0415
 
             signal_scope.record(self._redis(), uid, signal_page)

@@ -103,10 +103,10 @@ def process_meeting(ctx: StepCtx):
     still cannot ground it the reaction FAILS LOUDLY rather than mailing a report nobody can
     trace to the meeting.
 
-    THE ROOM. The turn may READ the desks of the people on the invite, prioritised by speaking
-    time and capped by `room_read_max`. Flows proposes; agent-api verifies, resolves each
-    address to a subject, and mounts only those who already have a desk — so nothing here
-    mounts anything and no account is ever minted for the room.
+    THE ROOM READS NO ATTENDEE'S DESK (founder decision 3, 2026-10-17): desks are personal.
+    The report is written from the transcript, the room's workspace (the group, below) and what
+    was shared explicitly. The invite's participants still travel on the post, and agent-api
+    mounts none of them — nothing here mounts anything and no account is minted for the room.
 
     THE GROUP, and ONLY when there is one: the group desk is mounted read/write and this turn
     MAINTAINS it — its people, decisions, open items, README — rather than appending an
@@ -775,6 +775,25 @@ def drop_to_attendees(ctx: StepCtx):
              for a in roster if a != organizer.lower()]
     entity_id = filename[:-3] if filename.endswith(".md") else filename
     native = str(ctx.refs.get("native") or "").strip()
+    # THE FOLLOW-UPS AS CARDS (S5, E2), before any page is written, so every copy of the page
+    # cites the same cards. Once per run (scratch), and idempotent at crm-api on a re-run.
+    import flows_config as _fc
+    if "cited_report" in ctx.scratch:
+        report = ctx.scratch["cited_report"]
+    elif _fc.get("VEXA_FLOWS_CRM_API_URL"):          # no CRM deployed: no cards, no extra lookups
+        names_ = {str(k).strip().lower(): str(v or "") for k, v in (ctx.refs.get("participant_names") or {}).items()}
+        people = []
+        for a in roster:
+            try:
+                people.append((str(uid) if a == organizer.lower() else ensure_platform_user(a), a, names_.get(a, "")))
+            except Exception:  # noqa: BLE001 — an unresolvable attendee owns no card
+                continue
+        report, offered_cards = offer_meeting_cards(
+            report, people, str(uid), _recorded_note_workspace(ctx, uid) or str(ctx.refs.get("workspace") or ""),
+            mid, day, title)
+        ctx.scratch["cited_report"] = report
+        ctx.scratch["cards"] = [{"id": c.get("id"), "kind": c.get("kind"), "next_actor": c.get("next_actor")}
+                                for c in offered_cards]
     body = _drop_entity(title=title, day=day, entity_id=entity_id, date_prose=date_prose,
                         organizer=organizer, participants=roster, report=report, link="",
                         meeting_id=str(mid or ""), native=native)
@@ -822,6 +841,7 @@ def drop_to_attendees(ctx: StepCtx):
     if done:
         return Done({"dropped": len(done), "to": done, "failed": failed,
                      "entity": entity_path, "meeting_id": mid, "proposed": proposed,
+                     "cards": ctx.scratch.get("cards") or [],
                      # every copy is these bytes plus that person's own link
                      "bytes": len(body)})
     raise StepError(

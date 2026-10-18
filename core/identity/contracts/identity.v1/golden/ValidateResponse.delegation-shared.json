@@ -14,5 +14,6 @@
     ],
     "shared": true
   },
-  "person_is_admin": false
+  "person_is_admin": false,
+  "credential_class": "delegation"
 }

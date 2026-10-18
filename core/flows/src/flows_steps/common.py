@@ -577,6 +577,9 @@ _SETTING_DEFAULTS = {
     "mail_minutes": True, "mail_join": False, "mail_rsvp": True, "timezone": "",
     # the prepare-for-this-meeting note, the twin of mail_minutes at the other end of the meeting.
     "mail_prep": True,
+    # the notification policy the delivery gate reads (PRD 0.13.4 D15, S6): identity validates it,
+    # `flows_delivery.policy.normalize` fills its defaults and clamps it to the global limits.
+    "notifications": None,
 }
 
 #: HOW LONG A CACHED ANSWER IS GOOD FOR. The entry below used to have no expiry at all: its own

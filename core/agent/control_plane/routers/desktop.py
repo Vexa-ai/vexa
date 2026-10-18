@@ -50,6 +50,7 @@ heads per scanned workspace.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Annotated, Optional
@@ -58,6 +59,12 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from control_plane import attention as att
+from control_plane import page_grammar as page_grammar_mod
+from control_plane import page_render as page_render_mod
+from control_plane import universal_refs as universal_refs_mod
+from control_plane import workspace_pins
+from control_plane.routers import refs as refs_router
+from workspaces.shared import links as links_mod
 from control_plane import display_name as display_mod
 from control_plane import features as features_mod
 from control_plane import front_page
@@ -107,6 +114,51 @@ PERSONAL = "Personal"
 UNTITLED_CHAT = "Untitled chat"
 COMPANY = "Company"
 _ACCESS = {"owner": "owner", "contributor": "contributor"}   # anything else reads
+#: `{{changes-since}}` with no earlier visit known: the last week.
+CHANGES_WINDOW_SEC = 7 * 86400
+_PLUMBING = re.compile(r"^(policy|policies|seed|workspace identity|identity|scaffold|init|sync|merge|chore|wip|pin|unpin)\b", re.I)
+_EDIT = re.compile(r"^edit (\S+)(?: \(.*\))?$", re.I)
+_SCAFFOLD = re.compile(r"^((claude|agents)\.md$|(flows|skills|policies|policy|templates|kg/templates|\.[^/]*|_[^/]*)/)", re.I)
+
+
+def _who_name(tile: dict, subject) -> str:
+    for m in tile.get("members") or []:
+        if str(m.get("subject")) == str(subject or ""):
+            return str(m.get("name") or subject)
+    return "Someone"
+
+
+def _people_rows(tile: dict, cards: list, viewer: str) -> list:
+    """`{{people}}` (founder 2026-10-17, "a workspace is about the people around it"): named faces
+    with role and presence, and who is waiting on whom — from the cards the viewer may read only."""
+    if tile.get("kind") != "shared":
+        return []
+    rows = []
+    for m in tile.get("members") or []:
+        name = str(m.get("name") or m.get("subject"))
+        waits_on = sum(1 for c in cards if str(c.get("waiting") or "").strip().lower() in
+                       {name.lower(), str(m.get("subject") or "").lower()} and c.get("waiting"))
+        bits = [str(m.get("role") or "")]
+        pres = m.get("presence")
+        if isinstance(pres, dict) and pres.get("state"):
+            bits.append(str(pres["state"]))
+        elif isinstance(pres, str) and pres:
+            bits.append(pres)
+        if waits_on:
+            bits.append(f"{waits_on} waiting on {'you' if str(m.get('subject')) == viewer else name.split(' ')[0]}")
+        rows.append({"key": m["subject"], "title": name + (" (you)" if str(m.get("subject")) == viewer else ""),
+                     "detail": " · ".join(b for b in bits if b), "ref": f"person:{m['subject']}",
+                     "state": m.get("initials") or ""})
+    return rows
+
+
+def _strip_front_matter(md: str) -> str:
+    """A page's front matter is metadata, never rendered."""
+    if md.startswith("---\n"):
+        end = md.find("\n---", 4)
+        if end >= 0:
+            return md[end + 4:].lstrip("\n")
+    return md
 
 
 class DesktopSectionsBody(BaseModel):
@@ -151,6 +203,9 @@ class CardIn(BaseModel):
     due: Optional[Annotated[str, StringConstraints(max_length=40)]] = None
     workspaces: list[_Slug] = Field(default_factory=list, max_length=20)
     members: list[CardMemberIn] = Field(default_factory=list, max_length=200)
+    # S5 (D11): the structured next actor and whether the card is still open
+    next_actor: Optional[Annotated[str, StringConstraints(max_length=128)]] = None
+    open: Optional[bool] = None
 
 
 class AttentionBody(BaseModel):
@@ -160,6 +215,21 @@ class AttentionBody(BaseModel):
     workspace: Optional[_Slug] = Field(default=None, description=(
         "Only this workspace (the workspace page): its key alone, with its rooms, chats, routines and "
         "calls. One the viewer cannot open answers empty."))
+
+
+class PageBody(BaseModel):
+    """`POST /api/desktop/page` (PRD 0.13.4 D17): one page rendered for this viewer. The terminal's
+    BFF passes what only it can read with the viewer's own key — the crm desk's cards, each
+    ``{{crm …}}`` block's answer (crm-api ``blocks/read``) and each card block's rows (the card read
+    interface) — keyed by the block's ``page_grammar.Block.key``. A missing key = that owner is down."""
+    model_config = ConfigDict(extra="forbid")
+    workspace: _Slug = Field(default="personal")
+    path: Annotated[str, StringConstraints(max_length=300)] = "README.md"
+    cards: list[CardIn] = Field(default_factory=list, max_length=MAX_CARDS)
+    crm: dict[Annotated[str, StringConstraints(max_length=600)], Optional[dict]] = Field(default_factory=dict, max_length=40)
+    card_blocks: dict[Annotated[str, StringConstraints(max_length=600)], Optional[list[dict]]] = Field(
+        default_factory=dict, max_length=40)
+    since: Optional[float] = Field(default=None, description="The viewer's previous visit (epoch s), for {{changes-since}}.")
 
 
 class RefsBody(BaseModel):
@@ -955,7 +1025,8 @@ def build(**d) -> APIRouter:
             needs += att.mention_needs(notes, chats, openable)
         # cards waiting on you (the terminal passed the crm desk's cards)
         if body.cards:
-            needs += att.card_needs([c.model_dump() for c in body.cards], _me_names(subject, email, gdir), openable)
+            needs += att.card_needs([c.model_dump() for c in body.cards],
+                                    [subject, *sorted(_me_names(subject, email, gdir) - {subject})], openable)
         # upcoming calls
         items = []
         for start, r in upcoming:
@@ -1275,5 +1346,167 @@ def build(**d) -> APIRouter:
             except Exception:  # noqa: BLE001 — a ref that cannot be resolved is not visible
                 out[ref] = att.invisible(att.parse_ref(ref)[0])
         return {"refs": out}
+
+    # ── the page: a README rendered for this viewer (PRD 0.13.4 D17, UI 7aa) ─────────────────────
+
+    def _changes_since(target: Optional[Path], since: float, now: float) -> list[dict]:
+        """People-facing commits since ``since`` (plumbing and the system's own commits left out)."""
+        if target is None or not (target / ".git").exists():
+            return []
+        try:
+            from shared.gitexec import run_git  # noqa: PLC0415
+            out = run_git(target, "log", f"--since=@{int(since)}", "-n", "40", "--format=%H%x1f%an%x1f%at%x1f%s")
+            text = out.stdout if hasattr(out, "stdout") else str(out or "")
+        except Exception:  # noqa: BLE001 — a history that cannot be read is no list
+            return []
+        rows = []
+        for line in str(text or "").splitlines():
+            parts = line.split("\x1f")
+            if len(parts) != 4:
+                continue
+            sha, author, at, msg = parts
+            if author in ("vexa-terminal",) and not msg.startswith("edit "):
+                continue
+            if _PLUMBING.match(msg):
+                continue
+            edit = _EDIT.match(msg)
+            who = "Someone" if author == "vexa-terminal" else author
+            # activity reads as people doing things (founder 2026-10-17)
+            title = f"{who} edited {Path(edit.group(1)).stem}" if edit else f"{who}: {msg}"
+            rows.append({"key": sha[:12], "title": att.clip(title, 200), "by": "" if author == "vexa-terminal" else author,
+                         "at": int(at) if at.isdigit() else None})
+        return rows[:20]
+
+    def _page_files(target: Optional[Path]) -> list[dict]:
+        if target is None:
+            return []
+        try:
+            tree = wsr.tree_at(target)
+        except Exception:  # noqa: BLE001
+            return []
+        pages = [f for f in tree if f.lower().endswith(".md") and not f.startswith(".") and not _SCAFFOLD.match(f)
+                 and f.lower() != "readme.md"]
+        out = []
+        for f in pages[:200]:
+            head = page_head(target, f)
+            out.append({"key": f, "title": front_page.page_title(head, f) if head is not None else Path(f).stem,
+                        "ref": f"file:{f}"})
+        return out
+
+    @router.post("/api/desktop/page")
+    def desktop_page(request: Request, body: PageBody = Body(default=None)):
+        """A PAGE RENDERED FOR YOU (the workspace page is its README, UI 7aa). The page's source holds
+        placeholders only; each live block and reference is resolved with YOUR access: what you may not
+        see is absent (never counted), what only you may see is marked personal, actions are
+        descriptors that never run here. Deterministic, no model call, nothing stored. Person only."""
+        body = body or PageBody()
+        slug = body.workspace or att.DESK
+        if slug != att.DESK:
+            require_read_in_ceiling(request, slug)
+        refuse_delegated(request, reason="person_only", instruction=(
+            "A page is rendered for the person's own app. Read the page's source with workspace_read."))
+        rel = body.path.strip().lstrip("/")
+        if not rel or ".." in rel.split("/") or not rel.lower().endswith(".md"):
+            raise HTTPException(status_code=400, detail="path must be a page (.md) inside the workspace")
+        cx = _context(request)
+        subject, email, gdir, now = cx["subject"], cx["email"], cx["gdir"], cx["now"]
+        _rows_, _shown, _names, tiles, _dirs = _tiles(request, subject, email, gdir, cx["admin"])
+        tile = next((t for t in tiles if t["slug"] == slug), None)
+        if tile is None:
+            raise HTTPException(status_code=404, detail="no such workspace among yours")
+        attention = desktop_attention(request, AttentionBody(cards=body.cards, workspace=slug))
+        entry = (attention.get("workspaces") or {}).get(slug) or {}
+        target = _target(request, None if slug == att.DESK else slug)
+        source = None
+        if target is not None:
+            try:
+                source = wpaths.read_text_inside(target, rel, max_bytes=400_000)
+            except Exception:  # noqa: BLE001
+                source = None
+        if source is None:
+            if rel.lower() != "readme.md":
+                raise HTTPException(status_code=404, detail="no such page")
+            source = page_render_mod.default_readme(tile.get("name") or slug)
+        source = _strip_front_matter(source)
+
+        lists: dict = {}
+        lists["waiting-on-you"] = [{"key": n.get("id"), "title": n.get("text"), "state": n.get("kind"),
+                                    "act": n.get("act")} for n in entry.get("needs") or []]
+        lists["rooms"] = [{"key": r["session"], "title": r["name"],
+                           "detail": f"{r['members']} {'member' if r['members'] == 1 else 'members'}",
+                           "at": r.get("last_active"), "state": "closed" if r.get("closed") else None,
+                           "act": {"kind": "open-session", "session": r["session"]}}
+                          for r in entry.get("rooms") or []]
+        lists["routines"] = [{"key": r["ref"], "title": r["name"], "state": r.get("state"), "detail": r.get("when"),
+                              "at": r.get("last_at"),
+                              **({"act": {"kind": "open-session", "session": r["session"]}} if r.get("session") else {})}
+                             for r in entry.get("routines") or []]
+        lists["meetings"] = [{"key": str(c["meeting"]), "title": c.get("name") or "Meeting", "state": c.get("state"),
+                              "at": c.get("at"), "ref": f"meeting:{c['meeting']}",
+                              "act": {"kind": "open-meeting", "meeting": str(c["meeting"])}}
+                             for c in entry.get("calls") or []]
+        # THE DIRECTORY RULE (founder 2026-10-17, supersedes "no roster for readers"): everyone who
+        # shares a workspace with you is discoverable, like Slack — readers included, with profile
+        # basics and roles only. Pending invites and requests (approver-only) are never in this list.
+        people_tile = tile
+        if tile.get("kind") == "shared" and not tile.get("members"):
+            try:
+                roster = membership_mod.read_members(wsr.root, slug)[:MEMBERS_MAX]
+            except Exception:  # noqa: BLE001 — a roster that cannot be read names nobody
+                roster = []
+            people_tile = {**tile, "members": [_member(str(m.get("subject")), m.get("email"), str(m.get("role") or ""), gdir)
+                                               for m in roster if m.get("subject")]}
+        lists["people"] = _people_rows(people_tile, [c.model_dump() for c in body.cards], subject)
+        lists["files"] = _page_files(target)
+
+        ws_rec = workspace_registry.by_slug(slug) if slug != att.DESK else None
+        page_ws = (ws_rec or {}).get("id") or slug
+        cards = [c.model_dump() for c in body.cards]
+        seams = refs_router.seams_for(request, subject, d, cards=cards, page_workspace=page_ws)
+
+        def resolve_many(refs) -> dict:
+            out = {}
+            for r in refs:
+                try:
+                    out[r.key] = universal_refs_mod.resolve(page_grammar_mod.ref_chip(r), seams)
+                except Exception:  # noqa: BLE001 — an unresolvable ref names nothing
+                    out[r.key] = {"access": "gone"}
+            return out
+
+        pins = workspace_pins.read(target) if target is not None else []
+        pin_rows = []
+        for p in pins:
+            u = links_mod.parse_universal(p["ref"])
+            if u is None:
+                continue
+            a = universal_refs_mod.resolve_ref(u, seams)
+            row = {"key": p["ref"], "by": p.get("by") or "", "at": p.get("at")}
+            if a.get("access") in ("readable", "grant"):
+                row.update({"title": a.get("label") or "Untitled", "ref": p["ref"], "url": a.get("url")})
+            else:
+                row["restricted"] = True
+            pin_rows.append(row)
+        lists["pinned"] = pin_rows
+        since = body.since if body.since and body.since < now else now - CHANGES_WINDOW_SEC
+        changes = _changes_since(target, since, now)
+        changes += [{"key": f"pin:{r['key']}", "title": f"{_who_name(tile, r.get('by'))} pinned {r.get('title') or 'an item'}", "by": r.get("by"),
+                     "at": r.get("at")} for r in pin_rows if not r.get("restricted") and (r.get("at") or 0) >= since]
+        lists["changes-since"] = sorted(changes, key=lambda r: -(r.get("at") or 0))
+
+        viewer = page_render_mod.Viewer(subject=subject, workspace=slug,
+                                        role=tile.get("access") if tile.get("access") in ("reader", "contributor", "owner") else "reader",
+                                        shared=tile.get("kind") == "shared")
+        me = {m.lower() for m in _me_names(subject, email, gdir)}
+        card_blocks = {}
+        for k, rows in body.card_blocks.items():
+            if rows is not None and k.startswith("waiting-on-others"):
+                rows = [r for r in rows if str((r or {}).get("who") or "").lower() not in me]
+            card_blocks[k] = rows
+        sources = page_render_mod.Sources(refs=resolve_many, lists=lists, crm=dict(body.crm), cards=card_blocks)
+        tree = page_render_mod.render(source, viewer, sources, path=rel)
+        tree["title"] = tile.get("name") or slug
+        tree["role"] = viewer.role
+        return tree
+
 
     return router

@@ -48,8 +48,8 @@ def clean(monkeypatch):
     from flows_steps import policies
     monkeypatch.setattr(policies, "read", lambda uid: policies.resolve(None))
     table = {
-        "anna-key": (200, {"user_id": 126, "email": "anna@vexa.test"}),
-        "ben-key": (200, {"user_id": 512, "email": "ben@vexa.test"}),
+        "anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "credential_class": "session"}),
+        "ben-key": (200, {"user_id": 512, "email": "ben@vexa.test", "credential_class": "session"}),
         "root-key": (200, {"user_id": 1, "email": "root@vexa.test", "admin_account": True}),
         "vxd_auto": (200, {"user_id": 126, "email": "anna@vexa.test", "is_admin": False,
                            "delegation": {"regime": "autonomous", "workspaces": ["126"]}}),

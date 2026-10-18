@@ -18,5 +18,6 @@
   },
   "person_is_admin": true,
   "admin_account": false,
-  "person_admin_account": false
+  "person_admin_account": false,
+  "credential_class": "delegation"
 }

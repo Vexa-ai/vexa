@@ -3,7 +3,7 @@
   "domain": "crm",
   "owner": "core/crm",
   "edge": "gateway",
-  "note": "The optional CRM (ADR-0047). ABSENT unless the deployment names CRM_API_URL: then the edge fronts the verbs the terminal needs under /crm/* — the record page's read, history and review, and the desktop's desk/read, desk/arrange, desk/proposal and desk/undo, and the person's own workspace settings desk/workspaces/read and desk/workspaces/set (all served only while the `desktop` feature is on), and the cards' card/list, card/read, card/create, card/update, card/members and card/membership (served only while `desktop_cards` is on) —, forwarded onto crm-api's own paths, with the caller's key, which crm-api resolves through identity itself. Everything else about the CRM is the agent's: the crm_* tools in the one MCP. No row admits a worker's delegation token: the record page and the desktop are a person's, and review and applying a desktop suggestion take a person's own credential; workers reach the desk through the desktop_* tools and cards only through card_list / card_propose / card_update_propose (a proposed card is accepted through /crm/review, a person's).",
+  "note": "The optional CRM (ADR-0047). ABSENT unless the deployment names CRM_API_URL: then the edge fronts the verbs the terminal needs under /crm/* — the person's own Person and merge card (person/me, person/merge, person/profile: D35, a person's own credential only), the record page's read, history and review, and the desktop's desk/read, desk/arrange, desk/proposal and desk/undo, and the person's own workspace settings desk/workspaces/read and desk/workspaces/set (all served only while the `desktop` feature is on), and the cards' card/list, card/read, card/create, card/update, card/members and card/membership (served only while `desktop_cards` is on) —, forwarded onto crm-api's own paths, with the caller's key, which crm-api resolves through identity itself. Everything else about the CRM is the agent's: the crm_* tools in the one MCP. No row admits a worker's delegation token: the record page and the desktop are a person's, and review and applying a desktop suggestion take a person's own credential; workers reach the desk through the desktop_* tools and cards only through card_list / card_propose / card_update_propose (a proposed card is accepted through /crm/review, a person's).",
   "presence_env": "CRM_API_URL",
   "forward": {
     "edge_prefix": "/crm/",
@@ -16,7 +16,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "allow"
     },
     {
       "method": "POST",
@@ -24,7 +25,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -32,7 +34,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -40,7 +43,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -48,7 +52,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -56,7 +61,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -64,7 +70,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -72,7 +79,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -80,7 +88,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -88,7 +97,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "allow"
     },
     {
       "method": "POST",
@@ -96,7 +106,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "allow"
     },
     {
       "method": "POST",
@@ -104,7 +115,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -112,7 +124,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -120,7 +133,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -128,7 +142,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -136,7 +151,8 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
     },
     {
       "method": "POST",
@@ -144,7 +160,80 @@
       "scopes": [
         "bot",
         "tx"
-      ]
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/crm/person/me",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/crm/person/merge",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/crm/person/profile",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/crm/card/inbox",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/crm/card/seen",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/crm/card/nonce",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/crm/card/decide",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/crm/blocks/read",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "shared": "refuse"
     }
   ]
 }

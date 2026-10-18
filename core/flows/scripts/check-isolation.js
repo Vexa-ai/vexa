@@ -11,7 +11,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 const STDLIB = new Set(["__future__","dataclasses","typing","json","time","uuid","sqlite3",
   "threading","pathlib","os","sys","random","re","math","functools","itertools","collections",
-  "contextlib","abc","enum","logging","urllib","http","hashlib","datetime","fnmatch"]);
+  "contextlib","abc","enum","logging","urllib","http","hashlib","hmac","datetime","fnmatch"]);
 
 function pyFiles(dir, acc = []) {
   for (const name of readdirSync(dir)) {

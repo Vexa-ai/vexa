@@ -155,11 +155,19 @@ def test_a_participant_gets_a_short_lived_token_for_this_room_only(env):
     claims = _claims(alice.json()["token"])
     assert claims["sub"] == "alice" and claims["video"]["room"] == "call-abc123"
     assert claims["video"]["canPublish"] is True and claims["exp"] - claims["nbf"] <= 600
-    assert redeemed == [("alice", "41.secret")]           # joining shares the call's transcript
+    # M8 (0.13.4 S4): joining no longer inherits the transcript — the owner shares it per person
+    assert redeemed == [] and alice.json()["transcript_shared"] is False
+    assert client.post(f"/api/sessions/{sid}/call/share", headers=H("alice"),
+                       json={"subject": "vic"}).status_code == 403          # only the call's owner
+    assert client.post(f"/api/sessions/{sid}/call/share", headers=H("bob"),
+                       json={"subject": "alice"}).status_code == 200
+    again = client.post(f"/api/sessions/{sid}/call/token", headers=H("alice"))
+    assert again.json()["transcript_shared"] is True and redeemed == [("alice", "41.secret")]
     vic = _claims(client.post(f"/api/sessions/{sid}/call/token", headers=H("vic")).json()["token"])
     assert vic["video"]["canPublish"] is False            # a viewer listens
+    assert len(redeemed) == 1                             # …and is given nothing they were not handed
     bob = client.post(f"/api/sessions/{sid}/call/token", headers=H("bob"))
-    assert bob.status_code == 200 and len(redeemed) == 2  # the owner redeems nothing
+    assert bob.status_code == 200 and len(redeemed) == 1  # the owner redeems nothing
     assert client.post(f"/api/sessions/{sid}/call/token", headers=H("eve")).status_code == 404
 
 

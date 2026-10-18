@@ -35,6 +35,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from flows import EventType, FakeClock, Registry  # noqa: E402
 from sqlite_double import SqliteDB  # noqa: E402
+from mail_auth_fixture import authed  # noqa: E402
 from flows_integrations import mail_policy  # noqa: E402
 from flows_integrations.mailbox import handle, invite_source_id, route  # noqa: E402
 from flows_steps.emailx import register_thread  # noqa: E402
@@ -49,7 +50,7 @@ ICS = ("BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:u-42\nDTSTART:20300302T140000Z\n"
 
 
 def msg(frm, *, body="hello", subject="hi", headers=None, ics=None, mid=None):
-    return SimpleNamespace(frm=frm, body=body, subject=subject, headers=headers or {},
+    return SimpleNamespace(frm=frm, body=body, subject=subject, headers=authed(frm, headers),
                            ics=ics, message_id=mid or f"<{frm}-1@x.test>",
                            ext_id="ext-1", cursor="c1")
 
@@ -292,7 +293,7 @@ def test_an_explicit_allow_list_replaces_the_default_rather_than_extending_it(mo
 def test_route_stays_pure_enough_to_drive_with_no_environment():
     """The storm's whole value is that it needs no services and no env: `allowed` is injectable."""
     db, _reg, _clock, known, _p, _m = rig()
-    assert route(db, SELF, STRANGER, {}, None, known, lambda u: False,
+    assert route(db, SELF, STRANGER, authed(STRANGER), None, known, lambda u: False,
                  allowed={"evil.test"})[0] == "new_sender_mail"
 
 

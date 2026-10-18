@@ -53,9 +53,24 @@ def mentionable(root: Path, subject: str, index_list: Callable[[str], Iterable])
             p["email"] = p["email"] or str(m.get("email") or "")
             if ws not in p["workspaces"]:
                 p["workspaces"].append(ws)
+            # their role in each workspace you share (the People list shows it per workspace)
+            p.setdefault("roles", {})[ws] = str(m.get("role") or "member")
             if m.get("discoverable") is False:     # never suggested to others (people discovery)
                 p["discoverable"] = False
     return sorted(people.values(), key=lambda p: (p["name"].lower(), p["subject"]))
+
+
+def sees_addresses(root: Path, subject: str, workspaces: Iterable[str]) -> bool:
+    """May ``subject`` see a co-member's ADDRESS (security review M1)? Only as an owner or contributor
+    of one of the ``workspaces`` they share; a reader sees names. Unreadable means no."""
+    for ws in workspaces or ():
+        try:
+            if membership_mod.normalize_role(membership_mod.is_member(Path(root), str(ws), subject) or "viewer") \
+                    in ("owner", "contributor"):
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
 
 
 def may_mention(root: Path, subject: str, other: str, index_list: Callable[[str], Iterable]) -> bool:

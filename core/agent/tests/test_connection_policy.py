@@ -376,3 +376,29 @@ def test_the_founders_unattended_gmail_reads_are_honoured(tmp_path):
         assert cp.allowed(eff, action, unattended=True) is None, action
     assert cp.allowed(eff, "calendar.events", unattended=True) == "connection_actions_unattended"
     assert cp.allowed(eff, "gmail.draft", unattended=True) is not None
+
+
+# ── drafts are never reported as sent; a person's own draft is replaced only on request ────────────
+
+def test_gmail_reads_tell_the_agent_a_draft_has_not_been_sent(world):
+    """Friction 2026-10-16: a recap draft was reported as having "gone out"."""
+    paths = world["client"].app.openapi()["paths"]
+    for path in ("/api/connections/gmail/search", "/api/connections/gmail/read", "/api/connections/gmail/thread",
+                 "/api/connections/gmail/inbox"):
+        text = paths[path]["post"]["description"]
+        assert "is_draft" in text and "went out" in text, path
+    assert "draft_id" in paths["/api/connections/gmail/thread"]["post"]["description"]
+    assert "replace_person_draft" in paths["/api/connections/gmail/draft/update"]["post"]["description"]
+
+
+def test_replacing_a_persons_own_draft_is_forwarded_only_when_asked(world):
+    body = {**DRAFT, "draft_id": "r-person-wrote"}
+    assert world["client"].post("/api/connections/gmail/draft/update", headers=HUMAN, json=body).status_code == 200
+    assert world["sent"]()["replace_person_draft"] is False
+    r = world["client"].post("/api/connections/gmail/draft/update", headers=HUMAN,
+                             json={**body, "request_id": "req-00000009", "replace_person_draft": True})
+    assert r.status_code == 200 and world["sent"]()["replace_person_draft"] is True
+    before = len(world["state"]["calls"])
+    r = world["client"].post("/api/connections/gmail/draft/update", headers=WORKER,
+                             json={**body, "request_id": "req-0000000a", "replace_person_draft": True})
+    assert r.status_code == 403 and len(world["state"]["calls"]) == before

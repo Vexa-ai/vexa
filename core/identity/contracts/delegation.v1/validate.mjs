@@ -48,6 +48,9 @@ function mint(v) {
                    iat: v.now, exp: v.now + v.ttl_sec, jti: v.jti };
   if ((v.target || "").trim()) claims.target = v.target.trim();
   if ((v.unit || "").trim()) claims.unit = v.unit.trim();
+  if (v.principal_kind === "workspace") {
+    claims.principal_kind = "workspace"; claims.principal_workspace = v.principal_workspace; claims.on_behalf_of = v.on_behalf_of;
+  }
   const body = `${b64u(canon({ alg: "HS256", typ: "vxdlg" }))}.${b64u(canon(claims))}`;
   return `${PREFIX}${body}.${b64u(hmac(v.secret, body))}`;
 }

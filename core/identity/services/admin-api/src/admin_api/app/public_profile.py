@@ -35,6 +35,17 @@ import time
 from typing import Any, Iterable, Mapping, Optional, Tuple
 
 DATA_KEY = "public_profile"
+#: RETIRED (PRD 0.13.4 D35, 2026-10-17): THE profile is the person's claimed CRM record. This module's
+#: write path is closed; its reads answer for one release with where the profile moved.
+MOVED_TO = "/api/person/profile"
+HANDLE_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+
+
+def moved() -> dict:
+    """The answer the closed write doors give."""
+    return {"refused": "profile_moved", "moved_to": MOVED_TO,
+            "tell_your_person": "Your profile is now your own record in the organisation's directory: edit it "
+                                "in Settings → Profile. Its public page is /p/<handle>, off until you switch it on."}
 VERIFY_KEY = "company_verification"
 FEATURE = "public_profiles"
 REASON = "feature_disabled"

@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import delegation as delegation_mod
 from ..schema.models import User
+from . import notification_policy as notification_policy_mod
 from . import person_settings as person_settings_mod
 from . import workspace_regime as workspace_regime_mod
 from .db import get_db
@@ -107,6 +108,36 @@ def build_router(get_current_user: Callable, get_current_user_for_update: Callab
                                 f"the next meeting.",
             "scope": "this is theirs alone; nobody else's Vexa changed",
         }
+
+    @router.get("/user/notifications")
+    async def get_user_notifications(user: User = Depends(get_current_user)):
+        """How Vexa reaches THIS person outside the app (Settings → Notifications; PRD 0.13.4 S6):
+        channels, the idle delay before the one email, the digest, quiet hours, the daily attention
+        budget, the per-room and per-workspace bell, and sounds. Answers the whole policy with its
+        defaults filled, the clock it is stated in, and the global limits the delivery gate keeps."""
+        return notification_policy_mod.answer(user.data if isinstance(user.data, dict) else {})
+
+    @router.put("/user/notifications")
+    async def set_user_notifications(request: Request, user: User = Depends(get_current_user_for_update),
+                                     db: AsyncSession = Depends(get_db)):
+        """CHANGE this person's notification policy — any subset of its keys, validated all-or-nothing.
+        The person's own credential only: a worker acting for them may not change how they are
+        reached (it is how they are interrupted, and the budget is theirs)."""
+        if _delegated(request):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail={
+                "refused": "notification settings are changed by the person only",
+                "why": "how and when a person is interrupted is their own choice — they change it in "
+                       "Settings → Notifications"})
+        try:
+            patch = await request.json()
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="body must be a JSON object")
+        try:
+            data = notification_policy_mod.apply(user.data if isinstance(user.data, dict) else {}, patch)
+        except notification_policy_mod.Refused as refused:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=refused.detail)
+        await _save_user_data(user, data, db)
+        return notification_policy_mod.answer(data)
 
     @router.get("/user/workspace-regime")
     async def get_user_workspace_regime(user: User = Depends(get_current_user)):

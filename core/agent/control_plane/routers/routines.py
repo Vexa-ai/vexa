@@ -16,6 +16,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from control_plane import identity_token
+from control_plane.ceiling import refuse_delegated
 from control_plane import routine_flows
 from control_plane.api_shared import logger
 from control_plane import routine_needs
@@ -92,8 +93,12 @@ def build(**d) -> APIRouter:
         # routes.v1.json, refused by the app's one gate before this runs).
         _adapter(response)
         subject = subject_of(request)
+        # AN AGENT'S ROUTINE IS A PROPOSAL (D24): a worker acting for the person files it paused,
+        # and the person turns it on from their Routines board.
+        proposed = identity_token.is_delegated(request.headers)
         try:
-            made = routine_flows.FlowsClient().submit(subject, body.name, body.cron, body.prompt)
+            made = routine_flows.FlowsClient().submit(subject, body.name, body.cron, body.prompt,
+                                                      activate=not proposed)
         except routine_flows.FlowsError as e:
             raise _flows_refusal(e)
         _inherit_scope(request, str(subject), made)
@@ -140,6 +145,12 @@ def build(**d) -> APIRouter:
     def set_routine_enabled(name: str, body: RoutineEnabledPatch, request: Request,
                             response: Response):
         _adapter(response)
+        if body.enabled:
+            # TURNING A ROUTINE ON IS THE PERSON'S ACT, from their own session (D24, H8): no agent
+            # turn arms one, its own proposals included. Switching one off stays open to it.
+            refuse_delegated(request, reason="person_approval_required",
+                             instruction="Turning a routine on is your person's act. Tell them it is "
+                                         "waiting on their Routines board; do not retry it another way.")
         subject = subject_of(request)
         flow = _flow_routine(subject, routine_flows.flow_name(name))
         if flow is None:

@@ -23,7 +23,8 @@ INTERNAL = "internal-secret-for-tests"
 DLG = "delegation-secret-for-tests"
 KEY = "vxa_bot_test-key"
 
-BASE_FIELDS = {"user_id", "scopes", "max_concurrent", "email", "is_admin", "admin_account"}
+BASE_FIELDS = {"user_id", "scopes", "max_concurrent", "email", "is_admin", "admin_account",
+               "credential_class"}
 
 
 class _Result:
@@ -84,7 +85,9 @@ def test_the_response_model_declares_the_whole_wire_in_one_place():
         "webhook_url", "webhook_secret", "webhook_events", "workspaces", "writable_workspaces", "delegation",
         "person_is_admin", "person_admin_account"}
     assert set(validate_mod.DelegationCeiling.model_fields) == {"regime", "workspaces", "target", "unit", "shared",
-                                                                 "audience", "grants", "flow"}
+                                                                 "audience", "grants", "flow",
+                                                                 "principal_kind", "principal_workspace",
+                                                                 "on_behalf_of", "bills_to"}
     assert set(validate_mod.ValidateRequest.model_fields) == {"token"}
 
 
@@ -100,7 +103,8 @@ def test_an_api_key_answers_the_base_fields_and_nothing_that_does_not_apply(monk
     r = _validate(client, {"token": KEY})
     assert r.status_code == 200, r.text
     assert r.json() == {"user_id": 42, "scopes": ["bot"], "max_concurrent": 2,
-                        "email": "ada@example.com", "is_admin": False, "admin_account": False}
+                        "email": "ada@example.com", "is_admin": False, "admin_account": False,
+                        "credential_class": "key"}
     assert session.commits == 1, "every hit bumps last_used_at"
 
 

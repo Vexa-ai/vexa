@@ -44,6 +44,15 @@ ROOM_VISIBILITY = ("open", "closed", "direct")
 ROOM_PROACTIVITY = ("off", "quiet", "active")
 KINDS = ("human", "agent")
 
+def _asks(raw) -> dict:
+    """A room's waiting turn-on asks: ``{switch: {"by": principal, "at": epoch}}``."""
+    try:
+        v = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return {k: a for k, a in v.items() if isinstance(a, dict)} if isinstance(v, dict) else {}
+
+
 _REL = re.compile(r"^[A-Za-z0-9._-][A-Za-z0-9._@+=-]*(/[A-Za-z0-9._-][A-Za-z0-9._@+=-]*)*$")
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -108,6 +117,7 @@ _DDL = (
         share_token TEXT NOT NULL,
         started DOUBLE PRECISION NOT NULL,
         ended DOUBLE PRECISION,
+        shared_with TEXT,
         PRIMARY KEY (session_id, room))""",
     # A file a participant attached to a message here: whose desk it is on and where. The
     # attachment route answers from THIS row to the session's participants — never from workspace
@@ -171,7 +181,8 @@ _DDL = (
         text TEXT NOT NULL,
         created DOUBLE PRECISION NOT NULL,
         read_at DOUBLE PRECISION,
-        acted TEXT)""",
+        acted TEXT,
+        expires_at DOUBLE PRECISION)""",
     "CREATE INDEX IF NOT EXISTS agent_session_notification_recipient "
     "ON agent_session_notification (recipient, created)",
     # The new-chat home (#1783, ``home``): every composition APPENDED (never overwritten) and every
@@ -219,7 +230,10 @@ _DDL = (
         level TEXT,
         created_by TEXT,
         org_id TEXT,
-        cross_org INTEGER)""",
+        cross_org INTEGER,
+        agent_on INTEGER,
+        transcribe INTEGER,
+        switch_asks TEXT)""",
     # WHAT THE ROOM'S AGENT CHANGED DURING A CALL (R1 1.5): one row per page write it made while the
     # room's call ran — the page before (the undo), a digest of the page after (to tell whether
     # anyone changed it since), who it answered, and whether a person undid it.
@@ -245,6 +259,7 @@ _DDL = (
 _ADDED_COLUMNS = (
     ("agent_session_notification", "source", "TEXT"),    # the agent's own notice (`notify`)
     ("agent_session_notification", "acted", "TEXT"),     # what the person did with a notice
+    ("agent_session_notification", "expires_at", "DOUBLE PRECISION"),  # D16: a notice expires
     # ROOM-LEVEL SETTINGS (R1, 2026-10-16): the room's own model level, who made it, its org, and
     # whether people from outside the org read it — one truth for the room, not one per member.
     ("agent_session_room", "level", "TEXT"),
@@ -252,6 +267,15 @@ _ADDED_COLUMNS = (
     ("agent_session_room", "org_id", "TEXT"),
     ("agent_session_room", "cross_org", "INTEGER"),
     ("agent_session_participant", "read_at", "DOUBLE PRECISION"),  # when this person last read the room
+    # THE ROOM'S TWO SWITCHES (0.13.4 S4, UI 7hh): "Vexa in this room" and "Transcribe calls" — NULL
+    # reads as on — and the turn-on asks waiting for the other member's consent (JSON).
+    ("agent_session_room", "agent_on", "INTEGER"),
+    ("agent_session_room", "transcribe", "INTEGER"),
+    ("agent_session_room", "switch_asks", "TEXT"),
+    # A NOTICE THAT EXPIRES (PRD §2.1 Notice): a ring is worth showing only while its call is live.
+    ("agent_session_notification", "expires_at", "DOUBLE PRECISION"),
+    # M8 (0.13.4 S4): who the call's owner gave its transcript to, explicitly (JSON list of ids).
+    ("agent_session_call", "shared_with", "TEXT"),
 )
 
 
@@ -325,6 +349,12 @@ class SessionStore:
         self._lock = threading.RLock()
         self._reconnect = reconnect
         self._in_tx = False
+        #: WHO IS IN A ROOM is not this table's to say (0.13.4 D36): an open room's members are its
+        #: workspace's, a closed room's are the identity registry's ``room:`` rows. The composition
+        #: root installs that resolver here (``room_membership.install``); with none installed, the
+        #: participant rows answer, as before. The rows stay as the per-person projection (read
+        #: marks, the rail's listing).
+        self._room_role = None
 
     # ── lifecycle ────────────────────────────────────────────────────────────────────────────
     @classmethod
@@ -484,6 +514,12 @@ class SessionStore:
         for r in rows:
             row = self._row(r[:10])
             row["role"] = r[10]
+            if self._room_role is not None and self.room(row["id"]) is not None:
+                # a room the person left the workspace of, or was removed from, is not theirs to list
+                role = self.role_of(row["id"], principal)
+                if role is None:
+                    continue
+                row["role"] = role
             out.append(row)
         return out
 
@@ -600,11 +636,28 @@ class SessionStore:
     # ── participants and roles (ADR-0048 decision 4, the session gate) ───────────────────────
     def participants(self, session_id: str) -> list[dict]:
         with self._lock:
-            rows = self._x("SELECT principal, kind, role, added FROM agent_session_participant "
+            rows = self._x("SELECT principal, kind, role, added, read_at FROM agent_session_participant "
                            "WHERE session_id = ? ORDER BY added", (session_id,)).fetchall()
-        return [{"principal": r[0], "kind": r[1], "role": r[2], "added": float(r[3])} for r in rows]
+        return [{"principal": r[0], "kind": r[1], "role": r[2], "added": float(r[3]),
+                 **({"read_at": float(r[4])} if r[4] is not None else {})} for r in rows]
+
+    def set_room_role(self, resolver) -> None:
+        """Install the room-membership authority: ``resolver(store, session_id, principal,
+        row_role) -> role | None``, asked for every session that has a room row. ``None`` removes it."""
+        self._room_role = resolver
 
     def role_of(self, session_id: str, principal: str) -> Optional[str]:
+        row_role = self.row_role(session_id, principal)
+        if self._room_role is not None and self.room(session_id) is not None:
+            try:
+                return self._room_role(self, session_id, principal, row_role)
+            except Exception:  # noqa: BLE001 — a membership that cannot be read is no membership (FD3)
+                logger.warning("room membership unreadable for %s; refused", session_id)
+                return None
+        return row_role
+
+    def row_role(self, session_id: str, principal: str) -> Optional[str]:
+        """The participant ROW's role — the projection, never the authority for a room."""
         with self._lock:
             r = self._x("SELECT role FROM agent_session_participant WHERE session_id = ? AND principal = ?",
                         (session_id, principal)).fetchone()
@@ -688,7 +741,7 @@ class SessionStore:
         """The room row of ``session_id``, or None (a one-person chat has none)."""
         with self._lock:
             r = self._x("SELECT visibility, proactivity, workspace, listen, listen_version, updated, "
-                        "level, created_by, org_id, cross_org "
+                        "level, created_by, org_id, cross_org, agent_on, transcribe, switch_asks "
                         "FROM agent_session_room WHERE session_id = ?", (session_id,)).fetchone()
         if r is None:
             return None
@@ -700,7 +753,27 @@ class SessionStore:
                 "listen": listen if isinstance(listen, dict) else {},
                 "listen_version": int(r[4] or 0), "updated": float(r[5]),
                 "level": r[6] or "", "created_by": r[7] or "", "org_id": r[8] or "",
-                "cross_org": bool(r[9])}
+                "cross_org": bool(r[9]),
+                # the two switches (S4): NULL is on — a room made before them has Vexa and transcripts
+                "agent_on": r[10] is None or bool(r[10]),
+                "transcribe": r[11] is None or bool(r[11]),
+                "switch_asks": _asks(r[12])}
+
+    def put_switches(self, session_id: str, *, agent_on: Optional[bool] = None,
+                     transcribe: Optional[bool] = None, asks: Optional[dict] = None) -> dict:
+        """Set a room's switches and its waiting turn-on asks; fields left out keep their value. The
+        route decides who may (``room_switches``); the store only records."""
+        with self._tx():
+            cur = self.room(session_id)
+            if cur is None:
+                raise ValueError("not a room")
+            self._x("UPDATE agent_session_room SET agent_on = ?, transcribe = ?, switch_asks = ?, updated = ? "
+                    "WHERE session_id = ?",
+                    (1 if (cur["agent_on"] if agent_on is None else agent_on) else 0,
+                     1 if (cur["transcribe"] if transcribe is None else transcribe) else 0,
+                     json.dumps(cur["switch_asks"] if asks is None else asks, sort_keys=True),
+                     time.time(), session_id))
+        return self.room(session_id)
 
     def put_room(self, session_id: str, *, visibility: Optional[str] = None,
                  proactivity: Optional[str] = None, workspace: "str | None | bool" = False,
@@ -861,6 +934,26 @@ class SessionStore:
                     (session_id, room, int(meeting_id), owner, share_token, now))
         return self.call(session_id, room)
 
+    def share_call_with(self, session_id: str, room: str, principal: str) -> list[str]:
+        """The call's owner gives ``principal`` its transcript (M8): recorded per person."""
+        with self._tx():
+            cur = self.call_shared_with(session_id, room)
+            if principal not in cur:
+                cur.append(str(principal))
+            self._x("UPDATE agent_session_call SET shared_with = ? WHERE session_id = ? AND room = ?",
+                    (json.dumps(cur), session_id, room))
+        return cur
+
+    def call_shared_with(self, session_id: str, room: str) -> list[str]:
+        with self._lock:
+            r = self._x("SELECT shared_with FROM agent_session_call WHERE session_id = ? AND room = ?",
+                        (session_id, room)).fetchone()
+        try:
+            v = json.loads((r[0] if r else None) or "[]")
+        except (TypeError, ValueError):
+            v = []
+        return [str(x) for x in v] if isinstance(v, list) else []
+
     def call(self, session_id: str, room: str) -> Optional[dict]:
         with self._lock:
             return self._call(self._x(f"SELECT {self._CALL_COLS} FROM agent_session_call "
@@ -963,7 +1056,14 @@ class SessionStore:
                                       (int(meeting_id),)).fetchone())
 
     # ── proposals after a call or meeting (ADR-0048 decision 7) ──────────────────────────────
-    PROPOSAL_KINDS = ("page", "entity", "commitment", "note")
+    #: ``policy`` (PRD 0.13.4 D5): an agent's proposed change to a workspace's policy — visibility,
+    #: connections, a member's role, its rule file. ``owner`` is who may approve it (the workspace's
+    #: owner); the body is the exact change as JSON; ``workspace_membership.apply_policy_proposal``
+    #: applies it on approval. Nothing changes before that.
+    #: ``ask`` (PRD 0.13.4 S5, 7g): an inline card's PENDING ITEM — the person who answers it is its
+    #: owner; the body binds the card id, the content hash of the card the agent wrote and the sha256
+    #: of a server nonce (``routers/asks.py``). Decided once, by the person's press.
+    PROPOSAL_KINDS = ("page", "entity", "commitment", "note", "policy", "ask")
     PROPOSAL_BODY_MAX = 200_000
     _PROP_COLS = ("id, session_id, meeting_id, owner, kind, workspace, path, title, body, status, "
                   "decided_by, decided, created")
@@ -989,6 +1089,8 @@ class SessionStore:
             if not workspace or not _NAME.fullmatch(workspace):
                 raise ValueError("a page or entity proposal names its workspace")
             check_rel(path or "")
+        if kind == "policy" and (not workspace or not _NAME.fullmatch(workspace)):
+            raise ValueError("a policy proposal names its workspace")
         if self.get(session_id) is None:
             raise KeyError(session_id)
         pid = f"p-{uuid.uuid4().hex[:16]}"
@@ -1008,6 +1110,14 @@ class SessionStore:
         with self._lock:
             rows = self._x(f"SELECT {self._PROP_COLS} FROM agent_session_proposal WHERE session_id = ? "
                            "ORDER BY created", (session_id,)).fetchall()
+        return [self._proposal(r) for r in rows]
+
+    def proposals_for(self, owner: str, kind: str, *, status: str = "open") -> list[dict]:
+        """The proposals ``owner`` decides, of one kind — a workspace owner's policy proposals come
+        from chats the owner is usually not in."""
+        with self._lock:
+            rows = self._x(f"SELECT {self._PROP_COLS} FROM agent_session_proposal WHERE owner = ? AND kind = ? "
+                           "AND status = ? ORDER BY created", (owner, kind, status)).fetchall()
         return [self._proposal(r) for r in rows]
 
     def decide(self, proposal_id: str, actor: str, *, accept: bool, body: Optional[str] = None) -> dict:

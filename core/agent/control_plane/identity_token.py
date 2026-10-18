@@ -78,7 +78,16 @@ CLAIM_HEADERS = {
     "webhook_url": "x-user-webhook-url",
     "webhook_secret": "x-user-webhook-secret",
     "webhook_events": "x-user-webhook-events",
+    # THE CREDENTIAL CLASS (D13, 0.13.4): `session` (the terminal's signed-in browser), `key` (every
+    # other API key) or `delegation` (a worker), as identity's /internal/validate stated it.
+    "credential_class": "x-user-credential-class",
 }
+#: The three credential classes identity answers (identity.v1 ValidateResponse `credential_class`).
+#: A value outside them is never carried, so a reader sees one of these words or nothing.
+CREDENTIAL_SESSION = "session"
+CREDENTIAL_KEY = "key"
+CREDENTIAL_DELEGATION = "delegation"
+CREDENTIAL_CLASSES = (CREDENTIAL_SESSION, CREDENTIAL_KEY, CREDENTIAL_DELEGATION)
 #: The delegation ceiling a worker's token carried, stated to the service so it can refuse a verb
 #: that needs a person in the loop. Present only on a delegated identity.
 DELEGATION_HEADERS = {
@@ -92,7 +101,17 @@ DELEGATION_HEADERS = {
     # unattended verbs its person granted it, comma-joined, and the routine they belong to.
     "grants": "x-user-delegation-grants",
     "flow": "x-user-delegation-flow",
+    # A WORKSPACE PRINCIPAL (D2, 0.13.4): a room's turn runs as its workspace's agent, a numeric
+    # principal of kind `workspace` (identity's `principals`) — `x-user-id` is that principal's own
+    # account, which owns nothing of a person's. These say what it is, which workspace it is the
+    # agent of, the person it answered, and the account its spend debits.
+    "principal_kind": "x-user-principal-kind",
+    "principal_workspace": "x-user-principal-workspace",
+    "on_behalf_of": "x-user-delegation-on-behalf-of",
+    "bills_to": "x-user-bills-to",
 }
+#: The one non-person principal kind (delegation.v1 `principal_kind`).
+PRINCIPAL_KIND_WORKSPACE = "workspace"
 
 #: The answer a service gives a worker dispatched without a person in the loop when it asks for a
 #: verb that needs one. One body everywhere, so a worker reads one refusal whichever service it hit.
@@ -127,6 +146,18 @@ def is_delegated(headers: Mapping[str, str]) -> bool:
     return any(name in headers for name in DELEGATION_HEADERS.values())
 
 
+def credential_class_of(headers: Mapping[str, str]) -> str:
+    """The caller's credential class, from ``x-user-credential-class`` — trustworthy only where the
+    guard rebuilt it from a verified identity. A delegated identity always reads ``delegation``,
+    whatever else it carries; a value outside :data:`CREDENTIAL_CLASSES`, or none (an older
+    identity, the internal tier), reads ``""``. A decision that must be a person's own act asks for
+    ``session`` and nothing else (positive evidence)."""
+    if is_delegated(headers):
+        return CREDENTIAL_DELEGATION
+    value = (headers.get(CLAIM_HEADERS["credential_class"]) or "").strip().lower()
+    return value if value in CREDENTIAL_CLASSES else ""
+
+
 #: The answer a service gives a worker whose turn other people read (``delegation.shared``) when it
 #: asks for something only its person may see: their mail, calendar or other connections, their
 #: meetings, transcripts or recordings (ADR-0048 decision 4). One body everywhere, like REFUSAL.
@@ -144,6 +175,20 @@ def is_shared(headers: Mapping[str, str]) -> bool:
     the identity door only from a signed ``delegation.shared``. A person-wide read refuses it with
     :data:`SHARED_REFUSAL`."""
     return is_delegated(headers) and (headers.get(DELEGATION_HEADERS["shared"]) or "").strip() == "1"
+
+
+def principal_kind_of(headers: Mapping[str, str]) -> str:
+    """``"workspace"`` when a delegated worker runs as a WORKSPACE principal (D2, a room's turn),
+    from ``x-user-principal-kind``; ``""`` for a person and a worker that acts as its person."""
+    if not is_delegated(headers):
+        return ""
+    return (headers.get(DELEGATION_HEADERS["principal_kind"]) or "").strip()
+
+
+def is_workspace_principal(headers: Mapping[str, str]) -> bool:
+    """Does a delegated worker run as a WORKSPACE principal rather than as a person? Such a caller
+    is shared by construction: the minter refuses a workspace principal without `shared`."""
+    return principal_kind_of(headers) == PRINCIPAL_KIND_WORKSPACE
 
 
 def claims_shared(claims: Mapping[str, Any]) -> bool:
@@ -363,6 +408,10 @@ def claims_from_validation(user: Mapping[str, Any]) -> dict:
             claims["webhook_secret"] = str(user["webhook_secret"])
         if user.get("webhook_events"):
             claims["webhook_events"] = user["webhook_events"]
+    # The credential class (D13), carried only when it is one of the three words identity answers.
+    cc = user.get("credential_class")
+    if isinstance(cc, str) and cc in CREDENTIAL_CLASSES:
+        claims["credential_class"] = cc
     dlg = user.get("delegation")
     if isinstance(dlg, Mapping):
         ws = dlg.get("workspaces")
@@ -376,6 +425,13 @@ def claims_from_validation(user: Mapping[str, Any]) -> dict:
             claims["delegation"]["unit"] = str(dlg["unit"])
         if dlg.get("shared") is True:
             claims["delegation"]["shared"] = True
+        if dlg.get("principal_kind") == PRINCIPAL_KIND_WORKSPACE:
+            claims["delegation"]["principal_kind"] = PRINCIPAL_KIND_WORKSPACE
+            for k in ("principal_workspace", "on_behalf_of"):
+                if dlg.get(k):
+                    claims["delegation"][k] = str(dlg[k])
+            if isinstance(dlg.get("bills_to"), int) and not isinstance(dlg.get("bills_to"), bool):
+                claims["delegation"]["bills_to"] = int(dlg["bills_to"])
         grants = dlg.get("grants")
         if isinstance(grants, list) and str(dlg.get("flow") or "").strip():
             kept = sorted({str(g) for g in grants if str(g) in UNATTENDED_GRANTS})
@@ -476,6 +532,11 @@ def headers_from_claims(claims: Mapping[str, Any]) -> dict:
             out[DELEGATION_HEADERS["unit"]] = str(dlg["unit"])
         if dlg.get("shared") is True:
             out[DELEGATION_HEADERS["shared"]] = "1"
+        for k in ("principal_kind", "principal_workspace", "on_behalf_of"):
+            if dlg.get(k):
+                out[DELEGATION_HEADERS[k]] = str(dlg[k])
+        if dlg.get("bills_to") not in (None, ""):
+            out[DELEGATION_HEADERS["bills_to"]] = str(dlg["bills_to"])
         if dlg.get("grants") and dlg.get("flow"):
             out[DELEGATION_HEADERS["grants"]] = _join(dlg["grants"])
             out[DELEGATION_HEADERS["flow"]] = str(dlg["flow"])

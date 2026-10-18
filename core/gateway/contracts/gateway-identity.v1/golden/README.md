@@ -9,6 +9,12 @@
   dispatch's `delegation` ceiling (`autonomous`, one workspace, a target).
 - `claims-session.json` — a chat worker's payload: a `human` delegation carrying the agent `unit`
   (the session) its token was minted for, which becomes `x-user-delegation-unit`.
+- `claims-workspace.json` / `headers-workspace.json` — a room's turn as a WORKSPACE principal (D2):
+  `sub` is the principal's own numeric account; `delegation.principal_kind`, `principal_workspace`, the
+  speaker as `on_behalf_of` and the payer as `bills_to`, beside `shared`.
+- `claims-browser-session.json` / `headers-browser-session.json` — the terminal's signed-in browser
+  (D13): `credential_class: "session"`, which becomes `x-user-credential-class: session`. An API key
+  carries `key`, a worker `delegation`.
 - `vector-human.json`, `vector-delegated.json`, `vector-session.json` — signing vectors. Signing `claims` at `now` with
   the RFC 8032 section 7.1 TEST 1 key must produce `token` exactly (Ed25519 is deterministic), and
   `public_key` (its public half) must verify it. No golden carries a signing key: `validate.mjs`

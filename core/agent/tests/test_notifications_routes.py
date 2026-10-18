@@ -97,7 +97,7 @@ def env(tmp_path, monkeypatch):
 
 
 def _h(who: str, **extra) -> dict:
-    return {"X-User-Id": who, "X-User-Email": MAIL.get(who, ""), **extra}
+    return {"X-User-Id": who, "X-User-Email": MAIL.get(who, ""), "x-user-credential-class": "session", **extra}
 
 
 def _mine(client, who, **q):
@@ -232,14 +232,17 @@ def test_a_routine_run_in_a_shared_chat_notifies_the_other_people(env):
 
 
 # ── workspaces ────────────────────────────────────────────────────────────────────────────────
-def test_inviting_an_account_tells_them_in_the_app_with_the_link(env):
+def test_inviting_an_account_tells_them_in_the_app_without_the_token(env):
     client, _, bus, _ = env
     r = client.post("/api/workspace/invite", json={"slug": "acme", "email": MAIL[DAVE], "role": "reader"},
                     headers=_h(ALICE))
     assert r.status_code == 200, r.text
     [n] = _mine(client, DAVE)["notifications"]
     assert n["kind"] == "workspace_invited" and n["object"]["kind"] == "workspace"
-    assert n["object"]["id"] == "acme" and "/join?i=" in n["object"]["url"]
+    # PRD 0.13.4 M2: the row names the invite by id; no token is stored or sent
+    assert n["object"]["id"] == "acme" and "url" not in n["object"]
+    assert n["actions"] == ["accept", "decline", "open"]
+    assert "join?i=" not in json.dumps(bus.to(DAVE)[0])
     assert bus.to(DAVE)[0]["type"] == "notification"
 
 

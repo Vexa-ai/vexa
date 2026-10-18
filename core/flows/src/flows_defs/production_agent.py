@@ -239,16 +239,20 @@ def build(reg: Registry, db, home=None) -> None:
             ctx.scratch["prev_hash"] = p.ag.collect_outbox(uid, session, None)[1]
             p.ag.dispatch_turn(
                 uid, session,
-                "[email-reply] The participant replied by email. Process it: update the workspace "
-                "where it changes facts (feedback on minutes → amend the note; onboarding answers → "
-                "continue the discovery loop and remember the .scaffolded acceptance). Then answer "
-                f"them. DELIVERY CONTRACT: write your answer to the file mail_outbox/{session}.md "
-                "(overwrite fully) — that file is emailed verbatim, plain text."
+                "[email-reply] The participant replied by email. Read it and answer them. This turn "
+                "was started by an email, so it changes nothing itself: where the email changes "
+                "facts (feedback on minutes, onboarding answers), PROPOSE the change with `propose` "
+                "for the person to accept. DELIVERY CONTRACT: write your answer with workspace_write "
+                f"to mail_outbox/{session}.md (overwrite fully) — the one file this turn may write; "
+                "it is emailed verbatim, plain text."
                 + _untrusted_mail(ctx.refs.get("from_addr") or ctx.refs.get("organizer") or "",
                                   ctx.refs["text"]),
                 # NOBODY TYPED THIS EITHER (Vexa-ai/vexa#1605): the person wrote an EMAIL, and the
                 # instruction block wrapped around it is ours. agent-api marks it from these two.
-                flow=ctx.reaction.flow, step=ctx.reaction.step)
+                flow=ctx.reaction.flow, step=ctx.reaction.step,
+                # A MAIL-TRIGGERED TURN PROPOSES ONLY (D25): agent-api runs it read-only, its one
+                # write the reply file above.
+                kind="mail")
             ctx.scratch["dispatched"] = True
             return Wait(seconds=10)
         reply, h = p.ag.collect_outbox(uid, session, ctx.scratch.get("prev_hash"))
@@ -429,6 +433,12 @@ def build(reg: Registry, db, home=None) -> None:
         # that forgets, and it is a fallback rather than a token left standing because a mail whose
         # subject line has a hole in it is not deliverable prose.
         values["workspace_name"] = str(ctx.refs.get("workspace_name") or workspace)
+        # WHERE, in two names and no more (PRD 0.13.4 S2): the room, when the invite names one, "in"
+        # the workspace. Never a message: the refs carry no field that could hold one, and only the
+        # declared names above are read, so a producer that added one would not reach the mail.
+        room = str(ctx.refs.get("room") or "").strip()
+        values["room"] = room
+        values["place"] = f"{room} in {values['workspace_name']}" if room else values["workspace_name"]
         subject, body = p.mailtext.render("workspace-invite", uid, values)
         if not subject:
             # `mailtext._split` answers "" when a template lost its `subject:` line and says the

@@ -42,6 +42,7 @@ def build(**d) -> APIRouter:
     _meeting_note_recorder = d['_meeting_note_recorder']
     _meeting_owner_lookup = d['_meeting_owner_lookup']
     _meeting_transcript_lookup = d['_meeting_transcript_lookup']
+    _read_target = d['_read_target']
     _ws_lookup = d['_ws_lookup']
     live = d['live']
     redis_url = d['redis_url']
@@ -179,8 +180,25 @@ def build(**d) -> APIRouter:
                 "refused": "not a meeting page", "path": path,
                 "said": "A meeting page lives at kg/entities/meeting/<name>.md. Move the page there "
                         "(workspace_move), then attach it."})
+        # A workspace may be named by its ID as well as its slug (what `workspaces()` hands an agent).
+        if slug and workspace_registry.by_slug(slug) is None:
+            rec = workspace_registry.get(slug)
+            if rec and rec.get("slug"):
+                slug = str(rec["slug"])
         place = next((p for p in meeting_note_mod.note_places(wsr.root, subject)
                       if not p["hidden"] and (p["slug"] == slug or (not slug and p["home"]))), None)
+        if place is None and slug:
+            # A SHARED WORKSPACE THE CALLER MAY WRITE, mounted or not (friction, app.dev 2026-10-16:
+            # an owner was told "no such workspace of yours" four times). Resolved through the one
+            # write gate every other write uses, `_read_target(write=True)`, which re-reads the role
+            # from the workspace's own `policy/members.json` and needs contributor or owner, so a
+            # viewer or a stranger is refused exactly as before.
+            try:
+                place = {"slug": slug, "dir": Path(_read_target(request, slug, write=True)),
+                         "home": False, "hidden": False}
+            except HTTPException as exc:
+                if exc.status_code != 403:
+                    raise
         if place is None:
             raise HTTPException(status_code=404, detail="no such workspace of yours is on")
         text = _wp.read_text_inside(place["dir"], path)

@@ -28,6 +28,7 @@ facts it carried, so that nothing the mail actually knew is thrown away by refus
 from __future__ import annotations
 
 import json
+import re
 import time
 
 import flows_config as cfg
@@ -48,6 +49,97 @@ QUARANTINE_TEMPLATE = (
 
 # The refusal recorded when the company has switched invitations off (`bot_joins_on_invite: off`).
 INVITE_POLICY_OFF = "invite_policy_off"
+
+# A `From:` the sending domain did not vouch for (D25, H6): no DMARC pass, no aligned DKIM or SPF
+# pass in the receiving MTA's verdict. Treated as a stranger, whoever it names.
+UNAUTHENTICATED_MAIL = "unauthenticated_mail"
+
+
+# ── IS THE `From:` THE SENDER? (D25, H6) ─────────────────────────────────────────────────────────
+#
+# `From:` is a string anybody can type. A known user's address in it used to be enough to run a
+# turn in that user's own session. The domain vouches for its senders through DMARC, and the
+# receiving MTA records its verdict in `Authentication-Results` (RFC 8601). We read that verdict;
+# we never re-run SPF or DKIM here, and a mail carrying no verdict at all is unauthenticated.
+#
+# WHICH HEADER: the receiving MTA PREPENDS its own, so the TOPMOST one is ours and anything below it
+# came with the message (a sender can write any header it likes). `inbox.from_rfc822` keeps the
+# topmost. When `VEXA_FLOWS_MAIL_AUTHSERV_ID` names our MTA, a header that names any other is
+# ignored too.
+
+_COMMENT = re.compile(r"\([^()]*\)")
+_RESULT = re.compile(r"^\s*([a-z0-9_-]+)\s*=\s*([a-z0-9_-]+)(.*)$", re.IGNORECASE | re.DOTALL)
+_PROP = re.compile(r"([a-z0-9_-]+\.[a-z0-9_.-]+)\s*=\s*\"?([^\s;\"]+)\"?", re.IGNORECASE)
+
+
+def _domain(value: str) -> str:
+    v = str(value or "").strip().strip("<>").lower()
+    return v.rsplit("@", 1)[1] if "@" in v else v
+
+
+def _aligned(from_domain: str, other: str) -> bool:
+    """Relaxed alignment (RFC 7489 §3.1): the same domain, or one a parent of the other."""
+    a, b = from_domain.strip(".").lower(), other.strip(".").lower()
+    if not a or not b:
+        return False
+    return a == b or a.endswith("." + b) or b.endswith("." + a)
+
+
+def parse_auth_results(value) -> tuple[str, list[dict]]:
+    """``(authserv_id, [{method, result, props}])`` from one `Authentication-Results` value."""
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else ""
+    text = _COMMENT.sub(" ", str(value or ""))
+    parts = [p.strip() for p in text.split(";")]
+    if not parts or not parts[0]:
+        return "", []
+    authserv = parts[0].split()[0].lower() if parts[0].split() else ""
+    out = []
+    for part in parts[1:]:
+        m = _RESULT.match(part)
+        if not m:
+            continue
+        props = {k.lower(): v.lower() for k, v in _PROP.findall(m.group(3) or "")}
+        out.append({"method": m.group(1).lower(), "result": m.group(2).lower(), "props": props})
+    return authserv, out
+
+
+def sender_authenticated(frm: str, headers: dict) -> tuple[bool, str]:
+    """``(True, how)`` when the receiving MTA's verdict vouches for the `From:` domain, else
+    ``(False, why)``. Fails closed: no verdict, a verdict from another server, or a verdict about
+    another domain is not a pass."""
+    from_domain = _domain(frm)
+    if not from_domain:
+        return False, "the From: address has no domain"
+    raw = None
+    for k, v in (headers or {}).items():
+        if str(k).lower() == "authentication-results":
+            raw = v
+            break
+    if not raw:
+        return False, "no Authentication-Results verdict on the message"
+    authserv, results = parse_auth_results(raw)
+    want = (cfg.get("VEXA_FLOWS_MAIL_AUTHSERV_ID") or "").strip().lower()
+    if want and authserv != want:
+        return False, f"the Authentication-Results verdict is not from {want}"
+    dmarc = [r for r in results if r["method"] == "dmarc"]
+    for r in dmarc:
+        hf = r["props"].get("header.from", from_domain)
+        # header.from IS the domain the MTA evaluated: it must be this From:'s, exactly
+        if r["result"] == "pass" and hf.strip(".") == from_domain:
+            return True, "dmarc=pass"
+    if any(r["result"] == "fail" for r in dmarc):
+        return False, "dmarc=fail for the From: domain"
+    # No DMARC pass to read (the domain publishes no policy, or the MTA did not evaluate it): an
+    # ALIGNED DKIM or SPF pass is what DMARC itself would have accepted.
+    for r in results:
+        if r["result"] != "pass":
+            continue
+        if r["method"] == "dkim" and _aligned(from_domain, r["props"].get("header.d", "")):
+            return True, "dkim=pass, aligned"
+        if r["method"] == "spf" and _aligned(from_domain, _domain(r["props"].get("smtp.mailfrom", ""))):
+            return True, "spf=pass, aligned"
+    return False, "no DMARC pass and no aligned DKIM or SPF pass for the From: domain"
 
 
 def allow_domains(self_addr: str, rules: dict | None = None) -> set:

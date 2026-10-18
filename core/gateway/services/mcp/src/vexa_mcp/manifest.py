@@ -103,6 +103,10 @@ class Tool:
     admin_auth: Optional[dict] = None
     #: the domain's `forward` as `(edge_prefix, upstream_prefix)`, or None — see `forward_of`.
     forward: Optional[tuple] = None
+    #: D3 (0.13.4): may a SHARED caller (a room's or a shared chat's delegation) be shown this tool?
+    #: `allow`, `refuse`, or "" (undeclared — refused to a shared caller, like `refuse`). The domain
+    #: stamps it from its own route table (agent-api: `routes.v1.json` `shared`).
+    shared: str = ""
 
 
 @dataclass(frozen=True)
@@ -158,6 +162,8 @@ def validate(doc: dict) -> dict:
                 f"{domain}/{name}: auth is admin, so {domain} must declare admin_auth "
                 '{"header": …, "key_env": …} — a deployment cannot hold a key it cannot spell, '
                 "and this edge will not invent the header the door reads.")
+        if t.get("shared") not in (None, "allow", "refuse"):
+            raise ManifestError(f"{domain}/{name}: shared must be allow or refuse (got {t.get('shared')!r})")
         requires = t.get("requires")
         if not isinstance(requires, list) or not requires:
             raise ManifestError(f"{domain}/{name}: requires must name at least one domain")
@@ -352,7 +358,8 @@ def assemble(manifests: List[dict], *, deployed: Set[str],
                 requires=frozenset(t["requires"]), route=t.get("route"),
                 base_url_env=doc.get("base_url_env"),
                 arguments=tuple(t.get("arguments") or ()), note=t.get("note", ""),
-                auth=t["auth"], admin_auth=admin_auth, forward=forward_of(doc)))
+                auth=t["auth"], admin_auth=admin_auth, forward=forward_of(doc),
+                shared=str(t.get("shared") or "")))
     for doc in manifests:
         if doc["domain"] not in deployed:
             out.absent_domains.add(doc["domain"])

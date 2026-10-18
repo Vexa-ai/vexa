@@ -32,11 +32,50 @@ function createTransporter() {
   });
 }
 
+/** The bare address out of `Name <a@b>` or `a@b`, lower-cased. */
+function bareAddress(addr: string): string {
+  const m = /<([^>]+)>/.exec(addr || "");
+  return (m ? m[1] : addr || "").trim().toLowerCase();
+}
+
 /**
- * Send an email using SMTP
+ * `VEXA_MAIL_RECIPIENT_ALLOW` (PRD 0.13.4 S2), the same key flows and the terminal read: a comma list
+ * of exact addresses and domains (`@vexa.ai` or `vexa.ai`). Unset: everyone. Set: a recipient not on
+ * it is never sent to — the message goes to the capture double instead.
+ */
+export function recipientAllowed(to: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const allow = (env.VEXA_MAIL_RECIPIENT_ALLOW || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+  if (!allow.length) return true;
+  const addr = bareAddress(to);
+  const domain = addr.split("@")[1] || "";
+  return allow.some((e) => (e.includes("@") && !e.startsWith("@") ? addr === e : !!domain && domain === e.replace(/^@/, "")));
+}
+
+/** The capture double (`VEXA_MAIL_CAPTURE_SMTP`, default `mailpit:1025`): plain SMTP, no login. */
+function createCaptureTransporter() {
+  const raw = (process.env.VEXA_MAIL_CAPTURE_SMTP || "mailpit:1025").trim();
+  const i = raw.lastIndexOf(":");
+  const port = i > 0 ? parseInt(raw.slice(i + 1), 10) : 1025;
+  return nodemailer.createTransport({
+    host: i > 0 ? raw.slice(0, i) : raw,
+    port: Number.isFinite(port) ? port : 1025,
+    secure: false,
+    ignoreTLS: true,
+  });
+}
+
+/**
+ * Send an email using SMTP — or, for a recipient off `VEXA_MAIL_RECIPIENT_ALLOW`, to the capture
+ * double, logged `mail_diverted` with the recipient's domain only (no subject, body or link).
  */
 export async function sendEmail({ to, subject, html, text }: SendEmailOptions): Promise<void> {
-  const transporter = createTransporter();
+  let transporter;
+  if (recipientAllowed(to)) {
+    transporter = createTransporter();
+  } else {
+    console.warn(`[dashboard-mail] mail_diverted to_domain=${bareAddress(to).split("@")[1] || "?"} — not on VEXA_MAIL_RECIPIENT_ALLOW; sent to the capture double instead`);
+    transporter = createCaptureTransporter();
+  }
   const from = process.env.SMTP_FROM || process.env.SMTP_USER;
 
   await transporter.sendMail({

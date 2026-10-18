@@ -77,7 +77,8 @@ DICT_BASE = {
 }
 #: Routes a worker cannot call at all — the internal tier, which a worker never holds. Refused
 #: before the ceiling is asked, which is all a worker needs.
-INTERNAL_TIER = frozenset({("POST", "/internal/scaffolds"),
+INTERNAL_TIER = frozenset({("POST", "/internal/scaffolds"), ("POST", "/internal/policy/decide"),
+                           ("POST", "/internal/invites/signin-claim"),
                            ("POST", "/api/sessions/{session}/proposals")})
 #: Gaps this test documents until their router is changed: the route answers without refusing.
 KNOWN_GAPS: dict = {}
@@ -113,7 +114,7 @@ def _build(monkeypatch, tmp_path) -> TestClient:
     monkeypatch.setenv("VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE", str(public))
     monkeypatch.setenv("INTERNAL_API_SECRET", "agent-test-internal-secret")
     # every route answers here, the explicit features' too (rooms and home2 are not in `all`)
-    monkeypatch.setenv("VEXA_FEATURES", "all,rooms,home2,transcript_signals")
+    monkeypatch.setenv("VEXA_FEATURES", "all,rooms,home2,readme_page,transcript_signals")
     root = tmp_path / "workspaces"
     root.mkdir()
     monkeypatch.setenv("VEXA_WORKSPACES_DIR", str(root))

@@ -47,7 +47,12 @@ from typing import Optional
 #: ``.claude`` is the agent's own plumbing in a work tree — chat continuity, harness state, and once
 #: a worker's tool credential — never a page: no file, upload or move route reaches it, and the
 #: platform's own reads and writes there say ``allow=(".claude",)``.
-RESERVED_DIRS = (".git", ".vexa", ".claude")
+#: ``policy`` is PLATFORM-ONLY (PRD 0.13.4 D5, security review C3): the member list, a workspace's
+#: visibility and its connections. A contributor's page write to ``policy/members.json`` used to make
+#: them owner at once. No caller route reads or writes it now; the membership and policy service paths
+#: (``workspace_membership``, ``room_principal``) and the mirror readers say ``allow=("policy",)``.
+#: The authority itself lives outside every tree (``workspace_membership.POLICY_STORE_DIR``).
+RESERVED_DIRS = (".git", ".vexa", ".claude", "policy")
 
 
 class PathRefused(ValueError):
@@ -105,6 +110,22 @@ def relative_parts(path: str, *, allow=()) -> list[str]:
     if any(p in reserved for p in parts):
         raise PathRefused(REFUSAL, kind="reserved")
     return parts
+
+
+def is_platform_policy_path(path: str) -> bool:
+    """True when ``path`` is refused ONLY because it reaches into ``policy/`` — the platform's own
+    folder (D5) — so a route can answer that refusal as the authority question it is (403), not as a
+    malformed path (400)."""
+    try:
+        relative_parts(path)
+        return False
+    except PathRefused:
+        pass
+    try:
+        relative_parts(path, allow=("policy",))
+        return True
+    except PathRefused:
+        return False
 
 
 def resolve_inside(root, path: str, *, allow=()) -> Path:

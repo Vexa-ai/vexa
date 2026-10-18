@@ -75,7 +75,8 @@ def _client(root: Path, index=None, *, ui_url: str = "https://app.example.com"):
 
 
 def _h(subject: str) -> dict:
-    return {"X-User-Id": subject}
+    # a person at the terminal: identity's session credential class (S5, D13)
+    return {"X-User-Id": subject, "x-user-credential-class": "session"}
 
 
 @pytest.fixture()
@@ -195,7 +196,12 @@ def test_preview_carries_the_sentence_the_join_page_says(owned):
     assert p["workspace_id"] == "pilot-a1b2c3"
     assert p["name"] == "pilot-a1b2c3"          # no registry record here → the slug, never blank
     assert p["role"] == "contributor"
-    assert p["shared_by"] == "jane@example.com"
+    # M1 (0.13.4 S4): the inviter is named to a signed-in visitor (the D26 confirm card), not to a
+    # link holder with no session
+    assert "shared_by" not in p and "purpose" not in p
+    signed = c.get("/api/workspace/invites/preview", params={"token": minted["token"]},
+                   headers=_h("u_jsmith")).json()
+    assert signed["shared_by"] == "jane@example.com"
     assert p["valid"] is True and p["reason"] is None
     # the address the page prefills and LOCKS: without it the person types one, gets a 403 at the
     # redeem, and nothing on screen says which address the invite was for.

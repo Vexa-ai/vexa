@@ -75,18 +75,17 @@ def _get(stack, who=PERSON):
 
 
 def _set_role(stack, role):
-    ws = wm._ws_dir(stack["root"], stack["wid"])
-    rows = wm._read_json_list(ws, wm.MEMBERS_FILE)
+    # the roster's authority is the policy store (PRD 0.13.4 D5), not the tree's mirror
+    rows = wm.read_members(stack["root"], stack["wid"])
     for row in rows:
         if row.get("subject") == PERSON:
             row["role"] = role
-    wm._write_json_list(ws, wm.MEMBERS_FILE, rows)
+    wm.write_policy(stack["root"], stack["wid"], "members", rows)
 
 
 def _remove(stack):
-    ws = wm._ws_dir(stack["root"], stack["wid"])
-    rows = [r for r in wm._read_json_list(ws, wm.MEMBERS_FILE) if r.get("subject") != PERSON]
-    wm._write_json_list(ws, wm.MEMBERS_FILE, rows)
+    rows = [r for r in wm.read_members(stack["root"], stack["wid"]) if r.get("subject") != PERSON]
+    wm.write_policy(stack["root"], stack["wid"], "members", rows)
 
 
 # ── 1. stored per person ────────────────────────────────────────────────────────────────────────

@@ -32,6 +32,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from flows import Done, EventType, FakeClock, Reaction, Registry, StepCtx  # noqa: E402
 from sqlite_double import SqliteDB  # noqa: E402
+from mail_auth_fixture import authed  # noqa: E402
 from flows_integrations import mail_policy  # noqa: E402
 from flows_integrations.mailbox import handle  # noqa: E402
 from flows_steps import policies  # noqa: E402
@@ -48,7 +49,7 @@ def _page(**rows) -> str:
 
 
 def _msg(frm, *, ics=None, mid=None):
-    return SimpleNamespace(frm=frm, body="hello", subject="hi", headers={}, ics=ics,
+    return SimpleNamespace(frm=frm, body="hello", subject="hi", headers=authed(frm), ics=ics,
                            message_id=mid or f"<{frm}-1@x.test>", ext_id="ext-1", cursor="c1")
 
 

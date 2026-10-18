@@ -232,6 +232,10 @@
         },
         "note": {
           "type": "string"
+        },
+        "shared": {
+          "enum": ["allow", "refuse"],
+          "description": "D3 (default-deny for shared tokens, 0.13.4): may a caller whose delegation is shared (a room's or a shared chat's turn) be shown and call this tool? The domain's service stamps it on the manifest it SERVES from its own route table (agent-api: routes.v1.json `shared`); the MCP edge shows a shared caller only the tools that say `allow`, and treats an absent value as `refuse`"
         }
       }
     },

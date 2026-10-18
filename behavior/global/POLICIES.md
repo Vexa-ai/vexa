@@ -78,6 +78,7 @@ routine_min_interval_minutes: 10
 home_compose_per_day: 14
 home_expand_per_day: 40
 event_agent_runs_per_day: 30
+invite_signin_days: 7
 event_agent_max_trust: draft
 model_chat_default:
 models_allowed: all
@@ -833,6 +834,7 @@ not offer shows as *unavailable* in Company mode and is skipped.
 - `home_cards` — whether the home shows its composed cards (`off` for the release: the greeting only; `VEXA_HOME_CARDS` overrides).
 - `home_people` — whether the home shows the People strip.
 - `event_agent_runs_per_day` — agent runs started by an outside event (mail, a meeting) per person a day.
+- `invite_signin_days` — how many days the link in a workspace invite this deployment mailed signs its one address in with one click (never past the invite's own expiry; at most 30). `0`: the link never signs anybody in, and the invitee signs in the ordinary way first.
 - `event_agent_max_trust` — the most an event-started run may do: `read`, `draft` or `act` (declared; not yet enforced).
 - `model_chat_default` — the model a new chat starts on (empty: the catalog's default).
 - `models_allowed` — the models anyone may pick, comma-separated catalog ids, or `all`.
@@ -987,6 +989,7 @@ product does not yet check.
 | `routine_runs_per_day`, `routine_min_interval_minutes` | flows, when a routine run is admitted and when a routine is created (read live) |
 | `home_compose_per_day`, `home_expand_per_day`, `model_home` | agent-api's home (`home`, `home_model`) |
 | `event_agent_runs_per_day` | agent-api's event door (`routers/ingress.py`) |
+| `invite_signin_days` | agent-api's invite act (`routers/sharing.py` → `membership_acts.invite`), when a mailed invite is minted |
 | `event_agent_max_trust` | **declared, not yet enforced** |
 | `appearance_accent`, `appearance_font_ui`, `appearance_font_reading` | agent-api's `GET /api/user/appearance` — the company default under each person's own choice |
 | `model_chat_default`, `models_allowed`, `models_for`, `model_routines`, `model_event_agents` | agent-api's model catalog (`model_providers/catalog.py`) and dispatch, on every turn |

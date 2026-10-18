@@ -17,5 +17,6 @@
     ],
     "flow": "user:42/bot-at-1213"
   },
-  "person_is_admin": false
+  "person_is_admin": false,
+  "credential_class": "delegation"
 }

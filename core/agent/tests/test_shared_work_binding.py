@@ -1,6 +1,5 @@
-"""SHARED WORK IS A PROFILE, NOT A SPECIAL RULE (Vexa-ai/vexa#1783, founder 2026-10-14): opening a
-workspace invite/join link starts the person's next new chat in "shared work" bound to that
-workspace; sharing a chat (adding a person) binds that person's view of it to the workspace the chat
+"""SHARED WORK IS A PROFILE, NOT A SPECIAL RULE (Vexa-ai/vexa#1783, founder 2026-10-14). Since PRD
+0.13.4 D26, opening a workspace invite/join link no longer moves the person's next chat; sharing a chat (adding a person) binds that person's view of it to the workspace the chat
 writes to. The header chip says "Shared work · writes to <workspace>"."""
 from __future__ import annotations
 
@@ -11,22 +10,24 @@ def _states(client, who, session):
     return client.get(f"/api/workspace/states?session={session}", headers=_h(who)).json()
 
 
-def test_opening_a_workspace_link_starts_the_next_new_chat_in_shared_work(env):
+# REVERSED by PRD 0.13.4 D26 (security review H4): opening a link used to start the person's next new
+# chat writing into the linked workspace, so one link sent to a signed-in person moved their writes
+# into a workspace the sender reads. Joining adds the workspace; only the person switches a chat's
+# target. (Sharing a CHAT, below, still binds that chat — it is the chat they were added to.)
+def test_opening_a_workspace_link_never_moves_the_next_new_chats_target(env):
     client, root, _ = env
     tok = _token(_link(client)["url"])
     assert client.post("/api/join-links/redeem", json={"token": tok}, headers=_h(B)).status_code == 200
     assert client.post("/api/chat", json={"prompt": "hi", "session": "pchat-b1"}, headers=_h(B)).status_code == 200
-    v = _states(client, B, "pchat-b1")
-    assert v["chat"]["target"] == "dna" and v["chat"]["reads"] == ["dna"]
-    assert v["line"].startswith("Writes to ") and "profile" not in v["line"].lower()
+    assert _states(client, B, "pchat-b1")["chat"]["target"] != "dna"
 
 
-def test_accepting_by_the_join_page_does_the_same(env):
+def test_accepting_by_the_join_page_never_moves_it_either(env):
     client, root, _ = env
     tok = _token(_link(client)["url"])
     assert client.post("/api/workspace/invites/accept", json={"token": tok}, headers=_h(B)).status_code == 200
     client.post("/api/chat", json={"prompt": "hi", "session": "pchat-b2"}, headers=_h(B))
-    assert _states(client, B, "pchat-b2")["chat"]["target"] == "dna"
+    assert _states(client, B, "pchat-b2")["chat"]["target"] != "dna"
 
 
 def test_sharing_a_chat_that_writes_to_a_workspace_binds_the_newcomer_to_it(env):
@@ -99,7 +100,10 @@ def test_a_workspace_created_from_a_chat_is_where_that_chat_writes_in_the_same_t
 def test_sharing_the_chats_workspace_makes_the_chat_read_only_it(env):
     client, root, _ = env
     slug = client.post("/api/workspace/create", json={"name": "FINOS research"}, headers=_turn(HOST, "pchat-g")).json()["slug"]
+    # H3 (0.13.4 S4): the chat's agent cannot mint the link — it proposes; the person's own session mints
     r = client.post("/api/workspace/invite-link", json={"slug": slug}, headers=_turn(HOST, "pchat-g"))
+    assert r.status_code == 403 and r.json()["detail"]["reason"] == "invite_needs_the_person"
+    r = client.post("/api/workspace/invite-link", json={"slug": slug}, headers=_h(HOST))
     assert r.status_code == 201, r.text
     wid = r.json()["workspace_id"]
     assert wid != slug                         # promoted to a shared workspace with a new id

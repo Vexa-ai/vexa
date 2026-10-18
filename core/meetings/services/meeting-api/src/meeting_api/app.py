@@ -230,6 +230,9 @@ def create_app(
                   dependencies=[route_scopes.SCOPE_GATE, _Depends(_refuse_shared)])
     # The edge: read/mint X-Trace-Id and bind it for the request (logevent.v1 trace_id).
     app.add_middleware(TraceMiddleware)
+    # D6: every answer says whether it carries the person's meeting data (`privacy_label.py`).
+    from .privacy_label import PrivacyLabel
+    app.add_middleware(PrivacyLabel)
     # THE DOOR FOR x-user-* (gateway-identity.v1). meeting-api derives the owner, the bot limit, the
     # workspace memberships and the webhook from these headers; a request that names a person
     # without the gateway's signature or the internal tier is refused here. Bot and runtime

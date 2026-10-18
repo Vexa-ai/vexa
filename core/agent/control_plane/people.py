@@ -141,6 +141,13 @@ class Directory:
                      workspaces=[str(w) for w in c.get("workspaces") or []][:8],
                      discoverable=c.get("discoverable") is not False)
             self._by_account[sub] = p["key"]
+            # D35: one Person, several logins — the other accounts the viewer already knew map here
+            for other in c.get("linked") or []:
+                if str(other) and str(other) != self.me:
+                    self._by_account[str(other)] = p["key"]
+            if int(c.get("accounts") or 1) > 1:
+                p["accounts"] = int(c["accounts"])
+                p["accounts_confirmed"] = bool(c.get("accounts_confirmed"))
 
     def _add(self, key: str, *, name: str, email: str = "") -> dict:
         p = self.people.get(key)
@@ -597,6 +604,8 @@ def known(*, dir: Directory, now: float, dms: list, meetings: list, shared: list
                     # reference only (and a call link the person sends themselves)
                     "subject": p.get("account_id") or None, "vexa": bool(p.get("colleague")),
                     "how_words": ", ".join(HOW_WORDS[h] for h in row["how"] if h in HOW_WORDS),
-                    "last": row["last"] or None, "page": page or None})
+                    "last": row["last"] or None, "page": page or None,
+                    **({"accounts": p["accounts"], "accounts_confirmed": bool(p.get("accounts_confirmed"))}
+                       if p.get("accounts") else {})})
     out.sort(key=lambda r: (-(r["last"] or 0), r["name"].lower()))
     return out

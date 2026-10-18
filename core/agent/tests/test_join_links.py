@@ -91,7 +91,7 @@ def env(tmp_path, monkeypatch):
 
 
 def _h(who: str) -> dict:
-    return {"X-User-Id": who, "X-User-Email": MAIL.get(who, "")}
+    return {"X-User-Id": who, "X-User-Email": MAIL.get(who, ""), "x-user-credential-class": "session"}
 
 
 def _link(client, **body):

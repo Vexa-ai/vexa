@@ -150,9 +150,9 @@
       "required": ["id", "kind", "actor", "object", "text", "created", "read"],
       "properties": {
         "id": { "type": "string" },
-        "kind": { "enum": ["chat_added", "chat_shared", "chat_mentioned", "workspace_invited", "workspace_added", "invite_accepted", "invite_declined", "workspace_joined_via_link", "routine_posted", "call_started", "agent", "meeting_shared", "bot_scheduled", "bot_joined", "access_requested"] },
+        "kind": { "enum": ["chat_added", "chat_shared", "chat_mentioned", "workspace_invited", "workspace_added", "invite_accepted", "invite_declined", "workspace_joined_via_link", "routine_posted", "call_started", "agent", "meeting_shared", "bot_scheduled", "bot_joined", "access_requested", "card_waiting", "card_slipped", "delivery_failed"] },
         "actor": { "type": "object", "required": ["id"], "properties": { "id": { "type": "string" }, "name": { "type": "string" } } },
-        "object": { "type": "object", "required": ["kind", "id"], "properties": { "kind": { "enum": ["chat", "workspace", "meeting", "record", "invite", "page", "none"] }, "id": { "type": "string" }, "name": { "type": "string" }, "url": { "type": "string" } } },
+        "object": { "type": "object", "required": ["kind", "id"], "properties": { "kind": { "enum": ["chat", "workspace", "meeting", "record", "invite", "page", "card", "none"] }, "id": { "type": "string" }, "name": { "type": "string" }, "url": { "type": "string" } } },
         "text": { "type": "string" },
         "created": { "type": "number" },
         "read": { "type": "boolean" },

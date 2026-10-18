@@ -140,7 +140,7 @@ def _real_subdirs(ws: Path, parts: "tuple[str, ...]") -> Iterator[str]:
 # Everything from a marked prompt until the next thing a person actually said is bookkeeping the
 # founder was never meant to read back as his own conversation.
 from shared import attachments as attachments_mod  # noqa: E402
-from shared.marks import PHASE_MARK, act_label, is_signal_turn, read_message_mark  # noqa: E402 — re-export under this module's long-standing name
+from shared.marks import PHASE_MARK, act_label, is_signal_turn, quiet_reply, read_message_mark  # noqa: E402 — re-export under this module's long-standing name
 
 # …and the salvage for a turn dispatched BEFORE any of those marks existed (Vexa-ai/vexa#1605):
 # a flow's composed kick names its own kind in its first bracket, which is the only thing a
@@ -298,6 +298,9 @@ def parse_history(raw: str, records: list) -> list[dict]:
     # Are we inside a write-back phase exchange (F51)? Set by a marked prompt, cleared by the
     # next thing a person actually said. While it is on, the agent's replies are bookkeeping.
     in_phase = False
+    # Is the open agent turn answering a SIGNAL's wake (friction 6)? Such a turn may end silently:
+    # its `QUIET_REPLY` is never shown. Set by the wake, cleared by the next real prompt.
+    in_signal = False
 
     def flush_agent() -> None:
         nonlocal cur_agent
@@ -306,6 +309,8 @@ def parse_history(raw: str, records: list) -> list[dict]:
         open_turn, cur_agent = cur_agent, None
         if in_phase:
             return  # the phase's reply — nobody was ever shown it, and nobody asked for it
+        if in_signal:
+            open_turn["text"] = quiet_reply(open_turn["text"])
         # An agent turn with neither prose nor a single operation is not a turn: it is the
         # residue of a beat that produced nothing, and it rendered as an empty grey card.
         if not open_turn["text"].strip() and not open_turn["ops"]:
@@ -381,10 +386,11 @@ def parse_history(raw: str, records: list) -> list[dict]:
                 in_phase = True   # …and everything the agent says until the next real prompt
                 continue
             in_phase = False
+            in_signal = is_signal_turn(text)
             turn: dict = {"role": "user", "text": text}
             # A MEETING SIGNAL'S WAKE (transcript signals): the terminal shows "From the meeting" and
             # hides the composed wake prompt, read off this field rather than the text.
-            if is_signal_turn(text):
+            if in_signal:
                 turn["trigger"] = "signal"
             # WHEN it was said — a shared chat draws people's lines between the turns by it.
             if (at := _line_at(obj)) is not None:

@@ -62,7 +62,15 @@ WRITES = {
     'crm_card_members': 'INSERT, UPDATE, DELETE',
     'crm_card_seen': 'INSERT, UPDATE',
     'crm_member_settings': 'INSERT, UPDATE',
+    'crm_profiles': 'INSERT, UPDATE',
+    'crm_card_nonces': 'INSERT, UPDATE',
 }
+
+#: Columns schema 6 adds to an existing ``crm_audit`` (``tables_and_version``).
+AUDIT_COLUMNS_6 = ('principal', 'on_behalf_of', 'workspace')
+#: Columns schema 8 adds to an existing ``crm_revisions`` (D13 decision records), in place with an
+#: empty default so every existing append-only row keeps its values.
+REVISION_COLUMNS_7 = ('decision', 'credential_class', 'nonce', 'content_hash')
 
 APPEND_ONLY = ('crm_revisions', 'crm_card_layouts', 'crm_audit', 'crm_desk_layouts')
 
@@ -143,7 +151,7 @@ def bootstrap_function_sql():
     """``crm_bootstrap_personal_org(org, name)``: ``bootstrap.bootstrap_org`` for an org of one,
     with the personal policy and this release's definitions (``orgs.PERSONAL_POLICY``,
     ``bootstrap.DEFINITIONS``) built in; it creates what is missing and changes nothing else."""
-    from .bootstrap import DEFINITIONS
+    from .bootstrap import CARD_LIFECYCLE_PROPERTIES, DEFINITIONS
     from .orgs import PERSONAL_POLICY
     return f"""CREATE OR REPLACE FUNCTION crm_bootstrap_personal_org(p_org text, p_name text) RETURNS text[]
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
@@ -160,6 +168,12 @@ BEGIN
               to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"+00:00"'));
     created := created || 'org'::text;
   END IF;
+  -- D11 (schema 8): an existing org's Card type gains the lifecycle properties it lacks; an
+  -- administrator's own property definitions win (the right side of `||`).
+  UPDATE crm_object_definitions
+     SET definition = jsonb_set(definition, '{{properties}}',
+                                {_literal(CARD_LIFECYCLE_PROPERTIES)} || COALESCE(definition->'properties', '{{}}'::jsonb))
+   WHERE org_id = p_org AND name = 'Card';
   FOR d IN SELECT key, value FROM jsonb_each({_literal(DEFINITIONS)}) LOOP
     IF NOT EXISTS (SELECT 1 FROM crm_object_definitions WHERE org_id = p_org AND name = d.key) THEN
       INSERT INTO crm_object_definitions (org_id, name, definition) VALUES (p_org, d.key, d.value);
@@ -192,11 +206,24 @@ def tables_and_version(c):
     its tables and rows; a table added in a later version (the desk's in 3, card members in 4, workspace
     settings in 5) is created beside them, and 4 lets a proposal name no record yet (a proposed card).
     5 adds only a new table, so an install at 4 upgrades by this same `create_all` and the re-grant in
-    `init`; no column of an existing table changes."""
+    `init`; no column of an existing table changes. 6 adds the field classification table (configuration:
+    SELECT only for crm-api's role, seeded by ``bootstrap``) and three audit columns, added in place
+    with an empty default so the existing append-only rows keep their values. 7 adds only a new table
+    (``crm_profiles``: a claimed Person record's person-owned fields, D35). 8 (D13) adds the decision
+    nonce table and four decision-record columns on ``crm_revisions``, also in place with an empty
+    default; the Card definition's new lifecycle properties reach an existing org through
+    ``bootstrap.upgrade_card_definition``."""
     metadata.create_all(c)
     if c.dialect.name == 'postgresql':
         # 4 (cards): a proposal may name no record yet — it proposes a new card. Idempotent.
         c.execute(text('ALTER TABLE crm_change_proposals ALTER COLUMN record_id DROP NOT NULL'))
+        # 6 (D4/H9): the audit names the principal, the person acted for and the workspace. Idempotent.
+        for column in AUDIT_COLUMNS_6:
+            c.execute(text(f"ALTER TABLE crm_audit ADD COLUMN IF NOT EXISTS {column} varchar NOT NULL DEFAULT ''"))
+        # 8 (D13): a revision may be a decision record. Idempotent; ALTER is DDL, not an UPDATE, so
+        # the append-only trigger is not involved.
+        for column in REVISION_COLUMNS_7:
+            c.execute(text(f"ALTER TABLE crm_revisions ADD COLUMN IF NOT EXISTS {column} varchar NOT NULL DEFAULT ''"))
     for table in metadata.sorted_tables:
         for index in table.indexes:
             index.create(c, checkfirst=True)
@@ -297,8 +324,10 @@ def main(argv):
         except ValueError as exc:
             print(f'[crm-schema] STOP: {exc}', flush=True)
             return 1
-        from .bootstrap import bootstrap_org
+        from .bootstrap import bootstrap_org, upgrade_card_definition
         created = bootstrap_org(engine, org, os.environ.get('CRM_ORG_NAME', '') or org)
+        if upgrade_card_definition(engine, org):
+            created.append('Card lifecycle properties')
         print(f'[crm-schema] role {role} and the crm_* tables are ready (schema version {SCHEMA_VERSION}; '
               f'grants on those tables only); created: {", ".join(created) or "nothing"}', flush=True)
         return 0

@@ -4,12 +4,13 @@ The signals service's chat source reads `room:{session}:msgs` (agent-api its one
 messages reach it when they are posted (`rooms.publish`). The AGENT's own messages must reach it too —
 never to be scored, only as context, and because "a question right after the agent spoke" is one of
 the sensor's rules. A room's turns run on its workspace agent's units
-(`agent-ws-<wid>-room-<session>[-signal|-auto]`), whose output streams this reads: the text of each
+(`agent-ws-<wid>-room-<session>-g<grant>[-read][-signal|-auto]`), whose output streams this reads: the text of each
 finished turn becomes one entry, `author.kind: agent`.
 
 ONE WRITER STILL: this runs inside agent-api, the stream's one writer. Its read position per unit is
 kept beside the stream (`room:{session}:echo:{unit}`), so a restart neither repeats nor drops a turn.
-A turn that said nothing writes nothing. Off with the `rooms` feature.
+A turn that said nothing writes nothing — and a SIGNAL turn (`-signal` unit) that answered only
+`marks.QUIET_REPLY` said nothing (friction 6). Off with the `rooms` feature.
 """
 from __future__ import annotations
 
@@ -21,11 +22,14 @@ import time
 from typing import Callable, Optional
 
 from control_plane import rooms
-from shared.units import output_topic
+from shared.marks import quiet_reply
+from shared.units import SIGNAL_UNIT_SUFFIX, output_topic
 
 logger = logging.getLogger("agent_api.room_echo")
 
-_ROOM_UNIT = re.compile(r"^agent-ws-.+?-room-(?P<session>[A-Za-z0-9._-]+?)(?:-read)?(?:-signal|-auto)?$")
+#: `-g<10 hex>` is the room's grant digest (D27, `room_principal.RoomPrincipal.grant_hash`).
+_ROOM_UNIT = re.compile(r"^agent-ws-.+?-room-(?P<session>[A-Za-z0-9._-]+?)(?:-g[0-9a-f]{10})?(?:-read)?"
+                        r"(?:-signal|-auto)?$")
 MAX_TEXT = 4000
 POLL_S = 2.0
 
@@ -58,6 +62,7 @@ def echo_unit(r, store, unit_id: str, *, agent_name: str = "Vexa") -> int:
                        count=ECHO_SCAN_MAX)
     if not entries:
         return 0
+    signal = str(unit_id).endswith(SIGNAL_UNIT_SUFFIX)
     text, published, last_done = [], 0, None
     for eid, fields in entries:
         try:
@@ -69,15 +74,41 @@ def echo_unit(r, store, unit_id: str, *, agent_name: str = "Vexa") -> int:
             text.append(str(ev["text"]))
         elif t == "turn-complete":
             said = "".join(text).strip()
+            if signal:
+                said = quiet_reply(said)
             text = []
             last_done = eid
             if said:
+                said = _held_or_said(unit_id, row, eid, said)
                 note = {"seq": f"a-{eid}", "author": "vexa", "text": said[:MAX_TEXT], "created": time.time()}
                 if rooms.publish(r, row, note, author_name=agent_name, author_kind="agent"):
                     published += 1
     if last_done is not None:
         r.set(key, last_done)            # an unfinished turn is read again, whole, next time
     return published
+
+
+#: What the room reads instead of a reply the privacy hold kept back (D6). Fixed text: no content.
+HELD_NOTICE = ("[held] Vexa's reply used private data, so it was not posted to this room. "
+               "The person it belongs to can share it from their own chat.")
+
+
+def _held_or_said(unit_id: str, row: dict, eid: str, said: str) -> str:
+    """A ROOM MESSAGE IS A MULTI-READER SURFACE (D6): a marked unit's reply is replaced by a fixed
+    notice; the reply is kept encrypted for the room's owner (`held_store`), never posted."""
+    from control_plane import held_store, private_taint  # noqa: PLC0415
+    found = private_taint.sources(unit_id)
+    if not found:
+        return said
+    owner = str((row or {}).get("owner") or (row or {}).get("created_by") or "")
+    store = held_store.current()
+    if store is not None and owner:
+        store.put(owner, f"room-{eid}", surface="room_message", sources=found,
+                  payload={"surface": "room_message", "target": str((row or {}).get("id") or ""),
+                           "content": said})
+    logger.info("room %s: a reply from %s held (privacy mark: %s)", (row or {}).get("id"), unit_id,
+                ",".join(sorted(found)))
+    return HELD_NOTICE
 
 
 def room_units(r) -> list:

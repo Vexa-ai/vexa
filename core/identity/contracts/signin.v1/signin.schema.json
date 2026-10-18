@@ -5,8 +5,8 @@
   "description": "Who may sign in, and who may become the administrator: the internal wire between the terminal's server (the sign-in doors) and admin-api (which holds every input and decides). The terminal asks and obeys; it holds no list of its own. Internal tier only (X-Internal-Secret). The reason vocabularies are the contract: the terminal's TypeScript and admin-api's Python both read them from code generated from this file (gen.mjs), so a reason one side adds is a reason the other side knows.",
   "$defs": {
     "AdmittedReason": {
-      "description": "Why a sign-in was admitted. admin: the claimed role is on this user. admin-email: VEXA_ADMIN_EMAILS names this address. admin-account: VEXA_ADMIN_ACCOUNT names this address as the deployment's dedicated admin account. existing-user: an account exists. allow-list: VEXA_SIGNIN_ALLOW or the admin-edited signin.allow setting matches. claim-code: the instance is unclaimed, nothing is configured, and this sign-in carries the live admin claim code.",
-      "enum": ["admin", "admin-email", "admin-account", "existing-user", "allow-list", "claim-code"]
+      "description": "Why a sign-in was admitted. admin: the claimed role is on this user. admin-email: VEXA_ADMIN_EMAILS names this address. admin-account: VEXA_ADMIN_ACCOUNT names this address as the deployment's dedicated admin account. existing-user: an account exists. allow-list: VEXA_SIGNIN_ALLOW or the admin-edited signin.allow setting matches. claim-code: the instance is unclaimed, nothing is configured, and this sign-in carries the live admin claim code. invited: the sign-in is the one-click join of a workspace invite this deployment mailed to this address (the terminal asks with via_invite only after agent-api spent the invite's sign-in half), and VEXA_SIGNIN_INVITES_ADMIT is on (the default).",
+      "enum": ["admin", "admin-email", "admin-account", "existing-user", "allow-list", "claim-code", "invited"]
     },
     "RefusedReason": {
       "description": "Why a sign-in was refused. not-allowed covers every refusal on purpose: the answer must not tell a caller which list an address is missing from.",
@@ -28,7 +28,28 @@
       "required": ["email"],
       "properties": {
         "email": { "type": "string", "maxLength": 320, "description": "The address, as the door received it. admin-api lower-cases and trims it." },
-        "claim_code": { "$ref": "#/$defs/ClaimCode" }
+        "claim_code": { "$ref": "#/$defs/ClaimCode" },
+        "via_invite": { "type": "boolean", "description": "True only for the terminal's join POST, after agent-api spent the sign-in half of an invite this deployment mailed to this address (PRD 0.13.4 S2). Admits as `invited` while VEXA_SIGNIN_INVITES_ADMIT is on." }
+      }
+    },
+    "RateTakeRequest": {
+      "description": "POST /internal/rate/take — count one request against a shared fixed window (PRD 0.13.4 M6: the terminal's link and join limits, the same for every replica).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "limit", "window_sec"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}:[A-Za-z0-9._@:+-]{1,200}$", "description": "<bucket>:<subject>, e.g. link-ip:203.0.113.4 or link-to:a@b.c" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "window_sec": { "type": "integer", "minimum": 1, "maximum": 86400 }
+      }
+    },
+    "RateTakeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed", "count"],
+      "properties": {
+        "allowed": { "type": "boolean", "description": "False once the window already holds `limit` requests; a refused request is not counted." },
+        "count": { "type": "integer", "minimum": 0 }
       }
     },
     "SigninAdmissionResponse": {

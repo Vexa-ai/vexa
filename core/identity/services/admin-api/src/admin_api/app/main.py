@@ -41,7 +41,9 @@ from .. import obs
 from .db import get_db
 from . import events as events_mod
 from . import person_settings as person_settings_mod
+from . import notification_policy as notification_policy_mod
 from . import person_doors as person_doors_mod
+from . import workspace_registry as workspace_registry_mod
 from . import person_photo_doors as person_photo_doors_mod
 from . import photo_storage as photo_storage_mod
 from . import profile_doors as profile_doors_mod
@@ -138,6 +140,16 @@ UNWATCHED_SETTING_REFUSAL = ("a setting changes only while the person is in the 
                              "and change it on their next turn")
 
 
+#: The one body every service answers a turn other people read with (gateway-identity.v1).
+SHARED_REFUSAL = {
+    "status": "refused",
+    "reason": "shared_conversation",
+    "instruction": "Other people read this conversation, so its answer may use only what every one "
+                   "of them can read. Say you cannot use it here, and offer to answer in the "
+                   "person's private chat; do not retry it another way.",
+}
+
+
 async def get_current_person(request: Request,
                              api_key: str = Security(USER_KEY_HEADER),
                              db: AsyncSession = Depends(get_db)) -> User:
@@ -154,6 +166,12 @@ async def get_current_person(request: Request,
     `get_current_user`."""
     if api_key and validate_mod.delegation_mod.is_delegation_token(api_key):
         ident = await validate_mod._validate_delegation(api_key, db)
+        dlg = ident.get("delegation") or {}
+        if dlg.get("shared") is True or dlg.get("principal_kind") == "workspace":
+            # D3 / BL-3: a turn other people read (a room's or a shared chat's, or a WORKSPACE
+            # principal) reaches none of a person's settings, regime or profile — the gateway
+            # refuses it first (routes.v1 `shared: refuse`); this is the same answer here.
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail=SHARED_REFUSAL)
         regime = (ident.get("delegation") or {}).get("regime")
         if request.method not in ("GET", "HEAD") and regime != "human":
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail=UNWATCHED_SETTING_REFUSAL)
@@ -335,6 +353,7 @@ class SigninAdmissionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     email: str = Field(max_length=signin_wire.EMAIL_MAX_LENGTH)
     claim_code: Optional[str] = Field(default=None, max_length=signin_wire.CLAIM_CODE_MAX_LENGTH)
+    via_invite: bool = False
 
 
 class SigninAdmissionResponse(BaseModel):
@@ -864,8 +883,11 @@ def create_app() -> FastAPI:
         expires_at = None
         if token_expires_in is not None and token_expires_in > 0:
             expires_at = datetime.utcnow() + timedelta(seconds=token_expires_in)
+        # Always a KEY (D13): this door has no parameter that reaches `kind`; a session is minted
+        # only by `POST /internal/sessions` (app/sessions.py).
         tok = APIToken(token=token_value, user_id=user_id, scopes=scope_list,
-                       name=token_name, created_at=datetime.utcnow(), expires_at=expires_at)
+                       name=token_name, created_at=datetime.utcnow(), expires_at=expires_at,
+                       kind="key")
         db.add(tok)
         await db.commit()
         await db.refresh(tok)
@@ -1192,6 +1214,9 @@ def create_app() -> FastAPI:
     # The person's OWN settings and workspace regime, and identity's MCP tool manifest
     # (Vexa-ai/vexa#1783) — `person_doors.py`.
     app.include_router(person_doors_mod.build_router(get_current_person, get_current_person_for_update))
+    # THE WORKSPACE REGISTRY (MIGRATION-0009, PRD 0.13.4 D5): workspaces, memberships and invites,
+    # identity their one writer, agent-api their caller over the internal tier — `workspace_registry.py`.
+    app.include_router(workspace_registry_mod.build_router())
     # A person's photo (UI 15g): their own upload/remove, the sign-in capture, the bytes for agent-api.
     app.include_router(person_photo_doors_mod.build_router(get_current_person))
     # PUBLIC PROFILES (R4, `public_profile.py`): the one writer of a person's public profile, the
@@ -1222,6 +1247,14 @@ def create_app() -> FastAPI:
 
     # --- internal tier: the org (MIGRATION-0008) — an account's home org and role, read-only.
     app.include_router(orgs_mod.build_router(_load_user))
+
+    # --- internal tier: the workspace principal (PRD 0.13.4 D2, MIGRATION-0009).
+    from . import principals as principals_mod  # noqa: PLC0415
+    app.include_router(principals_mod.build_router())
+
+    # --- internal tier + the terminal's second secret: the `session` credential (D13, MIGRATION-0010).
+    from . import sessions as sessions_mod  # noqa: PLC0415
+    app.include_router(sessions_mod.build_router())
 
     # --- internal tier: instance identity — admin existence + the admin claim.
     #     A fresh install has NO admin unless VEXA_ADMIN_EMAILS names them; the login surface (via
@@ -1347,6 +1380,8 @@ def create_app() -> FastAPI:
             allow=allow,
             claim_code_ok=code_ok,
             admin_accounts=admin_account.designated()[0],
+            invited=bool(payload.via_invite),
+            invites_admit=signin_allow.invites_admit(),
         )
         return {"admitted": admitted, "why": why}
 
@@ -1538,8 +1573,11 @@ def create_app() -> FastAPI:
         private preferences."""
         check_internal_no_dev_bypass(request)
         user = await _load_user(user_id, db)
-        return person_settings_mod.read_person_facts(
-            user.data if isinstance(user.data, dict) else {})
+        data = user.data if isinstance(user.data, dict) else {}
+        # + the notification policy the delivery gate reads (PRD 0.13.4 D15, S6): one read, the
+        # same door, so flows never has to ask twice before it decides whether to mail somebody.
+        return {**person_settings_mod.read_person_facts(data),
+                notification_policy_mod.KEY: notification_policy_mod.read(data)}
 
     @app.get("/internal/presence", include_in_schema=False)
     async def get_presence_internal(request: Request, ids: str = "",

@@ -6,7 +6,7 @@
   "$ref": "#/$defs/CarrierRegistry",
   "$defs": {
     "Domain": {
-      "enum": ["identity", "meetings", "flows", "agent", "runtime", "signals"],
+      "enum": ["identity", "meetings", "flows", "agent", "runtime", "signals", "crm"],
       "description": "The producing domain. It is the OWNER of the fact, not the transport: `onboarding.completed` is identity's because a person entering is identity's to know, regardless of who is told."
     },
     "Cardinality": {

@@ -37,7 +37,7 @@ const headersOk = ajv.compile({ $ref: `${schema.$id}#/$defs/Headers` });
 // Python's json.dumps of a flat object: ", " and ": " separators.
 const CLAIM_HEADERS = { sub: "x-user-id", email: "x-user-email", scopes: "x-user-scopes", limits: "x-user-limits",
   workspaces: "x-user-workspaces", writable_workspaces: "x-user-writable-workspaces", webhook_url: "x-user-webhook-url", webhook_secret: "x-user-webhook-secret",
-  webhook_events: "x-user-webhook-events" };
+  webhook_events: "x-user-webhook-events", credential_class: "x-user-credential-class" };
 const pyDumps = (v) => v && typeof v === "object" && !Array.isArray(v)
   ? `{${Object.entries(v).map(([k, x]) => `${JSON.stringify(k)}: ${pyDumps(x)}`).join(", ")}}`
   : Array.isArray(v) ? `[${v.map(pyDumps).join(", ")}]` : JSON.stringify(v);
@@ -57,6 +57,10 @@ function headersFromClaims(c) {
     if (d.target) out["x-user-delegation-target"] = String(d.target);
     if (d.unit) out["x-user-delegation-unit"] = String(d.unit);
     if (d.shared === true) out["x-user-delegation-shared"] = "1";
+    if (d.principal_kind) out["x-user-principal-kind"] = String(d.principal_kind);
+    if (d.principal_workspace) out["x-user-principal-workspace"] = String(d.principal_workspace);
+    if (d.on_behalf_of) out["x-user-delegation-on-behalf-of"] = String(d.on_behalf_of);
+    if (d.bills_to !== undefined && d.bills_to !== null && d.bills_to !== "") out["x-user-bills-to"] = String(d.bills_to);
     if (Array.isArray(d.grants) && d.grants.length && d.flow) {
       out["x-user-delegation-grants"] = d.grants.join(",");
       out["x-user-delegation-flow"] = String(d.flow);
@@ -77,6 +81,12 @@ function signedDelegation(validation) {
   if (d.target) out.target = String(d.target);
   if (d.unit) out.unit = String(d.unit);
   if (d.shared === true) out.shared = true;
+  if (d.principal_kind === "workspace") {
+    out.principal_kind = "workspace";
+    if (d.principal_workspace) out.principal_workspace = String(d.principal_workspace);
+    if (d.on_behalf_of) out.on_behalf_of = String(d.on_behalf_of);
+    if (Number.isInteger(d.bills_to)) out.bills_to = d.bills_to;
+  }
   const GRANTS = ["bot.request", "bot.stop", "flow.retire_self"];
   if (Array.isArray(d.grants) && String(d.flow || "").trim()) {
     const kept = [...new Set(d.grants.map(String).filter((g) => GRANTS.includes(g)))].sort();

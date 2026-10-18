@@ -91,6 +91,13 @@ class ProposalBody(BaseModel):
     meeting_id: Optional[int] = None
 
 
+class CallShareBody(BaseModel):
+    """M8 (0.13.4 S4): the call's owner gives one person its transcript."""
+    model_config = ConfigDict(extra="forbid")
+    subject: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._@+-]{0,199}$",
+                         description="the person on this call to give its transcript to")
+
+
 class DecideBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     body: Optional[str] = Field(default=None, max_length=200_000, description="the owner's edit")
@@ -200,23 +207,45 @@ def build(**d) -> APIRouter:
                 raise HTTPException(status_code=422, detail="only an untranscribed call has no meeting")
         elif not body.share_token or not body.share_token.startswith(f"{body.meeting_id}."):
             raise HTTPException(status_code=422, detail="the share is not of this call's meeting")
+        from control_plane import room_switches  # noqa: PLC0415
+        if body.meeting_id is not None and not room_switches.transcribe_on(_store(), row["id"]):
+            # "TRANSCRIBE CALLS" IS OFF HERE (UI 7hh, S4): a call in this room has audio only — no
+            # transcript and no notes. The client starts it untranscribed; a transcribed one is refused.
+            raise HTTPException(status_code=409, detail={
+                "refused": "transcription_off_in_this_room",
+                "said": "Calls in this room are not transcribed. Start it without a transcript, or ask to "
+                        "turn transcription back on."})
         call = _store().bind_call(row["id"], room=body.room, meeting_id=body.meeting_id or 0, owner=str(subject),
                                   share_token=body.share_token or "")
         _own_by_room(subject, row, body.meeting_id)
+        rang: list = []
         if notifier is not None:
-            # ``call_started`` (#1783), from this route only: to every other person in the chat.
             try:
                 from control_plane import people_directory  # noqa: PLC0415
 
-                others = [h for h in _store().humans(row["id"]) if h != str(subject)]
-                if others:
-                    name = people_directory.name_of(wsr.root, str(subject), mindex.list if mindex else (lambda _s: []),
-                                                    request.headers.get("x-user-email") or "")
-                    notifier.emit(others, kind="call_started", actor=str(subject), actor_name=name,
-                                  object_kind="chat", object_id=row["id"], object_name=row.get("title") or "a chat")
+                name = people_directory.name_of(wsr.root, str(subject), mindex.list if mindex else (lambda _s: []),
+                                                request.headers.get("x-user-email") or "")
+                if _store().room(row["id"]) is not None:
+                    # A ROOM CALL RINGS THE ROOM'S MEMBERS, AND ONLY THEM (S4, D36; sharing-tagging §7):
+                    # a live ring plus a notice that expires. Workspace members outside it see the
+                    # live call on the workspace page (7l) — discovery, not an invitation.
+                    from control_plane import room_ring  # noqa: PLC0415
+                    rang = room_ring.ring(_store(), wsr.root, notifier, row["id"], caller=str(subject),
+                                          caller_name=name, title=row.get("title") or "", call_room=body.room)
+                else:
+                    # ``call_started`` (#1783), from this route only: to every other person in the chat.
+                    others = [h for h in _store().humans(row["id"]) if h != str(subject)]
+                    if others:
+                        notifier.emit(others, kind="call_started", actor=str(subject), actor_name=name,
+                                      object_kind="chat", object_id=row["id"], object_name=row.get("title") or "a chat")
+                    rang = others
             except Exception as exc:  # noqa: BLE001 — the call is bound; its notice is the extra
                 logger.warning("call notification not sent (%s)", type(exc).__name__)
-        return {"session_id": row["id"], "call": _call_view(call, room)}
+        out = {"session_id": row["id"], "call": _call_view(call, room), "rang": rang}
+        if not rang and _store().room(row["id"]) is not None:
+            # NOBODY ELSE IS HERE (the dogfood case): say so, and how to ring someone
+            out["hint"] = "Nobody else is in this room yet. To ring someone, @mention or Invite them."
+        return out
 
     @router.get("/api/sessions/{session}/call")
     def get_call(session: SessionPath, request: Request):
@@ -239,15 +268,39 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=404, detail="no call in this session")
         call, room = live
         role = _store().role_of(row["id"], subject)
+        # JOINING A CALL NO LONGER INHERITS ITS TRANSCRIPT (security review M8, 0.13.4 S4): the starter's
+        # share is given explicitly, per person (`POST …/call/share`). A room call's notes land in the
+        # room, which its members already read.
+        shared = False
         if str(subject) != call["owner"] and redeem_share is not None and call["share_token"]:
-            email = request.headers.get("x-user-email", "")
-            if not redeem_share(str(subject), email, call["share_token"]):
-                raise HTTPException(status_code=502, detail="the call's transcript could not be shared with you")
+            if str(subject) in set(_store().call_shared_with(row["id"], call["room"])):
+                email = request.headers.get("x-user-email", "")
+                shared = bool(redeem_share(str(subject), email, call["share_token"]))
         name = (request.headers.get("x-user-email", "") or "").split("@", 1)[0] or str(subject)
         token = lk.participant_token(room=call["room"], identity=str(subject), name=name,
                                      can_publish=role in ("owner", "member"))
         return {"session_id": row["id"], "url": lk.url, "token": token, "role": role,
-                "call": _call_view(call, room)}
+                "transcript_shared": shared, "call": _call_view(call, room)}
+
+    @router.post("/api/sessions/{session}/call/share")
+    def call_share(session: SessionPath, request: Request, body: CallShareBody):
+        """THE CALL'S OWNER GIVES ONE PERSON ITS TRANSCRIPT (M8): explicit and per person, never by
+        joining. Only a participant of this session, only by the call's owner, only a person's click."""
+        refuse_delegated(request, reason="call_share_needs_a_person",
+                         instruction="Sharing a call's transcript is its owner's click. Suggest it and stop.")
+        subject, row = _row(request, session)
+        live = _live_call(row["id"])
+        if live is None:
+            raise HTTPException(status_code=404, detail="no call in this session")
+        call, _room_ = live
+        if str(subject) != call["owner"]:
+            raise HTTPException(status_code=403, detail="only the call's owner shares its transcript")
+        if _store().role_of(row["id"], body.subject) is None:
+            raise HTTPException(status_code=404, detail="person not found")
+        if not call["share_token"]:
+            raise HTTPException(status_code=409, detail="this call is not transcribed")
+        _store().share_call_with(row["id"], call["room"], body.subject)
+        return {"session_id": row["id"], "shared_with": body.subject}
 
     # ── show to everyone (founder 2026-10-15) ─────────────────────────────────────────────────
     #: Who is showing what, per session — EPHEMERAL (this process): never stored (`room_show`).

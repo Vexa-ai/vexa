@@ -110,6 +110,22 @@ class FakeLinkLedger:
         self.keys[key] = ex
         return True
 
+    # the shared rate counters (`/internal/rate/take`, PRD 0.13.4 M6)
+    async def incr(self, key: str) -> int:
+        if self.down:
+            raise ConnectionError("redis down")
+        self.counts = getattr(self, "counts", {})
+        self.counts[key] = self.counts.get(key, 0) + 1
+        return self.counts[key]
+
+    async def decr(self, key: str) -> int:
+        self.counts[key] -= 1
+        return self.counts[key]
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        self.keys[key] = seconds
+        return True
+
 
 @pytest.fixture(autouse=True)
 def link_ledger(monkeypatch):

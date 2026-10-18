@@ -21,9 +21,10 @@ import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Protocol
+from typing import Optional, Protocol
 
 import yaml
 
@@ -634,6 +635,121 @@ class AdminApiMembershipIndex:
             if e.code == 404:
                 return []
             raise
+
+
+class AdminApiPolicyStore:
+    """The workspace REGISTRY in the identity database (admin-api ``/internal/registry/*``,
+    MIGRATION-0009, PRD 0.13.4 D5): a ``PolicyStore`` (control_plane.workspace_membership) for the
+    roster, visibility, connections and invites. Identity is the one writer; this is agent-api's port.
+
+    Unlike the membership index it is AUTHORITATIVE, so it is not best-effort: every failure but a
+    404 raises, and the caller turns that into a refusal (fail closed, FD3). A workspace's document is
+    cached in-process for ``ttl`` seconds and dropped on every write through this port — agent-api is
+    pinned single-replica and is the registry's only client, so its own writes are the only change.
+    ``root`` is accepted and ignored: the registry is not on this filesystem."""
+
+    def __init__(self, base_url: str, internal_secret: str, *, timeout: float = 5.0, ttl: float = 2.0) -> None:
+        self._base = base_url.rstrip("/") + "/internal/registry"
+        self._secret = internal_secret
+        self._timeout = timeout
+        self._ttl = ttl
+        self._docs: dict[str, tuple[float, Optional[dict]]] = {}
+
+    def _req(self, method: str, path: str, body: Optional[dict] = None):
+        h = {"Content-Type": "application/json", **obs.trace_headers()}
+        if self._secret:
+            h["X-Internal-Secret"] = self._secret
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(f"{self._base}{path}", data=data, headers=h, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                return json.loads(r.read() or b"null")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise
+
+    @staticmethod
+    def _q(value: str) -> str:
+        return urllib.parse.quote(str(value), safe="")
+
+    def _doc(self, workspace_id: str) -> Optional[dict]:
+        hit = self._docs.get(workspace_id)
+        if hit is not None and time.monotonic() - hit[0] < self._ttl:
+            return hit[1]
+        doc = self._req("GET", f"/workspaces/{self._q(workspace_id)}")
+        self._docs[workspace_id] = (time.monotonic(), doc)
+        return doc
+
+    def has(self, root, workspace_id: str) -> bool:
+        return self._doc(workspace_id) is not None
+
+    def get(self, root, workspace_id: str, name: str):
+        if name == "invites":
+            out = self._req("GET", f"/workspaces/{self._q(workspace_id)}/invites")
+            return None if out is None else list(out.get("invites") or [])
+        doc = self._doc(workspace_id)
+        if doc is None:
+            return None
+        ws = doc.get("workspace") or {}
+        if name == "members":
+            return list(doc.get("members") or [])
+        if name == "visibility":
+            return {"visibility": ws.get("visibility") or "closed"}
+        if name == "connections":
+            return list(ws.get("connections") or [])
+        if name == "kind":
+            # the registry keeps the kind only; a pair's people are its roster (both owners)
+            return None if (ws.get("kind") or "normal") == "normal" else {"kind": ws.get("kind")}
+        raise ValueError(f"unknown policy record {name!r}")
+
+    def put(self, root, workspace_id: str, name: str, value) -> None:
+        self._docs.pop(workspace_id, None)
+        if name == "invites":
+            self._req("PUT", f"/workspaces/{self._q(workspace_id)}/invites", {"invites": list(value or [])})
+            return
+        if name == "members":
+            body = {"members": list(value or [])}
+        elif name == "visibility":
+            body = {"visibility": (value or {}).get("visibility", "closed") if isinstance(value, dict) else value}
+        elif name == "connections":
+            body = {"connections": list(value or [])}
+        elif name == "kind":
+            body = {"kind": str((value or {}).get("kind") or "normal")}
+        else:
+            raise ValueError(f"unknown policy record {name!r}")
+        self._req("PUT", f"/workspaces/{self._q(workspace_id)}", body)
+
+    def drop(self, root, workspace_id: str) -> bool:
+        self._docs.pop(workspace_id, None)
+        out = self._req("DELETE", f"/workspaces/{self._q(workspace_id)}")
+        return bool((out or {}).get("dropped"))
+
+    # ── closed rooms' members (0.13.4 S4, D36): the registry's ``room:<id>`` rows ──────────────
+    def room_get(self, root, room_id: str):
+        out = self._req("GET", f"/rooms/{self._q(room_id)}/members")
+        return None if out is None else list(out.get("members") or [])
+
+    def room_put(self, root, room_id: str, rows: list) -> None:
+        self._req("PUT", f"/rooms/{self._q(room_id)}/members", {"members": list(rows or [])})
+
+    def room_drop(self, root, room_id: str) -> bool:
+        out = self._req("DELETE", f"/rooms/{self._q(room_id)}/members")
+        return bool((out or {}).get("dropped"))
+
+    def principal_rooms(self, root, subject: str) -> list:
+        out = self._req("GET", f"/principals/{self._q(subject)}/rooms")
+        return list((out or {}).get("rooms") or [])
+
+    def member_workspaces(self, root, subject: str) -> list:
+        out = self._req("GET", f"/principals/{self._q(subject)}/memberships")
+        return list((out or {}).get("memberships") or [])
+
+    def invite_by_hash(self, root, token_hash: str):
+        out = self._req("GET", f"/invites/{self._q(token_hash)}")
+        if not out:
+            return None
+        return str(out["workspace_id"]), dict(out["invite"])
 
 
 class AdminApiModelConfig:

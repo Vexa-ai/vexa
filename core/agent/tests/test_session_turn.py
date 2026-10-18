@@ -85,7 +85,9 @@ def test_the_agent_hears_what_was_said_without_it(store):
     store.add_participant(sid, "alice", "bob")
     store.add_note(sid, "bob", "I'll take the migration")
     p = _plan(store, "alice", "main", "@vexa who owns the migration?", names={"bob": "Bob"})
-    assert "Bob: I'll take the migration" in p.preamble
+    # fenced as untrusted (M3): one JSON line per message inside <room-messages>
+    assert '{"author": "Bob", "text": "I\'ll take the migration"}' in p.preamble
+    assert '<room-messages untrusted="true">' in p.preamble
 
 
 def test_a_change_of_participants_moves_the_unit(store):

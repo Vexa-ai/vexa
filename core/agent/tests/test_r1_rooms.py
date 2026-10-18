@@ -33,12 +33,26 @@ from shared.config import load_settings
 from tests._session_fakes import MemBlobs
 from tests.test_session_routes import SUBJECTS, _FakeIdentity, _FakeReader, _FakeRuntime
 
+
+def _is_room_unit(uid: str, sid: str, suffix: str = "") -> bool:
+    """The room's unit, versioned by its grant digest (D27): `<room unit>-g<10 hex><suffix>`."""
+    import re as _re
+    return bool(_re.fullmatch(_re.escape(rp.room_unit_id("team", sid)) + r"-g[0-9a-f]{10}"
+                              + _re.escape(suffix), str(uid)))
+
+
 SECRET = "s" * 32
 DLG = "d" * 32
 
 
 def _h(who):
-    return {"X-User-Id": who}
+    """``who`` at the terminal: the internal tier naming them, from a SESSION credential (D13)."""
+    return {"X-User-Id": who, "x-user-credential-class": "session"}
+
+
+def _key(who, scopes="bot,tx,browser"):
+    """``who``'s API key — a KEY whatever its scopes, ``browser`` included (D13)."""
+    return {"X-User-Id": who, "x-user-credential-class": "key", "x-user-scopes": scopes}
 
 
 def _git(ws: Path):
@@ -120,7 +134,7 @@ def test_a_room_turn_runs_as_the_workspace_agent_on_one_worker(world):
     client.post("/api/chat/submit", json={"session": sid, "prompt": "@vexa what changed?"}, headers=_h("bob"))
     client.post("/api/chat/submit", json={"session": sid, "prompt": "@vexa and since then?"}, headers=_h("alice"))
     units_ = {uid for uid, _env in spawned}
-    assert units_ == {rp.room_unit_id("team", sid)}                 # one worker, whoever speaks
+    assert len(units_) == 1 and _is_room_unit(next(iter(units_)), sid)   # one worker, whoever speaks
     uid, env = spawned[0]
     assert env["VEXA_PRINCIPAL"] == "ws:team" and env["VEXA_ON_BEHALF_OF"] == "bob"
     assert env["VEXA_OWNER"] == "alice"                               # the workspace owner's pool
@@ -148,7 +162,7 @@ def test_a_readers_turn_in_a_room_runs_read_only_on_its_own_worker(world):
     store_lease = f"session:{sid}:lease"  # noqa: F841 - the fake runtime holds no lease
     client.post("/api/chat/submit", json={"session": sid, "prompt": "@vexa rewrite the plan"}, headers=_h(vic))
     uid, env = spawned[-1]
-    assert uid != writer_uid and uid == rp.room_unit_id("team", sid) + rp.READ_UNIT_SUFFIX
+    assert uid != writer_uid and _is_room_unit(uid, sid, rp.READ_UNIT_SUFFIX)
     assert {x["slug"]: x["write"] for x in json.loads(env["VEXA_MOUNTS"])}["team"] is False
     assert _claims(env)["scope"]["workspaces"] == ["ro:team"]
     p = rp.resolve(store, root, sid, speaker=vic)
@@ -242,9 +256,10 @@ def test_a_room_with_an_outsider_is_cross_org(world):
     assert p.audience == "cross_org"
 
 
-def test_a_room_wake_is_the_workspace_agent_writing_its_own_workspace(world, monkeypatch):
-    # FOUNDER RULING 2026-10-16 ("it can't write to its own workspace"): a sensor-woken turn in a room
-    # runs with the room agent's scope — W read-write under W's grants — like any room turn.
+def test_a_room_wake_is_the_workspace_agent_and_proposes_only(world, monkeypatch):
+    # D27 (2026-10-17) supersedes the 2026-10-16 ruling: a sensor-woken turn in a room keeps the
+    # room agent's READ scope (W and its connected open workspaces, nobody's private context) but
+    # writes nothing — anyone audible in the room speaks into it. Its writes become proposals.
     client, store, calls, spawned, root, _d = world
     (root / "_global" / "POLICIES.md").write_text("---\ntranscript_signals: on\n---\n")
     sid = _room(client)
@@ -255,23 +270,26 @@ def test_a_room_wake_is_the_workspace_agent_writing_its_own_workspace(world, mon
     r = client.post("/events", json=ev, headers={"X-Internal-Secret": SECRET})
     assert r.status_code == 202, r.text
     uid, env = spawned[-1]
-    assert uid == rp.room_unit_id("team", sid) + "-signal"
+    assert _is_room_unit(uid, sid, "-signal")
     mounts = json.loads(env["VEXA_MOUNTS"])
-    assert [x["slug"] for x in mounts if x["write"]] == ["team"]                # its own workspace only
+    assert "team" in {x["slug"] for x in mounts}                                # it reads W
+    assert [x["slug"] for x in mounts if x["write"]] == []                      # and writes nothing
     assert "secret" not in {x["slug"] for x in mounts}                          # nobody else's
-    assert "team" in _claims(env)["scope"]["workspaces"] and env["VEXA_PRINCIPAL"] == "ws:team"
-    assert "VEXA_LEAST_PRIVILEGE" not in env
+    assert env["VEXA_PRINCIPAL"] == "ws:team" and env["VEXA_LEAST_PRIVILEGE"] == "signal"
+    assert json.loads(env["VEXA_WORKSPACES"]) == [{"id": "alice", "mode": "ro"}]
 
 
-def test_a_room_signal_turn_writes_its_own_workspace_and_is_refused_another(world):
+def test_a_room_signal_turn_proposes_and_never_writes(world):
+    """D27/H1: a room's signal unit is held by `signal_scope` like any signal unit — no page of W,
+    no other workspace, only its call's note (none recorded here) and the proposal door."""
     client, store, calls, spawned, root, _d = world
     sid = _room(client)
-    unit = rp.room_unit_id("team", sid) + "-signal"
+    unit = rp.room_unit_id("team", sid) + "-gabcdef0123-signal"
     hdr = {"X-User-Id": "alice", "x-user-regime": "autonomous", "x-user-delegation-workspaces": "team",
            "x-user-delegation-unit": unit, "x-user-delegation-target": "team"}
     r = client.put("/api/workspace/file", headers=hdr, json={"path": "decisions.md", "content": "- Tuesday\n"})
-    assert r.status_code == 200, r.text
-    assert (root / "team" / "decisions.md").read_text() == "- Tuesday\n"
+    assert r.status_code == 403 and r.json()["detail"]["reason"] == "signal_scope"
+    assert not (root / "team" / "decisions.md").exists()
     r = client.put("/api/workspace/file", headers=hdr,
                    json={"path": "x.md", "content": "no\n", "slug": "secret"})
     assert r.status_code == 403 and not (root / "secret" / "x.md").exists()
@@ -285,7 +303,13 @@ def test_members_and_leave(world):
     got = client.get(f"/api/rooms/{sid}/members", headers=_h("bob")).json()["members"]
     assert [(x["principal"], x["role"]) for x in got] == [("alice", "owner"), ("bob", "member")]
     assert client.post(f"/api/rooms/{sid}/leave", headers=_h("bob")).json()["left"] is True
-    assert client.get(f"/api/rooms/{sid}/members", headers=_h("bob")).status_code == 404
+    # D36: an OPEN room's members are its workspace's — leaving ends following it (off bob's rail),
+    # never his access, which only leaving the workspace ends
+    assert sid not in {r["id"] for r in store.list_for("bob")}
+    assert client.get(f"/api/rooms/{sid}/members", headers=_h("bob")).status_code == 200
+    closed = _room(client, visibility="closed")
+    assert client.post(f"/api/rooms/{closed}/leave", headers=_h("bob")).json()["left"] is True
+    assert client.get(f"/api/rooms/{closed}/members", headers=_h("bob")).status_code == 404
 
 
 def test_only_an_open_workspace_connects_and_only_its_owner_opens_it(world):
@@ -296,12 +320,22 @@ def test_only_an_open_workspace_connects_and_only_its_owner_opens_it(world):
                       headers=_h("alice")).status_code == 403                       # not its owner
     assert client.put("/api/workspace-links/handbook/visibility", json={"visibility": "open"},
                       headers=_h("carol")).json()["visibility"] == "open"
+    # Connections are policy (PRD 0.13.4 D5): a contributor proposes, the owner connects (interim
+    # D7 floor: the owner, from a session credential (D13) — never a delegated caller, never a key).
     r = client.post("/api/workspace-links/team", json={"workspace": "handbook"}, headers=_h("bob"))
+    assert r.status_code == 403 and r.json()["detail"]["rule"].startswith("no_rule@")
+    r = client.post("/api/workspace-links/team", json={"workspace": "handbook"}, headers=_h("alice"))
     assert r.status_code == 200 and [x["workspace"] for x in r.json()["connected"]] == ["handbook"]
     got = client.get("/api/workspace-links/team", headers=_h("bob")).json()
     assert got["connected"][0]["open"] is True
     assert client.get("/api/workspace-links/team", headers=_h("mallory")).status_code == 404
     r = client.post("/api/workspace-links/team/remove", json={"workspace": "handbook"}, headers=_h("bob"))
+    assert r.status_code == 403                                   # policy: the owner's (D5/D7 interim)
+    agent = {**_h("alice"), "x-user-regime": "human", "x-user-delegation-workspaces": "team",
+             "x-user-delegation-target": "team"}
+    r = client.post("/api/workspace-links/team/remove", json={"workspace": "handbook"}, headers=agent)
+    assert r.status_code == 403                                   # not even the owner's watched agent
+    r = client.post("/api/workspace-links/team/remove", json={"workspace": "handbook"}, headers=_h("alice"))
     assert r.json()["connected"] == []
 
 
@@ -395,7 +429,7 @@ def test_a_call_in_a_room_is_owned_by_it_and_its_recap_lands_in_the_room(world, 
     c2.post("/api/chat/submit", json={"session": "meet-77", "prompt": "Write the meeting's report."},
             headers=hdr)
     uid, env = spawned[-1]
-    assert uid == rp.room_unit_id("team", sid) + units.ROUTINE_UNIT_SUFFIX
+    assert _is_room_unit(uid, sid, units.ROUTINE_UNIT_SUFFIX)
     assert env["VEXA_PRINCIPAL"] == "ws:team"
     assert {x["slug"] for x in json.loads(env["VEXA_MOUNTS"])} == {"_global", "team"}
 
@@ -635,7 +669,9 @@ def test_the_owner_leaving_hands_the_room_on_and_the_last_one_cannot_leave(world
     sid = _room(client)
     r = client.post(f"/api/rooms/{sid}/leave", headers=_h("alice"))
     assert r.status_code == 200 and r.json()["handed_to"] == "bob"
-    assert store.role_of(sid, "bob") == "owner" and store.role_of(sid, "alice") is None
+    # D36: in an open room alice stays a member by the workspace; she no longer follows it
+    assert store.role_of(sid, "bob") == "owner" and store.role_of(sid, "alice") == "member"
+    assert sid not in {x["id"] for x in store.list_for("alice")}
     r = client.post(f"/api/rooms/{sid}/leave", headers=_h("bob"))
     assert r.status_code == 409 and r.json()["detail"]["refused"] == "hand_the_room_on_first"
     assert "hand it on" in r.json()["detail"]["said"]
@@ -785,8 +821,9 @@ def test_a_calls_wake_into_a_room_runs_as_the_room_agent(world, tmp_path):
     r = c2.post("/events", json=ev, headers={"X-Internal-Secret": SECRET})
     assert r.status_code == 202, r.text
     uid, env = spawned[-1]
-    assert uid == rp.room_unit_id("team", sid) + "-signal"
-    assert env["VEXA_PRINCIPAL"] == "ws:team" and "VEXA_LEAST_PRIVILEGE" not in env
+    assert _is_room_unit(uid, sid, "-signal")
+    # the room's agent — and, since D27, at least privilege: it writes only the call's note
+    assert env["VEXA_PRINCIPAL"] == "ws:team" and env["VEXA_LEAST_PRIVILEGE"] == "signal"
     # …and the call's note is made in THE ROOM'S workspace, where this turn can write it
     notes = list((root / "team" / "kg" / "entities" / "meeting").glob("*.md"))
     assert len(notes) == 1 and "meeting: 77" in notes[0].read_text()

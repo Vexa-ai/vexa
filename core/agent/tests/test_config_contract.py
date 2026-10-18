@@ -39,7 +39,7 @@ def test_declaration_loads_and_is_internally_consistent():
     assert decl["service"] == "agent-api"
     assert set(decl["capabilities"]) == {"bot_gateway", "model_inference", "connections", "calls",
                                          "git_credential_broker", "worker_toolbelt",
-                                         "session_store"}
+                                         "session_store", "person_resolution"}
     assert decl["capabilities"]["worker_toolbelt"]["mode"] == "all"
     assert decl["capabilities"]["model_inference"]["mode"] == "any"
 
@@ -349,7 +349,11 @@ def test_the_qwen_lane_dials_are_declared():
 # 135: +1 VEXA_HOME_MEDIA_DIR — where the home stream keeps its media (home-stream-live).
 # 136: +1 VEXA_LLM_KILL_SWITCH — the spend cap's off switch (llm-spend-cap, prod-0133).
 # 137: +1 VEXA_WORKSPACE_NAMES — the person's workspaces by name, for the write-target hint (UI decision 6b).
-EXPECTED_DECLARED_KEYS = 138
+# 139: +1 VEXA_ROOM_WS_PRINCIPAL — a room's turn runs as its workspace principal `ws:<id>` (D2, 0.13.4;
+# 138 was the base's count, its own note missing here).
+# 140: +1 from s3-person (CRM_API_URL for person resolution, S3) at integration.
+# 141: +1 VEXA_ROOM_RING_DERIVED_DAYS (S4 D36 tuning line), at integration.
+EXPECTED_DECLARED_KEYS = 141
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

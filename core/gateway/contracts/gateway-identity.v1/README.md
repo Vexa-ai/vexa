@@ -81,8 +81,17 @@ what re-entry IS; which routes accept it is the owning domain's declaration, not
 | `limits` | `x-user-limits` |
 | `workspaces` | `x-user-workspaces` (comma-joined) |
 | `webhook_url` · `webhook_secret` · `webhook_events` | `x-user-webhook-*` |
+| `credential_class` | `x-user-credential-class` — `session` · `key` · `delegation` (D13, 0.13.4) |
 | `delegation.regime` · `.workspaces` · `.target` · `.unit` | `x-user-regime` · `x-user-delegation-workspaces` · `x-user-delegation-target` · `x-user-delegation-unit` (the agent session; correlation only — logevent.v1 `session`, the broker's `audit.session`) |
 | `typ` · `iat` · `exp` | — |
+
+`credential_class` is identity.v1's answer for the bearer (D13, 0.13.4): `session` for the terminal's
+signed-in browser, `key` for every other API key, `delegation` for a worker; the gateway carries it
+only when it is one of the three words, and a client-sent `x-user-credential-class` is dropped like
+every other `x-user-*` header. A service reads it with `credential_class_of(headers)`, which answers
+`delegation` for any delegated identity and `""` when the claim is absent (an older identity, the
+internal tier). A decision that must be a person's own act — a policy change, a routine's activation
+— asks for `session` and refuses everything else.
 
 `delegation` is present when the bearer was a worker's delegation token (`vxd_`, minted by
 agent-api per dispatch, verified by identity). Identity answers such a token only to a resolver that

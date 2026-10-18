@@ -1408,6 +1408,9 @@ def rename_workspace(root: str | Path, subject: str, slug: str, name: Optional[s
 
 SHARED_STORE_DIRNAME = ".attached-shared"   # <root>/.attached-shared/<workspace_id>/<slug> (dot ⇒ skipped by every scan)
 POLICY_DIRNAME = "policy"                   # the member list — travels across an attach
+# `policy/` is reserved for every caller route (workspace_paths.RESERVED_DIRS, D5); this mechanic is
+# the platform carrying its own MIRROR across an attach, so it names the folder it owns.
+_POLICY_ALLOW = (POLICY_DIRNAME,)
 
 
 def shared_store(root: str | Path, workspace_id: str) -> Path:
@@ -1469,20 +1472,21 @@ def carry_policy(src: Path, dest: Path) -> list[str]:
       one local commit on top means the first ``pull`` after an attach is refused as a divergence — the
       exact thing a person does immediately after loading an existing workspace.
 
-    Authority is unaffected: ``workspace_membership.read_members`` reads the file from the working tree,
-    not from git history."""
+    Authority is unaffected either way: since 0.13.4 (D5) ``workspace_membership.read_members`` reads the
+    platform store outside every tree (``POLICY_STORE_DIR``); the tree's ``policy/`` is a mirror kept for
+    the worker's reader count and the workspace's own history, so carrying it keeps the mirror true."""
     carried: list[str] = []
     # BOTH TREES ARE WRITABLE BY THE MODEL'S TOOLS, so the copy is read and written through
     # `workspace_paths`: a `policy` that is a link in either tree, or a `*.json` that is a link,
     # is neither read through (another workspace's list carried in) nor written through (this one
     # carried out). Only regular files directly in a real `policy/` are carried.
-    for name in wpaths.list_files_inside(src, POLICY_DIRNAME, suffix=".json"):
+    for name in wpaths.list_files_inside(src, POLICY_DIRNAME, suffix=".json", allow=_POLICY_ALLOW):
         rel = f"{POLICY_DIRNAME}/{name}"
-        text = wpaths.read_text_inside(src, rel)
+        text = wpaths.read_text_inside(src, rel, allow=_POLICY_ALLOW)
         if text is None:
             continue
         try:
-            wpaths.write_text_inside(dest, rel, text)
+            wpaths.write_text_inside(dest, rel, text, allow=_POLICY_ALLOW)
         except (wpaths.PathRefused, OSError) as exc:
             log.warning("membership policy %s not carried into %s: %s", rel, dest, exc)
             continue

@@ -115,6 +115,9 @@ runtime_api_token="${RUNTIME_API_TOKEN:-$(python3 -c "import secrets; print(secr
 unset RUNTIME_API_TOKEN
 # The worker toolbelt: agent-api signs each worker's delegation token, admin-api verifies it.
 export VEXA_MCP_DELEGATION_SECRET="${VEXA_MCP_DELEGATION_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
+# The terminal's second secret for minting the signed-in browser's SESSION credential at admin-api
+# (D13, POST /internal/sessions). Minted per boot like the two above; sessions end with the boot's key.
+export VEXA_TERMINAL_SESSION_SECRET="${VEXA_TERMINAL_SESSION_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 export DEFAULT_BOT_NAME="${DEFAULT_BOT_NAME:-Vexa}"
 # The deployment's default transcription language (empty = none): a code, and/or a comma list.
 export DEFAULT_TRANSCRIPTION_LANGUAGE="${DEFAULT_TRANSCRIPTION_LANGUAGE:-}"

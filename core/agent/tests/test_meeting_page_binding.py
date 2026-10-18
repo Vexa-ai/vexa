@@ -153,3 +153,60 @@ def test_attach_refuses_a_page_outside_the_meeting_folder_and_a_meeting_it_canno
     _agenda(desk)
     r = c.post("/api/meeting/note/attach", headers={"X-User-Id": JANE}, json={"path": AGENDA, "meeting_id": "999"})
     assert r.status_code == 403
+
+
+# ── A SHARED WORKSPACE THE CALLER CAN WRITE IS ONE OF THEIRS (friction, app.dev 2026-10-16) ──────
+# The live agent got 404 "no such workspace of yours is on" four times attaching a page in a shared
+# workspace its person OWNS: the route only looked at the person's own active slots. A shared
+# workspace resolves by slug or by id through the same write gate every other write uses
+# (`_read_target(write=True)` -> `require_role(..., "contributor")`); a viewer or a stranger is
+# still refused exactly as before.
+
+SHARED = "zenith"
+
+
+def _shared(root: Path, owner: str = JANE) -> Path:
+    ws = _git_init(root / SHARED)
+    m.ensure_owner(root, SHARED, owner, index=m.InMemoryMembershipIndex())
+    _agenda(ws)
+    return ws
+
+
+def _attach(c: TestClient, who: str, workspace: str):
+    return c.post("/api/meeting/note/attach", headers={"X-User-Id": who},
+                  json={"path": AGENDA, "workspace": workspace, "native": "abc-defg-hij",
+                        "platform": "google_meet"})
+
+
+def test_attach_in_a_shared_workspace_the_person_owns_by_slug(tmp_path):
+    root, desk, other = _root(tmp_path)
+    ws = _shared(root)
+    r = _attach(_client(root, {}, []), JANE, SHARED)
+    assert r.status_code == 200, r.text
+    assert r.json()["workspace"] == SHARED
+    assert meeting_note.front_matter((ws / AGENDA).read_text())["native"] == "abc-defg-hij"
+
+
+def test_attach_in_a_shared_workspace_the_person_owns_by_id(tmp_path):
+    from control_plane import workspace_ids as ids_mod
+    root, desk, other = _root(tmp_path)
+    ws = _shared(root)
+    c = _client(root, {}, [])
+    rec = ids_mod.sync_workspace(root, SHARED, registry=c.app.state.workspace_registry,
+                                 kind="group", owner=JANE)
+    r = _attach(c, JANE, rec["id"])
+    assert r.status_code == 200, r.text
+    assert r.json()["workspace"] == SHARED
+    assert meeting_note.front_matter((ws / AGENDA).read_text())["native"] == "abc-defg-hij"
+
+
+def test_attach_in_a_shared_workspace_is_still_refused_without_write(tmp_path):
+    root, desk, other = _root(tmp_path)
+    ws = _shared(root)
+    m.grant_membership(root, SHARED, "u_viewer", "viewer", added_by=JANE, index=m.InMemoryMembershipIndex())
+    before = (ws / AGENDA).read_text()
+    c = _client(root, {}, [])
+    for who in ("u_viewer", "u_stranger"):
+        r = _attach(c, who, SHARED)
+        assert r.status_code == 404, (who, r.text)
+    assert (ws / AGENDA).read_text() == before, "a caller without write stamped a shared page"

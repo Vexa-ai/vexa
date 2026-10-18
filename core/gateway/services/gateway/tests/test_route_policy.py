@@ -211,7 +211,7 @@ def test_the_mcp_reentry_rows_are_exactly_the_declared_ones():
 #: `tests/test_callback_routes.py` drives every one of those tools and holds each URL it sends to
 #: a row in this set — so neither side can move without the other noticing.
 MCP_CALLBACKS = {
-    ("GET", "/auth/me"),
+    ("GET", "/auth/me"), ("POST", "/internal/mcp/taint"),
     ("GET", "/bot-accounts"), ("POST", "/bot-accounts/sessions"),
     ("POST", "/bot-accounts/{account_id}/verify"),
     ("POST", "/bots"), ("GET", "/bots/status"),

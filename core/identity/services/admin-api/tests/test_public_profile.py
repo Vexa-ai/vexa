@@ -183,14 +183,34 @@ def doors(monkeypatch):
         yield c, me, others
 
 
-def test_publish_read_withdraw_through_the_doors(doors):
-    c, me, _ = doors
+def test_the_old_profile_is_retired_writes_closed_reads_marked_page_redirected(doors, monkeypatch):
+    """PRD 0.13.4 D35 (coordinator ruling 2026-10-17): THE profile is the claimed CRM record. This one's
+    write path is closed (410, saying where it moved), its read is marked retired for one release, and
+    its page redirects to /p/<handle>."""
+    c, me, others = doors
     r = c.put("/user/profile", json={"fields": {"name": {"value": "Jonas Weber", "public": True}}, "publish": True})
-    assert r.status_code == 200 and r.json()["published"] is True and r.json()["linked_by"] == 0
-    handle = r.json()["handle"]
-    assert c.get(f"/user/directory/profiles/{handle}").json()["fields"]["name"] == "Jonas Weber"
-    assert c.post("/user/profile/withdraw").json()["published"] is False
-    assert c.get(f"/user/directory/profiles/{handle}").status_code == 404
+    assert r.status_code == 410 and r.json()["detail"]["moved_to"] == pp.MOVED_TO
+    assert c.post("/user/profile/withdraw").status_code == 410
+    assert me.data.get(pp.DATA_KEY) is None                          # nothing was written
+    own = c.get("/user/profile").json()
+    assert own["retired"] is True and own["moved_to"] == pp.MOVED_TO
+    handle = others[1].data[pp.DATA_KEY]["handle"]
+    page = c.get(f"/user/directory/profiles/{handle}", follow_redirects=False)
+    assert page.status_code == 308 and page.headers["location"] == f"/p/{handle}"
+    assert page.json() == {"retired": True, "moved_to": f"/p/{handle}"}
+
+
+def test_the_legacy_profile_door_hands_crm_the_values_once_and_takes_the_secret(doors, monkeypatch):
+    c, _, others = doors
+
+    async def by_id(_db, uid):
+        return others.get(uid)
+    monkeypatch.setattr(profile_doors, "user_by_id", by_id)
+    assert c.get("/internal/users/1/legacy-profile").status_code == 403
+    got = c.get("/internal/users/1/legacy-profile", headers={"X-Internal-Secret": "s3cret"}).json()
+    assert got["fields"]["name"]["value"] == "Ines Duarte" and got["published"] is True
+    assert set(got) == {"handle", "published", "fields"}             # no email, no org links
+    assert c.get("/internal/users/99/legacy-profile", headers={"X-Internal-Secret": "s3cret"}).status_code == 404
 
 
 def test_the_directory_door_refuses_enumeration(doors):
@@ -199,7 +219,7 @@ def test_the_directory_door_refuses_enumeration(doors):
     hits = c.get("/user/directory/profiles", params={"q": "ines"}).json()["profiles"]
     assert [h["fields"]["name"] for h in hits] == ["Ines Duarte"]
     assert all(set(h) == {"handle", "fields", "company_verified"} for h in hits)   # no user id, no email
-    assert c.get("/user/directory/profiles/1").status_code == 404        # a user id is not a handle
+    assert c.get("/user/directory/profiles/1", follow_redirects=False).status_code == 404   # not a handle
     for _ in range(profile_doors.LIMITER.per_minute):
         c.get("/user/directory/profiles", params={"q": "ines"})
     assert c.get("/user/directory/profiles", params={"q": "ines"}).status_code == 429

@@ -1,3 +1,4 @@
+Authentication-Results: mx.rehearsal.test; dkim=pass header.d=example.test; spf=pass smtp.mailfrom=example.test; dmarc=pass header.from=example.test
 From: Casey Lund <Casey@Example.test>
 To: vexa@example.com
 Subject: Re: Minutes: Platform Sync weekly
