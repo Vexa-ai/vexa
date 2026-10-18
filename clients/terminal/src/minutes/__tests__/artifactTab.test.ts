@@ -10,7 +10,7 @@
  *  does NOTHING VISIBLE when it does not — where it used to append a tab "quietly behind the
  *  reader". Seven quiet tabs are not quiet. */
 import { describe, expect, it } from "vitest";
-import { artifactFromToken, artifactViewEffect, pageForArtifact } from "../roomView";
+import { artifactFromToken, artifactViewEffect, isMeetingNotePath, pageForArtifact } from "../roomView";
 import { artifactKey, touchHistory } from "../chats";
 
 const ev = (over: Partial<{ workspace: string; path: string; focus: boolean }> = {}) =>
@@ -61,6 +61,29 @@ describe("artifactViewEffect — the view moves, a tab is never minted", () => {
   it("an unresolvable write moves nothing", () => {
     expect(artifactViewEffect({ workspace: "daily", path: "../../etc/passwd", focus: true }, false)).toBeNull();
     expect(artifactViewEffect({ focus: true }, false)).toBeNull();
+  });
+});
+
+describe("a meeting's note is never its own tab (#1783)", () => {
+  const NOTE = "kg/entities/meeting/2026-10-14-2056-google-meet-meeting-abc-defg-hij.md";
+  it("a turn that wrote the note fronts the MEETING in a meeting's chat, never the file", () => {
+    expect(artifactViewEffect({ path: NOTE, focus: true }, false, "111"))
+      .toEqual({ view: { kind: "meeting", path: "111", label: "Meeting", permanent: true } });
+    expect(artifactViewEffect({ workspace: "biz-1", path: NOTE, focus: true }, false, "111")?.view?.kind).toBe("meeting");
+  });
+  it("…and in a chat with no meeting, or with a pin asked for, moves nothing and pins nothing", () => {
+    expect(artifactViewEffect({ path: NOTE, focus: true }, false, null)).toBeNull();
+    expect(artifactViewEffect({ path: NOTE, pin: true, focus: true }, false, "")).toBeNull();
+    expect(artifactViewEffect({ path: NOTE, pin: true }, false, "111")).toBeNull();
+  });
+  it("a reader's own choice still wins", () => {
+    expect(artifactViewEffect({ path: NOTE, focus: true }, true, "111")).toBeNull();
+  });
+  it("other pages under kg/entities/meeting are ordinary", () => {
+    expect(isMeetingNotePath(NOTE)).toBe(true);
+    expect(isMeetingNotePath("kg/entities/meeting/index.md")).toBe(false);
+    expect(isMeetingNotePath("kg/entities/meeting/sub/x.md")).toBe(false);
+    expect(artifactViewEffect({ path: "kg/entities/meeting/index.md", focus: true }, false, "111")?.view?.path).toBe("kg/entities/meeting/index.md");
   });
 });
 

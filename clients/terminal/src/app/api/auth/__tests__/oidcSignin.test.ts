@@ -253,6 +253,10 @@ describe("the sign-in callback", () => {
     stubEnv(BASE_ENV);
     expect(await signIn(adfsClaims())).toBe(true);
     expect(findOrCreateUserToken).toHaveBeenCalledWith("ana.lopez@corp.example", { subject: oidcSubject(ISSUER, adfsClaims().sub) });
+    // R4: a token that does not say email_verified is not recorded as a verified address
+    expect(verifiedProviderIdentity("oidc", { account: { id_token: idToken(adfsClaims()) } }, BASE_ENV)).not.toHaveProperty("emailVerified");
+    expect(verifiedProviderIdentity("oidc", { account: { id_token: idToken(adfsClaims({ email_verified: true })) } }, BASE_ENV)).toMatchObject({ ok: true, emailVerified: true });
+
   });
 
   it("refuses a token from another issuer before asking admin-api", async () => {

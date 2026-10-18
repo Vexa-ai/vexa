@@ -9,9 +9,12 @@
 "use client";
 import { Fragment, type ReactNode } from "react";
 import { Card, CardGroup, InternalLink, Wikilink, isInternalHref, useOpenEntity } from "./docLinks";
+import { RefChip } from "./RefChip";
 import { DocImage } from "./docImages";
 import { MeetingChip, meetingNotePath, meetingRefOfHref } from "./MeetingChip";
 import { MermaidDiagram, isMermaidFence } from "./docDiagrams";
+import { VexaFence } from "./blocks/Blocks";
+import { FENCE_LANG } from "./blocks/spec";
 import { EntityChip } from "./primitives/Chip";
 import { ExternalLink } from "./primitives/Links";
 
@@ -114,7 +117,7 @@ function emphasis(text: string, key: string, out: ReactNode[]): void {
   // used to eat it: `![logo](assets/x.svg)` matched the LINK arm, so the page printed a stray `!`
   // followed by a clickable "logo" and no picture at all (#1612). The alternation now takes the
   // optional bang with the token, and the arm branches on it.
-  const re = /(\[\[[^\]]+\]\])|(!?\[[^\]]*\]\([^)]+\))|(\*\*[^*]+\*\*|__[^_]+__)|(\*[^*]+\*|_[^_]+_)/g;
+  const re = /(\[\[[^\]]+\]\])|(!?\[[^\]]*\]\([^)]+\))|(\*\*[^*]+\*\*|__[^_]+__)|(\*[^*]+\*|_[^_]+_)|(https?:\/\/[^\s/<>"']+\/r\/(?:workspace|chat|page|entity|meeting|flow|sensor)\/[^\s<>"'#?|\]\[]+)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;
@@ -148,6 +151,12 @@ function emphasis(text: string, key: string, out: ReactNode[]): void {
       const inner: ReactNode[] = [];
       emphasis(tok.slice(2, -2), `${key}-b${i}`, inner);
       out.push(<strong key={`${key}-b${i}`} className="fw-600 c-1">{inner}</strong>);
+    } else if (m[5]) {
+      // a bare `/r/<kind>/<id>` link (#1783): the same chip a `[[kind:id]]` renders; trailing
+      // punctuation stays text
+      const trail = /[.,;:!)]+$/.exec(tok)?.[0] ?? "";
+      out.push(<RefChip key={`${key}-r${i}`} text={trail ? tok.slice(0, -trail.length) : tok} />);
+      if (trail) out.push(<Fragment key={`${key}-rt${i}`}>{trail}</Fragment>);
     } else if (m[4]) {
       // *italic* / _italic_ — recurse for the same reason
       const innerI: ReactNode[] = [];
@@ -274,6 +283,12 @@ export function Markdown({ children, style }: { children: string; style?: React.
       // ```mermaid → the picture, same component MdxDoc renders (#1617). Only once the fence has
       // CLOSED: this renderer draws the turn that is still streaming into the chat, and half a
       // flowchart is a parse error the reader would watch flash past for no reason.
+      // ```vexa → blocks.v1, drawn by the one blocks renderer (#1783): an agent may answer with
+      // blocks instead of a wall of text. Same rule as mermaid: only once the fence has closed.
+      if (closed && fence[1].trim().toLowerCase() === FENCE_LANG) {
+        blocks.push(<VexaFence key={key++} source={buf.join("\n")} />);
+        continue;
+      }
       if (closed && isMermaidFence(fence[1])) {
         blocks.push(<MermaidDiagram key={key++} source={buf.join("\n")} />);
         continue;

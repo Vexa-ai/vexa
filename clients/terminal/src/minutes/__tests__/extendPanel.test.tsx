@@ -24,6 +24,9 @@ import { clearPending } from "../extend";
 import type { PageIntent } from "../../surfaces/chatIntent";
 import type { Page } from "../types";
 
+/** The page's acts are one "…" (UI decisions 12): open it, then reach the act. */
+const openActs = (c: HTMLElement) => { if (!document.querySelector("[role=menu]")) fireEvent.click(c.querySelector("[data-doc-more]")!); };
+
 const PATH = "kg/entities/company/helm.md";
 const BODY = "# Helm Bank\n\nThe pilot ships in March, self-hosted.\n";
 // the tab's LABEL is deliberately not the path, and deliberately misleading: an intent built from
@@ -179,7 +182,7 @@ describe("the floating action on a selection (decision 32.1)", () => {
   it("prepares a quote with the source and no automatic agent intent", () => {
     const pre = rendered();
     expect(document.querySelector('[data-doc-act="extend-selection"]')).toBeNull();
-    highlight(pre, 13, 24);
+    highlight(pre, 0, 24);          // the "# Helm Bank" heading is the page's head now, not the body
     const btn = document.querySelector('[data-doc-act="extend-selection"]') as HTMLElement;
     expect(btn.textContent).toContain("Ask about this");
     fireEvent.click(btn);
@@ -201,7 +204,7 @@ describe("the floating action on a selection (decision 32.1)", () => {
 
   it("an editor's selection is being edited, not asked about", () => {
     const { container } = panel();
-    fireEvent.click(container.querySelector('[data-doc-act="edit"]') as HTMLElement);
+    openActs(container); fireEvent.click(document.querySelector('[data-doc-act="edit"]') as HTMLElement);
     expect(container.querySelector('[data-doc-act="extend-selection"]')).toBeNull();
   });
 });

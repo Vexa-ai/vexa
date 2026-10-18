@@ -16,13 +16,14 @@
  *    · refused — the importer's own code and sentence, in words the person can act on.
  *  The server decides all of it: who may import (the caller, into their own account), whether the
  *  file is whole, whether it is new. Nothing here grants or checks access. */
-import { useCallback, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useRef, useState } from "react";
 import { OPEN_MEETING_EVENT } from "../platform";
 import { Icon } from "../ui-kit";
-import { presentError } from "./apiClient";
+import { presentError } from "../data/apiClient";
 import { refreshMeetings } from "./liveMeetings";
 import { BundleError, confirmImport, previewImport, restoreParts, type RestoreResult } from "./meetingBundle";
 import { sniffMeetingBundle } from "./meetingBundleSniff";
+import "./meetingBundle.css";
 
 export type BundleCard =
   | { id: string; key: string; file: string; state: "importing"; phase: string; fraction: number | null }
@@ -148,16 +149,11 @@ export function useBundleImports() {
   return { cards, route, split, dismiss };
 }
 
-const card: CSSProperties = {
-  display: "flex", flexDirection: "column", gap: 4, margin: "0 0 14px", padding: "10px 12px",
-  border: "1px solid var(--line2)", borderRadius: 10, background: "var(--panel)", fontSize: 13, color: "var(--t2)", lineHeight: 1.45,
-};
-const link: CSSProperties = { background: "none", border: "none", padding: 0, color: "var(--blue)", cursor: "pointer", font: "inherit", textAlign: "left" };
-const quiet: CSSProperties = { fontSize: 12, color: "var(--t3)" };
+const card = "bun-card";
+const quiet = "t-xs c-3";
 
 function Close({ onClick }: { onClick: () => void }) {
-  return <button type="button" aria-label="Dismiss" title="Dismiss" onClick={onClick}
-    style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--t3)", cursor: "pointer", padding: 0, flex: "none" }}>
+  return <button type="button" aria-label="Dismiss" title="Dismiss" onClick={onClick} className="bun-dismiss">
     <Icon name="x" size={12} />
   </button>;
 }
@@ -168,49 +164,49 @@ export function BundleImportCards({ cards, onDismiss }: { cards: BundleCard[]; o
   return <>
     {cards.map((c) => {
       if (c.state === "importing") {
-        return <div key={c.id} data-bundle-card="importing" role="status" style={card}>
-          <div>Importing a call from <b style={{ color: "var(--t1)", fontWeight: 600 }}>{c.file}</b>…</div>
-          <div style={quiet}>{c.phase}{c.fraction == null ? "" : ` ${Math.round(c.fraction * 100)}%`}</div>
+        return <div key={c.id} data-bundle-card="importing" role="status" className={card}>
+          <div>Importing a call from <b className="c-1 fw-600">{c.file}</b>…</div>
+          <div className={quiet}>{c.phase}{c.fraction == null ? "" : ` ${Math.round(c.fraction * 100)}%`}</div>
           <progress value={c.fraction ?? undefined} max={1} style={{ width: "100%" }} />
         </div>;
       }
       if (c.state === "imported") {
-        return <div key={c.id} data-bundle-card="imported" role="status" style={card}>
+        return <div key={c.id} data-bundle-card="imported" role="status" className={card}>
           <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
             <span>Imported the call</span>
             <Close onClick={() => onDismiss(c.id)} />
           </div>
-          <button type="button" style={{ ...link, fontWeight: 600 }} onClick={() => openCall(c.meetingId)} title="Open its transcript">
+          <button type="button" className="bun-link fw-600" onClick={() => openCall(c.meetingId)} title="Open its transcript">
             {c.title}
           </button>
-          <div style={quiet}>
+          <div className={quiet}>
             {c.segments} transcript segment{c.segments === 1 ? "" : "s"}
             {c.recordings ? ` · ${c.recordings} recording${c.recordings === 1 ? "" : "s"}` : ""} · in your Calls, yours only
           </div>
-          {c.restoring && <div style={quiet}>Restoring its workspace and page…</div>}
-          {c.restored?.workspace && <div style={quiet}>Workspace restored: {c.restored.workspace.files} files in &ldquo;{c.restored.workspace.slug}&rdquo;.</div>}
-          {c.restored?.notes_page && <div style={quiet}>{c.restored.notes_page.written ? "Its page is on your desk." : "Your desk already had its page; it was kept."}</div>}
-          {c.restoreError && <div role="alert" style={{ fontSize: 12, color: "var(--danger)" }}>The call was imported, but its workspace and page were not: {c.restoreError}</div>}
+          {c.restoring && <div className={quiet}>Restoring its workspace and page…</div>}
+          {c.restored?.workspace && <div className={quiet}>Workspace restored: {c.restored.workspace.files} files in &ldquo;{c.restored.workspace.slug}&rdquo;.</div>}
+          {c.restored?.notes_page && <div className={quiet}>{c.restored.notes_page.written ? "Its page is in your personal workspace." : "Your personal workspace already had its page; it was kept."}</div>}
+          {c.restoreError && <div role="alert" className="bun-small bun-danger">The call was imported, but its workspace and page were not: {c.restoreError}</div>}
         </div>;
       }
       if (c.state === "duplicate") {
-        return <div key={c.id} data-bundle-card="duplicate" role="status" style={card}>
+        return <div key={c.id} data-bundle-card="duplicate" role="status" className={card}>
           <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
             <span>You already imported this call</span>
             <Close onClick={() => onDismiss(c.id)} />
           </div>
           {c.meetingId != null
-            ? <button type="button" style={{ ...link, fontWeight: 600 }} onClick={() => openCall(c.meetingId!)} title="Open its transcript">{c.title}</button>
-            : <div style={{ color: "var(--t1)" }}>{c.title}</div>}
-          <div style={quiet}>Nothing was imported again. Delete that call to import the file anew.</div>
+            ? <button type="button" className="bun-link fw-600" onClick={() => openCall(c.meetingId!)} title="Open its transcript">{c.title}</button>
+            : <div className="c-1">{c.title}</div>}
+          <div className={quiet}>Nothing was imported again. Delete that call to import the file anew.</div>
         </div>;
       }
-      return <div key={c.id} data-bundle-card="refused" role="alert" style={{ ...card, borderColor: "var(--danger)" }}>
+      return <div key={c.id} data-bundle-card="refused" role="alert" className={card} data-tone="danger">
         <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-          <span style={{ color: "var(--danger)" }}>Not imported: {c.reason}</span>
+          <span className="bun-danger">Not imported: {c.reason}</span>
           <Close onClick={() => onDismiss(c.id)} />
         </div>
-        <div style={quiet}>{c.file} — {c.detail} <code style={{ fontFamily: "var(--mono)" }}>{c.code}</code></div>
+        <div className={quiet}>{c.file} — {c.detail} <code className="f-mono">{c.code}</code></div>
       </div>;
     })}
   </>;

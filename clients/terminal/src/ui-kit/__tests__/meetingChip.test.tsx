@@ -15,19 +15,17 @@ import { DocPath, Wikilink, invalidateDocLinkCaches } from "../docLinks";
 import { invalidateWsLinkCaches } from "../wsLinks";
 import { meetingDay, meetingNotePath, meetingRefOfHref, platformName } from "../MeetingChip";
 import { OPEN_MEETING_EVENT } from "../../platform";
+import { provideMeetingSource } from "../meetingSource";
 
 const NOTE = "kg/entities/meeting/2026-10-09-1401-zoom-meeting-88410021706.md";
 const STRANGERS = "kg/entities/meeting/2026-10-08-0900-board.md";
-const ROW = { id: "118", platform: "Zoom", native_id: "88410021706", title: "Campbell", title_custom: "Campbell",
+const ROW = { id: "118", platform: "Zoom", native_id: "88410021706", title: "Acme", title_custom: "Acme",
   start_time: "2026-10-09T14:01:00Z", status: "past" };
 
-vi.mock("../../surfaces/liveMeetings", () => ({
-  useLiveMeetings: () => [ROW],
-  useLiveMeetingsLoaded: () => true,
-  ensureMeetingKnown: vi.fn(),
-}));
+// The meetings list, as the surfaces' store supplies it (`ui-kit/meetingSource`).
+provideMeetingSource({ useMeetings: () => [ROW], useLoaded: () => true, ensureKnown: vi.fn() });
 const asked: string[][] = [];
-vi.mock("../../surfaces/workspaceApi", () => ({
+vi.mock("../../data/workspaceApi", () => ({
   listWorkspaceTree: vi.fn(async () => [NOTE]),
   readActiveSet: vi.fn(async () => ({ subject: "126", active: [{ slug: "seed", path: "/workspaces/126", primary: true }] })),
   listSharedMemberships: vi.fn(async () => []),
@@ -36,7 +34,7 @@ vi.mock("../../surfaces/workspaceApi", () => ({
   resolveLinks: vi.fn(async (refs: string[]) => {
     asked.push(refs);
     return refs.map((ref) => (ref.endsWith(NOTE)
-      ? { ref, kind: "meeting", access: "readable", title: "Campbell", url: null, at: "2026-10-09T14:01:00Z",
+      ? { ref, kind: "meeting", access: "readable", title: "Acme", url: null, at: "2026-10-09T14:01:00Z",
           platform: "zoom", path: NOTE, meeting: { id: "118", platform: "zoom", native: "88410021706" } }
       : { ref, kind: "meeting", access: "not-yours", title: "", url: null }));
   }),
@@ -57,9 +55,9 @@ const chip = () => document.querySelector("[data-meeting-chip]") as HTMLElement 
 
 describe("a meeting named in a reply", () => {
   it("a link to its notes page is the meeting chip: its title and date, never the filename", async () => {
-    const { container } = render(<Markdown>{`We met in [${NOTE.split("/").pop()}](${NOTE}) with [[James Markakis]].`}</Markdown>);
+    const { container } = render(<Markdown>{`We met in [${NOTE.split("/").pop()}](${NOTE}) with [[Alex Example]].`}</Markdown>);
     await waitFor(() => expect(chip()).not.toBeNull());
-    expect(chip()!.textContent).toContain("Campbell");
+    expect(chip()!.textContent).toContain("Acme");
     expect(chip()!.querySelector("[data-meeting-day]")!.textContent).toContain("Fri 9 Oct");
     expect(container.textContent).not.toContain(".md");
     expect(asked.flat()).toContain(NOTE);
@@ -69,13 +67,13 @@ describe("a meeting named in a reply", () => {
 
   it("a backticked notes path is the chip too", async () => {
     const { container } = render(<Markdown>{`See \`${NOTE}\`.`}</Markdown>);
-    await waitFor(() => expect(chip()?.textContent).toContain("Campbell"));
+    await waitFor(() => expect(chip()?.textContent).toContain("Acme"));
     expect(container.textContent).not.toContain("zoom-meeting-88410021706");
   });
 
   it("a ?meeting= link is the chip with the meeting's current title, whatever the link says", () => {
     render(<Markdown>{"Recorded in [the call](/?meeting=118)."}</Markdown>);
-    expect(chip()!.textContent).toContain("Campbell");
+    expect(chip()!.textContent).toContain("Acme");
     expect(chip()!.textContent).toContain("Fri 9 Oct");
     expect(chip()!.textContent).not.toContain("the call");
     fireEvent.click(chip()!);
@@ -84,17 +82,17 @@ describe("a meeting named in a reply", () => {
 
   it("a <platform>/<native> link finds the same meeting", () => {
     render(<Markdown>{"[x](https://app.example/?meeting=zoom/88410021706)"}</Markdown>);
-    expect(chip()!.textContent).toContain("Campbell");
+    expect(chip()!.textContent).toContain("Acme");
   });
 
   it("DocPath (the MDX renderer's path chip) names the meeting, not the file", async () => {
     render(<DocPath path={`/workspaces/126/${NOTE}`} />);
-    await waitFor(() => expect(chip()?.textContent).toContain("Campbell"));
+    await waitFor(() => expect(chip()?.textContent).toContain("Acme"));
   });
 
   it("a [[wikilink]] that lands on the notes is the meeting chip", async () => {
     render(<Wikilink title="2026-10-09-1401-zoom-meeting-88410021706" />);
-    await waitFor(() => expect(chip()?.textContent).toContain("Campbell"));
+    await waitFor(() => expect(chip()?.textContent).toContain("Acme"));
   });
 });
 
@@ -121,7 +119,7 @@ describe("the vocabulary", () => {
     expect(meetingNotePath(`./${NOTE}`)).toBe(NOTE);
     expect(meetingNotePath(`/workspaces/126/${NOTE}#top`)).toBe(NOTE);
     expect(meetingNotePath("kg/entities/meeting/index.md")).toBeNull();
-    expect(meetingNotePath("kg/entities/person/james-markakis.md")).toBeNull();
+    expect(meetingNotePath("kg/entities/person/alex-example.md")).toBeNull();
     expect(meetingNotePath("kg/entities/meeting/a/b.md")).toBeNull();
   });
   it("reads a ?meeting= href, relative or absolute", () => {

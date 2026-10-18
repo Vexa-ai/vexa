@@ -6,7 +6,7 @@
  *  activity line, never in the reply and never as a stop line. */
 import { describe, it, expect, afterEach } from "vitest";
 import { render, cleanup, waitFor } from "@testing-library/react";
-import { Conversation, type Turn } from "../../workbench/agent-window";
+import { Conversation, type Turn } from "../agent-window";
 import { streamChatTurn, type ChatStreamCallbacks } from "../chatStream";
 
 afterEach(() => cleanup());

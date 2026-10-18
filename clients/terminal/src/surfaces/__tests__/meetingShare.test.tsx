@@ -9,7 +9,7 @@ import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/re
 import { MeetingShareButton, MeetingShareDialog, SharedIndicator } from "../MeetingShare";
 import { parseEmails, shareUrl, sharedWithCount } from "../meetingShareApi";
 import { shareRefusalSentence } from "../../app/App";
-import { ApiError } from "../apiClient";
+import { ApiError } from "../../data/apiClient";
 import { meetingHealth } from "../../canvas/meetingHealth";
 import type { MeetingMock } from "../meetingModel";
 

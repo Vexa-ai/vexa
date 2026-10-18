@@ -16,8 +16,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   chatForDeepLink, deepLinkOutcome, refusalSentence, resolveWorkspaceDeepLink,
 } from "../deepLink";
-import { workspaceRouteFromPath, workspacePath, isWorkspaceRouteRef } from "../../app/workspaceRoute";
-import type { WorkspaceIdentity } from "../../surfaces/workspaceApi";
+import { workspaceRouteFromPath, workspacePath, isWorkspaceRouteRef } from "../../platform/workspaceRoute";
+import type { WorkspaceIdentity } from "../../data/workspaceApi";
 import { newChat, type Chat } from "../chats";
 
 const ID = "k4m5x2q7bd";                       // 10 chars of base32 — the canonical form

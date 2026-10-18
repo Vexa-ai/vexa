@@ -15,7 +15,7 @@
  *  Scaffolded chats are untouched: a chat that carries `artifacts[]` renders those, and this is
  *  only the fallback.
  */
-import { readActiveSet } from "../surfaces/workspaceApi";
+import { readActiveSet } from "../data/workspaceApi";
 import { primeWorkspaceNames, workspaceBySlug, workspaceLabel } from "../ui-kit/wsLinks";
 import { WORKSPACE_WORD } from "./vocabulary";
 import type { Page } from "./types";
@@ -41,9 +41,10 @@ export async function deskLabel(): Promise<string> {
 /** The panel's tabs for a chat that opened without a scaffold focus.
  *
  *  Always leads with the reader's DESK README — including when the chat stresses group workspaces,
- *  because the desk is the page that says where they are — then a README tab per group, then the
- *  organisation tier last (it is the constant, and a constant belongs at the end of a tab strip). */
-export async function deskPanelPages(workspaces: string[]): Promise<Page[]> {
+ *  because the desk is the page that says where they are — then a README tab per group. The company
+ *  layer is NOT a tab here (founder, 2026-10-13): `_global` pages are reached in the Company profile
+ *  only (ADR-0049), so an everyday account's strip never carries it. */
+export async function deskPanelPages(workspaces: string[], target?: string): Promise<Page[]> {
   // THE ADMIN ACCOUNT HAS NO DESK (founder ruling 2026-10-11): its one page is the company layer's.
   // The active set says so (`admin_account: true`); an answer that does not say leaves the
   // everyday panel below, and the server refuses whatever that panel would not be allowed to read.
@@ -52,11 +53,18 @@ export async function deskPanelPages(workspaces: string[]): Promise<Page[]> {
       return [{ path: "README.md", slug: "_global", label: "_global" }];
     }
   } catch { /* the everyday panel below — it degrades on its own */ }
-  const shared = (workspaces ?? []).filter((w) => w && !IMPLICIT.has(w) && w !== PERSONAL);
+  // THE DESK AND WHERE THE CHAT WRITES — not a README per mounted workspace (Vexa-ai/vexa#1783): a
+  // chat reading eleven workspaces opened eleven tabs.
+  const shared = (target !== undefined ? [target] : (workspaces ?? []))
+    .filter((w) => w && !IMPLICIT.has(w) && w !== PERSONAL);
   await primeWorkspaceNames(shared).catch(() => { /* labels degrade to slugs, never to a failure */ });
+  // THE DESK ONLY WHEN THE CHAT HAS IT (Vexa-ai/vexa#1783): a chat that writes elsewhere and does not
+  // read Personal opens on where it writes, with no "Personal" tab.
+  if (target !== undefined && target !== "" && target !== PERSONAL && !(workspaces ?? []).includes(PERSONAL)) {
+    return shared.map((w) => ({ path: "README.md", slug: w, label: workspaceLabel(w) }));
+  }
   const label = await deskLabel();
   const pages: Page[] = [{ path: "README.md", label }];
   for (const w of shared) pages.push({ path: "README.md", slug: w, label: workspaceLabel(w) });
-  pages.push({ path: "README.md", slug: "_global", label: "_global" });
   return pages;
 }

@@ -94,3 +94,35 @@ it("relays a download's attachment header and query so a saved recording keeps i
   expect(res.headers.get("content-disposition")).toBe('attachment; filename="meeting-31-2026-10-09-audio.webm"');
   expect(res.headers.get("cache-control")).toBe("private, no-store");
 });
+
+describe("catch-all proxy — bot accounts", () => {
+  const ID = "0123456789abcdef0123456789abcdef";
+
+  it("forwards /api/bot-accounts/... to the gateway root, not /agent", async () => {
+    const mock = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ accounts: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", mock);
+    const res = await getRoute(makeReq("GET"), ctx("bot-accounts"));
+    expect(mock.mock.calls[0][0]).toMatch(/\/bot-accounts$/);
+    expect(mock.mock.calls[0][0]).not.toContain("/agent/");
+    expect(await res.json()).toEqual({ accounts: [] });
+  });
+
+  it("passes the noVNC client's bytes and content type through unchanged", async () => {
+    const html = "<!doctype html><title>noVNC</title>";
+    const mock = vi.fn(async (_url: string, _init: RequestInit) => new Response(html, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } }));
+    vi.stubGlobal("fetch", mock);
+    const res = await getRoute(makeReq("GET"), ctx("bot-accounts", "sessions", ID, "view", "vnc.html"));
+    expect(mock.mock.calls[0][0]).toContain(`/bot-accounts/sessions/${ID}/view/vnc.html`);
+    expect(mock.mock.calls[0][0]).not.toContain("/agent/");
+    expect((mock.mock.calls[0][1].headers as Record<string, string>)["X-API-Key"]).toBe("alice-tok");
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(await res.text()).toBe(html);
+  });
+
+  it("keeps JavaScript a script", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("export default 1;", { status: 200, headers: { "Content-Type": "application/javascript" } })));
+    const res = await getRoute(makeReq("GET"), ctx("bot-accounts", "sessions", ID, "view", "core", "rfb.js"));
+    expect(res.headers.get("content-type")).toBe("application/javascript");
+    expect(await res.text()).toBe("export default 1;");
+  });
+});

@@ -284,3 +284,20 @@ describe("withMeetingPages — the meeting view arrives PINNED, behind the reade
 //  state — went with the chips themselves. Its successor is `permanentTab.test.tsx`, which pins the
 //  stronger rule: the meeting's pages carry no `×`, every close path refuses them, and a strip
 //  stored before the ruling (including one whose transcript WAS closed) is repaired on open.
+
+describe("ADR-0048 — the rail carries who is in a conversation", () => {
+  it("a shared session becomes a row that says so, and the server's answer wins the merge", () => {
+    const [c] = chatsFromSessions([session({ session: "s-1", title: "Pricing", shared: true, participants: 3, role: "member" })], NOW);
+    expect(c.shared).toBe(true);
+    expect(c.participants).toBe(3);
+    expect(c.role).toBe("member");
+    const local = { ...c, shared: false, participants: 1, role: "owner" as const };
+    const [m] = mergeChats([local], [c]);
+    expect(m.shared).toBe(true);
+    expect(m.participants).toBe(3);
+  });
+  it("a private chat carries nothing extra", () => {
+    const [c] = chatsFromSessions([session({ session: "pchat-1", title: "x" })], NOW);
+    expect(c.shared).toBeUndefined();
+  });
+});

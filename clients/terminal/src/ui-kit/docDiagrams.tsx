@@ -128,7 +128,7 @@ export async function renderMermaid(source: string, theme: DiagramTheme): Promis
 }
 
 // ── the live theme ───────────────────────────────────────────────────────────────────
-/** The theme as the DOM currently has it. `data-theme` on <html> (written by app/theme.ts, read by
+/** The theme as the DOM currently has it. `data-theme` on <html> (written by platform/theme.ts, read by
  *  every rule in globals.css) is the one channel that is always current — `useTheme()` holds
  *  PER-CALLER state, so a diagram calling it would never hear the footer switch toggle somewhere
  *  else. Same reason, and the same shape, as MarkdownEditor's reader. */

@@ -42,7 +42,7 @@ describe("`flows/` in `_global`", () => {
   });
 
   it("the exception is subtracted from the one list, never added to it", () => {
-    expect(COMPANY_CONTENT_DIRS).toEqual(["flows"]);
+    expect(COMPANY_CONTENT_DIRS).toEqual(["flows", "kg/templates"]);   // templates: founder 2026-10-13
     for (const d of machineryDirs(GLOBAL_SLUG)) expect(MACHINERY_DIRS).toContain(d);
     expect(machineryDirs(GLOBAL_SLUG)).not.toContain("flows");
     expect(machineryDirs(undefined)).toEqual(MACHINERY_DIRS);
@@ -52,9 +52,9 @@ describe("`flows/` in `_global`", () => {
 // ── 2 · nothing else moved ───────────────────────────────────────────────────────────────────
 
 describe("everything else is still machinery in `_global`", () => {
-  it("the rest of the liquid layer, the shapes, the dotfiles and the instruction file", () => {
-    for (const p of ["skills/x.md", "routines/y.md", "views/z.md", "policy/p.md",
-                     "kg/templates/person.md", ".git/HEAD", ".claude/settings.json", "CLAUDE.md"]) {
+  it("the rest of the liquid layer, the dotfiles and the instruction file (the templates are the admin's content)", () => {
+    expect(isMachinery("kg/templates/person.md", GLOBAL_SLUG)).toBe(false);
+    for (const p of ["skills/x.md", "routines/y.md", "views/z.md", "policy/p.md", ".git/HEAD", ".claude/settings.json", "CLAUDE.md"]) {
       expect(isMachinery(p, GLOBAL_SLUG)).toBe(true);
     }
   });
@@ -75,7 +75,7 @@ const PATHS = ["README.md", "POLICIES.md", FLOW_PAGE, "flows/README.md",
 describe("the navigator's tree", () => {
   it("expands `flows/` for `_global`", () => {
     const t = treeFrom(PATHS, GLOBAL_SLUG);
-    expect(t.map((n) => n.name)).toEqual(["flows", "POLICIES.md", "README.md"]);
+    expect(t.map((n) => n.name)).toEqual(["flows", "kg", "POLICIES.md", "README.md"]);
     const flows = t.find((n) => n.name === "flows")!;
     expect(flows.dir).toBe(true);
     expect(flows.children.map((n) => n.path)).toEqual([FLOW_PAGE, "flows/README.md"]);
@@ -87,7 +87,7 @@ describe("the navigator's tree", () => {
   });
 
   it("humanPaths keeps the order it was given", () => {
-    expect(humanPaths(PATHS, GLOBAL_SLUG)).toEqual(["README.md", "POLICIES.md", FLOW_PAGE, "flows/README.md"]);
+    expect(humanPaths(PATHS, GLOBAL_SLUG)).toEqual(["README.md", "POLICIES.md", FLOW_PAGE, "flows/README.md", "kg/templates/person.md"]);
     expect(humanPaths(PATHS)).toEqual(["README.md", "POLICIES.md"]);
   });
 });

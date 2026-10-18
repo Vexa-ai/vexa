@@ -5,7 +5,7 @@
  * them only through primitives (or, until they migrate, through the old names aliased below).
  *
  * Dark is the primary theme (`:root`); light overrides on `:root[data-theme="light"]`, which
- * `app/theme.ts` sets. Any element carrying `data-theme` switches its own subtree (the catalogue
+ * `platform/theme.ts` sets. Any element carrying `data-theme` switches its own subtree (the catalogue
  * renders dark and light side by side this way). Every text-on-surface pair declared in `tokens.pairs.json` is held to WCAG
  * 2.2 AA by `ui-kit/__tests__/tokenContrast.test.ts` in both themes — the gate is the authority,
  * not the hex values.
@@ -36,6 +36,7 @@
   --text-2: #b4b4bd;
   --text-3: #94949e;                    /* was #65656f: 2.4–3.3:1, the most-used text colour, failed AA */
   --text-disabled: #65656f;             /* disabled only (WCAG-exempt) */
+  --text-body: #d6d6dc;                 /* long-form reading text: a step softer than headings (12.9:1) */
 
   /* ── accent: "this is the one / do this" ─────────────────────────────────────────────────── */
   --accent: #d8855c;
@@ -68,6 +69,10 @@
   /* ── type ────────────────────────────────────────────────────────────────────────────────── */
   --font-sans: var(--font-geist-sans, -apple-system), BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono, ui-monospace), "SF Mono", Menlo, monospace;
+  --font-reading: var(--font-sans);     /* pages and messages; Settings → Appearance may set a serif */
+  --font-reading: var(--font-sans);     /* pages and messages; Settings → Appearance may set a serif */
+  /* READING (founder 2026-10-15: "better and comfy readability for chat and pages") */
+  --read-size: 16px;      --read-leading: 1.6;    --read-measure: 70ch;
   --text-xs: 12px;      --leading-xs: 16px;
   --text-sm: 13px;      --leading-sm: 18px;
   --text-md: 14px;      --leading-md: 20px;
@@ -113,6 +118,7 @@
   --shadow-1: 0 8px 24px rgba(0, 0, 0, 0.32);   /* popover, menu */
   --shadow-2: 0 16px 48px rgba(0, 0, 0, 0.45);  /* dialog, sheet */
   --shadow-3: 0 8px 28px rgba(0, 0, 0, 0.38);   /* toast */
+  --shadow-mention-menu: 0 6px 20px rgba(0, 0, 0, 0.18);  /* the live transcript's inline entity menu (both themes) */
 
   /* ── motion ──────────────────────────────────────────────────────────────────────────────── */
   --dur-fast: 120ms;
@@ -146,6 +152,7 @@
   --text-2: #4f4f58;
   --text-3: #64646e;                    /* was #8a8a94: 2.8–3.4:1 */
   --text-disabled: #a1a1aa;
+  --text-body: #2b2b32;
   --accent: #ad5d35;                    /* was #c06a3f: white on it read 3.9:1 */
   --accent-hover: #9e4f28;
   --on-accent: #ffffff;

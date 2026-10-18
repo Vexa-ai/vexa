@@ -52,6 +52,8 @@ describe("summaries and round trips", () => {
   it("a malformed row field reads as codes only", () => {
     expect(readMeetingLanguage({ language: "DE!", allowed_languages: ["de", 3, "english"], source: "user" })).toEqual({ language: null, allowed_languages: ["de"], source: "user" });
     expect(readMeetingLanguage(null)).toBeUndefined();
+    // the person's own history (a tier of its own, transcription-language.v1)
+    expect(readMeetingLanguage({ language: null, allowed_languages: ["ru", "en"], source: "history" })).toEqual({ language: null, allowed_languages: ["ru", "en"], source: "history" });
   });
 });
 

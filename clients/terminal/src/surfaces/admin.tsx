@@ -14,9 +14,9 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { registerList, registerTab } from "../contributions";
 import { useService } from "../platform";
-import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
+import { LayoutServiceId, type TabDescriptor } from "../platform/layout";
 import { Icon } from "../ui-kit";
-import { reducedMode } from "../app/mode";
+import { reducedMode } from "../platform/mode";
 
 interface StreamStat { len?: number; last_id?: string | null; last_type?: string }
 interface PipelineRow {

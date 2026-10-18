@@ -20,7 +20,7 @@
  *  in `_global` was unwritten (the 2026-09-02 gate). There is no such state any more: the admin and
  *  everyone else are seeded the same way, on their first load, whatever `_global` holds. */
 import { useEffect } from "react";
-import { initWorkspace } from "../surfaces/workspaceApi";
+import { initWorkspace } from "../data/workspaceApi";
 import { isOnboarded, setOnboarded } from "./onboardingState";
 
 // Module-scoped so the bootstrap runs EXACTLY ONCE per page load — React StrictMode (dev) double-invokes

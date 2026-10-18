@@ -12,30 +12,76 @@
  *  from here. Personal onboarding still has its own entry — app/OnboardingGate.tsx fires the seed.
  *
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
+import { ROUTINES_CHANGED_EVENT } from "./RoutineBar";
 import { COMPANY_WORD, WORKSPACE_WORD } from "./vocabulary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, PAGE_REMOVED_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT, useService } from "../platform";
+import { ARTIFACT_EVENT, CHOOSE_TARGET_EVENT, CHAT_ARTIFACTS_EVENT, ASK_CHAT_EVENT, CALL_START_EVENT, CHAT_TOUCHED_EVENT, OPEN_SESSION_EVENT, FOCUS_WORKSPACE_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, PAGE_REMOVED_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT, OPEN_WORKSPACE_FILES_EVENT, useService } from "../platform";
+import { LEVEL_SET_EVENT, NEW_CHAT_AT_LEVEL_EVENT } from "../platform";
 import { Chat } from "../surfaces/chat";
-import { ensureMeetingKnown, useLiveMeetings } from "../surfaces/liveMeetings";
+import { ensureMeetingKnown, refreshMeetings, useLiveMeetings } from "../surfaces/liveMeetings";
+import { browserVoiceNoteDeps, startVoiceNote, voiceNoteState, VOICE_NOTE_OPEN } from "./voiceNote";
 import {
-  readActiveSet, setSharedActive, setChatTarget, deactivateWorkspace, readWorkspaceFile, readDeskFacts, type DeskFacts,
-  listSharedMemberships, listWorkspaceTree, readWorkspaceById, readWorkspaceBySlug, type Membership,
-} from "../surfaces/workspaceApi";
+  setChatTarget, getDefaultTarget, setDefaultTarget, readWorkspaceFile, readDeskFacts, type DeskFacts,
+  listSharedMemberships, listWritableWorkspaces, listWorkspaceTree, readWorkspaceById, readWorkspaceBySlug, type Membership, type WritableWorkspace,
+} from "../data/workspaceApi";
 import { AttachRepo } from "./AttachRepo";
-import { orderedRows, moveChat } from "./chatOrder";
-import { applyMarks, fetchMarks, markRow, NO_MARKS, type RailMark, type RailMarks } from "./railMarks";
+import { FolderImportHost } from "../surfaces/FolderImport";
+import { requestFolderImport } from "../surfaces/folderDrop";
+import { WorkspaceName } from "../ui-kit/WsLink";
+import { moveChat } from "./chatOrder";
+import { currentUserPins, loadUserPins, pinPage, unpinPage, useUserPins, withUserPins, pinsForPanel } from "./userPins";
+import { RailToast } from "./RailToast";
+import { fetchMarks, markRow, type RailMark, type RailMarks } from "./railMarks";
+import { applyFolders, createFolder, deleteFolder, fetchFolders, foldersFromMarks, FoldersUnavailable, HIDDEN, moveRows, NO_FOLDERS, PINNED, UNGROUPED, updateFolder, type RailFolders } from "./railFolders";
 import { ContextBar, GLOBAL_MOUNT } from "./ContextBar";
+import { featureOn, useFeature } from "../platform/features";
+import { workspaceLabel } from "../ui-kit/wsLinks";
+import { RoomHeader } from "./rooms/RoomHeader";
+import { BrowseRoomsDialog, NewRoomDialog } from "./rooms/RoomDialogs";
+import { leaveRoom } from "../surfaces/roomsApi";
+import { refreshRoom, useRoom } from "../surfaces/roomState";
+import { Face, thinkOf, rememberThink } from "./rooms/Face";
+import { useAutoTitles } from "./rooms/autoTitles";
+import { Modal } from "../ui-kit/Modal";
+import { notifyScope } from "../surfaces/scopeEvents";
+import { autoOpens, dropStaleTabs, openingStrip, panelShows } from "./staleTabs";
+import { chatArtifacts, writesOf, type ChatArtifact } from "./chatArtifacts";
+import type { ScopeView } from "../data/workspaceApi";
+import { ChatRoutines, retireRoutine, routineOfOpenChat } from "./RoutineBar";
+import { OPEN_CHAT_EVENT } from "../surfaces/agent-window";
+import { HOME_TARGET_EVENT, NEW_CHAT_AT_EVENT, NEW_ROOM_EVENT } from "../platform/events";
+import { NEW_WORKSPACE_KICK } from "./desktop/home2/StatusCard";
+import { homeTargetAct } from "./desktop/home2/HomeTarget";
+import { WORKSPACE_PAGE_WIDE_EVENT, isWorkspacePagePath } from "./desktop/home2/workspaceView";
 import { ConnectionsPanel, CONNECTIONS_CLOSE } from "./ConnectionsPanel";
 import { dropRemovedPage } from "./pageDelete";
+import { BrowserSessionView } from "./BrowserSessionView";
 import { PagesPanel, type Listing } from "./PagesPanel";
-import {
-  bindMeeting, chatForRow, chatsFromSessions, clearHidden, legacyShellStore, loadChats, loadHidden, loadRailAll, markTouched,
+import { withRoutineState,
+  bindMeeting, chatForRow, chatsFromSessions, clearHidden, dropEmptyUnlisted, dropLeftShared, legacyShellStore, loadChats, loadHidden, markTouched,
   meetingChatId, meetingTitle, mergeChats, nameChat, nameFromTurn,
-  newChat, railRows, readRailOwner, resetChats, setTarget, writeRailOwner,
-  removeChat, saveChats, saveRailAll, upsertChat, visibleRows, artifactKey,
-  forgetHistory, orderHistory, stripForRecord, togglePinned, touchHistory, withHome,
-  type Artifact, type Chat as ChatRec, type Row } from "./chats";
-import { listSessions } from "../surfaces/sessionsApi";
+  insideWorkspace, newChat, railRows, readRailOwner, resetChats, setTarget, withDefaultTarget, writeRailOwner,
+  removeChat, saveChats, upsertChat, artifactKey,
+  forgetHistory, orderHistory, stripForRecord, togglePinned, touchHistory,
+  type Artifact, type Chat as ChatRec, type Row, closingTab } from "./chats";
+import { addParticipant, bindMeetingToChat, listParticipants, listSessions } from "../surfaces/sessionsApi";
+import { LiveMeetingChip, meetingToOpen } from "./ChatMeetingStrip";
+import { pinLive } from "./livePin";
+import { OPEN_MEETING_CHAT } from "./MeetingPageHeader";
+import { meetingActs, meetingStatusOf, sendBotAgain, stopBot } from "./meetingActions";
+import { HomeStream } from "./HomeStream";
+import { DesktopHome, DesktopToaster } from "./desktop/DesktopHome";
+import { PeopleStrip } from "./PeopleStrip";
+import { cardTitle, directChatId, expandCard, externalMessagePrompt, homePrompt, personPagePrompt, readHome, sendFeedback, type HomeRead } from "./homeApi";
+import { BlocksProvider, cardPeople, homeFirstVisit, patchHome, peekFromMarkdown, type BlocksHandlers, type BlockCard as Card, type BlockPerson as Person } from "../ui-kit";
+import { sendMeetingAct } from "./MeetingActionsBar";
+import { useMeetingDeletions, wasDeletedHere } from "./meetingDeletion";
+import { exportable } from "../surfaces/MeetingBundleActions";
+import { createMeetingNotes, updateMeetingNotes } from "./meetingNote";
+import { pauseVoiceNote as pauseNote, stopVoiceNote as stopNote, voiceNoteState as noteState } from "./voiceNote";
+import type { ContextMenuItem } from "../ui-kit/ContextMenu";
+import { NotificationToasts } from "./NotificationToasts";
+import { HOME_FRAME_EVENT, RAIL_CHANGED_EVENT, startRailFrames } from "./notifications";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { SURFACE_RECORD_LIVE, syncSurface } from "../surfaces/surfaceSync";
 import { Rail, RailStrip } from "./Rail";
@@ -44,21 +90,27 @@ import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
 import { pendingArrival, useScaffoldArrival } from "./arrival";
 import { chatForDeepLink, resolveWorkspaceDeepLink, type DeepLinkOutcome } from "./deepLink";
-import { workspaceRouteFromPath, type WorkspaceRoute } from "../app/workspaceRoute";
-import { artifactsFromTokens, artifactViewEffect, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, meetingChatFront, withMeetingPages, withoutRetiredMeetingDocs, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot , SHARED_ARRIVAL_KEY, sharedArrivalFront } from "./roomView";
+import { landsOnHome, stashedDeepLink } from "./landOnHome";
+import { homeChips } from "./desktop/home2/workspaceNoise";
+import { SHARED_ARRIVAL_KEY as ARRIVAL_KEY_FOR_HOME } from "./roomView";
+import { workspaceRouteFromPath, type WorkspaceRoute } from "../platform/workspaceRoute";
+import { artifactsFromTokens, artifactViewEffect, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, meetingRefPage, pageForMeetingRef, panelForChat, pagesForPhase, resolveView, meetingChatFront, withMeetingPages, withoutRetiredMeetingDocs, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot , SHARED_ARRIVAL_KEY, sharedArrivalFront } from "./roomView";
 import { fetchMeetingNotePath } from "./meetingNote";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
-import { applyProposal, CALENDAR, proposals, type ConnectionRow, type Proposal, type Read, type UpcomingEvent } from "./proposals";
+import { startersFor, applyProposal, CALENDAR, proposals, type ConnectionRow, type Proposal, type Read, type UpcomingEvent } from "./proposals";
 import { CONNECTIONS_OPEN } from "./connectionEvents";
 import { listProposals, resolveProposal, type DeskProposal } from "../surfaces/proposalsApi";
 import { ProposalChips } from "./ProposalChips";
 import { AdminHome } from "./AdminHome";
 import { EdgeHandle, ShellToggle } from "./Collapse";
 import { Drawer, Sheet, Splitter, useShellLayout } from "../ui-kit";
+import { CallDock } from "./CallDock";
+import { enterCall } from "./callState";
+import { browserSessionFromOpenPath, openBrowserSession } from "./browserSession";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
 import { T, surface, type as ty } from "./tokens";
-import { LayoutServiceId } from "../workbench/layout";
+import { LayoutServiceId } from "../platform/layout";
 import type { Page, Sel } from "./types";
 
 /** A record → the selection that shows it. There is no default selection any more: the shell opens
@@ -127,7 +179,6 @@ export function MinutesShell() {
   // rebuilt on every poll is a listener re-registered every few seconds.
   const meetingsRef = useRef(meetings);
   useEffect(() => { meetingsRef.current = meetings; }, [meetings]);
-  const [all, setAll] = useState<boolean>(() => loadRailAll());
 
   // ── WHERE THE SHELL OPENS, and the DRAFT (founder ruling 2026-09-02, F35) ──────────────────
   //
@@ -148,6 +199,8 @@ export function MinutesShell() {
   //  All three are decided in the FIRST RENDER so it already names a real session — the shell used
   //  to sit on a hard-coded selection until an effect ran, and the header advertised `personal`
   //  whatever the chat's real mount set was.
+  // JTBD-1: whether the boot carried a link, read before any effect consumes its stash
+  const [bootDeepLinked] = useState<boolean>(() => stashedDeepLink([ARRIVAL_KEY_FOR_HOME]));
   const [firstOpen] = useState<ChatRec>(() =>
     [...chats].sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0))[0]
     ?? newChat("New chat", ["personal", "_global"], { touched: false }));
@@ -161,7 +214,16 @@ export function MinutesShell() {
   // can miss the event it exists for.
   const selRef = useRef(sel);
   useEffect(() => { selRef.current = sel; }, [sel]);
-  const [pages, setPages] = useState<Page[]>([]);
+  const [pages, setPagesRaw] = useState<Page[]>([]);
+  // PINNED PAGES ARE THE PERSON'S (`userPins.ts`, #1783): every update of this chat's tabs re-applies
+  // them, so a pin made in any chat is a tab here, in the person's order, and an unpin is gone here.
+  const userPins = useUserPins();
+  const setPages = useCallback((next: Page[] | ((prev: Page[]) => Page[])) => {
+    setPagesRaw((prev) => pinsForPanel(typeof next === "function" ? (next as (p: Page[]) => Page[])(prev) : next, currentUserPins(), featureOn("home2")));
+  }, []);
+  useEffect(() => { setPages((prev) => prev); }, [userPins, setPages]);
+  // A LIVE MEETING IS ALWAYS PINNED: first in this strip in ANY chat while it runs (`livePin.ts`).
+  const stripPages = useMemo(() => pinLive(pages, meetings), [pages, meetings]);
   // `?view=` — a chat's opening `artifacts[]` (the right-sidebar tabs), NOT a URL feature. A chat
   // is the saved focus state and a deeplink is just its constructor: the meeting says which pages
   // exist, this says which of them the chat opens with, and from then on the state is the chat's.
@@ -205,6 +267,9 @@ export function MinutesShell() {
   });
   const [docPath, setDocPath] = useState("README.md");
   const [docSlug, setDocSlug] = useState<string | undefined>(undefined);
+  // read by `startDraft` (a chat started from inside a workspace writes there, UI decision 6b)
+  const docSlugRef = useRef<string | undefined>(undefined);
+  docSlugRef.current = docSlug;
   // What KIND of thing is in front. A meeting tab is not a document: nothing is fetched for it and
   // the panel renders the meeting canvas instead of a body.
   const [docKind, setDocKind] = useState<"doc" | "meeting">("doc");
@@ -218,6 +283,16 @@ export function MinutesShell() {
   // chat restores its documents, and starts your walk through them fresh.
   const [hist, setHist] = useState<{ stack: Artifact[]; i: number }>({ stack: [], i: -1 });
   useEffect(() => { void listSharedMemberships().then(setMemberships).catch(() => undefined); }, []);
+  // EVERY WORKSPACE THIS READER CAN WRITE, by name (Vexa-ai/vexa#1783) — the Writes-to menu's
+  // candidates, own private workspaces included. Read on mount and again whenever a turn makes or
+  // targets a workspace (`focus`), so one the agent just created is in the menu without a reload.
+  const [writable, setWritable] = useState<WritableWorkspace[]>([]);
+  useEffect(() => {
+    const load = () => { void listWritableWorkspaces().then(setWritable).catch(() => undefined); };
+    load();
+    window.addEventListener(FOCUS_WORKSPACE_EVENT, load);
+    return () => window.removeEventListener(FOCUS_WORKSPACE_EVENT, load);
+  }, []);
   // WHAT THIS PERSON'S DESK IS (Vexa-ai/vexa#1613) — the server's own three words, read off the
   // files. This used to probe `.scaffolded` and read its absence as "never set up", which on
   // 2026-09-06 offered the founder a workspace-setup chip over a desk that had been running for
@@ -281,6 +356,7 @@ export function MinutesShell() {
   // The signed-in address — the ONE fact the setup chip puts in the person's mouth, so they never
   // type what we already know. Same seam the account badge reads; unknown simply drops the clause.
   const [email, setEmail] = useState<string | null>(null);
+  const speakerRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     let live = true;
     void fetch("/api/auth/me", { cache: "no-store" })
@@ -289,6 +365,9 @@ export function MinutesShell() {
         if (!live) return;
         const who = ((d?.user as { email?: string } | undefined)?.email) ?? null;
         setEmail(who);
+        // a voice note is the person's own voice: its lines carry their name, not the bot's "Speaker"
+        const name = ((d?.user as { name?: string } | undefined)?.name ?? "").trim();
+        speakerRef.current = name || (who ? who.split("@")[0] : "") || undefined;
         // No identity means no server rail to wait for: the stored one is all there is, so the
         // list has settled. Without this a `/w/` link would wait forever for a fetch never made.
         if (!who) setRailSettled(true);
@@ -329,12 +408,23 @@ export function MinutesShell() {
     fetch("/api/chat/order").then(r=>r.ok?r.json():Promise.reject()).then(d=>{if(live)setChatOrder(d.order || []);}).catch(()=>{});
     return ()=>{live=false;};
   }, [email]);
-  // PIN AND HIDE (`railMarks.ts`) — the person's own marks, read from the server so every device
-  // and every reload shows the same rail. The old browser-only delete list is migrated into Hide
-  // here, once: each id becomes a hidden mark, and an id the server does not know (a chat that
-  // never reached it) is simply gone. The list is cleared only when every id has been answered.
-  const [marks, setMarks] = useState<RailMarks>(NO_MARKS);
-  const [hiddenView, setHiddenView] = useState(false);
+  // CHAT FOLDERS (`railFolders.ts`, #1783) — the person's own sections, read from the server so
+  // every device and every reload shows the same rail: Pinned · their folders · Ungrouped · Hidden.
+  // A server without the session store keeps no folders; the sections then come from the pin and
+  // hide marks (`railMarks.ts`). The old browser-only delete list is migrated into Hidden here,
+  // once: each id becomes a hidden mark, and an id the server does not know is simply gone.
+  const [folders, setFolders] = useState<RailFolders>(NO_FOLDERS);
+  const fromMarks = useCallback((m: RailMarks, order: string[]) => {
+    const rank = new Map(order.map((k, i) => [k, i]));
+    const f = foldersFromMarks(m);
+    f.order[PINNED] = [...m.pinned].sort((x, y) => (rank.get(x) ?? 1e9) - (rank.get(y) ?? 1e9));
+    return f;
+  }, []);
+  const refreshFolders = useCallback(async (order: string[] = []) => {
+    try { setFolders(await fetchFolders()); return; }
+    catch (e) { if (!(e instanceof FoldersUnavailable)) return; }
+    try { setFolders(fromMarks(await fetchMarks(), order)); } catch { /* an unfiled rail */ }
+  }, [fromMarks]);
   useEffect(() => {
     if (!email) return;
     let live = true;
@@ -346,16 +436,66 @@ export function MinutesShell() {
         catch (e) { if (!String((e as Error).message).includes("404")) migrated = false; }
       }
       if (tombstones.length && migrated) clearHidden();
-      try { const m = await fetchMarks(); if (live) setMarks(m); } catch { /* an unmarked rail */ }
+      if (live) await refreshFolders();
     })();
     return () => { live = false; };
-  }, [email]);
-  const pinnedKeys = useMemo(() => new Set(marks.pinned), [marks]);
-  const rows = useMemo(() => orderedRows(applyMarks(railRows(allChats, meetings), marks), chatOrder, pinnedKeys),
-    [allChats, meetings, chatOrder, marks, pinnedKeys]);
+  }, [email, refreshFolders]);
+  // The agent files chats too (`chat_move`, `chat_folder_create` from the composer), so the folders
+  // are read again while the tab is in front — the same way the chat list picks up new names.
+  useEffect(() => {
+    if (!email || !folders.served) return;
+    const t = window.setInterval(() => { if (!document.hidden) void refreshFolders(); }, 10_000);
+    return () => window.clearInterval(t);
+  }, [email, folders.served, refreshFolders]);
+  useEffect(() => {
+    if (!folders.served && chatOrder.length) setFolders((f) => f.served ? f : { ...f, order: { ...f.order, [PINNED]: [...(f.order[PINNED] ?? [])].sort((x, y) => chatOrder.indexOf(x) - chatOrder.indexOf(y)) } });
+  }, [chatOrder, folders.served]);
+  // A meeting whose data was deleted leaves the lists (#1783): the server row says so after a
+  // refresh (`artifacts_deleted`); this tab knows the moment its own delete answers.
+  const deletions = useMeetingDeletions();
+  const listedMeetings = useMemo(() => meetings.filter((m) => !m.artifacts_deleted && !wasDeletedHere(m.id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [meetings, deletions]);
+  // THE ROUTINES' OWN STATE, for the rail's badge (a retired routine's chat is a normal chat):
+  // read on mount, every minute, and whenever a routine is paused, resumed or retired here.
+  const [routineStates, setRoutineStates] = useState<{ name: string; enabled?: boolean; status?: string }[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    const read = () => void fetch("/api/routines", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (live && d && Array.isArray(d.routines)) setRoutineStates(d.routines); }).catch(() => {});
+    read();
+    const t = window.setInterval(read, 60_000);
+    window.addEventListener(ROUTINES_CHANGED_EVENT, read);
+    return () => { live = false; window.clearInterval(t); window.removeEventListener(ROUTINES_CHANGED_EVENT, read); };
+  }, []);
+  // R1 FLAGS: `rooms` — rooms made in a workspace, chats private; `home2` — the sidebar by workspace
+  const roomsOn = useFeature("rooms");
+  const home2 = useFeature("home2");
+  // THE SIDEBAR BY WORKSPACE (home2): Pinned · one group per workspace · Hidden, and no folders. A
+  // chat lives in the group of the workspace it writes to; one with no workspace lives in Personal.
+  const railFolders = useMemo<RailFolders>(() => {
+    // UI 7e (founder 2026-10-16): chats are grouped by the person's FOLDERS, not by workspace
+    if (!home2 || folders.served) return folders;
+    const base = withRoutineState(railRows(allChats, listedMeetings), routineStates);
+    const wss = [{ slug: "personal", name: "Personal" }, ...writable.filter((w) => w.slug !== "personal")];
+    const known = new Set(wss.map((w) => w.slug));
+    const filings: Record<string, string> = {};
+    for (const row of base) {
+      if (folders.filings[row.key] === PINNED || folders.filings[row.key] === HIDDEN) { filings[row.key] = folders.filings[row.key]; continue; }
+      const t = row.target && known.has(row.target) ? row.target : "personal";
+      filings[row.key] = `ws:${t}`;
+    }
+    return { ...folders, filings, folders: [folders.folders.find((f) => f.id === PINNED) ?? { id: PINNED, name: "Pinned", builtin: true, collapsed: false },
+      ...wss.map((w) => ({ id: `ws:${w.slug}`, name: w.name, builtin: false, collapsed: false })),
+      folders.folders.find((f) => f.id === HIDDEN) ?? { id: HIDDEN, name: "Hidden", builtin: true, collapsed: true }] };
+  }, [home2, folders, allChats, listedMeetings, routineStates, writable]);
+  const rawRows = useMemo(() => applyFolders(withRoutineState(railRows(allChats, listedMeetings), routineStates), railFolders),
+    [allChats, listedMeetings, railFolders, routineStates]);
+  // the sidebar never shows "Chat 12:30": an unnamed chat takes its first sentence (home2)
+  const rows = useAutoTitles(rawRows, home2, sel.chatId);
   const reorder = async (from: string, to: string) => {
     if (orderBusy) return;
-    const next = moveChat(rows.filter((r) => r.pinned).map(r=>r.key), from, to);
+    const next = moveChat(folders.order[PINNED] ?? [], from, to);
     setOrderBusy(true); setOrderError("");
     try {
       const res = await fetch("/api/chat/order", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({order:next})});
@@ -366,15 +506,62 @@ export function MinutesShell() {
   };
   const mark = async (row: string, m: RailMark) => {
     setOrderError("");
-    try { setMarks(await markRow(row, m)); }
+    try {
+      if (folders.served) {
+        const where = folders.filings[row];
+        const to = m.hidden ? HIDDEN : m.pinned ? PINNED : UNGROUPED;
+        if ((m.hidden === false && where !== HIDDEN) || (m.pinned === false && where !== PINNED)) return;
+        setFolders(await moveRows([row], to));
+      } else setFolders(fromMarks(await markRow(row, m), chatOrder));
+    }
     catch { setOrderError(m.pinned !== undefined ? "Couldn't save the pin. Try again." : "Couldn't save. Try again."); }
   };
+  const folderAct = async (act: () => Promise<unknown>, failed: string) => {
+    setOrderError("");
+    try { await act(); } catch (e) { setOrderError((e as Error).message || failed); }
+    await refreshFolders();
+  };
+  const onMoveRows = (keys: string[], to: string, before?: string) => {
+    setOrderError("");
+    if (home2 && to.startsWith("ws:")) {
+      // dropped on a workspace's group: the chat writes there from now on
+      const slug = to.slice(3), target = slug === "personal" ? "" : slug;
+      for (const k of keys) {
+        const id = k.replace(/^c:/, "");
+        persist((prev) => prev.map((c) => (c.id === id ? { ...c, workspaces: target && !c.workspaces.includes(target) ? [...c.workspaces, target] : c.workspaces, target: target || undefined } : c)));
+        void setChatTarget(id, target).then(() => notifyScope()).catch(() => setOrderError("Couldn't move the chat. Try again."));
+      }
+      return;
+    }
+    void moveRows(keys, to, before).then(setFolders).catch((e) => setOrderError((e as Error).message || "Couldn't move the chat. Try again."));
+  };
   const selKey = `c:${sel.chatId}`;
-  const shownRows = useMemo(() => visibleRows(rows, all, selKey, hiddenView), [rows, all, selKey, hiddenView]);
-  const hiddenCount = useMemo(() => visibleRows(rows, true).length - visibleRows(rows, false, selKey).length, [rows, selKey]);
-  const hiddenMarked = useMemo(() => rows.filter((r) => r.hidden).length, [rows]);
-  useEffect(() => { if (hiddenView && hiddenMarked === 0) setHiddenView(false); }, [hiddenView, hiddenMarked]);
-  const toggleAll = (v: boolean) => { setAll(v); saveRailAll(v); };
+  // THE MEETING THIS CHAT STARTED (founder, 2026-10-13), for its header — a chat that is a
+  // meeting's own (`meet-…`) already is that meeting's page and needs no strip.
+  const boundMeetingId = sel.chatId.startsWith("meet-") ? "" : (allChats.find((c) => c.id === sel.chatId)?.meeting || "");
+  const chatMeeting = boundMeetingId ? meetings.find((m) => String(m.id) === boundMeetingId) : undefined;
+  /** The rail's meeting row menu: the page header's acts (`meetingActions.ts`). Acts that run on
+   *  their own (stop, send again, notes, pause/stop a note) run here; the ones whose control is on
+   *  the page (rename, language, share, export, delete with its confirmation) open the page and ask it. */
+  const meetingActsFor = (r: Row): ContextMenuItem[] => {
+    const m = meetings.find((x) => x.id === r.meetingId || x.native_id === r.meetingId);
+    if (!m) return [];
+    const vn = noteState();
+    const recording = m.platform === "voice_note" && vn.meetingId === m.id && (vn.phase === "recording" || vn.phase === "starting") ? { paused: !!vn.paused } : null;
+    const fail = (e: unknown) => setOrderError(e instanceof Error ? e.message : "Couldn't do that. Try again.");
+    return meetingActs(m, { recording, canExport: exportable(m), canChangeLanguage: true, canRename: !m.shared }).map((a) => ({
+      id: a.id, label: a.label, danger: a.danger,
+      onSelect: () => {
+        setOrderError("");
+        if (a.id === "stop-bot") return void stopBot(m).then(refreshMeetings, fail);
+        if (a.id === "send-again") return void sendBotAgain(m).then(refreshMeetings, fail);
+        if (a.id === "pause" || a.id === "resume") return pauseNote(a.id === "pause");
+        if (a.id === "stop-note") return void stopNote();
+        if (a.id === "notes") return void createMeetingNotes(m.id).then((path) => { updateMeetingNotes(m.id, path); }, fail);
+        void openRow(r).then(() => sendMeetingAct(m.id, a.id)).then((took) => { if (took === false) setOrderError("Open the meeting to do that."); });
+      },
+    }));
+  };
 
   /** Persist a change to the stored list. Mock chats live outside it, so a mutation aimed at one is
    *  a no-op by construction — the mock is a display fixture, not a record. */
@@ -392,6 +579,8 @@ export function MinutesShell() {
   const [attachTo, setAttachTo] = useState<{ id?: string } | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
   const shell = useShellLayout(shellRef, { legacy: legacyShellStore });
+  const setPagesOpenRef = useRef(shell.setPagesOpen);
+  setPagesOpenRef.current = shell.setPagesOpen;
   const L = shell.layout;
   const [connectionsMode,setConnectionsMode] = useState<'page'|'panel'|null>(null);
   const connectionsOpen=connectionsMode!==null;
@@ -401,16 +590,13 @@ export function MinutesShell() {
   const revealPages = useRef(shell.revealPages);
   revealPages.current = shell.revealPages;
 
-  const mountSet = useCallback(async (wanted: string[]) => {
-    // Mount every shared workspace in the chat's set; park the rest. personal/_global/_system
-    // ride along by construction. Best-effort — the chat runs regardless.
-    try {
-      const share = wanted.filter((w) => w !== "personal" && w !== "_global");
-      for (const w of share) await setSharedActive(w, true).catch(() => undefined);
-      const act = await readActiveSet().catch(() => null);
-      for (const m of act?.active ?? []) if (m.role === "shared" && !share.includes(m.slug)) { try { await deactivateWorkspace(m.slug); } catch { /* parked */ } }
-    } catch { /* best-effort */ }
-  }, []);
+  // OPENING A CHAT NO LONGER REWRITES THE PERSON'S WORKSPACES (Vexa-ai/vexa#1783). This used to
+  // switch every shared workspace in the opened chat ON for the person and every other one OFF —
+  // so the person-wide state followed whichever chat was opened last, a hidden workspace came back
+  // the moment an old chat named it, and "the pile of workspaces" could not be put away. A chat's
+  // reads are its own now (server-side, `workspace_state_set`), and the person's states change only
+  // when they ask. Kept as a no-op so the call sites' order is unchanged.
+  const mountSet = useCallback(async (_wanted: string[]) => { /* see above */ }, []);
 
   /** Open a chat. The ONE place a room's artifacts land.
    *
@@ -446,7 +632,7 @@ export function MinutesShell() {
       // README for a chat with no focus — the company's document, the same for everybody, and not
       // what a person opening a fresh conversation is looking at their screen to find out. And the
       // tabs are NAMED from the registry rather than by slug: this strip read `126` (F49).
-      return deskPanelPages(c.workspaces);
+      return deskPanelPages(c.workspaces, c.target ?? "");
     };
     /** THE MEETING'S OWN PAGES — the room's list, minus the personal page (Vexa-ai/vexa#1600).
      *
@@ -503,11 +689,14 @@ export function MinutesShell() {
     // all, so a strip that dropped one under the OLD rule is not a decision there is anything to
     // preserve. It is also the only way the ruling reaches the desks it was made about — his own
     // included, since every meeting chat he has opened already has a strip on disk.
-    const base: Page[] = withHome(
-      (hasStrip
-        ? (c.meeting ? withMeetingPages(strip, await meetingOwn()) : strip)
-        : (await roomPages()).map((pg) => ({ ...pg, pinned: true }))) as Artifact[],
-      c.workspaces,
+    // THE PANEL STAYS QUIET (UI decision 7 amended, founder 2026-10-15): a chat opens with the tabs
+    // the person opened in IT — never an auto-opened desk or workspace README. A meeting chat keeps
+    // its meeting's own pages (the meeting is the room).
+    const base: Page[] = openingStrip(
+      (c.meeting
+        ? withMeetingPages(hasStrip ? strip : (await roomPages()).map((pg) => ({ ...pg, pinned: true })) as Artifact[], await meetingOwn())
+        : strip) as Artifact[],
+      { meeting: !!c.meeting },
     ) as Page[];
     let list = base;
     let focus: Page | null = c.focus ? base.find((pg) => artifactKey(pg) === c.focus) ?? null : null;
@@ -528,6 +717,13 @@ export function MinutesShell() {
     // wherever a meeting is opened, so a chat about one leads with it — unless the reader was last
     // on some other page of theirs, which is where they were and stays where they land.
     // ARRIVING THROUGH A SHARE puts the MEETING in front (#1801 `sharedArrivalFront`).
+    const picked0 = sharedArrivalFront(list, how.front) ?? stored ?? focus ?? list[0];
+    // THE PANEL FOLLOWS THIS CHAT (home2, founder 2026-10-16): nothing of its own → its target
+    // workspace's page; no target → the panel stays closed.
+    if (featureOn("home2") && !c.meeting) {
+      const f = panelForChat({ list, front: picked0 ?? null, target: c.target, targetName: c.target ? workspaceLabel(c.target) : "" });
+      list = f.list;
+    }
     const picked = sharedArrivalFront(list, how.front) ?? stored ?? focus ?? list[0];
     const front = c.meeting ? meetingChatFront(list, picked) : picked;
     setSel({
@@ -540,7 +736,15 @@ export function MinutesShell() {
     });
     setPages(list);
     setListing(null);
+    // CLOSED UNTIL SOMETHING IS HERE (founder 2026-10-15): a chat with nothing of its own opened
+    // folds the panel; one with tabs (or its meeting) keeps the reader's own open/closed choice.
+    if (!panelShows(list.length, false)) setPagesOpenRef.current(false);
+    else if (featureOn("home2") && list.length && list.every((pg) => pg.path === ".workspace")) setPagesOpenRef.current(true);
+    // a notice answers a link from the chat that was in front before; it does not follow a switch
+    setNotice(null);
     if (front) { setDocPath(front.path); setDocSlug(front.slug); setDocKind(front.kind === "meeting" ? "meeting" : "doc"); }
+    // …and a chat with nothing open shows nothing of the LAST chat's: its own artifact list instead.
+    else { setDocPath(""); setDocSlug(undefined); setDocKind("doc"); }
     setHist(front ? { stack: [{ kind: front.kind, path: front.path, slug: front.slug, label: front.label }], i: 0 } : { stack: [], i: -1 });
     setDocBody(null); setDocNonce((n) => n + 1);
     // A new conversation is a fresh desk: nothing in it has been chosen by the reader yet, so an
@@ -585,15 +789,64 @@ export function MinutesShell() {
     if (opts.kick) fireKick(c.id, opts.kick, opts.say, opts.scaffoldId);
     return c;
   }, [openChat, persist]);
+  const addChatRef = useRef<typeof addChat | null>(null);
+  addChatRef.current = addChat;
 
   /** `+` — open a chat that IS NOT A RECORD YET (F35). Nothing is written; the rail gains no row
    *  (the draft is not in `allChats`); the panel opens on the room's own pages exactly as it would
    *  for a stored chat. It becomes real at the first human turn and not one moment earlier. */
-  const startDraft = useCallback(() => {
+  const startDraft = useCallback((at?: string) => {
+    // STARTED FROM INSIDE A WORKSPACE, IT WRITES THERE (UI decision 6b): the page in front names it —
+    // or the caller does (`at`; "" is the person's own desk).
+    const inside = at !== undefined ? insideWorkspace(at) : insideWorkspace(docSlugRef.current);
+    const c = newChat("New chat", inside ? ["personal", "_global", inside] : ["personal", "_global"],
+                      { touched: false, ...(inside ? { target: inside } : {}) });
+    setDraft(c);
+    void openChat(c);
+    if (inside) void setChatTarget(c.id, inside).then(() => notifyScope()).catch(() => undefined);
+    return c;
+  }, [openChat]);
+  const startDraftRef = useRef(startDraft);
+  startDraftRef.current = startDraft;
+
+  /** HOME (JTBD-1, home2): a fresh, unwritten chat, whose empty view IS the home page (workspace
+   *  cards, "+ New workspace"), in front and never aimed at a workspace. */
+  const goHome = useCallback(() => {
     const c = newChat("New chat", ["personal", "_global"], { touched: false });
     setDraft(c);
     void openChat(c);
+    return c;
   }, [openChat]);
+
+  // OPENING THE APP LANDS ON HOME (JTBD-1): once home2 is known, the restored last chat gives way
+  // to the home page, unless the address named something or the person already moved.
+  const landedHome = useRef(false);
+  const bootChat = useRef(sel.chatId);
+  useEffect(() => {
+    if (!home2 || landedHome.current) return;
+    landedHome.current = true;
+    if (selRef.current.chatId !== bootChat.current) return;
+    if (draftRef.current && draftRef.current.id === bootChat.current) return;
+    let where = { pathname: "/", search: "", hash: "" };
+    try { where = { pathname: window.location.pathname, search: window.location.search, hash: window.location.hash }; } catch { /* no window */ }
+    if (landsOnHome({ home2, ...where, deepLinked: bootDeepLinked || !!wsLink })) goHome();
+  }, [home2, goHome, bootDeepLinked, wsLink]);
+
+  // "START A NEW CHAT AT LEVEL N" (hosted plans, `levels`): a new chat, its level set before its
+  // first message, so the level is chosen at the start as the prompt cache needs.
+  useEffect(() => {
+    const on = (e: Event) => {
+      const level = Number((e as CustomEvent<{ level?: number }>).detail?.level);
+      if (!(level >= 1 && level <= 5)) return;
+      const c = startDraft();
+      void fetch("/api/chat/level", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ session: c.id, level, switch: true }) })
+        .then((r) => { if (r.ok) window.dispatchEvent(new CustomEvent(LEVEL_SET_EVENT, { detail: { session: c.id, level } })); })
+        .catch(() => undefined);
+    };
+    window.addEventListener(NEW_CHAT_AT_LEVEL_EVENT, on);
+    return () => window.removeEventListener(NEW_CHAT_AT_LEVEL_EVENT, on);
+  }, [startDraft]);
 
   /** The draft's ONE promotion path: a human turn happened in it, so it becomes a record — named by
    *  that same turn (F38), in one write rather than a record now and a name afterwards. */
@@ -627,6 +880,17 @@ export function MinutesShell() {
   // the dependency array.
   const openChatRef = useRef(openChat);
   useEffect(() => { openChatRef.current = openChat; }, [openChat]);
+  // A TURN FROM ANOTHER AGENT LINKS THE THREAD IT CAME FROM (ADR-0046 decision 13). Opened only
+  // when it is one of this reader's own chats; another person's thread is named, never opened.
+  useEffect(() => {
+    const open = (e: Event) => {
+      const id = String((e as CustomEvent).detail?.chat ?? "");
+      const c = chatsRef.current.find((x) => x.id === id);
+      if (c) void openChatRef.current(c);
+    };
+    window.addEventListener(OPEN_CHAT_EVENT, open);
+    return () => window.removeEventListener(OPEN_CHAT_EVENT, open);
+  }, []);
   useEffect(() => {
     if (!email) return;
     let live = true;
@@ -634,7 +898,7 @@ export function MinutesShell() {
       if (!live) return;
       const fromServer = chatsFromSessions(rows);
       const hidden = loadHidden();
-      persist((prev) => mergeChats(prev, fromServer, hidden));
+      persist((prev) => dropEmptyUnlisted(mergeChats(prev, fromServer, hidden), fromServer));
       // The rail is now as complete as it is going to get — what a `/w/` link waits on before it
       // picks the chat to land in. Same tick as the merge, so the landing reads the merged list.
       setRailSettled(true);
@@ -650,12 +914,59 @@ export function MinutesShell() {
       // second fetch cannot yank the reader out of what they have since opened.
       if (landed.current) return;
       landed.current = true;
-      if (deeplinkPending || pendingArrival() || !draftRef.current || !newest) return;
+      // …and only from the draft the shell OPENED ON: a new chat the person started with `+` before
+      // the list arrived is their choice, and the landing must not take it away (lab 2026-10-14:
+      // the new-chat home vanished behind the newest chat a second after `+`).
+      if (deeplinkPending || pendingArrival() || !draftRef.current || draftRef.current.id !== firstOpen.id || !newest) return;
       setDraft(null);
       void openChatRef.current(newest);
     }).catch(() => { if (live) setRailSettled(true); });
     return () => { live = false; };
   }, [email, persist, deeplinkPending]);
+
+  /** A person was added to a chat only its owner was in, so the server started a NEW shared chat
+   *  (ADR-0048): read the rail, which now lists it, and open it. The private chat stays as it was. */
+  const openSharedSession = useCallback((sid: string) => {
+    void listSessions().then((rows) => {
+      const fromServer = chatsFromSessions(rows);
+      persist((prev) => mergeChats(prev, fromServer, loadHidden()));
+      const c = fromServer.find((x) => x.id === sid);
+      if (c) void openChatRef.current(c);
+    }).catch(() => {});
+  }, [persist]);
+  // A CHAT JOINED OR LEFT THIS PERSON'S RAIL (#1783): somebody added them to it, or they left or
+  // were removed, in this tab or another. The socket says so (`rail` frames); the rail reads its
+  // chats and its folders again now, and a chat somebody else owns that is no longer listed goes.
+  useEffect(() => {
+    const onRail = (e: Event) => {
+      const d = (e as CustomEvent<{ change?: string; session?: string }>).detail ?? {};
+      void listSessions().then((rows) => {
+        const fromServer = chatsFromSessions(rows);
+        persist((prev) => dropEmptyUnlisted(dropLeftShared(mergeChats(prev, fromServer, loadHidden()), fromServer), fromServer));
+        if (d.change === "removed" && d.session && d.session === sel.chatId && !fromServer.some((c) => c.id === d.session)) startDraft();
+      }).catch(() => {});
+      void refreshFolders();
+    };
+    window.addEventListener(RAIL_CHANGED_EVENT, onRail);
+    return () => window.removeEventListener(RAIL_CHANGED_EVENT, onRail);
+  }, [persist, refreshFolders, sel.chatId, startDraft]);
+  // the rail's live refresh rides the user socket whether or not notifications are switched on
+  useEffect(() => startRailFrames(), []);
+  // A `/r/chat/<id>` link landed here (#1783, `app/r/refRoute.ts`): open that chat, once.
+  useEffect(() => {
+    let sid: string | null = null;
+    try { sid = localStorage.getItem("vexa.openSession"); localStorage.removeItem("vexa.openSession"); } catch { /* none */ }
+    if (sid) openSharedSession(sid);
+  }, [openSharedSession]);
+  // the composer shared a private chat by @-mention: the message goes to the new chat, so open it
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const sid = (e as CustomEvent<{ session?: string }>).detail?.session;
+      if (sid) openSharedSession(sid);
+    };
+    window.addEventListener(OPEN_SESSION_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_SESSION_EVENT, onOpen);
+  }, [openSharedSession]);
 
   // Refresh server-authored names without disturbing selection or reader-owned pages.
   useEffect(() => {
@@ -664,7 +975,7 @@ export function MinutesShell() {
     const timer = setInterval(() => { void listSessions().then(data=>{
       if(!live)return;
       const named = chatsFromSessions(data);
-      persist(prev=>mergeChats(prev,named,loadHidden()));
+      persist(prev=>dropEmptyUnlisted(dropLeftShared(mergeChats(prev,named,loadHidden()),named),named));
       const current = named.find(c=>c.id===sel.chatId && c.nameSource);
       if(current)setSel(x=>x.chatId===current.id?{...x,label:current.label}:x);
     }).catch(()=>{}); }, 5000);
@@ -691,6 +1002,8 @@ export function MinutesShell() {
       window.dispatchEvent(new CustomEvent(CONNECTIONS_OPEN, { detail: { provider: eff.provider, connection_id: eff.connectionId } }));
       return;
     }
+    // …and so does a call with Vexa: it is a chat of its own.
+    if (eff.act === "call") { startVexaCall(); return; }
     // A JOB LEAVES THE LIST WHEN ITS ACT RUNS (#1614). Locally first, so the row cannot re-offer it
     // while the close is in flight, and the close itself is fire-and-forget: a failed one costs a
     // chip that comes back on the next load, never a click that did nothing.
@@ -713,8 +1026,8 @@ export function MinutesShell() {
    *  desk's own facts and its short list. Pure, so the row is decided in the render that draws it —
    *  no model call and no effect. */
   const chips = useMemo(
-    () => proposals(connections, events, Date.now(), desk, email, deskItems),
-    [connections, events, desk, email, deskItems]);
+    () => proposals(connections, events, Date.now(), desk, email, deskItems, chats.map((c) => c.label)),
+    [connections, events, desk, email, deskItems, chats]);
   /** THE PERSON SAYING NO. It closes the row on the server and drops it here, and — unlike a pick —
    *  it does NOT spend the offer: the rest of the list is still worth having. */
   const dismissProposal = (p: Proposal) => {
@@ -732,7 +1045,142 @@ export function MinutesShell() {
   /** Which chat has already spent its offer — see `runProposal`. Per chat, because a different
    *  conversation has not been offered anything yet. */
   const [spent, setSpent] = useState<string | null>(null);
-  const shownChips = spent === sel.chatId ? [] : chips;
+  const shownChips = homeChips(startersFor({ chat: sel.chatId, draft: draft?.id, spent, chips }), home2);
+
+  // ── THE NEW-CHAT HOME (#1783) ─────────────────────────────────────────────────────────────
+  // One ranked stream the background `home_compose` flow wrote. A STORE READ — never a model call —
+  // re-read when a different chat comes to the front and when the connections answer (their ready
+  // providers are evidence for the onboarding steps). Absent (no store, a failed read), the empty
+  // chat keeps the chips it always had.
+  const [homeRead, setHomeRead] = useState<HomeRead | null>(null);
+  const readyProviders = Array.isArray(connections) ? connections.filter((c) => c.status === "ready").map((c) => c.provider).sort().join(",") : "";
+  useEffect(() => {
+    let live = true;
+    const tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } })();
+    void readHome(readyProviders ? readyProviders.split(",") : [], tz).then((r) => { if (live && r) setHomeRead(r); });
+    return () => { live = false; };
+  }, [sel.chatId, readyProviders]);
+  /** A home button: its prompt, fired into THIS chat exactly as a chip fires (`runProposal`) — the
+   *  new chat in front is the "new chat" the act goes into. The click is feedback, and so is the
+   *  chat it landed in. */
+  /** THINK OUT LOUD (founder, 2026-10-14): a new chat with a one-person call in it — the call
+   *  becomes a page with its transcript. It replaces the voice note everywhere it was offered. */
+  // AN @-PICK INVITED SOMEONE TO A CALL (founder: "@ is to tag and to invite to a call"): this chat's
+  // call starts, or is joined; everyone in the chat is rung by the server (`call_started`).
+  useEffect(() => {
+    const on = (e: Event) => {
+      const sid = String((e as CustomEvent<{ session?: string }>).detail?.session ?? "");
+      if (!sid) return;
+      const label = chatsRef.current.find((c) => c.id === sid)?.label ?? "Call";
+      void enterCall(sid, label).catch(() => { /* the dock says why the call did not start */ });
+    };
+    window.addEventListener(CALL_START_EVENT, on);
+    return () => window.removeEventListener(CALL_START_EVENT, on);
+  }, []);
+  const startVexaCall = (card?: Card | null) => {
+    if (card) sendFeedback(card, "click", { title: cardTitle(card) });
+    const c = addChat("Thinking out loud", ["personal", "_global"]);
+    void enterCall(c.id, c.label).catch(() => { /* the dock says why the call did not start */ });
+  };
+  const runHomePrompt = (card: Card, prompt: string, label: string) => {
+    const p: Proposal = { id: `home-${card.id}`, kind: "home", label, kick: homePrompt(prompt, card.id), say: prompt, title: cardTitle(card) };
+    sendFeedback(card, "click", { people: cardPeople(card), title: cardTitle(card) });
+    // A HOME ACT OPENS A NEW CHAT (founder, UI lab 2026-10-14): only the new chat in front is the
+    // place it goes; from any other chat it starts one, never posting into a routine's or a
+    // meeting's thread that happened to be open.
+    if (draft?.id !== sel.chatId) {
+      addChat(label, ["personal", "_global"], { kick: p.kick, say: prompt });
+      return;
+    }
+    sendFeedback(card, "sent", { chat: sel.chatId, title: cardTitle(card) });
+    void runProposal(p);
+  };
+  /** MESSAGE A PERSON. On Vexa: the one 1:1 shared chat the two of you have (the same id from either
+   *  side), created on first use, opened with the composer focused — the agent stays quiet there
+   *  unless @mentioned (policy `session_agent_speaks`). External: a new agent chat addressed to them
+   *  that only drafts; sending is the person's explicit go on the final text. */
+  const messagePerson = async (person: Person, card: Card | null) => {
+    if (card) sendFeedback(card, "click", { people: [person.key], title: cardTitle(card) });
+    const you = homeRead?.you ?? "";
+    if (person.vexa && person.account_id && you) {
+      const sid = directChatId(you, person.account_id);
+      const mine = chatsRef.current.find((c) => c.id === sid);
+      const focus = () => window.setTimeout(() => window.dispatchEvent(new Event("vexa:terminal:focus-chat")), 50);
+      if (mine) { await openChat(mine); focus(); return; }
+      try {
+        const v = await listParticipants(sid).catch(() => null);
+        if (!v || !v.participants.some((x) => x.principal === person.account_id)) {
+          await addParticipant(sid, { subject: person.account_id, history: "all" });
+        }
+        openSharedSession(sid);
+        focus();
+        return;
+      } catch { /* fall through to an addressed agent chat */ }
+    }
+    addChat(`Message to ${person.name}`, ["personal", "_global"], { kick: externalMessagePrompt(person), say: `Draft a message to ${person.name}` });
+  };
+  // A LIVE DASHBOARD (founder, 2026-10-13): a card moves in place when its work moves (`home.item`
+  // over the socket), and a new composition is read only when the pointer is off the home, so
+  // nothing reorders under the cursor.
+  const readyRef = useRef(readyProviders);
+  readyRef.current = readyProviders;
+  useEffect(() => {
+    let pending = false;
+    const reread = () => {
+      pending = false;
+      const tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } })();
+      void readHome(readyRef.current ? readyRef.current.split(",") : [], tz).then((r) => { if (r) setHomeRead(r); });
+    };
+    const onLeave = () => { if (pending) reread(); };
+    const onFrame = (e: Event) => {
+      const f = (e as CustomEvent).detail as { type: string; item?: string; state?: string; chat?: string; page?: string };
+      if (f.type === "home.item" && f.item && f.state) {
+        setHomeRead((r) => (r ? { ...r, doc: patchHome(r.doc, { item: f.item!, state: f.state!, chat: f.chat, page: f.page }, Date.now()) } : r));
+        return;
+      }
+      if (f.type !== "home.composed") return;
+      const el = document.querySelector("[data-home]");
+      if (el && el.matches(":hover")) {
+        pending = true;
+        el.addEventListener("mouseleave", onLeave, { once: true });
+      } else reread();
+    };
+    window.addEventListener(HOME_FRAME_EVENT, onFrame);
+    return () => window.removeEventListener(HOME_FRAME_EVENT, onFrame);
+  }, []);
+  /** ONE SET OF BEHAVIOURS for every block on screen — the home, a page's ```vexa fence, a reply. */
+  const homeHandlers: BlocksHandlers = {
+    onAction: (card, a) => {
+      if (a.call) { startVexaCall(card); return; }
+      if (a.open?.chat) {
+        if (card) sendFeedback(card, "click", { chat: a.open.chat, title: cardTitle(card) });
+        const c = chatsRef.current.find((x) => x.id === a.open?.chat);
+        if (c) void openChat(c); else openSharedSession(a.open.chat);
+        return;
+      }
+      if (a.prompt && card) { runHomePrompt(card, a.prompt, a.label); return; }
+      if (a.prompt) void runProposal({ id: `blocks-${a.label}`, kind: "home", label: a.label, kick: a.prompt, say: a.prompt, title: a.label });
+    },
+    onMessage: (person, card) => { void messagePerson(person, card); },
+    onOpenPerson: (person) => { void runProposal({ id: `person-${person.key}`, kind: "home", label: person.name, kick: personPagePrompt(person), say: personPagePrompt(person), title: person.name }); },
+    onDismiss: (card, reason) => sendFeedback(card, "dismiss", { reason, people: cardPeople(card), title: cardTitle(card) }),
+    onSnooze: (card) => sendFeedback(card, "snooze", { people: cardPeople(card), title: cardTitle(card) }),
+    onExpand: (card) => expandCard(card),
+    onPeekPage: async (path, slug) => {
+      const i = slug === undefined ? path.indexOf("/") : -1;
+      const where = slug ? { slug } : i > 0 ? { slug: path.slice(0, i) } : undefined;
+      const text = await readWorkspaceFile(i > 0 ? path.slice(i + 1) : path, where).catch(() => "");
+      const p = peekFromMarkdown(String(text ?? ""));
+      return { summary: p.summary, properties: p.properties, blocks: p.fence?.blocks, people: p.fence?.people };
+    },
+    onOpenPage: (path) => {
+      const i = path.indexOf("/");
+      if (i <= 0) return;
+      readerChoseFocus.current = true;
+      openPage({ path: path.slice(i + 1), slug: path.slice(0, i), label: (path.split("/").pop() || path).replace(/\.md$/i, "") } as Page, true);
+    },
+  };
+
 
   // Deleting a chat drops it from the rail (its agent session stays on the server — the row is the
   // user's index, not the record). A meeting's row comes back as a derived row, because the meeting
@@ -747,7 +1195,11 @@ export function MinutesShell() {
     setDraft(d=>d?.id===id?{...d,label:title,nameSource:"human"}:d);
     setSel(x=>x.chatId===id?{...x,label:title}:x);
   };
-  const deleteChat = async (chatId: string) => {
+  const deleteChat = async (chatId: string, opts?: { retireRoutine?: boolean }) => {
+    // A ROUTINE'S THREAD ASKS FIRST (ADR-0046): the rail calls this with the answer. Retiring is the
+    // routine's own verb; deleting the chat alone leaves the routine running.
+    const routine = chatsRef.current.find((c) => c.id === chatId)?.routine;
+    if (routine && opts?.retireRoutine) void retireRoutine(routine.flow).catch(() => undefined);
     // DELETE IS THE SERVER'S NOW. It used to drop the stored row and write a tombstone in this
     // browser, which left the chat on the server and on every other device — and a meeting's own
     // chat came straight back as the meeting's derived row, under the same name: "delete chat is not
@@ -763,7 +1215,7 @@ export function MinutesShell() {
       return;
     }
     persist((prev) => removeChat(prev, chatId));
-    try { setMarks(await fetchMarks()); } catch { /* the row is gone either way */ }
+    await refreshFolders(chatOrder);
     if (sel.chatId !== chatId) return;
     // There is no home row to fall back to any more (F34 deleted it), so the shell lands on the
     // most recent chat that still exists — or, when none does, on a fresh draft: a composer with
@@ -915,9 +1367,28 @@ export function MinutesShell() {
     setNotice(null);
   }, []);
 
+  /** THE CHAT'S MEETING IN THE RIGHT PANEL (founder, 2026-10-14: "there is no visible meeting UI or
+   *  transcript body in the panel"). The meeting view — transcript feed, Stop bot — is a panel tab:
+   *  the header's live chip opens it, and a meeting that is happening opens it by itself, once per
+   *  chat and meeting (`meetingToOpen`), so a reader who closes it keeps it closed. By itself it never
+   *  pulls a phone's sheet over the conversation (`byReader` false); the chip does, because it was asked. */
+  const openMeetingView = useCallback((m: MeetingMock, byReader: boolean) => {
+    openPage({ kind: "meeting", path: String(m.id), label: (m as { title?: string }).title || "Meeting" } as Page, byReader);
+  }, [openPage]);
+  const autoOpenedMeetings = useRef(new Set<string>());
+  const chatMeetingState = chatMeeting ? meetingStatusOf(chatMeeting) : "";
+  useEffect(() => {
+    const key = meetingToOpen(sel.chatId, chatMeeting, autoOpenedMeetings.current);
+    if (!key || !chatMeeting) return;
+    autoOpenedMeetings.current.add(key);
+    openMeetingView(chatMeeting, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sel.chatId, chatMeeting?.id, chatMeetingState]);
+
   /** PIN A PAGE. The amendment folded "open in tab" into this: the strip is history, so everything
    *  you open is already in it, and the only extra thing worth asking for is that one STAYS. */
   const openPinned = useCallback((pg: Page) => {
+    void pinPage({ slug: pg.slug ?? null, path: pg.path, label: pg.label });
     openPage(pg, true);
     setPages((prev) => prev.map((x) => artifactKey(x) === artifactKey(pg) ? { ...x, pinned: true } : x));
   }, [openPage]);
@@ -931,6 +1402,9 @@ export function MinutesShell() {
    *  about: every tab carries its own, and `togglePinned` is the pure rule behind all of them. */
   const togglePin = useCallback((pg: Page) => {
     const front = artifactKey(pg) === artifactKey({ kind: docKind, path: docPath, slug: docSlug });
+    // the person's list first (it is what every chat re-applies), then this chat's tabs
+    if (pg.pinned) void unpinPage({ slug: pg.slug ?? null, path: pg.path });
+    else if (pg.kind !== "meeting") void pinPage({ slug: pg.slug ?? null, path: pg.path, label: pg.label });
     setPages((prev) => togglePinned(prev, artifactKey(pg), front, Date.now()));
   }, [docKind, docPath, docSlug]);
 
@@ -1034,10 +1508,14 @@ export function MinutesShell() {
     const key = artifactKey(pg);
     const i = pages.findIndex((x) => artifactKey(x) === key);
     if (i < 0) return;
-    const next = forgetHistory(pages, key);
+    const { next, unpin } = closingTab(pages, pg);
+    if (unpin) void unpinPage({ slug: pg.slug ?? null, path: pg.path });
     setPages(next);
     if (key === artifactKey({ kind: docKind, path: docPath, slug: docSlug }) && next.length) {
       openPage(next[Math.min(i, next.length - 1)]);
+    } else if (!next.length) {
+      setDocPath(""); setDocSlug(undefined);   // the last tab closed: the panel folds away
+      shell.setPagesOpen(false);
     }
   };
 
@@ -1054,7 +1532,7 @@ export function MinutesShell() {
   /** The breadcrumb navigates. `listWorkspaceTree` returns every path in a workspace, so a folder
    *  is just that list cut at one prefix: the names with no further slash are files, the first
    *  segment of the rest are directories. No new endpoint, and no tree state to keep in step. */
-  const navigate = useCallback(async (slug: string | undefined, prefix: string) => {
+  const navigate = useCallback(async (slug: string | undefined, prefix: string, name?: string) => {
     const files = await listWorkspaceTree(slug ? { slug } : undefined).catch(() => [] as string[]);
     const head = prefix ? `${prefix}/` : "";
     const dirs = new Set<string>(), leaves = new Set<string>();
@@ -1065,8 +1543,23 @@ export function MinutesShell() {
       const cut = rest.indexOf("/");
       if (cut < 0) leaves.add(rest); else dirs.add(rest.slice(0, cut));
     }
-    setListing({ slug, prefix, dirs: [...dirs].sort(), files: [...leaves].sort() });
+    // the workspace's name rides along while the reader walks the same workspace
+    setListing((prev) => ({ slug, prefix, dirs: [...dirs].sort(), files: [...leaves].sort(),
+      name: name ?? (prev && prev.slug === slug ? prev.name : undefined) }));
   }, []);
+
+  // A WORKSPACE'S FILES, ASKED FOR BY NAME (#1783): a desktop tile whose workspace has no README
+  // shows the workspace's root here, where the listing offers Create README. Only the panel moves:
+  // the chat in front is not mounted, retargeted or created.
+  useEffect(() => {
+    const onFiles = (e: Event) => {
+      const d = (e as CustomEvent<{ workspace?: string; name?: string }>).detail || {};
+      const slug = (d.workspace || "").trim() || undefined;
+      void navigate(slug, "", (d.name || "").trim() || undefined).then(() => shell.setPagesOpen(true));
+    };
+    window.addEventListener(OPEN_WORKSPACE_FILES_EVENT, onFiles);
+    return () => window.removeEventListener(OPEN_WORKSPACE_FILES_EVENT, onFiles);
+  }, [navigate, shell]);
 
   /** The chat's focus set, edited from the header. The mount set follows immediately — the point of
    *  changing it is the next turn, not the next reload. */
@@ -1108,14 +1601,123 @@ export function MinutesShell() {
     setSel((x) => ({ ...x, target: next || undefined }));
     persist((prev) => setTarget(prev, id, next));
     setDraft((d) => (d && d.id === id ? { ...setTarget([d], id, next)[0] } : d));
-    void setChatTarget(id, next).catch(() => undefined);
+    void setChatTarget(id, next).then(() => notifyScope()).catch(() => undefined);
   };
   setChatTargetRef.current = chooseTarget;
+  // HOME2 (R3): the workspace page's "Expand" widens the pages panel (two columns), and back
+  const pagesWidthBefore = useRef<number | null>(null);
+  const wideRef = useRef<(wide: boolean) => void>(() => undefined);
+  useEffect(() => {
+    const on = (e: Event) => wideRef.current(!!(e as CustomEvent<{ wide?: boolean }>).detail?.wide);
+    window.addEventListener(WORKSPACE_PAGE_WIDE_EVENT, on);
+    return () => window.removeEventListener(WORKSPACE_PAGE_WIDE_EVENT, on);
+  }, []);
+  wideRef.current = (wide: boolean) => {
+    const b = L.bounds.pages;
+    if (!b) return;
+    if (wide) { pagesWidthBefore.current ??= L.widths.pages; shell.commitWidth("pages", b.max); }
+    else if (pagesWidthBefore.current != null) { shell.commitWidth("pages", pagesWidthBefore.current); pagesWidthBefore.current = null; }
+  };
+  // HOME2 (R3): a workspace status card on the home (or the workspace page's "New chat") aims the
+  // home's new chat at that workspace — mounted first, then targeted, in one beat, through the one
+  // writer above. "" is the person's own. Only `home2` cards send it, and never for a workspace they
+  // can only read. ONLY THE DRAFT IS AIMED: a stored chat in front keeps where it writes (its own
+  // chip and guard decide that), and the aim opens a new draft there instead.
+  useEffect(() => {
+    const on = (e: Event) => {
+      const wid = String((e as CustomEvent<{ workspace?: string }>).detail?.workspace ?? "").trim();
+      if (homeTargetAct(selRef.current.chatId, draftRef.current?.id) === "new-draft") { startDraftRef.current(wid); return; }
+      if (wid) setWorkspacesRef.current((ws) => (ws.includes(wid) ? ws : [...ws, wid]));
+      setChatTargetRef.current(wid, { justMounted: true });
+    };
+    window.addEventListener(HOME_TARGET_EVENT, on);
+    return () => window.removeEventListener(HOME_TARGET_EVENT, on);
+  }, []);
+  // NEW CHAT ON A WORKSPACE'S PAGE (founder 2026-10-16: a dead click): always a fresh draft in the
+  // centre, aimed there, composer focused, and prefilled when the page asked for words.
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ workspace?: string; draft?: string }>).detail ?? {};
+      const wid = String(d.workspace ?? "").trim();
+      const c = startDraftRef.current(wid === "personal" ? "" : wid);
+      window.setTimeout(() => {
+        if (d.draft) window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { prompt: d.draft, mode: "draft" } }));
+        window.dispatchEvent(new CustomEvent("vexa:terminal:focus-chat"));
+      }, 80);
+      return c;
+    };
+    window.addEventListener(NEW_CHAT_AT_EVENT, on);
+    return () => window.removeEventListener(NEW_CHAT_AT_EVENT, on);
+  }, []);
+  // NEW ROOM in a workspace (founder 2026-10-16): the room dialog, aimed at it
+  useEffect(() => {
+    const on = (e: Event) => { const w = String((e as CustomEvent<{ workspace?: string }>).detail?.workspace ?? ""); setRoomDialogRef.current({ kind: "new", workspace: w || undefined }); };
+    window.addEventListener(NEW_ROOM_EVENT, on);
+    return () => window.removeEventListener(NEW_ROOM_EVENT, on);
+  }, []);
+  // THE PERSON'S SWITCH ON AN AGENT'S PROPOSAL (UI decision 6b): the same writer as the chip, for the
+  // chat the proposal was made in — mounted first, then targeted, in one beat.
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ session?: string; workspace?: string }>).detail || {};
+      if (!d.session || d.session !== selRef.current.chatId) return;
+      const wid = String(d.workspace ?? "").trim();
+      if (wid) setWorkspacesRef.current((ws) => (ws.includes(wid) ? ws : [...ws, wid]));
+      setChatTargetRef.current(wid, { justMounted: true });
+    };
+    window.addEventListener(CHOOSE_TARGET_EVENT, on);
+    return () => window.removeEventListener(CHOOSE_TARGET_EVENT, on);
+  }, []);
+
+  /** THE SCOPE LINE'S READS (Vexa-ai/vexa#1783) — the server's answer for this chat — kept on the
+   *  record, so the pages panel opens what the chat actually reads. Stable, and a no-op when
+   *  nothing changed, so a re-read never re-renders the shell for nothing. */
+  const onScopeReads = useCallback((reads: string[], view?: ScopeView) => {
+    const cur = selRef.current.workspaces;
+    const next = [...reads, ...(cur.includes(GLOBAL_MOUNT) ? [GLOBAL_MOUNT] : [])];
+    if (!(next.length === cur.length && next.every((w, i) => w === cur[i]))) setWorkspacesRef.current(() => next);
+    // A TAB FOR A WORKSPACE THIS CHAT DOES NOT HAVE GOES (Vexa-ai/vexa#1783): the founder hid
+    // Personal and still saw a pinned "Personal" tab.
+    if (view) {
+      const scope = { reads, target: view.chat.target, known: view.workspaces.map((w) => w.slug) };
+      setPages((p) => dropStaleTabs(p, scope));
+    }
+  }, [setPages]);
+
+  // ── THE DEFAULT FOR NEW CHATS (founder 2026-10-13) ───────────────────────────────────────────
+  //  A person can make one workspace the place their new chats write to ("Make default for new
+  //  chats" in the Writes to menu). agent-api keeps it per person and RE-CHECKS it on every read —
+  //  removed, deleted, or lowered to reader, and the answer is Personal, unnamed — so it is asked
+  //  again for each new draft rather than remembered here. It is applied through the same two
+  //  writers a `focus` event uses (mount, then target), so the chip, the draft and the server move
+  //  together. Only an untouched draft that has chosen nothing takes it: existing chats keep theirs.
+  const [defaultTarget, setDefaultTargetState] = useState("");
+  const draftId = draft?.id;
+  useEffect(() => {
+    const d = draftRef.current;
+    if (!d || d.touched) return;
+    let live = true;
+    void getDefaultTarget().then((wid) => {
+      if (!live) return;
+      setDefaultTargetState(wid);
+      const cur = draftRef.current;
+      if (!cur || cur.id !== d.id || selRef.current.chatId !== d.id) return;
+      if (withDefaultTarget(cur, wid) === cur) return;
+      setWorkspacesRef.current((ws) => (ws.includes(wid) ? ws : [...ws, wid]));
+      setChatTargetRef.current(wid, { justMounted: true });
+    });
+    return () => { live = false; };
+  }, [draftId]);
+  const makeDefaultTarget = (wid: string) => {
+    void setDefaultTarget(wid).then((saved) => setDefaultTargetState(saved)).catch(() => undefined);
+  };
 
   useEffect(() => {
     let dead = false;
     // a meeting tab has no body to fetch: the canvas fetches its own transcript by row id.
     if (docKind === "meeting") { setDocBody(null); return; }
+    // a workspace's page (home2) is drawn from components, not read as a file
+    if (isWorkspacePagePath(docPath)) { setDocBody(null); return; }
     // mock bodies short-circuit the fetch entirely — no request is made for a fabricated page
     if (mock) {
       const canned = mockBody(docPath, Date.now() - mockStart.current);
@@ -1184,7 +1786,9 @@ export function MinutesShell() {
       const m = meetings.find((x) => (x as { native_id?: string }).native_id === native || String(x.id) === ref);
       // same rule: a ref with no row behind it opens the meeting's notes page rather than nothing —
       // and asks the list for the row, so the next render of that ref can do better than the notes.
-      if (m) void openMeeting(m); else { ensureMeetingKnown(native); openPage(pageForMeetingRef(ref), true); }
+      // NEVER THE CENTRE (founder rule 2026-10-16): the meeting opens on the right; the chat stays.
+      if (!m) ensureMeetingKnown(native);
+      openPage(meetingRefPage(ref, meetings as never), true);
     };
     // A CLICK IS THE READER CHOOSING. Both of these arrive from something the person pressed in
     // the conversation, so from here on an artifact appends behind them rather than in front.
@@ -1264,7 +1868,10 @@ export function MinutesShell() {
       // decide to move nothing (a reader who has since opened something else).
       const named = pageForArtifact(detail);
       if (named?.kind === "meeting") void bindMeetingHere(named.path);
-      const eff = artifactViewEffect(detail, readerChoseFocus.current);
+      // A FILE THE TURN WROTE IS A CHIP IN THE CHAT, NOT A TAB (UI decision 7 amended): the panel
+      // opens on the person's click, or for a meeting the chat just started.
+      if (!autoOpens(detail)) return;
+      const eff = artifactViewEffect(detail, readerChoseFocus.current, selRef.current.meetingId);
       if (!eff) return;              // neither pinned nor focused ⇒ NOTHING VISIBLE, not a quiet tab
       // PIN FIRST, then focus. `touchHistory` (inside openPage) carries a prior entry's `pinned`
       // forward, so pinning before navigating keeps the pin; the other order would move the page
@@ -1303,6 +1910,12 @@ export function MinutesShell() {
   useEffect(() => {
     const onOpen = (e: Event) => {
       const d = (e as CustomEvent<{ workspace?: string; path?: string }>).detail || {};
+      // `browser-session:<id>` is the live sign-in view (ADR-0049), not a page.
+      const bs = browserSessionFromOpenPath(d.path);
+      if (bs) { openBrowserSession(bs); return; }
+      // `chat:<id>` — a chat the agent just started for the person ("start an incognito chat").
+      const chatId = /^chat:(pchat-[0-9a-z]{4,20})$/.exec(d.path ?? "")?.[1];
+      if (chatId) { addChatRef.current?.("New chat", [], { id: chatId }); return; }
       const pg = pageForArtifact(d);
       if (!pg) return;
       readerChoseFocus.current = true;
@@ -1377,6 +1990,97 @@ export function MinutesShell() {
     if (m) void openMeeting(m, { touched: true, front }); else ensureMeetingKnown(native);
   }, [meetings, openMeeting]);
 
+  // A VOICE NOTE (#1783) opens as its meeting the moment the list has its row: the recorder makes the
+  // row, the list is asked for it, and this opens it — the transcript then arrives as for any meeting.
+  const [pendingVoice, setPendingVoice] = useState<string | null>(null);
+  // Two ways in, one recorder (founder 2026-10-13): the empty chat's "Record a voice note" chip and
+  // the agent's `record_voice_note` tool both raise VOICE_NOTE_OPEN. A note already recording in this
+  // tab is not started twice. A start that fails before the note exists (the microphone refused, the
+  // service unreachable) has no meeting view to say so in: the rail says it (Rail's VoiceNoteLive).
+  const startVoice = useCallback(() => {
+    const phase = voiceNoteState().phase;
+    if (phase === "starting" || phase === "recording" || phase === "stopping") return;
+    // STARTED FROM A CHAT, IT IS THAT CHAT'S (founder, 2026-10-13): the note binds to the chat it was
+    // started in — the header shows it, its transcript grounds the chat — and no chat of its own opens.
+    const from = selRef.current?.chatId || "";
+    void startVoiceNote(browserVoiceNoteDeps(), { speakerName: speakerRef.current }).then((m) => {
+      ensureMeetingKnown(m.native_meeting_id);
+      refreshMeetings();
+      if (from && !from.startsWith("meet-") && m.id) {
+        persist((prev) => bindMeeting(prev, from, String(m.id)));
+        void bindMeetingToChat(from, String(m.id)).catch(() => { /* the note records either way */ });
+        return;
+      }
+      setPendingVoice(m.native_meeting_id);
+    }).catch(() => { /* the rail shows why the note did not start */ });
+  }, [persist]);
+  // THE MEETING PAGE LINKS BACK TO ITS CHAT: the rail's own row for the meeting is the chat it was
+  // started from when there is one (`railRows` folds them), else its own chat.
+  useEffect(() => {
+    const open = (e: Event) => {
+      const id = String((e as CustomEvent<{ meetingId?: string }>).detail?.meetingId || "");
+      const m = meetings.find((x) => String(x.id) === id);
+      if (m) void openMeeting(m, { touched: true });
+    };
+    window.addEventListener(OPEN_MEETING_CHAT, open);
+    return () => window.removeEventListener(OPEN_MEETING_CHAT, open);
+  }, [meetings, openMeeting]);
+  useEffect(() => {
+    window.addEventListener(VOICE_NOTE_OPEN, startVoice);
+    return () => window.removeEventListener(VOICE_NOTE_OPEN, startVoice);
+  }, [startVoice]);
+  useEffect(() => {
+    if (!pendingVoice) return;
+    const m = meetings.find((x) => (x as { native_id?: string }).native_id === pendingVoice);
+    if (m) { setPendingVoice(null); void openMeeting(m, { touched: true }); }
+  }, [pendingVoice, meetings, openMeeting]);
+
+  // A CALL (ADR-0048 decision 6): the dock stays across chats. "Private" opens my own chat about the
+  // call's meeting — the meeting's chat, opened the way a voice note's is, once the list has its row.
+  const [pendingCallMeeting, setPendingCallMeeting] = useState<string | null>(null);
+  const openCallPrivate = useCallback((_meetingId: number, room: string) => {
+    setPendingCallMeeting(room);
+    ensureMeetingKnown(room);
+    refreshMeetings();
+  }, []);
+  useEffect(() => {
+    if (!pendingCallMeeting) return;
+    const m = meetings.find((x) => (x as { native_id?: string }).native_id === pendingCallMeeting);
+    if (m) { setPendingCallMeeting(null); void openMeeting(m, { touched: true }); }
+  }, [pendingCallMeeting, meetings, openMeeting]);
+  const openCallShared = useCallback((chatId: string) => {
+    const c = chatsRef.current.find((x) => x.id === chatId);
+    if (c) void openChat(c);
+  }, [openChat]);
+
+  // ── THE PANEL BELONGS TO THE AGENT ON ITS LEFT (founder, 2026-10-15) ─────────────────────────
+  //  With nothing open, the panel lists THIS chat's artifacts: files its turns wrote (re-emitted by
+  //  the chat surface, which owns the turns), pages opened in it (its own strip), cards bound to it
+  //  and the meeting it is about. Switching chats switches the list; nothing comes from a workspace.
+  const [chatWrites, setChatWrites] = useState<Record<string, { role: string; at?: number; ops?: { file?: string; wrote?: boolean }[] }[]>>({});
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ session?: string; turns?: { role: string; at?: number; ops?: { file?: string; wrote?: boolean }[] }[] }>).detail;
+      if (!d?.session) return;
+      setChatWrites((prev) => ({ ...prev, [d.session as string]: d.turns ?? [] }));
+    };
+    window.addEventListener(CHAT_ARTIFACTS_EVENT, on);
+    return () => window.removeEventListener(CHAT_ARTIFACTS_EVENT, on);
+  }, []);
+  const artifactsHere = useMemo<ChatArtifact[]>(() => chatArtifacts({
+    writes: writesOf(chatWrites[sel.chatId] ?? []),
+    visits: pages,
+    cards: (homeRead?.doc.cards ?? []).filter((c) => c.result?.chat === sel.chatId)
+      .map((c) => ({ id: c.id, title: cardTitle(c), at: c.patchedAt, page: c.result?.page })),
+    meeting: chatMeeting ? { id: String(chatMeeting.id), title: meetingTitle(chatMeeting) } : undefined,
+  }), [chatWrites, sel.chatId, pages, homeRead, chatMeeting]);
+  const openChatArtifact = (a: ChatArtifact) => {
+    readerChoseFocus.current = true;
+    if (a.meeting && chatMeeting) { void openMeeting(chatMeeting); return; }
+    if (a.page) { openPage(a.page as Page, true); return; }
+    // a written file or a card's page opens the way the chat's own chip does
+    if (a.file) window.dispatchEvent(new CustomEvent(OPEN_ENTITY_EVENT, { detail: { path: a.file } }));
+  };
   const session = sel.chatId;
 
   // The header says which phase the room is in. It read isHeld() — a two-way test — so a LIVE
@@ -1461,7 +2165,10 @@ export function MinutesShell() {
       meeting: rec.meeting,
       artifacts: fresh ? rec.artifacts : undefined,
       focus: fresh ? rec.focus : undefined,
-      kick: sc.openingText,
+      // THE FIRST VISIT IS THE HOME (#1783, founder 2026-10-13: "this same first page is the
+      // onboarding"). Its greeting turn is not fired: the empty chat shows the home, whose first
+      // cards are the onboarding curriculum's opening steps (`_global/onboarding.md`).
+      kick: homeFirstVisit(sc) ? undefined : sc.openingText,
       // The record travels ONTO the chat — kind and id together (F37). It never used to: the kind
       // was computed here and dropped on the floor, which is why the header could only fall back to
       // mount arithmetic and why a planted row could wear the admin flavour without a record.
@@ -1478,7 +2185,7 @@ export function MinutesShell() {
     // arrival's kick is hidden and settle-delayed — so without this the chat a link just opened
     // sits for a beat under "Set up a workspace for me", inviting the reader to start the thing
     // they have this second been sent.
-    setSpent(rec.id);
+    if (!homeFirstVisit(sc)) setSpent(rec.id);
   }, [addChat]);
 
   // A scaffold that would not open. Held so the reader is TOLD — a person who clicked a real link
@@ -1605,19 +2312,78 @@ export function MinutesShell() {
   // header's menu control, in single mode) opens. Selecting a chat from the drawer closes it — the
   // reader came for the conversation, not the list.
   const railBody = (inDrawer: boolean) => (
-    <Rail rows={shownRows} hidden={hiddenCount} all={all} onAll={toggleAll}
+    <Rail rows={rows} folders={railFolders}
+      onNewRoom={roomsOn ? () => { if (inDrawer) shell.closeOverlays(); setRoomDialog({ kind: "new" }); } : undefined}
+      onBrowseRooms={roomsOn ? () => { if (inDrawer) shell.closeOverlays(); setRoomDialog({ kind: "browse" }); } : undefined}
       selKey={selKey} onSelect={(r) => { if (inDrawer) shell.closeOverlays(); void openRow(r); }}
-      onNewChat={() => { if (inDrawer) shell.closeOverlays(); startDraft(); }} onDeleteChat={(id) => void deleteChat(id)} onMove={reorder}
+      onHome={home2 ? () => { if (inDrawer) shell.closeOverlays(); goHome(); } : undefined}
+      onNewWorkspace={home2 ? () => { if (inDrawer) shell.closeOverlays(); goHome(); window.setTimeout(() => window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { prompt: NEW_WORKSPACE_KICK, display: "Set up a new workspace" } })), 80); } : undefined}
+      onNewChat={() => { if (inDrawer) shell.closeOverlays(); startDraft(); }} onDeleteChat={(id, o) => void deleteChat(id, o)} onMove={reorder}
+      onDeleteChats={(ids) => void (async () => { for (const id of ids) await deleteChat(id, { retireRoutine: false }); })()}
+      onShareChats={(rs, email) => void (async () => {
+        setOrderError("");
+        const failed = (await Promise.allSettled(rs.filter((r) => r.chatId).map((r) => addParticipant(r.chatId as string, { email }))))
+          .filter((x) => x.status === "rejected").length;
+        if (failed) setOrderError(`Couldn't share ${failed} of ${rs.length} chats. Try again.`);
+      })()}
+      meetingActsFor={meetingActsFor}
       onPin={(r, on) => void mark(r.key, { pinned: on })} onHide={(r, on) => void mark(r.key, { hidden: on })}
-      hiddenView={hiddenView} onHiddenView={setHiddenView} hiddenMarked={hiddenMarked}
+      {...(home2 && !folders.served ? { onMoveRows } : folders.served ? {
+        onMoveRows,
+        onFolderCreate: (name: string, then?: string[]) => void folderAct(async () => { const f = await createFolder(name); if (then?.length) await moveRows(then, f.id); }, "Couldn't make the folder. Try again."),
+        onFolderRename: (id: string, name: string) => void folderAct(() => updateFolder(id, { name }), "Couldn't rename the folder. Try again."),
+        onFolderDelete: (id: string) => void folderAct(() => deleteFolder(id), "Couldn't delete the folder. Try again."),
+        onFolderCollapse: (id: string, collapsed: boolean) => void updateFolder(id, { collapsed }).catch(() => {}),
+        onFolderMove: (id: string, position: number) => void folderAct(() => updateFolder(id, { position }), "Couldn't move the folder. Try again."),
+      } : {})}
       onCollapse={() => shell.setRailOpen(false)} collapseLabel={inDrawer ? "Close the chat list" : undefined} />
   );
+  // the person's list, once per sign-in; a first load with nothing on the server keeps the pins the
+  // open chat already had, so nobody loses a tab to the move
+  const pagesRef = useRef<Page[]>([]);
+  pagesRef.current = pages;
+  useEffect(() => {
+    if (!email) return;
+    const seed = pagesRef.current.filter((a) => a.pinned && !a.desk && a.kind !== "meeting")
+      .map((a) => ({ slug: a.slug ?? null, path: a.path, label: a.label }));
+    void loadUserPins(seed);
+  }, [email]);
+  // ROOMS (R1): what the chat in front is; the dialogs; the personal header's "…"
+  const room = useRoom(sel.chatId, roomsOn && draft?.id !== sel.chatId);
+  const inRoom = roomsOn && !!room?.room;
+  const roomWorkspaces = useMemo(() => {
+    const shared = writable.filter((w) => memberships.some((m) => m.workspace_id === w.slug));
+    return shared.length ? shared : writable.filter((w) => w.slug !== "personal");
+  }, [writable, memberships]);
+  const wsName = (slug: string) => writable.find((w) => w.slug === slug)?.name ?? (slug === "personal" || !slug ? "Personal" : slug);
+  const [roomDialog, setRoomDialog] = useState<null | { kind: "new" | "take" | "browse"; workspace?: string; name?: string; from?: string }>(null);
+  const setRoomDialogRef = useRef(setRoomDialog);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const openRoomSession = (sid: string) => { setRoomDialog(null); void refreshRoom(sid); openSharedSession(sid); };
+  const thinkPrivately = () => {
+    // a private 1:1 about the room, linked back to it; it writes where you write
+    const c = addChat(`Thinking about: ${sel.label || "the room"}`, ["personal", "_global"]);
+    rememberThink(c.id, { session: sel.chatId, label: sel.label || "the room" });
+  };
+  const back = roomsOn ? thinkOf(sel.chatId) : null;
+  // PINNED PAGES IN THE CHAT HEADER while the panel is closed (#1783): reachable without opening it.
+  const pinChips = !pagesVisible && userPins.length > 0 ? (
+    <span className="vx-pin-chips" role="group" aria-label="Pinned pages">
+      {userPins.slice(0, 6).map((p) => (
+        <button key={`${p.slug ?? ""}:${p.path}`} type="button" className="vx-pin-chip" title={`${p.label} — open`}
+          onClick={() => openPage({ kind: "doc", path: p.path, slug: p.slug ?? undefined, label: p.label } as Page, true)}>
+          {p.label || p.path.split("/").pop()}
+        </button>
+      ))}
+    </span>
+  ) : null;
   const pagesOverlay = L.pagesKind === "sheet" || L.pagesKind === "fullscreen";
   const sheetForm = L.pagesKind === "sheet" ? "overlay" : L.pagesKind === "fullscreen" ? "fullscreen" : "inline";
 
   return (
     <div ref={shellRef} data-shell-mode={L.mode} data-rail={L.railKind} data-pages={L.pagesKind}
       style={{ position: "relative", display: "grid", gridTemplateColumns: L.columns, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, minWidth: 0, overflow: "clip", background: surface.rail }}>
+      <NotificationToasts />
       {L.railKind === "docked" ? railBody(false)
         : L.railKind === "strip" ? <RailStrip open={shell.drawerOpen} onOpen={() => shell.setRailOpen(true)} onNewChat={startDraft} />
         : null}
@@ -1631,13 +2397,45 @@ export function MinutesShell() {
           onPreview={(w) => shell.previewWidth("rail", w)} onCommit={(w) => shell.commitWidth("rail", w)}
           style={{ left: L.widths.rail - 4 }} />
       )}
-      {orderError && <div role="alert" style={{position:"absolute",bottom:10,left:10,zIndex:50}}>{orderError}</div>}
+      {/* A RAIL ERROR IS A CALM TOAST (#1783): it never lands as raw text over the account card,
+          it says what to do, and it can be dismissed (it also goes by itself). */}
+      {orderError && <RailToast message={orderError} onDismiss={() => setOrderError("")} />}
       <div style={{display:connectionsMode==='page'&&!pagesOverlay?"none":"contents"}}>
-      <ContextBar sel={sel} onRename={draft?.id === sel.chatId ? undefined : renameChat} flavor={flavor} memberships={memberships}
+      {inRoom && room ? <RoomHeader session={sel.chatId} label={sel.label} room={room} workspaceName={wsName(room.workspace)}
+        onRename={renameChat} onThinkPrivately={thinkPrivately}
+        onLeave={() => {
+          // leaving is the server's act (an owner's room is handed on to the next member; the last
+          // one cannot leave, and the server says why); the room then goes from this person's sidebar
+          const sid = sel.chatId;
+          void leaveRoom(sid).then(() => { persist((prev) => prev.filter((c) => c.id !== sid)); startDraft(); })
+            .catch((e: unknown) => setOrderError(((e as { body?: { detail?: { said?: string } } })?.body?.detail?.said)
+              || "Could not leave the room. Try again."));
+        }}
+        onActivity={() => setActivityOpen(true)}
+        leading={L.railKind === "drawer" ? <ShellToggle kind="rail" open={shell.drawerOpen} onClick={() => shell.setRailOpen(!shell.drawerOpen)} /> : undefined} />
+      : <ContextBar sel={sel} personal={roomsOn && sel.kind === "chat" ? { face: <Face name={signedInAs ?? email ?? ""} />, more: [
+          { key: "r-call", label: "Start a call", onSelect: () => window.dispatchEvent(new CustomEvent(CALL_START_EVENT, { detail: { session: sel.chatId } })) },
+          { key: "r-take", label: "Take to a room…", onSelect: () => setRoomDialog({ kind: "take", workspace: sel.target, name: sel.label, from: sel.label }) },
+          ...(back ? [{ key: "r-back", label: `Back to # ${back.label}`, onSelect: () => openSharedSession(back.session) }] : []),
+          ...userPins.slice(0, 4).map((pp) => ({ key: `r-pin:${pp.slug ?? ""}:${pp.path}`, label: `Open ${pp.label || pp.path.split("/").pop()}`, onSelect: () => openPage({ kind: "doc", path: pp.path, slug: pp.slug ?? undefined, label: pp.label } as Page, true) })),
+          { key: "r-activity", label: "Activity…", onSelect: () => setActivityOpen(true) },
+        ] } : undefined} untitled={draft?.id === sel.chatId || /^new chat$/i.test((sel.label ?? "").trim())} onRename={draft?.id === sel.chatId ? undefined : renameChat} flavor={flavor} memberships={memberships}
+        defaultTarget={defaultTarget} onMakeDefault={makeDefaultTarget}
+        scope={isAdminAccount ? undefined : { session: sel.chatId, onReads: onScopeReads }}
         leading={L.railKind === "drawer"
           ? <ShellToggle kind="rail" open={shell.drawerOpen} onClick={() => shell.setRailOpen(!shell.drawerOpen)} /> : undefined}
-        trailing={pagesOverlay
-          ? <ShellToggle kind="pages" open={shell.sheetOpen} onClick={() => shell.setPagesOpen(!shell.sheetOpen)} /> : undefined}
+        trailing={<>
+          {chatMeeting && <LiveMeetingChip meeting={chatMeeting} onOpen={() => openMeetingView(chatMeeting, true)} />}
+          {!roomsOn && pinChips}
+          {pagesOverlay && <ShellToggle kind="pages" open={shell.sheetOpen} onClick={() => shell.setPagesOpen(!shell.sheetOpen)} />}
+        </>}
+        writable={writable}
+        onWriteTo={(id) => {
+          // MOUNT · TARGET, one act — the mount first because `chooseTarget` refuses a target the
+          // chat is not over, and `justMounted` lets the second beat trust it before React commits.
+          setWorkspaces((ws) => (ws.includes(id) ? ws : [...ws, id]));
+          chooseTarget(id, { justMounted: true });
+        }}
         onAddWorkspace={(id) => setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id])}
         onRemoveWorkspace={(id) => {
           setWorkspaces((ws) => ws.filter((w) => w !== id));
@@ -1663,14 +2461,30 @@ export function MinutesShell() {
           readerChoseFocus.current = true;
           openPage({ path: "README.md", slug: GLOBAL_MOUNT, label: COMPANY_WORD } as Page, true);
         }}
-        onAttachRepo={(id) => setAttachTo({ id })} />
-      {/* Wrapped rather than a bare id so "the desk" (id undefined) is still an OPEN dialog — a
+        onAttachRepo={(id) => setAttachTo({ id })}
+        onFolderPicked={(folder) => requestFolderImport({ kind: "folder", folder, into: null })} />}
+      {roomDialog?.kind === "browse" && <BrowseRoomsDialog workspaces={roomWorkspaces} onClose={() => setRoomDialog(null)} onOpen={openRoomSession} />}
+      {(roomDialog?.kind === "new" || roomDialog?.kind === "take") && <NewRoomDialog workspaces={roomWorkspaces} initialWorkspace={roomDialog.workspace}
+        initialName={roomDialog.name ?? ""} from={roomDialog.kind === "take" ? { label: roomDialog.from ?? "" } : undefined}
+        onClose={() => setRoomDialog(null)} onCreated={(sid) => openRoomSession(sid)} />}
+      {/* A FOLDER DROPPED OR PICKED becomes a workspace (founder 2026-10-13). One host for the whole
+          shell: the rail, the chat and the empty state all land here. Offered INTO the workspace
+          this chat writes to when that is one; what it makes joins this chat's set. */}
+      {!isAdminAccount && (
+        <FolderImportHost
+          chatTarget={sel.target && sel.target !== GLOBAL_MOUNT ? { slug: sel.target, label: <WorkspaceName slug={sel.target} /> } : null}
+          onImported={(r) => { if (r.slug) setWorkspaces((ws) => (ws.includes(r.slug) ? ws : [...ws, r.slug])); }} />
+      )}
+            {/* Wrapped rather than a bare id so "the desk" (id undefined) is still an OPEN dialog — a
           nullable id alone cannot tell "no dialog" from "dialog, aimed at the desk". */}
       {attachTo && (
         <AttachRepo workspaceId={attachTo.id} onClose={() => setAttachTo(null)}
           onAttached={(id) => { if (id) setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id]); }} />
       )}
       <main className="vx-pane" data-pane="conversation" style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center, display: "flex", flexDirection: "column" }}>
+        <DesktopToaster />
+        <CallDock onOpenShared={openCallShared} onOpenPrivate={openCallPrivate}
+          nameOf={(sid) => { const c = allChats.find((x) => x.id === sid); return (c as { label?: string } | undefined)?.label ?? ""; }} />
         {/* A SCAFFOLD THAT WOULD NOT OPEN STATES ITSELF. Someone who clicked a real link and landed
             on an empty conversation cannot tell a spent invitation from a broken product — and the
             second reading is the one they take. So: whose it is, and what to do about it. It sits
@@ -1680,12 +2494,32 @@ export function MinutesShell() {
           <ScaffoldRefusalCard refusal={scaffoldRefusal} signedInAs={signedInAs}
             onDismiss={() => setScaffoldRefusal(null)} />
         )}
+        {/* A ROUTINE'S OWN CHAT carries its controls at the top of the conversation — only that
+            chat: it is part of this column, so it leaves with the chat when another one opens. */}
+        {/* A ROUTINE'S OWN CHAT carries its controls at the top of the conversation. ROOMS (R1): they
+            live under "…" → Activity in both headers instead of as a strip. */}
+        {(() => {
+          const strip = <ChatRoutines key={session} session={session} fallback={routineOfOpenChat(allChats, session)}
+            stage={allChats.find((c) => c.id === session)?.concern?.stage} />;
+          if (!roomsOn) return strip;
+          return activityOpen ? <Modal title="Activity" onClose={() => setActivityOpen(false)} width={460}>{strip}</Modal> : null;
+        })()}
+        <BlocksProvider value={homeHandlers}>
         <div style={{ flex: 1, minHeight: 0 }}>
           {/* THE ADMIN ACCOUNT'S HOME (founder ruling 2026-10-11): its four areas in place of the
               everyday chips, which offer a desk and meetings it does not have. */}
-          <Chat params={{ session }} emptyExtra={isAdminAccount ? <AdminHome /> : <ProposalChips items={shownChips}
-            onPick={(p) => void runProposal(p)} onDismiss={dismissProposal} />} />
+          <Chat params={{ session }} emptyExtra={isAdminAccount ? <AdminHome /> : <DesktopHome
+            /* THE DESKTOP (desktop ADR D1): behind `desktop`, in place of the composed cards; otherwise the home below */
+            active={spent !== sel.chatId && draft?.id === sel.chatId} greeting={homeRead?.doc.greeting}
+            starters={shownChips.length ? <ProposalChips items={shownChips} onPick={(p) => void runProposal(p)} onDismiss={dismissProposal} /> : undefined}
+            extra={homeRead && homeRead.people !== false ? <PeopleStrip /> : undefined}
+            fallback={homeRead && spent !== sel.chatId && draft?.id === sel.chatId
+            ? <HomeStream doc={homeRead.doc} people={homeRead.people} starters={shownChips.length ? <ProposalChips items={shownChips}
+                onPick={(p) => void runProposal(p)} onDismiss={dismissProposal} /> : undefined} />
+            : <ProposalChips items={shownChips}
+            onPick={(p) => void runProposal(p)} onDismiss={dismissProposal} />} />} />
         </div>
+        </BlocksProvider>
       </main>
       </div>
       {/* the pages panel's resize handle — a docked panel only: a folded or overlaid one has no
@@ -1702,18 +2536,20 @@ export function MinutesShell() {
         width={L.widths.sheet} label="Connections" dataPane="connections">
         <ConnectionsPanel onModeChange={setConnectionsMode} />
       </Sheet>
+      <BrowserSessionView />
       <div style={{display:connectionsOpen?"none":"contents"}} aria-hidden={connectionsOpen||undefined}>
       {L.pagesKind === "collapsed"
         ? <EdgeHandle side="right" onClick={() => shell.setPagesOpen(true)} />
         : <Sheet form={sheetForm} open={shell.sheetOpen} onClose={() => shell.setPagesOpen(false)}
             width={L.widths.sheet} label="Pages" dataPane="pages">
-            <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug} docKind={docKind}
+            <BlocksProvider value={homeHandlers}><PagesPanel roomSession={inRoom ? sel.chatId : undefined} pages={stripPages} docPath={docPath} docSlug={docSlug} docKind={docKind} chatReads={sel.workspaces}
               onTogglePin={togglePin} onOpen={(pg) => { readerChoseFocus.current = true; openPage(pg, true); }} onClose={closeTab}
               listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}
               canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}
               body={docBody} notice={notice} onSaved={() => setDocNonce((n) => n + 1)}
               onCollapse={() => shell.setPagesOpen(false)}
-              collapseLabel={pagesOverlay ? "Back to the conversation" : undefined} />
+              artifacts={artifactsHere} onArtifact={openChatArtifact}
+              collapseLabel={pagesOverlay ? "Back to the conversation" : undefined} /></BlocksProvider>
           </Sheet>}
       </div>
     </div>

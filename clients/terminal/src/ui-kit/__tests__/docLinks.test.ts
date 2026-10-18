@@ -13,7 +13,7 @@ let treeReads = 0;
  *  tier, so a listener that writes on ANY read would land its write inside the FIRST pass and the
  *  re-read it means to prove would never happen. */
 let onTreeRead: ((slug: string) => void) | null = null;
-vi.mock("../../surfaces/workspaceApi", () => ({
+vi.mock("../../data/workspaceApi", () => ({
   listWorkspaceTree: vi.fn(async (opts?: { slug?: string }) => {
     const answer = trees[opts?.slug ?? ""] ?? [];
     treeReads++;
@@ -50,6 +50,43 @@ describe("entitySlug", () => {
   it("slugifies titles the way entity files are named", () => {
     expect(entitySlug("James Hollister")).toBe("james-hollister");
     expect(entitySlug("Meeting 96088138284")).toBe("meeting-96088138284");
+  });
+});
+
+describe("entitySlug — the server's entity id (core/workspaces/shared/entities.py slugify)", () => {
+  it("folds accents instead of dropping the letter, and drops apostrophes", () => {
+    expect(entitySlug("mühlemann+popp AG")).toBe("muhlemann-popp-ag");
+    expect(entitySlug("Keith O'Donnell")).toBe("keith-odonnell");
+    expect(entitySlug("Keith O’Donnell")).toBe("keith-odonnell");
+    expect(entitySlug("Zürich Café")).toBe("zurich-cafe");
+  });
+  // The same vectors as core/agent/tests/test_slugify_unicode.py (#1783): a slug the server writes
+  // for a Cyrillic, Greek or CJK name is the slug the chip looks for.
+  it("transliterates Cyrillic and Greek exactly as the server does", () => {
+    expect(entitySlug("Дмитрий Гранкин")).toBe("dmitrii-grankin");
+    expect(entitySlug("Щукин Юлия")).toBe("shchukin-iuliia");
+    expect(entitySlug("Ёлка Объект")).toBe("elka-obieekt");
+    expect(entitySlug("Київ Ґанок")).toBe("kiiv-ganok");
+    expect(entitySlug("Ελένη Παπαδοπούλου")).toBe("eleni-papadopoulou");
+    expect(entitySlug("Θεσσαλονίκη")).toBe("thessaloniki");
+    expect(entitySlug("ООО Ромашка LLC")).toBe("ooo-romashka-llc");
+  });
+  it("gives a script with no table the server's stable hash slug", () => {
+    expect(entitySlug("東京")).toBe("u-68dea76f");
+    expect(entitySlug("محمد")).toBe("u-e375c9cf");
+    expect(entitySlug("  東京  ")).toBe("u-68dea76f");
+    for (const n of ["", "   ", "'", "---", "!!!"]) expect(entitySlug(n)).toBe("");
+  });
+  it("leaves every Latin name's slug where it was", () => {
+    expect(entitySlug("Łódź Ventures")).toBe("odz-ventures");
+    expect(entitySlug("İstanbul Office")).toBe("istanbul-office");
+    expect(entitySlug("Nguyễn Thị Minh Khai")).toBe("nguyen-thi-minh-khai");
+    expect(entitySlug("x".repeat(120))).toBe("x".repeat(80));
+  });
+  it("resolves a non-ASCII title to the company page the server wrote", async () => {
+    trees[""] = ["kg/entities/company/muhlemann-popp-ag.md"];
+    const r = await resolveDocRef({ wikilink: "mühlemann+popp AG" }, {});
+    expect(r).toEqual({ path: "kg/entities/company/muhlemann-popp-ag.md", slug: undefined, type: "company" });
   });
 });
 

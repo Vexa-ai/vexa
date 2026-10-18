@@ -24,9 +24,14 @@
  *  reachable by link and by nothing else. So the question this file answers takes the WORKSPACE
  *  as well as the path, and the exception is named per directory rather than per workspace kind:
  *  one entry in `COMPANY_CONTENT_DIRS` is the whole difference.
+ *
+ *  The company TEMPLATES are the second entry (founder, 2026-10-13, browsing `_global` in Files:
+ *  *"no templates here"*). `_global/kg/templates/<kind>.md` is the admin account's own content —
+ *  the company's shape for new notes, which only that account edits (ruling 2026-10-11) — so in
+ *  `_global` it is shown; on a desk `kg/templates/` is still the agent's machinery and stays hidden.
  */
 
-/** The company layer. The one workspace whose `flows/` is a person's reading, not an agent's. */
+/** The company layer. The one workspace whose `flows/` and `kg/templates/` are a person's reading, not an agent's. */
 export const GLOBAL_SLUG = "_global";
 
 /** Root-level files that are machinery. Root-level ONLY — a `CLAUDE.md` a person wrote inside
@@ -46,7 +51,7 @@ export const MACHINERY_DIRS: readonly string[] = [
 
 /** …except in `_global`, where these are CONTENT. Subtracted from the list above for that one
  *  workspace, never added to it: a directory nobody has ruled on stays hidden everywhere. */
-export const COMPANY_CONTENT_DIRS: readonly string[] = ["flows"];
+export const COMPANY_CONTENT_DIRS: readonly string[] = ["flows", "kg/templates"];
 
 /** The hide list that applies in one workspace. `slug` undefined = the reader's own desk. */
 export function machineryDirs(slug?: string): readonly string[] {

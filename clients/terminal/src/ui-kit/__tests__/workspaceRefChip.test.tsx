@@ -30,7 +30,7 @@ const memberships = [
   { workspace_id: "vexa-team-3183d1", role: "owner" },
   { workspace_id: "vexa-team-a2a023", role: "contributor" },
 ];
-vi.mock("../../surfaces/workspaceApi", () => ({
+vi.mock("../../data/workspaceApi", () => ({
   listWorkspaceTree: vi.fn(async (opts?: { slug?: string }) => trees[opts?.slug ?? ""] ?? []),
   readActiveSet: vi.fn(async () => ({ subject: "57", active })),
   listSharedMemberships: vi.fn(async () => memberships),

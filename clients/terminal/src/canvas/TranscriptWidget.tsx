@@ -13,7 +13,7 @@
  *  its own header, its own scrollport, `height: 100%` — and a surface nested in a document is a pane
  *  inside a pane. This one flows with the page it is in, and scrolls with it.
  *
- *  Registered as a tab KIND (`surfaces/canvas.tsx`) rather than imported by the renderer, so the
+ *  Registered as a tab KIND (`canvas/register.tsx`) rather than imported by the renderer, so the
  *  ui-kit keeps knowing nothing about meetings. */
 import { useState } from "react";
 import { copyText } from "../ui-kit/ContextMenu";
@@ -67,6 +67,7 @@ function WidgetBody({ meetingId }: { meetingId: string }) {
       <LiveTranscriptEngine
         meetingId={meeting.id}
         segments={transcript.segments}
+        gaps={transcript.gaps}
         renderText={renderText}
         emptyLabel={meeting.deleted
           ? "This meeting’s transcript and recording were deleted."

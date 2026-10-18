@@ -16,20 +16,23 @@ const LIVE_STATUSES = new Set(["active", "live", "requested", "joining", "awaiti
 
 // Only a real error is LOUD (red). A bot at the door, a reconnect, or a quiet room is benign —
 // often just silence, not a failure — so those get a muted, informational tone.
-const TONE: Record<Exclude<MeetingHealthKind, "ok">, { color: string; bg: string }> = {
+const TONE: Record<Exclude<MeetingHealthKind, "ok" | "recovered">, { color: string; bg: string }> = {
   "at-door": { color: "var(--t2)", bg: "var(--panel2)" },
   ended: { color: "var(--t2)", bg: "var(--panel2)" },
   disconnected: { color: "var(--t2)", bg: "var(--panel2)" },
   stalled: { color: "var(--t2)", bg: "var(--panel2)" },
+  // Catching up / finishing: the product is working through queued speech — neutral, never red.
+  behind: { color: "var(--t2)", bg: "var(--panel2)" },
+  finishing: { color: "var(--t2)", bg: "var(--panel2)" },
   // Warm amber (brand accent) — noticeable but not the alarming blood-red of a fatal failure.
   error: { color: "var(--accent)", bg: "var(--accentbg)" },
 };
 
 // The two things that can go wrong on the wire between the bot and this pane. Neither is a model:
 // one is the connection, the other is a frame that would not decode.
-function issueLabel(kind: "stream" | "parse" | "access"): string {
+function issueLabel(kind: "stream" | "parse" | "access", voiceNote = false): string {
   if (kind === "access") return "Access removed";
-  return kind === "parse" ? "Unreadable transcript frame" : "Bot feed error";
+  return kind === "parse" ? "Unreadable transcript frame" : voiceNote ? "Transcript feed error" : "Bot feed error";
 }
 
 export function MeetingHealthBanner() {
@@ -37,6 +40,8 @@ export function MeetingHealthBanner() {
   const diagnostics = meeting.diagnostics;
   const status = String(meeting.meeting.status ?? "").toLowerCase();
   const live = LIVE_STATUSES.has(status);
+  const platform = String(meeting.meeting.platform ?? "");
+  const voiceNote = platform === "voice_note";
 
   // A cheap 1s now-tick so the "no words for Ns" elapsed time keeps ticking while quiet/disconnected.
   // Only runs while a live feed could go stale; cleaned up on unmount / when not live.
@@ -51,6 +56,8 @@ export function MeetingHealthBanner() {
 
   const health = meetingHealth(diagnostics, now, live, STALE_MS, status);
   if (health.kind === "ok") return null;
+  // recovered: one quiet line, no box (founder 2026-10-16)
+  if (health.kind === "recovered") return <div role="status" className="mt-2 mr-4 mb-0 ml-4 t-xs c-3" data-health="recovered">Feed reconnected · words are coming in</div>;
 
   // The error chip (a wire issue) is dismissible; the headline bot states are not.
   const issue = health.latestIssue;
@@ -63,8 +70,8 @@ export function MeetingHealthBanner() {
   // ONE source for the words (meetingHealth.botStateHeadline); the error state is the only one whose
   // line depends on the issue itself, so it is composed here from the same label the detail row uses.
   const headline = health.kind === "error" && issue
-    ? `${issueLabel(issue.kind)}${issue.status ? ` (${issue.status})` : ""}`
-    : botStateHeadline(health);
+    ? `${issueLabel(issue.kind, voiceNote)}${issue.status ? ` (${issue.status})` : ""}`
+    : botStateHeadline(health, platform);
   const dot = health.kind !== "ended";   // the bot has left — nothing is pulsing
 
   return (
@@ -81,7 +88,7 @@ export function MeetingHealthBanner() {
       {/* For stalled/disconnected, still surface the most recent underlying issue if there is one. */}
       {health.kind !== "ended" && health.kind !== "error" && issue && !issueDismissed && (
         <div className="t-xs" style={{ opacity: 0.92 }}>
-          {issueLabel(issue.kind)}{issue.status ? ` (${issue.status})` : ""}: {issue.message}
+          {issueLabel(issue.kind, voiceNote)}{issue.status ? ` (${issue.status})` : ""}: {issue.message}
         </div>
       )}
 

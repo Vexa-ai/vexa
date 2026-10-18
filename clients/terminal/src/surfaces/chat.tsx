@@ -1,47 +1,74 @@
 "use client";
+import { privateApproval } from "./approvalCard";
+import { Identity } from "../ui-kit/Identity";
+import { useRoom } from "./roomState";
+import { ComposerSlotProvider } from "./composerSlot";
 import { setChatActivity } from "./chatActivity";
 /** Chat — the persistent right-rail agent window. Streams a real agent turn over /api/chat (SSE) into the
  *  turn timeline, surfacing each tool-call as a visible operation (read/search/edit/git/web) with status,
  *  then the message + commit / rejection badge. The composer carries the active center-tab reference. */
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ClipboardEvent, type ReactNode } from "react";
-import { minutesOnly } from "../app/mode";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ClipboardEvent, type ReactNode } from "react";
+import { minutesOnly } from "../platform/mode";
+import { useFeature } from "../platform/features";
 import { liveMeetingsNow } from "./liveMeetings";
-import { useService, useStore, CommandServiceId, ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, ONBOARDING_REPLY_SEP } from "../platform";
-import { LayoutServiceId, type ActiveTab } from "../workbench/layout";
+import { decideProposal, type ProposalChoice } from "./targetProposal";
+import { useService, useStore, CommandServiceId, ARTIFACT_EVENT, CHOOSE_TARGET_EVENT, CHAT_ARTIFACTS_EVENT, ASK_CHAT_EVENT, CALL_START_EVENT, OPEN_SESSION_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, ONBOARDING_REPLY_SEP, ROOM_SHOWING_EVENT } from "../platform";
+import { LayoutServiceId, type ActiveTab } from "../platform/layout";
 import { registerCommand, type TabProps } from "../contributions";
-import { meetingsOnly } from "../app/mode";
-import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
+import { meetingsOnly } from "../platform/mode";
+import { AgentLine, AgentWindow, Conversation, OPEN_CHAT_EVENT, opIcon, type FromAgent, type Turn, type Op } from "./agent-window";
 import { Chip, ChipRow, Fold, Icon, IconButton, Menu, mergeSources, readSources, type MenuItem } from "../ui-kit";
-import { Crosshair, Ellipsis, Mic, Paperclip, Plus, Send, Square } from "lucide-react";
+import { Crosshair, Ellipsis, Mic, Paperclip, Plus, Radio, Send, Square } from "lucide-react";
 import { BundleImportCards, useBundleImports } from "./ChatBundleImport";
 import { invalidateDocLinkCaches } from "../ui-kit/docLinks";
-import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
+import { micErrorMessage, startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
+import { createComposerDictation, type ComposerDictation } from "../ui-kit/composerDictation";
+import { toolResultUiEvent, toolUiEvent } from "./toolUiEvents";
+import "./dictation.css";
 import { sessionTitle, type SessionSummary } from "./sessions";
-import { listSessions } from "./sessionsApi";
+import { faultTone } from "./faults";
+import { knownAsMentionable, listKnownPeople, listMentionable, listSessions, sessionRoomLines, type MentionablePerson } from "./sessionsApi";
+import { activeMention, callInviteDraft, insertMention, insertReference, mentionsInText, pickerRows, type Mention, type PickerRow } from "./mentions";
+import { checkShare, shareWith, type ShareCheck } from "./shareFlow";
+import { MentionChips, MentionChoice, MentionPicker, ShareConfirm } from "./MentionUI";
 import { joinInterim, streamChatTurn, type ChatPhase } from "./chatStream";
+import { readFault } from "./faults";
 import { createStickToBottom, type StickToBottom } from "./stickToBottom";
 import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, writeIncludeSchedule, type FocusPayload } from "./chatContext";
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
-import { presentError } from "./apiClient";
+import { presentError } from "../data/apiClient";
 import { ModelPicker } from "./ModelPicker";
 import { promptCarriesActiveContext } from "./surfaceSync";
 import { isPageIntent, type ChatIntent } from "./chatIntent";
+import { foldSignalWakes, wakeLabel } from "./signalWake";
 import { actEnded, actNoted, actQueued, actSending, actSettled, actStarted, actStepped } from "./actState";
 import { actTarget, endJob, isJobIntent, jobLine, jobTarget, noteJob, promoteJob, queueJob, startJob, stepJob, type JobRec } from "./jobs";
 // THE CHAT'S INBOX (Vexa-ai/vexa#1610) — everything submitted is on the SERVER at once, and the
 // queued rows are read back from it rather than remembered here. See `surfaces/inbox.ts`.
-import { blockSubmission, claimInboxRow, fetchPending, flushOutbox, newSubmissionId, readOutbox, reconcileInbox, streamIdAfter, submitToInbox, SubmitRefused, turnsToWatch } from "./inbox";
-import { MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING } from "../canvas/actions";
-import { TERMS_EVENT } from "../canvas/transcriptTerms";
-import { ATTACHMENT_ACCEPT, AttachmentTray, FileDropZone, ImagePreview, pastedFiles, refusalFor, uploadAttachment, type ComposerAttachment, type UploadedWorkspaceFile } from "./attachments";
+import { blockSubmission, canSendNow, withdrawQueued, claimInboxRow, fetchPending, flushOutbox, newSubmissionId, readOutbox, reconcileInbox, sendNow, stopTurn, streamIdAfter, submitToInbox, SubmitRefused, turnsToWatch, attachPoint } from "./inbox";
+import { MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING } from "../platform/turnMarks";
+import { TERMS_EVENT } from "../platform/events";
+import { FolderImportedCards, useFolderImportedCards } from "./FolderImport";
+import { requestFolderImport } from "./folderDrop";
+import { PasteChip, UserMessage, isLongPaste, withPastes } from "./pastedText";
+import { RefChip } from "../ui-kit/RefChip";
+import { ModelChip } from "./usage/ModelChip";
+import { NEW_CHAT_AT_LEVEL_EVENT } from "../platform/events";
+import { pastedRefs, splitRefs } from "../ui-kit/universalRefs";
+import { ATTACHMENT_ACCEPT, AttachmentTray, FileDropZone, ImagePreview, MessageAttachments, attachmentSrc, attachmentsMark, originalName, pastedFiles, refusalFor, uploadAttachment, type ComposerAttachment, type MessageAttachment, type UploadedWorkspaceFile } from "./attachments";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
-function toolOp(tool: string, args?: Record<string, unknown>): Op {
+export function toolOp(tool: string, args?: Record<string, unknown>): Op {
   // `mcp__vexa__entity_upsert` → `entity_upsert`. The namespace is ours, not the reader's, and the
   // founder's own words for what he was watching were "entity_upsert".
   tool = tool.replace(/^mcp__[^_]+(?:_[^_]+)*?__/, "");
   const t = tool.toLowerCase();
+  // The harness's Skill tool loads instructions; the step is named by the skill, not "Skill".
+  if (t === "skill") {
+    const skill = typeof args?.skill === "string" && args.skill ? (args.skill as string) : undefined;
+    return { icon: opIcon.tool, label: skill ? `Loading skill · ${skill}` : "Loading skill", status: "running" };
+  }
   // verb-first labels: the op line reads as what the agent is DOING, not an internal tool name
   const [icon, verb] = /read|cat|open/.test(t) ? [opIcon.read, "Reading"]
     : /glob|search|grep|find|ls\b/.test(t) ? [opIcon.search, "Searching"]
@@ -53,12 +80,25 @@ function toolOp(tool: string, args?: Record<string, unknown>): Op {
   // the touched doc, when the tool call names one — powers the turn's actionable file chips
   const file = typeof args?.file_path === "string" ? (args.file_path as string) : undefined;
   const wrote = !!file && /edit|write|append|notebook/.test(t);
-  const name = file ? file.split("/").filter(Boolean).pop() : undefined;
+  // A PAGE IS NAMED BY ITS TITLE, NEVER ITS FILE (founder 2026-10-16: "ait-lisbon-next-meetup-nov-2026.md")
+  const base = file ? file.split("/").filter(Boolean).pop() : undefined;
+  const stem = base ? base.replace(/\.(md|markdown|mdx)$/i, "") : undefined;
+  const name = stem ? (/^readme$/i.test(stem) ? "README" : (stem.replace(/[-_]+/g, " ").trim().replace(/^./, (c) => c.toUpperCase()))) : undefined;
   // RUNNING, not done (F66). Every op was appended with `status: "done"`, so the step line rendered
   // a green TICK from the first tool call — an 18-step turn showed a finished-looking line that
   // never moved. Founder: *"i know it's working now, but it just stays like it's stale."* The op
   // that just started IS the one in progress; `onTool` marks the previous one done as it arrives,
   // and the turn's end marks the last one.
+  // A HARNESS TOOL IS NEVER NAMED (founder 2026-10-16: "Searching · Glob"): Glob, Grep, Bash, Read…
+  // are the agent's plumbing; the step says what it is doing in human words, or just the verb.
+  const harness = /^[A-Z][A-Za-z]*$/.test(tool);
+  if (harness && !name) {
+    const words = /glob|grep|search|find|^ls$/.test(t) ? "Looking through your files"
+      : /web|fetch/.test(t) ? "Reading the web"
+      : /bash|exec|run|task|todo/.test(t) ? "Working"
+      : verb === tool ? "Working" : verb;
+    return { icon, label: words, status: "running", file, wrote };
+  }
   return { icon, label: name ? `${verb} · ${name}` : (verb === tool ? tool : `${verb} · ${tool}`), status: "running", file, wrote };
 }
 
@@ -79,8 +119,14 @@ function settleOps(ops: Op[]): Op[] {
  *  not have it, and only because of that: for every turn taken from now on it is the only thing
  *  this surface should render. */
 type HistoryTurn =
-  | { role: "user"; text: string; user_text?: string }
-  | { role: "agent"; text: string; ops?: { label: string; file?: string; wrote?: boolean }[]; commit?: string };
+  | { role: "user"; text: string; user_text?: string; at?: number;
+      /** the files the message carried (agent-api `shared/attachments.py`), never in `text` */
+      attachments?: { name: string; path: string; type?: string; size?: number; kind?: "image" | "file" }[];
+      /** set when another agent sent this turn (ADR-0046 decision 13) */
+      from_agent?: { uid?: string; thread?: string; label?: string } }
+  | { role: "agent"; text: string; ops?: { label: string; file?: string; wrote?: boolean; skill?: string }[]; commit?: string; at?: number };
+/** Why a turn ran, when the history says (a signal-woken turn: `"signal"`). */
+type HistoryTrigger = { trigger?: string };
 
 type AgentTurn = Extract<Turn, { role: "agent" }>;
 type ChatSessionState = {
@@ -98,6 +144,8 @@ type ChatSessionState = {
 
 const EMPTY_CHAT_STATE: ChatSessionState = { turns: [], busy: false, loading: false, loaded: false, nextId: 0, abort: null, jobs: [] };
 const chatSessions = new Map<string, ChatSessionState>();
+/** Chats whose next history read replaces the turns shown: another participant's turn landed. */
+const rereadKeys = new Set<string>();
 const chatSubscribers = new Map<string, Set<() => void>>();
 
 function chatStateKey(subject: string, session: string): string {
@@ -145,9 +193,11 @@ function patchAgentTurn(key: string, agentId: string, fn: (turn: AgentTurn) => A
 }
 
 /** map a backend op label (read/search/edit/git/web/tool) to a frontend Op (icon from opIcon) */
-const OP_VERB: Record<string, string> = { read: "Reading", search: "Searching", edit: "Writing", git: "Committing", web: "Browsing", tool: "Working" };
-function historyOp(op: { label: string; file?: string; wrote?: boolean }): Op {
-  const name = op.file ? op.file.split("/").filter(Boolean).pop() : undefined;
+const OP_VERB: Record<string, string> = { read: "Reading", search: "Searching", edit: "Writing", git: "Committing", web: "Browsing", tool: "Working", skill: "Loaded skill" };
+export function historyOp(op: { label: string; file?: string; wrote?: boolean; skill?: string }): Op {
+  // `skill`: a loaded skill (agent-api `workspace_reader.parse_history`) — the harness injected its
+  // body as a user-role line, and it is a step of the agent's turn, never the person's words.
+  const name = op.file ? op.file.split("/").filter(Boolean).pop() : op.label === "skill" ? op.skill : undefined;
   const verb = OP_VERB[op.label] ?? op.label;
   return { icon: opIcon[op.label] ?? opIcon.tool, label: name ? `${verb} · ${name}` : verb, status: "done", file: op.file, wrote: op.wrote };
 }
@@ -158,9 +208,6 @@ type ActiveReference = ReferenceToken;
 const REFERENCE_RE = /@(file|meeting):([A-Za-z0-9._~%+@:/=-]+)/g;
 const MAX_TEXTAREA_HEIGHT = 156;
 
-/** Where a workspace keeps the pictures its pages reference (agent-api `shared/asset_source.py`). */
-const ASSETS_DIR = "assets";
-
 function resizeComposerTextarea(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   const height = Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT);
@@ -168,17 +215,23 @@ function resizeComposerTextarea(el: HTMLTextAreaElement) {
   el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_HEIGHT ? "auto" : "hidden";
 }
 
-/** AN ATTACHED PICTURE IS A PICTURE, and the turn is told so (Vexa-ai/vexa#1612). The upload route
- *  puts images in `assets/` — the directory a page's `![…](…)` reads from — so the line handed to
- *  the agent is the markdown that would put it on a page, ready to paste. Everything else keeps the
- *  `@file:` token it has always had: a spreadsheet is something to READ, not something to show. */
-function attachmentPrompt(prompt: string, files: UploadedWorkspaceFile[]): string {
-  if (files.length === 0) return prompt.trim();
-  const line = (f: UploadedWorkspaceFile) => (f.path.startsWith(`${ASSETS_DIR}/`)
-    ? `- ![${f.name}](${f.path}) — already in this workspace; reference it like that on a page`
-    : `- @file:${f.path}`);
-  const attached = ["Attached files:", ...files.map(line)].join("\n");
-  return prompt.trim() ? `${prompt.trim()}\n\n${attached}` : attached;
+/** A MESSAGE'S FILES RIDE ONE MARK, NOT A SENTENCE (founder, 2026-10-13: a pasted screenshot showed
+ *  in his own bubble as "Attached files: 9caa6e9e467d2341-Screenshot_….png", and the agent then had to
+ *  Glob for it). The mark goes after the person's words; agent-api vouches for each file, the worker
+ *  hands the agent its exact path (and the picture itself, where the model takes images), and history
+ *  returns the files as their own field. The bubble draws thumbnails; the mark is never shown. */
+export function attachmentPrompt(prompt: string, files: UploadedWorkspaceFile[]): string {
+  const mark = attachmentsMark(files.map((f) => ({ path: f.path, name: f.original || originalName(f.path) })));
+  if (!mark) return prompt.trim();
+  return prompt.trim() ? `${prompt.trim()}\n\n${mark}` : mark;
+}
+
+/** The bubble's attachments for files this browser just uploaded. */
+export function sentAttachments(session: string, files: UploadedWorkspaceFile[]): MessageAttachment[] {
+  return files.map((f) => ({
+    name: f.original || originalName(f.path), path: f.path, src: attachmentSrc(session, f.path),
+    size: f.size, type: f.type, kind: (f.type ?? "").startsWith("image/") || f.path.startsWith("assets/") ? "image" : "file",
+  }));
 }
 
 function tokenizeReferences(text: string): ReferenceSegment[] {
@@ -225,7 +278,8 @@ function ReferenceChip({ refToken }: { refToken: ReferenceToken }) {
 
 function ReferenceText({ text }: { text: string }) {
   return <>{tokenizeReferences(text).map((part, i) => part.kind === "text"
-    ? <span key={i}>{part.text}</span>
+    // a universal reference the person pasted or typed (#1783) is a chip the server resolves
+    ? <span key={i}>{splitRefs(part.text).map((p, j) => p.kind === "text" ? p.text : <RefChip key={j} text={p.text} />)}</span>
     : <ReferenceChip key={i} refToken={part.ref} />)}</>;
 }
 
@@ -336,7 +390,28 @@ export function historyUserText(t: { text: string; user_text?: string }): string
   return t.user_text ?? compactStoredUserText(t.text);
 }
 
-const userBubble: CSSProperties = { maxWidth: "82%", margin: "0 0 0 auto", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 12, borderTopRightRadius: 4, padding: "8px 12px", fontSize: 13, color: "var(--t1)", lineHeight: 1.5, whiteSpace: "pre-wrap" };
+
+/** A TURN ANOTHER AGENT SENT (ADR-0046 decision 13) — never drawn as the person's own bubble: on
+ *  the agent's side, outlined, under who sent it, with the way to the thread it came from. */
+export function AgentMessageBubble({ from, text }: { from: FromAgent; text: string }) {
+  return (
+    <div data-agent-message={from.thread} style={{ marginBottom: 16 }}>
+      <div style={{ maxWidth: "82%", border: "1px dashed var(--line2, var(--line))", borderRadius: 12,
+        borderTopLeftRadius: 4, padding: "8px 12px", fontSize: 13, color: "var(--t1)", lineHeight: 1.5,
+        whiteSpace: "pre-wrap" }}>
+        <div style={{ fontSize: 11.5, color: "var(--t3)", marginBottom: 4 }}>
+          From {from.label || "another agent"} ·{" "}
+          <button type="button" data-open-thread={from.thread}
+            onClick={() => window.dispatchEvent(new CustomEvent(OPEN_CHAT_EVENT, { detail: { chat: from.thread } }))}
+            style={{ background: "transparent", border: "none", padding: 0, color: "var(--accent)", cursor: "pointer", font: "inherit" }}>
+            open its thread
+          </button>
+        </div>
+        <ReferenceText text={text} />
+      </div>
+    </div>
+  );
+}
 
 function ChatHeader({ subject, session, onSelectSession, onNewChat, onClose }: {
   subject: string;
@@ -452,16 +527,19 @@ const LOST_JOB_LINE = "Lost the connection to that background job";
  *  runs, which is the whole point — so its line cannot hang off a turn, and sits at the foot of the
  *  transcript instead. `jobLine` is the same shape the turn's own step row reads in, so nobody has
  *  to learn a second vocabulary; the job's TARGET is what tells two of them apart. */
-function JobRows({ jobs, onRetry }: { jobs: JobRec[]; onRetry?: (j: JobRec) => void }) {
+function JobRows({ jobs: all, onRetry, onSendNow }: { jobs: JobRec[]; onRetry?: (j: JobRec) => void; onSendNow?: (j: JobRec) => void }) {
+  // a queued MESSAGE is drawn as the person's pending bubble (`QueuedActions`), not as a line here
+  const jobs = all.filter((j) => !isPendingMessage(j));
   if (jobs.length === 0) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, margin: "0 0 14px 5px" }}>
       {jobs.map((j) => (
         // A BLOCKED ROW IS NOT A WAITING ONE (P18). No spinner — nothing is coming — but the fault
-        // that stopped it, in the danger colour, and the press that sends it again.
+        // that stopped it and the press that sends it again. In the row's own muted colour: red is
+        // for a security refusal only (`faultTone`, founder 2026-10-13), never for "not right now".
         <div key={j.id} data-job-line data-job-blocked={j.blocked ? j.blocked.kind : undefined} title={jobLine([j])}
           role={j.blocked ? "alert" : undefined}
-          style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, color: j.blocked ? "var(--danger)" : "var(--t2)" }}>
+          style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.5, color: j.blocked && faultTone(j.blocked) === "danger" ? "var(--danger)" : "var(--t2)" }}>
           {j.blocked
             ? <Icon name="x" size={12} style={{ flex: "none" }} />
             : <span className="vx-op-spin" style={{ width: 11, height: 11, borderRadius: "50%", border: "1.5px solid var(--line2)", borderTopColor: "var(--accent)", flex: "none" }} />}
@@ -470,6 +548,12 @@ function JobRows({ jobs, onRetry }: { jobs: JobRec[]; onRetry?: (j: JobRec) => v
             <button data-job-retry onClick={() => onRetry(j)}
               style={{ flex: "none", fontSize: 11, fontFamily: "var(--mono)", color: "var(--blue)", background: "var(--bluebg)", border: "none", borderRadius: 6, padding: "2px 9px", cursor: "pointer" }}>
               Retry
+            </button>
+          )}
+          {onSendNow && canSendNow(j) && (
+            <button type="button" data-job-send-now onClick={() => onSendNow(j)} title="Stop the current answer and run this now"
+              className="aw-fault-retry">
+              Send now
             </button>
           )}
         </div>
@@ -485,22 +569,110 @@ function canRetry(j: JobRec): boolean {
   return !!j.outbox || (j.kind === "message" && !!j.display);
 }
 
-function ChatConversation({ turns, busy, empty, jobs = [], onContinue, onRetryRow }: {
+/** A routine's wake that found nothing new: one line, "Checked — …" (the delivery rule asks for it). */
+export function isQuietCheck(text: string): boolean {
+  const t = (text || "").trim();
+  return /^Checked\s+[—-]/.test(t) && !t.includes("\n") && t.length <= 160;
+}
+
+/** A QUEUED MESSAGE IS THE PERSON'S OWN PENDING BUBBLE (#1783; founder liked Send now, not the
+ *  element): right-aligned like a sent message, dimmed, the whole text, a small "Queued" label, and
+ *  three pills on one line — Send now (stops the answer running now and runs this next), Edit (takes
+ *  it back into the box), Remove. When the agent takes it, the label and pills go and the same bubble
+ *  stays where it is. */
+export const isPendingMessage = (j: JobRec): boolean =>
+  !!j.queued && !!j.inbox && !j.blocked && (j.kind || "message") === "message";
+
+function QueuedActions({ j, onSendNow, onEdit, onRemove }: {
+  j: JobRec; onSendNow?: (j: JobRec) => Promise<boolean> | void; onEdit?: (j: JobRec) => void; onRemove?: (j: JobRec) => void;
+}) {
+  const [sending, setSending] = useState(false);
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className="vx-queued-meta" data-queued-row={j.id}>
+      <span className="vx-queued-label" role="status">
+        <span className="vx-op-spin vx-queued-spin" aria-hidden />
+        {sending ? "Sending now — stopping the current reply…" : "Queued · after the current reply"}
+      </span>
+      {failed && <span role="alert" className="vx-queued-err">Couldn't send it now. Try again.</span>}
+      <span className="vx-queued-pills">
+        {onSendNow && <button type="button" className="vx-pill" data-job-send-now disabled={sending}
+          title="Stop the current reply and run this now"
+          onClick={async () => { setSending(true); setFailed(false); const ok = await onSendNow(j); if (ok === false) { setSending(false); setFailed(true); } }}>Send now</button>}
+        {onEdit && <button type="button" className="vx-pill" data-queued-edit disabled={sending} onClick={() => onEdit(j)}>Edit</button>}
+        {onRemove && <button type="button" className="vx-pill" data-queued-remove disabled={sending} onClick={() => onRemove(j)}>Remove</button>}
+      </span>
+    </div>
+  );
+}
+
+export function ChatConversation({ turns, busy, empty, jobs = [], room, onContinue, onStopRunning, onDecide, onRetryRow, onSendNow, onEditQueued, onRemoveQueued }: {
   turns: Turn[]; busy?: boolean; empty?: ReactNode; jobs?: JobRec[];
+  /** A SHARED CHAT'S LINES — what people typed to each other — drawn in the same stream, by time. */
+  room?: RoomView;
   /** A STOPPED TURN'S CONTINUE PRESS (Vexa-ai/vexa#1622) — forwarded to the bubble that draws it. */
   onContinue?: (turn: Extract<Turn, { role: "agent" }>) => void;
+  /** "STOP IT" ON A TURN REFUSED BECAUSE A PREVIOUS REPLY IS STILL RUNNING — forwarded likewise. */
+  onStopRunning?: (turn: Extract<Turn, { role: "agent" }>) => Promise<boolean>;
+  /** the person's answer to an agent's write-target proposal (UI decision 6b) */
+  onDecide?: (turn: Extract<Turn, { role: "agent" }>, choice: ProposalChoice) => void;
   /** A BLOCKED ROW'S RETRY PRESS (P18) — forwarded to the row that draws it. */
   onRetryRow?: (j: JobRec) => void;
+  /** A QUEUED ROW'S "SEND NOW" — stop the running turn and run this message next. */
+  onSendNow?: (j: JobRec) => Promise<boolean> | void;
+  onEditQueued?: (j: JobRec) => void;
+  onRemoveQueued?: (j: JobRec) => void;
 }) {
-  if (turns.length === 0 && empty && jobs.length === 0) return <>{empty}</>;
+  if (turns.length === 0 && empty && jobs.length === 0 && !room?.lines.length) return <>{empty}</>;
+  // a queued message drawn ON its own bubble when the bubble is here; on a bubble of its own when
+  // it is not (sent from another window, or this one reloaded)
+  const pending = jobs.filter(isPendingMessage);
+  const onTurn = new Set(turns.filter((t) => t.role === "user").map((t) => t.id));
+  const actions = (j: JobRec) => <QueuedActions j={j} onSendNow={onSendNow} onEdit={onEditQueued} onRemove={onRemoveQueued} />;
   return (
     <>
-      {turns.map((t, i) => t.role === "user"
-        ? <div key={t.id} style={{ marginBottom: 16 }}><div style={userBubble}><ReferenceText text={t.text} /></div></div>
+      {groupRepeats(interleave(turns, room?.lines ?? [])).map((x) => x.kind === "repeat"
+        ? <RepeatLine key={`r-${x.lines[0].seq}`} lines={x.lines} who={roomWho(room!, x.lines[0].author)} />
+        : x.kind === "line"
+        ? <PersonLine key={`l-${x.line.seq}`} who={roomWho(room!, x.line.author)} mine={x.line.author === room!.you}>
+            <ReferenceText text={shownWords(x.line.text)} />
+          </PersonLine>
+        : ((t: Turn, i: number) => t.role === "user"
+        ? (t.fromAgent
+          ? <AgentMessageBubble key={t.id} from={t.fromAgent} text={t.text} />
+          : (() => {
+              const q = pending.find((j) => j.id === t.id);
+              // THE PERSON'S MESSAGE IS A BUBBLE ON THE RIGHT (founder 2026-10-15: "user messages and
+              // agent messages must be distinct"): a soft rounded bubble on a muted surface, no label
+              // to read; the agent's answer is plain full-width text. Supersedes the named turns of
+              // 2026-10-14. The name stays for screen readers.
+              return <div key={t.id} data-turn="user" data-queued={q ? "" : undefined} className={q ? "vx-turn vx-turn-mine vx-queued" : "vx-turn vx-turn-mine"}>
+                <div data-turn-who="" className="vx-sr">You</div>
+                {t.attachments?.length ? <MessageAttachments items={t.attachments} /> : null}
+                {t.text ? <div className="vx-bubble vx-bubble-mine"><UserMessage text={shownWords(t.text)} renderText={(x) => <ReferenceText text={x} />} /></div> : null}
+                {q && actions(q)}
+              </div>;
+            })())
         // No report control on a turn (founder 2026-10-11: "remove - they report friction via
         // chat"). A person says what did not work to the agent, which files it with `report_friction`.
-        : <Conversation key={t.id} turns={[t]} busy={!!busy && i === turns.length - 1} onContinue={onContinue} />)}
-      <JobRows jobs={jobs} onRetry={onRetryRow} />
+        // A ROUTINE'S QUIET WAKE: nothing changed, so it says one line starting "Checked —" and the
+        // chat draws it as a muted tick, not a message — what makes a standing concern bearable.
+        : isQuietCheck(t.text) && !(busy && i === turns.length - 1)
+        ? <div key={t.id} data-quiet-check className="vx-quiet-check">✓ {t.text.trim()}</div>
+        : <div key={t.id} data-turn="agent" data-from-meeting={t.role === "agent" && t.fromMeeting ? "" : undefined} className="vx-turn vx-turn-agent">
+            <div data-turn-who="" className="vx-sr">Vexa</div>
+            {t.role === "agent" && t.fromMeeting && <div data-from-meeting-marker="" className="vx-from-meeting"><Radio size={12} strokeWidth={1.75} aria-hidden />{wakeLabel(t)}</div>}
+            <Conversation turns={[t]} busy={!!busy && i === turns.length - 1} onContinue={onContinue} onStopRunning={onStopRunning} onDecide={onDecide} />
+          </div>)(x.turn, x.i))}
+      {pending.filter((j) => !onTurn.has(j.id)).map((j) => (
+        <div key={`q-${j.id}`} data-queued="" className="vx-turn vx-turn-mine vx-queued vx-queued-alone">
+          <div data-turn-who="" className="vx-sr">You</div>
+          <div className="vx-bubble vx-bubble-mine"><UserMessage text={j.text || j.target} renderText={(x) => <ReferenceText text={x} />} /></div>
+          {actions(j)}
+        </div>
+      ))}
+      <JobRows jobs={jobs} onRetry={onRetryRow} onSendNow={onSendNow} />
+      {room && <RoomTurnStatus turn={room.turn} step={room.step} />}
     </>
   );
 }
@@ -582,7 +754,7 @@ const MODE_PLACEHOLDER: Record<MeetingPhase, string> = {
   live: "Ask about what's being said…",
   post: "Ask for the recap, decisions, or follow-up drafts…",
 };
-const meetingLabel = (m: MeetingMock) => m.title_custom ?? (m.native_id ?? m.title).replace(/^Google Meet · /, "");
+const meetingLabel = (m: MeetingMock) => m.title_custom || m.title;
 
 function activeContextPrompt(ref: ActiveReference | null, meeting: MeetingMock | undefined): string {
   if (!ref) return "";
@@ -624,12 +796,6 @@ export function promptWithActiveContext(prompt: string, ref: ActiveReference | n
 }
 
 const ROUTINE_COMMAND = "/routine";
-const ROUTINE_NAME_STOP_WORDS = new Set([
-  "a", "an", "and", "as", "at", "by", "create", "each", "every", "for", "from", "in", "into",
-  "me", "my", "of", "on", "our", "please", "routine", "scheduled", "the", "to", "with",
-  "hour", "hours", "day", "days", "week", "weeks", "month", "months", "am", "pm",
-]);
-
 function isRoutineCommand(text: string): boolean {
   return /^\/routine(?:\s|$)/i.test(text);
 }
@@ -638,42 +804,30 @@ function routineDescription(text: string): string {
   return text.replace(/^\/routine(?:\s+|$)/i, "").trim();
 }
 
-function routineFileStem(description: string): string {
-  const words = description.toLowerCase().match(/[a-z0-9]+/g) ?? [];
-  const stem = words
-    .filter((word) => !ROUTINE_NAME_STOP_WORDS.has(word) && !/^\d+(?:am|pm)?$/.test(word))
-    .slice(0, 6)
-    .join("-");
-  return stem || "scheduled-routine";
-}
-
-function routineCreationPrompt(commandText: string): string {
+/** THE `/routine` ASK (ADR-0046): a routine is the person's own flow, made with the flows tool — never
+ *  a file. Exported for the test that holds it to that. */
+export function routineCreationPrompt(commandText: string): string {
   const description = routineDescription(commandText);
   if (!description) {
     return [
       "The user invoked /routine without a routine description.",
-      "Ask one concise follow-up for the task to run and the cadence. Do not create a routine file until the user gives enough detail, or explicitly accepts a default daily 9 AM schedule.",
+      "Ask one concise follow-up for the task to run and the cadence. Do not create the routine until the user gives enough detail, or explicitly accepts a default daily 9 AM schedule.",
     ].join("\n\n");
   }
-
-  const fileStem = routineFileStem(description);
   return [
     `Create a scheduled routine from this user request: ${JSON.stringify(description)}.`,
     "",
-    "You must write the routine into the user's workspace as a markdown file. Do not only explain the routine.",
-    `Use this path unless a clearly better concise kebab-case name fits the request: routines/${fileStem}.md`,
+    "A routine is the person's own flow. Create it with the flows_submit tool — do not write any file for it:",
+    '- name: a short kebab-case name for the task',
+    '- trigger: {"kind": "schedule", "cron": "<5-field cron, UTC>"}',
+    '- steps: ["agent_run"]',
+    "- params.instruction: the recurring task itself, with the schedule wording removed",
+    "- params.thread: this chat's thread id (stated at the top of your turn) — the routine runs in this chat",
+    "Do not pass a scope: it is the person's own, taken from their credential.",
     "",
-    "The file must have YAML frontmatter in exactly this shape:",
-    "---",
-    "enabled: true",
-    'cron: "<valid 5-field cron expression>"',
-    "prompt: |",
-    "  <the task prompt the scheduled agent should run>",
-    "---",
-    "",
-    "Derive the cron from the user's schedule words. Examples: \"every 2 hours\" => \"0 */2 * * *\"; \"at 9am\" => \"0 9 * * *\". If no schedule is explicit, use daily at 9 AM local scheduler time: \"0 9 * * *\".",
-    "Make the prompt the actual recurring task, with schedule wording removed unless it is necessary context.",
-    "After writing the file, briefly confirm the path and cron.",
+    "Derive the cron from the user's schedule words, converted to UTC. Examples: \"every 2 hours\" => \"0 */2 * * *\"; \"at 9am\" => \"0 9 * * *\" in the person's time zone, shifted to UTC. If no schedule is explicit, use daily at 9 AM. A cron faster than the allowed minimum interval is refused (quota_min_interval): say so and offer the nearest allowed one.",
+    "The routine runs in this chat: every run continues this conversation and its alerts land here.",
+    "When flows_submit answers, confirm in one line: the routine's name, when it runs, and that it runs in this chat.",
   ].join("\n");
 }
 
@@ -703,10 +857,17 @@ type ChatProps = Partial<TabProps> & {
  *  home chat greeted a brand-new account with "I kept the minutes of your meeting" (founder,
  *  2026-09-01, on an account with no meetings at all). A `meet-` room asks about ITS OWN meeting;
  *  everywhere else says nothing at all. */
-function minutesEmptyGreeting(session: string): string {
+export function minutesEmptyGreeting(session: string): string {
   if (!session.startsWith("meet-")) return "";
   const held = liveMeetingsNow().some((mm) => session === `meet-${mm.id}` && ["completed", "stopped", "failed"].includes(String((mm as { live_status?: string }).live_status)));
-  return (held ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING).replace("👋 ", "").replace(/\*\*/g, "");
+  return (held ? MINUTES_ONBOARDING_GREETING : MINUTES_PREP_GREETING).replace("👋 ", "");
+}
+
+/** The meeting's greeting is the AGENT speaking: an agent line, left in the conversation like any
+ *  turn, never centred grey text. Nothing at all in a room that is not a meeting's. */
+export function MeetingGreeting({ session }: { session: string }) {
+  const text = minutesEmptyGreeting(session);
+  return text ? <AgentLine text={text} /> : null;
 }
 
 /** Everything a send carries besides its words.
@@ -726,7 +887,17 @@ type SendOpts = {
    *  submitted them, and this send exists only to render the turn they are about to get. Sending
    *  them again is the one thing that must not happen. */
   attachFrom?: string;
+  /** The files this message carries, for its own bubble (the words for the agent carry the mark). */
+  attachments?: MessageAttachment[];
+  /** ADR-0048 — the account ids this message @-mentions (the picker's), and whether it is the
+   *  agent's by construction (the first message of a chat that just became shared). */
+  mentions?: string[];
+  toAgent?: boolean;
 };
+
+/** A message waiting for the chat it was shared into to open (ADR-0048): pressing "Share and send"
+ *  on a private chat starts a NEW shared chat, and the message is sent there once it is the open one. */
+const pendingFirstSend = new Map<string, { text: string; mentions: string[] }>();
 
 export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const subject = typeof params.subject === "string" ? params.subject : "me";  // LOCAL chat-cache key only — never sent upstream; scope is server-derived from the authed user (P20)
@@ -742,6 +913,18 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     () => getChatState(chatKey),
   );
   const { turns, busy, loading } = chatState;
+  // THE PANEL LISTS WHAT THIS CHAT'S AGENT WROTE (founder, 2026-10-15). The turns are this
+  // surface's; the list is the shell's — so the writes are re-emitted (the shell reads them with `writesOf`), never listed here. A live
+  // turn has no stored time yet, so it takes the moment it was first seen.
+  const firstSeen = useRef(new Map<string, number>());
+  useEffect(() => {
+    const seen = (id: string) => firstSeen.current.get(id) ?? (firstSeen.current.set(id, Date.now()), Date.now());
+    const wrote = turns.flatMap((t) => (t.role === "agent"
+      ? [{ role: "agent", at: (t as { at?: number }).at ?? seen(t.id),
+          ops: (t.ops ?? []).filter((o) => o.wrote && o.file).map((o) => ({ file: o.file, wrote: true })) }]
+      : [])).filter((t) => t.ops.length > 0);
+    window.dispatchEvent(new CustomEvent(CHAT_ARTIFACTS_EVENT, { detail: { session, turns: wrote } }));
+  }, [turns, session]);
   const activeRef = activeReference(activeTab);
   // the user can clear focus with the chip's ×; a newly-focused tab re-shows it.
   const [focusCleared, setFocusCleared] = useState(false);
@@ -770,12 +953,40 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     : focusRef;
   const [uploading, setUploading] = useState(false);
   const [value, setValue] = useState("");
+  const micDictRef = useRef<ComposerDictation | null>(null);   // the box's dictation, while the mic streams
+  // LONG PASTES, COLLAPSED (`pastedText.tsx`): each one a chip above the box until the message goes.
+  const [pastes, setPastes] = useState<string[]>([]);
+  // Every send path clears the box through here; a send while the mic streams also hands the sent
+  // text over, so it is not shown again (see micDictRef).
+  const clearInput = () => { setValue(""); setPastes([]); micDictRef.current?.sent(); };
+  // ADR-0048 — @-mentions: who the picker may offer, who was picked into this message, where the
+  // caret is (the picker reads the `@query` before it), and the one question Enter may ask.
+  const [mentionPeople, setMentionPeople] = useState<{ people: MentionablePerson[]; agents: { name: string }[] } | null>(null);
+  const [picked, setPicked] = useState<Mention[]>([]);
+  const [caret, setCaret] = useState(0);
+  const [pickIdx, setPickIdx] = useState(0);
+  const [pickClosed, setPickClosed] = useState(false);
+  // FEATURE SWITCHES (#1783): with `shared_chats` off the @ picker offers nobody (adding a person
+  // is the sharing act); with `folder_drop` off a dropped folder is not offered as a workspace.
+  const sharingOn = useFeature("shared_chats");
+  // ROOMS (R1): chats are private — @ tags and invites only in a room (the server refuses adding
+  // people to a chat with 409 chats_are_private)
+  const roomsOn = useFeature("rooms");
+  const thisRoom = useRoom(session, roomsOn);
+  const mentionOn = sharingOn && (!roomsOn || !!thisRoom?.room);
+  const folderDropOn = useFeature("folder_drop");
+  // HOSTED PLANS PICK A LEVEL 1–5 at the chat's start, not a model (`levels`; off: the full picker)
+  const levelsOn = useFeature("levels");
+  const [confirm, setConfirm] = useState<{ check: ShareCheck; text: string; busy: boolean; error?: string } | null>(null);
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   // The model picker's effort levels, offered in the "⋯" menu when the composer is narrow.
   const [effortItems, setEffortItems] = useState<MenuItem[] | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   // A meeting bundle handed to the chat is a call to import, not a file to attach (ChatBundleImport).
   const bundleImports = useBundleImports();
+  // A FOLDER dropped on the chat becomes a workspace (founder 2026-10-13), offered first INTO the
+  // workspace this chat writes to when that is one (`into: null` — the shell's host knows the target).
+  const folderCards = useFolderImportedCards();
   const scrollRef = useRef<HTMLDivElement>(null);
   // Follow the stream ONLY while the reader is at the bottom — "chat should not fight with me when
   // it's outputting text and i scroll up to scroll chat history" (founder, Vexa-ai/vexa#1599).
@@ -809,42 +1020,63 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   //    speaking; stop flushes the final window. STT is proxied via /api/stt.
   const [mic, setMic] = useState<"idle" | "rec" | "stt">("idle");
   const [micError, setMicError] = useState<string | null>(null);
+  const [micLevel, setMicLevel] = useState(0);
+  const [micElapsed, setMicElapsed] = useState(0);
+  useEffect(() => {
+    if (mic !== "rec") return;
+    const id = window.setInterval(() => setMicElapsed(Math.floor((Date.now() - micStartRef.current) / 1000)), 250);
+    return () => window.clearInterval(id);
+  }, [mic]);
   const micRef = useRef<StreamingDictation | null>(null);
-  const micBaseRef = useRef("");     // composer text at record start — dictation appends after it
   const micStartRef = useRef(0);
   useEffect(() => () => { micRef.current?.cancel(); }, []);  // release the mic on unmount
-  const micCompose = (base: string, confirmed: string, pending: string) => {
-    const dictated = pending ? (confirmed ? `${confirmed} ${pending}` : pending) : confirmed;
-    return base ? (dictated ? `${base} ${dictated}` : base) : dictated;
-  };
   const toggleMic = async () => {
     if (mic === "stt") return;
     if (mic === "rec") {
       const d = micRef.current;
       micRef.current = null;
-      if (!d) { setMic("idle"); return; }
-      if (Date.now() - micStartRef.current < 300) { d.cancel(); setMic("idle"); return; }  // accidental tap
+      if (!d) { micDictRef.current = null; setMic("idle"); return; }
+      if (Date.now() - micStartRef.current < 300) { d.cancel(); micDictRef.current = null; setMic("idle"); return; }  // accidental tap
       setMic("stt");
       try {
         const final = await d.stop();
-        setValue(micCompose(micBaseRef.current, final, ""));
+        micDictRef.current?.finish(final);
+        micDictRef.current = null;
         window.setTimeout(() => inputRef.current?.focus(), 0);
       } catch (e) {
         setMicError(e instanceof Error ? e.message : "Transcription failed");
+        micDictRef.current = null;
       } finally { setMic("idle"); }
       return;
     }
     try {
       setMicError(null);
-      micBaseRef.current = value.trim();
+      const dict = createComposerDictation({ setValue });
+      dict.start(value);
+      micDictRef.current = dict;
       micStartRef.current = Date.now();
+      setMicElapsed(0);
       micRef.current = await startStreamingDictation({
-        onUpdate: (confirmed, pending) => setValue(micCompose(micBaseRef.current, confirmed, pending)),
-        onError: () => { /* transient mid-stream faults retry on the next window — stay quiet */ },
+        onUpdate: dict.update,
+        onLevel: setMicLevel,
+        onError: () => { /* transient mid-stream faults are retried — stay quiet */ },
       });
+      dict.attach(micRef.current);
       setMic("rec");
-    } catch { setMicError("Microphone unavailable — check browser permissions."); }
+    } catch (e) { micDictRef.current = null; setMicError(micErrorMessage(e)); }
   };
+  // Dictation shortcuts: Cmd/Ctrl+Shift+D starts or stops; Esc stops. The text stays in the box —
+  // nothing is sent until Enter.
+  const toggleMicRef = useRef(toggleMic);
+  toggleMicRef.current = toggleMic;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === "d" || e.key === "D")) { e.preventDefault(); void toggleMicRef.current(); }
+      else if (e.key === "Escape" && micRef.current) { e.preventDefault(); void toggleMicRef.current(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     const focus = () => inputRef.current?.focus();
@@ -861,6 +1093,21 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     for (const c of uploadAbortRef.current.values()) c.abort();
   }, []);
 
+  // ANOTHER PARTICIPANT'S TURN (#1783): when the conversation's version moves and this tab is not
+  // itself mid-turn, the conversation is read again — the store holds every participant's turns.
+  const [historyNonce, setHistoryNonce] = useState(0);
+  const rereadHistory = useCallback(() => {
+    const st = getChatState(chatKey);
+    if (st.busy || st.loading) return;
+    // the read REPLACES what is shown (it holds every turn shown now, and the other person's): an
+    // idle chat that already had turns kept them and dropped the read (founder's call 2026-10-14)
+    rereadKeys.add(chatKey);
+    updateChatState(chatKey, (s) => (s.busy ? s : { ...s, loaded: false }));
+    setHistoryNonce((x) => x + 1);
+  }, [chatKey]);
+  // A SHARED CHAT'S LINES are part of the conversation (drawn between the turns, by time); a move
+  // of the conversation's version re-reads it.
+  const room = useRoomLines(session, rereadHistory);
   // Load history into an idle, empty session snapshot. Live turns stay in the per-session store so switching
   // sessions never redirects or clears an in-flight stream.
   useEffect(() => {
@@ -876,7 +1123,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     (async () => {
       try {
         const r = await fetch(`/api/sessions/${encodeURIComponent(session)}/history`);
-        const data: { turns?: HistoryTurn[] } = await r.json();
+        const data: { turns?: (HistoryTurn & HistoryTrigger)[]; fault?: unknown } = await r.json();
         // THE PERSON'S WORDS ARE A FIELD, NOT SOMETHING TO RECOVER (F47). `user_text` is what they
         // typed, recorded by the worker beside the turn; `text` is the composed prompt the model
         // was given. When the field is there it is rendered as-is and the composed prompt is never
@@ -888,10 +1135,12 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         // `raw` stays the stored prompt either way: the filters below test the SHAPE of what was
         // stored (an onboarding kickoff, a machinery-marked composed opening), and those marks live
         // in the prompt, not in the person's sentence.
-        const compacted = (data.turns ?? []).map((t) =>
+        // A TURN THE MEETING WOKE (ADR transcript signals): its composed prompt is dropped and the
+        // reply it produced is marked, so it reads as Vexa speaking up "from the meeting".
+        const compacted = foldSignalWakes((data.turns ?? []).map((t) =>
           t.role === "user"
             ? { ...t, text: historyUserText(t), raw: t.text }
-            : { ...t, raw: t.text });
+            : { ...t, raw: t.text }));
         const loaded: Turn[] = compacted
           // Drop a PURE onboarding kickoff (legacy: marker with no user reply). A grounding-wrapped reply
           // (marker + grounding + reply) is KEPT and compacted to just the reply by compactStoredUserText.
@@ -919,9 +1168,21 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             && !t.raw.includes(ONBOARDING_KICKOFF_MARK)))
           .map((t, i) =>
             t.role === "user"
-              ? { id: `h-u-${i}`, role: "user", text: t.text }
-              : { id: `h-a-${i}`, role: "agent", text: t.text, ops: (t.ops ?? []).map(historyOp), commit: t.commit });
+              ? { id: `h-u-${i}`, role: "user", text: t.text, ...(typeof t.at === "number" ? { at: t.at } : {}),
+                  ...(t.attachments?.length ? { attachments: t.attachments.map((a) => ({
+                    ...a, name: a.name || originalName(a.path), src: attachmentSrc(session, a.path) })) } : {}),
+                  ...(t.from_agent?.thread ? { fromAgent: {
+                    uid: String(t.from_agent.uid ?? ""), thread: String(t.from_agent.thread),
+                    label: String(t.from_agent.label ?? "") } } : {}) }
+              : { id: `h-a-${i}`, role: "agent", text: t.text, ops: (t.ops ?? []).map(historyOp), commit: t.commit, ...(typeof t.at === "number" ? { at: t.at } : {}),
+                  ...(t.fromMeeting ? { fromMeeting: true, ...(t.wokeBy ? { wokeBy: t.wokeBy } : {}) } : {}) });
+        // A REPLY THE STORE REFUSED IS SAID, NOT LOST (ADR-0048 S5): the history carries the typed
+        // fault until the next save lands, and it renders as every typed fault does, at the end.
+        const refused = readFault(data.fault);
+        if (refused) loaded.push({ id: "h-fault", role: "agent", text: "", ops: [], failed: { fault: refused, retry: false } });
+        const replace = rereadKeys.delete(key);
         updateChatState(key, (s) => {
+          if (replace && !s.busy) return { ...s, turns: loaded, nextId: Math.max(s.nextId, loaded.length), loading: false, loaded: true };
           if (s.loaded || s.busy || s.turns.length > 0) return { ...s, loading: false, loaded: true };
           return { ...s, turns: loaded, nextId: Math.max(s.nextId, loaded.length), loading: false, loaded: true };
         });
@@ -930,7 +1191,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         updateChatState(key, (s) => (s.loaded ? s : { ...s, loading: false }));
       }
     })();
-  }, [chatKey, session, subject]);
+  }, [chatKey, session, subject, historyNonce]);
 
   /** One upload per file, started the moment the file is offered — so the tray shows each file's
    *  own progress, and a send only waits for whatever is still in flight. The promise resolves to
@@ -940,7 +1201,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     uploadAbortRef.current.set(a.id, ctl);
     const patch = (fields: Partial<ComposerAttachment>) =>
       setAttachments((current) => current.map((x) => (x.id === a.id ? { ...x, ...fields } : x)));
-    const p = uploadAttachment(a.file, (progress) => patch({ progress }), ctl.signal)
+    const p = uploadAttachment(a.file, (progress) => patch({ progress }), ctl.signal, session)
       .then((uploaded) => { patch({ status: "done", progress: 1, uploaded, error: undefined }); return uploaded; })
       .catch((e: unknown) => {
         if (ctl.signal.aborted) return null;
@@ -1084,7 +1345,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   // turn was running under and the instruction the harness offered to continue with.
   //
   // A REF BESIDE THE TURN, not a field on it. The Continue act has to go back to the SAME TARGET,
-  // and the target lives on the intent — a chat concern that `workbench/agent-window`'s `Turn`
+  // and the target lives on the intent — a chat concern that `surfaces/agent-window`'s `Turn`
   // (a rendering model, shared with the meeting copilot) has no business carrying. Nothing here is
   // rendered, so nothing here may cause a render either.
   const continuable = useRef(new Map<string, { instruction: string; intent?: ChatIntent;
@@ -1095,8 +1356,9 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const send = async (text: string, prompt = text, referenceSource = text, opts: SendOpts = {}) => {
     // hidden → no visible user bubble (system kickoffs); ground:false → don't append the active
     // meeting/file context (onboarding must not inherit whatever meeting happens to be focused).
-    const { hidden = false, ground = true, attachFrom } = opts;
+    const { hidden = false, ground = true, attachFrom, mentions, toAgent } = opts;
     const v = text.trim();
+    const files = opts.attachments ?? [];
     const { base: basePrompt, wire: p } = composePrompt(prompt, referenceSource, opts);
     const key = chatKey;
     const sessionForSend = session;
@@ -1104,7 +1366,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     // AN ATTACH CARRIES NO WORDS, by construction — they are already on the server (see `attachFrom`
     // on SendOpts). Everything else about this function is unchanged, which is the point: one
     // rendering path, whether the turn was dispatched here or is being watched.
-    if ((!attachFrom && (!v || !basePrompt)) || state.busy) {
+    if ((!attachFrom && ((!v && files.length === 0) || !basePrompt)) || state.busy) {
       // NOTHING IS BEING SENT, so the CONTROL that was pressed must stop saying something is —
       // that is the same lie as a spinner that outlives its turn, one object along
       // (Vexa-ai/vexa#1604).
@@ -1129,7 +1391,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     // and this turn is the answer to them.
     const newTurns = hidden || attachFrom
       ? [{ id: agentId, role: "agent" as const, text: "", ops: [] }]
-      : [{ id: `u-${n}`, role: "user" as const, text: displayText }, { id: agentId, role: "agent" as const, text: "", ops: [] }];
+      : [{ id: `u-${n}`, role: "user" as const, text: displayText, ...(files.length ? { attachments: files } : {}) },
+         { id: agentId, role: "agent" as const, text: "", ops: [] }];
     updateChatState(key, (s) => ({
       ...s,
       turns: [...s.turns, ...newTurns],
@@ -1148,8 +1411,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     // broken SSE reads as alive, never a frozen blank. Real output (a delta / tool / terminal) clears it.
     // `since` is per-gap: cleared on output, re-stamped when the next quiet stretch begins, so the counter
     // measures the CURRENT wait (the useful "is it stuck?" signal), not total turn time.
-    const setStatus = (phase: ChatPhase | null) =>
-      patchAgentTurn(key, agentId, (t) => ({ ...t, status: phase ? { phase, since: t.status?.since ?? Date.now() } : null }));
+    const setStatus = (phase: ChatPhase | null, label?: string) =>
+      patchAgentTurn(key, agentId, (t) => ({ ...t, status: phase ? { phase, since: t.status?.since ?? Date.now(), ...(label ? { label } : {}) } : null }));
     const { active, context } = wireContext(ground);
     // F40 — a tool call ENDS an assistant message, so the next interim text is a new paragraph.
     // The rule itself is `joinInterim` in chatStream.ts, where it is documented and tested; this is
@@ -1167,14 +1430,21 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         // `scaffold_id` on the FIRST turn: dispatch reads the same record the panel rendered from.
         // `intent` (PRD decision 32) — an Extend/Create press is an ACT on a named file, not a
         // sentence; it travels typed so the server can turn it into a preset without parsing prose.
-        { prompt: attachFrom ? "" : p, session: sessionForSend, active, context, scaffold_id: opts.scaffoldId, intent: opts.intent },
+        { prompt: attachFrom ? "" : p, session: sessionForSend, active, context, scaffold_id: opts.scaffoldId, intent: opts.intent, mentions, to_agent: toAgent },
         {
           onStarting: () => {},  // visual is driven by onStatus (below); the stream still signals cold-start here
-          onStatus: (phase) => setStatus(phase),
+          onStatus: (phase, label) => setStatus(phase, label),
           // A TURN BEING TAKEN IS SOMETHING LEAVING THE INBOX (Vexa-ai/vexa#1610), so this is when
           // the queued rows are re-read: the row for the message now answering stops saying it is
           // waiting at the moment it stops waiting, rather than when the answer finishes.
           onAccepted: () => { void refreshPending(); },
+          // A SHARED CHAT'S LINE, NOT A TURN (#1783): the message went to the people in the chat, and
+          // the room's lines show it with the sender's name — so the bubble pair painted for a turn
+          // goes, and the lines read now.
+          onNote: () => {
+            updateChatState(key, (s) => ({ ...s, turns: s.turns.filter((t) => t.id !== `u-${n}` && t.id !== agentId) }));
+            if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(ROOM_LINES_EVENT));
+          },
           // ONE VIEW, MORE THAN ONE TURN (the founder, 2026-10-10: *"sometimes chat does not answer
           // if asked while it's not yet answered"*). A message submitted while this turn ran is
           // taken by the worker while this turn is still writing its trailing steps, so its answer
@@ -1213,12 +1483,25 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // reader. Same forwarding rule — this surface opens nothing itself.
           onOpen: (o) => window.dispatchEvent(new CustomEvent(OPEN_PAGE_EVENT, { detail: o })),
           onFocusWorkspace: (f) => window.dispatchEvent(new CustomEvent(FOCUS_WORKSPACE_EVENT, { detail: f })),
+          // THE AGENT ASKS TO MOVE THIS CHAT'S WRITES (UI decision 6b): the question goes on its
+          // bubble with Switch / Keep. Nothing moves until the person clicks.
+          onProposeTarget: (p) => patchAgentTurn(key, agentId, (t) => ({ ...t, proposal: p })),
           // TERMS THIS TURN PUBLISHED for a meeting's transcript (PRD decision 35). Same seam and
           // same reason as the artifact above: the chips are part of the chat's record and the
           // transcript renders that record — this surface forwards and stores nothing.
           onTerms: (t) => window.dispatchEvent(new CustomEvent(TERMS_EVENT, { detail: t })),
+          // A sign-in browser the agent opened (`browser_session_open`): its result carries the
+          // session, and the shell's live view shows it. Same forwarding rule as `onTool`.
+          onToolResult: (tool, r) => {
+            // A WRITE HELD FOR THE PERSON'S APPROVAL becomes a card, not a typed code (2026-10-16)
+            const held = privateApproval(r.result);
+            if (held) patchAgentTurn(key, agentId, (t) => ({ ...t, approval: held }));
+            const ui = r.ok ? toolResultUiEvent(tool, r.result) : null;
+            if (ui) window.dispatchEvent(new CustomEvent(ui.name, { detail: ui.detail }));
+          },
           onTool: (tool, args) => {
-            if (/(^|__)connection_request$/.test(tool)) window.dispatchEvent(new CustomEvent("vexa:connections-open", { detail: args }));
+            const ui = toolUiEvent(tool);
+            if (ui) window.dispatchEvent(new CustomEvent(ui, { detail: args }));
             breakBeforeNextDelta = true;      // F40 — the assistant message ended here
             const op = toolOp(tool, args);
             // The workspace tree JUST changed. Drop the doc-link caches (60s TTL) or every entity
@@ -1415,7 +1698,11 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     }
   };
 
+  // STOP ENDS THE TURN, NOT ONLY THIS TAB'S VIEW OF IT (app.dev 2026-10-15): aborting the fetch
+  // left a fourteen-minute grep running on the worker, and the next message got a 409. The server is
+  // asked to kill the turn and its tools; that turn's own stream then says it stopped.
   const stop = () => {
+    void stopTurn(session);
     getChatState(chatKey).abort?.abort();
     updateChatState(chatKey, (s) => ({ ...s, busy: false, abort: null }));
   };
@@ -1524,13 +1811,34 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
    *  A page act carries its INTENT back with the new instruction, so the act lands on the same
    *  target and the worker queues it behind whatever is writing that page. A turn somebody typed
    *  has no intent, and its target is the conversation — which is where the words go anyway. */
+  /** THE PERSON ANSWERS A WRITE-TARGET PROPOSAL (UI decision 6b). Switch moves this chat's target —
+   *  through the shell, the one writer of it on this side, exactly as a chip click — and Keep moves
+   *  nothing. Either way the bubble says what they chose and the agent, which is waiting, gets the
+   *  answer as their next message. */
+  const decideTarget = (t: Extract<Turn, { role: "agent" }>, choice: ProposalChoice) => {
+    if (!t.proposal || t.proposal.decided) return;
+    const d = decideProposal(t.proposal, choice, session);
+    if (d.target) window.dispatchEvent(new CustomEvent(CHOOSE_TARGET_EVENT, { detail: d.target }));
+    patchAgentTurn(chatKey, t.id, (x) => (x.proposal ? { ...x, proposal: { ...x.proposal, decided: choice } } : x));
+    window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: d.ask }));
+  };
+
   const continueTurn = (t: Extract<Turn, { role: "agent" }>) => {
     const held = continuable.current.get(t.id);
     // RETRY A TURN A FAULT ENDED (P18) — the same words, the same options, once per press: the
     // control goes as it is pressed, and a second failure draws its own block with its own Retry.
     if (t.failed && held?.retry) {
       continuable.current.delete(t.id);
-      patchAgentTurn(chatKey, t.id, (x) => ({ ...x, failed: x.failed && { ...x.failed, retry: false } }));
+      // …AND THE FAILED ATTEMPT LEAVES NO TRACE (founder, 2026-10-13: three copies of one message
+      // and two red boxes). The retry draws the person's words again as it sends them, so the
+      // attempt that never got through — its bubble and the fault under it — goes first: one
+      // message on screen, and an answer under it when the retry lands.
+      updateChatState(chatKey, (s) => {
+        const at = s.turns.findIndex((x) => x.id === t.id);
+        if (at < 0) return s;
+        const from = at > 0 && s.turns[at - 1].role === "user" && !held.retry?.hidden ? at - 1 : at;
+        return { ...s, turns: [...s.turns.slice(0, from), ...s.turns.slice(at + 1)] };
+      });
       window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, {
         detail: { prompt: held.instruction, display: held.retry.display, hidden: held.retry.hidden,
                   ground: held.retry.ground, scaffoldId: held.retry.scaffoldId,
@@ -1610,10 +1918,10 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         if (detail?.intent && isJobIntent(detail.intent)) {
           actQueued({ target: actTarget(detail.intent), kind: detail.intent.kind });
         }
-        void submitToServer(rowId, prompt, prompt, opts);
+        void submitToServer(rowId, withSay(prompt, detail?.display), withSay(prompt, detail?.display), opts);
         return;
       }
-      void sendRef.current(display, prompt, prompt, opts);
+      void sendRef.current(display, withSay(prompt, detail?.display), withSay(prompt, detail?.display), opts);
     };
     window.addEventListener(ASK_CHAT_EVENT, onAsk);
     return () => window.removeEventListener(ASK_CHAT_EVENT, onAsk);
@@ -1629,7 +1937,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       try { localStorage.removeItem(key); } catch { /* ignore */ }
       try {
         const d = JSON.parse(raw as string) as { prompt: string; display?: string; hidden?: boolean; ground?: boolean; scaffoldId?: string };
-        if (d.prompt) void sendRef.current(d.display || d.prompt, d.prompt, d.prompt, { hidden: d.hidden, ground: d.ground, scaffoldId: d.scaffoldId });
+        if (d.prompt) void sendRef.current(d.display || d.prompt, withSay(d.prompt, d.display), withSay(d.prompt, d.display), { hidden: d.hidden, ground: d.ground, scaffoldId: d.scaffoldId });
       } catch { /* ignore */ }
     }, 600);
     return () => clearTimeout(t);
@@ -1704,7 +2012,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         // The cursor of the stream that just ended is EXACT — the next events after it are the
         // queued turn's. With none (a reload, a second window) the server's own tail is the honest
         // second best: the turn may already be under way, and its beginning is in the transcript.
-        void send("", "", "", { attachFrom: cursorRef.current || view.cursor || "0-0" });
+        void send("", "", "", { attachFrom: attachPoint(view, cursorRef.current) });
       } finally {
         catchingUp.current = false;
         if (rerunCatchUp.current) { rerunCatchUp.current = false; setCatchUpTick((n) => n + 1); }
@@ -1714,8 +2022,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy, session, catchUpTick]);
 
-  const onSubmit = async () => {
-    const v = value.trim();
+  const onSubmit = async (opts: { answered?: boolean; plain?: boolean } = {}) => {
+    const v = withPastes(value.trim(), pastes);
     const hasAttachments = attachments.length > 0;
     if ((!v && !hasAttachments) || uploading) return;
     // the user WROTE here — the minutes rail keeps a `touched` flag per chat and this is its
@@ -1735,18 +2043,30 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       // words go to the session's inbox immediately, and the queued row that follows is the
       // SERVER's answer about what is waiting.
       const qid = newSubmissionId();
-      updateChatState(chatKey, (s) => ({ ...s, turns: [...s.turns, { id: qid, role: "user", text: v }] }));
+      updateChatState(chatKey, (s) => ({ ...s, turns: [...s.turns, { id: qid, role: "user", text: v, at: Date.now() / 1000 }] }));
       stick.pin();   // queued or not, the person just wrote — show them their own turn
-      setValue("");
+      clearInput();
       void submitToServer(qid, isRoutineCommand(v) ? routineCreationPrompt(v) : v, v, {});
       return;
     }
     stick.pin();   // sending re-attaches follow-the-stream — the human asked for this reply
-    if (!hasAttachments && isRoutineCommand(v)) { void send(v, routineCreationPrompt(v)); setValue(""); return; }
-    if (!hasAttachments && v.startsWith("/")) { const sk = commands.querySkills(v)[0]; if (sk) { void commands.execute(sk.id, v); setValue(""); return; } }
+    if (!hasAttachments && isRoutineCommand(v)) { void send(v, routineCreationPrompt(v)); clearInput(); return; }
+    if (!hasAttachments && v.startsWith("/")) { const sk = commands.querySkills(v)[0]; if (sk) { void commands.execute(sk.id, v); clearInput(); return; } }
+    // @-MENTIONS (ADR-0048): a mentioned person who is not in this chat yet is a question, asked once
+    // before the message goes — share this chat with them? Nothing is sent until it is answered.
+    const live = hasAttachments ? [] : mentionsInText(v, picked);
+    // only a person picked to be INVITED (to the chat or a call) is a share question; a tag is not
+    const inviting = live.filter((m) => m.intent === "chat" || m.intent === "call");
+    if (inviting.length && !opts.answered) {
+      let check: ShareCheck = { kind: "send" };
+      try { check = await checkShare(session, inviting); } catch { check = { kind: "send" }; }
+      if (check.kind === "confirm") { setConfirm({ check, text: v, busy: false }); return; }
+    }
+    const mentionIds = opts.plain ? undefined : (live.length ? live.map((m) => m.subject) : undefined);
     let prompt = isRoutineCommand(v) ? routineCreationPrompt(v) : v;
-    let displayText = v;
-    let referenceSource = v;
+    const displayText = v;
+    const referenceSource = v;
+    let sentFiles: MessageAttachment[] = [];
     if (hasAttachments) {
       setUploading(true);
       setUploadError(null);
@@ -1755,8 +2075,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       if (typeof settled === "string") { setUploadError(settled); return; }
       const uploaded = settled;
       prompt = attachmentPrompt(prompt, uploaded);
-      referenceSource = [v, uploaded.map((f) => `@file:${f.path}`).join("\n")].filter(Boolean).join("\n");
-      displayText = displayText || `Attached files: ${uploaded.map((f) => f.name).join(", ")}`;
+      sentFiles = sentAttachments(session, uploaded);
       clearAttachments();
     }
     // ── DELETED 2026-09-02 (F36/F37): the two grounding arms ────────────────────────────────
@@ -1768,14 +2087,98 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     //  branch is now unreachable — which, per the founder's stale-code ruling, means it is deleted
     //  rather than left as a trap for the next person who wonders why it never fires. The admin
     //  conversation is a SCAFFOLD (`kind: "admin-setup"`), opened and grounded from its record.
-    void send(displayText, prompt, referenceSource);
-    setValue("");
+    void send(displayText, prompt, referenceSource, { mentions: mentionIds, ...(sentFiles.length ? { attachments: sentFiles } : {}) });
+    // INVITED TO A CALL: the call starts (or is joined) here, and everyone in the chat is rung
+    if (live.some((m) => m.intent === "call")) window.dispatchEvent(new CustomEvent(CALL_START_EVENT, { detail: { session } }));
+    clearInput();
+    setPicked([]);
+    setChoice(null);
   };
+
+  /** "Share and send" (`all`: they join this chat, history included) or "New chat with them"
+   *  (`none`): add the mentioned people, then send. A new shared chat: open it, and send there. */
+  const shareAndSend = async (history: "all" | "none" | null) => {
+    if (!confirm || confirm.check.kind !== "confirm") return;
+    const { check, text } = confirm;
+    setConfirm({ ...confirm, busy: true, error: undefined });
+    try {
+      const target = await shareWith(session, check.people, history);
+      const ids = mentionsInText(text, picked).map((m) => m.subject);
+      setConfirm(null);
+      if (target !== session) {
+        pendingFirstSend.set(target, { text, mentions: ids });
+        clearInput(); setPicked([]);
+        window.dispatchEvent(new CustomEvent(OPEN_SESSION_EVENT, { detail: { session: target } }));
+        if (!minutesOnly()) layout.setActiveSession(target);
+        return;
+      }
+      await onSubmit({ answered: true });
+    } catch (e) {
+      setConfirm({ ...confirm, busy: false, error: presentError(e).headline || "Couldn't share this chat. Try again." });
+    }
+  };
+
+  // …and the message waiting for that chat, sent once it is the open one.
+  useEffect(() => {
+    const p = pendingFirstSend.get(session);
+    if (!p || busy) return;
+    pendingFirstSend.delete(session);
+    stick.pin();
+    void send(p.text, p.text, p.text, { mentions: p.mentions, toAgent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+
+  // THE @ PICKER — the people the server says this person may mention, fetched once, on the first @.
+  const mq = activeMention(value, caret);
+  useEffect(() => {
+    if (!mq || mentionPeople || !mentionOn) return;
+    let live = true;
+    // THE SAME PEOPLE AS THE HOME (founder: "all those people should be available as @"): everyone
+    // the caller has interacted with, most recent first; the agents from the mention list
+    Promise.all([listKnownPeople().catch(() => ({ people: [], count: 0 })), listMentionable().catch(() => ({ people: [], agents: [{ name: "vexa" }] }))])
+      .then(([known, m]) => { if (live) setMentionPeople({ people: known.people.length ? knownAsMentionable(known.people) : m.people, agents: m.agents }); });
+    return () => { live = false; };
+  }, [mq !== null, mentionPeople, mentionOn]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const pickRows: PickerRow[] = mq && mentionPeople && !pickClosed && mentionOn ? pickerRows(mentionPeople.people, mentionPeople.agents, mq.query) : [];
+  // WHAT THE PICK IS FOR (founder: "to tag and to invite to a call"): a small choice after the
+  // chip, a tag by default
+  const [choice, setChoice] = useState<{ person: MentionablePerson; label: string } | null>(null);
+  const pick = (row: PickerRow) => {
+    if (!mq) return;
+    // a Vexa account is an @-mention (it can be invited); anyone else is a reference only — their
+    // page's chip when they have one, else their name — and never sends anything
+    const ref = row.kind === "person" && !(row.person.vexa ?? !!row.person.subject);
+    const next = ref ? insertReference(value, mq, row.kind === "person" ? row.person : null) : insertMention(value, mq, row.label);
+    setValue(next.text);
+    setCaret(next.caret);
+    if (row.kind === "person") {
+      if (!ref) {
+        const m: Mention = { subject: row.person.subject, label: row.label, name: row.person.name || row.label, intent: "tag" };
+        setPicked((prev) => [...prev.filter((x) => x.subject !== m.subject), m]);
+      }
+      setChoice({ person: row.person, label: row.label });
+    }
+    setPickIdx(0);
+    window.setTimeout(() => { const el = inputRef.current; if (el) { el.focus(); el.setSelectionRange(next.caret, next.caret); } }, 0);
+  };
+  const shownMentions = mentionsInText(value, picked);
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     // a screenshot, or files copied in the file manager — attached, not pasted as text
     const files = pastedFiles(e.clipboardData);
-    if (files.length === 0) return;
+    if (files.length === 0) {
+      const text = e.clipboardData?.getData("text/plain") ?? "";
+      if (isLongPaste(text)) { e.preventDefault(); setPastes((p) => [...p, text]); return; }
+      // A PASTED LINK TO ANYTHING OURS becomes its chip (#1783): `…/r/chat/<id>` → `[[chat:<id>]]`.
+      const chips = pastedRefs(text);
+      if (chips !== null) {
+        e.preventDefault();
+        const el = e.currentTarget;
+        const from = el.selectionStart ?? value.length, to = el.selectionEnd ?? value.length;
+        setValue(value.slice(0, from) + chips + value.slice(to));
+      }
+      return;
+    }
     e.preventDefault();
     addFiles(files);
   };
@@ -1791,12 +2194,39 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   // chat, where the step rows are (`JobRows` below, and the turn's own op line in agent-window).
   // The stop control stays: that is a handle, not narration.
 
+  // THE COMPOSER, IN PLACE: a surface in the empty chat (the home) may draw it under its greeting.
+  const [composerInline, setComposerInline] = useState(false);
   const composer = (
     <>
       {/* THE STANDING ROW that used to sit here — "Open transcript" · "Open note" (#1586) — is
           gone with the chips it carried (Vexa-ai/vexa#1600, founder: *"just keep a tab that can't
           be closed instead"*). It was this component's only host slot above the composer, so the
           slot goes too rather than standing empty waiting for a second reason to exist. */}
+      <MentionPicker rows={pickRows} active={Math.min(pickIdx, Math.max(0, pickRows.length - 1))} onPick={pick} />
+      {choice && !pickRows.length && (
+        <MentionChoice name={choice.person.name} vexa={!!(choice.person.vexa ?? choice.person.subject)}
+          onChoose={(intent) => {
+            const who = choice.person;
+            setChoice(null);
+            if (intent === "tag") return;
+            if (who.vexa ?? !!who.subject) {
+              setPicked((prev) => prev.map((m) => (m.subject === who.subject ? { ...m, intent } : m)));
+              return;
+            }
+            // someone not on Vexa: the call starts and the agent DRAFTS the invitation with its link;
+            // nothing goes out until the person confirms the final text
+            const d = callInviteDraft(who);
+            window.dispatchEvent(new CustomEvent(CALL_START_EVENT, { detail: { session } }));
+            window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { session, prompt: d.prompt, display: d.say } }));
+          }} />
+      )}
+      {confirm && confirm.check.kind === "confirm" && (
+        <ShareConfirm people={confirm.check.people} owner={confirm.check.owner} preview={confirm.check.preview}
+          busy={confirm.busy} error={confirm.error}
+          onShare={(h) => void shareAndSend(h)}
+          onSendPlain={() => { setConfirm(null); void onSubmit({ answered: true, plain: true }); }}
+          onCancel={() => { setConfirm(null); inputRef.current?.focus(); }} />
+      )}
       {slash && skills.length > 0 && (
         <div style={{ border: "1px solid var(--line2)", borderRadius: 11, background: "var(--panel)", overflow: "hidden" }}>
           {skills.map((c) => <div key={c.id} onMouseDown={() => setValue(c.skill! + " ")} style={{ display: "flex", gap: 10, padding: "9px 12px", cursor: "pointer", fontSize: 13 }}><code style={{ fontFamily: "var(--mono)", color: "var(--accent)", minWidth: 88 }}>{c.skill}</code><span style={{ color: "var(--t3)", fontSize: 12 }}>{c.title}</span></div>)}
@@ -1843,10 +2273,22 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           </div>
         )}
         <ComposerReferences text={value} />
+        <MentionChips mentions={shownMentions} onRemove={(m) => setPicked((prev) => prev.filter((x) => x.subject !== m.subject))} />
+        {pastes.length > 0 && <div className="vx-paste-tray">{pastes.map((t, i) => (
+          <PasteChip key={i} text={t} onRemove={() => setPastes((p) => p.filter((_, j) => j !== i))}
+            onEdit={() => { setPastes((p) => p.filter((_, j) => j !== i)); setValue((v) => (v ? `${v}\n\n${t}` : t)); inputRef.current?.focus(); }} />
+        ))}</div>}
         <AttachmentTray attachments={attachments} onRemove={removeAttachment} onRetry={retryAttachment}
           onPreview={(a) => setPreview(a)} onExit={() => inputRef.current?.focus()} />
         {uploadError && <div style={{ color: "var(--danger)", fontSize: 12, lineHeight: 1.35 }}>{uploadError}</div>}
         {micError && <div style={{ color: "var(--danger)", fontSize: 12, lineHeight: 1.35 }}>{micError}</div>}
+        {mic !== "idle" && (
+          <div data-dictation-status role="status" aria-live="polite" className="vx-dictation">
+            <progress className="vx-dictation-meter" max={100} value={Math.round(micLevel * 100)} aria-label="Microphone level" />
+            <span>{mic === "stt" ? "Finishing…" : `Listening ${Math.floor(micElapsed / 60)}:${String(micElapsed % 60).padStart(2, "0")}`}</span>
+            {mic === "rec" && <span className="vx-dictation-hint">Esc or the mic to stop · Enter sends</span>}
+          </div>
+        )}
         <input
           ref={fileInputRef}
           type="file"
@@ -1865,17 +2307,29 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           data-ring-host
           ref={inputRef}
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(e) => { setValue(e.target.value); micDictRef.current?.edited(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length); setPickClosed(false); setPickIdx(0); if (confirm) setConfirm(null); }}
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
           onInput={(e) => resizeComposerTextarea(e.currentTarget)}
           onPaste={onPaste}
           onKeyDown={(e) => {
+            if (pickRows.length) {
+              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                setPickIdx((i) => (i + (e.key === "ArrowDown" ? 1 : pickRows.length - 1)) % pickRows.length);
+                return;
+              }
+              if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pick(pickRows[Math.min(pickIdx, pickRows.length - 1)]); return; }
+              if (e.key === "Escape") { e.preventDefault(); setPickClosed(true); return; }
+            }
+            if (e.key === "Escape" && confirm) { e.preventDefault(); setConfirm(null); return; }
             if (e.key !== "Enter" || e.shiftKey) return;
             e.preventDefault();
+            if (confirm) return;          // the question above is the answer to this Enter
             void onSubmit();
           }}
-          placeholder={contextRef?.kind === "meeting" && activeMeeting
+          placeholder={composerPlaceholder(room) ?? (contextRef?.kind === "meeting" && activeMeeting
             ? MODE_PLACEHOLDER[meetingPhase(activeMeeting)]
-            : "Type / for skills, or ask the agent…"}
+            : "Type / for skills, or ask the agent…")}
           disabled={uploading}
           rows={2}
           style={{ width: "100%", boxSizing: "border-box", background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, lineHeight: "20px", minWidth: 0, minHeight: 44, maxHeight: MAX_TEXTAREA_HEIGHT, resize: "none", overflowY: "hidden", padding: "2px 2px", margin: 0, fontFamily: "inherit" }}
@@ -1902,7 +2356,9 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           <div style={{ flex: "1 1 auto", minWidth: 0, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
             {/* THE MODEL THIS CHAT RUNS ON, AND ITS EFFORT (ADR-0043) — beside send, because the next
                 turn is when a pick takes effect. Absent on a deployment with no catalog. */}
-            <ModelPicker session={session} onEffortItems={setEffortItems} />
+            {levelsOn
+              ? <ModelChip session={session} hasMessages={turns.length > 0} />
+              : <ModelPicker session={session} onEffortItems={setEffortItems} />}
             {busy
               ? <IconButton label="Stop" variant="secondary" onClick={stop}><Square size={12} strokeWidth={2.5} fill="currentColor" /></IconButton>
               : <IconButton label="Send" variant="primary" disabled={uploading} onClick={() => void onSubmit()}><Send size={16} strokeWidth={1.75} /></IconButton>}
@@ -1912,10 +2368,12 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     </>
   );
 
+  const composerSlot = { composer, claim: setComposerInline };
   return (
-    <FileDropZone onFiles={addFiles}>
+    <FileDropZone onFiles={addFiles} onFolders={folderDropOn ? (entries) => requestFolderImport({ kind: "entries", entries, into: null }) : undefined}>
     {preview?.previewUrl && <ImagePreview attachment={preview} onClose={() => setPreview(null)} />}
-    <AgentWindow top={<ChatHeader subject={subject} session={session} onSelectSession={selectSession} onNewChat={newChat} onClose={() => layout.toggleRight()} />} scrollRef={scrollRef} composer={composer}>
+    <ComposerSlotProvider value={composerSlot}>
+    <AgentWindow top={<ChatHeader subject={subject} session={session} onSelectSession={selectSession} onNewChat={newChat} onClose={() => layout.toggleRight()} />} scrollRef={scrollRef} composer={composerInline ? null : composer}>
       {/* THE EMPTY STATE. The centered "What organisation are you? / Just the name is enough — I'll
           research the rest…" card that used to sit here is DELETED (F37): it was the pre-scaffold
           admin onboarding, reachable only from an `org-setup` session the rail's own seeding
@@ -1923,20 +2381,39 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           it in a chat he never made — *"I explain this as stale code."*
           What is left renders the meeting greeting when there IS a meeting, and otherwise renders
           nothing but whatever the host put in `emptyExtra`. */}
-      <ChatConversation turns={turns} busy={busy || loading} jobs={chatState.jobs} onContinue={continueTurn} onRetryRow={(j) => { void retryRow(j); }} empty={
-        <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>
+      {/* THE READING COLUMN (founder 2026-10-15: "comfy readability"): a conversation reads in a
+          centred ~70-character column; the empty home keeps its own width */}
+      <div className={turns.length || room?.lines.length ? "vx-read-col" : undefined}>
+      <ChatConversation turns={turns} busy={busy || loading} jobs={chatState.jobs} room={room} onContinue={continueTurn} onStopRunning={(t) => stopTurn(t.failed?.fault.session || session)} onDecide={decideTarget} onRetryRow={(j) => { void retryRow(j); }} onSendNow={async (j) => { const ok = await sendNow(session, j.id); void refreshPending(); return ok; }}
+        onEditQueued={async (j) => {
+          if (!(await withdrawQueued(session, j.id))) { void refreshPending(); return; }
+          updateChatState(chatKey, (s) => ({ ...s, turns: s.turns.filter((t) => t.id !== j.id) }));
+          setValue((v) => (v ? `${v}\n\n${j.text ?? ""}` : (j.text ?? "")));
+          inputRef.current?.focus();
+          void refreshPending();
+        }}
+        onRemoveQueued={async (j) => {
+          if (await withdrawQueued(session, j.id)) updateChatState(chatKey, (s) => ({ ...s, turns: s.turns.filter((t) => t.id !== j.id) }));
+          void refreshPending();
+        }} empty={!loading && minutesOnly() && minutesEmptyGreeting(session)
+          // A MEETING'S GREETING is the agent speaking: its line where a turn goes, not a centred box
+          ? <div data-meeting-greeting=""><MeetingGreeting session={session} />{emptyExtra}</div>
+          :
+        <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: composerInline ? "none" : 560, margin: minutesOnly() ? (composerInline ? "8px auto 0" : "26px auto 0") : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>
             {loading ? "Loading conversation…" : (minutesOnly()
-              ? minutesEmptyGreeting(session)
+              ? <MeetingGreeting session={session} />
               : "Ask the agent to record, research, or restructure knowledge — it writes to your git workspace and commits.")}
             {/* NOT while the history is still loading: a chip that appears and then vanishes under
                 an arriving conversation is worse than one that arrives a beat late. */}
             {!loading && emptyExtra}
           </div>} />
+      </div>
       <BundleImportCards cards={bundleImports.cards} onDismiss={bundleImports.dismiss} />
+      <FolderImportedCards cards={folderCards.cards} />
       {/* JUMP TO LATEST — the only way back to following that costs the reader nothing. Sticky to
           the bottom of the scroller and zero-height, so it adds no scroll height of its own and the
           window shell (owned by parallel work) is untouched. */}
-      {!following && (
+      {!following && !composerInline && (
         <div style={{ position: "sticky", bottom: 0, height: 0, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
           <button type="button" onClick={() => stick.pin()} aria-label="Jump to latest" title="Jump to latest"
             style={{ pointerEvents: "auto", transform: "translateY(-10px)", display: "inline-flex", alignItems: "center", gap: 6, background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", borderRadius: 999, padding: "5px 12px", fontSize: 12, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.18)" }}>
@@ -1945,6 +2422,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         </div>
       )}
     </AgentWindow>
+    </ComposerSlotProvider>
     </FileDropZone>
   );
 }
@@ -1955,4 +2433,229 @@ if (!meetingsOnly()) {
   registerCommand({ id: "skill.research", title: "Research and file to the workspace", skill: "/research", run: () => {} });
   registerCommand({ id: "skill.draft", title: "Draft an email or doc", skill: "/draft", run: () => {} });
   registerCommand({ id: "skill.routine", title: "Create a scheduled routine", skill: ROUTINE_COMMAND, run: () => {} });
+}
+
+
+/** Fired when this tab posted a line to the chat, so the lines are read at once. */
+export const ROOM_LINES_EVENT = "vexa:terminal:room-lines";
+
+/** THE LINES IN A SHARED CHAT (#1783, collaboration rehearsal 2026-10-14): a message one person
+ *  posts without addressing the agent was stored and shown to nobody. They are the chat's own
+ *  (`GET /api/sessions/{s}/messages`), every participant reads them, and they show here with who
+ *  wrote each, newest last — read every few seconds while the chat is open (and at once after this
+ *  tab posts one), so they arrive live and are still there after a reload. The same read carries
+ *  the conversation's `version`: when another person's turn lands it moves, and `onTurn` re-reads
+ *  the conversation. A chat the store does not hold answers 404 and shows nothing. */
+export type RoomLine = { seq: number; author: string; text: string; created: number };
+export type RoomStep = { tool: string; file_path?: string };
+export type RoomTurn = "thinking" | "nothing" | null;
+export type RoomView = { lines: RoomLine[]; you: string; names: Record<string, string>; turn?: RoomTurn; step?: RoomStep | null };
+
+/** THE ROOM'S LIVE STATUS, above the composer (founder, app.dev 2026-10-16): "Vexa heard you ·
+ *  thinking…" from the moment a wake is accepted, the step the turn is on under it, replaced by the
+ *  reply; "Vexa: nothing to add" while `showingNothing` (3 s) after a turn that said nothing. */
+export function roomTurnRow(turn: RoomTurn | undefined, step: RoomStep | null | undefined, showingNothing: boolean): { line: string; step: string | null } | null {
+  if (turn === "thinking") {
+    const label = step?.tool ? toolOp(step.tool, step.file_path ? { file_path: step.file_path } : undefined).label : "";
+    const file = step?.file_path ? step.file_path.split("/").pop() : "";
+    return { line: "Vexa heard you \u00b7 thinking\u2026", step: label ? (file && !label.includes(file) ? `${label} \u00b7 ${file}` : label) : null };
+  }
+  if (turn === "nothing" && showingNothing) return { line: "Vexa: nothing to add", step: null };
+  return null;
+}
+
+function RoomTurnStatus({ turn, step }: { turn?: RoomTurn; step?: RoomStep | null }) {
+  const [showingNothing, setShowingNothing] = useState(false);
+  useEffect(() => {
+    if (turn !== "nothing") { setShowingNothing(false); return; }
+    setShowingNothing(true);
+    const t = window.setTimeout(() => setShowingNothing(false), 3000);
+    return () => window.clearTimeout(t);
+  }, [turn]);
+  const row = roomTurnRow(turn, step, showingNothing);
+  if (!row) return null;
+  return (
+    <div data-room-turn={turn || ""} role="status" aria-live="polite" className="vx-room-turn">
+      <span className="vx-room-turn-line">
+        {turn === "thinking" && <span className="vx-op-spin vx-room-turn-spin" />}
+        {row.line}
+      </span>
+      {row.step && <span data-room-step="" className="vx-room-turn-step">{row.step}</span>}
+    </div>
+  );
+}
+
+export function useRoomLines(session: string, onTurn?: () => void): RoomView {
+  const [lines, setLines] = useState<RoomLine[]>([]);
+  const [you, setYou] = useState("");
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [turn, setTurn] = useState<RoomTurn>(null);
+  const [step, setStep] = useState<RoomStep | null>(null);
+  const turnRef = useRef(onTurn);
+  turnRef.current = onTurn;
+  useEffect(() => {
+    let live = true;
+    let stop = false;
+    let seen = -1;
+    // A chat the store does not hold YET answers 404 — a new private chat, until its first turn
+    // lands or it is shared. It is read again, slower, never given up on: giving up left the owner
+    // of a chat shared after its first turn blind to every line the other person wrote (founder's
+    // call 2026-10-14). Only "not configured" (503) stops.
+    let quiet = 0;
+    const read = () => {
+      if (stop) return;
+      sessionRoomLines(session).then((m) => {
+        if (!live) return;
+        quiet = 0;
+        setLines(m.messages); setYou(m.you); setNames(m.names);
+        setTurn(m.agent_turn ?? null); setStep(m.agent_step ?? null);
+        // SHOW TO ROOM (JTBD-1): what a member shows the room opens in this member's panel, once
+        window.dispatchEvent(new CustomEvent(ROOM_SHOWING_EVENT, { detail: { session, showing: m.showing, you: m.you, names: m.names } }));
+        if (seen >= 0 && m.version > seen) turnRef.current?.();
+        seen = m.version;
+      }).catch((e: unknown) => {
+        const st = (e as { status?: number })?.status;
+        if (st === 503) stop = true; else quiet += 1;
+      });
+    };
+    setLines([]); setNames({}); setTurn(null); setStep(null);
+    read();
+    const now = () => { quiet = 0; read(); };
+    window.addEventListener(ROOM_LINES_EVENT, now);
+    let ticks = 0;
+    const t = window.setInterval(() => {
+      ticks += 1;
+      if (typeof document !== "undefined" && document.hidden) return;
+      if (quiet > 0 && ticks % 5 !== 0) return;   // unknown to the store: every 15 s
+      read();
+    }, 3000);
+    return () => { live = false; window.clearInterval(t); window.removeEventListener(ROOM_LINES_EVENT, now); };
+  }, [session]);
+  return { lines, you, names, turn, step };
+}
+
+export const roomWho = (v: RoomView, a: string) => a === "vexa" ? "Vexa" : a === v.you ? "You" : (v.names[a] || "Someone");
+
+/** WHERE EACH LINE GOES: before the first turn said after it. A turn the history gave no time takes
+ *  the one before it (a live reply follows its question); leading undated turns take the next one.
+ *  A conversation with no times at all keeps its lines after it. */
+export function interleave(turns: Turn[], lines: RoomLine[]): ({ kind: "turn"; turn: Turn; i: number } | { kind: "line"; line: RoomLine })[] {
+  const sorted = [...lines].sort((a, b) => a.created - b.created || a.seq - b.seq);
+  const known = turns.map((t) => ("at" in t && typeof t.at === "number" ? t.at : null));
+  if (known.every((x) => x === null)) {
+    return [...turns.map((turn, i) => ({ kind: "turn" as const, turn, i })), ...sorted.map((line) => ({ kind: "line" as const, line }))];
+  }
+  const eff: number[] = [];
+  for (let i = 0; i < turns.length; i++) eff[i] = known[i] ?? (i > 0 ? eff[i - 1] : NaN);
+  for (let i = turns.length - 1; i >= 0; i--) if (Number.isNaN(eff[i])) eff[i] = eff[i + 1];
+  const out: ({ kind: "turn"; turn: Turn; i: number } | { kind: "line"; line: RoomLine })[] = [];
+  let j = 0;
+  turns.forEach((turn, i) => {
+    while (j < sorted.length && sorted[j].created < eff[i]) out.push({ kind: "line", line: sorted[j++] });
+    out.push({ kind: "turn", turn, i });
+  });
+  while (j < sorted.length) out.push({ kind: "line", line: sorted[j++] });
+  return out;
+}
+
+/** AN ACT'S INSTRUCTION IS NEVER DRAWN AS SOMEBODY'S WORDS (live app.dev: "Update notes" showed its
+ *  whole internal instruction as the person's line). The server keeps such text out of the record;
+ *  this is the last guard: a turn or a line that carries the machinery's own phrases is drawn as the
+ *  act's short line, and the instruction stays in the record, auditable, unrendered. */
+const MACHINERY_PHRASES = /<!--\s*(?:meeting:|vexa:transcript)|transcript_cursor|next_index|\[vexa-(?:job|act|flow|msg):/;
+/** A home act's hidden tail (`homePrompt`): the agent's instruction, never the person's words. */
+const HOME_TAIL = /\s*\(This came from your home, item [\s\S]*$/;
+/** THE PERSON'S LINE, KEPT WITH A HIDDEN INSTRUCTION (founder, live: the "Create a shared workspace"
+ *  starter posted its whole internal prompt — tool names and all — as his message). A starter, a
+ *  chip or a home button sends the agent its instruction and the person's short line together; the
+ *  record carries both, the line after this mark, and only the line is ever drawn. agent-api's
+ *  `chat_label` names the chat from the same line. */
+export const SAY_MARK = "\n\n<!-- vexa:say -->";
+export function withSay(prompt: string, display?: string | null): string {
+  const say = String(display ?? "").trim();
+  return say && say !== prompt.trim() && !prompt.includes(SAY_MARK) ? `${prompt}${SAY_MARK}${say}` : prompt;
+}
+
+export function shownWords(text: string): string {
+  const said = text.indexOf(SAY_MARK.trim());
+  if (said >= 0) return text.slice(said + SAY_MARK.trim().length).trim() || "Ran an action";
+  if (HOME_TAIL.test(text)) text = text.replace(HOME_TAIL, "").trim() || "Ran an action";
+  if (!MACHINERY_PHRASES.test(text)) return text;
+  if (/transcript/i.test(text) && /meeting/i.test(text)) return "Update notes from the transcript";
+  const head = text.split("\n")[0].replace(MACHINERY_PHRASES, "").trim();
+  return /^(Extend|Create|Explore|Highlight)\b/.test(head) ? head.slice(0, 120) : "Ran an action";
+}
+
+type Streamed = { kind: "turn"; turn: Turn; i: number } | { kind: "line"; line: RoomLine };
+/** A ROUTINE'S REPEATED NOTICE IS ONE LINE (live app.dev, a routine chat with the same "couldn't tell
+ *  how this run ended" five times in a row): consecutive identical lines by one author fold into one
+ *  entry that carries them all. */
+export function groupRepeats(items: Streamed[]): (Streamed | { kind: "repeat"; lines: RoomLine[] })[] {
+  const out: (Streamed | { kind: "repeat"; lines: RoomLine[] })[] = [];
+  for (const x of items) {
+    const prev = out[out.length - 1];
+    if (x.kind === "line" && prev) {
+      const head = prev.kind === "line" ? prev.line : prev.kind === "repeat" ? prev.lines[0] : null;
+      if (head && head.author === x.line.author && head.text.trim() === x.line.text.trim()) {
+        out[out.length - 1] = { kind: "repeat", lines: prev.kind === "repeat" ? [...prev.lines, x.line] : [head, x.line] };
+        continue;
+      }
+    }
+    out.push(x);
+  }
+  return out;
+}
+const hhmm = (sec: number) => new Date(sec * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+/** A line a PERSON wrote in a shared chat: mine on the right, like my own messages; anybody else's
+ *  on the left as a bubble with their initials and name (founder 2026-10-15). */
+function PersonLine({ who, mine, repeat, children }: { who: string; mine: boolean; repeat?: boolean; children: ReactNode }) {
+  return (
+    <div data-turn={repeat ? "repeat" : "line"} className={mine ? "vx-turn vx-turn-mine" : "vx-turn vx-turn-other"}>
+      {mine ? <div data-turn-who="" className="vx-sr">{who}</div>
+        : <Identity kind="person" id={who} name={who} size={24} className="vx-turn-avatar" />}
+      <div className="vx-turn-other-body">
+        {!mine && <div data-turn-who="" className="vx-turn-who">{who}</div>}
+        <div className={mine ? "vx-bubble vx-bubble-mine" : "vx-bubble vx-bubble-other"}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function RepeatLine({ lines, who }: { lines: RoomLine[]; who: string }) {
+  const [open, setOpen] = useState(false);
+  const first = lines[0], last = lines[lines.length - 1];
+  return (
+    <PersonLine who={who} mine={who === "You"} repeat>
+      <>
+        <ReferenceText text={shownWords(first.text)} />{" "}
+        <span className="vx-repeat-meta">×{lines.length} · {hhmm(first.created)}–{hhmm(last.created)} · </span>
+        <button type="button" data-repeat-toggle className="vx-repeat-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? "hide" : "details"}
+        </button>
+        {open && <ul className="vx-repeat-list">{lines.map((l) => <li key={l.seq} data-repeat-at>{hhmm(l.created)}</li>)}</ul>}
+      </>
+    </PersonLine>
+  );
+}
+
+/** "Message Valeriia and Vexa" — who a message in a shared chat reaches; null in a chat of one. */
+export function composerPlaceholder(v: RoomView): string | null {
+  const others = Object.entries(v.names).filter(([id]) => id !== v.you && id !== "vexa").map(([, n]) => n).filter(Boolean);
+  if (!others.length) return null;
+  return `Message ${others.join(", ")} and Vexa`;
+}
+
+/** The lines alone (kept for a surface that shows them outside a conversation). */
+export function RoomLines({ session, onTurn }: { session: string; onTurn?: () => void }) {
+  const v = useRoomLines(session, onTurn);
+  if (!v.lines.length) return null;
+  return (
+    <div data-room-lines="" aria-label="Messages in this chat" className="vx-room-lines">
+      {v.lines.slice(-12).map((l) => (
+        <div key={l.seq} className="vx-room-line">
+          <span className="vx-room-line-who">{roomWho(v, l.author)}</span> {l.text}
+        </div>
+      ))}
+    </div>
+  );
 }

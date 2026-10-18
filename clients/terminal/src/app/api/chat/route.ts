@@ -6,7 +6,7 @@
  *  and abort the upstream fetch when the client disconnects. */
 import type { NextRequest } from "next/server";
 import { resolveApiKey } from "../proxyAuth";
-import { meetingsOnly } from "../../mode";
+import { meetingsOnly } from "../../../platform/mode";
 
 export const dynamic = "force-dynamic";
 
@@ -22,11 +22,19 @@ const SSE_HEADERS = {
 /** A fault as the chat stream carries it (`surfaces/faults.ts` renders it): WHO failed and HOW. */
 type ChatFault = { source: string; kind: string; status?: number | null; detail?: string; remedy?: string };
 
-function sseError(message: string, status?: number, fault?: ChatFault) {
-  return new Response(`data: ${JSON.stringify({ type: "error", message, status, ...(fault ? { fault } : {}) })}\n\n`, {
+function sseError(message: string, status?: number, fault?: ChatFault, retryAfter?: number) {
+  const extra = { ...(fault ? { fault } : {}), ...(retryAfter ? { retry_after: retryAfter } : {}) };
+  return new Response(`data: ${JSON.stringify({ type: "error", message, status, ...extra })}\n\n`, {
     status: 200,
     headers: SSE_HEADERS,
   });
+}
+
+/** The upstream's `Retry-After` in whole seconds, when it sent one (the gateway's auth 503 says 1).
+ *  The browser's chat reader waits at least this long before it retries the same turn. */
+function retryAfterSeconds(h: Headers): number | undefined {
+  const n = Number((h.get("retry-after") ?? "").trim());
+  return Number.isFinite(n) && n > 0 ? Math.ceil(n) : undefined;
 }
 
 /** THE TYPED FAULT agent-api answered with, when it answered with one (P18): `{detail, fault}`. */
@@ -125,11 +133,12 @@ export async function POST(req: NextRequest) {
       const raw = await upstream.text().catch(() => "");
       req.signal.removeEventListener("abort", onClientGone);
       const typed = typedRefusal(raw);
-      if (typed) return sseError(typed.detail || `agent-api chat returned ${upstream.status}`, upstream.status, typed.fault);
+      const retryAfter = retryAfterSeconds(upstream.headers);
+      if (typed) return sseError(typed.detail || `agent-api chat returned ${upstream.status}`, upstream.status, typed.fault, retryAfter);
       if (upstream.status >= 500) {
         const said = proseDetail(raw);
         const fault = upstreamFault(upstream.status, said);
-        return sseError(said || `${fault.detail}.`, upstream.status, fault);
+        return sseError(said || `${fault.detail}.`, upstream.status, fault, retryAfter);
       }
       const detail = raw.trim().replace(/\s+/g, " ");
       return sseError(detail || `agent-api chat returned ${upstream.status}`, upstream.status);

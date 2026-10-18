@@ -34,7 +34,7 @@ vi.mock("next/headers", () => ({
 }));
 
 import { POST as requestLink } from "../request-link/route";
-import { GET as redeem } from "../redeem/route";
+import { POST as redeem } from "../redeem/route"; // the button on the link page (prefetch-safe)
 import { POST as login } from "../login/route";
 import { authOptions } from "../[...nextauth]/authOptions";
 import { _settleLinkDeliveries } from "../linkDelivery";
@@ -166,7 +166,7 @@ function redeemReq(token: string) {
   const url = new URL("https://terminal.test/api/auth/redeem");
   url.searchParams.set("t", token);
   url.searchParams.set("next", "/?ask=catch-up");
-  return { nextUrl: url, url: url.toString() } as unknown as import("next/server").NextRequest;
+  return { nextUrl: url, url: url.toString(), method: "POST", headers: new Headers({ origin: "https://terminal.test", "sec-fetch-site": "same-origin" }) } as unknown as import("next/server").NextRequest;
 }
 
 function clickLinkFor(email: string) {
@@ -234,14 +234,14 @@ describe("who IS admitted", () => {
   it("an existing user — upgrading locks nobody out, at every door", async () => {
     await askForLink("member@example.com");
     expect(sendMail).toHaveBeenCalledTimes(1);
-    expect((await clickLinkFor("member@example.com")).status).toBe(302);
+    expect((await clickLinkFor("member@example.com")).status).toBe(303);
     expect(await oauth("Member@Example.com")).toBe(true);
     expect(created()).toHaveLength(0); // found, not created
   });
 
   it("an address on the allow-list by DOMAIN entry, and by EXACT entry", async () => {
     const domain = await clickLinkFor("anna@bank.example");
-    expect(domain.status).toBe(302);
+    expect(domain.status).toBe(303);
     expect(domain.cookies.get("vexa-token")?.value).toBe("minted-tok");
     expect(await oauth("alice@example.org", "microsoft")).toBe(true);
     expect(created()).toHaveLength(2); // new people on the list get their account at first sign-in
@@ -351,7 +351,7 @@ describe("the first admin claim still works", () => {
     await askForLink("founder@newco.example");
     expect(sendMail).toHaveBeenCalledTimes(1);           // the link is mailed…
     const res = await clickLinkFor("founder@newco.example");
-    expect(res.status).toBe(302);                        // …and redeemed in this browser
+    expect(res.status).toBe(303);                        // …and redeemed in this browser
     expect(res.cookies.get("vexa-token")?.value).toBe("minted-tok");
     expect(created()).toHaveLength(1);
     const claim = (globalThis.fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls

@@ -3,22 +3,24 @@
  *  README is the page BODY (the dashboard you land on); management is a compact header:
  *   • Header   — mount toggle + name (inline rename) · SHARE (the primary action — enables sharing if
  *                needed and opens the invite dialog) · ⋯ menu (Rename / Manage / Archive / Delete) ·
- *                one quiet meta row (members · GitHub sync · role).
+ *                one quiet meta row (members · repository sync · role).
  *   • README   — rendered below the header, live-refreshed; the hero of the page.
- *   • Manage   — the deeper sections (Purpose · GitHub push/pull/publish · Participants) fold below the
+ *   • Manage   — the deeper sections (Purpose · repository push/pull/publish · Participants) fold below the
  *                README behind one quiet toggle, opened by the meta row / ⋯ / Share.
  *
  *  Opened via `manageTabDescriptor(...)` from workspace.tsx. Data-access is the workspaceApi SoC module. */
+import { Identity } from "../ui-kit/Identity";
+import { WorkspaceImageDialog, WorkspaceImageProposal } from "./workspaceImage";
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useService } from "../platform";
-import { LayoutServiceId, type LayoutService, type TabDescriptor } from "../workbench/layout";
+import { LayoutServiceId, type LayoutService, type TabDescriptor } from "../platform/layout";
 import { registerTab, type TabProps } from "../contributions";
-import { meetingsOnly } from "../app/mode";
+import { meetingsOnly } from "../platform/mode";
 import { Icon, Checkbox, useConfirm, ExternalLink } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
-import { presentError } from "./apiClient";
+import { presentError } from "../data/apiClient";
 import { DocMetaContext } from "../ui-kit/docLinks";
 import {
   readAttachedWorkspaces, readActiveSet, listSharedMemberships, renameWorkspace,
@@ -28,7 +30,11 @@ import {
   readWorkspacePurpose, writeWorkspacePurpose, readWorkspaceFile,
   listWorkspaceMembers, removeWorkspaceMember, leaveWorkspace, mintInvite,
   type AttachedWorkspaces, type ActiveMount, type Membership, type GitRemoteStatus, type WorkspaceMember, type SavedGitToken,
-} from "./workspaceApi";
+} from "../data/workspaceApi";
+import {
+  listGitProviders, knownGitProviders, setKnownGitProviders, defaultProvider, providerForUrl,
+  type GitProvider, type GitProviderList,
+} from "../data/gitProviders";
 
 /** The tab descriptor a WORKSPACES row opens. `shared` ⇒ `slug` is a shared workspace_id (member view);
  *  otherwise `slug` is one of the caller's own slots. `name` seeds the tab title + header label. */
@@ -153,7 +159,7 @@ function WorkspaceManagePanel({ id, params }: TabProps) {
         {manage && (<>
           <PurposeSection slug={slug} />
 
-          <GitHubSection
+          <RepositorySection
             slug={slug} status={status} published_url={isSeed ? (attached.published_url ?? null) : null}
             defaultRepoName={defaultRepoName(displayName)}
             busy={busy} onRun={run} reload={loadCore}
@@ -221,6 +227,7 @@ function Header({ slug, shared, isSeed, displayName, mounted, archived, busy, on
   meta: { members: WorkspaceMember[] | null; status: GitRemoteStatus | null; myRole?: string };
 }) {
   const [renaming, setRenaming] = useState(false);
+  const [imaging, setImaging] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirm, confirmDialog] = useConfirm();
   const cancelled = useRef(false);
@@ -240,6 +247,7 @@ function Header({ slug, shared, isSeed, displayName, mounted, archived, busy, on
         <Checkbox checked={mounted} disabled={busy} onChange={toggle}
           title={mounted ? "Mounted into the agent — uncheck to switch off" : "Switched off — check to mount"}
           label={`${displayName} — ${mounted ? "on" : "off"}`} />
+        <Identity kind="workspace" id={slug} slug={slug} name={displayName} size={40} onChange={() => setImaging(true)} />
         {renaming && !shared ? (
           <input autoFocus defaultValue={displayName} disabled={busy}
             onKeyDown={(e) => { if (e.key === "Enter") { cancelled.current = false; e.currentTarget.blur(); } else if (e.key === "Escape") { cancelled.current = true; e.currentTarget.blur(); } }}
@@ -254,7 +262,7 @@ function Header({ slug, shared, isSeed, displayName, mounted, archived, busy, on
         <span onClick={openMenu} title="Rename · Manage · Archive · Delete"
           className="c-3 pt-0_5 pr-1_5 pb-0_5 pl-1_5 t-lg lh-tight bd r-md" style={{ cursor: "pointer" }}>⋯</span>
       </div>
-      {/* ONE quiet meta row: members · GitHub sync · role/kind — each opens the manage fold. */}
+      {/* ONE quiet meta row: members · repository sync · role/kind — each opens the manage fold. */}
       <div className="t-xs c-3 mt-1_5 ml-6" style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
         {meta.members !== null && (
           <span style={metaItem} onClick={onManage} title="Participants">
@@ -262,27 +270,30 @@ function Header({ slug, shared, isSeed, displayName, mounted, archived, busy, on
           </span>
         )}
         {sync && (
-          <span style={metaItem} onClick={onManage} title="GitHub sync">
-            <Icon name="github" size={12} />{sync}
+          <span style={metaItem} onClick={onManage} title="Repository sync">
+            <Icon name="git" size={12} />{sync}
           </span>
         )}
         <span style={{ ...metaItem, cursor: "default" }}>
           {shared ? `shared${meta.myRole ? ` · ${meta.myRole}` : ""}` : isSeed ? "Personal" : meta.members !== null ? "shared by you" : "private"}
-          {archived ? " · archived" : ""}
+          {archived ? " · hidden" : ""}
           {!mounted && " · not mounted"}
         </span>
       </div>
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
           ...(!shared ? [{ id: "rename", label: "Rename", detail: "display label", onSelect: () => setRenaming(true) }] : []),
-          { id: "manage", label: "Manage workspace", detail: "purpose · GitHub · participants", onSelect: onManage },
+          { id: "image", label: "Change image…", detail: "upload · logo · reset", onSelect: () => setImaging(true) },
+          { id: "manage", label: "Manage workspace", detail: "purpose · repository · participants", onSelect: onManage },
           ...(!shared && !isSeed ? [
-            { id: "archive", label: archived ? "Un-archive" : "Archive", detail: "collapse · keep data", onSelect: () => void onRun(async () => { await archiveWorkspace(slug, !archived); reload(); }, archived ? "Un-archived." : "Archived.") },
+            { id: "archive", label: archived ? "Unhide" : "Hide", detail: archived ? "listed and mounted again" : "not mounted · not listed · kept", onSelect: () => void onRun(async () => { await archiveWorkspace(slug, !archived); reload(); }, archived ? "Unhidden." : "Hidden.") },
             { id: "delete", label: "Delete", detail: "removes all data", onSelect: () => { void confirm({ title: `Delete “${displayName}”?`, consequence: "This permanently removes the workspace and all its data.", confirmLabel: "Delete workspace", typeToConfirm: displayName }).then((ok) => { if (ok) void onRun(async () => { await deleteWorkspace(slug); layout.closeTab(tabId); }); }); } },
           ] : []),
         ]} />
       )}
       {confirmDialog}
+      <WorkspaceImageProposal slug={slug} name={displayName} />
+      <WorkspaceImageDialog slug={slug} name={displayName} open={imaging} onClose={() => setImaging(false)} />
     </div>
   );
 }
@@ -325,67 +336,95 @@ function PurposeSection({ slug }: { slug: string }) {
   );
 }
 
-// ── GitHub sync ──────────────────────────────────────────────────────────────────────────────────
-function GitHubSection({ slug, status, published_url, defaultRepoName, busy, onRun, reload }: {
+// ── repository sync (any configured git provider) ──────────────────────────────────────────────
+function RepositorySection({ slug, status, published_url, defaultRepoName, busy, onRun, reload }: {
   slug: string; status: GitRemoteStatus | null; published_url: string | null;
   defaultRepoName: string; busy: boolean; onRun: (fn: () => Promise<unknown>, ok?: string) => Promise<void>; reload: () => void;
 }) {
   const [pushTok, setPushTok] = useState<{ open: boolean; token: string }>({ open: false, token: "" });
   const [pullTok, setPullTok] = useState<{ open: boolean; token: string }>({ open: false, token: "" });
-  const [pub, setPub] = useState<{ name: string; priv: boolean; token: string } | null>(null);
-  const [savedTok, setSavedTok] = useState<SavedGitToken | null>(null);  // the reusable server-side token
+  const [pub, setPub] = useState<{ name: string; priv: boolean; token: string; provider: string; org: string } | null>(null);
+  const [savedTok, setSavedTok] = useState<SavedGitToken | null>(null);  // the default provider's saved token
+  const [providers, setProviders] = useState<GitProviderList>(knownGitProviders());
   useEffect(() => { void getGitToken().then(setSavedTok).catch(() => setSavedTok(null)); }, []);
-  const hasSaved = !!savedTok?.set;
+  useEffect(() => {
+    let live = true;
+    void listGitProviders().then((l) => { if (!live) return; setKnownGitProviders(l); setProviders(l); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+  const defName = defaultProvider(providers).name;
+  // A provider's saved-token state: the list says so on a provider-aware server; an older server only
+  // knows the one (default) token, which `getGitToken()` reports.
+  const savedFor = (p: GitProvider | null | undefined) =>
+    typeof p?.token_saved === "boolean" ? p.token_saved : (!p || p.name === defName) && !!savedTok?.set;
   const hasHome = !!status?.has_home;
   const url = status?.url || published_url;
+  const home = providerForUrl(url, providers);
+  const hasSaved = savedFor(home);
+  const homeLabel = home?.label ?? null;
+  const creatable = providers.providers.filter((p) => p.can_create);
+  const pubProvider = pub ? providers.providers.find((p) => p.name === pub.provider) ?? defaultProvider(providers) : null;
+  const pubSaved = savedFor(pubProvider);
   // token: prompt value → else the saved token (backend fills it in when omitted).
-  const doPush = () => onRun(async () => { await pushWorkspace({ slug, token: pushTok.token.trim() || undefined }); setPushTok({ open: false, token: "" }); reload(); }, "Pushed to GitHub.");
-  const doPull = () => onRun(async () => { const r = await pullWorkspace({ slug, token: pullTok.token.trim() || undefined }); setPullTok({ open: false, token: "" }); reload(); return r; }, "Pulled — fast-forwarded from GitHub.");
-  const doPublish = (f: { name: string; priv: boolean; token: string }) => onRun(async () => { await publishWorkspace(f.name.trim(), f.priv, f.token.trim() || undefined, undefined, slug); setPub(null); reload(); }, "Published to GitHub.");
+  const doPush = () => onRun(async () => { await pushWorkspace({ slug, token: pushTok.token.trim() || undefined }); setPushTok({ open: false, token: "" }); reload(); }, "Pushed to the repository.");
+  const doPull = () => onRun(async () => { const r = await pullWorkspace({ slug, token: pullTok.token.trim() || undefined }); setPullTok({ open: false, token: "" }); reload(); return r; }, "Pulled — fast-forwarded from the repository.");
+  const doPublish = (f: NonNullable<typeof pub>, label: string) => onRun(async () => {
+    await publishWorkspace(f.name.trim(), f.priv, f.token.trim() || undefined, undefined, slug, { provider: f.provider, org: f.org.trim() || undefined });
+    setPub(null); reload();
+  }, `Published to ${label}.`);
   // With a saved token, push/pull run straight away (no prompt); otherwise open the one-off token row.
   const onPush = () => { if (hasSaved) void doPush(); else { setPushTok({ open: true, token: "" }); setPullTok({ open: false, token: "" }); } };
   const onPull = () => { if (hasSaved) void doPull(); else { setPullTok({ open: true, token: "" }); setPushTok({ open: false, token: "" }); } };
+  const tokenNoun = homeLabel ? `${homeLabel} token` : "Access token";
 
   return (
-    <Section icon="github" title="GitHub"
+    <Section icon="git" title="Repository"
       right={status?.branch && <span className="f-mono t-xs c-2">{status.branch}</span>}>
       {status === null ? (
-        <div className="t-xs c-3">Checking the GitHub state…</div>
+        <div className="t-xs c-3">Checking the repository state…</div>
       ) : hasHome ? (<>
         <div className="t-xs c-2 mb-2" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          {url && <ExternalLink href={url} className="c-accent" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="openIn" size={13} />Open on GitHub</ExternalLink>}
+          {url && <ExternalLink href={url} className="c-accent" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Icon name="openIn" size={13} />{homeLabel ? `Open on ${homeLabel}` : "Open repository"}</ExternalLink>}
           <AheadBehind ahead={status!.ahead} behind={status!.behind} tracked={status!.tracked} />
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button disabled={busy} onClick={onPush} style={btn("primary")} title="Push this branch to its GitHub home (fast-forward only)"><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="upload" size={13} />Push{status!.ahead ? ` (↑${status!.ahead})` : ""}</span></button>
-          <button disabled={busy} onClick={onPull} style={btn()} title="Fetch + fast-forward from GitHub"><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="refresh" size={13} />Pull{status!.behind ? ` (↓${status!.behind})` : ""}</span></button>
-          {hasSaved && <span title="Using your saved GitHub token" className="t-xs c-3" style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><Icon name="key" size={11} />saved token</span>}
+          <button disabled={busy} onClick={onPush} style={btn("primary")} title="Push this branch to its repository (fast-forward only)"><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="upload" size={13} />Push{status!.ahead ? ` (↑${status!.ahead})` : ""}</span></button>
+          <button disabled={busy} onClick={onPull} style={btn()} title="Fetch + fast-forward from the repository"><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Icon name="refresh" size={13} />Pull{status!.behind ? ` (↓${status!.behind})` : ""}</span></button>
+          {hasSaved && <span title={`Using your saved ${tokenNoun}`} className="t-xs c-3" style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><Icon name="key" size={11} />saved token</span>}
         </div>
         {pushTok.open && (
-          <TokenRow label="GitHub token (repo scope — used once, never stored)" value={pushTok.token} busy={busy}
+          <TokenRow label={`${tokenNoun} (write access — used once, never stored)`} value={pushTok.token} busy={busy}
             onChange={(t) => setPushTok({ open: true, token: t })} onSubmit={doPush} onCancel={() => setPushTok({ open: false, token: "" })}
             submitLabel={busy ? "Pushing…" : "Push"} required />
         )}
         {pullTok.open && (
-          <TokenRow label="GitHub token (optional — public repos need none)" value={pullTok.token} busy={busy}
+          <TokenRow label={`${tokenNoun} (optional — public repos need none)`} value={pullTok.token} busy={busy}
             onChange={(t) => setPullTok({ open: true, token: t })} onSubmit={doPull} onCancel={() => setPullTok({ open: false, token: "" })}
             submitLabel={busy ? "Pulling…" : "Pull"} />
         )}
       </>) : (<>
         {/* No home yet ⇒ this is a vexa-born workspace (attached clones always have origin) — offer
             Publish on ANY of them, own or shared (the backend permission-checks the slug). */}
-        <div className="t-xs c-2 mb-2">Not published yet — create a GitHub repo and push this workspace's full history.</div>
-        {pub === null ? (
-          <button disabled={busy} onClick={() => setPub({ name: defaultRepoName, priv: true, token: "" })} style={btn("primary")}>Publish to GitHub…</button>
+        <div className="t-xs c-2 mb-2">Not published yet — create a repository and push this workspace's full history.</div>
+        {pub === null || !pubProvider ? (
+          <button disabled={busy || creatable.length === 0}
+            onClick={() => setPub({ name: defaultRepoName, priv: true, token: "", provider: (creatable.find((p) => p.name === defName) ?? creatable[0] ?? defaultProvider(providers)).name, org: "" })}
+            style={btn("primary")}>{`Publish to ${(creatable.find((p) => p.name === defName) ?? creatable[0] ?? defaultProvider(providers)).label}…`}</button>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {creatable.length > 1 && (
+              <select aria-label="Provider" value={pub.provider} disabled={busy} onChange={(e) => setPub({ ...pub, provider: e.target.value, token: "" })} className="vx-input">
+                {creatable.map((p) => <option key={p.name} value={p.name}>{p.label} — {p.host}</option>)}
+              </select>
+            )}
+            <input aria-label="Owner / group" value={pub.org} placeholder={pubProvider.nested_groups ? "group/subgroup" : "org (optional)"} disabled={busy} onChange={(e) => setPub({ ...pub, org: e.target.value })} className="vx-input" />
             <input autoFocus value={pub.name} placeholder="repo name" disabled={busy} onChange={(e) => setPub({ ...pub, name: e.target.value })} className="vx-input" />
             <label className="t-xs c-2" style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
               <input type="checkbox" checked={pub.priv} disabled={busy} onChange={(e) => setPub({ ...pub, priv: e.target.checked })} /> private repo
             </label>
-            <input type="password" value={pub.token} placeholder={hasSaved ? "GitHub token (optional — using your saved token)" : "GitHub token (repo scope — used once, never stored)"} disabled={busy} onChange={(e) => setPub({ ...pub, token: e.target.value })} className="vx-input" />
+            <input type="password" value={pub.token} placeholder={pubSaved ? `${pubProvider.label} token (optional — using your saved token)` : `${pubProvider.label} token (used once, never stored)`} disabled={busy} onChange={(e) => setPub({ ...pub, token: e.target.value })} className="vx-input" />
             <div style={{ display: "flex", gap: 8 }}>
-              <button disabled={busy || !pub.name.trim() || (!pub.token.trim() && !hasSaved)} onClick={() => doPublish(pub)} style={btn("primary")}>{busy ? "Publishing…" : "Publish"}</button>
+              <button disabled={busy || !pub.name.trim() || (!pub.token.trim() && !pubSaved)} onClick={() => doPublish(pub, pubProvider.label)} style={btn("primary")}>{busy ? "Publishing…" : "Publish"}</button>
               <button disabled={busy} onClick={() => setPub(null)} style={btn()}>Cancel</button>
             </div>
           </div>

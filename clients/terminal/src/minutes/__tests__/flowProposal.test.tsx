@@ -30,7 +30,7 @@ import { POLICY_ACT_KIND, PROPOSAL_ACT_KIND } from "../../ui-kit/policyDoc";
 import { clearPending, compactLabel, fallbackText, pendingLanding } from "../extend";
 import { SEND_TO_DEVELOPERS, SendToDevelopersButton } from "../FlowProposalAct";
 
-vi.mock("../../surfaces/workspaceApi", () => ({
+vi.mock("../../data/workspaceApi", () => ({
   listWorkspaceTree: vi.fn(async () => []),
   readActiveSet: vi.fn(async () => ({ subject: "57", active: [] })),
   listSharedMemberships: vi.fn(async () => []),

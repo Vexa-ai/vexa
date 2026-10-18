@@ -11,16 +11,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { WorkspaceSwitcher } from "../workspace";
 import { ServicesProvider, createContainer, reg } from "../../platform";
-import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
-import * as api from "../workspaceApi";
+import { LayoutServiceId, createLayoutService } from "../../platform/layout";
+import * as api from "../../data/workspaceApi";
 
 // WorkspaceSwitcher now opens the MANAGE tab via the LayoutService — provide a real one so it renders.
 const withServices = (node: React.ReactNode) => (
   <ServicesProvider container={createContainer([reg(LayoutServiceId, () => createLayoutService("files"))])}>{node}</ServicesProvider>
 );
 
-vi.mock("../workspaceApi", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../workspaceApi")>()),
+vi.mock("../../data/workspaceApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../data/workspaceApi")>()),
   readAttachedWorkspaces: vi.fn(),
   readActiveSet: vi.fn(),
   swapWorkspace: vi.fn(),

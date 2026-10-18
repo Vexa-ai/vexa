@@ -15,7 +15,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { registerTab } from "../contributions";
 import { Icon } from "../ui-kit";
 import { useService } from "../platform";
-import { LayoutServiceId } from "../workbench/layout";
+import { LayoutServiceId } from "../platform/layout";
 import { usePreviewPinTab } from "./previewPinTab";
 import type { MeetingMock } from "./meetingModel";
 import { useLiveMeetings, fetchDurableTranscript } from "./liveMeetings";
@@ -23,7 +23,7 @@ import { groupMeetings, type MeetingGroup } from "./meetingGroups";
 import { meetingTab } from "./meeting";
 import { MeetingsOnboarding } from "./meetingsOnboarding";
 import { findBriefNote } from "./briefNote";
-import { listWorkspaceTree } from "./workspaceApi";
+import { listWorkspaceTree } from "../data/workspaceApi";
 
 // ── reviewed-recaps store (localStorage) — opening a recap retires its phrase ──────────────────
 const REVIEWED_KEY = "vexa.reviewedMeetings";
@@ -140,7 +140,7 @@ function useOwnWorkspaceTree(): string[] | null {
 }
 
 // ── rendering ─────────────────────────────────────────────────────────────────────────────────
-const label = (m: MeetingMock) => m.title_custom ?? (m.native_id ?? m.title).replace(/^Google Meet · /, "");
+const label = (m: MeetingMock) => m.title_custom || m.title;
 
 const toneColor = { live: "var(--green)", danger: "var(--danger)", accent: "var(--accent)" } as const;
 

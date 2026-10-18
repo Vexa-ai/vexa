@@ -19,7 +19,7 @@ let active: { slug: string; path: string; primary?: boolean }[] = [];
 // that is a membership but not a mount answers empty here, exactly as the server's 403 does.
 let memberships: { workspace_id: string; role: string }[] = [];
 let subject = "57";
-vi.mock("../../surfaces/workspaceApi", () => ({
+vi.mock("../../data/workspaceApi", () => ({
   listWorkspaceTree: vi.fn(async (opts?: { slug?: string }) => trees[opts?.slug ?? ""] ?? []),
   readActiveSet: vi.fn(async () => ({ subject, active })),
   listSharedMemberships: vi.fn(async () => memberships),

@@ -48,6 +48,7 @@
  *  the in-app controls onto this page is the obvious next move and it is a decision, not a
  *  refactor, so it is named on Vexa-ai/vexa#1635 rather than taken here.
  */
+import { Identity } from "../../ui-kit/Identity";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { signIn } from "next-auth/react";
 import { providersFrom } from "../AuthGate";
@@ -234,6 +235,7 @@ export default function JoinPage() {
 
         {(phase === "joining" || phase === "joined") && preview && (
           <>
+            <Identity kind="workspace" id={preview.workspace_id} name={preview.name || preview.workspace_id} size={40} label />
             <div style={sentence} data-testid="join-sentence">{inviteSentence(preview)}</div>
             <div style={muted} data-testid="join-joining">Adding you to it…</div>
           </>
@@ -241,6 +243,7 @@ export default function JoinPage() {
 
         {phase === "preview" && preview && (
           <>
+            <Identity kind="workspace" id={preview.workspace_id} name={preview.name || preview.workspace_id} size={40} label />
             <div style={sentence} data-testid="join-sentence">{inviteSentence(preview)}</div>
             {preview.purpose ? (
               <div style={muted} data-testid="join-purpose">{preview.purpose}</div>

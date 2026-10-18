@@ -89,6 +89,16 @@ describe("default hidden, one toggle, remembered (decision 27.4)", () => {
     expect(localStorage.getItem(NAV_OPEN_KEY)).toBe("0");
   });
 
+  it("one panel at a time: with a meeting in front the files fold away; the toggle swaps them in, for that meeting only", async () => {
+    localStorage.setItem(NAV_OPEN_KEY, "1");
+    const { container } = render(<PagesPanel pages={pages} docPath="9121" docKind="meeting" onOpen={onOpen} body={null} />);
+    expect(container.querySelector("[data-navigator]")).toBeNull();
+    fireEvent.click(toggle(container));
+    expect(container.querySelector("[data-navigator]")).toBeTruthy();
+    expect((container.querySelector(".vx-pages-col") as HTMLElement).hidden).toBe(true);
+    expect(localStorage.getItem(NAV_OPEN_KEY)).toBe("1");          // the document's choice untouched
+  });
+
   it("nothing is fetched while it is closed", () => {
     panel();
     expect(nav.loadNavWorkspaces).not.toHaveBeenCalled();

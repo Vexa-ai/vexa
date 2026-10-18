@@ -24,18 +24,25 @@
  *  name in the listing opens it as a tab. Plain names, no icons — this panel is for reading, not
  *  file management.
  */
-import { useEffect, useRef, useState } from "react";
-import { MeetingPageHeader } from "./MeetingPageHeader";
-import { MeetingControls, MeetingDeleteButton } from "./MeetingControls";
+import { Identity } from "../ui-kit/Identity";
+import { editableNote } from "./noteMarkers";
+import { AttachMeetingDialog } from "./AttachMeetingDialog";
+import { isMeetingNotePath } from "./roomView";
+import { plainPage, sourcesBlock } from "../ui-kit/plainPage";
+import { ImageViewer, isImageFile } from "./ImageViewer";
+import { PageHead, PagePath, pageTitle as pageHeadTitle } from "./PageHead";
+import { Menu } from "../ui-kit/primitives/Menu";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { MEETING_DELETED_EVENT } from "./meetingDeletion";
 import { Breadcrumb, Button, EmptyState, Icon, IconButton, OverflowStrip } from "../ui-kit";
-import { ChevronLeft, ChevronRight, FileText, Folder, Pin, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileText, Folder, MoreHorizontal, Pin, X } from "lucide-react";
 import { useLiveMeetings } from "../surfaces/liveMeetings";
 import { pageLabel } from "./callsList";
 import { copyText } from "../ui-kit/ContextMenu";
 import { DocMetaContext } from "../ui-kit/docRefs";
-import { MdxDoc } from "../ui-kit/MdxDoc";
+import { MdxDoc, TableRendererContext } from "../ui-kit/MdxDoc";
 import { transcriptSlotMeeting } from "../ui-kit/transcriptSlot";
-import { writeWorkspaceFile } from "../surfaces/workspaceApi";
+import { writeWorkspaceFile } from "../data/workspaceApi";
 import { MarkdownEditor } from "./MarkdownEditor";
 import type { Page } from "./types";
 import { CollapseButton } from "./Collapse";
@@ -48,8 +55,21 @@ import { header, surface, type as ty } from "./tokens";
 import { WorkspaceReadmePanel } from "./WorkspaceReadmePanel";
 import { splitLeadingH1 } from "./workspaceFrontPage";
 import { isWorkspaceReadme } from "./workspaceReadme";
+import { WORKSPACE_FRONT_PAGE } from "./deepLink";
+import { useActiveCall } from "./callState";
+import { showPage } from "./callShow";
+import { ROOM_LINES_REFRESH, stopRoomShow, useRoomShow } from "./roomShow";
+import { toast } from "../ui-kit/primitives/Toast";
+import { useFeature } from "../platform/features";
+import { RichPage } from "./desktop/home2/RichPage";
+import { LiveTable } from "./desktop/home2/LiveTable";
+import { hasRichSyntax } from "./desktop/home2/richParse";
+import { WorkspacePage, isWorkspacePagePath } from "./desktop/home2/WorkspacePage";
+import { artifactTime, artifactVerb, type ChatArtifact } from "./chatArtifacts";
+import { useDesktopItems, type DesktopTarget } from "./desktop/useDesktopItems";
+import { ContextMenu } from "../ui-kit/ContextMenu";
 import { DeletePageDialog, PageRemovedToast, pageTitle, useCanDelete, workspaceLabel, type PageTarget } from "./pageDelete";
-import { Trash2 } from "lucide-react";
+import { useCardItems } from "./desktop/useCardItems";
 
 /** Breadcrumb separator. Its padding is NBSP *content*, not margin, so it collapses away under
  *  `min-width: 0` instead of holding a permanent sliver open once the crumb has been starved. */
@@ -75,17 +95,24 @@ const tabKey = (pg: Page) => `${pg.slug ?? ""}|${pg.path}`;
 const tabName = (pg: Page) => (/^\d+$/.test(pg.label) ? "personal" : pg.label);
 
 /** A directory listing the breadcrumb navigated to: the folders and files directly under `prefix`. */
-export type Listing = { slug?: string; prefix: string; dirs: string[]; files: string[] };
+export type Listing = { slug?: string; prefix: string; dirs: string[]; files: string[];
+  /** the workspace's human name, when the opener knew it — the crumb's root reads it, never the slug */
+  name?: string };
 
 /** A call's tab is named by the meeting as it is NOW, so a rename reaches tabs already open. Its own
  *  component, so only a strip that holds a call subscribes to the meetings store. */
 function CallTabLabel({ pg }: { pg: Page }) {
   const meetings = useLiveMeetings();
+  if (pg.live) return <span data-tab-live="" className="vx-tab-live"><span aria-hidden className="vx-tab-live-dot" />Live · {pageLabel(pg, meetings)}</span>;
   return <>{pageLabel(pg, meetings)}</>;
 }
 
 export function PagesPanel(p: {
   pages: Page[]; docPath: string; docSlug?: string; onOpen: (pg: Page) => void;
+  /** the room in front (rooms): its pages can be shown to every member */
+  roomSession?: string;
+  /** the open chat's read set — a page outside it is marked "not read by this chat" */
+  chatReads?: string[];
   onClose?: (pg: Page) => void;
   /** THE PIN, PER TAB (founder ruling 2026-09-06: *"tab icon is on tab"*). Keep that page as a tab,
    *  or give it back to the preview slot. Absent = no pin control rendered. */
@@ -102,6 +129,10 @@ export function PagesPanel(p: {
    *  anything at all. */
   notice?: string | null;
   onCollapse?: () => void;
+  /** THIS CHAT'S ARTIFACTS (founder, 2026-10-15: *"right sidebar artefacts belong to the agent on
+   *  the left side of it"*): what the panel shows when nothing is open — never a workspace tree. */
+  artifacts?: ChatArtifact[];
+  onArtifact?: (a: ChatArtifact) => void;
   /** The fold control's name where folding really closes a sheet ("Back to the conversation"). */
   collapseLabel?: string;
 }) {
@@ -112,13 +143,21 @@ export function PagesPanel(p: {
   // surfaces register, shells render what is registered.
   // A NOTICE OUTRANKS THE CANVAS: the sentence is about the link, not about whatever tab the
   // chat happened to open with, and the canvas is a whole surface that would render over it.
-  const canvas = p.docKind === "meeting" && !p.listing && !p.notice;
+  // A held notice belongs to a link that would not open; a meeting in front outranks it.
+  const canvas = p.docKind === "meeting" && !p.listing;
   const MeetingCanvas = canvas ? registry.tabComponent("meeting") : undefined;
   // THE NAVIGATOR'S DOOR (PRD decision 27.4). Default hidden, remembered per browser — the boolean
   // lives here rather than in the shell because the rail is part of this panel, and the panel is
   // already the thing that knows whether it is folded away at all.
   const [navOpen, setNavOpen] = useState<boolean>(() => loadNavOpen());
-  const showNav = (v: boolean) => { setNavOpen(v); saveNavOpen(v); };
+  // ONE PANEL AT A TIME (founder, UI lab 2026-10-14): with a meeting in front the files fold away —
+  // the meeting is a sidebar, not a column beside a tree. The folder button then swaps the panel to
+  // the files and back, for this meeting only; a document keeps the person's remembered choice.
+  const [navOverMeeting, setNavOverMeeting] = useState(false);
+  useEffect(() => { setNavOverMeeting(false); }, [p.docPath, p.docKind]);
+  const navShown = canvas ? navOverMeeting : navOpen;
+  const [navReveal, setNavReveal] = useState<{ slug?: string; dir: string; at: number } | null>(null);
+  const showNav = (v: boolean) => { if (canvas) { setNavOverMeeting(v); return; } setNavOpen(v); saveNavOpen(v); };
   // The rendered document's own box — the scope a text selection must be inside to be THIS page's
   // (see SelectionExtend), and the positioning context the floating action sits in.
   const docBox = useRef<HTMLDivElement | null>(null);
@@ -126,6 +165,8 @@ export function PagesPanel(p: {
   useIntentLanding();
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [copied, setCopied] = useState(false);
+  const [details, setDetails] = useState(false);
+  useEffect(() => { setDetails(false); }, [p.docPath, p.docSlug]);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   // A failed save reports INLINE, beside the button that failed. It used to be a window.alert(),
@@ -136,6 +177,20 @@ export function PagesPanel(p: {
   // reader may edit; not on a meeting's page (it has its own delete) nor a workspace README.
   const [deleting, setDeleting] = useState<PageTarget | null>(null);
   const mayDelete = useCanDelete(p.docSlug);
+  // Add to desktop / Remove from desktop for the page in front (desktop ADR D1, 15e)
+  const desktopItems = useDesktopItems();
+  // SHOW TO EVERYONE (founder 2026-10-15): in a call, a page of a shared workspace can be shown to
+  // everyone in it; the server refuses a page someone cannot read, and the dock offers to share first.
+  const { current: inCall } = useActiveCall();
+  const showOn = useFeature("call_show");
+  // home2 (R3): pages using the rich grammar are drawn live, and plain tables can be searched and sorted
+  const richOn = useFeature("home2");
+  const canShow = !!inCall && showOn && !!p.docSlug && p.docSlug !== "personal" && p.docSlug !== "_global";
+  // SHOW TO ROOM (JTBD-1, rooms): in a room with no in-app call, the page opens in every member's panel
+  const roomShow = useRoomShow(p.roomSession);
+  const canShowRoom = !inCall && !!p.roomSession && !!p.docSlug && p.docSlug !== "personal" && p.docSlug !== "_global";
+  const showingThis = roomShow.mine && roomShow.showing?.workspace === p.docSlug && roomShow.showing?.path === p.docPath;
+  const cardItems = useCardItems();
   // a new doc (or fresh content) always lands in VIEW, rendered
   useEffect(() => { setMode("view"); setSaveError(null); }, [p.docPath, p.docSlug]);
   useEffect(() => { if (!copied) return; const t = setTimeout(() => setCopied(false), 1400); return () => clearTimeout(t); }, [copied]);
@@ -145,7 +200,7 @@ export function PagesPanel(p: {
   const crumbs = listing
     ? [listing.slug ?? "personal", ...listing.prefix.split("/").filter(Boolean)]
     : [p.docSlug ?? "personal", ...p.docPath.split("/").filter(Boolean)];
-  const shown = crumbs.map((c, i) => ({ i, c, label: crumbLabel(c, i, crumbs) })).filter((x) => x.label !== null);
+  const shown = crumbs.map((c, i) => ({ i, c, label: i === 0 && listing?.name ? listing.name : crumbLabel(c, i, crumbs) })).filter((x) => x.label !== null);
   const leaf = shown[shown.length - 1]?.label ?? crumbs[crumbs.length - 1];
   const trail = shown.slice(0, -1);
   const fullPath = shown.map((x) => x.label).join(SEP);
@@ -157,17 +212,30 @@ export function PagesPanel(p: {
   // open in front of it cannot rename the document sitting behind it.
   const docName = p.docPath.split("/").pop() || p.docPath;
 
-  const doc = !canvas && !listing;   // a document is in front — the only state the header describes
+  // NOTHING OPEN: the panel is this chat's list of artifacts, with every file one click deeper.
+  const home = !canvas && !listing && !p.docPath;
+  const doc = !canvas && !listing && !home;   // a document is in front — the only state the header describes
   // WHICH MEETING THIS PAGE IS, according to the page (Vexa-ai/vexa#1598). A meeting doc declares its
   // transcript widget in its own source, and that declaration is what makes Extend here the
   // meeting-doc act — read since the page's cursor, write into its regions. Read off the BODY rather
   // than off the shell's open chat, for the same reason the acts read the resolved slot rather than
   // the tab label (F63): a fact about the document beats a display string about the session.
   const docMeeting = transcriptSlotMeeting(p.body ?? "") || undefined;
+  // A MEETING DELETED FROM ITS OWN PAGE (#1783) closes that page: there is nothing left to read.
+  const closeRef = useRef<() => void>(() => {});
+  closeRef.current = () => { const pg = p.pages.find(tabOn); if (pg) p.onClose?.(pg); };
+  useEffect(() => {
+    if (!docMeeting) return;
+    const on = (e: Event) => { const d = (e as CustomEvent<{ id?: string; native?: string }>).detail; if (d && (d.id === docMeeting || (d.native && d.native === docMeeting))) closeRef.current(); };
+    window.addEventListener(MEETING_DELETED_EVENT, on);
+    return () => window.removeEventListener(MEETING_DELETED_EVENT, on);
+  }, [docMeeting]);
+  const restoreRef = useRef<(t: string) => string>((t) => t);
+  const [attaching, setAttaching] = useState(false);
   const save = async () => {
     setSaving(true); setSaveError(null);
     try {
-      await writeWorkspaceFile(p.docPath, draft, { slug: p.docSlug });
+      await writeWorkspaceFile(p.docPath, restoreRef.current(draft), { slug: p.docSlug });
       setMode("view"); p.onSaved?.();
     } catch (e) {
       // Stay in edit mode with the draft intact — the text is the one thing that must not be lost.
@@ -186,8 +254,8 @@ export function PagesPanel(p: {
             starts here (Obsidian, and the old terminal, both put them exactly there). */}
         {/* the navigator's toggle — the panel's leftmost control, because the rail it opens is the
             panel's leftmost column. One button, no other chrome (decision 27.4). */}
-        <IconButton data-nav-toggle pressed={navOpen} label={navOpen ? "Hide the file navigator" : "Show the file navigator"}
-          onClick={() => showNav(!navOpen)}>
+        <IconButton data-nav-toggle pressed={navShown} label={navShown ? "Hide the file navigator" : "Show the file navigator"}
+          onClick={() => showNav(!navShown)}>
           <Icon name="folder" size={14} />
         </IconButton>
         <IconButton data-nav="back" label="Back" disabled={!p.canBack} onClick={p.onBack}><ChevronLeft size={16} strokeWidth={1.75} /></IconButton>
@@ -234,7 +302,7 @@ export function PagesPanel(p: {
                   control advertising a close the product does not have: the defect #1600 removed
                   for the meeting's tabs, one tab to the left. It stands down on `!desk` exactly as
                   the pin above does. */}
-              {p.onClose && !pg.permanent && !pg.desk && p.pages.length > 1 && (
+              {p.onClose && !pg.permanent && !pg.desk && p.pages.length > 0 && (
                 <button data-tab-close aria-label={`Close ${pg.label}`} title="Close tab" onClick={(e) => { e.stopPropagation(); p.onClose?.(pg); }}
                   className="vx-doctab-act"><X size={12} strokeWidth={1.75} aria-hidden /></button>
               )}
@@ -253,8 +321,8 @@ export function PagesPanel(p: {
             way the founder's reference has it. `onOpenTab` is this panel's own open route, so an
             explicit open-in-tab lands on the chat record exactly like a link click does; a plain
             click never comes through here at all (decision 28). */}
-        {navOpen && <Navigator onOpenTab={p.onOpen} onClose={() => showNav(false)} />}
-        <div className="vx-pages-col">
+        {navShown && <Navigator onOpenTab={p.onOpen} onClose={() => showNav(false)} reveal={navReveal} />}
+        <div className="vx-pages-col" hidden={canvas && navShown}>
         {/* WHAT is in front, and what can be done to it — the document's own header row.
             Filename prominent, location subdued beside it, every utility grouped hard right
             (founder reference, the desktop app's doc panel). Three rows now stack above the body
@@ -262,42 +330,15 @@ export function PagesPanel(p: {
             FRONT, the crumb below says where it LIVES and walks you back up.
             A canvas is exempt — it names its own meeting in its own header, and there is no file
             here to read as source, copy or edit, so the whole row (not just the group) stands down. */}
-        {doc && <div className="vx-doc-head">
-          {docMeeting ? <MeetingPageHeader meetingId={docMeeting} body={p.body ?? ""} path={p.docPath} /> : <span data-doc-name title={docName} className="vx-doc-name">{docName}</span>}
-          {/* ONE PATH LINE (PRD decision 28, founder: *"duplicated paths"*). This span repeated the
-              folder trail that the breadcrumb directly below already shows, and navigates. The name
-              belongs here; the path belongs there. */}
+        {/* A PAGE OPENS WITH ITS TITLE AND ITS CONTENT (UI decisions 12): no name row and no band of
+            icons above it. Copy, Edit, Details, Show in Files and Delete are one "…" at the page's
+            corner; editing keeps its own compact row (Cancel · Save) while it lasts. */}
+        {doc && mode === "edit" && <div className="vx-doc-head">
+          <span data-doc-name title={docName} className="vx-doc-name">{docName}</span>
           <span className="vx-panelhead-gap" />
-          {/* WHAT IS LEFT IN THIS GROUP, and why each of the three that went, went. The PIN moved
-              onto the tab (*"tab icon is on tab"*) — it is a fact about a tab, not about the header.
-              The `</>` RAW LENS is gone outright (*"remove raw markdown button"*): it answered a
-              question a reader of a document does not ask, and Edit already shows the source to
-              anyone who does. EXTEND moved under the content, where it is a labelled control rather
-              than the sixth spark-shaped glyph in a row. */}
-          {!p.notice && p.body !== null && (mode === "view"
-            ? <>
-                <IconButton data-doc-act="copy" label="Copy contents" pressed={copied || undefined} onClick={() => { void copyText(p.body ?? ""); setCopied(true); }}>
-                  <Icon name={copied ? "check" : "copy"} size={14} />
-                </IconButton>
-                <IconButton data-doc-act="edit" label="Edit" onClick={() => { setDraft(p.body ?? ""); setSaveError(null); setMode("edit"); }}>
-                  <Icon name="edit" size={14} />
-                </IconButton>
-                {mayDelete && !docMeeting && !isWorkspaceReadme(p.docPath) && (
-                  <IconButton data-doc-act="delete" label="Delete page"
-                    onClick={() => setDeleting({ path: p.docPath, slug: p.docSlug, title: pageTitle(p.docPath), workspace: workspaceLabel(p.docSlug) })}>
-                    <Trash2 size={14} strokeWidth={1.75} aria-hidden />
-                  </IconButton>
-                )}
-                {docMeeting && <MeetingDeleteButton meetingId={docMeeting} size="header" />}
-              </>
-            : <>
-                {saveError && <span data-doc-act="save-error" role="alert" title={saveError} className="vx-doc-error">Could not save: {saveError}</span>}
-                <Button data-doc-act="cancel" variant="ghost" onClick={() => { setSaveError(null); setMode("view"); }} title="Cancel">Cancel</Button>
-                <Button data-doc-act="save" variant="primary" onClick={() => void save()} disabled={saving} loading={saving} title="Save">{saving ? "Saving…" : "Save"}</Button>
-              </>)}
-          {/* A meeting page's player row: its own full-width line under the title row, so the
-              scrubber gets the panel's width rather than what the icon group leaves. */}
-          {docMeeting && <div style={{ flexBasis: "100%", minWidth: 0 }}><MeetingControls meetingId={docMeeting} showDelete={false} /></div>}
+          {saveError && <span data-doc-act="save-error" role="alert" title={saveError} className="vx-doc-error">Could not save: {saveError}</span>}
+          <Button data-doc-act="cancel" variant="ghost" onClick={() => { setSaveError(null); setMode("view"); }} title="Cancel">Cancel</Button>
+          <Button data-doc-act="save" variant="primary" onClick={() => void save()} disabled={saving} loading={saving} title="Save">{saving ? "Saving…" : "Save"}</Button>
         </div>}
         {/* the breadcrumb — the doc's address, and a path you can walk back up. A canvas has no
             address: its `path` is a row id, and the canvas names the meeting in its own header. */}
@@ -309,22 +350,63 @@ export function PagesPanel(p: {
         {/* ONE BREADCRUMB STYLE (guidelines §4.7): the ui-kit Breadcrumb — sans, chevron
             separators, ancestors quiet, and the middle folded into "…" once the trail is long, so
             it never scrolls the panel sideways. Names come from `crumbLabel` (never a number). */}
-        {!canvas && (!doc || trail.length > 0) && <div title={fullPath} data-crumb className="vx-doc-crumb">
+        {!canvas && !doc && !home && <div title={fullPath} data-crumb className="vx-doc-crumb">
+          <Identity kind="workspace" id={slug ?? "personal"} slug={slug ?? "personal"} name={workspaceLabel(slug)} size={16} className="vx-id-inline" />
           <Breadcrumb label="Where this page lives" items={[
             ...trail.map(({ i, label: c }) => ({ key: `c${i}`, label: c as string, onSelect: () => nav(i) })),
             ...(!doc ? [{ key: "leaf", label: leaf as string }] : []),
           ]} />
         </div>}
         <div ref={docBox} data-doc-body className="vx-doc-body" data-flush={canvas || (mode === "edit" && !listing) ? "" : undefined} data-canvas={canvas ? "" : undefined}>
-          {p.notice
+          {doc && !p.notice && p.body !== null && mode === "view" && (
+            <span className="vx-doc-more">
+              <Menu label="Page actions" align="end" triggerData={{ "data-doc-more": "" }}
+                trigger={<MoreHorizontal size={15} strokeWidth={1.75} aria-hidden />}
+                items={[
+                  { key: "copy", label: copied ? "Copied" : "Copy contents", data: { "data-doc-act": "copy" }, onSelect: () => { void copyText(p.body ?? ""); setCopied(true); } },
+                  { key: "edit", label: "Edit", data: { "data-doc-act": "edit" }, onSelect: () => {
+                    // A MEETING NOTE'S MARKERS ARE NEVER SHOWN (#1783): the editor gets the words, the
+                    // save puts the frontmatter, transcript marker and region fences back.
+                    const e = editableNote(p.body ?? "");
+                    restoreRef.current = e.restore; setDraft(e.text); setSaveError(null); setMode("edit"); } },
+                  { key: "details", label: details ? "Hide details" : "Details", data: { "data-doc-act": "details" }, onSelect: () => setDetails((v) => !v) },
+                  // A PAGE MADE THE MEETING'S PAGE (#1783): bound by identity, never by a title
+                  ...(isMeetingNotePath(p.docPath) ? [{ key: "attach-meeting", label: "Use as meeting page…", data: { "data-doc-act": "attach-meeting" }, onSelect: () => setAttaching(true) }] : []),
+                  { key: "files", label: `Show in Files · ${fullPath}`, data: { "data-doc-act": "where" }, onSelect: () => showNav(true) },
+                  ...(canShow ? [{ key: "show-everyone", label: "Show to everyone in the call", data: { "data-doc-act": "show-everyone" },
+                    onSelect: () => { void showPage(inCall!.session, { workspace: p.docSlug!, path: p.docPath }); } }] : []),
+                  ...(canShowRoom ? [showingThis
+                    ? { key: "show-room-stop", label: "Stop showing to the room", data: { "data-doc-act": "show-room-stop" },
+                        onSelect: () => { void stopRoomShow(p.roomSession!, { workspace: p.docSlug!, path: p.docPath }).catch(() => toast("Couldn't stop showing it")); } }
+                    : { key: "show-room", label: "Show to room", data: { "data-doc-act": "show-room" },
+                        onSelect: () => { void showPage(p.roomSession!, { workspace: p.docSlug!, path: p.docPath }).then(() => window.dispatchEvent(new CustomEvent(ROOM_LINES_REFRESH))); } }] : []),
+                  ...desktopItems({ kind: "file", slug: p.docSlug, path: p.docPath }).map((it) => ({
+                    key: it.id, label: it.label, data: { "data-doc-act": it.id }, onSelect: () => { void it.onSelect(); } })),
+                  // Make a card (desktop ADR D2, 15c/15d): a CRM card about this page
+                  ...(!docMeeting ? cardItems({ kind: "page", slug: p.docSlug, path: p.docPath, title: pageTitle(p.docPath) })
+                    .map((it) => ({ key: it.id, label: it.label, data: { "data-doc-act": "make-card" }, onSelect: () => { void it.onSelect(); } })) : []),
+                  ...(mayDelete && !docMeeting && !isWorkspaceReadme(p.docPath) ? [{ key: "delete", label: "Delete page…", danger: true, separatorBefore: true,
+                    data: { "data-doc-act": "delete" }, onSelect: () => setDeleting({ path: p.docPath, slug: p.docSlug, title: pageTitle(p.docPath), workspace: workspaceLabel(p.docSlug) }) }] : []),
+                ]} />
+            </span>
+          )}
+          {p.notice && !canvas
             ? <div data-pages-notice className="vx-doc-notice">{p.notice}</div>
             : canvas
             // the canvas owns its own scrolling, header and padding — it is a whole surface, not a body
             ? (MeetingCanvas
                 ? <MeetingCanvas id={`meeting:${p.docPath}`} params={{ meetingId: p.docPath }} active />
                 : <EmptyState>The meeting surface is not registered in this build.</EmptyState>)
+            // home2 (R3): a workspace's own page, built from components (the README stays a document)
+            : richOn && isWorkspacePagePath(p.docPath)
+              ? <WorkspacePage slug={p.docSlug} />
+            : home
+              ? <ChatArtifactList items={p.artifacts ?? []} onOpen={(a) => p.onArtifact?.(a)} onAllFiles={() => showNav(true)} />
             : listing
               ? <FolderListing listing={listing} onNavigate={p.onNavigate} onOpen={p.onOpen} />
+              // AN IMAGE FILE IS A PICTURE, never its bytes as text (founder: "you need to render svg files")
+              : p.docPath && isImageFile(p.docPath)
+                ? <ImageViewer path={p.docPath} slug={p.docSlug} source={p.body} />
               : p.body === null
                 ? <div className="vx-doc-empty">
                     <div>No page here yet — it appears when the conversation (or a meeting) writes one.</div>
@@ -354,22 +436,43 @@ export function PagesPanel(p: {
                      who is here → what last changed → hairline → prose. Rendering it in both
                      places was the alternative, and a title printed twice two lines apart is the
                      shape a person reads as a bug. Every other page is untouched. */
-                  : <DocMetaContext.Provider value={{ path: p.docPath, slug: p.docSlug }}>
+                  : <TableRendererContext.Provider value={richOn ? LiveTable : null}><DocMetaContext.Provider value={{ path: p.docPath, slug: p.docSlug }}>
                       {isWorkspaceReadme(p.docPath)
                         ? (() => {
                             const front = splitLeadingH1(p.body);
                             return <>
+                              {/* the path line a plain page has, with the file named (founder 2026-10-15) */}
+                              <PagePath path={p.docPath} slug={p.docSlug} reads={p.chatReads} file
+                                onFolder={(dir) => { setNavReveal({ slug: p.docSlug, dir, at: Date.now() }); showNav(true); }} />
                               <WorkspaceReadmePanel slug={p.docSlug} path={p.docPath} title={front.title} />
-                              <MdxDoc>{front.body}</MdxDoc>
+                              {richOn && hasRichSyntax(front.body)
+                                ? <RichPage slug={p.docSlug} path={p.docPath} md={front.body} />
+                                : <MdxDoc>{front.body}</MdxDoc>}
                             </>;
                           })()
-                        : <MdxDoc>{p.body}</MdxDoc>}
-                    </DocMetaContext.Provider>}
+                        : (() => {
+                            // A PLAIN PAGE (UI decisions 12): source tails as markers listed once at
+                            // the bottom, empty headings not drawn, the property table under Details.
+                            // THE TITLE AND WHERE IT LIVES, above the prose (founder, live: the page
+                            // started with its first paragraph and "does not say what its path is")
+                            const head = pageHeadTitle(p.body ?? "", p.docPath ?? "");
+                            const pp = plainPage(head.body);
+                            return <>
+                              {p.docPath && <PageHead title={head.title} path={p.docPath} slug={p.docSlug} reads={p.chatReads}
+                                onFolder={(dir) => { setNavReveal({ slug: p.docSlug, dir, at: Date.now() }); showNav(true); }} />}
+                              {/* home2 (R3): a page using the rich grammar is drawn live; a plain one as before */}
+                              {richOn && hasRichSyntax(pp.body)
+                                ? <RichPage slug={p.docSlug} path={p.docPath} md={pp.body + sourcesBlock(pp.sources)} />
+                                : <MdxDoc properties={details}>{pp.body + sourcesBlock(pp.sources)}</MdxDoc>}
+                            </>;
+                          })()}
+                    </DocMetaContext.Provider></TableRendererContext.Provider>}
           {/* EXTEND, UNDER THE CONTENT (decision 32.1, as ruled 2026-09-06). Only while READING a
               document that exists: an empty page offers Create instead, and a canvas has no page to
               extend at all. */}
-          {doc && !p.notice && p.body !== null && mode === "view" && (
-            <ExtendPageButton workspace={p.docSlug} path={p.docPath} meeting={docMeeting} />
+          {/* …never on a meeting's note file (UI decisions 9): the meeting's sidebar is where it grows */}
+          {doc && !p.notice && p.body !== null && mode === "view" && !docMeeting && (
+            <ExtendPageButton workspace={p.docSlug} path={p.docPath} />
           )}
           {/* PRD decision 32.1's second trigger. Only while READING — an editor's selection is
               being edited, not asked about. */}
@@ -380,6 +483,8 @@ export function PagesPanel(p: {
         </div>
       </div>
       {deleting && <DeletePageDialog target={deleting} onClose={() => setDeleting(null)} />}
+      {attaching && <AttachMeetingDialog path={p.docPath} workspace={p.docSlug ?? ""} onClose={() => setAttaching(false)}
+        onAttached={() => p.onSaved?.()} />}
       <PageRemovedToast />
     </>
   );
@@ -395,11 +500,34 @@ function FolderListing(p: { listing: Listing; onNavigate?: (slug: string | undef
   // own `slug` goes with the question, because the answer differs by workspace (#1626).
   const dirs = p.listing.dirs.filter((d) => !isMachineryEntry(prefix, d, slug));
   const files = p.listing.files.filter((f) => !isMachineryEntry(prefix, f, slug));
+  // A WORKSPACE WITH NO FRONT PAGE (#1783): its root offers to make one — a desktop tile lands here
+  // when there is no README to open. The server refuses where the reader may not write; it says so.
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const noReadme = !prefix && !p.listing.files.some((f) => isWorkspaceReadme(f));
+  const createReadme = async () => {
+    setCreating(true); setCreateError(null);
+    try {
+      await writeWorkspaceFile(WORKSPACE_FRONT_PAGE, "# README\n", slug ? { slug } : undefined);
+      p.onOpen({ path: WORKSPACE_FRONT_PAGE, slug, label: "README" });
+    } catch {
+      setCreateError("The README could not be created here.");
+    } finally {
+      setCreating(false);
+    }
+  };
+  const create = noReadme && (
+    <div className="vx-listing-create" data-create-readme="">
+      <Button variant="primary" onClick={() => void createReadme()} disabled={creating} loading={creating}>Create README</Button>
+      {createError && <span role="alert" className="vx-doc-error">{createError}</span>}
+    </div>
+  );
   if (!dirs.length && !files.length) {
-    return <EmptyState>Nothing in this folder.</EmptyState>;
+    return <>{create}<EmptyState>Nothing in this folder.</EmptyState></>;
   }
   return (
     <div className="vx-listing">
+      {create}
       {dirs.map((d) => (
         <button key={"d/" + d} data-entry="dir" className="vx-row2-main vx-listing-entry" onClick={() => p.onNavigate?.(slug, at(d))}>
           <Folder size={14} strokeWidth={1.75} aria-hidden /><span className="vx-row2-title">{d}/</span></button>
@@ -409,6 +537,44 @@ function FolderListing(p: { listing: Listing; onNavigate?: (slug: string | undef
           onClick={() => p.onOpen({ path: at(f), slug, label: f.replace(/\.md$/i, "") })}>
           <FileText size={14} strokeWidth={1.75} aria-hidden /><span className="vx-row2-title">{f}</span></button>
       ))}
+    </div>
+  );
+}
+
+/** WHAT THIS CHAT'S AGENT MADE, newest first — "Wrote Sponsor plan · 10:12". One line each; a click
+ *  opens it. "All files" is the workspace browser, one click deeper and never the default. */
+/** A file the chat made, as the desktop places it — a page in a workspace; nothing else is a file. */
+const artifactTarget = (a: ChatArtifact): DesktopTarget | null =>
+  a.page && a.page.kind !== "meeting" && a.page.path ? { kind: "file", slug: a.page.slug, path: a.page.path } : null;
+
+function ChatArtifactList(p: { items: ChatArtifact[]; onOpen: (a: ChatArtifact) => void; onAllFiles: () => void }) {
+  const desktopItems = useDesktopItems();
+  const [menu, setMenu] = useState<{ key: string; x: number; y: number } | null>(null);
+  return (
+    <div className="vx-listing" data-chat-artifacts="">
+      {p.items.length === 0 && <EmptyState>Nothing from this chat yet. What the agent writes or opens here is listed here.</EmptyState>}
+      {p.items.map((a) => {
+        const t = artifactTarget(a);
+        const items = t ? desktopItems(t) : [];
+        return (
+          <div key={a.key} className="vx-row2 vx-listing-row">
+            <button data-entry="artifact" data-artifact-kind={a.kind} className="vx-row2-main vx-listing-entry" onClick={() => p.onOpen(a)}>
+              <FileText size={14} strokeWidth={1.75} aria-hidden />
+              <span className="vx-row2-title">{artifactVerb(a.kind)} {a.title}</span>
+              {a.at ? <span className="vx-row2-meta">{artifactTime(a.at)}</span> : null}
+            </button>
+            {items.length > 0 && <span className="vx-row2-actions" data-open={menu?.key === a.key ? "" : undefined}>
+              <IconButton label={`More for ${a.title}`} size="xs" aria-haspopup="menu" data-artifact-more={a.key}
+                onClick={(e: ReactMouseEvent<HTMLButtonElement>) => { const b = e.currentTarget.getBoundingClientRect(); setMenu({ key: a.key, x: b.right - 188, y: b.bottom + 4 }); }}>
+                <MoreHorizontal size={14} strokeWidth={1.75} />
+              </IconButton>
+            </span>}
+            {menu?.key === a.key && <ContextMenu x={menu.x} y={menu.y} label={`Actions for ${a.title}`} items={items} onClose={() => setMenu(null)} />}
+          </div>
+        );
+      })}
+      <button data-entry="all-files" className="vx-row2-main vx-listing-entry" onClick={p.onAllFiles}>
+        <Folder size={14} strokeWidth={1.75} aria-hidden /><span className="vx-row2-title">All files</span></button>
     </div>
   );
 }

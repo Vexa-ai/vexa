@@ -13,6 +13,8 @@
  *  saves a doomed upload — the server still enforces it. */
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Icon } from "../ui-kit";
+import { droppedDirectories, droppedPlainFiles, type EntryLike } from "./folderDrop";
+import "./attachments.css";
 
 /** agent-api `api_shared.MAX_UPLOAD_BYTES`. */
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -23,7 +25,42 @@ export const ATTACHMENT_ACCEPT = [
   ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip",
 ].join(",");
 
-export type UploadedWorkspaceFile = { name: string; path: string };
+/** What `POST /api/workspace/upload` answers per file. `name` is the STORED name (it carries the
+ *  content hash); `original` is the name the person picked, and the only one ever shown. */
+export type UploadedWorkspaceFile = { name: string; path: string; original?: string; size?: number; type?: string; ws?: string };
+
+/** A file attached to a SENT message, as its bubble draws it: the original name, the size, and
+ *  `src` — the session-scoped route that serves it to the conversation's participants
+ *  (agent-api `GET /api/sessions/{session}/attachment`), never a public URL. */
+export type MessageAttachment = { name: string; path: string; src: string; type?: string; size?: number; kind?: "image" | "file" };
+
+/** THE ONE MARK a message's attachments ride on (agent-api `shared/attachments.py` MARK_OPEN). The
+ *  server vouches for every item and fills in whose desk it is on; history hands the items back as
+ *  their own field, so the person never sees the mark and the agent is handed the exact path. */
+export const ATTACHMENTS_MARK_OPEN = "<!--vexa:attachments ";
+
+export function attachmentsMark(files: { path: string; name: string }[]): string {
+  if (files.length === 0) return "";
+  return `${ATTACHMENTS_MARK_OPEN}${JSON.stringify(files.map((f) => ({ path: f.path, name: f.name })))}-->`;
+}
+
+/** The serving route for one attachment of `session`. */
+export function attachmentSrc(session: string, path: string): string {
+  return `/api/sessions/${encodeURIComponent(session)}/attachment?path=${encodeURIComponent(path)}`;
+}
+
+/** The name a person recognises for a stored path: its last segment without the hash prefix. */
+export function originalName(path: string): string {
+  const base = path.split("/").pop() ?? path;
+  return base.replace(/^[0-9a-f]{16}-/, "");
+}
+
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i;
+export function isImageAttachment(a: { type?: string; kind?: string; path: string }): boolean {
+  if (a.kind) return a.kind === "image";
+  if (a.type) return a.type.startsWith("image/");
+  return IMAGE_EXT.test(a.path);
+}
 export type AttachmentStatus = "uploading" | "done" | "error" | "refused";
 export type ComposerAttachment = {
   id: string;
@@ -94,12 +131,14 @@ export function pastedFiles(data: DataTransfer | null): File[] {
 
 /** Upload ONE file on the attach button's route, reporting progress. XHR rather than `fetch`
  *  because `fetch` cannot report how much of a request body has gone. */
-export function uploadAttachment(file: File, onProgress: (p: number) => void, signal: AbortSignal): Promise<UploadedWorkspaceFile> {
+export function uploadAttachment(file: File, onProgress: (p: number) => void, signal: AbortSignal, session = ""): Promise<UploadedWorkspaceFile> {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append("files", file, file.name || "upload");
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/workspace/upload");
+    // THE CHAT decides where its files go (Vexa-ai/vexa#1783): its target workspace, `_system` for an
+    // incognito chat, the desk only when the chat writes to Personal.
+    xhr.open("POST", session ? `/api/workspace/upload?session=${encodeURIComponent(session)}` : "/api/workspace/upload");
     xhr.upload.onprogress = (e: ProgressEvent) => { if (e.lengthComputable && e.total > 0) onProgress(e.loaded / e.total); };
     xhr.onload = () => {
       let body: { files?: UploadedWorkspaceFile[]; detail?: unknown } = {};
@@ -119,8 +158,13 @@ export function uploadAttachment(file: File, onProgress: (p: number) => void, si
 
 /** A drop zone that counts enter/leave so crossing into a child does not flicker the overlay, and
  *  that only reacts to drags carrying files. */
-export function FileDropZone({ onFiles, children, label = "Drop files to attach" }: {
-  onFiles: (files: File[]) => void; children: ReactNode; label?: string;
+export function FileDropZone({ onFiles, onFolders, children, label = "Drop files to attach" }: {
+  onFiles: (files: File[]) => void;
+  /** A FOLDER dropped here (founder 2026-10-13): it becomes a workspace, it is not attached. The
+   *  entries are taken during the drop, because the browser empties them once the handler returns.
+   *  Absent → a folder drop attaches nothing (a folder is not a file the composer can upload). */
+  onFolders?: (entries: EntryLike[]) => void;
+  children: ReactNode; label?: string;
 }) {
   const [over, setOver] = useState(false);
   const depth = useRef(0);
@@ -155,7 +199,9 @@ export function FileDropZone({ onFiles, children, label = "Drop files to attach"
     e.stopPropagation();
     depth.current = 0;
     setOver(false);
-    const files = Array.from(e.dataTransfer?.files ?? []);
+    const dirs = droppedDirectories(e.dataTransfer);
+    if (dirs.length && onFolders) onFolders(dirs);
+    const files = dirs.length ? droppedPlainFiles(e.dataTransfer) : Array.from(e.dataTransfer?.files ?? []);
     if (files.length) onFiles(files);
   };
   return (
@@ -163,15 +209,12 @@ export function FileDropZone({ onFiles, children, label = "Drop files to attach"
       style={{ position: "relative", height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
       {children}
       {over && (
-        <div data-drop-overlay role="status" aria-live="polite"
-          style={{ position: "absolute", inset: 8, zIndex: 40, pointerEvents: "none", borderRadius: 16,
-            border: "2px dashed var(--accent)", background: "color-mix(in srgb, var(--rail) 86%, var(--accent) 14%)",
-            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, color: "var(--t1)" }}>
-          <span style={{ width: 44, height: 44, borderRadius: 12, background: "var(--accentbg)", color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div data-drop-overlay role="status" aria-live="polite" className="at-drop-overlay">
+          <span className="at-drop-icon">
             <Icon name="upload" size={22} />
           </span>
-          <span style={{ fontSize: 14, fontWeight: 600 }}>{label}</span>
-          <span style={{ fontSize: 12, color: "var(--t3)" }}>Images, PDFs, docs and spreadsheets · up to 25 MB each</span>
+          <span className="t-md fw-600">{label}</span>
+          <span className="t-xs c-3">Images, PDFs, docs and spreadsheets · up to 25 MB each{onFolders ? " · a folder becomes a workspace" : ""}</span>
         </div>
       )}
     </div>
@@ -198,12 +241,6 @@ function ProgressRing({ progress }: { progress: number }) {
     </svg>
   );
 }
-
-const removeButtonStyle = {
-  width: 18, height: 18, borderRadius: 999, border: "none", background: "var(--panel)", color: "var(--t2)",
-  cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
-  boxShadow: "0 1px 3px rgba(0,0,0,.3)", flex: "none",
-} as const;
 
 export function AttachmentTray({ attachments, onRemove, onRetry, onPreview, onExit }: {
   attachments: ComposerAttachment[];
@@ -234,26 +271,25 @@ export function AttachmentTray({ attachments, onRemove, onRetry, onPreview, onEx
         const label = `${name}, ${formatBytes(a.file.size)}, ${statusWords(a)}`;
         const setRef = (el: HTMLElement | null) => { if (el) itemRefs.current.set(a.id, el); else itemRefs.current.delete(a.id); };
         const remove = (
-          <button type="button" aria-label={`Remove ${name}`} title="Remove" onClick={() => onRemove(a.id)} style={removeButtonStyle}>
+          <button type="button" aria-label={`Remove ${name}`} title="Remove" onClick={() => onRemove(a.id)} className="at-x">
             <Icon name="x" size={10} />
           </button>
         );
         const retry = a.status === "error" ? (
           <button type="button" aria-label={`Retry uploading ${name}`} title="Retry" onClick={() => onRetry(a.id)}
-            style={{ ...removeButtonStyle, color: "var(--danger)" }}>
+            className="at-x" data-tone="danger">
             <Icon name="refresh" size={10} />
           </button>
         ) : null;
         if (a.isImage && a.previewUrl && a.status !== "refused") {
           return (
             <div key={a.id} role="listitem" ref={setRef} tabIndex={0} aria-label={label} title={failed ? `${name} — ${a.error}` : name}
-              data-attachment-thumb data-status={a.status}
+              data-attachment-thumb data-status={a.status} data-failed={failed ? "" : undefined} className="at-thumb"
               onKeyDown={(e) => {
                 if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) { e.preventDefault(); onPreview(a); return; }
                 removeFromKeyboard(e, a.id);
               }}
-              style={{ position: "relative", width: 72, height: 72, flex: "none", borderRadius: 10, overflow: "hidden",
-                border: `1px solid ${failed ? "var(--danger)" : "var(--line2)"}`, background: "var(--bg)", outlineOffset: 2 }}>
+              style={{ position: "relative", width: 72, height: 72, flex: "none", overflow: "hidden", outlineOffset: 2 }}>
               <img src={a.previewUrl} alt={name} onClick={() => onPreview(a)}
                 style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", cursor: "zoom-in",
                   opacity: a.status === "uploading" ? 0.55 : 1, filter: failed ? "grayscale(0.6)" : undefined }} />
@@ -263,8 +299,7 @@ export function AttachmentTray({ attachments, onRemove, onRetry, onPreview, onEx
                 </span>
               )}
               {failed && (
-                <span style={{ position: "absolute", left: 0, right: 0, bottom: 0, background: "var(--danger)", color: "var(--on-accent)", fontSize: 10,
-                  lineHeight: "15px", textAlign: "center", pointerEvents: "none" }}>Failed</span>
+                <span className="at-thumb-failed">Failed</span>
               )}
               <span style={{ position: "absolute", top: 4, right: 4, display: "flex", gap: 3 }}>{retry}{remove}</span>
             </div>
@@ -272,22 +307,19 @@ export function AttachmentTray({ attachments, onRemove, onRetry, onPreview, onEx
         }
         return (
           <div key={a.id} role="listitem" ref={setRef} tabIndex={0} aria-label={label} title={failed ? `${name} — ${a.error}` : name}
-            data-attachment-chip data-status={a.status}
+            data-attachment-chip data-status={a.status} data-failed={failed ? "" : undefined} className="at-chip"
             onKeyDown={(e) => removeFromKeyboard(e, a.id)}
-            style={{ display: "flex", alignItems: "center", gap: 8, maxWidth: 260, minWidth: 0, height: 48, boxSizing: "border-box",
-              border: `1px solid ${failed ? "var(--danger)" : "var(--line2)"}`, borderRadius: 10,
-              background: failed ? "var(--dangerbg)" : "var(--panel2)", color: "var(--t2)", padding: "6px 8px 6px 6px", outlineOffset: 2 }}>
-            <span style={{ width: 34, height: 34, borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center", flex: "none",
-              background: "var(--bg)", color: failed ? "var(--danger)" : "var(--t3)" }}>
+            style={{ display: "flex", alignItems: "center", gap: 8, maxWidth: 260, minWidth: 0, height: 48, boxSizing: "border-box", outlineOffset: 2 }}>
+            <span className="at-chip-icon" style={{ width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>
               {a.status === "uploading" ? <ProgressRing progress={a.progress} /> : <Icon name={failed ? "alert" : "file"} size={16} />}
             </span>
             <span style={{ display: "flex", flexDirection: "column", minWidth: 0, gap: 2 }}>
-              <span style={{ fontSize: 12.5, color: "var(--t1)", whiteSpace: "nowrap", overflow: "hidden" }}>{middleTruncate(name)}</span>
-              <span style={{ fontSize: 11, color: failed ? "var(--danger)" : "var(--t3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              <span className="at-chip-name" style={{ whiteSpace: "nowrap", overflow: "hidden" }}>{middleTruncate(name)}</span>
+              <span className="at-chip-meta" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                 {failed ? a.error : a.status === "uploading" ? `${formatBytes(a.file.size)} · uploading${a.progress > 0 ? ` ${Math.round(a.progress * 100)}%` : "…"}` : formatBytes(a.file.size)}
               </span>
             </span>
-            <span style={{ display: "flex", gap: 3, marginLeft: 2 }}>{retry}{remove}</span>
+            <span className="at-chip-acts" style={{ display: "flex", gap: 3 }}>{retry}{remove}</span>
           </div>
         );
       })}
@@ -297,6 +329,12 @@ export function AttachmentTray({ attachments, onRemove, onRetry, onPreview, onEx
 
 /** A larger look at an attached image. Escape, the backdrop or the close button dismisses it. */
 export function ImagePreview({ attachment, onClose }: { attachment: ComposerAttachment; onClose: () => void }) {
+  return <Lightbox src={attachment.previewUrl ?? ""} name={attachment.file.name || "pasted image"}
+    size={attachment.file.size} onClose={onClose} />;
+}
+
+/** The full-size picture behind a thumbnail — the composer's and a sent message's alike. */
+export function Lightbox({ src, name, size, onClose }: { src: string; name: string; size?: number; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
@@ -305,18 +343,59 @@ export function ImagePreview({ attachment, onClose }: { attachment: ComposerAtta
     window.addEventListener("keydown", onKey);
     return () => { window.removeEventListener("keydown", onKey); prev?.focus?.(); };
   }, [onClose]);
-  const name = attachment.file.name || "pasted image";
   return (
     <div role="dialog" aria-modal="true" aria-label={`Preview of ${name}`} onClick={onClose}
-      style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
-      <figure onClick={(e) => e.stopPropagation()} style={{ margin: 0, position: "relative", maxWidth: "min(92vw, 1200px)", maxHeight: "88vh", display: "flex", flexDirection: "column", gap: 8 }}>
-        <img src={attachment.previewUrl} alt={name} style={{ maxWidth: "100%", maxHeight: "80vh", objectFit: "contain", borderRadius: 10, background: "var(--bg)", display: "block" }} />
-        <figcaption style={{ alignSelf: "center", color: "var(--t1)", background: "var(--panel)", borderRadius: 999, padding: "3px 10px", fontSize: 12 }}>{name} · {formatBytes(attachment.file.size)}</figcaption>
+      className="at-preview">
+      <figure onClick={(e) => e.stopPropagation()} className="at-preview-figure" style={{ position: "relative", maxWidth: "min(92vw, 1200px)", maxHeight: "88vh", display: "flex", flexDirection: "column", gap: 8 }}>
+        <img src={src} alt={name} className="at-preview-img" style={{ maxWidth: "100%", maxHeight: "80vh", objectFit: "contain", display: "block" }} />
+        <figcaption className="at-preview-caption">{name}{typeof size === "number" ? ` · ${formatBytes(size)}` : ""}</figcaption>
         <button ref={closeRef} type="button" aria-label="Close preview" onClick={onClose}
-          style={{ ...removeButtonStyle, position: "absolute", top: -10, right: -10, width: 28, height: 28 }}>
+          className="at-x" data-size="lg">
           <Icon name="x" size={14} />
         </button>
       </figure>
+    </div>
+  );
+}
+
+// ── a sent message's attachments ────────────────────────────────────────────────────────────────
+
+/** The files a message carried, above its bubble: each picture a small rounded thumbnail that opens
+ *  full size, every other file a chip with its icon, original name and size. Served by the
+ *  session's own route, so a participant of a shared chat sees them and nobody else does. */
+export function MessageAttachments({ items }: { items: MessageAttachment[] }) {
+  const [open, setOpen] = useState<MessageAttachment | null>(null);
+  const [broken, setBroken] = useState<Set<string>>(() => new Set());
+  if (items.length === 0) return null;
+  return (
+    <div data-message-attachments role="list" aria-label="Attached to this message" className="at-msg">
+      {items.map((a) => {
+        const name = a.name || originalName(a.path);
+        if (isImageAttachment(a) && !broken.has(a.path)) {
+          return (
+            <span key={a.path} role="listitem" style={{ display: "contents" }}>
+              <button type="button" data-message-thumb
+                aria-label={`Open ${name}`} title={name} className="at-msg-thumb" onClick={() => setOpen(a)}>
+                <img src={a.src} alt={name} loading="lazy"
+                  onError={() => setBroken((b) => new Set(b).add(a.path))} />
+              </button>
+            </span>
+          );
+        }
+        return (
+          <a key={a.path} role="listitem" data-message-chip href={a.src} download={name}
+            title={name} className="at-chip at-msg-chip">
+            <span className="at-chip-icon" style={{ width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>
+              <Icon name="file" size={15} />
+            </span>
+            <span style={{ display: "flex", flexDirection: "column", minWidth: 0, gap: 2 }}>
+              <span className="at-chip-name" style={{ whiteSpace: "nowrap", overflow: "hidden" }}>{middleTruncate(name)}</span>
+              {typeof a.size === "number" && <span className="at-chip-meta">{formatBytes(a.size)}</span>}
+            </span>
+          </a>
+        );
+      })}
+      {open && <Lightbox src={open.src} name={open.name || originalName(open.path)} size={open.size} onClose={() => setOpen(null)} />}
     </div>
   );
 }

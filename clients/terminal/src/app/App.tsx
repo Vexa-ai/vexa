@@ -1,29 +1,44 @@
 "use client";
 /** The composition root — builds the DI container, wires surface commands, renders the workbench.
- *  Importing `../surfaces` registers every surface as a load-time side effect (before this body runs). */
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+ *  Importing `../surfaces` registers every surface as a load-time side effect (before this body runs);
+ *  `../canvas/register` and `../minutes/register` do the same for the views that sit above surfaces/. */
+// FIRST: browser storage is scoped to the signed-in account before any module reads it.
+import "../platform/accountScopeInstall";
+import "./gate.css";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   createContainer, reg, ServicesProvider,
   CommandServiceId, createCommandService,
   ContextKeyServiceId, createContextKeyService,
   KeybindingServiceId, createKeybindingService,
 } from "../platform";
-import { LayoutServiceId, createLayoutService } from "../workbench/layout";
+import { LayoutServiceId, createLayoutService } from "../platform/layout";
 import { PaletteServiceId, createPaletteService } from "../workbench/palette";
 import { registerEngineCommands } from "../workbench/commands";
 import { Workbench } from "../workbench/Workbench";
 import { MinutesShell } from "../minutes/MinutesShell";
-import { minutesOnly } from "./mode";
+import { minutesOnly } from "../platform/mode";
 import { VersionBar } from "./VersionBar";
+import { installFetchDedupe } from "../data/fetchDedupe";
+// one request in flight per identical /api read (a home load sent 66 calls in 18 s)
+installFetchDedupe();
 import { registry } from "../contributions";
 import { AuthGate } from "./AuthGate";
-import { ApiError, presentError } from "../surfaces/apiClient";
+import { ApiError, presentError } from "../data/apiClient";
 import { SHARED_ARRIVAL_KEY } from "../minutes/roomView";
 import { OnboardingGate } from "./OnboardingGate";
-import { acceptInvite, acceptTranscriptShare, previewInvite, type InvitePreview } from "../surfaces/workspaceApi";
+import { acceptInvite, acceptTranscriptShare, previewInvite, type InvitePreview } from "../data/workspaceApi";
 import { redeemScaffoldShare } from "../minutes/scaffold";
 import { beginArrival } from "../minutes/arrival";
 import "../surfaces";
+import "../canvas/register";   // the canvas registers its views by kind; it sits above surfaces/
+import "../minutes/register";  // the minutes shell's page acts and GitHub card, by kind; above surfaces/ too
+import { provideDocIntentPoster } from "../ui-kit/docIntents";
+
+// A rendered document's acts (an image's "Find it") go through the minutes shell's `postIntent`.
+// The ui-kit sits below that shell, so the composition root supplies the door; the shell still loads
+// only when the act is pressed, as it did when the ui-kit reached it by `import()` itself.
+provideDocIntentPoster((intent) => import("../minutes/extend").then((m) => m.postIntent(intent)));
 
 const roleLabel = (role: string) => (role === "viewer" ? "read-only" : "read & write");
 
@@ -197,11 +212,11 @@ export function shareRefusalSentence(e: unknown): string {
 
 function ShareRefused({ message, onContinue }: { message: string; onContinue: () => void }) {
   return (
-    <div style={{ height: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div role="alert" style={{ width: "100%", maxWidth: 440, background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 14, padding: "26px 26px 24px" }}>
-        <div style={{ fontSize: 16, color: "var(--t1)", marginBottom: 8 }}>This meeting could not be opened</div>
-        <div style={{ fontSize: 13, color: "var(--t2)", lineHeight: 1.5, marginBottom: 20 }}>{message}</div>
-        <button onClick={onContinue} style={{ padding: "9px 16px", borderRadius: 8, fontSize: 13, cursor: "pointer", border: "1px solid var(--line)", background: "transparent", color: "var(--t2)" }}>Continue to Vexa</button>
+    <div className="vx-gate-wrap">
+      <div role="alert" className="vx-gate-card">
+        <div className="vx-gate-refused-title">This meeting could not be opened</div>
+        <div className="vx-gate-refused-msg">{message}</div>
+        <button onClick={onContinue} className="vx-gate-btn vx-gate-btn-ghost">Continue to Vexa</button>
       </div>
     </div>
   );
@@ -223,25 +238,23 @@ function InviteConsent({ token, onProceed, onDecline, busy = false }: { token: s
   }, [token]);
 
   const invalid = Boolean(err) || Boolean(pv && !pv.valid);
-  const wrap: CSSProperties = { height: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 };
-  const card: CSSProperties = { width: "100%", maxWidth: 440, background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 14, padding: "26px 26px 24px" };
-  const termRow: CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderTop: "1px solid var(--line)", fontSize: 13 };
-  const termK: CSSProperties = { color: "var(--t3)" };
-  const termV: CSSProperties = { color: "var(--t1)", fontWeight: 500, maxWidth: "60%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
-  const btnBase: CSSProperties = { padding: "9px 16px", borderRadius: 8, fontSize: 13, cursor: "pointer", border: "1px solid var(--line)" };
-  const btnPrimary: CSSProperties = { ...btnBase, background: "var(--accent)", color: "var(--on-accent)", border: "1px solid var(--accent)", fontWeight: 600 };
-  const btnGhost: CSSProperties = { ...btnBase, background: "transparent", color: "var(--t2)" };
+  // the look lives in ./gate.css (tokens only)
+  const termRow = "vx-gate-term";
+  const termK = "c-3";
+  const termV = "vx-gate-term-v";
+  const btnPrimary = "vx-gate-btn vx-gate-btn-primary";
+  const btnGhost = "vx-gate-btn vx-gate-btn-ghost";
 
   return (
-    <div style={wrap}>
-      <div style={card}>
-        <div className="t-xs c-3 mb-3" style={{ textTransform: "uppercase", letterSpacing: ".08em" }}>You've been invited to a workspace</div>
+    <div className="vx-gate-wrap">
+      <div className="vx-gate-card">
+        <div className="t-xs c-3 mb-3 vx-gate-eyebrow">You've been invited to a workspace</div>
         {!pv && !err && <div className="c-3 t-sm">Loading invite…</div>}
         {invalid && (
           <>
             <div className="t-lg c-1 mb-1_5">Invite unavailable</div>
             <div className="t-sm c-3 mb-5">{err || "This invite is no longer valid — it may have been revoked, expired, or already used."}</div>
-            <button onClick={onDecline} style={btnGhost}>Continue to Vexa</button>
+            <button onClick={onDecline} className={btnGhost}>Continue to Vexa</button>
           </>
         )}
         {pv && pv.valid && (
@@ -250,14 +263,14 @@ function InviteConsent({ token, onProceed, onDecline, busy = false }: { token: s
             <div className="t-sm c-2 lh-snug mb-4">
               {pv.purpose || <span className="c-3">A shared knowledge workspace.</span>}
             </div>
-            <div style={termRow}><span style={termK}>Your access</span><span style={termV}>{roleLabel(pv.role)}</span></div>
-            {pv.shared_by && <div style={termRow}><span style={termK}>Shared by</span><span style={termV}>{pv.shared_by}</span></div>}
+            <div className={termRow}><span className={termK}>Your access</span><span className={termV}>{roleLabel(pv.role)}</span></div>
+            {pv.shared_by && <div className={termRow}><span className={termK}>Shared by</span><span className={termV}>{pv.shared_by}</span></div>}
             <div className="t-xs c-3 lh-snug mt-4 mr-0 mb-5 ml-0 pt-3 bd-t">
               Joining adds this workspace to your set and mounts it into the agent. You can switch it off or leave any time.
             </div>
             <div style={{ display: "flex", gap: 10 }}>
-              <button onClick={onProceed} disabled={busy} style={{ ...btnPrimary, opacity: busy ? 0.6 : 1, cursor: busy ? "default" : "pointer" }}>{busy ? "Joining…" : "Continue to join"}</button>
-              <button onClick={onDecline} disabled={busy} style={btnGhost}>Not now</button>
+              <button onClick={onProceed} disabled={busy} className={btnPrimary} style={{ opacity: busy ? 0.6 : 1, cursor: busy ? "default" : "pointer" }}>{busy ? "Joining…" : "Continue to join"}</button>
+              <button onClick={onDecline} disabled={busy} className={btnGhost}>Not now</button>
             </div>
           </>
         )}

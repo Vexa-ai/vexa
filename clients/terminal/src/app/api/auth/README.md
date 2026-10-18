@@ -27,9 +27,17 @@ while no admin has been claimed and neither list is configured, the sign-in that
 instance. Who may claim is admin-api's answer too. `signinAdmission` in `adminApi.ts` asks admin-api
 (`POST /internal/signin-admission`) and **fails closed**: no answer, a 404 from an older admin-api, or
 anything but a literal `admitted: true` refuses. `findOrCreateUserToken` asks before it can create an
-account, so OAuth, redeem and the dev login cannot skip it; `request-link/` asks before it mails. A
+account, so OAuth and redeem (including a test user's link) cannot skip it; `request-link/` asks before it mails. A
 refused person sees one sentence (`../../signinRefusal.ts`) at the redeem page and on the sign-in card
 (`?error=` after OAuth); the email form answers "check your email" either way.
+
+**Test users** (`test-users/`, `testUsers.ts` — app.dev tooling, #1783). With `VEXA_DEV_TEST_USERS=1`
+(compose only; Helm and Lite never set it), an instance administrator's account menu offers *Test
+users…*: list and create `tester-<name>@example.test` accounts (admin-api's ordinary create) and mint a
+one-time sign-in link for one (the emailed door's token, 15 minutes, single use), redeemed through
+`redeem/` and admission like any other. Refused unless switched on (404), unless the caller is an
+administrator (401/403), and for any address off `example.test` (400). Each mint is logged with who
+asked for which address.
 
 **The signing secret** (`authSecret.mjs`, one file read by both `server.mjs` and the routes).
 `NEXTAUTH_SECRET` must be at least 32 bytes and not a value published in this repository;
@@ -49,7 +57,7 @@ unknown method or a half-configured OIDC provider. Operator guide:
 [`docs/docs/sign-in-oidc.mdx`](../../../../../../docs/docs/sign-in-oidc.mdx).
 
 `login/` — direct email login — is **development-only** and answers 403 on any other build. To sign
-in against a deployed container, request a link and redeem it. `logout/` clears the vexa cookies and the NextAuth session cookies. `adminApi.ts` is the
+in against a deployed container, request a link and redeem it. `logout/` clears the vexa cookies and the NextAuth session cookies. `company/` is the Company profile switch: an instance administrator works as the admin account on this tab and switches back (ADR-0049). `adminApi.ts` is the
 server-only admin-api client.
 
 The user-facing description, the end-to-end flow and the compliance notes are in

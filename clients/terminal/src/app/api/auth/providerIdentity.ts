@@ -34,7 +34,9 @@ import { isWellFormedEmail } from "./emailAddress";
 import { OIDC_PROVIDER_ID, oidcConfig } from "./oidcConfig.mjs";
 
 export type ProviderIdentity =
-  | { ok: true; email: string; subject: string }
+  /** `emailVerified`: the provider vouches for the address (Google's `email_verified`; a Microsoft
+   *  account of the configured tenant, or one whose domain is verified; an OIDC token that says so). */
+  | { ok: true; email: string; subject: string; emailVerified?: boolean }
   | { ok: false; why: string };
 
 const MULTI_TENANT = new Set(["", "common", "organizations", "consumers"]);
@@ -100,7 +102,8 @@ function oidc(account: Claims | null | undefined, env: Record<string, string | u
   }
   const email = emailOf(claims, cfg.emailClaim);
   if (!email) return { ok: false, why: `the ID token carries no email address in the ${cfg.emailClaim} claim` };
-  return { ok: true, email, subject: oidcSubject(stripSlash(iss), sub) };
+  const verified = claims.email_verified === true || claims.email_verified === "true";
+  return { ok: true, email, subject: oidcSubject(stripSlash(iss), sub), ...(verified ? { emailVerified: true } : {}) };
 }
 
 function google(profile: Claims | undefined): ProviderIdentity {
@@ -109,7 +112,7 @@ function google(profile: Claims | undefined): ProviderIdentity {
   const email = emailOf(profile);
   const sub = str(profile.sub);
   if (!email || !sub) return { ok: false, why: "Google returned no email or subject" };
-  return { ok: true, email, subject: `google:${sub}` };
+  return { ok: true, email, subject: `google:${sub}`, emailVerified: true };
 }
 
 function microsoft(account: Claims | null | undefined, env: Record<string, string | undefined>): ProviderIdentity {
@@ -129,7 +132,7 @@ function microsoft(account: Claims | null | undefined, env: Record<string, strin
   }
   const email = emailOf(claims);
   if (!email) return { ok: false, why: "the Microsoft ID token carries no email address" };
-  return { ok: true, email, subject: `microsoft:${tid}:${oid}` };
+  return { ok: true, email, subject: `microsoft:${tid}:${oid}`, emailVerified: true };
 }
 
 /** The verified identity behind an OAuth sign-in, or why there is none. */

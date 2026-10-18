@@ -1,0 +1,13 @@
+/* The full-screen gate cards in front of the workbench (app/App.tsx: share refused, invite consent;
+ * app/AuthGate.tsx: sign-in). Tokens only. */
+.vx-gate-wrap { height: 100vh; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: var(--space-5); }
+.vx-gate-card { width: 100%; max-width: 440px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-xl); padding: 26px 26px var(--space-6); }
+.vx-gate-eyebrow { text-transform: uppercase; letter-spacing: .08em; }
+.vx-gate-refused-title { font-size: var(--text-lg); color: var(--t1); margin-bottom: var(--space-2); }
+.vx-gate-refused-msg { font-size: var(--text-sm); color: var(--t2); line-height: 1.5; margin-bottom: var(--space-5); }
+.vx-gate-term { display: flex; justify-content: space-between; align-items: center; padding: var(--space-2) 0; border-top: 1px solid var(--line); font-size: var(--text-sm); }
+.vx-gate-term-v { color: var(--t1); font-weight: var(--weight-medium); max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-gate-btn { padding: 9px var(--space-4); border-radius: 8px; font-size: var(--text-sm); cursor: pointer; border: 1px solid var(--line); }
+.vx-gate-btn-primary { background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent); font-weight: var(--weight-semibold); }
+.vx-gate-btn-ghost { background: transparent; color: var(--t2); }
+.vx-gate-error { font-size: var(--text-xs); color: var(--danger); line-height: 1.5; }

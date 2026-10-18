@@ -3,7 +3,7 @@
  *  passed through with its status so a refusal's code reaches the dialog. */
 import type { NextRequest } from "next/server";
 import { resolveApiKey } from "../../proxyAuth";
-import { meetingsOnly } from "../../../mode";
+import { meetingsOnly } from "../../../../platform/mode";
 
 export const dynamic = "force-dynamic";
 

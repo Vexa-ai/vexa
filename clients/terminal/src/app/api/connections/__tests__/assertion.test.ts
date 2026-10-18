@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, test } from 'vitest';
-import { AssertionRefused, KeyUnavailable, loadKey, signAssertion, verifyAssertion, type Claims } from '../assertion';
+import { AssertionRefused, KeyUnavailable, ROLES, loadKey, signAssertion, verifyAssertion, type Claims } from '../assertion';
 
 const GOLDEN = join(__dirname, '../../../../../../../core/agent/contracts/credential-broker.v1/golden');
 const vectors = readdirSync(GOLDEN).filter((f) => f.startsWith('SignedAssertionVector.')).sort();
@@ -15,7 +15,8 @@ const load = (f: string): Vector => JSON.parse(readFileSync(join(GOLDEN, f), 'ut
 
 describe('golden vectors (shared with the Python signer)', () => {
   test('there are vectors for every role', () => {
-    expect(new Set(vectors.map((f) => load(f).claims.role))).toEqual(new Set(['agent', 'human', 'git']));
+    expect(new Set(vectors.map((f) => load(f).claims.role))).toEqual(new Set(['agent', 'human', 'git', 'bots', 'sensors', 'signals']));
+    expect(new Set(ROLES)).toEqual(new Set(['agent', 'human', 'git', 'bots', 'sensors', 'signals']));
   });
   test.each(vectors)('%s reproduces and verifies', (f) => {
     const v = load(f), c = v.claims;

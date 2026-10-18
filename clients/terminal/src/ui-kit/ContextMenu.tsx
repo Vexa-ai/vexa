@@ -86,20 +86,16 @@ export function ContextMenu({ x, y, items, onClose, label }: {
 
   return (
     <div ref={ref} role="menu" aria-label={label} onKeyDown={onKey} onContextMenu={(e) => e.preventDefault()}
-      style={{ position: "fixed", left, top, width, zIndex: 1000, padding: 4, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 8, boxShadow: "0 10px 30px rgba(0,0,0,.38)" }}>
+      className="vx-menu vx-ctxmenu" style={{ left, top, width }}>
       {items.map((item) => (
-        <button key={item.id} role="menuitem" onClick={(e) => { e.stopPropagation(); choose(item); }}
-          aria-keyshortcuts={[item.shortcut && shortcutAria(item.shortcut), item.letter?.toUpperCase()].filter(Boolean).join(" ") || undefined}
-          style={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "stretch", gap: 1, border: "none", borderRadius: 6, background: "transparent", color: item.danger ? "var(--red, #e57373)" : "var(--t1)", cursor: "pointer", padding: "6px 9px", textAlign: "left", fontSize: 12.5 }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-          onFocus={(e) => (e.currentTarget.style.background = "var(--panel2)")}
-          onBlur={(e) => (e.currentTarget.style.background = "transparent")}>
-          <span style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-            <span style={{ flex: 1, minWidth: 0 }}>{item.label}</span>
-            {item.shortcut && <kbd data-shortcut-hint aria-hidden style={{ flex: "none", color: "var(--t3)", fontFamily: "var(--sans)", fontSize: 11, letterSpacing: ".02em" }}>{shortcutLabel(item.shortcut)}</kbd>}
+        <button key={item.id} type="button" role="menuitem" className="vx-menu-item" data-danger={item.danger ? "" : undefined}
+          onClick={(e) => { e.stopPropagation(); choose(item); }}
+          aria-keyshortcuts={[item.shortcut && shortcutAria(item.shortcut), item.letter?.toUpperCase()].filter(Boolean).join(" ") || undefined}>
+          <span className="vx-ctxmenu-line">
+            <span className="vx-menu-label">{item.label}</span>
+            {item.shortcut && <kbd data-shortcut-hint aria-hidden className="vx-menu-hint">{shortcutLabel(item.shortcut)}</kbd>}
           </span>
-          {item.detail && <span data-menu-detail style={{ color: "var(--t3)", fontFamily: item.mono ? "var(--mono)" : "var(--sans)", fontSize: item.mono ? 10.5 : 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.detail}</span>}
+          {item.detail && <span data-menu-detail data-mono={item.mono ? "" : undefined} className="vx-ctxmenu-detail">{item.detail}</span>}
         </button>
       ))}
     </div>

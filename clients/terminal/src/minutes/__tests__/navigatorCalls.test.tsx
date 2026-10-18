@@ -32,7 +32,7 @@ vi.mock("../navigatorApi", async (importOriginal) => ({
 }));
 
 const mtg = (o: Partial<MeetingMock> & { id: string }): MeetingMock => ({
-  title: o.title_custom ?? "x", when: "", status: "past", live_status: "completed", platform: "Google Meet",
+  title: o.title_custom ?? "", when: "", status: "past", live_status: "completed", platform: "Google Meet",
   participants: [], mentioned: [], actions: [], transcript: [], insights: [], ...o,
 });
 
@@ -127,9 +127,10 @@ describe("the list", () => {
     expect(c.querySelector('[data-call="14"] [data-call-live]')).toBeTruthy();
   });
 
-  it("labels an untitled call with its platform and id", async () => {
+  it("labels an untitled call by who was in it — never its platform id (UI decisions 14)", async () => {
     const c = await openCalls();
-    expect(c.querySelector('[data-call="12"]')?.textContent).toContain("Google Meet · abc-defg-hij");
+    expect(c.querySelector('[data-call="12"]')?.textContent).toContain("Call with Vexa");
+    expect(c.querySelector('[data-call="12"]')?.textContent).not.toContain("abc-defg-hij");
   });
 
   it("a click opens the transcript through the shell's open-page route and mints no tab", async () => {
@@ -238,10 +239,10 @@ describe("rename a call from its row", () => {
     fireEvent.click(c.querySelector('[data-call-more="12"]') as HTMLElement);
     fireEvent.click(screen.getByRole("menuitem", { name: /Rename/ }));
     const input = c.querySelector('[data-call-rename="12"] input') as HTMLInputElement;
-    expect(input.value).toBe("Google Meet · abc-defg-hij");
-    fireEvent.change(input, { target: { value: "Campbell" } });
+    expect(input.value).toBe("Call with Vexa");
+    fireEvent.change(input, { target: { value: "Acme" } });
     fireEvent.submit(input.closest("form")!);
-    await waitFor(() => expect(annotateCalls(fetchMock)).toEqual([["/api/meetings/12/annotate", { title: "Campbell" }]]));
+    await waitFor(() => expect(annotateCalls(fetchMock)).toEqual([["/api/meetings/12/annotate", { title: "Acme" }]]));
     await waitFor(() => expect(c.querySelector("[data-call-rename]")).toBeNull());
   });
 
@@ -290,7 +291,7 @@ describe("deleted calls and the row's own layout", () => {
   });
 
   it("a call that never started is listed at its request time and says so", async () => {
-    store.meetings = [mtg({ id: "17", title_custom: "Campbell", live_status: "failed", created_at: "2026-10-11T07:00:00Z" })];
+    store.meetings = [mtg({ id: "17", title_custom: "Acme", live_status: "failed", created_at: "2026-10-11T07:00:00Z" })];
     const c = await openCalls();
     expect(c.querySelector('[data-calls-group="undated"]')).toBeNull();
     expect(c.querySelector('[data-call="17"]')?.getAttribute("aria-label")).toMatch(/never started/);

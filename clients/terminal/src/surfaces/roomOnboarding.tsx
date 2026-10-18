@@ -12,8 +12,8 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { Modal } from "../ui-kit/Modal";
-import { createSharedWorkspace, mintInvite, setWorkspacePurpose } from "./workspaceApi";
-import { presentError } from "./apiClient";
+import { createSharedWorkspace, mintInvite, setWorkspacePurpose } from "../data/workspaceApi";
+import { presentError } from "../data/apiClient";
 
 type Who = "a" | "u";
 type Msg = { who: Who; text: string };

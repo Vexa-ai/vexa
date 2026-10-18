@@ -98,23 +98,23 @@ describe("what the server says about the page, beyond where it is", () => {
 
   it("carries the widget's meeting and the page's cursor through", async () => {
     const f = (async () => res({ path: FLOW_NOTE, transcript: ROW, cursor: "2026-09-06T12:04:31Z" })) as unknown as typeof fetch;
-    expect(await fetchMeetingNote(ROW, f)).toEqual({ path: FLOW_NOTE, transcript: ROW, cursor: "2026-09-06T12:04:31Z" });
+    expect(await fetchMeetingNote(ROW, f)).toEqual({ workspace: "", title: "", path: FLOW_NOTE, transcript: ROW, cursor: "2026-09-06T12:04:31Z" });
   });
 
   it("a page written before the widget answers with neither, and that is not a failure", async () => {
     const f = (async () => res({ path: FLOW_NOTE })) as unknown as typeof fetch;
-    expect(await fetchMeetingNote(ROW, f)).toEqual({ path: FLOW_NOTE, transcript: "", cursor: "" });
+    expect(await fetchMeetingNote(ROW, f)).toEqual({ workspace: "", title: "", path: FLOW_NOTE, transcript: "", cursor: "" });
   });
 
   it("a widget without a path is dropped — it could only hide a tab with nothing behind it", async () => {
     const f = (async () => res({ path: null, transcript: ROW })) as unknown as typeof fetch;
-    expect(await fetchMeetingNote(ROW, f)).toEqual({ path: null, transcript: "", cursor: "" });
+    expect(await fetchMeetingNote(ROW, f)).toEqual({ workspace: "", title: "", path: null, transcript: "", cursor: "" });
     const walker = (async () => res({ path: "../../etc/passwd", transcript: ROW })) as unknown as typeof fetch;
-    expect(await fetchMeetingNote(ROW, walker)).toEqual({ path: null, transcript: "", cursor: "" });
+    expect(await fetchMeetingNote(ROW, walker)).toEqual({ workspace: "", title: "", path: null, transcript: "", cursor: "" });
   });
 
   it("an unreachable server costs the room its Minutes tab and nothing else", async () => {
     const thrower = (async () => { throw new Error("offline"); }) as unknown as typeof fetch;
-    await expect(fetchMeetingNote(ROW, thrower)).resolves.toEqual({ path: null, transcript: "", cursor: "" });
+    await expect(fetchMeetingNote(ROW, thrower)).resolves.toEqual({ workspace: "", title: "", path: null, transcript: "", cursor: "" });
   });
 });

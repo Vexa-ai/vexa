@@ -223,9 +223,10 @@ export function fallbackText(intent: ChatIntent): string {
   // sentence; this one is about a FILE that has a transcript embedded in it.
   const room = (intent.kind === "extend" || intent.kind === "create") && intent.meeting
     ? `\n\nThis is meeting ${intent.meeting}'s own page and the transcript is embedded in it. ` +
-      "Read the page first: its frontmatter carries `transcript_cursor`. Read the transcript with " +
-      `get_meeting_transcript(meeting_db_id=${intent.meeting}, since_index=<that cursor>) — only what ` +
-      "is new; with no cursor, or one that is not a whole number, read it all — then rewrite the content BETWEEN the `<!-- meeting:<key>:start -->` / `:end` markers " +
+      "Read the page first. Read the WHOLE transcript with " +
+      `get_meeting_transcript(meeting_db_id=${intent.meeting}), and while it says complete: false ` +
+      "call it again with since_index=<its next_index> until complete is true; never write that " +
+      "something was not discussed from part of it — then rewrite the content BETWEEN the `<!-- meeting:<key>:start -->` / `:end` markers " +
       "(about · decisions · commitments · people · questions), leave every word outside them alone, " +
       "never touch the `<!-- vexa:transcript … -->` slot, and set `transcript_cursor` to the " +
       "`next_index` that read returned."

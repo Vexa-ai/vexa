@@ -1,16 +1,16 @@
 "use client";
 /** Settings — the footer-gear CENTER tab (design-spec meeting-lifecycle-v2, W5): account-level
- *  configuration in one place — Calendar integration, API tokens, GitHub token, Account, and for
+ *  configuration in one place — Calendar integration, API tokens, git provider tokens, Account, and for
  *  the admin, who may sign in to the instance (Sign-in). The old
  *  "API Tokens" activity-bar item retired into here (its panels are imported, not duplicated);
  *  the Meetings sidebar keeps its own first-connect calendar card at the point of need — this is
  *  the durable home (multi-calendar management lives in `calendarConnections.tsx`). Sections are a left nav (no sub-routing; one tab, local state). */
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { registerTab } from "../contributions";
-import { minutesOnly } from "../app/mode";
+import { minutesOnly } from "../platform/mode";
 import { Icon } from "../ui-kit";
 import { GitHubTokenCard, TokensPanel } from "./tokens";
-import { ApiError, presentError } from "./apiClient";
+import { ApiError, presentError } from "../data/apiClient";
 import { CalendarConnectionsPanel } from "./calendarConnections";
 import { TranscriptionLanguageSettings } from "./TranscriptionLanguagePicker";
 import { getModelCatalog, type ModelEntry } from "./modelsApi";
@@ -21,7 +21,7 @@ const SECTIONS: Array<{ id: SectionId; label: string; icon: string; adminOnly?: 
   { id: "calendar", label: "Calendar", icon: "cal" },
   { id: "models", label: "Models", icon: "spark" },
   { id: "tokens", label: "API tokens", icon: "key" },
-  { id: "github", label: "GitHub", icon: "github" },
+  { id: "github", label: "Git", icon: "git" },
   { id: "signin", label: "Sign-in", icon: "shield", adminOnly: true },
   { id: "account", label: "Account", icon: "user" },
 ];

@@ -10,12 +10,14 @@
  *  by kind, clickable → Research · Open entity doc) and copilot `signals` render as small
  *  actionable badges under the relevant block. RAW mode passes neither, so it stays plain text. */
 
-import { useEffect, useRef, useState } from "react";
+import "./liveTranscript.css";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { splitTextIntoSpans, type SpanEntity } from "./inlineSpans";
 import { useMeetingPlayback, seekMeeting, segmentSeconds } from "../minutes/meetingPlayback";
 import { playbackTime } from "../minutes/RecordingPlayer";
 import { entityColor } from "../ui-kit/docLinks";
+import { splitEmphasis, type MarksFor, type SegmentMarks } from "./signalMarks";
 
 export interface EngineTag { label: string; kind: string }
 export interface EngineEntity { id?: string; label: string; kind: string; docPath?: string }
@@ -64,35 +66,24 @@ function EntityMention({ entity, actions }: { entity: SpanEntity; actions?: Engi
         title={`${entity.kind}: ${entity.label}`}
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen((v) => !v); } }}
-        style={{
-          color: hue, cursor: "pointer", borderBottom: `1px dotted ${hue}`,
-          background: open ? "color-mix(in srgb, currentColor 12%, transparent)" : "transparent",
-          borderRadius: 3, padding: "0 1px", outlineColor: hue,
-        }}
+        className="vx-lt-mention"
+        style={{ "--lt-hue": hue } as CSSProperties}
       >
         {entity.label}
       </span>
       {open && (
         <span
           role="menu"
-          style={{
-            position: "absolute", top: "100%", left: 0, zIndex: 20, marginTop: 4, minWidth: 150,
-            display: "flex", flexDirection: "column", background: "var(--bg)", border: "1px solid var(--line2)",
-            borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,0.18)", padding: 4, fontSize: 12, fontWeight: 500,
-          }}
+          className="vx-lt-menu"
+          style={{ position: "absolute", top: "100%", left: 0, minWidth: 150, display: "flex", flexDirection: "column" }}
         >
-          <button type="button" role="menuitem" onClick={run(actions?.research)} style={menuItemStyle}>Research</button>
-          <button type="button" role="menuitem" onClick={run(actions?.openEntityDoc)} style={menuItemStyle}>Open entity doc</button>
+          <button type="button" role="menuitem" onClick={run(actions?.research)} className="vx-lt-menu-item">Research</button>
+          <button type="button" role="menuitem" onClick={run(actions?.openEntityDoc)} className="vx-lt-menu-item">Open entity doc</button>
         </span>
       )}
     </span>
   );
 }
-
-const menuItemStyle: React.CSSProperties = {
-  textAlign: "left", background: "transparent", border: "none", color: "var(--t1)",
-  cursor: "pointer", padding: "5px 8px", borderRadius: 5, fontSize: 12, lineHeight: 1.3,
-};
 
 function ContestedText({ text }: { text: string }): React.ReactElement | null {
   const pattern = /⟦([^⟧]+)⟧\{([^}]+)\}/g;
@@ -146,6 +137,45 @@ function BlockText({ text, entities, actions, renderText }: { text: string; enti
   );
 }
 
+/** A line's text with its significant words in a heavier weight (transcript signals). The word
+ *  pieces go through the same `renderText` layer as the rest, so term chips still draw. */
+function EmphasizedText({ text, words, renderText }: { text: string; words: string[]; renderText?: (text: string) => React.ReactNode }) {
+  return <>{splitEmphasis(text, words).map((p, i) => p.strong
+    ? <strong key={i} data-signal-word="" className="vx-lt-sigword">{renderText ? renderText(p.text) : p.text}</strong>
+    : <span key={i}>{renderText ? renderText(p.text) : p.text}</span>)}</>;
+}
+
+/** A line's wake-label chips: small, quiet, after the words they belong to. */
+function SignalChips({ marks }: { marks: SegmentMarks }) {
+  if (!marks.chips.length) return null;
+  return <>{marks.chips.map((c) => (
+    <span key={c.name} data-signal-chip={c.name} className="vx-lt-sigchip" aria-label={`Signal: ${c.label}`}
+      title={`${c.label} · ${Math.round(c.score * 100)}%`}>{c.label}</span>
+  ))}</>;
+}
+
+/** `text` with every case-insensitive occurrence of `query` marked — the transcript's search. */
+export function Marked({ text, query }: { text: string; query: string }): React.ReactElement {
+  const q = query.trim().toLowerCase();
+  if (!q) return <>{text}</>;
+  const out: React.ReactNode[] = [];
+  const low = text.toLowerCase();
+  let at = 0;
+  for (let i = low.indexOf(q); i >= 0; i = low.indexOf(q, i + q.length)) {
+    if (i > at) out.push(text.slice(at, i));
+    out.push(<mark key={i} data-transcript-match className="vx-lt-mark">{text.slice(i, i + q.length)}</mark>);
+    at = i + q.length;
+  }
+  if (at < text.length) out.push(text.slice(at));
+  return <>{out}</>;
+}
+
+/** Does a speaker turn match the search? Its words or its speaker's name. */
+export function turnMatches(turn: { speaker?: string; text: string }, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  return !q || turn.text.toLowerCase().includes(q) || (turn.speaker ?? "").toLowerCase().includes(q);
+}
+
 export function LiveTranscriptEngine({
   segments,
   meetingId,
@@ -155,6 +185,9 @@ export function LiveTranscriptEngine({
   actions,
   renderText,
   layout = "stack",
+  query = "",
+  gaps = [],
+  marks,
 }: {
   segments: EngineSegment[];
   meetingId?: string;
@@ -168,6 +201,13 @@ export function LiveTranscriptEngine({
    *  (tabular figures), what was said beside it, smaller than page prose. Default `stack` is the
    *  original speaker-over-text layout every other caller keeps. */
   layout?: "stack" | "rows";
+  /** the transcript search: only the speaker turns that match are drawn, the match marked */
+  query?: string;
+  /** Captured audio never transcribed (prod-cutover R4): a quiet marker at its place in time. */
+  gaps?: { startMs?: number; endMs?: number; label: string }[];
+  /** TRANSCRIPT SIGNALS (rows layout): per line, its wake-label chips and emphasised words. Absent,
+   *  or nothing for a line, and the line renders exactly as without it. */
+  marks?: MarksFor;
 }) {
   const playback = useMeetingPlayback(meetingId);
   // "Play from m:ss" is drawn here, not as a native `title`: a native tooltip floats wherever the
@@ -190,7 +230,11 @@ export function LiveTranscriptEngine({
     const timing = segmentSeconds(s, playback.originMs);
     const canSeek = !!meetingId && playback.available && !!timing;
     const current = active === s;
-    return <span key={s.id ?? index} data-playback-active={current || undefined}
+    const m = marks?.(s.id);
+    const words = query.trim() ? <Marked text={s.text} query={query} />
+      : m?.words.length && !/⟦[^⟧]+⟧\{[^}]+\}/.test(s.text) ? <EmphasizedText text={s.text} words={m.words} renderText={renderText} />
+      : <BlockText text={s.text} entities={entities} actions={actions} renderText={renderText} />;
+    const line = <span key={s.id ?? index} data-playback-active={current || undefined}
       role={canSeek ? "button" : undefined} tabIndex={canSeek ? 0 : undefined}
       aria-label={canSeek ? `Play from ${playbackTime(timing!.start)}: ${s.text}` : undefined}
       aria-current={current ? "true" : undefined}
@@ -207,27 +251,46 @@ export function LiveTranscriptEngine({
         if (canSeek && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
           e.preventDefault(); seekMeeting(meetingId!, timing!.start);
         }
-      }}><BlockText text={s.text} entities={entities} actions={actions} renderText={renderText} /></span>;
+      }}>{words}</span>;
+    return m ? <span key={s.id ?? index} data-signal-segment={s.id}>{line}<SignalChips marks={m} /></span> : line;
   };
   // Confirmed (completed !== false) = stable. Merge consecutive same-speaker confirmed segments into
   // flowing blocks; keyword tags accumulate per block. Pending (completed === false) = the live edge.
-  const blocks: { speaker?: string; tsMs?: number; text: string; key: string; tags: EngineTag[]; segments: EngineSegment[] }[] = [];
+  const blocks: { speaker?: string; tsMs?: number; text: string; key: string; tags: EngineTag[]; segments: EngineSegment[]; gap?: string }[] = [];
+  // A gap sits between the words around it, by time; it breaks a same-speaker run (the words on
+  // either side were not one continuous passage). A gap with no time goes last.
+  const pendingGaps = [...gaps].filter((g) => g.label).sort((a, b) => (a.startMs ?? Infinity) - (b.startMs ?? Infinity));
+  const flushGaps = (beforeMs?: number) => {
+    while (pendingGaps.length && (beforeMs === undefined || (pendingGaps[0].startMs ?? Infinity) <= beforeMs)) {
+      const g = pendingGaps.shift()!;
+      blocks.push({ tsMs: g.startMs, text: "", key: `gap-${g.startMs ?? blocks.length}-${blocks.length}`, tags: [], segments: [], gap: g.label });
+    }
+  };
   for (const s of segments) {
     if (s.completed === false) continue;
+    if (typeof s.tsMs === "number") flushGaps(s.tsMs);
     const last = blocks[blocks.length - 1];
-    if (last && last.speaker === s.speaker) { last.text += " " + s.text; last.segments.push(s); if (s.tags) last.tags.push(...s.tags); }
+    if (last && !last.gap && last.speaker === s.speaker) { last.text += " " + s.text; last.segments.push(s); if (s.tags) last.tags.push(...s.tags); }
     else blocks.push({ speaker: s.speaker, tsMs: s.tsMs, text: s.text, key: s.id ?? `b${blocks.length}`, tags: [...(s.tags ?? [])], segments: [s] });
   }
+  flushGaps();
+  const gapMarker = (key: string, label: string) => (
+    <div key={key} data-transcript-gap role="note" className="vx-lt-gap">{label}</div>
+  );
   const lastPending = [...segments].reverse().find((s) => s.completed === false);
-  const live = (lastPending?.text ?? "").trim();
   const liveSpeaker = lastPending?.speaker;
+  // Every draft of that speaker still awaiting reconfirmation, in order (show fast, then reconfirm:
+  // the drafts stay visible, dimmed, until the reconfirmed segment replaces them).
+  const live = segments
+    .filter((s) => s.completed === false && s.speaker === liveSpeaker && (s.text ?? "").trim())
+    .map((s) => s.text.trim()).join(" ");
 
   const lastBlock = blocks[blocks.length - 1];
-  const liveJoinsLast = !!live && !!lastBlock && lastBlock.speaker === liveSpeaker;
+  const liveJoinsLast = !!live && !!lastBlock && !lastBlock.gap && lastBlock.speaker === liveSpeaker;
   const liveOwnBlock = !!live && !liveJoinsLast;
 
   if (!blocks.length && !live) {
-    return <div style={{ color: "var(--t3)", fontSize: 13, padding: "8px 2px" }}>{emptyLabel}</div>;
+    return <div className="vx-lt-empty">{emptyLabel}</div>;
   }
 
   const head = (speaker?: string, tsMs?: number) =>
@@ -285,30 +348,39 @@ export function LiveTranscriptEngine({
     );
   };
 
+  if (layout === "rows" && query.trim()) {
+    const hits = blocks.filter((b) => !b.gap && turnMatches(b, query));
+    if (!hits.length) return <div className="vx-lt-empty" data-transcript-no-match>Nothing matches “{query.trim()}”.</div>;
+    blocks.splice(0, blocks.length, ...hits);
+  }
   if (layout === "rows") {
     const clock = (tsMs?: number) => typeof tsMs === "number"
       ? new Date(tsMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+    // SPEAKER AND TIME ON ONE LINE ABOVE THE WORDS (founder, UI lab 2026-10-14: "too much space
+    // lost"): no left column, so a long turn wraps the full width of the drawer.
     const row = (key: string, speaker: string | undefined, tsMs: number | undefined, body: React.ReactNode, extra?: React.ReactNode) => (
-      <div key={key} data-transcript-row style={{ display: "flex", flexWrap: "wrap", columnGap: 12, rowGap: 2, alignItems: "baseline" }}>
-        <div data-transcript-who style={{ flex: "0 0 112px", minWidth: 0, display: "flex", flexDirection: "column", fontSize: 11.5, lineHeight: 1.45 }}>
-          <span style={{ fontWeight: 600, color: "var(--t2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={speaker}>{speaker ?? ""}</span>
-          <span style={{ color: "var(--t3)", fontVariantNumeric: "tabular-nums" }}>{clock(tsMs)}</span>
+      <div key={key} data-transcript-row className="vx-lt-row">
+        <div data-transcript-who className="vx-lt-who">
+          <span className="vx-lt-speaker" title={speaker}>{speaker ?? ""}</span>
+          <span className="vx-lt-clock">{clock(tsMs)}</span>
         </div>
-        <div style={{ flex: "1 1 220px", minWidth: 0 }}>{body}{extra}</div>
+        <div className="vx-lt-body">{body}{extra}</div>
       </div>
     );
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div className="vx-lt-rows">
         {blocks.map((b, idx) => {
+          if (b.gap) return gapMarker(b.key, b.gap);
           const isLast = idx === blocks.length - 1;
           return row(b.key, b.speaker, b.tsMs,
-            <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.55 }}>
-              {playback.available ? b.segments.map((s, i) => <span key={s.id ?? i}>{i > 0 ? " " : ""}{passage(s, i)}</span>) : <BlockText text={b.text} entities={entities} actions={actions} renderText={renderText} />}
-              {isLast && liveJoinsLast && <span style={{ color: "var(--t3)", fontStyle: "italic" }}> {live} …</span>}
+            <div className="vx-lt-words">
+              {playback.available || marks ? b.segments.map((s, i) => <span key={s.id ?? i}>{i > 0 ? " " : ""}{passage(s, i)}</span>)
+                : query.trim() ? <Marked text={b.text} query={query} /> : <BlockText text={b.text} entities={entities} actions={actions} renderText={renderText} />}
+              {isLast && liveJoinsLast && !query.trim() && <span style={{ color: "var(--t3)", fontStyle: "italic" }}> {live} …</span>}
             </div>,
             <>{chips(b.tags)}{signalBadges(isLast && !liveOwnBlock)}</>);
         })}
-        {liveOwnBlock && row("live", liveSpeaker, lastPending?.tsMs,
+        {liveOwnBlock && !query.trim() && row("live", liveSpeaker, lastPending?.tsMs,
           <div style={{ fontSize: 13, color: "var(--t3)", lineHeight: 1.55, fontStyle: "italic" }}>{live} …</div>)}
       </div>
     );
@@ -317,6 +389,7 @@ export function LiveTranscriptEngine({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 13, maxWidth: 760 }}>
       {blocks.map((b, idx) => {
+        if (b.gap) return gapMarker(b.key, b.gap);
         const isLast = idx === blocks.length - 1;
         return (
           <div key={b.key}>

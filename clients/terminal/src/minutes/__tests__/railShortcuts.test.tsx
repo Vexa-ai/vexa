@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Rail } from '../Rail';
 import { shortcutLabel, RAIL_SHORTCUTS, matchesShortcut } from '../../ui-kit/shortcuts';
 vi.mock('../AccountBadge',()=>({AccountBadge:()=>null}));
@@ -7,6 +9,9 @@ vi.mock('../../surfaces/chatActivity',()=>({useChatActive:()=>false}));
 
 // Vexa-ai/vexa#1829 follow-up — founder 2026-10-11: "add keyboard shortcuts" to the row menu.
 // jsdom's navigator is not a Mac, so the primary modifier here is Ctrl.
+// DELETE CONFIRMS IN A DIALOG (design guidelines §4.11, S7): the row's in-place ✓ these tests first
+// armed was replaced by a ConfirmDialog whose button names the act, "Delete chat". The behaviour is
+// the same — the key only opens the confirm, the chat is deleted by the confirm, never by the key.
 const chat={key:'c:a',chatId:'a',label:'Inbox',whenLabel:'1:36 PM'} as any;
 const meeting={key:'m:42',chatId:null,meetingId:'42',label:'Weekly',whenLabel:'Sat'} as any;
 const ctrl=(code:string,extra:Record<string,unknown>={})=>({key:code.replace(/^Key/,''),code,ctrlKey:true,shiftKey:true,...extra});
@@ -42,21 +47,30 @@ describe('rail keyboard shortcuts',()=>{
     expect(hide).toHaveBeenLastCalledWith(hidden,false);
   });
 
-  it('Ctrl+Backspace only arms the confirm; the chat is deleted by the ✓, never by the key',()=>{
+  it('Ctrl+Backspace only opens the confirm; the chat is deleted by its "Delete chat", never by the key',()=>{
     const {del}=setup();
     fireEvent.keyDown(window,{key:'Backspace',code:'Backspace',ctrlKey:true});
     expect(del).not.toHaveBeenCalled();
-    const ok=screen.getByRole('button',{name:'Confirm delete Inbox'});
+    expect(screen.getByRole('dialog',{name:'Delete this chat?'})).toBeTruthy();
+    const ok=screen.getByRole('button',{name:'Delete chat'});
     fireEvent.keyDown(window,{key:'Backspace',code:'Backspace',ctrlKey:true});
     expect(del).not.toHaveBeenCalled();
     fireEvent.click(ok);
     expect(del).toHaveBeenCalledExactlyOnceWith('a');
   });
 
-  it('Ctrl+Shift+E starts a new chat',()=>{
+  it('a rail in a closed drawer (inert) takes no shortcuts',()=>{
+    const pin=vi.fn();
+    render(<div inert={true as any}><Rail rows={[chat]} hidden={0} all={true} onAll={()=>{}} selKey="c:a" onSelect={()=>{}} onNewChat={()=>{}} onDeleteChat={()=>{}} onPin={pin} onHide={()=>{}}/></div>);
+    fireEvent.keyDown(window,ctrl('KeyP'));
+    expect(pin).not.toHaveBeenCalled();
+  });
+
+  it('Ctrl+Shift+E starts a new chat, and the + names the shortcut',()=>{
     const {newChat}=setup({selKey:null});
     fireEvent.keyDown(window,ctrl('KeyE'));
     expect(newChat).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button',{name:'New chat'}).getAttribute('aria-keyshortcuts')).toBe('Control+Shift+E');
   });
 
   it('typing is never taken: plain letters and the editing key do nothing from a text field',()=>{
@@ -66,7 +80,7 @@ describe('rail keyboard shortcuts',()=>{
     for(const k of ['p','h','d','x']) fireEvent.keyDown(box,{key:k,code:`Key${k.toUpperCase()}`});
     fireEvent.keyDown(box,{key:'Backspace',code:'Backspace',ctrlKey:true});
     expect(pin).not.toHaveBeenCalled(); expect(hide).not.toHaveBeenCalled(); expect(del).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button',{name:'Confirm delete Inbox'})).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
     // a shortcut WITH the modifier still works from the composer
     fireEvent.keyDown(box,ctrl('KeyP'));
     expect(pin).toHaveBeenCalledOnce();
@@ -80,7 +94,7 @@ describe('rail keyboard shortcuts',()=>{
     cleanup();
     const m=setup({selKey:'m:42'});                       // a meeting with no chat has nothing to delete
     fireEvent.keyDown(window,{key:'Backspace',code:'Backspace',ctrlKey:true});
-    expect(screen.queryByRole('button',{name:/Confirm delete/})).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(del).not.toHaveBeenCalled(); expect(m.del).not.toHaveBeenCalled();
   });
 
@@ -112,26 +126,39 @@ describe('rail keyboard shortcuts',()=>{
     expect(hide).toHaveBeenCalledExactlyOnceWith(chat,true);
     open(); fireEvent.keyDown(screen.getByRole('menu'),{key:'d',code:'KeyD'});
     expect(del).not.toHaveBeenCalled();
-    expect(screen.getByRole('button',{name:'Confirm delete Inbox'})).toBeTruthy();
+    expect(screen.getByRole('dialog',{name:'Delete this chat?'})).toBeTruthy();
   });
 
+  // The menu's look moved from inline styles into the design system (ui-kit/layout/layout.css): the
+  // face is chosen by `data-mono`, so the check reads the attribute and the rule the browser applies.
   it('the Hide sub-line is the menu text face, not monospace',()=>{
     setup();
     fireEvent.click(screen.getByRole('button',{name:'Actions for Inbox'}));
     const sub=screen.getByText('Bring it back from Hidden');
-    expect(sub.style.fontFamily).toBe('var(--sans)');
+    expect(sub.hasAttribute('data-mono')).toBe(false);
+    expect(sub.className).toContain('vx-ctxmenu-detail');
+    const css=readFileSync(join(__dirname,'..','..','ui-kit','layout','layout.css'),'utf8').replace(/\/\*[\s\S]*?\*\//g,'');
+    const rule=(sel:string)=>[...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(m=>m[1].split(',').map(x=>x.trim()).includes(sel)).map(m=>m[2]).join(';');
+    expect(rule('.vx-ctxmenu-detail')).toMatch(/font-family:\s*var\(--font-sans\)/);
+    expect(rule('.vx-ctxmenu-detail[data-mono]')).toMatch(/font-family:\s*var\(--font-mono\)/);
   });
 
-  it('the armed ✓ survives a blur to nothing (a Mac click) and cancels when focus moves elsewhere',()=>{
+  // The in-place ✓ cancelled when focus moved elsewhere; the dialog that replaced it is modal, so
+  // focus cannot leave it — Escape (or Cancel) is the way out. What must still hold is the Mac case:
+  // Safari and Firefox do not focus a button on click, so the confirm blurs to NOTHING first, and
+  // that must not take the confirm away before its click lands.
+  it('the armed confirm survives a blur to nothing (a Mac click), and Escape cancels it',()=>{
     const {del}=setup();
     fireEvent.keyDown(window,{key:'Backspace',code:'Backspace',ctrlKey:true});
-    const ok=screen.getByRole('button',{name:'Confirm delete Inbox'});
+    const ok=screen.getByRole('button',{name:'Delete chat'});
     fireEvent.blur(ok,{relatedTarget:null});
-    fireEvent.click(screen.getByRole('button',{name:'Confirm delete Inbox'}));
+    fireEvent.click(screen.getByRole('button',{name:'Delete chat'}));
     expect(del).toHaveBeenCalledExactlyOnceWith('a');
     fireEvent.keyDown(window,{key:'Backspace',code:'Backspace',ctrlKey:true});
-    fireEvent.blur(screen.getByRole('button',{name:'Confirm delete Inbox'}),{relatedTarget:screen.getByRole('textbox',{name:'composer'})});
-    expect(screen.queryByRole('button',{name:'Confirm delete Inbox'})).toBeNull();
+    expect(screen.getByRole('dialog',{name:'Delete this chat?'})).toBeTruthy();
+    fireEvent.keyDown(document,{key:'Escape'});
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(del).toHaveBeenCalledOnce();
   });
 
   it('on a Mac the modifier is ⌘ and the hint is Apple-ordered',()=>{

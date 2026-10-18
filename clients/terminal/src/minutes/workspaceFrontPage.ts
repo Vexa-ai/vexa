@@ -43,10 +43,10 @@
  *  can hold exactly. `workspaceReadme.ts` does the reading, `WorkspaceReadmePanel.tsx` does the
  *  rendering, and the three sentences the founder asked for are decided here from fixture data.
  */
-import type { GitRemoteStatus, LastChange } from "../surfaces/workspaceApi";
+import type { GitRemoteStatus, LastChange } from "../data/workspaceApi";
 import type { BoundSeries, Role, WorkspaceKind } from "./workspaceReadme";
 
-export type { ChangedPage, LastChange } from "../surfaces/workspaceApi";
+export type { ChangedPage, LastChange } from "../data/workspaceApi";
 
 // ── what the server hands us ────────────────────────────────────────────────────────────────────
 
@@ -422,13 +422,12 @@ export function stripActs(f: {
       history,
     ];
   }
-  const repo: StripAct = f.remote?.has_home
-    ? { id: "sync", label: "Sync", why: "Ask the chat to sync this workspace with its GitHub home" }
-    : { id: "connect", label: "Connect a repo", why: "Ask the chat to connect this workspace to a GitHub repository" };
+  // NO REPO BUTTONS (UI decisions 11): a repo is a connection, connected from chat and listed in
+  // Connections — never "Connect a repo" or "Sync" on a workspace's page.
   // A DESK HAS NO MEMBERS to add — it is one person's, and the sentence above says so.
-  return f.kind === "desk" || f.kind === "private" ? [repo, history] : [
+  return f.kind === "desk" || f.kind === "private" ? [history] : [
     { id: "member", label: "Add a member", why: "Ask the chat who should join, and in which role" },
-    repo, history,
+    history,
   ];
 }
 
@@ -453,7 +452,7 @@ export function stripActs(f: {
  *    where the answer actually lives.
  *  · **Sync** and **Connect a repo** are #1623's controls stated as a conversation. The precise
  *    ones — sync now, pull, push, detach, and the attach dialog — are untouched and one click away
- *    in the GitHub section, which is where a person who wants a control rather than a sentence will
+ *    in the Repository section, which is where a person who wants a control rather than a sentence will
  *    look. */
 export function actInstruction(id: StripActId, where: { workspace: string; name?: string | null }): string {
   const place = where.name ? `“${where.name}” (\`${where.workspace}\`)` : `\`${where.workspace}\``;
@@ -465,12 +464,15 @@ export function actInstruction(id: StripActId, where: { workspace: string; name?
       `yes. No form: ask me here.`;
   }
   if (id === "sync") {
-    return `Sync ${place} with its GitHub home: fetch, tell me in one line what is ahead and what ` +
-      `is behind, and ask me before you push or pull anything.`;
+    return `Sync ${place} with its git home. Call workspace_status first — it fetches without ` +
+      `changing anything — and tell me in one line what is ahead and what is behind. Ask me before ` +
+      `you call workspace_pull or workspace_push. Do not run git yourself.`;
   }
   if (id === "connect") {
-    return `Connect ${place} to a GitHub repository. Ask me for the repository in ONE question — ` +
-      `an existing one or a new one — say what will be pushed there, and only do it if I say yes.`;
+    return `Connect ${place} to a repository on one of this deployment's git providers (call ` +
+      `git_providers to list them; for a new repository use workspace_publish with provider and org — ` +
+      `a GitLab group path may nest). Ask me for the repository in ONE question — an existing one or ` +
+      `a new one — say what will be pushed there, and only do it if I say yes.`;
   }
   return "";
 }

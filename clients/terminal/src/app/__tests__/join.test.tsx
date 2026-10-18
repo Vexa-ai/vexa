@@ -30,6 +30,7 @@ import {
   returnPath,
   roleSentence,
   type InvitePreview,
+  joinPathFor,
 } from "../join/joinState";
 
 // next-auth's client helper reaches for a session endpoint on import-time use; the page only ever
@@ -261,5 +262,13 @@ describe("the join page", () => {
     stub({});
     render(<JoinPage />);
     await waitFor(() => expect(screen.getByTestId("join-refused").textContent).toBe(refusal("no-token")));
+  });
+});
+
+describe("the path spelling of a link (#1783)", () => {
+  it("sends /join/<token> to the page that redeems it", () => {
+    expect(joinPathFor("abc_DEF-123")).toBe("/join?i=abc_DEF-123");
+    expect(joinPathFor("")).toBe("/join");
+    expect(joinPathFor("%E0%A4%A")).toBe("/join?i=%25E0%25A4%25A");
   });
 });

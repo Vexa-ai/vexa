@@ -2,7 +2,7 @@
 import { MeetingControls } from "../minutes/MeetingControls";
 import { useEffect, useRef } from "react";
 import { useService } from "../platform";
-import { LayoutServiceId } from "../workbench/layout";
+import { LayoutServiceId } from "../platform/layout";
 import { CanvasActionsProvider } from "./actions";
 import { MeetingHealthBanner } from "./MeetingHealthBanner";
 import { LiveTranscriptEngine } from "./LiveTranscriptEngine";
@@ -10,7 +10,9 @@ import { TranscriptExtend } from "./TranscriptExtend";
 import { HighlightButton, useTermRenderer } from "./TranscriptTermControls";
 import { MeetingScopeProvider, MeetingSourceProvider, useMeeting } from "./useMeeting";
 
-export const MEETING_CANVAS_CONTENT_INSET = 18;
+import { MEETING_CANVAS_CONTENT_INSET } from "../ui-kit/canvasSlot";
+
+export { MEETING_CANVAS_CONTENT_INSET };
 
 /** ONE render engine, ONE source: the RAW transcript segments as they stream (PRD decision 34 —
  *  "the product runs no model calls of its own beside the agent"). There is no second, "cleaned"
@@ -33,7 +35,7 @@ function RawTranscript({ meetingId }: { meetingId?: string }) {
   const box = useRef<HTMLDivElement>(null);
   return (
     <div ref={box} style={{ position: "relative" }}>
-      <LiveTranscriptEngine meetingId={meeting.id} segments={transcript.segments} renderText={renderText}
+      <LiveTranscriptEngine meetingId={meeting.id} segments={transcript.segments} gaps={transcript.gaps} renderText={renderText}
         {...(meeting.deleted ? { emptyLabel: "This meeting’s transcript and recording were deleted." } : {})} />
       {meetingId && <TranscriptExtend containerRef={box} meeting={meetingId} segments={transcript.segments} />}
     </div>

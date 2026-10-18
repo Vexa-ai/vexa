@@ -18,7 +18,7 @@ vi.mock("../chatStream", async (importOriginal) => ({
 
 import { Chat } from "../chat";
 import { ServicesProvider, createContainer, reg, CommandServiceId, OPEN_MEETING_EVENT, type CommandService } from "../../platform";
-import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
+import { LayoutServiceId, createLayoutService } from "../../platform/layout";
 import { sniffMeetingBundle } from "../meetingBundleSniff";
 import { mayBeBundle } from "../ChatBundleImport";
 

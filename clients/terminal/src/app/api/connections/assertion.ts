@@ -13,7 +13,7 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto
 import { readFile } from 'node:fs/promises';
 
 export const ASSERTION_HEADER = 'X-Vexa-Assertion';
-export const ROLES = ['agent', 'human', 'git'] as const;
+export const ROLES = ['agent', 'human', 'git', 'bots', 'sensors', 'signals'] as const;
 export type Role = (typeof ROLES)[number];
 export const MAX_AGE_S = 30;
 export const MAX_SKEW_S = 5;

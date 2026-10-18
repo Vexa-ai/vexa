@@ -1,0 +1,148 @@
+/** apiClient — the ONE fail-loud HTTP helper for the terminal's scoped data-access (P18).
+ *
+ *  A non-ok response (4xx/5xx — e.g. a backend 422, or the gateway down → 502) or a network failure
+ *  THROWS `ApiError` with the status + detail, instead of being swallowed into empty data. That is the
+ *  whole point: a failure must PROPAGATE to the surface and be shown to the user — never hidden as
+ *  "no data" (which is exactly what made this session's stale-backend 422s and dry STT invisible).
+ *  A legit-empty result (a 200 whose body is `[]`/`{}`) is NOT an error and returns normally.
+ *
+ *  Being the single client→API chokepoint, this is also where we report API usage to Google Analytics
+ *  (one `api_request` event per call: normalized endpoint · method · status · ok). GA is opt-in, so the
+ *  track() call no-ops unless a measurement id was configured. NOTE: this captures only WEB-CLIENT calls
+ *  — the authoritative cross-caller API-usage signal is the gateway's per-request logs. */
+import { track, endpointLabel } from "@/platform/analytics";
+import { noteAuthFailure } from "@/platform/session";
+import { redactSecrets } from "./redactSecrets";
+
+export class ApiError extends Error {
+  /** `detail` is the FLATTENED operator string (what goes in the message / the console). `body` is
+   *  the parsed failure body as it came off the wire, kept because some failures are STRUCTURED and
+   *  flattening them destroys the only thing the user needs: a `403
+   *  {"detail":{"code":"service_not_allowed","reason":…,"message":…,"action_url":…}}` is the
+   *  deciding service refusing in its own words, and once it is a string it is indistinguishable
+   *  from a permissions fault (see `surfaces/serviceDenial.ts`). Undefined when the body was absent
+   *  or not JSON. */
+  constructor(
+    public readonly status: number,
+    public readonly detail: string,
+    public readonly url: string,
+    public readonly body?: unknown,
+  ) {
+    super(`${url} → ${status || "network"}${detail ? `: ${detail}` : ""}`);
+    this.name = "ApiError";
+  }
+}
+
+/** What a surface renders for a failure: the user-truth headline + the full plumbing string.
+ *  `headline` is user vocabulary; `detail` is the untranslated fault (ApiError.message / the raw
+ *  error text) for the operator channel — a `title=` affordance and the browser console. */
+export interface PresentedError { headline: string; detail: string }
+
+const NETWORK_HEADLINE = "Couldn't reach the Vexa server — check that the stack is running.";
+const GENERIC_HEADLINE = "Something went wrong — details are in the browser console.";
+/** The one sentence a dead session gets, wherever it surfaces. Shared with the login gate's card so
+ *  the backstop headline and the full signed-out state say the same thing. */
+export const SESSION_ENDED_HEADLINE = "Your session ended — sign in again.";
+
+// A fetch()-level network failure surfaces as one of these engine-specific messages.
+const NETWORK_MESSAGE = /failed to fetch|networkerror|load failed|network request failed/i;
+
+/** Is a backend `detail` a human sentence we can show verbatim (the backend's own user-facing
+ *  reason), rather than a serialized payload? Deliberately conservative: prose has a space and
+ *  doesn't open like JSON/markup. */
+function isProse(detail: string): boolean {
+  const t = detail.trim();
+  return t.length > 0 && t.length <= 300 && !/^[{[<]/.test(t) && t.includes(" ");
+}
+
+/** `message` of a `{detail: {code: string, message: string}}` body, or null. */
+function structuredMessage(body: unknown): string | null {
+  const d = (body as { detail?: unknown } | null | undefined)?.detail as { code?: unknown; message?: unknown } | undefined;
+  if (!d || typeof d !== "object") return null;
+  return typeof d.code === "string" && typeof d.message === "string" ? d.message : null;
+}
+
+/** The presenter seam (issue #533): every terminal surface renders `presentError(e).headline`,
+ *  never `e.message`. Maps the STRUCTURED fields of an `ApiError` to user vocabulary; the typed
+ *  plumbing is preserved intact on the returned `detail` AND echoed to the console (P18's
+ *  observable channel keeps the full string — presentation never mutates the error). */
+export function presentError(e: unknown): PresentedError {
+  if (e instanceof ApiError) {
+    // P15 AT THE PRESENTER. `detail` is rendered by every surface AND echoed to the console, and on
+    // 2026-09-02 it carried a GitHub PAT (git's "repository '<the token>' does not exist", from a
+    // token pasted into the attach dialog's repository field). The server scrubs its own text now;
+    // this is the second line, because a client cannot know which backend, proxy or fetch failure
+    // will hand it a string containing a secret.
+    const detail = redactSecrets(e.message);
+    console.warn("api failure", detail);
+    if (e.status === 0) return { headline: NETWORK_HEADLINE, detail };
+    if (e.status === 502 || e.status === 504) return { headline: "The Vexa server can't reach a backend service right now.", detail };
+    // 401 is the session, not the request: the credential this tab holds is no longer accepted, so
+    // the honest headline names the SESSION. The login gate normally replaces the whole surface
+    // with the signed-out card before this is read (see @/platform/session) — this copy is the backstop
+    // for anything that renders in the gap.
+    if (e.status === 401) return { headline: SESSION_ENDED_HEADLINE, detail };
+    if (e.status === 403) return { headline: "Your key doesn't have access to this.", detail };
+    if (e.status === 429) return { headline: "Rate limit hit — try again in a moment.", detail };
+    // Remaining 4xx/5xx: a prose `detail` is the backend's own user-facing reason — pass it
+    // through VERBATIM (e.g. a typed transcription 503). A payload-shaped detail stays operator-only.
+    if (isProse(e.detail)) return { headline: redactSecrets(e.detail).trim(), detail };
+    // A STRUCTURED 4xx `{detail: {code, message}}` (e.g. a git provider's `token_rejected`): the
+    // `message` is the backend's own sentence, so it is the headline when it reads as prose.
+    if (e.status >= 400 && e.status < 500) {
+      const sm = structuredMessage(e.body);
+      if (sm && isProse(sm)) return { headline: redactSecrets(sm).trim(), detail };
+    }
+    return { headline: `The request failed (${e.status}).`, detail };
+  }
+  if (e instanceof Error) {
+    const detail = redactSecrets(e.message || String(e));
+    console.warn("api failure", detail);
+    if (NETWORK_MESSAGE.test(detail)) return { headline: NETWORK_HEADLINE, detail };
+    return isProse(detail) ? { headline: detail.trim(), detail } : { headline: GENERIC_HEADLINE, detail };
+  }
+  const detail = redactSecrets(e);
+  console.warn("api failure", detail);
+  return { headline: GENERIC_HEADLINE, detail };
+}
+
+/** GET/POST… JSON, loud on failure. status 0 = the request never completed (network/DNS/abort). */
+export async function getJson<T = unknown>(url: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method || "GET").toUpperCase();
+  const usage = (status: number, ok: boolean) =>
+    track("api_request", { endpoint: endpointLabel(url), method, status, ok });
+
+  let r: Response;
+  try {
+    r = await fetch(url, init);
+  } catch (e) {
+    usage(0, false);  // network/DNS/abort — never reached the gateway
+    throw new ApiError(0, e instanceof Error ? e.message : "network error", url);
+  }
+  usage(r.status, r.ok);
+  if (!r.ok) {
+    // An auth-shaped refusal is reported to the session watcher BEFORE the throw, so the login gate
+    // can confirm and take over the screen even if this particular caller swallows the error.
+    noteAuthFailure(r.status, url);
+    throw await readApiFailure(r, url);
+  }
+  return (await r.json()) as T;
+}
+
+/** Turn a non-ok `Response` into the typed `ApiError`. Reads the body ONCE and keeps it both ways:
+ *  flattened into `detail` for the operator channel, and intact on `body` for the presenters that
+ *  need the structure (the service-authority denial mapping). Shared so the surfaces that call
+ *  `fetch` directly — the join/bot-spawn edges — produce the same error object `getJson` does. */
+export async function readApiFailure(r: Response, url: string = r.url): Promise<ApiError> {
+  let detail = "";
+  let body: unknown;
+  try {
+    body = (await r.json()) as unknown;
+    const b = body as { detail?: unknown; error?: unknown } | null;
+    const d = b?.detail ?? b?.error;
+    detail = typeof d === "string" ? d : d != null ? JSON.stringify(d).slice(0, 200) : "";
+  } catch {
+    /* body wasn't JSON — the status alone is the signal */
+  }
+  return new ApiError(r.status, detail, url, body);
+}

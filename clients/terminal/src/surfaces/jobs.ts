@@ -36,6 +36,8 @@ export type JobRec = {
    *  Since Vexa-ai/vexa#1610 a queued row is also what a SERVER-HELD submission looks like, and what
    *  a same-target act waiting behind another looks like — three ways to be waiting, one row. */
   queued?: boolean;
+  /** A queued MESSAGE's whole text (the person's own words), for its pending bubble. */
+  text?: string;
   /** THIS ROW IS THE SERVER'S (Vexa-ai/vexa#1610) — it came from the session's pending list, not
    *  from a job this connection watched start. It is what `inbox.reconcileInbox` replaces wholesale
    *  on every refresh, and the reason a reload shows the same queue: nothing here is remembered. */

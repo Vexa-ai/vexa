@@ -24,8 +24,8 @@
  *  Pure, except the one lookup, which is injected — so the three kinds of workspace (a desk, a
  *  shared workspace, the company layer) and the refusals are unit-tested with no DOM and no server.
  */
-import { isWorkspaceRouteId, type WorkspaceRoute } from "../app/workspaceRoute";
-import type { WorkspaceIdentity } from "../surfaces/workspaceApi";
+import { isWorkspaceRouteId, type WorkspaceRoute } from "../platform/workspaceRoute";
+import type { WorkspaceIdentity } from "../data/workspaceApi";
 import { isWorkspaceReadme } from "./workspaceReadme";
 import type { Chat } from "./chats";
 import type { Page } from "./types";

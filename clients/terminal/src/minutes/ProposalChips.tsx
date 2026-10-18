@@ -13,15 +13,21 @@
  *  else's turn decided you had, so it carries two things the others do not need: its SOURCE, in
  *  human words, rendered beside the act — and a `×`, because a list you cannot say no to stops
  *  being a list and becomes a nag. Dismissing does NOT spend the row: the item leaves, the rest of
- *  the offer stays exactly where it was. */
-import type { CSSProperties } from "react";
-import type { Proposal } from "./proposals";
+ *  the offer stays exactly where it was.
+ *
+ *  EVERY CHIP LEADS WITH AN ICON (founder 2026-10-13: "hints should have icons") — the entity chips'
+ *  icon slot (`vx-chip-icon`: 14px lucide, stroke 1.75, the dim text colour), one per kind, so the
+ *  act reads before the words: a calendar for prep, mail for the email check, a plug for connect, a
+ *  mic for a voice note. The label is what is cut at phone width, never the icon. */
+import type { CSSProperties, ReactNode } from "react";
+import { CalendarClock, FolderPlus, ListTodo, Mail, Phone, Plug, Sparkles, Users } from "lucide-react";
+import type { Proposal, ProposalKind } from "./proposals";
 import { surface, type as ty } from "./tokens";
 
 const chipS: CSSProperties = {
   ...ty.chip, color: "var(--t2)", background: surface.raised, border: "1px solid var(--line)",
   borderRadius: 999, padding: "6px 13px", cursor: "pointer", lineHeight: 1.4, textAlign: "left",
-  maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+  maxWidth: "100%", display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0,
   transition: "background .12s, color .12s, border-color .12s",
 };
 
@@ -39,6 +45,20 @@ const dismissS: CSSProperties = {
 /** Where a jtbd chip says what it came from. Dim, inside the same button — one click target, and
  *  the source is context for the act rather than a second thing to read. */
 const sourceS: CSSProperties = { color: "var(--t3)", marginLeft: 6 };
+/** The label: the part a narrow row cuts, with an ellipsis. Layout only. */
+const labelS: CSSProperties = { minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+
+const ICON = { size: 14, strokeWidth: 1.75 } as const;
+const KIND_ICON: Record<ProposalKind, ReactNode> = {
+  prep: <CalendarClock {...ICON} />,
+  "check-email": <Mail {...ICON} />,
+  connect: <Plug {...ICON} />,
+  call: <Phone {...ICON} />,
+  "shared-workspace": <Users {...ICON} />,
+  jtbd: <ListTodo {...ICON} />,
+  setup: <FolderPlus {...ICON} />,
+  home: <Sparkles {...ICON} />,
+};
 
 function hoverIn(el: HTMLElement) {
   el.style.background = surface.raisedHi; el.style.color = "var(--t1)"; el.style.borderColor = "var(--line2)";
@@ -61,8 +81,11 @@ export function ProposalChips(
       {items.map((p) => {
         const body = (
           <>
-            {p.label}
-            {p.source ? <span style={sourceS}>· {p.source}</span> : null}
+            <span className="vx-chip-icon" aria-hidden="true">{KIND_ICON[p.kind]}</span>
+            <span data-proposal-label style={labelS}>
+              {p.label}
+              {p.source ? <span style={sourceS}>· {p.source}</span> : null}
+            </span>
           </>
         );
         if (p.itemId && onDismiss) {

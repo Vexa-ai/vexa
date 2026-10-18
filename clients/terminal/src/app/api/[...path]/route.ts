@@ -22,6 +22,13 @@ export const dynamic = "force-dynamic";
 
 const GATEWAY_URL = (process.env.GATEWAY_URL || "http://127.0.0.1:18056").replace(/\/$/, "");
 
+/** Image types the proxy passes through as bytes. Never SVG (it can carry script). */
+/** The one route whose SVG may reach the browser as an image: a workspace's image, which agent-api
+ *  rebuilt from an allowlist (no script, handlers, foreignObject or external references) before
+ *  storing it. Still served under the sandbox CSP below. */
+const SANITISED_SVG_ROUTE = /^workspaces\/[^/]+\/identity\/icon$/;
+const RASTER_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/x-icon", "image/vnd.microsoft.icon"]);
+
 // Two domains behind ONE authenticated edge (the gateway):
 //   • meetings · transcripts · bots  → the gateway ROOT (/meetings, …) — meeting-api behind it.
 //   • everything else (chat · sessions · routines · workspace · models · …) → the gateway's /agent/*
@@ -79,6 +86,14 @@ async function forward(req: NextRequest, params: Promise<{ path: string[] }>): P
       return new Response(null, { status: upstream.status, headers: { "Cache-Control": "no-cache" } });
     }
 
+    // A browser session's live view: the noVNC web client (HTML/JS/CSS/images), bytes and type as sent.
+    if (/^bot-accounts\/sessions\/[a-f0-9]{32}\/view\//.test(joined)) {
+      const viewHeaders = new Headers({ "Cache-Control": "private, no-store" });
+      const value = upstream.headers.get("Content-Type");
+      if (value) viewHeaders.set("Content-Type", value);
+      return new Response(upstream.body, { status: upstream.status, headers: viewHeaders });
+    }
+
     if (/^recordings\/[^/]+\/media\/[^/]+\/raw$/.test(joined)) {
       const mediaHeaders = new Headers({ "Cache-Control": "private, no-store" });
       // Content-Disposition carries a `?download=1` save (the server names the file).
@@ -87,6 +102,19 @@ async function forward(req: NextRequest, params: Promise<{ path: string[] }>): P
         if (value) mediaHeaders.set(name, value);
       }
       return new Response(upstream.body, { status: upstream.status, headers: mediaHeaders });
+    }
+
+    // AN IMAGE THE SERVER ANSWERS (a person's photo, a workspace image, a company logo — UI 15g)
+    // goes through as the same bytes. Read as text it would be mangled. Raster types only — an SVG
+    // can carry script — except a workspace's image, which agent-api sanitised (SANITISED_SVG_ROUTE). Cached privately — a
+    // shared cache never holds a face.
+    const imageType = contentType.split(";")[0].trim().toLowerCase();
+    if (upstream.ok && (RASTER_TYPES.has(imageType) || (imageType === "image/svg+xml" && SANITISED_SVG_ROUTE.test(joined)))) {
+      const imageHeaders = new Headers({ "Content-Type": imageType, "Cache-Control": "private, max-age=30",
+        "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'; sandbox" });
+      const etag = upstream.headers.get("ETag");
+      if (etag) imageHeaders.set("ETag", etag);
+      return new Response(await upstream.arrayBuffer(), { status: upstream.status, headers: imageHeaders });
     }
 
     return new Response(await upstream.text(), {

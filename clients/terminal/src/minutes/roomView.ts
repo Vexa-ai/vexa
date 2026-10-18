@@ -49,6 +49,15 @@ export function pageForDocRef(
 /** The doc tab a MEETING ref falls back to when no row in the list matches it — a meeting this
  *  account cannot see, or one the list has not caught up with. The canvas needs a row id to fetch
  *  anything, so there is nothing to render; its notes page is addressable regardless. */
+/** A CLICK INSIDE A CHAT NEVER REPLACES THE CHAT (founder rule 2026-10-16): a meeting reference
+ *  opens the meeting itself — transcript and notes — in the right panel; one this browser does not
+ *  know yet opens its notes page there. */
+export function meetingRefPage(ref: string, meetings: { id: number | string; native_id?: string; title?: string | null }[]): Page {
+  const native = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
+  const m = meetings.find((x) => x.native_id === native || String(x.id) === ref);
+  return m ? { kind: "meeting", path: String(m.id), label: (m.title || "").trim() || MEETING_VIEW_LABEL } : pageForMeetingRef(ref);
+}
+
 export function pageForMeetingRef(ref: string): Page {
   const native = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
   return { path: `kg/entities/meeting/${native}.md`, label: native };
@@ -185,9 +194,18 @@ export function pageForArtifact(ev: { workspace?: string; path?: string; label?:
 export function artifactViewEffect(
   ev: { workspace?: string; path?: string; focus?: boolean; pin?: boolean },
   readerChoseFocus: boolean,
+  meetingId?: string | null,
 ): { view?: Page; pin?: Page } | null {
   const pg = pageForArtifact(ev);
   if (!pg) return null;
+  // A MEETING'S NOTE IS NEVER ITS OWN TAB (#1783, founder: "we do not want this at all"). The note
+  // is embedded in the meeting view, so a turn that wrote it moves the view to the MEETING — in a
+  // chat that has one — and otherwise moves nothing. It is never pinned as a page: from Files it is
+  // a plain page like any other, opened by the person.
+  if (pg.kind !== "meeting" && isMeetingNotePath(pg.path)) {
+    const id = String(meetingId ?? "").trim();
+    return ev.focus === true && !readerChoseFocus && id ? { view: meetingView(id) } : null;
+  }
   // TWO INDEPENDENT ASKS. `pin` is about what STAYS in the strip; `focus` is about what is IN
   // FRONT. A turn may want either, both or neither, so they are decided separately rather than one
   // implying the other — a page pinned without focus is the whole point of pinning without
@@ -310,6 +328,13 @@ export function meetingChatFront(list: Page[], picked: Page | undefined): Page |
  *  outlive the fix on exactly the desks that hit the bug. `openChat` heals that one entry against
  *  this predicate and touches nothing else — positive evidence about a path we know we minted,
  *  never a tidy-up of somebody's panel. */
+/** A meeting's note as the minter names it (`meeting_note.is_note_path`): one segment, `.md`, under
+ *  `kg/entities/meeting/`, not the folder's index. */
+export function isMeetingNotePath(path?: string | null): boolean {
+  const m = /^(?:\.\/)?kg\/entities\/meeting\/([A-Za-z0-9][A-Za-z0-9._-]{0,120}\.md)$/.exec(String(path ?? "").trim());
+  return !!m && m[1] !== "index.md";
+}
+
 export function isRetiredNotePath(path: string, native?: string | null): boolean {
   const n = String(native ?? "").trim();
   return !!n && path === `kg/entities/meeting/${n}.md`;
@@ -435,4 +460,14 @@ export function sharedArrivalFront(pages: Page[], front?: "meeting"): Page | nul
   return pages.find((pg) => pg.kind === "meeting")
     ?? pages.find((pg) => pg.permanent)
     ?? null;
+}
+
+/** THE RIGHT PANEL FOLLOWS THE CHAT IN THE CENTRE (founder 2026-10-16): what this chat last had in
+ *  front; else, by default, its target workspace's page; else nothing (the panel stays closed). */
+export function panelForChat(p: { list: Page[]; front: Page | null; target: string | undefined; targetName: string }): { list: Page[]; front: Page | null } {
+  if (p.front || p.list.length) return { list: p.list, front: p.front };
+  const t = (p.target ?? "").trim();
+  if (!t || t === "personal" || t === "_global") return { list: [], front: null };
+  const page: Page = { path: ".workspace", slug: t, label: p.targetName || t };
+  return { list: [page], front: page };
 }

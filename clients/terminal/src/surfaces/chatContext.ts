@@ -7,7 +7,7 @@
  *  the client contributes only its timezone, which surface it's on, and the user's explicit
  *  include toggles (persisted per chat session).
  */
-import type { ActiveTab } from "../workbench/layout";
+import type { ActiveTab } from "../platform/layout";
 
 export type FocusPayload =
   | { kind: "meeting"; native_id: string; meeting_id?: string; platform?: string;

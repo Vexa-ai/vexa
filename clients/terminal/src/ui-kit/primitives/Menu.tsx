@@ -9,7 +9,8 @@
  *    `{ key, label, onSelect, icon?, hint?, checked?, danger?, disabled?, separatorBefore? }`.
  *  `checked` (true/false) makes it a `menuitemradio`; absent, a plain `menuitem`. Destructive items
  *  (`danger`) use the danger text colour and are expected below a separator. */
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Check } from "lucide-react";
 
 export type MenuItem = {
@@ -52,6 +53,26 @@ export function Menu({ label, trigger, items, empty, align = "start", placement 
   const list = useRef<HTMLDivElement>(null);
   const firstFocus = useRef<"first" | "last">("first");
   const id = useId();
+
+  // IN A PORTAL, INSIDE THE VIEWPORT (founder 2026-10-16: a panel's edge cut a menu off): placed from
+  // its button, then shifted or flipped so every edge stays on screen.
+  const [pos, setPos] = useState<CSSProperties | null>(null);
+  useLayoutEffect(() => {
+    if (!open) { setPos(null); return; }
+    const b = btn.current?.getBoundingClientRect();
+    const m = list.current?.getBoundingClientRect();
+    if (!b || !m) return;
+    const vw = window.innerWidth || document.documentElement.clientWidth;
+    const vh = window.innerHeight || document.documentElement.clientHeight;
+    const M = 8, GAP = 4;
+    let left = align === "end" ? b.right - m.width : b.left;
+    left = Math.max(M, Math.min(left, vw - m.width - M));
+    const below = b.bottom + GAP, above = b.top - GAP - m.height;
+    let top = placement === "top" ? above : below;
+    if (top + m.height > vh - M && above >= M) top = above;
+    if (top < M) top = Math.min(below, Math.max(M, vh - m.height - M));
+    setPos({ position: "fixed", top, left, right: "auto", bottom: "auto" });
+  }, [open, align, placement]);
 
   const itemsEls = () => Array.from(list.current?.querySelectorAll<HTMLElement>("[role^=menuitem]:not([aria-disabled=true])") ?? []);
   const close = useCallback((refocus: boolean) => { setOpen(false); if (refocus) btn.current?.focus(); }, []);
@@ -105,9 +126,10 @@ export function Menu({ label, trigger, items, empty, align = "start", placement 
         onClick={() => { firstFocus.current = "first"; setOpen((v) => !v); }} onKeyDown={onTriggerKey} {...triggerData}>
         {trigger ?? label}
       </button>
-      {open && (
-        <div ref={list} id={id} role="menu" aria-label={label} className="vx-menu"
-          data-align={align} data-placement={placement} onKeyDown={onListKey}>
+      {open && createPortal(
+        <div ref={list} id={id} role="menu" aria-label={label} className="vx-menu" data-portal=""
+          data-align={align} data-placement={placement} onKeyDown={onListKey}
+          style={pos ?? { position: "fixed", top: 0, left: 0, visibility: "hidden" }}>
           {items.length === 0 && empty ? <div className="vx-menu-empty">{empty}</div> : null}
           {items.map((it) => (
             <div key={it.key} style={{ display: "contents" }}>
@@ -127,7 +149,7 @@ export function Menu({ label, trigger, items, empty, align = "start", placement 
             </div>
           ))}
           {footer ? <div className="vx-menu-foot">{footer}</div> : null}
-        </div>
+        </div>, document.body,
       )}
     </span>
   );

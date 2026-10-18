@@ -2,7 +2,7 @@
  *  gateway (`/api/user/models`, `/api/user/transcription` — admin-api behind it, secrets masked
  *  on every read-back). The GLOBAL defaults ride the admin-gated terminal route
  *  (`/api/admin/settings/{key}` — 404 for non-admins, indistinguishable from absent). */
-import { ApiError } from "./apiClient";
+import { ApiError } from "../data/apiClient";
 
 export type ModelPrefs = {
   mode?: "subscription" | "custom" | null;

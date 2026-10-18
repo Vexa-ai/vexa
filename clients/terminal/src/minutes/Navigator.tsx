@@ -19,7 +19,10 @@
  *  (Vexa-ai/vexa#1585): *"no point of showing workspaces not available to you"*. There is no greyed
  *  row here any more, so every row expands and every row wears a name; which workspaces qualify is
  *  decided once, in `./navigatorApi`. */
+import { Identity } from "../ui-kit/Identity";
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import { surface } from "./tokens";
+import "./minutes.css";
 import { ChevronRight, MoreHorizontal, SquareArrowOutUpRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon, IconButton, SectionLabel } from "../ui-kit";
@@ -28,6 +31,8 @@ import { DeletePageDialog, offerDelete, pageTitle, type PageTarget } from "./pag
 import { WORKSPACE_COMMIT_EVENT } from "../platform";
 import type { Page } from "./types";
 import { navigateView } from "./roomView";
+import { useDesktopItems, useDesktopOn, writeDesktopDrag } from "./desktop/useDesktopItems";
+import { useCardItems } from "./desktop/useCardItems";
 import {
   MAX_HITS, filterByName, frontPagePath, loadNavTree, loadNavWorkspaces, parseQuery, treeFrom,
   type NavWorkspace, type TreeNode,
@@ -38,6 +43,11 @@ import { useLiveMeetings } from "../surfaces/liveMeetings";
 
 /** FIXED (founder: a "left-side bar", not a second resizable pane). The pages panel's own drag is
  *  the one width the reader sets here; a rail with its own handle would put two grips on one edge. */
+// The workspace row's own controls (the calls count, the README caret) keep their inline look.
+const nameS: CSSProperties = { flex: "1 1 0%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const caret = (open: boolean): CSSProperties => ({ flex: "none", width: 10, transform: open ? "rotate(90deg)" : "none" });
+const hoverOn = (e: { currentTarget: HTMLElement }) => { e.currentTarget.style.background = surface.raised; };
+const hoverOff = (e: { currentTarget: HTMLElement }) => { e.currentTarget.style.background = "transparent"; };
 export const NAV_W = 236;
 
 
@@ -53,6 +63,8 @@ export function Navigator(p: {
   workspaces?: NavWorkspace[];
   /** test seam: file lists by workspace key. A key present here is never fetched. */
   trees?: Record<string, string[]>;
+  /** open on this folder of this workspace — a page's path line asked for it ("" = its root) */
+  reveal?: { slug?: string; dir: string; at?: number } | null;
 }) {
   const [workspaces, setWorkspaces] = useState<NavWorkspace[] | null>(p.workspaces ?? null);
   const [trees, setTrees] = useState<Record<string, string[]>>(p.trees ?? {});
@@ -97,6 +109,23 @@ export function Navigator(p: {
     const files = await loadNavTree(ws);
     setTrees((prev) => ({ ...prev, [ws.key]: files }));
   }, []);
+
+  // A PAGE'S PATH LINE OPENS FILES ON ONE OF ITS FOLDERS: that workspace open, each folder down
+  // to it expanded.
+  useEffect(() => {
+    const r = p.reveal;
+    if (!r || !workspaces) return;
+    const ws = workspaces.find((w) => (w.slug ?? "") === (r.slug ?? "")) ?? (r.slug ? undefined : workspaces.find((w) => !w.slug));
+    if (!ws) return;
+    setOpenWs((prev) => new Set(prev).add(ws.key));
+    void ensureTree(ws);
+    const parts = r.dir.split("/").filter(Boolean);
+    setOpenDirs((prev) => {
+      const next = new Set(prev);
+      parts.forEach((_, i) => next.add(`${ws.key}|${parts.slice(0, i + 1).join("/")}`));
+      return next;
+    });
+  }, [p.reveal, workspaces, ensureTree]);
 
   // A TURN COMMITTED, AND THE TREE MAY BE ONE PAGE SHORTER (Vexa-ai/vexa#1621). `workspace_delete`
   // and `workspace_move` take a page OUT of a workspace — the first acts this rail has ever had to
@@ -180,10 +209,14 @@ export function Navigator(p: {
   // THE TREE ON THE ROW CLASSES (guidelines §4.8): 28px rows, the name ellipsizes, depth is an
   // indent the stylesheet reads from `--depth`; the "open in a tab" action appears on hover and
   // focus and keeps its space; carets and the tab icon are lucide, not text glyphs.
+  const desktopOn = useDesktopOn();
   const depthStyle = (depth: number) => ({ "--depth": depth } as CSSProperties);
+  // A FILE ROW CAN BE DRAGGED ONTO THE DESKTOP'S Files (#1783) — never within the tree (27.6).
   const fileRow = (ws: NavWorkspace, path: string, label: string, depth: number) => (
     <div key={`${ws.key}|${path}`} className="vx-row2 vx-nav-row">
       <button data-nav-file={`${ws.key}|${path}`} title={ws.slug ? `${ws.slug} › ${path}` : path}
+        draggable={desktopOn || undefined}
+        onDragStart={desktopOn ? (e) => { e.dataTransfer.effectAllowed = "copy"; writeDesktopDrag(e, { kind: "file", slug: ws.slug, path }); } : undefined}
         onClick={() => go(ws, path)}
         onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); keep(ws, path); } }}
         onContextMenu={(e) => { e.preventDefault(); openMenu(ws, path, e.clientX, e.clientY); }}
@@ -206,8 +239,14 @@ export function Navigator(p: {
   function openMenu(ws: NavWorkspace, path: string, x: number, y: number) {
     void offerDelete(ws.slug).catch(() => false).then((canDelete) => setMenu({ x, y, ws, path, canDelete }));
   }
+  const desktopItems = useDesktopItems();
+  const cardItems = useCardItems();
   const menuItems = (m: NonNullable<typeof menu>): ContextMenuItem[] => [
     { id: "open-tab", label: "Open in a tab", letter: "t", onSelect: () => keep(m.ws, m.path) },
+    // Add to desktop / Remove from desktop (desktop ADR D1, 15e); the desk row has no slug
+    ...desktopItems({ kind: "file", slug: m.ws.slug, path: m.path }),
+    // Make a card (desktop ADR D2, 15c/15d): a CRM card about this page
+    ...cardItems({ kind: "page", slug: m.ws.slug, path: m.path, title: pageTitle(m.path) }),
     ...(m.canDelete ? [{ id: "delete", label: "Delete…", detail: m.path, mono: true, danger: true, letter: "d", onSelect: () => setDeleting({
       path: m.path, slug: m.ws.slug, title: pageTitle(m.path),
       workspace: m.ws.kind === "desk" ? "your personal workspace" : m.ws.name,
@@ -254,7 +293,7 @@ export function Navigator(p: {
 
   return (
     <div data-navigator className="vx-nav">
-      <div style={{ flex: "none", padding: "8px 8px 0" }}>
+      <div className="vx-nav-switch-wrap" style={{ flex: "none" }}>
         <NavSwitch value={view} onChange={setView} />
       </div>
       <div className="vx-nav-search">
@@ -318,8 +357,9 @@ export function Navigator(p: {
                       className="vx-row2-main vx-nav-entry vx-nav-ws" style={depthStyle(0)}
                       onMouseEnter={hoverOn} onMouseLeave={hoverOff}>
                       <span data-nav-ws-caret={ws.key} title={open ? "Collapse" : "Expand"}
-                        style={{ ...caret(open), padding: "4px 3px", margin: "-4px -3px" }} aria-hidden>▶</span>
-                      <span style={{ ...nameS, paddingLeft: 2 }}>{ws.name}</span>
+                        className="vx-nav-ws-caret" style={caret(open)} aria-hidden>▶</span>
+                      <Identity kind="workspace" id={ws.slug ?? "personal"} slug={ws.slug ?? "personal"} name={ws.name} size={16} className="vx-id-nav" />
+                      <span className="vx-nav-ws-name" style={nameS}>{ws.name}</span>
                     </button>
                     {/* THE MEETING ↔ WORKSPACE LINK, seen from the folder: the calls bound to this
                         workspace (the meeting's own `workspace_id`), one click to list them. */}
@@ -327,7 +367,7 @@ export function Navigator(p: {
                       <button type="button" data-nav-ws-calls={ws.key} title={`${calls} call${calls === 1 ? "" : "s"} in ${ws.name}`}
                         aria-label={`Show ${calls} call${calls === 1 ? "" : "s"} in ${ws.name}`}
                         onClick={() => { setCallsWs(ws.key); setViewState("calls"); saveNavView("calls"); }}
-                        style={{ ...ty.meta, position: "absolute", right: 4, top: 4, display: "flex", alignItems: "center", gap: 3, background: "transparent", border: "none", cursor: "pointer", padding: "1px 3px", borderRadius: 4 }}>
+                        className="vx-nav-ws-calls" style={{ position: "absolute", right: 4, top: 4, display: "flex", alignItems: "center", gap: 3 }}>
                         <Icon name="mic" size={10} />{calls}
                       </button>
                     )}

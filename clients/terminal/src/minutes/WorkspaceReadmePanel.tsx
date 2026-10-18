@@ -77,17 +77,18 @@
  *     rather than rendering as a zero — and, since #1628, *no repo attached* is a STATE and not a
  *     failure: the red line is reserved for a read that actually broke, and it names what broke.
  */
+import { Identity } from "../ui-kit/Identity";
 import {
   useCallback, useEffect, useLayoutEffect, useRef, useState,
   type CSSProperties, type ReactNode,
 } from "react";
 import { Icon } from "../ui-kit";
-import { presentError } from "../surfaces/apiClient";
+import { presentError } from "../data/apiClient";
 import {
   detachWorkspaceRemote, gitRemoteStatus, pullWorkspace, pushWorkspace,
   readWorkspaceGitDiff,
   type GitCommit, type WorkspaceMember,
-} from "../surfaces/workspaceApi";
+} from "../data/workspaceApi";
 import { ASK_CHAT_EVENT } from "../platform";
 import { AttachRepo } from "./AttachRepo";
 import { postIntent } from "./extend";
@@ -95,7 +96,7 @@ import { POLICIES_PATH, POLICIES_WORKSPACE } from "./PoliciesAct";
 import { useOpenEntity } from "../ui-kit/docRefs";
 import { surface, type as ty } from "./tokens";
 import {
-  actDisplay, actInstruction, avatarPeople, eyebrow, initialsOf, kindFact, lastChangeParts,
+  actDisplay, actInstruction, avatarPeople, eyebrow, kindFact, lastChangeParts,
   lastChangeSentence, pageCount, peopleClause, stripActs,
   type StripAct, type FrontPageFacts,
 } from "./workspaceFrontPage";
@@ -103,6 +104,7 @@ import {
   DESK_SLUG, HISTORY_PAGE, loadHistory, loadWorkspaceFacts, roleLabel, type WorkspaceFacts,
 } from "./workspaceReadme";
 import { removedPathOf, restoreFromHistory, useCanDelete } from "./pageDelete";
+import "./minutes.css";
 
 /** THE STRIP IS NOT A CARD ANY MORE (#1634 rule 5: *"grey, small, sentence-like — the people-and-
  *  last-edit line under a shared document's title. Body starts right under."*). A bordered panel
@@ -174,16 +176,6 @@ const rowFlow: CSSProperties = {
   display: "flex", alignItems: "flex-start", gap: "4px 8px", flexWrap: "wrap", minWidth: 0,
 };
 const saidS: CSSProperties = { flex: "1 1 180px", minWidth: 0 };
-/** ONE FACE — 22px, initials, `-6px` overlap, a ring in the surface colour so the stack reads as
- *  cards rather than as a smear (#1634's design spec, point 3). */
-const avatarS: CSSProperties = {
-  width: 22, height: 22, borderRadius: "50%", flex: "none",
-  display: "inline-flex", alignItems: "center", justifyContent: "center",
-  fontFamily: "var(--sans)", fontSize: 9.5, fontWeight: 600, letterSpacing: ".02em",
-  background: surface.raisedHi, color: "var(--t2)",
-  border: "1px solid var(--line)", boxShadow: "0 0 0 2px var(--sidebar)",
-  marginLeft: -6, position: "relative",
-};
 /** THE KIND PILL — 12px, a hairline, an outline icon. One per kind, or none. */
 const pillS: CSSProperties = {
   ...ty.chip, display: "inline-flex", alignItems: "center", gap: 4, flex: "none",
@@ -261,11 +253,10 @@ function CommitRow(p: { c: GitCommit; open: boolean; diff: string | null; onOpen
     <div data-ws-commit={p.c.sha} className="mb-0_5" style={{ position: "relative" }}>
       {removed && (
         <button data-ws-restore={removed} onClick={() => p.onRestore?.(removed)} title={`Put ${removed} back`}
-          style={{ ...ty.chip, position: "absolute", right: 4, top: 2, zIndex: 1, background: surface.raisedHi, border: "1px solid var(--line)",
-                   borderRadius: 6, padding: "1px 8px", color: "var(--accent)", cursor: "pointer" }}>Restore</button>
+          className="vx-ws-restore" style={{ position: "absolute", right: 4, top: 2 }}>Restore</button>
       )}
       <button onClick={p.onOpen} title={`${files.length} file(s)`}
-        className="bd-none r-md pt-0_5 pr-1 pb-0_5 pl-1 c-1" style={{ ...ty.body, display: "block", width: "100%", textAlign: "left", background: p.open ? surface.raisedHi : "transparent", cursor: "pointer" }}>
+        className="bd-none r-md pt-0_5 pr-1 pb-0_5 pl-1 c-1 vx-ws-commit-btn" data-open={p.open ? "" : undefined} style={{ ...ty.body, display: "block", width: "100%", textAlign: "left", cursor: "pointer" }}>
         <span style={{ display: "flex", gap: 7, alignItems: "baseline", minWidth: 0 }}>
           <span style={{ ...ty.mono, flex: "none" }}>{p.c.sha}</span>
           <span style={{ flex: "1 1 0%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.c.msg}</span>
@@ -307,7 +298,9 @@ function Avatars(p: { people: { key: string; name: string; you: boolean }[] }) {
   return (
     <span data-ws-avatars aria-hidden className="pl-1_5" style={{ display: "inline-flex", flex: "none", alignSelf: "center" }}>
       {p.people.map((a) => (
-        <span key={a.key} data-ws-avatar={a.key} title={a.name} style={avatarS}>{initialsOf(a.name)}</span>
+        <span key={a.key} data-ws-avatar={a.key} title={a.name} className="vx-ws-face">
+          <Identity kind="person" id={a.key} name={a.name} size={22} />
+        </span>
       ))}
     </span>
   );
@@ -702,12 +695,12 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
 
       {/* THE REPO. THREE STATES, AND THEY ARE THREE (#1628 point 3): a repo is attached · none is ·
           the read broke. `_global` for the administrator was rendering the second as the third —
-          `not readable`, with `Could not read the GitHub state.` in red at the foot — on a workspace
+          `not readable`, with `Could not read the repository state.` in red at the foot — on a workspace
           that simply has no remote. The red line now fires only on a failure and says what failed. */}
       <Section id="repo" name="Repo">
           {facts.remoteFailure && (
             <div data-ws-github-failed role="alert" className="c-danger lh-snug" style={{ ...ty.body }}>
-              Could not read the GitHub state: {facts.remoteFailure}
+              Could not read the repository state: {facts.remoteFailure}
             </div>
           )}
           {!facts.remoteFailure && remote && !remote.has_home && (
@@ -734,6 +727,11 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
               <Fact k="remote" name="Remote">
                 <span className="c-2" style={{ ...ty.mono }}>{remote.url ?? remote.remote}</span>
               </Fact>
+              {remote.credential && (
+                <Fact k="credential" name="GitHub">
+                  <span data-ws-credential={remote.credential.usable ? "inherited" : "reconnect"}>{remote.credential.note}</span>
+                </Fact>
+              )}
               <Fact k="branch" name="Branch">
                 <span style={ty.mono}>{remote.branch ?? "—"}</span>
                 <span className="ml-2" style={{ ...ty.meta }}>
@@ -747,7 +745,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
                     setFacts({ ...facts, remote: s, remoteFailure: null });
                     return `${s.branch ?? "HEAD"} — ${s.ahead} ahead, ${s.behind} behind.`;
                   })}><Icon name="refresh" size={11} style={{ marginRight: 4 }} />Sync now</button>
-                  <Act id="pull" label="Pull" sentence="Fetch and fast-forward from GitHub"
+                  <Act id="pull" label="Pull" sentence="Fetch and fast-forward from the repository"
                     busy={busy} armed={armed} onArm={setArmed}
                     onRun={() => void run(async () => {
                       const r = await pullWorkspace(sync(syncSlug));
@@ -762,12 +760,12 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
                       return `Pushed ${r.branch} to ${r.remote} (${r.head_sha.slice(0, 8)}).`;
                     })} />
                   <Act id="detach" label="Detach" danger
-                    sentence="Stop syncing to GitHub — the files here stay exactly as they are"
+                    sentence="Stop syncing to the repository — the files here stay exactly as they are"
                     busy={busy} armed={armed} onArm={setArmed}
                     onRun={() => void run(async () => {
                       const r = await detachWorkspaceRemote(sync(syncSlug));
                       setFacts({ ...facts, remote: await gitRemoteStatus(sync(syncSlug)) });
-                      return r.detached ? `Detached from ${r.remote}. Nothing was deleted.` : "There was no GitHub home to detach.";
+                      return r.detached ? `Detached from ${r.remote}. Nothing was deleted.` : "There was no repository to detach.";
                     })} />
                 </div>
               )}

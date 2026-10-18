@@ -1,20 +1,47 @@
 /** /api/auth/redeem — the BACK half of the magic-link door, exercised as a route.
  *
- *  magicToken.test.ts owns the crypto; this file owns what the ROUTE does with it: a good link
- *  sets the same two httpOnly cookies the direct-login route sets and 302s to the deeplink; a
- *  replayed, expired, or forged link mints nothing; and a hostile `next=` cannot bounce the
- *  recipient off this origin.
+ *  magicToken.test.ts owns the crypto; this file owns what the ROUTE does with it: the link (GET)
+ *  is only a question and spends nothing — Microsoft 365 previews and scans every link before a
+ *  person clicks it (live 2026-10-15) — and the page's button (a same-origin POST) is the one act
+ *  that spends it: it sets the same two httpOnly cookies the direct-login route sets and 303s to
+ *  the deeplink; a replayed, expired, or forged link mints nothing; a cross-site POST is refused;
+ *  and a hostile `next=` cannot bounce the recipient off this origin.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { GET as redeem } from "../redeem/route";
+import { GET as open, HEAD as head, POST as redeem } from "../redeem/route";
 import { mintMagicToken } from "../magicToken";
 import { linkLedger } from "./linkLedgerDouble";
 
-function makeReq(query: Record<string, string>): import("next/server").NextRequest {
+const SAME_ORIGIN = { origin: "https://terminal.test", "sec-fetch-site": "same-origin" };
+
+/** The GET a person's click, a Teams preview and a mail scanner all make. */
+function linkReq(query: Record<string, string>): import("next/server").NextRequest {
   const url = new URL("https://terminal.test/api/auth/redeem");
   for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
-  return { nextUrl: url, url: url.toString() } as unknown as import("next/server").NextRequest;
+  return { nextUrl: url, url: url.toString(), method: "GET", headers: new Headers() } as unknown as import("next/server").NextRequest;
+}
+
+/** The page's button: a form POST of `t` and `next`. */
+function makeReq(
+  fields: Record<string, string>,
+  headers: Record<string, string> = SAME_ORIGIN,
+): import("next/server").NextRequest {
+  const url = new URL("https://terminal.test/api/auth/redeem");
+  const form = new FormData();
+  for (const [k, v] of Object.entries(fields)) form.set(k, v);
+  return {
+    nextUrl: url, url: url.toString(), method: "POST", headers: new Headers(headers),
+    formData: async () => form,
+  } as unknown as import("next/server").NextRequest;
+}
+
+/** Pull the form fields the link page renders, as a browser would submit them. */
+function formFields(html: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const unesc = (v: string) => v.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  for (const m of html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)">/g)) out[m[1]] = unesc(m[2]);
+  return out;
 }
 
 /** admin-api double: find-or-create returns a user, the token mint returns a value. Everything
@@ -58,14 +85,14 @@ afterEach(() => {
 });
 
 describe("a valid link", () => {
-  it("sets both httpOnly cookies and 302s to the deeplink it carried", async () => {
+  it("sets both httpOnly cookies and 303s to the deeplink it carried", async () => {
     vi.stubGlobal("fetch", stubAdminApi());
     const minted = mintMagicToken("magic@example.com");
     expect(minted.ok).toBe(true);
     if (!minted.ok) return;
 
     const res = await redeem(makeReq({ t: minted.token, next: "/?ask=catch-up" }));
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/?ask=catch-up");
 
     const tok = res.cookies.get("vexa-token");
@@ -82,7 +109,7 @@ describe("a valid link", () => {
     const minted = mintMagicToken("magic@example.com");
     if (!minted.ok) throw new Error("mint failed");
     const res = await redeem(makeReq({ t: minted.token }));
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/");
   });
 });
@@ -95,7 +122,7 @@ describe("open-redirect guard", () => {
       const minted = mintMagicToken("magic@example.com");
       if (!minted.ok) throw new Error("mint failed");
       const res = await redeem(makeReq({ t: minted.token, next: hostile }));
-      expect(res.status).toBe(302);
+      expect(res.status).toBe(303);
       expect(res.headers.get("location")).toBe("/");
     }
   });
@@ -108,7 +135,7 @@ describe("a link that must not work", () => {
     const minted = mintMagicToken("magic@example.com");
     if (!minted.ok) throw new Error("mint failed");
 
-    expect((await redeem(makeReq({ t: minted.token, next: "/" }))).status).toBe(302);
+    expect((await redeem(makeReq({ t: minted.token, next: "/" }))).status).toBe(303);
     const callsAfterFirst = fetchSpy.mock.calls.length;
 
     const second = await redeem(makeReq({ t: minted.token, next: "/" }));
@@ -150,7 +177,7 @@ describe("a link that must not work", () => {
 
     linkLedger.down = false;
     const later = await redeem(makeReq({ t: minted.token, next: "/" }));
-    expect(later.status).toBe(302);
+    expect(later.status).toBe(303);
   });
 
   it("sends the link's jti and expiry to admin-api, over the internal edge", async () => {
@@ -199,5 +226,101 @@ describe("a link that must not work", () => {
     const res = await redeem(makeReq({ t: minted.token, next: "/" }));
     expect(res.status).toBe(503);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("prefetch-safe: the link is a question, the button is the act (OeNB, 2026-10-15)", () => {
+  it("HEAD (a preview) then GET (a scanner) then the button: the person is signed in", async () => {
+    const fetchSpy = stubAdminApi();
+    vi.stubGlobal("fetch", fetchSpy);
+    const minted = mintMagicToken("maria@oenb.at");
+    if (!minted.ok) throw new Error("mint failed");
+
+    const h = await head();
+    expect(h.status).toBe(200);
+    expect(await h.text()).toBe("");
+
+    const page = await open(linkReq({ t: minted.token, next: "/?ask=catch-up" }));
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-type")).toContain("text/html");
+    expect(page.cookies.get("vexa-token")).toBeUndefined();
+    const html = await page.text();
+    expect(html).toContain("Sign in to Vexa as");
+    expect(html).toContain("m…@oenb.at");
+    expect(html).not.toContain("maria@oenb.at");
+    expect(html).toContain('method="post"');
+    expect(html).not.toMatch(/<script/i);                     // nothing presses the button but a person
+    expect(fetchSpy).not.toHaveBeenCalled();                  // the link spent nothing, asked nobody
+
+    const res = await redeem(makeReq(formFields(html)));
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/?ask=catch-up");
+    expect(res.cookies.get("vexa-token")?.value).toBe("minted-tok");
+  });
+
+  it("GET twice (preview + scanner), then the button: still signs in", async () => {
+    vi.stubGlobal("fetch", stubAdminApi());
+    const minted = mintMagicToken("maria@oenb.at");
+    if (!minted.ok) throw new Error("mint failed");
+    expect((await open(linkReq({ t: minted.token, next: "/" }))).status).toBe(200);
+    const second = await open(linkReq({ t: minted.token, next: "/" }));
+    expect(second.status).toBe(200);
+    const res = await redeem(makeReq(formFields(await second.text())));
+    expect(res.status).toBe(303);
+    expect(res.cookies.get("vexa-token")?.value).toBe("minted-tok");
+  });
+
+  it("the button twice: the second press is 410 — the link stays single-use", async () => {
+    vi.stubGlobal("fetch", stubAdminApi());
+    const minted = mintMagicToken("maria@oenb.at");
+    if (!minted.ok) throw new Error("mint failed");
+    expect((await redeem(makeReq({ t: minted.token, next: "/" }))).status).toBe(303);
+    const again = await redeem(makeReq({ t: minted.token, next: "/" }));
+    expect(again.status).toBe(410);
+    expect(await again.text()).toContain("already used");
+    expect(again.cookies.get("vexa-token")).toBeUndefined();
+  });
+
+  it("a cross-site POST is refused and spends nothing", async () => {
+    const fetchSpy = stubAdminApi();
+    vi.stubGlobal("fetch", fetchSpy);
+    const minted = mintMagicToken("maria@oenb.at");
+    if (!minted.ok) throw new Error("mint failed");
+    for (const headers of [
+      { origin: "https://evil.example", "sec-fetch-site": "cross-site" },
+      { origin: "https://evil.example" },
+      { "sec-fetch-site": "cross-site" },
+      { "sec-fetch-site": "same-site", origin: "https://other.terminal.test" },
+      { origin: "null" },
+      {},                                                    // a POST that says nothing about where it came from
+    ] as Record<string, string>[]) {
+      const res = await redeem(makeReq({ t: minted.token, next: "/" }, headers));
+      expect(res.status).toBe(403);
+      expect(res.cookies.get("vexa-token")).toBeUndefined();
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // …and the link is still good for the person's own press.
+    expect((await redeem(makeReq({ t: minted.token, next: "/" }))).status).toBe(303);
+  });
+
+  it("an expired or forged link is refused on the GET already, and the page has no button", async () => {
+    vi.stubGlobal("fetch", stubAdminApi());
+    const old = mintMagicToken("maria@oenb.at", { now: Date.now() - 3_600_000, ttl: 900 });
+    if (!old.ok) throw new Error("mint failed");
+    const expired = await open(linkReq({ t: old.token }));
+    expect(expired.status).toBe(410);
+    expect(await expired.text()).not.toContain("<form");
+    const forged = await open(linkReq({ t: "aaa.bbb" }));
+    expect(forged.status).toBe(400);
+  });
+
+  it("the page escapes what it echoes and keeps next on this origin", async () => {
+    vi.stubGlobal("fetch", stubAdminApi());
+    const minted = mintMagicToken("maria@oenb.at");
+    if (!minted.ok) throw new Error("mint failed");
+    const html = await (await open(linkReq({ t: minted.token, next: "https://evil.example/x" }))).text();
+    expect(formFields(html).next).toBe("/");
+    const tricky = await (await open(linkReq({ t: minted.token, next: '/"><script>x</script>' }))).text();
+    expect(tricky).not.toContain("<script>x</script>");
   });
 });

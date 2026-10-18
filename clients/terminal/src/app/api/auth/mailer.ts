@@ -23,12 +23,19 @@
  *                                   only over implicit TLS or STARTTLS
  *    VEXA_MAIL_SMTP_SECURE=1        implicit TLS
  *    VEXA_MAIL_SMTP_TLS_INSECURE=1  skip certificate verification (implicit TLS and STARTTLS) — dev only
+ *    VEXA_MAIL_REPLY_TO             Reply-To on every mail (the mailbox the inbound sensor reads)
+ *    VEXA_MAIL_RELAY                THE ONE SWITCH, shared with flows: unset = as above; `capture` = every
+ *                                   mail goes to VEXA_MAIL_CAPTURE_SMTP (`mailpit:1025`), no login, nothing
+ *                                   reaches a real mailbox; `relay` = the VEXA_MAIL_SMTP_* relay for real,
+ *                                   and then a recipient at a test domain is never relayed.
  *  These keys are the only source: the defaults above are the declared ones.
  */
 import net from "node:net";
 import tls from "node:tls";
 
 export interface MailerConfig {
+  relay: "" | "capture" | "relay";
+  replyTo?: string;
   host: string;
   port: number;
   from: string;
@@ -40,9 +47,23 @@ export interface MailerConfig {
 
 export function mailerConfig(): MailerConfig {
   const truthy = (v: string | undefined) => v === "1" || v === "true";
+  const relayRaw = (process.env.VEXA_MAIL_RELAY || "").trim().toLowerCase();
+  const relay: MailerConfig["relay"] = relayRaw === "capture" || relayRaw === "relay" ? relayRaw : "";
+  const replyTo = oneLine(process.env.VEXA_MAIL_REPLY_TO || "") || undefined;
+  if (relay === "capture") {
+    const raw = (process.env.VEXA_MAIL_CAPTURE_SMTP || "mailpit:1025").trim();
+    const i = raw.lastIndexOf(":");
+    const cport = i > 0 ? parseInt(raw.slice(i + 1), 10) : 1025;
+    return {
+      relay, replyTo, host: i > 0 ? raw.slice(0, i) : raw, port: Number.isFinite(cport) ? cport : 1025,
+      from: process.env.VEXA_MAIL_SMTP_FROM || "Vexa <no-reply@vexa.ai>",
+      secure: false, insecureTls: false,
+    };
+  }
   const host = process.env.VEXA_MAIL_SMTP_HOST || undefined;
   const port = parseInt(process.env.VEXA_MAIL_SMTP_PORT || "", 10);
   return {
+    relay, replyTo,
     host: host || "localhost",
     port: Number.isFinite(port) && port > 0 ? port : host ? 25 : 1025,
     from: process.env.VEXA_MAIL_SMTP_FROM || "Vexa <no-reply@vexa.ai>",
@@ -54,6 +75,19 @@ export function mailerConfig(): MailerConfig {
 }
 
 type Reply = { code: number; text: string };
+
+/** One header value with no line structure left in it. */
+function oneLine(v: string): string {
+  return v.replace(/[\r\n]+/g, " ").trim();
+}
+
+/** Addresses at these domains are never handed to a real relay (`VEXA_MAIL_RELAY=relay`) — the same
+ *  rule as flows' `emailx.is_test_domain`. */
+export function isTestDomain(address: string): boolean {
+  const d = (bareAddress(address).split("@")[1] || "").toLowerCase();
+  return [".test", ".invalid", ".localhost", ".example"].some((t) => d.endsWith(t)) ||
+    ["example.com", "example.org", "example.net", "localhost", "test", "invalid", "example"].includes(d);
+}
 
 /** Line-buffers the socket into complete SMTP replies, and turns a dead socket into a REJECTED
  *  read rather than a hung one (a request handler waiting forever on a closed connection is the
@@ -98,12 +132,14 @@ class Wire {
 }
 
 /** RFC 5322 message, WITHOUT a trailing CRLF (the caller's line-writer supplies it, then "."). */
-function buildMessage(from: string, to: string, subject: string, text: string, domain: string): string {
+function buildMessage(from: string, to: string, subject: string, text: string, domain: string,
+                      replyTo?: string): string {
   const messageId = `<${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}@${domain}>`;
   const headers = [
     `From: ${from}`,
     `To: ${to}`,
-    `Subject: ${subject}`,
+    ...(replyTo ? [`Reply-To: ${replyTo}`] : []),
+    `Subject: ${oneLine(subject)}`,
     `Date: ${new Date().toUTCString()}`,
     `Message-ID: ${messageId}`,
     "MIME-Version: 1.0",
@@ -129,6 +165,9 @@ function bareAddress(addr: string): string {
  *  whether that is fatal (for /api/auth/request-link it is not, and is never leaked to the client). */
 export async function sendMail(opts: { to: string; subject: string; text: string }, timeoutMs = 15000): Promise<void> {
   const cfg = mailerConfig();
+  if (cfg.relay === "relay" && isTestDomain(opts.to)) {
+    throw new Error(`refusing to relay to a test domain (${bareAddress(opts.to).split("@")[1]})`);
+  }
   let wire = new Wire();
   let encrypted = cfg.secure;
 
@@ -191,7 +230,7 @@ export async function sendMail(opts: { to: string; subject: string; text: string
       await expect([250], "EHLO after STARTTLS");
     }
 
-    if (cfg.user && cfg.pass) {
+    if (cfg.relay !== "capture" && cfg.user && cfg.pass) {
       if (!encrypted) {
         throw new Error(`SMTP: refusing to send credentials to ${cfg.host}:${cfg.port} over an unencrypted ` +
           "connection — the relay offers no STARTTLS (set VEXA_MAIL_SMTP_SECURE=1 for an implicit-TLS endpoint)");
@@ -211,7 +250,7 @@ export async function sendMail(opts: { to: string; subject: string; text: string
     await expect([250, 251], "RCPT TO");
     await say("DATA");
     await expect([354], "DATA");
-    await say(buildMessage(cfg.from, opts.to, opts.subject, opts.text, heloDomain));
+    await say(buildMessage(cfg.from, opts.to, opts.subject, opts.text, heloDomain, cfg.replyTo));
     await say(".");
     await expect([250], "message body");
     await say("QUIT");

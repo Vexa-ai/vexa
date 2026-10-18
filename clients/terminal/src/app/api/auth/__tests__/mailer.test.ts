@@ -22,6 +22,7 @@ afterEach(() => {
 describe("mailerConfig", () => {
   it("unset is the local dev door", () => {
     expect(mailerConfig()).toEqual({
+      relay: "", replyTo: undefined,
       host: "localhost", port: 1025, from: "Vexa <no-reply@vexa.ai>",
       user: undefined, pass: undefined, secure: false, insecureTls: false,
     });
@@ -36,6 +37,7 @@ describe("mailerConfig", () => {
     vi.stubEnv("VEXA_MAIL_SMTP_SECURE", "1");
     vi.stubEnv("VEXA_MAIL_SMTP_TLS_INSECURE", "true");
     expect(mailerConfig()).toEqual({
+      relay: "", replyTo: undefined,
       host: "smtp.example.com", port: 465, from: "Acme <signin@acme.example>",
       user: "relay-user", pass: "relay-pass", secure: true, insecureTls: true,
     });
@@ -49,6 +51,7 @@ describe("mailerConfig", () => {
   it("an old SMTP_* name configures nothing", () => {
     for (const k of LEGACY) vi.stubEnv(k, k === "SMTP_PORT" ? "2525" : "old-value");
     expect(mailerConfig()).toEqual({
+      relay: "", replyTo: undefined,
       host: "localhost", port: 1025, from: "Vexa <no-reply@vexa.ai>",
       user: undefined, pass: undefined, secure: false, insecureTls: false,
     });

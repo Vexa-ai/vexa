@@ -39,10 +39,10 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import * as api from "../../surfaces/workspaceApi";
+import * as api from "../../data/workspaceApi";
 
-vi.mock("../../surfaces/workspaceApi", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../surfaces/workspaceApi")>()),
+vi.mock("../../data/workspaceApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../data/workspaceApi")>()),
   readWorkspaceBySlug: vi.fn(),
   listWorkspaceTree: vi.fn(),
   readWorkspaceHistory: vi.fn(),
@@ -237,9 +237,13 @@ describe("the panel stands on a workspace README and nowhere else", () => {
     expect(where.textContent).toContain("you");
     // between the crumb above and the prose below — the reading order is the claim. The body is
     // compiled as MDX asynchronously, so wait for it rather than racing it (it lost under load).
-    await waitFor(() => expect(container.textContent).toContain("The workspace body."));
-    const text = container.textContent ?? "";
-    expect(text.indexOf("Shared workspace")).toBeLessThan(text.indexOf("The workspace body."));
+    // the order is read from ONE render inside the wait: under load the panel can re-render between
+    // a wait and a later read, and a body read from the next render is not there yet
+    await waitFor(() => {
+      const text = container.textContent ?? "";
+      expect(text.indexOf("The workspace body.")).toBeGreaterThan(-1);
+      expect(text.indexOf("Shared workspace")).toBeLessThan(text.indexOf("The workspace body."));
+    });
     expect(container.querySelector("[data-ws-readme]")?.getAttribute("data-ws-kind")).toBe("group");
   });
 
@@ -250,7 +254,8 @@ describe("the panel stands on a workspace README and nowhere else", () => {
     expect(container.querySelector("[data-ws-title]")?.textContent).toBe("Pilot");
     // …and exactly once as a heading: a title printed twice two lines apart reads as a bug
     expect([...container.querySelectorAll("h1")].map((h) => h.textContent)).toEqual(["Pilot"]);
-    expect(container.textContent).toContain("The workspace body.");
+    // the body renders after the title (its markdown loads on its own): wait for it, never race it
+    await waitFor(() => expect(container.textContent).toContain("The workspace body."));
   });
 
   it("does NOT render on an ordinary page", async () => {
@@ -267,7 +272,8 @@ describe("the panel stands on a workspace README and nowhere else", () => {
   it("does not render while the README is being EDITED — an editor edits a file", async () => {
     const { container } = panel();
     await waitFor(() => expect(container.querySelector("[data-ws-strip]")).toBeTruthy());
-    fireEvent.click(container.querySelector('[data-doc-act="edit"]')!);
+    fireEvent.click(container.querySelector("[data-doc-more]")!);
+    fireEvent.click(document.querySelector('[data-doc-act="edit"]')!);
     expect(container.querySelector("[data-ws-readme]")).toBeNull();
   });
 });
@@ -312,6 +318,17 @@ describe("a reader sees data and history, and no controls", () => {
     expect(container.querySelector("[data-ws-history]")).toBeTruthy();
   });
 
+  it("says a GitHub login inherited from a deleted workspace before a sync fails (#1783)", async () => {
+    vi.mocked(api.gitRemoteStatus).mockResolvedValue({ has_home: true, remote: "origin", url: "git@github.com:pilot/kg.git",
+      branch: "main", tracked: false, ahead: 0, behind: 0,
+      credential: { state: "inherited_from_deleted", usable: false, note: "GitHub login inherited from a deleted workspace — reconnect" } });
+    const { container } = panel();
+    await open(container, "people");
+    await waitFor(() => expect(container.querySelector('[data-ws-fact="credential"]')).toBeTruthy());
+    expect(container.querySelector("[data-ws-credential]")?.textContent).toBe("GitHub login inherited from a deleted workspace — reconnect");
+    expect(container.querySelector("[data-ws-credential]")?.getAttribute("data-ws-credential")).toBe("reconnect");
+  });
+
   it("gives the OWNER the membership and the GitHub controls", async () => {
     vi.mocked(api.listSharedMemberships).mockResolvedValue([{ workspace_id: "pilot-b5e60c", role: "owner" }]);
     vi.mocked(api.listWorkspaceMembers).mockResolvedValue([
@@ -344,7 +361,7 @@ describe("a reader sees data and history, and no controls", () => {
     fireEvent.click(container.querySelector('[data-ws-act="detach"]')!);
 
     // the armed state SAYS what will happen, and the first click has done nothing
-    expect(screen.getByText("Stop syncing to GitHub — the files here stay exactly as they are")).toBeTruthy();
+    expect(screen.getByText("Stop syncing to the repository — the files here stay exactly as they are")).toBeTruthy();
     expect(api.detachWorkspaceRemote).not.toHaveBeenCalled();
 
     fireEvent.click(container.querySelector('[data-ws-act-cancel="detach"]')!);
@@ -461,7 +478,7 @@ describe("the GitHub section tells a missing repo from a broken read", () => {
     await open(container, "repo");
 
     const said = container.querySelector("[data-ws-github-failed]")?.textContent ?? "";
-    expect(said).toContain("Could not read the GitHub state");
+    expect(said).toContain("Could not read the repository state");
     expect(said).toContain("upstream unreachable: ConnectError");
     expect(container.querySelector('[data-ws-github="unattached"]')).toBeNull();
   });
@@ -519,12 +536,13 @@ describe("the two workspaces that are not groups", () => {
 
 
 describe("private repository workspace", () => {
-  it("shows its owner repository controls without claiming shared membership", async () => {
+  it("shows no repo button and claims no shared membership (UI decisions 11)", async () => {
     vi.mocked(api.readWorkspaceBySlug).mockResolvedValue({ id: "w1", name: "Pilot", kind: "private", slug: "pilot-b5e60c", access: "readable", writable: true });
     panel();
     await waitFor(() => expect(screen.getByText("Private workspace")).toBeTruthy());
     expect(screen.queryByText("Shared workspace")).toBeNull();
-    expect(screen.getByRole("button", { name: "Sync" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sync" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Connect a repo" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Add a member" })).toBeNull();
     expect(api.listWorkspaceMembers).not.toHaveBeenCalled();
     expect(api.listSharedMemberships).not.toHaveBeenCalled();

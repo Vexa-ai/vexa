@@ -2,16 +2,17 @@
 /** Import a repository as an independent workspace, preserving its tree and Git identity. */
 import { CONNECTIONS_OPEN } from "./connectionEvents";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { workspacePath } from "../app/workspaceRoute";
+import { workspacePath } from "../platform/workspaceRoute";
 import { Icon, ExternalLink } from "../ui-kit";
 import { copyText } from "../ui-kit/ContextMenu";
-import { ApiError, presentError } from "../surfaces/apiClient";
-import { redactSecrets } from "../surfaces/redactSecrets";
+import { ApiError, presentError } from "../data/apiClient";
+import { redactSecrets } from "../data/redactSecrets";
 import { checkRepo } from "../surfaces/repoRef";
+import { knownGitProviders, listGitProviders, providerForUrl, setKnownGitProviders, sshFormOf, type GitProviderList } from "../data/gitProviders";
 import {
   ensureDeployKey, readDeployKey, importWorkspace,
   type DeployKey, type Membership,
-} from "../surfaces/workspaceApi";
+} from "../data/workspaceApi";
 import { surface, type as ty } from "./tokens";
 
 /** The person's own desk, as a target value. Empty is what both APIs already mean by "no slug". */
@@ -66,6 +67,14 @@ export function AttachRepo(p: { workspaceId?: string; embedded?: boolean; onClos
   const [importedWorkspace, setImportedWorkspace] = useState("");
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<{ headline: string; verbatim: string } | null>(null);
+  // The deployment's git providers: which hosts an https URL may be rewritten to ssh on, and the label
+  // of the place a deploy key is added. The built-in list stands in until it loads.
+  const [providers, setProviders] = useState<GitProviderList>(knownGitProviders());
+  useEffect(() => {
+    let live = true;
+    listGitProviders().then((l) => { if (!live) return; setKnownGitProviders(l); setProviders(l); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
   const dialog = useRef<HTMLDivElement | null>(null);
 
   const slug = target || DESK_KEY_SLUG;
@@ -106,8 +115,10 @@ export function AttachRepo(p: { workspaceId?: string; embedded?: boolean; onClos
     try {
       setKey(await ensureDeployKey(slug, repo.trim() || undefined)); setKeyNote(null);
       const checked = checkRepo(repo);
-      if (checked.ok && checked.url.startsWith("https://github.com/")) {
-        setRepo(checked.url.replace("https://github.com/", "git@github.com:"));
+      // A deploy key authenticates over ssh, so an https URL on a configured provider becomes its ssh form.
+      const ssh = checked.ok ? sshFormOf(checked.url, providers) : null;
+      if (ssh) {
+        setRepo(ssh);
         setRepoIssue(null);
       }
     }
@@ -197,7 +208,7 @@ export function AttachRepo(p: { workspaceId?: string; embedded?: boolean; onClos
                   const c = checkRepo(v);
                   setRepoIssue(!v.trim() ? null : c.ok ? null : c.kind === "token" ? c.sentence : null);
                 }}
-                placeholder="git@github.com:acme/kg.git" style={{ ...fieldS, borderColor: repoIssue ? "var(--danger)" : "var(--line)" }} />
+                placeholder="git@git.example.com:group/repo.git" style={{ ...fieldS, borderColor: repoIssue ? "var(--danger)" : "var(--line)" }} />
               {repoIssue && (
                 <div id="attach-repo-issue" data-attach="repo-issue" role="alert"
                   className="c-danger mt-1 lh-snug" style={{ ...ty.meta }}>{repoIssue}</div>
@@ -234,7 +245,7 @@ export function AttachRepo(p: { workspaceId?: string; embedded?: boolean; onClos
                         person, which is worse than making them find the page themselves. */}
                     {key.add_at && (
                       <ExternalLink data-attach="addat" href={key.add_at} className="c-accent" style={{ ...ty.meta }}>
-                        Add it on GitHub →
+                        Add it on {providerForUrl(key.add_at, providers)?.label ?? providerForUrl(repo, providers)?.label ?? "the repository's settings"} →
                       </ExternalLink>
                     )}
                     <span style={{ ...ty.meta }}>Add as {key.add_as}.</span>

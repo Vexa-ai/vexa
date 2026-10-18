@@ -37,7 +37,7 @@ describe("the admin account's home", () => {
 
   it("is shown to the admin account only — everybody else keeps the everyday chips", () => {
     const shell = readFileSync(join(__dirname, "..", "MinutesShell.tsx"), "utf8");
-    expect(shell).toMatch(/emptyExtra=\{isAdminAccount \? <AdminHome \/> : <ProposalChips/);
+    expect(shell).toMatch(/emptyExtra=\{isAdminAccount \? <AdminHome \/> : (homeRead|<DesktopHome)/);  // the desktop (D1) wraps the everyday home as its fallback
     // and the flag is identity's literal `admin_account === true`, never `is_admin`
     expect(shell).toMatch(/admin_account === true\)/);
   });

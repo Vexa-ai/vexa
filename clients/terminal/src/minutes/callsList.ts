@@ -40,13 +40,122 @@ const PLATFORM_NAMES: Record<string, string> = {
   google_meet: "Google Meet", "Google Meet": "Google Meet", teams: "Teams", zoom: "Zoom", jitsi: "Jitsi",
 };
 
-/** Title, or platform + id when untitled. The store's own fallback for a link-less row reads
- *  "Untitled meeting", which says nothing in a list of twenty; the row id at least tells two apart. */
-export function callLabel(m: Pick<MeetingMock, "id" | "title_custom" | "platform" | "native_id">): string {
-  const t = m.title_custom?.trim();
-  if (t) return t;
-  const platform = PLATFORM_NAMES[m.platform] ?? m.platform ?? "Call";
-  return m.native_id ? `${platform} · ${m.native_id}` : `${platform} · #${m.id}`;
+/** The platform's word ("Google Meet"), for an icon's label — never a meeting's name. */
+export function platformLabel(platform?: string | null): string {
+  const p = String(platform ?? "").trim();
+  if (!p) return "Call";
+  if (p === "voice_note") return "Voice note";
+  return PLATFORM_NAMES[p] ?? p.charAt(0).toUpperCase() + p.slice(1);
+}
+
+/** The minted placeholders a meeting carries before anyone named it. */
+const PLACEHOLDER = /^(google meet|zoom|microsoft teams|teams|jitsi|live|voice note|untitled)?\s*(meeting|call)?$/i;
+/** A chat that has no name of its own yet ("New chat", "Chat · 12:49 PM") names nothing. */
+const CHAT_PLACEHOLDER = /^(new chat|untitled( chat)?|chat(\s*·.*)?)$/i;
+/** A voice that is nobody in particular — a speaker label, a bot, the room. */
+const NOBODY = /^(speaker\s*[a-z]?\d*|unknown( speaker)?|unidentified( speaker)?|guest|participant\s*\d*|vexa( bot)?|.*notetaker|.*\bbot)$/i;
+
+/** Is this a person somebody could be — not "Speaker 1", "Unknown" or a bot? (founder, 2026-10-15:
+ *  "Speaker means no speaker identified, so no need to put it in the header"). */
+export function isIdentifiedPerson(name?: string | null): boolean {
+  const n = String(name ?? "").trim();
+  return !!n && !NOBODY.test(n);
+}
+
+type Nameable = Pick<MeetingMock, "id" | "title_custom" | "platform" | "native_id"> & Partial<Pick<MeetingMock, "start_time" | "scheduled_at" | "created_at">> & {
+  title?: string; participants?: { name: string }[];
+};
+
+/** Text that is an id or a platform key, not a name (founder 2026-10-15: "humans get crazy with
+ *  these names"): `vexa_call`, a Meet code, `call-21ca…`, `pchat-…`, a Zoom number, `#41`. */
+const RAW_PATTERNS: RegExp[] = [
+  // a link and nothing else (founder, live: a chat and its meeting titled
+  // "https://teams.microsoft.com/l/meetup-join/19%3a…") — the address is not a name
+  /^\s*(?:https?:\/\/|www\.)\S+\s*$/i,
+  /\b(?:google_meet|vexa_call|voice_note|ms_teams)\b/i,
+  /\b[a-z]{3}-[a-z]{4}-[a-z]{3}\b/,
+  /\b(?:call|vn|pchat|scaffold|meet|sess|session|unit|agent|flow|dm)-[0-9a-z][\w-]{4,}\b/i,
+  /\bs-[0-9a-f]{8,}\b/i,
+  /(?:^|\s)\d{9,12}(?:\s|$)/,
+  /(?:^|\s)#\d+$/,
+];
+export function looksRaw(text?: string | null): boolean {
+  const t = String(text ?? "").trim();
+  return !t || RAW_PATTERNS.some((r) => r.test(t));
+}
+
+/** A stored sentence that quotes an id ("Vexa joined “call-0c90e2a5fcff”") reads with a name in its
+ *  place — the object's name when known, else "your call" / "your meeting". */
+export function readableSentence(text: string, objectName?: string | null): string {
+  return String(text ?? "").replace(/[“"]([^”"]{1,120})[”"]/g, (all, inner: string) => {
+    if (!looksRaw(inner)) return all;
+    if (objectName && !looksRaw(objectName)) return `“${objectName}”`;
+    return /\bcall-|vexa_call/i.test(inner) ? "your call" : "your meeting";
+  });
+}
+
+/** A title a person gave, or a calendar's — not a placeholder and not an id. */
+function realTitle(m: Nameable, t?: string | null): string {
+  const s = String(t ?? "").trim();
+  if (!s || PLACEHOLDER.test(s) || looksRaw(s)) return "";
+  if (m.native_id && s.includes(m.native_id)) return "";
+  if (/·\s*#\d+$/.test(s)) return "";
+  return s;
+}
+
+/** THE ONE NAME A MEETING IS CALLED BY (UI decisions 14, founder 2026-10-15: "humans get crazy with
+ *  these names"): its calendar title (or the one it was given) · else its chat's name · else the
+ *  people in it ("Call with Valeriia") · else "Call with Vexa". Never a native or session id; the
+ *  platform is an icon beside it, not part of it. Used by the Calls list, the meeting sidebar and the
+ *  note's chip alike. */
+export function meetingDisplayName(m: Nameable, opts: { chatName?: string; people?: string[] } = {}): string {
+  const own = realTitle(m, m.title_custom) || realTitle(m, m.title);
+  if (own) return own;
+  const chat = String(opts.chatName ?? "").trim();
+  if (chat && !PLACEHOLDER.test(chat) && !CHAT_PLACEHOLDER.test(chat) && !looksRaw(chat)) return chat;
+  if (m.platform === "voice_note") return "Voice note";
+  const seen = new Set<string>();
+  const people: string[] = [];
+  for (const n of [...(m.participants ?? []).map((p) => p.name), ...(opts.people ?? [])]) {
+    const name = String(n ?? "").trim();
+    if (!name || NOBODY.test(name) || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    people.push(name);
+  }
+  if (!people.length) {
+    // a call known only by the link someone pasted is that call, at its time — never the address
+    const link = [m.title_custom, m.title, opts.chatName].map((t) => linkCallName(String(t ?? ""), m.start_time || m.scheduled_at || m.created_at))
+      .find((x) => x && x !== "Link");
+    return link || "Call with Vexa";
+  }
+  if (people.length === 1) return `Call with ${people[0]}`;
+  if (people.length === 2) return `Call with ${people[0]} and ${people[1]}`;
+  return `Call with ${people[0]}, ${people[1]} and ${people.length - 2} more`;
+}
+
+const HOST_CALL: [RegExp, string][] = [[/teams\.(microsoft|live)\.com/i, "Teams call"], [/(^|\.)zoom\.(us|com)/i, "Zoom call"],
+  [/meet\.google\.com/i, "Google Meet call"], [/meet\.jit\.si|jitsi/i, "Jitsi call"]];
+/** "Thu 15:30" — the day and time a call is known by when it has no name */
+function whenWords(at?: string | number | null): string {
+  const t = typeof at === "number" ? at : at ? Date.parse(at) : NaN;
+  if (!Number.isFinite(t)) return "";
+  const d = new Date(t);
+  return `${d.toLocaleDateString([], { weekday: "short" })} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}`;
+}
+/** A link someone pasted as the first message names the call it opens, not the address:
+ *  "Teams call · Thu 15:30". "" when the text is not a link. */
+export function linkCallName(text: string, at?: string | number | null): string {
+  const t = String(text ?? "").trim();
+  if (!/^\s*(?:https?:\/\/|www\.)\S+\s*$/i.test(t)) return "";
+  const kind = HOST_CALL.find(([re]) => re.test(t))?.[1] ?? "";
+  if (!kind) return "Link";
+  const w = whenWords(at);
+  return w ? `${kind} · ${w}` : kind;
+}
+
+/** A call's name in a list — `meetingDisplayName`. */
+export function callLabel(m: Nameable): string {
+  return meetingDisplayName(m);
 }
 
 /** The calls the panel lists: everything with a transcript to open — live or finished. A PLANNED

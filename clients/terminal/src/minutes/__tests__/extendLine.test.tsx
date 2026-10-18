@@ -137,7 +137,7 @@ describe("selection prepares a composer quote", () => {
   it("quotes the selected text without opening an inline prompt or firing an intent", () => {
     const { container } = panel();
     const doc = container.querySelector("[data-mdx]") as HTMLElement;
-    highlight(doc, 13, 24);
+    highlight(doc, 0, 24);          // the "# Helm Bank" heading is the page's head now, not the body
     fireEvent.click(container.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
     expect(field(container)).toBeNull();
     expect(asks).toHaveLength(1);

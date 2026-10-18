@@ -40,7 +40,7 @@ beforeEach(async () => {
   invalidateWsLinkCaches();
   resetReportedPages();
   // Warm the module cache so the first assertion is not racing vitest's first dynamic import.
-  await import("../../surfaces/workspaceApi");
+  await import("../../data/workspaceApi");
 });
 afterEach(() => vi.restoreAllMocks());
 

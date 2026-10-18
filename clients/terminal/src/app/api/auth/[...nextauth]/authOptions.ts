@@ -19,6 +19,7 @@ import { cookies } from "next/headers";
 import { AUTH_COOKIE, USER_INFO_COOKIE, findOrCreateUserToken, mintFirstVisitScaffold } from "../adminApi";
 import { SIGNIN_ERROR_NOT_ALLOWED, SIGNIN_ERROR_UNAVAILABLE, SIGNIN_ERROR_UNVERIFIED } from "../../../signinRefusal";
 import { oidcDisplayName, verifiedProviderIdentity } from "../providerIdentity";
+import { captureSigninPhoto, signinPhotoBody } from "../signinPhoto";
 import { rootCertificates } from "node:tls";
 import { OIDC_PROVIDER_ID, oidcConfig, signinMethodEnabled } from "../oidcConfig.mjs";
 
@@ -171,7 +172,9 @@ export const authOptions: AuthOptions = {
       // which cannot tell "this address may not sign in" from a cancelled consent screen; the codes
       // below let the sign-in card say the one sentence every door uses (app/signinRefusal.ts) —
       // naming no list and no domain, so it reveals nothing the person could not learn by trying.
-      const result = await findOrCreateUserToken(identity.email, { subject: identity.subject });
+      // when the provider vouched for the address, identity records it as verified (R4)
+      const result = await findOrCreateUserToken(identity.email, identity.emailVerified
+        ? { subject: identity.subject, emailVerifiedVia: `oidc:${provider}` } : { subject: identity.subject });
       if (!result.ok) {
         if (result.refused === "not-allowed") {
           // eslint-disable-next-line no-console
@@ -195,6 +198,14 @@ export const authOptions: AuthOptions = {
         maxAge: 60 * 60 * 24 * 30,
         path: "/",
       };
+      // THE PERSON'S PHOTO (UI 15g): identity stores the provider's picture and re-checks it at each
+      // sign-in. Not awaited — a photo never holds up or refuses a sign-in.
+      void captureSigninPhoto(result.user.id, signinPhotoBody(provider, {
+        user: user as unknown as Record<string, unknown>,
+        profile: profile as unknown as Record<string, unknown> | undefined,
+        account: account as unknown as Record<string, unknown>,
+      }));
+
       const cookieStore = await cookies();
       cookieStore.set(AUTH_COOKIE, result.token, opts);
       const displayName = user.name || result.user.name || result.user.email.split("@")[0];

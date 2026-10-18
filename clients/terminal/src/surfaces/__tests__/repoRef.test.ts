@@ -1,9 +1,10 @@
 /** The 2026-09-02 incident, client-side: a GitHub PAT was pasted into the attach dialog's Repository
  *  field and SENT. The point of these is not that a nicer error is shown — it is that the value never
  *  leaves the tab, and that nothing which does leave carries a secret. */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { BUILTIN_GIT_PROVIDER, setKnownGitProviders } from "../../data/gitProviders";
 import { checkRepo, looksLikeToken, MAX_PATH_SEGMENTS, SHAPE_SENTENCE, TOKEN_SENTENCE } from "../repoRef";
-import { MASK, redactSecrets } from "../redactSecrets";
+import { MASK, redactSecrets } from "../../data/redactSecrets";
 
 const PAT = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
 const FINE = "github_pat_11ABCDE0aAbBcCdDeEfF_gGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ01";
@@ -77,6 +78,36 @@ describe("checkRepo — the whitelist", () => {
     for (const ok of ["git@github.com:acme/kg.git", "acme/kg", "main", ""]) {
       expect(looksLikeToken(ok)).toBe(false);
     }
+  });
+});
+
+describe("checkRepo — limits come from the configured providers", () => {
+  afterEach(() => setKnownGitProviders(null));
+
+  it("the shape sentence names no host — identical to the server's", () => {
+    expect(SHAPE_SENTENCE).toBe(
+      "That is not a repository. Use https://host/owner/repo, git@host:owner/repo.git, owner/repo, " +
+      "or a full URL with groups (https://git.example.com/group/subgroup/repo).");
+  });
+
+  it("a GitHub-kind provider allows exactly two segments; a GitLab one nests", () => {
+    setKnownGitProviders({ default: "github", providers: [
+      BUILTIN_GIT_PROVIDER,
+      { name: "ghe", kind: "github", label: "GitHub Enterprise", base_url: "https://ghe.example.com", host: "ghe.example.com", nested_groups: false, can_create: true },
+      { name: "corp", kind: "gitlab", label: "Corp GitLab", base_url: "https://git.example.com", host: "git.example.com", nested_groups: true, can_create: true },
+    ] });
+    expect(checkRepo("https://ghe.example.com/a/b")).toEqual({ ok: true, url: "https://ghe.example.com/a/b.git" });
+    expect(checkRepo("https://ghe.example.com/a/b/c")).toMatchObject({ ok: false, kind: "shape" });
+    expect(checkRepo("https://git.example.com/it/ai/vexa")).toEqual({ ok: true, url: "https://git.example.com/it/ai/vexa.git" });
+    expect(checkRepo("git@git.example.com:it/ai/vexa.git")).toEqual({ ok: true, url: "git@git.example.com:it/ai/vexa.git" });
+  });
+
+  it("owner/repo expands on the deployment's default provider", () => {
+    setKnownGitProviders({ default: "corp", providers: [
+      BUILTIN_GIT_PROVIDER,
+      { name: "corp", kind: "gitlab", label: "Corp GitLab", base_url: "https://git.example.com", host: "git.example.com", nested_groups: true, can_create: true },
+    ] });
+    expect(checkRepo("it/vexa")).toEqual({ ok: true, url: "https://git.example.com/it/vexa.git" });
   });
 });
 

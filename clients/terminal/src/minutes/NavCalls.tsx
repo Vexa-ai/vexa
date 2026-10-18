@@ -24,7 +24,8 @@ import {
 import type { NavWorkspace, ParsedQuery } from "./navigatorApi";
 import { canRenameCall } from "./callRename";
 import { CallNameEditor } from "./CallName";
-import { surface, type as ty } from "./tokens";
+import { surface } from "./tokens";
+import "./minutes.css";
 
 // ── the switch ───────────────────────────────────────────────────────────────────────────────────
 
@@ -57,18 +58,13 @@ export function NavSwitch(p: { value: NavView; onChange: (v: NavView) => void })
   };
   return (
     <div ref={list} role="tablist" aria-label="Files or calls" data-nav-switch onKeyDown={onKey}
-      style={{ display: "flex", gap: 2, padding: 2, borderRadius: 7, background: surface.raised, border: "1px solid var(--line)" }}>
+      className="vx-navsw" style={{ display: "flex", gap: 2 }}>
       {VIEWS.map((v) => {
         const on = v.key === p.value;
         return (
           <button key={v.key} type="button" role="tab" aria-selected={on} tabIndex={on ? 0 : -1}
             data-nav-view={v.key} onClick={() => p.onChange(v.key)}
-            style={{
-              ...ty.chip, flex: "1 1 0%", minWidth: 0, minHeight: 24, padding: "2px 8px", borderRadius: 5, border: "none",
-              cursor: "pointer", color: on ? "var(--t1)" : "var(--t3)",
-              background: on ? surface.raisedHi : "transparent",
-              fontWeight: on ? 600 : 500,
-            }}>{v.label}</button>
+            className="vx-navsw-tab" style={{ flex: "1 1 0%", minWidth: 0, minHeight: 24 }}>{v.label}</button>
         );
       })}
     </div>
@@ -77,16 +73,10 @@ export function NavSwitch(p: { value: NavView; onChange: (v: NavView) => void })
 
 // ── the list ─────────────────────────────────────────────────────────────────────────────────────
 
-const rowBtn: CSSProperties = {
-  ...ty.body, display: "flex", alignItems: "center", gap: 6, width: "100%", minHeight: 28, textAlign: "left",
-  padding: "3px 6px", borderRadius: 6, border: "none", background: "transparent", color: "var(--t1)",
-  cursor: "pointer", minWidth: 0, fontSize: 12.5,
-};
+/** The row button's geometry; its look is `.vx-call-btn` (minutes.css). */
+const rowBtn: CSSProperties = { display: "flex", alignItems: "center", gap: 6, width: "100%", minHeight: 28, minWidth: 0 };
 const nameS: CSSProperties = { flex: "1 1 0%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
-const actBtn: CSSProperties = {
-  background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 11, lineHeight: 1,
-  padding: "2px 3px", fontFamily: "var(--sans)", display: "inline-flex", alignItems: "center",
-};
+const actBtn: CSSProperties = { display: "inline-flex", alignItems: "center" };
 /** THE ROW'S ACTIONS TAKE THE TIME'S PLACE. At rest a row shows its time at the right edge; under
  *  the pointer or keyboard focus the time steps aside (kept in layout, so nothing shifts) and the
  *  row's controls — workspace, open in a tab, more — stand where it was, on the hover colour. They
@@ -169,13 +159,13 @@ export function CallsList(p: {
     const notStarted = !r.live && !r.started;
     if (renaming === r.id && m && mayRename) {
       return (
-        <div key={r.id} data-call-row={r.id} style={{ display: "flex", alignItems: "center", padding: "2px 4px", minHeight: 28 }}>
+        <div key={r.id} data-call-row={r.id} className="vx-call-edit" style={{ display: "flex", alignItems: "center", minHeight: 28 }}>
           <CallNameEditor compact meeting={m} label={r.label} onDone={() => endRename(r.id)} />
         </div>
       );
     }
     return (
-      <div key={r.id} data-call-row={r.id} style={{ position: "relative", display: "flex", alignItems: "center", borderRadius: 6 }}
+      <div key={r.id} data-call-row={r.id} className="vx-call-row" style={{ position: "relative", display: "flex", alignItems: "center" }}
         onMouseEnter={(e) => reveal(e, true)} onMouseLeave={(e) => { if (menu?.id !== r.id) reveal(e, false); }}
         onFocus={(e) => reveal(e, true)} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node) && menu?.id !== r.id) reveal(e, false); }}>
         <button type="button" data-call={r.id} title={notStarted ? `${r.label} — requested, never started` : r.label}
@@ -184,27 +174,27 @@ export function CallsList(p: {
           onClick={() => openCall(r)}
           onKeyDown={(e) => { if (e.key === "F2" && mayRename) { e.preventDefault(); startRename(r.id); } }}
           onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); p.onOpenTab(callPage(r)); } }}
-          style={{ ...rowBtn, flexDirection: snippet ? "column" : "row", alignItems: snippet ? "stretch" : "center" }}>
+          className="vx-call-btn" style={{ ...rowBtn, flexDirection: snippet ? "column" : "row", alignItems: snippet ? "stretch" : "center" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
             {r.live
-              ? <span data-call-live aria-hidden style={{ flex: "none", width: 6, height: 6, borderRadius: "50%", background: "var(--red, #e5484d)" }} />
-              : <Icon name="mic" size={11} style={{ color: "var(--t3)" }} />}
+              ? <span data-call-live aria-hidden className="vx-call-live-dot" style={{ flex: "none", width: 6, height: 6 }} />
+              : <span className="vx-call-mic" style={{ flex: "none", display: "inline-flex" }}><Icon name="mic" size={11} /></span>}
             <span style={nameS}>{r.label}</span>
-            {r.shared && <span aria-hidden title="Shared with you" style={{ ...ty.meta, fontSize: 10, flex: "none" }}>shared</span>}
-            {when && <span data-call-when data-call-not-started={notStarted ? "" : undefined}
-              style={{ ...ty.meta, flex: "none", color: r.live ? "var(--red, #e5484d)" : "var(--t3)", fontStyle: notStarted ? "italic" : undefined }}>{when}</span>}
+            {r.shared && <span aria-hidden title="Shared with you" className="vx-call-shared" style={{ flex: "none" }}>shared</span>}
+            {when && <span data-call-when data-call-not-started={notStarted ? "" : undefined} data-live={r.live ? "" : undefined}
+              className="vx-call-when" style={{ flex: "none" }}>{when}</span>}
           </span>
-          {snippet && <span data-call-snippet style={{ ...ty.meta, ...nameS, paddingLeft: 17 }}>{snippet}</span>}
+          {snippet && <span data-call-snippet className="vx-call-snippet" style={nameS}>{snippet}</span>}
         </button>
-        <span data-call-acts style={{ position: "absolute", right: 2, top: 3, display: "flex", alignItems: "center", gap: 1, opacity: 0, transition: "opacity .12s", background: surface.raised, borderRadius: 5, paddingLeft: 2 }}>
+        <span data-call-acts className="vx-call-acts" style={{ position: "absolute", right: 2, top: 3, display: "flex", alignItems: "center", gap: 1, opacity: 0 }}>
           {ws && (
             <button type="button" data-call-ws={ws.key} title={`In workspace ${ws.name}`}
-              aria-label={`Show workspace ${ws.name}`} onClick={() => p.onRevealWorkspace(ws.key)} style={{ ...actBtn, lineHeight: 0 }}>
+              aria-label={`Show workspace ${ws.name}`} onClick={() => p.onRevealWorkspace(ws.key)} className="vx-call-act" data-flush="" style={actBtn}>
               <Icon name="folder" size={11} />
             </button>
           )}
           <button type="button" data-call-tab={r.id} aria-label={`Open ${r.label} in a tab`} title="Open in a tab"
-            onClick={() => p.onOpenTab(callPage(r))} style={actBtn}>⧉</button>
+            onClick={() => p.onOpenTab(callPage(r))} className="vx-call-act" style={actBtn}>⧉</button>
           {mayRename && (
             <button type="button" data-call-more={r.id} aria-label={`Actions for ${r.label}`} title="Rename"
               aria-haspopup="menu" aria-expanded={menu?.id === r.id}
@@ -213,7 +203,7 @@ export function CallsList(p: {
                 if (menu?.id === r.id) { setMenu(null); return; }
                 const b = e.currentTarget.getBoundingClientRect();
                 setMenu({ id: r.id, x: b.right - 188, y: b.bottom + 4 });
-              }} style={actBtn}>⋯</button>
+              }} className="vx-call-act" style={actBtn}>⋯</button>
           )}
         </span>
         {menu?.id === r.id && (
@@ -229,10 +219,10 @@ export function CallsList(p: {
   };
 
   const head = (label: string, key: string) => (
-    <div key={`h:${key}`} role="presentation" style={{ ...ty.lens, fontSize: 9.5, padding: "8px 6px 3px" }}>{label}</div>
+    <div key={`h:${key}`} role="presentation" className="vx-call-head">{label}</div>
   );
   const note = (text: string, attr: string) => (
-    <div {...{ [attr]: "" }} style={{ ...ty.meta, padding: "6px 8px", lineHeight: 1.45 }}>{text}</div>
+    <div {...{ [attr]: "" }} className="vx-call-note">{text}</div>
   );
 
   let body;
@@ -262,7 +252,7 @@ export function CallsList(p: {
         ))}
         {scoped.length > shown && (
           <button type="button" data-calls-more onClick={() => setShown((n) => n + CALLS_PAGE)}
-            style={{ ...rowBtn, ...ty.meta, justifyContent: "center", marginTop: 4 }}>
+            className="vx-call-btn" data-more="" style={{ ...rowBtn, justifyContent: "center" }}>
             Show {Math.min(CALLS_PAGE, scoped.length - shown)} more of {scoped.length - shown}
           </button>
         )}
@@ -273,16 +263,16 @@ export function CallsList(p: {
   return (
     <div data-calls ref={root}>
       {p.query.content && filtering && (
-        <div data-calls-note style={{ ...ty.meta, padding: "0 4px 6px", lineHeight: 1.45 }}>
+        <div data-calls-note className="vx-calls-searchnote">
           Searching the transcripts of your own calls; shared calls match by title only.
         </div>
       )}
       {wsName && (
-        <div data-calls-ws-filter style={{ ...ty.meta, display: "flex", alignItems: "center", gap: 6, padding: "2px 6px 4px" }}>
+        <div data-calls-ws-filter className="vx-calls-wsfilter" style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <Icon name="folder" size={11} />
           <span style={nameS}>{wsName}</span>
           <button type="button" aria-label="Show all calls" onClick={p.onClearWorkspaceFilter}
-            style={{ background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", padding: "0 2px", lineHeight: 0 }}>
+            className="vx-calls-wsclear">
             <Icon name="x" size={11} />
           </button>
         </div>

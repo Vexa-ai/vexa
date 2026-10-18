@@ -11,7 +11,8 @@
  *  so the doc always displays — worst case it loses interactivity, never the page.
  */
 "use client";
-import { isValidElement, useContext, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { InlineCard, parseInlineCard } from "./InlineCard";
+import { createContext, isValidElement, useContext, useEffect, useMemo, useState, type ComponentType, type CSSProperties, type ReactNode } from "react";
 import * as runtime from "react/jsx-runtime";
 import { evaluate } from "@mdx-js/mdx";
 import remarkGfm from "remark-gfm";
@@ -24,31 +25,43 @@ import { Icon } from "./index";
 import {
   Card, CardGroup, DocMetaContext, DocNavContext, DocPath, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, InternalLink,
   Wikilink, WorkspaceRef, isDistinctiveWorkspaceToken, isInternalHref, knownWorkspaces, lookupWorkspace,
-  primeKnownWorkspaces, type DocNavigate,
+  primeKnownWorkspaces, knownEntityNames, primeEntityNames, type DocNavigate,
 } from "./docLinks";
 import { MeetingChip, meetingRefOfHref } from "./MeetingChip";
 import { registry } from "../contributions";
 import { splitTranscriptSlots, TRANSCRIPT_WIDGET_KIND } from "./transcriptSlot";
 import { POLICY_ACT_KIND, PROPOSAL_ACT_KIND, PROPOSAL_KIND, ViewSource, declaredKind, docHeader, splitFrontmatter } from "./policyDoc";
+import { Outline, RelDate, Task, TaskAsk, TaskContext, enrichMarkdown, headingId, textOf, useTaskApi } from "./richMarkdown";
+import { Backlinks } from "./Backlinks";
 
 // Link/wikilink resolution + the entity chips live in ./docLinks (ONE resolver shared with
 // the plain-Markdown fallback and the workbench event handler). Re-exported for existing
 // importers (surfaces/workspace.tsx, mdx-demo).
 export { DocMetaContext, DocNavContext, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, type DocNavigate };
 
+/** A richer renderer for a page's plain tables, provided by a surface that has one (#1783, R3
+ *  `home2`). Absent → the plain scrolling table. It may change how rows are SHOWN, never the page. */
+export const TableRendererContext = createContext<ComponentType<{ children?: ReactNode }> | null>(null);
+function TableHost({ children }: { children?: ReactNode }) {
+  const Rich = useContext(TableRendererContext);
+  if (Rich) return <Rich>{children}</Rich>;
+  return <div className="vx-prose-table" data-allow-hscroll=""><table>{children}</table></div>;
+}
+
 // ── component registry (closed vocabulary — mirrors Mintlify tag names) ─────────
 
-function Callout({ tone, icon, children }: { tone: "blue" | "accent"; icon: string; children?: ReactNode }) {
+function Callout({ tone, icon, title, children }: { tone: "blue" | "accent"; icon: string; title?: string; children?: ReactNode }) {
   const color = tone === "blue" ? "var(--blue)" : "var(--accent)";
   return (
-    <div className="bd r-md bg-2 pt-2 pr-3 pb-2 pl-3 mt-2 mr-0 mb-3 ml-0 lh-normal" style={{ display: "flex", gap: 10, borderLeft: `3px solid ${color}` }}>
+    <div className="vx-callout bd r-md bg-2 pt-2 pr-3 pb-2 pl-3 mt-2 mr-0 mb-3 ml-0 lh-normal" style={{ display: "flex", gap: 10, borderLeft: `2px solid ${color}` }}>
       <span className="mt-0_5" style={{ color, flex: "none" }}><Icon name={icon} size={14} /></span>
-      <div className="c-2" style={{ minWidth: 0 }}>{children}</div>
+      <div className="c-2" style={{ minWidth: 0 }}>{title && <div className="vx-callout-title">{title}</div>}{children}</div>
     </div>
   );
 }
-const Note = ({ children }: { children?: ReactNode }) => <Callout tone="blue" icon="info">{children}</Callout>;
-const Warning = ({ children }: { children?: ReactNode }) => <Callout tone="accent" icon="alert">{children}</Callout>;
+// `> [!note] Title` / `> [!warning]` blocks arrive here too (richMarkdown), with their title.
+const Note = ({ title, children }: { title?: string; children?: ReactNode }) => <Callout tone="blue" icon="info" title={title}>{children}</Callout>;
+const Warning = ({ title, children }: { title?: string; children?: ReactNode }) => <Callout tone="accent" icon="alert" title={title}>{children}</Callout>;
 
 // Card + CardGroup live in ./docLinks — shared with the plain-Markdown fallback so the
 // same link-card UI renders whether or not the doc compiles as MDX.
@@ -116,9 +129,17 @@ function fencedCode(children: ReactNode): { lang: string; source: string } | nul
 // PROSE LOOKS ARE ONE STYLESHEET (`.vx-prose` in ui-kit/primitives/prose.css, guidelines §2.2):
 // headings on the type scale, 72ch measure, lists, quotes, tables, code. The elements below stay
 // plain; only behaviour (links, fences) is decided here.
-const h = (lvl: number) => ({ children }: { children?: ReactNode }) => (
-  <div className="vx-prose-h" data-level={lvl}>{children}</div>
-);
+// A HEADING CARRIES AN ANCHOR (#1783): its id is the outline's target, and `#` beside it is the link.
+const h = (lvl: number) => function Heading({ children }: { children?: ReactNode }) {
+  const id = headingId(textOf(children));
+  return (
+    <div className="vx-prose-h" data-level={lvl} id={id}>
+      {children}
+      {lvl > 1 && <a className="vx-anchor" href={`#${id}`} aria-label="Link to this section"
+        onClick={(e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ block: "start" }); }}>#</a>}
+    </div>
+  );
+};
 
 const htmlComponents = {
   h1: h(1), h2: h(2), h3: h(3), h4: h(4),
@@ -154,18 +175,31 @@ const htmlComponents = {
   pre: ({ children }: { children?: ReactNode }) => {
     const fence = fencedCode(children);
     if (fence && isMermaidFence(fence.lang)) return <MermaidDiagram source={fence.source} />;
+    // THE INLINE CARD (UI 7g): an agent asks or asks to confirm with a ```ask fence
+    if (fence && fence.lang === "ask") { const spec = parseInlineCard(fence.source); if (spec) return <InlineCard spec={spec} />; }
+    // A BLOCK FENCE (the shared block vocabulary home, pages and chat render — #1783): drawn by the
+    // registered block renderer; a build without one shows the fence as code.
+    if (fence && isBlockFence(fence.lang)) {
+      const Block = registry.tabComponent(BLOCK_RENDERER_KIND);
+      if (Block) return <Block id={BLOCK_RENDERER_KIND} params={{ lang: fence.lang, source: fence.source }} active />;
+    }
     return (
       <pre className="vx-code-block">{children}</pre>
     );
   },
-  // a wide table scrolls inside its own frame, never the page (guidelines §3.4)
-  table: ({ children }: { children?: ReactNode }) => <div className="vx-prose-table" data-allow-hscroll=""><table>{children}</table></div>,
+  // a wide table scrolls inside its own frame, never the page (guidelines §3.4); a host that offers
+  // a richer table (the `home2` page renderer: search, filter, sort) draws it instead
+  table: ({ children }: { children?: ReactNode }) => <TableHost>{children}</TableHost>,
   // GFM column alignment arrives as `style={{ textAlign }}` — layout, kept
   th: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => <th style={style ? { textAlign: style.textAlign } : undefined}>{children}</th>,
   td: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => <td style={style ? { textAlign: style.textAlign } : undefined}>{children}</td>,
 };
 
-export const MDX_COMPONENTS = { ...htmlComponents, ViewSource, Note, Warning, Card, CardGroup, Steps, Step, Tabs, Tab, Wikilink, DocPath, WorkspaceRef };
+/** The registered renderer for the shared block vocabulary, and the fences it draws. */
+export const BLOCK_RENDERER_KIND = "doc.block";
+export const isBlockFence = (lang: string): boolean => /^(vexa|vexa-[\w-]+|blocks?(\.v\d+)?|home-card(\.v\d+)?)$/i.test(lang);
+
+export const MDX_COMPONENTS = { ...htmlComponents, DocImg: htmlComponents.img, DocA: htmlComponents.a, ViewSource, Note, Warning, Card, CardGroup, Steps, Step, Tabs, Tab, Wikilink, DocPath, WorkspaceRef, Task, TaskAsk, RelDate };
 
 // ── security: forbid executable MDX ──────────────────────────────────────────
 // kg/ markdown is agent-written from meeting transcripts and external content, so it
@@ -193,6 +227,26 @@ function remarkForbidExecutable() {
   return (tree: { type?: string; children?: unknown[] }) => assertNoExecutableMdx(tree);
 }
 
+// ── literal tags go through the same doors as markdown ───────────────────────
+// MDX maps markdown-made elements through `components`, but a tag WRITTEN as JSX (`<img …>`,
+// `<a …>`) is rendered as the plain element. Left alone, `<img src="https://…">` would load straight
+// from a remote host (bypassing DocImage, which only names a remote picture) and `<a href=…>` would
+// skip ExternalLink's scheme check. So a literal img/a is renamed to the registered component, and
+// an inline `style` (a CSS `url(…)` is a remote request too) is dropped from every literal tag —
+// prose looks come from the stylesheet.
+const LITERAL_TO_COMPONENT: Record<string, string> = { img: "DocImg", a: "DocA" };
+type JsxNode = { type?: string; name?: string | null; attributes?: { type?: string; name?: string }[]; children?: unknown[] };
+function routeLiteralTags(node: JsxNode): void {
+  if (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") {
+    if (node.name && LITERAL_TO_COMPONENT[node.name]) node.name = LITERAL_TO_COMPONENT[node.name];
+    if (node.attributes) node.attributes = node.attributes.filter((a) => !(a?.type === "mdxJsxAttribute" && /^style$/i.test(String(a.name ?? ""))));
+  }
+  for (const child of (node.children ?? []) as JsxNode[]) routeLiteralTags(child);
+}
+function remarkLiteralTagsThroughComponents() {
+  return (tree: JsxNode) => routeLiteralTags(tree);
+}
+
 // ── prose preprocessing (fences untouched) ───────────────────────────────────────
 // 1. escape `<` that doesn't start a known tag — agent-written docs routinely carry raw
 //    angle-bracket text (`<meeting_id>`, `a<b`, `<url>`) that would otherwise abort the
@@ -200,11 +254,27 @@ function remarkForbidExecutable() {
 // 2. rewrite [[Title]] → <Wikilink title="Title" /> (after escaping, so the injected tag
 //    survives);
 // 3. rewrite a doc PATH → <DocPath path="…" /> so the file the agent names is clickable.
-const KNOWN_TAGS = "Note|Warning|CardGroup|Card|Steps|Step|Tabs|Tab|Wikilink|DocPath|WorkspaceRef|ViewSource" +
+const KNOWN_TAGS = "Note|Warning|CardGroup|Card|Steps|Step|Tabs|TaskAsk|Task|Tab|Wikilink|DocPath|WorkspaceRef|ViewSource|RelDate" +
   // no single-letter html tags (b, i): `a<b then` in prose is far likelier than a raw
   // <b> tag, and an unclosed <b would abort the compile this pass exists to save
   "|a\\b|br|blockquote|code|details|div|em|h[1-6]|hr|img|kbd|li|ol|p\\b|pre|span|strong|sub|summary|sup|table|tbody|td|th|thead|tr|ul";
 const UNKNOWN_TAG_OPEN = new RegExp(`<(?!/?(?:${KNOWN_TAGS})(?:[\\s/>]|$))`, "g");
+/** AN UNKNOWN COMPONENT NEVER PRINTS AS A TAG (founder 2026-10-16: `<Steps>`/`<Step title=…>` were
+ *  shown as literal text). A capitalised tag this renderer does not know drops away: its children
+ *  stay, and a `title` becomes a bold line. Lower-case `<meeting_id>`-style prose is left to
+ *  `escapeUnknownTags`. */
+const COMPONENT_TAG = /<(\/?)([A-Z][A-Za-z0-9]*)((?:\s+[A-Za-z_:][\w:.-]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|\{[^}]*\}))?)*)\s*(\/?)>\n?/g;
+const KNOWN_COMPONENTS = new Set(KNOWN_TAGS.split("|").filter((t) => /^[A-Z]/.test(t)));
+export function degradeUnknownComponents(seg: string): string {
+  return seg.replace(COMPONENT_TAG, (m: string, close: string, name: string, attrs: string) => {
+    if (KNOWN_COMPONENTS.has(name)) return m;
+    if (close) return "";
+    const title = /\btitle\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(attrs ?? "");
+    const t = title ? (title[1] ?? title[2] ?? "").trim() : "";
+    return t ? `\n**${t}**\n\n` : "";
+  });
+}
+
 export function escapeUnknownTags(seg: string): string {
   return seg.replace(UNKNOWN_TAG_OPEN, "\\<");
 }
@@ -268,14 +338,41 @@ function workspaceRefsInProse(seg: string): string {
   });
 }
 
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** PLAIN NAMES THAT ARE PAGES (#1783): a known entity's name in prose → its chip, at its FIRST
+ *  mention only, and only names of two or more words (a one-word name is too often an ordinary
+ *  word). Never inside a tag, link text or a heading; a name already [[linked]] is not linked again. */
+export function entityNamesInProse(seg: string, names: string[], linked: Set<string>): string {
+  if (!names.length) return seg;
+  let out = seg;
+  for (const name of [...names].filter((n) => n.includes(" ")).sort((a, b) => b.length - a.length)) {
+    if (linked.has(name.toLowerCase())) continue;
+    const re = new RegExp(`(^|[^\\w\\[>/-])(${escapeRe(name)})(?![\\w\\]-])`, "g");
+    for (let m = re.exec(out); m; m = re.exec(out)) {
+      const at = m.index + m[1].length;
+      const before = out.slice(0, at);
+      const lineStart = before.lastIndexOf("\n") + 1;
+      if (before.lastIndexOf("<") > before.lastIndexOf(">")) continue;          // inside a tag
+      if (/^\s*#/.test(out.slice(lineStart, at))) continue;                     // a heading
+      if (before.lastIndexOf("[") > before.lastIndexOf("]")) continue;          // inside link text
+      linked.add(name.toLowerCase());
+      out = `${before}<Wikilink title=${JSON.stringify(name)} />${out.slice(at + name.length)}`;
+      break;
+    }
+  }
+  return out;
+}
+
 /** Rewrite every reference spelling into its interactive component, fences excepted. */
-export function transformDocRefs(src: string): string {
+export function transformDocRefs(src: string, names: string[] = []): string {
+  const linked = new Set<string>([...src.matchAll(/\[\[([^\]|]+)/g)].map((m) => m[1].trim().toLowerCase()));
   // split out fenced code blocks and inline code; odd indices are one or the other
   return src.split(/(```[\s\S]*?```|`[^`]*`)/g).map((seg, i) => {
     if (i % 2 === 0) {
-      const prose = escapeUnknownTags(seg)
+      const prose = escapeUnknownTags(degradeUnknownComponents(seg))
         .replace(/\[\[([^\]]+)\]\]/g, (_m, t: string) => `<Wikilink title=${JSON.stringify(t)} />`);
-      return workspaceRefsInProse(docPathsInProse(prose));
+      return entityNamesInProse(workspaceRefsInProse(docPathsInProse(prose)), names, linked);
     }
     if (seg.startsWith("```")) return seg;                         // fenced: literal, always
     const code = seg.slice(1, -1);
@@ -312,7 +409,7 @@ function TranscriptSlot({ meeting }: { meeting: string }): ReactNode {
     );
   }
   return (
-    <div data-transcript-slot={meeting} style={SLOT_BOX}>
+    <div data-transcript-slot={meeting} className="vx-meeting-chip-slot">
       <Widget id={`${TRANSCRIPT_WIDGET_KIND}:${meeting}`} params={{ meetingId: meeting }} active />
     </div>
   );
@@ -357,7 +454,11 @@ const SLOT_BOX: CSSProperties = {
 /** Workspace markdown → the page. A document that declares a transcript slot renders as its parts
  *  with the live transcript in place; every other document takes the single-segment path, which is
  *  the identical render it had before the slot existed. */
-export function MdxDoc({ children, style }: { children: string; style?: CSSProperties }): ReactNode {
+export function MdxDoc({ children, style, properties = true, outline: withOutline = true }: { children: string; style?: CSSProperties;
+  /** draw an entity page's frontmatter table on top — a page in the panel asks for it from "…" → Details */
+  properties?: boolean;
+  /** the "On this page" outline of a long page; an embedded document (the meeting's note) has none */
+  outline?: boolean }): ReactNode {
   // FRONTMATTER FIRST, THEN THE SPLIT, THEN COMMENTS. The slot marker IS an HTML comment, so
   // stripping comments before splitting would drop the widget as machinery — `stripHtmlComments`
   // therefore moved down into `MdxBody`, which sees only text segments.
@@ -377,16 +478,27 @@ export function MdxDoc({ children, style }: { children: string; style?: CSSPrope
   // where the proposal act was not registered.
   const kind = declaredKind(attrs);
   const head = docHeader(attrs, body,
-    kind === PROPOSAL_KIND ? <RegisteredDocAct kind={PROPOSAL_ACT_KIND} /> : <PolicySetupAct />) ?? (entityProperties(children) ? <EntityProperties source={children} /> : null);
-  if (!head && segments.length === 1 && segments[0].kind === "text") {
-    return <MdxBody style={style}>{segments[0].text}</MdxBody>;
+    kind === PROPOSAL_KIND ? <RegisteredDocAct kind={PROPOSAL_ACT_KIND} /> : <PolicySetupAct />) ?? (properties && entityProperties(children) ? <EntityProperties source={children} /> : null);
+  // THE PAGE NAMES ITS MEETING, IT DOES NOT EMBED IT (founder, UI lab 2026-10-14: "a meeting
+  // SIDEBAR with the meeting note .md EMBEDDED into it — not vice versa"). One chip at the top —
+  // whatever the canvas registers for the kind — for a page whose frontmatter or marker names one.
+  const slotMeeting = segments.find((x) => x.kind === "transcript");
+  const meeting = (attrs.find(([k]) => k === "meeting")?.[1] ?? "").trim()
+    || (slotMeeting && slotMeeting.kind === "transcript" ? slotMeeting.meeting : "")
+    // a brief that links its meeting near its top (`/?meeting=<id>`) is that meeting's page too
+    || (/\(\/?\?meeting=(\d{1,12})\)/.exec(body.split("\n").slice(0, 12).join("\n"))?.[1] ?? "");
+  const prose = segments.filter((x) => x.kind === "text");
+  const outline = withOutline ? <Outline headings={enrichMarkdown(stripHtmlComments(body)).headings} /> : null;
+  if (!head && !meeting && prose.length === 1) {
+    return <><div>{outline}</div><MdxBody style={style}>{prose[0].text}</MdxBody><Backlinks /></>;
   }
   return (
     <div className="c-1" style={{ ...style }}>
+      {meeting && <TranscriptSlot meeting={meeting} />}
       {head}
-      {segments.map((seg, i) => (seg.kind === "transcript"
-        ? <TranscriptSlot key={`w${i}`} meeting={seg.meeting} />
-        : <MdxBody key={`t${i}`}>{seg.text}</MdxBody>))}
+      {outline}
+      {prose.map((seg, i) => <MdxBody key={`t${i}`}>{seg.kind === "text" ? seg.text : ""}</MdxBody>)}
+      <Backlinks />
     </div>
   );
 }
@@ -400,10 +512,21 @@ function MdxBody({ children, style }: { children: string; style?: CSSProperties 
   // escapeUnknownTags below would turn `<!-- desk:pinned:start -->` into visible prose, and the
   // plain-Markdown fallback reads this same string (#1590).
   const src = stripHtmlComments(children ?? "");
+  const rich = useMemo(() => enrichMarkdown(src), [src]);
+  const taskApi = useTaskApi(rich.tasks);
   const [state, setState] = useState<CompileState>({ status: "loading" });
   // Recognizing a workspace NAME needs the known set, and the transform cannot await. Prime the
   // snapshot once and recompile when it lands; a warm snapshot costs no second compile.
   const [wsGen, setWsGen] = useState(0);
+  const meta = useContext(DocMetaContext);
+  // the names of this workspace's entity pages, for plain mentions (recompile once they are known);
+  // a page only — a chat reply links with [[ ]] already
+  useEffect(() => {
+    if (!meta.path) return;
+    let cancelled = false;
+    void primeEntityNames(meta.slug).then((changed) => { if (!cancelled && changed) setWsGen((n) => n + 1); }, () => {});
+    return () => { cancelled = true; };
+  }, [meta.path, meta.slug]);
   useEffect(() => {
     if (knownWorkspaces().length) return;
     let cancelled = false;
@@ -414,11 +537,11 @@ function MdxBody({ children, style }: { children: string; style?: CSSProperties 
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
-    evaluate(transformDocRefs(src), { ...runtime, remarkPlugins: [remarkGfm, remarkForbidExecutable] })
+    evaluate(transformDocRefs(rich.src, meta.path ? knownEntityNames(meta.slug) : []), { ...runtime, remarkPlugins: [remarkGfm, remarkForbidExecutable, remarkLiteralTagsThroughComponents] })
       .then((mod) => { if (!cancelled) setState({ status: "ok", Content: mod.default }); })
       .catch((err: unknown) => { if (!cancelled) setState({ status: "fallback", error: String((err as Error)?.message ?? err) }); });
     return () => { cancelled = true; };
-  }, [src, wsGen]);
+  }, [rich.src, wsGen, meta.path, meta.slug]);
 
   if (state.status === "loading") return <div className="c-3 t-xs" style={{ ...style }}>rendering…</div>;
   if (state.status === "fallback") {
@@ -436,7 +559,7 @@ function MdxBody({ children, style }: { children: string; style?: CSSProperties 
   const Content = state.Content;
   return (
     <div className="vx-prose" style={style}>
-      <Content components={MDX_COMPONENTS} />
+      <TaskContext.Provider value={taskApi}><Content components={MDX_COMPONENTS} /></TaskContext.Provider>
     </div>
   );
 }

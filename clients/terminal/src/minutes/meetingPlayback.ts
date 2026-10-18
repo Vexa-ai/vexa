@@ -1,8 +1,8 @@
 "use client";
 import { useSyncExternalStore } from "react";
 
-type Player = { seek: (seconds: number) => void; pause: () => void; originMs?: number };
-type Snapshot = { available: boolean; time: number | null; originMs?: number };
+type Player = { seek: (seconds: number) => void; pause: () => void; toggle?: () => void; originMs?: number };
+type Snapshot = { available: boolean; time: number | null; originMs?: number; playing?: boolean };
 const EMPTY: Snapshot = { available: false, time: null };
 const players = new Map<string, Map<symbol, Player>>();
 const selected = new Map<string, symbol>();
@@ -27,7 +27,14 @@ export function registerPlayback(meeting: string, player: Player) {
         choose(meeting, id);
       }
       if (selected.get(meeting) !== id || !Number.isFinite(time)) return;
-      snapshots.set(meeting, { available: true, time, originMs: player.originMs }); emit();
+      snapshots.set(meeting, { ...snapshots.get(meeting), available: true, time, originMs: player.originMs }); emit();
+    },
+    /** The player started or stopped: the header's Play recording reads it. */
+    playing(on: boolean) {
+      if (selected.get(meeting) !== id) return;
+      const cur = snapshots.get(meeting) ?? { available: true, time: null, originMs: player.originMs };
+      if (!!cur.playing === on) return;
+      snapshots.set(meeting, { ...cur, playing: on }); emit();
     },
     dispose() {
       group.delete(id);
@@ -45,6 +52,12 @@ export function seekMeeting(meeting: string, seconds: number) {
   if (!Number.isFinite(seconds) || seconds < 0) return;
   const id = selected.get(meeting);
   if (id) players.get(meeting)?.get(id)?.seek(seconds);
+}
+/** Play or pause this meeting's recording — the header's "Play recording", the same player the
+ *  transcript seeks. A meeting with no player is a no-op. */
+export function toggleMeetingPlayback(meeting: string) {
+  const id = selected.get(meeting);
+  if (id) players.get(meeting)?.get(id)?.toggle?.();
 }
 export function useMeetingPlayback(meeting?: string) {
   return useSyncExternalStore(

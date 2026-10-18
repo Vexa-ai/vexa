@@ -10,6 +10,34 @@
       "targets": ["compose", "helm", "lite"]
     },
     {
+      "key": "VEXA_FLOWS_API_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 the sign-in mail is sent by the terminal itself)",
+      "description": "flows-api's internal URL. Set, the sign-in link is sent through the deployment's one outbound mail path (flows POST /mail/sign-in: the global account's `sign-in` template, the sender identity, the audit); any failure there falls back to the terminal's own baked mail, so signing in never depends on it.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_MAIL_REPLY_TO",
+      "class": "defaulted",
+      "default": "(unset \u2014 no Reply-To)",
+      "description": "The Reply-To on every mail — the mailbox the inbound mail sensor reads. The same key flows reads.",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_MAIL_RELAY",
+      "class": "defaulted",
+      "default": "(unset \u2014 VEXA_MAIL_SMTP_HOST as configured)",
+      "description": "THE ONE SWITCH for real delivery, shared with flows: `capture` sends every mail to VEXA_MAIL_CAPTURE_SMTP and reaches no real mailbox; `relay` uses the VEXA_MAIL_SMTP_* relay for real and never relays a recipient at a test domain (.test, .invalid, .localhost, .example, example.com/org/net).",
+      "targets": ["compose"]
+    },
+    {
+      "key": "VEXA_MAIL_CAPTURE_SMTP",
+      "class": "defaulted",
+      "default": "mailpit:1025",
+      "description": "host:port of the capture double used when VEXA_MAIL_RELAY=capture.",
+      "targets": ["compose"]
+    },
+    {
       "key": "VEXA_MAIL_SMTP_PORT",
       "class": "defaulted",
       "default": "25 (1025 for the dev double when VEXA_MAIL_SMTP_HOST is unset)",
@@ -152,11 +180,25 @@
       "targets": ["compose", "helm"]
     },
     {
+      "key": "VEXA_DEV_TEST_USERS",
+      "class": "defaulted",
+      "default": "(unset — off)",
+      "description": "app.dev tooling only: `1` gives an instance administrator \"Test users…\" in the account menu — list and create @example.test accounts and mint a one-time sign-in link for them (redeemed through the ordinary door and admission). Any other value, or unset, and the routes answer 404. The Helm chart and Lite never set it.",
+      "targets": ["compose"]
+    },
+    {
       "key": "VEXA_SIGNIN_METHODS",
       "class": "defaulted",
       "default": "(unset — every configured method)",
       "description": "Which sign-in doors this instance offers: a comma-separated subset of google, microsoft, oidc, email. A method left out is not registered (its routes refuse), not merely hidden. An unknown entry, or oidc without VEXA_OIDC_ISSUER, refuses to start.",
       "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_ADMIN_ACCOUNT",
+      "class": "defaulted",
+      "default": "(unset — no Company profile switch is offered)",
+      "description": "The deployment's admin account address(es), the same value admin-api reads (comma-separated). An instance administrator's account menu offers Switch to Company, which opens that account's session on their tab and gives it back (src/app/api/auth/company, ADR-0049). The switch counts only when admin-api answers admin_account for the opened session.",
+      "targets": ["compose", "helm", "lite"]
     }
   ],
   "capabilities": {

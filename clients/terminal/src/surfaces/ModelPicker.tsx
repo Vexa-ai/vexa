@@ -23,11 +23,13 @@
  *
  *  A pick the server refuses (gone from the catalog, not open to this person, an effort the model
  *  does not offer) is shown as the server's own sentence; the stored pick is left as it was. */
+import { createPortal } from "react-dom";
+import { useViewportPlacement } from "../ui-kit/placement";
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Fold, Icon, type MenuItem } from "../ui-kit";
 import { Gauge } from "lucide-react";
-import { presentError } from "./apiClient";
-import { effectiveModel, effortsOf, getModelCatalog, setChatModel, setDefaultModel, type Adapter, type Effort, type ModelEntry, type ModelList } from "./modelsApi";
+import { presentError } from "../data/apiClient";
+import { effectiveEffort, effectiveModel, effortsOf, getModelCatalog, setChatModel, type Adapter, type Effort, type ModelEntry, type ModelList } from "./modelsApi";
 
 const textButton: CSSProperties = {
   height: 28, minWidth: 0, display: "inline-flex", alignItems: "center", gap: 3, padding: "0 6px",
@@ -36,8 +38,8 @@ const textButton: CSSProperties = {
 };
 const ellipsis: CSSProperties = { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 const menuBox: CSSProperties = {
-  position: "absolute", zIndex: 30, bottom: 34, right: 0, width: 260, maxWidth: "calc(100vw - 32px)",
-  maxHeight: 320, overflowY: "auto", border: "1px solid var(--line)", borderRadius: 10,
+  zIndex: 1000, width: 260, maxWidth: "calc(100vw - 32px)",
+  maxHeight: "min(320px, calc(100vh - 16px))", overflowY: "auto", border: "1px solid var(--line)", borderRadius: 10,
   background: "var(--panel)", boxShadow: "0 14px 34px rgba(0,0,0,.32)", padding: 4,
 };
 const item: CSSProperties = {
@@ -102,6 +104,8 @@ function TextMenu({ label, title, buttonLabel, danger, data, children, open, set
     return () => document.removeEventListener("pointerdown", onDown);
   }, [open]);
   const close = () => { setOpen(false); trigger.current?.focus(); };
+  // in a portal, always fully on screen (founder 2026-10-16: the list was clipped at the top)
+  const placed = useViewportPlacement(open, trigger, box, { align: "end", prefer: "above" });
   return (
     <div style={{ position: "relative", minWidth: 0, display: "flex" }}>
       <button ref={trigger} type="button" aria-label={buttonLabel} aria-haspopup="menu" aria-expanded={open} title={title}
@@ -112,15 +116,15 @@ function TextMenu({ label, title, buttonLabel, danger, data, children, open, set
         <span style={ellipsis}>{label}</span>
         <Icon name="chevR" size={10} style={{ flex: "none", transform: open ? "rotate(-90deg)" : "rotate(90deg)", transition: "transform .12s", opacity: 0.7 }} />
       </button>
-      {open && (
+      {open && createPortal(
         <div ref={box} role="menu" aria-label={buttonLabel}
           onKeyDown={(e) => {
             if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); e.stopPropagation(); close(); return; }
             moveFocus(e);
           }}
-          style={{ ...menuBox, ...(width ? { width } : {}) }}>
+          style={{ ...menuBox, ...placed, ...(width ? { width } : {}) }}>
           {children}
-        </div>
+        </div>, document.body,
       )}
     </div>
   );
@@ -175,7 +179,7 @@ export function ModelPicker({ session, onEffortItems }: { session: string; onEff
   const effortStale = !!list?.selected && !list.models.some((m) => m.id === list.selected);
   const effortLevels = effortStale ? [] : effortsOf(effortModel);
   const effortDefaultLevel = effortModel?.capabilities.default_effort ?? null;
-  const effortPicked: Effort | "" = list?.selected_effort ?? effortDefaultLevel ?? "";
+  const effortPicked: Effort | "" = list ? effectiveEffort(list, effortModel) : "";
   const effortKey = `${effortLevels.join(",")}|${effortPicked}|${effortDefaultLevel ?? ""}`;
   useEffect(() => {
     const report = reportRef.current;
@@ -203,17 +207,23 @@ export function ModelPicker({ session, onEffortItems }: { session: string; onEff
     try {
       const r = await setChatModel(session, id);
       picks.current += 1;
-      setList((l) => (l ? { ...l, selected: r.model, selected_effort: null } : l));
+      // a pick is also the person's default for new chats (agent-api remembers it); "" picks nothing
+      setList((l) => (l ? { ...l, selected: r.model, selected_effort: null,
+        ...(r.model ? { default: r.model, default_effort: null } : {}) } : l));
     } catch (e) {
       setError(presentError(e).headline);
     }
   };
+  // "Use for new chats" on a chat that is not on the default: re-pick it here, which the server
+  // remembers as the default — the same one store every pick writes.
   const makeDefault = async (id: string) => {
     setOpen(false);
     setError(null);
     try {
-      await setDefaultModel(id);
-      setList((l) => (l ? { ...l, default: id } : l));
+      const level = list.selected_effort ?? "";
+      await setChatModel(session, id, level);
+      picks.current += 1;
+      setList((l) => (l ? { ...l, selected: id, default: id, default_effort: level || null } : l));
     } catch (e) {
       setError(presentError(e).headline);
     }
@@ -225,7 +235,10 @@ export function ModelPicker({ session, onEffortItems }: { session: string; onEff
       const r = await setChatModel(session, list.selected ?? "", level);
       picks.current += 1;
       // what the server stored: its echo, else the level it accepted
-      setList((l) => (l ? { ...l, selected_effort: r.effort !== undefined ? r.effort : (level || null) } : l));
+      const stored = r.effort !== undefined ? r.effort : (level || null);
+      // the level rides with the chat's model into the person's default for new chats
+      setList((l) => (l ? { ...l, selected_effort: stored,
+        ...(current ? { default: current.id, default_effort: stored } : {}) } : l));
     } catch (e) {
       setError(presentError(e).headline);
     }
@@ -234,8 +247,15 @@ export function ModelPicker({ session, onEffortItems }: { session: string; onEff
   pickEffortRef.current = (lvl) => void pickEffort(lvl);
   const efforts = stale ? [] : effortsOf(current);
   const effortDefault = current?.capabilities.default_effort ?? null;
-  const effortValue: Effort | "" = list.selected_effort ?? effortDefault ?? "";
-  const name = stale ? "Model unavailable" : current ? splitDisplayName(current.display_name).short : "Model";
+  const effortValue: Effort | "" = effectiveEffort(list, current);
+  // WHAT RAN, NOT ONLY WHAT IS PICKED (0.13.3): a chat's worker keeps the model it started on, so
+  // until the next message starts one on the pick the button names the model that is answering, and
+  // says the switch is next. `running` is the server's: the model the chat's worker was started on.
+  const ran = list.running ? list.models.find((m) => m.id === list.running) ?? null : null;
+  const pending = !stale && !!ran && !!current && ran.id !== current.id;
+  const name = stale ? "Model unavailable"
+    : pending && ran ? splitDisplayName(ran.display_name).short
+    : current ? splitDisplayName(current.display_name).short : "Model";
   const effortMenu = (
         <TextMenu open={effortOpen} setOpen={(v) => { setEffortOpen(v); if (v) setOpen(false); }} buttonLabel="Effort for this chat"
             title={`Reasoning effort for ${name}`} data={{ "data-effort-picker": "", "data-effort": effortValue }}
@@ -265,7 +285,9 @@ export function ModelPicker({ session, onEffortItems }: { session: string; onEff
     <div style={{ display: "flex", alignItems: "center", gap: 2, minWidth: 0, flex: "0 1 auto", position: "relative" }}>
       <div data-model-picker style={{ minWidth: 56, display: "flex" }}>
         <TextMenu open={open} setOpen={(v) => { setOpen(v); if (v) setEffortOpen(false); }} buttonLabel="Model for this chat"
-          title={stale ? "This chat's model is no longer offered — pick another" : `This chat runs on ${current?.display_name ?? "the default model"}`}
+          title={stale ? "This chat's model is no longer offered — pick another"
+            : pending && ran && current ? `This chat runs on ${ran.display_name} — ${current.display_name} from your next message`
+            : `This chat runs on ${current?.display_name ?? "the default model"}`}
           danger={stale} data={{}} label={name} width={280}>
           {list.models.map((m) => {
             const active = !stale && current?.id === m.id;
@@ -301,6 +323,9 @@ export function ModelPicker({ session, onEffortItems }: { session: string; onEff
           <div style={{ ...muted, padding: "4px 8px 6px" }}>A new pick takes effect on this chat&apos;s next message.</div>
         </TextMenu>
       </div>
+      {pending && current && (
+        <span data-model-pending="" className="c-3 t-xs">switching to {splitDisplayName(current.display_name).short} on your next message</span>
+      )}
       {efforts.length > 0 && (onEffortItems
         ? <Fold at={400} wide={effortMenu} narrow={null} />
         : effortMenu)}

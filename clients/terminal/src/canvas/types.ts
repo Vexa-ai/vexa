@@ -1,5 +1,13 @@
 import type { ComponentType } from "react";
 
+/** A stretch of captured audio that was never transcribed (prod-cutover R4) — drawn as a quiet
+ *  marker where the words would have been, never as a segment. */
+export interface TranscriptGap {
+  startMs?: number;           // ABSOLUTE wall-clock start, epoch ms
+  endMs?: number;
+  label: string;              // "gap mm:ss–mm:ss (not transcribed)", composed by meeting-api
+}
+
 export interface TranscriptSegment {
   id?: string;
   speaker?: string;
@@ -61,6 +69,7 @@ export interface MeetingState {
   meeting: {
     id: string;
     nativeId?: string;
+    platform?: string;          // "voice_note" picks the note's own words over the bot's
     title: string;
     status?: string;
     live?: boolean;             // true while the backend session is live (session_uid present)
@@ -72,6 +81,8 @@ export interface MeetingState {
   transcript: {
     segments: TranscriptSegment[];
     liveCaption?: string;
+    /** Audio the meeting never transcribed — recorded meetings only. */
+    gaps?: TranscriptGap[];
   };
   entities: {
     people: any[];
@@ -86,6 +97,8 @@ export interface MeetingState {
     reconnects?: number;
     lastEventAt?: number;
     lastTranscriptAt?: number;
+    /** The bot's latest transcription progress report (seconds behind, seconds quiet, final pass). */
+    progress?: { backlogS: number; silenceS: number | null; finishing: boolean; at: number };
     issues?: MeetingDiagnosticIssue[];
   };
   metrics: Record<string, number | string>;

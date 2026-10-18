@@ -16,7 +16,7 @@ import { Markdown, stripHtmlComments } from "../Markdown";
 import { MdxDoc } from "../MdxDoc";
 
 // The chips resolve against a workspace snapshot; nothing here is about them, so the world is empty.
-vi.mock("../../surfaces/workspaceApi", () => ({
+vi.mock("../../data/workspaceApi", () => ({
   listWorkspaceTree: vi.fn(async () => []),
   readActiveSet: vi.fn(async () => ({ subject: "57", active: [] })),
   listSharedMemberships: vi.fn(async () => []),

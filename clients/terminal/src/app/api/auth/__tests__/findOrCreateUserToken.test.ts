@@ -48,6 +48,7 @@ class FakeAdminApi {
   users = new Map<string, { id: number; email: string }>();
   tokens = new Map<number, FakeTokenInfo[]>();
   calls: Recorded[] = [];
+  verified: { userId: number; via: string }[] = [];
   private nextUserId = 100;
   private nextTokenId = 1000;
   /** Real wall-clock at construction — the prune compares against a real `Date.now()`, so every
@@ -156,6 +157,14 @@ class FakeAdminApi {
       const first = !current[provider];
       this.bindings.set(userId, { ...current, [provider]: subject });
       return jsonRes({ bound: first ? "first" : "same" });
+    }
+
+    // PUT /internal/users/{id}/email-verified — the address was proven at sign-in (R4)
+    const ver = path.match(/^\/internal\/users\/([^/]+)\/email-verified$/);
+    if (ver && method === "PUT") {
+      const { via } = JSON.parse(String(init?.body ?? "{}")) as { via: string };
+      this.verified.push({ userId: Number(ver[1]), via });
+      return jsonRes({ verified: "x" });
     }
 
     // GET /admin/users/email/{email}
@@ -521,5 +530,20 @@ describe("findOrCreateUserToken — an OAuth sign-in is bound to its provider su
   it("a sign-in with no subject (the emailed link, the dev login) binds nothing", async () => {
     expect((await findOrCreateUserToken("ana@example.com")).ok).toBe(true);
     expect(fake.calls.some((c) => c.path.endsWith("/provider-subject"))).toBe(false);
+  });
+});
+
+
+describe("findOrCreateUserToken — the address is recorded as verified only by a proof of the inbox (R4)", () => {
+  it("a redeemed sign-in link and an identity provider record it; a direct login does not", async () => {
+    expect((await findOrCreateUserToken("a@example.org", { emailVerifiedVia: "magic_link" })).ok).toBe(true);
+    expect((await findOrCreateUserToken("b@example.org", { subject: "google:123", emailVerifiedVia: "oidc:google" })).ok).toBe(true);
+    expect((await findOrCreateUserToken("c@example.org")).ok).toBe(true);
+    expect(fake.verified.map((v) => v.via)).toEqual(["magic_link", "oidc:google"]);
+  });
+  it("a failure to record it never blocks the sign-in", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) =>
+      /email-verified$/.test(new URL(url).pathname) ? new Response("down", { status: 503 }) : fake.fetch(url, init)));
+    expect((await findOrCreateUserToken("d@example.org", { emailVerifiedVia: "magic_link" })).ok).toBe(true);
   });
 });

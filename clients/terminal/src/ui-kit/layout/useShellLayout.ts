@@ -11,7 +11,7 @@
  *    · overlays  — whether the rail drawer or the pages sheet is open right now. Transient: they
  *                  close when the mode changes, and they never touch `prefs`. */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type RefObject } from "react";
-import { DEFAULT_PREFS, shellLayout, type Pane, type ShellLayout, type ShellMode, type ShellPrefs, type StoredWidths } from "./shellLayout";
+import { FRESH_PREFS as DEFAULT_PREFS, shellLayout, type Pane, type ShellLayout, type ShellMode, type ShellPrefs, type StoredWidths } from "./shellLayout";
 
 export const SHELL_KEY = "vexa.shell.v1";
 
@@ -28,7 +28,8 @@ export function readShellStore(fallback?: () => Partial<ShellStore> | null, key:
   try { raw = localStorage.getItem(key); } catch { /* storage unavailable: defaults */ }
   if (raw === null) {
     const legacy = (() => { try { return fallback?.() ?? null; } catch { return null; } })();
-    return { prefs: { ...DEFAULT_PREFS, ...(legacy?.prefs ?? {}) }, widths: legacy?.widths ?? {} };
+    // The legacy store's pagesOpen predates the reader's own choice: only the rail carries over.
+    return { prefs: { ...DEFAULT_PREFS, ...(typeof legacy?.prefs?.railOpen === "boolean" ? { railOpen: legacy.prefs.railOpen } : {}) }, widths: legacy?.widths ?? {} };
   }
   let parsed: unknown = null;
   try { parsed = JSON.parse(raw); } catch { /* junk: defaults */ }
@@ -36,7 +37,10 @@ export function readShellStore(fallback?: () => Partial<ShellStore> | null, key:
   const p = (o.prefs && typeof o.prefs === "object" ? o.prefs : {}) as Record<string, unknown>;
   const prefs: ShellPrefs = {
     railOpen: typeof p.railOpen === "boolean" ? p.railOpen : DEFAULT_PREFS.railOpen,
-    pagesOpen: typeof p.pagesOpen === "boolean" ? p.pagesOpen : DEFAULT_PREFS.pagesOpen,
+    // A stored open/closed is honoured only once the READER chose it: a store written before the
+    // desk went off by default carries the old default, not a choice.
+    pagesOpen: p.pagesChosen === true && typeof p.pagesOpen === "boolean" ? p.pagesOpen : DEFAULT_PREFS.pagesOpen,
+    ...(p.pagesChosen === true ? { pagesChosen: true } : {}),
   };
   const w = (o.widths && typeof o.widths === "object" ? o.widths : {}) as Record<string, unknown>;
   const widths: StoredWidths = {};
@@ -131,12 +135,15 @@ export function useShellLayout(rootRef: RefObject<HTMLElement | null>, opts: { l
     else setDrawerOpen((v) => !v);
   }, [railDocks, update]);
   const setPagesOpen = useCallback((open: boolean) => {
-    if (pagesDock) update((s) => (s.prefs.pagesOpen === open ? s : { ...s, prefs: { ...s.prefs, pagesOpen: open } }));
+    if (pagesDock) update((s) => (s.prefs.pagesOpen === open && s.prefs.pagesChosen ? s : { ...s, prefs: { ...s.prefs, pagesOpen: open, pagesChosen: true } }));
     else setSheetOpen(open);
   }, [pagesDock, update]);
   const revealPages = useCallback((byReader: boolean) => {
-    if (pagesDock) update((s) => (s.prefs.pagesOpen ? s : { ...s, prefs: { ...s.prefs, pagesOpen: true } }));
-    else if (byReader) setSheetOpen(true);
+    // Only the READER's ask opens it (a link they clicked, the folder button, the agent's open_page
+    // on their behalf) — never a page the room laid out or the agent wrote while they were typing.
+    if (!byReader) return;
+    if (pagesDock) update((s) => (s.prefs.pagesOpen ? s : { ...s, prefs: { ...s.prefs, pagesOpen: true, pagesChosen: true } }));
+    else setSheetOpen(true);
   }, [pagesDock, update]);
   const closeOverlays = useCallback(() => { setDrawerOpen(false); setSheetOpen(false); }, []);
 

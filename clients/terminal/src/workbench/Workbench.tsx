@@ -14,21 +14,21 @@ const PANES_KEY = "vexa.terminal.panes.v2";
 const savedSizes = (): number[] | undefined => { try { const s = localStorage.getItem(PANES_KEY); const a = s ? JSON.parse(s) : null; return Array.isArray(a) && a.length === 3 ? a : undefined; } catch { return undefined; } };
 const persistSizes = (s: number[]) => { try { localStorage.setItem(PANES_KEY, JSON.stringify(s)); } catch { /* noop */ } };
 import { useService, useStore, KeybindingServiceId, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, ASK_CHAT_EVENT } from "../platform";
-import { LayoutServiceId } from "./layout";
+import { LayoutServiceId } from "../platform/layout";
 import { CommandPalette } from "./CommandPalette";
 import { OpsNotice } from "./OpsNotice";
 import { registry } from "../contributions";
 import { Icon } from "../ui-kit";
 import { updatesBadge, markUpdatesSeen, updatesSeenTs } from "../surfaces/updatesBadge";
-import { readActiveSet, readWorkspaceGit } from "../surfaces/workspaceApi";
+import { readActiveSet, readWorkspaceGit } from "../data/workspaceApi";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { Chat } from "../surfaces/chat";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { liveMeetingsNow } from "../surfaces/liveMeetings";
 import { firstViewPlan } from "./firstView";
-import { isOwnedPath, meetingIdFromPath, meetingPath } from "../app/meetingRoute";
-import { useTheme } from "../app/theme";
-import { meetingsOnly, minutesOnly } from "../app/mode";
+import { isOwnedPath, meetingIdFromPath, meetingPath } from "../platform/meetingRoute";
+import { useTheme } from "../platform/theme";
+import { meetingsOnly, minutesOnly } from "../platform/mode";
 
 // ── theme toggle: dark ⇄ day mode, icon button in the profile row ──
 function ThemeToggle() {
@@ -163,7 +163,7 @@ function LeftPane() {
       if (document.hidden) return;
       try {
         const mounts = (await readActiveSet()).active;
-        const gits = await Promise.all(mounts.map((m) => readWorkspaceGit(m.primary ? undefined : { slug: m.slug }).catch(() => null)));
+        const gits = await Promise.all(mounts.map((m) => readWorkspaceGit((m.desk ?? m.primary) ? undefined : { slug: m.slug }).catch(() => null)));
         const member = gits.flatMap((g) => (g ? g.commits : [])).filter((c) => c.kind === "member" && (c.ts ?? 0) > 0);
         newestRef.current = member.reduce((mx, c) => Math.max(mx, c.ts ?? 0), 0);
         updatesBadge.set(member.filter((c) => (c.ts ?? 0) > updatesSeenTs()).length);

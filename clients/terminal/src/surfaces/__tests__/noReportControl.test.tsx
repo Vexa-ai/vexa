@@ -26,7 +26,7 @@ vi.mock("../chatStream", async (importOriginal) => ({
 import { Chat } from "../chat";
 import { PagesPanel } from "../../minutes/PagesPanel";
 import { ServicesProvider, createContainer, reg, CommandServiceId, type CommandService, ASK_CHAT_EVENT } from "../../platform";
-import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
+import { LayoutServiceId, createLayoutService } from "../../platform/layout";
 
 const container = () => createContainer([
   reg(LayoutServiceId, () => createLayoutService("files")),
@@ -85,8 +85,10 @@ describe("the terminal has no direct friction-report control", () => {
       <PagesPanel pages={[{ path: "drafts/prd.md", label: "prd" }]} docPath="drafts/prd.md"
         onOpen={() => {}} body={"# The PRD\n\nOne paragraph."} />,
     );
-    // the header is there — its other utilities still render — and the report button is not
-    expect(root.querySelector('[data-doc-act="copy"]')).toBeTruthy();
+    // the page's acts are its one "…" (UI decisions 12): opened, they are there — and no report
+    fireEvent.click(root.querySelector("[data-doc-more]")!);
+    expect(document.querySelector('[data-doc-act="copy"]')).toBeTruthy();
     expectNoReportControl(root);
+    expectNoReportControl(document.body);
   });
 });

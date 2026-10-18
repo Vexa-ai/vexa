@@ -14,7 +14,7 @@ import {
 import { WsLink, WorkspaceName } from "../WsLink";
 import {
   isWorkspaceRouteId, workspacePath, workspaceRouteFromPath, isWorkspacePath,
-} from "../../app/workspaceRoute";
+} from "../../platform/workspaceRoute";
 
 const ID = "k4m5x2q7bd";
 
@@ -129,7 +129,7 @@ describe("the chip", () => {
     render(<WsLink refText={`ws:${ID}/robin-vale`} />);
     const chip = await screen.findByRole("link");
     expect(chip.textContent).toContain("Robin Vale");
-    expect(chip.getAttribute("title")).toContain("ASWF DNA Project");
+    expect(chip.getAttribute("aria-label")).toContain("ASWF DNA Project");
   });
 
   it("not-yours — greyed, says whose it is, and does NOT invite a click", async () => {

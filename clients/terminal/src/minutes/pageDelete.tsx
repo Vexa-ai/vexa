@@ -17,12 +17,12 @@ import { createPortal } from "react-dom";
 import { PAGE_REMOVED_EVENT, WORKSPACE_COMMIT_EVENT } from "../platform";
 import { Modal } from "../ui-kit/Modal";
 import { invalidateDocLinkCaches } from "../ui-kit/docLinks";
-import { presentError } from "../surfaces/apiClient";
+import { presentError } from "../data/apiClient";
 import {
   listSharedMemberships, readWorkspaceBySlug, removeWorkspaceFile, restoreWorkspaceFile,
-} from "../surfaces/workspaceApi";
+} from "../data/workspaceApi";
 import { navigateView } from "./roomView";
-import { type as ty } from "./tokens";
+import "./minutes.css";
 
 /** What is being deleted, as the dialog and the toast name it. `slug` absent = the reader's desk. */
 export interface PageTarget { path: string; slug?: string; title: string; workspace: string }
@@ -168,19 +168,18 @@ export function PageRemovedToast() {
   }, [r]);
   if (!r || typeof document === "undefined") return null;
   return createPortal(
-    <div data-page-removed role="status" style={{
-      position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)", zIndex: 1100,
-      display: "flex", alignItems: "center", gap: 12, padding: "8px 10px 8px 14px", maxWidth: "min(520px, calc(100vw - 32px))",
-      background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.35)",
+    <div data-page-removed role="status" className="vx-removed-toast" style={{
+      position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)",
+      display: "flex", alignItems: "center", gap: 12, maxWidth: "min(520px, calc(100vw - 32px))",
     }}>
-      <span style={{ ...ty.body, fontSize: 13, color: r.error ? "var(--danger)" : "var(--t1)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      <span className="vx-removed-text" data-tone={r.error ? "danger" : undefined} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {r.error ? `Could not restore: ${r.error}` : <>Deleted <b>{r.target.title}</b>.</>}
       </span>
       <button data-page-undo onClick={() => void undoDelete()} disabled={r.undoing}
-        style={{ ...ty.chip, flex: "none", background: "transparent", border: "none", color: "var(--accent)", fontWeight: 600, cursor: r.undoing ? "default" : "pointer", padding: "3px 6px" }}>
+        className="vx-removed-undo" style={{ flex: "none", cursor: r.undoing ? "default" : "pointer" }}>
         {r.undoing ? "Restoring…" : "Undo"}</button>
       <button aria-label="Dismiss" onClick={dismissRemoved}
-        style={{ flex: "none", background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "0 4px" }}>×</button>
+        className="vx-removed-dismiss" style={{ flex: "none" }}>×</button>
     </div>,
     document.body,
   );
@@ -206,15 +205,15 @@ export function DeletePageDialog(p: { target: PageTarget; onClose: () => void; o
   return (
     <Modal title={`Delete ${p.target.title}?`} onClose={p.onClose}>
       <div data-page-delete-dialog style={{ display: "flex", flexDirection: "column" }}>
-        <p style={{ fontSize: 13, color: "var(--t2)", margin: 0, lineHeight: 1.6 }}>
-          It&apos;s removed from <b style={{ color: "var(--t1)" }}>{p.target.workspace}</b>; you can restore it from History.
+        <p className="vx-pgdel-body">
+          It&apos;s removed from <b className="c-1">{p.target.workspace}</b>; you can restore it from History.
         </p>
-        {error && <p data-page-delete-error role="alert" style={{ fontSize: 12, color: "var(--danger)", margin: "9px 0 0", lineHeight: 1.5 }}>Could not delete: {error}</p>}
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+        {error && <p data-page-delete-error role="alert" className="vx-pgdel-error">Could not delete: {error}</p>}
+        <div className="mt-4" style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button data-page-delete-cancel disabled={busy} onClick={p.onClose}
-            style={{ fontSize: 13, padding: "8px 16px", background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
+            className="vx-pgdel-btn">Cancel</button>
           <button ref={confirm} data-page-delete-confirm disabled={busy} onClick={() => void run()}
-            style={{ fontSize: 13, padding: "8px 16px", background: "var(--danger)", color: "var(--bg)", border: "none", borderRadius: 8, cursor: busy ? "default" : "pointer", fontWeight: 600 }}>
+            className="vx-pgdel-btn" data-tone="danger" style={{ cursor: busy ? "default" : "pointer" }}>
             {busy ? "Deleting…" : "Delete page"}</button>
         </div>
       </div>

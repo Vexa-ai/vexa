@@ -1,6 +1,6 @@
 /** `./callsList` — the pure half of the navigator's Calls view. */
 import { describe, it, expect } from "vitest";
-import { callLabel, callRows, contentMatches, groupCalls, matchCalls, callsPerWorkspace } from "../callsList";
+import { meetingDisplayName, callLabel, callRows, contentMatches, groupCalls, matchCalls, callsPerWorkspace } from "../callsList";
 import type { MeetingMock } from "../../surfaces/meetingModel";
 
 const m = (o: Partial<MeetingMock> & { id: string }): MeetingMock => ({
@@ -9,10 +9,17 @@ const m = (o: Partial<MeetingMock> & { id: string }): MeetingMock => ({
 });
 
 describe("callLabel", () => {
-  it("title, else platform + native id, else platform + row id", () => {
+  it("UI decisions 14: its title · else the people in it · else Call with Vexa — never an id", () => {
     expect(callLabel(m({ id: "1", title_custom: " Sync " }))).toBe("Sync");
-    expect(callLabel(m({ id: "1", platform: "zoom", native_id: "123" }))).toBe("Zoom · 123");
-    expect(callLabel(m({ id: "7", platform: "teams" }))).toBe("Teams · #7");
+    expect(callLabel(m({ id: "1", platform: "zoom", native_id: "123" }))).toBe("Call with Vexa");
+    expect(callLabel(m({ id: "7", platform: "teams" }))).toBe("Call with Vexa");
+    // the store's fallback title is platform · id: not a name
+    expect(callLabel(m({ id: "1", platform: "google_meet", native_id: "how-iich-wse", title: "Google Meet · how-iich-wse" }))).toBe("Call with Vexa");
+    expect(callLabel(m({ id: "1", title: "Weekly sync with Acme" }))).toBe("Weekly sync with Acme");
+    expect(callLabel(m({ id: "1", participants: [{ name: "Valeriia", role: "", initials: "V" }] }))).toBe("Call with Valeriia");
+    expect(callLabel(m({ id: "1", participants: [{ name: "Speaker 1", role: "", initials: "S" }, { name: "Vexa", role: "", initials: "V" }] }))).toBe("Call with Vexa");
+    expect(meetingDisplayName(m({ id: "1" }), { chatName: "AIT planning" })).toBe("AIT planning");
+    expect(meetingDisplayName(m({ id: "1" }), { people: ["Jane", "Ravi", "Ana"] })).toBe("Call with Jane, Ravi and 1 more");
   });
 });
 
@@ -62,11 +69,12 @@ describe("matchCalls / contentMatches / callsPerWorkspace", () => {
   });
 });
 
-import { pageForArtifact } from "../roomView";
+import { pageForArtifact, MEETING_VIEW_LABEL } from "../roomView";
 describe("pageForArtifact names a call it is told the name of", () => {
-  it("label wins; absent → Transcript, as before", () => {
+  it("label wins; absent → the meeting view's one name (never \"Transcript\")", () => {
     expect(pageForArtifact({ path: "meeting:11", label: "Acme review" })).toEqual({ kind: "meeting", path: "11", label: "Acme review" });
-    expect(pageForArtifact({ path: "meeting:11" })?.label).toBe("Transcript");
+    expect(pageForArtifact({ path: "meeting:11" })?.label).toBe(MEETING_VIEW_LABEL);
+    expect(MEETING_VIEW_LABEL).toBe("Meeting");
   });
 });
 
@@ -83,7 +91,7 @@ describe("callRows · deleted calls and calls that never started", () => {
     const now = new Date("2026-10-11T12:00:00");
     const rows = callRows([
       m({ id: "1", start_time: new Date("2026-10-11T09:00:00").toISOString() }),
-      m({ id: "2", live_status: "failed", title_custom: "Campbell", created_at: new Date("2026-10-11T10:00:00").toISOString() }),
+      m({ id: "2", live_status: "failed", title_custom: "Acme", created_at: new Date("2026-10-11T10:00:00").toISOString() }),
     ]);
     expect(rows.map((r) => r.id)).toEqual(["2", "1"]);
     expect(rows[0]).toMatchObject({ started: false });

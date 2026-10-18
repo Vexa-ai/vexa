@@ -33,7 +33,7 @@ export function reportOpened(slug: string | undefined, path: string): void {
     try {
       // No slug = the reader's own desk. Its id is what the README links by, so it is resolved the
       // same way every other workspace's is rather than special-cased here.
-      const api = await import("../surfaces/workspaceApi");
+      const api = await import("../data/workspaceApi");
       const own = slug ?? (await api.readActiveSet()).subject;
       if (!own) return;
       const rec = await workspaceBySlug(String(own));

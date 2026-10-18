@@ -32,6 +32,7 @@ export function RecordingPlayer({ src, duration, onError, meetingId, originMs, h
     const handle = registerPlayback(meetingId, {
       originMs,
       pause: () => { if (!audio.paused) audio.pause(); },
+      toggle: () => { if (!audio.paused) audio.pause(); else void audio.play().catch(() => errorRef.current()); },
       seek: seconds => {
         if (Number.isFinite(audio.duration) && seconds >= audio.duration) return;
         try {
@@ -56,7 +57,7 @@ export function RecordingPlayer({ src, duration, onError, meetingId, originMs, h
       onLoadedMetadata={e => setNativeDuration(finiteDuration(e.currentTarget.duration))}
       onTimeUpdate={e => { setElapsed(e.currentTarget.currentTime); controller.current?.update(e.currentTarget.currentTime); }}
       onSeeked={e => { setElapsed(e.currentTarget.currentTime); controller.current?.update(e.currentTarget.currentTime); }}
-      onPlay={e => { setPlaying(true); controller.current?.update(e.currentTarget.currentTime, true); }} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} onError={onError} />
+      onPlay={e => { setPlaying(true); controller.current?.update(e.currentTarget.currentTime, true); controller.current?.playing(true); }} onPause={() => { setPlaying(false); controller.current?.playing(false); }} onEnded={() => { setPlaying(false); controller.current?.playing(false); }} onError={onError} />
     <MediaIconButton label={playing ? "Pause recording" : "Play recording"} tooltip={`${playing ? "Pause" : "Play"}${hint ? ` · ${hint}` : ""}`} onClick={() => void toggle()}>
       {playing ? <Pause size={16} strokeWidth={1.75} aria-hidden /> : <Play size={16} strokeWidth={1.75} aria-hidden />}
     </MediaIconButton>

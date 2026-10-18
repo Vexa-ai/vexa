@@ -48,7 +48,7 @@ afterEach(() => {
 describe("Google", () => {
   it("accepts a verified email and names the subject", () => {
     expect(verifiedProviderIdentity("google", { profile: { email: "Ana@Example.com", email_verified: true, sub: "g-1" } }))
-      .toEqual({ ok: true, email: "ana@example.com", subject: "google:g-1" });
+      .toMatchObject({ ok: true, email: "ana@example.com", subject: "google:g-1" });
   });
 
   it("refuses an email claim longer than 254 characters", () => {
@@ -70,7 +70,7 @@ describe("Google", () => {
 
   it("the sign-in callback admits with the verified address", async () => {
     expect(await signIn("google", { profile: { email: "Ana@Example.com", email_verified: true, sub: "g-1" } })).toBe(true);
-    expect(findOrCreateUserToken).toHaveBeenCalledWith("ana@example.com", { subject: expect.stringMatching(/^(google|microsoft):/) });
+    expect(findOrCreateUserToken).toHaveBeenCalledWith("ana@example.com", { subject: expect.stringMatching(/^(google|microsoft):/), emailVerifiedVia: expect.stringMatching(/^oidc:(google|microsoft)$/) });
   });
 });
 
@@ -81,7 +81,7 @@ describe("Microsoft", () => {
       expect(verifiedProviderIdentity("microsoft", { account: { id_token: idToken(msClaims()) } }).ok).toBe(false);
       expect(verifiedProviderIdentity("microsoft", { account: { id_token: idToken(msClaims({ xms_edov: false })) } }).ok).toBe(false);
       expect(verifiedProviderIdentity("microsoft", { account: { id_token: idToken(msClaims({ xms_edov: true })) } }))
-        .toEqual({ ok: true, email: "ana@example.com", subject: `microsoft:${TENANT}:aaaaaaaa-0000-0000-0000-000000000001` });
+        .toMatchObject({ ok: true, email: "ana@example.com", subject: `microsoft:${TENANT}:aaaaaaaa-0000-0000-0000-000000000001` });
     }
   });
 
@@ -108,7 +108,7 @@ describe("Microsoft", () => {
     expect(findOrCreateUserToken).not.toHaveBeenCalled();
     expect(await signIn("microsoft", { account: { id_token: idToken(msClaims({ xms_edov: true })) } }, "someone-else@example.com"))
       .toBe(true);
-    expect(findOrCreateUserToken).toHaveBeenCalledWith("ana@example.com", { subject: expect.stringMatching(/^(google|microsoft):/) });
+    expect(findOrCreateUserToken).toHaveBeenCalledWith("ana@example.com", { subject: expect.stringMatching(/^(google|microsoft):/), emailVerifiedVia: expect.stringMatching(/^oidc:(google|microsoft)$/) });
   });
 });
 
@@ -120,5 +120,12 @@ describe("the claims reader", () => {
 
   it("an unknown provider is refused", () => {
     expect(verifiedProviderIdentity("github", {}).ok).toBe(false);
+  });
+});
+
+describe("the verified-address claim (R4)", () => {
+  it("Google carries it: it refuses an unverified address", () => {
+    const g = verifiedProviderIdentity("google", { profile: { email: "ana@example.com", email_verified: true, sub: "g-1" } }, {});
+    expect(g).toMatchObject({ ok: true, emailVerified: true });
   });
 });

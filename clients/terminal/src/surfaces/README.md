@@ -44,11 +44,13 @@ person's Settings → Models `default_model`.
 the composer, or picked with +. Each uploads on its own on `POST /api/workspace/upload` with its own
 progress; a file over 25 MB (the route's `MAX_UPLOAD_BYTES`) or of a type the picker does not offer
 is refused in the tray, and a failed upload stays there with a retry. A send never goes past a
-refused or failed file. The flow, who stores and reads the files, and why it complies:
+refused or failed file. A sent message carries its files on one mark (`attachmentPrompt`), and its
+bubble — live and after a reload — draws them with `MessageAttachments`, loaded from the session's
+`/api/sessions/{session}/attachment` route. The flow, who stores and reads the files, and why it complies:
 [`docs/docs/how-to/chat-attachments.mdx`](../../../../docs/docs/how-to/chat-attachments.mdx).
 
 **Error presentation is part of the surface contract** — surfaces render `presentError(e)`
-(`apiClient.ts`), never `e.message`: the headline is user vocabulary ("Couldn't reach the Vexa
+(`../data/apiClient.ts`), never `e.message`: the headline is user vocabulary ("Couldn't reach the Vexa
 server…", the backend's own prose reason verbatim when it sent one), while the untranslated
 plumbing string stays on the operator channels (the returned `detail` and a `console.warn`). The
 raw idiom `e instanceof Error ? e.message : String(e)` is banned from surface files by
@@ -73,3 +75,19 @@ shows the row's `data.transcription_language` and lets the meeting's owner, or a
 its bound workspace, switch it mid-meeting (`PUT /bots/{platform}/{native}/config`, the body replaces the
 setting). Readers see the language with no control. A refused switch keeps the previous value shown and
 the user's pick open, with the reason and the fix beside the control.
+
+**Layering** (Vexa-ai/vexa#1783): surfaces import `platform/`, `data/`, `contributions/` and
+`ui-kit/`, never a shell. The workbench, minutes and canvas sit above and import surfaces; what a
+surface renders from them it reaches by kind through `contributions` (the meeting tab's meeting view,
+Settings' GitHub card). `agent-window.tsx` — the conversation renderer the chat surface uses — lives
+here for that reason.
+
+**Tools that open something in this tab** (`toolUiEvents.ts`). The agent cannot open a panel or a
+microphone, so a tool whose answer carries a `ui_action` is forwarded by the chat as a window event the
+shell owns: `connection_request` opens Connections, `record_voice_note` opens the voice-note recorder.
+
+**Tool results reach the chat by `callId`** (`chatStream.ts` `onToolResult`): a `tool-result` is paired
+with the `tool-call` that asked for it. The chat uses it for one thing — a successful
+`browser_session_open` whose result says `ui_action: "open_browser_session"` raises
+`vexa:browser-session-open` (`toolUiEvents.ts` `toolResultUiEvent`), and the shell's live sign-in view
+opens on it (`../minutes/browserSession.ts`).

@@ -105,7 +105,7 @@ describe("the three viewers' lines", () => {
     expect(row(facts)).toBe("you, Jane Smith and 2 more · 9 pages");
     expect(lastChangeSentence(board)).toBe("Jane Smith changed the governing board page 2 hours ago");
     expect(stripActs({ kind: "group", owner: true, remote: REMOTE }).map((a) => a.label))
-      .toEqual(["Add a member", "Sync", "History"]);
+      .toEqual(["Add a member", "History"]);              // no repo buttons (UI decisions 11)
     // you first, then whoever is written down; the two nobody has named are in the "2 more"
     expect(avatarPeople(facts).map((a) => initialsOf(a.name))).toEqual(["AR", "JS"]);
   });
@@ -126,7 +126,7 @@ describe("the three viewers' lines", () => {
     expect(row(facts)).toBe("agents read it for meetings you are in · 12 pages");
     expect(lastChangeSentence(mine, now)).toBe("You changed the standing orders page yesterday");
     expect(stripActs({ kind: "desk", owner: true, remote: null }).map((a) => a.label))
-      .toEqual(["Connect a repo", "History"]);
+      .toEqual(["History"]);
   });
 });
 
@@ -330,11 +330,11 @@ describe("the buttons are what this viewer may do, and nothing else", () => {
     expect(stripActs({ kind: "desk", owner: false }).map((a) => a.id)).toEqual(["history"]);
   });
 
-  it("an owner gets Sync when a repo is attached and Connect a repo when none is", () => {
+  it("an owner gets no repo button at all — a repo is a connection, made from chat (UI decisions 11)", () => {
     expect(stripActs({ kind: "group", owner: true, remote: REMOTE }).map((a) => a.id))
-      .toEqual(["member", "sync", "history"]);
+      .toEqual(["member", "history"]);
     expect(stripActs({ kind: "group", owner: true, remote: { ...REMOTE, has_home: false } }).map((a) => a.id))
-      .toEqual(["member", "connect", "history"]);
+      .toEqual(["member", "history"]);
   });
 
   it("the company layer offers no repo button — it is not one of that flow's targets", () => {
@@ -344,7 +344,7 @@ describe("the buttons are what this viewer may do, and nothing else", () => {
 
   it("a desk has no members to add", () => {
     expect(stripActs({ kind: "desk", owner: true, remote: REMOTE }).map((a) => a.id))
-      .toEqual(["sync", "history"]);
+      .toEqual(["history"]);
   });
 
   it("every act with no verb behind it asks the CHAT, in one question, and waits for a yes", () => {
@@ -354,6 +354,20 @@ describe("the buttons are what this viewer may do, and nothing else", () => {
       expect(said).toContain("Pilot");
       expect(said.toLowerCase()).toMatch(/ask me/);
     }
+    // Sync LOOKS first with the look-only verb, and names the two that change something as the ones
+    // that wait for a yes — the agent cannot run git itself, and a "fetch" it had no verb for was
+    // the instruction it could not follow.
+    const sync = actInstruction("sync", where);
+    expect(sync).toContain("workspace_status");
+    expect(sync.indexOf("workspace_status")).toBeLessThan(sync.indexOf("workspace_pull"));
+    expect(sync).toContain("workspace_push");
+    expect(sync).not.toMatch(/\bfetch,/);
+    // Connect names no host: the agent lists the deployment's providers and publishes to one of them.
+    const connect = actInstruction("connect", where);
+    expect(connect).toContain("git_providers");
+    expect(connect).toContain("workspace_publish with provider and org");
+    expect(connect).toContain("ONE question");
+    expect(sync + connect).not.toMatch(/GitHub/);
     // #1632's principle in the string itself: no form, one question, a yes before anything happens
     expect(actInstruction("editor", where)).toContain("No form: ask me here.");
     expect(actInstruction("editor", where)).toContain("only write the file if I say yes");

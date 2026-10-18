@@ -82,7 +82,8 @@ test('upcoming reads only a READY calendar, over a fixed 24-hour window, and ret
  vi.mocked(brokerCall).mockImplementation(async (method:string,path:string)=>{
   if(method==='GET')return {connections:[{id:mail,provider:'google_email',status:'ready'},{id:off,provider:'google_calendar',status:'disconnected'},{id:cal,provider:'google_calendar',status:'ready'}]};
   return {events:[
-   {summary:'Acme — pricing review',start:{dateTime:'2026-10-11T15:00:00+02:00'},description:'secret agenda',attendees:[{email:'x@acme.test'}],htmlLink:'https://calendar.google.com/x',location:'Room 1'},
+   {summary:'Acme — pricing review',start:{dateTime:'2026-10-11T15:00:00+02:00'},description:'secret agenda',attendees:[{email:'x@acme.test'}],htmlLink:'https://calendar.google.com/x',location:'Room 1',meeting_url:'https://us02web.zoom.us/j/81234567890?pwd=abc'},
+   {summary:'Bad link',start:{dateTime:'2026-10-11T15:30:00+02:00'},meeting_url:'javascript:alert(1)'},
    {summary:'Gone',status:'cancelled',start:{dateTime:'2026-10-11T16:00:00+02:00'}},
    {start:{date:'2026-10-12'}},
   ]};
@@ -90,7 +91,8 @@ test('upcoming reads only a READY calendar, over a fixed 24-hour window, and ret
  const before=Date.now();
  const r=await GET(new NextRequest(origin+'/api/connections/upcoming?time_max=2099-01-01&connection='+off));
  expect(r.status).toBe(200);
- expect(await r.json()).toEqual({events:[{title:'Acme — pricing review',start:'2026-10-11T15:00:00+02:00'},{title:'',start:null}]});
+ // the call's link rides along (founder 2026-10-16: "join this call" in one step), https only
+ expect(await r.json()).toEqual({events:[{title:'Acme — pricing review',start:'2026-10-11T15:00:00+02:00',meeting_url:'https://us02web.zoom.us/j/81234567890?pwd=abc'},{title:'Bad link',start:'2026-10-11T15:30:00+02:00'},{title:'',start:null}]});
  const reads=vi.mocked(brokerCall).mock.calls.filter(c=>c[0]==='POST');
  expect(reads.map(c=>c[1])).toEqual([`/api/connections/${cal}/read`]);
  const body=reads[0][2] as {action:string;time_min:string;time_max:string};
@@ -107,4 +109,15 @@ test('upcoming fails loud as one generic line, never a calendar body',async()=>{
  vi.mocked(brokerCall).mockRejectedValueOnce(new BrokerFault('transport'));
  const r=await GET(new NextRequest(origin+'/api/connections/upcoming'));
  expect([r.status,(await r.json()).error]).toEqual([503,'Calendar unavailable. Try again.']);
+});
+test('authorize passes only the calendar-write grant through, and nothing else',async()=>{
+ vi.mocked(brokerCall).mockResolvedValue({authorize_url:'https://accounts.google.com/o/oauth2/v2/auth?x=1'});
+ const id='a'.repeat(32);
+ expect((await POST(request(id+'/authorize',{grant:'calendar_write'}))).status).toBe(200);
+ expect(vi.mocked(brokerCall).mock.calls.at(-1)).toEqual(['POST',`/api/connections/${id}/authorize`,{grant:'calendar_write'}]);
+ expect((await POST(request(id+'/authorize',{}))).status).toBe(200);
+ expect(vi.mocked(brokerCall).mock.calls.at(-1)?.[2]).toEqual({});
+ expect((await POST(request(id+'/authorize',{grant:'gmail_send'}))).status).toBe(400);
+ expect((await POST(request(id+'/authorize',{grant:'calendar_write',scope:'x'}))).status).toBe(400);
+ expect(brokerCall).toHaveBeenCalledTimes(2);
 });

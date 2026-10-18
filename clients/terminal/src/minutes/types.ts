@@ -44,4 +44,6 @@ export type Page = {
    *  pin stays an ordinary pin: pinning is the reader saying "keep this", and what the reader kept
    *  the reader may drop. */
   permanent?: boolean;
+  /** the meeting is happening now: its tab is pinned first in every chat (`livePin.ts`) */
+  live?: boolean;
 };

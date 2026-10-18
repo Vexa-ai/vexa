@@ -14,7 +14,7 @@
  *  them is answering a question it cannot see. */
 import type { NextRequest } from "next/server";
 import { resolveApiKey } from "../../proxyAuth";
-import { meetingsOnly } from "../../../mode";
+import { meetingsOnly } from "../../../../platform/mode";
 
 export const dynamic = "force-dynamic";
 

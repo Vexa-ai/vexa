@@ -39,7 +39,7 @@ import { LINE_PLACEHOLDER } from "../../minutes/ExtendAction";
 import { INSTRUCTION_LEAD, clearPending, pendingLanding } from "../../minutes/extend";
 import { resetActs } from "../../surfaces/actState";
 import { ServicesProvider, createContainer, reg } from "../../platform";
-import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
+import { LayoutServiceId, createLayoutService } from "../../platform/layout";
 import type { ChatIntent } from "../../surfaces/chatIntent";
 
 const MEETING = "abc-defg-hij";

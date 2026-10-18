@@ -11,7 +11,7 @@
 import Script from "next/script";
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
-import { gaPageview } from "./analytics";
+import { gaPageview } from "../platform/analytics";
 
 const GA_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
 

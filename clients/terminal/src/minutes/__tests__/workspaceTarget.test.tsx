@@ -11,12 +11,12 @@
  *  `workspaces[]` is what the chat can REACH; `target` is where it WORKS. The server half — the
  *  session record, the prompt line every turn carries, the turn's cwd and the tools' default slug —
  *  is pinned in `core/agent/tests/test_chat_workspace_target.py` and
- *  `deploy/dogfood/rig/tests/test_workspace_target.py`. What can break quietly on THIS side is the
+ *  `core/agent/tests/test_page_and_target_routes.py`. What can break quietly on THIS side is the
  *  record forgetting the field, the chip not saying which one it is, and the rail not showing a
  *  conversation that is working somewhere other than the desk.
  */
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -35,6 +35,15 @@ vi.mock("../../ui-kit/WsLink", () => ({
 }));
 
 afterEach(cleanup);
+// The header names a workspace only once the server says this reader may read it, and calls it the
+// target only once the server says they may write it (contextBarServerView.test.tsx). Here the
+// reader is a writing member of every workspace in the set.
+vi.mock("../../ui-kit/wsLinks", () => ({
+  workspaceBySlug: async (slug: string) => ({ id: "aaaaaaaaaa", name: slug, kind: "group", slug,
+    access: "readable", writable: true }),
+}));
+const settle = () => act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
 
 const BANK = "bank-4040f6";
 const chat = (over: Partial<Chat> = {}): Chat =>
@@ -103,72 +112,74 @@ const sel = (target?: string) => ({
   workspaces: ["personal", "_global", BANK], target,
 });
 
-function bar(target: string | undefined, onSetTarget = vi.fn()) {
+async function bar(target: string | undefined, onSetTarget = vi.fn()) {
   const { container } = render(
     <ContextBar sel={sel(target)} flavor="chat" memberships={[]}
       onAddWorkspace={vi.fn()} onRemoveWorkspace={vi.fn()} onSetTarget={onSetTarget} />);
+  await settle();
   return { container, onSetTarget };
 }
 
 const chipFor = (c: HTMLElement, slug: string) => c.querySelector(`[data-ws="${slug}"]`) as HTMLElement;
 
 describe("the header chip is visibly the target", () => {
-  it("marks the desk when nothing else has been chosen", () => {
-    const { container } = bar(undefined);
+  it("marks the desk when nothing else has been chosen", async () => {
+    const { container } = await bar(undefined);
     expect(chipFor(container, "personal").getAttribute("data-target")).toBe("1");
     expect(chipFor(container, BANK).getAttribute("data-target")).toBeNull();
   });
 
-  it("marks the chosen one, and only it", () => {
-    const { container } = bar(BANK);
+  it("marks the chosen one, and only it", async () => {
+    const { container } = await bar(BANK);
     expect(chipFor(container, BANK).getAttribute("data-target")).toBe("1");
     expect(chipFor(container, "personal").getAttribute("data-target")).toBeNull();
   });
 
-  it("says so to a screen reader too, not only in a colour", () => {
-    const { container } = bar(BANK);
+  it("says so to a screen reader too, not only in a colour", async () => {
+    const { container } = await bar(BANK);
     expect(chipFor(container, BANK).getAttribute("aria-current")).toBe("true");
   });
 
-  it("hides the two mounted in every chat — a constant is not information", () => {
-    const { container } = bar(BANK);
+  it("hides the two mounted in every chat — a constant is not information", async () => {
+    const { container } = await bar(BANK);
     expect(chipFor(container, "_global")).toBeNull();
   });
 
-  it("makes another one the target when the person clicks it", () => {
-    const { container, onSetTarget } = bar(undefined);
+  it("makes another one the target when the person clicks it", async () => {
+    const { container, onSetTarget } = await bar(undefined);
     fireEvent.click(container.querySelector(`[data-ws-target="${BANK}"]`) as HTMLElement);
     expect(onSetTarget).toHaveBeenCalledWith(BANK);
   });
 
-  it("goes back to the desk the same way — it is a place, not the absence of one", () => {
-    const { container, onSetTarget } = bar(BANK);
+  it("goes back to the desk the same way — it is a place, not the absence of one", async () => {
+    const { container, onSetTarget } = await bar(BANK);
     fireEvent.click(container.querySelector('[data-ws-target="personal"]') as HTMLElement);
     expect(onSetTarget).toHaveBeenCalledWith("personal");
   });
 
-  it("does nothing when the person clicks the one that is already the target", () => {
-    const { container, onSetTarget } = bar(BANK);
+  it("does nothing when the person clicks the one that is already the target", async () => {
+    const { container, onSetTarget } = await bar(BANK);
     fireEvent.click(container.querySelector(`[data-ws-target="${BANK}"]`) as HTMLElement);
     expect(onSetTarget).not.toHaveBeenCalled();
   });
 
-  it("shows the workspace's NAME, never its slug (#1585/#1602)", () => {
-    const { container } = bar(BANK);
+  it("shows the workspace's NAME, never its slug (#1585/#1602)", async () => {
+    const { container } = await bar(BANK);
     expect(chipFor(container, BANK).textContent).toContain("Example Bank");
     expect(chipFor(container, BANK).textContent).not.toContain("4040f6");
   });
 
-  it("still lets a workspace be removed from the chat's focus", () => {
+  it("still lets a workspace be removed from the chat's focus", async () => {
     const onRemoveWorkspace = vi.fn();
     const { container } = render(
       <ContextBar sel={sel(BANK)} flavor="chat" memberships={[]}
         onAddWorkspace={vi.fn()} onRemoveWorkspace={onRemoveWorkspace} onSetTarget={vi.fn()} />);
+    await settle();
     fireEvent.click(container.querySelector(`[data-ws="${BANK}"] [aria-label^="Remove"]`) as HTMLElement);
     expect(onRemoveWorkspace).toHaveBeenCalledWith(BANK);
   });
 
-  it("answers which chip is the target without rendering anything", () => {
+  it("answers which chip is the target without rendering anything", async () => {
     expect(isTargetChip(undefined, "personal")).toBe(true);
     expect(isTargetChip(undefined, BANK)).toBe(false);
     expect(isTargetChip(BANK, BANK)).toBe(true);
@@ -187,10 +198,11 @@ const rail = (rows: Row[]) => render(
     onNewChat={vi.fn()} onDeleteChat={vi.fn()} />);
 
 describe("the rail says which conversation is working somewhere else", () => {
-  it("names the target workspace on the row", () => {
+  it("marks the row with its target — as data, not a text chip (founder 2026-10-14: the chips ate the names)", () => {
     const { container } = rail([row({ target: BANK })]);
-    const tag = container.querySelector(`[data-row-target="${BANK}"]`);
-    expect(tag?.textContent).toBe("Example Bank");
+    const r = container.querySelector(`[data-row-target="${BANK}"]`);
+    expect(r).toBeTruthy();
+    expect(r!.querySelector(".vx-tag")).toBeNull();
   });
 
   it("says nothing on a row that writes to the desk", () => {

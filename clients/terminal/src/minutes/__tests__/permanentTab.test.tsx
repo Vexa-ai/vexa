@@ -267,9 +267,15 @@ describe("the open chips are deleted from the source", () => {
     ["data-open-chip", "…and the handle a test drove it by"],
   ];
 
+  // The ONE place the words may appear: a notification's own act (founder 2026-10-14, "a meeting
+  // shared with you → Open transcript"). That is the way IN to a meeting somebody else shared, not a
+  // way back to a transcript tab this person closed, so the ruling above does not reach it. Exempt by
+  // file, so a chip reappearing anywhere else still fails here.
+  const NOTICE_ACTS = "minutes/notifications.ts";
   for (const [needle, what] of GONE) {
     it(`${needle} — ${what}`, () => {
-      expect(CODE.filter(({ src }) => src.includes(needle)).map(({ f }) => f)).toEqual([]);
+      expect(CODE.filter(({ f, src }) => src.includes(needle) && !(needle === "Open transcript" && f === NOTICE_ACTS))
+        .map(({ f }) => f)).toEqual([]);
     });
   }
 });

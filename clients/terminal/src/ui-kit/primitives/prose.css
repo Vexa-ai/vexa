@@ -1,7 +1,7 @@
 /* PROSE — a document or an answer (guidelines §2.2, §3.5). One stylesheet for both renderers
  * (MdxDoc and the plain-Markdown fallback): body on --text-md, headings on the type scale, wraps
  * at spaces, a wide table or code block scrolls inside its own frame and never the page. */
-.vx-prose { color: var(--text-1); overflow-wrap: break-word; min-width: 0; }
+.vx-prose { font-family: var(--font-reading, var(--font-sans)); color: var(--text-1); overflow-wrap: break-word; min-width: 0; }
 .vx-prose p { margin: 0 0 var(--space-2); line-height: 1.6; }
 .vx-prose-h { color: var(--text-1); font-weight: var(--weight-semibold); line-height: 1.3; margin: var(--space-2) 0 var(--space-1); }
 .vx-prose-h[data-level="1"] { font-size: var(--text-xl); margin-top: var(--space-3); }
@@ -18,3 +18,30 @@
 .vx-prose th { background: var(--surface-2); border: 1px solid var(--border); padding: var(--space-1_5) var(--space-2); font-weight: var(--weight-semibold); text-align: left; }
 .vx-prose td { border: 1px solid var(--border-subtle); padding: var(--space-1_5) var(--space-2); color: var(--text-2); vertical-align: top; }
 .vx-link-inline { text-decoration: underline; cursor: pointer; }
+
+/* richer pages (#1783): tasks, relative dates, anchors, outline, callout titles, Mentioned in */
+.vx-task { display: inline-flex; align-items: center; gap: var(--space-1); vertical-align: middle; margin-right: var(--space-1); }
+.vx-task-box { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.vx-task-box:disabled { cursor: default; }
+.vx-task[data-done] + * { color: var(--text-3); }
+.vx-task-err { font-size: var(--text-xs); color: var(--danger-text); }
+.vx-task-ask { margin-left: var(--space-1); background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 var(--space-1); font: inherit; font-size: var(--text-xs); color: var(--text-3); cursor: pointer; opacity: 0; }
+li:hover > .vx-task-ask, li:focus-within > .vx-task-ask, p:hover > .vx-task-ask, .vx-task-ask:focus-visible { opacity: 1; }
+.vx-task-ask:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.vx-reldate { text-decoration: underline dotted var(--border); text-underline-offset: 2px; cursor: help; }
+.vx-anchor { margin-left: var(--space-1); color: var(--text-3); text-decoration: none; opacity: 0; font-weight: 400; }
+.vx-prose-h:hover .vx-anchor, .vx-anchor:focus-visible { opacity: 1; }
+.vx-callout-title { font-weight: 600; color: var(--text-1); margin-bottom: var(--space-0_5); }
+.vx-outline { margin: 0 0 var(--space-3); font-size: var(--text-xs); }
+.vx-outline-toggle { background: transparent; border: none; padding: 0; font: inherit; color: var(--text-3); cursor: pointer; }
+.vx-outline-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.vx-outline ul { list-style: none; margin: var(--space-1) 0 0; padding: 0; }
+.vx-outline li[data-level="3"] { padding-left: var(--space-3); }
+.vx-outline a { color: var(--text-2); text-decoration: none; }
+.vx-outline a:hover { color: var(--text-1); text-decoration: underline; }
+.vx-backlinks { margin-top: var(--space-5); padding-top: var(--space-3); border-top: 1px solid var(--border-subtle); }
+.vx-backlinks ul { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.vx-copyable { display: inline-flex; align-items: center; gap: var(--space-1); }
+.vx-copyable-btn { background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 var(--space-1); font: inherit; font-size: var(--text-xs); color: var(--text-3); cursor: pointer; }
+.vx-copyable-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.vx-chip-meta { margin-left: var(--space-1); font-size: var(--text-xs); color: var(--text-3); }

@@ -581,3 +581,75 @@ describe("streamChatTurn — a second turn on the same view", () => {
     expect(state.text).toBe("A-answer");
   });
 });
+
+describe("streamChatTurn — tool results", () => {
+  it("pairs a tool-result with its call and hands the full result on", async () => {
+    const result = { ui_action: "open_browser_session", session_id: "a".repeat(32), vnc_password: "pw" };
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "tool-call", tool: "mcp__vexa__browser_session_open", callId: "c1", args: { platform: "google" } }, "1-0"),
+      ev({ type: "tool-result", callId: "c1", ok: true, summary: "{\"ui_action\"", result }, "2-0"),
+      ev({ type: "tool-result", callId: "unknown", ok: true, summary: "x" }, "3-0"),
+      ev({ type: "turn-complete" }, "4-0"),
+    ]));
+    const { cb } = recorder();
+    const seen: Array<[string, { ok: boolean; result: unknown }]> = [];
+    cb.onToolResult = (tool, r) => { seen.push([tool, r]); };
+    await streamChatTurn({ prompt: "sign in", session: "s1", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+    expect(seen).toEqual([["mcp__vexa__browser_session_open", { ok: true, result }]]);
+  });
+
+  it("falls back to the summary when the harness sends no full result", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev({ type: "tool-call", tool: "Read", callId: "c2" }, "1-0"),
+      ev({ type: "tool-result", callId: "c2", ok: false, summary: "denied" }, "2-0"),
+      ev({ type: "turn-complete" }, "3-0"),
+    ]));
+    const { cb } = recorder();
+    const seen: unknown[] = [];
+    cb.onToolResult = (tool, r) => { seen.push([tool, r]); };
+    await streamChatTurn({ prompt: "x", session: "s1", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+    expect(seen).toEqual([["Read", { ok: false, result: "denied" }]]);
+  });
+});
+
+// ── live app.dev 2026-10-15: a message sent while the chat's own meeting recap ran ─────────────
+describe("a message queued behind its chat's own turn", () => {
+  const queued = { type: "queued", holder_kind: "meeting_recap", message: "Finishing the meeting recap — your message runs next." };
+
+  it("says what it waits behind, then renders the turn — one request, no retry", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev(queued), ": keepalive\n\n",
+      ev({ type: "turn-accepted", turn_id: "t3" }, "9-0"),
+      ev({ type: "message-delta", text: "finalized", turn_id: "t3" }, "9-1"),
+      ev({ type: "turn-complete", turn_id: "t3" }, "9-2"),
+    ]));
+    const statuses: [string | null, string | undefined][] = [];
+    const { state, cb } = recorder();
+    cb.onStatus = (p, label) => statuses.push([p, label]);
+    const result = await streamChatTurn({ prompt: "finalize the meeting", session: "s1", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+    expect(statuses).toContainEqual(["queued", "Finishing the meeting recap — your message runs next."]);
+    expect(state.text).toBe("finalized");
+    expect(result.terminal).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("a wait past the server's bound ends as the typed conflict with Stop — not retried", async () => {
+    const fault = { source: "session-store", kind: "session_conflict", session: "s1", status: 409, action: "stop",
+      remedy: "Stop it, then send your message again.",
+      detail: "A previous reply is still running in this conversation after five minutes, so your message was not sent." };
+    const fetchImpl = vi.fn().mockResolvedValueOnce(sseResponse([
+      ev(queued), ev({ type: "error", message: fault.detail, fault }), ev({ type: "turn-complete" }),
+    ]));
+    const faults: unknown[] = [];
+    const { cb } = recorder();
+    cb.onFault = (f) => { faults.push(f); };
+    await streamChatTurn({ prompt: "finalize the meeting", session: "s1", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(faults).toHaveLength(1);
+    expect((faults[0] as { kind: string }).kind).toBe("session_conflict");
+  });
+});

@@ -16,7 +16,8 @@
  *  show the same pending list: none of them is remembering it.
  */
 import type { ChatIntent } from "./chatIntent";
-import { readFault, type Fault } from "./faults";
+import { isTransientFault, readFault, type Fault } from "./faults";
+import { DEFAULT_TRANSIENT_BUDGET_MS, retryAfterMs, transientWait, TRANSIENT_STATUS } from "./transientRetry";
 import type { JobRec } from "./jobs";
 
 /** One thing this chat has submitted and its agent has not taken yet — the server's row, verbatim. */
@@ -143,7 +144,15 @@ export function turnsToWatch(v: InboxView, cursor: string): { head: string } | n
   const next = runnable(v.pending);
   if (next.length) return { head: next[0].entry };
   if (cursor && (v.taken ?? 0) > 0) return { head: `after:${cursor}` };
+  // A RELOAD MID-TURN (founder 2026-10-16): no cursor of its own, but a turn is running — watch it
+  const from = (v as { running_from?: string }).running_from;
+  if (!cursor && from) return { head: `running:${from}` };
   return null;
+}
+
+/** Where to attach: this chat's exact cursor, else the running turn's start, else the tail. */
+export function attachPoint(v: InboxView, cursor: string): string {
+  return cursor || (v as { running_from?: string }).running_from || v.cursor || "0-0";
 }
 
 /** Is anything on this list going to RUN? A queue whose every row is blocked has nothing to watch,
@@ -171,24 +180,38 @@ export class SubmitRefused extends Error {
   }
 }
 
-export async function submitToInbox(s: Submission, fetchImpl: typeof fetch = fetch): Promise<InboxView> {
+export async function submitToInbox(s: Submission, fetchImpl: typeof fetch = fetch,
+                                    sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))): Promise<InboxView> {
   rememberUnsent(s);
-  const r = await fetchImpl("/api/chat/submit", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      prompt: s.prompt, session: s.session, turn_id: s.id, active: s.active, context: s.context,
-      ...(s.scaffoldId ? { scaffold_id: s.scaffoldId } : {}),
-      ...(s.intent ? { intent: s.intent } : {}),
-    }),
-  });
-  if (!r.ok) {
+  // A MOMENT'S UNAVAILABILITY IS WAITED OUT, NOT SHOWN (founder, 2026-10-13) — the same schedule as
+  // a streamed turn (`transientRetry.ts`). Safe to repeat: every attempt carries the submission's own
+  // id, and agent-api withdraws an entry under that id before it queues one, so it is held once.
+  let spent = 0;
+  for (let attempt = 0; ; attempt += 1) {
+    const r = await fetchImpl("/api/chat/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: s.prompt, session: s.session, turn_id: s.id, active: s.active, context: s.context,
+        ...(s.scaffoldId ? { scaffold_id: s.scaffoldId } : {}),
+        ...(s.intent ? { intent: s.intent } : {}),
+      }),
+    });
+    if (r.ok) {
+      forgetUnsent(s.session, s.id);
+      return view(await r.json());
+    }
     let fault: Fault | null = null;
     try { fault = readFault(((await r.json()) as { fault?: unknown } | null)?.fault); } catch { /* not JSON */ }
-    throw new SubmitRefused(r.status, fault);
+    // A RUNTIME refusal (it could not start the agent the submission would wait for) is drawn at
+    // once as a blocked row with its own Retry: the row IS the patience, and it says why.
+    const transient = fault ? isTransientFault(fault) && fault.source !== "runtime" : TRANSIENT_STATUS.has(r.status);
+    const wait = transientWait(attempt,
+      retryAfterMs(typeof r.headers?.get === "function" ? r.headers.get("retry-after") : null));
+    if (!transient || spent + wait > DEFAULT_TRANSIENT_BUDGET_MS) throw new SubmitRefused(r.status, fault);
+    spent += wait;
+    await sleep(wait);
   }
-  forgetUnsent(s.session, s.id);
-  return view(await r.json());
 }
 
 /** What this chat has submitted and its agent has not taken yet — and, given `after` (the last
@@ -250,6 +273,8 @@ export function inboxRows(items: InboxItem[]): JobRec[] {
       queued: true,
       inbox: true,
       noun: i.kind ? "job" : "queued",
+      // the person's whole message, for the queued bubble that shows it (#1783)
+      ...(i.kind ? {} : { text: i.display }),
       ...(blocked ? { blocked, display: i.display } : {}),
     };
   });
@@ -284,4 +309,57 @@ export function reconcileInbox(jobs: JobRec[], items: InboxItem[]): JobRec[] {
 export function claimInboxRow(jobs: JobRec[], target: string): JobRec[] {
   const i = jobs.findIndex((j) => j.inbox && j.target === target);
   return i < 0 ? jobs : [...jobs.slice(0, i), ...jobs.slice(i + 1)];
+}
+
+/** RUN THIS QUEUED MESSAGE NOW (2026-10-13): agent-api stops the running turn — the chat says so —
+ *  and this message runs next, once. False when it is no longer queued (it already ran). */
+export async function sendNow(session: string, id: string, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  try {
+    const r = await fetchImpl("/api/chat/pending/now", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session, id }),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** STOP THIS CHAT'S RUNNING TURN ON THE SERVER (app.dev, 2026-10-15). Stop used to abort only this
+ *  browser's fetch, so a turn's tool (a fourteen-minute grep) kept running and the next message was
+ *  refused with a 409. agent-api asks the worker holding the turn to kill it and its tools; the turn
+ *  then ends on its own stream (`turn-truncated`, then `turn-complete`). Fire-and-forget for the
+ *  caller: true when the server took the request, false — logged, never thrown — when it did not. */
+export async function stopTurn(session: string, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  try {
+    const r = await fetchImpl("/api/chat/stop", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session }),
+    });
+    if (!r.ok) console.warn(`[chat] stop for ${session} was refused (${r.status})`);
+    return r.ok;
+  } catch (e) {
+    console.warn(`[chat] stop for ${session} did not reach the server`, e);
+    return false;
+  }
+}
+
+/** TAKE BACK A QUEUED MESSAGE (Remove; Edit puts its words back in the box). True when the server
+ *  still held it — false when it already ran, so the caller does not pretend it was taken back. */
+export async function withdrawQueued(session: string, id: string, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  try {
+    const r = await fetchImpl("/api/chat/pending/withdraw", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session, id }),
+    });
+    if (!r.ok) return false;
+    return ((await r.json()) as { withdrawn?: number }).withdrawn! > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** A queued MESSAGE the server holds, not blocked: the only row that offers "Send now". */
+export function canSendNow(j: JobRec): boolean {
+  return !!j.queued && !!j.inbox && !j.blocked && (j.kind || "message") === "message";
 }

@@ -22,7 +22,7 @@ import {
 import { registry, type TabProps } from "../../contributions";
 
 // The chips resolve against a workspace snapshot; nothing here is about them, so the world is empty.
-vi.mock("../../surfaces/workspaceApi", () => ({
+vi.mock("../../data/workspaceApi", () => ({
   listWorkspaceTree: vi.fn(async () => []),
   readActiveSet: vi.fn(async () => ({ subject: "57", active: [] })),
   listSharedMemberships: vi.fn(async () => []),
@@ -94,14 +94,28 @@ describe("<MdxDoc> — the renderer the pages panel opens every page with", () =
     });
   });
 
-  it("renders the transcript widget IN PLACE, bound to the meeting the doc names", async () => {
+  it("names its meeting ONCE, at the top — the page does not embed the meeting (founder, UI lab 2026-10-14)", async () => {
     const { container, getByTestId } = render(<MdxDoc>{DOC}</MdxDoc>);
     await waitFor(() => expect(container.textContent).toContain("technical steering committee"));
     expect(getByTestId("engine")).toBeTruthy();
     expect(seen.map((p) => p.params.meetingId)).toEqual(["147"]);
-    // the doc's own words survive around it — the widget is IN the page, not instead of it
+    const slot = container.querySelector("[data-transcript-slot]")!;
+    expect(container.firstElementChild?.firstElementChild).toBe(slot);
+    // the doc's own words are all there, under it
     expect(container.textContent).toContain("DNA TSC 2026-03-02");
     expect(container.textContent).toContain("What this is about");
+  });
+
+  it("a brief that links its meeting near its top gets the same chip", async () => {
+    const { container, getByTestId } = render(<MdxDoc>{"# Planning call\n\n**▶ [Live transcript](/?meeting=100)**\n\nagenda\n"}</MdxDoc>);
+    await waitFor(() => expect(container.textContent).toContain("agenda"));
+    expect(getByTestId("engine").textContent).toContain("100");
+  });
+
+  it("a page whose frontmatter names a meeting gets the same chip, with no marker in its body", async () => {
+    const { container, getByTestId } = render(<MdxDoc>{"---\ntitle: Call\nmeeting: 9121\n---\n# Call\n\nagenda\n"}</MdxDoc>);
+    await waitFor(() => expect(container.textContent).toContain("agenda"));
+    expect(getByTestId("engine").textContent).toContain("9121");
   });
 
   it("prints no marker and no region machinery at the reader (#1590 still holds)", async () => {
@@ -124,6 +138,7 @@ describe("<MdxDoc> — the renderer the pages panel opens every page with", () =
     const { container, getByTestId } = render(<MdxDoc>{broken}</MdxDoc>);
     await waitFor(() => expect(getByTestId("engine")).toBeTruthy());
     expect(container.textContent).toContain("live transcript for 9");
+    await waitFor(() => expect(container.textContent).toContain("a stray"));
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { botStateHeadline, isTranscriptStale, meetingHealth, STALE_MS } from "../meetingHealth";
+import { botStateHeadline, isTranscriptStale, meetingHealth, STALE_MS, wordsSeen } from "../meetingHealth";
 import { shouldForceReconnect } from "../../surfaces/meetingLive";
 
 const now = 1_000_000;
@@ -97,5 +97,71 @@ describe("shouldForceReconnect (watchdog predicate)", () => {
   });
   it("does not reconnect before any event has arrived", () => {
     expect(shouldForceReconnect(undefined, now)).toBe(false);
+  });
+});
+
+describe("transcription progress (catching up vs a quiet room)", () => {
+  const stale = now - STALE_MS - 5000;
+  it("behind: speech is queued for transcription — catching up, not 'no words'", () => {
+    const h = meetingHealth({ liveConnected: true, lastTranscriptAt: stale, progress: { backlogS: 42, silenceS: 1, finishing: false, at: now - 1000 } }, now, true);
+    expect(h.kind).toBe("behind");
+    expect(botStateHeadline(h)).toBe("Transcription delayed — catching up (42s behind)");
+  });
+  it("a quiet room stays 'no words' even with audio still queued (the queue is all silence)", () => {
+    const h = meetingHealth({ liveConnected: true, lastTranscriptAt: stale, progress: { backlogS: 12, silenceS: 30, finishing: false, at: now - 1000 } }, now, true);
+    expect(h.kind).toBe("stalled");
+  });
+  it("a small backlog is normal, not news", () => {
+    const h = meetingHealth({ liveConnected: true, lastTranscriptAt: now - 1000, progress: { backlogS: 6, silenceS: 0, finishing: false, at: now - 1000 } }, now, true);
+    expect(h.kind).toBe("ok");
+  });
+  it("finishing: after stop, until the final pass ends", () => {
+    const h = meetingHealth({ liveConnected: true, lastTranscriptAt: stale, progress: { backlogS: 20, silenceS: 5, finishing: true, at: now - 1000 } }, now, true);
+    expect(h.kind).toBe("finishing");
+    expect(botStateHeadline(h)).toBe("Finishing transcript…");
+  });
+  it("an old progress report is ignored", () => {
+    const h = meetingHealth({ liveConnected: true, lastTranscriptAt: stale, progress: { backlogS: 40, silenceS: 0, finishing: false, at: now - 60_000 } }, now, true);
+    expect(h.kind).toBe("stalled");
+  });
+});
+
+
+// app.dev 2026-10-16 ("Call with dmitry"): "Bot admitted · no words for 50s" stayed up while the call's
+// transcript was plainly flowing (20 lines, live). The verdict read only the live stream's last line
+// time; the lines on screen are evidence too. A segment the reader can SEE arrive clears it.
+describe("words on screen clear the no-words verdict", () => {
+  it("notes the time a new segment appears, and keeps it while nothing changes", () => {
+    const a = wordsSeen({ sig: "" }, [{ id: "1", text: "hello" }], now);
+    expect(a.at).toBe(now);
+    expect(wordsSeen(a, [{ id: "1", text: "hello" }], now + 5000).at).toBe(now);
+    expect(wordsSeen(a, [{ id: "1", text: "hello" }, { id: "2", text: "next" }], now + 5000).at).toBe(now + 5000);
+    expect(wordsSeen(a, [{ id: "1", text: "hello there" }], now + 7000).at).toBe(now + 7000);   // a draft refining
+    expect(wordsSeen({ sig: "" }, [], now).at).toBeUndefined();
+    expect(wordsSeen({ sig: null }, [{ id: "1", text: "already there" }], now).at).toBeUndefined();   // a baseline, not news
+  });
+  it("is not stalled when segments keep landing although the live stream went quiet", () => {
+    const streamLast = now - 50_000;
+    const seen = wordsSeen({ sig: "" }, [{ id: "9", text: "still talking" }], now - 1000);
+    const h = meetingHealth({ liveConnected: true, lastTranscriptAt: Math.max(streamLast, seen.at ?? 0) }, now, true, STALE_MS, "active");
+    expect(h.kind).toBe("ok");
+  });
+  it("clears 'at the door' on the first segment", () => {
+    const seen = wordsSeen({ sig: "" }, [{ id: "1", text: "hi" }], now);
+    expect(meetingHealth({ lastTranscriptAt: seen.at }, now, true, STALE_MS, "awaiting_admission").kind).toBe("ok");
+  });
+});
+
+
+describe("a stream that dropped and came back (founder 2026-10-16)", () => {
+  const issue = { kind: "stream" as const, message: "Meeting stream disconnected; reconnecting", at: 1000 };
+  it("is a quiet recovered line once words flow again, then nothing", () => {
+    const d = { issues: [issue], liveConnected: true, lastTranscriptAt: 5000 };
+    expect(meetingHealth(d as never, 6000, true).kind).toBe("recovered");
+    expect(meetingHealth(d as never, 1000 + 61_000, true).kind).not.toBe("error");
+  });
+  it("a stream issue with no words since stays loud", () => {
+    const d = { issues: [issue], liveConnected: true, lastTranscriptAt: 900 };
+    expect(meetingHealth(d as never, 1500, true).kind).toBe("error");
   });
 });

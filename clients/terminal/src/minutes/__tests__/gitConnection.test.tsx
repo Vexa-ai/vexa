@@ -1,8 +1,8 @@
 import { render,screen,fireEvent,waitFor,cleanup } from '@testing-library/react';
 import { afterEach,expect,it,vi } from 'vitest';
 import { GitConnection } from '../GitConnection';
-import { getGitToken,setGitToken } from '../../surfaces/workspaceApi';
-vi.mock('../../surfaces/workspaceApi',()=>({getGitToken:vi.fn(),setGitToken:vi.fn(),readDeployKey:vi.fn().mockResolvedValue({})}));
+import { getGitToken,setGitToken } from '../../data/workspaceApi';
+vi.mock('../../data/workspaceApi',()=>({getGitToken:vi.fn(),setGitToken:vi.fn(),readDeployKey:vi.fn().mockResolvedValue({})}));
 afterEach(()=>{cleanup();vi.resetAllMocks();});
 it('submits directly to secure API and clears input without displaying the value',async()=>{
  vi.mocked(getGitToken).mockResolvedValue({set:false,masked:null});
@@ -21,7 +21,7 @@ it('submits directly to secure API and clears input without displaying the value
 
 it('repository import stays inside the connection surface',async()=>{
  vi.mocked(getGitToken).mockResolvedValue({set:false,masked:null});
- const api=await import('../../surfaces/workspaceApi');
+ const api=await import('../../data/workspaceApi');
  vi.mocked(api.readDeployKey).mockResolvedValue({} as never);
  render(<GitConnection/>);
  fireEvent.click(screen.getByRole('button',{name:'Attach repository as a workspace'}));

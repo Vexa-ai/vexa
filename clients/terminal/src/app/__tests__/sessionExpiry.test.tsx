@@ -13,8 +13,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, cleanup } from "@testing-library/react";
 
-import { SESSION_EXPIRED_EVENT, noteAuthFailure, onSessionSuspect } from "../session";
-import { getJson, SESSION_ENDED_HEADLINE } from "../../surfaces/apiClient";
+import { SESSION_EXPIRED_EVENT, noteAuthFailure, onSessionSuspect } from "../../platform/session";
+import { getJson, SESSION_ENDED_HEADLINE } from "../../data/apiClient";
 import { streamChatTurn, type ChatStreamCallbacks } from "../../surfaces/chatStream";
 import { AuthGate } from "../AuthGate";
 

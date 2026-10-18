@@ -4,20 +4,21 @@
  *  injects X-User-Id and agent-api derives the user's scope from it (P20). FAIL-LOUD (P18): a backend
  *  error or network failure THROWS (via apiClient) instead of being swallowed into an empty list — the
  *  surface catches it and shows the error, so a failure is never hidden as "no routines". */
-import { getJson } from "./apiClient";
+import { getJson } from "../data/apiClient";
 
 export interface Routine {
   id: string; name: string; cron: string; plan_summary?: string; enabled: boolean;
-  /** Written where no person stood behind it (an agent's write on the workspace, or a run with nobody
-   *  watching): not armed until the person confirms it. */
-  pending_confirmation?: boolean;
+  /** `refused`: an old routine file the one-time move into flows could not convert — nothing runs,
+   *  and `refused_reason` says exactly why. Otherwise the flow's own status. */
+  status?: string;
+  refused_reason?: string;
   /** What this routine's prompt reaches for that only works when the person asks in chat (mail,
    *  calendar, connections). A scheduled run has nobody present, so each run is refused there. */
   needs_person?: string[];
   /** The one sentence agent-api puts beside such a routine. Present only with `needs_person`. */
   warning?: string;
   /** Set when the harness switched this routine off because its runs kept being refused the same
-   *  way (agent-api `routine_refusals.py`). Switching it back on clears it. */
+   *  way (agent-api `routine_flow_refusals.py`), or why the one-time move paused it. Switching it back on clears it. */
   paused_reason?: string;
 }
 
@@ -42,9 +43,6 @@ export async function deleteRoutine(id: string): Promise<void> {
 }
 
 /** The person stands behind this routine as its file reads now — arms one shown as pending. */
-export async function confirmRoutine(name: string): Promise<void> {
-  await getJson(`/api/routines/${encodeURIComponent(name)}/confirm`, { method: "POST" });
-}
 
 export async function setRoutineEnabled(name: string, enabled: boolean): Promise<void> {
   await getJson(`/api/routines/${encodeURIComponent(name)}/enabled`, {
@@ -52,4 +50,9 @@ export async function setRoutineEnabled(name: string, enabled: boolean): Promise
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ enabled }),
   });
+}
+
+/** The line an old routine file the one-time move could not convert shows, or null. */
+export function refusedNote(r: Routine): string | null {
+  return r.status === "refused" && r.refused_reason ? r.refused_reason : null;
 }

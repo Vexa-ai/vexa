@@ -15,11 +15,12 @@ same-origin server runtime (SSE relay, no CORS).
 |---|---|---|---|
 | calls | agent-api | `POST /api/chat` (SSE proxy → `${AGENT_API}/api/chat`) | a chat now-dispatch; SSE relay of the agent's output stream |
 | calls | agent-api | `GET /api/sessions?subject=` | a subject's chat-session list (resume) |
-| calls | agent-api | `GET/POST /api/routines`, `PATCH /api/routines/{name}/enabled`, `DELETE /api/routines/{id}` | list / create / enable·disable / delete a `routine.v1` cron job |
+| calls | agent-api | `GET/POST /api/routines`, `PATCH /api/routines/{name}/enabled`, `DELETE /api/routines/{id}` | list / create / pause·resume / retire the person's routines — scheduled flows since ADR-0046, through agent-api's deprecated adapter routes |
 | produces | agent-api | `POST /api/events` (→ `${AGENT_API}/events`) | an `event.v1` Event → a `unit.v1` Invocation → Dispatcher |
 | calls | meeting-api (via gateway) | `GET /meetings` + `WS /ws` (`u:{user}:meetings`) | the user's meetings (live + past); live status deltas over the socket (no poll) |
 | calls | agent-api | `GET /api/meeting/stream?meeting_id=&session_uid=` (SSE, `EventSource`) | the live transcript wire (raw segments + `retract`); nothing else rides it |
 | calls | meeting-api (via gateway) | `POST /bots`, `DELETE /bots/{platform}/{native}`, `PUT /meetings/{platform}/{native}/intent` | launch / stop a self-hosted meeting bot; schedule·cancel its scheduling intent |
+| calls | meeting-api (via gateway) | `GET /bot-accounts`, `POST/GET/DELETE /bot-accounts/sessions[/{id}]`, `GET …/view/*`, `WS /bot-accounts/sessions/{id}/vnc` | bot accounts and the live sign-in view of a browser session (noVNC; the socket rides `server.mjs` with the per-user key) |
 | calls | agent-api | `GET /api/workspace/{tree,file,git}?subject=` (git polled 5s) | workspace tree, file content, the agent's real git state |
 | consumes | browser | dockview workbench + surfaces registry (`src/surfaces/index.tsx`) | LEFT lists, CENTER tab-kinds, RIGHT context-kinds, `/`-skill commands |
 
@@ -40,7 +41,7 @@ proxies forward bodies verbatim, they do not re-declare schemas.
 ## Terminal modes
 
 `NEXT_PUBLIC_TERMINAL_MODE` (build-time public env — inlined by `next build`, changing it requires a
-rebuild; see `src/app/mode.ts`):
+rebuild; see `src/platform/mode.ts`):
 
 - unset / empty (default) — every surface registers.
 - `meetings` — a meetings-only terminal: only the **Meetings** list, the **meeting/canvas** tabs, and

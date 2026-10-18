@@ -219,3 +219,70 @@ test('an endpoint the person types is shown but not re-confirmed',async()=>{
  expect(screen.getByLabelText('Destination host').textContent).toBe('api.mine.test');
  expect(screen.queryByLabelText('Confirm destination host')).toBeNull();
 });
+test('a ready calendar shows calendar changes off and asks Google for the write permission only on the button',async()=>{
+ const replace=vi.fn();const popup={document:{title:'',body:{textContent:''}},location:{replace},close:vi.fn(),opener:window};
+ vi.spyOn(window,'open').mockReturnValue(popup as any);
+ const fetch=vi.fn().mockImplementation(async(path:string)=>({ok:true,json:async()=>path.endsWith('/authorize')?{authorize_url:'https://accounts.google.com/o/oauth2/v2/auth?state=fixture'}:{connections:[{id:'c'.repeat(32),provider:'google_calendar',label:'Google Calendar',status:'ready',created:1,permissions:[]}]}}));
+ vi.stubGlobal('fetch',fetch);render(<ConnectionsPanel/>);
+ fireEvent(window,new CustomEvent(CONNECTIONS_OPEN,{detail:{provider:'google_calendar'}}));
+ expect((await screen.findByText(/Calendar changes: off/))).toBeTruthy();
+ expect(fetch.mock.calls.some(([p])=>p.endsWith('/authorize'))).toBe(false);
+ fireEvent.click(screen.getByRole('button',{name:'Enable calendar changes'}));
+ await waitFor(()=>expect(replace).toHaveBeenCalled());
+ const [path,init]=fetch.mock.calls.find(([p])=>p.endsWith('/authorize'))!;
+ expect(path).toContain('c'.repeat(32)+'/authorize');
+ expect(JSON.parse(init.body)).toEqual({grant:'calendar_write'});
+});
+test('a calendar with the write permission says so and offers no second consent',async()=>{
+ vi.stubGlobal('fetch',vi.fn().mockResolvedValue({ok:true,json:async()=>({connections:[{id:'c'.repeat(32),provider:'google_calendar',label:'Google Calendar',status:'ready',created:1,permissions:['calendar_write']}]})}));
+ render(<ConnectionsPanel/>);fireEvent(window,new CustomEvent(CONNECTIONS_OPEN,{detail:{provider:'google_calendar'}}));
+ expect(await screen.findByText(/Calendar changes: on/)).toBeTruthy();
+ expect(screen.queryByRole('button',{name:'Enable calendar changes'})).toBeNull();
+});
+// "Connect your calendar" on a fresh account (2026-10-13): the chip opens the panel on a provider with
+// no connection yet. It sat on "Preparing connection…" forever and asked the broker for nothing.
+test('a connect chip with no connection yet requests one, then offers consent',async()=>{
+ const id='d'.repeat(32); let made=false;
+ const fetch=vi.fn().mockImplementation(async(path:string)=>{
+  if(path.endsWith('/request')){made=true;return {ok:true,json:async()=>({connection_id:id})};}
+  return {ok:true,json:async()=>({connections:made?[{id,provider:'google_calendar',label:'Google Calendar',status:'awaiting_user',created:1}]:[]})};
+ });
+ vi.stubGlobal('fetch',fetch);render(<ConnectionsPanel/>);
+ fireEvent(window,new CustomEvent(CONNECTIONS_OPEN,{detail:{provider:'google_calendar'}}));
+ expect(await screen.findByRole('button',{name:'Continue with Google'})).toBeTruthy();
+ expect(fetch.mock.calls.filter(([p])=>p.endsWith('/request'))).toHaveLength(1);
+ expect(fetch.mock.calls.some(([p])=>p.endsWith('/authorize'))).toBe(false);
+ expect(screen.queryByText('Preparing connection…')).toBeNull();
+});
+test('a connection that cannot be prepared says so and offers a retry',async()=>{
+ let fail=true;
+ const fetch=vi.fn().mockImplementation(async(path:string)=>{
+  if(path.endsWith('/request'))return fail?{ok:false,json:async()=>({})}:{ok:true,json:async()=>({connection_id:'e'.repeat(32)})};
+  return {ok:true,json:async()=>({connections:fail?[]:[{id:'e'.repeat(32),provider:'google_calendar',label:'Google Calendar',status:'awaiting_user',created:1}]})};
+ });
+ vi.stubGlobal('fetch',fetch);render(<ConnectionsPanel/>);
+ fireEvent(window,new CustomEvent(CONNECTIONS_OPEN,{detail:{provider:'google_calendar'}}));
+ expect((await screen.findByRole('alert')).textContent).toMatch(/try again/i);
+ fail=false;
+ fireEvent.click(screen.getByRole('button',{name:'Retry'}));
+ expect(await screen.findByRole('button',{name:'Continue with Google'})).toBeTruthy();
+});
+
+test('calendar_write off (#1783): a ready Gmail offers no "Enable drafts" and no drafts line; on, both are back',async()=>{
+ const { setFeatureOverride } = await import('../../platform/features');
+ const rows={connections:[{id:'gmail',provider:'google_email',label:'Work mail',status:'ready',created:1}]};
+ vi.stubGlobal('fetch',vi.fn().mockResolvedValue({ok:true,json:async()=>rows}));
+ setFeatureOverride({calendar_write:false});
+ const first=render(<ConnectionsPanel/>);
+ fireEvent(window,new CustomEvent(CONNECTIONS_OPEN,{detail:{provider:'google_email'}}));
+ expect(await screen.findByRole('button',{name:'Reconnect'})).toBeTruthy();
+ expect(screen.queryByRole('button',{name:'Enable drafts / reconnect'})).toBeNull();
+ expect(document.querySelector('[data-drafts]')).toBeNull();
+ first.unmount();
+ setFeatureOverride({calendar_write:true});
+ render(<ConnectionsPanel/>);
+ fireEvent(window,new CustomEvent(CONNECTIONS_OPEN,{detail:{provider:'google_email'}}));
+ expect(await screen.findByRole('button',{name:'Reconnect'})).toBeTruthy();
+ expect(document.querySelector('[data-drafts]')).toBeTruthy();
+ setFeatureOverride('all');
+});

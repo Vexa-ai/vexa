@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { AttachRepo } from "../AttachRepo";
-import { ApiError } from "../../surfaces/apiClient";
-import * as api from "../../surfaces/workspaceApi";
-vi.mock("../../surfaces/workspaceApi", async (original) => ({
-  ...(await original<typeof import("../../surfaces/workspaceApi")>()),
+import { ApiError } from "../../data/apiClient";
+import * as api from "../../data/workspaceApi";
+vi.mock("../../data/workspaceApi", async (original) => ({
+  ...(await original<typeof import("../../data/workspaceApi")>()),
   readDeployKey: vi.fn(), ensureDeployKey: vi.fn(), importWorkspace: vi.fn(),
 }));
 beforeEach(() => {

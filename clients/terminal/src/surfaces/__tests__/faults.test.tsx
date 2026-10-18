@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
-import { FaultBlock } from "../../workbench/agent-window";
+import { FaultBlock } from "../agent-window";
 import { faultHeadline, faultLine, readFault, type Fault } from "../faults";
 import { blockedLine, jobLine } from "../jobs";
 import { blockSubmission, inboxRows, runnable, submitToInbox, SubmitRefused, flushOutbox, rememberUnsent } from "../inbox";
@@ -142,8 +142,13 @@ const run = (r: Response, cb: ChatStreamCallbacks) => streamChatTurn(
 describe("streamChatTurn — typed faults end the turn as faults", () => {
   it("a spawn refusal folded into an `error` event is a fault, not 'Internal Server Error'", async () => {
     const { seen, cb } = callbacks();
-    const res = await run(sse([{ type: "error", status: 502, message: "The agent runtime could not start your agent.",
-                                 fault: KINDS[0][0] }]), cb);
+    // A spawn refusal clears by itself (the last agent letting go), so the reader retries it for a
+    // bounded while under the same turn id first (calmFaults.test.tsx); then it is ONE fault.
+    const refused = () => sse([{ type: "error", status: 502, message: "The agent runtime could not start your agent.",
+                                 fault: KINDS[0][0] }]);
+    const res = await streamChatTurn({ prompt: "hi", session: "s", active: undefined }, cb,
+      { fetchImpl: (async () => refused()) as unknown as typeof fetch, signal: new AbortController().signal,
+        now: () => 0, sleep: async () => {}, reconnectBackoffMs: 0 });
     expect(res.terminal).toBe(true);
     expect(seen.faults.map((f) => f.kind)).toEqual(["spawn_refused"]);
     expect(seen.errors).toEqual([]);

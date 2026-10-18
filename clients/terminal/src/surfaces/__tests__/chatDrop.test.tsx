@@ -23,7 +23,7 @@ vi.mock("../chatStream", async (importOriginal) => ({
 import { Chat } from "../chat";
 import { middleTruncate, acceptsFile, MAX_ATTACHMENT_BYTES } from "../attachments";
 import { ServicesProvider, createContainer, reg, CommandServiceId, type CommandService } from "../../platform";
-import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
+import { LayoutServiceId, createLayoutService } from "../../platform/layout";
 
 /** The upload wire, faked: every request waits until the test answers it. */
 class FakeXHR {
@@ -109,10 +109,12 @@ describe("dropping files anywhere on the chat panel", () => {
     expect(items[1].textContent).toContain(middleTruncate("q3-board-report-final-version.pdf"));
     expect(items[1].textContent).toMatch(/\.pdf/);
     // multiple files: one upload each, on the attach button's route
-    expect(FakeXHR.all.map((x) => [x.method, x.url, x.file.name])).toEqual([
+    // …and it names the chat, whose target decides where the files are stored (#1783)
+    expect(FakeXHR.all.map((x) => [x.method, x.url.split("?")[0], x.file.name])).toEqual([
       ["POST", "/api/workspace/upload", "screenshot.png"],
       ["POST", "/api/workspace/upload", "q3-board-report-final-version.pdf"],
     ]);
+    expect(FakeXHR.all.every((x) => /\?session=./.test(x.url))).toBe(true);
   });
 
   it("ignores a drag that carries text or a link, not files", async () => {
@@ -231,6 +233,34 @@ describe("the attachment tray", () => {
     await act(async () => { FakeXHR.all[1].respond(200, { files: [{ name: "x-notes.pdf", path: "uploads/x-notes.pdf" }] }); });
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(stream.calls).toHaveLength(1));
-    expect(stream.calls[0].req.prompt).toContain("@file:uploads/x-notes.pdf");
+    expect(stream.calls[0].req.prompt).toContain("\"path\":\"uploads/x-notes.pdf\"");
+  });
+});
+
+describe("a long paste (#1783)", () => {
+  const page = Array.from({ length: 214 }, (_, i) => `line ${i + 1} of the page`).join("\n");
+  it("becomes a chip, not text in the box; the agent gets it whole; the bubble shows it collapsed", async () => {
+    mountChat();
+    await messagesArea();
+    fireEvent.paste(composer(), { clipboardData: { getData: (k: string) => (k === "text/plain" ? page : ""), items: [] } });
+    expect(composer().value).toBe("");
+    expect(screen.getByText("Pasted text · 214 lines")).toBeTruthy();
+    fireEvent.change(composer(), { target: { value: "summarise this" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(stream.calls).toHaveLength(1));
+    expect(stream.calls[0].req.prompt).toContain("summarise this");
+    expect(stream.calls[0].req.prompt).toContain("line 214 of the page");
+    // the composer is clear and the sent bubble shows the words plus one collapsed chip
+    expect(screen.queryByTitle("Edit the pasted text")).toBeNull();
+    expect(screen.getByText("summarise this")).toBeTruthy();
+    expect(screen.getByText("Pasted text · 214 lines")).toBeTruthy();
+    expect(screen.queryByText(/line 200 of the page/)).toBeNull();
+  });
+  it("a short paste is ordinary text", async () => {
+    mountChat();
+    await messagesArea();
+    const ev = fireEvent.paste(composer(), { clipboardData: { getData: () => "two\nlines", items: [] } });
+    expect(ev).toBe(true);                       // not prevented: the browser inserts it as typed
+    expect(screen.queryByText(/Pasted text/)).toBeNull();
   });
 });

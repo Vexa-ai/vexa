@@ -15,12 +15,12 @@ import {
 } from "../navigatorApi";
 import { VIEW_NAVIGATE_EVENT, navigateView, pageForDocRef, viewSlotFor } from "../roomView";
 import { artifactKey, touchHistory } from "../chats";
-import * as api from "../../surfaces/workspaceApi";
-import type { ActiveMount } from "../../surfaces/workspaceApi";
+import * as api from "../../data/workspaceApi";
+import type { ActiveMount } from "../../data/workspaceApi";
 
 // The loaders are the only impure thing in this module; everything else here is a pure decision.
-vi.mock("../../surfaces/workspaceApi", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../surfaces/workspaceApi")>()),
+vi.mock("../../data/workspaceApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../data/workspaceApi")>()),
   readActiveSet: vi.fn(),
   listSharedMemberships: vi.fn(),
   readWorkspaceById: vi.fn(),
@@ -33,12 +33,22 @@ const mount = (over: Partial<ActiveMount> & { slug: string }): ActiveMount => ({
 });
 
 describe("the hide list — human files only (decision 27.2)", () => {
-  it("hides the agent's instructions, the liquid layer, and the templates", () => {
+  it("hides the agent's instructions, the liquid layer, and the templates — on a desk", () => {
     for (const p of ["CLAUDE.md", "flows", "flows/personal.md", "skills/sell/SKILL.md",
                      "routines/daily.md", "views/board.md", "policy/members.json",
                      "kg/templates", "kg/templates/person.md"]) {
       expect(isMachinery(p), p).toBe(true);
     }
+  });
+
+  // Founder 2026-10-13, browsing _global in Files: "no templates here". The company templates are
+  // the admin account's content (ruling 2026-10-11), so `_global` shows them; a desk still hides its own.
+  it("shows the company templates in _global, and only there", () => {
+    expect(isMachinery("kg/templates", "_global")).toBe(false);
+    expect(isMachinery("kg/templates/person.md", "_global")).toBe(false);
+    expect(isMachinery("kg/templates/person.md", "team-a")).toBe(true);
+    expect(isMachinery("kg/templates/person.md")).toBe(true);
+    expect(isMachinery("skills/sell/SKILL.md", "_global")).toBe(true);
   });
 
   it("hides dotfiles and anything under a dot-directory", () => {
@@ -88,22 +98,34 @@ describe("which workspaces are listed, and in what order (decisions 26–27)", (
     mount({ slug: "_system" }),
   ];
 
-  it("desk first, then `_global`, then the groups by name", () => {
+  it("desk first, then the groups by name — the company layer is not an everyday row (ADR-0049)", () => {
     const ws = buildWorkspaces({ active, subject: "u-7" });
-    expect(ws.map((w) => w.name)).toEqual(["Dmitry's desk", "Helm Bank", "Acme", "zebra-team"]);
-    expect(ws.map((w) => w.kind)).toEqual(["desk", "global", "group", "group"]);
+    // Personal is always "Personal" (#1783): the desk row never wears a slot's or a repo's name
+    expect(ws.map((w) => w.name)).toEqual(["Personal", "Acme", "zebra-team"]);
+    expect(ws.map((w) => w.kind)).toEqual(["desk", "group", "group"]);
+  });
+
+  it("user 2's shape: a biz clone mounted FIRST is its own row 'biz', the desk is 'Personal' (#1783)", () => {
+    const ws = buildWorkspaces({ subject: "2", active: [
+      mount({ slug: "biz-b1c87fc32ecb", role: "private", primary: true, desk: false, name: "biz",
+              path: "/workspaces/.attached/2/biz-b1c87fc32ecb" }),
+      mount({ slug: "aswf-dna-070436", name: "ASWF DNA" }),
+    ] });
+    expect(ws.map((w) => [w.kind, w.name, w.slug])).toEqual([
+      ["desk", "Personal", undefined], ["group", "ASWF DNA", "aswf-dna-070436"], ["group", "biz", "biz-b1c87fc32ecb"]]);
   });
 
   it("the desk is the NO-SLUG read — every other row carries its slug", () => {
     const ws = buildWorkspaces({ active, subject: "u-7" });
     expect(ws[0]).toMatchObject({ key: "desk", slug: undefined });
-    expect(ws[1].slug).toBe("_global");
+    expect(ws[1].slug).toBe("acme-kg");
   });
 
-  it("`_global` wears the company name when the mount knows one, its slug when it does not", () => {
-    expect(buildWorkspaces({ active, subject: "u-7" })[1].name).toBe("Helm Bank");
-    const anon = active.map((m) => (m.slug === "_global" ? { ...m, name: null } : m));
-    expect(buildWorkspaces({ active: anon, subject: "u-7" })[1].name).toBe("_global");
+  it("`_global` is listed for the admin account only, wearing the company name when known", () => {
+    expect(buildWorkspaces({ active, subject: "u-7" }).some((w) => w.key === "_global")).toBe(false);
+    expect(buildWorkspaces({ active, subject: "u-7", adminAccount: true })).toEqual([
+      { key: "_global", slug: "_global", kind: "global", name: "Helm Bank" },
+    ]);
   });
 
   it("`_system` is never listed — always mounted, never a place to read files", () => {
@@ -124,7 +146,7 @@ describe("which workspaces are listed, and in what order (decisions 26–27)", (
     // `btdl3lds34 — not available to you` reached the rail as an id the DESK links to. The desk is
     // not a listing, `buildWorkspaces` takes no such rows any more, and a row that is here opens.
     const ws = buildWorkspaces({ active, subject: "u-7" });
-    expect(ws.map((w) => w.key)).toEqual(["desk", "_global", "acme-kg", "zebra-team"]);
+    expect(ws.map((w) => w.key)).toEqual(["desk", "acme-kg", "zebra-team"]);
   });
 
   it("with nothing at all there is still a desk — it is the workspace that always exists", () => {
@@ -153,7 +175,7 @@ describe("the list as it is FETCHED — what never reaches the rail (founder, 20
       id === "grp-legal" ? identity({ id, name: "Legal room" }) : identity({ id, access: "gone" }));
 
     const ws = await loadNavWorkspaces();
-    expect(ws.map((w) => w.name)).toEqual(["Dmitry's desk", "Legal room"]);
+    expect(ws.map((w) => w.name)).toEqual(["Personal", "Legal room"]);
     expect(ws.some((w) => w.key === "btdl3lds34")).toBe(false);
   });
 

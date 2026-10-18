@@ -27,7 +27,7 @@ vi.mock("../../surfaces/meetingLive", () => ({
 import { MeetingCanvasView } from "../MeetingCanvasView";
 import { MeetingTranscriptWidget } from "../TranscriptWidget";
 import { ServicesProvider, createContainer, reg } from "../../platform";
-import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
+import { LayoutServiceId, createLayoutService } from "../../platform/layout";
 
 const SAID = "the budget is final";
 const DELETED_LABEL = "This meeting’s transcript and recording were deleted.";

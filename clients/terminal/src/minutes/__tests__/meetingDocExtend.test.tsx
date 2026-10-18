@@ -11,7 +11,7 @@
  *  reason the intent is built from the resolved view slot rather than from a tab label (F63).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, cleanup, fireEvent } from "@testing-library/react";
+import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 
 vi.mock("../../ui-kit/MdxDoc", async (importOriginal) => {
   const orig = await importOriginal<Record<string, unknown>>();
@@ -21,7 +21,7 @@ vi.mock("../../ui-kit/MdxDoc", async (importOriginal) => {
 
 import { PagesPanel } from "../PagesPanel";
 import { ASK_CHAT_EVENT } from "../../platform";
-import { clearPending } from "../extend";
+import { clearPending, postIntent } from "../extend";
 import { transcriptSlotMarker } from "../../ui-kit/transcriptSlot";
 import type { PageIntent } from "../../surfaces/chatIntent";
 import type { Page } from "../types";
@@ -49,28 +49,18 @@ beforeEach(() => { asks.length = 0; onOpen.mockClear(); clearPending(); window.a
 afterEach(() => { window.removeEventListener(ASK_CHAT_EVENT, onAsk); cleanup(); });
 
 describe("a page that declares a transcript widget", () => {
-  it("carries the meeting on the Extend intent, read off the page itself", () => {
+  it("the meeting's note file is a plain page: no Extend card, no meeting tools (UI decisions 9)", () => {
     const { container } = panel();
-    fireEvent.click(container.querySelector('[data-doc-act="extend"]') as HTMLElement);
-    fireLine();
-    expect(asks).toHaveLength(1);
-    expect(asks[0].intent).toEqual({ kind: "extend", path: PATH, meeting: "147" });
-  });
-
-  it("says on the control that it reads what is new — nobody presses it to find out", () => {
-    const { container } = panel();
-    const title = container.querySelector('[data-doc-act="extend"] [data-act-title]');
-    expect(title?.textContent).toContain("meeting");
-    expect(container.querySelector('[data-doc-act="extend"] [data-act-line]')?.textContent)
-      .toContain("since last time");
+    expect(container.querySelector('[data-doc-act="extend"]')).toBeNull();
+    expect(container.querySelector("[data-meeting-header]")).toBeNull();
+    expect(container.querySelector('[aria-label="Meeting controls"]')).toBeNull();
   });
 
   it("the fallback sentence carries the two rules whose absence is invisible", () => {
     // the `extend-meeting` ask says all of this properly; this sentence is what runs on an instance
     // whose preset library predates it, and it must still say: read since the cursor, keep the slot.
-    const { container } = panel();
-    fireEvent.click(container.querySelector('[data-doc-act="extend"]') as HTMLElement);
-    fireLine();
+    // the meeting sidebar's Update notes sends this act (the page itself no longer offers Extend)
+    postIntent({ kind: "extend", path: PATH, meeting: "147" });
     const prompt = asks[0].prompt ?? "";
     expect(prompt).toContain("transcript_cursor");
     expect(prompt).toContain("get_meeting_transcript(meeting_db_id=147");
@@ -85,8 +75,10 @@ describe("a page that declares a transcript widget", () => {
     const body = container.querySelector("[data-doc-body]") as HTMLElement;
     const node = container.querySelector("[data-mdx]")?.firstChild as Node;
     const range = document.createRange();
-    range.setStart(node, MEETING_DOC.indexOf("The CLA"));
-    range.setEnd(node, MEETING_DOC.indexOf("The CLA") + "The CLA".length);
+    // the page's title is its heading now, out of the body (founder 2026-10-15), so find the words
+    const at = (node.textContent ?? "").indexOf("The CLA");
+    range.setStart(node, at);
+    range.setEnd(node, at + "The CLA".length);
     const sel = window.getSelection();
     sel?.removeAllRanges(); sel?.addRange(range);
     fireEvent(document, new Event("selectionchange"));
@@ -94,6 +86,41 @@ describe("a page that declares a transcript widget", () => {
     fireEvent.click(container.querySelector('[data-doc-act="extend-selection"]') as HTMLElement);
     expect(asks[0]).toMatchObject({ mode: "draft", reference: { path: PATH, meeting: "147" } });
     expect(asks[0].prompt).toContain("> The CLA");
+  });
+});
+
+describe("Edit on a meeting note from Files (#1783: markers are never shown to a person)", () => {
+  it("the editor gets the words only; the save writes the frontmatter and markers back", async () => {
+    const puts: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_u: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? "GET").toUpperCase() === "PUT") puts.push(JSON.parse(String(init?.body)).content);
+      return new Response(JSON.stringify({ path: PATH, written: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    try {
+      const { container } = panel();
+      fireEvent.click(container.querySelector("[data-doc-more]") as HTMLElement);
+      fireEvent.click(document.querySelector('[data-doc-act="edit"]') as HTMLElement);
+      const editor = container.querySelector("[data-doc-body]") as HTMLElement;
+      expect(editor.textContent).toContain("The CLA follows the ASWF shape.");
+      expect(editor.textContent).not.toContain("<!--");
+      expect(editor.textContent).not.toContain("transcript_cursor");
+      fireEvent.click(container.querySelector('[data-doc-act="save"]') as HTMLElement);
+      await waitFor(() => expect(puts).toHaveLength(1));
+      expect(puts[0]).toBe(MEETING_DOC);
+    } finally { vi.unstubAllGlobals(); }
+  });
+});
+
+describe("Use as meeting page (#1783)", () => {
+  it("a meeting page offers it in its '…'; any other page does not", () => {
+    const { container, unmount } = panel();
+    fireEvent.click(container.querySelector("[data-doc-more]") as HTMLElement);
+    expect(document.querySelector('[data-doc-act="attach-meeting"]')).not.toBeNull();
+    unmount();
+    const other = panel({ body: PLAIN_DOC, docPath: "kg/entities/company/helm.md",
+                          pages: [{ path: "kg/entities/company/helm.md", label: "helm" }] });
+    fireEvent.click(other.container.querySelector("[data-doc-more]") as HTMLElement);
+    expect(document.querySelector('[data-doc-act="attach-meeting"]')).toBeNull();
   });
 });
 

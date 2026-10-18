@@ -33,7 +33,7 @@ vi.mock("../../surfaces/meetingLive", () => ({
 
 import { MeetingCanvasView } from "../MeetingCanvasView";
 import { ServicesProvider, createContainer, reg } from "../../platform";
-import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
+import { LayoutServiceId, createLayoutService } from "../../platform/layout";
 
 const LINE = { speaker: "Jane", text: "so um we agreed to ship friday", t: 1 };
 

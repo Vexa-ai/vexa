@@ -8,6 +8,7 @@
  *
  *  A whitelist, not a blacklist. The set of things that are a repository is small and knowable; the
  *  set of things that are a secret is neither. */
+import { maxPathSegments, shorthandUrl } from "../data/gitProviders";
 
 /** Token families we can name — the prefix check is the cheap half; anything long and opaque that
  *  isn't a repository shape is refused by the whitelist anyway. */
@@ -20,11 +21,12 @@ const TOKEN_PREFIX = /^(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|glpat-)/;
 export const TOKEN_SENTENCE =
   "That looks like a token, not a repository. Paste the repository URL here; a saved token goes in the token card.";
 export const SHAPE_SENTENCE =
-  "That is not a repository. Use https://github.com/owner/repo, git@github.com:owner/repo.git, owner/repo, " +
+  "That is not a repository. Use https://host/owner/repo, git@host:owner/repo.git, owner/repo, " +
   "or a full URL with groups (https://git.example.com/group/subgroup/repo).";
 
-/** The deepest repository path accepted — GitLab's group · 20 subgroups · project. `github.com` has
- *  exactly two segments, so a deeper path there is refused rather than cloned and failed. */
+/** The deepest repository path accepted — GitLab's group · 20 subgroups · project. A GitHub-kind
+ *  provider has exactly two segments, so a deeper path there is refused rather than cloned and failed
+ *  (the per-host limit comes from `data/gitProviders`). */
 export const MAX_PATH_SEGMENTS = 22;
 
 const SEG = "[A-Za-z0-9._-]+";
@@ -44,8 +46,7 @@ const tidy = (name: string) => name.replace(/\.git$/, "");
 function repoPath(host: string, path: string): string | null {
   const segs = path.split("/");
   segs[segs.length - 1] = tidy(segs[segs.length - 1]);
-  const bare = host.toLowerCase().replace(/:\d{1,5}$/, "");
-  const limit = bare === "github.com" ? 2 : MAX_PATH_SEGMENTS;
+  const limit = Math.min(maxPathSegments(host), MAX_PATH_SEGMENTS);
   if (segs.length < 2 || segs.length > limit) return null;
   for (const seg of segs) {
     if (!SEG_RE.test(seg) || /^\.+$/.test(seg) || seg === "-") return null;
@@ -95,6 +96,6 @@ export function checkRepo(raw: string): RepoCheck {
     return p ? { ok: true, url: `ssh://${m[1] ? `${m[1]}@` : ""}${m[2]}/${p}.git` } : shape;
   }
   m = BARE.exec(v);
-  if (m) return { ok: true, url: `https://github.com/${m[1]}/${tidy(m[2])}.git` };
+  if (m) return { ok: true, url: shorthandUrl(m[1], tidy(m[2])) };
   return { ok: false, kind: "shape", sentence: SHAPE_SENTENCE };
 }

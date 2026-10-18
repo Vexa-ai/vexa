@@ -21,6 +21,64 @@ export interface MeetingStatusFrame {
 }
 
 type Listener = (f: MeetingStatusFrame) => void;
+
+/** THE PERSON'S OWN FRAMES (#1783), on the same socket: the gateway also fans in
+ *  `u:{user_id}:notifications`, which carries a notification (somebody added you to a chat,
+ *  mentioned you, invited you…), a read-count change from another tab, and `rail` — a chat joined
+ *  or left your rail, so it is read again now instead of on the next poll. */
+export type NoticeFrame = {
+  id: string; kind: string; text: string; created: number; read: boolean;
+  actor: { id: string; name?: string };
+  object: { kind: string; id: string; name?: string; url?: string };
+  /** What the notice offers now (accept/decline an invite, join/decline a call, open). */
+  actions?: string[];
+  /** What the person did with it: accepted, declined, joined. */
+  state?: string;
+};
+export type UserFrame =
+  | { type: "notification"; notification: NoticeFrame }
+  | { type: "notification.update"; notification: NoticeFrame; unread: number }
+  | { type: "notification.read"; unread: number }
+  | { type: "rail"; change: "added" | "removed"; session: string }
+  | { type: "home.item"; item: string; state: string; chat?: string; page?: string }
+  | { type: "home.composed"; id: string };
+type UserListener = (f: UserFrame) => void;
+
+/** One stored notice (ws.v1 `Notice`), or null. */
+export function parseNotice(raw: unknown): NoticeFrame | null {
+  const n = raw as Record<string, unknown> | undefined;
+  if (!n || typeof n !== "object" || typeof n.id !== "string" || typeof n.text !== "string") return null;
+  const actor = (n.actor ?? {}) as Record<string, unknown>;
+  const obj = (n.object ?? {}) as Record<string, unknown>;
+  return {
+    id: n.id, kind: String(n.kind ?? ""), text: n.text, created: Number(n.created) || 0, read: !!n.read,
+    actor: { id: String(actor.id ?? ""), ...(typeof actor.name === "string" ? { name: actor.name } : {}) },
+    object: { kind: String(obj.kind ?? ""), id: String(obj.id ?? ""),
+      ...(typeof obj.name === "string" ? { name: obj.name } : {}), ...(typeof obj.url === "string" ? { url: obj.url } : {}) },
+    ...(Array.isArray(n.actions) ? { actions: n.actions.map(String) } : {}),
+    ...(typeof n.state === "string" ? { state: n.state } : {}),
+  };
+}
+
+/** One of the person's own frames, or null. Exported for the contract test (ws.v1 goldens). */
+export function parseUserFrame(data: unknown): UserFrame | null {
+  if (!data || typeof data !== "object") return null;
+  const o = data as Record<string, unknown>;
+  if (o.type === "notification" || (o.type === "notification.update" && typeof o.unread === "number")) {
+    const notification = parseNotice(o.notification);
+    if (!notification) return null;
+    return o.type === "notification" ? { type: "notification", notification }
+      : { type: "notification.update", notification, unread: o.unread as number };
+  }
+  if (o.type === "notification.read" && typeof o.unread === "number") return { type: "notification.read", unread: o.unread };
+  if (o.type === "rail" && (o.change === "added" || o.change === "removed") && typeof o.session === "string")
+    return { type: "rail", change: o.change, session: o.session };
+  if (o.type === "home.item" && typeof o.item === "string" && typeof o.state === "string")
+    return { type: "home.item", item: o.item, state: o.state,
+      ...(typeof o.chat === "string" ? { chat: o.chat } : {}), ...(typeof o.page === "string" ? { page: o.page } : {}) };
+  if (o.type === "home.composed" && typeof o.id === "string") return { type: "home.composed", id: o.id };
+  return null;
+}
 type ConnListener = (connected: boolean) => void;
 
 let ws: WebSocket | null = null;
@@ -46,6 +104,28 @@ let stableTimer: ReturnType<typeof setTimeout> | null = null;
 let authRejected = false;
 const WS_UNAUTHORIZED = 4401;
 const listeners = new Set<Listener>();
+const userListeners = new Set<UserListener>();
+/** PER-MEETING STREAMS on the same socket (ws.v1 `subscribe` with `streams`): today only the
+ *  transcript signals (`meeting.signals`), which the meeting view asks for. The transcript itself
+ *  reaches the view over its own feed, so a view never asks for it here. One entry per meeting; the
+ *  subscribe is sent when the socket opens (again after every reconnect) and the unsubscribe when the
+ *  last listener for that meeting leaves. The gateway grants it with the transcript's own access
+ *  check, for the meeting row that check answers. */
+type MeetingFrameListener = (frame: unknown) => void;
+interface MeetingStreamSub { platform: string; native: string; streams: string[]; listeners: Set<MeetingFrameListener> }
+const meetingSubs = new Map<string, MeetingStreamSub>();
+const subKey = (platform: string, native: string) => `${platform}|${native}`;
+/** Somebody is listening — to meeting status, the person's own frames, or a meeting's streams. */
+const wanted = () => listeners.size + userListeners.size + meetingSubs.size > 0;
+
+function sendFrame(frame: unknown): void {
+  if (!ws || ws.readyState !== 1) return;          // 1 = OPEN; the open handler sends what is wanted
+  try { ws.send(JSON.stringify(frame)); } catch { /* the socket is going; onclose reconnects */ }
+}
+
+function sendSubscribe(sub: MeetingStreamSub): void {
+  sendFrame({ action: "subscribe", meetings: [{ platform: sub.platform, native_id: sub.native }], streams: sub.streams });
+}
 const connListeners = new Set<ConnListener>();
 let connected = false;
 
@@ -78,7 +158,7 @@ export function parseFrame(data: unknown): MeetingStatusFrame | null {
  *  server-side on the upgrade to the gateway. */
 function connect() {
   if (typeof window === "undefined" || ws || starting) return;
-  if (listeners.size === 0) return;            // only (re)connect when someone is listening
+  if (!wanted()) return;                       // only (re)connect when someone is listening
   if (authRejected) return;                    // a refused key is not retried until it can change
   starting = true;
   try {
@@ -87,6 +167,7 @@ function connect() {
     ws = sock;
     sock.onopen = () => {
       setConnected(true);
+      meetingSubs.forEach(sendSubscribe);       // (re)subscribe every meeting stream this tab wants
       // BACKOFF RESETS ON A CONNECTION THAT PROVED ITSELF, NEVER ON `onopen`.
       //
       // Resetting `retry` here made the backoff a no-op against the one failure mode it exists for:
@@ -108,8 +189,16 @@ function connect() {
     sock.onmessage = (m) => {
       let data: unknown;
       try { data = JSON.parse(typeof m.data === "string" ? m.data : ""); } catch { return; }
+      const mf = data as { type?: unknown; meeting?: { platform?: unknown; native_id?: unknown } } | null;
+      if (mf && mf.type === "meeting.signals" && mf.meeting) {
+        const sub = meetingSubs.get(subKey(String(mf.meeting.platform ?? ""), String(mf.meeting.native_id ?? "")));
+        sub?.listeners.forEach((fn) => fn(data));
+        return;
+      }
       const f = parseFrame(data);
-      if (f) listeners.forEach((fn) => fn(f));
+      if (f) { listeners.forEach((fn) => fn(f)); return; }
+      const u = parseUserFrame(data);
+      if (u) userListeners.forEach((fn) => fn(u));
     };
     sock.onclose = (e) => {
       if (ws === sock) ws = null;
@@ -142,7 +231,7 @@ function clearReconnect() {
 }
 
 function scheduleReconnect() {
-  if (reconnectTimer || listeners.size === 0) return;
+  if (reconnectTimer || !wanted()) return;
   const delay = Math.min(1000 * 2 ** retry, 30000);  // 1s, 2s, 4s … capped at 30s
   retry += 1;
   reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
@@ -152,19 +241,58 @@ function scheduleReconnect() {
 export function onMeetingStatus(fn: Listener): () => void {
   listeners.add(fn);
   connect();
+  return () => { listeners.delete(fn); release(); };
+}
+
+/** Subscribe to the person's own frames (notifications, read counts, rail changes). Same socket. */
+export function onUserFrame(fn: UserListener): () => void {
+  userListeners.add(fn);
+  connect();
+  return () => { userListeners.delete(fn); release(); };
+}
+
+/** Follow some of one meeting's live streams (`["signals"]`). Returns the unsubscribe fn. */
+export function subscribeMeetingStreams(platform: string, native: string, streams: string[], fn: MeetingFrameListener): () => void {
+  const key = subKey(platform, native);
+  let sub = meetingSubs.get(key);
+  if (!sub) {
+    sub = { platform, native, streams: [...streams], listeners: new Set() };
+    meetingSubs.set(key, sub);
+    sendSubscribe(sub);
+  }
+  sub.listeners.add(fn);
+  connect();
   return () => {
-    listeners.delete(fn);
-    if (listeners.size === 0) {
-      clearReconnect();                          // kill any pending reconnect on the last unsubscribe
-      if (stableTimer) { clearTimeout(stableTimer); stableTimer = null; }
-      retry = 0;
-      // The latch clears with the last listener, so the next mount — which is what a sign-in
-      // produces — gets one clean attempt with whatever cookie is current. It never clears on a
-      // timer, because nothing about waiting makes a rejected key valid.
-      authRejected = false;
-      if (ws) { try { ws.close(); } catch { /* noop */ } ws = null; }
+    const cur = meetingSubs.get(key);
+    if (!cur) return;
+    cur.listeners.delete(fn);
+    if (cur.listeners.size === 0) {
+      meetingSubs.delete(key);
+      sendFrame({ action: "unsubscribe", meetings: [{ platform, native_id: native }] });
     }
+    release();
   };
+}
+
+/** TEST SEAM: forget the socket (and, unless kept, every listener); optionally connect again now. */
+export function __resetGatewayWS(opts: { keepSubscriptions?: boolean; reconnectNow?: boolean } = {}): void {
+  clearReconnect();
+  if (stableTimer) { clearTimeout(stableTimer); stableTimer = null; }
+  ws = null; starting = false; retry = 0; authRejected = false; connected = false;
+  if (!opts.keepSubscriptions) { listeners.clear(); userListeners.clear(); meetingSubs.clear(); }
+  if (opts.reconnectNow) connect();
+}
+
+function release(): void {
+  if (wanted()) return;
+  clearReconnect();                          // kill any pending reconnect on the last unsubscribe
+  if (stableTimer) { clearTimeout(stableTimer); stableTimer = null; }
+  retry = 0;
+  // The latch clears with the last listener, so the next mount — which is what a sign-in
+  // produces — gets one clean attempt with whatever cookie is current. It never clears on a
+  // timer, because nothing about waiting makes a rejected key valid.
+  authRejected = false;
+  if (ws) { try { ws.close(); } catch { /* noop */ } ws = null; }
 }
 
 /** Subscribe to connection-state changes (true once the socket is open). Fires the current state once. */

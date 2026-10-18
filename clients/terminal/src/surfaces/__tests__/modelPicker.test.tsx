@@ -117,18 +117,37 @@ describe("the model picker", () => {
     expect((await chip()).textContent).toContain("Model unavailable");
   });
 
-  it("follow-my-default clears the chat's pick; use-for-new-chats writes the person's default", async () => {
+  it("follow-my-default clears the chat's pick; use-for-new-chats re-picks it, which the server remembers", async () => {
     const calls = stub({ ...MEMBER, selected: "claude" });
     render(<ModelPicker session="s1" />);
     fireEvent.click(await chip());
     fireEvent.click(screen.getByText("Use for new chats"));
-    await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
-    expect(calls.find((c) => c.method === "PUT")).toEqual(
-      { url: "/api/user/models", method: "PUT", body: { default_model: "claude" } });
+    await waitFor(() => expect(calls.filter((c) => c.method === "POST").length).toBe(1));
+    // the person's default is their last pick, kept by agent-api — no browser storage, no second store
+    expect(calls.find((c) => c.method === "POST")?.body).toEqual({ session: "s1", model: "claude" });
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
     fireEvent.click(await chip());
     fireEvent.click(screen.getByText(/Follow my default/));
-    await waitFor(() => expect(calls.filter((c) => c.method === "POST").length).toBe(1));
-    expect(calls.find((c) => c.method === "POST")?.body).toEqual({ session: "s1", model: "" });
+    await waitFor(() => expect(calls.filter((c) => c.method === "POST").length).toBe(2));
+    expect(calls.filter((c) => c.method === "POST")[1].body).toEqual({ session: "s1", model: "" });
+  });
+
+  it("a pick becomes the default the menu names, for this and every new chat", async () => {
+    stub(MEMBER);
+    render(<ModelPicker session="s1" />);
+    fireEvent.click(await chip());
+    fireEvent.click(document.querySelector('[data-model-id="claude"]')!);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Model for this chat" }).textContent).toBe("Claude"));
+    fireEvent.click(await chip());
+    const claude = document.querySelector('[data-model-id="claude"]')!;
+    expect(claude.textContent).toContain("default");
+    expect(screen.queryByText("Use for new chats")).toBeNull();
+  });
+
+  it("a remembered default the list no longer carries falls back to the catalog's default model", async () => {
+    stub({ ...MEMBER, default: "retired-model" });
+    render(<ModelPicker session="s1" />);
+    expect((await chip()).textContent).toBe("Qwen 3 32B");
   });
 });
 
@@ -218,6 +237,40 @@ describe("the effort selector", () => {
 // the new chat's catalog read is in flight; a pick made then went out with the PREVIOUS chat's
 // model, and the read, landing after it, put the dropdown back on the default.
 
+describe("a new chat starts on the person's last pick", () => {
+  it("shows the remembered model and effort before anything is picked", async () => {
+    stub({ ...WITH_EFFORT, default: "claude", default_effort: "low", selected: null, selected_effort: null });
+    render(<ModelPicker session="new-chat" />);
+    expect((await chip()).textContent).toBe("Claude");
+    expect(effortSelect()!.value).toBe("low");
+    expect(effortSelect()!.text).toBe("Low");
+  });
+
+  it("a remembered effort the model does not offer shows the model's own default", async () => {
+    stub({ ...WITH_EFFORT, default: "claude", default_effort: "none", selected: null, selected_effort: null });
+    render(<ModelPicker session="new-chat" />);
+    await chip();
+    expect(effortSelect()!.value).toBe("medium");
+  });
+
+  it("a chat with its own model never shows the remembered effort of the default", async () => {
+    stub({ ...WITH_EFFORT, default: "claude", default_effort: "low", selected: "claude", selected_effort: null });
+    render(<ModelPicker session="s1" />);
+    await chip();
+    expect(effortSelect()!.value).toBe("medium");
+  });
+
+  it("an effort pick moves the default's remembered level with it", async () => {
+    stub({ ...WITH_EFFORT, selected: "claude", selected_effort: null });
+    render(<ModelPicker session="s1" />);
+    await chip();
+    pickLevel("max");
+    await waitFor(() => expect(effortSelect()!.value).toBe("max"));
+    fireEvent.click(await chip());
+    expect(document.querySelector('[data-model-id="claude"]')!.textContent).toContain("default");
+  });
+});
+
 describe("an effort picked in a new chat", () => {
   it("shows the pick right after picking, and a catalog read that lands later does not undo it", async () => {
     const calls: Call[] = [];
@@ -288,5 +341,23 @@ describe("the picker's menus from the keyboard", () => {
     fireEvent.keyDown(menu, { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
     expect(document.activeElement).toBe(await chip());
+  });
+});
+
+describe("what ran, not only what is picked (0.13.3)", () => {
+  it("names the model the chat's worker runs, and says the pick applies on the next message", async () => {
+    stub({ ...MEMBER, selected: "claude", running: "qwen3-32b" });
+    render(<ModelPicker session="s1" />);
+    const button = await chip();
+    await waitFor(() => expect(button.textContent).toContain("Qwen 3 32B"));
+    expect(await screen.findByText("switching to Claude on your next message")).toBeTruthy();
+  });
+
+  it("says nothing more once the worker runs the pick", async () => {
+    stub({ ...MEMBER, selected: "claude", running: "claude" });
+    const { container } = render(<ModelPicker session="s1" />);
+    const button = await chip();
+    await waitFor(() => expect(button.textContent).toContain("Claude"));
+    expect(container.querySelector("[data-model-pending]")).toBeNull();
   });
 });

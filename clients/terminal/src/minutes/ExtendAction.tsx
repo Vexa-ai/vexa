@@ -251,7 +251,8 @@ export function SelectionAct(p: {
   containerRef: RefObject<HTMLElement | null>;
   act: string;
   slot: string;
-  onReference: (selection: string) => void;
+  /** `ask`: the person chose "Ask about this" (a question follows the quote), else "Reference" */
+  onReference: (selection: string, ask: boolean) => void;
 }) {
   const [hit, setHit] = useState<Hit | null>(null);
   const read = useCallback(() => {
@@ -273,19 +274,32 @@ export function SelectionAct(p: {
   }, [read]);
   useEffect(() => { setHit(null); }, [p.slot]);
   if (!hit) return null;
-  return <button data-doc-act={p.act} title="Add this quote to your chat"
-    onMouseDown={(e) => e.preventDefault()}
-    onClick={() => { p.onReference(hit.text); window.getSelection()?.removeAllRanges(); setHit(null); }}
-    className="c-1 bd r-md pt-0_5 pr-2 pb-0_5 pl-2" style={{ ...ty.chip, position: "absolute", zIndex: 4, top: hit.top, left: hit.left, display: "inline-flex", alignItems: "center", gap: 5, background: surface.raisedHi, cursor: "pointer", boxShadow: "0 2px 8px rgba(0,0,0,.18)" }}>
-    <Icon name="spark" size={12} /> Ask about this
-  </button>;
+  const fire = (ask: boolean) => { p.onReference(hit.text, ask); window.getSelection()?.removeAllRanges(); setHit(null); };
+  const pill = { ...ty.chip, display: "inline-flex", alignItems: "center", gap: 5, background: surface.raisedHi, cursor: "pointer" } as const;
+  // TWO ACTS ON A SELECTION (founder 2026-10-16): Reference puts the quote in the composer; Ask
+  // about this does the same and leaves a question to finish. Neither changes the centre chat.
+  return <span style={{ position: "absolute", zIndex: 4, top: hit.top, left: hit.left, display: "inline-flex", gap: 4, boxShadow: "0 2px 8px rgba(0,0,0,.18)" }}>
+    <button data-doc-act={p.act} title="Add this quote to your chat" onMouseDown={(e) => e.preventDefault()} onClick={() => fire(true)}
+      className="c-1 bd r-md pt-0_5 pr-2 pb-0_5 pl-2" style={pill}><Icon name="spark" size={12} /> Ask about this</button>
+    <button data-doc-act={`${p.act}-reference`} title="Quote this in your chat" onMouseDown={(e) => e.preventDefault()} onClick={() => fire(false)}
+      className="c-1 bd r-md pt-0_5 pr-2 pb-0_5 pl-2" style={pill}>Reference</button>
+  </span>;
 }
 
-export function referenceInChat(selection: string, source: Record<string, unknown>): void {
+export function referenceInChat(selection: string, source: Record<string, unknown>, opts: { ask?: boolean; label?: string } = {}): void {
   const quote = selection.split("\n").map((line) => `> ${line}`).join("\n");
-  const label = source.path ? [source.workspace, source.path].filter(Boolean).join("/") : `Meeting ${source.meeting}`;
+  let label: string;
+  if (source.path) label = [source.workspace, source.path].filter(Boolean).join("/");
+  else {
+    // A MEETING IS A TYPED CHIP (founder 2026-10-16), with who said it and when when known
+    const name = String(opts.label || `Meeting ${source.meeting}`).replace(/[|\]]/g, " ").trim();
+    const at = typeof source.at === "string" && source.at ? new Date(source.at) : null;
+    const when = at && !Number.isNaN(at.getTime()) ? at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+    const who = [source.speaker ? String(source.speaker) : "", when].filter(Boolean).join(", ");
+    label = `[[meeting:${source.meeting}|${name}]]${who ? ` · ${who}` : ""}`;
+  }
   window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: {
-    mode: "draft", reference: source, prompt: `Source: ${label}\n\n${quote}\n\n`,
+    mode: "draft", reference: source, prompt: `Source: ${label}\n\n${quote}\n\n${opts.ask ? "Question: " : ""}`,
   } }));
 }
 
@@ -307,10 +321,10 @@ export function SelectionExtend(p: {
   return (
     <SelectionAct containerRef={p.containerRef} act="extend-selection"
       slot={`${p.workspace ?? ""}|${p.path}`}
-      onReference={(selection) => referenceInChat(selection, {
+      onReference={(selection, ask) => referenceInChat(selection, {
         workspace: p.workspace, path: p.path,
         selection_range: sourceRange(p.body, selection),
         ...(p.meeting ? { meeting: p.meeting } : {}),
-      })} />
+      }, { ask })} />
   );
 }

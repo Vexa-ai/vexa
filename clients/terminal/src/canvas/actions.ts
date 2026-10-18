@@ -1,7 +1,7 @@
 "use client";
 import { createContext, createElement, useContext, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import { useService, ASK_CHAT_EVENT } from "../platform";
-import { LayoutServiceId, type LayoutService } from "../workbench/layout";
+import { LayoutServiceId, type LayoutService } from "../platform/layout";
 import type { HarnessActions } from "./types";
 
 interface CanvasActionState {
@@ -67,10 +67,8 @@ function postMeetingTurn(prompt: string, session: string): void {
 //  opens empty. A flag with no reader is a flag that goes stale in silence, so it goes with the
 //  listener that read it rather than staying as a call every arrival still has to remember to make.
 
-export const MINUTES_ONBOARDING_GREETING = "👋 I kept notes on your meeting — they're beside this chat, with the full transcript under them. Ask me anything about it. To make this space yours: **what's your role at your organisation?** One line is enough — it decides what I pay attention to for you.";
-// Pre-meeting variant: the person arrived from the CONFIRM email — nothing has happened yet, so
-// the conversation is a BRIEFING, and the role question rides inside it.
-export const MINUTES_PREP_GREETING = "👋 I'm booked for your meeting. Brief me so it lands well: **what do you want out of it?** Anything I should read, anyone who matters, decisions you expect — one or two lines is plenty. (And what's your role? It decides what I pay attention to for you.)";
+// MINUTES_ONBOARDING_GREETING and MINUTES_PREP_GREETING live in ../platform/turnMarks.ts: the chat
+// surface reads them, and it sits below this folder (Vexa-ai/vexa#1783).
 // ── DELETED 2026-09-02 (F36): MINUTES_HOME_GREETING, ONBOARDING_GREETING, onboardingGreeting() ──
 //
 //  The home greeting opened every chat that was not about a meeting — "I'm your agent here … paste a

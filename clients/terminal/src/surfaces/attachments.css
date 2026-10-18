@@ -1,0 +1,71 @@
+/* THE COMPOSER'S ATTACHMENTS (attachments.tsx): the drop overlay, the tray's thumbnails and chips,
+   and the image preview. Colours are tokens; a value off the scale stays literal here. A failed
+   upload is `data-failed` on the item, so its danger tone is CSS rather than a style per render. */
+
+/* ── drop overlay ── */
+.at-drop-overlay {
+  position: absolute; inset: var(--space-2); z-index: var(--z-popover); pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  border: 2px dashed var(--accent); border-radius: 16px;
+  background: color-mix(in srgb, var(--rail) 86%, var(--accent) 14%); color: var(--t1);
+}
+.at-drop-icon {
+  width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+  background: var(--accentbg); color: var(--accent);
+}
+
+/* ── the small round × / retry / close buttons ── */
+.at-x {
+  flex: none; width: 18px; height: 18px; padding: 0; display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: var(--radius-full); background: var(--panel); color: var(--t2); cursor: pointer;
+  box-shadow: 0 1px 3px var(--scrim);
+}
+.at-x[data-tone="danger"] { color: var(--danger); }
+.at-x[data-size="lg"] { position: absolute; top: -10px; right: -10px; width: 28px; height: 28px; }
+
+/* ── an image thumbnail ── */
+.at-thumb { border: 1px solid var(--line2); border-radius: var(--radius-lg); background: var(--bg); }
+.at-thumb[data-failed] { border-color: var(--danger); }
+.at-thumb-failed {
+  position: absolute; left: 0; right: 0; bottom: 0; pointer-events: none; text-align: center;
+  background: var(--danger); color: var(--on-accent); font-size: 10px; line-height: 15px;
+}
+
+/* ── a file chip ── */
+.at-chip {
+  border: 1px solid var(--line2); border-radius: var(--radius-lg); background: var(--panel2); color: var(--t2);
+  padding: var(--space-1_5) var(--space-2) var(--space-1_5) var(--space-1_5);
+}
+.at-chip[data-failed] { border-color: var(--danger); background: var(--dangerbg); }
+.at-chip-icon { border-radius: 7px; background: var(--bg); color: var(--t3); }
+.at-chip[data-failed] .at-chip-icon { color: var(--danger); }
+.at-chip-name { font-size: 12.5px; color: var(--t1); }
+.at-chip-meta { font-size: 11px; color: var(--t3); }
+.at-chip[data-failed] .at-chip-meta { color: var(--danger); }
+.at-chip-acts { margin-left: var(--space-0_5); }
+
+/* ── the image preview ── */
+.at-preview {
+  position: fixed; inset: 0; z-index: 1000; padding: var(--space-6);
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--surface-0) 88%, transparent);
+}
+.at-preview-figure { margin: 0; }
+.at-preview-img { border-radius: var(--radius-lg); background: var(--bg); }
+.at-preview-caption {
+  align-self: center; color: var(--t1); background: var(--panel); border-radius: var(--radius-full);
+  padding: 3px 10px; font-size: var(--text-xs);
+}
+
+/* ── a sent message's attachments (MessageAttachments) ── */
+.at-msg { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-1_5); margin: 0 0 var(--space-1_5) auto; max-width: 82%; }
+.at-msg-thumb {
+  width: 88px; height: 88px; padding: 0; overflow: hidden; cursor: zoom-in; flex: none;
+  border: 1px solid var(--line2); border-radius: var(--radius-lg); background: var(--bg);
+}
+.at-msg-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.at-msg-chip { display: flex; align-items: center; gap: 8px; max-width: min(260px, 100%); min-width: 0; text-decoration: none; }
+@media (max-width: 480px) {
+  .at-msg { max-width: 100%; }
+  .at-msg-thumb { width: 72px; height: 72px; }
+}

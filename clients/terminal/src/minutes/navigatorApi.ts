@@ -15,8 +15,8 @@
  *  Decision 26.3's greyed chip is untouched where it was ruled: on a LINK someone followed, in
  *  `ui-kit/WsLink`, where "not yours" answers a question the reader asked. A listing asks nothing.
  */
-import type { ActiveMount, Membership } from "../surfaces/workspaceApi";
-import { listSharedMemberships, listWorkspaceTree, readActiveSet, readWorkspaceById } from "../surfaces/workspaceApi";
+import type { ActiveMount, Membership } from "../data/workspaceApi";
+import { listSharedMemberships, listWorkspaceTree, readActiveSet, readWorkspaceById } from "../data/workspaceApi";
 import { GLOBAL_SLUG, humanPaths } from "./machinery";
 import { WORKSPACE_FRONT_PAGE } from "./deepLink";
 import { isWorkspaceReadme } from "./workspaceReadme";
@@ -50,7 +50,7 @@ const SYSTEM_SLUG = "_system";
  *  Same test `ui-kit/docLinks` applies; duplicated deliberately rather than exported across a
  *  layer boundary that has no other reason to exist. */
 const isHomeMount = (m: ActiveMount, subject?: string): boolean =>
-  m.primary || m.slug === subject || (!!subject && m.path.endsWith(`/${subject}`));
+  (m.desk ?? m.primary) || m.slug === subject || (!!subject && m.path.endsWith(`/${subject}`));
 
 const byName = (a: NavWorkspace, b: NavWorkspace) =>
   a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.key.localeCompare(b.key);
@@ -73,17 +73,11 @@ export function buildWorkspaces(src: {
     return [{ key: GLOBAL_SLUG, slug: GLOBAL_SLUG, kind: "global", name: g?.name?.trim() || GLOBAL_SLUG }];
   }
   const home = active.find((m) => isHomeMount(m, src.subject));
-  const desk: NavWorkspace = {
-    key: "desk", slug: undefined, kind: "desk",
-    name: home?.name?.trim() || "Personal",
-  };
+  // PERSONAL IS ALWAYS "Personal" (Vexa-ai/vexa#1783): the desk row never borrows a repo's name.
+  const desk: NavWorkspace = { key: "desk", slug: undefined, kind: "desk", name: "Personal" };
 
-  const globalMount = active.find((m) => m.slug === GLOBAL_SLUG);
-  // "shown as the company name when known" — known means the mount carries a display name. With no
-  // name we say `_global` rather than invent an org: a guessed company name is worse than a slug.
-  const global: NavWorkspace | null = globalMount
-    ? { key: GLOBAL_SLUG, slug: GLOBAL_SLUG, kind: "global", name: globalMount.name?.trim() || GLOBAL_SLUG }
-    : null;
+  // The company layer is not an everyday account's row (founder, 2026-10-13): `_global` is reached
+  // in the Company profile only (ADR-0049), where it is the one row (the branch above).
 
   const groups = new Map<string, NavWorkspace>();
   for (const m of active) {
@@ -100,7 +94,7 @@ export function buildWorkspaces(src: {
     groups.set(id, { key: id, slug: id, kind: "group", name: ms.name?.trim() || id });
   }
 
-  return [desk, ...(global ? [global] : []), ...[...groups.values()].sort(byName)];
+  return [desk, ...[...groups.values()].sort(byName)];
 }
 
 // ── the front page ───────────────────────────────────────────────────────────────────────────────

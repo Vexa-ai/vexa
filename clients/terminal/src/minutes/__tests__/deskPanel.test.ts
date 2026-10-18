@@ -36,20 +36,21 @@ describe("deskPanelPages", () => {
     const pages = await deskPanelPages([]);
     expect(pages[0]).toEqual({ path: "README.md", label: "nora@studio.example" });
     expect(pages[0].slug).toBeUndefined();                 // the reader's own — a no-slug read
-    expect(pages.at(-1)).toEqual({ path: "README.md", slug: "_global", label: "_global" });
+    // The company layer is never an everyday account's tab (founder, 2026-10-13; ADR-0049).
+    expect(pages.some((p) => p.slug === "_global")).toBe(false);
   });
 
   it("the desk still leads when the chat stresses a group, and the group is NAMED", async () => {
     routes({ ...ACTIVE, ...NAMES });
     const pages = await deskPanelPages(["grp", "_global"]);
-    expect(pages.map((p) => p.label)).toEqual(["nora@studio.example", "ASWF DNA Project", "_global"]);
+    expect(pages.map((p) => p.label)).toEqual(["nora@studio.example", "ASWF DNA Project"]);
     expect(pages[1].slug).toBe("grp");
   });
 
   it("`personal` is the desk, not a second tab", async () => {
     routes({ ...ACTIVE, ...NAMES });
     const pages = await deskPanelPages(["personal"]);
-    expect(pages.map((p) => p.label)).toEqual(["nora@studio.example", "_global"]);
+    expect(pages.map((p) => p.label)).toEqual(["nora@studio.example"]);
   });
 
   it("`_system` is never a tab — always mounted, never chosen", async () => {

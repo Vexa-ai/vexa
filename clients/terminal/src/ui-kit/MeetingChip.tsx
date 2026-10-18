@@ -13,8 +13,8 @@
  *      wrote;
  *    - nothing else: a meeting is never guessed from prose.
  *
- *  WHO MAY SEE THE TITLE. A meeting link is answered from the meetings list (`useLiveMeetings`, which
- *  is `GET /api/meetings` — the meetings this reader owns plus those shared with them, as meeting-api
+ *  WHO MAY SEE THE TITLE. A meeting link is answered from the meetings list (`meetingSource`, supplied by
+ *  `surfaces/liveMeetings`, which is `GET /api/meetings` — the meetings this reader owns plus those shared with them, as meeting-api
  *  authorises the list). A notes-page link is answered by the server (`POST /api/links/resolve` →
  *  `meeting_link`), which reads the row through the one meeting access decision. Either way a meeting
  *  this reader may not see renders as PLAIN TEXT — the words the writer put there, or "a meeting" —
@@ -22,13 +22,13 @@
  *
  *  A click opens the meeting the way the Calls list does: `OPEN_MEETING_EVENT` with the row id. The
  *  chip names the route, not a view; whatever renders a meeting answers it. */
+import "./meetingChip.css";
 import { useContext, useEffect, useState, type ReactNode } from "react";
 import { Icon } from "./index";
-import { DocMetaContext, ENTITY_CHIP, useOpenEntity } from "./docRefs";
+import { DocMetaContext, useOpenEntity } from "./docRefs";
 import { resolveLink, type ResolvedLink } from "./wsLinks";
 import { OPEN_MEETING_EVENT } from "../platform";
-import { ensureMeetingKnown, useLiveMeetings, useLiveMeetingsLoaded } from "../surfaces/liveMeetings";
-import type { MeetingMock } from "../surfaces/meetingModel";
+import { ensureSourceMeetingKnown, useSourceMeetings, useSourceMeetingsLoaded, type MeetingRow } from "./meetingSource";
 
 /** A notes page, as the minter names it (`meeting_note.is_note_path`): one segment, `.md`, under
  *  `kg/entities/meeting/`, and not the folder's index. Any prefix — `./`, a mount path — is allowed. */
@@ -71,7 +71,7 @@ export function meetingDay(at?: string | null, now: Date = new Date()): string {
 }
 
 /** A meetings-list row a ref names: the row id, a native id, or `<platform>/<native>`. */
-export function findMeeting(meetings: readonly MeetingMock[], ref: string): MeetingMock | undefined {
+export function findMeeting(meetings: readonly MeetingRow[], ref: string): MeetingRow | undefined {
   const r = ref.trim();
   if (!r) return undefined;
   const native = r.includes("/") ? r.slice(r.indexOf("/") + 1) : r;
@@ -80,8 +80,8 @@ export function findMeeting(meetings: readonly MeetingMock[], ref: string): Meet
 
 /** The chip's two words, from a list row: the meeting's own name (a rename wins), else its
  *  platform; and the day it ran, was due, or was requested. */
-function fromRow(m: MeetingMock): { title: string; at?: string } {
-  const row = m as MeetingMock & { created_at?: string };
+function fromRow(m: MeetingRow): { title: string; at?: string } {
+  const row = m as MeetingRow & { created_at?: string };
   return {
     title: m.title_custom?.trim() || platformName(m.platform),
     at: m.start_time ?? m.scheduled_at ?? row.created_at,
@@ -93,12 +93,6 @@ type MeetingAnswer = ResolvedLink & {
   meeting?: { id: string; platform?: string; native?: string } | null;
 };
 
-const meetingStyle = ENTITY_CHIP.meeting;
-const chipBase = {
-  display: "inline-flex", alignItems: "center", gap: 5, verticalAlign: "baseline", borderRadius: 999,
-  padding: "0.5px 9px 0.5px 7px", fontSize: "0.92em", fontWeight: 500, whiteSpace: "nowrap", lineHeight: 1.45,
-} as const;
-
 /** The plain words a meeting this reader may not see renders as — what the writer put there, unless
  *  that is a path (a filename is never shown for a meeting), else "a meeting". */
 function plainLabel(label: ReactNode): ReactNode {
@@ -107,16 +101,13 @@ function plainLabel(label: ReactNode): ReactNode {
 }
 
 function Chip({ title, at, onOpen }: { title: string; at?: string; onOpen: () => void }) {
-  const [hover, setHover] = useState(false);
   const day = meetingDay(at);
   return (
     <span role="link" data-meeting-chip="" title={`Open ${title}${day ? ` · ${day}` : ""}`} onClick={onOpen}
-      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{ ...chipBase, background: hover ? meetingStyle.bg : "var(--panel2)",
-        border: `1px solid ${hover ? meetingStyle.color : "var(--line)"}`, color: meetingStyle.color, cursor: "pointer" }}>
+      className="vx-meeting-chip">
       <Icon name="mic" size={11} style={{ opacity: 0.8 }} />
       <span>{title}</span>
-      {day && <span data-meeting-day="" style={{ color: "var(--t3)", fontWeight: 400 }}>· {day}</span>}
+      {day && <span data-meeting-day="" className="vx-meeting-chip-day">· {day}</span>}
     </span>
   );
 }
@@ -124,7 +115,7 @@ function Chip({ title, at, onOpen }: { title: string; at?: string; onOpen: () =>
 /** While it resolves: the shape of a chip and none of its words. */
 function Pending() {
   return (
-    <span data-meeting-chip-pending="" style={{ ...chipBase, background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--t3)" }}>
+    <span data-meeting-chip-pending="" className="vx-meeting-chip" data-pending="">
       <Icon name="mic" size={11} style={{ opacity: 0.4 }} />Meeting
     </span>
   );
@@ -134,12 +125,12 @@ const openMeeting = (ref: string) => window.dispatchEvent(new CustomEvent(OPEN_M
 
 /** A meeting named by its link — `?meeting=<ref>`. */
 function ByRef({ meetingRef, label }: { meetingRef: string; label?: ReactNode }) {
-  const meetings = useLiveMeetings();
-  const loaded = useLiveMeetingsLoaded();
+  const meetings = useSourceMeetings();
+  const loaded = useSourceMeetingsLoaded();
   const m = findMeeting(meetings, meetingRef);
   // A row created this minute is not in the list yet: ask for it once (throttled in the store).
   useEffect(() => {
-    if (loaded && !m) ensureMeetingKnown(meetingRef.includes("/") ? meetingRef.slice(meetingRef.indexOf("/") + 1) : meetingRef);
+    if (loaded && !m) ensureSourceMeetingKnown(meetingRef.includes("/") ? meetingRef.slice(meetingRef.indexOf("/") + 1) : meetingRef);
   }, [loaded, m, meetingRef]);
   if (m) {
     const { title, at } = fromRow(m);
@@ -154,7 +145,7 @@ function ByNote({ path, label, slug }: { path: string; label?: ReactNode; slug?:
   const doc = useContext(DocMetaContext);
   const meta = slug !== undefined ? { ...doc, slug } : doc;
   const openEntity = useOpenEntity();
-  const meetings = useLiveMeetings();
+  const meetings = useSourceMeetings();
   const [answer, setAnswer] = useState<MeetingAnswer | null | undefined>(undefined);
   useEffect(() => {
     let on = true;

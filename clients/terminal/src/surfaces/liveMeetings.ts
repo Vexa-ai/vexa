@@ -9,6 +9,7 @@ import { useSyncExternalStore } from "react";
 import type { MeetingMock, TranscriptLine } from "./meetingModel";
 import { onGatewayWSConnected, onMeetingStatus } from "./gatewayWS";
 import { readMeetingLanguage } from "./transcriptionLanguage";
+import { provideMeetingSource } from "../ui-kit/meetingSource";
 
 /** A row from meeting-api GET /meetings (live AND past). */
 export interface MeetingRowDTO {
@@ -71,10 +72,22 @@ interface SegmentDTO {
   absolute_end_time?: string | null;
   speaker?: string | null;
   text?: string | null;
+  /** the segment's id (api.v1) — what a transcript signal annotates */
+  segment_id?: string | null;
+}
+
+interface GapDTO {
+  start?: number | null;
+  end?: number | null;
+  absolute_start_time?: string | null;
+  absolute_end_time?: string | null;
+  label?: string | null;
 }
 
 interface TranscriptResponseDTO {
   segments?: SegmentDTO[];
+  /** Present only because the fetch asks (`include_gaps=true`); a 0.12 reader never sees it. */
+  gaps?: GapDTO[];
 }
 
 /** The durable half of a meeting's transcript response: the raw recorded segments, mapped for the
@@ -82,6 +95,8 @@ interface TranscriptResponseDTO {
  *  inference pipeline that produced it, so `data.processed` has no producer and is not read. */
 export interface DurableTranscript {
   lines: TranscriptLine[];
+  /** Captured audio that was never transcribed, as meeting-api recorded it (prod-cutover R4). */
+  gaps?: { startMs?: number; endMs?: number; label: string }[];
 }
 
 function transcriptEpochMs(seconds?: number | null, iso?: string | null): number | undefined {
@@ -131,8 +146,11 @@ function whenLabel(d: MeetingRowDTO, live: boolean): string {
 }
 
 /** The name a meeting has when nobody named it: platform · code, or "Untitled meeting" without a link. */
-function fallbackTitle(platform: string, native: string | null | undefined): string {
-  return native ? `${platform === "google_meet" ? "Google Meet" : platform} · ${native}` : "Untitled meeting";
+function fallbackTitle(platform: string, _native?: string | null): string {
+  // NEVER THE NATIVE ID OR THE PLATFORM KEY (UI decisions 14): a placeholder word that the one name
+  // rule (`minutes/callsList` meetingDisplayName) passes over to the chat's name, then the people
+  const word: Record<string, string> = { google_meet: "Google Meet call", zoom: "Zoom call", teams: "Teams call", jitsi: "Jitsi call", vexa_call: "Call", voice_note: "Voice note" };
+  return word[platform] ?? "Meeting";
 }
 
 function toMock(d: MeetingRowDTO): MeetingMock {
@@ -154,7 +172,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     // a planned meeting's user-given title wins; otherwise the platform·native fallback
     // Honest fallbacks (design-spec W3): a link-less plan is "Untitled meeting", never
     // "unknown · (no link)"; a linked one reads "Google Meet · abc-defg-hij".
-    title: d.data?.title || fallbackTitle(d.platform, native),
+    title: d.data?.title || (d.platform === "voice_note" ? "Voice note" : fallbackTitle(d.platform, native)),
     title_custom: d.data?.title ?? undefined,
     when: whenLabel(d, live),
     status: live ? "live" : "past",
@@ -300,7 +318,7 @@ const EMPTY_DURABLE: DurableTranscript = { lines: [] };
  *  another tenant's). `meetingId` is the row id the mock now carries as `id`. */
 export async function fetchDurableTranscript(meetingId: string): Promise<DurableTranscript> {
   try {
-    const r = await fetch(`/api/transcripts/by-id/${encodeURIComponent(meetingId)}`, { cache: "no-store" });
+    const r = await fetch(`/api/transcripts/by-id/${encodeURIComponent(meetingId)}?include_gaps=true`, { cache: "no-store" });
     if (!r.ok) return EMPTY_DURABLE;
     const body = (await r.json()) as TranscriptResponseDTO;
     const list = body.segments || [];
@@ -312,8 +330,16 @@ export async function fetchDurableTranscript(meetingId: string): Promise<Durable
         endMs: transcriptEpochMs(s.end, s.absolute_end_time),
         offsetSeconds: typeof s.start === "number" && s.start < 1e9 ? s.start : undefined,
         speaker: s.speaker || "Speaker", text: s.text ?? "",
+        ...(s.segment_id ? { id: s.segment_id } : {}),
       }));
-    return { lines };
+    const gaps = (body.gaps || [])
+      .filter((g) => (g.label ?? "").trim())
+      .map((g) => ({
+        startMs: transcriptEpochMs(g.start, g.absolute_start_time),
+        endMs: transcriptEpochMs(g.end, g.absolute_end_time),
+        label: g.label as string,
+      }));
+    return gaps.length ? { lines, gaps } : { lines };
   } catch {
     return EMPTY_DURABLE;
   }
@@ -421,3 +447,7 @@ export function useLiveMeetings(): MeetingMock[] {
     () => meetings,
   );
 }
+
+// The ui-kit's meeting chip reads this list through a slot it names (`ui-kit/meetingSource`): the
+// ui-kit sits below this folder and never imports it (Vexa-ai/vexa#1783).
+provideMeetingSource({ useMeetings: useLiveMeetings, useLoaded: useLiveMeetingsLoaded, ensureKnown: ensureMeetingKnown });

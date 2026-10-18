@@ -3,7 +3,7 @@
  *  • EntityList (center): "in the room" + "detected" — click a card to open its workspace doc tab.
  *  • Research actions run in the active meeting copilot via a tiny bus. */
 import { useState, type CSSProperties, type ReactNode } from "react";
-import type { TabDescriptor } from "../workbench/layout";
+import type { TabDescriptor } from "../platform/layout";
 import { Icon } from "../ui-kit";
 import { type Entity, type EntityType } from "./meetingModel";
 

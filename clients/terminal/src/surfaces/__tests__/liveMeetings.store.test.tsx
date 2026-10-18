@@ -262,12 +262,12 @@ describe("liveMeetings store · a call's name and time", () => {
   it("a rename reaches every reader at once, and an empty name goes back to the default label", async () => {
     const { mod, hook } = await startStore();
     const id = String(golden.meeting_id);
-    expect(hook.result.current[0].title).toBe(`Google Meet · ${NATIVE}`);
-    act(() => mod.applyMeetingTitle(id, "  Campbell intro  "));
-    expect(hook.result.current[0].title_custom).toBe("Campbell intro");
-    expect(hook.result.current[0].title).toBe("Campbell intro");
+    expect(hook.result.current[0].title).not.toContain(NATIVE);       // never the native id (UI decisions 14)
+    act(() => mod.applyMeetingTitle(id, "  Acme intro  "));
+    expect(hook.result.current[0].title_custom).toBe("Acme intro");
+    expect(hook.result.current[0].title).toBe("Acme intro");
     act(() => mod.applyMeetingTitle(id, ""));
     expect(hook.result.current[0].title_custom).toBeUndefined();
-    expect(hook.result.current[0].title).toBe(`Google Meet · ${NATIVE}`);
+    expect(hook.result.current[0].title).not.toContain(NATIVE);       // never the native id (UI decisions 14)
   });
 });

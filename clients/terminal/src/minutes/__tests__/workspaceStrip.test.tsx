@@ -31,10 +31,10 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import * as api from "../../surfaces/workspaceApi";
+import * as api from "../../data/workspaceApi";
 
-vi.mock("../../surfaces/workspaceApi", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../surfaces/workspaceApi")>()),
+vi.mock("../../data/workspaceApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../data/workspaceApi")>()),
   readWorkspaceBySlug: vi.fn(),
   listWorkspaceTree: vi.fn(),
   readWorkspaceHistory: vi.fn(),
@@ -302,7 +302,7 @@ describe("the acts are conversations, and they are this viewer's", () => {
   it("queues a same-target act on the chat instead of opening a form", async () => {
     const seen = heard();
     const { container } = panel();
-    await waitFor(() => expect(acts(container).length).toBe(3));
+    await waitFor(() => expect(acts(container).length).toBe(2));
 
     fireEvent.click(container.querySelector('[data-ws-strip-act="member"]')!);
 

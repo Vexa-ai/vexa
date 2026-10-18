@@ -21,7 +21,7 @@
  */
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { Icon } from "../ui-kit";
-import { presentError } from "./apiClient";
+import { presentError } from "../data/apiClient";
 import { refreshMeetings } from "./liveMeetings";
 import {
   MAX_CALENDARS, listCalendars, createCalendar, updateCalendar, deleteCalendar,

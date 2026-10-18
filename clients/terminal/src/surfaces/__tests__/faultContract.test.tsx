@@ -12,7 +12,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { FaultBlock } from "../../workbench/agent-window";
+import { FaultBlock } from "../agent-window";
 import { faultHeadline, KIND_LABEL, readFault, SOURCE_LABEL, type Fault } from "../faults";
 import { FAULT_KINDS, FAULT_SOURCES, isFaultKind } from "../faultWire";
 

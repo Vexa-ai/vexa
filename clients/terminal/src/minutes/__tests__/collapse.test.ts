@@ -9,10 +9,10 @@ import { readShellStore, SHELL_KEY, writeShellStore } from "../../ui-kit/layout/
 describe("side-column collapse — migrated into the shell store", () => {
   beforeEach(() => localStorage.clear());
 
-  it("a profile that has never chosen opens with both columns", () => {
+  it("a profile that has never chosen opens the rail and keeps the desk closed (founder 2026-10-13)", () => {
     expect(loadCollapsed("left")).toBe(false);
     expect(loadCollapsed("right")).toBe(false);
-    expect(readShellStore(legacyShellStore).prefs).toEqual({ railOpen: true, pagesOpen: true });
+    expect(readShellStore(legacyShellStore).prefs).toEqual({ railOpen: true, pagesOpen: false });
   });
 
   it("a fold made under the old keys survives the move, per side", () => {

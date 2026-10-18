@@ -108,6 +108,8 @@ export { KeyValue, kvValue, humanizeKey, isEmptyValue } from "./primitives/KeyVa
 export type { KeyValueItem } from "./primitives/KeyValue";
 export { Truncate, displayUrl, splitForMiddle } from "./primitives/Truncate";
 export { DateText } from "./primitives/DateText";
+export { Identity, IdentityStack } from "./Identity";
+export type { IdentityProps, IdentityItem } from "./Identity";
 export { Fold, FOLD_AT } from "./primitives/Fold";
 export type { FoldAt } from "./primitives/Fold";
 export { OverflowStrip } from "./primitives/OverflowStrip";
@@ -137,3 +139,8 @@ export { Toaster, toast } from "./primitives/Toast";
 export { contrastRatio, parseColor } from "./format/contrast";
 export { parseTokens } from "./format/tokens";
 export { extractSources, mergeSources, parseSourceItem, readSources } from "./format/sources";
+// blocks.v1 — the one renderer for the home, page fences and chat replies (#1783)
+export { Avatar, BlocksView, BlocksProvider, CardView, KIND_LABEL, PagePeekPanel, Peek, PersonChip, VexaFence, useBlocksHandlers } from "./blocks/Blocks";
+export type { BlocksHandlers, PeekContent, Reason } from "./blocks/Blocks";
+export { BLOCKS_SPEC, FENCE_LANG, HOME_SPEC, KINDS, LIMITS, cardPeople, clip, homeFirstVisit, parseVexaFence, sanitizeFence, sanitizeHome, shownCards, patchHome, peekFromMarkdown, STATES } from "./blocks/spec";
+export type { Action as BlockAction, Block, Card as BlockCard, CheckItem, Fence, HomeDoc, HomeKind, IconName, ItemState, Person as BlockPerson, Refs as BlockRefs, Row as BlockRow } from "./blocks/spec";

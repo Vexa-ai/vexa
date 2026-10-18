@@ -14,52 +14,54 @@
  *      in through it;
  *    • The recording — whether the people you share with may play and download it.
  *  Every failure is shown where it happened, in words (`presentError`), never swallowed (P18). */
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import "./meetingShare.css";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Icon } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
 import { copyText } from "../ui-kit/ContextMenu";
-import { presentError } from "./apiClient";
-import { listWorkspaceMembers, removeWorkspaceMember, type WorkspaceMember } from "./workspaceApi";
+import { presentError } from "../data/apiClient";
+import { listWorkspaceMembers, removeWorkspaceMember, type WorkspaceMember } from "../data/workspaceApi";
 import {
   createShareLink, getMeetingAccess, inviteToMeeting, parseEmails, removeReader, revokeShare, setRecordingShared,
   type InviteResult, type MeetingAccess, type WorkspaceGrant,
 } from "./meetingShareApi";
 import type { MeetingMock } from "./meetingModel";
 
-const quiet: CSSProperties = { fontSize: 12, color: "var(--t3)" };
-const field: CSSProperties = { fontSize: 12.5, padding: "5px 8px", background: "var(--bg)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)", minWidth: 0 };
-const textBtn: CSSProperties = { background: "transparent", border: "none", padding: 0, color: "var(--t2)", fontSize: 12, cursor: "pointer", textDecoration: "underline dotted", textUnderlineOffset: 3 };
-const primary: CSSProperties = { fontSize: 12.5, padding: "5px 12px", background: "var(--accent)", color: "var(--on-accent, var(--bg))", border: "none", borderRadius: 6, cursor: "pointer" };
-const headerBtn: CSSProperties = { display: "inline-flex", alignItems: "center", gap: 5, background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 6, padding: "2px 9px", fontSize: 12, cursor: "pointer", flex: "none" };
+// The look lives in ./meetingShare.css (tokens only).
+const quiet = "vx-share-quiet";
+const field = "vx-share-field";
+const textBtn = "vx-share-text-btn";
+const primary = "vx-share-primary";
+const headerBtn = "vx-share-header-btn";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
-  return <section style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 12, marginTop: 12, borderTop: "1px solid var(--line)" }}>
-    <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em" }}>{title}</div>
+  return <section className="vx-share-section">
+    <div className="vx-share-section-title">{title}</div>
     {children}
   </section>;
 }
 
 function Alert({ children }: { children: ReactNode }) {
-  return <div role="alert" style={{ fontSize: 12, color: "var(--danger)", lineHeight: 1.4 }}>{children}</div>;
+  return <div role="alert" className="vx-share-alert">{children}</div>;
 }
 
 /** One row of the access list: who, what they can do, and the remove action. */
 function AccessRow({ who, role, onRemove, busy }: { who: string; role: string; onRemove?: () => void; busy?: boolean }) {
-  return <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5 }}>
-    <Icon name="user" size={13} style={{ color: "var(--t3)" }} />
-    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--t1)" }}>{who}</span>
-    <span style={quiet}>{role}</span>
-    {onRemove && <button type="button" style={textBtn} disabled={busy} onClick={onRemove}>Remove</button>}
+  return <div className="vx-share-access-row">
+    <Icon name="user" size={13} />
+    <span className="vx-share-who">{who}</span>
+    <span className={quiet}>{role}</span>
+    {onRemove && <button type="button" className={textBtn} disabled={busy} onClick={onRemove}>Remove</button>}
   </div>;
 }
 
 /** The quiet indicator: an icon and a few words — never a chip. */
 export function SharedIndicator({ meeting }: { meeting: Pick<MeetingMock, "shared" | "shared_with"> }) {
-  if (meeting.shared) return <span title="Someone shared this meeting with you" style={{ ...quiet, display: "inline-flex", alignItems: "center", gap: 4, flex: "none" }}>
+  if (meeting.shared) return <span title="Someone shared this meeting with you" className={`${quiet} vx-share-indicator`}>
     <Icon name="user" size={11} />Shared with you</span>;
   const n = meeting.shared_with ?? 0;
   if (!n) return null;
-  return <span title={`${n} ${n === 1 ? "person" : "people"} can read this meeting`} style={{ ...quiet, display: "inline-flex", alignItems: "center", gap: 4, flex: "none" }}>
+  return <span title={`${n} ${n === 1 ? "person" : "people"} can read this meeting`} className={`${quiet} vx-share-indicator`}>
     <Icon name="user" size={11} />Shared with {n}</span>;
 }
 
@@ -68,7 +70,7 @@ export function MeetingShareButton({ meeting }: { meeting: MeetingMock }) {
   const [open, setOpen] = useState(false);
   if (meeting.shared) return <SharedIndicator meeting={meeting} />;
   return <>
-    <button type="button" onClick={() => setOpen(true)} style={headerBtn} title="Share this meeting">
+    <button type="button" onClick={() => setOpen(true)} className={headerBtn} title="Share this meeting">
       <Icon name="link" size={12} /> Share{meeting.shared_with ? ` · ${meeting.shared_with}` : ""}
     </button>
     {open && <MeetingShareDialog meeting={meeting} onClose={() => setOpen(false)} />}
@@ -129,20 +131,20 @@ export function MeetingShareDialog({ meeting, onClose, origin }: { meeting: Meet
   const pending = access?.invites ?? [];
 
   return <Modal title="Share meeting" onClose={onClose} width={480}>
-    <div style={{ fontSize: 12.5, color: "var(--t2)", lineHeight: 1.5 }}>
+    <div className="vx-share-lede">
       People you share with see the live transcript while the meeting runs, and the transcript, notes and — if you allow it — the recording after. Everyone signs in first.
     </div>
 
     <Section title="Invite people">
-      <div style={{ display: "flex", gap: 6 }}>
+      <div className="vx-share-inline">
         <input aria-label="Email addresses" value={emails} placeholder="name@company.com, …" disabled={busy}
           onChange={(e) => { setEmails(e.target.value); setInputError(null); }}
-          onKeyDown={(e) => { if (e.key === "Enter") void invite(); }} style={{ ...field, flex: 1 }} />
-        <button type="button" style={{ ...primary, opacity: busy ? 0.5 : 1 }} disabled={busy} onClick={() => void invite()}>{busy ? "Inviting…" : "Invite"}</button>
+          onKeyDown={(e) => { if (e.key === "Enter") void invite(); }} className={field} style={{ flex: 1 }} />
+        <button type="button" className={primary} style={{ opacity: busy ? 0.5 : 1 }} disabled={busy} onClick={() => void invite()}>{busy ? "Inviting…" : "Invite"}</button>
       </div>
-      {workspaceId && <label style={{ display: "flex", alignItems: "center", gap: 8, ...quiet }}>
-        Also the workspace <span style={{ fontFamily: "var(--mono)", color: "var(--t2)" }}>{workspaceId}</span>
-        <select aria-label="Workspace access" value={wsRole} disabled={busy} onChange={(e) => setWsRole(e.target.value as WorkspaceGrant)} style={field}>
+      {workspaceId && <label className={`${quiet} vx-share-ws`}>
+        Also the workspace <span className="vx-share-ws-id">{workspaceId}</span>
+        <select aria-label="Workspace access" value={wsRole} disabled={busy} onChange={(e) => setWsRole(e.target.value as WorkspaceGrant)} className={field}>
           <option value="none">no</option>
           <option value="viewer">can view</option>
           <option value="contributor">can edit</option>
@@ -150,21 +152,21 @@ export function MeetingShareDialog({ meeting, onClose, origin }: { meeting: Meet
       </label>}
       {inputError && <Alert>{inputError}</Alert>}
       {results.map((r) => r.url
-        ? <div key={r.email} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
-            <span style={{ flex: 1, minWidth: 0, color: "var(--t2)" }}>{r.mailed
+        ? <div key={r.email} className="vx-share-result">
+            <span className="vx-share-result-text">{r.mailed
               ? (r.workspace
-                ? <>Emailed <b style={{ color: "var(--t1)" }}>{r.email}</b> the meeting. Their workspace invite is only in the copied link — send them that too. It works only for that address.</>
-                : <>Emailed <b style={{ color: "var(--t1)" }}>{r.email}</b> their link. You can also copy it — it works only for that address.</>)
-              : <>The email to <b style={{ color: "var(--t1)" }}>{r.email}</b> could not be sent. Copy the link and send it yourself — it works only for that address.</>}</span>
-            <button type="button" style={textBtn} onClick={() => void copyText(r.url!)}>Copy link</button>
+                ? <>Emailed <b className="c-1">{r.email}</b> the meeting. Their workspace invite is only in the copied link — send them that too. It works only for that address.</>
+                : <>Emailed <b className="c-1">{r.email}</b> their link. You can also copy it — it works only for that address.</>)
+              : <>The email to <b className="c-1">{r.email}</b> could not be sent. Copy the link and send it yourself — it works only for that address.</>}</span>
+            <button type="button" className={textBtn} onClick={() => void copyText(r.url!)}>Copy link</button>
           </div>
         : <Alert key={r.email}>Could not invite {r.email}: {presentError(r.error).headline}</Alert>)}
     </Section>
 
     <Section title="People with access">
-      {loadError && <Alert>Could not load who has access: {loadError} <button type="button" style={textBtn} onClick={() => void load()}>Retry</button></Alert>}
-      {!access && !loadError && <span role="status" style={quiet}>Loading…</span>}
-      {access && !readers.length && !pending.length && !(members && members.length) && <span style={quiet}>Only you.</span>}
+      {loadError && <Alert>Could not load who has access: {loadError} <button type="button" className={textBtn} onClick={() => void load()}>Retry</button></Alert>}
+      {!access && !loadError && <span role="status" className={quiet}>Loading…</span>}
+      {access && !readers.length && !pending.length && !(members && members.length) && <span className={quiet}>Only you.</span>}
       {readers.map((p) => <AccessRow key={`r${p.user_id}`} who={p.email ?? `User ${p.user_id}`} role="can view" busy={busy}
         onRemove={() => void act(() => removeReader(meeting.id, p.user_id))} />)}
       {pending.map((i) => <AccessRow key={`i${i.id}`} who={i.emails.join(", ")} role="invited, not opened yet" busy={busy}
@@ -188,30 +190,30 @@ export function MeetingShareDialog({ meeting, onClose, origin }: { meeting: Meet
 
     <Section title="Link">
       {openLink
-        ? <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5 }}>
-            <span style={{ flex: 1, color: "var(--t2)" }}>Anyone with the link can view after signing in{openLink.joined ? ` · ${openLink.joined} joined` : ""}.</span>
-            <button type="button" style={textBtn} disabled={busy} onClick={() => void act(async () => { setLink(null); return revokeShare(meeting.id, openLink.id); })}>Turn off</button>
+        ? <div className="vx-share-link-row">
+            <span className="vx-share-link-text">Anyone with the link can view after signing in{openLink.joined ? ` · ${openLink.joined} joined` : ""}.</span>
+            <button type="button" className={textBtn} disabled={busy} onClick={() => void act(async () => { setLink(null); return revokeShare(meeting.id, openLink.id); })}>Turn off</button>
           </div>
-        : <span style={quiet}>Off. Only the people above can open this meeting.</span>}
+        : <span className={quiet}>Off. Only the people above can open this meeting.</span>}
       {link
-        ? <div style={{ display: "flex", gap: 6 }}>
-            <input readOnly aria-label="Share link" value={link} onFocus={(e) => e.currentTarget.select()} style={{ ...field, flex: 1, fontSize: 11.5 }} />
-            <button type="button" style={primary} onClick={() => void copyText(link)}>Copy</button>
+        ? <div className="vx-share-inline">
+            <input readOnly aria-label="Share link" value={link} onFocus={(e) => e.currentTarget.select()} className={`${field} vx-share-link-field`} style={{ flex: 1 }} />
+            <button type="button" className={primary} onClick={() => void copyText(link)}>Copy</button>
           </div>
-        : <div><button type="button" style={textBtn} disabled={busy} onClick={() => void act(async () => {
+        : <div><button type="button" className={textBtn} disabled={busy} onClick={() => void act(async () => {
             setLink(await createShareLink(meeting.id, base));
             return getMeetingAccess(meeting.id);
           })}>{openLink ? "Create another link" : "Create a link"}</button></div>}
     </Section>
 
     <Section title="Recording">
-      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--t2)" }}>
+      <label className="vx-share-check">
         <input type="checkbox" checked={!!access?.recording} disabled={!access || busy}
           onChange={(e) => { const on = e.target.checked; void act(() => setRecordingShared(meeting.id, on)); }} />
         People you share with can play and download the recording
       </label>
     </Section>
 
-    {actionError && <div style={{ marginTop: 10 }}><Alert>{actionError}</Alert></div>}
+    {actionError && <div className="vx-share-action-error"><Alert>{actionError}</Alert></div>}
   </Modal>;
 }

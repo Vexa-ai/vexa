@@ -1,5 +1,5 @@
 /** A MEETING ROW SHOWS ITS TIME, NOT "Held" (founder, app.dev 2026-10-11, on a screenshot of the rail
- *  where meeting rows read "Campbell  Held  ⋯" and, on hover, "Hel⋯": *"i think this 'held' does not
+ *  where meeting rows read "Acme  Held  ⋯" and, on hover, "Hel⋯": *"i think this 'held' does not
  *  make sense anymore"*).
  *
  *  Three things are pinned: a finished meeting's row carries no status word and shows its date in
@@ -27,23 +27,21 @@ const chat = (over: Partial<Chat> & { id: string }): Chat => ({
 });
 const base: any = { hidden: 0, all: true, onAll: () => {}, selKey: null, onSelect: () => {}, onNewChat: () => {}, onDeleteChat: () => {} };
 
-const HELD = meeting('7', 'Campbell', 'completed', -2 * 24 * 60);       // two days ago: a weekday
-const LIVE = meeting('8', 'Bot into Campbell Zoom call', 'active', -5);
+const HELD = meeting('7', 'Acme', 'completed', -2 * 24 * 60);       // two days ago: a weekday
+const LIVE = meeting('8', 'Bot into Acme Zoom call', 'active', -5);
 
 describe('a meeting row in the chat list', () => {
   afterEach(() => cleanup());
 
-  it('a finished meeting shows no "Held" — its date, in the same column and format as a chat row', () => {
+  it('a finished meeting shows no "Held" and no time column — its date is in the row\'s tooltip (founder 2026-10-15: "remove time")', () => {
     const rows = railRows([chat({ id: 'plain' })], [HELD], NOW);
     const v = render(<Rail {...base} rows={rows} />);
     const held = v.container.querySelector('[data-row-key="m:7"]') as HTMLElement;
     expect(held.textContent).not.toMatch(/held/i);
     expect(held.querySelector('[data-row-status]')).toBeNull();
-    const when = held.querySelector('.vx-row2-meta') as HTMLElement;
-    expect(when.textContent).toBe(rows.find((r) => r.key === 'm:7')!.whenLabel);
-    expect(when.textContent).not.toBe('');
-    // the chat row's time sits in the same element, so the two columns line up
-    expect(v.container.querySelector('[data-row-key="c:plain"] .vx-row2-meta')?.textContent).not.toBe('');
+    expect(held.querySelector('.vx-row2-meta')).toBeNull();
+    expect(v.container.querySelector('[data-row-key="c:plain"] .vx-row2-meta')).toBeNull();
+    expect(held.querySelector('[data-chat-row]')?.getAttribute('title')).toMatch(/\d/);
   });
 
   it('is marked as a call by its filled dot, a chat by a ring — no extra icon or word', () => {

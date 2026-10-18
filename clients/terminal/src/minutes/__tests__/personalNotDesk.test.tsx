@@ -1,7 +1,7 @@
 /** THE PERSON'S OWN WORKSPACE IS "PERSONAL", NEVER "DESK" (founder, 2026-10-11).
  *
  *  *"rename desk to personal to remove ambiguity"* — the navigator row said "Desk" while the chat's
- *  target chip said "Writes to personal". The words a person reads say Personal; ids, slugs and
+ *  target chip said "Saves to personal". The words a person reads say Personal; ids, slugs and
  *  fields keep `desk`. Rendered through `PagesPanel`, because the claim is about what is on screen.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";

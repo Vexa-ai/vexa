@@ -6,10 +6,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Bell, FileText, Pin, Plus, Search, X } from "lucide-react";
 import {
-  Badge, Breadcrumb, Button, Card, Checkbox, Chip, ChipRow, Code, ConfirmDialog, DateText, Dialog, Drawer, EmptyState, EntityChip,
+  Badge, Breadcrumb, Button, Identity, IdentityStack, Card, Checkbox, Chip, ChipRow, Code, ConfirmDialog, DateText, Dialog, Drawer, EmptyState, EntityChip,
   ErrorState, ExternalLink, Fold, Icon, IconButton, Input, Kbd, KeyValue, ListRow, Menu, OverflowStrip, PanelHeader,
   Popover, SecretReveal, SectionLabel, Select, Sheet, Skeleton, SourceList, Spinner, Splitter, StatusDot, Tabs, Tag, Textarea, Toaster,
   Tooltip, Truncate, kvValue, toast,
+  Avatar, BlocksProvider, BlocksView, CardView, PagePeekPanel, Peek, PersonChip, VexaFence,
 } from "../../ui-kit";
 import { EMAIL, PATH_LONG, PROPERTIES, SOURCES, TABS, TOKEN, URL_LONG, WORKSPACE, PERSON, COMPANY } from "./fixtures";
 
@@ -130,6 +131,10 @@ export const REGISTRY: Entry[] = [
     demo: () => <Row><Tooltip text="Copies the page's markdown"><Button>Hover or focus me</Button></Tooltip><Button onClick={() => toast("Workspace shared")}>Show a toast</Button><Toaster /></Row> },
   { id: "keyvalue", title: "KeyValue", components: ["KeyValue"], note: "Two columns from 360px of pane width; stacked below. Never breaks a word.", widths: [320, 480, 720],
     demo: () => <KeyValue items={Object.entries(PROPERTIES).map(([key, value]) => ({ key, value: kvValue(value) }))} /> },
+  { id: "identity", title: "Identity, IdentityStack", components: ["Identity", "IdentityStack"], note: "One face for people, companies, workspaces and agents: the stored image, else a monogram on a colour from the id. A CRM non-user is initials plus a company badge.", widths: [320],
+    demo: () => <div className="vx-cat-col"><Row><Identity kind="workspace" id="garden-x1" name="Garden" size={40} /><Identity kind="company" id="acme" name="Acme Widgets" size={32} />
+      <Identity kind="person" id="u1" name="Jane Smith" user size={28} /><Identity kind="person" id="p2" name="Ada Lovelace" size={28} /><Identity kind="agent" id="digest" name="Morning digest" size={28} /></Row>
+      <Row><IdentityStack items={["Jane Smith", "Ada Lovelace", "Grace Hopper", "Alan Turing", "Kurt Gödel"].map((n) => ({ kind: "person" as const, id: n, name: n }))} /></Row></div> },
   { id: "truncate", title: "Truncate, DateText", components: ["Truncate", "DateText"], note: "One line, an ellipsis, the full value on hover. Dates never split.", widths: [320],
     demo: () => <div className="vx-cat-col"><Truncate text={EMAIL} href={`mailto:${EMAIL}`} /><Truncate text={URL_LONG} href={URL_LONG} /><Truncate text={PATH_LONG} mode="middle" />
       <Row><DateText value="2026-10-09" /><DateText value={new Date(Date.now() - 3600_000)} /><DateText value="2025-03-14T10:00:00Z" /></Row></div> },
@@ -142,4 +147,20 @@ export const REGISTRY: Entry[] = [
   { id: "sources", title: "SourceList", components: ["SourceList"], note: "A date shown once; the first three, then Show more.", demo: () => <SourceList sources={SOURCES} /> },
   { id: "splitter", title: "Splitter", components: ["Splitter"], note: "Drag, or focus and use ←/→, Shift, Home/End, Enter.", demo: () => <SplitterDemo /> },
   { id: "sheet", title: "Sheet, Drawer", components: ["Sheet", "Drawer"], note: "The overlay forms of the side panes: modal, focus-trapped, Esc closes.", demo: () => <Row><SheetDemo /><DrawerDemo /></Row> },
+  { id: "blocks", title: "Blocks: CardView, BlocksView, VexaFence, PersonChip, Peek, PagePeekPanel, Avatar",
+    components: ["CardView", "BlocksView", "BlocksProvider", "VexaFence", "PersonChip", "Peek", "PagePeekPanel", "Avatar"],
+    note: "blocks.v1 — one renderer for the home, page fences and chat replies. Fold, show more, peek, expand in place.",
+    demo: () => <BlocksProvider value={{}}><div className="vx-cat-col">
+      <CardView people={BLOCK_PEOPLE} card={{ type: "card", id: "demo", kind: "meeting", tone: "default", wide: false, controls: true, state: "prepared",
+        blocks: [{ type: "title", text: "Weekly sync" }, { type: "person", people: ["ann"] }, { type: "action", label: "Continue", primary: true, open: { chat: "chat-demo" } }] }} />
+      <VexaFence source={BLOCK_FENCE} />
+      <BlocksView people={BLOCK_PEOPLE} blocks={[{ type: "evidence", items: [{ text: "Two calls this week", source: "calendar" }] }]} />
+      <Row><PersonChip p={BLOCK_PEOPLE.ann} card={null} /><Avatar p={BLOCK_PEOPLE.ann} size="lg" />
+        <Peek label="A page" load={() => ({ summary: "A summary." })} trigger={<span>Peek a page</span>} /></Row>
+      <PagePeekPanel params={{ path: "kg/entities/company/example.md", title: "Example Co" }} />
+    </div></BlocksProvider> },
 ];
+const BLOCK_PEOPLE = { ann: { key: "ann", name: "Ann Example", initials: "AE", vexa: true, presence: "now" as const, role: "Operations" } };
+const BLOCK_FENCE = JSON.stringify({ v: 1, blocks: [{ type: "title", text: "Open items" }, { type: "list", rows: [
+  { type: "row", text: "SSO list", meta: "due Fri" }, { type: "row", text: "Usage report" }, { type: "row", text: "Check-in" }, { type: "row", text: "Third team" }] },
+  { type: "group", label: "Background", collapsed: true, summary: "Two teams now", blocks: [{ type: "text", text: "Agreed on the review." }] }] });

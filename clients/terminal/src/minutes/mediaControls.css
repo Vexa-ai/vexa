@@ -3,7 +3,7 @@
 .vx-media-btn {
   flex: none; width: 28px; height: 28px; padding: 0; display: inline-flex; align-items: center;
   justify-content: center; border: none; border-radius: 6px; background: transparent;
-  color: var(--t2); cursor: pointer; transition: color .12s, background .12s;
+  color: var(--t2); cursor: pointer; transition: color var(--dur-fast), background var(--dur-fast);
 }
 .vx-media-btn[data-size="header"] { width: 26px; height: 24px; color: var(--t3); }
 .vx-media-btn:hover:not(:disabled) { color: var(--t1); background: var(--panel2); }

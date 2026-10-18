@@ -13,6 +13,8 @@
  *  directly) except the two localStorage seams at the bottom.
  */
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "../surfaces/meetingModel";
+import { workspaceLabel } from "../ui-kit/wsLinks";
+import { linkCallName, looksRaw, meetingDisplayName } from "./callsList";
 
 /** One open document in the right panel — a TAB. Identical in shape to `Page`, and deliberately so:
  *  the panel's tab strip and the chat's saved artifacts are the same list, not two lists kept in
@@ -41,6 +43,9 @@ export type Artifact = {
    *  cap all refuse it, so no route the strip has — the `×`, an unpin, an eviction — can take the
    *  transcript off a meeting chat. See `Page.permanent` for the ruling it comes from. */
   permanent?: boolean;
+  /** THE CHAT'S HOME TAB — the README of where the chat writes (Vexa-ai/vexa#1783). Replaced when
+   *  the target moves; closable like any tab (founder 2026-10-14: no tab the reader cannot remove). */
+  home?: boolean;
 };
 
 /** A tab's identity. Path alone is not enough — `README.md` exists in every workspace.
@@ -61,6 +66,16 @@ export const artifactKey = (a: { kind?: string; path: string; slug?: string }) =
 export type Chat = {
   id: string;                 // also the agent session id — `meet-<meetingId>` for a meeting's chat
   label: string;
+  /** ADR-0048: a conversation with other people in it (the server's answer; never set locally) */
+  shared?: boolean;
+  /** how many participants it has, people and agents */
+  participants?: number;
+  /** the reader's role in it — a `viewer` reads and cannot post */
+  role?: "owner" | "member" | "viewer";
+  /** WHOSE IT IS, when it is somebody else's (#1783): their account id and name, for the rail's
+   *  "shared" chip and for the built-in Shared with me section. Absent on the reader's own chats. */
+  owner?: string;
+  ownerName?: string;
   nameSource?: "human" | "agent";
   meeting?: string;           // the meeting row id this chat is about (string form of MeetingMock.id)
   workspaces: string[];       // the mount set — what a PROJECT used to own
@@ -116,10 +131,39 @@ export type Chat = {
    *  scaffold opened the chat and wrong on every load after it — the sort of half-fix that reads as
    *  fixed. */
   scaffold?: { kind: string; id: string };
+  /** A ROUTINE'S THREAD (ADR-0046 decision 12): every run of the person's routine `flow` appends a
+   *  turn here, and the person can reply. Read from the server's session index; the rail marks the
+   *  row and the thread carries the flow's pause / resume / retire controls. */
+  routine?: RoutineRef;
+  /** A CONCERN CHAT'S STAGE (ADR-0046 decision 12): opened → active → waiting → resolved → archived. */
+  concern?: Concern;
   touched?: boolean;          // a user wrote in it, or a user made it by hand
   createdAt: number;
   lastActivityAt: number;
 };
+
+export type RoutineRef = { flow: string; scope: string; version: number };
+export const CONCERN_STAGES = ["opened", "active", "waiting", "resolved", "archived"] as const;
+export type Concern = { stage: (typeof CONCERN_STAGES)[number]; key?: string; flow?: string };
+
+/** A concern marker off the wire, or undefined. */
+export function concernOf(raw: unknown): Concern | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const stage = CONCERN_STAGES.find((x) => x === r.stage);
+  if (!stage) return undefined;
+  return { stage, ...(typeof r.key === "string" ? { key: r.key } : {}), ...(typeof r.flow === "string" ? { flow: r.flow } : {}) };
+}
+
+/** A routine marker off the wire, or undefined — all three fields or nothing. */
+export function routineRef(raw: unknown): RoutineRef | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const flow = typeof r.flow === "string" ? r.flow.trim() : "";
+  const scope = typeof r.scope === "string" ? r.scope.trim() : "";
+  if (!flow || !scope) return undefined;
+  return { flow, scope, version: Number.isFinite(Number(r.version)) ? Number(r.version) : 0 };
+}
 
 export const CHATS_KEY = "vexa.minutes.chats";
 /** The legacy project registry. Read ONCE, on the migration path, and never written again —
@@ -187,7 +231,9 @@ export const PERSONAL_CHAT_ID = "main";
  *  meeting get ordinary minted ids. */
 export const meetingChatId = (meetingId: string | number) => `meet-${meetingId}`;
 
-export const meetingTitle = (m: MeetingMock) => String(m.title ?? "").split(" — ")[0] || "Meeting";
+/** A meeting's row name: the one name rule (UI decisions 14) — its title, its chat's name, its
+ *  people, "Call with Vexa"; never an id. */
+export const meetingTitle = (m: MeetingMock) => meetingDisplayName({ ...m, title: String(m.title ?? "").split(" — ")[0] }, { chatName: chatNameForMeeting(m.id) });
 
 /** When a meeting sits on the timeline. 0 = unknown, which sorts last. */
 export function meetingWhen(m: MeetingMock | undefined): number {
@@ -243,7 +289,24 @@ export type Row = {
    *  list; hidden rows leave it and are listed only in the Hidden view. */
   pinned?: boolean;
   hidden?: boolean;
+  /** the routine this row's thread belongs to (ADR-0046) — the rail marks it, and a delete asks
+   *  whether to retire the routine too */
+  routine?: RoutineRef;
+  /** the routine is paused (the rail draws its icon paused) */
+  routinePaused?: boolean;
+  concern?: Concern;
+  /** ADR-0048, #1783: a chat with other people in it shows a "shared" chip; one somebody else owns
+   *  carries their name (`sharedBy`) — its chip shows their initials and it files by default in
+   *  Shared with me. */
+  shared?: boolean;
+  sharedBy?: string;
+  /** a call or a voice note — the rail's one icon for the row (founder 2026-10-14: no text chips) */
+  kind?: "call" | "voice";
 };
+
+/** What kind of meeting a row is, when it is one the rail draws an icon for. */
+const rowKind = (m: MeetingMock | undefined): Row["kind"] =>
+  !m ? undefined : m.platform === "voice_note" ? "voice" : m.platform === "vexa_call" ? "call" : undefined;
 
 /** The row's status word from the meeting's phase. `prep` deliberately has none — see `Row.status`. */
 const statusOf = (phase: MeetingPhase | null): Row["status"] =>
@@ -297,6 +360,11 @@ export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now(
       touched: !!c.touched,
       workspaces: c.workspaces,
       target: c.target,
+      routine: c.routine,
+      concern: c.concern,
+      ...(c.shared || c.owner ? { shared: true } : {}),
+      ...(c.owner ? { sharedBy: c.ownerName || "" } : {}),
+      ...(rowKind(m) ? { kind: rowKind(m) } : {}),
     });
   }
 
@@ -317,6 +385,7 @@ export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now(
       status: statusOf(phase),
       touched: false,
       workspaces: ["personal", "_global"],
+      ...(rowKind(m) ? { kind: rowKind(m) } : {}),
     });
   }
 
@@ -339,7 +408,7 @@ export function visibleRows(rows: Row[], all: boolean, keep?: string | null, hid
   if (hiddenView) return rows.filter((r) => r.hidden);
   const shown = rows.filter((r) => !r.hidden);
   if (all) return shown;
-  return shown.filter((r) => r.pinned || r.touched || r.live || r.upcoming || (keep != null && r.key === keep));
+  return shown.filter((r) => r.pinned || r.touched || r.live || r.upcoming || !!r.routine || !!r.concern || (keep != null && r.key === keep));
 }
 
 // ── the server's sessions — WHERE THE RAIL ACTUALLY COMES FROM ───────────────────────
@@ -373,11 +442,23 @@ export type ServerSession = {
    *  thing today: the desk is the default either way. */
   target?: string | null;
   scaffold?: { kind?: string | null; id?: string | null } | null;
+  /** a routine's thread (ADR-0046): `{flow, scope, version}`, or null for every other chat */
+  routine?: { flow?: string | null; scope?: string | null; version?: number | null } | null;
+  /** a concern chat's stage (ADR-0046 decision 12), or null */
+  concern?: { stage?: string | null; key?: string | null; flow?: string | null } | null;
   touched?: boolean | null;
   /** THE MEETING THIS CHAT MADE (Vexa-ai/vexa#1597) — the row id, or null. Written server-side when
    *  a bot goes out from this session; null for every chat that never sent one, including a
    *  `meet-<row>` session whose id already says it. */
   meeting?: string | null;
+  /** ADR-0048: how many people and agents the conversation has, and whether it is shared — a
+   *  session somebody else owns that the caller was added to, or one of theirs with others in it. */
+  participants?: number | null;
+  shared?: boolean | null;
+  role?: "owner" | "member" | "viewer" | null;
+  /** the account that owns a chat somebody added the reader to, and its name (#1783) */
+  owner?: string | null;
+  owner_name?: string | null;
 };
 
 /** The meeting a session id names, or null. The inverse of `meetingChatId`.
@@ -454,8 +535,15 @@ export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat
       target: typeof r.target === "string" && r.target.trim() ? r.target.trim() : undefined,
       artifacts: [],
       scaffold: sc && sc.kind && sc.id ? sc : undefined,
+      routine: routineRef(r.routine),
+      concern: concernOf(r.concern),
       // absent → a conversation that happened, so it shows. See `_Sessions` for why that direction.
       touched: r.touched !== false,
+      ...(r.shared ? { shared: true } : {}),
+      ...(typeof r.participants === "number" && r.participants > 0 ? { participants: r.participants } : {}),
+      ...(r.role ? { role: r.role } : {}),
+      ...(r.role && r.role !== "owner" && typeof r.owner === "string" && r.owner
+        ? { owner: r.owner, ownerName: typeof r.owner_name === "string" ? r.owner_name : "" } : {}),
       createdAt: created,
       lastActivityAt: whenMs(r.last_active) || created,
     });
@@ -505,12 +593,49 @@ export function mergeChats(local: Chat[], server: Chat[], hidden: string[] = [])
       workspaces: l.workspaces?.length ? l.workspaces : s.workspaces,
       target: l.target ?? s.target,
       scaffold: l.scaffold ?? s.scaffold,
+      // the server's marker wins: a routine's newer version renames what the thread belongs to
+      routine: s.routine ?? l.routine,
+      concern: s.concern ?? l.concern,
       touched: !!l.touched || !!s.touched,
+      // who is in a conversation is the server's to say (ADR-0048); a browser never decides it
+      shared: s.shared ?? l.shared,
+      participants: s.participants ?? l.participants,
+      role: s.role ?? l.role,
+      owner: s.owner ?? l.owner,
+      ownerName: s.ownerName ?? l.ownerName,
       createdAt: Math.min(l.createdAt || s.createdAt, s.createdAt || l.createdAt),
       lastActivityAt: Math.max(l.lastActivityAt || 0, s.lastActivityAt || 0),
     });
   }
   return [...by.values()].filter((c) => !drop.has(c.id));
+}
+
+/** A CHAT SOMEBODY ELSE OWNS THAT THE SERVER NO LONGER LISTS IS GONE (#1783): the reader left it or
+ *  was removed. The merge above never erases a stored row — the reader's own chats can be ahead of
+ *  the index — but a chat the reader does not own exists for them only while they are in it, so its
+ *  stored copy goes when the server stops listing it. */
+export function dropLeftShared(local: Chat[], server: Chat[]): Chat[] {
+  const listed = new Set(server.map((c) => c.id));
+  return local.filter((c) => !(c.owner && !listed.has(c.id)));
+}
+
+/** A CHAT NOBODY WROTE IN IS NOT A ROW (#1783, founder 2026-10-15: "empty new chats after every new
+ *  attempt to do something in the desktop"). The server no longer lists a chat with no message; this
+ *  drops this browser's stored copy of one too — a chat the full server list does not carry, still
+ *  named with a placeholder, made for no meeting, ask or routine, and older than `graceMs` (a chat
+ *  whose first message is in flight is younger than that, and is kept). Only for the FULL list. */
+export function dropEmptyUnlisted(local: Chat[], server: Chat[], now = Date.now(), graceMs = 120_000): Chat[] {
+  const listed = new Set(server.map((c) => c.id));
+  return local.filter((c) => listed.has(c.id) || !isPlaceholderLabel(c.label) || !!c.meeting || !!c.scaffold
+    || !!c.routine || !!c.owner || (c.createdAt || 0) > now - graceMs);
+}
+
+/** Initials for a person's name or address — the "shared" chip's avatar. */
+export function initials(name: string | undefined): string {
+  const n = String(name ?? "").trim().replace(/@.*$/, "");
+  if (!n) return "";
+  const parts = n.split(/[\s._-]+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
 }
 
 // ── mutations (pure: array in, array out) ────────────────────────────────────────────
@@ -639,8 +764,10 @@ export function stripMarkers(label: string): string {
  *  terms. Anything else is a name a human or a scaffold picked, and is never overwritten. */
 export function isPlaceholderLabel(label: string): boolean {
   const t = (label ?? "").trim();
-  return !t || /^new chat$/i.test(t) || /^chat$/i.test(t) || isMachineryLabel(t);
+  return !t || /^new chat$/i.test(t) || /^chat$/i.test(t) || isMachineryLabel(t) || URL_ONLY.test(t);
 }
+/** a label that is a pasted link and nothing else: nobody's name for anything */
+const URL_ONLY = /^\s*(?:https?:\/\/|www\.)\S+\s*$/i;
 
 /** How long a rail row's name may be. The rail is 248px wide; past this the row truncates anyway,
  *  so cutting here means the ellipsis lands on a word boundary instead of mid-glyph. */
@@ -649,7 +776,7 @@ export const CHAT_TITLE_MAX = 48;
 /** The person's first sentence, as a rail row's name: one line, trimmed, cut with an ellipsis. */
 export function titleFromTurn(text: string): string {
   const one = stripMarkers(text ?? "");
-  if (!one) return "";
+  if (!one || URL_ONLY.test(one)) return "";     // a pasted link names nothing; the chat is titled later
   return one.length > CHAT_TITLE_MAX ? one.slice(0, CHAT_TITLE_MAX - 1).trimEnd() + "…" : one;
 }
 
@@ -682,6 +809,25 @@ export function nameChat(c: Chat, text: string): Chat {
 /** `nameChat` over the stored list — the array-in/array-out shape every other mutation here has. */
 export function nameFromTurn(chats: Chat[], chatId: string, text: string): Chat[] {
   return chats.map((c) => (c.id === chatId ? nameChat(c, text) : c));
+}
+
+/** A NEW CHAT STARTS ON THE PERSON'S DEFAULT TARGET (founder 2026-10-13): `wid` is the server's
+ *  re-checked answer from `/api/chat/default-target` — `""` (or the desk's own name) is Personal and
+ *  leaves the chat as it was. The default is mounted and becomes where the chat writes. A chat that
+ *  already chose a target keeps it: only a draft that has chosen nothing starts from the default. */
+/** A CHAT STARTED FROM INSIDE A WORKSPACE WRITES THERE (UI decision 6b): the workspace of the page in
+ *  front when the person pressed New chat — never the person's own desk (that is the default
+ *  anyway), the company layer or the private system tier. `""` = no such workspace. */
+export function insideWorkspace(docSlug?: string | null): string {
+  const s = String(docSlug ?? "").trim();
+  if (!s || s === "personal" || /^\d+$/.test(s) || s.startsWith("_") || s.startsWith(".")) return "";
+  return s;
+}
+
+export function withDefaultTarget(c: Chat, wid: string): Chat {
+  const w = (wid || "").trim();
+  if (!w || w === "personal" || c.target) return c;
+  return { ...c, workspaces: c.workspaces.includes(w) ? c.workspaces : [...c.workspaces, w], target: w };
 }
 
 export function newChat(label: string, workspaces: string[], opts: { id?: string; touched?: boolean; meeting?: string; target?: string; scaffold?: { kind: string; id: string }; now?: number } = {}): Chat {
@@ -860,20 +1006,32 @@ export function orderHistory(list: Artifact[]): Artifact[] {
  *  `["_global", "u_priya", "grp-showb"]`). Without that third exclusion a person's own desk,
  *  arriving under its server name, would be mistaken for a group and become the home of every chat
  *  a scaffold opened. */
-export function homeEntry(workspaces: string[] = []): Artifact {
-  const group = workspaces.find((w) => w && w !== "_global" && w !== "personal" && !/^u_/.test(w));
-  return group
-    ? { path: "README.md", slug: group, label: group, desk: true }
-    : { path: "README.md", label: "Personal", desk: true };
+export function homeEntry(workspaces: string[] = [], target?: string): Artifact {
+  // WHERE THE CHAT WRITES decides it when the caller knows (Vexa-ai/vexa#1783): the first mounted
+  // workspace is not where a chat lives, and a chat reading eleven of them showed the first one's
+  // slug as an uncloseable tab. Without a target (a scaffold), the scaffold's group, as before.
+  const own = (w: string) => !w || w === "_global" || w === "personal" || /^u_/.test(w);
+  if (target === undefined) {
+    // A SCAFFOLD's or a meeting's strip: its group's README is the product's fixed entry, as before.
+    const group = workspaces.find((w) => !own(w));
+    return group
+      ? { path: "README.md", slug: group, label: workspaceLabel(group), desk: true }
+      : { path: "README.md", label: "Personal", desk: true };
+  }
+  return own(target)
+    ? { path: "README.md", label: "Personal", home: true, pinned: true }
+    : { path: "README.md", slug: target, label: workspaceLabel(target), home: true, pinned: true };
 }
 
 /** Compose a strip with the chat's home at its head. Idempotent, and it never duplicates: a chat
  *  whose scaffold happened to declare that README keeps ONE entry, promoted to the home tier. */
-export function withHome(list: Artifact[], workspaces: string[] = []): Artifact[] {
-  const h = homeEntry(workspaces);
+export function withHome(list: Artifact[], workspaces: string[] = [], target?: string): Artifact[] {
+  const h = homeEntry(workspaces, target);
   const key = artifactKey(h);
   const has = list.find((a) => artifactKey(a) === key);
-  const rest = list.filter((a) => artifactKey(a) !== key && !a.desk);
+  // the old home — a previous target's, or a pre-#1783 uncloseable `desk` tab — goes; the reader's
+  // own tabs stay.
+  const rest = list.filter((a) => artifactKey(a) !== key && !a.desk && !a.home);
   return orderHistory([{ ...(has ?? h), ...h, at: has?.at }, ...rest]);
 }
 
@@ -902,6 +1060,13 @@ export function touchHistory(list: Artifact[], art: Artifact, now: number, cap =
 }
 
 /** `×` on a tab: drop that entry. */
+/** CLOSING A TAB (founder 2026-10-16: a pinned tab could not be removed): x on a pinned tab unpins it
+ *  and closes it in one act. `unpin` tells the caller to drop the user pin too, or it would be put
+ *  back on the next render. */
+export function closingTab(list: Artifact[], tab: Artifact): { next: Artifact[]; unpin: boolean } {
+  return { next: forgetHistory(list, artifactKey(tab)), unpin: !!tab.pinned && !tab.desk && !(tab as { permanent?: boolean }).permanent };
+}
+
 export function forgetHistory(list: Artifact[], key: string): Artifact[] {
   // the desk is a product default, not something the reader put there, so it is not theirs to
   // forget — and a strip that could lose its first entry would have no default view to fall back to
@@ -1042,6 +1207,7 @@ function normalise(raw: unknown, now: number): Chat[] {
       // render on the next load. A half-record is dropped, never repaired — including the bare
       // `scaffoldKind` string an older build wrote, which by construction had no id beside it.
       scaffold: scaffoldRecord(r.scaffold),
+      routine: routineRef(r.routine),
       touched: !!r.touched,
       createdAt: Number.isFinite(r.createdAt) ? Number(r.createdAt) : now,
       lastActivityAt: Number.isFinite(r.lastActivityAt) ? Number(r.lastActivityAt) : Number(r.createdAt) || now,
@@ -1127,4 +1293,64 @@ export function legacyShellStore(): { prefs: { railOpen: boolean; pagesOpen: boo
     prefs: { railOpen: !loadCollapsed("left"), pagesOpen: !loadCollapsed("right") },
     widths: pages ? { wide: { pages }, desktop: { pages } } : {},
   };
+}
+
+/** NEVER AN INTERNAL ID ON THE RAIL, AND NO TIME IN A NAME (#1783; founder, on rows reading
+ *  `scaffold-WMSeRx…`, `pchat-mv747eaw` and `vexa_call · call-302959d51…`; then 2026-10-15 on
+ *  "Chat · 9:11 AM", "Call · 9:14 AM": "this is bloated — remove time"). A row is called by its own
+ *  name; a meeting's row by the meeting's name (`meetingTitle`); anything nobody named yet is "New
+ *  chat" until the agent names it from the first exchange. Display only: the stored label is left as
+ *  it is, so the first real name replaces it. */
+const INTERNAL_ID = /^(?:pchat|scaffold|meet|chat|call|sess|session|s|unit|agent)[-_][\w-]{5,}$/i;
+
+export function displayLabel(r: { label: string; when?: number; meetingId?: string | null }): string {
+  const t = stripMarkers(r.label ?? "");
+  if (/^voice[ _]note\b/i.test(t)) return "Voice note";
+  if (/^vexa_call\b/i.test(t)) return "Call with Vexa";
+  const link = linkCallName(t, r.when);
+  if (link) return link === "Link" ? (r.meetingId ? "Meeting" : "New chat") : link;
+  if (!t || /^(new )?chat$/i.test(t) || /^untitled meeting$/i.test(t) || INTERNAL_ID.test(t) || looksRaw(t)) {
+    return r.meetingId ? "Meeting" : "New chat";
+  }
+  return t;
+}
+
+/** A RETIRED ROUTINE'S CHAT IS A NORMAL CHAT (founder, live app.dev: "a retired routine should not
+ *  have the routine badge"). The chat keeps its marker on the server; the rail reads the routines'
+ *  own state (`GET /api/routines`): an active routine keeps its icon and its section, a paused one is
+ *  drawn paused, and one retired or no longer listed drops both — the chat goes back to Recent unless
+ *  the person filed it. `null` (not answered yet, or unreadable) changes nothing. */
+export function withRoutineState<T extends { routine?: { flow?: string | null } | null }>(
+  rows: T[], routines: { name: string; enabled?: boolean; status?: string }[] | null,
+): (T & { routinePaused?: boolean })[] {
+  if (!routines) return rows;
+  const by = new Map(routines.map((r) => [r.name, r]));
+  return rows.map((r) => {
+    const flow = r.routine?.flow;
+    if (!flow) return r;
+    const it = by.get(flow);
+    if (!it || /retired|deleted|done/i.test(it.status ?? "")) {
+      const { routine: _gone, ...rest } = r;
+      return { ...rest, routine: undefined } as T & { routinePaused?: boolean };
+    }
+    const paused = it.enabled === false || /paused/i.test(it.status ?? "");
+    return paused ? { ...r, routinePaused: true } : r;
+  });
+}
+
+/** The name of the chat a meeting is bound to — the second tier of `meetingDisplayName` (UI decisions
+ *  14) — or "" when no chat is bound or it has no name of its own yet. Read off this browser's chat
+ *  list; never throws. */
+export function chatNameForMeeting(meetingId: string): string {
+  const id = String(meetingId ?? "").trim();
+  if (!id) return "";
+  let raw: unknown = null;
+  try { raw = JSON.parse(localStorage.getItem(CHATS_KEY) || "null"); } catch { return ""; }
+  if (!Array.isArray(raw)) return "";
+  for (const c of raw as { meeting?: unknown; label?: unknown; id?: unknown }[]) {
+    if (!c || (String(c.meeting ?? "") !== id && String(c.id ?? "") !== meetingChatId(id))) continue;
+    const label = typeof c.label === "string" ? c.label.trim() : "";
+    if (label && !/^(new chat|chat|meeting)$/i.test(label) && !isMachineryLabel(label)) return label;
+  }
+  return "";
 }

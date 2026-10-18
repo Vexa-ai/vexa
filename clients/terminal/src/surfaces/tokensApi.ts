@@ -1,7 +1,7 @@
 /** Data-access for the API-tokens surface — thin, typed calls to the /api/tokens routes (SoC: the
  *  surface renders, this module fetches). The server scopes everything to the logged-in user; the
  *  client never sends a user_id (P20). Fail-loud via the shared apiClient (P18). */
-import { getJson } from "./apiClient";
+import { getJson } from "../data/apiClient";
 
 export const TOKEN_SCOPES = ["bot", "tx", "browser"] as const;
 export type TokenScope = (typeof TOKEN_SCOPES)[number];

@@ -12,18 +12,18 @@
  *  The connect surface TEACHES where the secret iCal URL lives (the step users bounce off),
  *  including the two field-tested traps (public-vs-secret address, Workspace-admin lock), and
  *  answers immediately on connect — sync-now runs and reports what it found. */
-import { minutesOnly } from "../app/mode";
+import { minutesOnly } from "../platform/mode";
 import { useEffect, useState, type CSSProperties } from "react";
 import { defaultBotName } from "./defaultBotName";
 import { useService } from "../platform";
-import { LayoutServiceId } from "../workbench/layout";
+import { LayoutServiceId } from "../platform/layout";
 import { Icon } from "../ui-kit";
 import { parseMeetingInput } from "./meetingId";
-import { readApiFailure } from "./apiClient";
+import { readApiFailure } from "../data/apiClient";
 import { resolveJoinError, type ServiceDenialPresentation } from "./serviceDenial";
 import { ServiceDenialPanel } from "./ServiceDenialPanel";
 import { getJitsiHosts } from "./jitsiHosts";
-import { presentError } from "./apiClient";
+import { presentError } from "../data/apiClient";
 import { refreshMeetings } from "./liveMeetings";
 import { listCalendars, createCalendar, syncCalendar, type CalendarSyncStamp } from "./plannedApi";
 import { prepDraftTabDescriptor } from "./meetingPrep";

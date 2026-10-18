@@ -19,14 +19,14 @@
  *  or "no members" when the roster 403'd, has told the reader something false about their own
  *  workspace — and this is the one page whose whole job is to be true about that.
  */
-import { presentError } from "../surfaces/apiClient";
+import { presentError } from "../data/apiClient";
 import {
   gitRemoteStatus, listSharedMemberships, listWorkspaceMembers, listWorkspaceTree,
   readInstanceAdmin, readLastChange, readMyPerson, readWorkspaceBySlug, readWorkspaceFile,
   readWorkspaceHistory,
   type GitCommit, type GitRemoteStatus, type InstanceAdmin, type LastChange, type MyPerson,
   type WorkspaceMember,
-} from "../surfaces/workspaceApi";
+} from "../data/workspaceApi";
 import { authorPhrase, companyName } from "./workspaceFrontPage";
 import { isMachinery } from "./machinery";
 
@@ -240,11 +240,11 @@ export interface WorkspaceFacts {
   /** the roster — `null` when this reader may not read it (a reader of a group may not) */
   members: WorkspaceMember[] | null;
   remote: GitRemoteStatus | null;
-  /** WHY the GitHub read failed, in the presenter's words — `null` when it did not fail.
+  /** WHY the repository read failed, in the presenter's words — `null` when it did not fail.
    *
    *  It is a field of its own, and not a line in `notes`, because *no repo attached* and *the read
    *  failed* are different facts and the panel was rendering them as one: on 2026-09-06 `_global`
-   *  showed `not readable` with `Could not read the GitHub state.` in red under it, for the
+   *  showed `not readable` with `Could not read the repository state.` in red under it, for the
    *  administrator, on a workspace that simply has no remote (Vexa-ai/vexa#1628). A red line that
    *  fires on an ordinary state is a red line nobody reads on the day it means something. */
   remoteFailure: string | null;
@@ -335,8 +335,8 @@ export async function loadWorkspaceFacts(docSlug: string | undefined): Promise<W
   if (kind !== "private" && policies.status === "rejected") note("Could not read the company policy.");
   // The company's name and the reader's own name are NOT notes. Both are optional clauses of one
   // sentence: a missing one costs the line a clause, and a red line at the foot of the panel would
-  // be announcing a failure about furniture (#1628's rule for the GitHub read, one fact along).
-  // The GitHub read's failure is NOT a note: it belongs to its own section, named, so that the red
+  // be announcing a failure about furniture (#1628's rule for the repository read, one fact along).
+  // The repository read's failure is NOT a note: it belongs to its own section, named, so that the red
   // line at the foot keeps meaning "something here is broken" (#1628 point 3).
   const remoteFailure = remote.status === "rejected" ? presentError(remote.reason).headline : null;
 

@@ -12,9 +12,11 @@
  *  Extracted from Chat.send so the robustness logic is unit-testable against a faked fetch/SSE. */
 
 import type { ChatIntent } from "./chatIntent";
-import { noteAuthFailure, isAuthStatus } from "@/app/session";
-import { SESSION_ENDED_HEADLINE } from "./apiClient";
-import { readFault, type Fault } from "./faults";
+import { noteAuthFailure, isAuthStatus } from "@/platform/session";
+import { SESSION_ENDED_HEADLINE } from "../data/apiClient";
+import { faultLine, isTransientFault, readFault, type Fault } from "./faults";
+import { DEFAULT_TRANSIENT_BUDGET_MS, retryAfterMs, transientWait } from "./transientRetry";
+import { isScopeTool, notifyScope } from "./scopeEvents";
 
 /** A parsed SSE event off the chat stream. `type` is the discriminator; other fields are per-type. */
 export type ChatStreamEvent = {
@@ -49,6 +51,10 @@ export type ChatStreamEvent = {
   /** `focus` events only (Vexa-ai/vexa#1603) — the workspace a `workspace_new` just made, and its
    *  human name when the create knew one. Never a path: this event names a place, not a page. */
   name?: string;
+  /** `propose-target` events only (UI decision 6b) — where the chat writes now, and why the agent
+   *  asks to move it. `workspace` / `name` (above) are the proposed workspace. */
+  current?: string;
+  current_name?: string;
   /** `terms` events only (PRD decision 35) — the meeting ROW the chips belong to, the cursor the
    *  next Highlight should send back, and the published terms themselves. */
   meeting?: string;
@@ -82,6 +88,11 @@ export type ChatStreamEvent = {
    *  was measured against. */
   steps?: number;
   budget?: number;
+  /** `tool-call` / `tool-result` — the id pairing a result with its call, and the result itself
+   *  (`summary` is short; `result` is the full body when the harness sends it). */
+  callId?: string;
+  summary?: string;
+  result?: unknown;
   /** `done` only — how many older messages the turn compacted to fit the model's context. */
   compacted?: number;
   /** `done` only, and only when the turn STOPPED at a budget (Vexa-ai/vexa#1622) — the act the
@@ -91,6 +102,8 @@ export type ChatStreamEvent = {
    *  the agent, the model provider that refused the turn. Read through `faults.readFault`; a server
    *  one release behind sends none and the event renders as it always did. */
   fault?: unknown;
+  /** `error` only — the upstream's `Retry-After`, in seconds, passed on by /api/chat */
+  retry_after?: number;
 };
 
 /** IS THIS JOB THIS CHAT'S? (Vexa-ai/vexa#1613.)
@@ -105,6 +118,9 @@ export type ChatStreamEvent = {
  *  It fails OPEN on an unstamped event, deliberately: a deployment one release behind stamps
  *  nothing, and refusing every job line there would replace a rare wrong line with a permanent
  *  missing one. The stamp is what removes the doubt, not the client's suspicion. */
+/** A proposal to move a chat's writes (UI decision 6b): the agent's ask, the person's choice. */
+export type TargetProposal = { workspace: string; name: string; current: string; currentName: string; reason: string };
+
 export function ownsJob(ev: { session?: string }, session: string | undefined): boolean {
   const owner = (ev.session ?? "").trim();
   return !owner || !session || owner === session;
@@ -140,13 +156,16 @@ export function joinInterim(prev: string, next: string, afterTool: boolean): str
  *  quiet right now — the agent is thinking / a tool is running) · `reconnecting` (the stream dropped, we
  *  are resuming from the cursor) · `stalled` (the stream is open but sending nothing — we're forcing a
  *  reconnect). `null` clears the indicator (real output is flowing or the turn ended). */
-export type ChatPhase = "connecting" | "working" | "reconnecting" | "stalled";
+export type ChatPhase = "connecting" | "working" | "reconnecting" | "stalled" | "queued";
 
 export type ChatStreamCallbacks = {
   /** an agent message-delta with non-empty text (the first one clears the "starting" placeholder) */
   onDelta: (text: string) => void;
   /** a tool-call step to show as an operation */
   onTool: (tool: string, args?: Record<string, unknown>) => void;
+  /** a tool's result, paired with the tool-call that asked for it by `callId`. `result` is the
+   *  event's full `result` body when the harness sends one, else its short `summary`. */
+  onToolResult?: (tool: string, r: { ok: boolean; result: unknown }) => void;
   /** the turn committed to the workspace (terminal) */
   onCommit: (sha: string | undefined) => void;
   /** the turn was rejected by workspace.v1 governance (terminal) */
@@ -188,6 +207,9 @@ export type ChatStreamCallbacks = {
    *  reason: a turn being taken is exactly the moment something LEAVES the session's inbox, so this
    *  is when the queued rows are worth re-reading). Optional; existing callers need not implement it. */
   onAccepted?: () => void;
+  /** A MESSAGE TO THE PEOPLE IN A SHARED CHAT, not to the agent (`session-note`): it was posted to
+   *  the chat's lines and no turn runs. Optional. */
+  onNote?: (note: { seq?: number; author?: string; text?: string }) => void;
   /** WHICH TURN THE NEXT EVENTS BELONG TO (the founder, 2026-10-10: *"sometimes chat does not answer
    *  if asked while it's not yet answered"*). One view can carry more than one turn: the worker
    *  finishes a turn's write-back AFTER its `done`, on a thread, and takes the next message — one
@@ -201,7 +223,7 @@ export type ChatStreamCallbacks = {
   onTurn?: (turnId: string, isNew: boolean) => boolean;
   /** the live phase changed (or a heartbeat fired while quiet) — drive a verbose status line. `null`
    *  clears it. Optional so existing callers/tests need not implement it. */
-  onStatus?: (phase: ChatPhase | null) => void;
+  onStatus?: (phase: ChatPhase | null, label?: string) => void;
   /** a chunk was consumed — a hook for autoscroll */
   onProgress?: () => void;
   /** A FILE THE TURN JUST WROTE (F41). Emitted after the matching `tool-result` and only on
@@ -217,6 +239,9 @@ export type ChatStreamCallbacks = {
    *  Forwarded, never stored, exactly like `onArtifact`: the focus set belongs to the CHAT RECORD
    *  and this reader owns no state. Optional so existing callers/tests need not implement it. */
   onFocusWorkspace?: (f: { workspace: string; name: string }) => void;
+  /** THE AGENT ASKS TO MOVE THIS CHAT'S WRITES (UI decision 6b) — `propose_write_target`. Rendered
+   *  inline with Switch / Keep; nothing moves until the person clicks. */
+  onProposeTarget?: (p: TargetProposal) => void;
   /** TERMS THE TURN PUBLISHED for a meeting's transcript (decision 35.2). Forwarded, never stored:
    *  the chips belong to the CHAT RECORD and this reader owns no state, exactly as with
    *  `onArtifact`. Optional so existing callers/tests need not implement it. */
@@ -250,6 +275,11 @@ export type ChatStreamCallbacks = {
 export type ChatStreamRequest = {
   /** the built prompt for this turn */
   prompt: string;
+  /** ADR-0048 — the people this message @-mentions, by the account id the picker carried. */
+  mentions?: string[];
+  /** the message is for the agent, as if it opened with @vexa (the first message of a chat that
+   *  just became shared, typed where the agent answered everything) */
+  to_agent?: boolean;
   /** the chat session/thread id (the warm unit keys on subject+session) */
   session: string;
   /** the active center-tab grounding (legacy mirror), or undefined */
@@ -303,6 +333,9 @@ export type ChatStreamOptions = {
    *  that must not happen. Exact by construction — the next events after that cursor ARE the queued
    *  turn's, so nothing replays and nothing is missed. */
   attachFrom?: string;
+  /** HOW LONG A TRANSIENT FAULT IS RETRIED before the person is told (`transientRetry.ts`) —
+   *  the sum of the waits, not wall time, so a test with a fake clock gives up exactly as a browser does. */
+  transientBudgetMs?: number;
 };
 
 export type ChatStreamResult = {
@@ -322,6 +355,26 @@ const DEFAULT_HARD_TIMEOUT_MS = 90000;   // >> a normal cold start
 const DEFAULT_RECONNECT_BACKOFF_MS = 800;
 const DEFAULT_HEARTBEAT_MS = 3500;       // "still working…" cadence during a quiet read
 const DEFAULT_IDLE_RECONNECT_MS = 18000; // an OPEN-but-silent stream this long ⇒ stalled → reconnect
+
+/* A MOMENT'S UNAVAILABILITY IS RETRIED, NOT SHOWN (the founder, 2026-10-13: he re-sent one message
+ *  three times past the gateway's one-second auth 503 and its red box). A fault `isTransientFault`
+ *  names, arriving BEFORE anything of the turn has (no event id, no output), is retried for the same
+ *  message: 1 s, 2 s, 4 s, 8 s, 8 s — never sooner than the server's Retry-After — for at most ~30 s
+ *  of waiting, and only then reported, once.
+ *
+ *  WHY A RETRY CANNOT RUN THE TURN TWICE. Every attempt carries the same `turn_id`. The gateway's auth
+ *  503 and an edge 429/5xx answer before anything is forwarded; agent-api answers a refusal it typed
+ *  (a runtime that would not spawn, a warm delivery that failed) after withdrawing the turn's inbox
+ *  entry, and a request whose turn it already started is recognised by that id and re-attached to it
+ *  rather than dispatched (`routers/chats.py`, `_chat_turn_head`). A fault that arrives AFTER the turn
+ *  began is never retried here — the turn may have run, and its own events say what happened. The schedule is
+ *  `transientRetry.ts`, shared with a message submitted while a turn runs (`inbox.submitToInbox`). */
+
+/** The fault an untyped edge answer stands for — a 429 or a bare 502/503/504 that never reached
+ *  agent-api. In the contract's words: the gateway could not be got through (`gateway · unreachable`). */
+const edgeFault = (status: number): Fault => ({ source: "gateway", kind: "unreachable", status,
+  detail: status === 429 ? "the Vexa gateway asked the terminal to slow down" : "the Vexa gateway did not answer" });
+
 
 /** The typed fault a non-ok JSON answer carries (`{detail, fault}`), or null. Never throws: a body
  *  that is not JSON, or a test double with no body at all, is simply no fault. */
@@ -359,10 +412,20 @@ export async function streamChatTurn(
   const backoffMs = opts.reconnectBackoffMs ?? DEFAULT_RECONNECT_BACKOFF_MS;
   const heartbeatMs = opts.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   const idleReconnectMs = opts.idleReconnectMs ?? DEFAULT_IDLE_RECONNECT_MS;
+  const transientBudgetMs = opts.transientBudgetMs ?? DEFAULT_TRANSIENT_BUDGET_MS;
   const signal = opts.signal;
+  /** the transient fault the last attempt ended on, waiting for the outer loop to retry or report it */
+  let transient: { fault: Fault; waitMs: number } | null = null;
+  /** nothing of the turn has arrived yet — the only moment a fault is safe to retry */
+  const beforeTurn = () => !sawVisibleOutput && lastEventId === (opts.attachFrom ?? null);
 
   let sawVisibleOutput = false;
   let terminal = false;
+  /** THE MESSAGE IS QUEUED behind this chat's own running turn (the meeting recap, a routine): the
+   *  server's sentence, held until the turn is accepted — the server runs it next, so the client
+   *  never retries (live app.dev 2026-10-15: three 409s while the recap ran). */
+  let queuedLabel: string | null = null;
+  const toolByCall = new Map<string, string>();
   let lastEventId: string | null = opts.attachFrom ?? null;
   const turnId = mintTurnId();
   const startedAt = now();
@@ -433,7 +496,9 @@ export async function streamChatTurn(
     let to: ReturnType<typeof setTimeout> | undefined;
     try {
       const guard = new Promise<"stalled">((resolve) => {
-        hb = setInterval(() => cb.onStatus?.(sawVisibleOutput ? "working" : "connecting"), heartbeatMs);
+        hb = setInterval(() => (queuedLabel
+          ? cb.onStatus?.("queued", queuedLabel)
+          : cb.onStatus?.(sawVisibleOutput ? "working" : "connecting")), heartbeatMs);
         to = setTimeout(() => resolve("stalled"), idleReconnectMs);
       });
       return await Promise.race([reader.read(), guard]);
@@ -443,7 +508,7 @@ export async function streamChatTurn(
     }
   };
 
-  const drainOnce = async (): Promise<"closed" | "terminal"> => {
+  const drainOnce = async (): Promise<"closed" | "terminal" | "transient"> => {
     // On a RECONNECT, Last-Event-ID makes agent-api re-attach to the SAME warm unit and resume from the
     // cursor — NO second turn is dispatched. The first attempt sends no cursor (fresh dispatch)…
     // …UNLESS THIS IS AN ATTACH (Vexa-ai/vexa#1610), where the whole point is that no turn is
@@ -460,7 +525,9 @@ export async function streamChatTurn(
         // from "this turn did not come from an arrival".
         body: JSON.stringify({ prompt: req.prompt, session: req.session, active: req.active, context: req.context, turn_id: turnId,
           ...(req.scaffold_id ? { scaffold_id: req.scaffold_id } : {}),
-          ...(req.intent ? { intent: req.intent } : {}) }),
+          ...(req.intent ? { intent: req.intent } : {}),
+          ...(req.mentions && req.mentions.length ? { mentions: req.mentions } : {}),
+          ...(req.to_agent ? { to_agent: true } : {}) }),
         signal,
       });
     } catch (e) {
@@ -468,9 +535,20 @@ export async function streamChatTurn(
       return "closed";                  // the POST itself failed (a network blip) → resume from the cursor
     }
     if (!r.ok) {
+      const waitMs = retryAfterMs(typeof r.headers?.get === "function" ? r.headers.get("retry-after") : null);
       // A 5xx THAT NAMES ITS FAULT is not transient by guessing — the server said what failed, and
-      // retrying for the whole hard cap would only hide that sentence behind a spinner (P18).
+      // retrying for the whole hard cap would only hide that sentence behind a spinner (P18). When
+      // what it names IS transient, and the turn has not begun, it is retried for a bounded while.
       const typed = r.status >= 500 && cb.onFault ? await bodyFault(r) : null;
+      if (typed && isTransientFault(typed) && beforeTurn()) {
+        transient = { fault: typed, waitMs };
+        return "transient";
+      }
+      // An edge 429 or a bare 502/503/504 — nothing typed, so nothing got as far as agent-api.
+      if (!typed && beforeTurn() && (r.status === 429 || r.status === 502 || r.status === 503 || r.status === 504)) {
+        transient = { fault: edgeFault(r.status), waitMs };
+        return "transient";
+      }
       if (typed) {
         terminal = true;
         cb.onFault?.(typed);
@@ -595,7 +673,16 @@ export async function streamChatTurn(
           // The worker's liveness ack — emitted the moment a turn is picked up (warm or cold), long
           // before the first model token. Flips the heartbeat "Starting agent" → "Working"
           // honestly: the agent IS working, it just hasn't produced output yet.
+          case "session-note":
+            sawVisibleOutput = true;
+            cb.onNote?.(ev as { seq?: number; author?: string; text?: string });
+            break;
+          case "queued":
+            queuedLabel = typeof ev.message === "string" && ev.message ? ev.message : "Your message runs next.";
+            cb.onStatus?.("queued", queuedLabel);
+            break;
           case "turn-accepted":
+            queuedLabel = null;
             sawVisibleOutput = true;
             cb.onStatus?.("working");
             cb.onAccepted?.();
@@ -604,8 +691,17 @@ export async function streamChatTurn(
             if (ev.text) { sawVisibleOutput = true; cb.onDelta(ev.text); }
             break;
           case "tool-call":
+            if (ev.callId && ev.tool) toolByCall.set(ev.callId, ev.tool);
             sawVisibleOutput = true; cb.onTool(ev.tool ?? "tool", (ev as { args?: Record<string, unknown> }).args);
             break;
+          case "tool-result": {
+            const tool = ev.callId ? toolByCall.get(ev.callId) : undefined;
+            if (tool) cb.onToolResult?.(tool, { ok: ev.ok !== false, result: ev.result ?? ev.summary });
+            // THE HEADER'S SCOPE LINE follows the agent (Vexa-ai/vexa#1783): a state, target or
+            // defaults verb that answered changes what the line says — it re-reads the server.
+            if (tool && ev.ok !== false && isScopeTool(tool)) notifyScope();
+            break;
+          }
           // A SUCCESSFUL WRITE TO A MOUNTED WORKSPACE (F41). The founder created a shared workspace,
           // the agent wrote its README, and the right panel stayed on `_global/README.md` — the one
           // document the turn had just made was the one thing not on screen. The event is
@@ -631,6 +727,13 @@ export async function streamChatTurn(
           // record's and this reader owns none of it.
           case "focus":
             if (ev.workspace) cb.onFocusWorkspace?.({ workspace: ev.workspace, name: ev.name ?? "" });
+            notifyScope();
+            break;
+          // THE AGENT ASKS, THE PERSON DECIDES (UI decision 6b). Nothing moves here.
+          case "propose-target":
+            if (ev.workspace) cb.onProposeTarget?.({
+              workspace: ev.workspace, name: ev.name ?? ev.workspace, current: ev.current ?? "",
+              currentName: ev.current_name ?? "", reason: ev.reason ?? "" });
             break;
           // THE TRANSCRIPT'S CHIPS (decision 35). Emitted by the harness off a successful
           // `transcript_terms` PUBLISH — the agent's second call, the one carrying `keep`. A bare
@@ -711,6 +814,15 @@ export async function streamChatTurn(
           // session watcher, and rendered as the session sentence.
           case "error":
           case "stream-error": {
+            // A MOMENT'S UNAVAILABILITY before the turn began (the gateway's auth 503, folded into
+            // this event by /api/chat) is retried, not shown — see `transientRetry.ts` and the note above `edgeFault`.
+            const early = cb.onFault && beforeTurn() ? readFault(ev.fault) : null;
+            const busy = !early && cb.onFault && beforeTurn() && ev.status === 429 ? edgeFault(429) : null;
+            if ((early && isTransientFault(early)) || busy) {
+              transient = { fault: (busy ?? early) as Fault, waitMs: retryAfterMs(ev.retry_after) };
+              try { await reader.cancel("transient"); } catch { /* ignore */ }
+              return "transient";
+            }
             terminal = true;
             sawVisibleOutput = true;
             const authFailed = typeof ev.status === "number" && isAuthStatus(ev.status);
@@ -730,8 +842,27 @@ export async function streamChatTurn(
     }
   };
 
+  let transientAttempt = 0;
+  let transientSpentMs = 0;
   while (!signal.aborted) {
     const outcome = await drainOnce();
+    if (outcome === "transient" && transient) {
+      const { fault, waitMs } = transient;
+      transient = null;
+      const wait = transientWait(transientAttempt, waitMs);
+      if (transientSpentMs + wait > transientBudgetMs) {
+        // Out of patience: ONE report, as the fault it was — the renderer says it calmly.
+        terminal = true;
+        sawVisibleOutput = true;
+        if (cb.onFault) cb.onFault(fault); else cb.onError(faultLine(fault));
+        break;
+      }
+      transientSpentMs += wait;
+      transientAttempt += 1;
+      cb.onStatus?.("connecting");   // the turn is still on its way — it never looks failed meanwhile
+      await sleep(wait);
+      continue;
+    }
     if (outcome === "terminal" || terminal) break;
     // The hard cap answers "did the worker ever come back". A job is ALLOWED to take minutes — that
     // is what it is for — so while one is running the cap is not the question and giving up on it

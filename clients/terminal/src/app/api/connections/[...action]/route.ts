@@ -23,18 +23,24 @@ function failure(e: unknown, fallback: string) {
  *  and nothing is stored. No ready calendar → an empty list, and the broker is not asked. */
 const UPCOMING_MS = 24 * 60 * 60 * 1000;
 const CAL_MAX = 3;
-type CalEvent = { summary?: unknown; status?: unknown; start?: { dateTime?: unknown } | null };
+type CalEvent = { summary?: unknown; status?: unknown; start?: { dateTime?: unknown } | null; meeting_url?: unknown };
+/** the call's own link (the broker's `meeting_url`), https only — so "join this call" needs no paste */
+const meetingUrl = (u: unknown): string | null => {
+  if (typeof u !== 'string' || u.length > 500) return null;
+  try { const x = new URL(u); return x.protocol === 'https:' && !x.username && !x.password ? u : null; } catch { return null; }
+};
 async function upcoming() {
   const rows = ((await brokerCall('GET','/api/connections'))?.connections ?? []) as {id:string;provider:string;status:string}[];
   const calendars = rows.filter(r => r.provider==='google_calendar' && r.status==='ready' && cid.test(r.id)).slice(0, CAL_MAX);
   const now = Date.now();
   const window = {action:'calendar.events', time_min:new Date(now).toISOString(), time_max:new Date(now+UPCOMING_MS).toISOString(), limit:10};
-  const events: {title:string;start:string|null}[] = [];
+  const events: {title:string;start:string|null;meeting_url?:string}[] = [];
   for (const c of calendars) {
     const read = await brokerCall('POST',`/api/connections/${c.id}/read`,window);
     for (const e of ((read?.events ?? []) as CalEvent[])) {
       if (e?.status === 'cancelled') continue;
-      events.push({title: typeof e?.summary==='string' ? e.summary.slice(0,200) : '', start: typeof e?.start?.dateTime==='string' ? e.start.dateTime : null});
+      const url = meetingUrl(e?.meeting_url);
+      events.push({title: typeof e?.summary==='string' ? e.summary.slice(0,200) : '', start: typeof e?.start?.dateTime==='string' ? e.start.dateTime : null, ...(url ? {meeting_url: url} : {})});
     }
   }
   return {events};
@@ -75,7 +81,13 @@ export async function POST(req: NextRequest) {
       const result=await brokerCall('POST',`/api/connections/${parts[0]}/custom-secret`,body);
       return NextResponse.json({connection_id:result.connection_id,status:result.status},{headers});
     }
-    if (parts.length===2 && cid.test(parts[0]) && ['authorize','disconnect','delete'].includes(parts[1])) {
+    if (parts.length===2 && cid.test(parts[0]) && parts[1]==='authorize') {
+      // One optional field: the additional permission this consent asks for (credential-broker.v1 AuthorizeRequest).
+      const body=await req.json().catch(()=>({}));
+      if (!body || typeof body!=='object' || Object.keys(body).some(k=>k!=='grant') || (body.grant!==undefined && !['','calendar_write'].includes(body.grant))) return new NextResponse(null,{status:400,headers});
+      return NextResponse.json(await brokerCall('POST',`/api/connections/${parts[0]}/authorize`,body.grant?{grant:body.grant}:{}),{headers});
+    }
+    if (parts.length===2 && cid.test(parts[0]) && ['disconnect','delete'].includes(parts[1])) {
       return NextResponse.json(await brokerCall('POST',`/api/connections/${parts[0]}/${parts[1]}`,{}),{headers});
     }
     return new NextResponse(null,{status:404,headers});

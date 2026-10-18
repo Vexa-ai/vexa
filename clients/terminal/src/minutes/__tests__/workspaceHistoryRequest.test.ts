@@ -12,7 +12,7 @@
  *  request.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { readWorkspaceHistory } from "../../surfaces/workspaceApi";
+import { readWorkspaceHistory } from "../../data/workspaceApi";
 
 const answer = (over: Record<string, unknown> = {}) => ({
   ok: true, status: 200,

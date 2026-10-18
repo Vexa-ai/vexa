@@ -20,9 +20,10 @@ import { ASK_CHAT_EVENT, OPEN_ENTITY_EVENT } from "../../platform";
 import { LiveTranscriptEngine } from "../LiveTranscriptEngine";
 import { HighlightButton, TermText, useTermRenderer } from "../TranscriptTermControls";
 import {
-  loadTerms, mergeTerms, notePageWritten, promoteWritten, recordTerms, resetTerms, TERMS_EVENT,
+  loadTerms, mergeTerms, notePageWritten, promoteWritten, recordTerms, resetTerms,
   termsCursor, termsFor, termSpans, type TranscriptTerm,
 } from "../transcriptTerms";
+import { TERMS_EVENT } from "../../platform/events";
 
 function render(ui: React.ReactElement) {
   const container = document.createElement("div");

@@ -1,7 +1,7 @@
 /** analytics — endpoint normalization (keeps GA dimensions low-cardinality) + the gtag forwarding that
  *  no-ops when GA isn't configured (so call sites never have to guard). */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { endpointLabel, track, gaReady } from "../analytics";
+import { endpointLabel, track, gaReady } from "../../platform/analytics";
 
 afterEach(() => { delete (window as unknown as { gtag?: unknown }).gtag; });
 

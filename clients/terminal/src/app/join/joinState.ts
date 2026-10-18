@@ -160,3 +160,15 @@ export function landingPath(workspaceId?: string | null, slug?: string | null): 
 export function returnPath(token: string): string {
   return `/join?i=${encodeURIComponent(token)}`;
 }
+
+/** `/join/<token>` → `/join?i=<token>`: the path spelling of a link, onto the page that redeems it. */
+export function joinPathFor(token: string): string {
+  let t = String(token || "");
+  try {
+    t = decodeURIComponent(t);
+  } catch {
+    /* a malformed escape is left as it came; the page refuses it as unknown */
+  }
+  t = t.trim();
+  return t ? `/join?i=${encodeURIComponent(t)}` : "/join";
+}

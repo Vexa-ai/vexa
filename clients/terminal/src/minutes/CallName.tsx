@@ -12,16 +12,14 @@ import { useRef, useState } from "react";
 import type { MeetingMock } from "../surfaces/meetingModel";
 import { CALL_TITLE_MAX, CallRenameError, canRenameCall, renameCall } from "./callRename";
 import { callLabel } from "./callsList";
+import "./minutes.css";
 
 type Named = Pick<MeetingMock, "id" | "shared" | "title_custom" | "platform" | "native_id">;
 
 /** The name with its custom title removed — what an empty save goes back to. */
 const defaultLabel = (m: Named) => callLabel({ ...m, title_custom: undefined });
 
-const inputS: CSSProperties = {
-  font: "inherit", color: "var(--t1)", background: "var(--bg)", border: "1px solid var(--line)",
-  borderRadius: 4, width: 120, flex: 1, minWidth: 50,
-};
+const inputS: CSSProperties = { width: 120, flex: 1, minWidth: 50 };
 
 /** The editor alone. `compact` is the Calls row's form: no Save/Cancel buttons, and leaving the
  *  field saves a change (as a file tree's rename does); the header's form has the chat title's
@@ -55,12 +53,13 @@ export function CallNameEditor(p: { meeting: Named; label: string; compact?: boo
           if (e.key === "Escape" && !busy) { e.preventDefault(); done(); }
         }}
         onBlur={p.compact ? () => { if (!error) void save(); } : undefined}
-        style={{ ...inputS, ...(p.compact ? { fontSize: 12.5, padding: "2px 4px", width: "100%" } : null) }} />
+        className="vx-callname-input" data-compact={p.compact ? "" : undefined}
+        style={{ ...inputS, ...(p.compact ? { width: "100%" } : null) }} />
       {!p.compact && <>
-        <button style={{ font: "inherit", fontSize: 12, color: "var(--accent)", background: "none", border: 0, cursor: "pointer", flex: "none" }} type="submit" disabled={busy}>{busy ? "Saving…" : "Save"}</button>
-        <button style={{ font: "inherit", fontSize: 12, color: "var(--t2)", background: "none", border: 0, cursor: "pointer", flex: "none" }} type="button" disabled={busy} onClick={done}>Cancel</button>
+        <button className="vx-callname-act" data-tone="accent" style={{ flex: "none" }} type="submit" disabled={busy}>{busy ? "Saving…" : "Save"}</button>
+        <button className="vx-callname-act" style={{ flex: "none" }} type="button" disabled={busy} onClick={done}>Cancel</button>
       </>}
-      {error && <span role="alert" style={{ fontSize: 12 }}>{error}</span>}
+      {error && <span role="alert" className="vx-callname-error">{error}</span>}
     </form>
   );
 }
@@ -75,7 +74,7 @@ export function CallName(p: { meeting: Named | undefined; label: string; style?:
   return (
     <button type="button" data-call-name title="Rename call" aria-label={`Rename ${p.label}`}
       onClick={() => setEditing(true)}
-      style={{ font: "inherit", color: "inherit", background: "none", border: 0, padding: 0, cursor: "text", textAlign: "left", ...base }}>
+      className="vx-callname-btn" style={base}>
       {p.label}
     </button>
   );

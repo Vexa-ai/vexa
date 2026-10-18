@@ -61,3 +61,9 @@ export const ONBOARDING_GROUNDING = ONBOARDING_KICKOFF_MARK + [
   "Only ask me about the genuine gaps you can't resolve yourself — saying why each matters. Run at least",
   "two discovery cycles. My details:",
 ].join("\n");
+
+/** The two opening texts of a minutes chat, read by the chat surface. Post-meeting: */
+export const MINUTES_ONBOARDING_GREETING = "👋 I kept notes on your meeting — they're beside this chat, with the full transcript under them. Ask me anything about it. To make this space yours: **what's your role at your organisation?** One line is enough — it decides what I pay attention to for you.";
+// Pre-meeting variant: the person arrived from the CONFIRM email — nothing has happened yet, so
+// the conversation is a BRIEFING, and the role question rides inside it.
+export const MINUTES_PREP_GREETING = "👋 I'm booked for your meeting. Brief me so it lands well: **what do you want out of it?** Anything I should read, anyone who matters, decisions you expect — one or two lines is plenty. (And what's your role? It decides what I pay attention to for you.)";

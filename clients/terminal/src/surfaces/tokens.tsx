@@ -8,9 +8,10 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { Button, Icon, SecretReveal } from "../ui-kit";
+import { registry } from "../contributions";
 import { copyText } from "../ui-kit/ContextMenu";
 import { listTokens, createToken, revokeToken, TOKEN_SCOPES, type TokenInfo, type TokenScope, type MintedToken } from "./tokensApi";
-import { presentError } from "./apiClient";
+import { presentError } from "../data/apiClient";
 
 const EXPIRIES: Array<{ label: string; seconds?: number }> = [
   { label: "never expires" },
@@ -116,8 +117,15 @@ function CreateTokenForm({ onCreated }: { onCreated: (t: MintedToken) => void })
   );
 }
 
-/** Settings uses the same connection editor as Minutes. */
-export { GitConnection as GitHubTokenCard } from '../minutes/GitConnection';
+/** Settings uses the same connection editor as Minutes. The editor is the minutes shell's, which
+ *  sits above this folder, so it registers under this kind (`minutes/register.tsx`) and Settings
+ *  renders whatever is registered (Vexa-ai/vexa#1783). */
+export const GITHUB_CONNECTION_KIND = "github-connection";
+
+export function GitHubTokenCard() {
+  const Card = registry.tabComponent(GITHUB_CONNECTION_KIND);
+  return Card ? <Card id={GITHUB_CONNECTION_KIND} params={{}} active /> : null;
+}
 
 export function TokensPanel() {
   const [tokens, setTokens] = useState<TokenInfo[]>([]);

@@ -34,6 +34,8 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { AUTH_COOKIE, USER_INFO_COOKIE, validateAuthToken } from "../adminApi";
+import { PERSON_COOKIE, PERSON_INFO_COOKIE, adminAccountAddresses } from "../companyMode";
+import { testUsersEnabled } from "../testUsers";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +63,16 @@ export async function GET() {
 
   const validated = await validateAuthToken(token);
 
+  // THE COMPANY PROFILE (ADR-0049). While this tab works as the company the auth cookie carries the
+  // admin account's session and the person's own token waits in PERSON_COOKIE. `company.person` is
+  // display-only (who to switch back to); `can_work_as_company` is an instance administrator on a
+  // deployment that names an admin account. Neither authorizes anything — company/ re-checks both.
+  const personToken = cookieStore.get(PERSON_COOKIE)?.value;
+  let person: { email?: string; name?: string } | null = null;
+  if (personToken) {
+    try { person = JSON.parse(cookieStore.get(PERSON_INFO_COOKIE)?.value || "{}"); } catch { person = {}; }
+  }
+
   if (validated.ok) {
     return NextResponse.json(
       {
@@ -71,7 +83,12 @@ export async function GET() {
         // layer, and on nothing else. The client shows it only Company, and shows Company to nobody
         // else. Same three values as `is_admin`.
         admin_account: validated.adminAccount,
-        user: { email: validated.email ?? email ?? null, name: name ?? null },
+        // The account id scopes this browser's stored state to this account (platform/accountStorage).
+        user: { id: String(validated.userId), email: validated.email ?? email ?? null, name: name ?? null },
+        company: personToken && validated.adminAccount ? { person: { email: person?.email ?? null, name: person?.name ?? null } } : null,
+        can_work_as_company: validated.isAdmin && !validated.adminAccount && !personToken && adminAccountAddresses().length > 0,
+        // app.dev tooling (#1783): "Test users…" in the account menu — switched on AND an administrator
+        dev_test_users: testUsersEnabled() && validated.isAdmin === true,
       },
       { headers: NO_STORE },
     );
@@ -80,6 +97,18 @@ export async function GET() {
   // The token was REFUSED — revoked, deleted, or expired. This is the signed-out answer, and the
   // only branch that takes a session away.
   if (validated.status === 401) {
+    // A Company session that ran out puts the person back in their own session, not on sign-in.
+    if (personToken && (await validateAuthToken(personToken)).ok) {
+      const res = NextResponse.json({ authenticated: false, reason: "company_session_ended" }, { status: 401, headers: NO_STORE });
+      const secure = (process.env.TERMINAL_URL || "").startsWith("https://") || (process.env.NEXTAUTH_URL || "").startsWith("https://");
+      const opts = { httpOnly: true, secure, sameSite: "lax" as const, path: "/", maxAge: 60 * 60 * 24 * 30 };
+      res.cookies.set(AUTH_COOKIE, personToken, opts);
+      const info = cookieStore.get(PERSON_INFO_COOKIE)?.value;
+      if (info) res.cookies.set(USER_INFO_COOKIE, info, opts);
+      res.cookies.set(PERSON_COOKIE, "", { ...opts, maxAge: 0 });
+      res.cookies.set(PERSON_INFO_COOKIE, "", { ...opts, maxAge: 0 });
+      return res;
+    }
     return NextResponse.json({ authenticated: false, reason: "session_ended" }, { status: 401, headers: NO_STORE });
   }
 
@@ -90,7 +119,7 @@ export async function GET() {
     // is_admin: null — "unknown", NOT "no". A consumer that reads this as a denial turns an
     // admin-api blip into a lockout screen for the administrator.
     { authenticated: true, degraded: true, is_admin: null, admin_account: null,
-      user: { email: email ?? null, name: name ?? null } },
+      user: { id: null, email: email ?? null, name: name ?? null } },
     { headers: NO_STORE },
   );
 }

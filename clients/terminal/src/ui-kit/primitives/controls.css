@@ -182,7 +182,7 @@
 .vx-source-snippet { font-size: var(--text-sm); color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* ── Toast (sonner) ───────────────────────────────────────────────────────────────────────── */
-.vx-toast { background: var(--surface-overlay) !important; color: var(--text-1) !important; border: 1px solid var(--border) !important; box-shadow: var(--shadow-3) !important; font-family: var(--font-sans) !important; font-size: var(--text-sm) !important; }
+.vx-sonner-toast { background: var(--surface-overlay) !important; color: var(--text-1) !important; border: 1px solid var(--border) !important; box-shadow: var(--shadow-3) !important; font-family: var(--font-sans) !important; font-size: var(--text-sm) !important; }
 
 
 /* ── a chat turn's sources ────────────────────────────────────────────────────────────────── */

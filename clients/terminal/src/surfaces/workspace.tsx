@@ -4,9 +4,9 @@
  *  active file from the center tab. Reuses /api/workspace/*. */
 import { useContext, useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { useService, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT } from "../platform";
-import { LayoutServiceId } from "../workbench/layout";
+import { LayoutServiceId } from "../platform/layout";
 import { registerList, registerTab, type TabProps } from "../contributions";
-import { minutesOnly } from "../app/mode";
+import { minutesOnly } from "../platform/mode";
 import { Icon, Checkbox, useConfirm, ExternalLink } from "../ui-kit";
 import { Modal } from "../ui-kit/Modal";
 import { RoomOnboarding } from "./roomOnboarding";
@@ -15,9 +15,9 @@ import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
 import { MdxDoc } from "../ui-kit/MdxDoc";
 // Data-access lives in its own SoC module (scoped to the authed user — no client subject, P20),
 // proven in isolation by workspaceApi.test.ts.
-import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readWorkspaceGitDiff, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, createSharedWorkspace, mintInvite, listSharedMemberships, setSharedActive, setWorkspacePurpose, shareEnableWorkspace, unshareWorkspace, archiveWorkspace, deleteWorkspace, type GitState, type GitCommit, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "./workspaceApi";
+import { readWorkspaceFile, listWorkspaceTree, readWorkspaceGit, readWorkspaceGitDiff, readAttachedWorkspaces, renameWorkspace, publishWorkspace, readActiveSet, activateWorkspace, deactivateWorkspace, createWorkspace, createSharedWorkspace, mintInvite, listSharedMemberships, setSharedActive, setWorkspacePurpose, shareEnableWorkspace, unshareWorkspace, archiveWorkspace, deleteWorkspace, type GitState, type GitCommit, type AttachedWorkspaces, type PublishResult, type ActiveMount, type Membership } from "../data/workspaceApi";
 import { manageTabDescriptor } from "./workspaceManage";
-import { presentError } from "./apiClient";
+import { presentError } from "../data/apiClient";
 const base = (p: string) => p.split("/").pop() ?? p;
 // `slug` (Lane A) opens a file from a SHARED workspace the user is a member of; omitted → own workspace.
 // The tab id includes the slug so the same path in two workspaces gets distinct tabs.
@@ -475,7 +475,7 @@ export function FilesList() {  // exported for the surface test
 const SS_WS_OPEN = "ws.attach.open";
 export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  // exported for the surface test
   const layout = useService(LayoutServiceId);
-  // Selecting a workspace row opens the MANAGE hub as a center tab (rename · on/off · GitHub · purpose ·
+  // Selecting a workspace row opens the MANAGE hub as a center tab (rename · on/off · repository · purpose ·
   // participants). The row's checkbox stays the quick on/off; the name opens the panel.
   const openManage = (slug: string, opts?: { shared?: boolean; name?: string }) => layout.openTab(manageTabDescriptor(slug, opts));
   const [open, setOpen] = useState<boolean>(() => readSS(SS_WS_OPEN) !== "0");  // default OPEN — workspaces lead the Knowledge rail
@@ -523,7 +523,6 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   // Share dialog (Lane M/A): non-null = the workspace_id being shared; carries the invite terms + the minted link.
   const [share, setShare] = useState<{ wsId: string; role: string; mode: string; emails: string; ttlDays: number; link: string | null } | null>(null);
   const [rowMenu, setRowMenu] = useState<{ slug: string; display: string; x: number; y: number } | null>(null);  // per-row … menu (archive/delete)
-  const [showArchived, setShowArchived] = useState(false);  // the collapsed 'Archived' group
   const load = () => {
     void readAttachedWorkspaces().then((v) => { setView(v); setErr(null); }).catch((e: unknown) => setErr(presentError(e).headline));
     void readActiveSet().then((s) => setActiveSet(s.active)).catch(() => { /* active-set is additive UI; a failure just leaves the toggles at the baseline */ });
@@ -622,7 +621,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
     finally { setBusy(false); }
   };
 
-  // Publish the vexa-born ACTIVE workspace to GitHub — repo created with the per-call token (never
+  // Publish the vexa-born ACTIVE workspace to its git provider — repo created with the per-call token (never
   // stored, P15), full history pushed. `remoteUrl` set = push updates to the already-published home
   // (plain push, never force). Success shows the repo URL and reloads the view so the row flips to
   // its published state (link + push); failure shows the (redacted) error.
@@ -707,7 +706,6 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
   const allSlots = Object.entries(view.slots);
   if (!allSlots.some(([s]) => s === "seed")) allSlots.unshift(["seed", { repo: null, ref: null }]);
   const slots = allSlots.filter(([, meta]) => !meta.archived);           // live rows
-  const archivedSlots = allSlots.filter(([, meta]) => meta.archived);    // collapsed 'Archived' group
   const label = (slug: string, repo: string | null) => (slug === "seed" ? "Personal" : repo ?? slug);
 
   // Publish applies to a VEXA-BORN active workspace only — one attached from an external repo already
@@ -771,7 +769,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                   className="t-xs pt-0_5 pr-1_5 pb-0_5 pl-1_5 bg-2 bd r-md c-1" style={{ flex: 1 }} />
               ) : (
                 <span onClick={() => assignUid ? void selectRoom(slug, false) : (!busy && openManage(slug, { name: display }))}
-                  title="Open the manage panel (rename · on/off · GitHub · purpose · participants)"
+                  title="Open the manage panel (rename · on/off · repository · purpose · participants)"
                   style={{ flex: 1, color: mounted ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: busy ? "default" : "pointer" }}>{display}</span>
               )}
               {/* Row is intentionally minimal: the CHECKBOX mounts/parks, the NAME opens the manage
@@ -804,7 +802,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                   label={`${wsId} — shared (${mem.role})`} />
               )}
               <span onClick={() => assignUid ? void doAssign(wsId, wsId) : openManage(wsId, { shared: true, name: wsId })}
-                title="Open the manage panel (GitHub · purpose · participants)"
+                title="Open the manage panel (repository · purpose · participants)"
                 style={{ flex: 1, color: mounted ? "var(--t1)" : "var(--t2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }}>{wsId}</span>
               {minutesOnly() && mem.role === "owner" && (
                 <span onClick={(e) => { e.stopPropagation(); setConfirmDelete({ slug: wsId, display: wsId }); }}
@@ -952,7 +950,7 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
                   private repo
                 </label>
               </>)}
-              <input autoFocus={pushMode} type="password" value={pubForm.token} placeholder="GitHub token (repo scope — used once, never stored)" disabled={busy}
+              <input autoFocus={pushMode} type="password" value={pubForm.token} placeholder="Access token (used once, never stored)" disabled={busy}
                 onChange={(e) => setPubForm({ ...pubForm, token: e.target.value })} onKeyDown={onKey}
                 className="t-xs pt-1 pr-1_5 pb-1 pl-1_5 bg-2 bd r-md c-1" />
               <div style={{ display: "flex", gap: 8 }}>
@@ -971,28 +969,12 @@ export function WorkspaceSwitcher({ onSwapped }: { onSwapped: () => void }) {  /
             <ExternalLink href={published.repo_url} className="c-accent" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{published.repo_url}</ExternalLink>
           </div>
         )}
-        {/* Archived workspaces — collapsed group; the data is kept, restore to bring them back. */}
-        {archivedSlots.length > 0 && (
-          <div className="mt-1">
-            <div onClick={() => setShowArchived((v) => !v)}
-              className="pt-1 pr-2 pb-1 pl-2 t-xs c-3" style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", textTransform: "uppercase", letterSpacing: ".04em" }}>
-              <Icon name="chevR" size={12} style={{ transform: showArchived ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
-              Archived ({archivedSlots.length})
-            </div>
-            {showArchived && archivedSlots.map(([slug, meta]) => (
-              <div key={`arch:${slug}`} className="pt-1 pr-2 pb-1 pl-6 t-xs c-3" style={{ display: "flex", alignItems: "center", gap: 6, opacity: busy ? 0.6 : 1 }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-                <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{meta.name || label(slug, meta.repo)}</span>
-                <span onClick={() => void doArchive(slug, false)} title="Un-archive" className="c-accent t-xs" style={{ flex: "none", cursor: "pointer" }}>restore</span>
-                <span onClick={() => void doDelete(slug, meta.name || label(slug, meta.repo))} title="Delete permanently" className="c-3 t-sm pt-0 pr-0_5 pb-0 pl-0_5" style={{ flex: "none", cursor: "pointer" }}>×</span>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* HIDDEN workspaces are not listed here at all (Vexa-ai/vexa#1783, founder 2026-10-14): they
+            are brought back by asking in the chat ("show P2 again"), never from the file browser. */}
         {/* Per-row … menu: archive / delete. */}
         {rowMenu && (
           <ContextMenu x={rowMenu.x} y={rowMenu.y} onClose={() => setRowMenu(null)} items={[
-            { id: "archive", label: "Archive", detail: "collapse · keep data", onSelect: () => void doArchive(rowMenu.slug, true) },
+            { id: "archive", label: "Hide", detail: "not mounted · not listed · kept", onSelect: () => void doArchive(rowMenu.slug, true) },
             { id: "delete", label: "Delete", detail: "removes all data", onSelect: () => void doDelete(rowMenu.slug, rowMenu.display) },
           ]} />
         )}
@@ -1018,7 +1000,7 @@ function GitSection() {
         const primary = await readWorkspaceGit();
         setGit(primary); setGitError(null);
         let mounts: ActiveMount[] = [];
-        try { mounts = (await readActiveSet()).active.filter((m) => !m.primary); } catch { /* additive — ignore */ }
+        try { mounts = (await readActiveSet()).active.filter((m) => !(m.desk ?? m.primary)); } catch { /* additive — ignore */ }
         const mg = await Promise.all(mounts.map(async (m) => {
           try { return { m, g: await readWorkspaceGit({ slug: m.slug }) }; } catch { return null; }
         }));

@@ -17,6 +17,7 @@
  *  no inference: the founder's correction was explicit that this "does not require any 'processing
  *  on'", and a background loop that highlights unasked is that feature under a different name.
  */
+import { Highlighter } from "lucide-react";
 import React, { useMemo } from "react";
 import { OPEN_ENTITY_EVENT } from "../platform";
 import { splitTextIntoSpans } from "./inlineSpans";
@@ -112,9 +113,20 @@ export function useTermRenderer(meeting: string): ((text: string) => React.React
  *  ADDITIVE means it sends the cursor the LAST publish returned, so a second press adds what has
  *  been said since instead of re-listing the room. The client never invents that cursor; it echoes
  *  the server's. */
-export function HighlightButton(p: { meeting: string; live?: boolean }) {
+export function HighlightButton(p: { meeting: string; live?: boolean; icon?: boolean }) {
   const terms = useTranscriptTerms(p.meeting);
   const n = terms.length;
+  if (p.icon) {
+    return (
+      <button type="button" data-act="highlight" className="vx-mv-icon"
+        aria-label={n ? `Highlight — ${n} term${n === 1 ? "" : "s"} so far` : "Highlight names"}
+        title={n ? `Highlight what has been said since — ${n} term${n === 1 ? "" : "s"} already on this transcript`
+                 : "Highlight the people, companies and projects this meeting has named"}
+        onClick={() => postIntent({ kind: "highlight", meeting: p.meeting, since: termsCursor(p.meeting) })}>
+        <Highlighter size={14} strokeWidth={1.75} aria-hidden />
+      </button>
+    );
+  }
   return (
     <button
       type="button"

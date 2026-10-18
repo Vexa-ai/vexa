@@ -2,7 +2,7 @@
 /** Tasks — the tasks LIST (left). Reads kg/entities/task/* from the workspace; clicking a task opens its
  *  entity as a Doc tab (the "doc" tab-kind). Tasks are created/updated by the agent in Chat. */
 import { useEffect, useState, type CSSProperties } from "react";
-import type { TabDescriptor } from "../workbench/layout";
+import type { TabDescriptor } from "../platform/layout";
 import { registerList } from "../contributions";
 import { usePreviewPinTab } from "./previewPinTab";
 

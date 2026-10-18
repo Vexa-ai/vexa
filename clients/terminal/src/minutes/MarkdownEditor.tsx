@@ -5,7 +5,7 @@
  *  refinement); the point is that the text you edit already LOOKS like the document.
  *
  *  THEMING — the editor paints from the SAME var(--*) tokens as the read view it replaces, and
- *  follows the live `data-theme` on <html> that src/app/theme.ts writes. Two traps, both of which
+ *  follows the live `data-theme` on <html> that src/platform/theme.ts writes. Two traps, both of which
  *  shipped:
  *
  *   1. `@uiw/react-codemirror`'s `theme` prop DEFAULTS TO "light", which pushes its
@@ -23,13 +23,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView } from "@codemirror/view";
 import { filesFromTransfer, insertAt, storeDropped } from "./assetDrop";
-import { uploadWorkspaceAsset } from "../surfaces/workspaceApi";
+import { uploadWorkspaceAsset } from "../data/workspaceApi";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { tags as t } from "@lezer/highlight";
 import { mermaidPreview } from "./mermaidPreview";
-import type { Theme } from "../app/theme";
+import type { Theme } from "../platform/theme";
 
 const mdHighlight = HighlightStyle.define([
   { tag: t.heading1, fontSize: "1.55em", fontWeight: "650", fontFamily: "var(--sans)" },
@@ -67,7 +67,7 @@ const editorTheme = (dark: boolean) => EditorView.theme({
 }, { dark });
 
 /** The LIVE theme, read off the one place that is always current: the `data-theme` attribute
- *  src/app/theme.ts stamps on <html> (and globals.css keys every other surface off). `useTheme()`
+ *  src/platform/theme.ts stamps on <html> (and globals.css keys every other surface off). `useTheme()`
  *  holds PER-CALLER state, so an editor calling it would never hear the footer switch toggle in a
  *  different component — the attribute is the shared channel, so observe that. */
 function useDocumentTheme(): Theme {

@@ -7,7 +7,7 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { ProposalChips } from "../ProposalChips";
-import { CHECK_EMAIL, jtbdProposal, proposals, type Proposal } from "../proposals";
+import { CHECK_EMAIL, jtbdProposal, prepProposal, proposals, setupProposal, CALL_VEXA, type Proposal } from "../proposals";
 
 afterEach(() => cleanup());
 
@@ -49,8 +49,48 @@ describe("what the row shows", () => {
     row([long]);
     const b = screen.getByRole("button", { name: long.label });
     expect(b.getAttribute("title")).toBe(long.label);
-    expect(b.style.textOverflow).toBe("ellipsis");
     expect(b.style.maxWidth).toBe("100%");
+    // the label is cut, never the icon in front of it
+    const label = b.querySelector("[data-proposal-label]") as HTMLElement;
+    expect(label.style.textOverflow).toBe("ellipsis");
+    expect(label.style.minWidth).toBe("0px");
+  });
+});
+
+describe("every chip leads with an icon (founder 2026-10-13: \"hints should have icons\")", () => {
+  const PREP = prepProposal({ title: "Design sync", at: Date.now() + 3_600_000 });
+  const ALL: Proposal[] = [PREP, CHECK_EMAIL, CONNECT_EMAIL, CALL_VEXA, JOB, setupProposal("a@b.c")];
+  const icon = (kind: string) => document.querySelector(`[data-proposal="${kind}"] .vx-chip-icon svg`);
+
+  it("one per chip, before the label, hidden from the accessible name", () => {
+    row(ALL);
+    for (const b of Array.from(document.querySelectorAll("[data-proposal]"))) {
+      const first = b.firstElementChild as HTMLElement;
+      expect(first.classList.contains("vx-chip-icon")).toBe(true);
+      expect(first.getAttribute("aria-hidden")).toBe("true");
+      expect(first.querySelector("svg")).toBeTruthy();
+    }
+    expect(screen.getByRole("button", { name: "Check my email" })).toBeTruthy();
+  });
+
+  it("the icon names the act: calendar for prep, mail for email, plug for connect, a phone for a call with Vexa", () => {
+    row(ALL);
+    expect(icon("prep")?.classList.contains("lucide-calendar-clock")).toBe(true);
+    expect(icon("check-email")?.classList.contains("lucide-mail")).toBe(true);
+    expect(icon("connect")?.classList.contains("lucide-plug")).toBe(true);
+    expect(icon("call")?.classList.contains("lucide-phone")).toBe(true);
+    expect(icon("jtbd")).toBeTruthy();
+    expect(icon("setup")).toBeTruthy();
+  });
+
+  it("one size and one stroke, the entity chips' (14px, 1.75)", () => {
+    row(ALL);
+    const svgs = Array.from(document.querySelectorAll("[data-proposal] .vx-chip-icon svg"));
+    expect(svgs).toHaveLength(ALL.length);
+    for (const s of svgs) {
+      expect(s.getAttribute("width")).toBe("14");
+      expect(s.getAttribute("stroke-width")).toBe("1.75");
+    }
   });
 });
 

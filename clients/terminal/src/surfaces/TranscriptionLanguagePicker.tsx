@@ -3,11 +3,12 @@
  *  override on the paste-a-link senders, the live meeting header). The mapping to and from the wire
  *  lives in `transcriptionLanguage.ts`; this file holds only presentation.
  *  All of this file's visual code is local so it swaps to the ui-kit Select/Chip primitives in one edit. */
-import { useEffect, useId, useState, type CSSProperties, type ReactNode } from "react";
+import "./transcriptionLanguage.css";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { Icon } from "../ui-kit";
-import { presentError } from "./apiClient";
+import { presentError } from "../data/apiClient";
 import { getTranscriptionPrefs, setTranscriptionPrefs } from "./settingsApi";
-import { listSharedMemberships } from "./workspaceApi";
+import { listSharedMemberships } from "../data/workspaceApi";
 import { refreshMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock } from "./meetingModel";
 import {
@@ -16,24 +17,21 @@ import {
   type LanguageChoice, type LanguageMode, type MeetingLanguage,
 } from "./transcriptionLanguage";
 
-// ── local look (tokens only) ─────────────────────────────────────────────────────────────────
+// ── local look: classes in ./transcriptionLanguage.css (tokens only) ─────────────────────────────
 const SCOPE = "vx-lang";
-const SCOPED_CSS = `.${SCOPE} :is(button, select):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.${SCOPE} :is(button, select) { min-height: 24px; }
-.${SCOPE} button:disabled, .${SCOPE} select:disabled { cursor: default; opacity: .55; }`;
-const row: CSSProperties = { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" };
-const labelText: CSSProperties = { fontSize: 11.5, color: "var(--t3)" };
-const select: CSSProperties = { fontSize: 12, padding: "3px 6px", borderRadius: 6, border: "1px solid var(--line2)", background: "var(--panel)", color: "var(--t1)", cursor: "pointer", maxWidth: "100%" };
-const chip: CSSProperties = { display: "inline-flex", alignItems: "center", gap: 2, height: 24, padding: "0 2px 0 8px", borderRadius: 6, border: "1px solid var(--line2)", background: "var(--panel2)", color: "var(--t1)", fontSize: 12 };
-const chipRemove: CSSProperties = { display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 22, border: "none", borderRadius: 4, background: "transparent", color: "var(--t2)", cursor: "pointer", fontSize: 13, lineHeight: 1 };
-const button: CSSProperties = { fontSize: 12, padding: "3px 10px", borderRadius: 6, border: "1px solid var(--line2)", background: "var(--panel2)", color: "var(--t1)", cursor: "pointer" };
-const primary: CSSProperties = { ...button, background: "var(--accent)", color: "var(--on-accent)", border: "1px solid var(--accent)", fontWeight: 500 };
-const hint: CSSProperties = { fontSize: 11, color: "var(--t3)", lineHeight: 1.45 };
-const errorText: CSSProperties = { fontSize: 11.5, color: "var(--danger)", lineHeight: 1.45 };
-const okText: CSSProperties = { fontSize: 11.5, color: "var(--green)" };
+const row = "vx-lang-row";
+const labelText = "vx-lang-label";
+const select = "vx-lang-select";
+const chip = "vx-lang-chip";
+const chipRemove = "vx-lang-chip-remove";
+const button = "vx-lang-btn";
+const primary = "vx-lang-btn vx-lang-btn-primary";
+const hint = "vx-lang-hint";
+const errorText = "vx-lang-error";
+const okText = "vx-lang-ok";
 
-function Scope({ children, style, label }: { children: ReactNode; style?: CSSProperties; label?: string }) {
-  return <div className={SCOPE} role="group" aria-label={label} style={style}><style>{SCOPED_CSS}</style>{children}</div>;
+function Scope({ children, className, label }: { children: ReactNode; className?: string; label?: string }) {
+  return <div className={`${SCOPE} ${className ?? ""}`} role="group" aria-label={label}>{children}</div>;
 }
 
 const MODE_LABEL: Record<Exclude<LanguageMode, "default">, string> = { auto: "Auto-detect", one: "One language", few: "A few languages" };
@@ -52,10 +50,10 @@ export function LanguagePicker({ value, onChange, modes, defaultLabel = "Default
   const set = (patch: Partial<LanguageChoice>) => onChange({ ...value, ...patch });
   const remaining = LANGUAGE_CODES.filter((c) => !value.languages.includes(c));
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <div style={row}>
-        <label htmlFor={`${id}-mode`} style={labelText}>Language</label>
-        <select id={`${id}-mode`} value={value.mode} disabled={disabled} style={select}
+    <div className="vx-lang-stack">
+      <div className={row}>
+        <label htmlFor={`${id}-mode`} className={labelText}>Language</label>
+        <select id={`${id}-mode`} value={value.mode} disabled={disabled} className={select}
           aria-describedby={problem ? `${id}-problem` : undefined}
           onChange={(e) => {
             const mode = e.target.value as LanguageMode;
@@ -67,8 +65,8 @@ export function LanguagePicker({ value, onChange, modes, defaultLabel = "Default
           {modes.map((m) => <option key={m} value={m}>{m === "default" ? defaultLabel : MODE_LABEL[m]}</option>)}
         </select>
         {value.mode === "one" && <>
-          <label htmlFor={`${id}-one`} style={labelText}>Transcribe in</label>
-          <select id={`${id}-one`} value={value.language} disabled={disabled} style={select}
+          <label htmlFor={`${id}-one`} className={labelText}>Transcribe in</label>
+          <select id={`${id}-one`} value={value.language} disabled={disabled} className={select}
             onChange={(e) => set({ language: e.target.value })}>
             <option value="">Choose…</option>
             {LANGUAGE_CODES.map((c) => <option key={c} value={c}>{languageLabel(c)}</option>)}
@@ -77,28 +75,28 @@ export function LanguagePicker({ value, onChange, modes, defaultLabel = "Default
       </div>
       {value.mode === "few" && <>
         {value.languages.length > 0 && (
-          <ul aria-label="Chosen languages" style={{ ...row, listStyle: "none", margin: 0, padding: 0 }}>
+          <ul aria-label="Chosen languages" className={`${row} vx-lang-list`}>
             {value.languages.map((c) => (
-              <li key={c} style={chip}>
+              <li key={c} className={chip}>
                 {languageLabel(c)}
-                <button type="button" aria-label={`Remove ${languageLabel(c)}`} disabled={disabled} style={chipRemove}
+                <button type="button" aria-label={`Remove ${languageLabel(c)}`} disabled={disabled} className={chipRemove}
                   onClick={() => set({ languages: value.languages.filter((x) => x !== c), fallback: value.fallback === c ? "" : value.fallback })}><Icon name="x" size={12} /></button>
               </li>
             ))}
           </ul>
         )}
-        <div style={row}>
-          <label htmlFor={`${id}-add`} style={labelText}>Add a language</label>
-          <select id={`${id}-add`} value="" disabled={disabled || !remaining.length} style={select}
+        <div className={row}>
+          <label htmlFor={`${id}-add`} className={labelText}>Add a language</label>
+          <select id={`${id}-add`} value="" disabled={disabled || !remaining.length} className={select}
             onChange={(e) => { if (e.target.value) set({ languages: [...value.languages, e.target.value] }); }}>
             <option value="">Choose…</option>
             {remaining.map((c) => <option key={c} value={c}>{languageLabel(c)}</option>)}
           </select>
         </div>
         {value.languages.length >= 2 && (
-          <div style={row}>
-            <label htmlFor={`${id}-fallback`} style={labelText}>When none of these is detected, use</label>
-            <select id={`${id}-fallback`} value={value.fallback} disabled={disabled} style={select}
+          <div className={row}>
+            <label htmlFor={`${id}-fallback`} className={labelText}>When none of these is detected, use</label>
+            <select id={`${id}-fallback`} value={value.fallback} disabled={disabled} className={select}
               onChange={(e) => set({ fallback: e.target.value })}>
               <option value="">The first one ({languageLabel(value.languages[0])})</option>
               {value.languages.map((c) => <option key={c} value={c}>{languageLabel(c)}</option>)}
@@ -106,7 +104,7 @@ export function LanguagePicker({ value, onChange, modes, defaultLabel = "Default
           </div>
         )}
       </>}
-      {problem && <div id={`${id}-problem`} aria-live="polite" style={hint}>{problem}</div>}
+      {problem && <div id={`${id}-problem`} aria-live="polite" className={hint}>{problem}</div>}
     </div>
   );
 }
@@ -152,29 +150,29 @@ export function TranscriptionLanguageSettings() {
   };
 
   return (
-    <Scope label="Default transcription language" style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 460 }}>
-      <div style={hint}>
+    <Scope label="Default transcription language" className="vx-lang-default">
+      <div className={hint}>
         Meeting bots transcribe in this language unless a meeting says otherwise. Leave it on
         Deployment default to use whatever this deployment is set to.
       </div>
       <LanguagePicker value={choice} disabled={busy || !loaded}
         onChange={(c) => { setSaved(false); setChoice(c); }}
         modes={["default", "one", "few"]} defaultLabel="Deployment default" />
-      <div style={row}>
+      <div className={row}>
         <button type="button" disabled={busy || !dirty || !!problem || !loaded} aria-busy={busy || undefined}
-          style={dirty && !problem ? primary : button} onClick={() => void save()}>
+          className={dirty && !problem ? primary : button} onClick={() => void save()}>
           {busy ? "Saving…" : "Save language"}
         </button>
-        {saved && <span role="status" style={okText}>Saved — applies to the next meeting bot</span>}
+        {saved && <span role="status" className={okText}>Saved — applies to the next meeting bot</span>}
       </div>
-      {err && <div role="alert" style={errorText}>{err}</div>}
+      {err && <div role="alert" className={errorText}>{err}</div>}
     </Scope>
   );
 }
 
 /** Owner-or-editor: the caller owns the meeting, or holds owner/contributor on its bound workspace.
  *  Resolves to false while unknown, so a reader never sees a control flash. */
-function useCanChangeLanguage(m: MeetingMock): boolean {
+export function useCanChangeLanguage(m: MeetingMock): boolean {
   const [role, setRole] = useState<string | null>(null);
   useEffect(() => {
     if (!m.shared || !m.workspace_id) return;
@@ -190,7 +188,13 @@ function useCanChangeLanguage(m: MeetingMock): boolean {
 
 /** The live meeting header's language: the setting the bot is running with, and — for the owner or an
  *  editor — the control that switches it mid-meeting. Renders nothing outside the live phase. */
-export function MeetingLanguageControl({ meeting: m }: { meeting: MeetingMock }) {
+export function MeetingLanguageControl({ meeting: m, compact = false, editing: editingProp, onDone }: {
+  meeting: MeetingMock;
+  /** THE MEETING VIEW'S FORM (founder, UI lab 2026-10-14): no "Language" row in the tools — the
+   *  language is a small label once known, and changing it is an item in "…" that opens the picker
+   *  (`editing`, `onDone`). */
+  compact?: boolean; editing?: boolean; onDone?: () => void;
+}) {
   const live = meetingPhase(m) === "live";
   const canChange = useCanChangeLanguage(m);
   const rowValue = m.transcription_language;
@@ -198,14 +202,21 @@ export function MeetingLanguageControl({ meeting: m }: { meeting: MeetingMock })
   // What a switch answered, shown until the meetings list carries the new row.
   const [applied, setApplied] = useState<{ forRow: string; value: MeetingLanguage } | null>(null);
   const shown = applied && applied.forRow === rowKey ? applied.value : rowValue;
-  const [editing, setEditing] = useState(false);
+  const [editingOwn, setEditingOwn] = useState(false);
+  const editing = compact ? !!editingProp : editingOwn;
+  const setEditing = (v: boolean) => { if (compact) { if (!v) onDone?.(); } else setEditingOwn(v); };
   const [choice, setChoice] = useState<LanguageChoice>(DEFAULT_CHOICE);
+  // opened from "…": start the picker on the setting the bot runs with
+  useEffect(() => { if (compact && editingProp) setChoice(settingToChoice(shown, "auto")); }, [compact, editingProp]); // eslint-disable-line react-hooks/exhaustive-deps
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   if (!live) return null;
 
   const summary = shown ? summarizeLanguage(shown) : "Not reported yet";
   const editable = canChange && !!m.native_id;
+  if (compact && !editing) {
+    return shown ? <span data-meeting-language className="vx-lang-label" title="Transcription language">{summary}</span> : null;
+  }
   const problem = choiceProblem(choice);
   const apply = async () => {
     if (!m.native_id || problem) return;
@@ -221,26 +232,26 @@ export function MeetingLanguageControl({ meeting: m }: { meeting: MeetingMock })
   };
 
   return (
-    <Scope label="Transcription language" style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
-      <div style={row}>
-        <span style={labelText}>Language</span>
-        <span data-meeting-language style={{ fontSize: 12, color: "var(--t1)" }}>{summary}</span>
+    <Scope label="Transcription language" className="vx-lang-meeting">
+      <div className={row}>
+        <span className={labelText}>Language</span>
+        <span data-meeting-language className="vx-lang-value">{summary}</span>
         {editable && !editing && (
-          <button type="button" style={button} onClick={() => { setChoice(settingToChoice(shown, "auto")); setErr(null); setEditing(true); }}>
+          <button type="button" className={button} onClick={() => { setChoice(settingToChoice(shown, "auto")); setErr(null); setEditing(true); }}>
             Change language
           </button>
         )}
       </div>
       {editable && editing && <>
         <LanguagePicker value={choice} onChange={setChoice} disabled={busy} modes={["auto", "one", "few"]} />
-        <div style={row}>
-          <button type="button" style={problem ? button : primary} disabled={busy || !!problem} aria-busy={busy || undefined} onClick={() => void apply()}>
+        <div className={row}>
+          <button type="button" className={problem ? button : primary} disabled={busy || !!problem} aria-busy={busy || undefined} onClick={() => void apply()}>
             {busy ? "Switching…" : "Switch language"}
           </button>
-          <button type="button" style={button} disabled={busy} onClick={() => { setEditing(false); setErr(null); }}>Cancel</button>
+          <button type="button" className={button} disabled={busy} onClick={() => { setEditing(false); setErr(null); }}>Cancel</button>
         </div>
       </>}
-      {err && <div role="alert" style={errorText}>{err}</div>}
+      {err && <div role="alert" className={errorText}>{err}</div>}
     </Scope>
   );
 }

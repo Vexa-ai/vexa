@@ -19,7 +19,7 @@ import { canRenameCall, renameCall } from "../callRename";
 import { CallName } from "../CallName";
 
 const mtg = (o: Partial<MeetingMock> & { id: string }): MeetingMock => ({
-  title: "x", when: "", status: "past", live_status: "completed", platform: "zoom",
+  title: "", when: "", status: "past", live_status: "completed", platform: "zoom",
   participants: [], mentioned: [], actions: [], transcript: [], insights: [], ...o,
 });
 const ok = () => ({ ok: true, status: 200, json: async () => ({}) }) as Response;
@@ -34,13 +34,13 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("renameCall — one front door, no copy", () => {
   it("writes the meeting's title through the annotate route by row id, then updates the store", async () => {
-    await renameCall("42", "  Campbell intro ");
+    await renameCall("42", "  Acme intro ");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/meetings/42/annotate");
     expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body)).toEqual({ title: "Campbell intro" });
-    expect(store.applied).toEqual([["42", "Campbell intro"]]);
+    expect(JSON.parse(init.body)).toEqual({ title: "Acme intro" });
+    expect(store.applied).toEqual([["42", "Acme intro"]]);
     expect(store.refreshed).toBe(1);
   });
 
@@ -66,20 +66,20 @@ describe("renameCall — one front door, no copy", () => {
 
 describe("CallName — the header's title, edited in place like a chat's", () => {
   it("click → input with the name selected; Enter saves", async () => {
-    render(<CallName meeting={mtg({ id: "7", native_id: "88410021706" })} label="Zoom · 88410021706" />);
-    fireEvent.click(screen.getByRole("button", { name: "Rename Zoom · 88410021706" }));
+    render(<CallName meeting={mtg({ id: "7", native_id: "88410021706" })} label="Call with Vexa" />);
+    fireEvent.click(screen.getByRole("button", { name: "Rename Call with Vexa" }));
     const input = screen.getByRole("textbox", { name: "Call name" }) as HTMLInputElement;
-    expect(input.value).toBe("Zoom · 88410021706");
-    expect(input.placeholder).toBe("Zoom · 88410021706");
-    fireEvent.change(input, { target: { value: "Campbell" } });
+    expect(input.value).toBe("Call with Vexa");
+    expect(input.placeholder).toBe("Call with Vexa");
+    fireEvent.change(input, { target: { value: "Acme" } });
     fireEvent.submit(input.closest("form")!);
-    await waitFor(() => expect(store.applied).toEqual([["7", "Campbell"]]));
+    await waitFor(() => expect(store.applied).toEqual([["7", "Acme"]]));
     await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
   });
 
   it("Escape cancels and writes nothing", () => {
-    render(<CallName meeting={mtg({ id: "7", title_custom: "Campbell" })} label="Campbell" />);
-    fireEvent.click(screen.getByRole("button", { name: "Rename Campbell" }));
+    render(<CallName meeting={mtg({ id: "7", title_custom: "Acme" })} label="Acme" />);
+    fireEvent.click(screen.getByRole("button", { name: "Rename Acme" }));
     const input = screen.getByRole("textbox", { name: "Call name" });
     fireEvent.change(input, { target: { value: "Something else" } });
     fireEvent.keyDown(input, { key: "Escape" });
@@ -88,10 +88,10 @@ describe("CallName — the header's title, edited in place like a chat's", () =>
   });
 
   it("an emptied name on a titled call reverts it to the default label", async () => {
-    render(<CallName meeting={mtg({ id: "7", native_id: "88410021706", title_custom: "Campbell" })} label="Campbell" />);
-    fireEvent.click(screen.getByRole("button", { name: "Rename Campbell" }));
+    render(<CallName meeting={mtg({ id: "7", native_id: "88410021706", title_custom: "Acme" })} label="Acme" />);
+    fireEvent.click(screen.getByRole("button", { name: "Rename Acme" }));
     const input = screen.getByRole("textbox", { name: "Call name" }) as HTMLInputElement;
-    expect(input.placeholder).toBe("Zoom · 88410021706");
+    expect(input.placeholder).toBe("Call with Vexa");
     fireEvent.change(input, { target: { value: "" } });
     fireEvent.submit(input.closest("form")!);
     await waitFor(() => expect(store.applied).toEqual([["7", ""]]));
@@ -102,7 +102,7 @@ describe("CallName — the header's title, edited in place like a chat's", () =>
     render(<CallName meeting={mtg({ id: "7" })} label="Zoom · #7" />);
     fireEvent.click(screen.getByRole("button", { name: "Rename Zoom · #7" }));
     const input = screen.getByRole("textbox", { name: "Call name" });
-    fireEvent.change(input, { target: { value: "Campbell" } });
+    fireEvent.change(input, { target: { value: "Acme" } });
     fireEvent.submit(input.closest("form")!);
     expect((await screen.findByRole("alert")).textContent).toMatch(/Couldn.t save/);
     expect(screen.getByRole("textbox", { name: "Call name" })).toBeTruthy();

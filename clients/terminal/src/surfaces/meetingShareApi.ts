@@ -6,8 +6,8 @@
  *      `DELETE …/share/{grant}` and `DELETE …/viewers/{user}`), owner-only;
  *    • agent-api owns who belongs to a workspace (its invites and members routes).
  *  This module only shapes requests and the link a person is sent. */
-import { getJson } from "./apiClient";
-import { mintInvite } from "./workspaceApi";
+import { getJson } from "../data/apiClient";
+import { mintInvite } from "../data/workspaceApi";
 
 /** A person who opened their invite and can read the meeting. */
 export interface MeetingReader { user_id: number; email: string | null; role: "viewer"; grant_id?: string | null; since?: string | null }

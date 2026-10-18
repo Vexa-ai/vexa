@@ -1,4 +1,5 @@
 "use client";
+import { wordsSeen } from "./meetingHealth";
 import { createContext, createElement, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLiveMeetings, fetchDurableTranscript, type DurableTranscript } from "../surfaces/liveMeetings";
 import { meetingEntities, type MeetingMock, type TranscriptLine } from "../surfaces/meetingModel";
@@ -323,6 +324,8 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
   const live = useMeetingLive(selected.id, pinRef.current.uid);
   const actions = useCanvasActionState();
   const [durable, setDurable] = useState<DurableTranscript>({ lines: [] });
+  // when the segments on screen last changed (any source) — see `wordsSeen`
+  const seenRef = useRef<{ sig: string | null; at?: number }>({ sig: null });
 
   // Hydrate the RECORDED segments from the durable store. For a past meeting this is the only
   // source; for a live one the live stream wins and this is the seed. (There is no second,
@@ -370,18 +373,21 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     // terms against the text it is drawing, so a term the agent extracted from the RAW
     // transcript could never match its own chip in the REWRITTEN one.
     const liveSegments = safeArray(live.transcript).map((s) => ({ id: s.id, speaker: s.speaker, text: s.text, ts: s.t, tsMs: s.tsMs, completed: s.completed }));
-    const recordedSegments = safeArray(durable.lines).map((s) => ({ speaker: s.speaker, text: s.text, ts: s.offsetSeconds ?? lineTs(s), tsMs: s.tsMs, endMs: s.endMs }));
+    const recordedSegments = safeArray(durable.lines).map((s) => ({ ...(s.id ? { id: s.id } : {}), speaker: s.speaker, text: s.text, ts: s.offsetSeconds ?? lineTs(s), tsMs: s.tsMs, endMs: s.endMs }));
     const fallbackSegments = normalizedSelected.transcript.map((s) => ({ speaker: s.speaker, text: s.text, ts: s.offsetSeconds ?? lineTs(s), tsMs: s.tsMs, endMs: s.endMs }));
     const isFinished = ["completed", "failed", "stopped", "past"].includes(selected.live_status ?? selected.status);
     // A deleted meeting shows no transcript at all — not the copy this view fetched or streamed
     // before the delete, and not a live replay of a cache.
     const segments = selected.artifacts_deleted ? [] : selected.session_uid && !isFinished ? liveSegments : (recordedSegments.length ? recordedSegments : liveSegments.length ? liveSegments : fallbackSegments);
+    seenRef.current = wordsSeen(seenRef.current, segments, Date.now());
     const diagnostics = {
       liveConnected: live.connected,
       ended: live.ended,
       reconnects: live.reconnects,
       lastEventAt: live.lastEventAt,
-      lastTranscriptAt: live.lastTranscriptAt,
+      // the stream's last line, or the last segment the reader saw arrive — whichever is newer
+      lastTranscriptAt: Math.max(live.lastTranscriptAt ?? 0, seenRef.current.at ?? 0) || undefined,
+      progress: live.progress,
       issues: safeArray(live.issues).map((issue) => ({
         kind: issue.kind,
         message: cleanTranscriptText(issue.message),
@@ -407,6 +413,7 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       meeting: {
         id: selected.id,
         nativeId: selected.native_id,
+        platform: selected.platform,
         title: selected.title,
         status: selected.live_status ?? selected.status,
         live: Boolean(selected.session_uid),
@@ -423,6 +430,9 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
       transcript: {
         segments,
         liveCaption: selected.session_uid ? latestCaption(live.transcript) : undefined,
+        // Gaps are a fact about the RECORDED transcript (reported at the meeting's end); a deleted
+        // meeting shows none, and a live one has none yet.
+        ...(!selected.artifacts_deleted && segments === recordedSegments && durable.gaps?.length ? { gaps: durable.gaps } : {}),
       },
       entities: { people, companies, products, numbers },
       cards,
@@ -443,6 +453,7 @@ function useLiveMeetingState(meetingId?: string): MeetingState {
     live.issues,
     live.lastEventAt,
     live.lastTranscriptAt,
+    live.progress,
     live.reconnects,
     live.transcript,
     durable,

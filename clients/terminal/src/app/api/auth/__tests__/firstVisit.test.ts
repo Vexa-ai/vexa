@@ -19,7 +19,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { GET as redeem } from "../redeem/route";
+import { POST as redeem } from "../redeem/route"; // the button on the link page (prefetch-safe)
 vi.mock("../adminApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../adminApi")>()),
   // admin-api's single-use record for links, held in memory (./linkLedgerDouble.ts)
@@ -31,7 +31,7 @@ import { linkLedger } from "./linkLedgerDouble";
 function makeReq(query: Record<string, string>): import("next/server").NextRequest {
   const url = new URL("https://terminal.test/api/auth/redeem");
   for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
-  return { nextUrl: url, url: url.toString() } as unknown as import("next/server").NextRequest;
+  return { nextUrl: url, url: url.toString(), method: "POST", headers: new Headers({ origin: "https://terminal.test", "sec-fetch-site": "same-origin" }) } as unknown as import("next/server").NextRequest;
 }
 
 /** Every POST agent-api saw, so the test can assert on the BODY — which is where the rule about
@@ -108,7 +108,7 @@ describe("the magic-link door", () => {
   it("a sign-in that names no destination lands on a freshly minted first-visit", async () => {
     stubs();
     const res = await redeem(makeReq({ t: link() }));
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("https://terminal.test/?s=SC1");
     // …and the person is signed in regardless: the arrival is where they land, not whether they got in
     expect(res.cookies.get("vexa-token")?.value).toBe("minted-tok");
@@ -132,7 +132,7 @@ describe("the magic-link door", () => {
   it("A FAILED MINT COSTS NOTHING BUT THE ARRIVAL — they are still signed in, and land on /", async () => {
     stubs({ mint: "fail" });
     const res = await redeem(makeReq({ t: link() }));
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/");
     expect(res.cookies.get("vexa-token")?.value).toBe("minted-tok");
   });

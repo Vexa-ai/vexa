@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   SharedAttachResult, SwapResult, WorkspaceImport, WorkspaceSlot, activateWorkspace,
-} from "../workspaceApi";
+} from "../../data/workspaceApi";
 
 /** agent-api's attach, swap, activate and import results carry no `nested` field: the always-false
  *  field was removed on the server, so no type here may promise it. Each `@ts-expect-error` line

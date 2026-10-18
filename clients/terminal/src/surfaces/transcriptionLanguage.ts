@@ -13,7 +13,7 @@
  *    - the live meeting header: `PUT /api/bots/{platform}/{native}/config` (`setMeetingLanguage`),
  *      whose body replaces the running setting.
  *  The picker that edits a `LanguageChoice` lives in `TranscriptionLanguagePicker.tsx`. */
-import { ApiError } from "./apiClient";
+import { ApiError } from "../data/apiClient";
 
 export const LANGUAGE_CODE = /^[a-z]{2,3}$/;
 
@@ -34,7 +34,7 @@ export function languageLabel(code: string): string {
 
 /** The wire shape on settings, meeting rows and the live-switch body. */
 export interface LanguageSetting { language: string | null; allowed_languages: string[] }
-export type LanguageSource = "meeting" | "user" | "deployment" | "auto";
+export type LanguageSource = "meeting" | "user" | "history" | "deployment" | "auto";
 /** What a meeting row reports (`data.transcription_language`): the setting the bot is running with. */
 export interface MeetingLanguage extends LanguageSetting { source?: LanguageSource }
 
@@ -44,7 +44,7 @@ export function readMeetingLanguage(raw: unknown): MeetingLanguage | undefined {
   const r = raw as { language?: unknown; allowed_languages?: unknown; source?: unknown };
   const language = typeof r.language === "string" && LANGUAGE_CODE.test(r.language) ? r.language : null;
   const allowed_languages = Array.isArray(r.allowed_languages) ? r.allowed_languages.filter((c): c is string => typeof c === "string" && LANGUAGE_CODE.test(c)) : [];
-  const source = r.source === "meeting" || r.source === "user" || r.source === "deployment" || r.source === "auto" ? r.source : undefined;
+  const source = r.source === "meeting" || r.source === "user" || r.source === "history" || r.source === "deployment" || r.source === "auto" ? r.source : undefined;
   return { language, allowed_languages, ...(source ? { source } : {}) };
 }
 

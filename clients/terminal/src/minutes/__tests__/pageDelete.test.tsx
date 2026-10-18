@@ -77,19 +77,22 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
+
+/** The page's acts are one "…" (UI decisions 12): open it, then reach the act. */
+const openActs = (c: HTMLElement) => { if (!document.querySelector("[role=menu]")) fireEvent.click(c.querySelector("[data-doc-more]")!); };
 const panel = (over: Partial<Parameters<typeof PagesPanel>[0]> = {}) =>
   render(<PagesPanel pages={[{ path: PAGE, label: "so-vexam" }]} docPath={PAGE} onOpen={() => {}} body={BODY} {...over} />);
 
 describe("the page header offers Delete where the reader may edit", () => {
   it("on the reader's own desk", async () => {
     const { container } = panel();
-    await waitFor(() => expect(container.querySelector('[data-doc-act="delete"]')).toBeTruthy());
+    await waitFor(() => { if (document.querySelector("[role=menu]")) fireEvent.click(container.querySelector("[data-doc-more]")!); openActs(container); expect(document.querySelector('[data-doc-act="delete"]')).toBeTruthy(); });
   });
 
   it("in a shared workspace where they are a contributor", async () => {
     roles = { team: "contributor" };
     const { container } = panel({ docSlug: "team", docPath: "notes/plan.md", pages: [{ path: "notes/plan.md", slug: "team", label: "plan" }] });
-    await waitFor(() => expect(container.querySelector('[data-doc-act="delete"]')).toBeTruthy());
+    await waitFor(() => { if (document.querySelector("[role=menu]")) fireEvent.click(container.querySelector("[data-doc-more]")!); openActs(container); expect(document.querySelector('[data-doc-act="delete"]')).toBeTruthy(); });
   });
 
   it("NOT in a shared workspace where they are a reader", async () => {
@@ -120,8 +123,8 @@ describe("the page header offers Delete where the reader may edit", () => {
 describe("the confirm, the delete and the undo", () => {
   it("names the page and the workspace, and its Delete button holds focus across re-renders", async () => {
     const { container } = panel();
-    await waitFor(() => expect(container.querySelector('[data-doc-act="delete"]')).toBeTruthy());
-    fireEvent.click(container.querySelector('[data-doc-act="delete"]')!);
+    await waitFor(() => { if (document.querySelector("[role=menu]")) fireEvent.click(container.querySelector("[data-doc-more]")!); openActs(container); expect(document.querySelector('[data-doc-act="delete"]')).toBeTruthy(); });
+    fireEvent.click(document.querySelector('[data-doc-act="delete"]')!);
     const dialog = screen.getByRole("dialog");
     expect(dialog.getAttribute("aria-label")).toBe("Delete so-vexam?");
     expect(dialog.textContent).toContain("It's removed from your personal workspace; you can restore it from History.");
@@ -140,8 +143,8 @@ describe("the confirm, the delete and the undo", () => {
     const onRemoved = (e: Event) => removedEvents.push((e as CustomEvent).detail);
     window.addEventListener(PAGE_REMOVED_EVENT, onRemoved);
     const { container } = panel();
-    await waitFor(() => expect(container.querySelector('[data-doc-act="delete"]')).toBeTruthy());
-    fireEvent.click(container.querySelector('[data-doc-act="delete"]')!);
+    await waitFor(() => { if (document.querySelector("[role=menu]")) fireEvent.click(container.querySelector("[data-doc-more]")!); openActs(container); expect(document.querySelector('[data-doc-act="delete"]')).toBeTruthy(); });
+    fireEvent.click(document.querySelector('[data-doc-act="delete"]')!);
     await act(async () => { fireEvent.click(document.querySelector("[data-page-delete-confirm]")!); });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     window.removeEventListener(PAGE_REMOVED_EVENT, onRemoved);

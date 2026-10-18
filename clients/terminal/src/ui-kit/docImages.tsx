@@ -33,6 +33,7 @@ import { useContext, useEffect, useState, type CSSProperties } from "react";
 import { Icon } from "./index";
 import { DocMetaContext } from "./docRefs";
 import { isInternalHref, normalizeDocPath } from "./docLinks";
+import { postDocIntent } from "./docIntents";
 import { WORKSPACE_COMMIT_EVENT } from "../platform";
 
 /** The only schemes a placeholder can offer to fetch. A `data:` image carries its own bytes and has
@@ -43,7 +44,7 @@ const FETCHABLE = /^https?:\/\//i;
  *  workspace read. A URL and not a fetch, because the browser is the thing that loads pictures —
  *  handing it bytes we downloaded ourselves would give up caching, ranges and off-thread decode.
  *
- *  It lives HERE, not in `surfaces/workspaceApi`, for the reason `docLinks` reaches that module by
+ *  It lives HERE, not in `data/workspaceApi`, for the reason `docLinks` reaches that module by
  *  `await import(...)`: the ui-kit renders markdown, and a static edge from it into the data-access
  *  layer would drag the HTTP client into every test that renders a paragraph. This is a string
  *  template with no client behind it, so it can simply be beside the renderer that needs it. */
@@ -106,7 +107,7 @@ export function findItInstruction(alt: string | undefined, src: string): string 
  *  button is broken". What actually happened is one sentence long and the route now carries the
  *  upstream code so it can be said: the picture is not there.
  *
- *  Duck-typed on purpose. The error is an `ApiError` from `surfaces/apiClient`, and a static import
+ *  Duck-typed on purpose. The error is an `ApiError` from `data/apiClient`, and a static import
  *  of that module from the ui-kit would drag the HTTP client into every test that renders a
  *  paragraph — the same reason `workspaceAssetUrl` lives here as a string template and `docLinks`
  *  reaches the data layer through `await import(...)`. Reading two fields off a shape needs no type
@@ -185,7 +186,7 @@ function ExternalImage({ src, alt }: { src: string; alt?: string }) {
   const bring = async () => {
     setState("fetching");
     try {
-      const api = await import("../surfaces/workspaceApi");
+      const api = await import("../data/workspaceApi");
       const asset = await api.fetchWorkspaceAsset(src, { slug: meta.slug });
       // THE REFERENCE FOLLOWS THE BYTES. Storing the image and leaving the page pointing at the
       // remote host would fix this render and nothing else — the next reader, and every export of
@@ -217,14 +218,12 @@ function ExternalImage({ src, alt }: { src: string; alt?: string }) {
    *  other: it queues behind whatever that chat is doing instead of being refused, it raises the
    *  act state the page's own controls wear, and the page it names is the one the reader is on.
    *
-   *  Reached by `await import` for the reason the module header gives about `workspaceApi`: the
-   *  ui-kit renders markdown, and a static edge from it into a shell module would pull the chat
-   *  into every test that renders a paragraph. */
+   *  Posted through `docIntents`, whose door the composition root supplies: `postIntent` lives in
+   *  the minutes shell, above the ui-kit, and the ui-kit does not import the layers above it. */
   const findIt = async () => {
     if (!meta.path) return;
     setTook("find");
-    const { postIntent } = await import("../minutes/extend");
-    postIntent({ kind: "extend", workspace: meta.slug, path: meta.path,
+    await postDocIntent({ kind: "extend", workspace: meta.slug, path: meta.path,
       instruction: findItInstruction(alt, src) });
   };
 
@@ -236,7 +235,7 @@ function ExternalImage({ src, alt }: { src: string; alt?: string }) {
     if (!meta.path) return;
     setTook("remove");
     try {
-      const api = await import("../surfaces/workspaceApi");
+      const api = await import("../data/workspaceApi");
       const body = await api.readWorkspaceFile(meta.path, { slug: meta.slug });
       if (body === null) return;
       const next = removeImageReference(body, src);

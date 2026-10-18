@@ -29,6 +29,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { entitySlug } from "../ui-kit/docLinks";
 import type { SpanEntity } from "./inlineSpans";
+import { TERMS_EVENT } from "../platform/events";
 
 /** The chat published this. `known` non-null ⇒ a page exists that THIS reader can open. */
 export interface TranscriptTerm {
@@ -46,9 +47,6 @@ export interface TranscriptTerm {
 
 export interface TermsEvent { meeting: string; cursor?: string; terms: TranscriptTerm[] }
 
-/** A `terms` event, re-emitted onto the window by the chat surface — the same seam, and for the
- *  same reason, as ARTIFACT_EVENT: the stream reader owns no state and the shell owns no parsing. */
-export const TERMS_EVENT = "vexa:terminal:terms";
 
 interface Entry { terms: TranscriptTerm[]; cursor: string }
 const EMPTY: Entry = { terms: [], cursor: "" };

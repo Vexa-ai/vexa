@@ -3,17 +3,16 @@
  *  • "meetings" LIST (left): meetings; the live one auto-opens; click any to (re)open its meeting view.
  *  • "meeting" TAB (center): fixed meeting chrome around the Meeting Canvas body.
  *    The generated canvas view consumes this meeting's live MeetingState. */
-import { CallName } from "../minutes/CallName";
-import { minutesOnly } from "../app/mode";
+import { minutesOnly } from "../platform/mode";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useService } from "../platform";
-import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
-import { registerList, registerTab, registerCommand, type TabProps } from "../contributions";
+import { LayoutServiceId, type TabDescriptor } from "../platform/layout";
+import { registerList, registerTab, registerCommand, registry, type TabProps } from "../contributions";
 import { Badge, Icon, SectionLabel, Spinner, Tag } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
-import { MeetingView } from "../canvas/MeetingView";
+import { MEETING_CANVAS_VIEW_KIND } from "../ui-kit/canvasSlot";
 import { type MeetingMock } from "./meetingModel";
-import { ApiError, presentError, readApiFailure } from "./apiClient";
+import { ApiError, presentError, readApiFailure } from "../data/apiClient";
 import { resolveJoinError, serviceDenialFromError, type ServiceDenialPresentation } from "./serviceDenial";
 import { ServiceDenialPanel } from "./ServiceDenialPanel";
 import { useLiveMeetings, useLiveMeetingsConnection, useLiveMeetingsLoaded, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
@@ -379,7 +378,7 @@ function MeetingRow({ m }: { m: MeetingMock }) {
   const live = m.status === "live";
   const inRoom = m.live_status === "active";   // actually live = green dot + a quiet "live", no badge
   // A planned meeting's user-given title wins; else just the meeting code — the platform is implicit.
-  const label = m.title_custom ?? (m.native_id ?? m.title).replace(/^Google Meet · /, "");
+  const label = m.title_custom || m.title;
   const showBadge = BADGE_STATUSES.has(m.live_status ?? "");
   const isIntent = INTENT_STATUSES.has(m.live_status ?? "");
   useEffect(() => {
@@ -394,7 +393,7 @@ function MeetingRow({ m }: { m: MeetingMock }) {
     <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }} className="pt-1_5 pr-2 pb-1_5 pl-2 r-md mb-0" style={{ cursor: "pointer" }}
       onMouseEnter={(e) => { setHover(true); e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => { setHover(false); e.currentTarget.style.background = "transparent"; }}>
       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-        {inRoom && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", flex: "none" }} />}
+        {inRoom && <span className="r-full bg-success" style={{ width: 6, height: 6, flex: "none" }} />}
         <span style={{ fontSize: 13, color: live ? "var(--t1)" : "var(--t2)", fontWeight: live ? 600 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
         <SharedIndicator meeting={m} />
         {(m.native_id || isIntent) && !m.shared && <RowActions m={m} showBadge={showBadge} reveal={hover} onActionStart={() => setActionFailure(null)} onActionFailure={setActionFailure} />}
@@ -888,6 +887,8 @@ function MeetingTab({ params }: TabProps) {
   // only call the meeting missing if the fresh snapshot still lacks it (see meetingLookupState).
   const graceExpired = useMeetingLookupGrace(!m && listLoaded, requestedMeetingId);
   const lookup = meetingLookupState(m, listLoaded, graceExpired);
+  // The canvas body, by kind: it registers itself (canvas/register.tsx) and sits above this folder.
+  const CanvasView = registry.tabComponent(MEETING_CANVAS_VIEW_KIND);
 
   // Still asking — say so, neutrally. A row the chat created moments ago lands here.
   if (lookup === "searching") return <MeetingLookingUp meetingId={requestedMeetingId} />;
@@ -908,7 +909,8 @@ function MeetingTab({ params }: TabProps) {
   // page the chat's panel shows, so a meeting opened from the list, a link or a chat reads alike.
   // The old chrome that stood here (a "Recap"/"Live" pill, the name, the bot and share controls)
   // is the view's header now (`MeetingPageHeader`), which is where those controls live.
-  return <MeetingView key={requestedMeetingId} meetingId={requestedMeetingId} />;
+  // The view registers itself by kind (canvas/register.tsx): the canvas sits above this folder.
+  return CanvasView ? <CanvasView key={requestedMeetingId} id={`meeting-view:${requestedMeetingId}`} params={{ meetingId: requestedMeetingId }} active /> : null;
 }
 
 registerList({ id: "meetings", label: "Meetings", icon: "cal", order: 20, component: MeetingsList,

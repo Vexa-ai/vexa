@@ -40,7 +40,7 @@ vi.mock("../chatStream", async (importOriginal) => ({
 import { Chat } from "../chat";
 import { postIntent } from "../../minutes/extend";
 import { ServicesProvider, createContainer, reg, CommandServiceId, type CommandService, ASK_CHAT_EVENT } from "../../platform";
-import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
+import { LayoutServiceId, createLayoutService } from "../../platform/layout";
 
 const container = () => createContainer([
   reg(LayoutServiceId, () => createLayoutService("files")),

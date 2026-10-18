@@ -25,6 +25,7 @@
  *  this file does not name fails `tsc`, and one it names that the contract does not, too.
  */
 import type { FaultKind, FaultSource } from "./faultWire";
+import { TRANSIENT_STATUS } from "./transientRetry";
 
 export type Fault = {
   /** WHO failed — the dependency, never "something" */
@@ -42,6 +43,11 @@ export type Fault = {
   model?: string;
   /** runtime only: which call failed (`spawn`, `status`, `list`) */
   op?: string;
+  /** session-store only: the conversation the refusal is about */
+  session?: string;
+  /** what the person can do in one press, when the server names it (`stop` — stop the turn still
+   *  running in this conversation) */
+  action?: string;
 };
 
 /** Is this a typed fault? A server one release behind sends none, and a half-record (no source or
@@ -60,8 +66,29 @@ export function readFault(x: unknown): Fault | null {
     provider: str(f.provider),
     model: str(f.model),
     op: str(f.op),
+    ...(str(f.session) ? { session: str(f.session) } : {}),
+    ...(str(f.action) ? { action: str(f.action) } : {}),
   };
 }
+
+/** A PREVIOUS REPLY IS STILL RUNNING in this conversation (agent-api's 409, `session-store ·
+ *  session_conflict`). Not a failure of anything: the turn in front has not ended, and the one
+ *  control that helps is stopping it — so it renders as one calm line with that control, and the
+ *  store's own vocabulary never reaches the screen (app.dev 2026-10-15: "Session conflict. Retry —
+ *  session-store · session conflict", under a Retry that could not work while the old turn ran). */
+export function isSessionConflict(f: Pick<Fault, "source" | "kind">): boolean {
+  return f.source === "session-store" && f.kind === "session_conflict";
+}
+
+/** THE SESSION STORE'S WORDS. `session-store` is not in unit.v1's `Fault` vocabulary (faultWire.ts
+ *  is generated from it, and SOURCE_LABEL/KIND_LABEL must equal it exactly — faultContract.test), so
+ *  its labels live here, beside it, until the schema names the source. */
+const STORE_SOURCE_LABEL: Readonly<Record<string, string>> = { "session-store": "Conversation" };
+const STORE_KIND_LABEL: Readonly<Record<string, string>> = {
+  session_conflict: "previous reply still running",
+  session_unavailable: "store not answering",
+};
+const SESSION_CONFLICT_SUMMARY = "A previous reply is still running.";
 
 /** WHO failed, per contract source. Exported for the contract test, never for a second renderer. */
 export const SOURCE_LABEL: Readonly<Record<FaultSource, string>> = {
@@ -107,12 +134,18 @@ const label = (table: Readonly<Record<string, string>>, key: string): string | u
  *  host is not part of it: the headline reads `Model provider · out of credits (402)`, and the
  *  remedy line already says where to act ("Add credits at openrouter.ai…"). */
 export function faultSource(f: Fault): string {
-  return label(SOURCE_LABEL, f.source) ?? f.source;
+  return label(SOURCE_LABEL, f.source) ?? label(STORE_SOURCE_LABEL, f.source) ?? f.source;
+}
+
+/** A kind in words: the contract's label, the session store's, or the kind itself made readable. */
+function kindWords(f: Fault): string {
+  const own = f.source === "session-store" ? label(STORE_KIND_LABEL, f.kind) : undefined;
+  return own ?? label(KIND_LABEL, f.kind) ?? f.kind.replace(/_/g, " ");
 }
 
 /** WHAT KIND of failure, in words, with the status beside it when there was one. */
 export function faultKind(f: Fault): string {
-  const base = label(KIND_LABEL, f.kind) ?? f.kind.replace(/_/g, " ");
+  const base = kindWords(f);
   return typeof f.status === "number" && f.status > 0 ? `${base} (${f.status})` : base;
 }
 
@@ -126,3 +159,45 @@ export function faultLine(f: Fault): string {
   return [faultHeadline(f), f.detail].filter(Boolean).join(" — ");
 }
 
+
+// ── how loud a fault is (the founder, 2026-10-13: "UPDATE UI SO THAT WE DO NOT HAVE RED DANGEROUS
+//    THINGS HERE") ───────────────────────────────────────────────────────────────────────────────
+// A one-second gateway 503 drew a red box naming an internal service and its status code, and he
+// re-sent the same message three times. Most faults are a moment's unavailability, or a setting
+// someone has to change; neither is dangerous. Red is kept for what is.
+
+/** Kinds that clear by themselves: something was down, busy, or still letting go of the last agent. */
+const TRANSIENT_KINDS: ReadonlySet<string> = new Set(
+  ["unavailable", "unreachable", "rate_limited", "spawn_refused", "quota_exceeded"]);
+
+/** Is this the kind of failure that clears by itself — worth retrying, not worth alarming anyone? */
+export function isTransientFault(f: Fault): boolean {
+  if (!TRANSIENT_KINDS.has(f.kind)) return false;
+  return f.status === null || f.status === undefined || TRANSIENT_STATUS.has(f.status);
+}
+
+/** Kinds that are a security refusal: the worker would not run the turn because it could not keep
+ *  the model's tools confined, or found a credential it must not run beside. The only ones in red. */
+const DANGER_KINDS: ReadonlySet<string> = new Set(["tools_unconfined", "credential_conflict"]);
+
+export type FaultTone = "neutral" | "danger";
+export function faultTone(f: Fault): FaultTone {
+  return DANGER_KINDS.has(f.kind) ? "danger" : "neutral";
+}
+
+/** The one sentence a fault shows by default — the person's words, never a status code or the name
+ *  of an internal service; those are under "details" (`faultHeadline`). */
+export function faultSummary(f: Fault): string {
+  if (isTransientFault(f)) {
+    return f.source === "model-provider"
+      ? "The model didn't answer just now."
+      : "Couldn't reach Vexa just now.";
+  }
+  if (isSessionConflict(f) && !f.detail) return SESSION_CONFLICT_SUMMARY;
+  if (f.detail) {
+    const t = f.detail.charAt(0).toUpperCase() + f.detail.slice(1);
+    return /[.!?…]$/.test(t) ? t : `${t}.`;
+  }
+  const k = kindWords(f);
+  return `${k.charAt(0).toUpperCase()}${k.slice(1)}.`;
+}

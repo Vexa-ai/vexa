@@ -2,8 +2,8 @@
  *  /api/routines* with NO `subject` (scope is server-derived — P20), AND that a backend error is
  *  FAIL-LOUD: it throws (propagates to the surface) instead of being swallowed into an empty list (P18). */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { listRoutines, deleteRoutine, setRoutineEnabled, confirmRoutine, routineNote, pausedNote } from "../routinesApi";
-import { ApiError } from "../apiClient";
+import { listRoutines, deleteRoutine, setRoutineEnabled, routineNote, pausedNote, refusedNote } from "../routinesApi";
+import { ApiError } from "../../data/apiClient";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 const lastUrl = () => String(fetchMock.mock.calls.at(-1)![0]);
@@ -30,12 +30,6 @@ describe("routinesApi — scoped (no subject) + fail-loud", () => {
     await setRoutineEnabled("daily", false);
     expect(lastUrl()).toBe("/api/routines/daily/enabled");
     expect(lastInit().method).toBe("PATCH");
-    expect(lastUrl()).not.toContain("subject");
-  });
-  it("confirmRoutine POSTs /api/routines/{name}/confirm, no subject", async () => {
-    await confirmRoutine("daily brief");
-    expect(lastUrl()).toBe("/api/routines/daily%20brief/confirm");
-    expect(lastInit().method).toBe("POST");
     expect(lastUrl()).not.toContain("subject");
   });
   it("FAIL-LOUD: a backend error throws ApiError (never a silent empty list)", async () => {
@@ -74,5 +68,17 @@ describe("pausedNote — a routine the harness switched off says why", () => {
   it("shows nothing once it is back on, or for a routine the person switched off themselves", () => {
     expect(pausedNote({ ...base, enabled: true, paused_reason: "stale" })).toBeNull();
     expect(pausedNote({ ...base, enabled: false })).toBeNull();
+  });
+});
+
+describe("routinesApi — no confirmation step; a file that could not convert says why", () => {
+  it("exports no confirm call: a routine an agent wrote arrives paused", async () => {
+    const api = await import("../routinesApi");
+    expect("confirmRoutine" in api).toBe(false);
+  });
+  it("refusedNote shows the exact reason for a refused card only", () => {
+    const base = { id: "file:x", name: "x", cron: "", enabled: false };
+    expect(refusedNote({ ...base, status: "refused", refused_reason: "the file names no cron" })).toContain("no cron");
+    expect(refusedNote({ ...base, status: "retired" })).toBeNull();
   });
 });

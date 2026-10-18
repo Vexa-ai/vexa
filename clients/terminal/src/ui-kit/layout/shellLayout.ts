@@ -21,8 +21,10 @@ export type RailKind = "docked" | "strip" | "drawer";
 export type PagesKind = "docked" | "collapsed" | "sheet" | "fullscreen";
 export type Pane = "rail" | "pages";
 
-/** What the reader asked for. `true` = open; a fresh profile opens both. */
-export type ShellPrefs = { railOpen: boolean; pagesOpen: boolean };
+/** What the reader asked for. `true` = open. A fresh profile opens the rail and keeps the pages
+ *  panel (the desk) CLOSED (founder 2026-10-13: "make the right side panel off by default"); it opens
+ *  when the reader asks for a page, and `pagesChosen` records that the open/closed state is theirs. */
+export type ShellPrefs = { railOpen: boolean; pagesOpen: boolean; pagesChosen?: boolean };
 /** Widths the reader dragged to, per mode. Absent = the mode's default. */
 export type StoredWidths = Partial<Record<ShellMode, Partial<Record<Pane, number>>>>;
 
@@ -70,7 +72,10 @@ export const MODES: Record<ShellMode, ModeSpec> = {
   single: { chatMin: 0 },
 };
 
+/** Both panes open: the layout's own default, what `shellLayout` computes when asked without prefs. */
 export const DEFAULT_PREFS: ShellPrefs = { railOpen: true, pagesOpen: true };
+/** A profile that has never chosen: the rail open, the desk CLOSED until the reader asks for a page. */
+export const FRESH_PREFS: ShellPrefs = { railOpen: true, pagesOpen: false };
 
 export function shellMode(vw: number): ShellMode {
   if (vw >= BREAKPOINTS.wide) return "wide";

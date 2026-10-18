@@ -2,15 +2,17 @@
 import { Download, Trash2 } from "lucide-react";
 import { Modal } from "../ui-kit/Modal";
 import { MediaIconButton } from "./MediaIconButton";
-import { markMeetingDeleted, useMeetingDeletedHere } from "./meetingDeletion";
+import { deleteMeetingData, markMeetingDeleted, useMeetingDeletedHere } from "./meetingDeletion";
+import { ConfirmDialog } from "../ui-kit";
 import { RecordingPlayer, finiteDuration } from "./RecordingPlayer";
 import { audioDownloadUrl, audioExtension, audioFilename, downloadAudio } from "./audioDownload";
 import { useEffect, useState } from "react";
 import { useLiveMeetings, useLiveMeetingsConnection, refreshMeetings } from "../surfaces/liveMeetings";
 import type { MeetingMock } from "../surfaces/meetingModel";
+import { clock, endVoiceNote, pauseVoiceNote, stopVoiceNote, useVoiceNote } from "./voiceNote";
+import "./minutes.css";
 
 type Track = { id: number; duration_seconds?: number; media_files?: { capture_started_at_ms?: number; id: number; type: string; format?: string; duration_seconds?: number }[] };
-const button = { background: "transparent", color: "var(--t2)", border: "1px solid var(--line)", borderRadius: 6, padding: "4px 9px", fontSize: 12, cursor: "pointer" };
 const terminal = new Set(["completed", "failed", "stopped"]);
 const running = new Set(["requested", "joining", "awaiting_admission", "needs_help", "active", "stopping"]);
 
@@ -29,44 +31,64 @@ function statusOf(m: MeetingMock) { return m.live_status || (m.status === "live"
 
 /** Delete as an icon button: danger colour on hover only, and the typed confirmation before
  *  anything is removed. `size="header"` matches the document header's icon group. */
-export function MeetingDeleteButton({ meetingId, size }: { meetingId: string; size?: "header" }) {
+/** A voice note recording IN THIS TAB: the running time (with the cap), Pause/Resume and Stop. Shown in
+ *  the meeting controls and in the meeting view's own header (founder 2026-10-13: the page itself
+ *  says it is recording and stops it). Renders nothing unless `nativeId` is the note this tab records. */
+export function VoiceNoteRecorderBar({ nativeId }: { nativeId?: string } = {}) {
+  const vn = useVoiceNote();
+  if (nativeId !== undefined && vn.nativeId !== nativeId) return null;
+  if (vn.phase !== "recording" && vn.phase !== "stopping") return null;
+  return <div data-voice-note-bar style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+    <span role="status" data-voice-note-clock className="vx-mc-clock" style={{ fontVariantNumeric: "tabular-nums", display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span aria-hidden className="vx-mc-rec-dot" data-paused={vn.paused ? "" : undefined} style={{ width: 8, height: 8, opacity: vn.paused ? 1 : 0.4 + Math.min(0.6, vn.level * 2) }} />
+      {vn.paused ? "Paused" : "Recording"} {clock(vn.sentSec)}{vn.maxSec ? ` / ${clock(vn.maxSec)}` : ""}
+    </span>
+    <button className="vx-mc-btn" disabled={vn.phase !== "recording"} onClick={() => pauseVoiceNote(!vn.paused)}>{vn.paused ? "Resume" : "Pause"}</button>
+    <button className="vx-mc-btn" disabled={vn.phase !== "recording"} onClick={() => void stopVoiceNote()}>{vn.phase === "stopping" ? "Saving…" : "Stop"}</button>
+  </div>;
+}
+
+/** The statuses a meeting is still happening in — Delete waits until it is not. A meeting that is
+ *  SAVING (`stopping`) offers Delete and waits for the save to finish before deleting. */
+const happening = new Set(["requested", "joining", "awaiting_admission", "needs_help", "active"]);
+
+/** DELETE, ON THE MEETING (#1783, founder: "where is delete?" on a voice note page). A plain button
+ *  beside Export, one confirmation naming what goes. A meeting still saving is waited for, not
+ *  refused; after the delete the page closes and the row leaves the lists. */
+export function MeetingDeleteButton({ meetingId }: { meetingId: string; size?: "header" }) {
   const meetings = useLiveMeetings();
   const m = meetings.find(x => x.id === meetingId || x.native_id === meetingId);
   const deletedHere = useMeetingDeletedHere(m?.id ?? "");
   const [confirm, setConfirm] = useState(false);
-  const [confirmationText, setConfirmationText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState("");
-  if (!m || m.shared || deletedHere || m.artifacts_deleted || !terminal.has(statusOf(m))) return null;
-  const close = () => { if (!busy) { setConfirm(false); setConfirmationText(""); setError(""); } };
+  if (!m || m.shared || deletedHere || m.artifacts_deleted || happening.has(statusOf(m))) return null;
+  const voice = m.platform === "voice_note";
   async function remove() {
-    if (!m || confirmationText !== "delete") return;
-    setBusy(true); setError("");
+    if (!m) return;
+    setBusy(true); setError(""); setWaiting(false);
     try {
-      const r = await fetch(`/api/meetings/${encodeURIComponent(m.id)}`, { method: "DELETE" });
-      if (!r.ok) throw new Error("Could not delete meeting data. Retry.");
-      markMeetingDeleted(m.id); setConfirm(false); setConfirmationText("");
+      await deleteMeetingData(m.id, { onWaiting: () => setWaiting(true), native: m.native_id });
+      setConfirm(false);
       refreshMeetings();
     } catch (e) { setError(e instanceof Error ? e.message : "Request failed"); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setWaiting(false); }
   }
   return <>
-    <MediaIconButton label="Delete meeting data" tone="danger" size={size} disabled={busy} onClick={() => { setConfirmationText(""); setConfirm(true); }}>
-      <Trash2 size={size ? 14 : 16} strokeWidth={1.75} aria-hidden />
-    </MediaIconButton>
-    {confirm && <Modal title="Delete meeting data?" onClose={close}>
-      <p style={{ fontSize: 13, color: "var(--t2)", lineHeight: 1.5 }}>Permanently delete this meeting’s audio, transcript and captured fixtures, including promoted fixtures. Saved pages are kept.</p>
-      <form onSubmit={e => { e.preventDefault(); if (!busy && confirmationText === "delete") void remove(); }}>
-        <label style={{ display: "block", fontSize: 13 }}>Type <strong>delete</strong> to confirm
-          <input autoFocus aria-label="Type delete to confirm" autoComplete="off" spellCheck={false} disabled={busy} value={confirmationText} onChange={e => setConfirmationText(e.target.value)} style={{ display: "block", boxSizing: "border-box", width: "100%", marginTop: 8, padding: "8px 10px", border: "1px solid var(--line)", borderRadius: 6, background: "var(--bg)", color: "var(--t1)" }} />
-        </label>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
-          <button type="button" style={button} disabled={busy} onClick={close}>Cancel</button>
-          <button type="submit" disabled={busy || confirmationText !== "delete"} style={{ ...button, background: "var(--danger)", color: "white", border: "none", opacity: busy || confirmationText !== "delete" ? 0.45 : 1 }}>{busy ? "Deleting…" : "Delete permanently"}</button>
-        </div>
-        {error && <p role="alert" style={{ color: "var(--danger)", fontSize: 12 }}>{error}</p>}
-      </form>
-    </Modal>}
+    <button type="button" className="bun-btn" data-tone="danger" data-meeting-delete aria-label="Delete meeting data"
+      disabled={busy} onClick={() => { setError(""); setConfirm(true); }}>
+      <Trash2 size={14} strokeWidth={1.75} aria-hidden /> Delete
+    </button>
+    <ConfirmDialog open={confirm} busy={busy} title={voice ? "Delete this voice note?" : "Delete this meeting?"}
+      confirmLabel={voice ? "Delete voice note" : "Delete meeting"}
+      consequence={<>
+        Its transcript, notes and recording are deleted for good, on every device. Pages saved in a workspace stay.
+        {waiting && <span role="status" className="vx-mc-note vx-mc-wait">Waiting for the recording to finish saving…</span>}
+        {error && <span role="alert" className="vx-mc-note vx-mc-wait" data-tone="danger">{error}</span>}
+      </>}
+      onCancel={() => { if (!busy) { setConfirm(false); setError(""); } }}
+      onConfirm={() => { if (!busy) void remove(); }} />
   </>;
 }
 
@@ -112,15 +134,30 @@ function Controls({ meeting: m, connected, showBot, showDelete }: { meeting: Mee
     } catch (e) { setError(e instanceof Error ? e.message : "Request failed"); }
     finally { setBusy(false); }
   }
+  // A VOICE NOTE (#1783) recording in this tab is stopped through the recorder, so the last words
+  // are sent before the end; one recording elsewhere (another tab, a reload) is stopped like a bot.
+  const vn = useVoiceNote();
+  const isVoiceNote = m.platform === "voice_note";
+  const thisNote = isVoiceNote && !!m.native_id && vn.nativeId === m.native_id;
+  const recordingHere = thisNote && (vn.phase === "recording" || vn.phase === "stopping");
+  // The note ended on the server (its bot left: Stop elsewhere, the idle rule, the cap) while this tab
+  // still records it: let the microphone go and leave the recording state.
+  const holding = thisNote && (vn.phase === "starting" || vn.phase === "recording");
+  useEffect(() => { if (finished && holding && m.native_id) endVoiceNote(m.native_id); }, [finished, holding, m.native_id]);
   const audio = tracks.flatMap(t => (t.media_files || []).filter(f => f.type === "audio").map(f => ({ recording: t.id, media: f.id, format: f.format, origin: finiteDuration(f.capture_started_at_ms), duration: finiteDuration(f.duration_seconds) ?? finiteDuration(t.duration_seconds) })));
-  const showStop = showBot && running.has(status) && !m.shared;
+  // A Vexa call's transcriber ends with the call: there is nothing to stop by hand.
+  const showStop = showBot && running.has(status) && !m.shared && !recordingHere && m.platform !== "vexa_call";
   const approximate = audio.some(t => !t.origin) ? "older recording timing is approximate" : "";
-  return <section aria-label="Meeting controls" style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-    {showStop && <div><button style={button} disabled={busy || !connected || status === "stopping"} onClick={() => void stopBot()}>{status === "stopping" ? "Stopping…" : "Stop bot"}</button></div>}
-    {deleted && <span role="status" style={{ fontSize: 12, color: "var(--t3)" }}>Meeting audio, transcript and fixtures deleted. Saved pages are kept.</span>}
+  return <section aria-label="Meeting controls" className="vx-mc" style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+    {recordingHere && <VoiceNoteRecorderBar />}
+    {thisNote && vn.phase === "starting" && <span role="status" className="vx-mc-note">Connecting the microphone…</span>}
+    {thisNote && vn.phase === "error" && vn.error && <p role="alert" className="vx-mc-note" data-tone="danger">{vn.error}</p>}
+    {thisNote && recordingHere && vn.warning && <span role="status" className="vx-mc-note" data-tone="danger">{vn.warning}</span>}
+    {showStop && <div><button className="vx-mc-btn" disabled={busy || !connected || status === "stopping"} onClick={() => void stopBot()}>{status === "stopping" ? "Stopping…" : isVoiceNote ? "Stop" : "Stop bot"}</button></div>}
+    {deleted && <span role="status" className="vx-mc-note">Meeting audio, transcript and fixtures deleted. Saved pages are kept.</span>}
     {finished && !deleted && <>
-      {loading ? <span role="status" style={{ fontSize: 12, color: "var(--t3)" }}>Loading recording…</span>
-        : !audio.length && !error ? <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: 12, color: "var(--t3)" }}>No audio recording available.</span>{showDelete && <MeetingDeleteButton meetingId={m.id} />}</div> : null}
+      {loading ? <span role="status" className="vx-mc-note">Loading recording…</span>
+        : !audio.length && !error ? <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span className="vx-mc-note">No audio recording available.</span>{showDelete && <MeetingDeleteButton meetingId={m.id} />}</div> : null}
       {audio.map(t => <RecordingPlayer key={`${t.recording}/${t.media}/${retry}`} meetingId={m.id}
         originMs={t.origin ?? (m.start_time && Number.isFinite(Date.parse(m.start_time)) ? Date.parse(m.start_time) : undefined)}
         duration={t.duration} hint={[HINT, approximate].filter(Boolean).join("; ")}
@@ -131,8 +168,8 @@ function Controls({ meeting: m, connected, showBot, showDelete }: { meeting: Mee
           </MediaIconButton>
           {showDelete && <MeetingDeleteButton meetingId={m.id} />}
         </>} />)}
-      {saveError && <div role="alert" style={{ fontSize: 12, color: "var(--danger)" }}>{saveError}</div>}
+      {saveError && <div role="alert" className="vx-mc-note" data-tone="danger">{saveError}</div>}
     </>}
-    {error && <div role="alert" style={{ fontSize: 12, color: "var(--danger)" }}>{error} {finished && <button style={button} onClick={() => setRetry(n => n + 1)}>Retry</button>}</div>}
+    {error && <div role="alert" className="vx-mc-note" data-tone="danger">{error} {finished && <button className="vx-mc-btn" onClick={() => setRetry(n => n + 1)}>Retry</button>}</div>}
   </section>;
 }

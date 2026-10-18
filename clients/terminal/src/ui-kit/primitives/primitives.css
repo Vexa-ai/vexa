@@ -183,3 +183,21 @@ a.vx-trunc:hover { text-decoration: underline; }
 .vx-kv-record { display: flex; align-items: baseline; gap: var(--space-1_5); min-width: 0; max-width: 100%; }
 .vx-kv-record > .vx-trunc { flex: 0 1 auto; min-width: 0; }
 .vx-kv-record > time, .vx-kv-record-sep { flex: none; color: var(--text-3); }
+
+/* ── the entity hover card (founder 2026-10-15: small, on hover only; click opens the page) ───── */
+.vx-hovercard { position: fixed; z-index: var(--z-popover); width: max-content; max-width: 320px; min-width: 160px;
+  padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface-2); box-shadow: var(--shadow-1); pointer-events: none;
+  display: flex; flex-direction: column; gap: 2px; }
+.vx-hovercard-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; margin-bottom: 2px; }
+.vx-hovercard-mark { flex: none; display: inline-flex; }
+.vx-hovercard-avatar { width: 22px; height: 22px; border-radius: var(--radius-full); display: inline-grid; place-items: center;
+  font-size: var(--text-xs); font-weight: var(--weight-semibold); color: var(--on-accent); background: var(--violet); }
+.vx-hovercard-icon { width: 22px; height: 22px; display: inline-grid; place-items: center; color: var(--blue); }
+.vx-hovercard-icon[data-kind="company"] { color: var(--accent); }
+.vx-hovercard-icon[data-kind="organization"], .vx-hovercard-icon[data-kind="meeting"] { color: var(--violet); }
+.vx-hovercard-icon[data-kind="project"], .vx-hovercard-icon[data-kind="task"], .vx-hovercard-icon[data-kind="product"] { color: var(--green); }
+.vx-hovercard-name { font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* the story wraps — never cut mid-line (founder: "tell the full story, short one") */
+.vx-hovercard-line { font-size: var(--text-xs); color: var(--text-2); line-height: 1.45; white-space: normal; }

@@ -4,15 +4,16 @@
  *  only the models THIS person may pick, the one they run on before picking, and — for one chat —
  *  that chat's own pick. It carries no endpoint and no credential, so nothing here ever holds one.
  *  A pick is stored per chat by agent-api (`POST /api/chat/model`), which refuses one the next turn
- *  could not run with a typed fault; the person's default is a Settings → Models field
- *  (`default_model`, admin-api, through the same `/api/user/models` edge the settings form uses).
+ *  could not run with a typed fault. THE LAST PICK IS THE DEFAULT: every stored pick also becomes
+ *  the model and effort this person's new chats start on, remembered per person by agent-api (so it
+ *  follows them across devices; nothing is kept in the browser). The listing's `default` and
+ *  `default_effort` are that memory, already checked against what this person may still run.
  *
  *  EFFORT, per chat, beside the model: each model lists the levels it offers
  *  (`capabilities.reasoning_efforts`, empty when it has no effort control) and the one it runs at
  *  until the chat picks (`default_effort`). The pick is stored with the model, so changing the model
  *  clears it. */
-import { getJson } from "./apiClient";
-import { setModelPrefs } from "./settingsApi";
+import { getJson } from "../data/apiClient";
 
 /** The effort vocabulary (`models.v1#/$defs/ReasoningEffort`). */
 export type Effort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -42,10 +43,14 @@ export type ModelList = {
   models: ModelEntry[];
   /** what this person runs on before they pick — null when the list is empty */
   default: string | null;
+  /** the effort a new chat starts at — the one last picked with `default`; null = its default_effort */
+  default_effort?: Effort | null;
   /** the named chat's own pick; null = it follows the default */
   selected?: string | null;
   /** the named chat's own effort pick; null = the model's default_effort */
   selected_effort?: Effort | null;
+  /** asked for a chat: the model its worker was started on — what the last turn ran on; null before any */
+  running?: string | null;
 };
 
 /** The person's model list. Only concrete catalog models are kept: an entry of any other kind (an
@@ -71,13 +76,21 @@ export function effortsOf(m: ModelEntry | null): Effort[] {
   return m?.capabilities.reasoning_efforts ?? [];
 }
 
-/** The model new and unpicked chats run on, for this person (Settings → Models `default_model`). */
-export async function setDefaultModel(model: string): Promise<void> {
-  await setModelPrefs({ default_model: model });
+/** The model a chat runs on: its own pick, else the person's default (their last pick, which the
+ *  server already checked is still open to them). A default the list does not carry falls back to
+ *  the catalog's default model, then the first — never a model this person is not offered. */
+export function effectiveModel(list: ModelList): ModelEntry | null {
+  if (list.selected) return list.models.find((m) => m.id === list.selected) ?? null;
+  return list.models.find((m) => m.id === list.default)
+    ?? list.models.find((m) => m.default) ?? list.models[0] ?? null;
 }
 
-/** The model a chat runs on: its own pick, else the person's default. */
-export function effectiveModel(list: ModelList): ModelEntry | null {
-  const id = list.selected || list.default;
-  return list.models.find((m) => m.id === id) ?? null;
+/** The effort a chat runs at: its own pick; else, for a chat that follows the default, the level
+ *  last picked with that model (`default_effort`) while the model still offers it; else the
+ *  model's own `default_effort`; `""` when none. */
+export function effectiveEffort(list: ModelList, m: ModelEntry | null): Effort | "" {
+  if (list.selected_effort) return list.selected_effort;
+  const remembered = !list.selected && list.default_effort && m?.id === list.default
+    && effortsOf(m).includes(list.default_effort) ? list.default_effort : null;
+  return remembered ?? m?.capabilities.default_effort ?? "";
 }

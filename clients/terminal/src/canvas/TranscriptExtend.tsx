@@ -11,12 +11,14 @@ export function TranscriptExtend(p: {
   meeting: string;
   /** the rendered segments, for locating the passage — see `segmentSelection.ts` */
   segments: TranscriptSegment[];
+  /** the meeting's name, for its chip */
+  label?: string;
 }) {
   return (
     <SelectionAct containerRef={p.containerRef} act="extend-transcript"
       slot={p.meeting}
-      onReference={(selection) => referenceInChat(selection, {
+      onReference={(selection, ask) => referenceInChat(selection, {
         meeting: p.meeting, ...segmentRef(p.segments, selection),
-      })} />
+      }, { ask, label: p.label })} />
   );
 }

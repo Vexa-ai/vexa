@@ -52,7 +52,7 @@ import { resetActs } from "../../surfaces/actState";
 import { clearPending } from "../extend";
 import { QUEUED_LINE } from "../../surfaces/jobs";
 import { ASK_CHAT_EVENT, ServicesProvider, createContainer, reg, CommandServiceId, type CommandService } from "../../platform";
-import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
+import { LayoutServiceId, createLayoutService } from "../../platform/layout";
 
 const PATH = "kg/new.md";
 const container = () => createContainer([
@@ -141,9 +141,9 @@ describe("an act control while its job runs", () => {
 
     // 2. THE JOB'S OWN STEPS, live, in the same vocabulary the chat's row uses.
     await flush(() => { stream.calls[0].cb.onJobStep?.("j-9" as never, "Write" as never); });
-    expect(line("create")).toBe("1 step · Write");
+    expect(line("create")).toBe("1 step · Writing");
     await flush(() => { stream.calls[0].cb.onJobStep?.("j-9" as never, "Read" as never); });
-    expect(line("create")).toBe("2 steps · Read");
+    expect(line("create")).toBe("2 steps · Reading");
 
     // …and the chat is saying the same thing at the foot of the transcript, about the same page
     expect(screen.getByText(/^job · kg\/new\.md · 2 steps/)).toBeTruthy();
@@ -243,7 +243,7 @@ describe("an act control while its job runs", () => {
       stream.calls[0].cb.onJobStarted?.({ jobId: "j-1", kind: "extend", target: PATH, line: "on it" } as never);
     });
     await flush(() => { stream.calls[0].cb.onJobStep?.("j-1" as never, "Grep" as never); });
-    expect(line("extend")).toBe("1 step · Grep");
+    expect(line("extend")).toBe("1 step · Looking through your files");
     await flush(() => { stream.calls[0].cb.onJobEnd?.({ jobId: "j-1", ok: true, line: "extended." } as never); });
     await waitFor(() => expect(head("extend")).toBe("Extend this page"));
   });

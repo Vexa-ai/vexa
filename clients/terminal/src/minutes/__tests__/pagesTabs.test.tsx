@@ -25,6 +25,9 @@ import { ASK_CHAT_EVENT } from "../../platform";
 import type { PageIntent } from "../../surfaces/chatIntent";
 import type { Page } from "../types";
 
+/** The page's acts are one "…" (UI decisions 12): open it, then reach the act. */
+const openActs = (c: HTMLElement) => { if (!document.querySelector("[role=menu]")) fireEvent.click(c.querySelector("[data-doc-more]")!); };
+
 const PATH = "kg/entities/company/academy-software-foundation.md";
 const BODY = "# ASWF\n\nThe foundation runs the DNA project.\n";
 /** the founder's screenshot, as a strip: the chat's home, a tab he kept, and the page he is on */
@@ -135,14 +138,13 @@ describe("the `×` is the reader's too — and the chat's home is not the reader
 });
 
 describe('Extend, under the content (founder: "noticeable as one click knowledge expansion")', () => {
-  it("sits under the document, not in the header's icon group", () => {
+  it("sits under the document — there is no icon group above the page at all", () => {
     const { container } = panel();
     const ext = container.querySelector('[data-doc-act="extend"]') as HTMLElement;
     const body = container.querySelector("[data-doc-body]") as HTMLElement;
-    const header = container.querySelector("[data-doc-name]")!.parentElement as HTMLElement;
 
     expect(body.contains(ext)).toBe(true);
-    expect(header.contains(ext)).toBe(false);
+    expect(container.querySelector("[data-doc-name]")).toBeNull();
     // …and AFTER the page it is about, which is the whole of "under content"
     const doc = container.querySelector("[data-mdx]") as HTMLElement;
     expect(doc.compareDocumentPosition(ext) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -175,7 +177,7 @@ describe('Extend, under the content (founder: "noticeable as one click knowledge
 
   it("an editor is not a reader — Extend stands down while the document is being written", () => {
     const { container } = panel();
-    fireEvent.click(container.querySelector('[data-doc-act="edit"]') as HTMLElement);
+    openActs(container); fireEvent.click(document.querySelector('[data-doc-act="edit"]') as HTMLElement);
     expect(container.querySelector('[data-doc-act="extend"]')).toBeNull();
   });
 });

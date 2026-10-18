@@ -16,7 +16,11 @@
 import { useContext, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Icon } from "./index";
 import { isWsRef } from "./wsLinks";
-import { WsLink } from "./WsLink";
+import { WsLink, isQualifiedRef } from "./WsLink";
+import { RefChip } from "./RefChip";
+import { parseUniversalRef } from "./universalRefs";
+import { usePeekOrOpen } from "./peekSeam";
+import { resolveLink } from "./wsLinks";
 import { MeetingChip, meetingNotePath, meetingRefOfHref } from "./MeetingChip";
 // The link vocabulary both renderers share. Re-exported below so every existing importer of
 // docLinks keeps working — the extraction is about the dependency graph, not about the API.
@@ -26,10 +30,68 @@ export { DocNavContext, DocMetaContext, useOpenEntity, ENTITY_CHIP, DEFAULT_ENTI
 export type { DocNavigate } from "./docRefs";
 
 // ── path + slug helpers ──────────────────────────────────────────────────────────
-export const entitySlug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+/** core/workspaces/shared/entities.py `_TRANSLIT`, verbatim (scripts/parity.json `entity-slug-translit`
+ *  holds the two to one spelling): lowercase letter:latin, space-separated, a two-letter key a digraph. */
+const TRANSLIT = "а:a б:b в:v г:g д:d е:e ж:zh з:z и:i й:i к:k л:l м:m н:n о:o п:p р:r с:s т:t у:u ф:f х:kh ц:ts ч:ch ш:sh щ:shch ъ:ie ы:y ь: э:e ю:iu я:ia ё:e є:ie і:i ї:i ґ:g ў:u ђ:dj ј:j љ:lj њ:nj ћ:c џ:dz ѓ:gj ќ:kj ѕ:dz α:a β:v γ:g δ:d ε:e ζ:z η:i θ:th ι:i κ:k λ:l μ:m ν:n ξ:x ο:o π:p ρ:r σ:s ς:s τ:t υ:y φ:f χ:ch ψ:ps ω:o ου:ou";
+const TRANSLIT_MAP = new Map(TRANSLIT.split(" ").map((p) => { const i = p.indexOf(":"); return [p.slice(0, i), p.slice(i + 1)] as const; }));
+const translitBase = (ch: string) => (Array.from(ch.normalize("NFKD"))[0] ?? "").toLowerCase();
+
+/** Cyrillic and Greek letters to their Latin spelling; everything else passes through untouched. */
+function transliterate(text: string): string {
+  const chars = Array.from(text.normalize("NFC"));
+  let out = "";
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    if (ch.charCodeAt(0) < 0x80) { out += ch; continue; }
+    const pair = i + 1 < chars.length ? translitBase(ch) + translitBase(chars[i + 1]) : "";
+    if (pair && TRANSLIT_MAP.has(pair)) { out += TRANSLIT_MAP.get(pair); i++; continue; }
+    const t = TRANSLIT_MAP.get(ch.toLowerCase()) ?? TRANSLIT_MAP.get(translitBase(ch));
+    out += t ?? ch;
+  }
+  return out;
+}
+
+/** FNV-1a 32 over UTF-8, hex — the server's `_fnv1a32`. */
+function fnv1a32(text: string): string {
+  let h = 0x811c9dc5;
+  for (const b of new TextEncoder().encode(text)) h = Math.imul(h ^ b, 0x01000193) >>> 0;
+  return h.toString(16).padStart(8, "0");
+}
+
+/** The entity id the SERVER gives a name (core/workspaces/shared/entities.py `slugify`), so a chip
+ *  finds the page the server wrote: apostrophes dropped, Cyrillic and Greek transliterated, accents
+ *  folded (NFKD, combining marks removed), every other non-alphanumeric run one hyphen, at most 80
+ *  characters; a name with letters but no Latin spelling (CJK, Arabic, …) is `u-<fnv1a32>`.
+ *  Dropping the non-ASCII letter instead of folding it sent `[[mühlemann+popp AG]]` to a page that
+ *  never existed. */
+export function entitySlug(s: string): string {
+  const raw = s.replace(/['’]/g, "");
+  const slug = transliterate(raw).normalize("NFKD").replace(/[^\x00-\x7f]/g, "").replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "").toLowerCase();
+  if (!slug && /[\p{L}\p{N}]/u.test(raw)) return `u-${fnv1a32(raw.normalize("NFC").toLowerCase().trim().split(/\s+/).join(" "))}`;
+  return slug.slice(0, 80);
+}
 
 /** Normalize a schemeless href into a workspace-relative path. `./x` and `../x` resolve
  *  against the linking doc's directory; anything else is taken from the workspace root. */
+/** A relative href that climbs OUT of its workspace names a sibling workspace by its first segment
+ *  (#1783): `../../biz/graph/sg/x.md` from `kg/notes/a.md` is `biz:graph/sg/x.md`. `null` when the
+ *  link stays inside. */
+export function climbedOutRef(href: string, docPath?: string): string | null {
+  const clean = href.replace(/[?#].*$/, "");
+  if (!/^\.\.?(\/|$)/.test(clean)) return null;
+  const parts = [...(docPath ? docPath.split("/").slice(0, -1) : []), ...clean.split("/")];
+  const out: string[] = [];
+  let above = 0;
+  for (const p of parts) {
+    if (!p || p === ".") continue;
+    if (p === "..") { if (out.length) out.pop(); else if (above === 0) above = 1; else return null; }
+    else out.push(p);
+  }
+  // exactly one level above the root: the first segment is the sibling workspace's slug
+  return above === 1 && out.length >= 2 ? `${out[0]}:${out.slice(1).join("/")}` : null;
+}
+
 export function normalizeDocPath(href: string, docPath?: string): string {
   const clean = href.replace(/[?#].*$/, "");
   const relative = /^\.\.?(\/|$)/.test(clean);
@@ -52,27 +114,41 @@ function workspaceTree(slug?: string): Promise<string[]> {
   const key = slug ?? HOME;
   const hit = treeCache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.p;
-  const p = import("../surfaces/workspaceApi")
+  const p = import("../data/workspaceApi")
     .then((api) => api.listWorkspaceTree(slug ? { slug } : undefined))
     .catch(() => [] as string[]);
   treeCache.set(key, { at: Date.now(), p });
   return p;
 }
+/** PLAIN NAMES THAT ARE PAGES (#1783). The entity pages of a workspace, as the names a writer would
+ *  type — `kg/entities/person/pat-mason.md` → "Pat Mason" — so a page that mentions Pat Mason in
+ *  prose links him without the writer having typed `[[ ]]`. Primed asynchronously; read in sync. */
+const entityNames = new Map<string, string[]>();
+export function knownEntityNames(slug?: string): string[] { return entityNames.get(slug ?? HOME) ?? []; }
+export async function primeEntityNames(slug?: string): Promise<boolean> {
+  const tree = await workspaceTree(slug);
+  const names = [...new Set(tree.map((p) => /(?:^|\/)kg\/entities\/[^/]+\/([^/]+)\.md$/.exec(p)?.[1]).filter((x): x is string => !!x)
+    .map((stem) => stem.split(/[-_]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ")))];
+  const before = (entityNames.get(slug ?? HOME) ?? []).join("\u0000");
+  entityNames.set(slug ?? HOME, names);
+  return before !== names.join("\u0000");
+}
+
 /** The mount table, cached WHOLE rather than as a list of slugs: every mount reports the worker
  *  path it is mounted at, plus the `subject` whose private baseline this client addresses with NO
  *  slug. That table is what turns an absolute path the agent quoted into {workspace, relative} —
  *  read off the server's own answer instead of guessed from the directory layout. */
-export interface Mount { slug: string; path: string; primary: boolean }
+export interface Mount { slug: string; path: string; primary: boolean; desk?: boolean }
 interface MountedSet { subject?: string; mounts: Mount[] }
 const EMPTY_MOUNTS: MountedSet = { mounts: [] };
 let mountedCache: { at: number; p: Promise<MountedSet> } | null = null;
 function mountedSet(): Promise<MountedSet> {
   if (mountedCache && Date.now() - mountedCache.at < CACHE_TTL_MS) return mountedCache.p;
-  const p = import("../surfaces/workspaceApi")
+  const p = import("../data/workspaceApi")
     .then((api) => api.readActiveSet())
     .then((s) => ({
       subject: s.subject,
-      mounts: s.active.map((m) => ({ slug: m.slug, path: m.path ?? "", primary: Boolean(m.primary) })),
+      mounts: s.active.map((m) => ({ slug: m.slug, path: m.path ?? "", primary: Boolean(m.primary), ...(m.desk !== undefined ? { desk: m.desk } : {}) })),
     }))
     .catch(() => EMPTY_MOUNTS);
   mountedCache = { at: Date.now(), p };
@@ -84,7 +160,7 @@ function mountedSet(): Promise<MountedSet> {
  *  sends every home read to a workspace called "seed" that no slug-addressed endpoint serves. The
  *  authoritative marks are `primary` and the mount path being `<root>/<subject>`. */
 const isHomeMount = (m: Mount, subject?: string): boolean =>
-  m.primary || m.slug === subject || (!!subject && m.path.endsWith(`/${subject}`));
+  (m.desk ?? m.primary) || m.slug === subject || (!!subject && m.path.endsWith(`/${subject}`));
 
 /** The workspaces to search, in mount order, with the baseline as `undefined` (a no-slug read). */
 function activeSlugs(): Promise<(string | undefined)[]> {
@@ -113,7 +189,7 @@ function reachableSet(): Promise<MountedSet> {
   if (reachableCache && Date.now() - reachableCache.at < CACHE_TTL_MS) return reachableCache.p;
   const p = (async (): Promise<MountedSet> => {
     const mounted = await mountedSet();
-    const memberships = await import("../surfaces/workspaceApi")
+    const memberships = await import("../data/workspaceApi")
       .then((api) => api.listSharedMemberships())
       .catch(() => [] as { workspace_id: string }[]);
     const mounts = [...mounted.mounts];
@@ -378,6 +454,17 @@ export async function resolveDocRef(ref: DocRef, meta: DocMeta = {}): Promise<Re
   return undefined;
 }
 
+/** `[[Title]]` asked of the server (`POST /api/links/resolve`, batched) — readable and present, or
+ *  undefined so the caller falls back to the tree search. */
+async function serverWikilink(title: string, slug?: string): Promise<ResolvedDoc | undefined> {
+  try {
+    const { resolveLink } = await import("./wsLinks");
+    const r = await resolveLink(title, slug);
+    if (r.access !== "readable" || r.missing || !r.path) return undefined;
+    return { path: r.path, slug: r.slug ?? slug, type: /kg\/entities\/([^/]+)\//.exec(r.path)?.[1] };
+  } catch { return undefined; }
+}
+
 /** Wikilink — the branch point between the TWO link grammars (PRD decision 26.2).
  *
  *  `[[Title]]` resolves in-workspace, by searching the mounted trees — unchanged, below.
@@ -389,7 +476,10 @@ export async function resolveDocRef(ref: DocRef, meta: DocMeta = {}): Promise<Re
  *  changes under a mounted chip. */
 export function Wikilink({ title }: { title: string }) {
   const meta = useContext(DocMetaContext);
-  if (isWsRef(title)) return <WsLink refText={title} slug={meta.slug} />;
+  if (isWsRef(title) || isQualifiedRef(title)) return <WsLink refText={title} slug={meta.slug} />;
+  // A UNIVERSAL REFERENCE (`[[chat:<id>|…]]`, `[[page:<ws>/<path>]]`, … #1783): the server says what
+  // it is for this reader, with no access check left to the client.
+  if (parseUniversalRef(`[[${title}]]`)) return <RefChip text={`[[${title}]]`} />;
   return <EntityWikilink title={title} />;
 }
 
@@ -400,41 +490,52 @@ function EntityWikilink({ title }: { title: string }) {
   const meta = useContext(DocMetaContext);
   // undefined = resolving, null = not found, ResolvedDoc = found
   const [target, setTarget] = useState<ResolvedDoc | null | undefined>(undefined);
+  // NOT HERE → MAYBE ELSEWHERE (#1783): a name with no page in the mounted trees is asked of the
+  // server, which looks in every workspace this reader can read (and names none they cannot).
+  const [far, setFar] = useState(false);
   useEffect(() => {
     let on = true;
-    void resolveDocRef({ wikilink: title }, meta).then((r) => { if (on) setTarget(r ?? null); });
+    setFar(false);
+    // THE SERVER FIRST (#1783): it holds the one slug rule and the access decision, so a name with
+    // accents finds the page the server wrote. The tree search across every mounted workspace stays
+    // as the fallback; a name found only in a workspace not mounted here is drawn as reachable.
+    void serverWikilink(title, meta.slug)
+      .then((hit) => hit ?? resolveDocRef({ wikilink: title }, meta))
+      .then((r) => {
+        if (!on) return;
+        setTarget(r ?? null);
+        if (!r) void resolveLink(title, meta.slug).then((x) => {
+          if (on && x.access === "readable" && !x.missing && (x.path || x.ambiguous)) setFar(true);
+        });
+      });
     return () => { on = false; };
   }, [title, meta.path, meta.slug]);
   const openEntity = useOpenEntity();
   const missing = target === null;
   const c = (target?.type && ENTITY_CHIP[target.type]) || DEFAULT_ENTITY_CHIP;
+  const peek = usePeekOrOpen(target ? { path: target.path, slug: target.slug, title, kind: target.type } : null);
+  if (missing && far) return <WsLink refText={title} slug={meta.slug} label={title} />;
   if (missing) {
-    // MUTED, NOT DEAD (founder, 2026-09-01). The dashed chip says honestly that no doc carries this
-    // title yet — but it still OPENS, landing on the page's empty state, because a chip that eats
-    // its own click is indistinguishable from a broken app. Everything the reader can see says
-    // "clickable"; only the handler disagreed.
-    // (a ghost chip, not a dashed one — guidelines §4.5)
-    return (
-      <span role="link" tabIndex={0} className="vx-chip vx-entity vx-inline-chip" data-missing=""
-        onClick={() => openEntity({ wikilink: title })} onKeyDown={(e) => { if (e.key === "Enter") openEntity({ wikilink: title }); }}
-        title={`No doc for “${title}” in the mounted workspaces yet — opens the empty page`}>
-        <span className="vx-chip-icon" aria-hidden><Icon name="link" size={12} /></span>
-        <span className="vx-chip-label">{title}</span>
-      </span>
-    );
+    // A PAGE THAT DOES NOT EXIST IS PLAIN TEXT (founder, live 2026-10-15: "pages do not exist, so
+    // what's the point?") — no chip, no picker, no empty page behind a click. The agent still
+    // creates the page when asked.
+    return <span className="vx-ws-missing" data-missing="" data-ws-missing="">{title}</span>;
   }
   // A [[wikilink]] that lands on a meeting's NOTES is the meeting: its title and date, not the
   // page's slug (founder, 2026-10-11: "a special label for a meeting alongside people companies").
   if (target && meetingNotePath(target.path)) return <MeetingChip path={target.path} slug={target.slug} label={title} />;
   // THE ENTITY CHIP (guidelines §4.5): one shape for every reference — radius 6, a border, the
   // type ICON in the type's colour; no colour fill per type and no pill.
-  const open = () => { if (target) openEntity({ path: target.path, slug: target.slug }); else openEntity({ wikilink: title }); };
+  const open = () => { if (target) peek.onActivate(); else openEntity({ wikilink: title }); };
   return (
-    <span role="link" tabIndex={0} className="vx-chip vx-entity vx-inline-chip" data-kind={target?.type ?? "doc"}
-      onClick={open} onKeyDown={(e) => { if (e.key === "Enter") open(); }}>
-      <span className="vx-chip-icon" aria-hidden style={{ color: c.color }}><Icon name={c.icon} size={12} /></span>
-      <span className="vx-chip-label">{title}</span>
-    </span>
+    <>
+      <span role="link" tabIndex={0} className="vx-chip vx-entity vx-inline-chip" data-kind={target?.type ?? "doc"} {...peek.bind}
+        onClick={open} onKeyDown={(e) => { if (e.key === "Enter") open(); }}>
+        <span className="vx-chip-icon" aria-hidden style={{ color: c.color }}><Icon name={c.icon} size={12} /></span>
+        <span className="vx-chip-label">{title}</span>
+      </span>
+      {peek.peek}
+    </>
   );
 }
 
@@ -517,6 +618,13 @@ export function InternalLink({ href, children }: { href: string; children?: Reac
 }
 
 function PathLink({ href, children }: { href: string; children?: ReactNode }) {
+  const meta = useContext(DocMetaContext);
+  const out = href.startsWith("/") ? null : climbedOutRef(href, meta.path);
+  if (out) return <WsLink refText={out} slug={meta.slug} label={children} />;
+  return <LocalPathLink href={href}>{children}</LocalPathLink>;
+}
+
+function LocalPathLink({ href, children }: { href: string; children?: ReactNode }) {
   const meta = useContext(DocMetaContext);
   const openEntity = useOpenEntity();
   // absolute = a worker-visible mount path — pass verbatim; resolveDocRef translates it

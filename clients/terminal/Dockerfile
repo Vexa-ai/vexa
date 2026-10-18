@@ -31,7 +31,7 @@ COPY . .
 # Empty → GA renders nothing (opt-in). Changing it requires a rebuild.
 ARG NEXT_PUBLIC_GA_MEASUREMENT_ID=""
 ENV NEXT_PUBLIC_GA_MEASUREMENT_ID=$NEXT_PUBLIC_GA_MEASUREMENT_ID
-# Terminal mode (src/app/mode.ts). "meetings" builds a meetings-only terminal: only the meetings
+# Terminal mode (src/platform/mode.ts). "meetings" builds a meetings-only terminal: only the meetings
 # list + meeting/canvas tabs + the API-tokens surface register, and the server proxy refuses
 # agent-api paths (404). Empty (default) keeps every surface. NEXT_PUBLIC_* → set BEFORE `next build`.
 ARG NEXT_PUBLIC_TERMINAL_MODE=""
@@ -129,7 +129,8 @@ COPY package.json package-lock.json ./
 COPY --from=deps /app/node_modules ./node_modules
 # The built app + the custom server + runtime config it reads.
 COPY --from=build /app/.next ./.next
-COPY public ./public
+# public/ from the BUILD stage: `npm run build` generated public/mediapipe/ (the blur runtime) there
+COPY --from=build /app/public ./public
 COPY server.mjs next.config.ts tsconfig.json ./
 # next-env.d.ts is gitignored (Next.js generates it during `next build`); take it from the build stage
 # rather than the build context, where it is absent on a clean clone.

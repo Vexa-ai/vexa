@@ -49,15 +49,17 @@
  *  once this gate said "in" it never asked again, so a session revoked server-side left the entire
  *  shell rendered over an app where every request 401'd — and the user's only report of it was a
  *  chat turn ending in a generic "something went wrong". The gate now LISTENS: the HTTP chokepoints
- *  raise a session-suspect signal on any 401/403 (see @/app/session), this component re-probes
+ *  raise a session-suspect signal on any 401/403 (see @/platform/session), this component re-probes
  *  /api/auth/me — which really validates the token now — and only a genuine 401 takes the screen.
  *  The probe is the authority precisely because a 403 is usually resource-scoped and means nothing
  *  about the session; suspicion never signs anybody out on its own. */
+import "./gate.css";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { adoptAccount } from "../platform/accountStorage";
 import { signIn } from "next-auth/react";
-import { onSessionSuspect } from "./session";
+import { onSessionSuspect } from "../platform/session";
 import { signinErrorMessage } from "./signinRefusal";
-import { SESSION_ENDED_HEADLINE } from "../surfaces/apiClient";
+import { SESSION_ENDED_HEADLINE } from "../data/apiClient";
 
 type Status = "checking" | "out" | "in";
 /** `oidc` is the button's label when the instance's OIDC provider is registered, else null. */
@@ -175,8 +177,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     // The session probe also carries what to call the subject on the claim screen.
     fetch("/api/auth/me", { cache: "no-store" })
       .then(async (r) => {
-        const body = r.ok ? ((await r.json().catch(() => ({}))) as { user?: { email?: string | null } }) : {};
+        const body = r.ok ? ((await r.json().catch(() => ({}))) as { user?: { id?: string | null; email?: string | null } }) : {};
         if (!active) return;
+        // Stored browser state is this account's alone: another account's open workspace, pending
+        // meeting or layout is never applied. A switch of account reloads before anything renders,
+        // so nothing read under the previous account survives into this one.
+        if (r.ok && adoptAccount(body.user?.id ?? null) === "changed") { window.location.reload(); return; }
         setStatus(r.ok ? "in" : "out");
         setSubjectEmail(body.user?.email ?? null);
       })
@@ -392,12 +398,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
               </button>
             )}
             {!needCode && providers.oidc && (
-              <button data-testid="signin-oidc" onClick={() => signIn("oidc", { callbackUrl: destination() })} style={oauthBtn}>
+              <button data-testid="signin-oidc" onClick={() => signIn("oidc", { callbackUrl: destination() })} className="vx-btn vx-auth-btn" data-variant="secondary" data-size="md">
                 Continue with {providers.oidc}
               </button>
             )}
             {!needCode && !hasOAuth && !emailLink && (
-              <div style={{ fontSize: 12, color: "var(--danger)", lineHeight: 1.5 }}>
+              <div className="vx-gate-error">
                 No sign-in method is configured on this instance. Ask its operator.
               </div>
             )}

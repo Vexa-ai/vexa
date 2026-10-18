@@ -24,6 +24,8 @@ export interface LiveState {
   reconnects: number;
   lastEventAt?: number;
   lastTranscriptAt?: number;
+  /** The bot's latest transcription progress report (the feed's `progress` event). */
+  progress?: { backlogS: number; silenceS: number | null; finishing: boolean; at: number };
 }
 
 interface Entry { state: LiveState; subs: Set<() => void>; es?: EventSource; refs: number; retry?: number; watchdog?: number; startEpochMs?: number; lastEventId?: string }
@@ -144,7 +146,13 @@ function connect(e: Entry, meetingId: string, sessionUid: string): void {
       const kept = s.transcript.filter((x) => !x.id || !drop.has(x.id));
       if (kept.length !== s.transcript.length) s.transcript = kept; else return; // nothing here → don't churn
     }
-    else if (ev.type === "stream-error") addIssue({ kind: "stream", message: ev.message || "Meeting stream error", status: ev.status });
+    else if (ev.type === "progress") {
+      // How far transcription is behind capture — not a transcript line, so lastTranscriptAt stays.
+      const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+      const p = ev as { backlog_s?: unknown; silence_s?: unknown; finishing?: unknown };
+      s.progress = { backlogS: num(p.backlog_s) ?? 0, silenceS: num(p.silence_s), finishing: p.finishing === true, at: Date.now() };
+    }
+        else if (ev.type === "stream-error") addIssue({ kind: "stream", message: ev.message || "Meeting stream error", status: ev.status });
     else if (ev.type === "meeting-end") { s.ended = true; clearWatchdog(e); es.close(); e.es = undefined; }
     // The owner removed this reader (or turned the share off) while they watched: the server ended
     // the stream on purpose. Say so, and do not reconnect into a refusal.

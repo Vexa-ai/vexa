@@ -15,7 +15,7 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe("meeting controls", () => {
-  it("offers playback without autoplay and requires the exact confirmation word before deleting", async () => {
+  it("offers playback without autoplay and deletes after one confirmation naming what goes", async () => {
     const { container } = render(<MeetingControls meetingId="42" />);
     await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
     const audio = container.querySelector("audio")!;
@@ -24,13 +24,9 @@ describe("meeting controls", () => {
     expect(audio.preload).toBe("metadata");
     fireEvent.click(screen.getByRole("button", { name: "Delete meeting data" }));
     expect(vi.mocked(fetch).mock.calls.filter(c => c[1]?.method === "DELETE")).toHaveLength(0);
-    const confirm = screen.getByRole("button", { name: "Delete permanently" }) as HTMLButtonElement;
-    expect(confirm.disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText("Type delete to confirm"), { target: { value: "DELETE" } });
-    expect(confirm.disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText("Type delete to confirm"), { target: { value: "delete" } });
-    expect(confirm.disabled).toBe(false);
-    fireEvent.click(confirm);
+    // ONE confirmation, naming what goes (#1783)
+    expect(screen.getByText(/transcript, notes and recording are deleted for good/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Delete meeting" }));
     await screen.findByText("Meeting audio, transcript and fixtures deleted. Saved pages are kept.");
     expect(container.querySelector("audio")).toBeNull();
   });
@@ -41,6 +37,21 @@ describe("meeting controls", () => {
     expect(screen.getByText("Meeting audio, transcript and fixtures deleted. Saved pages are kept.")).toBeTruthy();
     expect(container.querySelector("audio")).toBeNull();
     expect(vi.mocked(fetch).mock.calls.filter(c => String(c[0]).startsWith("/api/recordings"))).toHaveLength(0);
+  });
+  it("a meeting still saving is waited for, not refused: the delete is tried again until it lands", async () => {
+    state.status = "stopping";
+    let n = 0;
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => init?.method === "DELETE"
+      ? new Response(null, { status: ++n < 2 ? 409 : 204 })
+      : new Response(JSON.stringify({ recordings: [] }))));
+    const { deleteMeetingData } = await import("../meetingDeletion");
+    const seen: string[] = [];
+    window.addEventListener("vexa:meeting-deleted", (e) => seen.push((e as CustomEvent).detail.id), { once: true });
+    let waited = false;
+    await deleteMeetingData("42", { onWaiting: () => { waited = true; }, sleep: async () => {}, native: "native-zoom" });
+    expect(waited).toBe(true);
+    expect(n).toBe(2);
+    expect(seen).toEqual(["42"]);
   });
   it("stops the correct bot and does not offer deletion or playback for an active meeting", async () => {
     state.status = "active";
@@ -64,14 +75,13 @@ describe("meeting controls", () => {
     expect(screen.queryByRole("button", { name: /mute/i })).toBeNull();
     expect(screen.queryByRole("button", { name: "Delete meeting data" })).toBeNull();
   });
-  it("the header's Delete removes the player through the typed confirmation", async () => {
+  it("the header's Delete removes the player after its confirmation", async () => {
     const { container } = render(<><MeetingDeleteButton meetingId="42" size="header" /><MeetingControls meetingId="42" showDelete={false} /></>);
     await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
     const del = screen.getByRole("button", { name: "Delete meeting data" });
     expect(del.getAttribute("data-tone")).toBe("danger");
     fireEvent.click(del);
-    fireEvent.change(screen.getByLabelText("Type delete to confirm"), { target: { value: "delete" } });
-    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete meeting" }));
     await screen.findByText("Meeting audio, transcript and fixtures deleted. Saved pages are kept.");
     expect(container.querySelector("audio")).toBeNull();
     expect(screen.queryByRole("button", { name: "Delete meeting data" })).toBeNull();

@@ -1,0 +1,54 @@
+/* THE COMPOSER'S @-MENTIONS (ADR-0048) — the picker, the mention chips and the share question. Every
+ * colour reads a token; a pixel value stays literal only where no token equals it. */
+.vx-mention-box { border: 1px solid var(--line2); border-radius: 11px; background: var(--panel); overflow: hidden; }
+.vx-mention-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; font-size: 13px; background: transparent; }
+.vx-mention-row[aria-selected="true"] { background: var(--panel2); }
+.vx-mention-handle { color: var(--accent); min-width: 80px; }
+.vx-mention-says { color: var(--t3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-mention-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.vx-mention-chip {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--accent);
+  background: var(--accentbg); border-radius: 999px; padding: 1px 4px 1px 9px;
+}
+.vx-mention-chip-x { background: none; border: none; color: inherit; cursor: pointer; padding: 0 3px; font-size: 12px; }
+.vx-share { padding: 10px 12px; display: grid; gap: 6px; }
+.vx-share-title { font-size: 13.5px; font-weight: 600; color: var(--t1); }
+.vx-share-line { font-size: 12.5px; color: var(--t2); line-height: 1.45; }
+.vx-share-error { font-size: 12px; color: var(--danger); }
+.vx-share-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+.vx-share-act {
+  font: inherit; font-size: 12.5px; border-radius: 7px; padding: 4px 10px; cursor: pointer;
+  border: 1px solid var(--line2); background: transparent; color: var(--t1);
+}
+.vx-share-act[data-tone="primary"] { background: var(--accent); color: var(--on-accent); border: none; }
+.vx-share-act[data-tone="quiet"] { border: none; color: var(--t3); }
+.vx-room-lines { display: flex; flex-direction: column; gap: 2px; padding: 6px 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--t2); max-height: 96px; overflow: auto; }
+.vx-room-line-who { color: var(--t1); font-weight: var(--weight-medium); }
+
+/* NAMED TURNS (founder 2026-10-14): every turn says who — "You", "Vexa" — like the people's lines */
+.vx-turn { margin-bottom: 16px; min-width: 0; }
+/* the person's own message: a soft bubble on the right (founder 2026-10-15) */
+.vx-turn-mine { display: flex; flex-direction: column; align-items: flex-end; }
+/* the body spans the turn so the bubble's max-width resolves against it, not against itself (a short
+   "hi" rendered one letter per line, founder 2026-10-16) */
+.vx-turn-mine > .vx-turn-other-body { align-self: stretch; align-items: flex-end; }
+.vx-bubble { font-size: 13px; line-height: 1.5; color: var(--t1); white-space: pre-wrap; overflow-wrap: break-word; width: fit-content; min-width: 2.5em; box-sizing: border-box;
+  max-width: min(75%, 680px); padding: var(--space-2) var(--space-3); border-radius: var(--radius-xl); background: var(--surface-2); }
+.vx-bubble-mine { background: var(--surface-3); border-bottom-right-radius: var(--radius-sm); }
+/* someone else in a shared chat: a bubble on the left, with their initials and name */
+.vx-turn-other { display: flex; align-items: flex-start; gap: var(--space-2); }
+.vx-turn-other-body { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; flex: 1; }
+.vx-turn-other .vx-bubble { max-width: min(75%, 680px); border-bottom-left-radius: var(--radius-sm); }
+.vx-turn-avatar { margin-top: 18px; }
+/* the agent's answer: plain full-width text */
+.vx-turn-agent { max-width: none; }
+.vx-turn-who { font-family: var(--sans); font-size: 12px; font-weight: var(--weight-semibold); color: var(--t1); margin-bottom: 2px; }
+.vx-turn-you { font-size: 13px; line-height: 1.5; color: var(--t1); white-space: pre-wrap; max-width: 680px; }
+/* a repeated notice, folded: the count and the time range, and its times on demand */
+.vx-repeat-meta { color: var(--t3); font-size: 12px; }
+.vx-repeat-toggle { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
+.vx-repeat-list { margin: 4px 0 0; padding-left: 16px; color: var(--t3); font-size: 12px; }
+/* what an @-pick is for: Tag (default) · Invite to this chat · Invite to a call */
+.vx-mention-choice { display: flex; gap: var(--space-1); align-items: center; padding: 2px 0; }
+.vx-mention-choice-btn { border: 1px solid var(--line2); background: var(--panel); color: var(--t2); border-radius: var(--radius-md); padding: 2px 8px; font-size: var(--text-xs); cursor: pointer; }
+.vx-mention-choice-btn:hover { color: var(--t1); border-color: var(--t3); }

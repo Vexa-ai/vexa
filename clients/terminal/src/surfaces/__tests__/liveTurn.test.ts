@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { joinInterim, streamChatTurn, type ChatStreamCallbacks } from "../chatStream";
-import type { Op } from "../../workbench/agent-window";
+import type { Op } from "../agent-window";
 
 function sseResponse(chunks: string[]): Response {
   const enc = new TextEncoder();
@@ -160,7 +160,7 @@ describe("an artifact navigates DURING the turn", () => {
  */
 const SURFACES = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CHAT_TSX = readFileSync(join(SURFACES, "chat.tsx"), "utf8");
-const AGENT_WINDOW_TSX = readFileSync(join(SURFACES, "..", "workbench", "agent-window.tsx"), "utf8");
+const AGENT_WINDOW_TSX = readFileSync(join(SURFACES, "agent-window.tsx"), "utf8");
 
 /** The composer's JSX: `const composer = (` through the `);` that closes it (column 2 — every
  *  line inside is indented deeper). Everything the input field renders is in here. */
@@ -206,6 +206,6 @@ describe("the chat's own step rows are the one place status is told", () => {
     // and it is inside the conversation, not the composer
     expect(composerJsx(CHAT_TSX)).not.toMatch(/data-job-line/);
     // (a blocked row carries its Retry press, P18 — the rows are still rendered in one place)
-    expect(CHAT_TSX).toMatch(/<JobRows jobs=\{jobs\}( onRetry=\{onRetryRow\})? \/>/);
+    expect(CHAT_TSX).toMatch(/<JobRows jobs=\{jobs\}( onRetry=\{onRetryRow\})?( onSendNow=\{onSendNow\})? \/>/);
   });
 });

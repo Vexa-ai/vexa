@@ -10,7 +10,7 @@ vi.mock("../../surfaces/liveMeetings", () => ({
   useLiveMeetingsConnection: () => true,
   refreshMeetings: state.refresh,
 }));
-vi.mock("../../surfaces/workspaceApi", () => ({
+vi.mock("../../data/workspaceApi", () => ({
   listSharedMemberships: async () => [{ workspace_id: "ws-1", role: state.role }],
 }));
 

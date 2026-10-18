@@ -71,6 +71,11 @@ export function createUser(email: string): Promise<AdminResult<AdminUser>> {
   return adminRequest<AdminUser>(`/admin/users`, { method: "POST", body: JSON.stringify({ email }) });
 }
 
+/** The accounts on the reserved `example.test` domain (#1783 dev tooling, "Test users…"). */
+export function listTestUsers(): Promise<AdminResult<AdminUser[]>> {
+  return adminRequest<AdminUser[]>(`/admin/users/test-users`, { method: "GET" });
+}
+
 export function createUserToken(userId: string | number): Promise<AdminResult<{ token: string }>> {
   return adminRequest<{ token: string }>(
     `/admin/users/${encodeURIComponent(String(userId))}/tokens?scopes=bot,tx,browser`,
@@ -170,6 +175,31 @@ export async function bindProviderSubject(
   );
   if (res.ok) return res.data?.bound === "first" || res.data?.bound === "same" ? "bound" : "unavailable";
   return res.status === 409 ? "mismatch" : "unavailable";
+}
+
+// ── the person's photo, from a sign-in (UI 15g) ─────────────────────────────────────────────────
+
+/** Tell identity what this sign-in carried about the person's photo (`PUT
+ *  /internal/users/{id}/signin-photo`): identity fetches, checks, stores and re-checks it. True on a
+ *  200; never throws. Callers do not await it — a photo never holds up a sign-in. */
+export async function putSigninPhoto(userId: string | number, body: Record<string, string>): Promise<boolean> {
+  const res = await internalRequest(`/internal/users/${encodeURIComponent(String(userId))}/signin-photo`,
+    { method: "PUT", body: JSON.stringify(body) });
+  return res.ok;
+}
+
+// ── a verified address: proven at sign-in (R4) ───────────────────────────────────────────────────
+
+/** Record that the account's address was proven at this sign-in (`PUT /internal/users/{id}/
+ *  email-verified`): `magic_link` after an emailed link was redeemed, `oidc:<provider>` when the
+ *  provider vouched for the address. Identity keeps it with the address, so a company domain can be
+ *  verified through an admin email on it. Best-effort: a failure never blocks the sign-in. */
+export async function recordEmailVerified(userId: string | number, via: string): Promise<boolean> {
+  const res = await internalRequest<{ verified?: unknown }>(
+    `/internal/users/${encodeURIComponent(String(userId))}/email-verified`,
+    { method: "PUT", body: JSON.stringify({ via }) },
+  );
+  return res.ok;
 }
 
 // ── emailed sign-in links: the shared single-use record ─────────────────────────────────────────
@@ -699,7 +729,7 @@ export type SigninRefused = { ok: false; status: number; error: string; refused:
  *  forget. */
 export async function findOrCreateUserToken(
   email: string,
-  opts: { subject?: string } = {},
+  opts: { subject?: string; emailVerifiedVia?: string } = {},
 ): Promise<{ ok: true; user: AdminUser; token: string } | SigninRefused | { ok: false; status: number; error: string; refused?: undefined }> {
   const admission = await signinAdmission(email);
   if (!admission.admitted) {
@@ -736,6 +766,13 @@ export async function findOrCreateUserToken(
     if (binding !== "bound") {
       return { ok: false, status: 503, error: "the account's provider binding could not be checked", refused: "unavailable" };
     }
+  }
+
+  // THE ADDRESS WAS PROVEN by this sign-in (a redeemed link, or a provider that vouches for it):
+  // identity records it. Only the callers that proved the inbox pass `emailVerifiedVia`; the direct
+  // login does not. Best-effort — never blocks the sign-in.
+  if (opts.emailVerifiedVia) {
+    try { await recordEmailVerified(user.id, opts.emailVerifiedVia); } catch { /* best-effort */ }
   }
 
   // Mint the login token with a stable `terminal-login` name so it is distinguishable from

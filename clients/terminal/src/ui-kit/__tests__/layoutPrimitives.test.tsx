@@ -208,20 +208,29 @@ describe("the shell store — one key, one writer", () => {
   beforeEach(() => localStorage.clear());
 
   it("round-trips prefs and per-mode widths", () => {
-    writeShellStore({ prefs: { railOpen: false, pagesOpen: true }, widths: { wide: { pages: 520 }, compact: { pages: 340 } } });
-    expect(readShellStore()).toEqual({ prefs: { railOpen: false, pagesOpen: true }, widths: { wide: { pages: 520 }, compact: { pages: 340 } } });
+    writeShellStore({ prefs: { railOpen: false, pagesOpen: true, pagesChosen: true }, widths: { wide: { pages: 520 }, compact: { pages: 340 } } });
+    expect(readShellStore()).toEqual({ prefs: { railOpen: false, pagesOpen: true, pagesChosen: true }, widths: { wide: { pages: 520 }, compact: { pages: 340 } } });
+  });
+
+  // The desk is off by default (founder 2026-10-13): a stored "open" the reader never chose — every
+  // store written before — reads as closed; once they open or close it themselves, it is kept.
+  it("an open desk the reader never chose reads as closed; their own choice is kept", () => {
+    writeShellStore({ prefs: { railOpen: true, pagesOpen: true }, widths: {} });
+    expect(readShellStore().prefs).toEqual({ railOpen: true, pagesOpen: false });
+    writeShellStore({ prefs: { railOpen: true, pagesOpen: false, pagesChosen: true }, widths: {} });
+    expect(readShellStore().prefs).toEqual({ railOpen: true, pagesOpen: false, pagesChosen: true });
   });
 
   it("junk JSON and wrong types fall back to defaults, field by field", () => {
     localStorage.setItem(SHELL_KEY, "{not json");
-    expect(readShellStore().prefs).toEqual({ railOpen: true, pagesOpen: true });
+    expect(readShellStore().prefs).toEqual({ railOpen: true, pagesOpen: false });
     localStorage.setItem(SHELL_KEY, JSON.stringify({ prefs: { railOpen: "no" }, widths: { wide: { pages: "x", rail: 250 }, bogus: { pages: 1 } } }));
-    expect(readShellStore()).toEqual({ prefs: { railOpen: true, pagesOpen: true }, widths: { wide: { rail: 250 } } });
+    expect(readShellStore()).toEqual({ prefs: { railOpen: true, pagesOpen: false }, widths: { wide: { rail: 250 } } });
   });
 
   it("storage that throws still yields a working layout", () => {
     const spy = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("denied"); });
-    expect(readShellStore().prefs).toEqual({ railOpen: true, pagesOpen: true });
+    expect(readShellStore().prefs).toEqual({ railOpen: true, pagesOpen: false });
     spy.mockRestore();
     const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("denied"); });
     expect(() => writeShellStore({ prefs: { railOpen: true, pagesOpen: true }, widths: {} })).not.toThrow();

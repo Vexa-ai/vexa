@@ -10,11 +10,11 @@
  *  meeting chip never carries a placeholder name; the removed chips are gone; what a click does. */
 import { describe, expect, it } from "vitest";
 import type { DeskProposal } from "../../surfaces/proposalsApi";
-import type { DeskFacts } from "../../surfaces/workspaceApi";
+import type { DeskFacts } from "../../data/workspaceApi";
 import type { Chat } from "../chats";
 import {
-  applyProposal, atTime, CHECK_EMAIL, isUnlabeled, jtbdProposal, needsSetup, nextMeeting, PROPOSALS_MAX,
-  proposals, setupProposal, UPCOMING_WINDOW_MS, type ConnectionRow, type UpcomingEvent,
+  applyProposal, atTime, CHECK_EMAIL, SHARED_WORKSPACE, isUnlabeled, jtbdProposal, needsSetup, nextMeeting, PROPOSALS_MAX,
+  proposals, setupProposal, UPCOMING_WINDOW_MS, CALL_VEXA, type ConnectionRow, type UpcomingEvent,
 } from "../proposals";
 import { ONBOARDING_GROUNDING, ONBOARDING_REPLY_SEP } from "../../platform";
 
@@ -38,29 +38,36 @@ const kinds = (ps: { kind: string }[]) => ps.map((p) => p.kind);
 
 const FINISHED: DeskFacts = { state: "warm", scaffolded: true };
 const BLANK: DeskFacts = { state: "new", scaffolded: false };
+/** The call with Vexa (it replaced the voice note, founder 2026-10-14) needs no connection: once the row is decided it is always offered, after the
+ *  connection chips (founder 2026-10-13: "record voice note should be just an MCP tool and an item in
+ *  the hints"). */
+const VN = "Start a call with Vexa";
+/** …and right after it, the shared-workspace starter (founder 2026-10-14). */
+const SW = "Create a shared workspace";
 const item = (id: string, act: string, label = "Pilot sync"): DeskProposal =>
   ({ id, source: `meeting:${id}`, source_label: label, act, since: "2026-10-01T09:00:00Z", status: "open", by: "post-meeting" });
 
 describe("nothing connected", () => {
-  it("offers to connect email, then calendar — and nothing else", () => {
+  it("offers to connect email, then calendar, then a call with Vexa and the shared-workspace starter — and nothing else", () => {
     const ps = proposals(NONE, null, NOW, FINISHED);
-    expect(labels(ps)).toEqual(["Connect your email", "Connect your calendar"]);
-    expect(ps.map((p) => p.provider)).toEqual(["google_email", "google_calendar"]);
-    expect(ps.every((p) => !p.kick)).toBe(true);           // opening Connections says nothing to the agent
+    expect(labels(ps)).toEqual(["Connect your email", "Connect your calendar", VN, SW]);
+    expect(ps.map((p) => p.provider)).toEqual(["google_email", "google_calendar", undefined, undefined]);
+    // opening Connections says nothing to the agent; only the shared-workspace starter is a turn
+    expect(ps.filter((p) => p.kick).map((p) => p.kind)).toEqual(["shared-workspace"]);
   });
 
   it("a connection that exists but is not ready is offered as Connect, opening on THAT connection", () => {
     const stuck = row("google_email", "awaiting_user", "a".repeat(32));
     const broken = row("google_calendar", "disconnected", "b".repeat(32));
     const ps = proposals([stuck, broken], null, NOW);
-    expect(labels(ps)).toEqual(["Connect your email", "Connect your calendar"]);
-    expect(ps.map((p) => p.connectionId)).toEqual(["a".repeat(32), "b".repeat(32)]);
+    expect(labels(ps)).toEqual(["Connect your email", "Connect your calendar", VN, SW]);
+    expect(ps.map((p) => p.connectionId)).toEqual(["a".repeat(32), "b".repeat(32), undefined, undefined]);
   });
 });
 
 describe("email only", () => {
   it("offers Check my email and Connect your calendar", () => {
-    expect(labels(proposals(EMAIL_ONLY, null, NOW))).toEqual(["Check my email", "Connect your calendar"]);
+    expect(labels(proposals(EMAIL_ONLY, null, NOW))).toEqual(["Check my email", "Connect your calendar", VN, SW]);
   });
 
   it("Check my email is the person's own words, and the kick names the mail tools and the read-first rule", () => {
@@ -80,19 +87,19 @@ describe("email only", () => {
 describe("calendar only", () => {
   it("with a meeting coming up: Prepare for it, then Connect your email", () => {
     const ps = proposals(CAL_ONLY, [PRICING], NOW);
-    expect(labels(ps)).toEqual([`Prepare for Acme — pricing review ${atTime(NOW + 75 * 60000, NOW)}`, "Connect your email"]);
+    expect(labels(ps)).toEqual([`Prepare for Acme — pricing review ${atTime(NOW + 75 * 60000, NOW)}`, "Connect your email", VN, SW]);
     expect(ps[0].label).toMatch(/^Prepare for Acme — pricing review at /);
   });
 
-  it("with nothing coming up: only Connect your email", () => {
-    expect(labels(proposals(CAL_ONLY, [], NOW))).toEqual(["Connect your email"]);
+  it("with nothing coming up: Connect your email, and the call with Vexa", () => {
+    expect(labels(proposals(CAL_ONLY, [], NOW))).toEqual(["Connect your email", VN, SW]);
   });
 });
 
 describe("both connected", () => {
   it("with a meeting coming up: Prepare for it, then Check my email", () => {
     const ps = proposals(BOTH, [PRICING], NOW);
-    expect(kinds(ps)).toEqual(["prep", "check-email"]);
+    expect(kinds(ps)).toEqual(["prep", "check-email", "call", "shared-workspace"]);
     expect(ps[0].say).toBe(`${ps[0].label}.`);
     expect(ps[0].kick).toContain('"Acme — pricing review"');
     expect(ps[0].kick).toContain(new Date(NOW + 75 * 60000).toISOString());
@@ -101,13 +108,13 @@ describe("both connected", () => {
     expect(ps[0].kick).toMatch(/not instructions/);
   });
 
-  it("with no meeting coming up: only Check my email", () => {
-    expect(labels(proposals(BOTH, [], NOW))).toEqual(["Check my email"]);
+  it("with no meeting coming up: Check my email, and the call with Vexa", () => {
+    expect(labels(proposals(BOTH, [], NOW))).toEqual(["Check my email", VN, SW]);
   });
 
   it("while the calendar read has not answered, or failed, the rest of the row stands", () => {
-    expect(labels(proposals(BOTH, null, NOW))).toEqual(["Check my email"]);
-    expect(labels(proposals(BOTH, "error", NOW))).toEqual(["Check my email"]);
+    expect(labels(proposals(BOTH, null, NOW))).toEqual(["Check my email", VN, SW]);
+    expect(labels(proposals(BOTH, "error", NOW))).toEqual(["Check my email", VN, SW]);
   });
 
   it("a meeting tomorrow morning says tomorrow", () => {
@@ -123,7 +130,7 @@ describe("connections status unreadable", () => {
 });
 
 describe("connections status not answered yet", () => {
-  it("offers no connection chip (no flicker of a wrong one)", () => {
+  it("offers no chip at all — not even the call with Vexa, so the row never reorders as it answers", () => {
     expect(proposals(null, null, NOW)).toEqual([]);
   });
 });
@@ -164,11 +171,11 @@ describe("the next meeting — the window, and never a placeholder name", () => 
 });
 
 describe("the rows other cars own stay, after the connection chips", () => {
-  it("agent-filed jobs and the empty-desk setup follow, and the row is cut at four", () => {
+  it("agent-filed jobs and the empty-desk setup follow, and the row is cut at five", () => {
     const ps = proposals(BOTH, [PRICING], NOW, BLANK, "a@b.c", [item("r1", "Send the deck"), item("r2", "Book the room")]);
-    expect(kinds(ps)).toEqual(["prep", "check-email", "jtbd", "jtbd"]);
+    expect(kinds(ps)).toEqual(["prep", "check-email", "call", "shared-workspace", "jtbd"]);
     expect(ps).toHaveLength(PROPOSALS_MAX);
-    expect(kinds(proposals(NONE, null, NOW, BLANK, "a@b.c"))).toEqual(["connect", "connect", "setup"]);
+    expect(kinds(proposals(NONE, null, NOW, BLANK, "a@b.c"))).toEqual(["connect", "connect", "call", "shared-workspace", "setup"]);
   });
 
   it("a job says its source", () => {
@@ -207,6 +214,22 @@ describe("what a click does", () => {
   it("a chat somebody named keeps its name", () => {
     const eff = applyProposal(CHECK_EMAIL, chat({ label: "Inbox triage" }), NOW);
     expect(eff.act === "run" && eff.chat.label).toBe("Inbox triage");
+  });
+
+  it("Start a call with Vexa opens a call in a chat of its own: no turn, the chat in front untouched", () => {
+    expect(CALL_VEXA.label).toBe(VN);
+    expect(CALL_VEXA.kick).toBeUndefined();
+    expect(applyProposal(CALL_VEXA, chat(), NOW)).toEqual({ act: "call" });
+    expect(applyProposal(CALL_VEXA, null, NOW)).toEqual({ act: "call" });
+  });
+
+  it("Create a shared workspace is a turn: the agent asks the purpose, picks a template, creates, links, offers the event", () => {
+    expect(SHARED_WORKSPACE.label).toBe("Create a shared workspace");
+    expect(SHARED_WORKSPACE.say).toBe("Create a shared workspace.");
+    for (const tool of ["workspace_templates_list", "workspace_create", "workspace_invite_link_create", "workspace_invite", "calendar_event_create"])
+      expect(SHARED_WORKSPACE.kick).toContain(tool);
+    const eff = applyProposal(SHARED_WORKSPACE, null, NOW);
+    expect(eff).toMatchObject({ act: "create", label: "Shared workspace", say: "Create a shared workspace." });
   });
 
   it("with no chat in front, one is created", () => {

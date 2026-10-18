@@ -4,7 +4,7 @@
  *  `ApiError` per failure class, each pinned to the user-truth headline it must show.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ApiError, presentError, SESSION_ENDED_HEADLINE } from "../apiClient";
+import { ApiError, presentError, SESSION_ENDED_HEADLINE } from "../../data/apiClient";
 
 beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -103,5 +103,24 @@ describe("presentError — non-ApiError failures", () => {
     const p = presentError("boom");
     expect(p.headline).toBe("Something went wrong — details are in the browser console.");
     expect(p.detail).toBe("boom");
+  });
+});
+
+describe("presentError — structured 4xx {detail:{code,message}}", () => {
+  it("a rejected git-provider token shows the backend's own sentence as the headline", () => {
+    const message = "GitLab rejected the saved token: it is expired or lacks the api scope.";
+    const body = { detail: { code: "token_rejected", provider: "gitlab", message } };
+    const e = new ApiError(422, JSON.stringify(body.detail), "/api/workspace/publish", body);
+    expect(presentError(e).headline).toBe(message);
+  });
+  it("a non-prose structured message stays operator-only", () => {
+    const body = { detail: { code: "token_rejected", message: "token_rejected" } };
+    const e = new ApiError(422, JSON.stringify(body.detail), "/api/workspace/publish", body);
+    expect(presentError(e).headline).toBe("The request failed (422).");
+  });
+  it("403 keeps its own headline even when structured", () => {
+    const body = { detail: { code: "x", message: "You may not do this thing here." } };
+    const e = new ApiError(403, JSON.stringify(body.detail), "/api/x", body);
+    expect(presentError(e).headline).toBe("Your key doesn't have access to this.");
   });
 });

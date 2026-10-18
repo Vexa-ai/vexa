@@ -23,6 +23,7 @@ import { MdxDoc } from "../MdxDoc";
 import { DocMetaContext } from "../docRefs";
 import { DocImage, fetchFailureLine, findItInstruction, removeImageReference, rewriteImageReference, workspaceAssetUrl } from "../docImages";
 import { WORKSPACE_COMMIT_EVENT } from "../../platform";
+import { provideDocIntentPoster } from "../docIntents";
 
 const fetchWorkspaceAsset = vi.fn(async () => ({
   path: "assets/bank-logo.svg", bytes: 12, source: "https://bank.example/logo.svg",
@@ -31,10 +32,11 @@ const fetchWorkspaceAsset = vi.fn(async () => ({
 const readWorkspaceFile = vi.fn(async () => "# Note\n\n![Example Bank logo](https://bank.example/logo.svg)\n");
 const writeWorkspaceFile = vi.fn(async () => ({ path: "kg/note.md", written: true }));
 
-const postIntent = vi.fn(() => null);
-vi.mock("../../minutes/extend", () => ({ postIntent: (...a: unknown[]) => postIntent(...(a as [])) }));
+// "Find it" posts through the door the composition root supplies (`docIntents`); this test is that root.
+const postIntent = vi.fn((_intent: unknown) => null);
+provideDocIntentPoster((intent) => postIntent(intent));
 
-vi.mock("../../surfaces/workspaceApi", () => ({
+vi.mock("../../data/workspaceApi", () => ({
   // the chips resolve against a workspace snapshot; nothing here is about them, so the world is empty
   listWorkspaceTree: vi.fn(async () => []),
   readActiveSet: vi.fn(async () => ({ subject: "57", active: [] })),
@@ -63,7 +65,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-/** An `ApiError` as `surfaces/apiClient` mints one — read duck-typed by `fetchFailureLine`, which
+/** An `ApiError` as `data/apiClient` mints one — read duck-typed by `fetchFailureLine`, which
  *  is why this is a shape and not an import. */
 const apiFailure = (status: number, body?: unknown, detail = "") =>
   Object.assign(new Error(`/api/workspace/asset → ${status}`), { status, detail, body });

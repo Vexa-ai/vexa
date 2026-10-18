@@ -24,12 +24,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { ASK_CHAT_EVENT } from "../../platform";
-import * as api from "../../surfaces/workspaceApi";
+import * as api from "../../data/workspaceApi";
 import { MEMBER_MAX, isMemberIntent, isPageIntent, normalizeIntent, type ChatIntent } from "../../surfaces/chatIntent";
 import { isJobIntent } from "../../surfaces/jobs";
 
-vi.mock("../../surfaces/workspaceApi", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../surfaces/workspaceApi")>()),
+vi.mock("../../data/workspaceApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../data/workspaceApi")>()),
   readWorkspaceBySlug: vi.fn(),
   listWorkspaceTree: vi.fn(),
   readWorkspaceHistory: vi.fn(),

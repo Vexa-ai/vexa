@@ -4,7 +4,7 @@
  *  (GET · POST · PUT · DELETE). A method missing from this file is a 405, not a fallthrough. */
 import type { NextRequest } from "next/server";
 import { resolveApiKey } from "../../proxyAuth";
-import { meetingsOnly } from "../../../mode";
+import { meetingsOnly } from "../../../../platform/mode";
 
 export const dynamic = "force-dynamic";
 

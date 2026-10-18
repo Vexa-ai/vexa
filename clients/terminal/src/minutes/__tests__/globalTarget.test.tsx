@@ -14,7 +14,7 @@
  *  `core/agent/tests/test_admin_account.py` and `core/agent/tests/test_global_target.py`.
  */
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { render, cleanup, fireEvent } from "@testing-library/react";
+import { render, cleanup, fireEvent, act } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -25,6 +25,15 @@ import { COMPANY_WORD } from "../vocabulary";
 // The real component's contract: a NAME from the registry wins, the caller's fallback comes next,
 // and the slug is the last resort nobody should ever see. `_global` is absent here on purpose.
 const NAMED: Record<string, string> = { "bank-4040f6": "Example Bank" };
+// The header names a workspace only once the server says this reader may read it, and calls it the
+// target only once the server says they may write it (contextBarServerView.test.tsx). Here the
+// reader is a writing member of every workspace in the set.
+vi.mock("../../ui-kit/wsLinks", () => ({
+  workspaceBySlug: async (slug: string) => ({ id: "aaaaaaaaaa", name: slug, kind: "group", slug,
+    access: "readable", writable: true }),
+}));
+const settle = () => act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
 vi.mock("../../ui-kit/WsLink", () => ({
   WorkspaceName: ({ slug, fallback }: { slug: string; fallback?: string }) =>
     <span>{NAMED[slug] ?? fallback ?? slug}</span>,
@@ -64,7 +73,9 @@ describe("the admin account's header is the company layer and nothing else", () 
   it("shows one chip, Company, whatever the chat's record holds", () => {
     const { container } = bar({ adminAccount: true, target: undefined, workspaces: ["personal", BANK] });
     expect(chips(container)).toEqual([GLOBAL_MOUNT]);
-    expect(chipFor(container, GLOBAL_MOUNT).textContent).toBe(COMPANY_WORD);
+    // The admin's one chip is always the target, so it carries the design system's target
+    // wording ("Saves to …", never colour alone) around the company layer's name.
+    expect(chipFor(container, GLOBAL_MOUNT).textContent).toBe(`Saves to ${COMPANY_WORD}`);
   });
 
   it("the chip is always the target, and says so to a screen reader", () => {
@@ -116,8 +127,9 @@ describe("an everyday account is never offered Company", () => {
     expect(container.textContent).toContain("No other workspace to add");
   });
 
-  it("leaves every other chip exactly as it was", () => {
+  it("leaves every other chip exactly as it was", async () => {
     const { container, onSetTarget } = bar({ adminAccount: false });
+    await settle();
     fireEvent.click(container.querySelector(`[data-ws-target="${BANK}"]`) as HTMLElement);
     expect(onSetTarget).toHaveBeenCalledWith(BANK);
     expect(chipFor(container, BANK).querySelector('[aria-label^="Remove"]')).toBeTruthy();

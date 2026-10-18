@@ -21,8 +21,10 @@ By concern:
   page), `ExtendAction.tsx` and `extend.ts` (Extend and Create as background jobs; a text selection's
   **Ask about this**, which drafts a quote into the chat), `machinery.ts` (what a reader is not shown
   as files), `deskPanel.ts` and `deskTouch.ts` (the right panel when a chat names no page).
-- **Meetings** — `MeetingPageHeader.tsx` (the meeting view's header; the view itself is
-  `canvas/MeetingView.tsx`), `MeetingControls.tsx`, `meetingNote.ts` (where the notes are),
+- **Meetings** — the meeting view and its header are `canvas/MeetingView.tsx` and
+  `canvas/MeetingViewHeader.tsx`. Here: `MeetingPageHeader.tsx` (the header a meeting's note file
+  shows in the pages panel, and `OPEN_MEETING_CHAT`), `MeetingControls.tsx`, `meetingNote.ts` (where
+  the notes are), `livePin.ts` (a live meeting's tab pinned first in every chat while it runs),
   `RecordingPlayer.tsx` and `meetingPlayback.ts` (playback that follows the transcript).
 - **Chat helpers** — `ProposalChips.tsx` and `proposals.ts` (suggested next moves),
   `FlowProposalAct.tsx`, `PoliciesAct.tsx`.
@@ -30,5 +32,15 @@ By concern:
   `SecretConnectionForm.tsx`, `DestinationHost.tsx` and `connectionHosts.ts` (a secret's destination host and its first-use
   confirmation), `connectionEvents.ts`,
   `connectionStyles.ts`, `GitConnection.tsx`, `AttachRepo.tsx`.
+- **Bot accounts** — `browserSession.ts` (the open event, the live-view URL with the VNC password in
+  the fragment only, `startBrowserSession`), `BrowserSessionView.tsx` (the live sign-in browser and
+  its status, mounted once in the shell), `BotAccounts.tsx` (the Bot accounts section of the
+  Connections page: list, sign in, sign in again, delete). Guide:
+  [`docs/docs/minutes/bot-accounts.mdx`](../../../../docs/docs/minutes/bot-accounts.mdx).
 - `vocabulary.ts` (the product's words for its surfaces), `tokens.ts` (design tokens), `types.ts`,
   `mockPhases.ts` (layout fixtures); tests in `__tests__/`.
+
+Minutes sits ABOVE `surfaces/` and `data/`: it composes them, and no surface imports it. What a
+surface or a page renders from here it reaches by kind — `register.tsx` registers the policy and
+proposal acts (`ui-kit/policyDoc` kinds) and the GitHub connection card Settings shows
+(`surfaces/tokens.tsx`'s `GITHUB_CONNECTION_KIND`); the composition root (`app/App.tsx`) imports it.

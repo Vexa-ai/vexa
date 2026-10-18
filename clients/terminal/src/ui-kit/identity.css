@@ -1,0 +1,39 @@
+/* <Identity> — one face for people, companies, workspaces and agents (UI decisions 15f, 15g).
+ * --id-h (a curated hue, set inline per id) and --id-size are the only inputs; the theme decides the
+ * shades, so every monogram meets contrast in dark and light. */
+.vx-id {
+  position: relative; flex: none; display: inline-grid; place-items: center;
+  width: var(--id-size, 24px); height: var(--id-size, 24px);
+  border-radius: 24%; background: hsl(var(--id-h, 212) 38% 34%); color: hsl(var(--id-h, 212) 40% 93%);
+  font: var(--weight-semibold) calc(var(--id-size, 24px) * 0.42) / 1 var(--font-sans);
+  letter-spacing: 0; vertical-align: middle; user-select: none; overflow: visible;
+}
+[data-theme="light"] .vx-id { background: hsl(var(--id-h, 212) 52% 87%); color: hsl(var(--id-h, 212) 48% 24%); }
+.vx-id[data-kind="person"], .vx-id[data-kind="agent"] { border-radius: var(--radius-full); }
+.vx-id[data-has-image], [data-theme="light"] .vx-id[data-has-image] { background: var(--panel2); outline: 1px solid var(--border-subtle); outline-offset: -1px; }
+.vx-id-img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
+.vx-id[data-kind="workspace"] > .vx-id-img, .vx-id[data-kind="company"] > .vx-id-img { object-fit: contain; }
+.vx-id-mono { line-height: 1; }
+.vx-id-mark { width: 74%; height: 74%; fill: currentColor; }
+.vx-id-badge {
+  position: absolute; right: -8%; bottom: -8%; width: 44%; height: 44%; min-width: 10px; min-height: 10px;
+  border-radius: 28%; background: var(--panel2); box-shadow: 0 0 0 1.5px var(--bg); overflow: hidden;
+}
+.vx-id-btn { border: 0; padding: 0; cursor: pointer; }
+.vx-id-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.vx-id-stack { display: inline-flex; align-items: center; }
+.vx-id-stack > .vx-id + .vx-id { margin-left: calc(var(--id-size, 22px) * -0.2); box-shadow: 0 0 0 1.5px var(--bg); }
+.vx-id-more, [data-theme="light"] .vx-id-more { background: var(--panel2); color: var(--text-2); border-radius: var(--radius-full);
+  font-size: calc(var(--id-size, 22px) * 0.4); }
+.vx-id-inline { margin-right: 6px; vertical-align: -3px; }
+.vx-doc-crumb > .vx-id-inline { vertical-align: middle; }
+/* "Change image…" and the owner's answer to a proposed image */
+.vx-wsimg { display: flex; gap: var(--space-4); align-items: flex-start; }
+.vx-wsimg-acts { display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-start; min-width: 0; }
+.vx-wsimg-hint { font-size: var(--text-xs); color: var(--text-3); }
+.vx-wsimg-err { font-size: var(--text-xs); color: var(--danger-text); }
+.vx-wsimg-proposal { display: flex; gap: var(--space-2); align-items: center; padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-md); }
+.vx-ws-face { display: inline-flex; margin-left: -6px; border-radius: var(--radius-full); box-shadow: 0 0 0 2px var(--sidebar); }
+.vx-id-nav { margin-right: 6px; }
+.vx-acct-face { flex: none; }

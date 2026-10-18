@@ -23,7 +23,7 @@ vi.mock("next/headers", () => ({
 }));
 
 import { POST as login } from "../login/route";
-import { GET as redeem } from "../redeem/route";
+import { POST as redeem } from "../redeem/route"; // the button on the link page (prefetch-safe)
 vi.mock("../adminApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../adminApi")>()),
   // admin-api's single-use record for links, held in memory (./linkLedgerDouble.ts)
@@ -39,7 +39,7 @@ function loginReq(body: unknown): import("next/server").NextRequest {
 function redeemReq(query: Record<string, string>): import("next/server").NextRequest {
   const url = new URL("https://terminal.test/api/auth/redeem");
   for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
-  return { nextUrl: url, url: url.toString() } as unknown as import("next/server").NextRequest;
+  return { nextUrl: url, url: url.toString(), method: "POST", headers: new Headers({ origin: "https://terminal.test", "sec-fetch-site": "same-origin" }) } as unknown as import("next/server").NextRequest;
 }
 
 /** An admin-api from before the change: it would still refuse this address if asked. */
@@ -108,7 +108,7 @@ describe("no door is gated on `_global`", () => {
     const minted = mintMagicToken("member@example.com");
     if (!minted.ok) throw new Error("mint failed");
     const res = await redeem(redeemReq({ t: minted.token, next: "/?ask=catch-up" }));
-    expect(res.status).toBe(302);
+    expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/?ask=catch-up");
     expect(res.cookies.get("vexa-token")?.value).toBe("minted-tok");
     expect(calls.some((c) => c.includes("/internal/signin-allowed"))).toBe(false);
@@ -118,7 +118,7 @@ describe("no door is gated on `_global`", () => {
     stubAdminApi();
     const minted = mintMagicToken("member@example.com");
     if (!minted.ok) throw new Error("mint failed");
-    expect((await redeem(redeemReq({ t: minted.token, next: "/?ask=catch-up" }))).status).toBe(302);
+    expect((await redeem(redeemReq({ t: minted.token, next: "/?ask=catch-up" }))).status).toBe(303);
     const second = await redeem(redeemReq({ t: minted.token, next: "/?ask=catch-up" }));
     expect(second.status).toBe(410);
     expect(await second.text()).toContain("already used");

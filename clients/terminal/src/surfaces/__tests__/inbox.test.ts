@@ -115,7 +115,8 @@ describe("a submission is on the server, or still in the outbox", () => {
 
   it("a refused submission is not silently acknowledged", async () => {
     const refused = vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })) as unknown as typeof fetch;
-    await expect(submitToInbox({ id: "c-1", session: "main", prompt: "hello" }, refused)).rejects.toThrow(/503/);
+    // a 503 is waited out first (calmFaults.test.tsx); still refused after that, it is said
+    await expect(submitToInbox({ id: "c-1", session: "main", prompt: "hello" }, refused, async () => {})).rejects.toThrow(/503/);
     expect(readOutbox("main").map((s) => s.id)).toEqual(["c-1"]);
   });
 });

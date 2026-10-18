@@ -1,0 +1,77 @@
+/* R1 rooms (behind `rooms` / `home2`). Tokens only; light and dark come from the theme. */
+/* colours are theme tokens (tint + text pairs), so light and dark need nothing here */
+.vx-wm { display: inline-grid; place-items: center; flex: none; font-weight: 700; letter-spacing: .02em;
+  width: 32px; height: 32px; font-size: 13px; border-radius: 8px; background: var(--accent-tint); color: var(--accent-text); }
+.vx-wm[data-h="1"] { background: var(--info-tint); color: var(--info-text); }
+.vx-wm[data-h="2"] { background: var(--success-tint); color: var(--success-text); }
+.vx-wm[data-h="3"] { background: var(--danger-tint); color: var(--danger-text); }
+.vx-wm[data-h="4"] { background: var(--meeting-tint); color: var(--meeting-text); }
+.vx-wm[data-h="5"] { background: var(--warning-tint); color: var(--warning-text); }
+.vx-wm[data-h="6"] { background: var(--surface-3); color: var(--text-1); }
+.vx-wm[data-h="7"] { background: var(--surface-2); color: var(--text-2); }
+.vx-wm[data-size="16"] { width: 16px; height: 16px; font-size: 7px; border-radius: 4px; }
+.vx-wm[data-size="30"] { width: 30px; height: 30px; font-size: 12px; border-radius: 7px; }
+.vx-wm[data-size="40"] { width: 40px; height: 40px; font-size: 16px; border-radius: 10px; }
+
+/* THE ROOM HEADER — essentials only, 56 px at most */
+.vx-rh { grid-row: 1; grid-column: 2; padding: 0 12px 0 16px; min-width: 0; max-height: 56px; }
+.vx-rh-id { display: flex; flex-direction: column; min-width: 0; flex: 0 1 auto; }
+.vx-rh-name { display: flex; align-items: center; gap: 4px; min-width: 0; font-weight: var(--weight-semibold); color: var(--text-1); }
+.vx-rh-name > svg { flex: none; color: var(--text-3); }
+.vx-rh-name > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-rh-sub { font-size: var(--text-xs); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vx-rh-ws { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.vx-rh-ws:hover { color: var(--text-1); text-decoration: underline; }
+.vx-rh-gap { flex: 1; min-width: 4px; }
+.vx-rh-call { flex: none; }
+@media (max-width: 640px) { .vx-rh .vx-wm { display: none; } .vx-rh-sub { max-width: 46vw; } }
+
+.vx-rooms-form { display: flex; flex-direction: column; gap: 12px; font-size: var(--text-sm); }
+.vx-rooms-field { display: flex; flex-direction: column; gap: 6px; }
+.vx-rooms-field > span { color: var(--text-2); font-size: var(--text-xs); }
+.vx-rooms-input, .vx-rooms-select { font: inherit; font-size: var(--text-sm); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); color: var(--text-1); padding: 6px 8px; }
+.vx-rooms-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 2px; align-self: flex-start; }
+.vx-rooms-seg button { font: inherit; font-size: var(--text-xs); border: 0; background: transparent; color: var(--text-2); padding: 3px 12px; border-radius: 999px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.vx-rooms-seg button[aria-checked="true"] { background: var(--surface-2); color: var(--text-1); }
+.vx-rooms-note { font-size: var(--text-xs); color: var(--text-3); margin: 0; }
+.vx-rooms-error { font-size: var(--text-xs); color: var(--danger-text); margin: 0; }
+.vx-rooms-acts { display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--border-subtle); padding-top: 10px; }
+.vx-rooms-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.vx-rooms-list li { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-radius: var(--radius-md); }
+.vx-rooms-list li:hover { background: var(--surface-2); }
+.vx-rooms-list li > span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.vx-rooms-list b { font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--text-1); }
+.vx-rooms-list small { font-size: var(--text-xs); color: var(--text-3); }
+
+/* Vexa's tile in a room call (placeholder: it listens; it speaks when addressed) */
+.vx-ck-vexatile { margin: 0; flex: 0 0 120px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; border-radius: 10px; border: 1px solid var(--border); padding: 8px; font-size: 12px; color: var(--text-2); }
+.vx-ck-vexatile[data-speaking] { box-shadow: 0 0 0 2px var(--accent); }
+.vx-ck-withvexa { display: flex; gap: 8px; align-items: stretch; }
+.vx-ck-withvexa > :first-child { flex: 1 1 auto; min-width: 0; }
+.vx-face { flex: none; width: 26px; height: 26px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 11px; font-weight: 700; background: var(--surface-2); color: var(--text-1); border: 1px solid var(--border); }
+.vx-rh-busy { color: var(--text-2); }
+@media (prefers-reduced-motion: no-preference) { .vx-rh-busy { animation: vx-rh-pulse 1.6s ease-in-out infinite; } }
+@keyframes vx-rh-pulse { 50% { opacity: .55; } }
+
+/* Schedule a call (2.4): the planned call, said back */
+.vx-rooms-planned { display: flex; align-items: center; gap: 10px; margin: 0; padding: 10px 12px; border-radius: var(--radius-md); background: var(--surface-2); color: var(--text-1); }
+.vx-rooms-planned > svg { flex: none; color: var(--text-2); }
+.vx-rooms-planned > span { display: flex; flex-direction: column; min-width: 0; }
+.vx-rooms-planned small { font-size: var(--text-xs); color: var(--text-3); }
+a.vx-btn { text-decoration: none; }
+
+/* The room call's lane (2.3): how Vexa writes on this call, and what it changed or proposed */
+.vx-ck-lane { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--surface-1); font-size: var(--text-xs); color: var(--text-2); min-width: 0; }
+.vx-ck-lane-mode { display: flex; align-items: center; gap: 6px; margin: 0; }
+.vx-ck-lane-mode > svg { flex: none; color: var(--text-3); }
+.vx-ck-lane-mode > span { flex: 1; min-width: 0; }
+.vx-ck-lane-mode b { color: var(--text-1); font-weight: var(--weight-semibold); }
+.vx-ck-lane-link { font: inherit; display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; color: var(--text-2); cursor: pointer; padding: 2px 4px; border-radius: var(--radius-md); flex: none; }
+.vx-ck-lane-link:hover { color: var(--text-1); background: var(--surface-2); }
+.vx-ck-lane-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.vx-ck-lane-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid var(--border-subtle); }
+.vx-ck-lane-err { flex-basis: 100%; }
+.vx-ck-lane-what { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.vx-ck-lane-what b { color: var(--text-1); font-weight: var(--weight-medium); }
+.vx-ck-lane-what small { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vx-ck-lane-acts { display: inline-flex; gap: 4px; flex: none; }

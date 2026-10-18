@@ -16,8 +16,6 @@
  *
  *  Everything here is pure or a thin fetch, so the view's rules are tested without a browser.
  */
-import { postIntent, clearPending } from "../minutes/extend";
-import type { ChatIntent } from "../surfaces/chatIntent";
 import { splitTranscriptSlots } from "../ui-kit/transcriptSlot";
 import type { TranscriptSegment } from "./types";
 
@@ -32,6 +30,23 @@ export function notesForView(body: string): string {
   return splitTranscriptSlots(src)
     .map((s) => (s.kind === "text" ? s.text : ""))
     .join("");
+}
+
+/** The page's own `# Title`, when its first non-blank line is one — else "". */
+export function leadingTitle(md: string): string {
+  const first = String(md ?? "").split("\n").find((l) => l.trim());
+  const m = first ? /^#\s+(.+?)\s*#*\s*$/.exec(first) : null;
+  return m ? m[1] : "";
+}
+
+/** The notes without their `# Title` line: the meeting's name is the view's header (its real name,
+ *  #1783), and a minted page's placeholder heading ("Google Meet meeting") must not be a second,
+ *  wrong title under it. Only a FIRST-line H1 goes; every other line stays. */
+export function withoutLeadingTitle(md: string): string {
+  const lines = String(md ?? "").split("\n");
+  const i = lines.findIndex((l) => l.trim());
+  if (i < 0 || !/^#\s+\S/.test(lines[i])) return String(md ?? "");
+  return lines.slice(0, i).concat(lines.slice(i + 1)).join("\n");
 }
 
 /** The notes without headings that head nothing. A minted page carries its sections empty until an
@@ -67,18 +82,28 @@ export function clock(seconds: number): string {
   return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
 
+/** Below this a `ts` is seconds into the meeting; at or above it, seconds since 1970 (2001-09-09). */
+const EPOCH_FLOOR_S = 1e9;
+
 /** How far into the meeting a segment was said, in seconds — or null when the segment carries no
  *  time. A meeting-relative `ts` wins; otherwise the wall-clock `tsMs` against the first line's. */
 export function segmentOffset(segments: TranscriptSegment[], index: number): number | null {
   const s = segments[index];
   if (!s) return null;
-  const rel = typeof s.ts === "number" ? s.ts : typeof s.ts === "string" && s.ts.trim() !== "" ? Number(s.ts) : NaN;
+  const num = (x: TranscriptSegment) => typeof x.ts === "number" ? x.ts : typeof x.ts === "string" && x.ts.trim() !== "" ? Number(x.ts) : NaN;
+  const rel = num(s);
+  // A `ts` this large is a wall-clock epoch (seconds), not a place in the meeting: shown as a
+  // duration it read "497792:23:39" (founder, 2026-10-15). It is measured from the first line's.
+  if (Number.isFinite(rel) && rel >= EPOCH_FLOOR_S) {
+    const first = segments.map(num).find((v) => Number.isFinite(v) && v >= EPOCH_FLOOR_S);
+    return first === undefined ? null : Math.max(0, rel - first);
+  }
   if (Number.isFinite(rel)) return rel;
   const first = segments.find((x) => typeof x.tsMs === "number")?.tsMs;
   return typeof s.tsMs === "number" && typeof first === "number" ? (s.tsMs - first) / 1000 : null;
 }
 
-/** "Updated 14:32 · from transcript up to 12:05" — what the notes have taken in, in one line.
+/** "Updated 14:32 · transcript to 12:05" — what the notes have taken in, in one line.
  *
  *  `cursor` is the page's own `transcript_cursor`: the index of the next segment the last update did
  *  NOT read, written back by the agent. So the notes cover segments `[0, cursor)`, and the time is
@@ -103,7 +128,7 @@ export function notesFreshness(opts: {
   const n = /^\d+$/.test(c) ? Number(c) : NaN;
   if (Number.isFinite(n) && n > 0) {
     const at = segmentOffset(opts.segments, Math.min(n, opts.segments.length) - 1);
-    parts.push(at === null ? "from the transcript" : `from transcript up to ${clock(at)}`);
+    parts.push(at === null ? "from the transcript" : `transcript to ${clock(at)}`);
   } else {
     parts.push("not yet updated from the transcript");
   }
@@ -122,45 +147,5 @@ export function transcriptLines(segments: TranscriptSegment[]): number {
   return segments.filter((s) => s.completed !== false && (s.text ?? "").trim()).length;
 }
 
-/** Is the transcript open? COLLAPSED BY DEFAULT, live or finished (founder, 2026-10-11: during a
- *  live meeting the tail keeps updating; expanding is the person's choice). The person's own toggle
- *  is remembered per meeting for this browser session — never across sessions, and never shared. */
-const OPEN_KEY = (meetingId: string) => `vexa.meetingTranscriptOpen.${meetingId}`;
-
-export function loadTranscriptOpen(meetingId: string): boolean {
-  try { return sessionStorage.getItem(OPEN_KEY(meetingId)) === "1"; } catch { return false; }
-}
-
-export function saveTranscriptOpen(meetingId: string, open: boolean): void {
-  try { sessionStorage.setItem(OPEN_KEY(meetingId), open ? "1" : "0"); } catch { /* storage refused */ }
-}
-
-/** CREATE NOTES — the meeting's page, minted by agent-api through the route that has always minted
- *  it (`POST /api/meeting/note`). Idempotent on the server: a page already there is returned as it
- *  is. The server checks the caller may read this meeting before it writes anything; a refusal is
- *  thrown so the view can say so rather than pretend the page exists. */
-export async function createMeetingNotes(meetingId: string, fetcher: typeof fetch = fetch): Promise<string> {
-  const r = await fetcher("/api/meeting/note", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ meeting_id: String(meetingId) }),
-  });
-  if (!r.ok) throw new Error(r.status === 403 ? "You can't create notes for this meeting." : "Could not create notes. Retry.");
-  const body = await r.json() as { path?: unknown };
-  const path = typeof body?.path === "string" ? body.path.trim() : "";
-  if (!path || path.split("/").includes("..")) throw new Error("Could not create notes. Retry.");
-  return path;
-}
-
-/** UPDATE NOTES — the existing Extend act on the meeting's page (`extend` + `meeting`, which the
- *  server runs as the `extend-meeting` ask). One writer: the chat's agent, through agent-api, reading
- *  the transcript since the page's cursor. Nothing new is invented on the client.
- *
- *  The view stays where it is: an Extend normally lands the panel on the page it wrote, and here
- *  the page IS in front, inside the view — so the landing is cleared and the view re-reads the notes
- *  on the commit instead. */
-export function updateMeetingNotes(meetingId: string, path: string, instruction?: string): ChatIntent | null {
-  const posted = postIntent({ kind: "extend", path, meeting: String(meetingId), ...(instruction ? { instruction } : {}) });
-  clearPending();
-  return posted;
-}
+// CREATE / UPDATE NOTES live in `minutes/meetingNote.ts` (the page header's actions call them too).
+export { createMeetingNotes, updateMeetingNotes } from "../minutes/meetingNote";

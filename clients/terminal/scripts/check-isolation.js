@@ -93,23 +93,24 @@ const IMPORT_SPECIFIER = new RegExp([
 
 let files = 0;
 const violations = [];
-/** FOLDER CYCLES (architecture pass 4, S7). dependency-cruiser's no-circular works per FILE, so two
+/** FOLDER CYCLES (architecture pass 4, S7). dependency-cruiser's no-circular works per FILE, so
  *  top-level folders of src/ can import each other through different files and no gate sees it:
  *  canvas/ ⇄ minutes/ did, through a shared vocabulary of event names that lived in canvas/actions.
  *  That vocabulary now lives in platform/ (events.ts, turnMarks.ts), below every surface.
  *
  *  This records which folder imports which (production files only; tests may reach across) and
- *  refuses any pair of folders that import each other, unless the pair is listed below. The list is
- *  the debt as it stands, not a licence: a pair leaves it when it is broken and no pair joins it. */
-const KNOWN_FOLDER_CYCLES = new Set([
-  "app<->minutes", "app<->surfaces", "app<->workbench", "canvas<->surfaces", "minutes<->surfaces",
-  "minutes<->ui-kit", "surfaces<->ui-kit", "surfaces<->workbench",
-]);
+ *  refuses ANY cycle among folders — every strongly connected component of two or more, a chain
+ *  a → b → c → a as much as a pair — and prints the cycle's path. Until Vexa-ai/vexa#1783 it refused
+ *  only mutual pairs, against an allow-list of eight known ones; that work emptied the list, so the
+ *  list is gone: no cycle is allowed. The folders form layers, each importing only the ones below:
+ *  platform < contributions · data < ui-kit < surfaces < minutes < canvas, with workbench above
+ *  surfaces and app above all. What a lower folder renders from a higher one it reaches by kind
+ *  through contributions/, never by import. */
 const folderEdges = new Map();   // "from" -> Set("to")
 const folderOf = (abs) => { const r = relative(SRC, abs); return r.startsWith("..") ? null : r.split(sep)[0]; };
 const isTest = (p) => p.includes(`${sep}__tests__${sep}`) || /\.test\.tsx?$/.test(p);
-/** A lazy `import("../x")` is a runtime edge too: ui-kit reaches surfaces/ and minutes/ that way so
- *  that no static cycle shows. Relative specifiers only, so the type-query ambiguity above does not
+/** A lazy `import("../x")` is a runtime edge too: ui-kit once reached surfaces/ and minutes/ that way
+ *  so that no static cycle showed. Relative specifiers only, so the type-query ambiguity above does not
  *  arise for a package name. */
 const LAZY_RELATIVE = /(?<![\w$.])import\(\s*['"](\.[^'"\n]+)['"]\s*\)/g;
 const noteEdge = (p, spec) => {
@@ -141,10 +142,48 @@ const noteEdge = (p, spec) => {
   }
 })(SRC);
 if (violations.length) { console.error("❌ ISOLATION VIOLATION (undeclared dep):\n  " + violations.join("\n  ")); process.exit(1); }
-const mutual = [];
-for (const [from, tos] of folderEdges) for (const to of tos) if (from < to && folderEdges.get(to)?.has(from)) mutual.push(`${from}<->${to}`);
-const newCycles = mutual.filter((pair) => !KNOWN_FOLDER_CYCLES.has(pair));
-const broken = [...KNOWN_FOLDER_CYCLES].filter((pair) => !mutual.includes(pair));
-if (newCycles.length) { console.error("❌ FOLDER CYCLE (src/ folders that import each other):\n  " + newCycles.join("\n  ") + "\n  Move what both need below both (platform/ holds shared vocabulary)."); process.exit(1); }
-if (broken.length) { console.error("❌ FOLDER CYCLE LIST IS STALE — these pairs no longer import each other; remove them from KNOWN_FOLDER_CYCLES:\n  " + broken.join("\n  ")); process.exit(1); }
-console.log(`✅ ISOLATION VERIFIED — scanned ${files} files in src/; every import intra-package (./ or @/), builtin, or declared dep; no new folder cycle (${mutual.length} known).`);
+// Tarjan: every strongly connected component of the folder graph. Size ≥ 2 is a cycle (a folder
+// never edges to itself — noteEdge drops from === to).
+const sccs = [];
+{
+  const nodes = new Set([...folderEdges.keys(), ...[...folderEdges.values()].flatMap((t) => [...t])]);
+  const index = new Map(), low = new Map(), stack = [], on = new Set();
+  let i = 0;
+  const visit = (v) => {
+    index.set(v, i); low.set(v, i); i++; stack.push(v); on.add(v);
+    for (const w of [...(folderEdges.get(v) || [])].sort()) {
+      if (!index.has(w)) { visit(w); low.set(v, Math.min(low.get(v), low.get(w))); }
+      else if (on.has(w)) low.set(v, Math.min(low.get(v), index.get(w)));
+    }
+    if (low.get(v) === index.get(v)) {
+      const comp = [];
+      let w;
+      do { w = stack.pop(); on.delete(w); comp.push(w); } while (w !== v);
+      if (comp.length > 1) sccs.push(comp.sort());
+    }
+  };
+  for (const v of [...nodes].sort()) if (!index.has(v)) visit(v);
+}
+/** One concrete cycle through a component, as a path that returns to its start: BFS from the
+ *  component's first folder back to itself, staying inside the component. */
+const cyclePath = (comp) => {
+  const inside = new Set(comp), start = comp[0];
+  const prev = new Map(), queue = [start];
+  const seen = new Set();
+  while (queue.length) {
+    const v = queue.shift();
+    for (const w of [...(folderEdges.get(v) || [])].sort()) {
+      if (!inside.has(w)) continue;
+      if (w === start) { const path = [start]; for (let u = v; u !== start; u = prev.get(u)) path.splice(1, 0, u); return [...path, start].join(" -> "); }
+      if (!seen.has(w)) { seen.add(w); prev.set(w, v); queue.push(w); }
+    }
+  }
+  return comp.join(", ");
+};
+if (sccs.length) {
+  console.error("❌ FOLDER CYCLE (src/ folders that reach each other through imports):\n  " +
+    sccs.map((c) => `${cyclePath(c)}   [component: ${c.join(", ")}]`).join("\n  ") +
+    "\n  Move what both need below both (platform/ holds shared vocabulary), or have the lower folder reach the higher one by kind through contributions/.");
+  process.exit(1);
+}
+console.log(`✅ ISOLATION VERIFIED — scanned ${files} files in src/; every import intra-package (./ or @/), builtin, or declared dep; no folder cycle (the src/ folders are layered).`);

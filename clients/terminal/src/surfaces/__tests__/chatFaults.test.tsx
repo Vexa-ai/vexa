@@ -33,7 +33,7 @@ vi.mock("../chatStream", async (importOriginal) => ({
 
 import { Chat } from "../chat";
 import { ServicesProvider, createContainer, reg, CommandServiceId, type CommandService } from "../../platform";
-import { LayoutServiceId, createLayoutService } from "../../workbench/layout";
+import { LayoutServiceId, createLayoutService } from "../../platform/layout";
 import { ASK_CHAT_EVENT } from "../../platform";
 
 const SPAWN_REFUSED = {
