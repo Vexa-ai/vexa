@@ -77,9 +77,10 @@ describe("New workspace", () => {
     const readme = calls.find((c) => c.url.startsWith("/api/workspace/file") && c.method === "PUT");
     expect(readme?.body).toMatchObject({ path: "README.md", slug: "kestrel-1a2b" });
     expect(String((readme?.body as { content: string }).content)).toContain("The insurance pilot.");
-    const icon = calls.find((c) => c.url.includes("/identity/icon") && c.method === "PUT");
-    expect(icon?.url).toBe("/api/workspaces/kestrel-1a2b/identity/icon");
-    expect(icon?.body).toEqual({ site: "kestrel.example", propose: true });
+    const icons = calls.filter((c) => c.url.includes("/identity/icon") && c.method === "PUT");
+    expect(icons.map((c) => c.url)).toEqual(["/api/workspaces/kestrel-1a2b/identity/icon", "/api/workspaces/kestrel-1a2b/identity/icon"]);
+    expect(icons[0].body).toEqual({ glyph: "auto" });               // its standard icon, picked at once
+    expect(icons[1].body).toEqual({ site: "kestrel.example", propose: true });
     expect(aim.got).toEqual([{ workspace: "kestrel-1a2b" }]);
     expect(ask.got).toEqual([]);                                     // a found logo needs no agent turn
     type("People to invite", "ruth@kestrel.example, li@kestrel.example");
@@ -95,7 +96,7 @@ describe("New workspace", () => {
     aim.off(); ask.off();
   });
 
-  it("private, no site: the agent is asked (hidden) to design a mark and PROPOSE it; no invite step", async () => {
+  it("private, no site: a standard icon is picked from the name and purpose, no agent turn; no invite step", async () => {
     const ask = heard(ASK_CHAT_EVENT);
     const closed = vi.fn();
     render(<NewWorkspaceDialog open onClose={closed} />);
@@ -105,9 +106,9 @@ describe("New workspace", () => {
     await waitFor(() => expect(closed).toHaveBeenCalled());
     expect(calls.find((c) => c.url === "/api/workspace/new")?.body).toEqual({ name: "My notes" });
     expect(calls.some((c) => c.url === "/api/workspace/shared/new")).toBe(false);
-    const d = ask.got[0] as { prompt: string; hidden?: boolean };
-    expect(d.hidden).toBe(true);
-    expect(d.prompt).toContain("propose: true");
+    const icons = calls.filter((c) => c.url.includes("/identity/icon") && c.method === "PUT");
+    expect(icons.map((c) => c.body)).toEqual([{ glyph: "auto" }]);
+    expect(ask.got).toEqual([]);
     ask.off();
   });
 

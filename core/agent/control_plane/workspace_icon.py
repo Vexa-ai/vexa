@@ -276,6 +276,61 @@ def reset_icon(ws: Path) -> list[str]:
     return touched
 
 
+# ── the standard icon (README `glyph:`, founder 2026-10-18) ─────────────────────────────────────
+
+def glyph(ws: Path, slug: str = "") -> tuple[Optional[str], Optional[str]]:
+    """``(name, by)``: the stored standard icon, or ``(None, None)``."""
+    from control_plane import workspace_glyph  # noqa: PLC0415
+    return workspace_glyph.stored(front_page.front_matter(_readme(ws)))
+
+
+def derived_glyph(ws: Path, slug: str) -> str:
+    """The icon a workspace with none stored shows: what its README and slug match (no model call on
+    a read), else a neutral one stable for the slug. The personal workspace wears the desk's."""
+    from control_plane import workspace_glyph  # noqa: PLC0415
+    if slug in ("", "personal", "desk"):
+        return workspace_glyph.DESK
+    text = _readme(ws)
+    name, purpose = workspace_glyph.name_and_purpose(text, front_page.front_matter(text), slug)
+    return workspace_glyph.match(name, purpose) or workspace_glyph.generic(slug)
+
+
+def set_glyph(ws: Path, name: str, by: str) -> list[str]:
+    """Store a standard icon in the README (``glyph:`` and ``glyph_by:``). A PERSON's pick also drops
+    any image of the workspace's own, so what they chose is what shows. Returns the paths touched."""
+    from control_plane import workspace_glyph  # noqa: PLC0415
+    if not workspace_glyph.known(name):
+        raise IconRefused(f"{name!r} is not one of the standard icons")
+    touched = [README]
+    text = _readme(ws)
+    if by == "person":
+        for rel in ICON_PATHS.values():
+            if wpaths.unlink_inside(ws, rel, allow=_ALLOW):
+                touched.append(rel)
+        text = _set_front(text, "icon", None) if "icon" in front_page.front_matter(text) else text
+    text = _set_front(_set_front(text, "glyph", name), "glyph_by", by)
+    wpaths.write_text_inside(ws, README, text)
+    return touched
+
+
+def assign_glyph(ws: Path, name: str, ws_id: str, *, purpose: str = "", author: str = "vexa") -> Optional[str]:
+    """AT CREATION: store the icon the name (and purpose) match, else a neutral one, as ``auto``, in one
+    commit. Never raises — a workspace is made with or without its icon (the image route still
+    derives one). No model call here: creation stays instant; ``PUT … glyph: auto`` asks one."""
+    from control_plane import workspace_glyph  # noqa: PLC0415
+    from shared.gitexec import run_git  # noqa: PLC0415
+    try:
+        pick, by = workspace_glyph.choose(name or "", purpose, ws_id)
+        touched = set_glyph(ws, pick, by)
+        if (ws / ".git").is_dir():
+            run_git(ws, "add", "--", *touched)
+            run_git(ws, "-c", f"user.name={author or 'vexa'}", "-c", "user.email=terminal@vexa.local",
+                    "commit", "-q", "-m", f"workspace icon: {pick} ({by})", "--", *touched)
+        return pick
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def company_domain(ws: Path) -> Optional[str]:
     fm = front_page.front_matter(_readme(ws))
     raw = (fm.get("domain") or fm.get("website") or fm.get("company_domain") or "").strip().lower()

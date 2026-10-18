@@ -10,6 +10,8 @@
  *  Colour is set by a custom property (`--id-h`) and `identity.css`, per theme; size by `--id-size`. */
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { WORKSPACE_IMAGE_CHANGED, agentMark, identityColour, identitySrc, media, monogram, type IdentityKind } from "../platform/identity";
+import { glyphNow, loadGlyphs } from "../platform/workspaceGlyphs";
+import { GlyphSvg } from "./WorkspaceGlyph";
 import "./identity.css";
 
 /** URLs that answered with an error this session: not asked again on the next render. */
@@ -26,6 +28,8 @@ export type IdentityProps = {
   src?: string;
   /** a workspace's slug — its image route */
   slug?: string;
+  /** a workspace's standard icon by name, when the caller already knows it (else the image route says) */
+  glyph?: string;
   /** media-proxy keys: a user's avatar, a company's logo (`d:<domain>`) */
   avatar?: string;
   logo?: string;
@@ -39,6 +43,68 @@ export type IdentityProps = {
   /** a small overlay (presence dot) */
   children?: ReactNode;
 };
+
+/** A WORKSPACE'S FACE, asked once per image URL (founder 2026-10-18: standard icons). The image route
+ *  answers a stored image or the company logo — drawn as an <img> — or the workspace's STANDARD ICON,
+ *  an SVG carrying `data-vexa-glyph="<name>"`, which is drawn here in the tile's own colours instead
+ *  (an <img> cannot take the theme). 404 → the monogram. No fetch, or a failed one → the <img> path,
+ *  exactly as before. */
+type Face = { glyph: string } | { img: true } | { none: true };
+const FACES = new Map<string, Face>();
+const ASKING = new Map<string, Promise<Face>>();
+const GLYPH_ATTR = /data-vexa-glyph="([a-z0-9-]{1,64})"/;
+function askFace(url: string): Promise<Face> {
+  const known = FACES.get(url);
+  if (known) return Promise.resolve(known);
+  let p = ASKING.get(url);
+  if (p) return p;
+  p = (async (): Promise<Face> => {
+    try {
+      const r = await fetch(url, { credentials: "same-origin" });
+      if (!r || typeof r.ok !== "boolean" || !r.headers) return { img: true };
+      if (!r.ok) return { none: true };
+      if ((r.headers.get("content-type") || "").includes("svg")) {
+        const m = GLYPH_ATTR.exec(await r.text());
+        if (m) return { glyph: m[1] };
+      }
+      return { img: true };
+    } catch {
+      return { img: true };
+    }
+  })().then((f) => { FACES.set(url, f); ASKING.delete(url); return f; });
+  ASKING.set(url, p);
+  return p;
+}
+
+/** Test seam: forget every face asked. */
+export function resetWorkspaceFaces(): void { FACES.clear(); ASKING.clear(); }
+
+function useWorkspaceFace(url: string | undefined, enabled: boolean): Face | undefined {
+  const [, bump] = useState(0);
+  const face = url && enabled ? FACES.get(url) : undefined;
+  useEffect(() => {
+    if (!url || !enabled || FACES.has(url) || typeof fetch !== "function") return;
+    let live = true;
+    void askFace(url).then(() => { if (live) bump((n) => n + 1); });
+    return () => { live = false; };
+  }, [url, enabled]);
+  if (!url || !enabled) return undefined;
+  if (typeof fetch !== "function") return { img: true };
+  return face;
+}
+
+/** The glyph's strokes once the list is loaded (re-renders when it lands). */
+function useGlyphDef(name: string | undefined) {
+  const [, bump] = useState(0);
+  const def = glyphNow(name);
+  useEffect(() => {
+    if (!name || def) return;
+    let live = true;
+    void loadGlyphs().then(() => { if (live) bump((n) => n + 1); });
+    return () => { live = false; };
+  }, [name, def]);
+  return def;
+}
 
 function Img({ url, onFail, cls }: { url: string; onFail: () => void; cls: string }) {
   return <img className={cls} src={url} alt="" draggable={false} loading="lazy" decoding="async"
@@ -65,8 +131,15 @@ export function Identity(p: IdentityProps) {
   }, [kind, p.slug]);
   const base = identitySrc(p);
   const want = base && version ? `${base}${base.includes("?") ? "&" : "?"}v=${version}` : base;
+  // a workspace's own route is asked first (stored image · company logo · standard icon); a given
+  // `src` (a proposal preview) or a given `glyph` is drawn as it is
+  const routed = kind === "workspace" && !p.src && !p.glyph && !!want;
+  const face = useWorkspaceFace(want, routed);
+  const glyphName = p.glyph || (face && "glyph" in face ? face.glyph : undefined);
+  const glyph = useGlyphDef(kind === "workspace" && !p.src ? glyphName : undefined);
+  const waiting = (routed && !face) || (!!glyphName && !glyph && !p.src);
   const [failed, setFailed] = useState<string | null>(null);
-  const url = want && !FAILED.has(want) && failed !== want ? want : undefined;
+  const url = want && !FAILED.has(want) && failed !== want && !(routed && face && !("img" in face)) && !p.glyph && !waiting ? want : undefined;
   const [, rerender] = useState(0);
   const mark = kind === "agent" ? agentMark(id) : null;
   const hue = mark ? mark.hue : identityColour(id).hue;
@@ -76,22 +149,26 @@ export function Identity(p: IdentityProps) {
   const cls = `vx-id${p.onChange ? " vx-id-btn" : ""}${p.className ? ` ${p.className}` : ""}`;
   const a11y = p.onChange ? {} : p.label ? { role: "img", "aria-label": name } : { "aria-hidden": true as const };
 
-  const face = url
+  const drawn = url
     ? <Img url={url} cls="vx-id-img" onFail={() => setFailed(url)} />
-    : mark
-      ? <svg className="vx-id-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{SHAPES[mark.shape]}</svg>
-      : <span className="vx-id-mono">{monogram(name)}</span>;
+    : glyph
+      ? <GlyphSvg def={glyph} />
+      : waiting
+        ? null
+        : mark
+          ? <svg className="vx-id-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">{SHAPES[mark.shape]}</svg>
+          : <span className="vx-id-mono">{monogram(name)}</span>;
 
   const inner = (
     <>
-      {face}
+      {drawn}
       {badge && <span className="vx-id-badge" data-badge="">
         <Img url={badge} cls="vx-id-img" onFail={() => rerender((n) => n + 1)} />
       </span>}
       {p.children}
     </>
   );
-  const data = { "data-kind": kind, "data-has-image": url ? "" : undefined };
+  const data = { "data-kind": kind, "data-has-image": url ? "" : undefined, "data-glyph": !url && glyph ? glyph.name : undefined };
   if (p.onChange) {
     const what = kind === "person" ? "Change photo" : "Change image";
     return <button type="button" className={cls} style={style} {...data} aria-label={`${what} — ${name}`}

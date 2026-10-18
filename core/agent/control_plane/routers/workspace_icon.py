@@ -1,13 +1,16 @@
 """routers/workspace_icon.py — a workspace's image over HTTP (UI decision 15f, Vexa-ai/vexa#1783).
 
-    GET  /api/workspaces/{slug}/identity/icon       the image: its own, else the bound company's logo
-                                                    (media proxy), else 404 — the client then draws
-                                                    the monogram. `?proposal=1` shows a pending one.
+    GET  /api/workspaces/{slug}/identity/icon       the image: its own, else the standard icon the
+                                                    person chose, else the bound company's logo (media
+                                                    proxy), else its standard icon — stored at creation
+                                                    or matched from its README and slug (an SVG with
+                                                    `data-vexa-glyph`). `?proposal=1` shows a pending one.
     GET  /api/workspaces/{slug}/identity/state      what it is now (`workspace` · `company` · none) and
                                                     any pending proposal
     PUT  /api/workspaces/{slug}/identity/icon       set it: an `svg`, base64 `data_b64` + `type`, a
                                                     `url` the server fetches, `site` (find that site's
-                                                    logo), `use: company_logo`, or `reset`
+                                                    logo), `use: company_logo`, `reset`, or `glyph` (a
+                                                    standard icon by name; `auto` picks one)
     POST /api/workspaces/{slug}/identity/proposal   the owner accepts or declines a pending proposal
 
 WHY `identity/icon` AND NOT `{slug}/icon`: the shorter path overlaps `/api/workspaces/by-slug/{slug}`
@@ -35,6 +38,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from control_plane import home_media
+from control_plane import workspace_glyph as wg
 from control_plane import workspace_icon as wi
 from control_plane import workspace_membership as membership_mod
 from control_plane.ceiling import is_delegated
@@ -52,7 +56,7 @@ HEADERS = {
 
 class IconSetBody(BaseModel):
     """One way to set a workspace's image. Give exactly one of `svg`, `data_b64`, `url`, `site`,
-    `use` or `reset`."""
+    `use`, `reset` or `glyph`."""
     model_config = ConfigDict(extra="forbid")
     svg: Optional[str] = Field(default=None, max_length=wi.MAX_BYTES * 2, description=(
         "An SVG mark you designed: one glyph or motif and a colour that suits the topic, a square "
@@ -69,7 +73,11 @@ class IconSetBody(BaseModel):
     use: Optional[str] = Field(default=None, description=(
         "`company_logo`: store the bound company's logo (README `domain:`) as the image."))
     reset: Optional[bool] = Field(default=None, description=(
-        "Remove the image; the workspace shows its company's logo or its monogram again."))
+        "Remove the image; the workspace shows its company's logo or its standard icon again."))
+    glyph: Optional[str] = Field(default=None, max_length=64, description=(
+        "A STANDARD ICON by name (the outline set the product draws with; `workspace_glyphs`), the "
+        "person's pick — it replaces an uploaded image. `auto` picks one from the workspace's name and "
+        "purpose (its README), as at creation."))
     propose: Optional[bool] = Field(default=None, description=(
         "Store it as a PROPOSAL the owner accepts (on the workspace's card) instead of setting it — "
         "what you do for a workspace that was just created, so the person sees and chooses it."))
@@ -138,24 +146,75 @@ def build(**d) -> APIRouter:
             run_git(ws, "-c", f"user.name={author or 'vexa'}", "-c", "user.email=terminal@vexa.local",
                     "commit", "-q", "-m", message, "--", *staged)
 
+    def _glyph(ws: Path, slug: str) -> tuple[str, str]:
+        """The standard icon that shows: the stored one (and who chose it), else the derived one."""
+        name, by = wi.glyph(ws, slug)
+        return (name, by) if name else (wi.derived_glyph(ws, _slug(slug) or ""), "derived")
+
+    def _face(ws: Path, slug: str) -> tuple[Optional[tuple[bytes, str]], str]:
+        """What the image route serves and its source: own image · the person's icon · the company
+        logo · the standard icon."""
+        own = wi.read_icon(ws)
+        if own:
+            return own, "workspace"
+        name, by = _glyph(ws, slug)
+        if by == "person":
+            return (wg.svg(name), "image/svg+xml"), "glyph"
+        logo = _company(ws)
+        if logo:
+            return logo, "company"
+        return (wg.svg(name), "image/svg+xml"), "glyph"
+
+    def _model(request: Request):
+        """The small model for the fallback pick, or None (no catalog, or the budget says stop)."""
+        catalog = getattr(d.get("dispatcher"), "catalog", None)
+        if catalog is None or getattr(catalog, "empty", True):
+            return None
+        subject = subject_of(request)
+
+        def complete(system: str, user: str):
+            from control_plane import budgets, home_model  # noqa: PLC0415
+            from shared import usage as usage_mod  # noqa: PLC0415
+            pol = budgets.read(_global_root())
+            ucli = budgets.usage_client(d.get("redis_url"))
+            if budgets.verdict(pol, usage_mod.rolling(ucli, subject), background=True).get("stop"):
+                return None
+            out = home_model.complete_json(catalog, system, user, named=pol.get("model_home", "cheapest"),
+                                           allowed=budgets.allowed_list(pol))
+            if out and out.get("_tokens"):
+                from control_plane import llm_budget  # noqa: PLC0415
+                llm_budget.record_local(subject, "title", out.get("_usage") or {"prompt_tokens": int(out["_tokens"])},
+                                        fallback_client=ucli)
+            return out
+        return complete
+
     @router.get("/api/workspaces/{slug}/identity/icon")
     def icon(slug: str, request: Request, proposal: int = 0):
-        """The workspace's image — its own (`.vexa/icon.*`), else its company's logo through the
-        media proxy, else 404 (draw the monogram). `proposal=1` serves a pending proposal instead."""
+        """The workspace's image — its own (`.vexa/icon.*`), else the standard icon the person chose,
+        else its company's logo through the media proxy, else its standard icon (stored at creation,
+        or matched from its README and slug): never a 404 for a workspace you can read. The standard
+        icon is an SVG carrying `data-vexa-glyph="<name>"`. `proposal=1` serves a pending proposal."""
         ws = _target(request, slug)
-        got = wi.read_proposal(ws) if proposal else (wi.read_icon(ws) or _company(ws))
-        if not got:
-            raise HTTPException(status_code=404, detail="no image")
+        if proposal:
+            got = wi.read_proposal(ws)
+            if not got:
+                raise HTTPException(status_code=404, detail="no image")
+        else:
+            got, _source = _face(ws, slug)
         return Response(content=got[0], media_type=got[1], headers=HEADERS)
 
     @router.get("/api/workspaces/{slug}/identity/state")
     def state(slug: str, request: Request):
         """What this workspace's image is now: `source` is `workspace` (its own file), `company`
-        (its bound company's logo) or null (the client draws the monogram); `proposal` is a change
-        an agent proposed and the owner has not answered; `domain` is the bound company's site."""
+        (its bound company's logo) or `glyph` (its standard icon); `glyph` names that icon and
+        `glyph_by` who chose it (`auto` · `model` · `person` · `derived` when none is stored);
+        `proposal` is a change an agent proposed and the owner has not answered; `domain` is the
+        bound company's site."""
         ws = _target(request, slug)
-        source = "workspace" if wi.icon_path(ws) else ("company" if _company(ws) else None)
+        _got, source = _face(ws, slug)
+        name, by = _glyph(ws, slug)
         return {"slug": slug, "source": source, "path": wi.icon_path(ws),
+                "glyph": name, "glyph_by": by,
                 "domain": wi.company_domain(ws), "proposal": wi.proposal(ws),
                 "shared": _shared(slug), "owner": _owner(request, slug)}
 
@@ -167,6 +226,8 @@ def build(**d) -> APIRouter:
         ws = _target(request, slug, write=True)
         subject = subject_of(request)
         agent = is_delegated(request)
+        if body.glyph is not None:
+            return _set_glyph(request, slug, ws, subject, agent, body.glyph.strip().lower())
         try:
             if body.reset:
                 if agent and _shared(slug):
@@ -187,6 +248,25 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from None
         _commit(ws, touched, f"workspace image ({source or 'uploaded'})", subject)
         return {"set": True, "path": wi.icon_path(ws), "source": source}
+
+    def _set_glyph(request: Request, slug: str, ws: Path, subject: str, agent: bool, want: str):
+        if agent and _shared(slug):
+            raise HTTPException(status_code=403, detail=(
+                "in a shared workspace an agent proposes a new image (an `svg` with propose); the "
+                "standard icon is the people's choice"))
+        if want == "auto":
+            text = wi._readme(ws)
+            from control_plane import front_page  # noqa: PLC0415
+            name, purpose = wg.name_and_purpose(text, front_page.front_matter(text), _slug(slug) or "")
+            pick, by = wg.choose(name, purpose, slug, complete=_model(request))
+        else:
+            pick, by = want, "person"
+        try:
+            touched = wi.set_glyph(ws, pick, by)
+        except wi.IconRefused as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+        _commit(ws, touched, f"workspace icon: {pick} ({by})", subject)
+        return {"set": True, "glyph": pick, "glyph_by": by}
 
     def _bytes(ws: Path, body: IconSetBody) -> tuple[bytes, str, str]:
         if body.svg is not None:
@@ -220,7 +300,7 @@ def build(**d) -> APIRouter:
                 raise wi.IconRefused("this workspace has no company logo (README `domain:`)", status=404)
             stored, kind = wi.from_fetched(got[0], got[1])
             return stored, kind, f"company logo {wi.company_domain(ws)}"
-        raise wi.IconRefused("give one of svg, data_b64, url, site, use=company_logo or reset")
+        raise wi.IconRefused("give one of svg, data_b64, url, site, use=company_logo, reset or glyph")
 
     @router.post("/api/workspaces/{slug}/identity/proposal")
     def answer(slug: str, request: Request, body: IconProposalBody = Body(...)):

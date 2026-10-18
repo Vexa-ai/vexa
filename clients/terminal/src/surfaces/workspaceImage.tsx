@@ -2,20 +2,27 @@
 /** A workspace's image — "Change image…" and the owner's one-click answer to a proposal (UI decision
  *  15f). The image lives in the workspace (`.vexa/icon.*`); agent-api stores, sanitises and serves it
  *  (`/api/workspaces/{slug}/identity/*`). The agent sets it through `workspace_icon_set`; this is
- *  the person's own door: upload a file, use the company's logo, or reset. */
+ *  the person's own door: pick a standard icon (founder 2026-10-18: "pick icons from a large selection
+ *  of standard icons at creation unless changed"), upload a file, use the company's logo, or reset. */
 import { useEffect, useRef, useState } from "react";
 import { Button, Dialog } from "../ui-kit";
 import { Identity } from "../ui-kit/Identity";
 import { WORKSPACE_IMAGE_CHANGED } from "../platform/identity";
+import { GlyphPicker } from "../ui-kit/WorkspaceGlyph";
 
 export type ImageState = {
-  source: "workspace" | "company" | null;
+  source: "workspace" | "company" | "glyph" | null;
+  /** the standard icon it shows (or would, under an image), and who chose it */
+  glyph?: string | null;
+  glyph_by?: "auto" | "model" | "person" | "derived" | null;
   domain: string | null;
   owner: boolean;
   shared: boolean;
   proposal: { by: string; at: number; source: string; kind: string } | null;
 };
-export type ImageSet = { svg?: string; data_b64?: string; type?: string; use?: "company_logo"; reset?: boolean; site?: string };
+export type ImageSet = { svg?: string; data_b64?: string; type?: string; use?: "company_logo"; reset?: boolean; site?: string;
+  /** a standard icon by name, or "auto" to pick one from the name and purpose */
+  glyph?: string; propose?: boolean };
 
 const base = (slug: string) => `/api/workspaces/${encodeURIComponent(slug)}/identity`;
 export { WORKSPACE_IMAGE_CHANGED };
@@ -70,7 +77,8 @@ export function WorkspaceImageDialog({ slug, name, open, onClose }: { slug: stri
     finally { setBusy(false); }
   };
   return (
-    <Dialog open={open} onClose={onClose} title="Change image" footer={<Button onClick={onClose}>Close</Button>}>
+    <Dialog open={open} onClose={onClose} title="Change icon" width="wide" footer={<Button onClick={onClose}>Close</Button>}>
+      <div className="vx-wsimg-col">
       <div className="vx-wsimg">
         <Identity kind="workspace" id={slug} slug={slug} name={name} size={56} />
         <div className="vx-wsimg-acts">
@@ -80,10 +88,13 @@ export function WorkspaceImageDialog({ slug, name, open, onClose }: { slug: stri
           {st?.domain && <Button disabled={busy} onClick={() => void run({ use: "company_logo" })}>
             {`Use ${st.domain}'s logo`}</Button>}
           {st?.source === "workspace" && <Button variant="ghost" disabled={busy} onClick={() => void run({ reset: true })}>Reset</Button>}
-          <span className="vx-wsimg-hint">SVG, PNG or WebP, up to 200 KB. Or ask the agent to find the logo or design a mark.</span>
+          <span className="vx-wsimg-hint">Pick an icon below, or upload SVG, PNG or WebP up to 200 KB.</span>
           {note && <span role="status" className="vx-wsimg-hint">{note}</span>}
           {err && <span role="alert" className="vx-wsimg-err">{err}</span>}
         </div>
+      </div>
+      <GlyphPicker value={st?.source === "glyph" ? st.glyph : null} suggested={st?.glyph_by !== "person" ? st?.glyph : null}
+        onPick={(g) => void run({ glyph: g })} />
       </div>
     </Dialog>
   );

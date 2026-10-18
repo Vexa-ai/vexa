@@ -7,9 +7,9 @@
  *        it; only while `open_workspaces` is on).
  *    2 · It is made through the existing doors (`/api/workspace/new` private, `/api/workspace/shared/new`
  *        shared), its README is seeded as a rich front page, and it appears on the home as a card.
- *    3 · Its identity is PROPOSED, never set: the site's logo when one is given (the server finds and
- *        stores it), otherwise the agent designs a mark — both with `propose: true`. The proposal is a
- *        "needs you" item on the new card; the owner accepts or declines it there.
+ *    3 · Its identity: a standard icon picked from the name and purpose at once (changeable from the
+ *        icon on its page); the site's logo, when one is given, is PROPOSED (`propose: true`), a
+ *        "needs you" item on the new card the owner accepts or declines.
  *    4 · Invite (shared): an invite link is minted and the invitation emails are DRAFTED in the
  *        person's chat for them to send — nothing goes out on its own. */
 import { useState } from "react";
@@ -20,6 +20,7 @@ import { writeWorkspaceFile } from "../../../data/workspaceApi";
 import { toast } from "../../../ui-kit/primitives/Toast";
 import { loadDesktop } from "../desktopApi";
 import { askAgent } from "./acts";
+import { WORKSPACE_IMAGE_CHANGED } from "../../../platform/identity";
 import { loadAttention } from "./attentionApi";
 import { aimHome } from "./HomeTarget";
 import { openWorkspaceView } from "./workspaceView";
@@ -67,16 +68,15 @@ export async function createWorkspace(name: string, visibility: Visibility): Pro
   return slug;
 }
 
-/** Ask for its identity, as a proposal the owner answers on the card. */
-export async function proposeIdentity(slug: string, name: string, site: string | null): Promise<void> {
-  if (site) {
-    const r = await postJson(`/api/workspaces/${encodeURIComponent(slug)}/identity/icon`, { site, propose: true }, "PUT");
-    if (r.ok) return;
-  }
-  // no site, or its logo could not be found: the agent designs a mark and proposes it
-  askAgent(`Design a simple mark for my new workspace "${name}": one glyph or motif on a colour that suits `
-    + `what it is for. Set it with workspace_icon_set (slug ${slug}) with propose: true, so I accept it on its `
-    + `card. Then say one line.`, { hidden: true, display: `Give ${name} its image` });
+/** Its identity. A STANDARD ICON is picked at once from its name and purpose (founder 2026-10-18:
+ *  "pick icons from a large selection of standard icons at creation unless changed") — the server's
+ *  matcher reads the README just written, a small model when no word matched. A site given → its logo
+ *  is PROPOSED too, for the owner to accept on the card. */
+export async function proposeIdentity(slug: string, _name: string, site: string | null): Promise<void> {
+  const route = `/api/workspaces/${encodeURIComponent(slug)}/identity/icon`;
+  await postJson(route, { glyph: "auto" }, "PUT");
+  if (site) await postJson(route, { site, propose: true }, "PUT");
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(WORKSPACE_IMAGE_CHANGED, { detail: slug }));
 }
 
 /** Mint one invite link and ask the agent, IN the chat (a real turn, so its draft shows there), to

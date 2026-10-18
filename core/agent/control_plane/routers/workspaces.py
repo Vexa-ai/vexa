@@ -1958,6 +1958,10 @@ def build(**d) -> APIRouter:
         name = (body.name or "").strip() or None
         _ws_sync(result.slug, kind="desk", owner=str(subject), name=name,
                  ws_dir=workspace_slot_dir(wsr.root, subject, result.slug))
+        # ITS STANDARD ICON, picked from the name at birth (founder 2026-10-18), changeable any time
+        from control_plane import workspace_icon as _wicon  # noqa: PLC0415
+        _wicon.assign_glyph(workspace_slot_dir(wsr.root, subject, result.slug), name or "", result.slug,
+                            author=str(subject))
         return {"subject": result.subject, "slug": result.slug, "created": result.slug,
                 "name": name or result.slug, "changed": result.changed, "added": True,
                 "say": (f"Created {name or result.slug} — its slug is `{result.slug}`. Say so, and that "

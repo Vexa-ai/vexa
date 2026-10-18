@@ -1483,7 +1483,7 @@
       },
       "IconSetBody": {
         "additionalProperties": false,
-        "description": "One way to set a workspace's image. Give exactly one of `svg`, `data_b64`, `url`, `site`,\n`use` or `reset`.",
+        "description": "One way to set a workspace's image. Give exactly one of `svg`, `data_b64`, `url`, `site`,\n`use`, `reset` or `glyph`.",
         "properties": {
           "data_b64": {
             "anyOf": [
@@ -1497,6 +1497,19 @@
             ],
             "description": "A PNG or WebP (or SVG) the person uploaded, base64-encoded; `type` names which.",
             "title": "Data B64"
+          },
+          "glyph": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A STANDARD ICON by name (the outline set the product draws with; `workspace_glyphs`), the person's pick \u2014 it replaces an uploaded image. `auto` picks one from the workspace's name and purpose (its README), as at creation.",
+            "title": "Glyph"
           },
           "propose": {
             "anyOf": [
@@ -1519,7 +1532,7 @@
                 "type": "null"
               }
             ],
-            "description": "Remove the image; the workspace shows its company's logo or its monogram again.",
+            "description": "Remove the image; the workspace shows its company's logo or its standard icon again.",
             "title": "Reset"
           },
           "site": {
@@ -5380,7 +5393,7 @@
     },
     "/api/workspaces/{slug}/identity/state": {
       "get": {
-        "description": "What this workspace's image is now: `source` is `workspace` (its own file), `company`\n(its bound company's logo) or null (the client draws the monogram); `proposal` is a change\nan agent proposed and the owner has not answered; `domain` is the bound company's site.",
+        "description": "What this workspace's image is now: `source` is `workspace` (its own file), `company`\n(its bound company's logo) or `glyph` (its standard icon); `glyph` names that icon and\n`glyph_by` who chose it (`auto` \u00b7 `model` \u00b7 `person` \u00b7 `derived` when none is stored);\n`proposal` is a change an agent proposed and the owner has not answered; `domain` is the\nbound company's site.",
         "parameters": [
           {
             "in": "path",

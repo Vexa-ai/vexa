@@ -14,6 +14,24 @@
 .vx-id-img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
 .vx-id[data-kind="workspace"] > .vx-id-img, .vx-id[data-kind="company"] > .vx-id-img { object-fit: contain; }
 .vx-id-mono { line-height: 1; }
+/* A workspace's STANDARD ICON (founder 2026-10-18): an outline on a tinted tile — never a solid fill
+ * (7r) — in the workspace's own hue, per theme. */
+.vx-id[data-glyph] { background: hsl(var(--id-h, 212) 30% 21%); color: hsl(var(--id-h, 212) 62% 80%); }
+[data-theme="light"] .vx-id[data-glyph] { background: hsl(var(--id-h, 212) 56% 93%); color: hsl(var(--id-h, 212) 52% 30%); }
+.vx-id-glyph { width: 60%; height: 60%; display: block; }
+/* the picker: a search box over a grid of every standard icon */
+.vx-glyphs { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.vx-glyphs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(40px, 1fr)); gap: var(--space-1);
+  max-height: 280px; overflow-y: auto; padding: var(--space-0_5); }
+.vx-glyphs-cell { position: relative; display: grid; place-items: center; aspect-ratio: 1; border: 1px solid transparent;
+  border-radius: var(--radius-md); background: none; color: var(--text-2); cursor: pointer; }
+.vx-glyphs-cell > .vx-id-glyph { width: 20px; height: 20px; }
+.vx-glyphs-cell:hover { background: var(--panel2); color: var(--text-1); }
+.vx-glyphs-cell[data-suggested] { border-color: var(--border-subtle); }
+.vx-glyphs-cell[aria-pressed="true"] { border-color: var(--accent); color: var(--text-1); }
+.vx-glyphs-cell:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.vx-glyphs-on { position: absolute; right: 2px; top: 2px; display: inline-flex; color: var(--accent); }
+.vx-glyphs-empty { grid-column: 1 / -1; font-size: var(--text-xs); color: var(--text-3); padding: var(--space-2); }
 .vx-id-mark { width: 74%; height: 74%; fill: currentColor; }
 .vx-id-badge {
   position: absolute; right: -8%; bottom: -8%; width: 44%; height: 44%; min-width: 10px; min-height: 10px;
@@ -28,6 +46,7 @@
 .vx-id-inline { margin-right: 6px; vertical-align: -3px; }
 .vx-doc-crumb > .vx-id-inline { vertical-align: middle; }
 /* "Change image…" and the owner's answer to a proposed image */
+.vx-wsimg-col { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
 .vx-wsimg { display: flex; gap: var(--space-4); align-items: flex-start; }
 .vx-wsimg-acts { display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-start; min-width: 0; }
 .vx-wsimg-hint { font-size: var(--text-xs); color: var(--text-3); }

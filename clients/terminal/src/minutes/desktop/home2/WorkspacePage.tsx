@@ -40,6 +40,7 @@ import { InviteDialog } from "./NewWorkspace";
 import { useFeature as useReadmeFeature } from "../../../platform/features";
 import { ReadmeView } from "../../readme/ReadmeView";
 import { copyReference } from "../../../surfaces/reference";
+import { WorkspaceImageDialog } from "../../../surfaces/workspaceImage";
 import { INVITE_EVENT } from "./acts";
 import "./home2.css";
 
@@ -174,6 +175,7 @@ export function WorkspacePage({ slug: given }: { slug?: string }) {
   const [filter, setFilter] = useState<"all" | "you" | "member" | "system">("all");
   const [dragging, setDragging] = useState<string | null>(null);
   const [inviting, setInviting] = useState(false);
+  const [imaging, setImaging] = useState(false);
   // S7 (UI 7aa): below the fixed header the page IS the README, rendered for this viewer by the server
   const readmePage = useReadmeFeature("readme_page");
   useEffect(() => {
@@ -248,7 +250,7 @@ export function WorkspacePage({ slug: given }: { slug?: string }) {
       {/* 1 · HEADER */}
       <header ref={headRef} className="vx-wsp-head" data-folded={folded ? "" : undefined}>
         <div className="vx-wsp-id">
-          <WsMark slug={slug} name={name} size={56} />
+          <WsMark slug={slug} name={name} size={56} onChange={readOnly ? undefined : () => setImaging(true)} />
           <div className="vx-wsp-idt"><h1>{name}</h1>
             {/* shell2 (founder 2026-10-17): people first — named faces with presence beside the title,
                 "N people" to the People section, Invite next to them; then who changed it last */}
@@ -342,6 +344,7 @@ export function WorkspacePage({ slug: given }: { slug?: string }) {
       </div></FoldContext.Provider>}
       {dialog}
       {inviting && <InviteDialog open slug={slug} name={name} onClose={() => setInviting(false)} />}
+      {imaging && <WorkspaceImageDialog open slug={slug} name={name} onClose={() => setImaging(false)} />}
     </article>
   );
 }

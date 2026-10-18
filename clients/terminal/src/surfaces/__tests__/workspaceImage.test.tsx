@@ -63,3 +63,19 @@ describe("WorkspaceImageProposal", () => {
     expect(container.textContent).toBe("");
   });
 });
+
+describe("WorkspaceImageDialog · standard icons (founder 2026-10-18)", () => {
+  it("offers a searchable grid of standard icons, the current one marked, and a pick is stored by PUT", async () => {
+    const calls = mockFetch({ source: "glyph", glyph: "sprout", glyph_by: "auto", proposal: null, owner: true, shared: false, domain: null });
+    const done = vi.fn();
+    render(<WorkspaceImageDialog slug="garden" name="Garden club" open onClose={done} />);
+    const now = await screen.findByRole("button", { name: "sprout" });
+    await waitFor(() => expect(now.getAttribute("aria-pressed")).toBe("true"));
+    fireEvent.change(screen.getByLabelText("Search icons"), { target: { value: "rocket" } });
+    fireEvent.click(await screen.findByRole("button", { name: "rocket" }));
+    await waitFor(() => expect(done).toHaveBeenCalled());
+    const put = calls.find((c) => c.init?.method === "PUT");
+    expect(put?.url).toBe("/api/workspaces/garden/identity/icon");
+    expect(JSON.parse(String(put?.init?.body))).toEqual({ glyph: "rocket" });
+  });
+});

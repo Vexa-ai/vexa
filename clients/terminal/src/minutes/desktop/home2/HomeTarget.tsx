@@ -78,9 +78,9 @@ export function wsHue(slug: string | undefined): number {
 
 /** The workspace's face: its stored image (or its company's logo) when it has one, else its
  *  monogram — the product's one identity component (UI decisions 15f, 15g). */
-export function WsMark({ slug, name, size = 40 }: { slug?: string; name: string; size?: number }) {
+export function WsMark({ slug, name, size = 40, onChange }: { slug?: string; name: string; size?: number; onChange?: () => void }) {
   const s = slug || PERSONAL;
-  return <Identity kind="workspace" id={s} slug={s} name={name} size={size} />;
+  return <Identity kind="workspace" id={s} slug={s} name={name} size={size} onChange={onChange} />;
 }
 
 /** THE SPACE A STUCK COMPOSER GIVES BACK (founder 2026-10-16: the composer flickered in and out of

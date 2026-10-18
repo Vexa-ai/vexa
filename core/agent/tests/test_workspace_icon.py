@@ -200,9 +200,13 @@ def _h(sub: str, *, agent: bool = False, ceiling: str = "*") -> dict:
     return h
 
 
-def test_no_icon_and_no_company_is_a_404_so_the_client_draws_the_monogram(tmp_path):
+def test_no_icon_and_no_company_is_the_standard_icon_never_a_404(tmp_path):
+    """Founder 2026-10-18: a workspace with nothing stored shows a standard icon, not a 404 and a
+    monogram — the personal workspace the desk's own."""
     c = _world(tmp_path)
-    assert c.get("/api/workspaces/personal/identity/icon", headers=_h(JANE)).status_code == 404
+    r = c.get("/api/workspaces/personal/identity/icon", headers=_h(JANE))
+    assert r.status_code == 200 and r.headers["content-type"].startswith("image/svg+xml")
+    assert b'data-vexa-glyph="briefcase"' in r.content
 
 
 def test_default_is_the_company_logo_through_the_media_proxy(tmp_path):
@@ -301,7 +305,8 @@ def test_external_images_off_stops_every_logo_fetch(tmp_path):
     for body in ({"url": "https://studio.example.com/logo.png"}, {"site": "studio.example.com"}):
         r = c.put("/api/workspaces/personal/identity/icon", headers=_h(JANE), json=body)
         assert r.status_code == 403 and "external_images" in r.text
-    assert c.get(f"/api/workspaces/{SHARED}/identity/icon", headers=_h(BOB)).status_code == 404
+    got = c.get(f"/api/workspaces/{SHARED}/identity/icon", headers=_h(BOB))   # no logo: its standard icon
+    assert got.status_code == 200 and b"data-vexa-glyph" in got.content
     assert seen == []
     assert c.put("/api/workspaces/personal/identity/icon", headers=_h(JANE), json={"svg": MARK}).status_code == 200
 

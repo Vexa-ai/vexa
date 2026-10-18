@@ -1,9 +1,9 @@
 /** `<Identity>` — the one component for everything that has a face (UI decisions 15f, 15g). */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render } from "@testing-library/react";
-import { Identity, IdentityStack } from "../Identity";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { Identity, IdentityStack, resetWorkspaceFaces } from "../Identity";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); resetWorkspaceFaces(); vi.restoreAllMocks(); });
 
 describe("Identity", () => {
   it("draws the same monogram and colour for the same id on every render", () => {
@@ -14,8 +14,9 @@ describe("Identity", () => {
     expect(a).toContain("SL");
   });
 
-  it("a workspace asks its own image route and falls back to the monogram when there is none", () => {
+  it("a workspace asks its own image route and falls back to the monogram when there is none", async () => {
     const { container } = render(<Identity kind="workspace" id="w1" slug="garden-x1" name="Garden" />);
+    await waitFor(() => expect(container.querySelector("img")).not.toBeNull());   // the face is asked first
     const img = container.querySelector("img")!;
     expect(img.getAttribute("src")).toBe("/api/workspaces/garden-x1/identity/icon");
     fireEvent.error(img);
@@ -81,5 +82,33 @@ describe("Avatar (home blocks) — a user's photo comes from the photo route", a
   it("prefers the photo route over a media key", () => {
     const { container } = render(<Avatar p={{ name: "Jane", initials: "J", photo: "/api/people/7/photo", avatar: "g:00" }} />);
     expect(container.querySelector("img")!.getAttribute("src")).toBe("/api/people/7/photo");
+  });
+});
+
+describe("Identity · a workspace's standard icon (founder 2026-10-18)", () => {
+  const svg = (body: string) => new Response(body, { status: 200, headers: { "Content-Type": "image/svg+xml" } });
+  it("the image route's standard icon is drawn in the tile's colours, never as an <img> or letters", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(svg('<svg data-vexa-glyph="sprout"><path d="M1 1"/></svg>'));
+    const { container } = render(<Identity kind="workspace" id="w9" slug="garden-club-9xa" name="Garden club" />);
+    await waitFor(() => expect(container.querySelector("svg[data-glyph='sprout']")).not.toBeNull());
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toBe("");
+    expect(container.querySelector("[data-kind='workspace']")!.getAttribute("data-glyph")).toBe("sprout");
+  });
+  it("a stored image still shows as an image", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("x", { status: 200, headers: { "Content-Type": "image/png" } }));
+    const { container } = render(<Identity kind="workspace" id="w8" slug="logo-ws" name="Logo" />);
+    await waitFor(() => expect(container.querySelector("img")?.getAttribute("src")).toBe("/api/workspaces/logo-ws/identity/icon"));
+  });
+  it("a 404 leaves the letters, the fallback", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 404 }));
+    const { container } = render(<Identity kind="workspace" id="w7" slug="gone" name="Gone West" />);
+    await waitFor(() => expect(container.textContent).toBe("GW"));
+  });
+  it("a glyph the caller names is drawn without asking", async () => {
+    const f = vi.spyOn(globalThis, "fetch");
+    const { container } = render(<Identity kind="workspace" id="w6" slug="x" name="Growth" glyph="chart-line" />);
+    await waitFor(() => expect(container.querySelector("svg[data-glyph='chart-line']")).not.toBeNull());
+    expect(f).not.toHaveBeenCalled();
   });
 });
