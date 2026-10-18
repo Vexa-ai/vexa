@@ -513,6 +513,16 @@
    "description": "whether the person starting a call may turn its transcription off (POST /bots `transcribe: false`); off \u21d2 every call is transcribed and says so"
   },
   {
+   "key": "CALL_TRANSCRIBE_SHARED_SCREEN",
+   "class": "defaulted",
+   "default": "true",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "whether the sound of a screen a call participant shares (a tab or video with audio) is transcribed too, as its own speaker \"<name> (shared screen)\" (invocation.v1 `call.screenShareAudio`; the room notice says so); off \u21d2 the listener never reads that track"
+  },
+  {
    "key": "SEGMENT_CONSUMER_INTERVAL",
    "class": "defaulted",
    "default": "0.5",

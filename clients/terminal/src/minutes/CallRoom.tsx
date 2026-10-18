@@ -10,7 +10,11 @@
  *  Capture uses the browser's own echo cancellation, noise suppression and gain control, and Opus
  *  with DTX and redundancy (RED) on the way out. The notice that the call is transcribed comes from
  *  the room's own metadata, set by meeting-api when it created the room, so every participant's
- *  client shows the same thing. */
+ *  client shows the same thing — including whether the sound of a shared screen is transcribed too.
+ *
+ *  A SHARED SCREEN CARRIES ITS SOUND: sharing asks the browser for the tab's or the system's audio
+ *  as well (the picker's "Share audio" box), so a video shown to the call is heard by everyone and,
+ *  when the notice says so, transcribed as "<name> (shared screen)". */
 import "@livekit/components-styles";
 import {
   LiveKitRoom, MediaDeviceSelect, RoomAudioRenderer, VideoTrack, isTrackReference, useLocalParticipant, useParticipants,
@@ -53,6 +57,20 @@ export interface CallRoomProps {
 
 /** The listener that transcribes joins hidden; it is never one of the people. */
 const LISTENER = /^vexa-(listener|meeting-api)/;
+
+/** Share the screen WITH its sound: livekit-client asks getDisplayMedia for audio only when told to
+ *  (its default is video only, which is why a shared video's words never reached the transcript). */
+export const SCREEN_SHARE_CAPTURE = { audio: true, systemAudio: "include", suppressLocalAudioPlayback: false } as const;
+
+/** Whether the room's notice says a shared screen's sound is transcribed. A room minted before the
+ *  notice carried it says nothing: then it follows the call's own notice (never under-disclose). */
+export function sharedScreenNotice(metadata: string | undefined, transcribed: boolean): boolean {
+  if (!transcribed) return false;
+  try {
+    const m = JSON.parse(metadata || "{}");
+    return typeof m?.shared_screen_transcribed === "boolean" ? m.shared_screen_transcribed : transcribed;
+  } catch { return transcribed; }
+}
 
 export function transcribedNotice(metadata: string | undefined, fallback: boolean): boolean {
   try {
@@ -105,6 +123,7 @@ function Inside({ call, name, nameWith, onLeave, onPrivate, onName, onAddPeople,
   const cams = useTracks([Track.Source.Camera, Track.Source.ScreenShare], { onlySubscribed: false }).filter(isTrackReference);
   const { localParticipant, isMicrophoneEnabled, isCameraEnabled, isScreenShareEnabled } = useLocalParticipant();
   const transcribed = transcribedNotice(info.metadata, call.join.call.transcribed);
+  const screenAudio = sharedScreenNotice(info.metadata, transcribed);
   const roomsOn = useFeature("rooms");
   const roomCall = !!useRoom(call.session, roomsOn)?.room;
   const elapsed = useElapsed(call.join.call.started);
@@ -160,11 +179,11 @@ function Inside({ call, name, nameWith, onLeave, onPrivate, onName, onAddPeople,
     ...(listener ? [] : [{ id: "blur", label: `Background blur: ${BLUR_WORD[blur.level]}`, hint: `Press for ${BLUR_WORD[nextBlur(blur.level)].toLowerCase()}`, onSelect: () => { cycleBlur(); } }]),
   ];
   return (<>
-    <CallBar selfAction={listener ? undefined : <BlurButton />} name={nameWith ? nameWith(people.filter((x) => !x.self).map((x) => x.name)) : name} onName={onName} elapsed={elapsed} people={people} activeId={active} transcribed={transcribed}
+    <CallBar selfAction={listener ? undefined : <BlurButton />} name={nameWith ? nameWith(people.filter((x) => !x.self).map((x) => x.name)) : name} onName={onName} elapsed={elapsed} people={people} activeId={active} transcribed={transcribed} screenAudio={screenAudio}
       mic={isMicrophoneEnabled} cam={isCameraEnabled} sharing={isScreenShareEnabled} canPublish={!listener} narrow={narrow}
       onMic={() => void localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled)}
       onCam={() => void localParticipant.setCameraEnabled(!isCameraEnabled)}
-      onShare={() => void localParticipant.setScreenShareEnabled(!isScreenShareEnabled).catch(() => {})}
+      onShare={() => void localParticipant.setScreenShareEnabled(!isScreenShareEnabled, SCREEN_SHARE_CAPTURE).catch(() => {})}
       onLeave={onLeave} menu={menu}
       devices={listener ? undefined : <>
         <label>Microphone<MediaDeviceSelect kind="audioinput" /></label>

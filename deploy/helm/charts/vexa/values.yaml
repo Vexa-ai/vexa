@@ -574,13 +574,15 @@ meetingApi:
   voiceNoteMaxDurationSeconds: "1800"
   voiceNoteIdleTimeoutSeconds: "120"
   # Calls (docs: /minutes/calls; only used when livekit.enabled): a call's limits, and whether the
-  # person starting a call may start it untranscribed (CALL_TRANSCRIPTION_SWITCHABLE).
+  # person starting a call may start it untranscribed (CALL_TRANSCRIPTION_SWITCHABLE), and whether
+  # the sound of a shared screen is transcribed too (CALL_TRANSCRIBE_SHARED_SCREEN).
   calls:
     maxDurationSeconds: "14400"
     emptyGraceSeconds: "30"
     firstJoinTimeoutSeconds: "30"
     maxParticipants: "50"
     transcriptionSwitchable: "false"
+    transcribeSharedScreen: "true"
   # Authenticated-bot mode (deployment-scoped; docs: /authenticated-bots): botAuthenticated "true"
   # makes every spawned bot restore the provisioned browser session and join signed-in. The BOT_S3
   # values are the bots' READ-ONLY userdata-store pair (create it in your object store with

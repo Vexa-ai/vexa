@@ -122,6 +122,23 @@ describe("the dock is one compact bar (UI decisions 7–10a, 14)", () => {
     expect(document.querySelector('[data-kind="audioinput"]')).not.toBeNull();
   });
 
+  it("sharing the screen asks the browser for its sound too, and the Vexa mark says that sound is transcribed", async () => {
+    const { container } = await join();
+    fireEvent.click(screen.getByRole("button", { name: "Share your screen" }));
+    expect(local.setScreenShareEnabled).toHaveBeenCalledWith(true, expect.objectContaining({ audio: true }));
+    const mark = container.querySelector(".vx-cb-vexa") as HTMLElement;
+    expect(mark.getAttribute("title")).toMatch(/a shared screen's sound too/);
+  });
+
+  it("the shared-screen notice follows the room: on, off, or (an older room) the call's own notice", async () => {
+    const { sharedScreenNotice } = await import("../CallRoom");
+    expect(sharedScreenNotice('{"transcribed":true,"shared_screen_transcribed":true}', true)).toBe(true);
+    expect(sharedScreenNotice('{"transcribed":true,"shared_screen_transcribed":false}', true)).toBe(false);
+    expect(sharedScreenNotice('{"transcribed":true}', true)).toBe(true);
+    expect(sharedScreenNotice('{"transcribed":false,"shared_screen_transcribed":true}', false)).toBe(false);
+    expect(sharedScreenNotice("not json", true)).toBe(true);
+  });
+
   it("the transcription notice before joining is one quiet line, not a banner", async () => {
     const { default: CallRoom } = await import("../CallRoom");
     const { container } = render(<CallRoom call={call(true)} name="AIT team" onLeave={() => {}} onPrivate={() => {}} />);

@@ -27,7 +27,9 @@ tokens. This module mints only the listener's token and the room service's token
 Without `LIVEKIT_URL`, `Calls.from_env()` is None and a `vexa_call` spawn answers
 `503 calls_not_deployed`.
 
-A caller cannot turn transcription off unless `CALL_TRANSCRIPTION_SWITCHABLE` is on.
+A caller cannot turn transcription off unless `CALL_TRANSCRIPTION_SWITCHABLE` is on. The sound of a
+shared screen is transcribed too (invocation `call.screenShareAudio`, notice `shared_screen_transcribed`)
+unless `CALL_TRANSCRIBE_SHARED_SCREEN` is off.
 
 ## Verify
 

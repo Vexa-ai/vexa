@@ -247,6 +247,8 @@ spec:
               value: {{ .Values.meetingApi.calls.maxParticipants | default "50" | quote }}
             - name: CALL_TRANSCRIPTION_SWITCHABLE
               value: {{ .Values.meetingApi.calls.transcriptionSwitchable | default "false" | quote }}
+            - name: CALL_TRANSCRIBE_SHARED_SCREEN
+              value: {{ .Values.meetingApi.calls.transcribeSharedScreen | default "true" | quote }}
             {{- if include "vexa.botAccountsEnabled" . }}
             # Bot accounts (ADR-0049): saved signed-in browser profiles, kept in the credential
             # broker. meeting-api signs as its `bots` role (credential-broker.v1).

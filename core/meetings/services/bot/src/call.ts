@@ -7,7 +7,8 @@
  *
  *   • the SOURCE gives each participant identity its own channel, for the whole call, and feeds
  *     that participant's audio (mono 16 kHz, Int16 from the room → Float32) with the participant's
- *     display name as the channel's name;
+ *     display name as the channel's name; the sound of a screen they share is one more channel,
+ *     named "<person> (shared screen)";
  *   • the JOIN DRIVER connects to the room and is admitted at once — nobody admits a listener;
  *   • the call ENDS when the room empties: the last participant pressed Leave (a few seconds), or the
  *     last connection dropped and nobody came back within the grace window, or nobody came at all
@@ -29,7 +30,14 @@ export interface CallParticipant {
   name?: string;
   /** How they left: pressed Leave (`leave`), or the connection was lost (`lost`). Leaves only. */
   left?: 'leave' | 'lost';
+  /** Which of their tracks the audio is from (audio frames only): their microphone (the default), or
+   *  the sound of a screen they share (a tab or a video with audio). A shared screen is its own
+   *  channel, named "<person> (shared screen)", so its words never interleave with the person's own. */
+  source?: 'microphone' | 'screen_share_audio';
 }
+
+/** What the transcript appends to a person's name for the sound of the screen they share. */
+export const SHARED_SCREEN_SUFFIX = ' (shared screen)';
 
 /** One frame of a participant's audio: interleaved Int16 at `sampleRate`, `channels` channels. */
 export interface CallAudioFrame {
@@ -41,7 +49,7 @@ export interface CallAudioFrame {
 export interface CallRoomHandlers {
   participantJoined(p: CallParticipant): void;
   participantLeft(p: CallParticipant): void;
-  /** One frame of a participant's microphone track. */
+  /** One frame of a participant's microphone track, or of the audio of a screen they share. */
   audio(p: CallParticipant, frame: CallAudioFrame): void;
   /** The room is gone (deleted, or the connection is lost for good). */
   disconnected(reason: string): void;
@@ -142,14 +150,18 @@ export function createCallSource(opts: CallSourceOptions): CallSource {
   };
   const disarm = () => { if (timer !== null) { clearTimer(timer); timer = null; } };
 
+  // One channel per participant microphone, and one more per participant's shared-screen audio.
   const channelOf = (p: CallParticipant): SpeakerStats => {
-    let s = channels.get(p.identity);
+    const screen = p.source === 'screen_share_audio';
+    const key = screen ? `${p.identity}#screen` : p.identity;
+    const label = (n: string) => (screen ? `${n}${SHARED_SCREEN_SUFFIX}` : n);
+    let s = channels.get(key);
     if (!s) {
-      s = { channel: channels.size, name: p.name || p.identity, frames: 0, audioSeconds: 0, silentFrames: 0 };
-      channels.set(p.identity, s);
+      s = { channel: channels.size, name: label(p.name || p.identity), frames: 0, audioSeconds: 0, silentFrames: 0 };
+      channels.set(key, s);
       log(`[bot] call: ${s.name} on channel ${s.channel}`);
-    } else if (p.name && p.name !== s.name) {
-      s.name = p.name;
+    } else if (p.name && label(p.name) !== s.name) {
+      s.name = label(p.name);
     }
     return s;
   };

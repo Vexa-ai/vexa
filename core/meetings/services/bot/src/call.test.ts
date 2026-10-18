@@ -12,6 +12,7 @@ import {
   createCallPipeline,
   callMaxActiveMs,
   toMono16k,
+  SHARED_SCREEN_SUFFIX,
   type CallRoom,
   type CallRoomHandlers,
 } from './call.js';
@@ -69,6 +70,28 @@ console.log('\n=== call: one channel per participant, named by the participant =
   r.h.participantJoined({ identity: 'u:7', name: 'Ada' });
   r.h.audio({ identity: 'u:7', name: 'Ada' }, tone(480));
   check('a participant who rejoins keeps their channel', fed[3].ch === 0);
+}
+
+console.log('\n=== call: a shared screen with sound is its own channel, "<person> (shared screen)" ===');
+{
+  const r = scriptedRoom([{ identity: 'u:7', name: 'Ada' }]);
+  const tm = manualTimers();
+  const fed: Array<{ ch: number; name: string }> = [];
+  const ends: string[] = [];
+  const src = createCallSource({ room: r.room, feed: (ch, name) => fed.push({ ch, name }),
+    onEmpty: (w) => ends.push(w), emptyGraceMs: 5000, firstJoinTimeoutMs: 60_000, ...tm });
+  await src.start();
+  r.h.audio({ identity: 'u:7', name: 'Ada' }, tone(480));
+  r.h.audio({ identity: 'u:7', name: 'Ada', source: 'screen_share_audio' }, tone(480));
+  r.h.audio({ identity: 'u:7', name: 'Ada' }, tone(480));
+  r.h.audio({ identity: 'u:7', name: 'Ada', source: 'screen_share_audio' }, tone(480));
+  check('the shared screen gets a channel of its own, apart from the voice',
+    fed[0].ch === 0 && fed[1].ch === 1 && fed[2].ch === 0 && fed[3].ch === 1, JSON.stringify(fed));
+  check(`it is named "Ada${SHARED_SCREEN_SUFFIX}"`, fed[1].name === 'Ada (shared screen)' && fed[0].name === 'Ada', JSON.stringify(fed));
+  check('a shared screen is not a participant', src.stats().participants === 1);
+  r.h.participantLeft({ identity: 'u:7', left: 'leave' });
+  tm.advance(LEAVE_GRACE_MS);
+  check('the call still ends with its people', ends.join() === 'everyone_left');
 }
 
 console.log('\n=== call: the call ends when the room empties, after the grace window ===');
@@ -196,7 +219,7 @@ console.log('\n=== call: through the real lane, one transcript per speaker ===')
     onEmpty: () => {}, emptyGraceMs: 5000, firstJoinTimeoutMs: 30_000, now: () => t });
   const pipe = createCallPipeline({ source: src, engine });
   await pipe.start();
-  const speech = (who: { identity: string; name: string }, sec: number) => {
+  const speech = (who: { identity: string; name: string; source?: 'microphone' | 'screen_share_audio' }, sec: number) => {
     for (let i = 0; i < sec * 50; i++) {
       const data = new Int16Array(960);
       for (let k = 0; k < data.length; k++) data[k] = Math.round(8000 * Math.sin((k + i * 960) / 7));
@@ -209,10 +232,13 @@ console.log('\n=== call: through the real lane, one transcript per speaker ===')
   silence(3);
   speech({ identity: 'u:8', name: 'Grace' }, 3);
   silence(3);
+  speech({ identity: 'u:8', name: 'Grace', source: 'screen_share_audio' }, 3);
+  silence(3);
   await pipe.stop();
   await new Promise((res) => setTimeout(res, 50));
   const speakers = new Set(segs.map((s) => s.speaker));
   check('the lane emitted segments for both speakers', speakers.has('Ada') && speakers.has('Grace'), JSON.stringify([...speakers]));
+  check('a shared screen\'s sound becomes segments of "Grace (shared screen)"', speakers.has('Grace (shared screen)'), JSON.stringify([...speakers]));
   check('max active time is the call cap', callMaxActiveMs(inv) === 60_000);
   const jd = createCallJoinDriver();
   check('the join driver admits at once', (await jd.join()) === 'admitted');

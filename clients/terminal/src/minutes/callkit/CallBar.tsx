@@ -30,6 +30,8 @@ export interface CallBarProps {
   activeId?: string;
   /** Vexa is in the call, listening (the transcription is on) */
   transcribed: boolean;
+  /** the sound of a shared screen is transcribed too (the room's notice says so) */
+  screenAudio?: boolean;
   /** Vexa is speaking (it answers out loud) */
   vexaSpeaking?: boolean;
   /** the call's profile, shown as a chip */
@@ -84,8 +86,8 @@ export function CallBar(p: CallBarProps) {
         <Roster people={p.people} size={20} max={p.narrow ? 3 : 5} />
         {p.transcribed && (
           <span className="vx-cb-vexa" data-speaking={p.vexaSpeaking ? "" : undefined}
-            title={p.vexaSpeaking ? "Vexa is speaking" : "Vexa is listening · transcribed — everyone in the call sees this"}
-            aria-label={p.vexaSpeaking ? "Vexa is speaking" : "Vexa is listening; the call is transcribed and everyone in it sees this"}>
+            title={p.vexaSpeaking ? "Vexa is speaking" : `Vexa is listening · transcribed${p.screenAudio ? ", a shared screen's sound too" : ""} — everyone in the call sees this`}
+            aria-label={p.vexaSpeaking ? "Vexa is speaking" : `Vexa is listening; the call is transcribed${p.screenAudio ? ", including the sound of a shared screen," : ""} and everyone in it sees this`}>
             <VexaMark size={16} /><span className="vx-ck-listen" aria-hidden />
           </span>
         )}

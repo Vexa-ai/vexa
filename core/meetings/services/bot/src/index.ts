@@ -311,7 +311,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   } else if (isCall && inv.call) {
     // ── call (#1783): no browser, no admission. The listener joins the LiveKit room hidden and
     // subscribe-only; each participant's microphone track is its own channel, named by the
-    // participant. The room emptying ends the call through the orchestrator's left_alone path. ──
+    // participant, and so is the audio of a screen they share ("<name> (shared screen)"). The room emptying ends the call through the orchestrator's left_alone path. ──
     const c = inv.call;
     const engine = createBotPipeline(inv, transcript, {
       transcribe: signalRecorder ? wrapTranscribeWithTap(createTranscribe(inv), signalRecorder.path) : undefined,
@@ -321,7 +321,8 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     botPipeline = engine;
     const sdk = (await import('@livekit/rtc-node')) as unknown as LiveKitSdk;
     const source = createCallSource({
-      room: createLiveKitRoom({ sdk, url: c.url, token: c.token, log: (m) => console.log(m) }),
+      room: createLiveKitRoom({ sdk, url: c.url, token: c.token, log: (m) => console.log(m),
+        screenShareAudio: c.screenShareAudio !== false }),
       feed: (channel, name, pcm, tsMs) => engine.feedAudio(channel, name, pcm, tsMs),
       onEmpty: (why) => { console.log(`[bot] call: ${why}`); aloneHook?.(); },
       emptyGraceMs: (c.emptyGraceSec ?? 30) * 1000,

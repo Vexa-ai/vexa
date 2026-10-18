@@ -68,6 +68,8 @@ export interface Call {
   emptyGraceSec?: number;
   /** How long the listener waits for the first participant. */
   firstJoinTimeoutSec?: number;
+  /** Transcribe the audio of a screen a participant shares (policy; absent ⇒ on). */
+  screenShareAudio?: boolean;
 }
 
 export interface AutomaticLeave {

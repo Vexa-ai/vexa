@@ -824,6 +824,7 @@ When calls are enabled, the chart does four things:
 | `meetingApi.calls.firstJoinTimeoutSeconds` | `30` (`CALL_FIRST_JOIN_TIMEOUT_SEC`) |
 | `meetingApi.calls.maxParticipants` | `50` (`CALL_MAX_PARTICIPANTS`) |
 | `meetingApi.calls.transcriptionSwitchable` | `"false"` (`CALL_TRANSCRIPTION_SWITCHABLE`) |
+| `meetingApi.calls.transcribeSharedScreen` | `"true"` (`CALL_TRANSCRIBE_SHARED_SCREEN`) |
 
 **Network.** Media needs each node's own UDP range, which is why `livekit.hostNetwork` defaults to
 `true`. Route `livekit.url` to the Service's port 7880 through your Ingress as a WebSocket.

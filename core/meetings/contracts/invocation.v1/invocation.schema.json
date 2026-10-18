@@ -21,14 +21,15 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["url", "room", "token", "maxDurationSec"],
-      "description": "A Vexa call: a room on the deployment's self-hosted LiveKit server. The bot joins it hidden and subscribe-only and reads each participant's microphone track as its own channel, named by the participant; no browser. Present exactly when `platform` is `vexa_call`",
+      "description": "A Vexa call: a room on the deployment's self-hosted LiveKit server. The bot joins it hidden and subscribe-only and reads each participant's microphone track (and, unless `screenShareAudio` is false, the audio of a screen they share) as its own channel, named by the participant; no browser. Present exactly when `platform` is `vexa_call`",
       "properties": {
         "url": { "type": "string", "pattern": "^wss?://", "description": "the LiveKit server as the bot reaches it inside the deployment" },
         "room": { "type": "string", "pattern": "^call-[a-z0-9-]{4,64}$", "description": "the room name meeting-api minted for this call" },
         "token": { "type": "string", "description": "SECRET — the listener's LiveKit access token: hidden, subscribe-only, this room only, expiring with the call's cap. Placeholder in goldens" },
         "maxDurationSec": { "type": "integer", "minimum": 1, "description": "the longest call; the bot ends a call still running at it with `max_bot_time_exceeded`" },
         "emptyGraceSec": { "type": "integer", "minimum": 0, "default": 30, "description": "how long an emptied room is given for someone to come back before the call ends (`left_alone`)" },
-        "firstJoinTimeoutSec": { "type": "integer", "minimum": 1, "default": 300, "description": "how long the bot waits for the first participant before the call ends (`left_alone`)" }
+        "firstJoinTimeoutSec": { "type": "integer", "minimum": 1, "default": 300, "description": "how long the bot waits for the first participant before the call ends (`left_alone`)" },
+        "screenShareAudio": { "type": "boolean", "default": true, "description": "policy: also transcribe the audio of a screen a participant shares (a tab or video with sound), as its own channel named \"<participant> (shared screen)\"; false ⇒ that track is never read (CALL_TRANSCRIBE_SHARED_SCREEN)" }
       }
     },
     "AutomaticLeave": {

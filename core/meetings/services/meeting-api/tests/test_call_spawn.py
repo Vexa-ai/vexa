@@ -32,6 +32,7 @@ def env(monkeypatch):
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "http://stt:8000/v1/audio/transcriptions")
     monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "stt-token")
     monkeypatch.delenv("CALL_TRANSCRIPTION_SWITCHABLE", raising=False)
+    monkeypatch.delenv("CALL_TRANSCRIBE_SHARED_SCREEN", raising=False)
     runtime = FakeRuntimeClient()
     rooms = InMemoryCallRooms()
     cfg = LiveKitConfig(url="wss://calls.example.test", api_key="APIkey1", api_secret="s" * 32,
@@ -61,6 +62,22 @@ def test_a_call_creates_its_room_with_the_notice_and_spawns_a_hidden_listener(en
     data = body.get("data") or {}
     assert data["call"]["room"] == room and data["call"]["url"] == "wss://calls.example.test"
     assert "token" not in json.dumps(data["call"])
+
+
+def test_a_shared_screen_is_transcribed_by_default_and_the_notice_says_so(env, monkeypatch):
+    client, runtime, rooms = env
+    resp = client.post("/bots", headers=USER, json={"platform": "vexa_call", "session_id": SID})
+    assert resp.status_code == 201, resp.text
+    inv = json.loads(runtime.specs[-1]["env"]["VEXA_BOT_CONFIG"])
+    assert inv["call"]["screenShareAudio"] is True
+    assert rooms.rooms[resp.json()["native_meeting_id"]]["metadata"]["shared_screen_transcribed"] is True
+    # The policy switch: off ⇒ the listener never reads a shared screen's audio, and the notice says so.
+    monkeypatch.setenv("CALL_TRANSCRIBE_SHARED_SCREEN", "false")
+    off = client.post("/bots", headers=USER, json={"platform": "vexa_call", "session_id": SID})
+    assert off.status_code == 201, off.text
+    inv = json.loads(runtime.specs[-1]["env"]["VEXA_BOT_CONFIG"])
+    assert inv["call"]["screenShareAudio"] is False
+    assert rooms.rooms[off.json()["native_meeting_id"]]["metadata"]["shared_screen_transcribed"] is False
 
 
 def test_a_call_refuses_an_id_or_a_url_and_a_bad_session(env):

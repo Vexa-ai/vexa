@@ -78,8 +78,11 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
     return value
 
 
-def _env_bool(name: str) -> bool:
-    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -89,6 +92,10 @@ class CallLimits:
     first_join_timeout_sec: int
     max_participants: int
     transcription_switchable: bool
+    # Policy: the audio of a screen a participant shares is transcribed too, as its own speaker
+    # "<person> (shared screen)". On by default; the room's notice says so, so the consent mark
+    # every participant sees covers it.
+    screen_share_audio: bool = True
 
     @classmethod
     def from_env(cls) -> "CallLimits":
@@ -98,6 +105,7 @@ class CallLimits:
             first_join_timeout_sec=_env_int("CALL_FIRST_JOIN_TIMEOUT_SEC", DEFAULT_FIRST_JOIN_TIMEOUT_SEC),
             max_participants=_env_int("CALL_MAX_PARTICIPANTS", DEFAULT_MAX_PARTICIPANTS),
             transcription_switchable=_env_bool("CALL_TRANSCRIPTION_SWITCHABLE"),
+            screen_share_audio=_env_bool("CALL_TRANSCRIBE_SHARED_SCREEN", default=True),
         )
 
 
@@ -217,6 +225,7 @@ async def prepare_call(calls: Optional[Calls], *, user_id: int, session_id: Opti
         "vexa_call": 1,
         "transcribed": transcribed,
         "transcription_switchable": limits.transcription_switchable,
+        "shared_screen_transcribed": transcribed and limits.screen_share_audio,
         "owner": str(user_id),
         "session_id": session_id,
     }
@@ -231,6 +240,7 @@ async def prepare_call(calls: Optional[Calls], *, user_id: int, session_id: Opti
         "maxDurationSec": limits.max_duration_sec,
         "emptyGraceSec": limits.empty_grace_sec,
         "firstJoinTimeoutSec": limits.first_join_timeout_sec,
+        "screenShareAudio": limits.screen_share_audio,
     }
     data = {"room": room, "url": calls.config.url, "session_id": session_id, "transcribed": transcribed,
             "transcription_switchable": limits.transcription_switchable,
