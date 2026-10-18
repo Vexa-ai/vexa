@@ -54,7 +54,7 @@ CREATED = {"draft_id": "r-draft-1", "message_id": "m1", "status": "draft_created
 @pytest.fixture
 def mailbox(connection, ready, store):
     cid = connection("google_email")
-    store.put(cid, {"owner": OWNER, "value": COMPOSE})
+    store.put(cid, {"owner": OWNER, "value": {**COMPOSE, "expires_at": time.time() + 500}})
     ready(cid)
     return cid
 
@@ -151,7 +151,7 @@ def test_only_drafts_this_broker_created_can_be_updated(signed, mailbox, connect
         assert r.status_code == 409 and "Only drafts Vexa created" in r.json()["detail"]
         # Another mailbox of the same person did not create it either.
         other = connection("google_email")
-        store.put(other, {"owner": OWNER, "value": COMPOSE})
+        store.put(other, {"owner": OWNER, "value": {**COMPOSE, "expires_at": time.time() + 500}})
         ready(other)
         r = signed("agent", "POST", f"/api/connections/{other}/draft-update", {**update, "request_id": "fixture-draft-13"})
         assert r.status_code == 409

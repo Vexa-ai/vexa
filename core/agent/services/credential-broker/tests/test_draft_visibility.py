@@ -74,7 +74,7 @@ def test_a_thread_without_drafts_makes_no_drafts_call():
 @pytest.fixture
 def mailbox(connection, ready, store):
     cid = connection("google_email")
-    store.put(cid, {"owner": OWNER, "value": COMPOSE})
+    store.put(cid, {"owner": OWNER, "value": {**COMPOSE, "expires_at": time.time() + 500}})
     ready(cid)
     return cid
 
