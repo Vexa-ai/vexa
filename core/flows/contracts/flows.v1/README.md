@@ -69,15 +69,17 @@ loses a card and never loses the fact.
 - **the flows suite** — `test_carrier_census.py` holds the census and the domain manifests in
   agreement in both directions.
 
-## Registered, not yet sealed
+## `FlowDefinition` — one version of one flow (ADR-0046)
 
-It is registered in `architecture.calm.json` (node `flows.v1`) — `gate:dataflow`'s completeness
-check requires every contract dir on disk to appear in the chart, so registration is not optional
-and not deferrable.
+Beside the census, the contract carries the shape `flow_version` stores and `GET /flows` reads
+back: `scope` (`instance` or `user:<uid>`), `name`, `version`, a `trigger` (`event` naming a
+carrier, or `schedule` with a five-field UTC cron), `steps` by name and `params` as data. The key is
+(scope, name, version). A routine is a user-scoped flow with a schedule trigger and `agent_run`.
+Goldens: `FlowDefinition.user-routine.json`, `FlowDefinition.instance-event.json`.
 
-It carries no entry in `contracts.seal.json`, so `gate:contract-version` reports it as *in
-development* — and that part is deliberate. Sealing publishes a frozen `.vN`; freezing a shape on
-the branch that introduces it would pin it before anybody has built a consumer against it. Re-seal
-with `pnpm seal:contracts` in a `lane:contract` review once it has one.
+## Sealed
+
+Registered in `architecture.calm.json` (node `flows.v1`) and sealed in `contracts.seal.json`.
+`FlowDefinition` was added back-compatibly and re-sealed (`pnpm seal:contracts`).
 
 _Governed by `docs/docs/governance/architecture.mdx` (P1–P12). This folder owns one concern; its public surface is its `index`/contract; it may depend only on what the dependency-rules allow._

@@ -79,6 +79,8 @@ from __future__ import annotations
 
 import hmac
 import json
+import re
+import time
 import logging
 import os
 import secrets
@@ -94,12 +96,13 @@ from pydantic import BaseModel, Field  # noqa: E402
 
 from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
 import flows_config  # noqa: E402
+import flows_obs  # noqa: E402
 import flows_pages  # noqa: E402 — the page renderer `GET /flows/pages` serves (Vexa-ai/vexa#1639)
 from flows_defs import production  # noqa: E402
 from flows_steps.common import (db_url, internal_secret,  # noqa: E402
                                 require_internal_secret, setting)
 from flows_integrations import friction_dedup  # noqa: E402 — the repeat counter POST /friction keeps
-from flows_integrations.subject_auth import (REFUSAL, Caller,  # noqa: E402
+from flows_integrations.subject_auth import (REFUSAL, SHARED_REFUSAL, Caller,  # noqa: E402
                                               IdentityUnavailable, SubjectUnknown, resolve)
 # ALIASED, and it is not style. The route below is also called `list_reactions`, and `def` rebinds
 # the module global — so the route was calling ITSELF, and every authenticated `GET /reactions`
@@ -314,6 +317,9 @@ async def _lifespan(_app: FastAPI):
 app = FastAPI(title="flows-api", version="0.1.0",
               description="Submit and manage Vexa workflows as data — no code over the wire.",
               lifespan=_lifespan)
+# THE TRACE (logevent.v1): adopt the caller's X-Trace-Id or mint one, bind it for the request, echo
+# it; `flows_steps.common.http` forwards it on every call this request makes to a Vexa service.
+app.add_middleware(flows_obs.TraceMiddleware, service="flows-api")
 
 
 def _same_key(presented: str, expected: str) -> bool:
@@ -391,6 +397,23 @@ def _bearer(authorization: str, x_api_key: str) -> str:
 PERSON_ONLY, OPEN = "person-only", "open"
 DELEGATED_REACH = {
     ("GET", "/flows"): OPEN,
+    ("GET", "/flows/runs"): OPEN,
+    # a worker with nobody in the loop may not author, pause or retire anybody's flows (ADR-0046)
+    ("POST", "/flows"): PERSON_ONLY,
+    ("POST", "/flows/{name}/{version}/{action}"): PERSON_ONLY,
+    ("POST", "/flows/{name}/claim"): PERSON_ONLY,
+    ("POST", "/routines/triggers"): PERSON_ONLY,
+    ("POST", "/concerns/stage"): PERSON_ONLY,
+    ("POST", "/event-agents/pause"): PERSON_ONLY,
+    ("POST", "/sinks"): PERSON_ONLY,
+    ("POST", "/sinks/{name}/unsubscribe"): PERSON_ONLY,
+    # ADR-0050: a person's sensors. Reading their health is a read of their own rows; making,
+    # changing, testing (a read of their connection), enabling and connecting one is the person's.
+    ("GET", "/sensors"): OPEN,
+    ("POST", "/sensors"): PERSON_ONLY,
+    ("POST", "/sensors/{name}/test"): PERSON_ONLY,
+    ("POST", "/sensors/{name}/connect"): PERSON_ONLY,
+    ("POST", "/sensors/{name}/{action}"): PERSON_ONLY,
     ("GET", "/flows/pages"): OPEN,
     ("GET", "/reactions"): OPEN,
     ("POST", "/reactions/{reaction_id}/{verb}"): PERSON_ONLY,
@@ -399,6 +422,15 @@ DELEGATED_REACH = {
     ("GET", "/friction"): OPEN,
     ("GET", "/queue/waiting"): OPEN,
     ("GET", "/queue/notices"): OPEN,
+    ("GET", "/mail/address"): OPEN,
+    ("GET", "/mail/delivery"): OPEN,
+    # the admin account's mail design: reads are open to its chat worker, every write needs the
+    # person in the loop — a test-send and a switch are acts the admin takes, not a routine
+    ("GET", "/mail/kinds"): OPEN,
+    ("POST", "/mail/preview/{kind}"): OPEN,
+    ("PUT", "/mail/templates/{kind}"): PERSON_ONLY,
+    ("POST", "/mail/test-send/{kind}"): PERSON_ONLY,
+    ("PUT", "/mail/kinds/{kind}"): PERSON_ONLY,
 }
 
 
@@ -411,11 +443,51 @@ def _reach(request: Optional[Request]) -> str:
     return DELEGATED_REACH.get((request.method.upper(), path), PERSON_ONLY)
 
 
+#: The one route a worker whose turn other people read may still reach: filing a friction report
+#: into Vexa's own sink reads nothing of its person's (ADR-0048 decision 4).
+SHARED_OPEN = {("POST", "/friction")}
+
+
+def _route_key(request: Optional[Request]):
+    route = request.scope.get("route") if request is not None else None
+    path = getattr(route, "path", None)
+    return (request.method.upper(), path) if path else None
+
+
 def _refuse_unwatched(request: Optional[Request], caller: Caller) -> Caller:
-    """403 `REFUSAL` for a worker with nobody in the loop on a `PERSON_ONLY` route; else the caller."""
-    if caller.is_unwatched and _reach(request) != OPEN:
+    """403 `SHARED_REFUSAL` for a worker whose turn other people read, on every route but
+    `SHARED_OPEN`; 403 `REFUSAL` for a worker with nobody in the loop on a `PERSON_ONLY` route;
+    else the caller."""
+    if caller.is_shared and _route_key(request) not in SHARED_OPEN:
+        raise HTTPException(status_code=403, detail=SHARED_REFUSAL)
+    if caller.is_unwatched and _reach(request) != OPEN and not _retires_itself(request, caller):
         raise HTTPException(status_code=403, detail=REFUSAL)
     return caller
+
+
+#: The lifecycle actions a routine granted `flow.retire_self` may take on ITSELF.
+SELF_RETIRE_ACTIONS = ("retire", "pause")
+
+
+def _retires_itself(request: Optional[Request], caller: Caller) -> bool:
+    """A routine's own unwatched run retiring or pausing that same routine, which its person granted
+    it (`flow.retire_self`, carried on its delegation beside the routine's name). Nothing else: not
+    another flow, not activate, not a grant change. Logged as a granted use."""
+    if request is None or _route_key(request) != ("POST", "/flows/{name}/{version}/{action}"):
+        return False
+    params = request.path_params or {}
+    if str(params.get("action") or "") not in SELF_RETIRE_ACTIONS:
+        return False
+    if "flow.retire_self" not in caller.grants or not caller.uid:
+        return False
+    asked = str(request.query_params.get("scope") or "").strip()
+    if asked and asked != f"user:{caller.uid}":
+        return False
+    if caller.flow != f"user:{caller.uid}/{params.get('name')}":
+        return False
+    flows_obs.log_event("routine_grant_used",
+                        fields={"action": "flow.retire_self", "flow": caller.flow})
+    return True
 
 
 def subject_or_operator(x_flows_operator_key: str = Header(default=""),
@@ -561,93 +633,520 @@ def health():
 
 
 class FlowSubmission(BaseModel):
-    name: str = Field(min_length=1, max_length=80)
-    on_event: str = Field(min_length=1, max_length=120)
-    steps: list[str] = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+    #: the event a flow reacts to — or omit it and send `trigger` (flows.v1 `Trigger`)
+    on_event: str = Field(default="", max_length=120)
+    trigger: Optional[dict] = None
+    steps: list[str] = Field(
+        min_length=1,
+        description="Step NAMES in run order, e.g. [\"agent_run\"] — strings, never objects. What a "
+                    "step needs (agent_run's `instruction`, `thread`) goes in `params`.")
     params: dict = Field(default_factory=dict)
     activate: bool = True
+    #: WHOSE FLOW (ADR-0046 decision 5). Taken from the caller, never trusted from here: a person
+    #: may name only their own scope (or omit it); `instance` needs the operator key or the
+    #: deployment's admin account (its own key, or its chat's delegation); the operator key may name
+    #: a person (the routine migration).
+    scope: Optional[str] = None
 
 
-def _db_flows() -> list:
+#: Typed refusals a submission can meet (ADR-0046 decisions 5, 6, 9). Each is a `detail.refused`.
+STEP_NOT_ALLOWED, QUOTA_ACTIVE, QUOTA_INTERVAL = (
+    "step_not_allowed", "quota_active_flows", "quota_min_interval")
+TOO_LARGE, QUOTA_VERSIONS, QUOTA_DRAFTS = ("submission_too_large", "quota_versions", "quota_drafts")
+#: The most one submission's `params` may weigh in a person's scope, as compact JSON (the
+#: instruction is in there). A routine's instruction is a paragraph; 16 KB is several pages of it.
+SUBMISSION_MAX_BYTES = 16 * 1024
+#: How many versions, and how many of them drafts, one person's scope may hold in all. Versions are
+#: minted and never overwritten, so without a ceiling one person's resubmissions grow the table
+#: without bound. Generous for a person editing their own routines; the instance scope is not
+#: capped (only the operator and the instance admin write it).
+USER_SCOPE_MAX_VERSIONS = 500
+USER_SCOPE_MAX_DRAFTS = 50
+
+
+def _refuse(code: int, reason: str, **facts):
+    raise HTTPException(status_code=code, detail={"refused": reason, **facts})
+
+
+def _db_flows(scope_filter: Optional[set] = None) -> list:
     """Every runtime-authored version, oldest first — the `flow_version` table as dicts.
 
     ONE READER, because `GET /flows` and `GET /flows/pages` answer two questions about the same
     rows and a second SELECT is a second column list to keep in step. `created_at` is here for the
     page: a flow somebody wrote from the governance chat says on its own page who activated it and
-    when, and neither fact is anywhere else."""
-    rows = db.execute("SELECT name, version, on_event, steps, params, status, created_by, "
-                      "created_at FROM flow_version ORDER BY name, version")
-    return [{"name": n, "version": v, "on": e, "steps": json.loads(st),
-             "params": json.loads(p or "{}"), "status": status,
-             "created_by": by, "created_at": str(at or ""), "source": "api"}
-            for n, v, e, st, p, status, by, at in rows]
+    when, and neither fact is anywhere else.
+
+    `scope_filter` keeps only the named scopes — a person reads the instance's and their own, never
+    anybody else's (ADR-0046 decision 5)."""
+    rows = db.execute("SELECT scope, name, version, on_event, cron, steps, params, status, "
+                      "created_by, created_at FROM flow_version ORDER BY scope, name, version")
+    out = []
+    for sc, n, v, e, cron, st, p, status, by, at in rows:
+        sc = sc or "instance"
+        if scope_filter is not None and sc not in scope_filter:
+            continue
+        params = json.loads(p or "{}")
+        trigger = ({"kind": "at", "at": params.get("at"), "cron": cron}
+                   if cron and params.get("once") else
+                   {"event": e, **params["_trigger"]} if isinstance(params.get("_trigger"), dict) else
+                   {"kind": "schedule", "cron": cron} if cron else {"kind": "event", "event": e})
+        from flows_steps import grants as _g
+        granted = _g.clean([x for x in (params.get("grants") or []) if x in _g.VOCAB]) \
+            if isinstance(params.get("grants"), list) else []
+        out.append({"name": n, "version": v, "scope": sc, "on": e, "trigger": trigger,
+                    "steps": json.loads(st), "params": params, "status": status,
+                    "grants": granted, "may": _g.may_sentence(granted),
+                    "created_by": by, "created_at": str(at or ""), "source": "api"})
+    return out
+
+
+def _readable_scopes(caller: Caller) -> Optional[set]:
+    """None = every scope (the operator); else the instance's and the caller's own."""
+    if caller.is_admin:
+        return None
+    return {"instance", f"user:{caller.uid}"} if caller.uid else {"instance"}
 
 
 @app.get("/flows")
 def list_flows(caller: Caller = Depends(subject_or_operator)):
-    """Every flow this engine knows, and the step vocabulary flows are built out of.
+    """Every flow this engine knows that you may see, and the step vocabulary flows are built out of.
 
     Read this when you need to know what this deployment can actually DO before promising it: each
-    entry names the flow, its version, the event that starts it (`on`) and its ordered steps, and
-    `source` says whether it came from the image or was submitted through the API. It answers
-    "is there a flow for X?" — it does not start one; facts start flows.
+    entry names the flow, its version, its `scope` (`instance`, or `user:<uid>` for a person's own),
+    its `trigger` (an event, or a schedule's cron in UTC) and its ordered steps, and `source` says
+    whether it came from the image or was submitted through the API. A person sees the instance's
+    flows and their own, never anybody else's.
 
-    `steps_vocabulary` is every step name with its own one-line description, which is the same list
-    a submitted flow is validated against. `shadowing_versions` names any runtime version that
+    `steps_vocabulary` is every step name with its own one-line description and whether a person's
+    own flow may use it (`user_allowed`). A person's routine that did not run says why in
+    `last_refusal` (`reason`, `text`, `at`, `next_run_at` — e.g. the daily run limit and when the
+    next run can start), so "why didn't it run" has an answer. `shadowing_versions` names any runtime version that
     overrides an image version with fewer steps — the shape of a flow quietly doing less than the
-    code says, surfaced here because nobody reads a startup log until they already suspect it.
-
-    Takes the operator key or a person's own credential; it describes the machine, not a person, so
-    the answer is the same either way.
-    """
-    db_flows = _db_flows()
-    code_flows = [{"name": f.name, "version": f.version, "on": f.on.name,
+    code says, surfaced here because nobody reads a startup log until they already suspect it."""
+    db_flows = _with_refusals(_db_flows(_readable_scopes(caller)))
+    code_flows = [{"name": f.name, "version": f.version, "scope": "instance", "on": f.on.name,
+                   "trigger": {"kind": "event", "event": f.on.name},
                    "steps": list(f.steps), "source": "image", "status": "active"}
-                  for f in vocab.flows.values()]
+                  for (ident, _v), f in vocab.flows.items() if (ident, _v) not in vocab.db_versions]
+    allowed = _user_allowed_steps(caller.uid)
     # RUNTIME VERSIONS THAT SHADOW THE IMAGE'S with fewer steps — the F57 class. Surfaced on the
     # listing rather than only in a startup log, because the log is read when somebody already
     # suspects something and this is the defect where nobody does.
     return {"shadowing_versions": vocab.shadowing_versions(),
             "steps_vocabulary": [
-        {"name": n, "doc": " ".join((vocab.steps[n].__doc__ or "undocumented").split())}
+        {"name": n, "doc": " ".join((vocab.steps[n].__doc__ or "undocumented").split()),
+         "user_allowed": n in allowed}
         for n in sorted(vocab.steps)],
         "flows": code_flows + db_flows}
 
 
-@app.post("/flows", status_code=201, dependencies=[Depends(auth)])
-def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api")):
-    """Author a new version of a flow: an event to react to, and the ordered steps to run.
+def _with_refusals(flows: list) -> list:
+    """Each person's flow gains `last_refusal` when a schedule fire was refused in the last day."""
+    since = clock.now() - 86_400.0
+    rows = db.execute("SELECT flow, subject_refs, created_at FROM reaction "
+                      "WHERE event_type = 'schedule.refused' AND created_at > :t "
+                      "ORDER BY created_at DESC", {"t": since})
+    latest: dict = {}
+    for ident, refs, at in rows:
+        if ident not in latest:
+            r = json.loads(refs or "{}")
+            latest[ident] = {"reason": r.get("refused"), "text": r.get("text"), "at": float(at),
+                             "next_run_at": r.get("next_run_at")}
+    from flows.admission import runs_today
+    cap = flows_config.get_int("VEXA_FLOWS_USER_RUNS_PER_DAY")
+    used: dict = {}
+    for f in flows:
+        scope = f.get("scope", "instance")
+        if scope == "instance":
+            continue
+        ident = f"{scope}/{f.get('name')}"
+        f["kind"] = ("sink" if (f.get("steps") or [None])[0] == "post_event_card" else
+                     "routine" if (f.get("trigger") or {}).get("kind") == "schedule" else "event_agent")
+        hit = latest.get(ident)
+        if hit:
+            f["last_refusal"] = hit
+        paused = (f.get("params") or {}).get("paused") if isinstance(f.get("params"), dict) else None
+        if f.get("status") != "active" and isinstance(paused, dict) and paused.get("text"):
+            # WHY A ROUTINE PAUSED ITSELF (Vexa-ai/vexa#1783): its chat became shared and a run
+            # needed something only its owner reads. The strip says it; the owner's resume clears it.
+            f["paused_reason"] = str(paused["text"])
+        owner = scope.split(":", 1)[-1]
+        if owner not in used:
+            used[owner] = runs_today(db, owner, clock.now(), scheduled=True)
+        f["runs_today"], f["runs_per_day"] = used[owner], cap
+        cron = (f.get("trigger") or {}).get("cron")
+        if cron:
+            # SAID, NOT GUESSED: the schedule in words and its next slot, so an agent reading its
+            # own flows states them instead of inferring them from the cron (founder, 2026-10-14)
+            from flows.schedule import next_slot, parse
+            f["schedule"] = schedule_words(cron)
+            try:
+                f["next_run_at"] = next_slot(parse(cron), clock.now())
+            except Exception:  # noqa: BLE001 — an unreadable cron has no next run to state
+                f["next_run_at"] = None
+        last = _last_run(ident)
+        if last:
+            f["last_run"] = last
+        # WHAT IS ARMED AND WHAT FEEDS IT (ADR-0050): a keyed flow's next fires, and the sensor a
+        # connected chat's sink reads from, with its health — what the routine strip shows.
+        params = f.get("params") or {}
+        if isinstance(params.get("_trigger"), dict) and params["_trigger"].get("kind") == "relative":
+            from flows import keyed as _keyed
+            f["kind"] = "keyed"
+            f["next_fires"] = _keyed.upcoming(db, scope, f.get("name"))
+        sensor = str((params.get("filter") or {}).get("_sensor") or "") if isinstance(
+            params.get("filter"), dict) else ""
+        if sensor and "/" in sensor:
+            from flows_sensors import pool as _pool
+            sc, _, nm = sensor.rpartition("/")
+            got = _pool.health(db, sc, nm)
+            if got:
+                f["sensor"] = got[0]
+    return flows
 
-    `steps` may only name steps this deployment already carries — `GET /flows` lists the whole
-    vocabulary under `steps_vocabulary`, and an unknown name is refused with the list rather
-    than accepted and discovered at run time. The API never accepts code: a flow is data.
 
-    Versions are minted, never overwritten. Submitting a name that already exists files the
-    NEXT version beside it, and reactions already in flight keep the version they were admitted
-    on. `activate` (default true) makes it live within about ten seconds; false files it as a
-    draft for `POST /flows/{name}/{version}/activate` later.
+def _hhmm(h: int, m: int) -> str:
+    return f"{h:02d}:{m:02d}"
 
-    Operator-gated: this door reads the deployment's own operator key, never the caller's."""
+
+def schedule_words(cron: str) -> str:
+    """A 5-field UTC cron in words: "every 30 min, 06:00–21:30 UTC", "daily at 09:00 UTC",
+    "weekdays at 07:30 UTC", "hourly at :05" — else the cron itself."""
+    p = str(cron or "").split()
+    if len(p) != 5:
+        return str(cron or "")
+    mi, ho, dom, mon, dow = p
+    days = "" if dow == "*" else (" on weekdays" if dow == "1-5" else f" on days {dow}")
+    if dom != "*" or mon != "*":
+        return cron
+    import re as _re
+    step = _re.fullmatch(r"\*/(\d+)", mi)
+    if step:
+        n = int(step.group(1))
+        span = _re.fullmatch(r"(\d+)-(\d+)", ho)
+        if ho == "*":
+            return f"every {n} min{days}"
+        if span:
+            a, b = int(span.group(1)), int(span.group(2))
+            last = (60 - n) if 60 % n == 0 else (59 // n) * n
+            return f"every {n} min, {_hhmm(a, 0)}–{_hhmm(b, last)} UTC{days}"
+    if mi.isdigit() and ho == "*":
+        return f"hourly at :{int(mi):02d}{days}"
+    if mi.isdigit() and ho.isdigit():
+        return (f"at {_hhmm(int(ho), int(mi))} UTC{days}" if days
+                else f"daily at {_hhmm(int(ho), int(mi))} UTC")
+    return cron
+
+
+def _last_run(ident: str):
+    """The newest run of one flow — when, how it ended, and each step's last state and duration —
+    for the routine strip and the flow graph. None when it never ran."""
+    rows = db.execute("SELECT reaction_id, status, reason, step, created_at, updated_at FROM reaction "
+                      "WHERE flow = :f AND event_type <> 'schedule.refused' "
+                      "ORDER BY created_at DESC LIMIT 1", {"f": ident})
+    if not rows:
+        return None
+    rid, status, reason, step, created, updated = rows[0]
+    rec = db.execute("SELECT step, state, result, attempted_at FROM effect_receipt "
+                     "WHERE reaction_id = :r ORDER BY attempted_at", {"r": rid})
+    steps: dict = {}
+    prev = float(created or 0)
+    for st, state, result, at in rec:
+        at = float(at or prev)
+        steps[st] = {"state": state, "at": at, "duration_s": max(0.0, round(at - prev, 1))}
+        prev = at
+        res = _json_or_none(result)
+        if isinstance(res, dict) and res.get("session") and "session" not in steps.get("_run", {}):
+            steps["_run"] = {"session": res.get("session")}
+    run = steps.pop("_run", {})
+    return {"id": rid, "status": status, "reason": reason, "step": step,
+            "started_at": float(created or 0), "ended_at": float(updated or 0),
+            "duration_s": max(0.0, round(float(updated or 0) - float(created or 0), 1)),
+            "steps": steps, **run}
+
+
+def _user_allowed_steps(uid: str = "") -> set:
+    """The steps a person's flow may name: `_global/POLICIES.md` `user_flow_steps` within the
+    vocabulary, or the image's user-allowed marks when the policy says nothing (decision 6)."""
+    from flows_steps import policies
+    try:
+        rules = policies.read(uid) if uid else policies.resolve(None)
+    except Exception:  # noqa: BLE001 — a policy we cannot read is the image's marks
+        rules = policies.resolve(None)
+    return policies.user_flow_steps(rules, vocab.user_allowed, vocab.steps)
+
+
+def _names_own_scope(caller: Caller, asked: str) -> bool:
+    """Does `asked` name the caller's own scope — `user:<uid>`, or `user:<address>` with the address
+    identity answered for this credential? Agents often know their person's address and not the
+    uid; both spell the same person, and the scope is always WRITTEN with the uid."""
+    if not asked.startswith("user:") or not caller.uid:
+        return False
+    return asked[len("user:"):].strip().lower() in caller.names
+
+
+def _author_scope(caller: Caller, asked: Optional[str]) -> str:
+    """THE SCOPE A SUBMISSION WRITES, decided by who is calling (ADR-0046 decision 5)."""
+    asked = (asked or "").strip()
+    if caller.is_admin:
+        if not asked or asked == "instance":
+            return "instance"
+        if asked.startswith("user:") and len(asked) > 5 and "/" not in asked:
+            return asked
+        _refuse(400, "bad_scope", scope=asked, note="instance, or user:<uid>")
+    if not caller.uid:
+        raise HTTPException(status_code=403, detail="this credential cannot author flows")
+    own = f"user:{caller.uid}"
+    if not asked or asked == own or _names_own_scope(caller, asked):
+        return own
+    if asked == "instance" and caller.instance_admin:
+        return "instance"
+    _refuse(403, "not_your_scope", scope=asked, you_are=own,
+            note="a person writes their own flows; the instance's are the operator's or the "
+                 "deployment's admin account's")
+
+
+def _trigger_of(sub: FlowSubmission) -> tuple[str, Optional[str]]:
+    """(on_event, cron) from the submission — `trigger` when sent, else the legacy `on_event`."""
+    from flows.registry import SCHEDULE_EVENT
+    from flows.schedule import CronError, parse
+    trig = sub.trigger or {}
+    kind = str(trig.get("kind") or ("event" if sub.on_event else "")).strip()
+    if kind == "schedule":
+        cron = str(trig.get("cron") or "").strip()
+        try:
+            parse(cron)
+        except CronError as e:
+            _refuse(400, "bad_cron", cron=cron, note=str(e))
+        return SCHEDULE_EVENT, cron
+    if kind == "at":
+        at = _at_epoch(trig.get("at"))
+        tm = time.gmtime(at)
+        return SCHEDULE_EVENT, f"{tm.tm_min} {tm.tm_hour} {tm.tm_mday} {tm.tm_mon} *"
+    if kind == "relative":
+        # A KEYED SCHEDULE (ADR-0050): `{kind: relative, event: "calendar.event.*", filter,
+        # at: "payload.start - 60s", key: "payload.event_id"}` — one pending fire per key, moved by
+        # each matching event, cancelled when one no longer passes or is cancelled.
+        from flows.triggers import TriggerError, check_glob
+        try:
+            return check_glob(trig.get("event") or ""), None
+        except TriggerError as e:
+            _refuse(400, "bad_trigger", note=str(e))
+    if kind == "event":
+        event = str(trig.get("event") or sub.on_event or "").strip()
+        if "*" in event:
+            from flows.triggers import TriggerError, check_glob
+            try:
+                event = check_glob(event)
+            except TriggerError as e:
+                _refuse(400, "bad_trigger", note=str(e))
+        if not event:
+            _refuse(400, "no_trigger", note="send trigger {kind: event, event} or {kind: schedule, cron}")
+        if event == SCHEDULE_EVENT:
+            _refuse(400, "reserved_event", event=event,
+                    note="schedule.due is fired by the worker; send trigger {kind: schedule, cron}")
+        return event, None
+    _refuse(400, "no_trigger", note="send trigger {kind: event, event}, {kind: schedule, cron} "
+                                    "or {kind: at, at}")
+
+
+#: How far ahead a one-shot may be set. A cron names a day of a year, so a time further out than a
+#: year could not be told apart from the same day next year.
+AT_HORIZON_S = 360 * 86400
+
+
+def _at_epoch(raw) -> float:
+    """A one-shot's time as UTC epoch seconds, on the minute — from epoch seconds or an ISO-8601
+    time with its offset (`2027-03-01T13:13:00+01:00`; `Z` is UTC). Refused when it has no offset,
+    is in the past, or is further out than :data:`AT_HORIZON_S`."""
+    from datetime import datetime
+    try:
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            at = float(raw)
+        else:
+            text = str(raw or "").strip().replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(text)
+            if parsed.tzinfo is None:
+                _refuse(400, "bad_at", at=raw, note="say the time with its offset, e.g. "
+                        "2027-03-01T13:13:00+01:00, or as UTC epoch seconds")
+            at = parsed.timestamp()
+    except (TypeError, ValueError):
+        _refuse(400, "bad_at", at=raw, note="an ISO-8601 time with its offset, or UTC epoch seconds")
+    at -= at % 60
+    now = clock.now()
+    if at < now - 60:
+        _refuse(400, "at_in_the_past", at=at, now=now)
+    if at > now + AT_HORIZON_S:
+        _refuse(400, "at_too_far", at=at, maximum_s=AT_HORIZON_S)
+    return at
+
+
+def _grants_for(scope: str, sub: "FlowSubmission") -> list:
+    """WHAT THIS ROUTINE MAY DO UNATTENDED, as the person named it (`params.grants`), checked against
+    the vocabulary and the company's cap (flows phase 0). A no-LLM step that acts for the person
+    needs its grant named here: `request_meeting_bot` needs `bot.request`."""
+    from flows_steps import grants as g
+    from flows_steps import policies
+    try:
+        named = g.clean((sub.params or {}).get("grants"))
+    except g.GrantError as e:
+        _refuse(400, "grant_unknown", unknown=e.unknown, known=list(g.VOCAB),
+                note="params.grants names what this routine may do on its own")
+    if "request_meeting_bot" in sub.steps and "bot.request" not in named:
+        _refuse(400, "grant_required", step="request_meeting_bot", grant="bot.request",
+                note="a routine that sends a bot names params.grants: [\"bot.request\"]; the person "
+                     "is told \"This routine may: send bots to meetings\"")
+    if not named:
+        return []
+    uid = scope[len("user:"):] if scope.startswith("user:") else ""
+    try:
+        rules = policies.read(uid) if uid else policies.resolve(None)
+    except Exception:  # noqa: BLE001 — a policy we cannot read grants only the defaults
+        rules = policies.resolve(None)
+    over = [x for x in named if x not in g.allowed(rules)]
+    if over:
+        _refuse(403, "grant_not_allowed", grants=over, allowed=sorted(g.allowed(rules)),
+                note="_global/POLICIES.md routine_unattended_actions does not allow it")
+    return named
+
+
+def _policies_mod():
+    from flows_steps import policies  # noqa: PLC0415
+    return policies
+
+
+def _quota(name: str) -> int:
+    return flows_config.get_int(name)
+
+
+def _check_user_flow(scope: str, sub: FlowSubmission, cron: Optional[str]) -> None:
+    """The allow-list and the quotas a PERSON's flow meets (ADR-0046 decisions 6 and 9)."""
+    uid = scope[len("user:"):]
+    allowed = _user_allowed_steps(uid)
+    for step in sub.steps:
+        if step not in allowed:
+            _refuse(403, STEP_NOT_ALLOWED, step=step, allowed=sorted(allowed),
+                    note="a person's own flow may name only the steps `user_flow_steps` in "
+                         "_global/POLICIES.md allows")
+    if "agent_run" in sub.steps and not str((sub.params or {}).get("instruction") or "").strip():
+        _refuse(400, "instruction_required", step="agent_run",
+                note="agent_run needs params.instruction — what the agent should do each run")
+    if cron:
+        from flows.schedule import min_interval
+        floor = _policies_mod().company_quota("routine_min_interval_minutes", "VEXA_FLOWS_USER_MIN_INTERVAL_S", scale=60)
+        gap = min_interval(cron)
+        if gap < floor:
+            _refuse(403, QUOTA_INTERVAL, cron=cron, interval_s=int(gap), minimum_s=floor)
+    held = db.execute("SELECT COUNT(*) FROM flow_version WHERE scope = :sc", {"sc": scope})
+    if int(held[0][0] or 0) >= USER_SCOPE_MAX_VERSIONS:
+        _refuse(403, QUOTA_VERSIONS, versions=int(held[0][0]), maximum=USER_SCOPE_MAX_VERSIONS,
+                note="retire or delete old versions before submitting more")
+    if not sub.activate:
+        drafts = db.execute("SELECT COUNT(*) FROM flow_version WHERE scope = :sc "
+                            "AND status = 'draft'", {"sc": scope})
+        if int(drafts[0][0] or 0) >= USER_SCOPE_MAX_DRAFTS:
+            _refuse(403, QUOTA_DRAFTS, drafts=int(drafts[0][0]), maximum=USER_SCOPE_MAX_DRAFTS)
+    if sub.activate:
+        rows = db.execute("SELECT DISTINCT name FROM flow_version WHERE scope = :sc "
+                          "AND status = 'active'", {"sc": scope})
+        active = {r[0] for r in rows}
+        cap = _quota("VEXA_FLOWS_USER_ACTIVE_FLOWS")
+        if sub.name not in active and len(active) >= cap:
+            _refuse(403, QUOTA_ACTIVE, active=len(active), maximum=cap)
+
+
+@app.post("/flows", status_code=201)
+def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api"),
+                caller: Caller = Depends(subject_or_operator)):
+    """Author a new version of a flow: a trigger — an event to react to, or a schedule — and the
+    ordered steps to run. A routine is a flow of your own with a schedule and the `agent_run` step.
+
+    The flow is YOURS: with your own credential it is written in your scope (`user:<you>`), runs
+    only for events about you, and nobody else can read, change or retire it. `scope` may be
+    omitted; naming anybody else's is refused. The instance's flows are written with the operator
+    key or by the deployment's admin account (or its chat) asking for `scope: instance`.
+
+    `trigger` is `{"kind": "event", "event": "<event_type>"}` or `{"kind": "schedule", "cron":
+    "<minute hour day month weekday>"}` in UTC (`on_event` is still accepted for an event). `steps`
+    may only name steps this deployment carries — `GET /flows` lists them under `steps_vocabulary`,
+    with `user_allowed` marking the ones your own flow may use. `agent_run` needs
+    `params.instruction`, what your agent should do each run, and takes `params.thread`: the id
+    of the chat you are creating it from (your turn states it) — each run then continues that
+    chat; without it the routine gets a chat of its own; `params` must fit in 16 KB. A refusal
+    says why in `detail.refused`: `step_not_allowed` (naming the step), `quota_active_flows`,
+    `quota_min_interval`, `quota_versions`, `quota_drafts`, `submission_too_large`, `bad_cron`,
+    `not_your_scope`.
+
+    Versions are minted, never overwritten. Submitting a name that already exists in the same scope
+    files the NEXT version beside it; runs already in flight keep the version they started on.
+    `activate` (default true) makes it live within about ten seconds; false files it as a draft."""
+    scope = _author_scope(caller, sub.scope)
+    size = len(json.dumps(sub.params, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    if scope != "instance" and size > SUBMISSION_MAX_BYTES:
+        _refuse(413, TOO_LARGE, bytes=size, maximum=SUBMISSION_MAX_BYTES,
+                note="params (the instruction among them) must fit in 16 KB")
+    on_event, cron = _trigger_of(sub)
+    # THE TRIGGER BEYOND THE ROW (ADR-0050): a filter, or a relative time with its key, is stored as
+    # the engine-owned `params._trigger`; a person's own `_trigger` param is never taken as one.
+    sub.params = {k: v for k, v in (sub.params or {}).items() if k != "_trigger"}
+    _kind = str((sub.trigger or {}).get("kind") or "")
+    if _kind in ("relative", "event") and ((sub.trigger or {}).get("filter") or _kind == "relative"):
+        from flows.triggers import TriggerError, check_spec
+        try:
+            sub.params["_trigger"] = check_spec(sub.trigger or {})
+        except TriggerError as e:
+            _refuse(400, "bad_trigger", note=str(e))
+    at = None
+    if str((sub.trigger or {}).get("kind") or "") == "at":
+        # A ONE-SHOT (flows phase 0): the worker fires it at its minute, once, then retires it.
+        at = _at_epoch((sub.trigger or {}).get("at"))
+        sub.params = {**(sub.params or {}), "at": at, "once": True}
     missing = [s for s in sub.steps if s not in vocab.steps]
     if missing:
         raise HTTPException(status_code=400,
                             detail={"unknown_steps": missing, "vocabulary": sorted(vocab.steps)})
-    row = db.execute("SELECT COALESCE(MAX(version),0) FROM flow_version WHERE name=:n",
-                     {"n": sub.name})
-    code_max = max([v for (fn, v) in vocab.flows if fn == sub.name], default=0)
+    granted: list = []
+    if scope != "instance":
+        _check_user_flow(scope, sub, cron)
+        granted = _grants_for(scope, sub)
+        params = {k: v for k, v in (sub.params or {}).items() if k != "grants"}
+        sub.params = {**params, **({"grants": granted} if granted else {})}
+        if "request_meeting_bot" in sub.steps and not str(
+                (sub.params or {}).get("meeting_url") or "").strip():
+            _refuse(400, "meeting_url_required", step="request_meeting_bot",
+                    note="params.meeting_url — the meeting the bot joins")
+    row = db.execute("SELECT COALESCE(MAX(version),0) FROM flow_version WHERE scope=:sc AND name=:n",
+                     {"sc": scope, "n": sub.name})
+    code_max = (max([v for (fn, v) in vocab.flows if fn == sub.name and (fn, v) not in
+                     vocab.db_versions], default=0) if scope == "instance" else 0)
     version = max(row[0][0], code_max) + 1
     status = "active" if sub.activate else "draft"
-    db.execute("""INSERT INTO flow_version (name, version, on_event, steps, params, status,
-                                            created_by, created_at)
-                  VALUES (:n,:v,:e,:s,:p,:st,:by,:t)""",
-               {"n": sub.name, "v": version, "e": sub.on_event, "s": json.dumps(sub.steps),
-                "p": json.dumps(sub.params), "st": status, "by": x_actor, "t": clock.now()})
-    return {"name": sub.name, "version": version, "status": status,
+    by = x_actor if caller.is_admin else (caller.email or f"user:{caller.uid}")
+    db.execute("""INSERT INTO flow_version (scope, name, version, on_event, cron, steps, params,
+                                            status, created_by, created_at)
+                  VALUES (:sc,:n,:v,:e,:c,:s,:p,:st,:by,:t)""",
+               {"sc": scope, "n": sub.name, "v": version, "e": on_event, "c": cron,
+                "s": json.dumps(sub.steps), "p": json.dumps(sub.params), "st": status,
+                "by": by, "t": clock.now()})
+    if status == "active":
+        _supersede(scope, sub.name, version)
+    if granted:
+        flows_obs.log_event("routine_grant_recorded",
+                            fields={"flow": f"{scope}/{sub.name}", "version": version,
+                                    "grants": granted})
+    from flows_steps import grants as _g
+    return {"name": sub.name, "scope": scope, "version": version, "status": status,
+            "trigger": ({"kind": "at", "at": at} if at is not None else
+                        {"event": on_event, **sub.params["_trigger"]} if sub.params.get("_trigger") else
+                        {"kind": "schedule", "cron": cron} if cron
+                        else {"kind": "event", "event": on_event}),
+            "grants": granted, "may": _g.may_sentence(granted),
             "live_within_s": 10 if status == "active" else None}
 
 
 @app.get("/flows/pages")
-def flow_pages(bodies: int = 1, only: str = "",
+def flow_pages(bodies: int = 1, only: str = "", scope: str = "instance",
                caller: Caller = Depends(subject_or_operator)):
     """THE PAGE OF EVERY FLOW SOMEBODY WROTE — one per runtime-authored VERSION, as markdown.
 
@@ -674,13 +1173,20 @@ def flow_pages(bodies: int = 1, only: str = "",
     Takes the operator key or a person's own credential, exactly like `GET /flows`: it describes the
     machine, not a person."""
     wanted = {s.strip() for s in (only or "").split(",") if s.strip()}
-    pages = flows_pages.runtime_pages(vocab, _db_flows())
+    # ONE SCOPE PER ANSWER (ADR-0046). The instance's pages land in `_global/flows/`, which every
+    # person reads, so a person's own flows must never be in that answer; `scope=user:<uid>` is the
+    # per-person mirror, readable by that person and the operator only.
+    scope = (scope or "instance").strip()
+    readable = _readable_scopes(caller)
+    if readable is not None and scope not in readable:
+        raise HTTPException(status_code=403, detail={"refused": "not_your_scope", "scope": scope})
+    pages = flows_pages.runtime_pages(vocab, _db_flows({scope}))
     if wanted:
         pages = [p for p in pages
                  if p["file"] in wanted or f"{p['flow']}@{p['version']}" in wanted]
     if not bodies:
         pages = [{k: v for k, v in p.items() if k != "body"} for p in pages]
-    return {"dir": flows_pages.PAGES_DIR[-1], "pages": pages}
+    return {"dir": flows_pages.PAGES_DIR[-1], "scope": scope, "pages": pages}
 
 
 class EventSubmission(BaseModel):
@@ -724,16 +1230,97 @@ def admit_event(ev: EventSubmission, x_actor: str = Header(default="")):
     that mistake would be made. It never accepts code, and it never names a step: what the fact
     causes is the registry's business (the n8n line we do not cross)."""
     vocab.refresh_from_db(db)          # a DB-submitted flow may be the only reactor
+    if ev.event_type in ("meeting.signal", "room.signal"):
+        # ONE PRODUCER (transcript signals): a meeting signal comes from the signals service, over
+        # the internal tier, at `/events/signal` — never through the operator's intake.
+        raise HTTPException(status_code=403, detail={
+            "refused": "signals_only", "note": "meeting.signal is posted by the signals service"})
     if not vocab.match(ev.event_type):
         raise HTTPException(status_code=400, detail={
             "no_flow_reacts_to": ev.event_type,
             "reactable_event_types": sorted({f.on.name for f in vocab.flows.values()})})
+    if ev.event_type == "schedule.due":
+        raise HTTPException(status_code=400, detail={
+            "refused": "reserved_event", "note": "schedule.due is fired by the flows worker"})
     actor = _actor(x_actor)
     refs = {**ev.refs, "admitted_by": actor}
+    if ev.event_type == "thread.message":
+        _check_message_policy(refs)
+    refusals: list = []
     n = admit(db, vocab, clock, source_event_id=ev.source_event_id,
-              event_type=ev.event_type, subject_refs=refs)
+              event_type=ev.event_type, subject_refs=refs, refusals=refusals,
+              **_admission_limits())
+    flows_obs.log_event("event_admitted", fields={"event_type": ev.event_type,
+                                                  "reactions_created": n, "duplicate": n == 0})
+    if ev.event_type == "thread.message" and not n and refusals:
+        # A MESSAGE THE GUARDS REFUSED IS SAID, NOT SWALLOWED (ADR-0046 decisions 8, 9, 13): the
+        # sending agent is waiting on this answer to tell its person whether it was delivered.
+        raise HTTPException(status_code=429, detail={"refused": refusals[0]})
     return {"event_type": ev.event_type, "source_event_id": ev.source_event_id,
-            "admitted_by": actor, "reactions_created": n, "duplicate": n == 0}
+            "admitted_by": actor, "reactions_created": n, "duplicate": n == 0,
+            **({"refused": refusals} if refusals else {})}
+
+
+@app.post("/events/signal", status_code=202)
+def admit_signal(event: dict = Body(...), x_internal_secret: str = Header(default=""),
+                 x_vexa_service: str = Header(default="")):
+    """A MEETING SIGNAL, from the signals service only (transcript signals, 2026-10-15).
+
+    The body is the event.v1 `meeting.signal` the service built (`subject` = the meeting's owner,
+    `data` = the buffer, its score and why it woke). It is admitted as one fact, keyed by the
+    buffer's segments so a redelivery wakes nobody twice; the company flow `meeting_signal` decides
+    what it does. The caller is the internal tier naming itself `signals`; anyone else — a person,
+    a worker, the operator's key — is refused, because a forged signal would put words in the
+    agent's meeting chat."""
+    from flows_steps import signals as _signals
+    if (not INTERNAL_SECRET or not _same_key(x_internal_secret, INTERNAL_SECRET)
+            or (x_vexa_service or "").strip().lower() != _signals.SIGNALS_SERVICE):
+        raise HTTPException(status_code=403, detail={
+            "refused": "signals_only", "note": "meeting.signal is posted by the signals service"})
+    try:
+        cleaned = _signals.clean(event)
+    except _signals.SignalRefused as exc:
+        raise HTTPException(status_code=400, detail={"refused": "invalid_signal", "note": str(exc)})
+    name = cleaned["name"]
+    vocab.refresh_from_db(db)
+    if not vocab.match(name):
+        # the company retired its flow: a wake does nothing, said rather than queued into silence
+        return {"event_type": name, "reactions_created": 0, "duplicate": False,
+                "refused": ["no_flow_reacts"]}
+    sid = _signals.source_id(cleaned)
+    where = ({"session": cleaned["data"]["session"]} if "session" in cleaned["data"]
+             else {"meeting_row": cleaned["data"]["meeting_row"]})
+    refs = {"uid": cleaned["subject"], **where, "signal": cleaned["data"], "admitted_by": "service:signals"}
+    refusals: list = []
+    n = admit(db, vocab, clock, source_event_id=sid, event_type=name,
+              subject_refs=refs, refusals=refusals, **_admission_limits())
+    flows_obs.log_event("event_admitted", fields={"event_type": name,
+                                                  "reactions_created": n, "duplicate": n == 0})
+    return {"event_type": name, "source_event_id": sid, "reactions_created": n,
+            "duplicate": n == 0, **({"refused": refusals} if refusals else {})}
+
+
+def _admission_limits() -> dict:
+    """The loop guard and the per-person caps, from `config.v1` — the same numbers the worker's
+    own `emit` admits under (ADR-0046 decisions 8, 9)."""
+    return {"loop_limit": flows_config.get_int("VEXA_FLOWS_LOOP_LIMIT"),
+            "max_hops": flows_config.get_int("VEXA_FLOWS_MAX_HOPS"),
+            "runs_per_day": _policies_mod().company_quota("routine_runs_per_day", "VEXA_FLOWS_USER_RUNS_PER_DAY"),
+            "messages_per_day": flows_config.get_int("VEXA_FLOWS_USER_MESSAGES_PER_DAY")}
+
+
+def _check_message_policy(refs: dict) -> None:
+    """WHO MAY MESSAGE WHOM is `_global/POLICIES.md`, read by the one policy reader (ADR-0046
+    decision 13). A refusal names the key that refused it."""
+    from flows_steps import policies
+    try:
+        rules = policies.read(str(refs.get("sender_uid") or ""))
+    except Exception:  # noqa: BLE001 — an unreadable policy is the defaults, which are the safe side
+        rules = policies.resolve(None)
+    key = policies.message_refusal(rules, refs)
+    if key:
+        raise HTTPException(status_code=403, detail={
+            "refused": key, "policy": f"_global/POLICIES.md#{key}"})
 
 
 class SeedRow(BaseModel):
@@ -810,25 +1397,458 @@ def admit_batch(batch: SeedBatch, x_actor: str = Header(default="")):
     return {**log, "meetings": out}
 
 
-@app.post("/flows/{name}/{version}/{action}", dependencies=[Depends(auth)])
-def set_flow_status(name: str, version: int, action: str):
-    """Activate or retire ONE version of a flow, addressed by its name and version number.
+#: The lifecycle verbs, and the status each one writes. `pause` and `resume` are the words a
+#: routine's thread uses; they are `retire` and `activate` — a retired version is kept and may be
+#: activated again, so a pause loses nothing.
+FLOW_ACTIONS = {"activate": "active", "resume": "active", "retire": "retired", "pause": "retired"}
 
-    `action` is `activate` or `retire` and nothing else. Activating makes that version the one
-    new facts react on, within about ten seconds; retiring stops it being chosen without
-    deleting it or disturbing reactions already running on it — a retired version can be
-    activated again, so this is reversible and is the safe way to take a flow out of service.
 
-    Use `GET /flows` to see which versions exist and which one is active. Operator-gated: this
-    door reads the deployment's own operator key, never the caller's."""
-    if action not in ("activate", "retire"):
-        raise HTTPException(status_code=404, detail="activate | retire")
-    st = "active" if action == "activate" else "retired"
-    rows = db.execute("UPDATE flow_version SET status=:s WHERE name=:n AND version=:v RETURNING name",
-                      {"s": st, "n": name, "v": version})
+@app.post("/flows/{name}/{version}/{action}")
+def set_flow_status(name: str, version: int, action: str, scope: str = "",
+                    caller: Caller = Depends(subject_or_operator)):
+    """Activate, pause, resume or retire ONE version of a flow, addressed by name and version.
+
+    `action` is `activate`, `retire`, `pause` (the same as retire) or `resume` (the same as
+    activate). Retiring stops that version being chosen — a schedule stops firing — without deleting
+    it or disturbing runs already going; it can be activated again, so this is the safe way to take
+    a flow out of service.
+
+    With your own credential this acts on YOUR flow (`scope` defaults to `user:<you>`); another
+    person's flow is refused, and the instance's needs the operator key or the instance
+    administrator. Use `GET /flows` to see which versions exist and which one is active."""
+    if action == REVOKE_GRANTS:
+        return _revoke_grants(_lifecycle_scope(caller, scope), name, version)
+    if action not in FLOW_ACTIONS:
+        raise HTTPException(status_code=404,
+                            detail="activate | retire | pause | resume | revoke_grants")
+    target = _lifecycle_scope(caller, scope)
+    st = FLOW_ACTIONS[action]
+    if st == "active" and target != "instance":
+        rows = db.execute("SELECT steps, cron FROM flow_version WHERE scope=:sc AND name=:n "
+                          "AND version=:v", {"sc": target, "n": name, "v": version})
+        if rows:
+            sub = FlowSubmission(name=name, steps=json.loads(rows[0][0]) or ["agent_run"],
+                                 on_event="x.y", params={"instruction": "-"})
+            _check_user_flow(target, sub, rows[0][1])
+    if st == "active":
+        rows = _supersede(target, name, version)
+        if rows:
+            _clear_pause(target, name, version)
+    else:
+        rows = db.execute("UPDATE flow_version SET status=:s WHERE scope=:sc AND name=:n "
+                          "AND version=:v RETURNING name", {"s": st, "sc": target, "n": name,
+                                                            "v": version})
     if not rows:
         raise HTTPException(status_code=404, detail="flow version not found")
-    return {"name": name, "version": version, "status": st}
+    return {"name": name, "scope": target, "version": version, "status": st}
+
+
+def _clear_pause(scope: str, name: str, version: int) -> None:
+    """A resumed routine is no longer paused for the reason it paused itself (Vexa-ai/vexa#1783)."""
+    rows = db.execute("SELECT params FROM flow_version WHERE scope=:sc AND name=:n AND version=:v",
+                      {"sc": scope, "n": name, "v": version})
+    params = json.loads(rows[0][0] or "{}") if rows else {}
+    if isinstance(params, dict) and params.pop("paused", None) is not None:
+        db.execute("UPDATE flow_version SET params=:p WHERE scope=:sc AND name=:n AND version=:v",
+                   {"p": json.dumps(params), "sc": scope, "n": name, "v": version})
+
+
+#: Withdraw what a routine may do unattended (flows phase 0). A narrowing written in place on the
+#: version: the routine keeps its schedule and instruction, and its next run carries no grant.
+REVOKE_GRANTS = "revoke_grants"
+
+
+def _revoke_grants(scope: str, name: str, version: int) -> dict:
+    rows = db.execute("SELECT params FROM flow_version WHERE scope=:sc AND name=:n AND version=:v",
+                      {"sc": scope, "n": name, "v": version})
+    if not rows:
+        raise HTTPException(status_code=404, detail="flow version not found")
+    params = json.loads(rows[0][0] or "{}")
+    dropped = params.pop("grants", None) or []
+    db.execute("UPDATE flow_version SET params=:p WHERE scope=:sc AND name=:n AND version=:v",
+               {"p": json.dumps(params), "sc": scope, "n": name, "v": version})
+    flows_obs.log_event("routine_grant_revoked",
+                        fields={"flow": f"{scope}/{name}", "version": version, "grants": dropped})
+    return {"name": name, "scope": scope, "version": version, "grants": [], "revoked": dropped,
+            "may": ""}
+
+
+def _supersede(scope: str, name: str, version: int) -> list:
+    """ONE ACTIVE VERSION PER FLOW. ``version`` becomes the active one and every other active version
+    of the same (scope, name) is retired — in ONE statement, so there is no moment with two running
+    and none with zero. A schedule fires once per active version, so a resubmitted routine used to
+    run once per copy. Returns the row for ``version`` (empty when it does not exist)."""
+    rows = db.execute(
+        "UPDATE flow_version SET status = CASE WHEN version = :v THEN 'active' ELSE 'retired' END "
+        "WHERE scope = :sc AND name = :n AND (version = :v OR status = 'active') "
+        "RETURNING name, version", {"sc": scope, "n": name, "v": version})
+    return [r for r in rows if int(r[1]) == int(version)]
+
+
+_CHAT = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+
+
+class Claim(BaseModel):
+    #: the chat that takes the routine on — the caller's current chat (its turn states the id)
+    thread: str = Field(min_length=1, max_length=128, pattern=_CHAT)
+
+
+def _routine_facts(scope: str, name: str) -> dict:
+    """WHAT IS TRUE NOW, read back after a change: the active version, the chat it runs in, its
+    trigger and when it next runs (UTC) — what a reply may state, never what it hoped."""
+    from flows.schedule import next_slot, parse
+    rows = db.execute("SELECT version, cron, on_event, params FROM flow_version WHERE scope=:sc "
+                      "AND name=:n AND status='active' ORDER BY version DESC",
+                      {"sc": scope, "n": name})
+    if not rows:
+        return {"name": name, "scope": scope, "active": None}
+    version, cron, on_event, params = rows[0]
+    p = json.loads(params or "{}")
+    nxt = None
+    if cron:
+        try:
+            nxt = next_slot(parse(cron), clock.now())
+        except Exception:  # noqa: BLE001 — a cron that cannot be read has no next run to state
+            nxt = None
+    return {"name": name, "scope": scope, "active": version, "active_versions": len(rows),
+            "thread": p.get("thread") or None,
+            "trigger": {"kind": "schedule", "cron": cron} if cron else {"kind": "event", "event": on_event},
+            "next_run_at": nxt}
+
+
+def _announce(scope: str, name: str, thread: str, text: str, version: int = 0) -> bool:
+    """One line in the chat that owns the routine, through agent-api (which also marks the chat as a
+    routine's at once). False when the agent domain is not here; the claim stands either way."""
+    try:
+        from flows_steps import common, routine as _routine
+        if not common.domain_present("agent"):
+            return False
+        code, _ = _routine.post_notice(scope.split(":", 1)[-1], thread, text, name=name, scope=scope,
+                                       version=version)
+        return 200 <= int(code or 0) < 300
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@app.post("/flows/{name}/claim")
+def claim_routine(name: str, body: Claim, caller: Caller = Depends(subject_or_operator)):
+    """CLAIM A ROUTINE FOR THIS CHAT — one operation, no new version (founder, 2026-10-13: "claiming
+    must be ONE clean operation"). The active version's chat binding (`params.thread`) moves to
+    `thread`; its schedule, instruction and version stay as they are, and the runs already made stay
+    in the chat they were made in. A chat may own several routines. The answer is read back after
+    the change: the active version, the chat it now runs in and its next run — state only these.
+    Your own routines only; a worker with nobody in the loop is refused."""
+    scope = _lifecycle_scope(caller, "")
+    if scope == "instance":
+        raise HTTPException(status_code=403, detail={"refused": "not_a_routine",
+                                                     "note": "only a person's own flow runs in a chat"})
+    rows = db.execute("SELECT version, params FROM flow_version WHERE scope=:sc AND name=:n "
+                      "AND status='active' ORDER BY version DESC LIMIT 1", {"sc": scope, "n": name})
+    if not rows:
+        raise HTTPException(status_code=404, detail={"refused": "no_active_routine", "name": name})
+    version, params = rows[0]
+    p = json.loads(params or "{}")
+    before = p.get("thread") or None
+    p["thread"] = body.thread
+    db.execute("UPDATE flow_version SET params=:p WHERE scope=:sc AND name=:n AND version=:v",
+               {"p": json.dumps(p), "sc": scope, "n": name, "v": version})
+    facts = _routine_facts(scope, name)
+    when = (time.strftime("%H:%M UTC", time.gmtime(facts["next_run_at"]))
+            if facts.get("next_run_at") else "on its event")
+    facts["announced"] = _announce(scope, name, body.thread,
+                                   f"This chat now runs the routine {name} (version {version}); "
+                                   f"next run {when}." + (f" Earlier runs stay in chat {before}."
+                                                          if before and before != body.thread else ""),
+                                   version=version)
+    facts["moved_from"] = before
+    return facts
+
+
+class TriggerAdd(BaseModel):
+    thread: str = Field(min_length=1, max_length=128, pattern=_CHAT)
+    name: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+    #: `{"kind": "schedule", "cron": "*/15 * * * *"}` or `{"kind": "event", "event": "<type>"}`
+    trigger: dict
+    instruction: str = Field(min_length=1, max_length=8000)
+
+
+@app.post("/routines/triggers", status_code=201)
+def add_routine_trigger(body: TriggerAdd, x_actor: str = Header(default="api"),
+                        caller: Caller = Depends(subject_or_operator)):
+    """GIVE A CHAT ANOTHER TIMER — one more routine it owns (a schedule; an event-triggered agent is a
+    different thing, not made here). A chat is a standing concern (production monitoring, a
+    pipeline): each wake is a turn in it with its history as memory. Same checks as `POST /flows`
+    (your scope, the step allow-list, quotas); the answer is read back after the change."""
+    if (body.trigger or {}).get("kind") != "schedule":
+        raise HTTPException(status_code=422, detail={
+            "refused": "routine_needs_schedule",
+            "note": "a routine runs on a schedule; an event-triggered agent is not a routine"})
+    made = submit_flow(FlowSubmission(name=body.name, trigger=body.trigger, steps=["agent_run"],
+                                      params={"instruction": body.instruction, "thread": body.thread}),
+                       x_actor=x_actor, caller=caller)
+    facts = _routine_facts(made["scope"], made["name"])
+    _announce(made["scope"], made["name"], body.thread,
+              f"This chat now also wakes on {body.name} "
+              + (f"({made['trigger'].get('cron')} UTC)." if made["trigger"].get("cron")
+                 else f"(event {made['trigger'].get('event')}).") )
+    return facts
+
+
+class StageMove(BaseModel):
+    thread: str = Field(min_length=1, max_length=128, pattern=_CHAT)
+    stage: str = Field(pattern=r"^(opened|active|waiting|resolved|archived)$")
+    note: str = Field(default="", max_length=400)
+
+
+@app.post("/concerns/stage")
+def move_concern(body: StageMove, caller: Caller = Depends(subject_or_operator)):
+    """MOVE A CONCERN CHAT along its lifecycle: opened → active → waiting (on someone) → resolved →
+    archived. Say `waiting` when the next move is somebody else's, `resolved` when the concern's
+    exit condition is met (the recap was sent, the incident cleared) or the person closes it. The
+    chat shows its stage and the home counts what is waiting. Your own chats only."""
+    scope = _lifecycle_scope(caller, "")
+    if scope == "instance":
+        raise HTTPException(status_code=403, detail={"refused": "not_a_person"})
+    from flows_steps import common, routine as _routine
+    if not common.domain_present("agent"):
+        raise HTTPException(status_code=503, detail={"refused": "agent:not_present"})
+    code, out = _routine.post_stage(scope.split(":", 1)[-1], body.thread, body.stage, body.note)
+    if not 200 <= int(code or 0) < 300:
+        raise HTTPException(status_code=502, detail={"refused": "stage_not_saved", "status": code})
+    return {"thread": body.thread, "stage": body.stage,
+            "saved": bool((out or {}).get("stage") == body.stage) if isinstance(out, dict) else False}
+
+
+@app.post("/event-agents/pause")
+def pause_event_agents(everyone: bool = False, caller: Caller = Depends(subject_or_operator)):
+    """THE KILL SWITCH: pause every running event agent — yours, or (the operator key or the instance
+    administrator, `everyone=true`) every person's. Routines are untouched. Each paused version can be
+    resumed one by one (`flow_lifecycle`)."""
+    if everyone and not caller.is_admin:
+        raise HTTPException(status_code=403, detail={"refused": "admin_only"})
+    where = "scope LIKE 'user:%'" if everyone else "scope = :sc"
+    params = {} if everyone else {"sc": _lifecycle_scope(caller, "")}
+    rows = db.execute(f"UPDATE flow_version SET status='retired' WHERE {where} AND status='active' "
+                      "AND (cron IS NULL OR cron = '') RETURNING scope, name, version", params)
+    return {"paused": [{"scope": a, "name": b, "version": c} for a, b, c in rows]}
+
+
+class Subscribe(BaseModel):
+    thread: str = Field(min_length=1, max_length=128, pattern=_CHAT)
+    name: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+    event: str = Field(min_length=1, max_length=120)
+    #: `{ref: text}` — every pair must appear in that ref of the event (case-insensitive)
+    filter: dict = Field(default_factory=dict)
+    wake: str = Field(default="never", pattern=r"^(never|per_event|batch:\d{1,4}|match:.{1,80})$")
+    instruction: str = Field(default="", max_length=4000)
+
+
+@app.post("/sinks", status_code=201)
+def chat_subscribe(body: Subscribe, x_actor: str = Header(default="api"),
+                   caller: Caller = Depends(subject_or_operator)):
+    """SUBSCRIBE A CHAT TO AN EVENT STREAM — a sink. Every matching event lands in the chat as one
+    compact card (no agent run, never counted as one; capped per chat per hour). The chat's agent
+    wakes only as `wake` says: never (a pure log), per_event, batch:<minutes>, match:<text>. This
+    is how a concern chat keeps its own timeline. Read back after the change."""
+    made = submit_flow(FlowSubmission(name=body.name, trigger={"kind": "event", "event": body.event},
+                                      steps=["post_event_card"],
+                                      params={"thread": body.thread, "filter": body.filter,
+                                              "wake": body.wake, **({"instruction": body.instruction}
+                                                                    if body.instruction else {})}),
+                       x_actor=x_actor, caller=caller)
+    return {**_routine_facts(made["scope"], made["name"]), "kind": "sink", "filter": body.filter,
+            "wake": body.wake}
+
+
+# ── sensors: the person's own (ADR-0050 decision 6) ────────────────────────────────────────────
+
+class SensorBody(BaseModel):
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+    #: a building block: `calendar` (Google Calendar, through the broker) — `GET /sensors` lists them
+    kind: str = Field(min_length=1, max_length=40)
+    #: a predicate over each event (`payload.video_url exists and payload.self_response != 'declined'`)
+    filter: str = Field(default="", max_length=512)
+    connection_id: str = Field(default="", max_length=64)
+    interval_s: Optional[float] = Field(default=None, ge=1, le=86400)
+    scope: Optional[str] = None
+
+
+class SensorChange(BaseModel):
+    filter: Optional[str] = Field(default=None, max_length=512)
+    connection_id: Optional[str] = Field(default=None, max_length=64)
+    interval_s: Optional[float] = Field(default=None, ge=1, le=86400)
+
+
+class SensorConnect(BaseModel):
+    thread: str = Field(min_length=1, max_length=128, pattern=_CHAT)
+    wake: str = Field(default="per_event", pattern=r"^(never|per_event|batch:\d{1,4}|match:.{1,80})$")
+    instruction: str = Field(default="", max_length=4000)
+
+
+def _sensor_scope(caller: Caller, asked: Optional[str]) -> str:
+    return _lifecycle_scope(caller, asked or "")
+
+
+def _sensor_kinds() -> dict:
+    from flows_sensors.calendar import KINDS
+    return KINDS
+
+
+def _sensor_call(fn, *a, **kw):
+    from flows_sensors.store import SensorError
+    try:
+        return fn(*a, **kw)
+    except SensorError as e:
+        _refuse(e.code, e.reason, **e.facts)
+
+
+def _sensor_view(scope: str, name: str) -> dict:
+    from flows_sensors import pool
+    rows = pool.health(db, scope, name)
+    return rows[0] if rows else {"name": name, "scope": scope, "status": None}
+
+
+@app.get("/sensors")
+def sensor_list(scope: str = "", caller: Caller = Depends(subject_or_operator)):
+    """Your sensors — each with its kind, filter, status (draft · active · degraded · stopped),
+    whether this version passed its test, its last events and when it checks next — and the kinds a
+    sensor can be made of. A sensor turns what changes in the world (your calendar) into events with
+    no model call and never acts; it runs only after a test of its current version."""
+    from flows_sensors import pool
+    sc = _sensor_scope(caller, scope)
+    return {"scope": sc, "sensors": pool.health(db, sc),
+            "kinds": [{"kind": k.kind, "event_types": list(k.event_types), "connection": k.connection,
+                       "min_interval_s": k.min_interval_s} for k in _sensor_kinds().values()]}
+
+
+@app.post("/sensors", status_code=201)
+def sensor_create(body: SensorBody, caller: Caller = Depends(subject_or_operator)):
+    """Make a sensor of your own, as a DRAFT: a `kind` (e.g. `calendar`), an optional `filter` over
+    each event, optionally which `connection_id` and how often to check. Then `sensor_test` it,
+    enable it (`sensor_action enable`) and connect it to a chat (`sensor_connect`). Read back."""
+    from flows_sensors import store
+    sc = _sensor_scope(caller, body.scope)
+    _sensor_call(store.create, db, _sensor_kinds(), sc, name=body.name, kind=body.kind,
+                 filter=body.filter, connection_id=body.connection_id, interval_s=body.interval_s,
+                 by=caller.email or f"user:{caller.uid}", now=clock.now())
+    return _sensor_view(sc, body.name)
+
+
+@app.post("/sensors/{name}/test")
+def sensor_test(name: str, scope: str = "", caller: Caller = Depends(subject_or_operator)):
+    """Dry-run a sensor over your recent real data, with NO side effects: the events it WOULD emit
+    and the ones it dropped, with the reason for each. A passing test is what lets this version be
+    enabled. Show the person both lists before enabling."""
+    from flows_sensors import store
+    sc = _sensor_scope(caller, scope)
+    return _sensor_call(store.test, db, _sensor_kinds(), sc, name, now=clock.now())
+
+
+@app.post("/sensors/{name}/connect")
+def sensor_connect(name: str, body: SensorConnect, scope: str = "",
+                   caller: Caller = Depends(subject_or_operator)):
+    """Connect a sensor's events to a chat (this one: `thread` is the id your turn states): each event
+    lands there as one card, and the chat's agent wakes as `wake` says (per_event · batch:<minutes> ·
+    match:<text> · never) with `instruction`. The chat's agent then proposes; it does not act alone."""
+    from flows_sensors import store
+    sc = _sensor_scope(caller, scope)
+    s = store.get(db, sc, name)
+    if s is None:
+        _refuse(404, "not_found", name=name)
+    kind = _sensor_kinds().get(s.kind)
+    event = (kind.event_types[0].rsplit(".", 1)[0] + ".*") if kind and kind.event_types else "*"
+    made = chat_subscribe(Subscribe(thread=body.thread, name=f"sensor-{name}"[:80], event=event,
+                                    filter={"_sensor": f"{sc}/{name}"}, wake=body.wake,
+                                    instruction=body.instruction),
+                          caller=caller)
+    return {"sensor": _sensor_view(sc, name), "connected": made}
+
+
+@app.post("/sensors/{name}/{action}")
+def sensor_action(name: str, action: str, body: SensorChange = SensorChange(), scope: str = "",
+                  caller: Caller = Depends(subject_or_operator)):
+    """`enable` (only a version that passed `sensor_test`), `pause`, `update` (a new version from the
+    body's filter / connection_id / interval_s — back to draft until tested again) or `delete`."""
+    from flows_sensors import store
+    sc = _sensor_scope(caller, scope)
+    if action == "enable":
+        _sensor_call(store.enable, db, sc, name, now=clock.now())
+    elif action == "pause":
+        _sensor_call(store.pause, db, sc, name)
+    elif action == "update":
+        b = body or SensorChange()
+        _sensor_call(store.update, db, _sensor_kinds(), sc, name, filter=b.filter,
+                     interval_s=b.interval_s, connection_id=b.connection_id)
+    elif action == "delete":
+        if not store.delete(db, sc, name):
+            _refuse(404, "not_found", name=name)
+        return {"name": name, "scope": sc, "deleted": True}
+    else:
+        raise HTTPException(status_code=404, detail="enable | pause | update | delete")
+    return _sensor_view(sc, name)
+
+
+@app.post("/sinks/{name}/unsubscribe")
+def chat_unsubscribe(name: str, caller: Caller = Depends(subject_or_operator)):
+    """STOP A CHAT'S SUBSCRIPTION to an event stream, by the sink's name: its running version is
+    retired, so no new event cards arrive and the chat's agent is no longer woken by that stream.
+    The cards already posted stay in the chat as its timeline. Your own sinks only; a worker with
+    nobody in the loop is refused. Use `flows_list` to see a chat's sinks (`kind: sink`)."""
+    scope = _lifecycle_scope(caller, "")
+    rows = db.execute("UPDATE flow_version SET status='retired' WHERE scope=:sc AND name=:n "
+                      "AND status='active' RETURNING version", {"sc": scope, "n": name})
+    if not rows:
+        raise HTTPException(status_code=404, detail={"refused": "no_active_sink", "name": name})
+    return {"name": name, "scope": scope, "unsubscribed": [r[0] for r in rows]}
+
+
+def _lifecycle_scope(caller: Caller, asked: str) -> str:
+    asked = (asked or "").strip()
+    if caller.is_admin:
+        return asked or "instance"
+    if not caller.uid:
+        raise HTTPException(status_code=403, detail="this credential cannot change flows")
+    own = f"user:{caller.uid}"
+    if not asked or asked == own or _names_own_scope(caller, asked):
+        return own
+    if asked == "instance" and caller.instance_admin:
+        return "instance"
+    raise HTTPException(status_code=403, detail={"refused": "not_your_flow", "scope": asked,
+                                                 "you_are": own})
+
+
+@app.get("/flows/runs")
+def flow_runs(subject: str = "", limit: int = 50,
+              caller: Caller = Depends(subject_or_operator)):
+    """THE RUNS OF YOUR OWN FLOWS, newest first — each with the receipts its steps left.
+
+    Only flows you own are here (`user:<you>/…`): a routine's fires, an event flow of yours, and
+    what each step did (`receipts`: step, state, result). Nobody else's runs are ever in this
+    answer, and the instance's flows are not either — their runs are about many people. The
+    operator key must name the person (`subject`)."""
+    uid = scoped_subject(caller, subject)
+    limit = max(1, min(int(limit or 50), 200))
+    rows = db.execute(
+        "SELECT reaction_id, flow, flow_version, event_type, step, status, reason, created_at, "
+        "updated_at FROM reaction WHERE flow LIKE :p ORDER BY created_at DESC LIMIT :lim",
+        {"p": f"user:{uid}/%", "lim": limit})
+    runs = []
+    for rid, flow, ver, et, step, status, reason, created, updated in rows:
+        rec = db.execute("SELECT step, state, result FROM effect_receipt WHERE reaction_id = :r "
+                         "ORDER BY attempted_at", {"r": rid})
+        runs.append({"id": rid, "flow": flow.split("/", 1)[-1], "version": ver, "trigger": et,
+                     "step": step, "status": status, "reason": reason, "started_at": created,
+                     "updated_at": updated,
+                     "receipts": [{"step": a, "state": b, "result": _json_or_none(c)}
+                                  for a, b, c in rec]})
+    return {"subject": uid, "runs": runs}
+
+
+def _json_or_none(text):
+    try:
+        return json.loads(text) if text else None
+    except (TypeError, ValueError):
+        return None
 
 
 @app.get("/reactions")
@@ -962,7 +1982,7 @@ def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 2
             tz = str(setting(out.get("uid") or subj, "timezone") or "")
         except Exception:  # noqa: BLE001 — a preference lookup must not cost the timeline
             tz = ""
-        out = {**out, "timezone": tz or "UTC",
+        out = {**out, "timezone": tz or "UTC", "timezone_set": bool(tz),
                "text": (render_preamble(out, tz) if shape == "preamble"
                         else render_text(out, tz))}
     return out
@@ -1163,6 +2183,12 @@ def report_friction(
     tool said it succeeded but the thing did not happen, something errored outright, or it worked
     but was confusing. You do not need permission and you do not need to be sure it is our fault —
     file it. Nothing is too small, and a report is never lost for being imperfectly labelled.
+
+    NOT AS A REPLY TO THE PERSON. When the person you are talking to says something did not work
+    ("no it does not fix", "the links don't open"), that is a reply to what you last did: re-check
+    it and answer them first. Never answer them with this call, and never ask them to explain a
+    report they did not make. File it when they ask you to, or once your re-check shows the failure
+    is ours — in addition to answering them, not instead.
 
     THE PAYLOAD IS TWO SENTENCES: `what_i_tried` (what you were attempting) and `what_happened`
     (what happened instead). Send `session` too — the chat or meeting session you are in — whenever
@@ -1404,7 +2430,7 @@ def mail_settings():
 
     Operator-gated; the MCP edge spends the key for the admin account only (`mail_settings`)."""
     from flows_integrations import mail_policy
-    from flows_steps import mailtext, policies
+    from flows_steps import mailkinds, mailtext, policies
     from flows_steps.common import ws_file
     rules = policies.read_company()
     addr = (flows_config.get("VEXA_MAIL_ADDR") or flows_config.get("VEXA_GRAPH_MAILBOX")
@@ -1449,6 +2475,11 @@ def mail_settings():
                     | {"external_participants": bool(rules.get("external_participants", True)),
                        "attendee_domains": list(rules.get("attendee_domains") or ())},
         "templates": templates,
+        "kinds": {k: mailkinds.switch(rules, k) for k in mailkinds.KINDS},
+        "sender": {"from": flows_config.get("VEXA_MAIL_SMTP_FROM") or (f"Vexa <{addr}>" if addr else ""),
+                   "reply_to": flows_config.get("VEXA_MAIL_REPLY_TO"),
+                   "relay": flows_config.get("VEXA_MAIL_RELAY") or "unset (VEXA_MAIL_SMTP_HOST as configured)"},
+        "inbound_filter": flows_config.get("VEXA_MAIL_INBOUND_FILTER"),
         "policy_problems": list(rules.get("problems") or ()),
         "how_to_change": (
             "Runtime answers: edit the front matter of _global/POLICIES.md (the admin account's "
@@ -1458,6 +2489,190 @@ def mail_settings():
             "inbound mail: flow_lifecycle. The mailbox address, its credentials, the relay and the "
             "rate limits are the operator's deployment configuration and are not changed here."),
     }
+
+
+# ── THE GLOBAL ACCOUNT DESIGNS THE MAIL (`mail_admin`, founder 2026-10-14) ───────────────────────
+
+class _MailTemplate(BaseModel):
+    content: str
+
+
+class _MailPreview(BaseModel):
+    sample: Optional[dict] = None
+    draft: Optional[str] = None
+
+
+class _MailTest(BaseModel):
+    sample: Optional[dict] = None
+
+
+class _MailSwitch(BaseModel):
+    state: str
+
+
+class _SignIn(BaseModel):
+    to: str
+    link: str
+    minutes: int = 15
+
+
+def _mail_admin(caller: Caller) -> Caller:
+    """The deployment's ADMIN ACCOUNT, speaking for itself (identity's `admin_account`) — the only
+    caller that designs the company's mail. The operator key may read, never act as somebody."""
+    if caller.is_admin or caller.instance_admin:
+        return caller
+    raise HTTPException(status_code=403, detail=(
+        "only the deployment's admin account designs the company's mail (Company mode); your own "
+        "mail settings are in Settings, and mail_address tells you Vexa's invite address"))
+
+
+def _mail_call(fn):
+    from flows_integrations.mail_admin import MailAdminError
+    try:
+        return fn()
+    except MailAdminError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e).strip("'\""))
+
+
+def _reader(caller: Caller) -> str:
+    from flows_steps import policies as _p
+    return caller.uid or _p.COMPANY_READER
+
+
+@app.get("/mail/kinds")
+def mail_kinds(caller: Caller = Depends(subject_or_operator)):
+    """Every kind of mail this deployment can send, for the admin account: its switch (on, off,
+    admins), its template's current version and whether that version was test-sent, the variables a
+    template may use, and what sends it today."""
+    from flows_integrations import mail_admin
+    _mail_admin(caller)
+    return {"kinds": _mail_call(lambda: mail_admin.kinds(db, _reader(caller))),
+            "how": "mail_template_edit → mail_preview → mail_test_send → mail_kind_set"}
+
+
+@app.put("/mail/templates/{kind}")
+def mail_template_put(kind: str, body: _MailTemplate, caller: Caller = Depends(subject_or_operator)):
+    """Rewrite one mail kind's template (`subject: …`, `---`, body; {{variables}}; no URL) into
+    `_global/mail/<template>.md` as the admin account. The edit is a new template version."""
+    from flows_integrations import mail_admin
+    from flows_steps.common import ws_write
+    _mail_admin(caller)
+    if not caller.uid:
+        raise HTTPException(status_code=403, detail="only the admin account writes _global/mail")
+    return _mail_call(lambda: mail_admin.edit(kind, body.content, uid=caller.uid,
+                                              write_file=ws_write))
+
+
+@app.post("/mail/preview/{kind}")
+def mail_preview(kind: str, body: _MailPreview, caller: Caller = Depends(subject_or_operator)):
+    """Render one mail kind — subject and body — with its sample values (`sample` overrides them),
+    from the live template or an unsaved `draft`. Sends nothing."""
+    from flows_steps import outbound as _out
+    _mail_admin(caller)
+    return _mail_call(lambda: _out.preview(kind, uid=_reader(caller), sample=body.sample,
+                                           draft=body.draft))
+
+
+@app.post("/mail/test-send/{kind}")
+def mail_test_send(kind: str, body: _MailTest, caller: Caller = Depends(subject_or_operator)):
+    """Send the current template of one mail kind to the admin account's OWN address (the only
+    recipient this route has) and record that version as test-sent — what lets it be switched on."""
+    from flows_integrations import mail_admin
+    _mail_admin(caller)
+    return _mail_call(lambda: mail_admin.test_send(db, kind, uid=_reader(caller),
+                                                   email=caller.email, sample=body.sample))
+
+
+@app.put("/mail/kinds/{kind}")
+def mail_kind_put(kind: str, body: _MailSwitch, caller: Caller = Depends(subject_or_operator)):
+    """Switch one mail kind on, off or admins-only in `_global/POLICIES.md`. Refused for on/admins
+    until its current template version was test-sent; refused for switching the sign-in link off."""
+    from flows_integrations import mail_admin
+    from flows_steps.common import ws_file, ws_write
+    _mail_admin(caller)
+    if not caller.uid:
+        raise HTTPException(status_code=403, detail="only the admin account writes _global/POLICIES.md")
+    return _mail_call(lambda: mail_admin.set_kind(db, kind, body.state, uid=caller.uid,
+                                                  read_file=ws_file, write_file=ws_write))
+
+
+@app.get("/mail/delivery")
+def mail_delivery(caller: Caller = Depends(subject_or_operator)):
+    """WHAT HAPPENS TO MAIL HERE: `delivered`, or `captured` (the capture double — nobody receives
+    it). A producer that hands a mail over (agent-api's invite) asks this before it tells a person
+    the mail went out (live defect 2026-10-14)."""
+    from flows_steps import emailx as _mx
+    mode = _mx.delivery_mode()
+    return {"delivery": mode,
+            "means": ("mail reaches the recipient's mailbox" if mode == "delivered" else
+                      "mail is captured by the deployment's mail double and reaches nobody — give "
+                      "people their links yourself")}
+
+
+@app.get("/mail/address")
+def mail_address(caller: Caller = Depends(subject_or_operator)):
+    """THE ADDRESS TO INVITE VEXA AT — every person may read it (it is not a setting, it is how
+    the product is used), not only the admin account (friction 2026-10-14)."""
+    addr = (flows_config.get("VEXA_MAIL_ADDR") or flows_config.get("VEXA_GRAPH_MAILBOX")
+            or "").strip().lower()
+    if not addr:
+        return {"address": None, "how": "this deployment has no Vexa mailbox; send a bot from the "
+                                         "chat with a meeting link instead"}
+    return {"address": addr,
+            "how": f"add {addr} as a guest to a calendar event with a meeting link — the bot "
+                   f"joins at the start. Replies to mail from Vexa reach the same mailbox."}
+
+
+@app.post("/mail/sign-in")
+def mail_sign_in(body: _SignIn, x_internal_secret: str = Header(default="")):
+    """THE SIGN-IN LINK, through the one outbound path — the terminal's door (internal tier). The
+    kind is locked on and never capped here; a failure is the terminal's cue to send its own baked
+    mail, so a sign-in never depends on this route."""
+    from flows_steps import outbound as _out
+    if not INTERNAL_SECRET or not _same_key(x_internal_secret, INTERNAL_SECRET):
+        raise HTTPException(status_code=403, detail="internal tier only")
+    if "@" not in body.to or not body.link.startswith(("https://", "http://")):
+        raise HTTPException(status_code=422, detail="to and link are required")
+    out = _out.send("sign-in", body.to.strip(), values={"minutes": str(int(body.minutes))},
+                    link=body.link, db=db)
+    if not out.sent:
+        raise HTTPException(status_code=502, detail=f"not sent: {out.result}")
+    return {"sent": True, "delivery": out.delivery, "template_version": out.template_version}
+
+
+class _PlatformMail(BaseModel):
+    kind: str
+    to: str
+    uid: str = ""
+    values: Optional[dict] = None
+    link: Optional[str] = None
+
+
+#: The kinds a platform producer (agent-api, meeting-api) may send through `POST /mail/send`. Each
+#: is a mail a PERSON's act produced (an invite redeemed, a chat shared, a call started); the switch,
+#: cap, template and audit all still apply. Reports and digests are a flow's, not a producer's.
+_PLATFORM_KINDS = frozenset({"workspace-joined", "workspace-invite", "chat-share", "call-invite",
+                             "meeting-share", "bot-joined", "bot-failed"})
+
+
+@app.post("/mail/send")
+def mail_send(body: _PlatformMail, x_internal_secret: str = Header(default="")):
+    """ONE MAIL OF ONE KIND, for a platform producer on the internal tier — the same outbound path
+    every flow step uses: the company's switch, the cap, the template, the audit. A kind that is off
+    answers 200 with `sent: false` and why; nothing is an error the producer must handle."""
+    from flows_steps import outbound as _out
+    if not INTERNAL_SECRET or not _same_key(x_internal_secret, INTERNAL_SECRET):
+        raise HTTPException(status_code=403, detail="internal tier only")
+    if body.kind not in _PLATFORM_KINDS:
+        raise HTTPException(status_code=422, detail=f"{body.kind} is not sent by a platform producer")
+    if "@" not in body.to or (body.link and not body.link.startswith(("https://", "http://"))):
+        raise HTTPException(status_code=422, detail="to must be an address and link an http(s) URL")
+    values = {k: re.sub(r"[\x00-\x1f\x7f]+", " ", str(v))[:300] for k, v in (body.values or {}).items()}
+    out = _out.send(body.kind, body.to.strip(), uid=body.uid, values=values, link=body.link, db=db)
+    return {"sent": out.sent, "result": out.result, "detail": out.detail,
+            "delivery": out.delivery, "template_version": out.template_version}
 
 
 def bind_host() -> str:
@@ -1502,6 +2717,7 @@ def main() -> int:  # pragma: no cover — process entrypoint
     # misconfigured deployment would refuse either way — but refusing here means it never listens
     # at all, which is what "no door, no boot" has always meant on this service.
     boot()
+    flows_obs.set_service("flows-api")
     port = int(os.environ.get("VEXA_FLOWS_API_PORT", "18200"))
     host = bind_host()
     print(f"flows-api up on {host}:{port} · vocabulary of {len(vocab.steps)} steps", flush=True)
@@ -1555,7 +2771,7 @@ import flows_queue as _flows_queue  # noqa: E402
 #
 # IT IS A `summary`, AND THE ROUTE CARRIES NO DOCSTRING ON PURPOSE. The MCP edge derives a tool's
 # description from this route's OpenAPI operation, preferring the docstring and falling back to
-# the summary (`core/meetings/services/mcp/src/vexa_mcp/bind.py::_describe`). A docstring here
+# the summary (`core/gateway/services/mcp/src/vexa_mcp/bind.py::_describe`). A docstring here
 # would therefore be served to every agent, in front of every call, forever. The maintainer's
 # half lives in the comment block below instead, where no agent pays for it by the token.
 WHATS_WAITING_SUMMARY = (

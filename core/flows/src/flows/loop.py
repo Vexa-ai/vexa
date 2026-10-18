@@ -133,7 +133,7 @@ def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, present=None) -
     receipts.reserve(db, key, r.reaction_id, r.step, clock)          # commit point A
     ctx = StepCtx(reaction=r, effect_key=key,
                   prior=receipts.prior(db, r.reaction_id), clock_now=clock.now(),
-                  scratch=getattr(r, "_scratch", {}) or {}, emit=emit,
+                  scratch=getattr(r, "_scratch", {}) or {}, emit=_with_origin(emit, r, flow),
                   absent=frozenset(absent))
     ctx.flow = flow                       # the governing version's definition incl. params
     def _save_scratch() -> None:
@@ -195,6 +195,20 @@ def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, present=None) -
     else:  # pragma: no cover — the type system should prevent this
         _retry_or_fail(db, r, clock, f"step returned {type(out).__name__}", retryable=False)
     return True
+
+
+def _with_origin(emit, r: Reaction, flow):
+    """THE ORIGIN CHAIN RIDES EVERY FACT A STEP EMITS (ADR-0046 decision 8). The emitted refs carry
+    `_origin`: the chain the reaction itself was started by, plus this flow. Admission reads it and
+    refuses a hop that would loop — so a person's flow whose step publishes the very event it reacts
+    to runs once, not forever."""
+    if emit is None:
+        return None
+    chain = list((r.subject_refs or {}).get("_origin") or []) + [flow.ident]
+
+    def _emit(event_type: str, source_id: str, refs: dict):
+        return emit(event_type, source_id, {**(refs or {}), "_origin": chain})
+    return _emit
 
 
 def _not_present(db: DB, r: Reaction, clock: Clock, key: str, out: NotPresent) -> None:

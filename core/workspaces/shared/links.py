@@ -177,3 +177,118 @@ def entity_slug_index(root, *, workspace_id: str, kinds=None, slugify=None) -> d
             if name != "index.md":
                 out.setdefault(name[:-3], workspace_id)
     return out
+
+
+# ── universal references (#1783) ─────────────────────────────────────────────────────────────────
+#
+# Founder, 2026-10-14: "references to workspaces, chats, documents, etc., accepted everywhere where
+# access is confirmed." One format for every object, in two spellings that carry the same pair:
+#
+#     https://<host>/r/<kind>/<id>     pasteable anywhere — chat, a calendar body, an email, other apps
+#     [[<kind>:<id>|<label>]]          the chip the agent writes; the label is only a hint for a
+#                                      reader with no access to the server, never echoed back by it
+#
+# The id is the object's STABLE id: a workspace id, a chat id, `<workspace-id>/<path>` for a page,
+# `<workspace-id>/<entity-id>` for an entity, a meeting's row id, a flow's or sensor's name. What a
+# ref points at, and whether this reader may see it, is answered by the one resolver in agent-api
+# (`control_plane/universal_refs.py`) — never by the text of the ref.
+#
+# A JOIN LINK (`/join/<token>`, `control_plane.join_links`) is a reference too, of kind `join`: one
+# that carries a grant. It is recognised here so a calendar body yields it with the others.
+
+REF_KINDS = ("workspace", "chat", "page", "entity", "meeting", "flow", "sensor")
+REF_PATH = "/r/"
+_KIND_ALT = "|".join(REF_KINDS)
+_REF_ID = r"[^\s<>\"'#?|\]\[]{1,300}"
+REF_URL = re.compile(r"(?:https?://[^\s/<>\"']+)?/r/(" + _KIND_ALT + r")/(" + _REF_ID + r")")
+_REF_CHIP = re.compile(r"^(" + _KIND_ALT + r"):(" + _REF_ID + r")$")
+_JOIN_URL = re.compile(r"https?://[^\s/<>\"']+/join(?:/([A-Za-z0-9_-]{40,64})|\?i=([A-Za-z0-9_-]{40,64}))")
+_TRAILING = ".,;:!)"
+
+
+@dataclass(frozen=True)
+class UniversalRef:
+    kind: str                  # one of REF_KINDS, or "join"
+    id: str
+    label: Optional[str] = None
+
+
+def _clean_id(raw: str) -> Optional[str]:
+    i = str(raw or "").strip().rstrip(_TRAILING).strip("/")
+    if not i or any(seg in ("", ".", "..") for seg in i.split("/")):
+        return None
+    return i
+
+
+def ref_url(kind: str, ref_id: str, *, base: str = "") -> str:
+    """``<base>/r/<kind>/<id>`` — the one URL for any object."""
+    from urllib.parse import quote
+
+    return f"{str(base or '').rstrip('/')}{REF_PATH}{kind}/{quote(str(ref_id), safe='/-_.~')}"
+
+
+def ref_chip(kind: str, ref_id: str, label: Optional[str] = None) -> str:
+    """``[[kind:id|label]]`` — the chip the agent writes."""
+    return f"[[{kind}:{ref_id}|{label}]]" if label else f"[[{kind}:{ref_id}]]"
+
+
+def parse_universal(text: str) -> Optional[UniversalRef]:
+    """A URL, a ``[[kind:id|label]]`` chip, the chip's inner text, or a join link → the reference;
+    anything else → ``None`` (a ``[[Title]]`` chip is not a typed reference)."""
+    from urllib.parse import unquote
+
+    t = str(text or "").strip()
+    m = WIKILINK.fullmatch(t)
+    inner, label = (m.group(1).strip(), (m.group(2) or "").strip() or None) if m else (t, None)
+    c = _REF_CHIP.match(inner)
+    if c:
+        i = _clean_id(c.group(2))
+        return UniversalRef(c.group(1), i, label) if i else None
+    u = REF_URL.fullmatch(t.split("#", 1)[0].split("?", 1)[0])
+    if u:
+        i = _clean_id(unquote(u.group(2)))
+        return UniversalRef(u.group(1), i) if i else None
+    j = _JOIN_URL.fullmatch(t)
+    if j:
+        return UniversalRef("join", j.group(1) or j.group(2))
+    return None
+
+
+def universal_refs_in(text: str) -> list[UniversalRef]:
+    """Every reference in a piece of text — chips, ``/r/`` URLs and join links — in order, once each."""
+    from urllib.parse import unquote
+
+    s = str(text or "")
+    hits: list[tuple[int, UniversalRef]] = []
+    for m in WIKILINK.finditer(s):
+        r = parse_universal(m.group(0))
+        if r:
+            hits.append((m.start(), r))
+    for m in REF_URL.finditer(s):
+        if s[max(0, m.start() - 2):m.start()] == "[[":
+            continue
+        i = _clean_id(unquote(m.group(2)))
+        if i:
+            hits.append((m.start(), UniversalRef(m.group(1), i)))
+    for m in _JOIN_URL.finditer(s):
+        hits.append((m.start(), UniversalRef("join", m.group(1) or m.group(2))))
+    out: list[UniversalRef] = []
+    seen: set = set()
+    for _, r in sorted(hits, key=lambda h: h[0]):
+        if (r.kind, r.id) not in seen:
+            seen.add((r.kind, r.id))
+            out.append(r)
+    return out
+
+
+def refs_as_urls(text: str, *, base: str) -> str:
+    """For mail and anything else that is not our client: every ``[[kind:id|label]]`` chip becomes
+    ``label (URL)`` (just the URL without a label). The URL is resolved for whoever opens it."""
+    def _sub(m: re.Match) -> str:
+        r = parse_universal(m.group(0))
+        if not r or r.kind == "join":
+            return m.group(0)
+        url = ref_url(r.kind, r.id, base=base)
+        return f"{r.label} ({url})" if r.label else url
+
+    return WIKILINK.sub(_sub, str(text or ""))

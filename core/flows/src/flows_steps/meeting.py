@@ -432,8 +432,17 @@ def dispatch_bot(ctx: StepCtx):
     # step used to read a `bot_name` key out of `.settings.json` in the AGENT domain, which is how
     # one fact came to have three stores and why the same person's bot showed up under one name
     # when a calendar armed it and another when a flow did (founder ruling, 2026-09-02).
+    # THE MEETING GOES INTO THE INVITE'S WORKSPACE (founder 2026-10-14): the invite sensor reads the
+    # workspace link out of the event body and the invite carries it as `workspace`. meeting-api binds
+    # it only when the organizer is a member (`workspace_id`, authorized against the signed
+    # memberships); refused, the bot still goes, to the organizer's default, and the reason is kept.
+    ws = str(ctx.refs.get("workspace") or ctx.refs.get("workspace_id") or "").strip()
     st, body = http("POST", f"{meetings_door()}/bots", {"X-API-Key": key},
-                    {"meeting_url": ctx.refs["url"]})
+                    {"meeting_url": ctx.refs["url"], **({"workspace_id": ws} if ws else {})})
+    if ws and st in (400, 403, 422):
+        ctx.scratch["workspace_refused"] = f"{st}: {_http_detail(body)}"[:200]
+        st, body = http("POST", f"{meetings_door()}/bots", {"X-API-Key": key},
+                        {"meeting_url": ctx.refs["url"]})
     if st == 409:
         st2, existing = http("GET", f"{meetings_door()}/bots", {"X-API-Key": key})
         rows = existing if isinstance(existing, list) else existing.get("meetings", [])
@@ -580,3 +589,114 @@ def run_meeting(ctx: StepCtx):
     if s == "failed":
         raise StepError(f"meeting failed: {m.get('completion_reason')}", retryable=False)
     return Wait(seconds=6)
+
+
+# ── a bot at a time, with no agent run (flows phase 0) ──────────────────────────────────────────
+
+def _routine_chat(flow) -> str:
+    """The chat a person's flow reports into: the one it was made in, else its own thread."""
+    from . import routine
+    thread = str(flow.param("thread", "") or "").strip()
+    if thread and thread.lower() not in ("flow", "new") and routine.CHAT_THREAD.match(thread):
+        return thread
+    return routine.thread_session(getattr(flow, "scope", "instance"), flow.name)
+
+
+def _say(ctx: StepCtx, uid: str, text: str) -> None:
+    """One line in the routine's chat. Never fails the step: the run's status says it either way."""
+    if ctx.scratch.get("noticed"):
+        return
+    try:
+        from . import routine
+        flow = ctx.flow
+        routine.post_notice(uid, _routine_chat(flow), text, name=flow.name,
+                            scope=getattr(flow, "scope", ""), version=getattr(flow, "version", 0))
+        ctx.scratch["noticed"] = True
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _slot(value, refs: dict) -> str:
+    """A param, or `{{payload.<ref>}}` — the event's own value copied into a declared slot (ADR-0050
+    decision 2.3: an untrusted event's fields only ever fill slots, never become instructions)."""
+    text = str(value or "").strip()
+    if text.startswith("{{") and text.endswith("}}"):
+        path = text[2:-2].strip()
+        if path.startswith("payload."):
+            path = path[len("payload."):]
+        cur = refs or {}
+        for part in path.split("."):
+            cur = cur.get(part) if isinstance(cur, dict) else None
+        return str(cur or "").strip()
+    return text
+
+
+def register_user_steps(reg) -> None:
+    @reg.step(needs=("meetings",), user_allowed=True)
+    def request_meeting_bot(ctx: StepCtx):
+        """Send the flow owner's bot into `params.meeting_url` — no agent run (flows phase 0). Use it
+        with a one-shot trigger for "a bot to this meeting at 12:13". The routine must carry the grant
+        `bot.request` (`params.grants`, capped by `_global/POLICIES.md`); without it the step refuses
+        and says so in the routine's chat. A meeting the bot is already in is adopted, not re-sent.
+        Says the outcome in one line in the routine's chat. Result: {meeting_id, native, platform}."""
+        if ctx.scratch.get("sent"):
+            return Done(ctx.scratch["sent"], provider_ref=str(ctx.scratch["sent"].get("meeting_id")))
+        flow = ctx.flow
+        uid = str(getattr(flow, "owner", "") or "").strip()
+        url = _slot(flow.param("meeting_url", ""), ctx.refs)
+        if not uid or not url:
+            raise StepError("request_meeting_bot needs the flow's owner and params.meeting_url",
+                            retryable=False)
+        from . import grants
+        if "bot.request" not in grants.effective(flow, uid):
+            _say(ctx, uid, "Couldn't send the bot: this routine isn't allowed to send bots on its "
+                           "own. Remake it allowing that, or ask in chat.")
+            raise StepError("refused: no bot.request grant on this routine (or the policy no longer "
+                            "allows it)", retryable=False)
+        key = user_api_key(uid)
+        ws = _slot(flow.param("workspace_id", ""), ctx.refs) or str(
+            ctx.refs.get("workspace") or "").strip()
+        st, body = http("POST", f"{meetings_door()}/bots", {"X-API-Key": key},
+                        {"meeting_url": url, **({"workspace_id": ws} if ws else {})})
+        st = int(st or 0)
+        if st == 409:
+            sent = {"meeting_id": None, "native": url.rstrip("/").rsplit("/", 1)[-1],
+                    "platform": "", "already": True}
+            _say(ctx, uid, f"The bot is already in {url}.")
+        elif 200 <= st < 300 and isinstance(body, dict):
+            sent = {"meeting_id": body.get("id"), "native": body.get("native_meeting_id"),
+                    "platform": body.get("platform")}
+            _say(ctx, uid, f"Sent the bot to {url} — admit it from the lobby when it asks.")
+        else:
+            detail = body.get("detail") if isinstance(body, dict) else body
+            if st in (400, 403, 404, 422) or not st:
+                _say(ctx, uid, f"Couldn't send the bot to {url}: {str(detail)[:160]}")
+                raise StepError(f"bot refused {st}: {str(detail)[:200]}", retryable=False)
+            raise StepError(f"bot request failed {st}: {str(detail)[:200]}", retryable=True)
+        flows_log = __import__("logging").getLogger("flows.grants")
+        flows_log.info("routine_grant_used action=bot.request flow=%s", getattr(flow, "ident", ""))
+        ctx.scratch["sent"] = sent
+        return Done(sent, provider_ref=str(sent.get("meeting_id") or sent.get("native") or ""))
+
+
+def register_light_steps(reg) -> None:
+    @reg.step(needs=("agent",), user_allowed=True)
+    def post_message(ctx: StepCtx):
+        """Post one line into the flow's chat — no agent run (ADR-0050 decision 4.1). `params.text`,
+        where `{{payload.<ref>}}` slots copy the event's own values (never instructions) and
+        `{{date}}` is today's date (UTC). Result: {posted}."""
+        if ctx.scratch.get("posted"):
+            return Done({"posted": True})
+        flow = ctx.flow
+        uid = str(getattr(flow, "owner", "") or ctx.refs.get("uid") or "").strip()
+        text = str(flow.param("text", "") or "")
+        if not uid or not text.strip():
+            raise StepError("post_message needs the flow's owner and params.text", retryable=False)
+        import re as _re
+        text = text.replace("{{date}}", time.strftime("%A %d %B %Y", time.gmtime(ctx.clock_now)))
+        text = _re.sub(r"\{\{\s*payload\.[A-Za-z0-9_.]+\s*\}\}", lambda m: _slot(m.group(0), ctx.refs), text)
+        _say(ctx, uid, text[:2000])
+        if not ctx.scratch.get("noticed"):
+            raise StepError("the chat did not take the line", retryable=True)
+        ctx.scratch["posted"] = True
+        return Done({"posted": True})

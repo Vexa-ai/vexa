@@ -161,7 +161,7 @@ def test_the_rename_carries_the_declaration_with_the_function():
 #: review; `test_no_production_step_reaches_the_agent_domain_undeclared` is the net underneath it.
 AGENT_STEPS = {
     "ack_by_email", "open_person", "drive_person", "open_group", "drive_group",
-    "process_meeting", "email_minutes", "email_attendees", "drop_to_attendees",
+    "process_meeting", "email_minutes", "email_attendees", "drop_to_attendees", "propose_call_changes",
     "prepare_meeting", "feedback_turn",
     # The two desk cards (PRD decision 42.2). They RE-READ the desk before asking — the fact is
     # old the moment it is published — and the desk is agent state. A deployment without the agent
@@ -170,6 +170,18 @@ AGENT_STEPS = {
     "await_scaffold", "await_claim",
     # The paused-routine card re-reads the routine file on the desk, which is agent state.
     "await_routine",
+    # The new-chat home (#1783): agent-api composes it; flows only keeps the clock.
+    "compose_home",
+    # Transcript signals: a meeting's or a room's wake is an agent turn in a chat.
+    "wake_meeting_chat",
+    # A person's routine (ADR-0046): one turn of their own agent, in the routine's chat thread.
+    "agent_run",
+    # a sink's card: posted into a chat through agent-api (ADR-0046 decision 12)
+    "post_event_card",
+    # one line into the flow's chat, no agent run (ADR-0050 light step)
+    "post_message",
+    # …and one agent's message, delivered into another agent's thread (ADR-0046 decision 13).
+    "deliver_message",
 }
 
 

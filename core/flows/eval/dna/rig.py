@@ -1,13 +1,34 @@
-"""Minimal streamable-HTTP MCP client for the rig. One interface: rule 1 of the audit."""
+"""Minimal streamable-HTTP MCP client for the replay. One interface: rule 1 of the audit.
+
+It was written against the dogfood control rig, which is gone (Vexa-ai/vexa#1783). It now speaks to
+the product MCP at the gateway, named by ``VEXA_DNA_MCP_URL`` (no default: a replay against a host
+nobody named is a replay against nothing). The replay still needs three verbs only the rig served —
+``meeting_seed`` (the capture double), ``fact_emit`` (fact injection) and ``mark_scaffolded`` —
+and :meth:`Rig.require` refuses by name until they have a product home.
+"""
 from __future__ import annotations
 import json, os, time, urllib.request
 
-RIG_URL = os.environ.get("VEXA_RIG_URL", "https://rig.dev.vexa.ai/mcp")
+MCP_URL = os.environ.get("VEXA_DNA_MCP_URL", "")
+#: The verbs the replay calls that the deleted rig served and the product MCP does not.
+RIG_ONLY_VERBS = ("meeting_seed", "fact_emit", "mark_scaffolded")
 
 
 class Rig:
-    def __init__(self, token: str, url: str = RIG_URL):
+    def __init__(self, token: str, url: str = MCP_URL):
+        if not url:
+            raise SystemExit("set VEXA_DNA_MCP_URL to the gateway's /mcp (the control rig is gone)")
         self.token, self.url, self.sid, self._id = token, url, None, 0
+
+    def require(self, names) -> None:
+        """Refuse to start a replay whose verbs this MCP does not serve, naming them."""
+        missing = sorted(set(names) - set(self.tools()))
+        if missing:
+            raise SystemExit(
+                f"{self.url} does not serve {', '.join(missing)}. "
+                + ("These were dogfood-rig verbs (Vexa-ai/vexa#1783 removed the rig); the replay "
+                   "cannot run until each has a product route. " if set(missing) & set(RIG_ONLY_VERBS)
+                   else ""))
 
     def _post(self, payload, notify=False, timeout=600):
         self._id += 1

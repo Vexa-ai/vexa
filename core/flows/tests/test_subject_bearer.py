@@ -234,12 +234,12 @@ def test_the_operator_key_still_opens_every_one_of_them(client, identity, method
 
 # ── A4 · the admin routes are still admin-keyed ──────────────────────────────────────────────────
 
+#: `POST /flows` and the lifecycle verb left this list with ADR-0046: a person now authors and
+#: retires flows of their OWN (tests/test_user_flows.py holds what they may not touch).
 ADMIN_ONLY = [
-    ("POST", "/flows", {"name": "x", "on_event": "e", "steps": ["email_minutes"]}),
     ("POST", "/events", {"event_type": "meeting.completed", "source_event_id": "s1", "refs": {}}),
     ("POST", "/events/batch", {"meetings": [{"url": "https://m.test/a", "organizer": "a@b.test",
                                              "start": T0}]}),
-    ("POST", "/flows/post_meeting/1/retire", {}),
 ]
 
 
@@ -358,13 +358,28 @@ def test_the_old_name_still_opens_the_door_for_one_release(client, identity):
     ).status_code != 401
 
 
+def _prose(out: str) -> str:
+    """Stdout minus the logevent.v1 lines every request now emits (one JSON object per line, with a
+    `trace_id`): what these tests read is the human-facing deprecation notice, not the trace."""
+    import json as _j
+    kept = []
+    for line in out.splitlines(keepends=True):
+        try:
+            if "trace_id" in _j.loads(line):
+                continue
+        except ValueError:
+            pass
+        kept.append(line)
+    return "".join(kept)
+
+
 def test_the_old_name_says_once_that_it_is_deprecated(client, identity, capsys):
     fa._DEPRECATED_HEADER_SAID.clear()
     client.get("/reactions", headers=admin_old_name())
-    first = capsys.readouterr().out
+    first = _prose(capsys.readouterr().out)
     assert "X-Flows-Admin-Key" in first and "X-Flows-Operator-Key" in first
     client.get("/reactions", headers=admin_old_name())
-    assert capsys.readouterr().out == "", "once per process, not once per request"
+    assert _prose(capsys.readouterr().out) == "", "once per process, not once per request"
 
 
 def test_the_new_name_wins_when_both_are_sent(client, identity):
@@ -476,7 +491,19 @@ UNWATCHED_TOKENS = [f"vxd_unwatched_{i}" for i in range(len(UNWATCHED))]
 PERSON_ONLY_ROUTES = sorted(k for k, v in fa.DELEGATED_REACH.items() if v == fa.PERSON_ONLY)
 OPEN_ROUTES = sorted(k for k, v in fa.DELEGATED_REACH.items() if v == fa.OPEN)
 #: A concrete URL for each templated path: Anna's own reaction, the verb that calls off her join.
-PATH_PARAMS = {"reaction_id": "r-anna-uid", "verb": "cancel"}
+PATH_PARAMS = {"reaction_id": "r-anna-uid", "verb": "cancel",
+               "name": "annas-brief", "version": 1, "action": "pause", "kind": "minutes"}
+#: The body each POST needs to get past validation — a person's own routine for `POST /flows`.
+BODIES = {"/flows": {"name": "annas-brief", "trigger": {"kind": "schedule", "cron": "0 7 * * *"},
+                     "steps": ["agent_run"], "params": {"instruction": "brief me"}},
+          "/flows/{name}/claim": {"thread": "pchat-anna"},
+          "/concerns/stage": {"thread": "pchat-anna", "stage": "waiting"},
+          "/sinks": {"thread": "pchat-anna", "name": "annas-brief", "event": "mail.received"},
+          "/sensors": {"name": "annas-new-sensor", "kind": "calendar"},
+          "/sensors/{name}/connect": {"thread": "pchat-anna"},
+          "/routines/triggers": {"thread": "pchat-anna", "name": "annas-check",
+                                 "trigger": {"kind": "schedule", "cron": "0 8 * * *"},
+                                 "instruction": "check"}}
 
 
 def _url(path):
@@ -484,8 +511,18 @@ def _url(path):
 
 
 def _call(client, method, path, token):
+    fa.db.execute("DELETE FROM flow_version WHERE scope = 'user:126'")
+    fa.db.execute("INSERT INTO flow_version (scope, name, version, on_event, cron, steps, params, "
+                  "status, created_by, created_at) VALUES ('user:126','annas-brief',1,"
+                  "'schedule.due','0 7 * * *','[\"agent_run\"]','{\"instruction\":\"x\"}',"
+                  "'active','t',1.0)")
+    # …and her own sensor of the same name (ADR-0050), for the sensor verbs
+    fa.db.execute("DELETE FROM sensor WHERE scope = 'user:126'")
+    fa.db.execute("INSERT INTO sensor (scope, name, kind, interval_s, version, status, mode, "
+                  "next_due_at, failures, created_at) VALUES ('user:126','annas-brief','calendar',"
+                  "60,1,'draft','poll',0,0,1.0)")
     return client.request(method, _url(path), headers=bearer(token),
-                          json={} if method == "POST" else None)
+                          json=BODIES.get(path, {}) if method == "POST" else None)
 
 
 def _subject_routes():
@@ -564,12 +601,22 @@ def test_a_worker_with_nobody_in_the_loop_is_refused_every_person_only_verb(
         "SELECT status FROM reaction WHERE reaction_id='r-anna-uid'")[0][0] == "admitted"
 
 
+#: The mail-design writes are PERSON_ONLY for a worker AND the admin account's alone — a second gate
+#: an everyday person does not pass (`test_mail_admin.py::test_refusals`), so they are not in the
+#: "an everyday person is admitted" set below.
+ADMIN_ACCOUNT_ROUTES = {r for r in PERSON_ONLY_ROUTES if r[1].startswith("/mail/")}
+
+
 @pytest.mark.parametrize("token", ["vxd_human", "vxd_human_upper", "anna-key"])
-@pytest.mark.parametrize("method,path", PERSON_ONLY_ROUTES)
+@pytest.mark.parametrize("method,path", [r for r in PERSON_ONLY_ROUTES if r not in ADMIN_ACCOUNT_ROUTES])
 def test_a_worker_in_the_loop_and_the_person_are_admitted_to_person_only_verbs(
-        client, workers, method, path, token):
+        client, workers, method, path, token, monkeypatch):
+    from flows_steps import common, routine
+    monkeypatch.setattr(common, "AGENT_API", "http://agent-api.test")   # past the door, agent-api answers
+    monkeypatch.setattr(routine, "http", lambda m, u, h, b=None, timeout=20: (200, {"ok": True}))
     r = _call(client, method, path, token)
-    assert r.status_code == 200, f"{method} {path} as {token} -> {r.status_code}: {r.text[:200]}"
+    assert r.status_code in (200, 201), (
+        f"{method} {path} as {token} -> {r.status_code}: {r.text[:200]}")
 
 
 @pytest.mark.parametrize("token", UNWATCHED_TOKENS)
@@ -591,3 +638,56 @@ def test_the_refusal_is_the_one_every_service_answers_with():
     assert subject_auth.REFUSAL["reason"] == "human_session_required"
     assert subject_auth.REFUSAL["remedy"] == "ask_in_chat"
     assert "ask in chat" in subject_auth.REFUSAL["tell_your_person"]
+
+
+# ── a worker whose turn other people read (delegation.shared, ADR-0048 decision 4) ─────────────
+#
+# A person's flows, reactions, timeline and queue are theirs alone; a shared conversation's answer
+# may use only what every participant can read. So a shared worker is refused every route here but
+# filing a friction report into Vexa's own sink, with the body every service answers it with.
+
+SHARED_OPEN = {("POST", "/friction")}
+
+
+@pytest.fixture
+def shared_workers(identity):
+    table = {"anna-key": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["legacy"]}),
+             "vxd_shared": (200, {"user_id": 126, "email": "anna@vexa.test", "scopes": ["bot"],
+                                  "is_admin": False, "person_is_admin": False,
+                                  "delegation": {"regime": "human", "workspaces": ["team"],
+                                                 "shared": True}}),
+             "vxd_private": _worker_answer("human")}
+    identity.set(table)
+    return identity
+
+
+def test_a_shared_workers_caller_says_so(monkeypatch, shared_workers):
+    monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://admin-api:8001")
+    assert subject_auth.resolve("vxd_shared", secret="s").is_shared
+    assert not subject_auth.resolve("vxd_private", secret="s").is_shared
+    assert not subject_auth.resolve("anna-key", secret="s").is_shared
+
+
+@pytest.mark.parametrize("method,path", sorted(set(fa.DELEGATED_REACH) - SHARED_OPEN))
+def test_a_shared_turn_is_refused_every_flows_route(client, shared_workers, monkeypatch, method, path):
+    monkeypatch.setattr(fa, "fetch_meetings", lambda uid: [])
+    r = _call(client, method, path, "vxd_shared")
+    assert r.status_code == 403, f"{method} {path} -> {r.status_code}: {r.text[:200]}"
+    assert r.json()["detail"] == subject_auth.SHARED_REFUSAL
+    assert fa.db.execute(
+        "SELECT status FROM reaction WHERE reaction_id='r-anna-uid'")[0][0] == "admitted"
+
+
+@pytest.mark.parametrize("method,path", sorted(set(fa.DELEGATED_REACH) - SHARED_OPEN))
+def test_a_private_turn_is_not_refused_by_the_shared_rule(client, shared_workers, monkeypatch,
+                                                          method, path):
+    monkeypatch.setattr(fa, "fetch_meetings", lambda uid: [])
+    r = _call(client, method, path, "vxd_private")
+    detail = r.json().get("detail") if r.headers.get("content-type", "").startswith(
+        "application/json") and isinstance(r.json(), dict) else None
+    assert detail != subject_auth.SHARED_REFUSAL
+
+
+def test_the_shared_refusal_is_the_one_every_service_answers_with():
+    assert subject_auth.SHARED_REFUSAL["status"] == "refused"
+    assert subject_auth.SHARED_REFUSAL["reason"] == "shared_conversation"

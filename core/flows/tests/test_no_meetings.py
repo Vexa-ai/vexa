@@ -50,9 +50,11 @@ SRC = pathlib.Path(__file__).resolve().parents[1] / "src"
 #: is declared on the step and so it belongs on this list, which is read in review.
 MEETINGS_STEPS = {
     "await_start", "dispatch_bot", "run_meeting", "first_meeting",
-    "process_meeting", "email_minutes", "email_attendees", "drop_to_attendees", "prepare_meeting",
+    "process_meeting", "email_minutes", "email_attendees", "drop_to_attendees", "propose_call_changes", "prepare_meeting",
     # mints the recipient's own link through meeting-api at send time (Vexa-ai/vexa#1801, R1801-5)
     "mail_meeting_share",
+    # a bot at a time with no agent run (flows phase 0): a person's flow may name it, with its grant
+    "request_meeting_bot",
 }
 
 
@@ -150,7 +152,9 @@ def test_every_meetings_url_is_built_from_the_access_time_door():
     # TWELVE after 0.12.27: the candidate's `transcript_segment_count` — the read that answers
     # "did this meeting transcribe?" without joining the words — is a twelfth call site. The
     # property is per-call door resolution, not the count; the count is recomputed, never guessed.
-    assert text.count("meetings_door()") == 12, "the twelve sites resolve the door per call"
+    # THIRTEEN with flows phase 0's `request_meeting_bot`, a person's bot at a time; FOURTEEN with
+    # dispatch_bot's second POST when the invite's workspace is refused (ADR-0050).
+    assert text.count("meetings_door()") == 14, "the fourteen sites resolve the door per call"
 
 
 # ── the declarations on the steps ────────────────────────────────────────────────────────────
@@ -166,13 +170,13 @@ def test_every_meetings_reaching_production_step_declares_it():
     assert {s for s, n in reg.step_needs.items() if "meetings" in n} == MEETINGS_STEPS
 
 
-def test_a_step_may_need_two_domains_and_five_of_these_do():
-    """`process_meeting` and its four siblings dispatch an agent turn AND read the meeting. Both
+def test_a_step_may_need_two_domains_and_six_of_these_do():
+    """`process_meeting` and its five siblings dispatch an agent turn AND read the meeting. Both
     declarations ride the same decorator; the engine answers on the first absent one."""
     reg = _production_registry()
     both = {s for s, n in reg.step_needs.items() if {"agent", "meetings"} <= set(n)}
     assert both == {"process_meeting", "email_minutes", "email_attendees",
-                    "drop_to_attendees", "prepare_meeting"}
+                    "drop_to_attendees", "propose_call_changes", "prepare_meeting"}
 
 
 # ── the contract ─────────────────────────────────────────────────────────────────────────────

@@ -349,7 +349,7 @@ def test_an_extra_field_cannot_re_address_the_report_to_someone_else(api):
 #
 # The other half of F-D26: the route was lenient nowhere and instructive nowhere either. What the
 # MCP edge publishes as `report_friction` is DERIVED from this route's OpenAPI (see
-# `core/meetings/services/mcp/src/vexa_mcp/bind.py`), so the vocabulary and the instructions have to
+# `core/gateway/services/mcp/src/vexa_mcp/bind.py`), so the vocabulary and the instructions have to
 # be here or they do not exist anywhere an agent can read them.
 
 def _friction_op(flows_api, method="post"):

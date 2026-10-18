@@ -222,6 +222,11 @@ class Inbox:
         """Persist the position AFTER this message has been routed."""
         raise NotImplementedError
 
+    def recent(self, n: int) -> list[InboundMessage]:
+        """The last `n` messages, READ-ONLY and without touching the cursor — what the mail
+        sensor's dry run (`sensor_test`) is shown. A source that cannot answer raises."""
+        raise NotImplementedError(f"the {self.name} inbox cannot list recent messages")
+
 
 # ---------------------------------------------------------------------------------------------
 # IMAP — any IMAP server. Gmail is the PRESET (every endpoint key defaults to it), not the only
@@ -230,6 +235,19 @@ class Inbox:
 # row as the original wiring. Connection, TLS and login failures leave `_open` as a typed
 # `MailTransportError` (`flows_steps.mail_transport`) the poller reports and the probe reads.
 # ---------------------------------------------------------------------------------------------
+def _peek(im, uid) -> bytes:
+    """ONE MESSAGE, READ WITHOUT A TRACE. `BODY.PEEK[]` is the whole message exactly as `RFC822`
+    returns it, except that it does not set `\\Seen` — and the folder is opened with EXAMINE
+    (`mail_transport.imap_open`, read-only), so nothing this reader does can mark, move, label or
+    delete mail in a mailbox other people read too. There is no STORE, COPY, MOVE or EXPUNGE
+    anywhere in this module, and `test_mail_sensor.py` holds it to that."""
+    _, md = im.uid("fetch", uid, "(BODY.PEEK[])")
+    for part in md or ():
+        if isinstance(part, tuple) and len(part) > 1:
+            return part[1]
+    return b""
+
+
 class ImapInbox(Inbox):
     name = "imap"
 
@@ -247,13 +265,29 @@ class ImapInbox(Inbox):
     def address(self) -> str:
         return self._creds()[0]
 
+    def _identity(self) -> str:
+        """WHICH MAILBOX the stored UID belongs to. A UID means nothing in another mailbox or
+        folder: a cursor row left by the mail double (uid 0), or by a different address, read as a
+        position here would replay this mailbox's whole history — on a shared `info@`, every
+        message anybody ever received. So the position is kept WITH the mailbox it was taken in,
+        and a cursor that names another one (or none) is not a position: first boot anchors at
+        the tail again (C1)."""
+        import flows_config
+        addr = (flows_config.get("VEXA_MAIL_IMAP_USER") or flows_config.get("VEXA_MAIL_ADDR") or "")
+        return f"imap:{addr.strip().lower()}/{self.folder}"
+
     def restore(self, db) -> str | None:
-        row = db.execute("SELECT uid FROM mail_cursor WHERE id = 1")
-        return str(row[0][0]) if row else None
+        ensure_token_column(db)
+        row = db.execute("SELECT uid, token FROM mail_cursor WHERE id = 1")
+        if not row or (row[0][1] or "") != self._identity():
+            return None
+        return str(row[0][0])
 
     def anchor(self, db, cursor: str) -> None:
-        db.execute("INSERT INTO mail_cursor (id, uid) VALUES (1, :u) ON CONFLICT (id) DO NOTHING",
-                   {"u": int(cursor)})
+        ensure_token_column(db)
+        db.execute("INSERT INTO mail_cursor (id, uid, token) VALUES (1, :u, :t) "
+                   "ON CONFLICT (id) DO UPDATE SET uid = :u, token = :t",
+                   {"u": int(cursor), "t": self._identity()})
 
     def _open(self):
         try:
@@ -277,8 +311,14 @@ class ImapInbox(Inbox):
                 uid = int(raw)
                 if uid <= low:
                     continue          # IMAP's `n:*` returns the last UID even when the range is empty
-                _, md = im.uid("fetch", raw, "(RFC822)")
-                yield from_rfc822(md[0][1], cursor=str(uid), ext_id=str(uid))
+                yield from_rfc822(_peek(im, raw), cursor=str(uid), ext_id=str(uid))
+
+    def recent(self, n: int) -> list[InboundMessage]:
+        with self._open() as im:
+            _, d = im.uid("search", None, "ALL")
+            uids = (d[0].split() if d and d[0] else [])[-max(int(n), 0):] if n else []
+            return [from_rfc822(_peek(im, raw), cursor=str(int(raw)), ext_id=str(int(raw)))
+                    for raw in uids]
 
     def commit(self, db, msg: InboundMessage) -> None:
         db.execute("UPDATE mail_cursor SET uid = :u WHERE id = 1", {"u": int(msg.cursor)})
@@ -323,6 +363,8 @@ class MailpitInbox(Inbox):
     def restore(self, db) -> str | None:
         ensure_token_column(db)
         token = read_watermark(db)
+        if token and token.startswith("imap:"):
+            return None                     # an IMAP mailbox's identity, not a mailpit watermark
         if token:
             self._seen = load_seen(db, self.name, iso_norm(iso_epoch(token) - self.lookback))
         return token
@@ -393,6 +435,18 @@ class MailpitInbox(Inbox):
             raw = self._open(f"/api/v1/message/{mid}/raw")
             yield from_rfc822(raw if isinstance(raw, bytes) else raw.encode(),
                               cursor=created, ext_id=mid)
+
+    def recent(self, n: int) -> list[InboundMessage]:
+        msgs = self._json(f"/api/v1/messages?limit={max(int(n), 0)}&start=0").get("messages") or []
+        out = []
+        for m in reversed(msgs):
+            if not self._for_us(m):
+                continue
+            mid = m.get("ID") or ""
+            raw = self._open(f"/api/v1/message/{mid}/raw")    # `/raw` does not mark it read
+            out.append(from_rfc822(raw if isinstance(raw, bytes) else raw.encode(),
+                                   cursor=iso_norm(m.get("Created", "")), ext_id=mid))
+        return out
 
 
 def get_inbox() -> Inbox:

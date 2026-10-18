@@ -77,11 +77,18 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None,
     (`shared/marks.flow_mark`) — the marks are its vocabulary, and a caller able to compose one
     could compose any of them.
 
-    Omitted when the caller names neither, so every dispatch that does not identify itself sends
-    exactly the body and headers it has always sent."""
+    Omitted when the caller names neither.
+
+    EVERY TURN FLOWS DISPATCHES RUNS UNATTENDED. Nobody typed it — an email reply, a meeting kick,
+    an onboarding opening — so it carries ``X-Vexa-Flow-Regime: autonomous`` beside the internal
+    tier's secret, the one pair agent-api believes (`_flow_turn`): the turn is dispatched with the
+    ``scheduled`` trigger and its worker's delegation is the hard, unattended scope, exactly as a
+    routine's run (`routine.post_turn`). A person's own turn running in the same thread is answered
+    409 ``thread_busy``; that is retried, never dropped."""
     base = len(history(uid, session))
     body = {"prompt": prompt, "session": session}
     headers = as_person(uid)
+    headers["X-Vexa-Flow-Regime"] = "autonomous"
     if flow and step:
         headers["X-Vexa-Flow"] = str(flow)
         headers["X-Vexa-Flow-Step"] = str(step)
@@ -108,9 +115,10 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None,
         raise StepError(
             f"the agent turn for {uid}/{session} was not dispatched: agent-api answered {code} — "
             f"{str(out)[:200]}",
-            # 5xx and 429 are the platform having a moment; a 4xx is a fact about this call, and
-            # retrying it just delays the reaction without changing the answer.
-            retryable=code == 429 or int(code) >= 500)
+            # 5xx and 429 are the platform having a moment, and so is 409 (the thread is running
+            # its person's turn); any other 4xx is a fact about this call, and retrying it just
+            # delays the reaction without changing the answer.
+            retryable=code in (409, 429) or int(code) >= 500)
     return base
 
 
@@ -230,6 +238,45 @@ def propose(uid: str, *, source: str, act: str, source_label: str = "", by: str 
     return out
 
 
+def compose_home(uid: str, trigger: str) -> dict:
+    """ASK AGENT-API TO COMPOSE THIS PERSON'S HOME NOW (#1783, `home_compose`).
+
+    agent-api does the whole composition — it holds the chats, the notifications, the meetings it
+    reads and the model catalog — and APPENDS it; this is only the clock. It answers `skipped` when
+    the last composition is fresher than its debounce, so a burst of events costs one composition.
+    Raises a retryable `StepError` when agent-api does not answer: the engine retries, and a home
+    that is a little late is still the home."""
+    code, out = http("POST", f"{agent_door()}/api/home/compose", as_person(uid), {"trigger": str(trigger)})
+    if not _ok(code) or not isinstance(out, dict):
+        raise StepError(f"agent-api did not compose the home (HTTP {code})", retryable=True)
+    return out
+
+
+def propose_session_change(uid: str, session_id: str, *, kind: str, body: str, title: str = "",
+                           workspace: str | None = None, path: str | None = None,
+                           meeting_id=None) -> dict:
+    """RECORD ONE PROPOSED CHANGE for a call's owner to decide (ADR-0048 decision 7).
+
+    After a call, nothing lands in a workspace on its own: the post-meeting run proposes, and the
+    meeting's owner (``uid``) accepts, edits or rejects in the session the call belonged to. This is
+    the internal-tier door agent-api keeps for that. Raises `StepError` (retryable) when agent-api
+    refuses or is unreachable: unlike a short-list chip, a proposal is the call's only way into a
+    workspace, so losing one is not a degradation."""
+    payload = {"owner": str(uid), "kind": kind, "body": body, "title": title}
+    if workspace is not None:
+        payload["workspace"] = workspace
+    if path is not None:
+        payload["path"] = path
+    if meeting_id is not None:
+        payload["meeting_id"] = int(meeting_id)
+    # AS the owner: with `post_meeting_auto_accept` on, the change lands with their rights.
+    code, out = http("POST", f"{agent_door()}/api/sessions/{urllib.parse.quote(session_id)}/proposals",
+                     as_person(uid), payload)
+    if not _ok(code) or not isinstance(out, dict):
+        raise StepError(f"agent-api did not record the proposal (HTTP {code})", retryable=True)
+    return out.get("proposal") or {}
+
+
 def head_sha(uid: str) -> str:
     """The current HEAD commit of ONE subject's desk, or "" if it has no repo (or cannot be read).
 
@@ -300,7 +347,7 @@ def reset_desk(uid: str, sha: str, reason: str = "") -> dict:
     return out
 
 
-def workspace_write(uid: str, path: str, content: str) -> None:
+def workspace_write(uid: str, path: str, content: str, slug: "str | None" = None) -> None:
     """WRITE one file into ONE subject's workspace, as that subject, COMMITTED.
 
     `PUT /api/workspace/file` is the door the terminal's own page editor uses: it writes the file,
@@ -314,8 +361,10 @@ def workspace_write(uid: str, path: str, content: str) -> None:
 
     A non-2xx RAISES: a write that silently did not land leaves the workspace disagreeing with a
     mail that has already gone out, and nobody would ever learn that from a return value."""
-    code, body = http("PUT", f"{agent_door()}/api/workspace/file", as_person(uid),
-                      {"path": path, "content": content})
+    payload = {"path": path, "content": content}
+    if slug:
+        payload["slug"] = slug      # the workspace a meeting's page is recorded in (#1783)
+    code, body = http("PUT", f"{agent_door()}/api/workspace/file", as_person(uid), payload)
     if not _ok(code):
         raise StepError(f"workspace write {path!r} for {uid}: HTTP {code} — {str(body)[:200]}")
 

@@ -12,6 +12,7 @@ from typing import Optional
 from urllib.parse import quote as _q
 
 import flows_config
+import flows_obs
 # THE ONLY MODULE-SCOPE ENGINE IMPORT IN THIS FILE, and it is here because a class statement needs
 # its base at definition time (`SettingsUnavailable` below). Everything else keeps the existing
 # function-local `from flows import StepError` idiom, which is not stylistic: it keeps the engine
@@ -341,6 +342,36 @@ def mint_scaffold(kind: str, recipient: str, *, opening: str,
         retryable=int(code or 0) >= 500 or int(code or 0) == 429)
 
 
+def notify_in_app(kind: str, *, meeting_id, title: str = "", to: str = "", email: str = "",
+                  actor: str = "", actor_name: str = "", url: str = "", object_kind: str = "") -> bool:
+    """Hand one meeting fact to the person's in-app notifications (#1783): `meeting_shared` (to the
+    account behind `email`), `bot_scheduled` / `bot_joined` (to the meeting's owner, `to`).
+
+    agent-api is the store's one writer and composes the words; this only names the fact, on the
+    internal tier. A PUBLISH, NOT A DEPENDENCY: no agent domain, no secret, a refusal or a timeout
+    all return False and the step carries on — the mail (or the bot) is the act, the bell its echo.
+    `url` is where Open goes and must be a path in the app; an absolute link is cut to its path."""
+    base = (AGENT_API or "").strip()
+    if not base:
+        return False
+    try:
+        from urllib.parse import urlsplit
+        path = ""
+        if url:
+            parts = urlsplit(str(url))
+            path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+        body = {"kind": kind, "meeting_id": str(meeting_id), "title": str(title or "")[:1000]}
+        for key, value in (("to", to), ("email", email), ("actor", actor), ("actor_name", actor_name),
+                           ("url", path), ("object_kind", object_kind)):
+            if value:
+                body[key] = str(value)
+        code, _ = http("POST", f"{base.rstrip('/')}/internal/notifications",
+                       {"X-Internal-Secret": require_internal_secret()}, body, timeout=5)
+        return 200 <= int(code or 0) < 300
+    except Exception:  # noqa: BLE001 — an in-app echo never fails the step that reports it
+        return False
+
+
 def db_url() -> str:
     """The engine's database, named by the deployment and by nothing else (decision 18d).
 
@@ -377,7 +408,11 @@ def swallowed(source: str, kind: str, exc: BaseException | None = None, **facts)
 def http(method: str, url: str, headers: dict, body: dict | None = None, timeout: float = 20):
     req = urllib.request.Request(url, method=method,
                                  data=json.dumps(body).encode() if body is not None else None)
-    for k, v in {"content-type": "application/json", **headers}.items():
+    # THE TRACE TRAVELS ON EVERY HOP THROUGH HERE (logevent.v1). This is the one door to Vexa
+    # services; third-party wires (Graph, IMAP, mailpit, SMTP) have their own openers and never
+    # carry it. A caller that set its own X-Trace-Id keeps it.
+    trace = {} if any(k.lower() == flows_obs.TRACE_HEADER for k in headers) else flows_obs.trace_headers()
+    for k, v in {"content-type": "application/json", **trace, **headers}.items():
         req.add_header(k, v)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -424,6 +459,24 @@ def ensure_platform_user(email: str) -> str:
     _code, u = http("POST", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/admin/users", _admin_headers(),
                     {"email": email, "name": email.split("@")[0].title()})
     return str(u["id"])
+
+
+def is_admin_address(email: str) -> bool:
+    """Is this address the deployment's admin account, or one of its instance admins? Identity's own
+    answer (`/internal/users/{id}/is-admin`); never raises, and anything that is not a clear yes —
+    a stranger, identity down, a malformed answer — is NO. It gates `mail.<kind>: admins`, where a
+    wrong yes would mail a person a kind the company has not turned on for them."""
+    try:
+        uid = platform_user_id(email)
+        if not uid:
+            return False
+        code, body = http("GET", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/internal/users/"
+                                 f"{_q(uid, safe='')}/is-admin",
+                          {"X-Internal-Secret": require_internal_secret()})
+    except Exception:  # noqa: BLE001 — fail closed
+        return False
+    return code == 200 and isinstance(body, dict) and (
+        body.get("admin_account") is True or body.get("is_admin") is True)
 
 
 def address_for_uid(uid: str) -> str:
@@ -497,6 +550,17 @@ def ws_file(uid: str, path: str, slug: Optional[str] = None) -> Optional[str]:
     code, body = http("GET", f"{agent_door()}/api/workspace/file?path={_q(path, safe='')}{q}",
                       {"X-User-Id": uid, "X-Internal-Secret": require_internal_secret()})
     return body.get("content") if code == 200 and isinstance(body, dict) else None
+
+
+def ws_write(uid: str, path: str, content: str, slug: Optional[str] = None) -> tuple[int, object]:
+    """Write one page AS `uid` through agent-api's own door (`PUT /api/workspace/file`), which
+    decides whether `uid` may write there — for `_global`, only the deployment's admin account.
+    Returns (status, body); never raises on a refusal, so the caller can say what agent-api said."""
+    body = {"path": path, "content": content}
+    if slug:
+        body["slug"] = slug
+    return http("PUT", f"{agent_door()}/api/workspace/file",
+                {"X-User-Id": str(uid), "X-Internal-Secret": require_internal_secret()}, body)
 
 
 # A person's preferences, read from IDENTITY — the one domain flows may depend on.

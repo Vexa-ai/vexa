@@ -1,0 +1,17 @@
+{
+  "at": "2026-10-15T09:00:00+00:00",
+  "author": "8",
+  "author_kind": "agent",
+  "card": null,
+  "fields": {
+    "About": "meeting:m-1",
+    "Next": "send the deck",
+    "State": "To do",
+    "Title": "Follow up pricing"
+  },
+  "id": "6d0a19a1-0a35-41bd-bae9-3ed0b0468530",
+  "kind": "create",
+  "reason": "promised on the call",
+  "title": "Follow up pricing",
+  "workspace": "sales"
+}

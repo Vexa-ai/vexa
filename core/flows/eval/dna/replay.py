@@ -24,7 +24,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rig import Rig                                              # noqa: E402
+from rig import RIG_ONLY_VERBS, Rig                              # noqa: E402
 # agent-api believes a named person only from the gateway's signature or the internal tier;
 # this harness acts for one the way flows does (`flows_steps.agent.as_person`).
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src"))
@@ -474,6 +474,7 @@ def main() -> int:
     token = pathlib.Path(a.token_file or (pathlib.Path(a.run_root) / "r0" / ".token")).read_text().strip()
     rig = Rig(token)
     rig.connect()
+    rig.require({"workspace_read", "reactions_list", "propose", "validate", *RIG_ONLY_VERBS})
 
     fixtures = sorted(pathlib.Path(a.fixtures).glob("*.transcript.json"))
     if a.limit:

@@ -29,6 +29,7 @@ mailpit invite produce byte-identical facts. See `flows_integrations/inbox.py` f
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sys
@@ -38,6 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import flows_config as cfg
+import flows_obs
 from flows import Registry, SystemClock, admit, postgres_db
 from flows_defs import production
 from flows_integrations import mail_policy, outlook
@@ -45,6 +47,21 @@ from flows_integrations import mailbox_status
 from flows_integrations.inbox import get_inbox
 from flows_steps.common import db_url
 from flows_steps.mail_transport import MailTransportError
+
+
+def log_sender(addr: str) -> str:
+    """How a sender appears in this process's log: the domain and a short digest of the whole
+    address, never the address. Enough to correlate two lines about one sender, and to tell one
+    domain's mail from another's; not enough to read who wrote."""
+    a = (addr or "").strip().lower()
+    domain = a.rsplit("@", 1)[1] if "@" in a else "?"
+    return f"<{hashlib.sha256(a.encode()).hexdigest()[:10]}@{domain}>"
+
+
+def log_message(msg) -> str:
+    """A message as it appears in the log: a digest of its source id. The subject is never logged."""
+    ref = str(getattr(msg, "ext_id", "") or getattr(msg, "message_id", "") or "")
+    return "msg:" + hashlib.sha256(ref.encode()).hexdigest()[:10]
 
 POLL_SECONDS = 12
 
@@ -214,6 +231,7 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
     # duplicate, produced no reaction and no error, on precisely the "put the mailbox on the
     # recurring dailies" case `POST /events/batch` exists for (R-B02).
     rec = re.search(r"^RECURRENCE-ID(?:;[^:]*)?:(\S+)$", ve, re.M)
+    seq = re.search(r"^SEQUENCE:(\d{1,9})\s*$", ve, re.M)
     # `;LANGUAGE=en-US` — Exchange puts a parameter on SUMMARY where Google does not, so
     # `^SUMMARY:` matched nothing and every Exchange invite was titled "Meeting". Silent, and it
     # reaches the person: the title is the subject line of the mail we send back. Same
@@ -292,6 +310,11 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
             # what makes THIS occurrence not the series: RECURRENCE-ID when the sender gave one,
             # else the occurrence's own DTSTART, which is what a per-occurrence invite differs by.
             "occurrence": (rec.group(1).strip() if rec else (dt.group(2) + dt.group(3) if dt else "")),
+            # THE MEETING ACROSS ITS UPDATES (ADR-0050 keyed schedules): UID, plus RECURRENCE-ID for
+            # one occurrence of a series — never DTSTART, which is exactly what a reschedule moves.
+            "event_key": ((uid.group(1).strip() if uid else f"noid-{int(start)}")
+                          + (f"@{rec.group(1).strip()}" if rec else "")),
+            "sequence": int(seq.group(1)) if seq else 0,
             "title": (summ.group(1).strip() if summ else "Meeting"),
             "group": group,
             "participants": participants,
@@ -301,7 +324,38 @@ def parse_ics(ics: str, self_addr: str | None = None) -> dict | None:
             # `share: False` could be silently flipped to True by any later admission for the
             # same meeting, which is a suppressed fan-out un-suppressing itself. This spelling
             # cannot be clobbered by that rule in either direction.
-            **({"share_opt_out": True} if NOSHARE.search(ics) else {})}
+            **({"share_opt_out": True} if NOSHARE.search(ics) else {}),
+            **workspace_invite(ics)}
+
+
+#: A workspace invite link in the event body: `<this deployment's UI>/join/<token>` (founder,
+#: 2026-10-14: the meeting goes into the workspace whose invite link the host put in the event).
+_JOIN = re.compile(r"(https?://[^\s\"<>\\]+?)/join/([A-Za-z0-9_\-.~]{6,200})")
+
+
+def workspace_invite(ics: str) -> dict:
+    """`{workspace_invite_link, workspace_invite_token}` when the invite's text carries a workspace
+    invite link of THIS deployment, else `{}`. Only a link on this deployment's own UI origin
+    (`VEXA_UI_URL`) counts: a link anybody could paste into an event must not attach a meeting to a
+    workspace somewhere else, and the token is resolved — and authorised — by the step that uses
+    it, never here. ICS folding and escaping are undone first, so a link split across lines is
+    still found."""
+    from urllib.parse import urlsplit
+    try:
+        from flows_steps.common import ui_link
+        ui = ui_link().rstrip("/")         # the one door to the client's URL (common.py)
+    except Exception:  # noqa: BLE001 — no UI URL configured: no link can be ours
+        return {}
+    if not ui:
+        return {}
+    want = urlsplit(ui)
+    text = _unfold(ics or "").replace("\\n", " ").replace("\\,", ",").replace("\\;", ";")
+    for m in _JOIN.finditer(text):
+        base = urlsplit(m.group(1))
+        if (base.scheme, base.netloc.lower()) == (want.scheme, want.netloc.lower()):
+            token = m.group(2).rstrip(".")
+            return {"workspace_invite_link": f"{ui}/join/{token}", "workspace_invite_token": token}
+    return {}
 
 
 def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
@@ -336,7 +390,15 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
         return None
     allowed = mail_policy.allow_domains(self_addr) if allowed is None else allowed
     if ics and "BEGIN:VEVENT" in ics:
-        if "METHOD:REPLY" in ics or "METHOD:CANCEL" in ics:
+        if "METHOD:CANCEL" in ics:
+            # A CANCELLED MEETING (ADR-0050): the bot armed for it is called off. Only an organizer
+            # we would act for may cancel, the same test an invite meets.
+            ev = parse_ics(ics, self_addr)
+            if ev and ev["organizer"] and (known_uid(ev["organizer"]) is not None or
+                                           mail_policy.in_allow_list(ev["organizer"], self_addr, allowed)):
+                return ("invite_cancel", ev)
+            return None
+        if "METHOD:REPLY" in ics:
             return None               # calendar machinery (our own RSVP echoes!) — never a
                                       # conversation, never a provisioning trigger (storm catch:
                                       # we nearly onboarded calendar-notification@google.com)
@@ -446,7 +508,7 @@ def _fixed_reply(db, msg, ext_id: str, now: float, reply) -> bool:
     try:
         reply(msg.frm, "Re: " + (msg.subject or "your message"), mail_policy.QUARANTINE_TEMPLATE)
     except Exception as e:  # noqa: BLE001 — a refusal we could not post is still a refusal
-        print(f"quarantine reply to {msg.frm} failed: {type(e).__name__}: {e}", flush=True)
+        print(f"quarantine reply to {log_sender(msg.frm)} failed: {type(e).__name__}", flush=True)
         return False
     mail_policy.mark_answered(db, ext_id, now)
     return True
@@ -498,6 +560,11 @@ def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
         n = admit(db, reg, clock, source_event_id=invite_source_id(payload),
                   event_type="invite.received", subject_refs=payload)
         return ("invite", n)
+    if kind == "invite_cancel":
+        n = admit(db, reg, clock,
+                  source_event_id=f"ics-cancel-{payload['event_key']}-{payload.get('sequence', 0)}",
+                  event_type="invite.cancelled", subject_refs=payload)
+        return ("invite_cancel", n)
     if kind == "invite_quarantine":
         # THE FACTS SURVIVE THE REFUSAL. Decision 19 binds the prepare touch to the organizer and
         # to attendees who are already users, and says the workspace is established on the click,
@@ -549,7 +616,31 @@ def _boot(db, inbox) -> str:
     return cursor
 
 
+SERVICE = "mailbox"
+
+
+def process(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
+            provision, reply=None) -> tuple[str, int] | None:
+    """`handle`, as ONE TRACED UNIT (logevent.v1): a fresh trace per message, bound while it is
+    routed, so the identity/agent-api lookups it makes carry the same `X-Trace-Id`
+    (`flows_steps.common.http`). The line names the message by its source-native id — an IMAP UID,
+    a mailpit or Graph id, opaque — and the outcome; never the sender, subject or body."""
+    with flows_obs.unit(SERVICE):
+        fields = {"ext_id": str(msg.ext_id)}
+        try:
+            out = handle(db, reg, clock, self_addr, msg, known_uid, is_scaffolded, provision,
+                         reply=reply)
+        except Exception as e:
+            flows_obs.log_event("mail_failed", level="warning",
+                                fields={**fields, "error": type(e).__name__})
+            raise
+        kind, n = out if out is not None else ("ignored", 0)
+        flows_obs.log_event("mail_processed", fields={**fields, "outcome": kind, "admitted": n})
+        return out
+
+
 def main() -> int:
+    flows_obs.set_service(SERVICE)
     db = postgres_db(db_url())
     clock = SystemClock()
     reg = Registry()
@@ -592,21 +683,56 @@ def main() -> int:
         return platform_user_id(e) or None
 
     def _reply(to: str, subject: str, body: str) -> str:
-        return notify(to, subject, body)
+        # Through the one outbound path: `mail.quarantine-reply` (off by default) and the audit.
+        from flows_steps import outbound
+        out = outbound.send("quarantine-reply", to, subject=subject, body=body, db=db,
+                            sender=lambda *a, **k: notify(*a, **k))
+        if not out.sent:
+            raise RuntimeError(f"quarantine reply not sent: {out.result}")
+        return out.message_id
 
+    # THE EDGE (`mail_sensor`): only invitations and replies to mail Vexa sent reach `process`;
+    # everything else is dropped here — no event, no row, no model — and only counted.
+    from flows_integrations.mail_sensor import MailSensor, sensor_id_for
+
+    def _emit_from(self_addr: str):
+        def emit(msg):
+            out = process(db, reg, clock, self_addr, msg, _known_uid, _scaff,
+                          ensure_platform_user, reply=_reply)
+            if out is None:
+                print(f"ignored mail from {log_sender(msg.frm)} ({log_message(msg)})", flush=True)
+            else:
+                kind, n = out
+                print(f"{kind} {log_sender(msg.frm)} {log_message(msg)} → admitted {n}", flush=True)
+        return emit
+
+    def _a_sensor_reads_it() -> bool:
+        """A `mailbox` sensor (flows-sensors, owned by the global account) reads this mailbox now —
+        then this loop stands aside, so one message is never admitted twice by two readers."""
+        try:
+            return bool(db.execute("SELECT 1 FROM sensor WHERE kind = 'mailbox' "
+                                   "AND status IN ('active', 'degraded') LIMIT 1"))
+        except Exception:  # noqa: BLE001 — no sensor table yet: this loop is the reader
+            return False
+
+    standing_aside = False
     while True:
+        if _a_sensor_reads_it():
+            if not standing_aside:
+                print("mailbox: a `mailbox` sensor reads this mailbox — this loop stands aside",
+                      flush=True)
+            standing_aside = True
+            status.ok(inbox.name)
+            time.sleep(POLL_SECONDS)
+            continue
+        standing_aside = False
         try:
             self_addr = inbox.address().lower()
-            for msg in inbox.fetch(cursor):
-                out = handle(db, reg, clock, self_addr, msg, _known_uid, _scaff,
-                             ensure_platform_user, reply=_reply)
-                if out is None:
-                    print(f"ignored mail from {msg.frm} ({msg.subject[:40]!r})", flush=True)
-                else:
-                    kind, n = out
-                    print(f"{kind} {msg.frm} {msg.subject[:40]!r} → admitted {n}", flush=True)
-                cursor = msg.cursor
-                inbox.commit(db, msg)
+            sensor = MailSensor(sensor_id_for(self_addr), "global", inbox, _emit_from(self_addr))
+            cursor = sensor.tick(db, cursor)
+            if sensor.dropped:
+                print(f"mail sensor {sensor.sensor_id}: dropped {sensor.dropped} at the edge "
+                      f"(not an invitation, not a reply to Vexa mail)", flush=True)
             status.ok(inbox.name)
         except MailTransportError as e:
             status.fault(e)

@@ -33,6 +33,9 @@ behind. There is none and there should be none: a second invite to the same addr
 expiry or at a different role, is a second occurrence and must mail again, and what stops one
 invite mailing twice is the `source_event_id` keyed to the invite rather than to the person.
 
+`FlowDefinition.user-routine.json` and `FlowDefinition.instance-event.json` pin the two triggers
+(ADR-0046): a person's schedule flow running `agent_run`, and the instance's event flow.
+
 A golden and its census entry must agree on the CONTRACT — owner, cardinality, refs, whether a
 stamp stands behind an exactly-once claim, and `published_by` — and `tests/test_carrier_census.py`
 checks exactly that, per carrier. Their prose may differ and in two cases does: the meeting
@@ -40,3 +43,7 @@ goldens carry the empty-room race on the calendar-intake path written out in ful
 census summarises it. That is a reference instance being more useful than the registry, not drift.
 
 _Governed by `docs/docs/governance/architecture.mdx` (P1–P12). This folder owns one concern; its public surface is its `index`/contract; it may depend only on what the dependency-rules allow._
+
+`Carrier.thread-message.json` (ADR-0046 decision 13) is the ninth: one agent writing to another. The
+case it pins is a carrier whose refs carry the facts a POLICY decides on (`shared`,
+`sender_routine`) beside the addresses, so the intake can refuse a message by naming the rule.

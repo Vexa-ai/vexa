@@ -104,6 +104,58 @@ def _kind_entries(root, kind: str):
         yield name, text
 
 
+# THE TRANSLITERATION TABLE (#1783). NFKD has nothing to fold a Cyrillic or Greek letter to, so a
+# name written in either script slugified to "" and `entity_upsert` refused it outright. One small
+# fixed table (lowercase letter:latin, space-separated; a two-letter key is a digraph and wins over
+# its first letter), applied to each letter before the ascii
+# fold: Cyrillic as ICAO Doc 9303 spells it for passports (plus the Ukrainian, Belarusian and South
+# Slavic letters), Greek as ELOT 743 simplified. Latin letters are not in it, so every name that was
+# writable before keeps exactly the slug it had. The terminal's `entitySlug`
+# (clients/terminal/src/ui-kit/docLinks.tsx) carries this string verbatim and scripts/parity.json
+# holds the two to one spelling: change one, change both.
+_TRANSLIT = ("а:a б:b в:v г:g д:d е:e ж:zh з:z и:i й:i к:k л:l м:m н:n о:o п:p р:r с:s т:t у:u "
+             "ф:f х:kh ц:ts ч:ch ш:sh щ:shch ъ:ie ы:y ь: э:e ю:iu я:ia ё:e є:ie і:i ї:i ґ:g ў:u "
+             "ђ:dj ј:j љ:lj њ:nj ћ:c џ:dz ѓ:gj ќ:kj ѕ:dz α:a β:v γ:g δ:d ε:e ζ:z η:i θ:th ι:i κ:k "
+             "λ:l μ:m ν:n ξ:x ο:o π:p ρ:r σ:s ς:s τ:t υ:y φ:f χ:ch ψ:ps ω:o ου:ou")
+_TRANSLIT_MAP = dict(pair.split(":", 1) for pair in _TRANSLIT.split(" "))
+
+
+def _transliterate(text: str) -> str:
+    """Each letter the table knows becomes its Latin spelling; everything else passes through
+    untouched for the ascii fold. A letter the table knows only by its base (an accented Greek
+    vowel, a Cyrillic letter with a diacritic) is looked up by that base."""
+    def base(ch: str) -> str:
+        return unicodedata.normalize("NFKD", ch)[:1].lower()
+
+    chars, out, i = list(unicodedata.normalize("NFC", text)), [], 0
+    while i < len(chars):
+        ch = chars[i]
+        if ch.isascii():
+            out.append(ch)
+            i += 1
+            continue
+        pair = base(ch) + base(chars[i + 1]) if i + 1 < len(chars) else ""
+        if pair in _TRANSLIT_MAP:
+            out.append(_TRANSLIT_MAP[pair])
+            i += 2
+            continue
+        t = _TRANSLIT_MAP.get(ch.lower())
+        if t is None:
+            t = _TRANSLIT_MAP.get(base(ch))
+        out.append(ch if t is None else t)
+        i += 1
+    return "".join(out)
+
+
+def _fnv1a32(text: str) -> str:
+    """FNV-1a, 32 bits, over UTF-8 — chosen because the terminal can compute the same value
+    synchronously, with no crypto API, and a slug must be computable on both sides."""
+    h = 0x811C9DC5
+    for b in text.encode("utf-8"):
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return f"{h:08x}"
+
+
 def slugify(name: str) -> str:
     """kebab-case ascii, the shape the templates promise (``id: <slug>`` matches the filename).
 
@@ -114,13 +166,27 @@ def slugify(name: str) -> str:
     the filename by hand, via `workspace_write`, naturally wrote it without the hyphen), so the two
     calls disagreed on this person's slug and a second page was created for the first one's subject.
     Treating the apostrophe as an ordinary separator character is what did it: every OTHER
-    non-alnum run still becomes one hyphen, so a name is never assembled by both rules at once."""
+    non-alnum run still becomes one hyphen, so a name is never assembled by both rules at once.
+
+    EVERY NAME WITH A LETTER OR DIGIT GETS A SLUG (#1783). Cyrillic and Greek are transliterated
+    (``_TRANSLIT``); a name in a script with no table that would otherwise leave nothing — CJK,
+    Arabic, Hebrew — becomes ``u-<fnv1a32 of the name>``, stable across calls and processes. A name
+    the old rule could already slug is unchanged, so no existing page moves."""
     # Apostrophe (straight/curly) stripped BEFORE the ascii-encode: NFKD has no compatibility
     # decomposition for the curly form (U+2019) to an ascii base character, so `encode("ascii",
     # "ignore")` would already have silently dropped it by the time a `.replace()` after that step
     # could ever see it — leaving the straight apostrophe as the only one actually handled.
     raw = str(name or "").replace("'", "").replace("’", "")
-    s = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode()
+    s = _ascii_slug(_transliterate(raw))
+    if not s and any(ch.isalnum() for ch in raw):
+        key = " ".join(unicodedata.normalize("NFC", raw).lower().split())
+        return f"u-{_fnv1a32(key)}"
+    return s
+
+
+def _ascii_slug(text: str) -> str:
+    """Accents folded, every other non-ascii character dropped, non-alnum runs one hyphen, ≤80."""
+    s = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     s = re.sub(r"[^a-zA-Z0-9]+", "-", s).strip("-").lower()
     return s[:80]
 
@@ -133,6 +199,28 @@ def entity_rel_path(kind: str, name: str) -> str:
     if not slug:
         raise EntityRefused("an entity needs a name that survives slugification")
     return f"{ENTITIES_DIR}/{kind}/{slug}.md"
+
+
+def _pre_transliteration_slug(name: str) -> str:
+    """The slug a name had before #1783 taught ``slugify`` Cyrillic and Greek: only its Latin part."""
+    return _ascii_slug(str(name or "").replace("'", "").replace("’", ""))
+
+
+def _existing_rel_path(root, kind: str, name: str) -> str:
+    """``entity_rel_path``, except that a MIXED-script name ("ООО Ромашка LLC") whose page was
+    written before #1783 under its Latin part alone (``llc.md``) keeps landing on that page while
+    no page exists at the new slug — so the transliteration does not split one subject into two.
+    Only a page whose ``title`` is this very name counts; any other page at that path is another
+    subject's."""
+    rel = entity_rel_path(kind, name)
+    old = _pre_transliteration_slug(name)
+    if not old or rel.endswith(f"/{old}.md") or _wp.read_text_inside(root, rel) is not None:
+        return rel
+    legacy = f"{ENTITIES_DIR}/{kind.strip().lower()}/{old}.md"
+    text = _wp.read_text_inside(root, legacy)
+    if text is not None and _fm_get(split_frontmatter(text)[0], "title") == str(name).strip():
+        return legacy
+    return rel
 
 
 def split_frontmatter(text: str) -> tuple[list[str], str]:
@@ -633,8 +721,8 @@ def tool_connection_text() -> str:
     """The `connections` shape, as the tool description must state it.
 
     Generated for exactly the reason `tool_sections_text` is, and now with an incident behind it:
-    the writer is here, the description an agent reads is in another tree (`deploy/dogfood/rig/`,
-    which imports nothing from this one), and a description that leaves the shape unstated is how a
+    the writer is here, the description an agent reads is in another tree (the `entity_upsert` body
+    schema in `core/agent/control_plane/bodies.py`), and a description that leaves the shape unstated is how a
     live agent came to send `{"from": …, "type": …}` and get a 500 (Vexa-ai/vexa#1589). Derived from
     `CONNECTION_KEYS` so the sentence cannot outlive the vocabulary it describes."""
     return ('- `connections` — `["Acme"]` or `[{"name": "Acme", "relation": "works at"}]`: a bare '
@@ -1013,6 +1101,54 @@ def connection_name(value: str) -> str:
     return name
 
 
+_NAME_SPLIT = re.compile(r"[;,/\n]|&|\band\b|\bwith\b|\bplus\b")
+
+
+def _capitalised(token: str) -> bool:
+    return bool(token) and (token[0].isupper() or token[0].isdigit())
+
+
+def field_link_names(value: str) -> list[str]:
+    """The pages a LINK FIELD's value names (`who`, `company`, `participants`, `people`).
+
+    A field is prose: "Alex Example (GitHub handle); maintained by Dmitry Grankin" is a fine line
+    for a page, and it names two people. Taking the whole sentence as one page name refused it
+    (`Connection name must identify one page`, Vexa-ai/vexa#1783) and made the agent strip its own
+    write-back down to one name. So: `[[wikilinks]]` decide when there are any; otherwise a value
+    that is itself one name (one word, or up to five capitalised words) is that name; otherwise the
+    value is split at `; , / & and with plus`, parentheticals dropped, and each part's trailing run
+    of capitalised words ("maintained by Dmitry Grankin" → Dmitry Grankin) is a name. A part with no
+    such run names nobody — the line is still filed as written, it just links nothing."""
+    text = str(value or "").strip()
+    links = wikilinks([text])
+    if links:
+        return links
+    words = text.split()
+    if words and (len(words) == 1 or (len(words) <= 5 and all(_capitalised(w) for w in words))):
+        try:
+            return [connection_name(text)]
+        except EntityMalformed:
+            pass
+    names, seen = [], set()
+    for part in _NAME_SPLIT.split(re.sub(r"\([^)]*\)", " ", text)):
+        run = []
+        for tok in reversed(part.split()):
+            tok = tok.strip(".:!?\"'")
+            if not _capitalised(tok):
+                break
+            run.insert(0, tok)
+        if not 1 <= len(run) <= 5:
+            continue
+        try:
+            name = connection_name(" ".join(run))
+        except EntityMalformed:
+            continue
+        if name.lower() not in seen:
+            seen.add(name.lower())
+            names.append(name)
+    return names
+
+
 def _connection_bullet(line):
     match = re.fullmatch(r'\s*[-*]\s+(\[\[.*\]\])(?:\s+—\s+(.+))?\s*', line)
     if not match:
@@ -1021,6 +1157,53 @@ def _connection_bullet(line):
         return connection_name(match[1]), (match[2] or '').strip()
     except EntityMalformed:
         return None
+
+
+_WS_LINK = re.compile(r"\A[a-z]+:[^/\s]+/(.+)\Z")
+
+
+def _target_key(name: str) -> str:
+    """One key per page a chip names, whichever spelling it uses: `[[Ada Lovelace]]` and
+    `[[ws:<id>/ada-lovelace]]` are the same page."""
+    m = _WS_LINK.match(str(name or "").strip())
+    return slugify(m.group(1) if m else name)
+
+
+def dedupe_connected(card) -> bool:
+    """ONE CHIP PER PAGE in `## Connected` (a real workspace, 2026-10-14: a project page listed four
+    people twice after parallel writes, one spelling by name and one by id). The first chip for a
+    page stays where it is; a later one adds its relation if the first had none and is removed."""
+    i = card.index("Connected")
+    if i < 0:
+        return False
+    lines = card.blocks[i][1]
+    first: dict = {}
+    drop: list = []
+    changed = False
+    for j, line in enumerate(lines[1:], 1):
+        edge = _connection_bullet(line)
+        if not edge:
+            continue
+        key = (_target_key(edge[0]), (edge[1] or "").casefold())
+        bare = (_target_key(edge[0]), "")
+        if key in first:
+            drop.append(j)
+            continue
+        if edge[1] and bare in first:
+            # the relationless chip for this page gives way to the one that says how they relate
+            k = first.pop(bare)
+            lines[k] = line
+            drop.append(j)
+            first[key] = k
+            changed = True
+            continue
+        if not edge[1] and any(t == bare[0] for t, _r in first):
+            drop.append(j)
+            continue
+        first[key] = j
+    for j in sorted(drop, reverse=True):
+        del lines[j]
+    return changed or bool(drop)
 
 
 def _chip(name: str, relation: str) -> str:
@@ -1055,7 +1238,8 @@ def plan_link_back(root, target_name: str, from_name: str, relation: str) -> "tu
     card = parse_card(body)
     if not card.title:
         card.title = _fm_get(fm, "title") or target_name
-    if not card.add("Connected", _chip(from_name, relation)):
+    added = card.add("Connected", _chip(from_name, relation))
+    if not (dedupe_connected(card) or added):
         return None
     return rel, render_card(card, kind, fm)
 
@@ -1221,13 +1405,15 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
         raise EntityRefused(
             "every fact needs a source: pass `source=` — ONE argument for the whole call, a few "
             "words saying what was said or read that this came from (the meeting, the mail, the "
-            "file, the person's own words). That argument is the gate and the only one: a "
+            "file, the person's own words), for example `source=\"2026-10-13 call with Ada "
+            "Lovelace\"`, `source=\"Ada's email of 2026-10-12\"` or `source=\"notes/roadmap.md\"`. "
+            "That argument is the gate and the only one: a "
             "`— source: …` written inside a fact does not satisfy it and is not read, because this "
             "tool stamps the attribution onto every bullet and onto `## Sources` itself. Split the "
             "call when the facts come from different places. A page carries only what was said or "
             "read — if you do not have a source the gap goes to kg/MISSING.md, never onto the page.")
 
-    rel = entity_rel_path(kind, name)
+    rel = _existing_rel_path(root, kind, name)
     path = root / rel
     # The page is read NOFOLLOW: a link planted at `kg`, `kg/entities`, the kind dir or the page
     # itself is not followed, so another tenant's page cannot be read into this one and the write
@@ -1312,7 +1498,7 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
             for value in values:
                 for target_name in ([connection_name(value)] if value.strip().startswith('[[') and value.strip().endswith(']]')
                                     and value.count(']]') == value.count('[[') and ']]' not in value.strip('[]')
-                                    else (wikilinks([value]) or [value])):
+                                    else field_link_names(value)):
                     if card.add("Connected", _chip(target_name, here)):
                         written += 1
                     connections.append({"name": target_name, "relation": here, "reverse": there,
@@ -1364,6 +1550,7 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
                 "migrated": False, "filed": {}}
 
     drop_empty_tail(card)          # a `## Timeline` that never had an entry helps nobody
+    dedupe_connected(card)
     # NOFOLLOW writes: a link at any directory on the path refuses; a link at the page is replaced.
     # The entity lands in THIS workspace, never through a link into another's tree. A refused page
     # (a KG directory that is a planted link, not a plain folder) is a clean EntityRefused, not a
@@ -1386,7 +1573,10 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
             "links_rewritten": rewritten_all, "kind": kind, "name": name, "date": day,
             "dates": new_stamps, "back_links": back_links, "migrated": bool(migrated),
             "filed": filed, "sections": list(shape or CARD_SECTIONS.get(kind, ())),
-            **({"template": "company"} if shape else {})}
+            # WHICH template shaped a NEW card: the organisation's own file, named by its path. It
+            # used to read `"template": "company"` — meaning the company's (organisation's) template,
+            # read by agents as "built from the company KIND" on a person page (Vexa-ai/vexa#1783).
+            **({"template": f"_global/kg/templates/{kind}.md"} if shape else {})}
 
 
 # ── candidate names, mechanically (the phase's pre-pass) ─────────────────────────────────────────
@@ -1413,8 +1603,53 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
 # pattern joined the last capitalised word of one line to the first of the next into a single
 # "name" — two lines of an unrelated list, or a heading and the sentence under it, read as one
 # entity. A name is a phrase someone said in a row; it does not survive a line break.
-_BARE_NAME = re.compile(r"\b[A-Z][a-zA-Z'’\-]+(?:[ \t]+(?:of|de|del|van|von|da|di)[ \t]+[A-Z][a-zA-Z'’\-]+"
-                        r"|[ \t]+[A-Z][a-zA-Z'’\-]+)+")
+#
+# THE LETTERS ARE UNICODE (2026-10-13). The first spelling was `[A-Z][a-zA-Z'’\-]+`, so a name stopped
+# at its first non-ASCII letter: "Jardim-Escola João de Deus de Belas" came out as "Jardim-Escola Jo"
+# and "Deus de Belas", and the write-back phase asked for a page for each half. A word is now any run
+# of letters (digits, apostrophes and hyphens inside it), and it opens a name when its first letter
+# is upper case in any script. `re` has no `\p{Lu}`, so the test is `str.isupper()` on the token.
+_WORD = re.compile(r"[^\W\d_][\w'’\-]*")
+_BLANK = re.compile(r"[ \t]+")
+_PARTICLES = frozenset({"of", "de", "del", "van", "von", "da", "di"})
+
+
+def _capitalised(word: str) -> bool:
+    return len(word) >= 2 and word[0].isupper()
+
+
+def _name_runs(body: str):
+    """Every capitalised RUN of two or more words in ``body``, as the text it spans.
+
+    The connector is spaces or tabs only (never a newline — F202-F205 below), and a lower-case
+    particle joins two capitalised words when it sits between them ("João de Deus")."""
+    toks = []
+    for m in _WORD.finditer(body):
+        w = m.group(0).rstrip("'’-")
+        if w:
+            toks.append((m.start(), m.start() + len(w), w))
+
+    def joined(a: int, b: int) -> bool:
+        return bool(_BLANK.fullmatch(body[toks[a][1]:toks[b][0]]))
+
+    i = 0
+    while i < len(toks):
+        if not _capitalised(toks[i][2]):
+            i += 1
+            continue
+        last, caps, j = i, 1, i + 1
+        while j < len(toks) and joined(last, j):
+            if _capitalised(toks[j][2]):
+                last, caps, j = j, caps + 1, j + 1
+                continue
+            if (toks[j][2] in _PARTICLES and j + 1 < len(toks) and joined(j, j + 1)
+                    and _capitalised(toks[j + 1][2])):
+                last, caps, j = j + 1, caps + 1, j + 2
+                continue
+            break
+        if caps >= 2:
+            yield body[toks[i][0]:toks[last][1]]
+        i = last + 1 if last > i else i + 1
 _FENCE = re.compile(r"```[\s\S]*?```")
 _HEADING = re.compile(r"^#{1,6}\s.*$", re.M)
 _MD_LINK = re.compile(r"\[[^\]]+\]\([^)]*\)")
@@ -1549,8 +1784,8 @@ def candidate_names(text: str, *, mask_linked: bool = True) -> list[str]:
         body = _WIKILINK.sub(lambda m: " " if is_document_ref(m.group(1)) else " " + m.group(1) + " ",
                              body)
     out: list[str] = []
-    for m in _BARE_NAME.finditer(body):
-        n = _POSSESSIVE.sub("", " ".join(m.group(0).split())).strip()
+    for run in _name_runs(body):
+        n = _POSSESSIVE.sub("", " ".join(run.split())).strip()
         if not n or n in _NOT_A_NAME or n in out:
             continue
         if n.split()[0].lower() in _LEADING_NOT_A_NAME:
@@ -1682,6 +1917,110 @@ def _near_variant(slug: str, known: str) -> bool:
     return _edit_distance(slug, known, cap) <= cap
 
 
+# ── WHAT THE WRITE-BACK PRE-PASS DOES NOT READ, AND WHAT IT NEVER PROPOSES (2026-10-13) ─────────────
+#
+# Measured on app.dev, fourteen friction reports in one day, every one the agent declining a page the
+# phase asked for: a routine's format placeholder ("YYYY-MM-DD HH"), an instruction's emphasis ("TWO
+# LINES"), button and field labels written in bold ("Reset Token", "Client Secret", "Message
+# Content"), a token example ("Bot MTI…"), box labels from a diagram ("OT CONTAINER"), a sentence
+# start ("Next I'm"), an HTTP reason phrase ("Service Unavailable") and components ("Realtime API",
+# "Second Chromium"). A page is for a person, company, meeting, project or decision; none of these is
+# one, and a proposal the agent has to decline costs a model round trip and a friction report.
+#
+# FOR THE PHASE ONLY. `candidate_names` stays the decision-24.4 metric (`core/flows/eval/dna/score.py`)
+# and the chip extractor's proxy; these rules are about what the phase may ASK FOR, and they prefer a
+# missed page — written the next time the name arrives on its own — to a junk proposal every turn.
+
+_BOX_DRAWING = re.compile(r"[\u2500-\u259F]")
+_TABLE_OR_BOX_ROW = re.compile(r"^\s*[|+].*[|+]\s*$")
+_INLINE_CODE = re.compile(r"(`+)[^`\n]*?\1")
+_STRONG = re.compile(r"(\*\*|__)(?=\S)([^\n]+?)(?<=\S)\1")
+
+#: Words that make a run a placeholder rather than a name: date/time format letters.
+_FORMAT_WORD = re.compile(r"^[YMDHhmsST:/.\-]*(?:YY|MM|DD|HH|hh|mm|ss)[YMDHhmsST:/.\-]*$")
+
+#: A person never names themself mid-name: "Next I'm", "Nothing I'm", "And I'd".
+_PRONOUN_WORDS = frozenset({
+    "i", "i'm", "i'll", "i've", "i'd", "we", "we're", "we'll", "we've", "we'd", "you", "you're",
+    "you'll", "you've", "you'd", "they", "they're", "they'll", "they've", "they'd", "he's", "he'll",
+    "he'd", "she's", "she'll", "she'd", "it's", "it'll", "let's", "that's", "there's", "here's",
+})
+
+#: The last word of a UI label, a product component or an interface part, not of an organisation.
+_COMPONENT_TAIL = frozenset({
+    "api", "apis", "id", "ids", "token", "tokens", "secret", "secrets", "key", "keys", "portal",
+    "generator", "content", "history", "channel", "channels", "button", "buttons", "tab", "tabs",
+    "panel", "settings", "setting", "menu", "field", "fields", "url", "urls", "uri", "sdk", "cli",
+    "endpoint", "endpoints", "container", "browser", "intent", "intents", "scope", "scopes",
+    "permission", "permissions", "dialog", "modal", "toggle", "option", "options", "label",
+    "application", "applications", "webhook", "webhooks", "server", "adapter", "adaptor",
+})
+
+#: The first word of an instruction to press something, or an ordinal before a component.
+_UI_LEAD = frozenset({
+    "click", "press", "tap", "select", "enable", "disable", "grant", "copy", "paste", "toggle",
+    "tick", "choose", "reset", "view", "second", "third", "fourth", "fifth",
+})
+
+
+def _http_phrases() -> frozenset:
+    from http import HTTPStatus
+    return frozenset(s.phrase.lower() for s in HTTPStatus)
+
+
+_HTTP_PHRASES = _http_phrases()
+
+
+def mask_for_writeback(text: str) -> str:
+    """The text with everything that is not prose about the world blanked out: fenced blocks
+    (closed or not — a streamed reply can end inside one), diagram and table rows, inline code and
+    bold labels. Line count is kept, so nothing on two sides of a blank joins into one name."""
+    out: list[str] = []
+    fence = ""
+    for line in (text or "").split("\n"):
+        m = _FENCE_OPEN.match(line)
+        if m:
+            tok = m.group(1)
+            if not fence:
+                fence = tok
+            elif tok[0] == fence[0] and len(tok) >= len(fence):
+                fence = ""
+            out.append("")
+            continue
+        if fence or _BOX_DRAWING.search(line) or _TABLE_OR_BOX_ROW.match(line):
+            out.append("")
+            continue
+        out.append(line)
+    body = "\n".join(out)
+    body = _INLINE_CODE.sub(" ", body)
+    return _STRONG.sub(" ", body)
+
+
+def is_proposable_name(name: str) -> bool:
+    """Could ``name`` be a person, company, meeting, project or decision? A lexical floor, not a
+    classifier: it rejects only the shapes measured above, and the phase's prompt carries the rest."""
+    words = name.split()
+    if len(words) < 2:
+        return False
+    low = [w.lower().replace("’", "'") for w in words]
+    if name.lower() in _HTTP_PHRASES:
+        return False
+    if any(w in _PRONOUN_WORDS for w in low):
+        return False
+    if low[0] in _UI_LEAD or low[-1] in _COMPONENT_TAIL:
+        return False
+    if any(_FORMAT_WORD.match(w) for w in words):
+        return False
+    # SHOUTING, not an acronym: no lower-case letter anywhere and a word of four or more capitals
+    # ("TWO LINES", "OT CONTAINER"). "DNA TSC" — short acronyms only — still passes.
+    if not any(ch.islower() for ch in name) and any(len(w) >= 4 for w in words):
+        return False
+    # A token, a hash or an id: a word with a digit in it, eight characters or longer.
+    if any(len(w) >= 8 and any(ch.isdigit() for ch in w) for w in words):
+        return False
+    return True
+
+
 def missing_names(roots, texts, *, limit: int = 8) -> list[str]:
     """The names these texts touched that no mounted desk has a page for, in order, capped.
 
@@ -1703,12 +2042,12 @@ def missing_names(roots, texts, *, limit: int = 8) -> list[str]:
             continue
     seen: list[str] = []
     for t in texts:
-        for raw in candidate_names(t, mask_linked=False):
+        for raw in candidate_names(mask_for_writeback(t), mask_linked=False):
             # A TRANSCRIPT OPENS SENTENCES WITH "So", "And", "Well"… (``LEADING_SPEECH_NOISE``):
             # "So Vexam" is the opener and an ASR spelling of Vexa, not a project. The same strip
             # the chip extractor applies, from the same list.
             n = strip_leading_noise(raw)
-            if not n:
+            if not n or not is_proposable_name(n):
                 continue
             slug = slugify(n)
             if not slug or n in seen:
@@ -1765,7 +2104,57 @@ def index_rows(root) -> list[tuple[str, str, str, str]]:
             except (OSError, ValueError, OverflowError):
                 mtime = ""
             rows.append((kind, title, f"{ENTITIES_DIR}/{kind}/{fname}", _last_updated(text, mtime)))
+    # A PAGE OUTSIDE ITS KIND'S FOLDER IS STILL A PAGE (a real workspace, 2026-10-14: a company page
+    # written at `kg/entities/<name>.md` was missing from the index). Listed where it is, under the
+    # kind its frontmatter states, or `unfiled`.
+    for fname in _wp.list_files_inside(root, ENTITIES_DIR, suffix=".md"):
+        if fname.lower() == "index.md":
+            continue
+        rel = f"{ENTITIES_DIR}/{fname}"
+        data = _wp.read_bytes_inside(root, rel)
+        if data is None:
+            continue
+        text = data.decode("utf-8", errors="replace")
+        fm, _ = split_frontmatter(text)
+        if (_fm_get(fm, "template") or "").lower() == "true":
+            continue
+        kind = (_fm_get(fm, "type") or "").strip().lower()
+        st = _wp.stat_inside(root, rel)
+        try:
+            mtime = _dt.date.fromtimestamp(st.st_mtime).isoformat() if st else ""
+        except (OSError, ValueError, OverflowError):
+            mtime = ""
+        rows.append((kind if kind in KINDS else "unfiled", _fm_get(fm, "title") or fname[:-3], rel,
+                     _last_updated(text, mtime)))
     return rows
+
+
+def file_strays(root) -> "list[tuple[str, str]]":
+    """Move each page at `kg/entities/<name>.md` whose frontmatter names a kind into that kind's
+    folder, when nothing is there yet. Returns ``[(old, new)]`` — the caller commits both."""
+    moved = []
+    root = Path(root)
+    for fname in _wp.list_files_inside(root, ENTITIES_DIR, suffix=".md"):
+        if fname.lower() == "index.md":
+            continue
+        old = f"{ENTITIES_DIR}/{fname}"
+        data = _wp.read_bytes_inside(root, old)
+        if data is None:
+            continue
+        fm, _ = split_frontmatter(data.decode("utf-8", errors="replace"))
+        kind = (_fm_get(fm, "type") or "").strip().lower()
+        if kind not in KINDS:
+            continue
+        new = f"{ENTITIES_DIR}/{kind}/{fname}"
+        if _wp.is_file_inside(root, new):
+            continue
+        try:
+            _wp.write_bytes_inside(root, new, data)
+            _wp.unlink_inside(root, old)
+        except (_wp.PathRefused, OSError):
+            continue
+        moved.append((old, new))
+    return moved
 
 
 def render_index(root, slug: str = "") -> str:

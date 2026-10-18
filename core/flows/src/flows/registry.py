@@ -26,6 +26,27 @@ class EventType:
     name: str
 
 
+#: The reserved event a SCHEDULE flow is filed under (ADR-0046 decision 3). No producer may publish
+#: it: the flows worker fires schedule flows itself, from the cron on the row.
+SCHEDULE_EVENT = "schedule.due"
+INSTANCE = "instance"
+USER_SCOPE_PREFIX = "user:"
+
+
+def flow_ident(scope: str, name: str) -> str:
+    """THE FLOW'S IDENTITY as a reaction stores it (ADR-0046 decision 4). The instance's flows keep
+    their bare name — every reaction written before scope existed still resolves — and a person's
+    flow is `user:<uid>/<name>`, so two people and the instance may each own a `morning-brief`."""
+    scope = scope or INSTANCE
+    return name if scope == INSTANCE else f"{scope}/{name}"
+
+
+def scope_owner(scope: str) -> str:
+    """The uid a `user:<uid>` scope names, or "" for the instance."""
+    scope = scope or INSTANCE
+    return scope[len(USER_SCOPE_PREFIX):] if scope.startswith(USER_SCOPE_PREFIX) else ""
+
+
 @dataclass(frozen=True)
 class Flow:
     name: str
@@ -33,6 +54,21 @@ class Flow:
     on: EventType
     steps: tuple[str, ...]                # names, derived — the DB representation
     params: tuple = ()                    # (key, json-value-str) pairs — flow-as-data tuning
+    scope: str = INSTANCE                 # `instance` | `user:<uid>` (ADR-0046 decision 4)
+    cron: Optional[str] = None            # set ⇒ a SCHEDULE flow, fired by the worker (decision 3)
+    created_at: float = 0.0               # no slot before this fires
+
+    @property
+    def ident(self) -> str:
+        return flow_ident(self.scope, self.name)
+
+    @property
+    def owner(self) -> str:
+        return scope_owner(self.scope)
+
+    @property
+    def is_scheduled(self) -> bool:
+        return bool(self.cron)
 
     def param(self, key: str, default=None):
         import json as _j
@@ -67,9 +103,22 @@ class Registry:
         # shadowing the code's?" — see `shadowing_versions`. Without it the two are
         # indistinguishable here, which is precisely why the shadow was invisible.
         self.db_versions: set[tuple[str, int]] = set()
+        # SCHEDULE FLOWS (ADR-0046 decision 3), by identity → their versions. Kept out of
+        # `by_event`: nothing publishes `schedule.due`, the worker fires these from their cron.
+        self.scheduled: dict[str, list[Flow]] = {}
+        # Which steps a USER-scoped flow may name (ADR-0046 decision 6). The image marks them at
+        # registration (`user_allowed=True`); `_global/POLICIES.md` narrows or widens within the
+        # vocabulary at submission time.
+        self.user_allowed: set[str] = set()
+        # THE CHECK A PERSON'S STORED ROW MEETS EVERY TIME IT IS LOADED, not only at submission:
+        # `(scope, name, steps, cron) -> refusal reason | None`. Injected by the composition
+        # (`flows_defs.production.build`) because the rules live in `_global/POLICIES.md` and
+        # `config.v1`, which this engine core does not read. A row it refuses stops being chosen
+        # within one refresh; the runs already admitted on it finish.
+        self.row_check = None
 
     def step(self, fn: StepFn | None = None, *, needs: "tuple[str, ...] | list[str]" = (),
-             absent: "str | dict[str, str] | None" = None):
+             absent: "str | dict[str, str] | None" = None, user_allowed: bool = False):
         """Register a step. `@reg.step` as before; `@reg.step(needs=("agent",))` also DECLARES the
         domains the body reaches, so the engine can answer for it when one of them is not deployed
         (PRD decision 40.7) without the body ever running.
@@ -97,6 +146,8 @@ class Registry:
             if name in self.steps and self.steps[name] is not f:
                 raise ValueError(f"step name already registered: {name}")
             self.steps[name] = f
+            if user_allowed:
+                self.user_allowed.add(name)
             if needs:
                 self.step_needs[name] = frozenset(needs)
             policies = self._policies(name, needs, absent)
@@ -132,6 +183,9 @@ class Registry:
             self.step_needs[new] = self.step_needs.pop(old)
         if old in self.step_absent:
             self.step_absent[new] = self.step_absent.pop(old)
+        if old in self.user_allowed:
+            self.user_allowed.discard(old)
+            self.user_allowed.add(new)
 
     def needs(self, step_name: str) -> frozenset:
         return self.step_needs.get(step_name, frozenset())
@@ -155,20 +209,35 @@ class Registry:
         return f
 
     def flow_by_names(self, *, name: str, version: int, on_event: str, step_names: list[str],
-                      params: dict | None = None) -> Flow:
+                      params: dict | None = None, scope: str = INSTANCE,
+                      cron: Optional[str] = None, created_at: float = 0.0) -> Flow:
         """Hydrate a DB-DEFINED flow: steps referenced by NAME against the image's reviewed
-        vocabulary. Unknown names raise — submission-time validation mirrors this."""
+        vocabulary. Unknown names raise — submission-time validation mirrors this.
+
+        `scope` and `cron` are ADR-0046's: a user flow is keyed by its identity
+        (`user:<uid>/<name>`), and a flow with a cron is filed under the schedule, not an event."""
         missing = [n for n in step_names if n not in self.steps]
         if missing:
             raise ValueError(f"unknown steps {missing}; known: {sorted(self.steps)}")
         import json as _j
         f = Flow(name=name, version=version, on=EventType(on_event), steps=tuple(step_names),
-                 params=tuple((k, _j.dumps(v)) for k, v in (params or {}).items()))
-        self.flows[(name, version)] = f
-        self.db_versions.add((name, version))
-        bucket = self.by_event.setdefault(on_event, [])
-        bucket[:] = [x for x in bucket if not (x.name == name and x.version == version)] + [f]
+                 params=tuple((k, _j.dumps(v)) for k, v in (params or {}).items()),
+                 scope=scope or INSTANCE, cron=(cron or None), created_at=float(created_at or 0))
+        key = (f.ident, version)
+        self.flows[key] = f
+        self.db_versions.add(key)
+        if f.is_scheduled:
+            bucket = self.scheduled.setdefault(f.ident, [])
+        else:
+            bucket = self.by_event.setdefault(on_event, [])
+        bucket[:] = [x for x in bucket if not (x.ident == f.ident and x.version == version)] + [f]
         return f
+
+    def _unmatch(self, ident: str, version: int) -> None:
+        """Stop a DB version being CHOSEN (retired, or no longer in the table) while keeping its
+        definition for the reactions already running on it."""
+        for bucket in list(self.by_event.values()) + list(self.scheduled.values()):
+            bucket[:] = [x for x in bucket if not (x.ident == ident and x.version == version)]
 
     def refresh_from_db(self, db) -> int:
         """Load ACTIVE flow rows — DB versions join (and, at higher versions, supersede via the
@@ -177,19 +246,40 @@ class Registry:
         import json as _j
         n = 0
         try:
-            rows = db.execute("SELECT name, version, on_event, steps, params FROM flow_version "
-                              "WHERE status = 'active'")
+            rows = db.execute("SELECT scope, name, version, on_event, steps, params, cron, "
+                              "created_at FROM flow_version WHERE status = 'active'")
         except Exception:  # noqa: BLE001 — a missing table (tests on bare sqlite) is fine
             return 0
-        for name, version, on_event, steps, params in rows:
-            if (name, version) in self.flows:
+        active: set[tuple[str, int]] = set()
+        refused: dict[str, int] = {}
+        for scope, name, version, on_event, steps, params, cron, created_at in rows:
+            key = (flow_ident(scope, name), version)
+            if self.row_check is not None and str(scope or "").startswith("user:"):
+                try:
+                    reason = self.row_check(scope, name, _j.loads(steps or "[]"), cron)
+                except Exception:  # noqa: BLE001 — a check that cannot answer refuses the row
+                    reason = "row_check_failed"
+                if reason:
+                    refused[reason] = refused.get(reason, 0) + 1
+                    continue
+            active.add(key)
+            if key in self.flows and self._chosen(key):
                 continue
             try:
                 self.flow_by_names(name=name, version=version, on_event=on_event,
-                                   step_names=_j.loads(steps), params=_j.loads(params or "{}"))
+                                   step_names=_j.loads(steps), params=_j.loads(params or "{}"),
+                                   scope=scope, cron=cron, created_at=created_at or 0.0)
                 n += 1
             except ValueError:
                 continue          # a row referencing steps this image lacks stays dormant here
+        # A RETIRED VERSION STOPS BEING CHOSEN WITHOUT A RESTART. It used to stay matched until the
+        # worker restarted — harmless while only the operator authored flows, and wrong once a
+        # person can retire their own schedule and expects it to stop firing.
+        for key in sorted(self.db_versions - active):
+            self._unmatch(*key)
+        if refused:
+            _log.warning("flow rows not loaded because the policy no longer allows them: %s",
+                         ", ".join(f"{k}={v}" for k, v in sorted(refused.items())))
         for s in self.shadowing_versions():
             _log.warning(
                 "FLOW SHADOW: %s@%d (authored through the API) is ACTIVE and NEWER than the "
@@ -235,16 +325,43 @@ class Registry:
                             "code_steps": list(top_code.steps), "db_steps": list(top_db.steps)})
         return out
 
+    def _chosen(self, key: tuple[str, int]) -> bool:
+        ident, version = key
+        f = self.flows.get(key)
+        if f is None:
+            return False
+        bucket = self.scheduled.get(ident, []) if f.is_scheduled else self.by_event.get(f.on.name, [])
+        return any(x.ident == ident and x.version == version for x in bucket)
+
     def get(self, name: str, version: int) -> Flow:
+        """`name` is the flow's IDENTITY — the bare name for the instance's, `user:<uid>/<name>`
+        for a person's — exactly what a reaction's `flow` column holds."""
         return self.flows[(name, version)]
+
+    def schedules(self) -> list[Flow]:
+        """The newest chosen version of every schedule flow."""
+        return [max(vs, key=lambda f: f.version) for vs in self.scheduled.values() if vs]
+
+    def newest(self, scope: str, name: str) -> Optional[Flow]:
+        """The newest CHOSEN version of one flow, or None (retired, or never loaded)."""
+        ident = flow_ident(scope, name)
+        chosen = [f for vs in list(self.by_event.values()) + list(self.scheduled.values())
+                  for f in vs if f.ident == ident]
+        return max(chosen, key=lambda f: f.version) if chosen else None
 
     def match(self, event_type: str) -> list[Flow]:
         """One version per flow IDENTITY: new events select the newest activated version of each
         flow (in-flight reactions keep the version stamped at their admission). Caught by the
         version-coexistence test: returning every registered version made v1 shadow v2 forever."""
         latest: dict[str, Flow] = {}
-        for f in self.by_event.get(event_type, []):
-            cur = latest.get(f.name)
+        # A GLOB TRIGGER (`calendar.event.*`, ADR-0050) is filed under its pattern and matched here.
+        from fnmatch import fnmatchcase
+        candidates = list(self.by_event.get(event_type, []))
+        for pattern, flows in self.by_event.items():
+            if "*" in pattern and pattern != event_type and fnmatchcase(event_type, pattern):
+                candidates.extend(flows)
+        for f in candidates:
+            cur = latest.get(f.ident)
             if cur is None or f.version > cur.version:
-                latest[f.name] = f
+                latest[f.ident] = f
         return list(latest.values())

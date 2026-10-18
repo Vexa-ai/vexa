@@ -145,6 +145,13 @@ def postgres_db(url: str):  # pragma: no cover — production composition; lazy 
                 return
             self._schema_applied = True
             self._run_script(SCHEMA)
+            # Columns added since a table was created (`migrations`): one transaction, so a
+            # half-swapped key is never what the next boot finds.
+            from . import migrations
+            with engine.begin() as c:
+                migrations.apply(lambda sql, params=None: (
+                    lambda res: [tuple(r) for r in res] if res.returns_rows else [])(
+                        c.execute(text(sql), params or {})))
 
         def _run_script(self, sql: str) -> None:
             # strip comment lines BEFORE splitting on ';' — comments legitimately contain

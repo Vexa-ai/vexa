@@ -38,6 +38,7 @@ import logging
 import re
 from typing import Optional
 
+from . import mailkinds
 from .common import ws_file
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,143 @@ DEFAULTS: dict = {
     "mail_domains": (),
     # this deployment's own sentence about where the words live; empty = the derived one
     "data_statement": "",
+    # the steps a PERSON's own flow may name (ADR-0046 decision 6). EMPTY IS NOT "NONE": it means
+    # the steps the image marks user-allowed, which is `agent_run` alone. A list here narrows or
+    # widens that set within the deployed vocabulary.
+    "user_flow_steps": (),
+    # WHAT A PERSON'S ROUTINE MAY BE GRANTED TO DO WITH NOBODY IN THE LOOP (flows phase 0, founder
+    # 2026-10-14). A grant is named by the person when they make the routine in chat and shown to
+    # them; this list caps what any routine may hold (`none` for nothing). Read by flows-api when a
+    # routine is saved and by the worker at every run (`flows_steps.grants`).
+    "routine_unattended_actions": ("bot.request", "bot.stop", "flow.retire_self"),
+    # A ROUTINE WHOSE CHAT BECAME SHARED (Vexa-ai/vexa#1783): a shared turn reads only what every
+    # participant can, so a run refused a private source there (`shared_conversation`) pauses the
+    # routine with one line in its chat (`on`), or fails that run and keeps the routine on (`off`).
+    # Read by the flows worker at the end of every routine run (`flows_steps.routine`).
+    "routine_pauses_when_shared": True,
+    # AGENTS SPEAK TO EACH OTHER (ADR-0046 decision 13). Between one person's own threads; between
+    # two people only when this is switched on, and then only into a conversation (`s-…`) both take
+    # part in, inside a workspace both belong to where the sender writes; never from a routine
+    # running with nobody in the loop unless this says so.
+    "agent_messages_own": True,
+    "agent_messages_shared": False,
+    "agent_messages_from_routines": False,
+    # ADR-0048: with two or more people in a chat, the agent answers `mentioned` (when @-named or
+    # asked directly) or `always`. Read by agent-api (`control_plane/session_access.py`), which
+    # reads a channel workspace's own POLICIES.md first; listed here so file and table stay one set.
+    "session_agent_speaks": "mentioned",
+    # WHAT AN AGENT MAY DO WITH A PERSON'S CONNECTED MAIL AND CALENDAR (founder, 2026-10-12: "this
+    # should be policy configurable"). Read and ENFORCED by agent-api's `connection_policy` (typed,
+    # and loud: a value it cannot read refuses every connection action) and again by the credential
+    # broker; no flow reads them. They are here, spelled as the seed spells them, so this table stays
+    # the one list of every key the file may carry — `core/agent/tests/test_connection_policy.py`
+    # holds agent-api's table to these values.
+    "connection_actions": "all",
+    "connection_actions_unattended": "none",
+    "calendar_notify_attendees": False,
+    "calendar_attendee_domains": "any",
+    "calendar_ids": "primary",
+    "draft_recipient_domains": "any",
+    "draft_attachments": False,
+    "draft_attachment_max_kb": "5120",
+    # ADR-0048 decision 7: a change proposed after a call waits for its owner (`off`) or lands at
+    # once in their name (`on`). Read by agent-api (`control_plane/routers/calls.py`).
+    "post_meeting_auto_accept": False,
+    # HOW LARGE A DROPPED FOLDER MAY BE (founder 2026-10-13: "as we drop calls we can drop folder").
+    # Read and enforced by agent-api's `folder_import` (typed and loud, like the connection keys); no
+    # flow reads them. Listed here so this table stays the one list of every key the file may carry.
+    "folder_import_max_mb": "200",
+    "folder_import_max_files": "10000",
+    "folder_import_file_max_mb": "25",
+    # HOW MANY TOOL CALLS ONE CHAT TURN MAY MAKE (Vexa-ai/vexa#1783). Read by agent-api's
+    # `turn_budget` at dispatch; a workspace or a person may only narrow it. No flow reads it.
+    "chat_turn_max_tool_calls": "40",
+    # HOW LONG ONE SHELL COMMAND OF THE AGENT MAY RUN, in seconds (live app.dev 2026-10-15). Read by
+    # agent-api at dispatch (`turn_budget.shell_timeout`, narrow-only) and enforced in the worker by
+    # `llm/shell_guard.sh`; no flow reads it.
+    "shell_timeout_sec": "120",
+    # WHICH UNPROVEN FEATURES ARE ON (founder 2026-10-13). Read and enforced by agent-api's
+    # `features` (the install default is its environment); no flow reads it. Empty = the install's answer.
+    "features": "",
+    # WHAT MAIL THIS DEPLOYMENT SENDS, PER KIND (founder 2026-10-14: "the actual notifications should
+    # be decided by the global account"). `mail.<kind>: on | off | admins`, one row per kind in
+    # `mailkinds.KINDS`; the sign-in link is always on whatever its row says. `mail_caps` is the
+    # per-kind daily ceiling (`minutes=50, *=500`), under the operator's own ceiling.
+    **mailkinds.policy_defaults(),
+    "mail_caps": "",
+    # HOW LONG THE NEW-CHAT HOME'S HISTORY IS KEPT (#1783). Read by agent-api's `home` on every
+    # composition; no flow reads it. Listed so this table stays the one list of every key.
+    "home_history_retention_days": "forever",
+    # WHETHER AVATARS AND COMPANY LOGOS ARE FETCHED (#1783), by agent-api's `home_media`; no flow reads it.
+    "external_images": True,
+    # THE HOME'S SWITCHES (#1783): agent-api's home reads them; no flow does.
+    "home_cards": "off",
+    "home_people": "on",
+    # WHO SEES WHETHER A COLLEAGUE IS ACTIVE (desktop D1, founder 2026-10-15: "like in social media,
+    # and that's configurable in global"). `off` · `shared_chats` · `workspace_members`. Read by
+    # agent-api's desktop (`routers/desktop.py`) on every read; a person's own switch still wins and a
+    # value it cannot read is `off`. No flow reads it; listed so this table stays the one list of keys.
+    "presence_visibility": "workspace_members",
+    # THE DESKTOP'S LIMITS (desktop D1, ADR desktop-cards §2.7). Read and enforced by crm-api's desk
+    # (`core/crm/src/crm/policies.py`, through agent-api's door, cached 30 s); a company may only narrow
+    # them, and a wider or unreadable value is the default. No flow reads them; listed so this table
+    # stays the one list of every key the file may carry.
+    "desk_placements_max": "50",
+    "card_proposals_pending_max": "5",
+    "card_proposals_per_agent_per_day": "20",
+    "card_proposal_ttl_days": 7,
+    # THE CARD LIFECYCLE (desktop D2): stages in order, then side states after `|`. Read by crm-api's
+    # cards (`core/crm/src/crm/card_ops.py`); a company's own card types add `lifecycles.<type>`.
+    "lifecycles.card": "To do > Doing > Done | Dropped",
+    # When an unfinished card that has not moved shows "Stalled" (days; crm-api's cards read it).
+    "card_stalled_days": 14,
+    # BUDGETS AND MODEL POLICY (#1783, founder: "globally set-up policy — budgets for tokens for
+    # users and routines, model policies"). agent-api's `budgets` reads and enforces the token,
+    # home, event and model keys; flows reads the two routine quotas live (`company_quota`). An empty
+    # value is the install default (the environment), never "unlimited"; the seed carries these.
+    "budget_tokens_per_user_day": "2000000",
+    "budget_tokens_routines_share": "50",
+    "routine_runs_per_day": "48",
+    "routine_min_interval_minutes": "10",
+    "home_compose_per_day": "14",
+    "home_expand_per_day": "40",
+    "event_agent_runs_per_day": "30",
+    "event_agent_max_trust": "draft",
+    "model_chat_default": "",
+    "models_allowed": "all",
+    "model_routines": "cheapest",
+    "model_home": "cheapest",
+    "model_event_agents": "cheapest",
+    "models_for": "",
+    "model_rules": "",
+    "model_levels": "",
+    "appearance_accent": "clay",
+    "appearance_font_ui": "geist",
+    "appearance_font_reading": "ui",
+    # WHAT THIS DEPLOYMENT MAY SPEND ON MODEL CALLS, in US dollars (founder, production cutover).
+    # Read and enforced by agent-api's `llm_budget` before every turn; no flow reads them. Listed
+    # here so this table stays the one list of every key the file may carry;
+    # `core/agent/tests/test_llm_budget_policy.py` holds agent-api's table to these values.
+    "llm_budget_org_daily_usd": "25",
+    "llm_budget_org_monthly_usd": "250",
+    "llm_budget_user_daily_usd": "5",
+    "llm_budget_user_monthly_usd": "50",
+    # empty: a model the market price table does not name counts at its base open-weight price
+    "llm_price_input_usd_per_mtok": "",
+    "llm_price_output_usd_per_mtok": "",
+    "llm_budget_notify": "",
+    # TRANSCRIPT SIGNALS (2026-10-15): agent-api's event door and its internal brief read take
+    # these, and the signals service gets them through that read; no flow decides on them.
+    "transcript_signals": "off",
+    "model_signals": "",
+    "signals_wakes_per_meeting": "12",
+    "signals_cost_per_meeting_usd": "0.50",
+    "signals_default_brief": "",
+    # VEXA CREDITS (agent-api `credits`, feature `usage`): market cost x the markup; the plan's 5-hour
+    # and weekly allowances in credits ($). Empty allowance: no window limit.
+    "credit_markup": "1.3",
+    "credits_5h": "",
+    "credits_week": "",
 }
 
 #: `profile:` applies a preset; a key written explicitly in the file wins over it. The two the
@@ -168,6 +306,35 @@ def _as_days(value: str, default, key: str, problems: list):
     return default
 
 
+def message_refusal(rules: dict, refs: dict) -> "str | None":
+    """THE POLICY KEY THAT REFUSES THIS AGENT-TO-AGENT MESSAGE, or None (ADR-0046 decision 13).
+
+    `refs` are the `thread.message` carrier's: who sends (`sender_uid`), to whose thread (`uid`),
+    whether the two share a workspace (`shared`) and whether the sender is a routine running with
+    nobody in the loop (`sender_routine`). A message between two people is refused under
+    `agent_messages_shared` unless the key is on, they share a workspace, and the target thread is
+    a stored conversation (`s-…`) — never the other person's own threads or routines.
+    """
+    r = rules or {}
+    if refs.get("sender_routine") and not r.get("agent_messages_from_routines", False):
+        return "agent_messages_from_routines"
+    own = str(refs.get("sender_uid") or "") == str(refs.get("uid") or "")
+    if own:
+        return None if r.get("agent_messages_own", True) else "agent_messages_own"
+    if (not r.get("agent_messages_shared", False) or not refs.get("shared")
+            or not str(refs.get("thread") or "").startswith("s-")):
+        return "agent_messages_shared"
+    return None
+
+
+def user_flow_steps(rules: dict, marked: "set[str] | frozenset", vocabulary) -> set:
+    """THE STEPS A PERSON'S FLOW MAY NAME: the policy's list within the vocabulary, or — when the
+    policy says nothing — the steps the image marks user-allowed."""
+    listed = tuple((rules or {}).get("user_flow_steps") or ())
+    vocab = set(vocabulary)
+    return (set(listed) & vocab) if listed else (set(marked) & vocab)
+
+
 def _as_domains(value: str) -> tuple:
     return tuple(d.strip().lower().lstrip("@") for d in value.split(",") if d.strip())
 
@@ -225,9 +392,19 @@ def resolve(raw: Optional[str]) -> dict:
             out[key] = _as_strict_domains(raw_value, key, problems)
         elif isinstance(default, tuple):
             out[key] = _as_domains(raw_value)
+        elif key.startswith("mail.") and key[5:] in mailkinds.KINDS:
+            v = str(raw_value).strip().lower()
+            if v in mailkinds.SWITCH_VALUES:
+                out[key] = v
+            else:
+                problems.append(f"{key}: {raw_value!r} is not on, off or admins — using the "
+                                f"default {base!r}")
+                out[key] = base
         else:
             out[key] = raw_value
     out["problems"] = problems
+    #: the keys the page actually answered — `mailkinds.switch` tells "written off" from "unanswered"
+    out["_explicit"] = frozenset(k for k, v in attrs.items() if str(v).strip())
     return out
 
 
@@ -251,6 +428,27 @@ def read(uid: str) -> dict:
     for problem in out.get("problems") or ():
         logger.warning("policies: %s", problem)
     return out
+
+
+_CQ: dict = {"at": 0.0, "rules": None}
+COMPANY_TTL_S = 30.0
+
+
+def company_quota(key: str, env_name: str, *, scale: int = 1, now: "float | None" = None) -> int:
+    """A routine quota as the COMPANY holds it now (`routine_runs_per_day`,
+    `routine_min_interval_minutes`), read live from `_global/POLICIES.md` at most every 30 s, else the
+    install default from the environment. A value that is not a whole number is the default."""
+    import time as _t  # noqa: PLC0415
+    import flows_config  # noqa: PLC0415
+    now = _t.time() if now is None else now
+    if _CQ["rules"] is None or now - _CQ["at"] > COMPANY_TTL_S:
+        try:
+            _CQ["rules"] = read_company()
+        except Exception:  # noqa: BLE001
+            _CQ["rules"] = {}
+        _CQ["at"] = now
+    v = str((_CQ["rules"] or {}).get(key) or "").strip().replace(",", "")
+    return int(v) * scale if v.isdigit() else flows_config.get_int(env_name)
 
 
 #: WHO READS `_global` WHEN NO PERSON IS INVOLVED. The inbound mailbox decides whether to act on a

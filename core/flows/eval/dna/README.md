@@ -13,6 +13,11 @@ repo carries one synthetic fixture under `fixtures/`.
 
 ## One revolution
 
+> **Blocked since the control rig was removed (Vexa-ai/vexa#1783).** The replay needs three verbs
+> only the rig served — `meeting_seed`, `fact_emit` and `mark_scaffolded` — and the product MCP
+> does not serve them yet. `replay.py` refuses at start, naming them, until each has a product
+> route. Point it at the product MCP with `VEXA_DNA_MCP_URL` (the gateway's `/mcp`).
+
     python replay.py    --fixtures ~/dna-fixtures --rev 1 --uid 68
     python score.py     --run ~/dna-runs/r1
     python scoreboard.py --run ~/dna-runs/r1

@@ -200,14 +200,17 @@ def test_the_drop_writes_into_the_page_the_send_minted(monkeypatch):
     assert desks.of("ben@bank.test", COMPOSED) is None, "no second page beside the minted one"
 
 
-def test_the_report_lands_in_its_region_and_nothing_else_on_the_page_moves(monkeypatch):
+def test_the_report_lands_in_its_region_and_fills_only_the_empty_note_sections(monkeypatch):
     desks = Desks({("uid-anna", RECORDED): MINTED, ("uid-ben", RECORDED): MINTED})
     reg = _rig(monkeypatch, desks, Rows(RECORDED))
     reg.steps["drop_to_attendees"](_ctx(dict(REFS), PRIOR))
     after = desks.of("ben@bank.test", RECORDED)
     assert "<!-- meeting:report:start -->\n## Decided\n- ship it on the 21st\n" in after
-    # the widget, the frontmatter and every other region are byte-identical to the minted page
-    head, tail = MINTED.split("<!-- meeting:report:start -->")
+    # the empty Decisions section of the note is filled from the report (call forensics 2026-10-14)…
+    assert "<!-- meeting:decisions:start -->\n- ship it on the 21st\n<!-- meeting:decisions:end -->" in after
+    # …and the widget, the frontmatter and every other byte are the minted page's
+    filled = production._fill_note_regions(MINTED, "## Decided\n- ship it on the 21st")
+    head, tail = filled.split("<!-- meeting:report:start -->")
     assert after.startswith(head) and after.endswith(tail.lstrip("\n"))
 
 

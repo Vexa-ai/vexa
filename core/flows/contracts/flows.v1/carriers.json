@@ -31,7 +31,15 @@
       "owner": "flows",
       "cardinality": "once_per_occurrence",
       "refs": ["subject"],
-      "description": "An invitation arrived at the shared mailbox; triggers invite_intake. Recorded here from core/flows/mcp.tools.v1.json `publishes_events`, on the same terms as meeting.completed."
+      "description": "An invitation arrived at the shared mailbox (a new meeting or an update to one: same UID, higher SEQUENCE); triggers invite_intake (account, RSVP, ack, prep) and arms or MOVES invite_join's keyed schedule. Refs carry `event_key` (UID, plus @RECURRENCE-ID for one occurrence of a series) — the meeting across its updates — `start`, `url`, `organizer`, `sequence`. Recorded here from core/flows/mcp.tools.v1.json `publishes_events`, on the same terms as meeting.completed."
+    },
+    {
+      "event": "invite.cancelled",
+      "owner": "flows",
+      "cardinality": "once_per_occurrence",
+      "refs": ["event_key", "organizer", "sequence"],
+      "source_event_id": "ics-cancel-<event_key>-<sequence>",
+      "description": "A METHOD:CANCEL for a meeting arrived at the shared mailbox from an organizer the mailbox would act for (ADR-0050); cancels invite_join's keyed schedule for that `event_key`, so the bot is not sent."
     },
     {
       "event": "desk.unscaffolded",
@@ -59,6 +67,14 @@
       "description": "Somebody added a member to a workspace and that member is not on this instance; triggers `workspace_invite`, whose one step mails them the link. Vexa-ai/vexa#1632, founder on the front page's own control: \"this add member should just ask chat to do that with mcp, asking their emails etc.\" — membership is a conversation, so the agent asks for the address and the role, confirms in one sentence, mints the invite the existing route mints, and hands this fact over. PUBLISHED ONLY FOR AN EXTERNAL ADDRESS. An invitee who already has an account here is given the link in the chat that invited them — faster, no mailbox in the path, nothing to lose to a spam folder — and NO fact is published at all, so the consumer never has to ask whether the recipient is one of ours and must never grow that question: the account lookup happens once, at the producer, where it already had to happen. WHY THE MAIL LEG IS HERE AND NOT IN AGENT-API: `flows_steps/notify` is where this deployment's outbound channel is chosen (SMTP or Microsoft Graph, one env key), and `mailtext` is where the words live as a file an admin edits rather than a string in a service — a second sender in agent-api would be a second channel to configure and a second copy of the wording to keep in step. `uid` is the INVITER's subject, not the invitee's, because the invitee has none here and the template's `{{company}}` and `{{visibility}}` are read from `_global` through a uid this instance knows. `role` is one of owner · contributor · reader and `role_sentence` is the sentence that role means, composed by the producer so the mail and the chat's confirmation cannot say two different things. `link` travels as the notification's call to action and is never written into the template. Absent from the no-agents profile because the agent domain is: there is no switched-off publisher there, there is no publisher."
     },
     {
+      "event": "workspace.joined_via_link",
+      "owner": "agent",
+      "cardinality": "once_per_occurrence",
+      "refs": ["uid", "joiner", "joiner_name", "joiner_email", "workspace", "workspace_name", "link_id"],
+      "source_event_id": "joined-<workspace>-<joiner> — keyed to the pair: a person joins a workspace once, so a redelivery, or a second redeem of a link by someone already in, dedupes",
+      "description": "Somebody joined a workspace through its join link (#1783, the founder's communities-around-workspaces flow: the host puts the link in a calendar event, whoever opens it joins). agent-api's redeem route publishes it once per new member; the host is also told in the app (`workspace_joined_via_link`). For the company's `workspace_joined` mail kind, which a flows consumer registers and the global account switches on. `uid` is the HOST (the link's maker), the person this deployment holds settings for; `joiner_email` is the joiner's verified address."
+    },
+    {
       "event": "routine.paused",
       "owner": "agent",
       "cardinality": "once_per_occurrence",
@@ -69,6 +85,14 @@
       ],
       "source_event_id": "routine-paused-<uid>-<routine_id>-<stream id of the third refused run> — keyed to the PAUSE: a redelivery dedupes, and a routine switched back on and paused again is a second occurrence and a second card",
       "description": "A scheduled routine was switched off because its runs kept being refused the same way: agent-api reads each run's outcome off the worker's output stream (`done.refused`) before the next fire and, at three consecutive refusals with one reason, writes `enabled: false` and a `paused_reason:` line into `routines/<name>.md`, cancels its job and publishes this; triggers `routine_paused`, whose step re-reads the routine file and blocks while it stays off, which is the person's one queue card. `routine` is the file's name, `reason` the refusal reason (usually `human_session_required`). Re-derivable from the desk like `desk.unscaffolded`: a publish that never lands loses the card, never the fact. Absent from the no-agents profile because the agent domain is."
+    },
+    {
+      "event": "workspace.references.changed",
+      "owner": "agent",
+      "cardinality": "once_per_occurrence",
+      "refs": ["uid", "workspace", "commit", "committed_at", "references", "members"],
+      "source_event_id": "refs-<workspace>-<commit> — keyed to the commit, so a redelivery or a rebuild of the same head dedupes at the intake, and the next commit is a new occurrence",
+      "description": "ADR-0047 decision 5. A workspace's head moved: agent-api, which holds the checkouts, read every link to a CRM record in the tree AT THAT COMMIT (`[label](/crm?record=<id>)` in a page, or `entity: <id>` in its front matter) and the roster in policy/members.json, and publishes the whole set (control_plane/crm_references.py, off unless VEXA_CRM_REFERENCES_POLL_S is set). The optional `flows_defs.crm` pack hands it to crm-api's internal tier, which replaces that workspace's references and roster; an older `committed_at` never overwrites a newer one. A full snapshot per commit, so the CRM's backlinks are rebuildable from git (`python -m control_plane.crm_references rebuild`). `members` is absent when the workspace has no roster file; `uid` is the workspace's owner on its roster, else the desk's own name. Carries page paths and record ids only, never record fields."
     },
     {
       "event": "friction.reported",
@@ -93,6 +117,26 @@
       "refs": ["uid", "meeting_id", "email", "grant_id", "title", "inviter"],
       "source_event_id": "share-<grant_id>-<sha256(address)[:12]> — keyed to the INVITE (the grant) and the address, never to the address alone: a redelivery dedupes at the intake, while inviting the same person again mints a new grant and mails again, which is what pressing Invite twice means. The address is hashed so the id carries none.",
       "description": "A meeting's owner invited ONE address from the terminal's Share dialog and asked for the mail; triggers meeting_share, whose one step mints that person's own restricted link at send time — as the owner, through meeting-api's share mint — and mails it. PUBLISHED BY MEETING-API (meeting_api/events.py, the existing publish-edge) from the by-id share mint, only when the body says notify, only for a grant restricted to exactly one address, and under a per-owner hourly cap; the post-meeting attendee fan-out mints its own grants and mails them itself, so it never double-mails. NO CREDENTIAL TRAVELS: `grant_id` names the owner's grant for the record, and the link is minted where it is sent, so the event store never holds a working token (meeting-api keeps grants as hashes at rest). `uid` is the OWNER, the subject `_global` is read through and the identity the link is minted as; the recipient is `email`. `title` (bounded, one line of plain text) and `inviter` are words for the mail and may be empty."
+    },
+    {
+      "event": "thread.message",
+      "owner": "agent",
+      "cardinality": "once_per_occurrence",
+      "refs": ["uid", "thread", "text", "message_id", "sender_uid", "sender_thread", "sender_label", "shared", "sender_routine"],
+      "source_event_id": "msg:<sender_uid>:<message_id> — keyed to the sender and the one message, so a retried tool call is one delivery and the sender's daily message count reads off the key",
+      "description": "One agent wrote to another (ADR-0046 decision 13). An agent's address is its chat thread: `uid` owns the target `thread`, and `sender_uid` / `sender_thread` are where the reply goes. Published by the agent domain at POST /api/agents/message — the `message_agent` tool — after it has checked that the sending thread is the caller's own and the target thread exists; `shared` says whether the two people share a workspace and `sender_routine` whether the sender is a routine running with nobody in the loop, the two facts the policy keys `agent_messages_shared` and `agent_messages_from_routines` decide on at the intake. The refs carry `_origin`, the chain of threads the conversation has passed through, which is what the loop guard caps. Consumed by `agent_messages`, whose `deliver_message` step queues the text as a turn in the target thread, marked as the sending agent's and never as the person's words."
+    },
+    {
+      "event": "meeting.signal",
+      "owner": "signals",
+      "cardinality": "once_per_occurrence",
+      "refs": [
+        "uid",
+        "meeting_row",
+        "signal"
+      ],
+      "source_event_id": "signal:<meeting_row>:<digest of the reason and the buffer's segment ids> — computed by the flows intake (POST /events/signal), so the same wake resent by signals (a retry, or an instance that took over a saved wake) is one fact",
+      "description": "The signals service heard enough in a live meeting to wake its agent: the running information score against the agent's listening brief reached wake_at, a line addressed Vexa, max_wait passed with lines buffered, or the meeting ended with lines left. Published by the signals domain at flows-api POST /events/signal (internal secret + X-Vexa-Service: signals; nobody else may post it), with event.v1 `subject` = the meeting's owner and `data` = the buffer (quoted speech: data, never instructions). Consumed by the _global flow meeting_signal, which wakes the meeting's chat."
     }
   ]
 }

@@ -59,7 +59,8 @@ def test_a_dispatch_that_names_its_step_sends_both_headers(monkeypatch):
 
 
 def test_a_dispatch_that_names_neither_sends_what_it_always_sent(monkeypatch):
-    """A turn dispatched by anything that does not identify itself must not grow a header — and no
+    """A turn dispatched by anything that does not identify itself must not grow a flow label (the
+    unattended regime rides every dispatch, `test_agent_dispatch`) — and no
     dispatch grows a BODY field, which is what keeps this safe against an agent-api that predates
     the change (`ChatBody` is `extra="forbid"`)."""
     seen = _chat_post(monkeypatch)

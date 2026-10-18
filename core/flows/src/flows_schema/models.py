@@ -150,6 +150,36 @@ class MailTurn(Base):
     __table_args__ = (Index("mail_turn_window", "at"),)
 
 
+class MailSend(Base):
+    """ONE OUTBOUND MAIL, AS THE AUDIT SEES IT (`flows_steps/outbound.py`) — every send attempt of
+    every kind, sent or not: the kind, the template version, the recipient's DOMAIN (never the
+    address), and what happened (`sent`, `off`, `admins-only`, `capped`, `suppressed`, `failed`).
+    Also the count the per-kind daily caps read, and the Message-IDs the inbound sensor matches a
+    reply against."""
+    __tablename__ = "mail_send"
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    at: Mapped[float] = mapped_column(Double, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    template_version: Mapped[str] = mapped_column(Text, nullable=False)
+    recipient_domain: Mapped[str] = mapped_column(Text, nullable=False)
+    result: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text)
+    message_id: Mapped[str | None] = mapped_column(Text)
+    test: Mapped[int] = mapped_column(Integer, nullable=False)
+    __table_args__ = (Index("mail_send_kind_at", "kind", "at"),)
+
+
+class MailTestSend(Base):
+    """A TEST-SEND OF ONE TEMPLATE VERSION to the admin's own address. A kind is switched on only
+    while its live template version has a row here (`mail_kind_set`): what the global account turns
+    on is what it has seen arrive."""
+    __tablename__ = "mail_test_send"
+    kind: Mapped[str] = mapped_column(Text, primary_key=True)
+    template_version: Mapped[str] = mapped_column(Text, primary_key=True)
+    at: Mapped[float] = mapped_column(Double, nullable=False)
+    by: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 class MailOutboxSent(Base):
     __tablename__ = "mail_outbox_sent"
     subject_uid: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -159,10 +189,19 @@ class MailOutboxSent(Base):
 
 
 class FlowVersion(Base):
+    """ONE VERSION OF ONE FLOW (flows.v1 `FlowDefinition`, ADR-0046).
+
+    Keyed (scope, name, version): `scope` is `instance` or `user:<uid>`, so two people and the
+    instance may each own a flow of the same name. It defaults to `instance` so every row and every
+    INSERT written before scope existed keeps its meaning; an existing table is migrated in place
+    by `flows.migrations`. `cron` set makes the flow a SCHEDULE flow (five fields, UTC): the worker
+    fires it, and `on_event` then holds the reserved `schedule.due`, which no producer may publish."""
     __tablename__ = "flow_version"
+    scope: Mapped[str] = mapped_column(Text, primary_key=True, server_default="instance")
     name: Mapped[str] = mapped_column(Text, primary_key=True)
     version: Mapped[int] = mapped_column(Integer, primary_key=True)
     on_event: Mapped[str] = mapped_column(Text, nullable=False)
+    cron: Mapped[str | None] = mapped_column(Text)
     steps: Mapped[str] = mapped_column(Text, nullable=False)
     params: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
@@ -196,3 +235,70 @@ class FrictionOccurrence(Base):
     admitted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # ONE index, on the join column the read side uses (see MailTurn on why only one).
     __table_args__ = (Index("friction_occurrence_by_id", "friction_id"),)
+
+
+class KeyedSchedule(Base):
+    """ONE PENDING FIRE PER KEY (ADR-0050 decision 3, flows-sensors phase A): "a bot 1 min before
+    every calendar meeting, following reschedules". A `relative` trigger keeps a row per
+    (scope, flow, key) — the key is read off the event (`payload.event_id`). Each matching event
+    UPSERTS it: a new `fire_at` and `version + 1`, so a reschedule moves it; an event that no longer
+    passes the trigger's filter, or a `*.cancelled`, cancels it. The worker fires due rows into
+    reactions keyed `at:<scope>/<flow>/<key>:<fire_at>`, so a slot fires at most once by the reaction
+    table's constraint; a row moved after firing re-arms. ONE WRITER: flows (`flows.keyed`)."""
+    __tablename__ = "keyed_schedule"
+    scope: Mapped[str] = mapped_column(Text, primary_key=True)
+    flow: Mapped[str] = mapped_column(Text, primary_key=True)
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    fire_at: Mapped[float] = mapped_column(Double, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    # whom the pending fire is for — the flow's owner, or for a company flow the person the event names
+    # (uid, else organizer): the per-person cap counts this, so one busy company flow starves nobody
+    person: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    payload: Mapped[str | None] = mapped_column(Text)
+    fired_for: Mapped[float | None] = mapped_column(Double)
+    updated_at: Mapped[float] = mapped_column(Double, nullable=False)
+    __table_args__ = (
+        CheckConstraint("status IN ('armed','fired','cancelled','missed')", name="keyed_status"),
+        Index("keyed_due", "fire_at"),
+        Index("keyed_person", "scope", "person"),
+    )
+
+
+class Sensor(Base):
+    """A SENSOR IS ITS OWNER'S OBJECT (ADR-0050 decision 6, founder 2026-10-14). `{kind, connection,
+    filter, interval}`, owned by one person (`scope` = `user:<uid>`) or by the company (`instance`,
+    the global account's), made from chat (`sensor_create`), TESTED before it runs (`sensor_test`
+    returns the events it would emit and what it dropped, with no side effects; `tested_version` must
+    equal `version` to enable), and CONNECTED to a chat (`sensor_connect`). It turns a provider's
+    changes into typed events with no model call and never acts; the credential broker holds the
+    token and makes the call, the sensor keeps only its CURSOR. A no-change tick writes nothing.
+    `status`: draft (made, not yet enabled) · active · degraded (N failures in a row; `reason`) ·
+    stopped. ONE WRITER: flows (flows-api for the person's edits, the sensor pool for ticks)."""
+    __tablename__ = "sensor"
+    scope: Mapped[str] = mapped_column(Text, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    connection_id: Mapped[str | None] = mapped_column(Text)
+    filter: Mapped[str | None] = mapped_column(Text)
+    interval_s: Mapped[float] = mapped_column(Double, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    tested_version: Mapped[int | None] = mapped_column(Integer)
+    tested_at: Mapped[float | None] = mapped_column(Double)
+    cursor: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False, default="poll")
+    next_due_at: Mapped[float] = mapped_column(Double, nullable=False)
+    failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reason: Mapped[str | None] = mapped_column(Text)
+    last_tick_at: Mapped[float | None] = mapped_column(Double)
+    last_change_at: Mapped[float | None] = mapped_column(Double)
+    last_events: Mapped[str | None] = mapped_column(Text)
+    lease_until: Mapped[float | None] = mapped_column(Double)
+    created_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[float] = mapped_column(Double, nullable=False)
+    __table_args__ = (
+        CheckConstraint("status IN ('draft','active','degraded','stopped')", name="sensor_status"),
+        Index("sensor_due", "next_due_at"),
+    )

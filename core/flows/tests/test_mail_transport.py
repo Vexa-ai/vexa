@@ -118,6 +118,7 @@ class _Handler(socketserver.StreamRequestHandler):
             tag, _, rest = raw.decode().rstrip("\r\n").partition(" ")
             verb, _, args = rest.partition(" ")
             verb = verb.upper()
+            srv.commands.append(f"{verb} {args}".strip())
             if verb == "CAPABILITY":
                 caps = "IMAP4rev1" + (" STARTTLS" if srv.offer_starttls and not encrypted else "")
                 self._send(f"* CAPABILITY {caps}\r\n{tag} OK done\r\n")
@@ -134,9 +135,11 @@ class _Handler(socketserver.StreamRequestHandler):
                     self._send(f"{tag} OK LOGIN completed\r\n")
                 else:
                     self._send(f"{tag} NO LOGIN failed\r\n")
-            elif verb == "SELECT":
+            elif verb in ("SELECT", "EXAMINE"):
+                access = "READ-ONLY" if verb == "EXAMINE" else "READ-WRITE"
+                self.read_only = verb == "EXAMINE"
                 if _astrings(args)[0] in srv.folders:
-                    self._send(f"* {len(srv.messages)} EXISTS\r\n{tag} OK [READ-WRITE] done\r\n")
+                    self._send(f"* {len(srv.messages)} EXISTS\r\n{tag} OK [{access}] done\r\n")
                 else:
                     self._send(f"{tag} NO no such mailbox\r\n")
             elif verb == "UID":
@@ -147,10 +150,15 @@ class _Handler(socketserver.StreamRequestHandler):
                     if m:
                         uids = [u for u in uids if u >= int(m.group(1))] or uids[-1:]
                     self._send(f"* SEARCH {' '.join(map(str, uids))}\r\n{tag} OK done\r\n")
-                else:                                   # FETCH <uid> (RFC822)
+                else:                          # FETCH <uid> (RFC822) | (BODY.PEEK[])
                     uid = int(uargs.split()[0])
                     body = srv.messages[uid]
-                    self._send(f"* 1 FETCH (UID {uid} RFC822 {{{len(body)}}}\r\n".encode()
+                    item = "BODY[]" if "BODY.PEEK[]" in uargs.upper() else "RFC822"
+                    # RFC 3501 §6.4.5: a non-PEEK body fetch in a READ-WRITE session sets \Seen —
+                    # what a real server does, and what marked real mail read on 2026-10-14.
+                    if item == "RFC822" and not getattr(self, "read_only", False):
+                        srv.flags.setdefault(uid, set()).add("\\Seen")
+                    self._send(f"* 1 FETCH (UID {uid} {item} {{{len(body)}}}\r\n".encode()
                                + body + f")\r\n{tag} OK done\r\n".encode())
             elif verb == "LOGOUT":
                 self._send(f"* BYE\r\n{tag} OK done\r\n")
@@ -177,7 +185,8 @@ def imap_server(pki):
         srv.ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         srv.ctx.load_cert_chain(pki / "server.pem", pki / "server.key")
         srv.user, srv.password, srv.folders = USER, PASSWORD, set(folders)
-        srv.messages, srv.logins = dict(messages or {}), []
+        srv.messages, srv.logins, srv.commands = dict(messages or {}), [], []
+        srv.flags = {}
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         made.append(srv)
         return srv
@@ -357,3 +366,46 @@ def test_the_probe_is_not_ready_before_a_first_poll_or_when_the_loop_goes_silent
     mailbox_status.Reporter(p, clock=lambda: 0.0, out=lambda *a, **k: None).ok("imap")
     ready, why = mailbox_status.check(p, now=mailbox_status.STALE_AFTER_S + 1.0)
     assert not ready and "silent" in why
+
+
+# ── THE READER LEAVES NO TRACE (global mail, 2026-10-14) ─────────────────────────────────────────
+# The mailbox may be one people read too (`info@`): the reader opens the folder READ-ONLY and
+# fetches with BODY.PEEK[], so no flag changes, and it never STOREs, COPYs, MOVEs or EXPUNGEs.
+
+def test_the_reader_examines_the_folder_and_peeks_never_marking_or_moving(exchange_env, imap_server):
+    raw = (FIX / "invite-exchange-teams.eml").read_bytes()
+    srv = imap_server("tls", messages={7: raw, 8: raw}, folders=("INBOX", "vexa"))
+    _use(exchange_env, srv, VEXA_MAIL_IMAP_FOLDER="vexa")
+    msgs = list(ImapInbox().fetch("6")) + ImapInbox().recent(2)
+    assert len(msgs) == 4 and all(m.ics for m in msgs)
+    verbs = [c.split()[0] for c in srv.commands]
+    assert "EXAMINE" in verbs and "SELECT" not in verbs, srv.commands
+    assert all(c.startswith("EXAMINE vexa") or c.startswith("EXAMINE \"vexa\"")
+               for c in srv.commands if c.startswith("EXAMINE")), srv.commands
+    fetches = [c for c in srv.commands if c.upper().startswith("UID FETCH")]
+    assert fetches and all("BODY.PEEK[]" in c.upper() for c in fetches), fetches
+    for c in srv.commands:
+        words = c.upper().split()
+        assert not ({"STORE", "COPY", "MOVE", "EXPUNGE", "APPEND", "DELETE"} & set(words)), c
+    assert srv.flags == {}, f"reading changed flags on the server: {srv.flags}"
+
+
+def test_the_fake_server_would_catch_the_old_reader(exchange_env, imap_server):
+    """The guard above is real: the reader this branch replaced (SELECT + `(RFC822)`) marks mail
+    \\Seen on this server, exactly as Gmail did to a shared inbox on 2026-10-14."""
+    import imaplib
+    raw = (FIX / "invite-exchange-teams.eml").read_bytes()
+    srv = imap_server("plain", offer_starttls=False, messages={7: raw})
+    im = imaplib.IMAP4("127.0.0.1", srv.server_address[1])
+    im.login(USER, PASSWORD)
+    im.select("INBOX")
+    im.uid("fetch", b"7", "(RFC822)")
+    im.logout()
+    assert srv.flags == {7: {"\\Seen"}}
+
+
+def test_the_inbox_module_has_no_verb_that_changes_a_mailbox():
+    src = (Path(__file__).resolve().parents[1] / "src" / "flows_integrations" / "inbox.py").read_text()
+    for verb in ('"store"', '"copy"', '"move"', '"expunge"', ".store(", ".copy(", ".move(",
+                 ".expunge(", '"(RFC822)"'):
+        assert verb not in src.lower(), f"inbox.py names {verb}"

@@ -1,0 +1,98 @@
+{
+  "contract": "config.v1",
+  "service": "signals",
+  "keys": [
+    {
+      "key": "REDIS_URL",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "the broker carrying the bots' segment hints (transcription_segments), the collector's verified feeds (tc:meeting:{row}, read only) and signals' own keys (sig:*, signals the only writer)",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "SIGNALS_AGENT_API_URL",
+      "class": "required-explicit",
+      "description": "agent-api's internal door: each meeting's listening brief and the company's signal policy, in one answer (GET /internal/meetings/{row}/listen?subject=<owner>). Without it signals cannot know it is switched on, so it refuses to boot rather than idle silently",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "INTERNAL_API_SECRET",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "the internal tier's secret: sent to agent-api on the brief read, and to flows-api on POST /events/signal with X-Vexa-Service: signals (the only door a wake goes through)",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_FLOWS_API_URL",
+      "class": "publish-edge",
+      "description": "flows' address — the domain signals HANDS its wakes to (event.v1 meeting.signal, POST /events/signal, authenticated with INTERNAL_API_SECRET + X-Vexa-Service: signals). A publish, not a dependency: unset is the no-flows profile and wakes are dropped",
+      "targets": ["compose", "helm"],
+      "publishes_events": ["meeting.signal"]
+    },
+    {
+      "key": "VEXA_SIGNALS_BROKER_URL",
+      "class": "capability",
+      "capability": "model_key",
+      "description": "the credential broker, where the signal model's company key lives (model_signals.secret_ref broker:signals/<name>)",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_SIGNALS_BROKER_KEY_FILE",
+      "class": "capability",
+      "capability": "model_key",
+      "description": "file holding the broker's signals role key (the broker holds the same file as VEXA_CONNECTIONS_SIGNALS_KEY_FILE); it opens POST /api/internal/signals/model-key and nothing else",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_ENV",
+      "class": "defaulted",
+      "default": "(unset — not dev)",
+      "description": "`dev` alone allows the development key fallback below; any other value never reads it",
+      "targets": ["compose"]
+    },
+    {
+      "key": "SIGNALS_OPENROUTER_API_KEY",
+      "class": "defaulted",
+      "default": "(unset)",
+      "secret": true,
+      "description": "DEVELOPMENT ONLY, read only when VEXA_ENV=dev and the broker holds no key for the policy's name: an OpenRouter key for the signal model. Production keys live in the credential broker",
+      "targets": ["compose"]
+    },
+    {
+      "key": "SIGNALS_USD_PER_MTOK",
+      "class": "defaulted",
+      "default": "2.0",
+      "description": "the operator's price estimate per million tokens of the signal model, the basis of the per-source cost cap (signals_cost_per_meeting_usd)",
+      "targets": []
+    },
+    {
+      "key": "SIGNALS_REPLAY_API_KEY",
+      "class": "defaulted",
+      "default": "(unset)",
+      "secret": true,
+      "description": "the replay tool only (python -m meeting_signals.replay --model-signals …), never the service: the key for a real signal model while replaying a transcript by hand",
+      "targets": []
+    },
+    {
+      "key": "SIGNALS_PORT",
+      "class": "defaulted",
+      "default": "8310",
+      "description": "the port of GET /health (liveness and what this instance listens to)",
+      "targets": []
+    },
+    {
+      "key": "SIGNALS_INSTANCE",
+      "class": "defaulted",
+      "default": "(the host name + a random suffix)",
+      "description": "this instance's name on leases and consumer groups; unique per replica",
+      "targets": []
+    }
+  ],
+  "capabilities": {
+    "model_key": {
+      "description": "the signal model's key is read from the credential broker (signals role)",
+      "mode": "all",
+      "when_unconfigured": "a model_signals with secret_ref broker:signals/<name> cannot be keyed: lines are buffered unscored and the log names the fix (VEXA_ENV=dev may use SIGNALS_OPENROUTER_API_KEY); secret_ref none still works"
+    }
+  }
+}

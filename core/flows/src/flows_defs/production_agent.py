@@ -65,9 +65,8 @@ from flows import Block, Done, Registry, StepCtx, StepError, Wait
 #: to know which side of the split a step was written on.
 logger = logging.getLogger("flows.production")
 
-#: Where the claim book lives on a desk. The rig writes it through agent-api's generic file route
-#: (`deploy/dogfood/rig/vexa_control_mcp.py:3396` `propose`), which is also why `claim.proposed`
-#: has no publisher yet: there is no claim-aware route in agent-api to publish it from.
+#: Where the claim book lives on a desk. Agent-api's claim route writes it (`POST /api/claims`,
+#: `core/agent/control_plane/claims.py`) and publishes `claim.proposed`, one per claim.
 #: It moved here with `await_claim`, its only reader — the book is a file on a DESK, and a desk is
 #: agent state.
 CLAIM_BOOK = "_pending/claims.json"
@@ -171,7 +170,9 @@ def build(reg: Registry, db, home=None) -> None:
                                provenance={"flow": "meeting_prep", "step": "prepare_meeting",
                                            "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                                            "minted_by": str(uid)})
-        mid = p.notify(to, subject or f"Prepare: {title}", body, link=link)
+        mid = p.mail("prepare", to, subject or f"Prepare: {title}", body, link=link, db=db, uid=uid)
+        if mid is None:
+            return Done({"skipped": "mail.prepare is off"})
         p.mx.register_thread(db, mid, uid, f"meet-{ref}")
         return Done({"message_id": mid, "meeting_ref": ref}, provider_ref=mid)
 
@@ -271,8 +272,11 @@ def build(reg: Registry, db, home=None) -> None:
         ft = ctx.prior["feedback_turn"]
         if not ft.get("reply"):
             return Done({"coalesced": True})                    # content already mailed by a sibling
-        mid = p.notify(ctx.refs["from_addr"], "Re: " + (ctx.refs.get("subject") or "Vexa"),
-                       ft["reply"], in_reply_to=ctx.refs.get("orig_msgid"))
+        mid = p.mail("reply", ctx.refs["from_addr"], "Re: " + (ctx.refs.get("subject") or "Vexa"),
+                     ft["reply"], in_reply_to=ctx.refs.get("orig_msgid"), db=db,
+                     uid=str(ctx.refs["uid"]))
+        if mid is None:
+            return Done({"skipped": "mail.reply is off"})
         p.mx.register_thread(db, mid, ctx.refs["uid"], ctx.refs["session"])
         db.execute("""INSERT INTO mail_outbox_sent (subject_uid, session, hash, sent_at)
                       VALUES (:u,:s,:h,:t) ON CONFLICT DO NOTHING""",
@@ -437,7 +441,10 @@ def build(reg: Registry, db, home=None) -> None:
         # THE LINK TRAVELS AS THE PORT'S ARGUMENT, never inside the body. `notify.compose` puts it
         # last and on its own paragraph because a URL buried mid-paragraph is a URL nobody clicks,
         # and a step that hands over a URL should not also decide its typography.
-        mid = p.notify(to, subject, body, link=link)
+        mid = p.mail("workspace-invite", to, subject, body, link=link, db=db, uid=uid)
+        if mid is None:
+            return Done({"skipped": "mail.workspace-invite is off", "to": to,
+                         "workspace": workspace})
         # NO `register_thread`, and this is the deliberate half of the decision rather than the
         # forgotten half. That row exists to route a REPLY into an ongoing conversation, by thread,
         # for the subject who owns it (`flows_integrations/mailbox.py`) — and there is no such
@@ -447,6 +454,34 @@ def build(reg: Registry, db, home=None) -> None:
         # that subject is `THREAD_MISMATCH` and quarantined. It would be a row whose only possible
         # outcome is a quarantine entry. This mail also expects no reply: its answer is the click.
         return Done({"message_id": mid, "to": to, "workspace": workspace}, provider_ref=mid)
+
+    # ── the new-chat home (#1783) ─────────────────────────────────────────────
+    # A SYSTEM FLOW: instance scope, so it never counts against a person's routine quota. One
+    # trigger, `home.stale`, published by agent-api: when a page read finds the home old (two hours,
+    # a meeting started or ended since, a meeting within the hour, a routine ran, a notification
+    # arrived) and when the work behind a card moved (`home_item_update`). Meeting facts are not
+    # subscribed to here: a second reaction on `meeting.completed` would sit beside post-meeting's.
+    @reg.step(needs=("agent",))
+    def compose_home(ctx: StepCtx):
+        """COMPOSE THIS PERSON'S NEW-CHAT HOME NOW — agent-api collects the candidates, ranks them
+        with at most one call to the cheapest configured model, and appends the composition.
+
+        Debounced on agent-api's side (ten minutes; one after a meeting ended), so a burst of
+        facts costs one composition; a skipped compose is `Done` with `skipped`, and so is one
+        agent-api did not answer — the home is best-effort and never a waiting item.
+        Reads: refs.{uid|subject} · Effect: one home composition appended · Result: {id, stage,
+        cards, model} or {skipped}."""
+        uid = str(ctx.refs.get("uid") or ctx.refs.get("subject") or "").strip()
+        if not uid:
+            raise StepError("the home fact carried no person — there is no home to compose", retryable=False)
+        trigger = getattr(ctx.flow, "on", None)
+        try:
+            out = p.ag.compose_home(uid, getattr(trigger, "name", "") or "home.stale")
+        except StepError as e:
+            # THE HOME IS BEST-EFFORT: a composition that could not run is not a waiting item, and
+            # must never hold up the meeting's own reactions. The next stale read asks again.
+            return Done({"skipped": "agent-api did not answer", "detail": str(e)[:200]})
+        return Done({k: out.get(k) for k in ("id", "stage", "cards", "model", "skipped") if k in out})
 
     s = reg.steps
     # THE EVENT TYPES STAY IN `production` and are read through it. They are the module's published
@@ -477,3 +512,4 @@ def build(reg: Registry, db, home=None) -> None:
     # blocked while the routine stays off — that blocked row is the queue item.
     reg.flow(name="routine_paused", version=1, on=p.ROUTINE_PAUSED,
              steps=[s["await_routine"]])
+    reg.flow(name="home_compose", version=1, on=p.HOME_STALE, steps=[s["compose_home"]])

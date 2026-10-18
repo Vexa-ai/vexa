@@ -2,11 +2,11 @@
   "$id": "https://vexa.ai/contracts/flows.v1",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "flows.v1",
-  "description": "THE CARRIER CENSUS. A carrier is an event type with exactly ONE producing domain: the domain that knows the fact publishes it, fire-and-forget, and a flow definition decides what happens next. This is the only way two domains couple, because a publish edge is not a dependency — a domain that publishes into flows does not depend on flows and works with no flows deployed at all. Registering a carrier promises three things: who owns it, the refs a consumer may rely on, and how often it fires. The third is the one that matters most: exactly_once_per_subject means the producer holds a durable stamp and will not re-emit, and it is required wherever a consumer takes an irreversible action.",
+  "description": "THE CARRIER CENSUS. A carrier is an event type with exactly ONE producing domain: the domain that knows the fact publishes it, fire-and-forget, and a flow definition decides what happens next. This is the only way two domains couple, because a publish edge is not a dependency — a domain that publishes into flows does not depend on flows and works with no flows deployed at all. Registering a carrier promises three things: who owns it, the refs a consumer may rely on, and how often it fires. The third is the one that matters most: exactly_once_per_subject means the producer holds a durable stamp and will not re-emit, and it is required wherever a consumer takes an irreversible action. Beside the census, `FlowDefinition` is the shape of one flow version (ADR-0046).",
   "$ref": "#/$defs/CarrierRegistry",
   "$defs": {
     "Domain": {
-      "enum": ["identity", "meetings", "flows", "agent", "runtime"],
+      "enum": ["identity", "meetings", "flows", "agent", "runtime", "signals"],
       "description": "The producing domain. It is the OWNER of the fact, not the transport: `onboarding.completed` is identity's because a person entering is identity's to know, regardless of who is told."
     },
     "Cardinality": {
@@ -56,6 +56,122 @@
           "then": { "required": ["stamp"] }
         }
       ]
+    },
+    "Scope": {
+      "type": "string",
+      "pattern": "^(instance|user:[^\\s/]{1,200})$",
+      "description": "WHOSE FLOW THIS IS (ADR-0046 decision 4). `instance` is the deployment's own — the image's flows and what the operator or the instance admin writes. `user:<uid>` is one person's, and is admitted only for events whose subject is that person. The scope is taken from the caller's identity at submission, never from an argument a person may set."
+    },
+    "Trigger": {
+      "description": "WHAT STARTS A RUN (ADR-0046 decision 3). `event` names a carrier's `event_type`; `schedule` is a five-field cron in UTC, fired by the flows worker into an ordinary reaction keyed by the slot, so a slot runs at most once; `at` is one time, fired once, after which the version retires.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "event"
+          ],
+          "properties": {
+            "kind": {
+              "const": "event"
+            },
+            "event": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "cron"
+          ],
+          "properties": {
+            "kind": {
+              "const": "schedule"
+            },
+            "cron": {
+              "type": "string",
+              "minLength": 9,
+              "maxLength": 120,
+              "description": "minute hour day-of-month month day-of-week, UTC"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "at"
+          ],
+          "description": "A ONE-SHOT (flows phase 0): a time, not a cron. Fired once at its minute by the worker, then the version retires itself. Stored as the cron of that minute plus params `at` (UTC epoch seconds) and `once: true`; read back as {kind: at, at}.",
+          "properties": {
+            "kind": {
+              "const": "at"
+            },
+            "at": {
+              "description": "ISO-8601 with its offset (2027-03-01T13:13:00+01:00) or UTC epoch seconds; in the future and within 360 days",
+              "oneOf": [ { "type": "string", "minLength": 16, "maxLength": 40 }, { "type": "number" } ]
+            },
+            "cron": {
+              "type": "string",
+              "description": "the cron of the minute it fires on, as stored (read back only)"
+            }
+          }
+        }
+      ]
+    },
+    "FlowDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "scope",
+        "version",
+        "trigger",
+        "steps"
+      ],
+      "description": "ONE VERSION OF ONE FLOW, as `flow_version` stores it and `GET /flows` reads it back (ADR-0046). The key is (scope, name, version), so two people and the instance may each own a flow of the same name. Steps are NAMES from the deployed vocabulary — a flow is data and never code; a user-scoped flow may name only the steps the deployment allows users (decision 6). A routine is a user-scoped flow with a schedule trigger and the `agent_run` step.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "trigger": {
+          "$ref": "#/$defs/Trigger"
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "params": {
+          "type": "object",
+          "description": "pure data the steps read through `ctx.flow.param` — for `agent_run`: `instruction` (required) and `workspaces` (optional list of workspace ids)."
+        },
+        "status": {
+          "enum": [
+            "draft",
+            "active",
+            "retired"
+          ],
+          "default": "active"
+        }
+      }
     },
     "CarrierRegistry": {
       "type": "object",

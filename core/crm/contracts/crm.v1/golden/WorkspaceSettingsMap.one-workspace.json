@@ -1,0 +1,19 @@
+{
+  "workspaces": {
+    "growth": {
+      "collapsed": [
+        "done"
+      ],
+      "hidden": false,
+      "level": null,
+      "muted": true,
+      "notify": "mentions",
+      "pinned": true,
+      "room_order": [
+        "c1",
+        "c2"
+      ],
+      "updated_at": "2026-10-16T09:00:00+00:00"
+    }
+  }
+}

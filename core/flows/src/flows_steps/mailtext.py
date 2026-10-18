@@ -182,6 +182,83 @@ DEFAULTS: dict[str, str] = {
         "\n"
         "The link below works only for this address — it signs you in, so please do not forward it.\n"
     ),
+    # ── THE MAIL-KIND CATALOGUE'S STARTER TEMPLATES (`mailkinds.py`) ────────────────────────────
+    # PLACEHOLDER WORDING, the global account's to rewrite (`mail_template_edit`). Each one is
+    # BYTE-FOR-BYTE `behavior/mail/<name>.md`, on the same terms as the templates above. None writes
+    # a URL: the sender appends the one link.
+    "sign-in": (
+        "subject: Your Vexa sign-in link\n"
+        "---\n"
+        "Sign in to Vexa at {{company}} with the link below.\n"
+        "\n"
+        "It works once and expires in {{minutes}} minutes. If you did not ask for it, ignore this mail — nothing happens until the link is used."
+    ),
+    "workspace-joined": (
+        "subject: {{joiner}} joined {{workspace_name}}\n"
+        "---\n"
+        "{{joiner}} joined {{workspace_name}} through your invite link. You now share the workspace, and you can find each other by name in Vexa."
+    ),
+    "chat-share": (
+        "subject: {{inviter}} shared a chat with you: {{title}}\n"
+        "---\n"
+        "I am Vexa, the meeting assistant at {{company}}. {{service}}\n"
+        "\n"
+        "{{inviter}} shared the chat {{title}} with you.\n"
+        "\n"
+        "{{visibility}}\n"
+        "\n"
+        "The link below works only for this address — it signs you in, so please do not forward it."
+    ),
+    "call-invite": (
+        "subject: {{inviter}} invites you to a call: {{title}}\n"
+        "---\n"
+        "{{inviter}} invites you to {{title}} ({{when}}).\n"
+        "\n"
+        "The link below opens the call in your browser; Vexa takes the notes."
+    ),
+    "bot-scheduled": (
+        "subject: Vexa will join: {{title}}\n"
+        "---\n"
+        "Vexa accepted the invitation and joins {{url}} at {{when}}."
+    ),
+    "bot-joined": (
+        "subject: Vexa joined: {{title}}\n"
+        "---\n"
+        "Vexa is in {{title}} now and is transcribing. Follow along with the link below."
+    ),
+    "bot-failed": (
+        "subject: Vexa could not join: {{title}}\n"
+        "---\n"
+        "Vexa could not join {{title}} ({{url}}): {{reason}}.\n"
+        "\n"
+        "Invite it again from the chat if you still want notes."
+    ),
+    "recording": (
+        "subject: Recorded: {{title}}\n"
+        "---\n"
+        "{{title}} was recorded. The recording and transcript are in your {{workspace}}."
+    ),
+    "report-daily": (
+        "subject: Your day — {{date}}\n"
+        "---\n"
+        "{{summary}}\n"
+        "\n"
+        "The link below opens the full report."
+    ),
+    "report-weekly": (
+        "subject: Your week — {{week}}\n"
+        "---\n"
+        "{{summary}}\n"
+        "\n"
+        "The link below opens the full report."
+    ),
+    "digest": (
+        "subject: {{count}} things in Vexa\n"
+        "---\n"
+        "{{items}}\n"
+        "\n"
+        "The link below opens them in Vexa."
+    ),
 }
 
 
@@ -250,15 +327,37 @@ def render(name: str, uid: str, values: Optional[dict] = None) -> tuple[str, str
     product differently; everything else comes from `values`. An unknown `{{token}}` is left
     STANDING rather than blanked: a visible `{{organizer}}` in a test inbox is a bug report, and a
     silently empty sentence is not."""
+    raw, _source = template(name, uid)
+    return render_text(raw, uid, values)
+
+
+def template(name: str, uid: str) -> tuple[str, str]:
+    """(raw template, source) — `_global/mail/<name>.md` when the admin wrote one, else the baked
+    default. `source` is `_global` or `baked`. Raises KeyError for a name neither knows."""
     raw = _global_file(uid, f"mail/{name}.md")
     # An override that is EMPTY, or only whitespace, is an accident and not an instruction. `or`
     # alone did not catch it -- `"   \n\n"` is truthy in Python, so an admin who cleared the file
     # instead of editing it would have mailed a stranger a blank introduction with a blank subject,
     # which is worse than the placeholder wording they were trying to replace.
-    if not (raw or "").strip():
-        raw = DEFAULTS.get(name)
+    if (raw or "").strip():
+        return raw, "_global"
+    raw = DEFAULTS.get(name)
     if raw is None:
         raise KeyError(f"no mail template named {name!r} (baked or in _global/mail/)")
+    return raw, "baked"
+
+
+def version(raw: str) -> str:
+    """THE TEMPLATE VERSION — a short content hash of the raw text. A test-send records the version
+    it sent; a kind can be switched on only while that version is still the live one, so an edit
+    after the test-send needs a new test-send."""
+    import hashlib
+    return hashlib.sha256((raw or "").strip().encode("utf-8")).hexdigest()[:12]
+
+
+def render_text(raw: str, uid: str, values: Optional[dict] = None) -> tuple[str, str]:
+    """(subject, body) for one raw template — the half of `render` that does not choose the file,
+    so `mail_preview` can render a draft nobody has saved yet."""
     subject, body = _split(raw)
     # `{{visibility}}` is DERIVED from this deployment's rules, not a constant — see
     # `policies.visibility_sentence`. Read per send for the same reason the template is: an admin

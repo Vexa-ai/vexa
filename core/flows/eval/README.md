@@ -8,6 +8,7 @@ any good. Both answers are needed and they are not the same answer.
 |---|---|
 | [`dna/`](dna/README.md) | Fixture replay. Walks a library of recorded meetings through the real flows as a real user, in one workspace and in calendar order, then scores the note, the two mails and the two primed chat openings — mechanically first, then against a truth sidecar. |
 | [`adoption/`](adoption/README.md) | The adoption simulator. Generates an org and its meeting graph, drives the real flows through it, and asks a persona per touch whether it earned an action — reporting simulated days to adoption, retention, and which lever moved them. Runs in an isolated flows lane so it can never reach a real recipient. |
+| [`sensors-spike/`](sensors-spike/README.md) | The ADR-0050 spike: a shared calendar sensor pool feeding a keyed one-shot trigger, with its cost per tick. Not product code. |
 
 `dna/` scores what a meeting note SAYS; `adoption/` scores what an org DOES with it. Neither
 substitutes for the other, and a change can move one without moving the other.

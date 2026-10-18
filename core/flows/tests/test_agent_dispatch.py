@@ -193,3 +193,39 @@ def test_the_desk_probes_say_when_they_could_not_read(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert out.count("warning: swallowed") == 2
     assert "flows_steps.agent.head_sha" in out and "flows_steps.agent.head_subjects" in out
+
+
+# ── a turn flows dispatches runs with nobody in the loop ─────────────────────────────────────────
+def _headers_of_post(monkeypatch):
+    seen: dict = {}
+
+    def fake_http(method, url, headers, body=None, timeout=20):
+        if url.endswith("/history"):
+            return 200, {"turns": []}
+        seen["headers"] = dict(headers)
+        return 200, {"ok": True}
+    monkeypatch.setattr(ag, "http", fake_http)
+    return seen
+
+
+@pytest.mark.parametrize("named", [{"flow": "email_chat", "step": "feedback_turn"},
+                                   {"flow": "post_meeting", "step": "process_meeting"},
+                                   {"flow": "onboarding", "step": "open_onboarding"}, {}])
+def test_every_turn_flows_dispatches_runs_unattended(monkeypatch, named):
+    """Nobody typed a turn flows posts — an email reply, a meeting kick, an onboarding opening — so
+    agent-api must run it in the `autonomous` regime, which it believes only beside the internal
+    tier's secret. Without the regime header the turn ran as though its person were watching."""
+    seen = _headers_of_post(monkeypatch)
+    ag.dispatch_turn("7", "main", "go", **named)
+    assert seen["headers"]["X-Vexa-Flow-Regime"] == "autonomous"
+    assert seen["headers"]["X-Internal-Secret"], "the regime is believed only from the internal tier"
+    assert seen["headers"]["X-User-Id"] == "7"
+
+
+def test_a_thread_busy_with_its_persons_turn_is_retried_later(monkeypatch):
+    """An unattended turn waits for the person's running turn in the same thread (agent-api answers
+    409 `thread_busy`): that is a moment, not a fact about the call, so the step is retried."""
+    _wire(monkeypatch, post=lambda m, u: (409, {"detail": {"refused": "thread_busy"}}))
+    with pytest.raises(StepError) as e:
+        ag.dispatch_turn("7", "main", "go", flow="email_chat", step="feedback_turn")
+    assert e.value.retryable is True

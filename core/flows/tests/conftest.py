@@ -115,3 +115,24 @@ def registry(db, monkeypatch):
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+# ── THE MAIL-KIND SWITCHES, FOR THE SUITES THAT PREDATE THEM ─────────────────────────────────────
+# `mail.<kind>` in `_global/POLICIES.md` (flows_steps/mailkinds.py) ships most kinds OFF until the
+# global account turns them on. Every suite written before the switches existed is a test of what a
+# kind SAYS once it is on, so they run with every kind on — overlaid on whatever `policies.read`
+# answers, so a suite that writes its own POLICIES still decides what it writes.
+# A test about the switches themselves opts out with `@pytest.mark.mail_defaults`.
+@pytest.fixture(autouse=True)
+def _mail_kinds_on(request, monkeypatch):
+    if request.node.get_closest_marker("mail_defaults"):
+        yield
+        return
+    # The operator's own answer for "every kind on unless _global says otherwise" — read per call,
+    # so it holds for every copy of the modules, including suites that purge and re-import them.
+    monkeypatch.setenv("VEXA_MAIL_KINDS_DEFAULT", "on")
+    yield
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "mail_defaults: run with the shipped mail-kind switches")

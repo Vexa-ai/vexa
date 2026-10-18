@@ -9,14 +9,29 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from flows import Registry, SystemClock, admit, escalate, postgres_db, reclaim, tick
+from flows import Registry, SystemClock, admit, escalate, postgres_db, reclaim
+from flows.schedule import fire_due
+from flows import keyed
+from flows.admission import admissible
 from flows_defs import production
 import flows_config
+from flows_steps import policies
+import flows_obs
 from flows_steps import common
+from flows_worker.unit import SERVICE, instrument, run_unit
 from flows_steps.common import db_url, require_internal_secret
 
 POLL_S = 1.0
 SLOW_STEP_S = 8.0
+
+
+def admission_limits() -> dict:
+    """The loop guard and the per-person daily cap, from `config.v1` (ADR-0046 decisions 8, 9)."""
+    return {"loop_limit": flows_config.get_int("VEXA_FLOWS_LOOP_LIMIT"),
+            "max_hops": flows_config.get_int("VEXA_FLOWS_MAX_HOPS"),
+            # live from `_global/POLICIES.md` (`routine_runs_per_day`), the env as the install default
+            "runs_per_day": policies.company_quota("routine_runs_per_day", "VEXA_FLOWS_USER_RUNS_PER_DAY"),
+            "messages_per_day": flows_config.get_int("VEXA_FLOWS_USER_MESSAGES_PER_DAY")}
 
 
 def main() -> int:
@@ -41,10 +56,25 @@ def main() -> int:
     clock = SystemClock()
     reg = Registry()
     production.build(reg, db)
+    # COMPANY FLOWS ARE THE GLOBAL ACCOUNT'S (seeds, written once, never overwritten).
+    seeded = production.seed(db)
+    if seeded:
+        print(f"seeded company flow(s): {', '.join(seeded)}", flush=True)
+    reg.refresh_from_db(db)
+    # logevent.v1: one trace per unit of work (one tick = at most one step), forwarded as
+    # X-Trace-Id on every Vexa call the step makes; see flows_worker/unit.py.
+    flows_obs.set_service(SERVICE)
+    instrument(reg)
 
     def emit(event_type: str, source_id: str, refs: dict) -> int:
-        return admit(db, reg, clock, source_event_id=source_id,
-                     event_type=event_type, subject_refs=refs)
+        n = admit(db, reg, clock, source_event_id=source_id,
+                  event_type=event_type, subject_refs=refs, **admission_limits())
+        # A ROOM'S PLANNED CALL FOLLOWS ITS CREATOR'S CALENDAR (PLAN-8H 8.4): a moved or cancelled
+        # event is handed to agent-api's room door as its owner. Never stops the pass.
+        if event_type.startswith("calendar.event.") and common.domain_present("agent"):
+            from flows_sensors import planned_sync as _planned_sync
+            _planned_sync.on_change(event_type, refs)
+        return n
 
     print(f"flows-worker up · {len(reg.flows)} flows · {len(reg.steps)} steps", flush=True)
     last_recon = 0.0
@@ -56,13 +86,45 @@ def main() -> int:
             fresh = reg.refresh_from_db(db)
             if fresh:
                 print(f"hot-loaded {fresh} flow version(s) from the DB", flush=True)
+            # FLOWS OWN TIME (ADR-0046 decision 3): a due schedule slot becomes a reaction here.
+            fired = fire_due(db, reg, clock,
+                             catchup_s=float(flows_config.get_int("VEXA_FLOWS_SCHEDULE_CATCHUP_S")),
+                             **admission_limits())
+            if fired:
+                print(f"fired {fired} schedule slot(s)", flush=True)
+            # KEYED SCHEDULES (ADR-0050): one pending fire per key — the bot one minute before a
+            # meeting, moved by every update, called off by a cancel — fired here like a slot.
+            try:
+                kfired = keyed.fire_due(db, reg, clock, admissible=lambda f, refs: admissible(
+                    db, f, clock, event_type=keyed.KEYED_EVENT, subject_refs=refs, **limits))
+                if kfired:
+                    print(f"fired {kfired} keyed schedule(s)", flush=True)
+            except Exception as exc:  # noqa: BLE001 — a keyed pass never stops the loop
+                print(f"keyed pass failed: {type(exc).__name__}", flush=True)
+            # SENSORS (ADR-0050 decision 6): every enabled sensor whose check is due reads its
+            # provider's changes through the broker, filters them and admits them as events.
+            try:
+                from flows_sensors import pool as _sensors
+                from flows_sensors.calendar import KINDS as _kinds
+                ticked = _sensors.run_due(db, _kinds, emit)
+                if ticked:
+                    print(f"ticked {len(ticked)} sensor(s)", flush=True)
+            except Exception as exc:  # noqa: BLE001 — a sensor pass never stops the loop
+                print(f"sensor pass failed: {type(exc).__name__}", flush=True)
+            # …and a fire the person's daily cap refused says so in the routine's chat, once a day.
+            if common.domain_present("agent"):
+                from flows_steps import routine as _routine
+                try:
+                    _routine.announce_refusals(db)
+                except Exception as exc:  # noqa: BLE001 — a notice never stops the loop
+                    print(f"refusal notice not posted: {type(exc).__name__}", flush=True)
         t0 = time.time()
         # The DOMAIN PRESENCE predicate is injected HERE and nowhere else (PRD decision 40.7):
         # which domains a deployment runs is a fact about this process's configuration, not about
         # the engine. A step that names an absent domain answers `not_present` — terminal, with the
         # reason on the reaction — instead of retrying against a door that is not there.
         # There is no instance gate: nothing waits for a company layer (founder ruling 2026-10-08).
-        worked = tick(db, reg, clock, emit=emit, present=common.domain_present)
+        worked = run_unit(db, reg, clock, emit=emit, present=common.domain_present)
         dt = time.time() - t0
         if dt > SLOW_STEP_S:
             print(f"⚠ SLOW STEP {dt:.1f}s — steps must never sleep (no-sleep law)", flush=True)

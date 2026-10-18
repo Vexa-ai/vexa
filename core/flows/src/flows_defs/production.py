@@ -79,6 +79,7 @@ from flows_steps import common as _common
 from flows_steps.common import (address_for_uid, ensure_platform_user, mint_scaffold,  # noqa: F401
                                 platform_user_id, scaffolded, setting, ws_file)
 from flows_steps.notify import notify
+from flows_steps import outbound
 # THE ONE SCOPING PREDICATE, imported rather than re-written. `flows_timeline.model` is pure and
 # stdlib-only; `concerns` answers "is this fact about this person" over BOTH the uid and the email
 # because the two lineages spell the subject differently, and a second implementation of that in
@@ -117,6 +118,10 @@ WORKSPACE_INVITED = EventType("workspace.invited")
 #: PUBLISHED BY THE AGENT DOMAIN (`control_plane/routine_refusals.py`): a scheduled routine was
 #: switched off because its runs kept being refused the same way. One card per pause.
 ROUTINE_PAUSED = EventType("routine.paused")
+#: PUBLISHED BY THE AGENT DOMAIN (`control_plane/routers/home.py`): a person's new-chat home is
+#: older than its cadence, or something it predates happened (a meeting within the hour, a routine
+#: that ran, a notification). Keyed to the person and a ten-minute bucket, so a burst is one fact.
+HOME_STALE = EventType("home.stale")
 #: PRD 40.9 open-decision 8. PUBLISHED BY FLOWS ITSELF — `POST /friction` calls `admit()` in
 #: process, no publish-edge and no agent-api dependency, which is why the carrier census owns this
 #: one to `flows` rather than `agent`: friction is not a domain, and its one ingestion point lives
@@ -155,6 +160,22 @@ ONBOARDING_POLL_S = 30
 #: The ceiling the interval doubles up to. Fifteen minutes: still far inside the window in which
 #: "you have your first transcript" is a useful thing to be told, and ~1/30th of the reads.
 ONBOARDING_POLL_MAX_S = 15 * 60
+
+
+
+def mail(kind: str, to: str, subject, body, *, db=None, uid: str = "", link=None,
+         in_reply_to=None, values=None):
+    """EVERY MAIL A STEP SENDS GOES THROUGH HERE — `flows_steps.outbound.send`, the one outbound
+    path: the company's `mail.<kind>` switch, the daily cap, the audit row. Returns the Message-ID,
+    or None when the kind is off (or admins-only, capped, a test domain on a real relay) — the step
+    records that and moves on. A transport failure raises, as `notify` always did.
+
+    `notify` is looked up in THIS module at call time, so a test that intercepts
+    `production.notify` still sees every mail."""
+    out = outbound.send(kind, to, uid=str(uid or ""), subject=subject, body=body, link=link,
+                        in_reply_to=in_reply_to, values=values, db=db,
+                        sender=lambda *a, **k: notify(*a, **k))
+    return out.message_id if out.sent else None
 
 
 def onboarding_backoff(looks: int) -> float:
@@ -420,7 +441,85 @@ def _report_region(report: str) -> str:
     return (f"## Report\n{MEETING_REPORT_START}\n{(report or '').strip()}\n{MEETING_REPORT_END}")
 
 
-def _merge_meeting_doc(existing: "str | None", fresh: str, report: str) -> str:
+#: The note's own sections the report fills when nobody has written in them yet: region key, the
+#: report headings that feed it (the prompt writes Decided / Committed / Open).
+_NOTE_FILL = (("decisions", _re.compile(r"\A#{1,6}\s*(?:decided|decisions)\b", _re.I)),
+              ("commitments", _re.compile(r"\A#{1,6}\s*(?:committed|commitments|follow-?ups)\b", _re.I)),
+              ("questions", _re.compile(r"\A#{1,6}\s*(?:open|open questions)\b", _re.I)))
+_REGION_HEAD = _re.compile(r"\A#{1,6}\s")
+#: A title nobody chose: the platform's ("Google Meet meeting") or the bare word.
+_PLACEHOLDER_TITLE = _re.compile(r"\A(?:(?:google meet|microsoft teams|teams|zoom|jitsi|browser)\s+meeting|meeting)\Z",
+                                 _re.I)
+
+
+def is_placeholder_title(title) -> bool:
+    return bool(_PLACEHOLDER_TITLE.match(str(title or "").strip()))
+
+
+def _report_section(report: str, heading) -> str:
+    """The body under the first report heading ``heading`` matches, up to the next heading or rule."""
+    out, inside = [], False
+    for line in str(report or "").splitlines():
+        stripped = line.strip()
+        if heading.match(stripped):
+            inside = True
+            continue
+        if inside and (_REGION_HEAD.match(stripped) or stripped in ("---", "***", "___")):
+            break
+        if inside:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+def _fill_note_regions(doc: str, report: str) -> str:
+    """Fill each EMPTY note section (decisions, commitments, open questions) from the report's own
+    section. A section somebody (or an Update) already wrote in is never touched."""
+    for key, heading in _NOTE_FILL:
+        start, end = f"<!-- meeting:{key}:start -->", f"<!-- meeting:{key}:end -->"
+        i, j = doc.find(start), doc.find(end)
+        if i == -1 or j == -1 or j < i or doc[i + len(start):j].strip():
+            continue
+        body = _report_section(report, heading)
+        if body:
+            doc = doc[: i + len(start)] + "\n" + body + "\n" + doc[j:]
+    return doc
+
+
+def _retitle(doc: str, title: str) -> str:
+    """Replace a placeholder title (frontmatter ``title:`` and the H1) with ``title`` — the calendar
+    event's or the one somebody gave the meeting. A title a person chose is never replaced."""
+    title = str(title or "").strip()
+    if not title or is_placeholder_title(title):
+        return doc
+    m = _re.match(r"\A---\r?\n(.*?)\r?\n---[ \t]*\r?\n?", doc, _re.S)
+    if not m:
+        return doc
+    fm_lines = m.group(1).splitlines()
+    old = next((ln.split(":", 1)[1].strip().strip("\"'") for ln in fm_lines if ln.startswith("title:")), "")
+    if old and not is_placeholder_title(old):
+        return doc
+    quoted = '"' + title.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    fm = [f"title: {quoted}" if ln.startswith("title:") else ln for ln in fm_lines]
+    if not old:
+        fm.append(f"title: {quoted}")
+    rest = doc[m.end():]
+    if old:
+        rest = _re.sub(rf"(?m)^#\s+{_re.escape(old)}\s*$", f"# {title}", rest, count=1)
+    return "---\n" + "\n".join(fm) + "\n---\n" + rest
+
+
+#: The agent's minted note opens with frontmatter carrying the transcript cursor
+#: (`meeting_doc.CURSOR_KEY`); a page this step composes never has that key.
+_FRONTMATTER = _re.compile(r"\A---\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", _re.S)
+
+
+def _is_minted_note(doc: str) -> bool:
+    """Is ``doc`` a meeting note the agent minted (its frontmatter carries the transcript cursor)?"""
+    m = _FRONTMATTER.match(str(doc or ""))
+    return bool(m) and any(ln.startswith("transcript_cursor:") for ln in m.group(1).splitlines())
+
+
+def _merge_meeting_doc(existing: "str | None", fresh: str, report: str, title: str = "") -> str:
     """What to WRITE to a desk, given what is already on it.
 
     THE PAGE MAY HAVE GROWN SINCE. Expand writes the meeting's own sections into it while the room
@@ -436,9 +535,17 @@ def _merge_meeting_doc(existing: "str | None", fresh: str, report: str) -> str:
         return fresh
     i, j = existing.find(MEETING_REPORT_START), existing.find(MEETING_REPORT_END)
     if i == -1 or j == -1 or j < i:
-        return fresh
-    return (existing[: i + len(MEETING_REPORT_START)] + "\n" + (report or "").strip() + "\n"
-            + existing[j:])
+        if not _is_minted_note(existing):
+            return fresh
+        # A NOTE MINTED EMPTY (no sections, no Report region: `meeting_doc.scaffold`) that the
+        # meeting may have written into. Its Report is appended; nothing on it is replaced.
+        merged = existing.rstrip("\n") + "\n\n" + _report_region(report) + "\n"
+        return _retitle(_fill_note_regions(merged, report), title)
+    merged = (existing[: i + len(MEETING_REPORT_START)] + "\n" + (report or "").strip() + "\n"
+              + existing[j:])
+    # THE NOTE IS FILLED, NOT ONLY ITS REPORT (a real call, 2026-10-14: the page minted at bot start
+    # kept six empty sections and its "Google Meet meeting" title after the report landed).
+    return _retitle(_fill_note_regions(merged, report), title)
 
 
 # ── the report's commitments, per person (Vexa-ai/vexa#1614) ─────────────────────────────────────
@@ -623,9 +730,42 @@ def _recorded_note_path(ctx, uid, meeting_id=None) -> str:
             cand = str((meta or {}).get("note_path") or "").strip() if isinstance(meta, dict) else ""
             if _is_note_path(cand):
                 found = cand
+                ws = str((meta or {}).get("note_workspace") or "").strip()
+                if isinstance(scratch, dict):
+                    scratch[f"_note_ws:{uid}"] = ws
     if isinstance(scratch, dict):
         scratch[key] = found
     return found
+
+
+def _recorded_note_workspace(ctx, uid, meeting_id=None) -> str:
+    """The workspace the row records for its page (#1783) — `""` for the person's home. Read with
+    the path, in the same lookup, so the two can never name different places."""
+    _recorded_note_path(ctx, uid, meeting_id)
+    scratch = getattr(ctx, "scratch", None)
+    return str((scratch or {}).get(f"_note_ws:{uid}") or "") if isinstance(scratch, dict) else ""
+
+
+def _call_session(ctx) -> str:
+    """The session a CALL belongs to (ADR-0048 decision 6), or "" for any other meeting.
+
+    A call is a meeting with platform `vexa_call`; meeting-api records the session it was started
+    from on the row (`data.call.session_id`). Read once per run and kept in scratch."""
+    if str(ctx.refs.get("platform") or "").strip().lower() != "vexa_call":
+        return ""
+    scratch = getattr(ctx, "scratch", None)
+    if isinstance(scratch, dict) and "call_session" in scratch:
+        return str(scratch["call_session"] or "")
+    uid = ctx.refs.get("uid")
+    try:
+        row = mt.meeting_row(str(uid), ctx.refs.get("meeting_id"), ctx.refs.get("native"))
+    except Exception:  # noqa: BLE001 — an unreadable row is a meeting with no session
+        row = None
+    data = (row or {}).get("data") if isinstance(row, dict) else None
+    sid = str(((data or {}).get("call") or {}).get("session_id") or "") if isinstance(data, dict) else ""
+    if isinstance(scratch, dict):
+        scratch["call_session"] = sid
+    return sid
 
 
 def _note_path(ctx, uid, title, meeting_id=None) -> str:
@@ -766,6 +906,8 @@ def _mail_title(ctx) -> str:
         data = row.get("data")
         row_title = (data or {}).get("title") if isinstance(data, dict) else None
         title = str(row_title or "").strip()
+        if is_placeholder_title(title):
+            title = ""          # the platform's name for it, not a name: try the calendar below
     if not title:
         platform = str(ctx.refs.get("platform") or "").strip().lower()
         if platform and platform != "unknown":
@@ -952,6 +1094,49 @@ def _register_extra_packs(reg: Registry, db) -> None:
         logger.info("flow pack registered: %s", name)
 
 
+#: How long one person's policy answer is reused by the stored-row check. Rows are re-checked on
+#: every refresh (about every ten seconds); the policy is one HTTP read per person per this window.
+ROW_POLICY_TTL_S = 60.0
+
+
+def user_row_check(reg: Registry, *, read=None, floor=None, now=time.monotonic):
+    """THE CHECK A PERSON'S STORED FLOW ROW MEETS WHEN IT IS LOADED (ADR-0046 decisions 6, 9): the
+    steps `_global/POLICIES.md` lets a person's flow name, and the minimum gap between two fires.
+    The same two rules `flows_api._check_user_flow` applies at submission. Returns the refusal
+    reason, or None."""
+    read = read or policies.read
+    cache: dict[str, tuple[float, set]] = {}
+
+    def _floor() -> int:
+        if floor is not None:
+            return int(floor)
+        import flows_config  # noqa: PLC0415
+        return policies.company_quota("routine_min_interval_minutes", "VEXA_FLOWS_USER_MIN_INTERVAL_S", scale=60)
+
+    def check(scope: str, name: str, steps, cron) -> "str | None":
+        uid = str(scope or "")[len("user:"):]
+        hit = cache.get(uid)
+        if hit is None or now() - hit[0] > ROW_POLICY_TTL_S:
+            try:
+                rules = read(uid)
+            except Exception:  # noqa: BLE001 — a policy that cannot be read is the defaults
+                rules = policies.resolve(None)
+            hit = (now(), policies.user_flow_steps(rules, reg.user_allowed, reg.steps))
+            cache[uid] = hit
+        if any(str(s) not in hit[1] for s in (steps or ())):
+            return "step_not_allowed"
+        if cron:
+            from flows.schedule import CronError, min_interval  # noqa: PLC0415
+            try:
+                if min_interval(cron) < _floor():
+                    return "quota_min_interval"
+            except CronError:
+                return "bad_cron"
+        return None
+
+    return check
+
+
 def build(reg: Registry, db) -> None:
     # ── shared small steps ────────────────────────────────────────────────────
     @reg.step
@@ -992,8 +1177,14 @@ def build(reg: Registry, db) -> None:
         uid = (ctx.prior.get("ensure_user") or {}).get("uid")
         if uid and not setting(uid, "mail_rsvp"):
             return Done({"skipped": "mail_rsvp is off for this person"})
-        mid = mx.send_rsvp_accept(ctx.refs["organizer"], ics_uid=ctx.refs["ics_uid"],
-                                  start_epoch=ctx.refs["start"], title=ctx.refs["title"])
+        out = outbound.send(
+            "rsvp", ctx.refs["organizer"], uid=str(uid or ""), subject="Accepted", body="", db=db,
+            sender=lambda to, *_a, **_k: mx.send_rsvp_accept(
+                to, ics_uid=ctx.refs["ics_uid"], start_epoch=ctx.refs["start"],
+                title=ctx.refs["title"]))
+        if not out.sent:
+            return Done({"skipped": f"rsvp not sent: {out.result} ({out.detail})"})
+        mid = out.message_id
         return Done({"message_id": mid}, provider_ref=mid)
 
     # REACHES THE AGENT DOMAIN (PRD decision 40.7). Declared, not checked inside the body:
@@ -1022,12 +1213,16 @@ def build(reg: Registry, db) -> None:
         if not setting(uid, "mail_join"):
             return Done({"skipped": "mail_join is off for this person"})
         ready = scaffolded(uid)
-        body = (f"Vexa accepted the invitation and joins {ctx.refs['url']} at "
-                f"{_their_clock(uid, ctx.refs['start'])}.")
+        subject, body = mailtext.render("bot-scheduled", uid, {
+            "title": ctx.refs["title"], "url": ctx.refs["url"],
+            "when": _their_clock(uid, ctx.refs["start"])})
         if not ready:
             body += ("\n\nOne thing before your minutes can flow: your workspace isn't set up yet — "
                      "answer the setup email that follows (it's a short conversation, not a form).")
-        mid = notify(ctx.refs["organizer"], f"Vexa will join: {ctx.refs['title']}", body)
+        mid = mail("bot-scheduled", ctx.refs["organizer"],
+                   subject or f"Vexa will join: {ctx.refs['title']}", body, db=db, uid=uid)
+        if mid is None:
+            return Done({"skipped": "mail.bot-scheduled is off"})
         # the ack is a thread anchor too: replying to the meeting confirmation is a conversation
         mx.register_thread(db, mid, uid, "main" if ready else "onboarding")
         return Done({"message_id": mid, "workspace_ready": ready}, provider_ref=mid)
@@ -1078,8 +1273,12 @@ def build(reg: Registry, db) -> None:
         platform's meetings table without telling flows. So the fact is emitted from inside
         invite_intake, before await_start parks: a second producer can admit the same event type
         later without touching this step. Prior: ensure_user."""
-        ctx.emit(UPCOMING.name, f"prep-{ctx.refs['ics_uid']}",
-                 {**ctx.refs, "uid": ctx.prior["ensure_user"]["uid"]})
+        uid = ctx.prior["ensure_user"]["uid"]
+        ctx.emit(UPCOMING.name, f"prep-{ctx.refs['ics_uid']}", {**ctx.refs, "uid": uid})
+        # The owner's bell says the bot is set (#1783): no meeting row exists yet, so the notice
+        # names the invite and opens nothing of its own. An echo — it never fails the intake.
+        _common.notify_in_app("bot_scheduled", to=str(uid), meeting_id=ctx.refs["ics_uid"],
+                              title=str(ctx.refs.get("title") or ""), object_kind="none")
         return Done({})
 
     # THE THREE THAT ARE THE MEETING (PRD decision 40.7 + decision 5). They wait for a call to
@@ -1152,10 +1351,11 @@ def build(reg: Registry, db) -> None:
                 ctx.scratch["sent_hash"] = h                    # seen globally — don't resend
                 reply = None
             if reply is not None:
-                mid = notify(ctx.refs.get("person") or ctx.refs["organizer"],
-                             subject_line(ctx), reply,
-                             in_reply_to=ctx.scratch.get("thread"))
-                mx.register_thread(db, mid, uid, session)
+                mid = mail("reply", ctx.refs.get("person") or ctx.refs["organizer"],
+                           subject_line(ctx), reply, db=db, uid=uid,
+                           in_reply_to=ctx.scratch.get("thread"))
+                if mid:
+                    mx.register_thread(db, mid, uid, session)
                 ctx.scratch["thread"] = ctx.scratch.get("thread") or mid
                 ctx.scratch["sent_hash"] = h
                 db.execute("""INSERT INTO mail_outbox_sent (subject_uid, session, hash, sent_at)
@@ -1163,10 +1363,10 @@ def build(reg: Registry, db) -> None:
                            {"u": uid, "s": session, "h": h, "t": ctx.clock_now})
                 ctx.scratch["last_mail_at"] = ctx.clock_now
             elif ctx.clock_now - ctx.scratch.get("last_mail_at", ctx.clock_now) > NUDGE_EVERY_S:
-                mid = notify(ctx.refs.get("person") or ctx.refs["organizer"],
-                             "Still there? " + subject_line(ctx),
-                             "Reply whenever — your minutes wait for this thread.",
-                             in_reply_to=ctx.scratch.get("thread"))
+                mid = mail("reply", ctx.refs.get("person") or ctx.refs["organizer"],
+                           "Still there? " + subject_line(ctx),
+                           "Reply whenever — your minutes wait for this thread.", db=db, uid=uid,
+                           in_reply_to=ctx.scratch.get("thread"))
                 ctx.scratch["last_mail_at"] = ctx.clock_now
             return Wait(seconds=10)
         _drive.__name__ = f"drive_{prefix}"
@@ -1571,7 +1771,10 @@ def build(reg: Registry, db) -> None:
             provenance={"flow": "post_meeting", "step": "email_minutes",
                         "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                         "minted_by": str(ctx.refs["uid"])})
-        mid = notify(organizer, f"Minutes: {_mail_title(ctx)}", body, link=link)
+        mid = mail("minutes", organizer, f"Minutes: {_mail_title(ctx)}", body, link=link, db=db,
+                   uid=str(ctx.refs["uid"]))
+        if mid is None:
+            return Done({"skipped": "mail.minutes is off"})
         mx.register_thread(db, mid, ctx.refs["uid"], f"meet-{ctx.refs['meeting_id']}")
         # AND EVERYONE ELSE IN THE WORKSPACE THIS MEETING BELONGS TO. A meeting bound to a workspace
         # is the GROUP's, so its write-up is the group's too — mailing it to the requester alone is
@@ -1637,8 +1840,8 @@ def build(reg: Registry, db) -> None:
                     provenance={"flow": "post_meeting", "step": "email_minutes_group",
                                 "reaction_id": str(getattr(ctx, "reaction_id", "") or ""),
                                 "minted_by": uid, "workspace": str(ws)})
-                notify(addr, subject, body, link=their_link)
-                sent += 1
+                if mail("minutes", addr, subject, body, link=their_link, db=db, uid=uid):
+                    sent += 1
             except Exception as e:  # noqa: BLE001 — one member's mail never costs the others theirs
                 logger.warning("group minutes: member mail failed in workspace %s (uid %s): %s", ws, uid, e)
         return sent
@@ -1667,7 +1870,11 @@ def build(reg: Registry, db) -> None:
         # uid} — no `title` — so this is the branch that runs on the deployment least likely to
         # have had one. `_provenance` resolves the same way, through the same one function.
         title = _mail_title(ctx)
-        mid = notify(organizer, f"Recorded: {title}", body)
+        mid = mail("recording", organizer, f"Recorded: {title}", body, db=db,
+                   uid=str(ctx.refs["uid"]))
+        if mid is None:
+            return Done({"skipped": "mail.recording is off", "degraded": "agent:not_present",
+                         "report": None})
         mx.register_thread(db, mid, ctx.refs["uid"], f"meet-{ctx.refs.get('meeting_id')}")
         return Done({"message_id": mid, "degraded": "agent:not_present",
                      "report": None}, provider_ref=mid)
@@ -1710,7 +1917,8 @@ def build(reg: Registry, db) -> None:
             if a in sent:
                 continue
             try:
-                notify(a, subject, body)
+                if not mail("recording", a, subject, body, db=db, uid=str(ctx.refs.get("uid") or "")):
+                    continue
                 sent.append(a)
                 ctx.scratch["sent"] = sent
             except Exception as e:  # noqa: BLE001 — one bad address never blocks the rest
@@ -2138,7 +2346,9 @@ def build(reg: Registry, db) -> None:
             # off, which is how the double-splice went unnoticed), and the "—\nOpen it and ask
             # anything about the meeting:" trailer. Four elements were approved; this is four.
             try:
-                notify(a, subject, body, link=link)
+                if not mail("attendee-report", a, subject, body, link=link, db=db,
+                            uid=str(ctx.refs.get("uid") or "")):
+                    continue
                 sent.append(a)
                 ctx.scratch["sent"] = sent
                 drops.append({"to": a, "link": link})
@@ -2272,7 +2482,8 @@ def build(reg: Registry, db) -> None:
             kept.pop()
         return "\n".join(kept) + "\n\n" + line + "\n" if kept else line + "\n"
 
-    def _write_if_changed(their_uid: str, path: str, content: str, *, report: str = "") -> bool:
+    def _write_if_changed(their_uid: str, path: str, content: str, *, report: str = "",
+                          title: str = "", slug: "str | None" = None) -> bool:
         """Write only when the bytes differ. This is the ACROSS-RUN half of idempotence: scratch
         remembers who is done inside one run, but a worker restart loses scratch, and a re-run
         that rewrites an identical file still produces a second commit in somebody's history.
@@ -2282,11 +2493,14 @@ def build(reg: Registry, db) -> None:
         report region, only that region is rewritten and everything else on the page survives. It is
         the same read this function already makes; what changes is that the answer is used for more
         than a comparison."""
-        current = ws_file(their_uid, path)
-        wanted = _merge_meeting_doc(current, content, report) if report else content
+        current = ws_file(their_uid, path, slug)
+        wanted = _merge_meeting_doc(current, content, report, title) if report else content
         if current == wanted:
             return False
-        ag.workspace_write(their_uid, path, wanted)
+        if slug:
+            ag.workspace_write(their_uid, path, wanted, slug=slug)
+        else:
+            ag.workspace_write(their_uid, path, wanted)
         return True
 
     # REACHES THE AGENT DOMAIN (PRD decision 40.7). Declared, not checked inside the body:
@@ -2299,6 +2513,48 @@ def build(reg: Registry, db) -> None:
     # recorded absence. It is the last step, so skipping it changes only what the reaction says
     # about itself: `done` with a complete timeline, instead of `done / agent:not_present` at
     # step one with seven steps' worth of silence behind it.
+    # A CALL'S CHANGES WAIT FOR ITS OWNER (ADR-0048 decision 7). A call held in a session lands in
+    # no workspace on its own: the report becomes a proposed page on the owner's desk, and each
+    # commitment it names a proposed commitment, recorded in the session the call belonged to. The
+    # owner accepts (as is or edited) or rejects each one there; an accepted page is committed in
+    # their name. Every other meeting skips this step, and a call skips `drop_to_attendees`.
+    @reg.step(needs=("agent", "meetings"), absent={"agent": "skip"})
+    def propose_call_changes(ctx: StepCtx):
+        """Prior: process_meeting{report}. Effect: proposals in the call's session.
+        Result: {proposed, session} or {skipped}."""
+        sid = _call_session(ctx)
+        if not sid:
+            return Done({"skipped": "not a call held in a session"})
+        pm = ctx.prior.get("process_meeting") or {}
+        report = _readable(pm.get("report") or "").strip()
+        if not report:
+            return Done({"proposed": 0, "session": sid, "skipped": "there is no report to propose"})
+        uid = str(ctx.refs["uid"])
+        mid = ctx.refs.get("meeting_id")
+        if ctx.scratch.get("call_proposed"):
+            return Done({"proposed": ctx.scratch["call_proposed"], "session": sid})
+        title = _mail_title(ctx)
+        day = _meeting_stamp(ctx, uid)[:10]
+        entity_path = _note_path(ctx, uid, title)
+        filename = entity_path.rsplit("/", 1)[-1]
+        organizer = _organizer_address(ctx) or ""
+        roster = [str(a).strip().lower() for a in (ctx.refs.get("participants") or []) if str(a).strip()]
+        page = _drop_entity(title=title, day=day, entity_id=filename[:-3] if filename.endswith(".md") else filename,
+                            date_prose=_meeting_date(ctx, uid), organizer=organizer, participants=roster,
+                            report=report, link="", meeting_id=str(mid or ""),
+                            native=str(ctx.refs.get("native") or "").strip())
+        ag.propose_session_change(uid, sid, kind="page", body=page, title=title,
+                                  workspace=uid, path=entity_path, meeting_id=mid)
+        count = 1
+        for bullet in committed_bullets(report):
+            text = bullet.replace("[[", "").replace("]]", "").strip()
+            if text:
+                ag.propose_session_change(uid, sid, kind="commitment", body=text, title=title,
+                                          meeting_id=mid)
+                count += 1
+        ctx.scratch["call_proposed"] = count
+        return Done({"proposed": count, "session": sid, "entity": entity_path})
+
     @reg.step(needs=("agent", "meetings"), absent={"agent": "skip"})
     def drop_to_attendees(ctx: StepCtx):
         """The meeting's ARTEFACT into every desk in the room — the organiser's included. Plain
@@ -2360,6 +2616,9 @@ def build(reg: Registry, db) -> None:
 
         Prior: process_meeting{report}, email_attendees{drops}, email_minutes{link}
         Effect: N desk writes · Result: {dropped, to, failed, entity, proposed}."""
+        if _call_session(ctx):
+            return Done({"dropped": 0, "to": [], "failed": [],
+                         "skipped": "a call's changes wait for its owner (propose_call_changes)"})
         pm = ctx.prior.get("process_meeting") or {}
         report = _readable(pm.get("report") or "").strip()
         if not report:
@@ -2438,7 +2697,10 @@ def build(reg: Registry, db) -> None:
                     link=d.get("link") or "", meeting_id=str(mid or ""), native=native),
                     # A page this person has already grown keeps everything but its report region
                     # (#1598). Their words are not this step's to overwrite.
-                    report=report)
+                    report=report, title=title,
+                    # THE ORGANISER'S PAGE IS THE ONE THE ROW RECORDS, in the workspace it records
+                    # (#1783): an agenda page adopted in another of their workspaces gets the report.
+                    slug=(_recorded_note_workspace(ctx, uid) or None) if their_uid == uid else None)
                 _write_if_changed(their_uid, index_path, _index_entry(
                     ws_file(their_uid, index_path), title, filename, day))
                 # AND WHAT THEY OWE, ONTO THEIR SHORT LIST (Vexa-ai/vexa#1614). The report is the
@@ -2539,6 +2801,10 @@ def build(reg: Registry, db) -> None:
                 retryable=False)
         if _completion_seen(mid):
             return Done({"meeting_id": mid, "outcome": "completed"})
+        if "live_since" not in ctx.scratch and ctx.refs.get("uid"):
+            # The first tick is the bot going live: the owner's bell says so, once (#1783).
+            _common.notify_in_app("bot_joined", to=str(ctx.refs["uid"]), meeting_id=mid,
+                                  title=str(ctx.refs.get("title") or ctx.refs.get("native") or ""))
         since = ctx.scratch.setdefault("live_since", ctx.clock_now)
         if ctx.clock_now - since > LIVE_CAP_S:
             return Done({"meeting_id": mid, "outcome": "lapsed"})
@@ -2718,7 +2984,14 @@ def build(reg: Registry, db) -> None:
         if not subject:
             logger.warning("the meeting-share template carries no `subject:` line — falling back")
             subject = f"{values['inviter']} shared a meeting with you"
-        mid = notify(to, subject, body, link=link)
+        # The same link lights the recipient's bell when the address has an account (#1783):
+        # agent-api writes it; an address with none is told by the mail alone.
+        _common.notify_in_app("meeting_shared", email=to, actor=uid, actor_name=values["inviter"],
+                              meeting_id=meeting_id, title=str(ctx.refs.get("title") or ""), url=link)
+        mid = mail("meeting-share", to, subject, body, link=link, db=db, uid=uid)
+        if mid is None:
+            return Done({"skipped": "mail.meeting-share is off", "to": to,
+                         "meeting_id": meeting_id})
         return Done({"message_id": mid, "to": to, "meeting_id": meeting_id}, provider_ref=mid)
 
     s = reg.steps
@@ -2731,6 +3004,14 @@ def build(reg: Registry, db) -> None:
                     s["emit_prep"],
                     s["await_start"], s["dispatch_bot"], s["emit_started"],
                     s["run_meeting"], s["emit_completed"]])
+    # VERSION 4 (ADR-0050, founder 2026-10-14: "a reschedule moves it, a cancel removes it") — the
+    # bot half moves to `invite_join`. Version 3 parked one reaction on the invite's FIRST start and
+    # never saw an update: a moved meeting got its bot at the old time, a cancelled one got it anyway.
+    reg.flow(name="invite_intake", version=4, on=INVITE,
+             steps=[s["ensure_user"], s["rsvp_accept"], s["ack_by_email"], s["emit_prep"]])
+    # THE BOT FOLLOWS THE MEETING (`invite_join`) is NOT registered here: it is a SEED (`SEEDS`), a
+    # company flow the global account's agent owns, reads and changes from chat (founder 2026-10-14:
+    # "the global level is owned by the global user's agent"). The image carries its steps only.
     # `onboard_person` and `onboard_group` are RETIRED (decision 29) — the email conversations that
     # chased a person until they finished setup. They are not declared, so nothing reacts to
     # `onboarding.*.needed` any more, and `spawn_onboardings` no longer emits it either. Their
@@ -2740,9 +3021,10 @@ def build(reg: Registry, db) -> None:
     # 3 were authored through the API against this same flow name and `match()` takes the newest
     # number wherever it came from; a code change that does not clear the highest DB version is
     # inert, which is exactly the defect `Registry.shadowing_versions` now warns about.
-    reg.flow(name="post_meeting", version=4, on=COMPLETED,
+    # VERSION 5 — `propose_call_changes` (ADR-0048 decision 7): a call's changes wait for its owner.
+    reg.flow(name="post_meeting", version=5, on=COMPLETED,
              steps=[s["process_meeting"], s["email_minutes"],
-                    s["email_attendees"], s["drop_to_attendees"]])
+                    s["email_attendees"], s["propose_call_changes"], s["drop_to_attendees"]])
     # THE QUEUE FLOW THIS FILE KEEPS (PRD decision 42.2). It is one step and produces no effect:
     # what it produces is a REACTION ROW in a state a person can be told about — pending while a
     # call runs. That row is the queue. Its two siblings, the desk cards, are `production_agent`'s.
@@ -2769,6 +3051,30 @@ def build(reg: Registry, db) -> None:
     reg.flow(name="onboarding", version=1, on=ONBOARDED,
              steps=[s["first_meeting"]])
 
+    # ── a person's own flows (ADR-0046) ───────────────────────────────────────
+    # `agent_run` is the step a routine is made of, and the one step the image marks user-allowed.
+    # Registered whatever the deployment: with no agent domain it answers `agent:not_present`.
+    from flows_steps import routine as _routine
+    _routine.register(reg, db)
+    _routine.register_sinks(reg, db)
+    # A BOT AT A TIME WITH NO AGENT RUN (flows phase 0): a person's flow may name it, with the grant.
+    mt.register_user_steps(reg)
+    mt.register_light_steps(reg)
+    # …and a person's STORED row meets the allow-list and the minimum interval every time it is
+    # loaded, so a policy narrowed after submission stops the rows it no longer allows.
+    reg.row_check = user_row_check(reg)
+    # Agents speak to each other through a flow (ADR-0046 decision 13): one instance flow delivers
+    # every `thread.message` into its target thread. No agent domain, nothing to deliver to.
+    # WHAT A MEETING SIGNAL DOES (transcript signals): its one step is in the vocabulary whatever
+    # the deployment (`needs=("agent",)` answers `not_present` without the agent domain); the flow
+    # that runs it is the `meeting_signal` SEED below, the company's to change.
+    from flows_steps import signals as _signals
+    _signals.register(reg)
+    if _common.domain_present("agent"):
+        _routine.register_messages(reg)
+        reg.flow(name=_routine.MESSAGE_FLOW, version=1, on=EventType(_routine.MESSAGE_EVENT),
+                 steps=[reg.steps["deliver_message"]])
+
     # ── the agent-only half ───────────────────────────────────────────────────
     # `meeting_prep`, `email_chat`, `desk_setup`, `desk_claim` and `workspace_invite` are
     # registered by `flows_defs/production_agent.py`, and ONLY where the agent domain is deployed. The call is
@@ -2778,3 +3084,53 @@ def build(reg: Registry, db) -> None:
     # ── whatever else this DEPLOYMENT carries ─────────────────────────────────
     # Last, for the same reason and one more: a private pack composes on top of everything above.
     _register_extra_packs(reg, db)
+
+
+# ── seeds: company flows the global account owns (founder 2026-10-14) ──────────────────────────────
+#: Built-in company flows, as DATA. Each is written into `flow_version` (scope `instance`) once, the
+#: first time a worker finds no version of it, and never again: from then on it is the global
+#: account's, changed from its chat (`flows_submit` with `scope: instance`, versioned, activate or
+#: retire), and an upgrade that changes the seed does not overwrite it — the new seed is only a
+#: version the global agent may choose to submit. `created_by: seed` marks the copy.
+SEEDS = (
+    # THE BOT FOLLOWS THE MEETING (ADR-0050): one keyed schedule per meeting (`event_key`: UID, plus
+    # RECURRENCE-ID for one occurrence), armed by `invite.received`, MOVED by every update, CANCELLED
+    # by `invite.cancelled`; one minute before the start it runs the steps invite_intake v3 ran after
+    # `await_start`, with the invite's refs (its `workspace` among them), so the meeting's record is
+    # the same and it lands in the invite's workspace.
+    {"name": "invite_join", "on_event": "invite.*",
+     "steps": ["ensure_user", "dispatch_bot", "emit_started", "run_meeting", "emit_completed"],
+     "params": {"_trigger": {"kind": "relative", "filter": "payload.url exists",
+                             "at": "payload.start - 60s", "key": "payload.event_key"}}},
+    # WHAT A MEETING SIGNAL DOES (transcript signals, 2026-10-15): the `signals` service posts one
+    # `meeting.signal` when a live meeting's buffer is worth the agent's attention; this wakes the
+    # meeting's agent in the meeting's chat with the buffer as data. A company changes the plan
+    # (`params.plan`, `{score}` filled in) or retires the flow to stop every wake.
+    {"name": "meeting_signal", "on_event": "meeting.signal", "steps": ["wake_meeting_chat"],
+     "params": {}},
+    # …AND A ROOM'S (rooms, 2026-10-15): a room's sensor wakes the agent in the room itself.
+    {"name": "room_signal", "on_event": "room.signal", "steps": ["wake_meeting_chat"], "params": {}},
+)
+
+
+def seed(db, now: "float | None" = None) -> list:
+    """Write every seed that has no version yet. Returns the names written. Never overwrites."""
+    import json as _j
+    import time as _t
+    written = []
+    for d in SEEDS:
+        try:
+            have = db.execute("SELECT COUNT(*) FROM flow_version WHERE scope = 'instance' AND name = :n",
+                              {"n": d["name"]})
+        except Exception:  # noqa: BLE001 — a store with no table (a stub) seeds nothing
+            return written
+        if have and int(have[0][0] or 0):
+            continue
+        db.execute("INSERT INTO flow_version (scope, name, version, on_event, cron, steps, params, "
+                   "status, created_by, created_at) VALUES ('instance', :n, 1, :e, NULL, :s, :p, "
+                   "'active', 'seed', :t)",
+                   {"n": d["name"], "e": d["on_event"], "s": _j.dumps(d["steps"]),
+                    "p": _j.dumps(d["params"]), "t": _t.time() if now is None else now})
+        written.append(d["name"])
+    return written
+

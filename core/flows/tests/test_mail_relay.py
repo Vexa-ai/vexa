@@ -218,3 +218,80 @@ def test_the_ca_file_is_what_starttls_trusts(relay, monkeypatch, tmp_path):
     conn, _ = emailx._smtp()
     assert conn.starttls_context.verify_mode == ssl.CERT_REQUIRED
     assert conn.starttls_context.cert_store_stats()["x509_ca"] > 0
+
+
+# ── capture mode holds for every outbound channel ─────────────────────────────────────────────
+
+class _Captured:
+    sent: list = []
+
+    def __init__(self, host, port, timeout=None, **kw):
+        self.where = (host, port)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def send_message(self, msg):
+        _Captured.sent.append((self.where, msg))
+
+
+class _GraphSpy:
+    def __init__(self):
+        self.calls = []
+
+    def address(self):
+        self.calls.append("address")
+        return "tenant@vexa.test"
+
+    def send(self, *a, **kw):
+        self.calls.append("send")
+        return "<graph@x>"
+
+    def send_calendar_reply(self, *a, **kw):
+        self.calls.append("send_calendar_reply")
+        return "<graph-rsvp@x>"
+
+
+@pytest.fixture
+def graph_in_capture(monkeypatch):
+    from flows_integrations import graph_client
+    from flows_steps import notify
+    spy = _GraphSpy()
+    graph_client.use(spy)
+    notify.use(None)
+    _Captured.sent = []
+    monkeypatch.setattr(emailx.smtplib, "SMTP", _Captured)
+    monkeypatch.setattr(emailx.smtplib, "SMTP_SSL", _Captured)
+    monkeypatch.setenv("VEXA_NOTIFY_CHANNEL", "graph")
+    monkeypatch.setenv("VEXA_MAIL_RELAY", "capture")
+    monkeypatch.setenv("VEXA_MAIL_CAPTURE_SMTP", "capture.local:1025")
+    monkeypatch.setenv("VEXA_MAIL_ADDR", "vexa@deploy.test")
+    yield spy
+    graph_client.use(None)
+    notify.use(None)
+
+
+def test_capture_mode_routes_the_graph_channel_to_capture(graph_in_capture):
+    from flows_steps import notify
+    assert notify.channel().name == "smtp"
+    notify.notify("anna@partner.test", "Hello", "Body", link="https://app/x")
+    emailx.send_rsvp_accept("host@partner.test", ics_uid="u-1", start_epoch=1_900_000_000.0,
+                            title="Sync")
+    assert graph_in_capture.calls == [], "no Graph call is made while the relay captures"
+    assert [w for w, _ in _Captured.sent] == [("capture.local", 1025)] * 2
+    assert emailx.delivery_mode() == "captured"
+
+
+def test_a_cached_graph_channel_does_not_outlive_capture(graph_in_capture, monkeypatch):
+    from flows_steps import notify
+    monkeypatch.setenv("VEXA_MAIL_RELAY", "relay")
+    monkeypatch.setenv("VEXA_MAIL_SMTP_HOST", "relay.example")
+    assert notify.channel().name == "graph"            # cached while the relay is real
+    monkeypatch.setenv("VEXA_MAIL_RELAY", "capture")
+    notify.use(notify.GraphNotifier())                  # even an installed Graph channel
+    assert notify.channel().name == "smtp"
+    notify.notify("anna@partner.test", "Hello", "Body")
+    assert graph_in_capture.calls == [] and len(_Captured.sent) == 1

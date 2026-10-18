@@ -32,6 +32,11 @@ dispatch's `regime`, `workspaces` and `target` — and `Caller` carries it. A wo
 not `human` runs with nobody in the loop (`Caller.is_unwatched`, the rule gateway-identity.v1's
 `identity_token.is_unwatched` states for the services behind the gateway), and flows-api refuses it
 the verbs that act as the person with `REFUSAL`, the body every other service answers it with.
+
+A WORKER WHOSE TURN OTHER PEOPLE READ (`delegation.shared`, ADR-0048 decision 4) is `Caller.is_shared`.
+A shared conversation's answer may use only what every participant can read, and a person's flows,
+reactions, timeline and queue are theirs alone, so flows-api refuses it every route but filing a
+friction report, with `SHARED_REFUSAL`.
 """
 from __future__ import annotations
 
@@ -40,6 +45,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import flows_config
+import flows_obs
 
 #: identity's authz oracle — the route, not a route. Same path the gateway posts to.
 VALIDATE_PATH = "/internal/validate"
@@ -70,6 +76,17 @@ REFUSAL = {
                         "meeting run), and mail, calendar and connection actions only work when you "
                         "ask in chat. Nothing is wrong with your connection, and signing in again "
                         "will not change it.",
+}
+
+
+#: The answer a worker whose turn other people read gets for anything only its person may see —
+#: gateway-identity.v1's ``SHARED_REFUSAL``, word for word (gate:fact-parity holds the copy).
+SHARED_REFUSAL = {
+    "status": "refused",
+    "reason": "shared_conversation",
+    "instruction": "Other people read this conversation, so its answer may use only what every one "
+                   "of them can read. Say you cannot use it here, and offer to answer in the "
+                   "person's private chat; do not retry it another way.",
 }
 
 
@@ -108,6 +125,11 @@ class Caller:
     #: when the credential is a worker's delegation token, `{}` when that answer lost it. `None` is a
     #: person's own key, the operator key and the timeline key.
     delegation: Optional[Mapping] = field(default=None, hash=False)
+    #: identity's own answer that this caller is the deployment's admin account (`admin_account` on
+    #: `/internal/validate` for its own key, `person_admin_account` for its chat's delegation token) —
+    #: what lets it write an `instance` flow (ADR-0046 decision 5). A worker with nobody in the loop
+    #: still cannot author: `POST /flows` is `PERSON_ONLY`.
+    instance_admin: bool = False
 
     @property
     def is_delegated(self) -> bool:
@@ -124,6 +146,26 @@ class Caller:
         """A worker whose regime is not `human` — empty, unknown and `autonomous` alike: nobody is in
         the loop this turn. `identity_token.is_unwatched`'s rule, read from identity's answer."""
         return self.is_delegated and self.regime != "human"
+
+    @property
+    def is_shared(self) -> bool:
+        """A worker whose answer other people read (delegation.v1 ``scope.shared``, carried by
+        identity as ``delegation.shared``). Only ``true`` counts."""
+        return self.is_delegated and (self.delegation or {}).get("shared") is True
+
+    @property
+    def flow(self) -> str:
+        """The routine this worker runs for (delegation.v1 ``scope.flow``), ``""`` for anything else."""
+        return str((self.delegation or {}).get("flow") or "").strip()
+
+    @property
+    def grants(self) -> frozenset:
+        """The unattended verbs this routine's person granted it (delegation.v1 ``scope.grants``),
+        as identity answered them — only beside the routine's name, empty for everything else."""
+        raw = (self.delegation or {}).get("grants")
+        if not self.flow or not isinstance(raw, list):
+            return frozenset()
+        return frozenset(str(g) for g in raw)
 
     @property
     def is_admin(self) -> bool:
@@ -200,5 +242,24 @@ def resolve(token: str, *, secret: str = "") -> Caller:
     uid = body.get("user_id")
     if uid in (None, ""):
         raise IdentityUnavailable("identity answered 200 with no user_id")
-    return Caller(kind="subject", uid=str(uid), email=str(body.get("email") or ""),
-                  delegation=_delegation_of(token, body))
+    delegation = _delegation_of(token, body)
+    # INSTANCE-SCOPE FLOWS ARE THE DEPLOYMENT'S ADMIN ACCOUNT'S (identity.v1 `admin_account`, the one
+    # identity that writes the company layer — founder ruling 2026-10-11), never an everyday account's.
+    # The account's own key answers `admin_account`; its chat's delegation token answers
+    # `person_admin_account`, which identity computes from the person the VERIFIED token names — so
+    # a worker cannot claim it. A worker's answer that lost its delegation is never the account.
+    if delegation is None:
+        is_account = body.get("admin_account") is True
+    else:
+        is_account = bool(delegation) and body.get("person_admin_account") is True
+    caller = Caller(kind="subject", uid=str(uid), email=str(body.get("email") or ""),
+                    delegation=delegation, instance_admin=is_account)
+    # THE SESSION, from the one source that can vouch for it: identity verified `unit` inside the
+    # delegation token's signature (logevent.v1 `session`). Never from a header the caller sent.
+    flows_obs.set_user_id(caller.uid)
+    unit = (caller.delegation or {}).get("unit")
+    if unit:
+        flows_obs.set_session(str(unit))
+    flows_obs.log_event("caller_resolved",
+                        fields={"delegated": caller.is_delegated, "regime": caller.regime or None})
+    return caller

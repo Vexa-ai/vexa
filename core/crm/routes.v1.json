@@ -1,0 +1,150 @@
+{
+  "contract": "routes.v1",
+  "domain": "crm",
+  "owner": "core/crm",
+  "edge": "gateway",
+  "note": "The optional CRM (ADR-0047). ABSENT unless the deployment names CRM_API_URL: then the edge fronts the verbs the terminal needs under /crm/* — the record page's read, history and review, and the desktop's desk/read, desk/arrange, desk/proposal and desk/undo, and the person's own workspace settings desk/workspaces/read and desk/workspaces/set (all served only while the `desktop` feature is on), and the cards' card/list, card/read, card/create, card/update, card/members and card/membership (served only while `desktop_cards` is on) —, forwarded onto crm-api's own paths, with the caller's key, which crm-api resolves through identity itself. Everything else about the CRM is the agent's: the crm_* tools in the one MCP. No row admits a worker's delegation token: the record page and the desktop are a person's, and review and applying a desktop suggestion take a person's own credential; workers reach the desk through the desktop_* tools and cards only through card_list / card_propose / card_update_propose (a proposed card is accepted through /crm/review, a person's).",
+  "presence_env": "CRM_API_URL",
+  "forward": {
+    "edge_prefix": "/crm/",
+    "upstream_prefix": "/"
+  },
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/crm/read",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/history",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/review",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/desk/read",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/desk/arrange",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/desk/proposal",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/desk/undo",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/desk/workspaces/read",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/desk/workspaces/set",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/card/list",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/card/read",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/card/create",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/card/update",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/card/members",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/card/membership",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/profile/read",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/crm/profile/link",
+      "scopes": [
+        "bot",
+        "tx"
+      ]
+    }
+  ]
+}

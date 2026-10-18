@@ -27,5 +27,16 @@ Base.metadata.create_all(engine, checkfirst=False)
 header = ("-- GENERATED from src/flows_schema/models.py (the SSOT) by core/flows/scripts/gen_schema.py.\n"
           "-- DO NOT EDIT BY HAND — edit the models and regenerate. The engine and the sqlite\n"
           "-- test rig consume this file so they stay stdlib-pure; the drift gate keeps it honest.\n\n")
-OUT.write_text(header + "\n\n".join(stmts) + "\n")
+# A table's indexes come out of a set, so their order changes with the hash seed: sort each
+# consecutive run of CREATE INDEX statements by its text, so the file is the same on every run.
+ordered: list[str] = []
+run: list[str] = []
+for st in stmts:
+    if st.startswith("CREATE INDEX") or st.startswith("CREATE UNIQUE INDEX"):
+        run.append(st)
+        continue
+    ordered.extend(sorted(run)); run = []
+    ordered.append(st)
+ordered.extend(sorted(run))
+OUT.write_text(header + "\n\n".join(ordered) + "\n")
 print(f"wrote {OUT} · {len(stmts)} statements")

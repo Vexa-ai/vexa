@@ -1,0 +1,5 @@
+{
+  "status": "refused",
+  "reason": "person_confirmation_required",
+  "instruction": "A person accepts or rejects a proposed change themselves. Tell them it is waiting and give them the record's link; do not retry it another way."
+}

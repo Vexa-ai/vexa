@@ -43,7 +43,7 @@ _SRC = _ROOT / "src"
 #: (worker · mailbox · api) selected by command, so the identity claim is that all three import.
 #: The probe's other half (`assert os.path.exists('/app/mcp.tools.v1.json')`) is about the IMAGE's
 #: layout, which only the built image can answer; the source of both is
-#: `.github/workflows/release-validate.yml`, job `image-identity`, case `vexaai/v012-flows`.
+#: `.github/workflows/release-validate.yml`, job `image-identity`, case `vexaai/vexa-flows`.
 IDENTITY_PROBE = "import flows_worker, flows_integrations.mailbox, flows_integrations.flows_api"
 
 

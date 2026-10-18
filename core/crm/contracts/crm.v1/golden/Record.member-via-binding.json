@@ -1,0 +1,38 @@
+{
+  "id": "430242d1-37fc-5198-9ab9-7b335cebfbea",
+  "org_id": "acme",
+  "object_type": "Company",
+  "revision": 1,
+  "quarantined": false,
+  "fields": {
+    "Name": "Globex",
+    "Stage": "Customer"
+  },
+  "narrative": "Globex buys **minutes**.",
+  "card": {
+    "version": 0,
+    "layout": null
+  },
+  "href": "/crm?record=430242d1-37fc-5198-9ab9-7b335cebfbea",
+  "sources": [],
+  "links": [],
+  "actions": {
+    "can_review": false,
+    "can_update": true,
+    "can_propose": true
+  },
+  "mentioned_in": [
+    {
+      "workspace": "sales",
+      "page": "accounts/globex.md"
+    }
+  ],
+  "bound_to": [
+    "sales"
+  ],
+  "match_ids": [
+    "domain:globex.test"
+  ],
+  "account_id": null,
+  "proposals": []
+}

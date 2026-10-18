@@ -199,6 +199,8 @@ def test_the_exchange_invite_becomes_the_exact_invite_received_refs():
                           tzinfo=ZoneInfo("Europe/Berlin")).timestamp(),
         "ics_uid": "040000008200E00074C5B7101A82E00800000000A1B2C3D4E5F6",
         "occurrence": "20300902T140000",
+        "event_key": "040000008200E00074C5B7101A82E00800000000A1B2C3D4E5F6",
+        "sequence": 0,
         "title": "Planning",
         "group": None,
         "participants": ["anna.smith@example.test", "ben.meier@example.test"],

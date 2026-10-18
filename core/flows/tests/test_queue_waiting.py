@@ -246,13 +246,14 @@ def test_meeting_started_is_a_registered_trigger_with_a_flow():
 
 def test_invite_intake_publishes_meeting_started_at_a_new_version():
     """A step list is changed by ADDING a version — `match()` is newest-wins and a reaction in
-    flight keeps the version it was admitted on."""
+    flight keeps the version it was admitted on. Version 4 (ADR-0050) moved the bot half — and its
+    `emit_started` right after `dispatch_bot` — to the company seed `invite_join`."""
     reg = _registry(_StubDB())
     intake = [f for f in reg.by_event[production.INVITE.name] if f.name == "invite_intake"]
     newest = max(intake, key=lambda f: f.version)
-    assert newest.version == 3
-    assert "emit_started" in newest.steps
-    assert newest.steps.index("emit_started") == newest.steps.index("dispatch_bot") + 1
+    assert newest.version == 4 and "dispatch_bot" not in newest.steps
+    join = next(d for d in production.SEEDS if d["name"] == "invite_join")["steps"]
+    assert join.index("emit_started") == join.index("dispatch_bot") + 1
 
 
 def test_a_live_call_is_a_pending_reaction_and_it_clears_on_completion():

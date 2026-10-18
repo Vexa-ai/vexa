@@ -108,6 +108,15 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     # flow step that would dispatch an agent turn reports `not_present` instead of knocking on a
     # door that is not there. `defaulted` could not express that: a default URL asserts the domain
     # exists, and the absence then arrives as a connection error that retries forever.
+    "VEXA_FLOWS_CRM_API_URL": ("capability", None,
+                               "the optional CRM's door (ADR-0047). UNSET MEANS NO CRM IS DEPLOYED — "
+                               "flows_defs.crm then ends its step not_present."),
+    "VEXA_FLOWS_SENSORS_BROKER_URL": ("capability", None,
+                                      "the credential broker, for sensors' read-only provider calls "
+                                      "(ADR-0050). UNSET: no sensor reads a connection."),
+    "VEXA_FLOWS_SENSORS_KEY_FILE": ("capability", None,
+                                    "the broker's sensors-role key file (ADR-0050); the broker holds "
+                                    "the same file. UNSET: no sensor reads a connection."),
     "VEXA_FLOWS_AGENT_API_URL": ("capability", None,
                                  "agent-api's internal tier. UNSET MEANS THE AGENT DOMAIN IS NOT "
                                  "DEPLOYED — see flows_steps.common.domain_present."),
@@ -190,6 +199,22 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "How a set VEXA_MAIL_SMTP_HOST is secured: `auto` (implicit TLS when VEXA_MAIL_SMTP_SECURE is on, else STARTTLS whenever offered \u2014 the previous behaviour), `tls` (implicit), `starttls` (required; a relay that does not offer it is refused) or `none` (never upgrade; no credentials are sent). Flows only \u2014 the terminal's sign-in mail reads VEXA_MAIL_SMTP_SECURE."),
     "VEXA_MAIL_SMTP_CA_FILE": ("defaulted", "",
         "A PEM CA bundle a set relay's certificate must chain to, instead of the system store. Empty = the system store. Flows only \u2014 the terminal's Node runtime takes NODE_EXTRA_CA_CERTS."),
+    # THE SENDER IDENTITY AND THE ONE SWITCH FOR REAL DELIVERY (`flows_steps/emailx.py`). The same
+    # keys the terminal's sign-in mailer reads, so every mail leaves as one sender.
+    "VEXA_MAIL_SMTP_FROM": ("defaulted", "",
+        "The sender identity on every mail, e.g. `Vexa <info@vexa.ai>`. Empty = `Vexa <VEXA_MAIL_ADDR>`."),
+    "VEXA_MAIL_REPLY_TO": ("defaulted", "",
+        "The Reply-To on every mail — the mailbox the inbound mail sensor reads. Empty = no Reply-To."),
+    "VEXA_MAIL_RELAY": ("defaulted", "",
+        "THE ONE SWITCH for real delivery. Empty = as before (VEXA_MAIL_SMTP_HOST, or the Gmail preset); `capture` = every mail goes to VEXA_MAIL_CAPTURE_SMTP and reaches no real mailbox; `relay` = the VEXA_MAIL_SMTP_* relay for real. Under `relay`, recipients at test domains (.test, .invalid, .localhost, .example, example.com/org/net) are never relayed."),
+    "VEXA_MAIL_CAPTURE_SMTP": ("defaulted", "mailpit:1025",
+        "host:port of the capture double used when VEXA_MAIL_RELAY=capture."),
+    "VEXA_MAIL_MAX_PER_DAY": ("defaulted", "2000",
+        "The operator's ceiling on mail per kind per day, under whatever `mail_caps` in _global/POLICIES.md says. The sign-in link is never capped here (the terminal rate-limits it)."),
+    "VEXA_MAIL_KINDS_DEFAULT": ("defaulted", "shipped",
+        "What a mail kind does when _global/POLICIES.md does not answer `mail.<kind>`: `shipped` (sign-in, sharing and call invites on, everything else off) or `on` (every kind on — the behaviour before the mail catalogue, until the admin account decides)."),
+    "VEXA_MAIL_INBOUND_FILTER": ("defaulted", "vexa",
+        "Which inbound mail the mailbox acts on: `vexa` (meeting invitations and replies to mail Vexa sent; everything else is dropped at the edge, unstored) or `all` (the previous behaviour: every message is routed)."),
     "VEXA_MAILPIT_URL": ("defaulted", "http://127.0.0.1:8025", "mailpit's HTTP base, when the inbox is mailpit."),
     "VEXA_MAILPIT_LOOKBACK_S": ("defaulted", "300", "re-scan window behind the mailpit watermark."),
     "VEXA_NOTIFY_CHANNEL": ("defaulted", "smtp",
@@ -249,6 +274,27 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "defaulted", "120",
         "mail-triggered agent turns the whole deployment may run per window — the ceiling on what "
         "one inbox can cost, whoever sends it."),
+    "VEXA_FLOWS_SCHEDULE_CATCHUP_S": (
+        "defaulted", "3600",
+        "After downtime the worker fires a schedule flow's most recent missed slot once, if it is younger than this many seconds; older slots are skipped and counted (ADR-0046 decision 3)."),
+    "VEXA_FLOWS_LOOP_LIMIT": (
+        "defaulted", "1",
+        "How many times an event may start a flow that is already in the chain of flows that produced it (ADR-0046 decision 8). 1 means a flow's own step events never start that flow again."),
+    "VEXA_FLOWS_MAX_HOPS": (
+        "defaulted", "8",
+        "The longest chain of flows an event may carry; an event at this depth starts no flow at all (ADR-0046 decision 8)."),
+    "VEXA_FLOWS_USER_ACTIVE_FLOWS": (
+        "defaulted", "20",
+        "How many active flows one person may own. A submission over it is refused with quota_active_flows (ADR-0046 decision 9)."),
+    "VEXA_FLOWS_USER_MIN_INTERVAL_S": (
+        "defaulted", "900",
+        "The shortest gap, in seconds, a person's schedule flow may leave between two fires. A cron that fires closer is refused with quota_min_interval (ADR-0046 decision 9)."),
+    "VEXA_FLOWS_USER_RUNS_PER_DAY": (
+        "defaulted", "48",
+        "How many runs one person's flows may start in any 24 hours, counted separately for schedule fires and for event-started runs, so events about a person never use up the budget their scheduled routines run from. A run over it is not admitted, and is counted (ADR-0046 decision 9)."),
+    "VEXA_FLOWS_USER_MESSAGES_PER_DAY": (
+        "defaulted", "100",
+        "How many messages one person's agents may send to other agents in any 24 hours (message_agent, ADR-0046 decision 13). A message over it is refused with quota_messages_per_day."),
     "VEXA_FLOWS_MAIL_RATE_WINDOW_S": ("defaulted", "3600", "the window both mail rate limits count over."),
     "VEXA_FLOWS_MAIL_BODY_MAX": (
         "defaulted", "4000",
@@ -298,7 +344,8 @@ MAIL_KEYS = ("VEXA_MAIL_ADDR", "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_HOST",
              "VEXA_MAIL_SMTP_USER", "VEXA_MAIL_SMTP_PASSWORD", "VEXA_MAIL_SMTP_TLS",
              "VEXA_MAIL_SMTP_CA_FILE", "VEXA_MAIL_IMAP_HOST", "VEXA_MAIL_IMAP_PORT",
              "VEXA_MAIL_IMAP_TLS", "VEXA_MAIL_IMAP_USER", "VEXA_MAIL_IMAP_FOLDER",
-             "VEXA_MAIL_IMAP_CA_FILE")
+             "VEXA_MAIL_IMAP_CA_FILE", "VEXA_MAIL_SMTP_FROM", "VEXA_MAIL_REPLY_TO",
+             "VEXA_MAIL_RELAY", "VEXA_MAIL_CAPTURE_SMTP")
 
 
 def _decl(name: str) -> tuple[str, object, str]:

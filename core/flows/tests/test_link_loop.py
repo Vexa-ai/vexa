@@ -281,7 +281,10 @@ def test_the_prep_fact_is_emitted_inside_invite_intake():
     # `emit_prep`, which is a test failing on something it is not about.
     newest = max(v for (n, v) in reg.flows if n == "invite_intake")
     steps = reg.get("invite_intake", newest).steps
-    assert steps.index("emit_prep") < steps.index("await_start")
+    # VERSION 4 (ADR-0050): the intake ends at the prep; the bot is `invite_join`'s keyed schedule
+    assert steps[-1] == "emit_prep" and "await_start" not in steps
+    from flows_defs.production import SEEDS
+    assert next(d for d in SEEDS if d["name"] == "invite_join")["steps"][1] == "dispatch_bot"
     # DECISION 29: three touches and no others — RSVP accept, the ack mail, the prepare mail.
     assert "spawn_onboardings" not in steps
     assert ("onboard_person", 1) not in reg.flows and ("onboard_group", 1) not in reg.flows

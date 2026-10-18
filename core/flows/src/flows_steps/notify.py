@@ -89,14 +89,29 @@ class GraphNotifier:
 _CHANNELS = {"smtp": SmtpNotifier, "graph": GraphNotifier}
 
 _CHANNEL: Optional[NotifyPort] = None
+_CAPTURE: Optional[NotifyPort] = None
+
+
+def _capturing() -> bool:
+    from . import emailx
+    return emailx.relay_mode() == "capture"
 
 
 def channel() -> NotifyPort:
     """The process's outbound channel. Env-selected so a deployment, not a recipe, decides:
     ``VEXA_NOTIFY_CHANNEL`` names it; anything but ``smtp`` is refused loudly rather than
     silently falling back, because a notification that quietly went nowhere is the worst
-    failure this module can have."""
-    global _CHANNEL
+    failure this module can have.
+
+    CAPTURE HOLDS FOR EVERY CHANNEL: while ``VEXA_MAIL_RELAY=capture`` every message goes to the
+    capture double over SMTP, whatever channel is configured, cached or installed — a deployment
+    that says nothing reaches a real mailbox must not reach one through another wire. Checked on
+    every call, so a channel cached before the switch flipped is never used under it."""
+    global _CHANNEL, _CAPTURE
+    if _capturing() and (_CHANNEL is None or getattr(_CHANNEL, "name", "") in _CHANNELS):
+        if _CAPTURE is None:
+            _CAPTURE = SmtpNotifier()
+        return _CAPTURE
     if _CHANNEL is None:
         want = os.environ.get("VEXA_NOTIFY_CHANNEL", "smtp").strip().lower()
         if want not in _CHANNELS:

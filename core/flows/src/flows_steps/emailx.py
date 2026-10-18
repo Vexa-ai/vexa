@@ -55,7 +55,128 @@ def _needs_login() -> bool:
     `_smtp` because the answer is needed BEFORE a socket is opened — the credentials are resolved
     while the message is still being built, so a deployment that cannot name them is refused
     without first connecting to a mail server."""
+    if relay_mode() == "capture":
+        return False
     return not flows_config.get("VEXA_MAIL_SMTP_HOST")
+
+
+# ── WHO THE MAIL IS FROM, WHERE IT GOES, AND WHAT IS NEVER RELAYED ────────────────────────────────
+#
+# Operator config, one family for every sender (the terminal's sign-in mailer reads the same keys):
+#
+#   VEXA_MAIL_SMTP_FROM   the sender identity, e.g. `Vexa <info@vexa.ai>`; unset = `Vexa <VEXA_MAIL_ADDR>`
+#   VEXA_MAIL_REPLY_TO    where replies go (the address the inbound sensor reads); unset = no header
+#   VEXA_MAIL_RELAY       THE ONE SWITCH for real delivery:
+#                           unset    — as before: VEXA_MAIL_SMTP_HOST (or the Gmail preset)
+#                           capture  — every mail goes to VEXA_MAIL_CAPTURE_SMTP (`mailpit:1025`),
+#                                      no login, nothing reaches a real mailbox
+#                           relay    — the VEXA_MAIL_SMTP_* relay, for real
+#   VEXA_MAIL_CAPTURE_SMTP   host:port of the capture double for `capture`
+#
+# TEST DOMAINS ARE NEVER RELAYED: with VEXA_MAIL_RELAY=relay, a recipient at
+# `.test`, `.invalid`, `.localhost`, `.example` or `example.{com,org,net}` is refused BEFORE a socket is
+# opened (`MailSuppressed`). The rig's addresses live there, and a switch flipped to `relay` must not
+# start mailing them through a real provider.
+
+RELAY_MODES = ("", "capture", "relay")
+_TEST_TLDS = (".test", ".invalid", ".localhost", ".example")
+_TEST_DOMAINS = ("example.com", "example.org", "example.net")
+
+
+class MailSuppressed(mt.MailTransportError):
+    """A send refused on purpose (a test domain on a real relay) — not a fault, never retried."""
+
+    def __init__(self, to: str, why: str):
+        super().__init__("config", "smtp", "", "", why)
+        self.retryable = False
+        self.to = to
+        self.why = why
+
+
+def relay_mode() -> str:
+    mode = (flows_config.get("VEXA_MAIL_RELAY") or "").strip().lower()
+    if mode not in RELAY_MODES:
+        raise mt.MailTransportError("config", "smtp", "", "",
+                                    f"VEXA_MAIL_RELAY={mode!r} — expected capture or relay (or unset)")
+    return mode
+
+
+def is_test_domain(address: str) -> bool:
+    domain = (address or "").strip().lower().rpartition("@")[2].rstrip(">").strip()
+    return (domain.endswith(_TEST_TLDS) or domain in _TEST_DOMAINS
+            or domain in ("localhost", "test", "invalid", "example"))
+
+
+def delivery_mode() -> str:
+    """WHAT HAPPENS TO A MAIL THIS DEPLOYMENT SENDS: `delivered` (a real relay or provider) or
+    `captured` (the capture double — nothing reaches a real mailbox). Every answer to a person that
+    would say "mailed" asks this first (live defect 2026-10-14: "the invite link was emailed to her"
+    while the mail sat in mailpit). `capture` is captured; so is an unset switch whose relay IS the
+    capture double's host (a deployment that has not adopted the switch yet). `capture` is answered
+    first because it is what happens: every channel, Graph included, goes to the capture double
+    while the switch says capture (`notify.channel`, `send_rsvp_accept`)."""
+    try:
+        mode = relay_mode()
+    except mt.MailTransportError:
+        return "captured"                    # a switch nobody can read delivers nothing
+    if mode == "capture":
+        return "captured"
+    if mode == "relay":
+        return "delivered"
+    import os
+    if (os.environ.get("VEXA_NOTIFY_CHANNEL") or "smtp").strip().lower() == "graph":
+        return "delivered"
+    host = (flows_config.get("VEXA_MAIL_SMTP_HOST") or "").strip().lower()
+    if not host:
+        return "delivered"                   # the Gmail preset
+    try:
+        capture_host = _capture_addr()[0].strip().lower()
+    except mt.MailTransportError:
+        capture_host = "mailpit"
+    return "captured" if host in (capture_host, "mailpit", "localhost", "127.0.0.1") else "delivered"
+
+
+def relay_refusal(to: str) -> str:
+    """"" when this recipient may be handed to the transport, else why not. Only the real relay
+    refuses: `capture` reaches no real mailbox, and unset keeps the previous behaviour exactly."""
+    if relay_mode() != "relay":
+        return ""
+    if is_test_domain(to):
+        return f"test domain {to.rpartition('@')[2]} is never relayed"
+    return ""
+
+
+def sender(addr: str) -> str:
+    """The From header — the operator's identity, else Vexa at the mailbox address."""
+    configured = header_safe(flows_config.get("VEXA_MAIL_SMTP_FROM") or "")
+    return configured or f"Vexa <{addr}>"
+
+
+def _from_domain(frm: str, addr: str) -> str:
+    bare = email.utils.parseaddr(frm)[1] or addr
+    return bare.rpartition("@")[2] or "vexa.local"
+
+
+def _identity(msg, addr: str) -> None:
+    """From, Reply-To and Message-ID, set the same way on every message this module sends."""
+    frm = sender(addr)
+    msg["From"] = frm
+    reply_to = header_safe(flows_config.get("VEXA_MAIL_REPLY_TO") or "")
+    if reply_to:
+        msg["Reply-To"] = reply_to
+    msg["Message-ID"] = email.utils.make_msgid(domain=_from_domain(frm, addr))
+
+
+def _capture_addr() -> tuple[str, int]:
+    raw = (flows_config.get("VEXA_MAIL_CAPTURE_SMTP") or "mailpit:1025").strip()
+    host, _, port = raw.rpartition(":")
+    if not host:
+        host, port = raw, "1025"
+    try:
+        return host, int(port)
+    except ValueError:
+        raise mt.MailTransportError("config", "smtp", host, port,
+                                    f"VEXA_MAIL_CAPTURE_SMTP={raw!r} is not host:port") from None
 
 
 def _tls_context(host: str = "", port="") -> ssl.SSLContext:
@@ -92,6 +213,12 @@ def _smtp():
     EVERY FAILURE LEAVES TYPED (`MailTransportError`, P18): the password, the certificate and the
     network are three different people's problems, and the reaction's reason says which.
     """
+    if relay_mode() == "capture":
+        host, port = _capture_addr()
+        try:
+            return smtplib.SMTP(host, port, timeout=20), False
+        except BaseException as e:  # noqa: BLE001
+            raise mt.classify(e, "smtp", host, port, phase="connect") from e
     if _needs_login():
         try:
             return smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20), True
@@ -162,10 +289,13 @@ def _deliver(conn, needs_login: bool, addr: str, pw: str, msg) -> None:
 
 
 def send(to: str, subject: str, body: str, *, in_reply_to: str | None = None) -> str:
+    refused = relay_refusal(to)
+    if refused:
+        raise MailSuppressed(to, refused)
     addr, pw = creds(login=_needs_login())
     m = EmailMessage()
-    m["From"], m["To"], m["Subject"] = f"Vexa <{addr}>", to, subject
-    m["Message-ID"] = email.utils.make_msgid(domain=addr.split("@")[1])
+    _identity(m, addr)
+    m["To"], m["Subject"] = to, header_safe(subject)
     if in_reply_to:
         m["In-Reply-To"] = m["References"] = in_reply_to
     m.set_content(body)
@@ -239,22 +369,26 @@ def send_rsvp_accept(organizer_email: str, *, ics_uid: str, start_epoch: float, 
     A Microsoft 365 deployment with SMTP AUTH switched off sends the IDENTICAL calendar bytes as
     a Graph attachment. Which wire that is, is the deployment's answer to `VEXA_NOTIFY_CHANNEL`
     and nothing this function decides; the SMTP path below is untouched, down to the header order.
+    While the relay captures, the reply goes to the capture double over SMTP on every deployment.
     """
     from .notify import channel
-    if getattr(channel(), "name", "smtp") == "graph":
+    if relay_mode() != "capture" and getattr(channel(), "name", "smtp") == "graph":
         from flows_integrations.graph_client import client
         gc = client()
         ics = build_rsvp_ics(gc.address(), organizer_email, ics_uid=ics_uid,
                              start_epoch=start_epoch, title=title)
         return gc.send_calendar_reply(organizer_email, header_safe(f"Accepted: {title}"),
                                       "Vexa will attend and take the minutes.", ics)
+    refused = relay_refusal(organizer_email)
+    if refused:
+        raise MailSuppressed(organizer_email, refused)
     addr, pw = creds(login=_needs_login())
     ics = build_rsvp_ics(addr, organizer_email, ics_uid=ics_uid, start_epoch=start_epoch,
                          title=title)
     msg = MIMEMultipart("mixed")
-    msg["From"], msg["To"] = f"Vexa <{addr}>", organizer_email
+    _identity(msg, addr)
+    msg["To"] = organizer_email
     msg["Subject"] = header_safe(f"Accepted: {title}")
-    msg["Message-ID"] = email.utils.make_msgid(domain=addr.split("@")[1])
     msg.attach(MIMEText("Vexa will attend and take the minutes.", "plain"))
     cal = MIMEText(ics, "calendar")
     cal.set_param("method", "REPLY")

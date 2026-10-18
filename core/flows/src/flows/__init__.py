@@ -2,6 +2,7 @@
 from .admission import admit
 from .clock import Clock, FakeClock, SystemClock
 from .db import db_from_url, pg_engine, postgres_db
+from . import keyed, triggers  # noqa: F401 — ADR-0050 triggers and keyed schedules
 from .loop import claim, effect_key, tick
 from .model import Block, Done, NotPresent, Reaction, Receipt, StepCtx, StepError, Wait
 from .projection import status, waiting

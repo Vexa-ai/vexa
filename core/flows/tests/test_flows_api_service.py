@@ -64,7 +64,11 @@ finally:
 #: rather than counted: a count is satisfied by a swap, and the set is the thing that matters.
 TOOLS = {"flows_list", "reactions_list", "reaction_signal", "timeline", "whats_waiting",
         "report_friction", "friction_so_far", "flows_submit", "flow_lifecycle",
-        "friction_list", "mail_settings"}
+        "friction_list", "mail_settings", "mail_templates_list", "mail_template_edit",
+        "mail_preview", "mail_test_send", "mail_kind_set", "mail_address", "flow_runs",
+        "routine_claim", "routine_add_trigger",
+        "concern_stage", "event_agents_pause", "chat_subscribe", "chat_unsubscribe",
+        "sensor_list", "sensor_create", "sensor_test", "sensor_action", "sensor_connect"}
 
 
 def _route(path: str, method: str = ""):

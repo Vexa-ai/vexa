@@ -252,18 +252,28 @@ DONE_REFS = {"uid": "7", "meeting_id": 41, "native": "abc123", "title": "Weekly 
 
 def test_invite_intake_reaches_emit_completed_with_no_agent_domain(monkeypatch):
     """THE HEADLINE. Red before the fix: the reaction ends at `ack_by_email` and the receipts stop
-    there — no bot, no meeting, no `meeting.completed`."""
+    there — no bot, no meeting, no `meeting.completed`. Since ADR-0050 the intake ends at the prep and
+    the bot half is the company seed `invite_join`, fired by its keyed schedule; both halves run with
+    no agent domain."""
     reg, _sent = _production(monkeypatch)
     _forbid_the_agent_door(monkeypatch)
     st, emitted = _run_flow(reg, "invite.received", dict(INVITE_REFS), NO_AGENT)
-
     steps = [r["step"] for r in st["receipts"]]
     assert st["status"] == "done", f"{st['step']}: {st['reason']}"
-    for expected in ("rsvp_accept", "emit_prep", "dispatch_bot", "run_meeting", "emit_completed"):
+    for expected in ("rsvp_accept", "emit_prep"):
         assert expected in steps, f"{expected} never ran — the reaction stopped at {st['step']}"
     ack = next(r for r in st["receipts"] if r["step"] == "ack_by_email")
     assert ack["result"]["skipped"] == "agent:not_present"
-    assert [e[0] for e in emitted] == ["meeting.upcoming", "meeting.started", "meeting.completed"]
+    assert [e[0] for e in emitted] == ["meeting.upcoming"]
+    # the keyed half, as the worker fires it (`keyed.due`), with the invite's refs
+    seed = next(d for d in production.SEEDS if d["name"] == "invite_join")
+    reg.flow_by_names(name="invite_join", version=1, on_event="keyed.due", step_names=seed["steps"])
+    st, emitted = _run_flow(reg, "keyed.due", dict(INVITE_REFS), NO_AGENT)
+    steps = [r["step"] for r in st["receipts"]]
+    assert st["status"] == "done", f"{st['step']}: {st['reason']}"
+    for expected in ("dispatch_bot", "run_meeting", "emit_completed"):
+        assert expected in steps, f"{expected} never ran — the reaction stopped at {st['step']}"
+    assert [e[0] for e in emitted] == ["meeting.started", "meeting.completed"]
 
 
 def test_post_meeting_still_mails_the_person_with_no_agent_domain(monkeypatch):

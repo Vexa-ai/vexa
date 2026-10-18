@@ -214,7 +214,9 @@ def imap_open(addr: str, password: str, settings: dict | None = None):
         except BaseException as e:  # noqa: BLE001
             raise classify(e, "imap", host, port, phase="login", secrets=(password,)) from e
         try:
-            typ, data = im.select(s["folder"])
+            # EXAMINE, not SELECT: the session is READ-ONLY, so no flag in this folder can change
+            # because Vexa read it — the mailbox may be one people read too (`mail_sensor`).
+            typ, data = im.select(s["folder"], readonly=True)
         except BaseException as e:  # noqa: BLE001
             raise classify(e, "imap", host, port, phase="select") from e
         if typ != "OK":
