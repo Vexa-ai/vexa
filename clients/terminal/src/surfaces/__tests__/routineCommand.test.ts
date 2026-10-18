@@ -11,6 +11,11 @@ describe("the /routine prompt", () => {
     expect(prompt).toContain("params.thread");
     expect(prompt).toContain("runs in this chat");
   });
+  it("a draft is pointed at the control the person has — the Turn on line — never a Routines board", () => {
+    expect(prompt).toContain("awaiting_approval");
+    expect(prompt).toContain("Turn on");
+    expect(prompt).toContain("never try to turn it on yourself");
+  });
   it("carries no file path and no file shape", () => {
     expect(prompt).not.toMatch(/routines\//);
     expect(prompt).not.toMatch(/\.md\b/);

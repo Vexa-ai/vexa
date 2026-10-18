@@ -7,9 +7,10 @@ upgrading from 0.13 whose clients still call them, and are removed in `routine_f
 routine mechanism of their own: each is one flows-api call for the caller's own scope. A deployment
 without flows has no routines, and every route answers `501 routines_need_flows`.
 
-The Routines board reads this list: the person's schedule flows (with why a paused one is paused)
-and a card for each old routine file the one-time migration could not turn into a flow, with the
-exact reason. There is no confirmation step: a routine an agent wrote arrives as a paused flow.
+The terminal reads this list — the Routines filter in the sidebar, the routine strip and the "Draft
+routine · … · Turn on" line in a routine's chat: the person's schedule flows (with why a paused one is
+paused) and a card for each old routine file the one-time migration could not turn into a flow, with
+the exact reason. A routine an agent wrote arrives as a draft the person turns on from their session.
 """
 from __future__ import annotations
 
@@ -153,10 +154,7 @@ def build(**d) -> APIRouter:
             # its scopes. flows checks nothing here: this adapter calls it with the operator key.
             # Switching one off stays open to both (a narrowing).
             require_session_credential(request, reason="person_approval_required",
-                                       instruction="Turning a routine on is your person's own press, "
-                                                   "from their signed-in session. Tell them it is "
-                                                   "waiting on their Routines board; do not retry "
-                                                   "it another way.")
+                                       instruction=routine_flows.TURN_ON_INSTRUCTION)
         subject = subject_of(request)
         flow = _flow_routine(subject, routine_flows.flow_name(name))
         if flow is None:
@@ -169,7 +167,25 @@ def build(**d) -> APIRouter:
         # switching a routine on clears why it was paused; switching it off is the person's own act
         routine_flows.set_paused_reason(
             wsr.root, subject, flow["name"], None if body.enabled else "paused by you")
-        return {"ok": True, "name": flow["name"], "enabled": body.enabled}
+        thread = routine_flows.routine_thread(flow.get("scope") or f"user:{subject}", flow["name"],
+                                              flow.get("params"))
+        if body.enabled:
+            _mark_routine_chat(str(subject), thread, flow)
+        return {"ok": True, "name": flow["name"], "enabled": body.enabled, "thread": thread}
+
+    def _mark_routine_chat(subject: str, thread: str, flow: dict) -> None:
+        """A DRAFT TURNED ON MAKES ITS CHAT A ROUTINE'S AT ONCE (live app.dev 2026-10-18): the chat
+        it was proposed in gains the routine mark now — the rail's icon, the Routines filter and the
+        routine strip — rather than at its first run, which for a daily routine is tomorrow."""
+        sess = d.get("sess")
+        if sess is None:
+            return
+        try:
+            sess.upsert(subject, thread, routine={"flow": flow["name"],
+                                                  "scope": flow.get("scope") or f"user:{subject}",
+                                                  "version": flow.get("version") or 1})
+        except Exception:  # noqa: BLE001 — the routine is on; the mark follows at its first run
+            logger.warning("could not mark chat %s as a routine's", thread)
 
     @router.delete("/api/routines/{routine_id}")
     def delete_routine(routine_id: str, request: Request, response: Response):

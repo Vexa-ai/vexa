@@ -873,6 +873,7 @@ export function routineCreationPrompt(commandText: string): string {
     "Derive the cron from the user's schedule words, converted to UTC. Examples: \"every 2 hours\" => \"0 */2 * * *\"; \"at 9am\" => \"0 9 * * *\" in the person's time zone, shifted to UTC. If no schedule is explicit, use daily at 9 AM. A cron faster than the allowed minimum interval is refused (quota_min_interval): say so and offer the nearest allowed one.",
     "The routine runs in this chat: every run continues this conversation and its alerts land here.",
     "When flows_submit answers, confirm in one line: the routine's name, when it runs, and that it runs in this chat.",
+    "If it answers awaiting_approval, it is a draft that runs only once the person turns it on: say so, and that the switch is the \"Turn on\" on the \"Draft routine\" line at the top of this chat (also under Routines in the sidebar). Never send them to a \"Routines board\"; never try to turn it on yourself.",
   ].join("\n");
 }
 

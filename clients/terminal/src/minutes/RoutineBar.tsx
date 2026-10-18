@@ -14,6 +14,8 @@ import { clock, cronText, scheduleLine, type FlowDef } from "../ui-kit/flowGraph
 import { askFor, doesWords, nextWords, permissionRows, refusalWords, resultsWords, routineLine, whenWords } from "../ui-kit/flowGraph/human";
 import { ChevronDown } from "lucide-react";
 import { ASK_CHAT_EVENT } from "../platform/events";
+import { useChatActive } from "../surfaces/chatActivity";
+import { draftLine, draftsOfChat, isDraft, type RoutineCard } from "./routineDraft";
 import "./minutes.css";
 
 /** The three verbs, as the routine adapter routes spell them. Exported for the delete path and the
@@ -234,25 +236,74 @@ export function RoutineBar({ routine, session }: { routine: RoutineRef; session?
 
 /** EVERY ROUTINE THIS CHAT OWNS (a chat is a standing concern that may own several — production
  *  monitoring wakes on each). One strip per routine whose chat is `session`; the rail's marker
- *  (`fallback`) still draws its strip before the routine list answers. */
-export function routinesOfChat(cards: ReadonlyArray<{ name?: string; thread?: string }>, session: string): string[] {
-  return cards.filter((c) => c.thread === session && c.name).map((c) => String(c.name));
+ *  (`fallback`) still draws its strip before the routine list answers. A DRAFT is not one of them:
+ *  it has its own line (`ChatRoutineDrafts`) until the person turns it on. */
+export function routinesOfChat(cards: ReadonlyArray<{ name?: string; thread?: string; draft?: boolean; status?: string }>, session: string): string[] {
+  return cards.filter((c) => c.thread === session && c.name && !isDraft(c)).map((c) => String(c.name));
 }
 
 export function ChatRoutines({ session, fallback, stage }: { session: string; fallback?: RoutineRef; stage?: string }) {
   const [names, setNames] = useState<string[] | null>(null);
+  const [drafts, setDrafts] = useState<string[]>([]);
   useEffect(() => {
     let live = true;
-    void fetch("/api/routines").then((r) => (r.ok ? r.json() : null)).then((d) => {
-      if (live && d) setNames(routinesOfChat(d.routines ?? [], session));
+    const read = () => void fetch("/api/routines").then((r) => (r.ok ? r.json() : null)).then((d) => {
+      if (!live || !d) return;
+      setNames(routinesOfChat(d.routines ?? [], session));
+      setDrafts(draftsOfChat(d.routines ?? [], session).map((c) => c.name));
     }).catch(() => { /* the marker's strip still draws */ });
-    return () => { live = false; };
+    read();
+    // a draft turned on here becomes a routine of this chat: its strip appears without a reload
+    window.addEventListener(ROUTINES_CHANGED_EVENT, read);
+    return () => { live = false; window.removeEventListener(ROUTINES_CHANGED_EVENT, read); };
   }, [session]);
   const list = names ?? [];
-  const all = fallback && !list.includes(fallback.flow) ? [fallback.flow, ...list] : list;
+  const all = fallback && !list.includes(fallback.flow) && !drafts.includes(fallback.flow) ? [fallback.flow, ...list] : list;
   // one quiet line, like the routine's: what this chat is and where it stands
   const stageLine = stage ? <div data-concern-stage={stage} className="vx-routine-bar vx-routine-text"
     title="A concern moves opened → active → waiting → resolved → archived.">Concern · {stage}</div> : null;
   if (!all.length) return stageLine;
   return <>{stageLine}{all.map((n) => <RoutineBar key={`${session}:${n}`} session={session} routine={{ flow: n, scope: fallback?.scope ?? "", version: fallback?.version ?? 0 }} />)}</>;
+}
+
+/** ONE DRAFT'S LINE at the top of its home chat: "Draft routine · Narrative field pulse · daily 08:00
+ *  · Turn on". The press is the person's own, from this browser's session — agent-api refuses it to
+ *  an agent turn and to an API key — and it is the only way the draft starts. */
+export function DraftRoutineLine({ card, now }: { card: RoutineCard; now?: Date }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const turnOn = async () => {
+    setBusy(true); setError(null);
+    try {
+      if (!(await setRoutineRunning(card.name, true))) setError("It did not turn on — try again.");
+    } catch {
+      setError("It did not turn on — try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div data-routine-draft={card.name} className="vx-routine-bar vx-routine-draft" role="region" aria-label="Draft routine">
+      <span data-routine-draft-line className="vx-routine-line-text">{draftLine(card, now)}</span>
+      <button type="button" data-routine-turn-on className="vx-routine-btn" disabled={busy}
+        title="Turn this routine on — it runs on its schedule in this chat" onClick={() => void turnOn()}>Turn on</button>
+      {error && <span role="alert" className="vx-routine-text">{error}</span>}
+    </div>
+  );
+}
+
+/** THE DRAFTS WHOSE HOME IS THIS CHAT, from the routine cards the shell already reads. Drawn above
+ *  the conversation in every layout — never behind "…" → Activity — because a draft does nothing
+ *  until its person sees it. When the chat's turn ends (the agent may just have filed one) the
+ *  cards are read again. */
+export function ChatRoutineDrafts({ session, cards }: { session: string; cards: ReadonlyArray<RoutineCard> | null }) {
+  const active = useChatActive(session || null);
+  const [was, setWas] = useState(active);
+  useEffect(() => {
+    if (was && !active && typeof window !== "undefined") window.dispatchEvent(new Event(ROUTINES_CHANGED_EVENT));
+    setWas(active);
+  }, [active, was]);
+  const drafts = draftsOfChat(cards, session);
+  if (!drafts.length) return null;
+  return <>{drafts.map((c) => <DraftRoutineLine key={`${session}:${c.name}`} card={c} />)}</>;
 }

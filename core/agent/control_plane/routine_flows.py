@@ -14,11 +14,11 @@ arm anything. What is left here is deliberately small:
   dot-namespace (`<store>/.routines/retired/<subject>/`), outside every workspace mount. A file whose
   intent one of the person's flows already has is MERGED into that flow (the flow kept, the newer
   schedule carried). A file that cannot be read, or that flows refuses, runs nothing and is SHOWN —
-  a card on the Routines board with the exact reason. A file nobody stood behind (an unwatched run's
+  a card in the Routines list with the exact reason. A file nobody stood behind (an unwatched run's
   write) becomes a paused flow the person resumes. Logs carry counts, never a routine's text.
 * `start_migration` — runs `migrate` at startup and again every interval until one pass completes
   with nothing left to move, then stops for good (`<store>/.routines/migration.v1.json`).
-* `card_from_flow` / `problem_cards` — what the Routines board reads, off flows.
+* `card_from_flow` / `problem_cards` — what the terminal's routine list reads, off flows.
 """
 from __future__ import annotations
 
@@ -43,6 +43,14 @@ from workspaces.shared import workspace_paths as wpaths
 log = logging.getLogger(__name__)
 
 TIMEOUT_S = 5.0
+#: WHERE A DRAFT IS TURNED ON, in the words an agent repeats to its person (live app.dev 2026-10-18:
+#: an agent sent the founder to "the Routines board", which shell2 does not have). One spelling,
+#: shared with flows' `APPROVAL_NOTE`.
+WHERE_TO_TURN_ON = ('the "Draft routine · <name> · Turn on" line at the top of the chat it runs in, '
+                    'or its switch under Routines in the sidebar')
+TURN_ON_INSTRUCTION = ("Turning a routine on is your person's own press, from their signed-in session. "
+                       f"Tell them it is waiting for them: {WHERE_TO_TURN_ON}. Do not retry it "
+                       "another way.")
 #: The id prefix a flow-backed routine card carries.
 FLOW_ID_PREFIX = "flow:"
 #: The id prefix of a card for a routine file the migration could not turn into a flow.
@@ -149,7 +157,8 @@ class FlowsClient:
 
 
 def card_from_flow(subject: str, f: dict, *, state: Optional[dict] = None) -> dict:
-    """The routine card the terminal's Routines board reads, from a flow. ``state`` is the person's
+    """The routine card the terminal reads (the Routines filter, the strip, the draft line), from a
+    flow. ``state`` is the person's
     flow state (`load_flow_state`): why a paused routine is paused."""
     params = f.get("params") or {}
     held = ((state or {}).get(f["name"]) or {})
@@ -157,6 +166,7 @@ def card_from_flow(subject: str, f: dict, *, state: Optional[dict] = None) -> di
     if f.get("status") == "draft" and not (f.get("paused_reason") or held.get("paused_reason")):
         # PROPOSED, NOT YET ARMED (D24): an agent wrote it; it runs once the person turns it on
         held = {**held, "paused_reason": "proposed by your agent — read it, then turn it on"}
+    draft = f.get("status") == "draft"
     return {
         # WHY IT IS PAUSED: the reason flows recorded when the routine paused itself (its chat
         # became shared, Vexa-ai/vexa#1783), else the one this side wrote after repeated refusals.
@@ -188,6 +198,9 @@ def card_from_flow(subject: str, f: dict, *, state: Optional[dict] = None) -> di
         **({"schedule": f["schedule"]} if f.get("schedule") else {}),
         "status": f.get("status"),
         "enabled": running,
+        # A DRAFT, NOT A PAUSE: an agent proposed it and nobody has turned it on yet. The terminal
+        # shows it as "Draft" with its Turn on control; a paused routine has run before.
+        "draft": draft,
         "flow": {"name": f["name"], "version": f["version"], "scope": f.get("scope")},
         "thread": routine_thread(f.get("scope") or f"user:{subject}", f["name"], params),
     }

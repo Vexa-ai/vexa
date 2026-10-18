@@ -1345,21 +1345,35 @@ export function displayLabel(r: { label: string; when?: number; meetingId?: stri
  *  own state (`GET /api/routines`): an active routine keeps its icon and its section, a paused one is
  *  drawn paused, and one retired or no longer listed drops both — the chat goes back to Recent unless
  *  the person filed it. `null` (not answered yet, or unreadable) changes nothing. */
-export function withRoutineState<T extends { routine?: { flow?: string | null } | null }>(
-  rows: T[], routines: { name: string; enabled?: boolean; status?: string }[] | null,
+export function withRoutineState<T extends { routine?: { flow?: string | null } | null; chatId?: string | null }>(
+  rows: T[], routines: { name: string; enabled?: boolean; status?: string; draft?: boolean; thread?: string;
+                          flow?: { scope?: string; version?: number } | null }[] | null,
 ): (T & { routinePaused?: boolean })[] {
   if (!routines) return rows;
   const by = new Map(routines.map((r) => [r.name, r]));
+  // A ROUTINE'S HOME CHAT IS ITS CHAT FROM THE MOMENT IT IS ON (live app.dev 2026-10-18): a draft
+  // turned on today has not run yet, so its chat has no mark from a run — the card's `thread` says
+  // which chat it is. A draft is not a routine yet: it is listed under Drafts, not as a routine chat.
+  const home = new Map<string, (typeof routines)[number]>();
+  for (const r of routines) {
+    if (r.thread && !r.draft && r.status !== "draft" && !/retired|deleted|done/i.test(r.status ?? "")) home.set(r.thread, r);
+  }
   return rows.map((r) => {
-    const flow = r.routine?.flow;
-    if (!flow) return r;
+    let flow = r.routine?.flow;
+    let row = r;
+    if (!flow && r.chatId && home.has(r.chatId)) {
+      const it = home.get(r.chatId)!;
+      flow = it.name;
+      row = { ...r, routine: { flow: it.name, scope: it.flow?.scope ?? "", version: it.flow?.version ?? 1 } } as T;
+    }
+    if (!flow) return row;
     const it = by.get(flow);
-    if (!it || /retired|deleted|done/i.test(it.status ?? "")) {
-      const { routine: _gone, ...rest } = r;
+    if (!it || it.draft || it.status === "draft" || /retired|deleted|done/i.test(it.status ?? "")) {
+      const { routine: _gone, ...rest } = row;
       return { ...rest, routine: undefined } as T & { routinePaused?: boolean };
     }
     const paused = it.enabled === false || /paused/i.test(it.status ?? "");
-    return paused ? { ...r, routinePaused: true } : r;
+    return paused ? { ...row, routinePaused: true } : row;
   });
 }
 

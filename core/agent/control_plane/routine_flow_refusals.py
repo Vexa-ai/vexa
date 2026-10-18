@@ -13,7 +13,7 @@ refused. So just BEFORE the next run is accepted, agent-api reads that unit's ``
 its cursor and counts consecutive refusals with one reason. A run that was not refused resets it.
 
 AT THREE: the flow is paused (flows-api, the person's own scope, operator key), the reason is
-written for the Routines board (`routine_flows.set_paused_reason`) and posted into the routine's
+written for the routine list (`routine_flows.set_paused_reason`) and posted into the routine's
 own chat (a session note), and this run is refused with ``423 routine_paused`` — flows' `agent_run`
 treats it as final. Resuming the routine clears the reason.
 

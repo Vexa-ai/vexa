@@ -56,7 +56,8 @@ import { notifyScope } from "../surfaces/scopeEvents";
 import { autoOpens, dropStaleTabs, openingStrip, panelShows } from "./staleTabs";
 import { chatArtifacts, writesOf, type ChatArtifact } from "./chatArtifacts";
 import type { ScopeView } from "../data/workspaceApi";
-import { ChatRoutines, retireRoutine, routineOfOpenChat } from "./RoutineBar";
+import { ChatRoutineDrafts, ChatRoutines, retireRoutine, routineOfOpenChat, setRoutineRunning } from "./RoutineBar";
+import { draftRoutines, draftWhen, routineLabel, type RoutineCard } from "./routineDraft";
 import { OPEN_CHAT_EVENT } from "../surfaces/agent-window";
 import { HOME_TARGET_EVENT, NEW_CHAT_AT_EVENT, NEW_ROOM_EVENT, START_MEETING_EVENT } from "../platform/events";
 import { NEW_WORKSPACE_KICK } from "./desktop/home2/StatusCard";
@@ -471,7 +472,7 @@ export function MinutesShell() {
     [meetings, deletions]);
   // THE ROUTINES' OWN STATE, for the rail's badge (a retired routine's chat is a normal chat):
   // read on mount, every minute, and whenever a routine is paused, resumed or retired here.
-  const [routineStates, setRoutineStates] = useState<{ name: string; enabled?: boolean; status?: string }[] | null>(null);
+  const [routineStates, setRoutineStates] = useState<RoutineCard[] | null>(null);
   useEffect(() => {
     let live = true;
     const read = () => void fetch("/api/routines", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null))
@@ -533,6 +534,9 @@ export function MinutesShell() {
       ...wss.map((w) => ({ id: `ws:${w.slug}`, name: w.name, builtin: false, collapsed: false })),
       folders.folders.find((f) => f.id === HIDDEN) ?? { id: HIDDEN, name: "Hidden", builtin: true, collapsed: true }] };
   }, [home2, folders, allChats, listedMeetings, routineStates, writable]);
+  // DRAFT ROUTINES for the sidebar's Routines filter (live app.dev 2026-10-18)
+  const railDrafts = useMemo(() => draftRoutines(routineStates).map((c) => ({
+    name: c.name, label: routineLabel(c.name), when: draftWhen(c), thread: c.thread })), [routineStates]);
   const rawRows = useMemo(() => applyFolders(withRoutineState(railRows(allChats, listedMeetings), routineStates), railFolders),
     [allChats, listedMeetings, railFolders, routineStates]);
   // the sidebar never shows "Chat 12:30": an unnamed chat takes its first sentence (home2)
@@ -2427,6 +2431,13 @@ export function MinutesShell() {
         if (failed) setOrderError(`Couldn't share ${failed} of ${rs.length} chats. Try again.`);
       })()}
       meetingActsFor={meetingActsFor}
+      routineDrafts={railDrafts}
+      onTurnOnRoutine={(name) => setRoutineRunning(name, true)}
+      onOpenThread={(thread) => {
+        if (inDrawer) shell.closeOverlays();
+        const r = rows.find((x) => x.chatId === thread);
+        if (r) void openRow(r); else openSharedSession(thread);
+      }}
       onPin={(r, on) => void mark(r.key, { pinned: on })} onHide={(r, on) => void mark(r.key, { hidden: on })}
       {...(home2 && !folders.served ? { onMoveRows } : folders.served ? {
         onMoveRows,
@@ -2604,6 +2615,9 @@ export function MinutesShell() {
             chat: it is part of this column, so it leaves with the chat when another one opens. */}
         {/* A ROUTINE'S OWN CHAT carries its controls at the top of the conversation. ROOMS (R1): they
             live under "…" → Activity in both headers instead of as a strip. */}
+        {/* A DRAFT ROUTINE whose home is this chat: its Turn on line, in every layout (live app.dev
+            2026-10-18 — with rooms on the strip sits behind "…" → Activity, where a draft was lost) */}
+        <ChatRoutineDrafts session={session} cards={routineStates} />
         {(() => {
           const strip = <ChatRoutines key={session} session={session} fallback={routineOfOpenChat(allChats, session)}
             stage={allChats.find((c) => c.id === session)?.concern?.stage} />;

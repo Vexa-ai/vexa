@@ -1,5 +1,5 @@
 """A routine (a person's flow) refused the same way three runs in a row is paused, and says why in
-its own chat and on the Routines board (ADR-0046; the rule the old scheduler path had)."""
+its own chat and in the Routines list (ADR-0046; the rule the old scheduler path had)."""
 from __future__ import annotations
 
 import json

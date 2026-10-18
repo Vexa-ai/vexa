@@ -55,7 +55,11 @@ def test_an_agents_submission_says_it_waits_for_the_person(api):
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["status"] == "draft" and body["awaiting_approval"] is True
-    assert body["live_within_s"] is None and "Routines board" in body["note"]
+    assert body["live_within_s"] is None
+    # …and it names the control the person actually has (live app.dev 2026-10-18: "the Routines
+    # board" an agent sent the founder to does not exist in the current sidebar)
+    assert "Routines board" not in body["note"]
+    assert "Turn on" in body["note"] and "Routines in the sidebar" in body["note"]
 
 
 def test_the_persons_own_credential_still_arms_at_once(api):

@@ -70,11 +70,55 @@ def test_an_agent_turn_cannot_turn_a_routine_on(routines_world, flows):
                         json={"enabled": False}).status_code == 200
 
 
+def _session() -> dict:
+    """The person's signed-in browser session (D13: `credential_class: session`)."""
+    from control_plane import identity_token
+    from tests.test_routine_flows import KEY
+    return {identity_token.HEADER: identity_token.sign(
+        KEY, {"sub": "7", "email": "ada@example.com", "credential_class": "session"})}
+
+
 def test_the_person_turns_the_proposal_on(routines_world, flows):
     client, _sched, _root = routines_world
     flows.submit("7", "brief", "0 9 * * *", "x", activate=False)
     r = client.patch("/api/routines/brief/enabled", headers=_session(), json={"enabled": True})
     assert r.status_code == 200 and [x["status"] for x in flows.rows] == ["active"]
+
+
+def test_an_api_key_cannot_turn_a_draft_on(routines_world, flows):
+    """D13: turning a routine on is a SESSION press — a key, whatever its scopes, is refused."""
+    client, _sched, _root = routines_world
+    flows.submit("7", "brief", "0 9 * * *", "x", activate=False)
+    r = client.patch("/api/routines/brief/enabled", headers=_as(), json={"enabled": True})
+    assert r.status_code == 403 and r.json()["detail"]["reason"] == "person_approval_required"
+    assert [x["status"] for x in flows.rows] == ["draft"]
+    # the refusal names the control the person has, never a board that does not exist
+    said = json.dumps(r.json())
+    assert "Routines board" not in said and "Turn on" in said
+
+
+def test_a_draft_in_its_chat_is_listed_as_a_draft_with_its_chat(routines_world, flows):
+    """The card the sidebar and the chat's Turn on line read: marked a draft, its schedule, its chat."""
+    client, _sched, _root = routines_world
+    flows.submit("7", "field-pulse", "0 7 * * *", "x", activate=False)
+    flows.rows[-1]["params"]["thread"] = "pchat-abc123"
+    card = next(c for c in client.get("/api/routines", headers=_session()).json()["routines"]
+                if c["name"] == "field-pulse")
+    assert card["draft"] is True and card["enabled"] is False and card["status"] == "draft"
+    assert card["cron"] == "0 7 * * *" and card["thread"] == "pchat-abc123"
+
+
+def test_turning_a_draft_on_marks_its_chat_a_routines(routines_world, flows):
+    """Live app.dev 2026-10-18: the chat a draft was proposed in is the routine's chat from the
+    moment it is turned on (rail icon, Routines filter), not from its first run tomorrow."""
+    client, _sched, _root = routines_world
+    flows.submit("7", "field-pulse", "0 7 * * *", "x", activate=False)
+    flows.rows[-1]["params"]["thread"] = "pchat-abc123"
+    r = client.patch("/api/routines/field-pulse/enabled", headers=_session(), json={"enabled": True})
+    assert r.status_code == 200 and r.json()["thread"] == "pchat-abc123"
+    rows = client.app.state.sessions.list("7")
+    row = next(x for x in rows if x.get("session") == "pchat-abc123")
+    assert (row.get("routine") or {}).get("flow") == "field-pulse"
 
 
 def test_stood_behind_still_answers_yes_with_a_matching_approval(tmp_path):

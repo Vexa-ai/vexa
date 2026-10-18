@@ -33,6 +33,8 @@
   background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: var(--space-0_5) 10px; cursor: pointer;
 }
 .vx-routine-col { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-1); }
+/* a draft routine's line in its chat: the words, then its one press (Turn on) */
+.vx-routine-draft { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 /* THE ONE LINE (founder 2026-10-14): one row, truncates, never wraps — the chat starts right under it */
 .vx-routine-line { display: flex; align-items: center; gap: var(--space-1_5); min-width: 0; width: 100%; background: none; border: 0; padding: 0; color: var(--t2); cursor: pointer; text-align: left; }
 .vx-routine-line-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--sans); font-size: 12px; }

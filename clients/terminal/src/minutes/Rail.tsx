@@ -35,7 +35,7 @@ const RECENT_CAP = 8;
 import { NotificationBell } from "./NotificationBell";
 import { ContextMenu, type ContextMenuItem } from "../ui-kit/ContextMenu";
 import { RAIL_SHORTCUTS, isTypingTarget, matchesShortcut, shortcutAria, shortcutLabel, type Shortcut } from "../ui-kit/shortcuts";
-import { Button, ConfirmDialog, Dialog, IconButton, Input, Menu, Tabs } from "../ui-kit";
+import { Button, ConfirmDialog, Dialog, IconButton, Input, Menu, Switch, Tabs, Tag } from "../ui-kit";
 import { SidebarNav } from "./shell2/SidebarNav";
 import { PairFace, isPairRoom, pairPeerOf } from "./shell2/pairRooms";
 import { usePresence } from "./shell2/PeoplePage";
@@ -119,6 +119,37 @@ function RowTitle({ r, pair }: { r: Row; pair: boolean }) {
   </>;
 }
 
+/** A draft routine as the Routines filter lists it (`routineDraft.ts` builds it from the card). */
+export type RailDraft = { name: string; label: string; when: string; thread?: string };
+
+/** ONE DRAFT ROUTINE under the Routines filter: its name and the Draft tag, its schedule and its
+ *  home chat (a press opens the chat), and the switch that turns it on. */
+function DraftRow({ d, chat, onTurnOn, onOpen }: {
+  d: RailDraft; chat: string; onTurnOn?: (name: string) => Promise<boolean>; onOpen?: (thread: string) => void;
+}) {
+  const [on, setOn] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const flip = async (next: boolean) => {
+    if (!next || !onTurnOn) return;   // a draft is off; switching it on is the only act here
+    setOn(true); setFailed(false);
+    let ok = false;
+    try { ok = await onTurnOn(d.name); } catch { ok = false; }
+    if (!ok) { setOn(false); setFailed(true); }
+  };
+  return (
+    <div className="vx-rail-draft" data-routine-draft-row={d.name}>
+      <button type="button" className="vx-rail-draft-open" disabled={!d.thread || !onOpen}
+        title={d.thread ? `Open “${chat}”, the chat it runs in` : undefined}
+        onClick={() => { if (d.thread) onOpen?.(d.thread); }}>
+        <span className="vx-rail-draft-title"><span className="vx-row2-title">{d.label}</span><Tag>Draft</Tag></span>
+        <span className="vx-rail-draft-meta" data-routine-draft-meta>{d.when} · in {chat}</span>
+      </button>
+      <Switch checked={on} hideLabel label={`Turn on ${d.label}`} disabled={on || !onTurnOn} onChange={(v) => void flip(v)} />
+      {failed && <span role="alert" className="vx-rail-draft-meta">It did not turn on — try again.</span>}
+    </div>
+  );
+}
+
 /** How many rows a section shows before "Show N more". The selected row always shows. */
 export const SECTION_CAP = 8;
 /** How long a finger rests on a row before it lifts for dragging (a phone's long-press). */
@@ -170,6 +201,14 @@ export function Rail(p: {
   /** A MEETING ROW'S OWN ACTS (#1783): the same set the meeting's page header offers
    *  (`meetingActions.ts`), appended to the row's menu. */
   meetingActsFor?: (r: Row) => ContextMenuItem[];
+  /** shell2: routines an agent PROPOSED and nobody has turned on yet (D24), listed under the
+   *  Routines filter marked Draft — schedule, home chat and an on/off switch (live app.dev
+   *  2026-10-18: a draft showed nowhere its person could reach). */
+  routineDrafts?: RailDraft[];
+  /** the switch: the person's own press, from this session; `true` when the routine took it */
+  onTurnOnRoutine?: (name: string) => Promise<boolean>;
+  /** open a draft's home chat */
+  onOpenThread?: (thread: string) => void;
 }) {
   const vn = useVoiceNote();
   const folders = p.folders ?? NO_FOLDERS;
@@ -584,7 +623,7 @@ export function Rail(p: {
             <Tabs label="Show chats" value={railFilter} onChange={setRailFilter} items={[
               { key: "all", label: <>All<span className="vx-s2-tabcount">{chatRows.filter((r) => !r.hidden).length}</span></> },
               { key: "rooms", label: <>Rooms<span className="vx-s2-tabcount">{chatRows.filter((r) => r.shared && !r.hidden).length}</span></> },
-              { key: "routines", label: <>Routines<span className="vx-s2-tabcount">{chatRows.filter((r) => r.routine && !r.hidden).length}</span></> }]} />
+              { key: "routines", label: <>Routines<span className="vx-s2-tabcount">{chatRows.filter((r) => r.routine && !r.hidden).length + (p.routineDrafts?.length ?? 0)}</span></> }]} />
           </div></>
       ) : home2 && p.onHome ? (
         // UI 7e (founder 2026-10-16): ONE entry in the header — "+ New", which is home (a fresh chat
@@ -635,6 +674,20 @@ export function Rail(p: {
         </div>
       )}
       <div className="vx-rail-list">
+        {shell2 && railFilter === "routines" && !!p.routineDrafts?.length && (
+          <section className="vx-rail-section" data-section="routine-drafts" aria-label="Drafts — waiting for you to turn them on">
+            <div className="vx-rail-section-head"><span className="vx-rail-section-toggle">
+              <span className="vx-rail-section-name">Drafts</span>
+              <span className="vx-rail-section-count">{p.routineDrafts.length}</span></span></div>
+            <div className="vx-rail-section-rows">
+              {p.routineDrafts.map((d) => {
+                const home = d.thread ? p.rows.find((r) => r.chatId === d.thread) : undefined;
+                return <DraftRow key={d.name} d={d} chat={home ? displayLabel(home) : "its own chat"}
+                  onTurnOn={p.onTurnOnRoutine} onOpen={p.onOpenThread} />;
+              })}
+            </div>
+          </section>
+        )}
         {groups.map(section)}
         {home2 && p.onFolderCreate && <button type="button" className="vx-rail-more" aria-label="New folder" onClick={() => setNaming({ id: null, name: "" })}>+ Folder</button>}
         {p.rows.length === 0 && <p className="vx-empty-text vx-rail-empty">Meetings arrive by invitation; “+” starts a chat.</p>}

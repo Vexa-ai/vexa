@@ -1132,7 +1132,8 @@ def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api"),
     files the NEXT version beside it; runs already in flight keep the version they started on.
     `activate` (default true) makes it live within about ten seconds; false files it as a draft.
     FROM AN AGENT TURN IT IS ALWAYS A DRAFT (`awaiting_approval: true`): tell your person it is
-    waiting on their Routines board, where they read it and turn it on themselves."""
+    waiting for them — a "Draft routine · <name> · Turn on" line at the top of the chat it runs in,
+    and its switch under Routines in the sidebar — where they read it and turn it on themselves."""
     scope = _author_scope(caller, sub.scope)
     size = len(json.dumps(sub.params, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
     if scope != "instance" and size > SUBMISSION_MAX_BYTES:
@@ -1178,8 +1179,8 @@ def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api"),
     version = max(row[0][0], code_max) + 1
     # AN AGENT PROPOSES A FLOW; A PERSON ARMS IT (D24, H8). A worker acting for a person — any
     # delegated caller, watched or not — files a DRAFT whatever `activate` it sent. It goes live
-    # only when the person turns it on from their own session (the Routines board, through
-    # agent-api), never from an agent turn: injected text must not be able to plant a standing
+    # only when the person turns it on from their own session (the draft line in its chat or the
+    # Routines filter, through agent-api), never from an agent turn: injected text must not be able to plant a standing
     # routine that runs every day as its owner.
     status = "active" if (sub.activate and not proposed) else "draft"
     by = x_actor if caller.is_admin else (caller.email or f"user:{caller.uid}")
@@ -1498,14 +1499,18 @@ def admit_batch(batch: SeedBatch, x_actor: str = Header(default="")):
 FLOW_ACTIONS = {"activate": "active", "resume": "active", "retire": "retired", "pause": "retired"}
 
 #: What an agent turn is told when it submits a flow (D24): filed, not live.
+#: Where they do it is said exactly as the terminal draws it (live app.dev 2026-10-18: an agent sent
+#: the founder to "the Routines board", which the current sidebar does not have).
+WHERE_TO_TURN_ON = ('the "Draft routine · <name> · Turn on" line at the top of the chat it runs in, '
+                    'or its switch under Routines in the sidebar')
 APPROVAL_NOTE = ("Filed as a draft. A routine an agent writes runs only after your person turns it "
-                 "on themselves, from their Routines board. Tell them it is waiting there; do not "
-                 "try to activate it.")
+                 f"on themselves, with one press: {WHERE_TO_TURN_ON}. Tell them exactly that; do "
+                 "not try to activate it.")
 #: …and what it gets when it tries to arm one anyway.
 APPROVAL_REFUSAL = {
     "refused": "person_approval_required",
     "instruction": "Activating or resuming a flow is your person's act, from their own session. "
-                   "Tell them the routine is waiting on their Routines board; do not retry it "
+                   f"Tell them it is waiting for them: {WHERE_TO_TURN_ON}. Do not retry it "
                    "another way.",
 }
 
@@ -1514,9 +1519,9 @@ APPROVAL_REFUSAL = {
 #: done from a signed-in session, and a key — whatever its scopes — is not one.
 SESSION_REFUSAL = {
     "refused": "session_required",
-    "instruction": "Turning a routine on is done by its person from their signed-in session (the "
-                   "Routines board). An API key cannot do it, whatever its scopes. File it with "
-                   "activate=false and turn it on from the board.",
+    "instruction": "Turning a routine on is done by its person from their signed-in session "
+                   f"({WHERE_TO_TURN_ON}). An API key cannot do it, whatever its scopes. File it "
+                   "with activate=false and turn it on in the app.",
 }
 
 
@@ -1721,8 +1726,8 @@ def add_routine_trigger(body: TriggerAdd, x_actor: str = Header(default="api"),
     if made.get("awaiting_approval"):
         # proposed by an agent turn (D24): nothing wakes until the person turns it on
         _announce(made["scope"], made["name"], body.thread,
-                  f"Proposed a timer {body.name} for this chat. It waits on your Routines board "
-                  "until you turn it on.")
+                  f"Proposed a timer {body.name} for this chat. It is a draft until you turn it "
+                  "on: the Turn on line at the top of this chat.")
         return {**facts, "awaiting_approval": True, "note": APPROVAL_NOTE}
     _announce(made["scope"], made["name"], body.thread,
               f"This chat now also wakes on {body.name} "

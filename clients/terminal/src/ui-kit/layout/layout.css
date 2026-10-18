@@ -146,6 +146,11 @@
 .vx-rail-section-rows { display: flex; flex-direction: column; gap: var(--space-0_5); }
 .vx-rail-section-empty { margin: 0; padding: var(--space-1) var(--space-2); font-size: var(--text-xs); color: var(--text-3); border: 1px dashed var(--border); border-radius: var(--radius-sm); }
 .vx-rail-more { align-self: flex-start; background: transparent; border: none; padding: var(--space-0_5) var(--space-2); font: inherit; font-size: var(--text-xs); color: var(--text-3); cursor: pointer; border-radius: var(--radius-sm); }
+/* a draft routine under the Routines filter: name + Draft, schedule · home chat, and its switch */
+.vx-rail-draft { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); }
+.vx-rail-draft-open { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; background: transparent; border: none; padding: 0; font: inherit; color: var(--text-1); text-align: left; cursor: pointer; }
+.vx-rail-draft-title { display: flex; align-items: center; gap: var(--space-1); min-width: 0; max-width: 100%; }
+.vx-rail-draft-meta { font-size: var(--text-xs); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .vx-rail-more:hover { color: var(--text-1); }
 .vx-rail-more:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .vx-rail-row { -webkit-touch-callout: none; }
