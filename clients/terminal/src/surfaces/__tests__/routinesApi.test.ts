@@ -2,7 +2,7 @@
  *  /api/routines* with NO `subject` (scope is server-derived — P20), AND that a backend error is
  *  FAIL-LOUD: it throws (propagates to the surface) instead of being swallowed into an empty list (P18). */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { listRoutines, deleteRoutine, setRoutineEnabled, confirmRoutine } from "../routinesApi";
+import { listRoutines, deleteRoutine, setRoutineEnabled, confirmRoutine, routineNote, pausedNote } from "../routinesApi";
 import { ApiError } from "../apiClient";
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -45,5 +45,34 @@ describe("routinesApi — scoped (no subject) + fail-loud", () => {
   it("FAIL-LOUD: a network failure throws (not [])", async () => {
     fetchMock.mockRejectedValueOnce(new TypeError("offline"));
     await expect(listRoutines()).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe("routineNote — a routine that needs the person says so on its card", () => {
+  const base = { id: "r1", name: "inbox", cron: "*/10 * * * *", enabled: true };
+  it("shows agent-api's warning when the routine needs mail or calendar", () => {
+    const warning = "This routine needs your mail. … Ask in chat instead when you want it done; nothing is wrong with your connection.";
+    expect(routineNote({ ...base, needs_person: ["mail"], warning })).toBe(warning);
+  });
+  it("shows nothing for a routine that needs nobody, or a card from an older agent-api", () => {
+    expect(routineNote({ ...base, needs_person: [] })).toBeNull();
+    expect(routineNote(base)).toBeNull();
+  });
+  it("listRoutines carries the fields through unchanged", async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ routines: [{ ...base, needs_person: ["calendar"], warning: "w" }] }) } as unknown as Response);
+    const [r] = await listRoutines();
+    expect(r.needs_person).toEqual(["calendar"]);
+    expect(routineNote(r)).toBe("w");
+  });
+});
+
+describe("pausedNote — a routine the harness switched off says why", () => {
+  const base = { id: "r1", name: "inbox", cron: "*/10 * * * *" };
+  it("shows agent-api's reason while the routine is off", () => {
+    expect(pausedNote({ ...base, enabled: false, paused_reason: "paused after 3 runs in a row were refused" })).toContain("3 runs");
+  });
+  it("shows nothing once it is back on, or for a routine the person switched off themselves", () => {
+    expect(pausedNote({ ...base, enabled: true, paused_reason: "stale" })).toBeNull();
+    expect(pausedNote({ ...base, enabled: false })).toBeNull();
   });
 });

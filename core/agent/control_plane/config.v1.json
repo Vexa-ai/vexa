@@ -82,12 +82,9 @@
     {
       "key": "VEXA_GLOBAL_ADMIN_SUBJECTS",
       "class": "defaulted",
-      "default": "(unset \u2014 nobody writes _global)",
-      "description": "comma-separated user ids whose workers mount _global READ-WRITE \u2014 the admin setup conversation is the one sanctioned writer of the org tier; all other subjects mount it ro",
-      "targets": [
-        "compose",
-        "helm"
-      ]
+      "default": "(unset)",
+      "description": "RETIRED (founder ruling 2026-10-11) and IGNORED: it used to name user ids whose workers mounted _global read-write. The company layer is now written only by the deployment's ADMIN ACCOUNT, which identity decides (admin-api VEXA_ADMIN_ACCOUNT; control_plane/global_layer.is_admin_account). Read only so the boot can warn a deployment that still sets it that nobody it names writes _global any more. No deploy target sets it.",
+      "targets": []
     },
     {
       "key": "VEXA_GLOBAL_SYSTEM_WORKSPACE_REF",
@@ -186,6 +183,17 @@
       "description": "operator gate on workspace-pinned models (comma-separated)",
       "targets": [
         "compose"
+      ]
+    },
+    {
+      "key": "VEXA_MODEL_CATALOG",
+      "class": "defaulted",
+      "default": "(empty \u2014 no catalog: every turn runs on VEXA_AGENT_MODEL / VEXA_RUNNER and each person's Settings \u2192 Models)",
+      "description": "the operator's model catalog (ADR-0043): one JSON object validated against core/agent/contracts/models.v1 Catalog \u2014 the providers this deployment reaches (each naming its adapter: openai_compatible, openrouter, anthropic) and the models people pick per chat in the terminal, each a real model named by its id at the provider. Refused WHOLE at boot, every problem named and no value quoted. Holds no credential: a provider's secret_ref (env:VEXA_MODEL_SECRET_<NAME>) names a variable in agent-api's environment, delivered by the deploy surface's secret store (compose .env, Helm models.catalogSecrets)",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
       ]
     },
     {
@@ -540,14 +548,15 @@
     {
       "key": "VEXA_FLOWS_API_URL",
       "class": "publish-edge",
-      "description": "flows' address \u2014 the domain this service HANDS FACTS TO (desk.unscaffolded, claim.proposed, and workspace.invited \u2014 an invite for an address this instance does not know, which flows mails; Vexa-ai/vexa#1632) and reads the worker's read-only timeline preamble from. Declared as the publish edge because that is what it is: agent-api needs no answer from flows \u2014 the publishes are bounded at 2s and swallowed (control_plane/publish.py) and an absent timeline degrades a turn rather than failing it, so unset is the no-flows PROFILE and not a degraded state. NO DEFAULT, and the class forbids one for the right reason: a fallback address to publish to, invented by us, in a deployment that deliberately runs no such domain",
+      "description": "flows' address \u2014 the domain this service HANDS FACTS TO (desk.unscaffolded, claim.proposed, workspace.invited \u2014 an invite for an address this instance does not know, which flows mails; Vexa-ai/vexa#1632 \u2014 and routine.paused, a scheduled routine the harness switched off after repeated identical refusals) and reads the worker's read-only timeline preamble from. Declared as the publish edge because that is what it is: agent-api needs no answer from flows \u2014 the publishes are bounded at 2s and swallowed (control_plane/publish.py) and an absent timeline degrades a turn rather than failing it, so unset is the no-flows PROFILE and not a degraded state. NO DEFAULT, and the class forbids one for the right reason: a fallback address to publish to, invented by us, in a deployment that deliberately runs no such domain",
       "targets": [
         "compose"
       ],
       "publishes_events": [
         "desk.unscaffolded",
         "claim.proposed",
-        "workspace.invited"
+        "workspace.invited",
+        "routine.paused"
       ]
     },
     {
@@ -569,7 +578,8 @@
       "publishes_events": [
         "desk.unscaffolded",
         "claim.proposed",
-        "workspace.invited"
+        "workspace.invited",
+        "routine.paused"
       ]
     },
     {

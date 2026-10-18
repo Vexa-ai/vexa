@@ -37,6 +37,7 @@ from sqlalchemy.future import select
 from .. import delegation as delegation_mod
 from ..schema.models import APIToken, User
 from . import delegation_revocation as revocation
+from . import admin_account
 from . import signin_allow
 from .db import get_db
 from .internal_tier import check_internal
@@ -63,6 +64,11 @@ DELEGATION_REVOCATION_UNAVAILABLE = "Delegation revocation store unavailable"
 def accepts_delegation(request: Request) -> bool:
     """Did the caller declare that it reads a delegation answer? Exactly `1`; anything else is no."""
     return (request.headers.get(ACCEPTS_DELEGATION_HEADER) or "").strip() == ACCEPTS_DELEGATION_VALUE
+
+
+#: The membership roles that may write into a shared workspace (agent-api's role ladder:
+#: viewer < contributor < owner; "reader" is the person-facing word for viewer).
+WRITE_ROLES = frozenset({"contributor", "owner"})
 
 
 class ValidateRequest(BaseModel):
@@ -96,24 +102,36 @@ class ValidatedIdentity(BaseModel):
     # subscribe. Present when the account carries a membership list. For a delegation token, only
     # the memberships inside the dispatch's ceiling (`_validate_delegation`).
     workspaces: Optional[List[str]] = None
+    # The subset the caller may WRITE into (contributor or owner), so meeting-api can refuse to bind
+    # a meeting into a workspace its owner only reads. Bounded by the same ceiling for a delegation.
+    writable_workspaces: Optional[List[str]] = None
     delegation: Optional[DelegationCeiling] = None   # delegation tokens only
     # WHO THE WORKER ACTS FOR, as a fact about that person — never a role the worker holds
     # (`is_admin` stays False). The MCP edge spends the deployment's operator key for a worker only
     # when its person is the instance admin AND the person is in the loop (regime `human`); it asks
     # the gateway, which reads this beside the regime. Delegation tokens only.
     person_is_admin: Optional[bool] = None
+    # THE ADMIN ACCOUNT (app/admin_account.py): the deployment's dedicated account, the only one
+    # that writes `_global`. Always stated for an API key — positive evidence, so a resolver that
+    # finds it missing (an older identity) reads "no". False for a worker's delegation token: a
+    # worker is never the account; `person_admin_account` says whether its person is.
+    admin_account: Optional[bool] = None
+    person_admin_account: Optional[bool] = None
 
 
 def identity_of(user: User, *, scopes: List[str], is_admin: bool) -> Dict[str, Any]:
     """The fields of a `ValidatedIdentity` for `user` — only the ones that apply."""
+    data_blob = user.data if isinstance(user.data, dict) else {}
+    is_account = admin_account.is_admin_account(user.email, data_blob)
     resp: Dict[str, Any] = {
         "user_id": user.id,
         "scopes": scopes,
-        "max_concurrent": user.max_concurrent_bots,
+        # The admin account launches no bot, whatever its row says: 0 is meeting-api's "no bots".
+        "max_concurrent": admin_account.MAX_CONCURRENT_BOTS if is_account else user.max_concurrent_bots,
         "email": user.email,
         "is_admin": is_admin,
+        "admin_account": is_account,
     }
-    data_blob = user.data if isinstance(user.data, dict) else {}
     if data_blob.get("webhook_url"):
         resp["webhook_url"] = data_blob["webhook_url"]
         if data_blob.get("webhook_secret"):
@@ -124,6 +142,11 @@ def identity_of(user: User, *, scopes: List[str], is_admin: bool) -> Dict[str, A
     if isinstance(memberships, list):
         resp["workspaces"] = [str(m["workspace_id"]) for m in memberships
                               if isinstance(m, dict) and m.get("workspace_id")]
+        writable = [str(m["workspace_id"]) for m in memberships
+                    if isinstance(m, dict) and m.get("workspace_id")
+                    and str(m.get("role") or "").lower() in WRITE_ROLES]
+        if writable:   # present only when there is one, like the webhook fields
+            resp["writable_workspaces"] = writable
     return resp
 
 
@@ -164,11 +187,19 @@ async def _validate_delegation(token: str, db: AsyncSession) -> Dict[str, Any]:
     if "workspaces" in resp:
         resp["workspaces"] = [w for w in resp["workspaces"] if delegation_mod.ceiling_reads(
             ceiling["workspaces"], w, subject=str(uid))]
+    # The WRITE set is narrowed by the ceiling's own rule (`ceiling_allows`), never by the read
+    # result: reads also include what every subject reads (`_global`), and a worker must not be
+    # able to put a meeting into `_global` because its person happens to edit it (R1801-7).
+    if "writable_workspaces" in resp:
+        resp["writable_workspaces"] = [w for w in resp["writable_workspaces"] if delegation_mod.ceiling_allows(
+            ceiling["workspaces"], w, subject=str(uid))]
     resp["delegation"] = ceiling
     if claims.get("target"):
         resp["delegation"]["target"] = str(claims["target"])
     resp["person_is_admin"] = signin_allow.is_admin(
         user.email, user.data, signin_allow.admin_emails()[0])
+    resp["person_admin_account"] = bool(resp["admin_account"])
+    resp["admin_account"] = False
     return resp
 
 

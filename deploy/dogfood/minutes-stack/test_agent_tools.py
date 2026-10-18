@@ -85,6 +85,16 @@ class AgentToolsOnTheRig(unittest.TestCase):
         agent_tools.with_time_context(lambda: '{}', call)()
         self.assertEqual(named[-1][0], 'current_time')
 
+    def test_account_read_tools_forbid_constructing_a_provider_url(self):
+        """No provider link may be built by the agent: every mail/calendar read tool says so, and
+        the broker's web_url reaches the agent unchanged."""
+        rule = 'Link to a message or event only with its web_url; never construct a provider URL.'
+        url = 'https://mail.google.com/mail/u/robin.vale%2Bwork@example.test/#all/t1'
+        tools, _, _ = registered({('POST', '/api/connections/gmail/read'): (200, {'message': {'id': 'm1', 'web_url': url}})})
+        for name in ('gmail_search', 'gmail_read', 'gmail_thread', 'calendar_events', 'mail_inbox', 'mail_read'):
+            self.assertIn(rule, ' '.join(tools[name].__doc__.split()), name)
+        self.assertEqual(json.loads(tools['gmail_read']('m1'))['message']['web_url'], url)
+
     def test_whats_waiting_carries_the_clock(self):
         _, _, call = registered({('GET', '/api/time'): (200, {'timezone': 'Europe/Lisbon'})})
         waiting = agent_tools.with_time_context(lambda: json.dumps({'waiting': []}), call)
@@ -196,6 +206,21 @@ class AgentCallGoesThroughTheGateway(unittest.TestCase):
         self.assertEqual((status, body), (403, {'detail': inner}))
         out = json.loads(agent_tools._error(status, body, 'fallback'))
         self.assertEqual((out['status'], out['reason']), ('refused', 'human_session_required'))
+
+    def test_the_refusal_remedy_reaches_the_agent_through_the_gateway_render(self):
+        """The product's `REFUSAL` (gateway-identity.v1) rendered by the gateway MCP and parsed here
+        keeps `remedy` and `tell_your_person`, so the agent on this rig reads the same way through
+        as it would on the product's own MCP."""
+        errors = agent_mcp.load('product_tool_errors', PRODUCT_TOOLS.parents[2] / 'core' / 'meetings'
+                                / 'services' / 'mcp' / 'src' / 'vexa_mcp' / 'tool_errors.py')
+        token = agent_mcp.load('product_identity_token', PRODUCT_TOOLS.parents[2] / 'core' / 'gateway'
+                               / 'contracts' / 'gateway-identity.v1' / 'identity_token.py')
+        inner = token.REFUSAL
+        text = errors.render_tool_error(403, json.dumps({'detail': inner}))
+        _, (status, body) = self.worker(Gateway(refusal(text)))
+        out = json.loads(agent_tools._error(status, body, 'fallback'))
+        self.assertEqual(out['remedy'], 'ask_in_chat')
+        self.assertEqual(out['tell_your_person'], inner['tell_your_person'])
 
     def test_an_http_status_in_the_refusal_is_kept(self):
         _, (status, body) = self.worker(Gateway(refusal('HTTP 404\n{"detail":"no such"}')))

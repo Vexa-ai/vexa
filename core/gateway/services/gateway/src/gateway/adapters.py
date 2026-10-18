@@ -18,6 +18,7 @@ the conformance harness never imports it — it injects its own in-process fakes
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -58,12 +59,17 @@ class HttpxDownstreamClient:
         )
 
     @asynccontextmanager
-    async def open_stream(self, method, url, *, headers=None, params=None, content=None):
+    async def open_stream(self, method, url, *, headers=None, params=None, content=None,
+                          timeout=None):
         """Open a streaming downstream request and yield the response HEAD (status + headers)
         while the body is still arriving. The httpx stream is a context manager; it stays open
-        for the life of this block so the gateway can relay each chunk as it arrives."""
+        for the life of this block so the gateway can relay each chunk as it arrives.
+
+        ``content`` may be an async iterator (a request body relayed as it arrives). ``timeout``,
+        when given, replaces the streaming leg's own for this one request (the bundle hop's)."""
+        extra = {"timeout": timeout} if timeout is not None else {}
         async with self._stream_client.stream(
-            method, url, headers=headers, params=params or None, content=content
+            method, url, headers=headers, params=params or None, content=content, **extra
         ) as resp:
             yield resp
 
@@ -76,6 +82,11 @@ class HttpxDownstreamClient:
                 yield chunk
 
 
+#: Waits before each retry of a ``/internal/validate`` hop that could not CONNECT (seconds). Bounded:
+#: two retries, ~2 s added, which covers admin-api restarting behind its Service.
+VALIDATE_CONNECT_RETRY_BACKOFF = (0.5, 1.5)
+
+
 class AdminApiAuthorizer:
     """``Authorizer`` over the admin-api + meeting-api hops.
 
@@ -85,8 +96,10 @@ class AdminApiAuthorizer:
     the resolved user identity.
     """
 
-    def __init__(self, client, admin_api_url: str, meeting_api_url: str, *, identity_key=None):
+    def __init__(self, client, admin_api_url: str, meeting_api_url: str, *, identity_key=None,
+                 sleep=asyncio.sleep):
         self._client = client
+        self._sleep = sleep
         self._admin_api_url = admin_api_url.rstrip("/")
         self._meeting_api_url = meeting_api_url.rstrip("/")
         # gateway-identity.v1: the gateway's Ed25519 signing key, the same one every forward is signed with.
@@ -103,12 +116,7 @@ class AdminApiAuthorizer:
         if internal_secret:
             headers["X-Internal-Secret"] = internal_secret
         try:
-            resp = await self._client.post(
-                f"{self._admin_api_url}/internal/validate",
-                json={"token": api_key},
-                headers=headers,
-                timeout=5.0,
-            )
+            resp = await self._post_validate(httpx, api_key, headers)
         except httpx.HTTPError as e:
             # Transport-layer failure or timeout: we did NOT reach a verdict on the key. Surfacing
             # this as an invalid key is the #495/#483 bug — raise so the app answers 503 (retry),
@@ -126,6 +134,28 @@ class AdminApiAuthorizer:
         if 400 <= resp.status_code < 500:
             return None
         raise AuthUnavailable(f"admin-api validate returned {resp.status_code}")
+
+    async def _post_validate(self, httpx, api_key: str, headers: dict):
+        """POST ``/internal/validate``, retrying ONLY a hop that never connected.
+
+        A ``ConnectError`` / ``ConnectTimeout`` means the request never reached admin-api (it is
+        restarting, or its endpoint is not ready yet), so it is safe to send again and likely to
+        succeed a moment later: two retries, after ``VALIDATE_CONNECT_RETRY_BACKOFF``. Every other
+        failure is raised at once — a read timeout means admin-api has the request and is slow, and
+        repeating it would add load exactly when it is overloaded; a pool timeout is this edge's own
+        saturation (#495)."""
+        for wait in (*VALIDATE_CONNECT_RETRY_BACKOFF, None):
+            try:
+                return await self._client.post(
+                    f"{self._admin_api_url}/internal/validate",
+                    json={"token": api_key},
+                    headers=headers,
+                    timeout=5.0,
+                )
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                if wait is None:
+                    raise
+                await self._sleep(wait)
 
     async def authorize_subscribe(self, api_key: str, meetings: list) -> dict:
         auth_headers = {"X-API-Key": api_key, TRACE_HEADER: get_trace_id() or ""}

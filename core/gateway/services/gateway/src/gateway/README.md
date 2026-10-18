@@ -10,7 +10,11 @@ The production edge logic, injectable. Modules:
   auth, scope 403, verbatim body passthrough on the CORE routes), the `/ws` mount, and
   `/health`. Behavior is the carve of `services/api-gateway/main.py` (cited inline).
 - **`multiplex.py`** — `run_multiplex`, the `/ws` control loop (subscribe/unsubscribe/ping) and
-  its redis fan-in.
+  its redis fan-in. Every 15 s (`WS_REAUTH_INTERVAL_SEC`) each open socket RE-RESOLVES its key
+  through identity (`POST /internal/validate`) — a key that no longer resolves is closed `4401`, and
+  a changed workspace membership re-derives its `w:{id}:meetings` channels — and re-runs
+  `/ws/authorize-subscribe` for what it streams, stopping any meeting that no longer passes with a
+  ws.v1 `subscription_revoked` frame. Two failed hops in a row fail closed.
 - **`delegation.py`** — where a worker's delegation token is admitted: `/mcp` and the MCP's own
   re-entry (`McpReentry`) on the routes declared `"mcp_reentry": true`, and what `/auth/me`
   reports about a worker's admin standing.

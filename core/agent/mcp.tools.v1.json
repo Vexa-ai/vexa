@@ -12,7 +12,7 @@
     "edge_prefix": "/agent/",
     "upstream_prefix": "/api/"
   },
-  "note": "ADR-0037 / PRD decision 40.5 \u2014 the agent domain's cut at the assembled edge: every tool an agent has here is a route agent-api serves, bound by `bind.py` from the route's own OpenAPI (`parameters` and a named pydantic `requestBody`). The gateway's one MCP server serves them to a person's own client and to a cloud worker alike; a worker's delegation token reaches them as the person it acts for, and the routes that need a person in the loop refuse it when it was dispatched without one. The page verbs default an omitted `slug` to the chat's target, which the worker's signed identity carries as `x-user-delegation-target`. The gateway fronts this domain wholesale, so `forward` (the same mapping as `routes.v1.json`'s) sends each tool call back through the gateway at /agent/<path> rather than to agent-api directly.",
+  "note": "ADR-0037 / PRD decision 40.5 — the agent domain's cut at the assembled edge: every tool an agent has here is a route agent-api serves, bound by `bind.py` from the route's own OpenAPI (`parameters` and a named pydantic `requestBody`). The gateway's one MCP server serves them to a person's own client and to a cloud worker alike; a worker's delegation token reaches them as the person it acts for, and the routes that need a person in the loop refuse it when it was dispatched without one. The page verbs default an omitted `slug` to the chat's target, which the worker's signed identity carries as `x-user-delegation-target`. The gateway fronts this domain wholesale, so `forward` (the same mapping as `routes.v1.json`'s) sends each tool call back through the gateway at /agent/<path> rather than to agent-api directly.",
   "tools": [
     {
       "name": "workspace_tree",
@@ -67,7 +67,7 @@
         "content",
         "slug"
       ],
-      "note": "Create a page or replace it whole, committed in the workspace. An omitted `slug` is where the conversation is working (the chat's target on a worker's identity, the desk otherwise); `personal` names the desk."
+      "note": "Create a page or replace it whole, committed in the workspace. An omitted `slug` is where the conversation is working (the chat's target on a worker's identity, the person's personal workspace otherwise); `personal` names it."
     },
     {
       "name": "workspace_delete",
@@ -185,7 +185,7 @@
       "arguments": [
         "verdicts"
       ],
-      "note": "The person's word on proposed claims; the first one they stand behind makes the desk ready (`.scaffolded`)."
+      "note": "The person's word on proposed claims; the first one they stand behind makes their personal workspace ready (`.scaffolded`)."
     },
     {
       "name": "transcript_terms",
@@ -234,7 +234,7 @@
       "arguments": [
         "slug"
       ],
-      "note": "Reads the one-line PURPOSE a workspace carries. The SET side (`POST /api/workspace/purpose`) IS bindable now (`WorkspacePurposeBody` is a named pydantic model) but is not wired in as a tool here: it would need a name of its own \u2014 this GET's name is already `workspace_purpose` in the worker's allow-list (`core/agent/worker/mcp_tools.v1.json`) \u2014 and minting a new one is a worker-capability decision, not an assembler one. Left as the concrete next step in the issue this manifest shipped with."
+      "note": "Reads the one-line PURPOSE a workspace carries. The SET side (`POST /api/workspace/purpose`) IS bindable now (`WorkspacePurposeBody` is a named pydantic model) but is not wired in as a tool here: it would need a name of its own — this GET's name is already `workspace_purpose` in the worker's allow-list (`core/agent/worker/mcp_tools.v1.json`) — and minting a new one is a worker-capability decision, not an assembler one. Left as the concrete next step in the issue this manifest shipped with."
     },
     {
       "name": "workspace_new",
@@ -251,7 +251,7 @@
       "arguments": [
         "name"
       ],
-      "note": "CREATE a brand-new blank workspace, seeded from the template, and add it to the caller's active set. `name` is optional (`WorkspaceNewBody.name`) \u2014 omitted, the route mints a unique default label."
+      "note": "CREATE a brand-new blank workspace, seeded from the template, and add it to the caller's active set. `name` is optional (`WorkspaceNewBody.name`) — omitted, the route mints a unique default label."
     },
     {
       "name": "workspace_members",
@@ -376,7 +376,7 @@
         "new_account",
         "setup"
       ],
-      "note": "Opens the trusted Connections panel for Gmail, Calendar or a custom secret (Git tokens are added by the person in Connections → Git, not requested). Secrets are entered there, never in chat. Refused for a worker dispatched without a person."
+      "note": "Opens the trusted Connections panel for Gmail, Calendar or a custom secret (Git tokens are added by the person in Connections → Git, not requested). The verb for any request to connect or reconnect an account, and for a tool failure with reason reconnect_required; while the credential store is unavailable it opens nothing. Secrets are entered there, never in chat. Refused for a worker dispatched without a person."
     },
     {
       "name": "connections_status",
@@ -409,7 +409,8 @@
         "limit",
         "connection_id",
         "page_token"
-      ]
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL."
     },
     {
       "name": "gmail_read",
@@ -426,7 +427,8 @@
       "arguments": [
         "message_id",
         "connection_id"
-      ]
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL."
     },
     {
       "name": "gmail_thread",
@@ -445,7 +447,8 @@
         "connection_id",
         "limit",
         "page_token"
-      ]
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL."
     },
     {
       "name": "calendar_events",
@@ -465,7 +468,8 @@
         "limit",
         "connection_id",
         "page_token"
-      ]
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL."
     },
     {
       "name": "mail_inbox",
@@ -482,7 +486,8 @@
       "arguments": [
         "limit",
         "connection_id"
-      ]
+      ],
+      "note": "Link to a message or event only with its web_url; never construct a provider URL."
     },
     {
       "name": "mail_read",
@@ -501,7 +506,7 @@
         "connection_id"
       ],
       "alias_of": "gmail_read",
-      "note": "An alias of gmail_read (the same door), under the name the inbox tool pairs with."
+      "note": "An alias of gmail_read (the same door), under the name the inbox tool pairs with. Link to a message or event only with its web_url; never construct a provider URL."
     },
     {
       "name": "gmail_draft_create",
@@ -575,6 +580,20 @@
         "path": "/api/time"
       },
       "note": "The clock, in the timezone identity remembers for this person."
+    },
+    {
+      "name": "models_list",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/models/catalog"
+      },
+      "note": "The models this person may pick per chat (models.v1 ModelList, ADR-0043), the one they run on before picking, and the effort levels each model offers (capabilities.reasoning_efforts, empty when it has none). Read-only; picking is the person's, in the terminal."
     },
     {
       "name": "timezone_set",

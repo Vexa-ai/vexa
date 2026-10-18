@@ -21,7 +21,7 @@ mails correctly before anyone has edited anything.
 Plain text. One link at most, and the step appends it — a template never writes a URL, because a
 link that a template could write is a link anyone who can edit a file can point anywhere.
 
-## The four templates
+## The templates
 
 | file | who reads it | when |
 |---|---|---|
@@ -29,6 +29,7 @@ link that a template could write is a link anyone who can edit a file can point 
 | `attendee-head.md` | **a stranger** — an attendee who is not a user | after the meeting, above the shared report |
 | `minutes-head.md` | somebody who already knows what Vexa is | after the meeting |
 | `workspace-invite.md` | **a stranger** — somebody a person here named by address | when they are invited to a group |
+| `meeting-share.md` | anybody an owner invited by address from a meeting's **Share** dialog | when they are invited to read that meeting |
 
 **`workspace-invite.md` is the only mail here that nothing about a meeting produced**
 (Vexa-ai/vexa#1632). A person pressed **Add a member…**, was asked for an address and a role, read
@@ -97,6 +98,8 @@ customer.
 
 `workspace-invite.md` gets `{{company}}`, `{{service}}` and `{{visibility}}` from the renderer, plus four its own step fills: `{{inviter}}` (who asked), `{{workspace_name}}` (the group they were invited to), `{{role}}` and `{{role_sentence}}` (what that role IS, derived in `workspace_membership.ROLE_SENTENCES` from `behavior/global/POLICIES.md`'s own line). It gets none of the meeting tokens, because no meeting produced it.
 
+`meeting-share.md` gets `{{company}}`, `{{service}}` and `{{visibility}}` from the renderer, plus two its own step (`mail_meeting_share`) fills: `{{inviter}}` (the owner's address) and `{{title}}` (the meeting's title, or "a meeting"). Like the workspace invite it is sent on a person's own act — they pressed **Invite** — so no fan-out switch swallows it, and the link it carries admits only the address it was sent to.
+
 `attendee-head.md` (rendered by `email_attendees` in `flows_defs/production.py`):
 
 | token | becomes |
@@ -124,17 +127,17 @@ telling them is still a choice they can act on. The `_global` setup chat tells t
 same thing and records their own answer in `STRUCTURE.md`.
 
 Note the wording: "your workspaces", the ordinary English word — not the product's NAME for a
-person's own space, which is a **desk** (founder, 2026-09-02: a personal desk, and a group desk for
-a group). The name lives behind one constant per runtime, `mailtext.WORKSPACE_WORD` and
+person's own space, which is a **personal workspace** (founder, 2026-10-11: *"rename desk to personal"*; it
+was called a desk from 2026-09-02). The name lives behind one constant per runtime, `mailtext.WORKSPACE_WORD` and
 `clients/terminal/src/minutes/vocabulary.ts`; templates and presets write `{{workspace}}` rather than
 the word. Code paths, slugs and API fields keep saying "workspace" on purpose — a naming decision
 should not cost a migration.
 
-The word carries the meaning, which is why "private" was the wrong word: **a desk is company
+The word carries the meaning, which is why "private" was the wrong word: **a personal workspace is company
 knowledge held by one person**, and the company's agents may read it for a meeting that person is
-in. What stays genuinely private is `_system` — chats, sessions, settings — which is not a desk.
+in. What stays genuinely private is `_system` — chats, sessions, settings — which is not a personal workspace.
 
-After a meeting the shared artefact goes to every attendee's desk as well as by mail, so the mail
+After a meeting the shared artefact goes to every attendee's personal workspace as well as by mail, so the mail
 may say so; `attendee-head.md` says it as literal text for the same reason it carries the service
 sentence literally — its renderer fills four tokens and would mail `{{workspace}}` verbatim.
 

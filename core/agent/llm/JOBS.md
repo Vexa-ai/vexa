@@ -192,6 +192,18 @@ server is processed, in order, once.**
 So a reload, a second window, another machine and a swapped terminal container all show the same
 pending list, because none of them is remembering it.
 
+### …and everything taken is watched (2026-10-10)
+
+The founder: *"sometimes chat does not answer if asked while it's not yet answered."* The worker
+answered; nobody was reading. Three gaps, all closed:
+
+| Gap | Fix |
+|---|---|
+| The write-back trailer (F161) ends a turn AFTER the next one has been taken, so turn t2 streams on t1's view and the relay closed on t1's `turn-complete` | `RedisStreamReader` closes a view only when every turn ACCEPTED on it has completed; the terminal routes events by `turn_id` and gives t2 its own bubble (`onTurn`) |
+| A message is taken the instant the turn in front ends, so an idle client that asked "what is pending?" heard "nothing" | `GET /api/chat/pending?after=<cursor>` adds `taken` (turns started since the client's last event); the terminal attaches on a pending row OR `taken` |
+| The turn in front ended while the submission POST was in flight | the terminal re-runs its catch-up when the submission is acknowledged, and never re-sends a copy still in flight |
+| A submission stepped the mount generation (model change, new workspace) and ran on a second unit nobody was watching | a submission reads the generation; the next streamed turn on an idle chat takes it |
+
 ## Completion
 
 `job-done` posts its line into the live chat as an agent turn, and the job's `commit` dispatches

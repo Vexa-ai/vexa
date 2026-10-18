@@ -45,6 +45,8 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   contract sdk-capture.v1
   data-asset acl-bots-index [writers: meeting-api]
   contract mcp.tools.v1
+  data-asset meeting-bundle-file [writers: meeting-api]
+  data-asset meeting-bundle-parts [writers: agent-api]
 
 system agent  # the execution domain: a trigger becomes one governed agent turn over a workspace.v1 git repo; owns no transcript
   service agent-api
@@ -54,6 +56,7 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   contract routine.v1
   contract task.v1
   contract tool.v1
+  contract models.v1
   contract unit.v1
   contract credential-broker.v1
   service credentials-broker
@@ -65,6 +68,7 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   data-asset imports-status [writers: agent-api]
   data-asset onboarding-research-state [writers: agent-api]
   data-asset rail-order [writers: agent-api]
+  data-asset rail-marks [writers: agent-api]
   data-asset redis-acl-users [writers: agent-api, meeting-api]
   data-asset acl-units-index [writers: agent-api]
   data-asset routine-state [writers: agent-api]
@@ -101,6 +105,7 @@ system deploy  # deployment + execution-target registry
   contract execution-targets.v1
   contract config.v1
   contract outbound-url.v1
+  contract meeting-bundle.v1
 
 system service-authority-system  # optional operator-owned admission and active-service authority; absent in stock OSS and never owns billing policy inside core
   service service-authority
@@ -154,6 +159,8 @@ edges:
   meeting-api -write-> object-store
   meeting-api -req-> runtime  # meeting-api drives the kernel with Authorization: Bearer RUNTIME_API_TOKEN (runtime.v1 CallerCredential): POST /workloads to spawn a bot, GET /workloads/{id} to read it and DELETE /workloads/{id} to tear it down; its RuntimeEvents come back signed on rt-ma
   meeting-api -req-> admin-api  # GET /internal/calendar-configs discovers secret-gated calendar connections for sync and disconnect cleanup
+  meeting-api -req-> admin-api  # GET /internal/users/{id}/email (X-Internal-Secret) answers {id, email} for a reader of a shared meeting, asked only on the OWNER's access view (GET /meetings/{id}/access) for readers who redeemed before meeting-api kept a roster; meeting-api writes the address into that meeting's own data.share_viewers (one writer) and a failed lookup leaves the reader listed by id (collector/reader_directory.py)
+  meeting-api -req-> admin-api  # GET /internal/users/{id}/memberships (X-Internal-Secret), read once per calendar sync run: a new occurrence of a calendar series inherits the series' workspace only while its owner still holds contributor or owner there (R1801-3); an unanswered lookup is 'may write nowhere' and the occurrence is created private (calendar_sync/runner.py, collector/reader_directory.py)
   meeting-api -req-> service-authority  # optional signed service-authority.v1 admit/continue decision; unset is explicit OSS allow-all, configured failure is closed
   meeting-api -req-> system-webhook  # optional signed terminal webhook.v1 delivery to a boot-frozen operator destination; customer webhook SSRF policy remains separate
   agent-api -read-> segments-stream  # the transcription watcher's group agent_copilot: XREADGROUP + XACK each raw entry as a hint only, naming which verified per-meeting feed (tc-stream) to read; it acts on nothing it reads here
@@ -201,6 +208,7 @@ edges:
   agent-api -write-> imports-status  # repository import status (workspace_import.py)
   agent-api -write-> onboarding-research-state  # onboarding research checkpoints (onboarding_research.py)
   agent-api -write-> rail-order  # SET/GET the chat rail order
+  agent-api -write-> rail-marks  # HSET/HDEL/HGETALL a person's rail pins and hides
   admin-api -write-> signin-link-redeemed  # SET NX with the link's own expiry (at most an hour) when a terminal redeems an emailed sign-in link; a write that cannot be made refuses the sign-in
   claude-plugin -req-> gateway  # the plugin's HTTP MCP server entry: Claude Code calls the gateway's /mcp with the person's Vexa API key; the plugin itself runs no code
   agent-api -write-> unit-in  # XADD the person's next message to a warm unit, signed with the unit's key
@@ -223,6 +231,11 @@ edges:
   mcp -req-> flows-api  # boot assembly: GET /.well-known/mcp-tools.json + /openapi.json — the flows domain's tools join the one MCP surface; its operator-keyed tools need the MCP to hold the key its admin_auth names
   mcp -req-> meeting-api  # boot assembly: GET /.well-known/mcp-tools.json + /openapi.json on the meetings domain's door; a 404 is a deployed domain that publishes no manifest, and contributes no tools
   mcp -req-> admin-api  # boot assembly: GET /.well-known/mcp-tools.json + /openapi.json on identity's door, always configured; a 404 is a domain that publishes no manifest, and contributes no tools
+  meeting-api -write-> meeting-bundle-file  # GET /meetings/{meeting_id}/export — the owner's whole meeting as a meeting-bundle.v1 zip
+  meeting-api -read-> meeting-bundle-file  # POST /meetings/import — validate a meeting-bundle.v1 zip (manifest, every hash, paths, sizes) and land it as a new meeting the importer owns
+  agent-api -write-> meeting-bundle-parts  # GET /api/meeting/bundle-parts — the owner's bound workspace tree (never its roster or policy) and the meeting's page
+  meeting-api -read-> meeting-bundle-parts  # POST /meetings/{meeting_id}/export — the parts placed into the bundle
+  agent-api -read-> meeting-bundle-file  # POST /api/meeting/bundle-restore — the bundle's workspace part as a new private workspace of the importer and its notes page on their desk, re-bound to the imported meeting
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, object-store, transcription deployed-in deploy
   flows-api, flows-worker deployed-in deploy

@@ -23,7 +23,7 @@ INTERNAL = "internal-secret-for-tests"
 DLG = "delegation-secret-for-tests"
 KEY = "vxa_bot_test-key"
 
-BASE_FIELDS = {"user_id", "scopes", "max_concurrent", "email", "is_admin"}
+BASE_FIELDS = {"user_id", "scopes", "max_concurrent", "email", "is_admin", "admin_account"}
 
 
 class _Result:
@@ -81,8 +81,8 @@ def _validate(client, body):
 
 def test_the_response_model_declares_the_whole_wire_in_one_place():
     assert set(validate_mod.ValidatedIdentity.model_fields) == BASE_FIELDS | {
-        "webhook_url", "webhook_secret", "webhook_events", "workspaces", "delegation",
-        "person_is_admin"}
+        "webhook_url", "webhook_secret", "webhook_events", "workspaces", "writable_workspaces", "delegation",
+        "person_is_admin", "person_admin_account"}
     assert set(validate_mod.DelegationCeiling.model_fields) == {"regime", "workspaces", "target"}
     assert set(validate_mod.ValidateRequest.model_fields) == {"token"}
 
@@ -99,7 +99,7 @@ def test_an_api_key_answers_the_base_fields_and_nothing_that_does_not_apply(monk
     r = _validate(client, {"token": KEY})
     assert r.status_code == 200, r.text
     assert r.json() == {"user_id": 42, "scopes": ["bot"], "max_concurrent": 2,
-                        "email": "ada@example.com", "is_admin": False}
+                        "email": "ada@example.com", "is_admin": False, "admin_account": False}
     assert session.commits == 1, "every hit bumps last_used_at"
 
 
@@ -158,10 +158,39 @@ def test_a_delegation_answers_the_ceiling_and_the_person_and_omits_an_absent_tar
                        headers={"X-Internal-Secret": INTERNAL,
                                 validate_mod.ACCEPTS_DELEGATION_HEADER:
                                     validate_mod.ACCEPTS_DELEGATION_VALUE}).json()
-    assert set(body) == BASE_FIELDS | {"delegation", "person_is_admin"}
+    assert set(body) == BASE_FIELDS | {"delegation", "person_is_admin", "person_admin_account"}
     assert body["delegation"] == {"regime": "human", "workspaces": "*"}
     assert body["scopes"] == ["bot", "tx"]
     assert body["is_admin"] is False and body["person_is_admin"] is True
+    assert body["admin_account"] is False and body["person_admin_account"] is False
+
+
+def test_the_admin_account_key_says_so_and_carries_no_bot(monkeypatch):
+    """The deployment's dedicated admin account (app/admin_account.py): named AND stamped."""
+    monkeypatch.setenv("VEXA_ADMIN_ACCOUNT", "ada@example.com")
+    client, _ = _client(monkeypatch, data={"account": "admin"})
+    body = _validate(client, {"token": KEY}).json()
+    assert body["admin_account"] is True and body["is_admin"] is False
+    assert body["max_concurrent"] == 0
+
+
+def test_a_stamp_the_deployment_no_longer_names_is_not_the_admin_account(monkeypatch):
+    monkeypatch.delenv("VEXA_ADMIN_ACCOUNT", raising=False)
+    client, _ = _client(monkeypatch, data={"account": "admin"})
+    body = _validate(client, {"token": KEY}).json()
+    assert body["admin_account"] is False and body["max_concurrent"] == 2
+
+
+def test_the_admin_accounts_worker_is_never_the_account_its_person_is(monkeypatch):
+    monkeypatch.setenv("VEXA_ADMIN_ACCOUNT", "ada@example.com")
+    client, _ = _client(monkeypatch, data={"account": "admin"})
+    tok = delegation.mint_delegation(DLG, subject="42", regime="human", workspaces="*")
+    body = client.post("/internal/validate", json={"token": tok},
+                       headers={"X-Internal-Secret": INTERNAL,
+                                validate_mod.ACCEPTS_DELEGATION_HEADER:
+                                    validate_mod.ACCEPTS_DELEGATION_VALUE}).json()
+    assert body["admin_account"] is False and body["person_admin_account"] is True
+    assert body["max_concurrent"] == 0
 
 
 def test_the_internal_tier_guards_the_typed_route(monkeypatch):

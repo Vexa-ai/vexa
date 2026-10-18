@@ -27,6 +27,7 @@ from pydantic import ValidationError
 from . import connection_setup, providers, secret_service, service_oauth, setup_schema
 from .broker import Broker, credential_hosts
 from .faults import UpstreamFault
+from .reasons import ReasonedError, refusal_reason
 from .models import (AccountReadBody, CustomCallBody, CustomSecretBody, GmailDraftBody, OAuthApplicationBody,
                      PreparedSetupBody, SetupBody)
 
@@ -197,7 +198,7 @@ def build(b: Broker) -> APIRouter:
             try:
                 url = service_oauth.authorize(cfg["spec"], cfg, b.redirect(), state, challenge)
             except secret_service.ServiceError as e:
-                raise HTTPException(409, str(e)) from None
+                raise ReasonedError(409, str(e), refusal_reason(str(e))) from None
         else:
             url = providers.authorize(row["provider"], b.google(), b.redirect(), state, challenge)
         b.sql("DELETE FROM oauth_states WHERE connection=? OR expires<?", (cid, time.time()))
@@ -293,7 +294,10 @@ def build(b: Broker) -> APIRouter:
                 raise
         # Token rotation is serialized; independent account reads must not hold the global lock.
         try:
-            result = providers.read_account(row["provider"], value, **body.model_dump())
+            # The connected address comes from the broker's own row (Gmail's profile answer at
+            # consent), never from the body: AccountReadBody forbids extra fields.
+            result = providers.read_account(row["provider"], value, account=row.get("account") or "",
+                                            **body.model_dump())
             b.audit(who, cid, body.action, "success", operation=operation, version=row["version"])
             return {"operation_id": operation, "source": row["provider"], "untrusted_content": True, **result}
         except (providers.ProviderError, UpstreamFault, HTTPException):
@@ -370,7 +374,7 @@ def build(b: Broker) -> APIRouter:
         except secret_service.ServiceError as e:
             b.refused("service", "refused", "/api/connections/{cid}/call")
             b.audit(who, cid, "service.call", "failed", operation=operation)
-            raise HTTPException(409, str(e)) from None
+            raise ReasonedError(409, str(e), refusal_reason(str(e))) from None
         except UpstreamFault:
             b.audit(who, cid, "service.call", "failed", operation=operation)
             raise

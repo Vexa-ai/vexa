@@ -122,7 +122,7 @@ describe("the three viewers' lines", () => {
       pages: [{ path: "kg/standing-orders.md", title: "standing orders" }],
     });
 
-    expect(eyebrow(facts.kind)).toBe("Your desk");
+    expect(eyebrow(facts.kind)).toBe("Your personal workspace");
     expect(row(facts)).toBe("agents read it for meetings you are in · 12 pages");
     expect(lastChangeSentence(mine, now)).toBe("You changed the standing orders page yesterday");
     expect(stripActs({ kind: "desk", owner: true, remote: null }).map((a) => a.label))

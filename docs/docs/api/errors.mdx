@@ -26,6 +26,7 @@ failures (`422`).
 | `422` | semantic validation failed — bad field, invalid scope, event with no plan | `Invalid scope(s): ['foo']. Valid: ['bot', 'browser', 'tx']` |
 | `429` | rate-limited — per-IP edge throttle or per-user limiter; honor the `Retry-After` header (seconds) | — |
 | `500` | unexpected server error | — |
+| `503` | a dependency is unavailable — for any route, the gateway could not check your key with admin-api (the key was not rejected; retry after `Retry-After`) | `Authentication temporarily unavailable, retry` |
 
 ## By surface
 

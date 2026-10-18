@@ -268,3 +268,21 @@ def test_a_provider_fault_is_not_healed_as_a_stale_resume(tmp_path, monkeypatch)
     assert sess_file.read_text() == "s-old"                    # the chat's memory survived
     assert evs[-1]["fault"]["kind"] == "unpaid"
 
+
+
+def test_a_claude_code_turn_with_no_base_url_names_anthropic_not_unknown(monkeypatch):
+    """The subscription route (and a catalog route to Anthropic) stamps ANTHROPIC_BASE_URL empty:
+    the CLI's own default endpoint is where the turn went, so a fault names it."""
+    from llm.errors import provider_host
+    from llm.faults import classify
+
+    for value in (None, ""):
+        if value is None:
+            monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+        else:
+            monkeypatch.setenv("ANTHROPIC_BASE_URL", value)
+        assert provider_host() == "api.anthropic.com"
+        assert classify(status=402, text="credit balance is too low").provider == "api.anthropic.com"
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://openrouter.ai/api")
+    assert provider_host() == "openrouter.ai"
+    assert provider_host("") == "unknown"          # an explicit empty endpoint names nothing

@@ -81,7 +81,7 @@ def _worked(body: str) -> dict:
 SENTENCES: dict = {
     "Write the report and get it to the room": (
         "when a meeting ends, write the report, mail it to everybody who was in the room, and put "
-        "it on their desks",
+        "it in their personal workspaces",
         "meeting.completed",
         ("process_meeting", "email_minutes", "email_attendees", "drop_to_attendees"),
     ),

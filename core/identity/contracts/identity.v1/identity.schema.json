@@ -98,7 +98,7 @@
       }
     },
     "ValidateResponse": {
-      "description": "The 200 answer of POST /internal/validate: who the bearer is. For an API key, `scopes` are the key's (`legacy` for a key minted before scopes) and `is_admin` is identity's admin test for its owner. For a delegation token, `scopes` are exactly [bot, tx], `is_admin` is always false (a worker is never the admin), `delegation` carries the dispatch's ceiling and `person_is_admin` says whether the person it acts for is the instance admin; the gateway treats a worker as the admin only when that is true AND the regime is human. `delegation` and `person_is_admin` appear together and only for a delegation token.",
+      "description": "The 200 answer of POST /internal/validate: who the bearer is. For an API key, `scopes` are the key's (`legacy` for a key minted before scopes) and `is_admin` is identity's admin test for its owner. For a delegation token, `scopes` are exactly [bot, tx], `is_admin` is always false (a worker is never the admin), `delegation` carries the dispatch's ceiling and `person_is_admin` says whether the person it acts for is the instance admin; the gateway treats a worker as the admin only when that is true AND the regime is human. `delegation` and `person_is_admin` appear together and only for a delegation token. `admin_account` says whether the bearer is the deployment's dedicated admin account, the only identity that writes `_global` — never the same question as `is_admin` (the instance admin is a person); `person_admin_account` asks it of a worker's person. The admin account's `max_concurrent` is always 0: it launches no bot.",
       "type": "object",
       "additionalProperties": false,
       "required": ["user_id", "scopes", "max_concurrent", "email", "is_admin"],
@@ -112,10 +112,13 @@
         "webhook_secret": { "type": "string", "description": "present only with webhook_url" },
         "webhook_events": { "type": "object", "additionalProperties": { "type": "boolean" }, "description": "present only with webhook_url" },
         "workspaces": { "type": "array", "items": { "type": "string" }, "description": "shared-workspace memberships; for a delegation token, only the person's memberships inside the dispatch's ceiling (delegation.v1 ceiling_reads)" },
+        "writable_workspaces": { "type": "array", "items": { "type": "string" }, "description": "the subset of workspaces the caller may write into (role contributor or owner); for a delegation token, bounded by the same ceiling as workspaces" },
         "delegation": { "$ref": "#/$defs/ValidateDelegation" },
-        "person_is_admin": { "type": "boolean" }
+        "person_is_admin": { "type": "boolean" },
+        "admin_account": { "type": "boolean", "description": "Is the bearer the deployment's dedicated ADMIN ACCOUNT — the one identity that writes the company layer `_global` (admin-api app/admin_account.py: created as one while VEXA_ADMIN_ACCOUNT names its address, and still named)? Always stated for an API key; always false for a delegation token. A resolver reads a missing field as false." },
+        "person_admin_account": { "type": "boolean", "description": "Delegation tokens only: whether the person the worker acts for is the admin account." }
       },
-      "dependentRequired": { "delegation": ["person_is_admin"], "person_is_admin": ["delegation"], "webhook_secret": ["webhook_url"], "webhook_events": ["webhook_url"] }
+      "dependentRequired": { "delegation": ["person_is_admin"], "person_is_admin": ["delegation"], "person_admin_account": ["delegation"], "webhook_secret": ["webhook_url"], "webhook_events": ["webhook_url"] }
     },
     "AccessDecision": {
       "description": "The verdict canAccess(subject, resource, action) returns. Default-deny: `allow=false` unless a policy explicitly grants. `reason` is a stable machine code, not free text.",

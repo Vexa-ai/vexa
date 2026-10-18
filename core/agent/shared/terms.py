@@ -30,7 +30,9 @@ agent, and a cursor for the next call — never a join key across two readers.
 """
 from __future__ import annotations
 
-from workspaces.shared.entities import KINDS, candidate_names, slugify
+import datetime as _dt
+
+from workspaces.shared.entities import KINDS, candidate_names, slugify, strip_leading_noise
 
 # `kg/entities/<kind>/<stem>.md` — the one shape `entity_upsert` writes and the one shape this
 # reads. Anything else in the tree is not an entity page, however much it looks like one.
@@ -46,43 +48,15 @@ ENTITIES_PREFIX = "kg/entities/"
 # is exactly what the extractor is looking for. Prose does not begin sentences that way; people do,
 # constantly, and a transcript is nothing but sentence openings.
 #
-# So the lead is stripped HERE and not in `candidate_names`: that function's behaviour is measured
-# against the write-back phase's own numbers (decision 24.4), and quietly changing it to suit a
-# different corpus would move a metric nobody was watching. This is the transcript's own correction,
-# named as such.
+# So the lead is stripped by the CONSUMER and not in `candidate_names`: that function's behaviour is
+# measured against the write-back phase's own numbers (decision 24.4), and quietly changing it to
+# suit a different corpus would move a metric nobody was watching.
 #
-# THE TRADE, STATED: "On Semiconductor" and "Our World in Data" lose their first word and then fall
-# to the two-word floor, so they never become chips. That is one chip missed against eight junk
-# chips on a single meeting — and a junk chip is not neutral, it is an invitation to research
-# "But I'll".
-_LEADING_NOISE = frozenset({
-    # sentence openers
-    "so", "but", "and", "also", "then", "now", "well", "actually", "just", "right", "okay", "ok",
-    "yeah", "yes", "no", "oh", "plus", "or", "if", "when", "while", "because", "though", "although",
-    "like", "maybe", "anyway", "basically", "honestly", "obviously",
-    # demonstratives and possessives that read as part of a name
-    "that", "that's", "this", "these", "those", "the", "a", "an",
-    "our", "your", "their", "his", "her", "its", "my",
-    # pronouns and their contractions — "But I'll" survives the opener strip as "I'll"
-    "i", "i'll", "i'm", "i've", "i'd", "we", "we'll", "we're", "we've", "they", "they'll",
-    "they're", "they've", "he", "he's", "she", "she's", "it", "it's", "you", "you'll", "you're",
-    "you've",
-    # prepositions that open a clause
-    "on", "in", "at", "for", "to", "with", "from", "by", "as", "of", "about", "into", "over",
-})
-
-
-def _strip_lead(name: str) -> str:
-    """Drop leading noise words until the first real one, then hold the two-word floor.
-
-    Repeated rather than single-pass: "And so Cameron" is one utterance and two noise words. What is
-    left has to still be a NAME — one word is not, by the extractor's own rule (see the header of
-    `extract_terms`) — so a stripped candidate that shrinks to a single word is dropped entirely
-    rather than admitted through a back door the two-word floor was closed against."""
-    parts = name.split()
-    while parts and parts[0].lower() in _LEADING_NOISE:
-        parts = parts[1:]
-    return " ".join(parts) if len(parts) >= 2 else ""
+# ONE LIST, ONE OWNER. The noise list and the strip moved to `workspaces.shared.entities`
+# (`LEADING_SPEECH_NOISE`, `strip_leading_noise`) when the write-back pre-pass needed the same
+# correction: it read "So Vexam, which is the Finos project" out of a transcript and wrote a page
+# called "So Vexam". Two copies of this list would drift the first time either was tuned, and the
+# drift would show up as a chip for a name the write-back refuses, or the other way round.
 
 
 def extract_terms(segments) -> list[dict]:
@@ -106,7 +80,7 @@ def extract_terms(segments) -> list[dict]:
         sid = (seg or {}).get("id")
         at = (seg or {}).get("at")
         for raw in candidate_names(text, mask_linked=False):
-            name = _strip_lead(raw)
+            name = strip_leading_noise(raw)
             if not name:
                 continue
             row = seen.get(name)
@@ -201,3 +175,64 @@ def match_known(terms, index) -> list[dict]:
 def terms_for(segments, index) -> list[dict]:
     """The whole thing: what was said → what has a page. The one entry point a caller needs."""
     return match_known(extract_terms(segments), index)
+
+
+# ── the cursor ───────────────────────────────────────────────────────────────────────────────────
+
+def segment_at(segment: dict):
+    """A segment's position on the meeting's clock: its absolute start, else its relative start."""
+    return segment.get("absolute_start_time") or segment.get("start")
+
+
+def _instant(value):
+    """``value`` as an aware UTC datetime when it is an ISO-8601 timestamp, else None."""
+    text = str(value or "").strip()
+    if not text or text.replace(".", "", 1).isdigit():
+        return None
+    try:
+        t = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=_dt.timezone.utc)
+
+
+def segments_since(raw, since) -> list:
+    """The segments said AFTER ``since``, the cursor a previous call returned.
+
+    COMPARED AS TIMES when both sides are timestamps. Comparing the strings made the answer depend
+    on spelling: ``…14:52:57Z`` sorts after ``…14:52:57.309+00:00`` even though it is earlier, so a
+    cursor written with a ``Z`` by one reader hid every later segment from another. Numbers (a
+    relative ``start``) compare as numbers. Anything else falls back to the old string order."""
+    rows = [g for g in (raw or []) if isinstance(g, dict)]
+    if not since:
+        return rows
+    since_t, since_n = _instant(since), _number(since)
+
+    def after(g) -> bool:
+        at = segment_at(g)
+        if since_t is not None and _instant(at) is not None:
+            return _instant(at) > since_t
+        if since_n is not None and _number(at) is not None:
+            return _number(at) > since_n
+        return str(at or "") > str(since)
+
+    return [g for g in rows if after(g)]
+
+
+def _number(value):
+    try:
+        return float(value) if not isinstance(value, bool) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def cursor_note(raw, fresh, since) -> str:
+    """One sentence that tells an EMPTY READ from a cursor with nothing after it. Both used to come
+    back as zero segments, and an agent cannot tell "the meeting said nothing new" from "the
+    transcript is empty" without it (friction report, dogfood 2026-10-10)."""
+    if not raw:
+        return "the transcript has no segments yet"
+    if since and not fresh:
+        return (f"nothing was said after since={since}; the transcript holds {len(raw)} segments. "
+                "Omit since to scan the whole meeting.")
+    return ""

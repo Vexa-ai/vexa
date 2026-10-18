@@ -121,7 +121,9 @@ describe("the strip takes the header and no more", () => {
     const rows = container.querySelector("[data-ws-rows]") as HTMLElement;
     expect(rows).toBeTruthy();
     expect(rows.style.maxHeight).toBe(`${STRIP_MAX_VH}vh`);   // the cap is in the style, not in luck
-    expect(rows.style.overflowY).toBe("auto");                // …and nothing is clipped out of reach
+    // …and nothing is clipped out of reach: what overflows the cap is reached through "Show more",
+    // never through a second scroller nested inside the page's own (design guidelines §4.10)
+    expect(rows.style.overflow).toBe("hidden");
     expect(strip(container)!.style.maxHeight).toBe("");       // the head of the page is not capped
     // …and the cap the style names is inside "1/8 screen at max" on the viewport above
     expect((STRIP_MAX_VH / 100) * window.innerHeight).toBeLessThanOrEqual(window.innerHeight / 8);
@@ -280,7 +282,7 @@ describe("what could not be read is still said", () => {
  *  visibility answers and the profile) — and this reader either its administrator or not. */
 const asCompanyLayer = (isAdmin: boolean) => {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
-    ok: true, json: async () => (String(url).includes("/api/auth/me") ? { is_admin: isAdmin } : []),
+    ok: true, json: async () => (String(url).includes("/api/auth/me") ? { admin_account: isAdmin } : []),
   })) as unknown as typeof fetch);
   vi.mocked(api.readWorkspaceFile).mockImplementation(async (path: string) =>
     (path === "README.md" ? "# Pilot Industries\n\nWe make the things.\n"
@@ -343,7 +345,7 @@ describe("the acts are conversations, and they are this viewer's", () => {
 });
 
 describe("the title never repeats the eyebrow", () => {
-  it("a desk whose README opens `# Your desk` shows the eyebrow once and no title", async () => {
+  it("a README seeded as `# Your desk` (before the rename) shows the eyebrow once and no title", async () => {
     // Seen in a browser on the seeded desk: `Your desk` on one line and `Your desk` again in 19px
     // under it. A title that repeats the label above it is not a title.
     vi.mocked(api.readWorkspaceBySlug).mockResolvedValue({ id: "w1", name: "Desk", kind: "desk", slug: "personal", access: "readable", writable: true });
@@ -352,7 +354,8 @@ describe("the title never repeats the eyebrow", () => {
       body: "# Your desk\n\nWhat you are working on.",
     });
 
-    await waitFor(() => expect(container.querySelector("[data-ws-eyebrow]")?.textContent).toBe("Your desk"));
+    await waitFor(() => expect(container.querySelector("[data-ws-eyebrow]")?.textContent).toBe("Your personal workspace"));
+    expect(container.querySelector("[data-ws-readme]")?.textContent ?? "").not.toMatch(/\bdesk\b/i);
     expect(container.querySelector("[data-ws-title]")).toBeNull();
     // …and the body does not get it back either — it was lifted, not hidden
     expect([...container.querySelectorAll("h1")].map((h) => h.textContent)).toEqual([]);

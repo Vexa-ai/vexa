@@ -78,12 +78,29 @@ class InMemoryRecordingRepo:
         self._sessions: dict[str, int] = {}
 
     def seed(
-        self, *, meeting_id: int, user_id: int, session_uid: str, status: str = "active"
+        self, *, meeting_id: int, user_id: int, session_uid: str, status: str = "active",
+        data: "dict | None" = None,
     ) -> None:
         self._meetings.setdefault(
-            meeting_id, {"user_id": user_id, "status": status, "recordings": []}
+            meeting_id, {"user_id": user_id, "status": status, "recordings": [], "data": {}}
         )
+        if data is not None:
+            self._meetings[meeting_id]["data"] = data
         self._sessions[session_uid] = meeting_id
+
+    async def list_shared_recordings(self, user_id: int, member_workspaces=None, *,
+                                     meeting_id=None) -> list[dict]:
+        from .shared_access import may_read_shared_recording
+
+        out = []
+        for mid, m in self._meetings.items():
+            if meeting_id is not None and mid != meeting_id:
+                continue
+            if m.get("user_id") == user_id:
+                continue
+            if may_read_shared_recording(m.get("data") or {}, user_id, member_workspaces):
+                out.extend({**r, "meeting_id": mid} for r in m.get("recordings", []))
+        return out
 
     def erase(self, meeting_id: int, *, state: str = "completed") -> None:
         """Stamp the meeting the way a typed delete of its transcript and recordings does:

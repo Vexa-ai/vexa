@@ -99,7 +99,8 @@ def run(out=sys.stdout) -> dict:
             filed.append(c.post("/api/friction", json=rec, headers=HDR).json())
 
             # ── EDGE 2 · no-page, filed by a PERSON from the terminal ───────────────────────────
-            # Exactly the body `clients/terminal/src/surfaces/frictionApi.ts` builds.
+            # A person-shaped body (`reporter: "person"`). The terminal no longer builds one itself —
+            # people report through the chat agent — but the route still accepts this shape.
             filed.append(c.post("/api/friction", json={
                 "reporter": "person", "session": "meet-104",
                 "happened": "clicked the DNA link and the panel says there is no page here yet",

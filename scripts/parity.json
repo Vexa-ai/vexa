@@ -147,6 +147,23 @@
       ]
     },
     {
+      "id": "secret-redaction",
+      "fact": "the shape-based secret scrubber (token families, URL credentials, long opaque runs)",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/agent/shared/git_redaction.py",
+      "how_to_agree": "edit core/agent/shared/git_redaction.py and copy it VERBATIM over core/flows/src/flows_timeline/redaction.py",
+      "why": "agent-api scrubs a friction report on the worker's way in; flows-api serves the whole friction sink to the deployment's admin account (GET /friction/all, friction_list) and scrubs every free-text field on the way out, because a report filed over MCP is stored as sent. Two images that may not import each other (P2), one rule for what a secret looks like, compared by bytes.",
+      "sites": [
+        {
+          "path": "core/agent/shared/git_redaction.py"
+        },
+        {
+          "path": "core/flows/src/flows_timeline/redaction.py"
+        }
+      ]
+    },
+    {
       "id": "workspace-paths",
       "fact": "how this domain reaches a file inside a work tree the model's tools can write",
       "kind": "file-bytes",
@@ -209,6 +226,46 @@
         },
         {
           "path": "core/agent/services/credential-broker/src/credential_broker/ssrf.py"
+        }
+      ]
+    },
+    {
+      "id": "meeting-bundle-codec",
+      "fact": "how a meeting-bundle.v1 archive and its parts archive are written and read: the path grammar, the entry and size rules, the manifest and hash checks, and the refusal codes",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "deploy/contracts/meeting-bundle.v1/bundle_codec.py",
+      "how_to_agree": "edit the canonical copy in the contract directory and copy it VERBATIM over every other site; the meeting-api and agent-api bundle tests and validate.mjs must stay green",
+      "why": "meeting-api writes and reads the bundle (meeting, transcript, annotations, media) and agent-api writes the parts archive and reads the bundle's workspace and notes parts. The two may not import each other (P2), and two readers of one format that disagree about a path or a cap are how a bundle one side accepts lands on the other. So the codec is vendored and byte-compared, with its canonical copy beside the schema.",
+      "sites": [
+        {
+          "path": "deploy/contracts/meeting-bundle.v1/bundle_codec.py"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bundle/codec.py"
+        },
+        {
+          "path": "core/agent/shared/meeting_bundle_codec.py"
+        }
+      ]
+    },
+    {
+      "id": "meeting-bundle-schema",
+      "fact": "the sealed meeting-bundle.v1 schema each vendored codec reads from beside itself",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "deploy/contracts/meeting-bundle.v1/meeting-bundle.schema.json",
+      "how_to_agree": "change the contract's schema (a version bump or a reviewed re-seal) and copy it VERBATIM beside every vendored codec",
+      "why": "The codec validates every part against the schema at runtime and is vendored into two images that do not carry the contract directory; a copy beside each keeps the image self-contained and this fact keeps the copies the sealed one.",
+      "sites": [
+        {
+          "path": "deploy/contracts/meeting-bundle.v1/meeting-bundle.schema.json"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bundle/meeting-bundle.schema.json"
+        },
+        {
+          "path": "core/agent/shared/meeting-bundle.schema.json"
         }
       ]
     },
@@ -449,11 +506,11 @@
       "sites": [
         {
           "path": "core/gateway/contracts/gateway-identity.v1/identity_token.py",
-          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"human_session_required\",[\\s\\S]*?another way\\.\")"
+          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"human_session_required\",[\\s\\S]*?will not change it\\.\",\\s*\\})"
         },
         {
           "path": "core/flows/src/flows_integrations/subject_auth.py",
-          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"human_session_required\",[\\s\\S]*?another way\\.\")"
+          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"human_session_required\",[\\s\\S]*?will not change it\\.\",\\s*\\})"
         }
       ]
     },
@@ -1986,6 +2043,25 @@
         {
           "path": "deploy/helm/charts/vexa/templates/networkpolicy-namespace.yaml",
           "pattern": "^\\s+vexa\\.role: (worker)$"
+        }
+      ]
+    },
+    {
+      "id": "model-catalog-id",
+      "fact": "the shape of a model-catalog id (models.v1 ModelId)",
+      "kind": "regex-source",
+      "enforced": true,
+      "canonical": "core/agent/contracts/models.v1/models.schema.json — $defs/ModelId",
+      "how_to_agree": "change the contract's ModelId pattern and admin-api's MODEL_ID_SOURCE in one change (a re-seal of models.v1)",
+      "why": "ADR-0043. A person's and the organisation's default model are stored by admin-api (Settings → Models default_model), which is in the identity domain and cannot read the agent domain's contract, so it re-states the shape to refuse a malformed id at write time. agent-api reads the pattern from the contract itself. Two shapes would let admin-api store a default agent-api can never match, and a stale default is skipped silently by design.",
+      "sites": [
+        {
+          "path": "core/agent/contracts/models.v1/models.schema.json",
+          "pattern": "\"ModelId\": \\{[^}]*?\"pattern\": \"([^\"]+)\""
+        },
+        {
+          "path": "core/identity/services/admin-api/src/admin_api/app/platform_settings.py",
+          "pattern": "^MODEL_ID_SOURCE = r\"([^\"]+)\""
         }
       ]
     },

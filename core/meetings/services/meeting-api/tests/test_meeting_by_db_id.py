@@ -163,3 +163,29 @@ def test_search_by_meeting_id_is_still_owner_scoped():
     r = client.get("/transcripts/search", headers={"x-user-id": str(OTHER)},
                    params={"q": "the", "meeting_id": older})
     assert r.status_code == 200 and r.json()["hits"] == []
+
+
+def test_a_person_the_meeting_is_shared_with_sees_it_but_cannot_rename_it():
+    """The terminal's call rename (Calls row, meeting header) writes through this route. Sharing
+    is READ access: a member of the meeting's workspace finds it in their list, marked `shared`, and
+    the same id on the annotate route is still a 404 that writes nothing — only the owner names it."""
+    store = InMemoryTranscriptStore()
+    mid = store.seed_meeting(user_id=USER, platform=PLAT, native_meeting_id=NID, meeting_id=5,
+                             status="completed", data={"workspace_id": "acme"})
+    client = TestClient(create_app(store, redis=_NullRedis()))
+    member = {"x-user-id": str(OTHER), "x-user-workspaces": "acme"}
+
+    listed = client.get("/meetings", headers=member)
+    assert listed.status_code == 200, listed.text
+    rows = [m for m in listed.json()["meetings"] if m["id"] == mid]
+    assert rows and rows[0]["shared"] is True, "precondition: the member can see the meeting"
+
+    r = client.post(f"/meetings/{mid}/annotate", headers=member, json={"title": "renamed by a viewer"})
+    assert r.status_code == 404
+    assert "title" not in store._meetings[mid]["data"]
+
+    owner = client.post(f"/meetings/{mid}/annotate", headers=H, json={"title": "Campbell"})
+    assert owner.status_code == 200, owner.text
+    assert store._meetings[mid]["data"]["title"] == "Campbell"
+    assert [m for m in client.get("/meetings", headers=member).json()["meetings"]
+            if m["id"] == mid][0]["data"]["title"] == "Campbell", "the viewer sees the owner's rename"

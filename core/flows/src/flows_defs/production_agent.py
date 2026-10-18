@@ -7,6 +7,8 @@ deleting one module rather than by editing seven flows out of eighteen hundred l
   desk_setup       (v1, on desk.unscaffolded)  — the SETUP card on somebody's desk
   desk_claim       (v1, on claim.proposed)     — the QUESTION card, one claim awaiting a person
   workspace_invite (v1, on workspace.invited)  — the mail carrying a membership invite outward
+  routine_paused   (v1, on routine.paused)     — the card for a routine switched off after
+                                                 repeated identical refusals
 
 WHY THESE FIVE AND NOT THE OTHER THREE. `invite_intake`, `post_meeting` and `live_meeting` still
 DO something where there is no agent: an invite is still accepted and a bot still joins, a meeting
@@ -53,6 +55,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from flows import Block, Done, Registry, StepCtx, StepError, Wait
 
@@ -68,6 +71,10 @@ logger = logging.getLogger("flows.production")
 #: It moved here with `await_claim`, its only reader — the book is a file on a DESK, and a desk is
 #: agent state.
 CLAIM_BOOK = "_pending/claims.json"
+
+#: A routine file that is switched off says so in its frontmatter (agent-api
+#: `workspace_routines.set_routine_file_enabled`).
+ROUTINE_OFF = re.compile(r"(?m)^[ \t]*enabled[ \t]*:[ \t]*(?:false|no|off|0)\b", re.I)
 
 
 def build(reg: Registry, db, home=None) -> None:
@@ -316,6 +323,26 @@ def build(reg: Registry, db, home=None) -> None:
             return Done({"claim_id": cid, "outcome": "already_answered"})
         return Block(str(claim.get("claim") or "")[:200] or "claim proposed")
 
+    @reg.step(needs=("agent",))
+    def await_routine(ctx: StepCtx):
+        """The PAUSED-ROUTINE card: a scheduled routine the harness switched off after its runs
+        kept being refused the same way (agent-api `control_plane/routine_refusals.py`).
+
+        Same re-read as the two cards above, for the same reason: the person may already have
+        switched it back on, edited it or deleted it, and must not be asked again. `Done` when the
+        file is gone or no longer says `enabled: false`; otherwise `Block` on the routine's name —
+        the sentence around it is `behavior/queue/routine_paused.human.md`'s.
+        Reads: refs.{uid, routine, reason}."""
+        uid = str(ctx.refs.get("uid") or "").strip()
+        name = str(ctx.refs.get("routine") or "").strip()
+        if not uid or not name or "/" in name or name in (".", ".."):
+            raise StepError("routine.paused needs a uid and a routine name — without both there is "
+                            "no routine to look at", retryable=False)
+        text = p.ws_file(uid, f"routines/{name}.md") or ""
+        if not text or not ROUTINE_OFF.search(text):
+            return Done({"routine": name, "outcome": "no_longer_paused"})
+        return Block(f"routine {name} paused: {str(ctx.refs.get('reason') or '')}"[:200])
+
     # ── the membership invite's mail leg (Vexa-ai/vexa#1632) ──────────────────
     # NO `needs=`. This step reaches no domain: it renders a template and posts ONE notification,
     # and the notify port is a mailbox, which every profile has. It is the same shape as the other
@@ -446,3 +473,7 @@ def build(reg: Registry, db, home=None) -> None:
     # is never published and this flow would exist to do nothing.
     reg.flow(name="workspace_invite", version=1, on=p.WORKSPACE_INVITED,
              steps=[s["mail_workspace_invite"]])
+    # THE THIRD AGENT CARD: a routine switched off after repeated identical refusals. One step,
+    # blocked while the routine stays off — that blocked row is the queue item.
+    reg.flow(name="routine_paused", version=1, on=p.ROUTINE_PAUSED,
+             steps=[s["await_routine"]])

@@ -118,7 +118,7 @@ export function liveTranscript(elapsedMs: number): string {
 }
 
 /** The live room's SECOND page. A meeting that is running still has the brief you walked in with —
- *  and without a body here the live room advertised a "Brief" chip that opened "No page here yet". */
+ *  and without a body here the live room advertised a notes chip that opened "No page here yet". */
 const LIVE_BRIEF = `# Standup
 
 **Running now.** Daily, 15 minutes, three people.

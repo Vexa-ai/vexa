@@ -75,17 +75,18 @@ def test_the_README_is_a_MAP_a_reader_can_walk_from_the_name_to_everything_known
     assert "so a reader can walk from the name to everything known" in body
 
 
-def test_every_company_tier_page_is_written_INTO_global_and_only_the_admins_own_page_is_not():
+def test_every_company_tier_page_is_written_INTO_global_and_nothing_goes_to_a_desk():
     """The failure this sentence exists to stop: `entity_upsert` defaults to the caller's own desk,
     so a company page written without `slug` lands on ONE person's desk — invisible to everyone
-    else, in a layer whose entire purpose is that every agent in the company carries it."""
+    else, in a layer whose entire purpose is that every agent in the company carries it. Since the
+    admin account (founder ruling 2026-10-11) the setup runs on an account with no desk at all, so
+    EVERY page goes to `_global` — there is no `self:` page left to make an exception for."""
     body = _ask("setup-global")
     assert "**Every company-tier page is written INTO `_global`**" in body
     assert "/workspaces/_global/kg/entities/<kind>/<slug>.md" in body
-    assert 'pass `slug="_global"` for every company-tier page' in body
-    assert "Only the administrator's own\nperson page (`self: true`) goes to their desk." in body
-    assert ("A company page that lands on one person's desk is invisible to everyone else and\n"
-            "wrong.") in body
+    assert 'pass `slug="_global"` for every page' in body
+    assert "goes to their desk" not in body
+    assert "TWO scaffolds" not in body
 
 
 def test_the_setup_preset_works_from_public_data_BEFORE_it_asks_the_administrator_anything():
@@ -142,7 +143,7 @@ def test_who_can_see_what_is_WRITTEN_as_the_default_first_and_the_choice_offered
     # the sentence that made the files wait on an answer is GONE
     assert "Ask the administrator whether that is what they intend" not in body
     # decision 21's own words, which this ruling refines rather than replaces, are untouched
-    assert "a desk is company knowledge held by one person" in body
+    assert "a personal workspace is company knowledge held by one person" in body
     assert "what stays genuinely private is `_system`" in body
     # and disagreement is still a `MISSING.md` line, not something to smooth over
     assert "is a `MISSING.md` line, not something to smooth over" in body

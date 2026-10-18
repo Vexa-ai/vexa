@@ -58,6 +58,10 @@ caller or with the internal secret, never with a credential of its own:
 - `workload_redis.py` — the Redis user an agent worker connects as.
 - `model_endpoint.py` — whether a subject's model config points elsewhere, and the operator gate on
   where.
+- `model_providers/` — the operator's model catalog (`VEXA_MODEL_CATALOG`, `models.v1`) and the
+  provider port each model resolves through, one adapter per provider kind (ADR-0043). The dispatch
+  (`dispatch.apply_model_route`, `route_env`) is the one place a resolved route becomes a worker's
+  environment; see [`model_providers/README.md`](model_providers/README.md).
 
 **Meetings**
 - `bridge.py` — the meeting WebSocket → agent bridge.
@@ -66,7 +70,11 @@ caller or with the internal secret, never with a credential of its own:
   (where its report lives on a desk), `meeting_room.py` (the attendees' read-only mounts after it),
   `meeting_highlight.py` (what it has named, and which names have a page), `meeting_terms.py` (the
   annotation layer over its transcript), `meeting_steering.py` (per-state preambles for meeting chat
-  turns), `schedule_digest.py` (the schedule as a prompt block).
+  turns), `schedule_digest.py` (the schedule as a prompt block), `meeting_link.py` (a link to a
+  meeting's notes, answered as the meeting: its title and date, for a reader who may see it).
+- `meeting_bundle.py` (+ `routers/meeting_bundle.py`) — a meeting's workspace tree and page in and out of a
+  meeting-bundle.v1: the parts archive for an owner's export, and the restore after an import. The
+  codec is `shared/meeting_bundle_codec.py`, vendored verbatim from the contract.
 
 **Workspaces**
 - `workspace_reader.py`, `workspace_ids.py` (id → where it is now), `workspace_purpose.py`,

@@ -110,3 +110,11 @@ class RecordingRepo(Protocol):
     async def list_meeting_recordings(self, user_id: int) -> list[dict]:
         """Every recording across the user's meetings (for ``GET /recordings``)."""
         ...
+
+    async def list_shared_recordings(self, user_id: int, member_workspaces: "set[str] | None" = None,
+                                     *, meeting_id: "int | None" = None) -> list[dict]:
+        """Recordings of meetings the caller does NOT own but may read — a transcript-share recipient
+        (``data.transcript_viewers``) or a member of the bound workspace — and ONLY those whose owner
+        allowed recipients the recording (``data.share_settings.recording``). ``meeting_id`` narrows
+        to one meeting. Empty otherwise: default-deny (P20)."""
+        ...

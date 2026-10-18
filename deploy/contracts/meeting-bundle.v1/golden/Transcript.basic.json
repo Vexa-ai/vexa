@@ -1,0 +1,25 @@
+{
+  "segments": [
+    {
+      "end": 4.5,
+      "language": "en",
+      "speaker": "Ada",
+      "start": 0.0,
+      "text": "Welcome, everyone. Two items today."
+    },
+    {
+      "end": 9.25,
+      "language": "en",
+      "speaker": "Grace",
+      "start": 4.5,
+      "text": "First, the release checklist."
+    },
+    {
+      "end": 15.0,
+      "language": "en",
+      "speaker": "Ada",
+      "start": 9.25,
+      "text": "Then the migration plan <b>draft</b>."
+    }
+  ]
+}

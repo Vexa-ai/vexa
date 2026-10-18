@@ -14,7 +14,7 @@
  *  One CSS grid: three columns (rail · conversation · pages), a shared 46px header band. */
 import { COMPANY_WORD, WORKSPACE_WORD } from "./vocabulary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT, useService } from "../platform";
+import { ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, PAGE_REMOVED_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT, useService } from "../platform";
 import { Chat } from "../surfaces/chat";
 import { ensureMeetingKnown, useLiveMeetings } from "../surfaces/liveMeetings";
 import {
@@ -23,36 +23,41 @@ import {
 } from "../surfaces/workspaceApi";
 import { AttachRepo } from "./AttachRepo";
 import { orderedRows, moveChat } from "./chatOrder";
+import { applyMarks, fetchMarks, markRow, NO_MARKS, type RailMark, type RailMarks } from "./railMarks";
 import { ContextBar, GLOBAL_MOUNT } from "./ContextBar";
 import { ConnectionsPanel, CONNECTIONS_CLOSE } from "./ConnectionsPanel";
+import { dropRemovedPage } from "./pageDelete";
 import { PagesPanel, type Listing } from "./PagesPanel";
 import {
-  bindMeeting, chatForRow, chatsFromSessions, hideChat, loadChats, loadCollapsed, loadHidden, loadRailAll, markTouched,
+  bindMeeting, chatForRow, chatsFromSessions, clearHidden, legacyShellStore, loadChats, loadHidden, loadRailAll, markTouched,
   meetingChatId, meetingTitle, mergeChats, nameChat, nameFromTurn,
   newChat, railRows, readRailOwner, resetChats, setTarget, writeRailOwner,
-  removeChat, saveChats, saveCollapsed, saveRailAll, upsertChat, visibleRows, artifactKey,
+  removeChat, saveChats, saveRailAll, upsertChat, visibleRows, artifactKey,
   forgetHistory, orderHistory, stripForRecord, togglePinned, touchHistory, withHome,
   type Artifact, type Chat as ChatRec, type Row } from "./chats";
 import { listSessions } from "../surfaces/sessionsApi";
 import { resolveDocRef } from "../ui-kit/docLinks";
 import { SURFACE_RECORD_LIVE, syncSurface } from "../surfaces/surfaceSync";
-import { Rail } from "./Rail";
+import { Rail, RailStrip } from "./Rail";
 import { ScaffoldRefusalCard } from "./ScaffoldRefusalCard";
 import { meetingPhase, type MeetingMock } from "../surfaces/meetingModel";
 import { scaffoldToChat, type Scaffold, type ScaffoldRefusal } from "./scaffold";
 import { pendingArrival, useScaffoldArrival } from "./arrival";
 import { chatForDeepLink, resolveWorkspaceDeepLink, type DeepLinkOutcome } from "./deepLink";
 import { workspaceRouteFromPath, type WorkspaceRoute } from "../app/workspaceRoute";
-import { artifactsFromTokens, artifactViewEffect, boundMeetingView, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, withMeetingPages, withoutSeparateTranscript, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot } from "./roomView";
-import { fetchMeetingNote, fetchMeetingNotePath } from "./meetingNote";
+import { artifactsFromTokens, artifactViewEffect, isRetiredNotePath, meetingPages, pageForArtifact, pageForDocRef, pageForMeetingRef, pagesForPhase, resolveView, meetingChatFront, withMeetingPages, withoutRetiredMeetingDocs, VIEW_KEY, VIEW_NAVIGATE_EVENT, type ViewSlot , SHARED_ARRIVAL_KEY, sharedArrivalFront } from "./roomView";
+import { fetchMeetingNotePath } from "./meetingNote";
 import { deskPanelPages } from "./deskPanel";
 import { reportOpened } from "./deskTouch";
-import { applyProposal, proposals, type Proposal } from "./proposals";
+import { applyProposal, CALENDAR, proposals, type ConnectionRow, type Proposal, type Read, type UpcomingEvent } from "./proposals";
+import { CONNECTIONS_OPEN } from "./connectionEvents";
 import { listProposals, resolveProposal, type DeskProposal } from "../surfaces/proposalsApi";
 import { ProposalChips } from "./ProposalChips";
-import { EdgeHandle, EDGE_W } from "./Collapse";
+import { AdminHome } from "./AdminHome";
+import { EdgeHandle, ShellToggle } from "./Collapse";
+import { Drawer, Sheet, Splitter, useShellLayout } from "../ui-kit";
 import { MOCK_CHATS, MOCK_MEETINGS, mockBody, mockOn } from "./mockPhases";
-import { T, maxPagesW, surface, type as ty } from "./tokens";
+import { T, surface, type as ty } from "./tokens";
 import { LayoutServiceId } from "../workbench/layout";
 import type { Page, Sel } from "./types";
 
@@ -80,6 +85,16 @@ const fireKick = (session: string, prompt: string, say?: string, scaffoldId?: st
     // re-derive mounts and opening from the session, which is the composed-from-whatever-was-there
     // problem the scaffold exists to end.
     { detail: { hidden: !say, display: say, session, prompt, scaffoldId } })), 1200);
+
+/** The suggestion row could not read what it is built from. Said ONCE per page — the row re-reads
+ *  on every focus, and a console that repeats the same line every time the tab comes back says
+ *  nothing new. The row itself shows no chips (or no prep chip) instead of a wrong one. */
+let chipFaultLogged = false;
+function logChipFault(e: unknown) {
+  if (chipFaultLogged) return;
+  chipFaultLogged = true;
+  console.warn(JSON.stringify({ event: "suggestions_unreadable", source: "terminal", detail: String((e as Error)?.message ?? e) }));
+}
 
 export function MinutesShell() {
   const layout = useService(LayoutServiceId);
@@ -218,18 +233,51 @@ export function MinutesShell() {
   // existed — `listProposals` never throws, deliberately.
   const [deskItems, setDeskItems] = useState<DeskProposal[]>([]);
   useEffect(() => { void listProposals().then(setDeskItems); }, []);
-  // Can this deployment CREATE a Google Meet? It decides which of the two standing acts is offered
-  // — the Meet itself, or "connect Google" said plainly (`app/api/googleMeet.ts` names what is
-  // missing). False until the config answers, so the honest branch is the one that flickers in.
-  const [googleMeet, setGoogleMeet] = useState(false);
+  // THE PERSON'S OWN CONNECTIONS decide the row (founder, 2026-10-11: "connect email, calendar and
+  // if connected is to check email and prepare for next meeting"). Read through the Connections
+  // front door the panel uses (`/api/connections/list` → the broker, metadata only). Three states:
+  // `null` until it answers, the rows, or `"error"` — and an error shows NO chips (never a guessed
+  // row), logged once per page. Re-read when the tab regains focus and when a consent window reports
+  // back, so a chip flips from "Connect …" to "Check my email" without a reload.
+  const [connections, setConnections] = useState<Read<ConnectionRow[]>>(null);
   useEffect(() => {
     let live = true;
-    void fetch("/api/config", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (live) setGoogleMeet(!!(d?.google as { meet?: boolean } | undefined)?.meet); })
-      .catch(() => undefined);
-    return () => { live = false; };
+    const load = () => void fetch("/api/connections/list", { cache: "no-store" })
+      .then(async (r) => {
+        const d = r.ok ? await r.json() : null;
+        if (!d || !Array.isArray(d.connections)) throw new Error(`connections list: HTTP ${r.status}`);
+        return d.connections as ConnectionRow[];
+      })
+      .then((rows) => { if (live) setConnections(rows); })
+      .catch((e) => { if (!live) return; logChipFault(e); setConnections("error"); });
+    load();
+    const onVis = () => { if (!document.hidden) load(); };
+    document.addEventListener("visibilitychange", onVis);
+    const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("vexa:connection-consent") : null;
+    if (channel) channel.onmessage = () => load();
+    return () => { live = false; document.removeEventListener("visibilitychange", onVis); channel?.close(); };
   }, []);
+  // THE NEXT MEETING ON THE CONNECTED CALENDAR — only asked for when a calendar is ready, and at most
+  // once every five minutes (each read is a real, audited calendar call). The terminal projects it to
+  // title + start; the row picks the soonest titled one (`nextMeeting`). An error here only costs the
+  // prep chip — the rest of the row is still true.
+  const [events, setEvents] = useState<Read<UpcomingEvent[]>>(null);
+  const calendarReady = Array.isArray(connections) && connections.some((c) => c.provider === CALENDAR && c.status === "ready");
+  useEffect(() => {
+    if (!calendarReady) { setEvents(null); return; }
+    let live = true;
+    const load = () => void fetch("/api/connections/upcoming", { cache: "no-store" })
+      .then(async (r) => {
+        const d = r.ok ? await r.json() : null;
+        if (!d || !Array.isArray(d.events)) throw new Error(`upcoming events: HTTP ${r.status}`);
+        return d.events as UpcomingEvent[];
+      })
+      .then((ev) => { if (live) setEvents(ev); })
+      .catch((e) => { if (!live) return; logChipFault(e); setEvents("error"); });
+    load();
+    const timer = window.setInterval(() => { if (!document.hidden) load(); }, 5 * 60 * 1000);
+    return () => { live = false; window.clearInterval(timer); };
+  }, [calendarReady]);
   // The signed-in address — the ONE fact the setup chip puts in the person's mouth, so they never
   // type what we already know. Same seam the account badge reads; unknown simply drops the clause.
   const [email, setEmail] = useState<string | null>(null);
@@ -281,10 +329,33 @@ export function MinutesShell() {
     fetch("/api/chat/order").then(r=>r.ok?r.json():Promise.reject()).then(d=>{if(live)setChatOrder(d.order || []);}).catch(()=>{});
     return ()=>{live=false;};
   }, [email]);
-  const rows = useMemo(() => orderedRows(railRows(allChats, meetings), chatOrder), [allChats, meetings, chatOrder]);
+  // PIN AND HIDE (`railMarks.ts`) — the person's own marks, read from the server so every device
+  // and every reload shows the same rail. The old browser-only delete list is migrated into Hide
+  // here, once: each id becomes a hidden mark, and an id the server does not know (a chat that
+  // never reached it) is simply gone. The list is cleared only when every id has been answered.
+  const [marks, setMarks] = useState<RailMarks>(NO_MARKS);
+  const [hiddenView, setHiddenView] = useState(false);
+  useEffect(() => {
+    if (!email) return;
+    let live = true;
+    void (async () => {
+      const tombstones = loadHidden();
+      let migrated = true;
+      for (const id of tombstones) {
+        try { await markRow(`c:${id}`, { hidden: true }); }
+        catch (e) { if (!String((e as Error).message).includes("404")) migrated = false; }
+      }
+      if (tombstones.length && migrated) clearHidden();
+      try { const m = await fetchMarks(); if (live) setMarks(m); } catch { /* an unmarked rail */ }
+    })();
+    return () => { live = false; };
+  }, [email]);
+  const pinnedKeys = useMemo(() => new Set(marks.pinned), [marks]);
+  const rows = useMemo(() => orderedRows(applyMarks(railRows(allChats, meetings), marks), chatOrder, pinnedKeys),
+    [allChats, meetings, chatOrder, marks, pinnedKeys]);
   const reorder = async (from: string, to: string) => {
     if (orderBusy) return;
-    const next = moveChat(rows.map(r=>r.key), from, to);
+    const next = moveChat(rows.filter((r) => r.pinned).map(r=>r.key), from, to);
     setOrderBusy(true); setOrderError("");
     try {
       const res = await fetch("/api/chat/order", {method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({order:next})});
@@ -293,9 +364,16 @@ export function MinutesShell() {
     } catch { setOrderError("Couldn't save chat order. Try again."); }
     finally { setOrderBusy(false); }
   };
+  const mark = async (row: string, m: RailMark) => {
+    setOrderError("");
+    try { setMarks(await markRow(row, m)); }
+    catch { setOrderError(m.pinned !== undefined ? "Couldn't save the pin. Try again." : "Couldn't save. Try again."); }
+  };
   const selKey = `c:${sel.chatId}`;
-  const shownRows = useMemo(() => visibleRows(rows, all, selKey), [rows, all, selKey]);
-  const hiddenCount = useMemo(() => rows.length - visibleRows(rows, false, selKey).length, [rows, selKey]);
+  const shownRows = useMemo(() => visibleRows(rows, all, selKey, hiddenView), [rows, all, selKey, hiddenView]);
+  const hiddenCount = useMemo(() => visibleRows(rows, true).length - visibleRows(rows, false, selKey).length, [rows, selKey]);
+  const hiddenMarked = useMemo(() => rows.filter((r) => r.hidden).length, [rows]);
+  useEffect(() => { if (hiddenView && hiddenMarked === 0) setHiddenView(false); }, [hiddenView, hiddenMarked]);
   const toggleAll = (v: boolean) => { setAll(v); saveRailAll(v); };
 
   /** Persist a change to the stored list. Mock chats live outside it, so a mutation aimed at one is
@@ -304,55 +382,24 @@ export function MinutesShell() {
     setChats((prev) => { const next = fn(prev); if (next !== prev) saveChats(next); return next; });
   }, []);
 
-  // BOTH side columns fold away, independently, and the choice persists per side (founder,
-  // 2026-09-01). Collapse never writes `pagesW`, so reopening the panel restores the width the
-  // reader dragged it to — the two controls share a column and no state.
+  // THE SHELL'S LAYOUT IS ONE PURE FUNCTION (terminal design guidelines §3.1, ui-kit/layout).
+  // Both side columns still fold away by the reader's choice (founder, 2026-09-01) — that choice is
+  // `prefs`, persisted — but what FITS is now the layout's call: as the window narrows the rail
+  // folds to a strip and opens as a drawer, then the pages panel becomes a sheet, and the
+  // conversation never shrinks below its floor. An auto-collapse never writes a preference, so
+  // widening the window brings the reader's layout back. Widths are remembered per mode, clamped on
+  // read and never discarded (the rule the old `vexa.minutes.pagesW` kept, carried over).
   const [attachTo, setAttachTo] = useState<{ id?: string } | null>(null);
-  const [railCollapsed, setRailCollapsed] = useState<boolean>(() => loadCollapsed("left"));
-  const [pagesCollapsed, setPagesCollapsed] = useState<boolean>(() => loadCollapsed("right"));
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  const shell = useShellLayout(shellRef, { legacy: legacyShellStore });
+  const L = shell.layout;
   const [connectionsMode,setConnectionsMode] = useState<'page'|'panel'|null>(null);
   const connectionsOpen=connectionsMode!==null;
-  const rightCollapsed=pagesCollapsed&&!connectionsOpen;
-  const collapseRail = (v: boolean) => { setRailCollapsed(v); saveCollapsed("left", v); };
-  const collapsePages = (v: boolean) => { setPagesCollapsed(v); saveCollapsed("right", v); };
-
-  // The pages panel is DRAGGABLE — a document panel whose width is the reader's call.
-  const [pagesW, setPagesW] = useState<number>(() => {
-    const n = Number(localStorage.getItem("vexa.minutes.pagesW"));
-    const cap = maxPagesW(window.innerWidth);
-    // CLAMP a stored width, never discard it: a width chosen on a wide monitor should come back as
-    // the widest this window allows, not silently reset to the default the next time you open a laptop.
-    return Number.isFinite(n) && n >= T.pagesMin ? Math.min(n, cap) : Math.min(T.pagesDefault, cap);
-  });
-  const dragging = useRef(false);
-  useEffect(() => {
-    const move = (e: MouseEvent) => {
-      if (!dragging.current) return;
-      e.preventDefault();
-      const cap = maxPagesW(window.innerWidth);
-      setPagesW(Math.min(cap, Math.max(T.pagesMin, window.innerWidth - e.clientX)));
-    };
-    const up = () => {
-      if (!dragging.current) return;
-      dragging.current = false;
-      document.body.style.cursor = ""; document.body.style.userSelect = "";
-      setPagesW((w) => { try { localStorage.setItem("vexa.minutes.pagesW", String(w)); } catch { /* ignore */ } return w; });
-    };
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-    return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
-  }, []);
-  useEffect(() => {
-    const onResize = () => setPagesW((w) => Math.min(maxPagesW(window.innerWidth), Math.max(T.pagesMin, w)));
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-  const startDrag = () => { dragging.current = true; document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none"; };
-  const nudge = (d: number) => setPagesW((w) => {
-    const n = Math.min(maxPagesW(window.innerWidth), Math.max(T.pagesMin, w + d));
-    try { localStorage.setItem("vexa.minutes.pagesW", String(n)); } catch { /* ignore */ }
-    return n;
-  });
+  // `openPage` is a stable callback; it reaches the CURRENT layout controls through this ref.
+  // Is the pages panel on screen — docked, or an open sheet? (The surface record reports it.)
+  const pagesVisible = L.pagesKind === "docked" || shell.sheetOpen;
+  const revealPages = useRef(shell.revealPages);
+  revealPages.current = shell.revealPages;
 
   const mountSet = useCallback(async (wanted: string[]) => {
     // Mount every shared workspace in the chat's set; park the rest. personal/_global/_system
@@ -374,7 +421,7 @@ export function MinutesShell() {
    *
    *  Every setState below runs after the single `await`, so React commits them together — which is
    *  what lets the artifacts effect trust that `sel.chatId` and `pages` describe the same chat. */
-  const openChat = useCallback(async (c: ChatRec) => {
+  const openChat = useCallback(async (c: ChatRec, how: { front?: "meeting" } = {}) => {
     window.dispatchEvent(new Event(CONNECTIONS_CLOSE));
     const m = c.meeting ? meetings.find((x) => String(x.id) === c.meeting) : undefined;
     // BOUND TO A ROW THIS CLIENT HAS NEVER LISTED — the bot the chat sent moments ago. Ask the list
@@ -384,27 +431,16 @@ export function MinutesShell() {
     await mountSet(c.workspaces);
     const roomPages = async (): Promise<Page[]> => {
       if (c.meeting) {
-        // TWO layouts, keyed on whether a transcript exists yet (founder ruling): prep opens the
-        // brief; live and post both lead with the transcript. `meetingPhase()` still returns three —
-        // chat.tsx needs them for its mode chip — but live/post render the same room here.
-        // It is a property of the MEETING, never of the link that opened it: an emailed link is
-        // clicked at an unpredictable time, so a "prep" link followed after the meeting must not lie.
-        // A `?mock=1` meeting has no row behind it, so its transcript stays the canned markdown
-        // page; every real meeting gets the canvas, bound to its row id.
+        // ONE VIEW (founder-approved design, 2026-10-11). A real meeting opens the meeting view —
+        // header, notes, transcript — in every phase, and the view reads its own notes from
+        // `/api/meeting/note`, so laying the room out asks the server nothing and never depends on
+        // the notes file existing. It is a property of the MEETING, never of the link that opened it.
+        // A `?mock=1` meeting has no row behind it, so it keeps its canned markdown pages, keyed on
+        // the composed path (`mockPhases.ts`) — the mock composes, and only the mock.
         const fake = mock && MOCK_MEETINGS.some((x) => String(x.id) === c.meeting);
         const native = (m as { native_id?: string } | undefined)?.native_id;
-        // THE SERVER SAYS WHERE THE MEETING'S DOCUMENT IS (Vexa-ai/vexa#1588). A `?mock=1` fixture
-        // has no server to ask and its canned pages ARE keyed on the composed path
-        // (`mockPhases.ts`), so the mock composes — and only the mock.
-        // …AND WHETHER THAT DOCUMENT IS THE MEETING'S ONE PAGE (Vexa-ai/vexa#1598): a page that
-        // declares the transcript widget renders the room inside itself, so the strip carries no
-        // second Transcript tab. Read off the file by the server, never inferred from "a note
-        // exists" — the reports written before the widget carry none, and they keep both pages.
-        const note = fake
-          ? { path: native ? `kg/entities/meeting/${native}.md` : null, transcript: "", cursor: "" }
-          : await fetchMeetingNote(c.meeting);
-        return pagesForPhase(m ? meetingPhase(m) : "post", native, fake ? null : c.meeting, note.path,
-                             { noteHasTranscript: !!note.transcript });
+        const mockNote = fake && native ? `kg/entities/meeting/${native}.md` : null;
+        return pagesForPhase(m ? meetingPhase(m) : "post", native, fake ? null : c.meeting, mockNote);
       }
       // THE DESK IS THE DEFAULT PAGE (PRD decision 26.4). This used to open the ORGANISATION's
       // README for a chat with no focus — the company's document, the same for everybody, and not
@@ -441,6 +477,17 @@ export function MinutesShell() {
     // touched either way: a reader owns their tabs, and this is the one entry no reader chose.
     const hasStrip = c.artifacts.length > 0;
     let strip = c.artifacts.map((a) => ({ ...a }));
+    // THE TWO-TAB ERA'S NOTES TAB GOES (the one-view design, 2026-10-11): a meeting chat stored
+    // before it pinned its notes file as a permanent "Brief"/"Minutes" tab beside the transcript,
+    // and the view now renders that file itself. `withoutRetiredMeetingDocs` takes only what
+    // `meetingPages` stamped; the reader's own tabs are untouched. A stored VIEW on that tab lands
+    // on the meeting view instead (below), so the old name is never what a reader reopens onto.
+    const retiredKeys = new Set<string>();
+    if (hasStrip && c.meeting && !(mock && MOCK_MEETINGS.some((x) => String(x.id) === c.meeting))) {
+      const kept = withoutRetiredMeetingDocs(strip);
+      for (const a of strip) if (!kept.includes(a)) retiredKeys.add(artifactKey(a));
+      strip = kept;
+    }
     if (hasStrip && c.meeting) {
       const native = (m as { native_id?: string } | undefined)?.native_id;
       const stale = strip.findIndex((a) => a.kind !== "meeting" && isRetiredNotePath(a.path, native));
@@ -473,8 +520,16 @@ export function MinutesShell() {
     // The stored VIEW wins over the first tab: it is where the reader actually was. A chat with
     // tabs but no stored view (pre-28, or one that has never been navigated) still opens on its
     // focused tab, so nothing regresses for records written before the slot existed.
-    const stored = c.view ? { kind: c.view.kind, path: c.view.path, slug: c.view.slug, label: c.view.label } as Page : null;
-    const front = stored ?? focus ?? list[0];
+    const storedRaw = c.view ? { kind: c.view.kind, path: c.view.path, slug: c.view.slug, label: c.view.label } as Page : null;
+    const stored = storedRaw && retiredKeys.has(artifactKey(storedRaw))
+      ? (list.find((pg) => pg.kind === "meeting") ?? null)
+      : storedRaw;
+    // A MEETING CHAT OPENS ON ITS MEETING (the one-view design, 2026-10-11): the view is the same
+    // wherever a meeting is opened, so a chat about one leads with it — unless the reader was last
+    // on some other page of theirs, which is where they were and stays where they land.
+    // ARRIVING THROUGH A SHARE puts the MEETING in front (#1801 `sharedArrivalFront`).
+    const picked = sharedArrivalFront(list, how.front) ?? stored ?? focus ?? list[0];
+    const front = c.meeting ? meetingChatFront(list, picked) : picked;
     setSel({
       kind: c.meeting ? "meeting" : "chat",
       chatId: c.id,
@@ -497,7 +552,7 @@ export function MinutesShell() {
    *  (id `meet-<meetingId>`, so it lands on the agent session that meeting has always used).
    *  Returns the id of the chat that was actually opened: a caller with something to say to it
    *  (a proposal chip's kick) must address the chat that LANDED, never a reconstructed id. */
-  const openRow = useCallback(async (r: Row, opts: { touched?: boolean; artifacts?: Artifact[]; focus?: string } = {}) => {
+  const openRow = useCallback(async (r: Row, opts: { touched?: boolean; artifacts?: Artifact[]; focus?: string; front?: "meeting" } = {}) => {
     const existing = r.chatId ? chatsRef.current.find((c) => c.id === r.chatId) : undefined;
     const c = existing ?? chatForRow(chatsRef.current, r, meetings);
     let want = opts.touched ? { ...c, touched: true } : c;
@@ -510,11 +565,11 @@ export function MinutesShell() {
       want = { ...want, artifacts: opts.artifacts, focus: opts.focus ?? want.focus };
     }
     if (!existing || opts.touched || opts.artifacts?.length) persist((prev) => upsertChat(prev, want));
-    await openChat(want);
+    await openChat(want, { front: opts.front });
     return want.id;
   }, [meetings, openChat, persist]);
 
-  const openMeeting = useCallback(async (m: MeetingMock, opts: { touched?: boolean; artifacts?: Artifact[]; focus?: string } = {}) => {
+  const openMeeting = useCallback(async (m: MeetingMock, opts: { touched?: boolean; artifacts?: Artifact[]; focus?: string; front?: "meeting" } = {}) => {
     const id = String(m.id);
     const row = railRows(chatsRef.current, [m]).find((r) => r.meetingId === id);
     return row ? await openRow(row, opts) : null;
@@ -623,16 +678,19 @@ export function MinutesShell() {
    *  should not create a new chat, this chat is already new").
    *
    *  What the click does to the record is `applyProposal`, which is pure and tested; this is the
-   *  wiring only — persist it, re-lay-out if the chat just became a meeting's, say the line into the
-   *  SAME session. A meeting chip therefore REBINDS: the conversation in front takes the meeting's
-   *  ref and title, and the phase pages open beside it exactly as they do from the rail. */
+   *  wiring only — persist it, rename the chat in front if nobody named it, say the line into the
+   *  SAME session. A connect chip opens the Connections panel instead and says nothing. */
   const runProposal = async (p: Proposal) => {
     // …including inside a DRAFT: the chat in front is the draft when there is one, so a chip
     // PROMOTES it rather than minting a second row beside it. That is the founder's 2026-09-01
     // ruling ("this chat is already new") applied to F35's unwritten chat.
     const current = chatsRef.current.find((c) => c.id === sel.chatId) ?? draftRef.current ?? null;
-    const eff = applyProposal(p, current, meetings);
-    if (!eff) return;
+    const eff = applyProposal(p, current);
+    // Opening Connections says nothing and touches no chat, so it does not spend the offer.
+    if (eff.act === "connect") {
+      window.dispatchEvent(new CustomEvent(CONNECTIONS_OPEN, { detail: { provider: eff.provider, connection_id: eff.connectionId } }));
+      return;
+    }
     // A JOB LEAVES THE LIST WHEN ITS ACT RUNS (#1614). Locally first, so the row cannot re-offer it
     // while the close is in flight, and the close itself is fire-and-forget: a failed one costs a
     // chip that comes back on the next load, never a click that did nothing.
@@ -643,32 +701,20 @@ export function MinutesShell() {
     // The offer is spent the moment it is taken. A kick is hidden AND settle-delayed, so without
     // this the row would sit there for another 1.2 seconds, live, offering to do the same thing.
     setSpent(sel.chatId);
-    if (eff.act === "filter") { toggleAll(true); return; }
     if (eff.act === "create") { addChat(eff.label, ["personal", "_global"], { kick: eff.kick, say: eff.say }); return; }
-    if (eff.act === "open") {
-      const m = meetings.find((x) => String(x.id) === eff.meetingId);
-      const chatId = m ? await openMeeting(m, { touched: true }) : null;
-      if (!chatId) return;
-      setSpent(chatId);
-      if (eff.kick) fireKick(chatId, eff.kick, eff.say);
-      return;
-    }
-    // The chat in front, mutated in place. It only needs re-opening when it CHANGED ROOM — a plain
-    // relabel must not throw away the pages panel the reader is looking at.
-    const rebound = eff.chat.meeting !== current?.meeting;
+    // The chat in front, mutated in place: touched and named, never re-roomed.
     persist((prev) => upsertChat(prev, eff.chat));
     setDraft((d) => (d && d.id === eff.chat.id ? null : d));
-    if (rebound) await openChat(eff.chat);
-    else setSel((x) => ({ ...x, label: eff.chat.label }));
+    setSel((x) => ({ ...x, label: eff.chat.label }));
     if (eff.kick) fireKick(eff.chat.id, eff.kick, eff.say);
   };
 
-  /** Up to ten chips, recomputed from the two lists already in hand, the desk's own facts, its short
-   *  list and one capability flag. Pure, so the row is decided in the render that draws it — no model
-   *  call and no effect; the one fetch this needs (`listProposals`) is a plain file read done once. */
+  /** Up to four chips, recomputed from the person's connections, their next calendar meeting, the
+   *  desk's own facts and its short list. Pure, so the row is decided in the render that draws it —
+   *  no model call and no effect. */
   const chips = useMemo(
-    () => proposals(meetings, allChats, desk, Date.now(), email, deskItems, googleMeet),
-    [meetings, allChats, desk, email, deskItems, googleMeet]);
+    () => proposals(connections, events, Date.now(), desk, email, deskItems),
+    [connections, events, desk, email, deskItems]);
   /** THE PERSON SAYING NO. It closes the row on the server and drops it here, and — unlike a pick —
    *  it does NOT spend the offer: the rest of the list is still worth having. */
   const dismissProposal = (p: Proposal) => {
@@ -701,12 +747,23 @@ export function MinutesShell() {
     setDraft(d=>d?.id===id?{...d,label:title,nameSource:"human"}:d);
     setSel(x=>x.chatId===id?{...x,label:title}:x);
   };
-  const deleteChat = (chatId: string) => {
-    // …and it has to be REMEMBERED now that the rail derives from the server (Vexa-ai/vexa#1591).
-    // Dropping the stored row alone would put the chat straight back on the next fetch: the row is
-    // this reader's index, the session is the server's, and a delete is a statement about the index.
-    hideChat(chatId);
+  const deleteChat = async (chatId: string) => {
+    // DELETE IS THE SERVER'S NOW. It used to drop the stored row and write a tombstone in this
+    // browser, which left the chat on the server and on every other device — and a meeting's own
+    // chat came straight back as the meeting's derived row, under the same name: "delete chat is not
+    // working". The server removes the session and its conversation, and hides the meeting's row for
+    // this person (`hidden_meeting`). A 404 is a chat that never reached the server: removing the
+    // stored row is the whole delete.
+    setOrderError("");
+    let res: Response;
+    try { res = await fetch(`/api/sessions/${encodeURIComponent(chatId)}`, { method: "DELETE" }); }
+    catch { setOrderError("Couldn't delete the chat. Try again."); return; }
+    if (!res.ok && res.status !== 404) {
+      setOrderError(res.status === 409 ? "This chat still has queued messages. Try again when they have run." : "Couldn't delete the chat. Try again.");
+      return;
+    }
     persist((prev) => removeChat(prev, chatId));
+    try { setMarks(await fetchMarks()); } catch { /* the row is gone either way */ }
     if (sel.chatId !== chatId) return;
     // There is no home row to fall back to any more (F34 deleted it), so the shell lands on the
     // most recent chat that still exists — or, when none does, on a fresh draft: a composer with
@@ -823,15 +880,17 @@ export function MinutesShell() {
    *  about the agent's own writes here, and it is the same rule. */
   const readerChoseFocus = useRef(false);
 
-  const openPage = useCallback((pg: Page) => {
+  const openPage = useCallback((pg: Page, byReader = false) => {
     const e: Artifact = { kind: pg.kind, path: pg.path, slug: pg.slug, label: pg.label };
     // What this person actually opens is the desk README's ordering signal — and the only place
     // that knows it is here. Fire-and-forget; a usage signal is never worth a millisecond of the
     // document they asked for. (The seam worker's panel-view-slot lands the same one line.)
     if (pg.kind !== "meeting") reportOpened(pg.slug, pg.path);
-    // A folded-away panel is the other way a link click "does nothing": the tab opens into a 22px
-    // column nobody can see. Asking for a document unfolds the column it lands in.
-    setPagesCollapsed(false); saveCollapsed("right", false);
+    // A folded-away panel is the other way a link click "does nothing": the tab opens into a
+    // column nobody can see. Asking for a document unfolds the column it lands in — and, where the
+    // panel is a sheet, opens the sheet when the READER asked (a link they clicked), never for a
+    // page the agent wrote while they were typing.
+    revealPages.current(byReader);
     // standard history semantics: navigating after going BACK truncates the forward branch, and
     // re-opening the document already in front is not a navigation at all.
     setHist((h) => {
@@ -859,7 +918,7 @@ export function MinutesShell() {
   /** PIN A PAGE. The amendment folded "open in tab" into this: the strip is history, so everything
    *  you open is already in it, and the only extra thing worth asking for is that one STAYS. */
   const openPinned = useCallback((pg: Page) => {
-    openPage(pg);
+    openPage(pg, true);
     setPages((prev) => prev.map((x) => artifactKey(x) === artifactKey(pg) ? { ...x, pinned: true } : x));
   }, [openPage]);
 
@@ -888,7 +947,7 @@ export function MinutesShell() {
     const onView = (e: Event) => {
       const d = (e as CustomEvent<ViewSlot>).detail;
       if (!d?.path) return;
-      openPage({ path: d.path, slug: d.workspace, label: d.label });
+      openPage({ path: d.path, slug: d.workspace, label: d.label }, true);
     };
     window.addEventListener(VIEW_NAVIGATE_EVENT, onView);
     return () => window.removeEventListener(VIEW_NAVIGATE_EVENT, onView);
@@ -1079,6 +1138,24 @@ export function MinutesShell() {
     return () => window.removeEventListener(WORKSPACE_COMMIT_EVENT, onCommit);
   }, []);
 
+  // A PERSON DELETED A PAGE (`./pageDelete`): every tab on it goes, and if it was in front its
+  // neighbour comes forward — `closeTab`'s rule, applied to all of that page's tabs at once. No deps
+  // on purpose, like the key listener above: it reads the strip as it is now.
+  useEffect(() => {
+    const onRemoved = (e: Event) => {
+      const d = (e as CustomEvent<{ path?: string; slug?: string }>).detail;
+      if (!d?.path) return;
+      const next = dropRemovedPage(pages, d.path, d.slug);
+      if (next.length === pages.length) return;
+      const front = docKind !== "meeting" && docPath === d.path && (docSlug || undefined) === (d.slug || undefined);
+      const i = pages.findIndex((x) => x.kind !== "meeting" && x.path === d.path && (x.slug || undefined) === (d.slug || undefined));
+      setPages(next);
+      if (front && next.length) openPage(next[Math.min(Math.max(i, 0), next.length - 1)]);
+    };
+    window.addEventListener(PAGE_REMOVED_EVENT, onRemoved);
+    return () => window.removeEventListener(PAGE_REMOVED_EVENT, onRemoved);
+  });
+
   // The live phase means words ARRIVING. Re-read the live transcript on a timer so "flowing" is
   // something you watch rather than something the label claims. Mock-only: the real live feed will
   // be a stream, not a poll.
@@ -1098,7 +1175,7 @@ export function MinutesShell() {
       // NEVER A DEAD CLICK: an unresolved link opens its canonical path anyway, so the panel
       // answers with the empty state instead of the click vanishing (pageForDocRef).
       const pg = pageForDocRef(d, r);
-      if (pg) openPage(pg);
+      if (pg) openPage(pg, true);
     };
     const onMeeting = (e: Event) => {
       const ref = (e as CustomEvent<{ ref?: string }>).detail?.ref;
@@ -1107,7 +1184,7 @@ export function MinutesShell() {
       const m = meetings.find((x) => (x as { native_id?: string }).native_id === native || String(x.id) === ref);
       // same rule: a ref with no row behind it opens the meeting's notes page rather than nothing —
       // and asks the list for the row, so the next render of that ref can do better than the notes.
-      if (m) void openMeeting(m); else { ensureMeetingKnown(native); openPage(pageForMeetingRef(ref)); }
+      if (m) void openMeeting(m); else { ensureMeetingKnown(native); openPage(pageForMeetingRef(ref), true); }
     };
     // A CLICK IS THE READER CHOOSING. Both of these arrive from something the person pressed in
     // the conversation, so from here on an artifact appends behind them rather than in front.
@@ -1134,21 +1211,14 @@ export function MinutesShell() {
    *      than at the next open;
    *    · the meetings list is ASKED for the row, which it has never listed — the bot went out a
    *      second ago;
-   *    · and the meeting's own pages join the strip, PINNED (`withMeetingPages` — it adds behind the
-   *      reader and never re-opens the room, so the transcript the send just fronted stays in front).
+   *    · and the meeting view joins the strip, PINNED (`withMeetingPages` — it adds behind the
+   *      reader and never re-opens the room, so the view the send just fronted stays in front).
    *
    *  A LATCH, exactly as `bindMeeting` and the server's index are: a chat already about a meeting is
    *  not rebound by a second send. Its identity is what the reader is looking at.
    *
-   *  THE NOTE IS NO LONGER USUALLY ABSENT (Vexa-ai/vexa#1601). It used to be — *"a meeting that
-   *  started a second ago has no report yet"* — and that is precisely what the founder hit: he sent
-   *  the bot, the transcript opened, and he asked *"where is it?"*. agent-api mints the page on this
-   *  same event now, before it relays it, so this lookup finds one; and when that page declares the
-   *  widget (#1598) it IS the room, so it comes to the front and the transcript tab the send pinned a
-   *  moment ago gives way to it. A note that carries no widget keeps today's two-page room exactly.
-   *
-   *  A path that is still absent stays `pagesForPhase`'s own rule: one document fewer, never a tab
-   *  onto a guess. */
+   *  ONE VIEW (2026-10-11): the meeting's furniture is the meeting view, which reads its own notes
+   *  (minted at bot-send, #1601) — so binding needs no note lookup and fronts nothing itself. */
   const bindMeetingHere = useCallback(async (meetingId: string) => {
     const id = selRef.current.chatId;
     if (!id || selRef.current.meetingId) return;
@@ -1161,18 +1231,11 @@ export function MinutesShell() {
     // A row the list has not caught up with is a meeting that has just begun — which is the only way
     // to reach this at all, so `live` is the honest reading rather than a default.
     const phase = m ? meetingPhase(m) : "live";
-    const note = await fetchMeetingNote(meetingId);
-    const room = meetingPages(phase, meetingId, note.path, null,
-                              { noteHasTranscript: !!note.transcript });
-    // THE PAGE IS THE ROOM, so it goes in FRONT — never over a focus the reader chose in the
-    // meantime, which is the same rule `artifactViewEffect` keeps one effect down.
-    const front = boundMeetingView(room, note);
-    if (front && !readerChoseFocus.current) openPage(front);
-    setPages((prev) => {
-      const merged = withMeetingPages(prev as Artifact[], room) as Page[];
-      return front ? (withoutSeparateTranscript(merged as Artifact[], meetingId) as Page[]) : merged;
-    });
-  }, [persist, openPage]);
+    // ONE VIEW: what binding adds is the meeting view, pinned behind whatever the reader is looking
+    // at. The send's own `meeting:<row>` artifact is what fronts it, and that is the same page.
+    const room = meetingPages(phase, meetingId, null, null);
+    setPages((prev) => withMeetingPages(prev as Artifact[], room) as Page[]);
+  }, [persist]);
 
   // ── F41, AS AMENDED BY DECISION 28: A FILE THE TURN WROTE NAVIGATES THE VIEW ────────────────
   //
@@ -1243,7 +1306,7 @@ export function MinutesShell() {
       const pg = pageForArtifact(d);
       if (!pg) return;
       readerChoseFocus.current = true;
-      openPage(pg);
+      openPage(pg, true);
     };
     window.addEventListener(OPEN_PAGE_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_PAGE_EVENT, onOpen);
@@ -1298,14 +1361,20 @@ export function MinutesShell() {
     if (meetingRefSpent.current || !meetings.length) return;
     meetingRefSpent.current = true;
     let ref: string | null = null;
-    try { ref = localStorage.getItem("vexa.openMeetingRef"); localStorage.removeItem("vexa.openMeetingRef"); }
+    let front: "meeting" | undefined;
+    try {
+      ref = localStorage.getItem("vexa.openMeetingRef"); localStorage.removeItem("vexa.openMeetingRef");
+      // Set beside the ref by a share redeem (`App.stashSharedMeeting`): open on the meeting page.
+      if (localStorage.getItem(SHARED_ARRIVAL_KEY) === "meeting") front = "meeting";
+      localStorage.removeItem(SHARED_ARRIVAL_KEY);
+    }
     catch { return; }
     if (!ref) return;
     const native = ref.includes("/") ? ref.slice(ref.indexOf("/") + 1) : ref;
     const m = meetings.find((x) => (x as { native_id?: string }).native_id === native || String(x.id) === ref);
     // The link is spent on the first non-empty list, so a row created between the click and that
     // list would be lost outright — ask for it rather than dropping the deeplink on the floor.
-    if (m) void openMeeting(m, { touched: true }); else ensureMeetingKnown(native);
+    if (m) void openMeeting(m, { touched: true, front }); else ensureMeetingKnown(native);
   }, [meetings, openMeeting]);
 
   const session = sel.chatId;
@@ -1361,9 +1430,9 @@ export function MinutesShell() {
         history: ordered.filter((a) => !a.pinned && !a.desk).map((a) => ({ ...ref(a), at: a.at ?? 0 })),
         pins: ordered.filter((a) => a.pinned || a.desk).map(ref),
       },
-      navigator: { open: !pagesCollapsed, workspace: docSlug ?? null },
+      navigator: { open: pagesVisible, workspace: docSlug ?? null },
     });
-  }, [sel.chatId, sel.kind, sel.meetingId, selMeeting, pages, docPath, docSlug, pagesCollapsed]);
+  }, [sel.chatId, sel.kind, sel.meetingId, selMeeting, pages, docPath, docSlug, pagesVisible]);
 
 
   // `?ask=<preset>` — the emailed link. App.tsx stashed the name; resolve it to an ADMIN-AUTHORED
@@ -1420,17 +1489,18 @@ export function MinutesShell() {
   // reader cannot see which identity that was — so the card names it. Probed only when a refusal
   // actually exists: the common path is a link that opens, and it should cost nothing. Fail-soft —
   // an identity probe that does not answer leaves the copy exactly as it read before.
-  // IS THIS PERSON THE INSTANCE'S ADMIN (Vexa-ai/vexa#1616) — the one question the `+` menu's
-  // company-layer entry turns on. FAIL CLOSED: `is_admin` is three-valued (see /api/auth/me) and
-  // only a literal `true` counts, because an unknown answer must not offer a door the server
-  // would then slam. Nothing hangs on it being right — the write seam refuses a non-admin either
-  // way — so it is a probe, not a gate, and a probe that does not answer costs an offer.
-  const [isAdmin, setIsAdmin] = useState(false);
+  // IS THIS THE DEPLOYMENT'S ADMIN ACCOUNT (founder ruling 2026-10-11: *"admin is a special account
+  // that has global only"*) — the one question the header turns on. The admin account sees Company
+  // and nothing else; every everyday account (the instance admin's included) never sees Company.
+  // FAIL CLOSED: `admin_account` is three-valued (see /api/auth/me) and only a literal `true` counts.
+  // Nothing hangs on it being right — the server confines the admin account and refuses everybody
+  // else's `_global` writes either way — so it is a probe, not a gate.
+  const [isAdminAccount, setIsAdminAccount] = useState(false);
   useEffect(() => {
     let active = true;
     void fetch("/api/auth/me", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (active) setIsAdmin((d as { is_admin?: boolean } | null)?.is_admin === true); })
+      .then((d) => { if (active) setIsAdminAccount((d as { admin_account?: boolean } | null)?.admin_account === true); })
       .catch(() => undefined);
     return () => { active = false; };
   }, []);
@@ -1531,17 +1601,43 @@ export function MinutesShell() {
     })();
   }, []);
 
+  // THE RAIL, in whichever form fits: docked in the grid, or inside the drawer the strip (or the
+  // header's menu control, in single mode) opens. Selecting a chat from the drawer closes it — the
+  // reader came for the conversation, not the list.
+  const railBody = (inDrawer: boolean) => (
+    <Rail rows={shownRows} hidden={hiddenCount} all={all} onAll={toggleAll}
+      selKey={selKey} onSelect={(r) => { if (inDrawer) shell.closeOverlays(); void openRow(r); }}
+      onNewChat={() => { if (inDrawer) shell.closeOverlays(); startDraft(); }} onDeleteChat={(id) => void deleteChat(id)} onMove={reorder}
+      onPin={(r, on) => void mark(r.key, { pinned: on })} onHide={(r, on) => void mark(r.key, { hidden: on })}
+      hiddenView={hiddenView} onHiddenView={setHiddenView} hiddenMarked={hiddenMarked}
+      onCollapse={() => shell.setRailOpen(false)} collapseLabel={inDrawer ? "Close the chat list" : undefined} />
+  );
+  const pagesOverlay = L.pagesKind === "sheet" || L.pagesKind === "fullscreen";
+  const sheetForm = L.pagesKind === "sheet" ? "overlay" : L.pagesKind === "fullscreen" ? "fullscreen" : "inline";
+
   return (
-    <div style={{ position: "relative", display: "grid", gridTemplateColumns: `${railCollapsed ? EDGE_W : T.railW}px minmax(0, 1fr) ${rightCollapsed ? EDGE_W : pagesW}px`, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, background: surface.rail }}>
-      {railCollapsed
-        ? <EdgeHandle side="left" onClick={() => collapseRail(false)} />
-        : <Rail rows={shownRows} hidden={hiddenCount} all={all} onAll={toggleAll}
-            selKey={selKey} onSelect={(r) => void openRow(r)}
-            onNewChat={startDraft} onDeleteChat={deleteChat} onMove={reorder}
-            onCollapse={() => collapseRail(true)} />}
+    <div ref={shellRef} data-shell-mode={L.mode} data-rail={L.railKind} data-pages={L.pagesKind}
+      style={{ position: "relative", display: "grid", gridTemplateColumns: L.columns, gridTemplateRows: `${T.headerH}px 1fr`, height: "100%", minHeight: 0, minWidth: 0, overflow: "clip", background: surface.rail }}>
+      {L.railKind === "docked" ? railBody(false)
+        : L.railKind === "strip" ? <RailStrip open={shell.drawerOpen} onOpen={() => shell.setRailOpen(true)} onNewChat={startDraft} />
+        : null}
+      {L.railKind !== "docked" && (
+        <Drawer open={shell.drawerOpen} onClose={() => shell.setRailOpen(false)} width={L.widths.drawer} label="Chats">
+          {railBody(true)}
+        </Drawer>
+      )}
+      {L.railKind === "docked" && L.bounds.rail && (
+        <Splitter label="Resize chat list" value={L.widths.rail} bounds={L.bounds.rail} grows="right"
+          onPreview={(w) => shell.previewWidth("rail", w)} onCommit={(w) => shell.commitWidth("rail", w)}
+          style={{ left: L.widths.rail - 4 }} />
+      )}
       {orderError && <div role="alert" style={{position:"absolute",bottom:10,left:10,zIndex:50}}>{orderError}</div>}
-      <div style={{display:connectionsMode==='page'?"none":"contents"}}>
+      <div style={{display:connectionsMode==='page'&&!pagesOverlay?"none":"contents"}}>
       <ContextBar sel={sel} onRename={draft?.id === sel.chatId ? undefined : renameChat} flavor={flavor} memberships={memberships}
+        leading={L.railKind === "drawer"
+          ? <ShellToggle kind="rail" open={shell.drawerOpen} onClick={() => shell.setRailOpen(!shell.drawerOpen)} /> : undefined}
+        trailing={pagesOverlay
+          ? <ShellToggle kind="pages" open={shell.sheetOpen} onClick={() => shell.setPagesOpen(!shell.sheetOpen)} /> : undefined}
         onAddWorkspace={(id) => setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id])}
         onRemoveWorkspace={(id) => {
           setWorkspaces((ws) => ws.filter((w) => w !== id));
@@ -1551,7 +1647,7 @@ export function MinutesShell() {
           if (sel.target === id) chooseTarget("");
         }}
         onSetTarget={(id) => chooseTarget(id)}
-        isAdmin={isAdmin}
+        adminAccount={isAdminAccount}
         onTargetGlobal={() => {
           // THE ADMIN AIMS A CHAT AT THE COMPANY LAYER (Vexa-ai/vexa#1616) — MOUNT · TARGET ·
           // OPEN, in that order, which is the same three beats the `focus` event performs and
@@ -1565,7 +1661,7 @@ export function MinutesShell() {
           setWorkspaces((ws) => (ws.includes(GLOBAL_MOUNT) ? ws : [...ws, GLOBAL_MOUNT]));
           chooseTarget(GLOBAL_MOUNT, { justMounted: true });
           readerChoseFocus.current = true;
-          openPage({ path: "README.md", slug: GLOBAL_MOUNT, label: COMPANY_WORD } as Page);
+          openPage({ path: "README.md", slug: GLOBAL_MOUNT, label: COMPANY_WORD } as Page, true);
         }}
         onAttachRepo={(id) => setAttachTo({ id })} />
       {/* Wrapped rather than a bare id so "the desk" (id undefined) is still an OPEN dialog — a
@@ -1574,7 +1670,7 @@ export function MinutesShell() {
         <AttachRepo workspaceId={attachTo.id} onClose={() => setAttachTo(null)}
           onAttached={(id) => { if (id) setWorkspaces((ws) => ws.includes(id) ? ws : [...ws, id]); }} />
       )}
-      <main style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center, display: "flex", flexDirection: "column" }}>
+      <main className="vx-pane" data-pane="conversation" style={{ gridRow: 2, gridColumn: 2, minWidth: 0, minHeight: 0, background: surface.center, display: "flex", flexDirection: "column" }}>
         {/* A SCAFFOLD THAT WOULD NOT OPEN STATES ITSELF. Someone who clicked a real link and landed
             on an empty conversation cannot tell a spent invitation from a broken product — and the
             second reading is the one they take. So: whose it is, and what to do about it. It sits
@@ -1585,34 +1681,40 @@ export function MinutesShell() {
             onDismiss={() => setScaffoldRefusal(null)} />
         )}
         <div style={{ flex: 1, minHeight: 0 }}>
-          <Chat params={{ session }} emptyExtra={<ProposalChips items={shownChips}
+          {/* THE ADMIN ACCOUNT'S HOME (founder ruling 2026-10-11): its four areas in place of the
+              everyday chips, which offer a desk and meetings it does not have. */}
+          <Chat params={{ session }} emptyExtra={isAdminAccount ? <AdminHome /> : <ProposalChips items={shownChips}
             onPick={(p) => void runProposal(p)} onDismiss={dismissProposal} />} />
         </div>
       </main>
       </div>
-      {/* the pages panel's resize handle — a real separator: 11px hit area, a hairline that
-          lights up on hover/focus, and arrow keys for anyone not dragging. A collapsed panel has no
-          width to drag, so the separator goes with it. */}
-      {!rightCollapsed && connectionsMode!=='page' && <div role="separator" aria-orientation="vertical" aria-label="Resize pages panel" tabIndex={0}
-        onMouseDown={startDrag}
-        onKeyDown={(e) => { if (e.key === "ArrowLeft") { e.preventDefault(); nudge(24); } if (e.key === "ArrowRight") { e.preventDefault(); nudge(-24); } }}
-        onMouseEnter={(e) => { (e.currentTarget.firstElementChild as HTMLElement).style.background = "var(--accent)"; }}
-        onMouseLeave={(e) => { if (!dragging.current) (e.currentTarget.firstElementChild as HTMLElement).style.background = "transparent"; }}
-        onFocus={(e) => { (e.currentTarget.firstElementChild as HTMLElement).style.background = "var(--accent)"; }}
-        onBlur={(e) => { (e.currentTarget.firstElementChild as HTMLElement).style.background = "transparent"; }}
-        style={{ position: "absolute", top: 0, bottom: 0, right: pagesW - 5, width: 11, cursor: "col-resize", zIndex: 5, display: "flex", justifyContent: "center", outline: "none" }}>
-        <span style={{ width: 1, alignSelf: "stretch", background: "transparent", transition: "background .12s" }} />
-      </div>}
-      <ConnectionsPanel onModeChange={setConnectionsMode} />
+      {/* the pages panel's resize handle — a docked panel only: a folded or overlaid one has no
+          edge to drag. */}
+      {L.pagesKind === "docked" && L.bounds.pages && !connectionsOpen && (
+        <Splitter label="Resize pages panel" value={L.widths.pages} bounds={L.bounds.pages} grows="left"
+          onPreview={(w) => shell.previewWidth("pages", w)} onCommit={(w) => shell.commitWidth("pages", w)}
+          style={{ right: L.widths.pages - 4 }} />
+      )}
+      {/* CONNECTIONS take the pages panel's place: docked in its column, or — where the panel is a
+          sheet — as a sheet of their own. One element either way, so it never remounts. */}
+      <Sheet form={connectionsOpen && pagesOverlay ? (connectionsMode === "page" ? "fullscreen" : sheetForm) : "inline"}
+        open={connectionsOpen} onClose={() => window.dispatchEvent(new Event(CONNECTIONS_CLOSE))}
+        width={L.widths.sheet} label="Connections" dataPane="connections">
+        <ConnectionsPanel onModeChange={setConnectionsMode} />
+      </Sheet>
       <div style={{display:connectionsOpen?"none":"contents"}} aria-hidden={connectionsOpen||undefined}>
-      {pagesCollapsed
-        ? <EdgeHandle side="right" onClick={() => collapsePages(false)} />
-        : <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug} docKind={docKind}
-            onTogglePin={togglePin} onOpen={(pg) => { readerChoseFocus.current = true; openPage(pg); }} onClose={closeTab}
-            listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}
-            canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}
-            body={docBody} notice={notice} onSaved={() => setDocNonce((n) => n + 1)}
-            onCollapse={() => collapsePages(true)} />}
+      {L.pagesKind === "collapsed"
+        ? <EdgeHandle side="right" onClick={() => shell.setPagesOpen(true)} />
+        : <Sheet form={sheetForm} open={shell.sheetOpen} onClose={() => shell.setPagesOpen(false)}
+            width={L.widths.sheet} label="Pages" dataPane="pages">
+            <PagesPanel pages={pages} docPath={docPath} docSlug={docSlug} docKind={docKind}
+              onTogglePin={togglePin} onOpen={(pg) => { readerChoseFocus.current = true; openPage(pg, true); }} onClose={closeTab}
+              listing={listing} onNavigate={(slug, prefix) => void navigate(slug, prefix)}
+              canBack={canBack} canForward={canForward} onBack={goBack} onForward={goForward}
+              body={docBody} notice={notice} onSaved={() => setDocNonce((n) => n + 1)}
+              onCollapse={() => shell.setPagesOpen(false)}
+              collapseLabel={pagesOverlay ? "Back to the conversation" : undefined} />
+          </Sheet>}
       </div>
     </div>
   );

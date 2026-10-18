@@ -23,6 +23,7 @@ guard exists to refuse. ``aliases``/``created``/``sources`` are added on top; no
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import re
 import unicodedata
 from pathlib import Path
@@ -143,11 +144,31 @@ def split_frontmatter(text: str) -> tuple[list[str], str]:
     return m.group(1).splitlines(), text[m.end():]
 
 
+def _strip_comment(value: str) -> str:
+    """Cut a trailing YAML comment: a ``#`` after whitespace, outside a quoted scalar. A quote only
+    opens a scalar where one can start (the value's first character, or after ``[`` or ``,``), so
+    an apostrophe inside a bare title is text. Cutting at ANY ``#`` truncated a quoted source such
+    as ``"Slack #general"``, which ``_render_list`` writes quoted for exactly that reason."""
+    quote, prev, last = "", " ", ""
+    for i, ch in enumerate(value):
+        if quote:
+            if ch == quote and not (quote == '"' and prev == "\\"):
+                quote = ""
+        elif ch in "\"'" and last in ("", "[", ","):
+            quote = ch
+        elif ch == "#" and prev in " \t":
+            return value[:i]
+        prev = ch
+        if not ch.isspace():
+            last = ch
+    return value
+
+
 def _fm_get(lines: list[str], key: str) -> str | None:
     for ln in lines:
         k, sep, v = ln.partition(":")
         if sep and k.strip() == key:
-            return v.split("#")[0].strip()
+            return _strip_comment(v).strip()
     return None
 
 
@@ -166,20 +187,87 @@ def _fm_set(lines: list[str], key: str, value: str) -> list[str]:
 
 
 def _list_field(raw: str | None) -> list[str]:
+    """Read a one-line YAML flow list (``[a, "b, c"]``) back into its items.
+
+    QUOTE-AWARE, because ``_render_list`` quotes any item that carries a comma. Splitting the raw
+    text on every comma turned ONE source, ``"Zoom call 17, 2026-10-09 14:07 UTC"``, into two
+    items, and each later upsert of the same source appended it again beside its own halves — the
+    doubled `## Sources` a person found on their page. A double-quoted item is read with JSON
+    escapes (the subset of YAML's that ``_render_list`` writes), a single-quoted one with YAML's
+    doubled-quote escape, and a bare item as the trimmed text it always was."""
     raw = (raw or "").strip()
     if not raw or raw in ("[]", "~", "null"):
         return []
-    return [p.strip() for p in raw.strip("[]").split(",") if p.strip()]
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1]
+    items, buf, quote, i = [], [], "", 0
+    while i < len(raw):
+        ch = raw[i]
+        if quote == '"':
+            buf.append(ch)
+            if ch == "\\" and i + 1 < len(raw):
+                buf.append(raw[i + 1])
+                i += 1
+            elif ch == '"':
+                quote = ""
+        elif quote == "'":
+            buf.append(ch)
+            if ch == "'":
+                if raw[i + 1:i + 2] == "'":
+                    buf.append("'")
+                    i += 1
+                else:
+                    quote = ""
+        elif ch in "\"'" and not "".join(buf).strip():
+            buf, quote = [ch], ch
+        elif ch == ",":
+            items.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    items.append("".join(buf))
+    return [v for v in (_unquote(p.strip()) for p in items) if v]
+
+
+def _unquote(item: str) -> str:
+    if len(item) >= 2 and item[0] == item[-1] == '"':
+        try:
+            return str(json.loads(item)).strip()
+        except ValueError:
+            return item[1:-1].strip()
+    if len(item) >= 2 and item[0] == item[-1] == "'":
+        return item[1:-1].replace("''", "'").strip()
+    return item
+
+
+#: A flow-list item that YAML (and ``_list_field``) would read differently written bare: it carries
+#: a separator or a quote, opens with an indicator character, or contains `: ` / ` #`.
+_NEEDS_QUOTES = re.compile(r"""[,\[\]{}"']|^[\s&*!|>%@`?-]|\s$|:\s|:$|\s#""")
+
+
+def _render_item(item: str) -> str:
+    return json.dumps(item, ensure_ascii=False) if _NEEDS_QUOTES.search(item) else item
 
 
 def _render_list(items) -> str:
+    """Write items as a one-line YAML flow list, quoting each that would not read back as itself.
+
+    DEDUPLICATED BY VALUE, and an item written before this fix as the comma-split halves of a value
+    now being added is folded back into it: a page that already carries ``Zoom call 17`` and
+    ``2026-10-09 14:07 UTC`` side by side, re-upserted with the source they were cut from, ends up
+    with that one source instead of three."""
     seen, out = set(), []
     for i in items:
         i = str(i).strip()
         if i and i not in seen:
             seen.add(i)
             out.append(i)
-    return "[" + ", ".join(out) + "]"
+    for whole in [i for i in out if "," in i]:
+        halves = [h.strip() for h in whole.split(",") if h.strip()]
+        if len(halves) > 1 and all(h in seen for h in halves):
+            out = [i for i in out if i not in halves]
+    return "[" + ", ".join(_render_item(i) for i in out) + "]"
 
 
 def _normalise(fact: str) -> str:
@@ -837,13 +925,49 @@ def migrate_flat(card: Card) -> bool:
     return True
 
 
-def ensure_card_shape(card: Card, kind: str) -> None:
+def template_sections(kind: str, text: str) -> "tuple | None":
+    """THE KIND SECTIONS A COMPANY TEMPLATE DECLARES, in its order — or ``None`` when ``text`` is not
+    a template this writer can create a card from.
+
+    The company's templates (`_global/kg/templates/<kind>.md`, written by the deployment's admin
+    account, founder ruling 2026-10-11) may ADD sections and reorder the kind's own; they may not
+    drop one the field map files into (``CARD_SECTIONS``) nor any tail section, because a field
+    whose section is gone has nowhere to land. Anything short of that is not a shape and the caller
+    falls back to the baked one — a bad edit to a template can never break note creation.
+
+    Headings inside a fence or an HTML comment are text, not sections (``_opaque_mask``)."""
+    kind = (kind or "").strip().lower()
+    if kind not in CARD_SECTIONS:
+        return None
+    fm, body = split_frontmatter(text or "")
+    if (_fm_get(fm, "template") or "").strip().lower() != "true":
+        return None
+    if (_fm_get(fm, "type") or "").strip().lower() != kind:
+        return None
+    lines = (body or "").split("\n")
+    mask = _opaque_mask(lines)
+    heads = []
+    for line, opaque in zip(lines, mask):
+        m = _H2.match(line) if not opaque else None
+        if m:
+            name = m.group(1).strip()
+            if name and name not in heads:
+                heads.append(name)
+    if any(h not in heads for h in CARD_SECTIONS[kind]) or any(t not in heads for t in TAIL_SECTIONS):
+        return None
+    return tuple(h for h in heads if h not in TAIL_SECTIONS)
+
+
+def ensure_card_shape(card: Card, kind: str, sections: "tuple | None" = None) -> None:
     """Put the sections this tool owns where they belong, WITHOUT moving anything else.
 
     A missing kind-section lands after the last kind-section that precedes it; a missing tail
     section lands before the first tail section that follows it, else at the end. Sections a human
-    wrote are never reordered — the card is imposed around their page, not over it."""
-    named = list(CARD_SECTIONS.get(kind, ()))
+    wrote are never reordered — the card is imposed around their page, not over it.
+
+    ``sections`` is the company template's own list for this kind (``template_sections``); absent,
+    the baked ``CARD_SECTIONS``."""
+    named = list(sections if sections else CARD_SECTIONS.get(kind, ()))
     for n, head in enumerate(named):
         if card.index(head) >= 0:
             continue
@@ -1030,8 +1154,13 @@ def _sourced(line: str, src: str) -> str:
 def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
                   today: str | None = None, aliases=(), mounts=None, dates=None,
                   summary: str = "", fields=None, section: str = "",
-                  connections=(), open_questions=()) -> dict:
+                  connections=(), open_questions=(), template: str = "") -> dict:
     """Create or update ``kg/entities/<kind>/<slug>.md`` AS A CARD (PRD decision 24.6).
+
+    ``template`` is the COMPANY's template for this kind (`_global/kg/templates/<kind>.md`) when the
+    caller holds one. A NEW card takes its sections from it — added ones included, in its order —
+    and ``section=`` may name any of them; an existing page is never reshaped. A template that is
+    not a valid shape (``template_sections``) is ignored and the baked shape is used.
 
     The page is always parsed and re-rendered, never appended to, and that one decision carries the
     migration: a flat page — the shape the founder rejected, a title and a stack of dated bullets —
@@ -1138,7 +1267,11 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
     migrated = existed and (migrate_flat(card) or card.was_flat)
     if not card.title:
         card.title = name
-    ensure_card_shape(card, kind)
+    # The company's shape decides a NEW card's sections; on an existing page it only widens which
+    # sections `section=` may name (an added section the page already carries), never reshapes it.
+    company_shape = template_sections(kind, template) if template else None
+    shape = company_shape if not existed else None
+    ensure_card_shape(card, kind, shape)
 
     if not existed:
         fm = [f"type: {kind}", f"id: {slugify(name)}", f"title: {name}",
@@ -1161,7 +1294,7 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
         card.summary = summary.strip()
         written += 1
 
-    valid = set(CARD_SECTIONS.get(kind, ()))
+    valid = set(CARD_SECTIONS.get(kind, ())) | {h for h in (company_shape or ()) if card.index(h) >= 0}
     edges = dict(FIELD_LINKS.get(kind, {}))
     for field, values in field_lines.items():
         head = FIELD_SECTION.get(kind, {}).get(field)
@@ -1252,7 +1385,8 @@ def upsert_entity(root, kind: str, name: str, facts=(), source: str = "", *,
             "links_docs": documents,
             "links_rewritten": rewritten_all, "kind": kind, "name": name, "date": day,
             "dates": new_stamps, "back_links": back_links, "migrated": bool(migrated),
-            "filed": filed, "sections": list(CARD_SECTIONS.get(kind, ()))}
+            "filed": filed, "sections": list(shape or CARD_SECTIONS.get(kind, ())),
+            **({"template": "company"} if shape else {})}
 
 
 # ── candidate names, mechanically (the phase's pre-pass) ─────────────────────────────────────────
@@ -1337,6 +1471,50 @@ _LEADING_DETERMINER = {
 
 # The one set the extractor tests — a first word that cannot start a name, whichever way it fails.
 _LEADING_NOT_A_NAME = _LEADING_VERB | _LEADING_DETERMINER
+
+
+# SPEECH NOISE AT THE HEAD OF A NAME — the one list, owned here, read by both consumers that see a
+# transcript: the chip extractor (`core/agent/shared/terms.py`) and the write-back pre-pass
+# (`missing_names` below). Measured on the DNA TSC transcript of 2026-03-02: eight of 28 candidates
+# were "But I'll", "So Cameron", "That's John", "And Gabe"… — a sentence opens with a capitalised
+# function word and the next word is capitalised too. Measured again on app.dev, 2026-10-11: the
+# write-back phase read "So Vexam, which is the Finos project" and wrote a project page called
+# "So Vexam" — an ASR spelling of Vexa behind a discourse opener.
+#
+# Stripped by the CONSUMERS, not inside `candidate_names`: that function is the decision-24.4
+# metric `core/flows/eval/dna/score.py` imports, tuned on written notes, and a corpus correction
+# applied inside it would move a number nobody was watching.
+#
+# THE TRADE, STATED: "On Semiconductor" and "Our World in Data" lose their first word and then fall
+# to the two-word floor. One page or chip missed, against a junk page per meeting.
+LEADING_SPEECH_NOISE = frozenset({
+    # sentence openers
+    "so", "but", "and", "also", "then", "now", "well", "actually", "just", "right", "okay", "ok",
+    "yeah", "yes", "no", "oh", "plus", "or", "if", "when", "while", "because", "though", "although",
+    "like", "maybe", "anyway", "basically", "honestly", "obviously",
+    # demonstratives and possessives that read as part of a name
+    "that", "that's", "this", "these", "those", "the", "a", "an",
+    "our", "your", "their", "his", "her", "its", "my",
+    # pronouns and their contractions — "But I'll" survives the opener strip as "I'll"
+    "i", "i'll", "i'm", "i've", "i'd", "we", "we'll", "we're", "we've", "they", "they'll",
+    "they're", "they've", "he", "he's", "she", "she's", "it", "it's", "you", "you'll", "you're",
+    "you've",
+    # prepositions that open a clause
+    "on", "in", "at", "for", "to", "with", "from", "by", "as", "of", "about", "into", "over",
+})
+
+
+def strip_leading_noise(name: str) -> str:
+    """Drop leading speech-noise words until the first real one, then hold the two-word floor.
+
+    Repeated rather than single-pass: "And so Cameron" is one utterance and two noise words. What is
+    left has to still be a NAME — one word is not, by the extractor's own rule — so a candidate that
+    shrinks to a single word ("So Vexam" → "Vexam") is dropped entirely rather than admitted through
+    a back door the two-word floor was closed against. Returns "" for a dropped candidate."""
+    parts = name.split()
+    while parts and parts[0].lower().replace("’", "'") in LEADING_SPEECH_NOISE:
+        parts = parts[1:]
+    return " ".join(parts) if len(parts) >= 2 else ""
 
 
 def candidate_names(text: str, *, mask_linked: bool = True) -> list[str]:
@@ -1463,7 +1641,45 @@ def _shadows(slug: str, known: str) -> bool:
         return True
     if len(b) >= 2 and set(b) <= set(a):
         return True
-    return False
+    return _near_variant(slug, known)
+
+
+def _edit_distance(a: str, b: str, cap: int) -> int:
+    """Levenshtein distance, stopping early once every path is past ``cap`` (returns ``cap + 1``)."""
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        if min(cur) > cap:
+            return cap + 1
+        prev = cur
+    return prev[-1]
+
+
+def _near_variant(slug: str, known: str) -> bool:
+    """Is ``slug`` a mis-hearing or mis-spelling of the page keyed ``known``?
+
+    ⚠ MEASURED 2026-10-11 on app.dev: speech recognition wrote "Vexa" as "Vexam", and the write-back
+    phase made a page for the variant beside the page for the real thing. Every other test in
+    ``_shadows`` is about truncation and word order; none sees one letter wrong.
+
+    One edit when the longer slug has five characters or more and the shorter has four ("vexam" →
+    "vexa"); two edits once both have twelve ("robin-valentine" / "robyn-valentyne"). Below that
+    floor two short names a letter apart are usually two different things ("Ada" / "Ida").
+
+    THE TRADE, STATED: "James Holl" and "James Hall" are one edit apart and can be two people. The
+    cost is one page not written this turn — it is written the next time the name arrives with a
+    source of its own, under the alias the person adds — against a duplicate page per ASR variant,
+    which nothing merges. Known variants the desk has already seen belong in a page's ``aliases``;
+    ``known_names`` reads those, so a recorded variant is an exact match, not a guess."""
+    short, long_ = sorted((slug, known), key=len)
+    if len(long_) < 5 or len(short) < 4:
+        return False
+    cap = 2 if len(short) >= 12 else 1
+    return _edit_distance(slug, known, cap) <= cap
 
 
 def missing_names(roots, texts, *, limit: int = 8) -> list[str]:
@@ -1487,7 +1703,13 @@ def missing_names(roots, texts, *, limit: int = 8) -> list[str]:
             continue
     seen: list[str] = []
     for t in texts:
-        for n in candidate_names(t, mask_linked=False):
+        for raw in candidate_names(t, mask_linked=False):
+            # A TRANSCRIPT OPENS SENTENCES WITH "So", "And", "Well"… (``LEADING_SPEECH_NOISE``):
+            # "So Vexam" is the opener and an ASR spelling of Vexa, not a project. The same strip
+            # the chip extractor applies, from the same list.
+            n = strip_leading_noise(raw)
+            if not n:
+                continue
             slug = slugify(n)
             if not slug or n in seen:
                 continue

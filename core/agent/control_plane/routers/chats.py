@@ -17,15 +17,15 @@ from control_plane import dispatch as dispatch_mod
 from control_plane import meeting_mint as meeting_mint_mod
 from control_plane import scaffolds as scaffolds_mod
 from control_plane import unit_faults
-from control_plane import global_layer, system_mounts
+from control_plane import admin_account_scope, global_layer, model_providers, system_mounts
 from control_plane.api_shared import (
     CONTEXT_SENTINEL, GLOBAL_TARGET_NOTE,
     _chat_turn_head, _context_grounding, _has_custom_model_endpoint, _is_slug,
     _model_creds_error_message, _record_chat_turn_head, _sse, _stream_tail_id,
-    inbox_pending, inbox_withdraw, logger, meeting_binding, target_preamble, toolbelt_preamble, workspace_focus)
+    inbox_pending, inbox_withdraw, logger, turns_taken_after, meeting_binding, target_preamble, toolbelt_preamble, workspace_focus)
 from control_plane.peer_lookups import meeting_access_check
-from control_plane.bodies import CHAT_SESSION_PATTERN, ChatBody, ResetBody, SessionId
-from control_plane.ceiling import refuse_delegated, require_in_ceiling
+from control_plane.bodies import CHAT_SESSION_PATTERN, ChatBody, ChatModelBody, ResetBody, SessionId
+from control_plane.ceiling import reads_within, refuse_delegated, require_in_ceiling
 from control_plane.config_preflight import NOT_CONFIGURED, capability_state
 from control_plane.workspace_attach import active_workspaces, shared_active_mounts
 from typing import Annotated, Literal
@@ -70,6 +70,14 @@ RailKey = Annotated[str, StringConstraints(pattern=RAIL_KEY_PATTERN)]
 class ChatOrderBody(BaseModel):
     model_config = ConfigDict(extra='forbid')
     order: list[RailKey] = Field(max_length=5000)
+
+
+class ChatMarkBody(BaseModel):
+    """Pin or hide ONE row of the caller's own rail. A flag that is absent is left as it is."""
+    model_config = ConfigDict(extra='forbid')
+    row: RailKey = Field(description='the rail row: `c:<chat session>` or `m:<meeting id>`')
+    pinned: bool | None = Field(default=None, description='keep the row at the top of the list')
+    hidden: bool | None = Field(default=None, description='take the row out of the list, reversibly')
 
 
 def build(**d) -> APIRouter:
@@ -144,7 +152,7 @@ def build(**d) -> APIRouter:
             row = None
         mounts = [str(w) for w in ((row or {}).get("workspaces") or [])
                   if str(w) not in ("_global", "_system")]
-        desk = _ws_name(str(subject), fallback="your own desk")
+        desk = _ws_name(str(subject), fallback="your personal workspace")
         # The registry names `_global` too — `The organisation` until the setup conversation
         # writes the company's own — so this fallback is only reached when the lookup FAILS, and
         # its whole job is to keep the slug out of the one line #1585/#1602 exist to keep
@@ -237,7 +245,10 @@ def build(**d) -> APIRouter:
             sid, title = str(r.get("session") or ""), str(r.get("title") or "")
             meeting_title = (titles.get(sid[len(_MEET_SESSION_PREFIX):], "")
                              if sid.startswith(_MEET_SESSION_PREFIX) else "")
-            out.append({**r, "label": r.get("named_title") or chat_label_mod.chat_label(
+            # A stored name is cleaned ON READ, never rewritten: a `named_title` an agent sent with a
+            # marker in it (Vexa-ai/vexa#1641) shows as the words around the marker.
+            named = chat_label_mod.strip_markers(r.get("named_title") or "")
+            out.append({**r, "label": named or chat_label_mod.chat_label(
                 title, meeting_title=meeting_title,
                 scaffold_label=_preset_label(chat_label_mod.preset_kind(title), cache))})
         return out
@@ -374,7 +385,8 @@ def build(**d) -> APIRouter:
 
     @router.get("/api/chat/pending")
     def chat_pending(request: Request,
-                     session: Annotated[str | None, Query(pattern=CHAT_SESSION_PATTERN)] = None):
+                     session: Annotated[str | None, Query(pattern=CHAT_SESSION_PATTERN)] = None,
+                     after: Annotated[str | None, Query(pattern=r"^\d{1,20}-\d{1,20}$")] = None):
         """WHAT THIS CHAT HAS SUBMITTED AND ITS AGENT HAS NOT TAKEN YET (Vexa-ai/vexa#1610).
 
         The inbox is the in-topic and the worker publishes how far it has read, so this is a read of
@@ -383,7 +395,13 @@ def build(**d) -> APIRouter:
 
         `cursor` is the output Stream's tail right now — where a client with nothing open should
         attach to watch the queue run. A client that already has a stream has an exact cursor of its
-        own and should use that one instead."""
+        own and should use that one instead.
+
+        `after` — that exact cursor, when the client has one — adds `taken`: how many turns the
+        worker has started since it. A message submitted mid-turn is taken the instant the turn in
+        front of it ends, so by the time a client whose view just closed asks, it is no longer
+        pending; `taken` is what tells that client there is an answer running that it has not seen,
+        and that it should attach from its cursor and watch it."""
         subject = subject_of(request)
         session = session or units.DEFAULT_CHAT_SESSION
         try:
@@ -397,6 +415,7 @@ def build(**d) -> APIRouter:
         blocked = next((p["blocked"] for p in pending if p.get("blocked")), None)
         return {"pending": pending,
                 "cursor": _stream_tail_id(redis_url, units.output_topic(unit_id)) or "",
+                **({"taken": turns_taken_after(redis_url, unit_id, after)} if after else {}),
                 **({"fault": blocked} if blocked else {})}
 
     def _chat(body: ChatBody, request: Request, *, stream: bool):
@@ -421,6 +440,16 @@ def build(**d) -> APIRouter:
                                  names=body.room_participant_names,
                                  speakers=body.room_speakers,
                                  read_max=body.room_read_max)
+        # A MEETING'S NOTES ARE WRITTEN ONLY FOR A MEETING THE CALLER CAN READ (the one meeting view,
+        # 2026-10-11). Update notes / Create notes on the meeting view is the Extend act naming a
+        # MEETING (`extend-meeting`): it reads that meeting's transcript and rewrites its notes. The
+        # meeting id rides the body, so it is checked here — the same access decision the transcript
+        # stream and `/api/meeting/note` make — before any preset is read or any turn is queued. A
+        # refusal costs a 403, never a partly-run turn; another person's meeting gets the same answer
+        # as one that does not exist.
+        _intent_meeting = chat_intents.page_meeting(body.intent)
+        if _intent_meeting and _meeting_access(subject, _intent_meeting) is None:
+            raise HTTPException(status_code=403, detail="not authorized for this meeting")
         # THE SCAFFOLD (PRD 5.5). When the turn names one and it is THIS subject's, the record
         # — not the client — decides two things: which workspaces this chat mounts, and what
         # the opening ask is. Both used to be composed client-side, and that is precisely why
@@ -555,8 +584,15 @@ def build(**d) -> APIRouter:
         # would strand its own reconnect on a unit nobody spawned, so a reconnect (`Last-Event-ID`)
         # reads the generation as it stands and re-attaches to the unit it was watching; only a
         # fresh turn lowers the stale-mounts flag and steps the generation.
+        #
+        # …AND A SUBMISSION READS TOO. It is sent while a turn is running (that is the only time the
+        # terminal submits instead of streaming), so stepping the generation here would put it on a
+        # unit nobody spawned — a second worker, a second output Stream, and an answer written where
+        # the view the person is watching never looks. A model change or a new workspace made
+        # mid-turn therefore applies from the next turn the person starts on an idle chat; the
+        # submission queues behind the running turn on the unit that is running it.
         try:
-            _gen = (sess.mount_gen(subject, session) if resume
+            _gen = (sess.mount_gen(subject, session) if (resume or not stream)
                     else sess.take_mount_generation(subject, session))
         except Exception:  # noqa: BLE001
             logger.warning("mount generation unreadable for subject=%s session=%s — this turn keeps "
@@ -573,6 +609,16 @@ def build(**d) -> APIRouter:
             logger.warning("target workspace unreadable for subject=%s session=%s — this turn "
                            "writes where it always did", subject, session)
             _target = ""
+        # THE CHAT'S MODEL — its own pick from the operator's catalog, "" for the person's
+        # default. Read once, fail-soft like the target: an index that cannot answer costs the
+        # turn its pick, and the dispatch runs it on the person's default.
+        try:
+            _model = sess.model(subject, session)
+            _effort = sess.effort(subject, session)
+        except Exception:  # noqa: BLE001
+            logger.warning("chat model unreadable for subject=%s session=%s — this turn runs on "
+                           "the person's default", subject, session)
+            _model, _effort = "", ""
         # THE TARGET WORKSPACE, IN FRONT OF THE ASK (Vexa-ai/vexa#1611). Every turn, including the
         # ones nobody typed — a flow's kick and a routine's wake write somewhere too, and the
         # founder's failure was a turn that did not know where. It goes in FRONT of the grounding
@@ -629,7 +675,10 @@ def build(**d) -> APIRouter:
                 # Refuse HERE with an actionable frame instead: no worker spawn, no ghost session
                 # entry. A FAILED config lookup (None) fails OPEN — a down identity service must
                 # never block a turn; the worker-side auth taxonomy still catches it cleanly.
-                if capability_state("model_inference") == NOT_CONFIGURED:
+                # A MODEL CATALOG CARRIES ITS OWN CREDENTIALS: every provider's secret_ref was
+                # resolved at boot, so the deployment-credential question is not this turn's.
+                if (capability_state("model_inference") == NOT_CONFIGURED
+                        and dispatcher.catalog.empty):
                     cfg = dispatcher.resolve_model_config(subject)
                     if cfg is not None and not _has_custom_model_endpoint(cfg):
                         if not stream:
@@ -719,6 +768,12 @@ def build(**d) -> APIRouter:
                         # envelope, and never anything a request body asserted. It decides the
                         # turn's cwd and rides the delegation token as the tools' default `slug`.
                         target=_target,
+                        # WHICH MODEL — the chat's pick, a catalog id or "" — resolved through the
+                        # provider port inside the dispatch, the one place a route is decided.
+                        model=_model,
+                        # …AT WHICH EFFORT — the chat's pick, checked again against the model
+                        # in the dispatch (a catalog may have changed since it was stored).
+                        effort=_effort,
                         # WHAT A QUEUED ROW SHOWS (Vexa-ai/vexa#1610), stamped on the inbox entry
                         # itself so the record a person reads and the record the worker takes are
                         # the same object. Written for every turn, not only a submission: a chat
@@ -727,6 +782,14 @@ def build(**d) -> APIRouter:
                         inbox={"id": body.turn_id or "", "display": _submitted,
                                "kind": _intent_kind, "target": _intent_target,
                                "at": round(time.time(), 3)})
+                except model_providers.ModelChoiceFault as fault:
+                    # THE CHAT'S MODEL CANNOT RUN (P18): gone from the catalog, admins-only, an own
+                    # endpoint not set or not allowed, a provider secret missing. Refused before
+                    # anything was spawned or delivered, as a typed fault naming the model and the
+                    # provider — never a turn run on a model the person did not pick.
+                    return JSONResponse(status_code=fault.http_status,
+                                        content={"detail": fault.sentence(),
+                                                 "fault": fault.as_dict()})
                 except dispatch_mod.WarmDeliveryFailed as exc:
                     # THE TURN IS REFUSED, NOT DROPPED. For a warm unit the pre-delivery is the only
                     # delivery, so a failure here means the person's words reached nobody. Answering
@@ -818,9 +881,18 @@ def build(**d) -> APIRouter:
             # and entity routes already run, asked here for the same reason a target is checked
             # at all: the field exists so the agent may trust it, and a chat pointed at a
             # workspace its person cannot write is a promise the first write breaks.
-            if not global_layer.is_admin(settings, str(subject)):
+            # Since 2026-10-11 that test is the ADMIN ACCOUNT (global_layer.is_admin_account): the
+            # deployment's dedicated account, never a person's everyday one — the instance admin's
+            # included. An everyday chat can never be aimed at Company.
+            if not global_layer.is_admin_account(settings, str(subject)):
                 raise HTTPException(status_code=403,
-                                    detail="only an org admin may write into _global")
+                                    detail="only the admin account may write into _global — sign in "
+                                           "as the admin account to work on Company")
+        elif global_layer.is_admin_account(settings, str(subject)):
+            # …AND THE ADMIN ACCOUNT TARGETS NOTHING ELSE: `_global`, or "" (which its dispatch reads
+            # as `_global` too — `dispatch.build_unit_env`). It has no desk and no workspaces.
+            if wid:
+                raise HTTPException(status_code=403, detail=admin_account_scope.REFUSAL)
         elif wid:
             # WRITABLE, ASKED OF THE THING THAT KNOWS. `write=True` is the point: a target is where
             # writes go, so a workspace this subject may only READ is not one — the same seam, and
@@ -834,6 +906,37 @@ def build(**d) -> APIRouter:
                 raise HTTPException(status_code=403, detail="not a workspace you can write")
         changed = sess.set_target(subject, session, wid)
         return {"ok": True, "session": session, "target": wid or None, "changed": changed}
+    @router.post("/api/chat/model")
+    def chat_model(body: ChatModelBody, request: Request):
+        """Pick which of the deployment's models this chat runs on — the model picker.
+
+        `model` is an id from `GET /api/models/catalog`; `""` puts the chat back on your default.
+        A model the catalog does not have is refused (422), and so is one you may not use (403):
+        the pick is stored only once it is one the next turn can run, because a stored pick is what
+        that turn runs on. The change takes effect on the chat's next turn — a fresh worker, since
+        a running one keeps the model it started with."""
+        _refuse_delegated(request)
+        subject = subject_of(request)
+        session = str(body.session or "").strip() or units.DEFAULT_CHAT_SESSION
+        mid = str(body.model or "").strip()
+        effort = str(body.effort or "").strip()
+        catalog = dispatcher.catalog
+        if mid or effort:
+            if catalog.empty:
+                raise HTTPException(status_code=409, detail="this deployment offers no model "
+                                                            "catalog; its model is set by the operator")
+            ctx = dispatch_mod.route_context(dispatcher.resolve_model_config(subject) or {})
+            try:
+                # The effort is checked against the model it will run on — the pick, else the
+                # person's default — so a stored effort is always one the next turn can send.
+                catalog.choose_with_effort(mid, effort, ctx,
+                                           admin=lambda: dispatcher.is_admin(subject))
+            except model_providers.ModelChoiceFault as fault:
+                return JSONResponse(status_code=fault.http_status,
+                                    content={"detail": fault.sentence(), "fault": fault.as_dict()})
+        changed = sess.set_model(subject, session, mid, effort)
+        return {"ok": True, "session": session, "model": mid or None, "effort": effort or None,
+                "changed": changed}
     @router.post("/api/chat/reset")
     def chat_reset(body: ResetBody, request: Request):
         """Drop a conversation thread: remove it from the index AND delete its continuity file so a
@@ -848,7 +951,7 @@ def build(**d) -> APIRouter:
         return {"ok": True}
     def _name(request: Request, session: str, title: str, *, human: bool) -> dict:
         subject = subject_of(request)
-        title = ' '.join(title.split())
+        title = chat_label_mod.strip_markers(title)
         if not title or len(title) > 100:
             raise HTTPException(422, 'Use a title between 1 and 100 characters')
         if not any(r['session'] == session for r in sess.list(subject)):
@@ -880,6 +983,48 @@ def build(**d) -> APIRouter:
             raise HTTPException(422, 'Invalid chat order')
         return {'order': sess.rail_order(subject_of(request), body.order)}
 
+    def _row_visible(subject: str, row: str, request: Request) -> bool:
+        """May this person mark this row? Only a row their own rail can show (P20, default-deny).
+
+        A chat is theirs when the session is in their own index, or when it is a meeting's own
+        chat (`meet-<id>`) on a meeting they can read — that chat exists in the browser before its
+        first turn reaches the index. A meeting is theirs when THE ONE meeting access decision
+        (owner, share recipient, member of its workspace) returns the row. Any failure denies."""
+        kind, _, ref = row.partition(':')
+        try:
+            if kind == 'c':
+                if any(r['session'] == ref for r in sess.list(subject)):
+                    return True
+                ref = ref[len(_MEET_SESSION_PREFIX):] if ref.startswith(_MEET_SESSION_PREFIX) else ''
+            if not ref.isdigit():
+                return False
+            return _meeting_access(subject, ref, within=lambda slug: reads_within(request, slug)) is not None
+        except Exception:  # noqa: BLE001 — a lookup that fails narrows to deny, never opens
+            logger.warning("rail mark visibility check failed subject=%s row=%s", subject, row)
+            return False
+
+    @router.get("/api/chat/marks")
+    def read_chat_marks(request: Request):
+        """The caller's pinned and hidden rail rows: `{pinned: [row], hidden: [row]}`."""
+        return sess.rail_marks(subject_of(request))
+
+    @router.post("/api/chat/marks")
+    def mark_chat_row(request: Request, body: ChatMarkBody):
+        """Pin, unpin, hide or unhide one row of the caller's own rail and return their marks.
+
+        Setting a mark needs a row the caller can see (`404` otherwise). Clearing one does not: it
+        only ever removes the caller's own mark, for a row that may have gone since."""
+        if body.pinned is None and body.hidden is None:
+            raise HTTPException(422, 'Name a mark to change: pinned or hidden')
+        subject = subject_of(request)
+        row = body.row if ':' in body.row else f'c:{body.row}'
+        if (body.pinned or body.hidden) and not _row_visible(subject, row, request):
+            raise HTTPException(404, 'Row not found')
+        try:
+            return sess.mark_row(subject, row, pinned=body.pinned, hidden=body.hidden)
+        except OverflowError:
+            raise HTTPException(422, 'Too many marked rows')
+
     @router.get("/api/sessions")
     def list_sessions(request: Request):
         """THE RAIL, FOR THIS PERSON, WHEREVER THEY SIGN IN (Vexa-ai/vexa#1591).
@@ -910,6 +1055,56 @@ def build(**d) -> APIRouter:
         outrank the reader's own rename in the merge."""
         subject = subject_of(request)
         return {"sessions": _labelled(subject, sess.list(subject))}
+    @router.delete("/api/sessions/{session}")
+    def delete_session(session: Annotated[str, Path(pattern=CHAT_SESSION_PATTERN)], request: Request):
+        """DELETE ONE OF YOUR CHATS, for good (`DELETE /api/sessions/{session_id}`, api.v1).
+
+        Removes the session from your index, its conversation (the harness transcript and its
+        continuity pointer) and your own marks and place in the rail order. Pages and files the chat
+        wrote into a workspace stay: they belong to the workspace. A meeting the chat was about is not
+        deleted — that is the meeting owner's act — but its row is hidden on YOUR rail so the meeting
+        does not come straight back in the chat's place; unhide it from the Hidden view.
+
+        `404` for a session that is not in your index; `409` while something you submitted to it is
+        still queued, because the queued turn would bring the chat back; `403` for an agent acting
+        for the person — deleting a conversation is the person's own act."""
+        refuse_delegated(request, reason="delegated_delete",
+                         instruction="Deleting a chat is the person's own act. Tell them which chat and stop.")
+        subject = subject_of(request)
+        row = next((r for r in sess.list(subject) if r['session'] == session), None)
+        if row is None:
+            raise HTTPException(404, 'Chat not found')
+        try:
+            gen = sess.mount_gen(subject, session)
+        except Exception:  # noqa: BLE001
+            gen = 0
+        unit_id = units.chat_unit_id(subject, session, gen)
+        if inbox_pending(redis_url, unit_id, _unit_key(unit_id)):
+            raise HTTPException(409, 'This chat still has queued messages. Wait for them to run, then delete it.')
+        extra: list = []
+        try:
+            ms = active_workspaces(wsr.root, subject) + shared_active_mounts(wsr.root, subject, mindex.list(subject))
+            extra = [m.path for m in ms]
+        except Exception:  # noqa: BLE001 — narrows the sweep to the anchored roots, never widens it
+            logger.warning("mount resolution for delete failed subject=%s", subject)
+        try:
+            files = wsr.drop_history(subject, session, extra_roots=extra)
+        except Exception:  # noqa: BLE001
+            logger.exception("deleting chat history failed subject=%s session=%s", subject, session)
+            raise HTTPException(500, 'Could not delete the conversation. Nothing was removed from your list.')
+        sess.drop(subject, session)
+        sess.mark_row(subject, f'c:{session}', pinned=False, hidden=False)
+        order = sess.rail_order(subject)
+        if f'c:{session}' in order or session in order:
+            sess.rail_order(subject, [k for k in order if k not in (f'c:{session}', session)])
+        meeting = (session[len(_MEET_SESSION_PREFIX):] if session.startswith(_MEET_SESSION_PREFIX)
+                   else str(row.get('meeting') or ''))
+        hidden_meeting = None
+        if meeting.isdigit():
+            hidden_meeting = f'm:{meeting}'
+            sess.mark_row(subject, hidden_meeting, hidden=True)
+        return {'ok': True, 'session': session, 'files_removed': files, 'hidden_meeting': hidden_meeting}
+
     @router.get("/api/sessions/{session}/history")
     def session_history(session: Annotated[str, Path(pattern=CHAT_SESSION_PATTERN)],
                         request: Request):

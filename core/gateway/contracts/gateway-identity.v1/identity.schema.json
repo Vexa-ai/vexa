@@ -15,6 +15,7 @@
         "scopes": { "type": "array", "items": { "type": "string" }, "description": "the credential's scopes; becomes x-user-scopes (comma-joined)" },
         "limits": { "type": "integer", "minimum": 0, "description": "max concurrent bots; becomes x-user-limits" },
         "workspaces": { "type": "array", "items": { "type": "string" }, "description": "shared-workspace memberships; becomes x-user-workspaces (comma-joined)" },
+        "writable_workspaces": { "type": "array", "items": { "type": "string" }, "description": "the memberships that may write (contributor or owner), a subset of workspaces; becomes x-user-writable-workspaces (comma-joined). Absent means the caller may write into no shared workspace." },
         "webhook_url": { "type": "string", "description": "the user's webhook; becomes x-user-webhook-url" },
         "webhook_secret": { "type": "string", "description": "its signing secret; becomes x-user-webhook-secret" },
         "webhook_events": { "description": "its event filter; becomes x-user-webhook-events (JSON)" },
@@ -39,7 +40,7 @@
     },
     "Headers": {
       "type": "object",
-      "description": "A claims-to-headers vector: the x-user-* headers a service rebuilds from the claims in `claims_golden` (a claims-*.json beside it). Lower-cased names; scopes and workspaces comma-joined; webhook_events as JSON; limits as decimal; an absent, empty or null claim gives no header; delegation becomes x-user-regime, x-user-delegation-workspaces (\"*\" or comma-joined) and x-user-delegation-target.",
+      "description": "A claims-to-headers vector: the x-user-* headers a service rebuilds from the claims in `claims_golden` (a claims-*.json beside it). Lower-cased names; scopes, workspaces and writable_workspaces comma-joined; webhook_events as JSON; limits as decimal; an absent, empty or null claim gives no header; delegation becomes x-user-regime, x-user-delegation-workspaces (\"*\" or comma-joined) and x-user-delegation-target.",
       "required": ["claims_golden", "headers"],
       "additionalProperties": false,
       "properties": {

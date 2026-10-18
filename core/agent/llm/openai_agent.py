@@ -122,10 +122,11 @@ from llm import faults as provider_faults
 # The panel/chip/transcript vocabularies are shared (`llm.tool_events`), imported rather than copied:
 # the terminal must render an openai-agent turn identically, and two copies of a closed vocabulary drift.
 from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artifact,
-                             _open_event, _published_terms, _short, _workspace_focus,
+                             _open_event, _published_terms, _short, _workspace_focus, _FETCH_TOOLS, _fetched_source,
                              _written_artifact)
 from llm.ports import harness_subprocess_env, max_output_tokens
 from llm import jobs, web_tools
+from llm.refusal_guard import RefusalGuard
 from llm import workspace_paths as wpaths
 
 
@@ -1259,6 +1260,10 @@ class OpenAIAgentHarness:
             # therefore never emitted a `tool-call` event to carry a name. Two fixes, and this is
             # the first: the loop remembers what it last actually ran.
             last_tool = ""
+            # THE SAME REFUSAL, TWICE, STOPS THE ASKING (`llm/refusal_guard.py`). A turn with nobody
+            # in the loop cannot change a `human_session_required` refusal by trying again; the
+            # second identical {tool, reason} gets a stop note, the third ends the turn here.
+            refusals = RefusalGuard()
 
             while True:
                 sent, trimmed = trim_messages(messages, ctx_budget)
@@ -1358,12 +1363,29 @@ class OpenAIAgentHarness:
                            "callId": call["id"]}
                     ok, out = self._exec_tool(call, mcp_index, sandbox, allow)
                     out = out[:_TOOL_RESULT_MAX_CHARS]
+                    out, refusal_action = refusals.observe(call["name"], ok, out)
                     yield {"type": "tool-result", "callId": call["id"], "ok": ok,
                            "summary": _short(out)}
                     for extra in _panel_events(call, ok, out):
                         yield extra
                     store.record_tool_result(call["id"], ok, out)
                     messages.append({"role": "tool", "tool_call_id": call["id"], "content": out})
+                    if refusal_action == "end":
+                        # Every call the model made is still answered (see the budget branch above:
+                        # an unanswered tool_call is a malformed next request).
+                        for skipped in calls[i + 1:]:
+                            note = "not run: the turn stopped on a repeated refusal"
+                            yield {"type": "tool-result", "callId": skipped["id"], "ok": False,
+                                   "tool": skipped["name"], "summary": note}
+                            store.record_tool_result(skipped["id"], False, note)
+                            messages.append({"role": "tool", "tool_call_id": skipped["id"],
+                                             "content": note})
+                        yield {"type": "refusal-repeated", **(refusals.ended or {})}
+                        break
+                if refusals.ended:
+                    reply = text.strip() or refusals.ended_reply()
+                    store.record_assistant(reply, [], {"role": "assistant", "content": reply})
+                    break
                 if over_budget:
                     # A JOB CHECKPOINTS AND CARRIES ON (Vexa-ai/vexa#1613). Its pages are already
                     # committed as they land, so there is nothing to save here — what a fresh
@@ -1401,6 +1423,12 @@ class OpenAIAgentHarness:
                 # harness is the only thing that knows the turn did not finish its own reasoning;
                 # the client's job is to render a control and post the instruction back.
                 done["act"] = {"label": _CONTINUE_LABEL, "instruction": _CONTINUE_INSTRUCTION}
+            elif refusals.ended:
+                # Not a budget stop, so no Continue act: continuing would be refused the same way.
+                r = refusals.ended
+                done["ok"] = False
+                done["reason"] = (f"stopped: `{r['tool']}` was refused {r['count']} times for the "
+                                  f"same reason ({r['reason']})")
             if trimmed_total:
                 # QUIETLY: a count the client shows as a muted note in the turn's activity line —
                 # never the reply text, never `reason` (which renders as the turn's stop line).
@@ -1690,6 +1718,10 @@ def _panel_events(call: dict, ok: bool, out: str) -> list[dict]:
                            "focus": True})
     elif name in _TERMS_TOOLS:
         ev = _published_terms(out)
+        if ev:
+            events.append(ev)
+    elif name in _FETCH_TOOLS:
+        ev = _fetched_source(call["args"], out)
         if ev:
             events.append(ev)
     elif name in _BOT_TOOLS:

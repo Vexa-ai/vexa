@@ -507,6 +507,18 @@
    ]
   },
   {
+   "unique-id": "models.v1",
+   "node-type": "contract",
+   "name": "models.v1",
+   "description": "models.v1 \u2014 sealed/published contract (agent): the operator's model catalog (VEXA_MODEL_CATALOG) and the per-person list agent-api serves the terminal and the MCP",
+   "metadata": [
+    {
+     "path": "core/agent/contracts/models.v1",
+     "domain": "agent"
+    }
+   ]
+  },
+  {
    "unique-id": "unit.v1",
    "node-type": "contract",
    "name": "unit.v1",
@@ -1415,7 +1427,7 @@
    "unique-id": "flows-rows",
    "node-type": "data-asset",
    "name": "flows-rows",
-   "description": "the reaction + effect_receipt tables (core/flows/schema.sql); a retry consults the receipt before touching the outside world again. TWO writers: flows-worker runs the steps and stamps the receipts, and flows-api admits facts (POST /events \u2192 admit() \u2192 INSERT INTO reaction) and registers flow versions (INSERT INTO flow_version) in its own process"
+   "description": "the reaction + effect_receipt tables (core/flows/schema.sql); a retry consults the receipt before touching the outside world again. TWO writers: flows-worker runs the steps and stamps the receipts, and flows-api admits facts (POST /events \u2192 admit() \u2192 INSERT INTO reaction) and registers flow versions (INSERT INTO flow_version) in its own process. The friction_occurrence table (the repeat counter behind POST /friction's dedup: one row per subject + tool + normalised reason + UTC hour) is written ONLY by flows-api's POST /friction (flows_integrations/friction_dedup.py) and read by flows-timeline's friction_for_subject"
   },
   {
    "unique-id": "flows.v1",
@@ -1589,6 +1601,29 @@
         "writers": [
          "agent-api"
         ]
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "rail-marks",
+   "node-type": "data-asset",
+   "name": "agent:rail-marks:{subject} (redis hash)",
+   "description": "a person's pins and hides on their own chat rail, one field per mark (p:<row>, h:<row>) (control_plane/api_shared.py rail_marks, mark_row); agent-api writes and reads it, in memory when there is no redis. A mark on a shared meeting is the viewer's own and never the owner's",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ],
+        "match": "_marks_key",
+        "op": "kv-write"
        }
       }
      ]
@@ -1888,6 +1923,70 @@
      "domain": "meetings"
     }
    ]
+  },
+  {
+   "unique-id": "meeting-bundle.v1",
+   "node-type": "contract",
+   "name": "meeting-bundle.v1",
+   "description": "meeting-bundle.v1 — sealed/published contract (deploy): one meeting as a portable zip that any separate Vexa deployment can import (manifest with a SHA-256 per file; meeting, transcript and annotations parts; optional media and workspace parts); nothing deployment-bound is carried; its goldens include malicious bundles the Python importer and the Node re-derivation must both refuse with the same code",
+   "metadata": [
+    {
+     "path": "deploy/contracts/meeting-bundle.v1",
+     "domain": "deploy"
+    }
+   ]
+  },
+  {
+   "unique-id": "meeting-bundle-file",
+   "node-type": "data-asset",
+   "name": "meeting bundle (portable file)",
+   "description": "a meeting exported as one meeting-bundle.v1 zip: written by meeting-api's export for the meeting's owner, read by meeting-api's import on this or another deployment as a new meeting the importer owns; the person carries the file between them",
+   "controls": {
+    "ownership": {
+     "description": "single writer: meeting-api's exporter",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "meeting-api"
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "metadata": [
+    {
+     "contract": "meeting-bundle.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "meeting-bundle-parts",
+   "node-type": "data-asset",
+   "name": "meeting bundle parts (workspace tree + notes page)",
+   "description": "the agent domain's half of a meeting-bundle.v1 export: the bound workspace's tree and the meeting's page on the owner's desk, as one zip agent-api writes for the owner's client, which hands it to meeting-api's POST /meetings/{meeting_id}/export to place in the bundle",
+   "controls": {
+    "ownership": {
+     "description": "single writer: agent-api",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "metadata": [
+    {
+     "contract": "meeting-bundle.v1"
+    }
+   ]
   }
  ],
  "relationships": [
@@ -1904,6 +2003,7 @@
       "routine.v1",
       "task.v1",
       "tool.v1",
+      "models.v1",
       "unit.v1",
       "credential-broker.v1",
       "credentials-broker",
@@ -1915,6 +2015,7 @@
       "imports-status",
       "onboarding-research-state",
       "rail-order",
+      "rail-marks",
       "redis-acl-users",
       "acl-units-index",
       "routine-state",
@@ -2010,7 +2111,9 @@
       "zoom-sdk-capture",
       "sdk-capture.v1",
       "acl-bots-index",
-      "mcp.tools.v1"
+      "mcp.tools.v1",
+      "meeting-bundle-file",
+      "meeting-bundle-parts"
      ]
     }
    }
@@ -2595,6 +2698,38 @@
    "protocol": "HTTPS"
   },
   {
+   "unique-id": "ma-admin-reader-email",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "admin-api",
+      "interface": "admin-api-rest"
+     }
+    }
+   },
+   "description": "GET /internal/users/{id}/email (X-Internal-Secret) answers {id, email} for a reader of a shared meeting, asked only on the OWNER's access view (GET /meetings/{id}/access) for readers who redeemed before meeting-api kept a roster; meeting-api writes the address into that meeting's own data.share_viewers (one writer) and a failed lookup leaves the reader listed by id (collector/reader_directory.py)",
+   "protocol": "HTTPS"
+  },
+  {
+   "unique-id": "ma-admin-writable",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "admin-api",
+      "interface": "admin-api-rest"
+     }
+    }
+   },
+   "description": "GET /internal/users/{id}/memberships (X-Internal-Secret), read once per calendar sync run: a new occurrence of a calendar series inherits the series' workspace only while its owner still holds contributor or owner there (R1801-3); an unanswered lookup is 'may write nowhere' and the occurrence is created private (calendar_sync/runner.py, collector/reader_directory.py)",
+   "protocol": "HTTPS"
+  },
+  {
    "unique-id": "ma-service-authority",
    "relationship-type": {
     "connects": {
@@ -3041,7 +3176,8 @@
      "nodes": [
       "execution-targets.v1",
       "config.v1",
-      "outbound-url.v1"
+      "outbound-url.v1",
+      "meeting-bundle.v1"
      ]
     }
    }
@@ -3519,6 +3655,25 @@
    ]
   },
   {
+   "unique-id": "aa-rail-marks",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "rail-marks"
+     }
+    }
+   },
+   "description": "HSET/HDEL/HGETALL a person's rail pins and hides",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
    "unique-id": "admin-signin-link-record",
    "relationship-type": {
     "connects": {
@@ -3962,6 +4117,106 @@
     {
      "access": "req",
      "contract": "mcp.tools.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "ma-writes-bundle",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "meeting-bundle-file"
+     }
+    }
+   },
+   "description": "GET /meetings/{meeting_id}/export — the owner's whole meeting as a meeting-bundle.v1 zip",
+   "metadata": [
+    {
+     "access": "write",
+     "contract": "meeting-bundle.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "ma-reads-bundle",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "meeting-bundle-file"
+     }
+    }
+   },
+   "description": "POST /meetings/import — validate a meeting-bundle.v1 zip (manifest, every hash, paths, sizes) and land it as a new meeting the importer owns",
+   "metadata": [
+    {
+     "access": "read",
+     "contract": "meeting-bundle.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "agent-writes-bundle-parts",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "meeting-bundle-parts"
+     }
+    }
+   },
+   "description": "GET /api/meeting/bundle-parts — the owner's bound workspace tree (never its roster or policy) and the meeting's page",
+   "metadata": [
+    {
+     "access": "write",
+     "contract": "meeting-bundle.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "ma-reads-bundle-parts",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "meeting-bundle-parts"
+     }
+    }
+   },
+   "description": "POST /meetings/{meeting_id}/export — the parts placed into the bundle",
+   "metadata": [
+    {
+     "access": "read",
+     "contract": "meeting-bundle.v1"
+    }
+   ]
+  },
+  {
+   "unique-id": "agent-reads-bundle",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "meeting-bundle-file"
+     }
+    }
+   },
+   "description": "POST /api/meeting/bundle-restore — the bundle's workspace part as a new private workspace of the importer and its notes page on their desk, re-bound to the imported meeting",
+   "metadata": [
+    {
+     "access": "read",
+     "contract": "meeting-bundle.v1"
     }
    ]
   }

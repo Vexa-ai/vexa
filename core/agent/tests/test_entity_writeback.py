@@ -209,3 +209,14 @@ def test_the_preamble_ships_on_the_turn_prompt(tmp_path, monkeypatch):
 
     list(engine.run_turn_over_workspace(tmp_path, "hello", harness=H(), commit=False))
     assert "A name without a page gets one NOW" in seen["prompt"]
+
+
+def test_a_name_heard_once_in_a_transcript_goes_to_open_questions_not_a_page():
+    """2026-10-11, app.dev: "So Vexam, which is the Finos project" — one transcript line — became a
+    project page. Both places the rule is stated carry the exception, and the general rule stays."""
+    from pathlib import Path
+    assert "heard ONCE in a meeting transcript" in engine.WRITEBACK_PROMPT
+    assert "`open_questions`" in engine.WRITEBACK_PROMPT
+    md = (Path(__file__).resolve().parents[3] / "behavior" / "workspaces" / "default" / "CLAUDE.md").read_text()
+    assert "A name without a page gets one NOW" in md
+    assert "a name heard once in a meeting transcript, with no other source" in md

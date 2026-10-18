@@ -452,8 +452,14 @@ def _fixed_reply(db, msg, ext_id: str, now: float, reply) -> bool:
     return True
 
 
+def _company_rules() -> dict:
+    """The company's answers, read hot per message; never raises (`policies.read` is fail-soft)."""
+    from flows_steps import policies
+    return policies.read_company()
+
+
 def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
-           provision, reply=None) -> tuple[str, int] | None:
+           provision, reply=None, rules: dict | None = None) -> tuple[str, int] | None:
     """One inbound message → at most one admission. Source-blind and service-blind: every reach
     outside is injected, so the whole intake is drivable offline.
 
@@ -462,13 +468,32 @@ def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
     quarantined WITH ITS MEETING FACTS, and a mail that would exceed a rate limit is quarantined
     with the count that stopped it. `provision` — the call that mints a platform account — is
     reached only on the `new_sender_mail` branch, which now requires the allow-list.
+
+    THE COMPANY'S ANSWERS (`rules`, `_global/POLICIES.md`, the admin account's to write) decide two
+    things here: who is inside (`mail_domains`, before the operator's env value) and whether an
+    invitation is acted on at all (`bot_joins_on_invite`). Injectable so the storm needs no agent
+    domain; absent, they are read once per message and an unreadable `_global` is the defaults.
     """
-    decision = route(db, self_addr, msg.frm, msg.headers, msg.ics, known_uid, is_scaffolded)
+    if rules is None:
+        rules = _company_rules()
+    allowed = mail_policy.allow_domains(self_addr, rules)
+    decision = route(db, self_addr, msg.frm, msg.headers, msg.ics, known_uid, is_scaffolded,
+                     allowed=allowed)
     if decision is None:
         return None
     kind, payload = decision
     ext = str(msg.message_id or msg.ext_id)
     now = clock.now()
+    if kind == "invite" and rules.get("bot_joins_on_invite", True) is False:
+        # THE COMPANY SAID NO TO INVITATIONS. Recorded with the meeting's facts, exactly like an
+        # invite from an organiser we cannot place: no account, no RSVP, no prep, no bot. A meeting
+        # is still attended when a person asks for it in the product.
+        mail_policy.quarantine(
+            db, ext_id=ext, frm=msg.frm, kind=mail_policy.INVITE_POLICY_OFF,
+            reason=("bot_joins_on_invite is off in _global/POLICIES.md — meeting facts recorded, "
+                    "nothing created, accepted or joined"),
+            facts=payload, at=now)
+        return ("invite_policy_off", 0)
     if kind == "invite":
         n = admit(db, reg, clock, source_event_id=invite_source_id(payload),
                   event_type="invite.received", subject_refs=payload)

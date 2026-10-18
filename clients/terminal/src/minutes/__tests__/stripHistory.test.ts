@@ -134,7 +134,7 @@ describe("forgetHistory — × drops a tab, except the home", () => {
 
 describe("homeEntry / withHome — the chat's home follows its mounts", () => {
   it("no group → the reader's own desk README", () => {
-    expect(homeEntry(["_global", "personal"])).toEqual({ path: "README.md", label: "Desk", desk: true });
+    expect(homeEntry(["_global", "personal"])).toEqual({ path: "README.md", label: "Personal", desk: true });
     // `u_*` is the SERVER's name for a person's desk — not a group, or every scaffolded chat
     // would be "at home" in the reader's own desk under its server name.
     expect(homeEntry(["_global", "u_priya"]).slug).toBeUndefined();

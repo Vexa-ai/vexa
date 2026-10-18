@@ -74,10 +74,12 @@ from shared import unit_input
 # THE JOB RUNNER (Vexa-ai/vexa#1584) — a long act that does not hold the chat. It sits above the
 # harness on purpose, so `serve` gets background work for every runner rather than one adapter's.
 from worker import jobs as worker_jobs
+from worker import meeting_link
 from worker import tool_access
 from worker.friction import (disbelieved_capability, fallback_session, friction_preamble,
                              mcp_unreachable,
-                             report as report_friction, scan_turn, spawn_gap, use_token_source)
+                             report as report_friction, scan_turn, spawn_gap, turn_refusal,
+                             use_token_source)
 
 log = logging.getLogger("agent_api.worker")
 
@@ -127,14 +129,15 @@ def _tier_label(m: dict) -> str:
     (AMENDMENT 4 three-tier stack). Derived from role/primary/write, not from the slug."""
     role = m.get("role", "private")
     if role == "global":
-        # The org tier is ro for everyone EXCEPT the platform-elevated admin subjects
-        # (VEXA_GLOBAL_ADMIN_SUBJECTS): their setup conversation is its one sanctioned writer.
-        # Declare what the mount ACTUALLY is — a rw bind described as ro reads as an injection
-        # attempt and a well-behaved model rightly refuses it.
+        # The org tier is ro for everyone EXCEPT the deployment's ADMIN ACCOUNT (identity's answer,
+        # control_plane.global_layer.is_admin_account): its conversations are the one sanctioned
+        # writer, and they have nothing else. Declare what the mount ACTUALLY is — a rw bind
+        # described as ro reads as an injection attempt and a well-behaved model rightly refuses it.
         if m.get("write"):
-            return ("GLOBAL SYSTEM tier — READ-WRITE for THIS session only: the platform's admin "
-                    "allowlist elevated you as the org tier's one sanctioned writer (the admin "
-                    "setup conversation). Commit each change; everyone else mounts this ro.")
+            return ("GLOBAL SYSTEM tier — READ-WRITE: you are working for the deployment's admin "
+                    "account, the company layer's one sanctioned writer. It has no desk, no other "
+                    "workspace and no meetings — this tier is where its work goes. Commit each "
+                    "change; everyone else mounts this ro.")
         return "GLOBAL SYSTEM tier — READ-ONLY (platform behaviour/skills/tools; never write here)"
     if role == "system":
         return ("PRIVATE SYSTEM tier — read-write (who you're helping via `identity.md`, your"
@@ -158,7 +161,7 @@ def _tier_label(m: dict) -> str:
         # the slug, the path and every code identifier keep saying what they say, because renaming
         # those would move data. Same word as `control_plane.scaffolds.WORKSPACE_WORD` and the
         # terminal's `minutes/vocabulary.ts`; four spellings of one noun, each naming the others.
-        return "your DESK — your private baseline, durable personal memory — read-write"
+        return "your PERSONAL workspace — your private baseline, durable personal memory — read-write"
     writable = "read-write" if m.get("write", True) else "READ-ONLY (do not write here)"
     return f"{role} workspace — {writable}"
 
@@ -388,9 +391,16 @@ def kg_links_preamble(mounts: "list[dict] | None" = None) -> str:
     return (
         "## Referencing knowledge (always)\n\n"
         "Your replies render in a client that turns entity references into clickable chips:\n"
-        "- Whenever you mention a person, company, organization, project, meeting, or task that has"
+        "- Whenever you mention a person, company, organization, project, or task that has"
         " (or that you are creating) an entity doc under `kg/entities/`, write it as `[[Title]]` —"
         " in chat replies AND in workspace docs alike. Never mention a known entity as plain text.\n"
+        # Founder, 2026-10-11: the people in a reply were chips and the meeting was a filename —
+        # "we need a special label for a meeting alongside people companies etc".
+        "- Mention a MEETING by its link, `[<title>](/?meeting=<meeting id>)` — the id is the"
+        " `meeting:` field of its notes page's frontmatter (or the id a meeting tool returned). The"
+        " client renders it as a meeting chip with the meeting's current title and date, and a click"
+        " opens the meeting. Never name a meeting by its notes filename"
+        " (`kg/entities/meeting/<date>-<slug>.md`): that is a file, not the meeting.\n"
         "- Reference other workspace files by their path in backticks (e.g. `kg/dashboards/plan.md`)"
         " or a markdown link — both are clickable.\n"
         "- Name a WORKSPACE by its slug (e.g. `vexa-team-3183d1`) or link its README"
@@ -412,10 +422,18 @@ def kg_links_preamble(mounts: "list[dict] | None" = None) -> str:
         " with no entity id, `[[ws:<workspace-id>/<path>]]`.\n"
         "- Don't write `[[wikilinks]]` for things that have no entity doc (they render as inert"
         " 'not found' chips) — create the entity first, or use plain text.\n"
+        "- Link to an email, thread or calendar event only with the `web_url` its account tool"
+        " returned; never construct a provider URL. No `web_url`, no link.\n"
         "- `kg/templates/` and any doc whose frontmatter carries `template: true` are SHAPES, not"
         " records: never list them as entities or meetings, never `[[wikilink]]` them, never cite"
         " them in a brief and never count them as prior context. If you hold nothing on a subject,"
-        " say so — a shape is not a substitute for knowledge you do not have.\n\n"
+        " say so — a shape is not a substitute for knowledge you do not have.\n"
+        # The company's shapes (founder ruling 2026-10-11): the admin account edits them in
+        # `_global/kg/templates/`, and `entity_upsert` already creates a new card from them.
+        "- The company's templates are `_global/kg/templates/<kind>.md`. When the company has one"
+        " for a kind, it is the shape of a new page of that kind — it wins over this workspace's own"
+        " `kg/templates/` copy; `entity_upsert` creates new cards from it, and `section=` may name"
+        " any section it adds.\n\n"
     )
 
 
@@ -455,6 +473,38 @@ def page_verbs_preamble() -> str:
         "org admin, a shared workspace you only read. A refusal is the answer — say it, do not "
         "route around it.\n\n"
         + member_verbs_preamble()
+    )
+
+
+def connections_preamble() -> str:
+    """WHEN THE PERSON ASKS TO CONNECT AN ACCOUNT, AND WHAT A CONNECTION FAILURE MEANS.
+
+    The Connections panel opens only through `connection_request`. A turn that held only the
+    failing account tool answered *"let's connect gmail"* by retrying that tool: nothing told it the
+    request was a verb of its own, and the failure (an outage of the deployment's credential store)
+    looked the same as an authorization the person could renew. The account tools now answer a
+    typed ``reason`` (`control_plane/routers/connections.py` ``INSTRUCTIONS``), and this names the
+    two rules beside each other on every dispatch, since the tools arrive deferred and a verb the
+    prompt does not mention is one the model improvises around.
+
+    `tests/test_connections_preamble.py` holds the text to the reasons agent-api answers."""
+    return (
+        "## Connecting an account\n\n"
+        "When the person asks to connect or reconnect an account (\"connect gmail\", \"reconnect my "
+        "calendar\"), call `connection_request` for that provider: it opens the Connections panel, where "
+        "they sign in. Never answer that request by retrying the tool that failed, and never ask for a "
+        "password, token or code in chat.\n"
+        "Account tools that fail answer a `reason`:\n"
+        "- `reconnect_required` — the authorization is no longer accepted: call `connection_request`.\n"
+        "- `store_unavailable`, `broker_unreachable` — this deployment's connection service is down. "
+        "Do NOT call `connection_request`, even when they ask to connect: the account is already "
+        "connected, and a new sign-in would be stored in the same broken place. Say exactly that in "
+        "words: the account is connected, this is an outage, reconnecting will not fix it, try again "
+        "later.\n"
+        "- `provider_error` — the provider refused or is down: report its sentence and say that "
+        "reconnecting will not fix it.\n"
+        "Only if they ask again after that explanation, call `connection_request`, repeating that it "
+        "will not fix the failure.\n\n"
     )
 
 
@@ -833,14 +883,14 @@ def _writeback_workspace_note(mounts: "list[dict] | None" = None) -> str:
         return (
             f"\nTHIS TURN IS IN THE SHARED WORKSPACE `{slug}`" + (f" ({label})" if label != slug else "")
             + f" — pass `slug=\"{slug}\"` explicitly on every `entity_upsert` call below so each "
-            "page lands there, not on your personal desk (which is where a call with no `slug` "
+            "page lands there, not in your personal workspace (which is where a call with no `slug` "
             "goes). Only leave `slug` off for something that is genuinely personal and not part "
             "of this shared work.\n"
         )
     listed = ", ".join(f"`{g.get('slug') or g.get('id')}`" for g in groups)
     return (
         f"\nMORE THAN ONE SHARED WORKSPACE IS ACTIVE ({listed}). A call to `entity_upsert` with no "
-        "`slug` lands on your personal desk, never on one of these — pass `slug=\"<the one this "
+        "`slug` lands in your personal workspace, never in one of these — pass `slug=\"<the one this "
         "name belongs to>\"` explicitly for every name that is shared work, and leave it off only "
         "for something genuinely personal.\n"
     )
@@ -903,13 +953,20 @@ def writeback_prompt(candidates: list[str], mounts: "list[dict] | None" = None) 
         "For a MEETING, pass `dates` as well — `held_at` when you know it ran, "
         "`report_delivered_at` when you know its write-up reached them, `scheduled_at` when it is "
         "still ahead (ISO-8601 or epoch, any subset, only what this turn actually knows). Those "
-        "three fields are what the desk's `Now` section and `timeline` both read, so a meeting "
+        "three fields are what the personal workspace's `Now` section and `timeline` both read, so a meeting "
         "that ran with no write-up shows as an open commitment without anyone writing a sentence "
         "about it. A meeting page with no `dates` is a page nothing can order.\n\n"
         + _ENTITY_FILE_SHAPE +
         "A name you cannot say one sourced thing about does NOT get a page: append it to "
         "`kg/MISSING.md` as one line — the name and what you would need to know — in a single "
         "write at the end. Never invent a fact to fill a page.\n\n"
+        # 2026-10-11, app.dev: "So Vexam, which is the Finos project" — one line of a transcript —
+        # became a project page whose own body said it was not a distinct project. Speech
+        # recognition mishears names; one hearing is not evidence that a thing exists.
+        "A name heard ONCE in a meeting transcript, with no other source this turn, is not a page "
+        "yet — transcription mishears names. Add it to the meeting's `open_questions` as \"Who or "
+        "what is <name>?\" and move on. A name with a second source (the person's message, a "
+        "file, a mail, a tool result) gets its page as above.\n\n"
         + image_rule() + "\n\n"
         "Work only from this turn. You have a hard budget: no exploration, no reading files you "
         "have not already read.")
@@ -1069,6 +1126,16 @@ def removed_page_slugs(tool: str, args: object) -> set:
     return out
 
 
+# THE ASSISTANT IS NOT A SUBJECT OF THE PERSON'S GRAPH (friction report, dogfood 2026-10-10). Asked
+# "what model is running behind the hood here?", the turn answered with the model's name, and the
+# pre-pass asked the phase to write a page for it. The model's own family name is a property of
+# this deployment, not a person, company, meeting, project or decision the person deals with.
+# Narrow on purpose: only the vendor family followed by a tier word, so a page about the vendor or
+# a product named in a meeting is still a candidate. The Highlight extractor (`shared/terms.py`)
+# does not use this filter, because a room can legitimately discuss a model by name.
+_ASSISTANT_SELF = re.compile(r"^Claude(?:\s+(?:Sonnet|Opus|Haiku|Fable|Code|Instant))+(?:\s+[\d.]+)?$")
+
+
 def writeback_candidates(texts, mounts: list[dict] | None = None,
                          removed: "set | None" = None) -> list[str]:
     """THE PRE-PASS — the phase's cheap half, in code, before any model is asked anything.
@@ -1119,7 +1186,7 @@ def writeback_candidates(texts, mounts: list[dict] | None = None,
              and not (in_room and str(m.get("role") or "private") == "private")]
     if not roots:
         return []
-    names = missing_names(roots, [t for t in texts if t])
+    names = [n for n in missing_names(roots, [t for t in texts if t]) if not _ASSISTANT_SELF.match(n)]
     if not removed:
         return names
     from workspaces.shared.entities import slugify
@@ -1829,6 +1896,20 @@ def run_turn_over_workspace(
                 log.warning("friction: could not file the mcp-unreachable gap (%s)", e)
             yield {"type": "mcp-unavailable", "server": VEXA_MCP_SERVER, "detail": mcp_detail}
             mcp_config = None
+    # A MESSAGE THAT IS ONLY A MEETING LINK SENDS THE BOT (`worker/meeting_link.py`). Decided and
+    # done here, before the model is asked anything, on the same attachment and token the model's
+    # own `request_meeting_bot` would use; the turn then runs with the outcome at the top of its
+    # prompt so the answer — and the history — say what happened. Only a turn somebody typed in a
+    # chat qualifies: no job, no post-meeting room (its bot verbs are withheld), no mark.
+    link_note = ""
+    if mcp_config is not None and session and session_continuity and not llm_jobs.in_job() \
+            and not room_run():
+        link = meeting_link.candidate(prompt, human_half(prompt))
+        endpoint = _mcp_endpoint(mcp_config) if link else None
+        if link and endpoint is not None:
+            link_events, link_ev = meeting_link.send(link, endpoint)
+            yield from link_events
+            link_note = meeting_link.preamble(link_ev)
     # Declare the mount set to the model VERBATIM (WP-A1.1) + the write-routing policy (WP-A1.2), so the
     # agent never guesses where it may read/write. Single-mount turns get no mounts preamble; the
     # kg-links rule ([[wikilinks]] render as actionable entity chips) applies to EVERY turn.
@@ -1848,9 +1929,9 @@ def run_turn_over_workspace(
     # F162 — the imperative gate goes FIRST, ahead of even the MCP-status note: see its definition
     # for the ledger incident this closes (four unanswered "send bot"s, lost under six preambles'
     # worth of onboarding/propose framing).
-    turn_prompt = (imperative_preamble(prompt)
+    turn_prompt = (link_note + imperative_preamble(prompt)
                    + mcp_status_note + voice_preamble() + friction_preamble() + kg_links_preamble(mounts)
-                   + page_verbs_preamble()
+                   + page_verbs_preamble() + connections_preamble()
                    + mounts_preamble(mounts, active_target())
                    + entity_index_preamble(mounts) + timeline_preamble()
                    + global_context_preamble(mounts)
@@ -1916,8 +1997,16 @@ def run_turn_over_workspace(
     tool_events: list[dict] = []
     try:
         for ev in (gen if first is None else itertools.chain([first], gen)):
-            if ev.get("type") in ("tool-call", "tool-result", "turn-truncated"):
+            if ev.get("type") in ("tool-call", "tool-result", "turn-truncated", "refusal-repeated"):
                 tool_events.append(ev)
+            if ev.get("type") == "done":
+                # THE RUN'S REFUSAL, ON ITS OWN OUTCOME (`llm/refusal_guard.py`). Read off the
+                # turn's tool results, so it holds for every harness, the CLI ones included. agent-api
+                # reads it off a scheduled routine's `done` to pause a routine that is refused run
+                # after run (`control_plane/routine_refusals.py`).
+                refused = turn_refusal(tool_events)
+                if refused:
+                    ev.setdefault("refused", refused)
             if ev.get("type") == "done" and ev.get("sessionId"):
                 captured = ev["sessionId"]
             if ev.get("type") == "done" and ev.get("reason"):

@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from jsonschema.exceptions import ValidationError
 
 from control_plane import meeting_room
+from control_plane import model_providers
 from control_plane import meeting_steering
 from control_plane import schedule_digest as schedule_digest_mod
 from control_plane import unit_faults
@@ -232,6 +233,50 @@ def inbox_pending(redis_url: "str | None", unit_id: str, key: str) -> list[dict]
     return out
 
 
+#: How far past a client's cursor `turns_taken_after` looks. A chat writes a few hundred events per
+#: turn at most; a client that has been away for longer than this has nothing exact to resume anyway.
+TURNS_TAKEN_SCAN_MAX = 2000
+
+
+def turns_taken_after(redis_url: "str | None", unit_id: str, after: str) -> int:
+    """How many turns this chat's worker has TAKEN since ``after`` — a cursor on the unit's output
+    Stream that a client has read up to. Counted off the worker's own ``turn-accepted`` events.
+
+    WHY THE PENDING LIST IS NOT ENOUGH (the founder, 2026-10-10: *"sometimes chat does not answer if
+    asked while it's not yet answered"*). A message submitted while a turn runs leaves the inbox the
+    moment the worker takes it — and the worker takes it within milliseconds of the turn in front
+    finishing. A client whose view of that turn had just closed asked "is anything queued?", heard
+    "no", and watched nothing: the answer was written to a Stream nobody was reading. "Pending"
+    answers *what is waiting*; this answers *what started after the last thing I saw*, which is the
+    question a client that just went idle actually has.
+
+    Best-effort like the inbox reader: no redis, an unreadable one, or a malformed cursor count as
+    zero — a chat that cannot tell watches what it would have watched before this existed."""
+    if not redis_url or not after:
+        return 0
+    try:
+        import redis
+
+        r = redis.from_url(redis_url, decode_responses=True)
+        rows = r.xrange(units.output_topic(unit_id), min=after, max="+", count=TURNS_TAKEN_SCAN_MAX)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not read the output stream for unit=%s: %s", unit_id, exc)
+        return 0
+    taken = 0
+    for entry_id, fields in rows or []:
+        if entry_id == after:
+            continue                      # inclusive range (no Redis 6.2 dependency): drop the cursor
+        try:
+            ev = json.loads((fields or {}).get("event") or "{}")
+        except (TypeError, ValueError):
+            continue
+        # A turn the WORKER started carries its `turn_id`. The injected-steering ack carries only a
+        # nonce and starts nothing new, so it is not counted.
+        if isinstance(ev, dict) and ev.get("type") == "turn-accepted" and ev.get("turn_id"):
+            taken += 1
+    return taken
+
+
 def inbox_withdraw(redis_url: "str | None", unit_id: str, key: str, item_id: str) -> int:
     """Take back what is still QUEUED under the id its client gave it; the count withdrawn.
 
@@ -357,11 +402,16 @@ class _Sessions:
     read and even to write, if explicit ask and purpose)"*.
 
     NOT a latch, unlike ``meeting``: a target is a thing a person changes by clicking a chip, and
-    changing it is the whole feature. ``set_target`` is its ONE writer."""
+    changing it is the whole feature. ``set_target`` is its ONE writer.
+
+    ``model`` — a model-catalog id, or absent for the person's default — is which of the operator's
+    models this chat runs on. Not a latch either: picking another model is the feature.
+    ``set_model`` is its ONE writer."""
 
     def __init__(self, redis_client=None) -> None:
         self._redis = redis_client
         self._mem: dict[str, dict[str, dict]] = {}  # subject → {session → {created,last_active,title}}
+        self._marks: dict[str, dict[str, str]] = {}  # subject → {"p:<row>" | "h:<row>" → "1"}
 
     # ── redis key helpers ──
     @staticmethod
@@ -485,6 +535,64 @@ class _Sessions:
             self._orders[subject] = list(order)
         return list(self._orders.get(subject, []))
 
+    #: The most rows one person may mark. A mark is one hash field per flag, so this bounds the
+    #: carrier the way ``ChatOrderBody`` bounds the order.
+    RAIL_MARKS_CAP = 5000
+    #: The two marks a rail row can carry, by their field prefix in the hash.
+    _MARK_FLAGS = {"pinned": "p", "hidden": "h"}
+
+    @staticmethod
+    def _marks_key(subject: str) -> str:
+        return f"agent:rail-marks:{subject}"
+
+    def rail_marks(self, subject: str) -> dict:
+        """THIS PERSON'S PINS AND HIDES on their own rail: ``{pinned: [row], hidden: [row]}``.
+
+        A row is a rail key (``c:<chat session>`` or ``m:<meeting id>``). The marks are the
+        viewer's and nobody else's: a pin on a meeting shared with you lives under YOUR subject, so
+        the owner's rail never moves because you pinned or hid it."""
+        if self._redis is not None:
+            fields = self._redis.hgetall(self._marks_key(subject)) or {}
+        else:
+            fields = dict(self._marks.get(subject, {}))
+        out: dict[str, list[str]] = {name: [] for name in self._MARK_FLAGS}
+        for field in sorted(fields):
+            flag, _, row = str(field).partition(":")
+            for name, prefix in self._MARK_FLAGS.items():
+                if flag == prefix and row:
+                    out[name].append(row)
+        return out
+
+    def mark_row(self, subject: str, row: str, *, pinned: "bool | None" = None,
+                 hidden: "bool | None" = None) -> dict:
+        """Set or clear one row's marks and return the person's marks. ``None`` leaves a flag alone.
+
+        One hash field PER FLAG (``p:<row>``, ``h:<row>``), so a pin and a hide written at the same
+        moment from two windows cannot overwrite each other: neither write reads the other's field.
+        Raises ``OverflowError`` when a new mark would pass ``RAIL_MARKS_CAP``."""
+        wanted = {self._MARK_FLAGS[n]: v for n, v in (("pinned", pinned), ("hidden", hidden)) if v is not None}
+        if self._redis is not None:
+            key = self._marks_key(subject)
+            adds = [f"{p}:{row}" for p, on in wanted.items() if on and not self._redis.hexists(key, f"{p}:{row}")]
+            if adds and self._redis.hlen(key) + len(adds) > self.RAIL_MARKS_CAP:
+                raise OverflowError("too many marked rows")
+            for prefix, on in wanted.items():
+                if on:
+                    self._redis.hset(self._marks_key(subject), f"{prefix}:{row}", "1")
+                else:
+                    self._redis.hdel(self._marks_key(subject), f"{prefix}:{row}")
+            return self.rail_marks(subject)
+        mine = self._marks.setdefault(subject, {})
+        adds = [f"{p}:{row}" for p, on in wanted.items() if on and f"{p}:{row}" not in mine]
+        if adds and len(mine) + len(adds) > self.RAIL_MARKS_CAP:
+            raise OverflowError("too many marked rows")
+        for prefix, on in wanted.items():
+            if on:
+                mine[f"{prefix}:{row}"] = "1"
+            else:
+                mine.pop(f"{prefix}:{row}", None)
+        return self.rail_marks(subject)
+
     def add_workspace(self, subject: str, session: str, workspace: str) -> bool:
         """PUT a workspace into this chat's focus, and say whether that changed anything
         (Vexa-ai/vexa#1603). THE RAISER of the stale-mounts semaphore.
@@ -582,6 +690,64 @@ class _Sessions:
         rec["last_active"] = self._now()
         return True
 
+    def set_model(self, subject: str, session: str, model: str, effort: str = "") -> bool:
+        """PIN this chat to one model of the operator's catalog, at one effort level, and say
+        whether that changed anything. THE ONE WRITER of ``model`` and ``effort``.
+
+        ``model`` is a catalog id the caller has already checked against the catalog and the
+        person's access, or ``""`` — the person's default, which is what an unpicked chat runs on
+        rather than a second name for it. ``effort`` is a level the caller has checked against that
+        model, or ``""`` — the model's own default. They are written together because an effort
+        means something only for the model it was picked for. A value that is not even shaped like
+        an id or a level is REFUSED.
+
+        IT RAISES THE STALE-MOUNTS SEMAPHORE, for the reason ``set_target`` does. The route is baked
+        into the container at spawn — the worker reads its harness, endpoint, credential, model and
+        effort from its environment, once — so a warm worker would keep answering on the old model
+        for its whole window. A new unit id is the cure; ``take_mount_generation`` hands the next
+        fresh turn one. A REAL CHANGE ONLY: re-picking what is in force costs nobody a cold start."""
+        mid = str(model or "").strip()
+        eff = str(effort or "").strip()
+        if mid and not model_providers.is_model_id(mid):
+            return False
+        if eff and eff not in model_providers.EFFORTS:
+            return False
+        if self._redis is not None:
+            mkey = self._meta_key(subject, session)
+            meta = self._redis.hgetall(mkey) or {}
+            if (meta.get("model") or "").strip() == mid and (meta.get("effort") or "").strip() == eff:
+                return False
+            self._redis.hset(mkey, mapping={"model": mid, "effort": eff, "mounts_stale": "1",
+                                            "last_active": str(self._now())})
+            self._redis.sadd(self._ids_key(subject), session)
+            return True
+        rec = self._mem.setdefault(subject, {}).get(session)
+        if rec is None:
+            rec = {"created": self._now(), "last_active": self._now(), "title": session,
+                   "touched": False}
+            self._mem[subject][session] = rec
+        if str(rec.get("model") or "").strip() == mid and str(rec.get("effort") or "").strip() == eff:
+            return False
+        rec["model"] = mid
+        rec["effort"] = eff
+        rec["mounts_stale"] = True
+        rec["last_active"] = self._now()
+        return True
+
+    def model(self, subject: str, session: str) -> str:
+        """This chat's own model pick (a catalog id), or ``""`` for the person's default."""
+        if self._redis is not None:
+            meta = self._redis.hgetall(self._meta_key(subject, session)) or {}
+            return (meta.get("model") or "").strip()
+        return str((self._mem.get(subject, {}).get(session) or {}).get("model") or "").strip()
+
+    def effort(self, subject: str, session: str) -> str:
+        """This chat's own effort pick, or ``""`` for the model's default."""
+        if self._redis is not None:
+            meta = self._redis.hgetall(self._meta_key(subject, session)) or {}
+            return (meta.get("effort") or "").strip()
+        return str((self._mem.get(subject, {}).get(session) or {}).get("effort") or "").strip()
+
     def target(self, subject: str, session: str) -> str:
         """This chat's target workspace slug, or ``""`` for the person's own desk."""
         if self._redis is not None:
@@ -657,6 +823,8 @@ class _Sessions:
                     # server predates the field" from "this chat targets the desk" — they mean the
                     # same thing today and a client that guessed would be wrong the day they do not.
                     "target": (meta.get("target") or "").strip() or None,
+                    # absent → the person's default model; `null` for the reason `target` is
+                    "model": (meta.get("model") or "").strip() or None,
                     "scaffold": self._scaffold_pair(meta.get("scaffold")),
                     # absent → True: a row older than the field is a conversation that happened
                     "touched": meta.get("touched") != "0",
@@ -672,6 +840,7 @@ class _Sessions:
                     "created": meta.get("created", 0.0), "last_active": meta.get("last_active", 0.0),
                     "workspaces": list(meta.get("workspaces") or []),
                     "target": str(meta.get("target") or "").strip() or None,
+                    "model": str(meta.get("model") or "").strip() or None,
                     "scaffold": self._scaffold_pair(meta.get("scaffold")),
                     "touched": meta.get("touched", True) is not False,
                     "meeting": str(meta.get("meeting") or "").strip() or None,
@@ -833,7 +1002,7 @@ TARGET_LINE_ALONE = "target workspace: {target} — writes go here unless asked 
 #: `kg/entities/` (the rule Vexa-ai/vexa#1589 settled when it stopped refusing entity writes here).
 GLOBAL_TARGET_NOTE = ("The company layer is thin: the five files at its root, and company-tier "
                       "pages under `kg/entities/`. Meeting notes, customer records and personal "
-                      "documents belong on a desk or in an ordinary workspace, never here.")
+                      "documents belong in a personal workspace or an ordinary workspace, never here.")
 
 
 def toolbelt_preamble(session: str) -> str:

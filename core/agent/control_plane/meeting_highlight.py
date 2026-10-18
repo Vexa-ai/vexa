@@ -61,7 +61,7 @@ def entity_index(mounts: Iterable[tuple[str, str, Path]]) -> list[dict]:
 def scan(segments: list, index: list, *, since: str = "", keep: str = "") -> dict:
     """The look, and — when ``keep`` names any — the publish set. Pure: no I/O."""
     raw = [g for g in (segments or []) if isinstance(g, dict)]
-    fresh = [g for g in raw if str(_at(g) or "") > str(since)] if since else raw
+    fresh = terms_mod.segments_since(raw, since)
     lines = [{"id": _at(g), "at": _at(g), "text": str(g.get("text") or "").strip()}
              for g in fresh if str(g.get("text") or "").strip()]
     cursor = str(_at(raw[-1])) if raw else (since or "")
@@ -74,7 +74,8 @@ def scan(segments: list, index: list, *, since: str = "", keep: str = "") -> dic
     known = sum(1 for t in found if t.get("known"))
     return {
         "read_ok": True, "cursor": cursor, "since": since or "",
-        "scanned_segments": len(lines), "terms": found,
+        "scanned_segments": len(lines), "transcript_segments": len(raw),
+        "cursor_note": terms_mod.cursor_note(raw, fresh, since), "terms": found,
         "known_count": known, "unknown_count": len(found) - known,
         "emit": emit, "published": len(emit),
         "keep_not_found": [] if publish_all else [w for w in wanted if w not in said],

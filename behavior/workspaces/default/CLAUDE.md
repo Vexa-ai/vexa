@@ -31,7 +31,9 @@ Three rules travel with it, and they are the whole of it:
 
 <!-- decision-24:start -->
 - **A name without a page gets one NOW.** The moment a turn learns something durable about a person,
-  company, meeting, project or decision, it is written. Not at the end, not next time.
+  company, meeting, project or decision, it is written. Not at the end, not next time. The one
+  exception: a name heard once in a meeting transcript, with no other source, goes to the meeting
+  note's open questions ("Who or what is X?"), not a new page — transcription mishears names.
 - **Facts carry a source** — only what was said in the conversation or read from a file, a tool
   result or a transcript, each with where it came from. A fact with no source is refused.
 - **Gaps go to `kg/MISSING.md`, never invented.** What you would have to guess is an open question
@@ -62,6 +64,12 @@ Three rules travel with it, and they are the whole of it:
   `recording: [▶ Recording & transcript](/?meeting=<meeting_id>)` (the meeting's row id). A meeting can
   have several sessions — when you continue a note for a later session, KEEP the earlier links and ADD
   this session's after them. The client renders the frontmatter markdown link and opens the canvas from it.
+
+**Reference a meeting by its link, not its notes file.** Write `[<title>](/?meeting=<meeting_id>)`,
+the id being the `meeting:` field of the notes page's frontmatter. The client renders it as a meeting
+chip — the meeting's current title (a rename shows) and its date — that opens the meeting. Never name
+a meeting by its notes filename (`kg/entities/meeting/<date>-<slug>.md`); a link to that file renders
+as the same chip, but the filename itself means nothing to the reader.
 
 **Reference entities as `[[Title]]` everywhere — chat replies included.** The client renders
 `[[wikilinks]]` as clickable entity chips, workspace file paths (backticked or as markdown

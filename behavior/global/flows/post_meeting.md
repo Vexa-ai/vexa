@@ -16,7 +16,7 @@ Runs when **`meeting.completed`** happens, in 4 steps. This page is written from
 | **trigger** | `meeting.completed` |
 | **version** | 4 — a step list changes by adding a version, never by editing one in place |
 | **mails** | `(composed in the step, from no template)`, `attendee-head` |
-| **rules it honours** | [`report_to_participants`](../POLICIES.md#report_to_participants), [`external_participants`](../POLICIES.md#external_participants), [`attendee_domains`](../POLICIES.md#attendee_domains), [`data_statement`](../POLICIES.md#data_statement) |
+| **rules it honours** | [`report_to_participants`](../POLICIES.md#report_to_participants), [`external_participants`](../POLICIES.md#external_participants), [`minutes_mail`](../POLICIES.md#minutes_mail), [`attendee_domains`](../POLICIES.md#attendee_domains), [`data_statement`](../POLICIES.md#data_statement) |
 
 ## The steps, in order
 
@@ -37,7 +37,7 @@ Send the committed note VERBATIM in the body + the feedback ask + ONE link into 
 - **effect:** one notification
 - **domains:** without **agent** it runs anyway, with less to work with · without **meetings** the reaction ends there, saying so
 - **mails:** `(composed in the step, from no template)`
-- **rules it honours:** [`report_to_participants`](../POLICIES.md#report_to_participants), [`data_statement`](../POLICIES.md#data_statement)
+- **rules it honours:** [`report_to_participants`](../POLICIES.md#report_to_participants), [`minutes_mail`](../POLICIES.md#minutes_mail), [`data_statement`](../POLICIES.md#data_statement)
 
 ### 3. `email_attendees`
 
@@ -239,7 +239,7 @@ def process_meeting(ctx: StepCtx):
                 if undo.get("reset"):
                     ctx.scratch["baseline"] = ag.dispatch_turn(
                         uid, session,
-                        "STOP. That turn WROTE TO A DESK, and this run writes to none. It "
+                        "STOP. That turn WROTE TO A WORKSPACE, and this run writes to none. It "
                         f"committed: {landed}. Those commits have been removed. Write the "
                         "report again as your REPLY and nothing else — create no file, update "
                         "no index, update no README. The reply is mailed verbatim, so no "
@@ -248,10 +248,10 @@ def process_meeting(ctx: StepCtx):
                     return Wait(seconds=12)
                 landed += f" · reset refused: {undo.get('detail') or 'no detail'}"
             raise StepError(
-                "this turn committed to the organiser's desk, and it must not (decision 22): "
+                "this turn committed to the organiser's personal workspace, and it must not (decision 22): "
                 f"HEAD moved {before[:9]} -> {after[:9]}. Landed: {landed}. The report IS the "
-                "reply; desks are written by drop_to_attendees. This step already tried to undo "
-                "it once and re-ran the turn. To recover by hand, put the desk back:\n"
+                "reply; personal workspaces are written by drop_to_attendees. This step already tried to undo "
+                "it once and re-ran the turn. To recover by hand, put the workspace back:\n"
                 f"  curl -fsS -X POST \"$AGENT_API_URL/api/workspace/git/reset\" "
                 f"-H 'X-User-Id: {uid}' -H \"X-Internal-Secret: $INTERNAL_API_SECRET\" "
                 f"-H 'Content-Type: application/json' -d '{{\"sha\":\"{before}\"}}'\n"
@@ -298,6 +298,12 @@ def email_minutes(ctx: StepCtx):
     layer out.
 
     Reads: refs.{uid,organizer,title,meeting_id} · Effect: one notification."""
+    # THE DEPLOYMENT'S RULE BEFORE THE PERSON'S PREFERENCE, the shape `emit_prep` already has:
+    # `minutes_mail` in `_global/POLICIES.md` is the admin account's answer for everybody (and
+    # covers the group fan-out below, which only this step reaches); `mail_minutes` is one
+    # person's answer for themselves. Deny wins either way; an unreadable `_global` is `on`.
+    if policies.param(ctx, "minutes_mail", str(ctx.refs.get("uid") or "")) is False:
+        return Done({"skipped": "minutes_mail is off for this deployment"})
     if not setting(ctx.refs["uid"], "mail_minutes"):
         return Done({"skipped": "mail_minutes is off for this person"})
     # THE RECIPIENT. `refs["organizer"]` only exists for a calendar-invited meeting — an AD
@@ -672,7 +678,7 @@ def drop_to_attendees(ctx: StepCtx):
     organizer = _organizer_address(ctx)
     if not organizer:
         raise StepError(
-            f"cannot drop meeting {ctx.refs.get('meeting_id')!r} to any desk: no organizer on "
+            f"cannot drop meeting {ctx.refs.get('meeting_id')!r} to any personal workspace: no organizer on "
             f"the ref and no address for uid {uid!r}.", retryable=False)
     day = _meeting_stamp(ctx, uid)[:10]          # the MEETING's day, in the organiser's zone
     date_prose = _meeting_date(ctx, uid)
@@ -758,7 +764,7 @@ def drop_to_attendees(ctx: StepCtx):
                      # every copy is these bytes plus that person's own link
                      "bytes": len(body)})
     raise StepError(
-        f"every desk drop failed for meeting {mid} ({len(room)} person(s) in the room): "
+        f"every personal-workspace drop failed for meeting {mid} ({len(room)} person(s) in the room): "
         + " · ".join(failed), retryable=True)
 ```
 

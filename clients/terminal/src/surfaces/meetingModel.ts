@@ -18,9 +18,11 @@ export interface MeetingMock {
   status: "live" | "past";
   live_status?: string;       // the RAW meeting-api status — drives the status badge + action dropdown
   shared?: boolean;           // surfaced via a share/membership (not owned by the caller) — badged in the list
+  shared_with?: number;       // the OWNER's view: how many people this meeting is shared with ("Shared with N")
   scheduled_at?: string;      // when a `scheduled` meeting is due (data.scheduled_at)
   start_time?: string;        // when the run actually started (row start_time) — sorts recordings
   end_time?: string;          // when the run ended (row end_time) — with start_time gives duration
+  created_at?: string;        // when the row was made (row created_at) — the time of a call that never started
   title_custom?: string;      // the user-given planned-meeting title (data.title) — wins over the fallback
   workspace_id?: string;      // the sharing bind (data.workspace_id) — members of it see this meeting
   calendar_uid?: string;      // calendar-import provenance (data.calendar_uid)

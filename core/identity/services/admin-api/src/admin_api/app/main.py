@@ -41,6 +41,7 @@ from .db import get_db
 from . import events as events_mod
 from . import person_settings as person_settings_mod
 from . import claim_code
+from . import admin_account
 from . import signin_allow
 from . import signin_wire
 from . import platform_settings as platform_settings_mod
@@ -341,6 +342,9 @@ class ModelPrefsUpdate(BaseModel):
     extra_body: Optional[str] = None
     effort: Optional[str] = None  # claude-code reasoning-effort pin (low|medium|high|xhigh); empty = unset
     runner: Optional[str] = None  # the harness that runs workspace turns; empty = the deployment's
+    # the model-catalog id (ADR-0043) new and unpicked chats run on; empty = the organisation's
+    # default, else the catalog's
+    default_model: Optional[str] = None
 
 
 class TranscriptionPrefsUpdate(BaseModel):
@@ -577,6 +581,13 @@ def create_app() -> FastAPI:
         u = User(email=normalise_email(user_in.email), name=user_in.name,
                  max_concurrent_bots=user_in.max_concurrent_bots)
         u.data = {**(u.data or {}), "onboarding_completed_at": time.time()}
+        # THE ADMIN ACCOUNT IS BORN HERE OR NOWHERE (app/admin_account.py). A NEW row for an address
+        # VEXA_ADMIN_ACCOUNT names is created as the deployment's dedicated admin account, in this
+        # transaction. The existing-row branch above never reaches this line, so an everyday account
+        # is never promoted into one — naming its address changes nothing about it.
+        u.data = admin_account.stamp_for_new_row(u.email, u.data)
+        if admin_account.is_stamped(u.data):
+            u.max_concurrent_bots = admin_account.MAX_CONCURRENT_BOTS
         db.add(u)
         try:
             await db.commit()
@@ -695,7 +706,7 @@ def create_app() -> FastAPI:
         return {"mode": prefs.get("mode"), "model": prefs.get("model"),
                 "base_url": prefs.get("base_url"),
                 "effort": prefs.get("effort"), "runner": prefs.get("runner"),
-                "extra_body": prefs.get("extra_body"),
+                "extra_body": prefs.get("extra_body"), "default_model": prefs.get("default_model"),
                 "api_key_set": bool(prefs.get("api_key")),
                 "api_key": _mask_secret(prefs.get("api_key"))}
 
@@ -1048,6 +1059,7 @@ def create_app() -> FastAPI:
             "base_url": prefs.get("base_url"),
             "effort": prefs.get("effort"),
             "runner": prefs.get("runner"),
+            "default_model": prefs.get("default_model"),
             "api_key_set": bool(prefs.get("api_key")),
             "api_key": _mask_secret(prefs.get("api_key")),
         }
@@ -1223,6 +1235,7 @@ def create_app() -> FastAPI:
             admin_claimed=admin_claimed_now,
             allow=allow,
             claim_code_ok=code_ok,
+            admin_accounts=admin_account.designated()[0],
         )
         return {"admitted": admitted, "why": why}
 
@@ -1272,6 +1285,21 @@ def create_app() -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
         return {"id": user.id}
 
+    # The reverse of the door above: a subject's verified address, for meeting-api to name the
+    # people a meeting is shared with on its OWNER's access list (Vexa-ai/vexa#1801). Readers who
+    # redeemed a share before meeting-api kept a roster carry only an id; this is how that roster is
+    # backfilled. Internal tier only, like every route on this prefix — an owner's view never
+    # reaches identity directly, and a subject with no address answers 404.
+    @app.get("/internal/users/{user_id}/email", include_in_schema=False)
+    async def internal_user_email(user_id: int, request: Request,
+                                  db: AsyncSession = Depends(get_db)):
+        # NO DEV-MODE BYPASS: this reads one named person's address by path id (R1801-9).
+        check_internal_no_dev_bypass(request)
+        user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+        if not user or not user.email:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+        return {"id": user.id, "email": user.email}
+
     @app.get("/internal/users/{user_id}/is-admin", include_in_schema=False)
     async def user_is_admin(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
         """Is THIS subject the instance admin? The role oracle agent-api asks before it mounts the
@@ -1280,8 +1308,12 @@ def create_app() -> FastAPI:
         definition of who may rewrite how every agent in the company behaves."""
         check_internal(request)
         user = await _load_user(user_id, db)
+        # `admin_account` is the question agent-api actually asks before it lets anybody write
+        # `_global`: is this the deployment's dedicated admin account (app/admin_account.py)? It is
+        # NOT `is_admin` — the instance admin is a person, and a person's chats read `_global` only.
         return {"user_id": user.id, "email": user.email,
-                "is_admin": signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0])}
+                "is_admin": signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0]),
+                "admin_account": admin_account.is_admin_account(user.email, user.data)}
 
     @app.post("/internal/release-admin", include_in_schema=False)
     async def release_admin(payload: dict, request: Request, db: AsyncSession = Depends(get_db)):
@@ -1523,7 +1555,10 @@ def create_app() -> FastAPI:
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
         resp: dict = {
-            "max_concurrent": user.max_concurrent_bots,
+            # The admin account launches no bot, whatever its row says (app/admin_account.py).
+            "max_concurrent": (admin_account.MAX_CONCURRENT_BOTS
+                               if admin_account.is_admin_account(user.email, data)
+                               else user.max_concurrent_bots),
             "bot_name": data.get("calendar_bot_name") or "Vexa",
             # The owner's auto-join block list, enforced by meeting-api's sweep. Always stated, so
             # the sweep never has to tell "no list" from "an older identity".

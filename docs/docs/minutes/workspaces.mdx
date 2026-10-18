@@ -3,9 +3,9 @@ title: "Workspaces and connections"
 description: "A workspace's front page, adding members and invite links, links to workspace pages, attaching a repository, and connecting your accounts."
 ---
 
-A workspace is a shared folder of pages with a roster. Your **desk** is yours; a **shared workspace**
-has members; the **company** workspace (`_global`) is read by everyone and written by the
-administrator. This page covers the front page of a workspace, how people join one, links into it,
+A workspace is a shared folder of pages with a roster. Your **personal workspace** is yours; a **shared workspace**
+has members; the **company** workspace (`_global`) is read by everyone and written only by the
+deployment's **admin account**. This page covers the admin account, the front page of a workspace, how people join one, links into it,
 attaching an existing repository, and the **Connections** page where you connect your own accounts.
 
 ## What you can do
@@ -14,9 +14,9 @@ attaching an existing repository, and the **Connections** page where you connect
 
 Open a workspace's `README.md` (or a `/w/<workspace>` link) and its header shows:
 
-- **What it is:** *Your desk*, *Shared workspace* or *Company layer*, with its title.
+- **What it is:** *Your personal workspace*, *Shared workspace* or *Company layer*, with its title.
 - **Who is in it:** for a shared workspace, up to two names with *you* first ("you, … and 2 more");
-  for your desk, whether agents read it for your meetings; for the company workspace, who reads and
+  for your personal workspace, whether agents read it for your meetings; for the company workspace, who reads and
   who writes it. A reader who may not see the roster sees *you and the other members*.
 - **What is in it:** the page count, and what the workspace is bound to (a meeting series, or where it
   came from).
@@ -29,8 +29,8 @@ The buttons depend on your role:
 |---|---|
 | a member who is not an owner | **History** only |
 | owner of a shared workspace | **Add a member**, **Connect a repo** (or **Sync**), **History** |
-| owner of your desk | **Connect a repo** (or **Sync**), **History** |
-| the administrator, on the company workspace | **Set up policies**, **Add an editor**, **History** |
+| owner of your personal workspace | **Connect a repo** (or **Sync**), **History** |
+| the admin account, on the company workspace | **Set up policies**, **History** |
 
 Every button except History starts a conversation in the chat; none opens a form.
 
@@ -42,6 +42,33 @@ Every button except History starts a conversation in the chat; none opens a form
   **Sync now**, **Pull**, **Push** and **Detach**; Pull, Push and Detach ask you to confirm. Detaching
   stops syncing and leaves the files as they are.
 - **History** lists commits ten at a time, for the workspace or *This page only*.
+
+### The admin account
+
+The company workspace has exactly one writer: the deployment's **admin account**. It is a dedicated
+account, not anybody's everyday one. It writes `_global` — its pages, `POLICIES.md` and the flows —
+and it does nothing else: it has no desk, no shared workspaces and no meetings. Every other account,
+including the person who administers Settings, reads `_global` and never writes it.
+
+**Get one (operator).**
+
+1. Pick a fresh address that has never signed in to this deployment — for example
+   `admin@example.com`, or a plus-address such as `you+admin@example.com`.
+2. Set it as `VEXA_ADMIN_ACCOUNT` on admin-api (compose `.env`, Helm `adminApi.adminAccount`, or
+   `docker run -e VEXA_ADMIN_ACCOUNT=…` for Lite) and restart admin-api.
+3. Sign in with that address, the same way anyone signs in (the emailed link, or Google or Microsoft
+   for that address). The address is admitted even on a closed instance.
+
+An address that already belongs to an everyday account is **never** turned into the admin account;
+admin-api says so in its log at boot. Pick another address. Removing the address from
+`VEXA_ADMIN_ACCOUNT` takes the role away at the next restart. With the key empty there is no admin
+account and nobody writes `_global`.
+
+**What you see, signed in as the admin account.** The terminal shows one workspace: **Company**. Every
+chat writes there; there is no desk, no `+` menu, and no meetings list to fill. The first sign-in
+opens the company setup; after that an empty chat offers four areas — **Flows & mail**,
+**Templates**, **Friction** and **Workspace**. [Admin account](/minutes/admin-account) covers each.
+Sign out and back in with your everyday account for everything else.
 
 ### Add a member
 
@@ -80,7 +107,7 @@ Choose **Attach existing repo…** in the chat bar's **+** menu, **Attach a repo
 **Attach repository as a workspace** under Connections → Git repositories.
 
 1. Enter the **Repository** address (for example `git@github.com:<org>/<repo>.git`) and the **Branch**
-   (`main` by default). The repository always becomes a **new workspace**; your desk and other
+   (`main` by default). The repository always becomes a **new workspace**; your personal workspace and other
    workspaces are unchanged.
 2. Press **Attach**. Large repositories can take several minutes; the dialog shows progress.
 3. When it is done (*Cloned … into …*), press **Open workspace**.
@@ -172,7 +199,7 @@ How an operator runs the credential broker behind this page is in [Connections](
 | *This invite could not be checked just now.* | the service did not answer | try again |
 | an owner-only refusal from the agent | only owners add, remove or change members | ask an owner |
 | *cannot remove the last owner* | a workspace needs an owner | add another owner first |
-| *That page is in …, a workspace you do not have access to.* · *That link points at a workspace that is no longer here.* | a `/w/` link you cannot open; Minutes never shows your desk instead | ask for access |
+| *That page is in …, a workspace you do not have access to.* · *That link points at a workspace that is no longer here.* | a `/w/` link you cannot open; Minutes never shows your personal workspace instead | ask for access |
 | *Repository access failed. Check the repository URL and credential.* | the clone was refused | check the address, token or deploy key |
 | *That is not a repository. Use https://github.com/owner/repo, …* | the address has an empty segment, `.`/`..`, a GitLab page path (`/-/…`), more than 22 segments, or more than `owner/repo` on `github.com` | paste the project's clone address |
 | *Vexa can create a repository on GitHub, or on a GitLab host this deployment registered …* (`422`) | publish was asked to create a repository on another host | create it there and publish with `remote_url` |
@@ -180,9 +207,10 @@ How an operator runs the credential broker behind this page is in [Connections](
 | *Import interrupted. Check the workspace before retrying.* | the import stopped part-way | check what arrived, then retry |
 | *Allow popups for Minutes, then try again.* · *Authorization was not completed.* | Google consent did not finish | allow pop-ups and retry |
 | *Connections unavailable. Please try again.* | the credential service did not answer | try again; an operator checks the broker |
+| *only the admin account may edit _global* (or *write…*, *reset…*, *accept…*) | you are on an everyday account | sign in as the admin account |
+| *the admin account works on the company layer (_global) only…* | the admin account has no desk, workspaces or meetings | sign in with your everyday account |
 
-The private tier is never shared. On the company workspace only the administrator manages who may
-write. A connection label is at most 80 characters.
+The private tier is never shared. The company workspace is written only by the admin account. A connection label is at most 80 characters.
 
 ## How it works
 
@@ -223,6 +251,27 @@ write. A connection label is at most 80 characters.
 7. **Connections.** The terminal's `/api/connections/*` routes call the credential broker as the
    signed-in person. Agents use their own `connection_request` route, which can request a setup but
    never read a credential.
+8. **The admin account.** Identity decides it and nothing else does:
+   - **Designation.** admin-api reads `VEXA_ADMIN_ACCOUNT`. When a named address signs in for the first
+     time, `POST /admin/users` creates its row with `users.data.account = "admin"` and a bot cap of 0,
+     in the same transaction. No other code path sets that field, and an existing row is never
+     changed, so an everyday account cannot become the admin account. An account is the admin
+     account only while it has the field **and** the address is still named.
+   - **The answer.** admin-api reports `admin_account` on `POST /internal/validate` (identity.v1; for
+     a worker, `person_admin_account`) and on `GET /internal/users/{id}/is-admin`. The gateway reports
+     it on `/auth/me`; the terminal's `/api/auth/me` passes it to the page. agent-api reads it in one
+     function, `global_layer.is_admin_account`, which answers *no* when identity is unreachable or
+     the field is missing.
+   - **Writing `_global`.** The dispatch mounts `_global` read-write only for the admin account, and
+     the file, page, reset, acceptance and chat-target routes ask the same function. The MCP spends
+     flows' operator key on `flows_submit` and `flow_lifecycle` only when `/auth/me` says
+     `admin_account: true`.
+   - **Having nothing else.** For the admin account the dispatch mounts `_global` and `_system` only
+     and makes `_global` the working directory; it seeds no desk. agent-api's workspace door
+     (`_read_target`) resolves no other workspace for it, an app-level dependency
+     (`admin_account_scope.REFUSED`) refuses the routes that create, import, activate or join a
+     workspace and every meeting route, and `GET /api/workspace/active` answers `_global` with
+     `admin_account: true`. Its bot cap of 0 makes meeting-api refuse any bot it asks for.
 
 ### Who writes what
 
@@ -232,6 +281,8 @@ write. A connection label is at most 80 characters.
 | Invites (hashes only) | agent-api | `.invites/` beside the workspaces, outside every workspace |
 | Workspace ids and names | agent-api | `.vexa/workspace.json` in each workspace, plus a registry that can be rebuilt from it |
 | Membership index, users by email | admin-api | the identity database |
+| Which account is the admin account (`users.data.account`) | admin-api, when it creates the row | the identity database |
+| The company workspace `_global` | the admin account's chats and routes, through agent-api | `_global`'s git repository; every change is a commit by its author |
 | Import status | agent-api | outside every workspace |
 | Git tokens and deploy keys | agent-api's secret store, or the credential broker when configured | sealed at rest |
 | Connections, consent state, audit | the credential broker | its encrypted store |
@@ -252,7 +303,10 @@ write. A connection label is at most 80 characters.
 ### Configuration
 
 `VEXA_UI_URL` on agent-api (no invite is made without it). `VEXA_GIT_PROVIDERS` on agent-api (Helm
-`agentApi.gitProviders`) registers self-hosted git hosts; it is validated when agent-api starts. The terminal's connections routes read
+`agentApi.gitProviders`) registers self-hosted git hosts; it is validated when agent-api starts.
+`VEXA_ADMIN_ACCOUNT` on admin-api names the admin account (compose `.env`, Helm
+`adminApi.adminAccount`, Lite `-e`); see [Configuration](/configuration). agent-api's old
+`VEXA_GLOBAL_ADMIN_SUBJECTS` is retired and ignored. The terminal's connections routes read
 `VEXA_CONNECTIONS_BROKER_URL`, `VEXA_CONNECTIONS_HUMAN_KEY_FILE` and `VEXA_CONNECTIONS_PUBLIC_ORIGIN`;
 the broker itself is set up as in [Connections](/connections).
 
@@ -268,17 +322,20 @@ the broker itself is set up as in [Connections](/connections).
 | **P18** fail loud | each invite and link refusal is its own sentence; broker failures are typed `broker_fault`s; an interrupted import says so | ungated: reviewed |
 | **P20** authorize every access | roles are checked on every membership and repository route; invites check the verified email | deny tests below |
 | **P21** state from evidence | an import is done only when it reports `completed`; a connection request is not a connected account | ungated: reviewed |
-| **P23** one writer per carrier | agent-api writes rosters, invites and import status; the broker writes credentials | `gate:dataflow` |
+| **P23** one writer per carrier | agent-api writes rosters, invites and import status; the broker writes credentials; admin-api alone decides the admin account, and agent-api, the gateway and the terminal only read its answer | `gate:dataflow`; the admin account: ungated: reviewed |
 | **P14** config is a validated contract | `VEXA_GIT_PROVIDERS` is declared in agent-api's `config.v1.json`, surfaced on Helm and Compose, and parsed at boot by `shared/config.py`, which refuses a malformed entry | `gate:config-contract` |
 | **P15** secrets (git tokens) | a token is put into a URL only by `token_destination.embed_token`, only over `https`, and never persisted: the clone's `origin` and the push remote are reset token-free; the GitLab API gets it in a header, never a URL; errors are scrubbed of the token, its password half and the URL form it took | ungated: reviewed; deny tests below |
 | **P18** fail loud | a host publish cannot create on is a typed `UnsupportedHostError` (`422`) naming the host and the alternative; a bad provider map stops the boot; GitLab answers are translated into named refusals (taken name, rejected token, missing group, redirect) | ungated: reviewed |
 | no duplication | the address rule lives in `repo_ref.py` with one twin in the terminal, held to the same cases by both test suites; the token shape lives only in `git_provider.py` | ungated: reviewed |
+| **P6** one front door (the admin account) | agent-api learns the admin account through admin-api's existing internal route; the terminal learns it through `/auth/me`; no service keeps its own list | ungated: reviewed |
+| **P14** validate at boot | a malformed `VEXA_ADMIN_ACCOUNT` (a domain, `*`, more than five addresses) stops admin-api from starting; a named address that already has an everyday account is logged at boot | `admin-api tests/test_admin_account.py` |
 
 ### Security
 
 **Who can do what.** Owners add, remove and change members and manage the repository. Contributors
 write. Readers read. Only the owner or an administrator renames a workspace. The private tier cannot be
-shared, and only the administrator manages the company workspace.
+shared, and only the admin account writes the company workspace. The admin account has no desk, no
+shared workspaces and no meetings.
 
 **Protections.**
 
@@ -298,6 +355,15 @@ shared, and only the administrator manages the company workspace.
   holds the person's broker key; agent workers hold none.
 - Consent pop-ups follow only Google's authorization address or the address the setup declared, and
   report a status, never a credential, back to the page.
+- The admin account is decided by admin-api, which every other service asks. Both conditions must
+  hold: the row was created as the admin account, and the address is still named. With nothing
+  configured, with identity unreachable, or with an older identity that does not send the field,
+  nobody writes `_global`.
+- An everyday account is never promoted: the admin field is written only when admin-api creates the
+  row.
+- The admin account is confined three ways: its mounts, the workspace door, and a list of refused
+  routes that `admin_account_scope.assert_served` checks at boot, so a renamed route cannot leave a
+  gap unnoticed.
 
 **Deny tests.**
 
@@ -316,6 +382,10 @@ shared, and only the administrator manages the company workspace.
 | `clients/terminal/src/app/__tests__/join.test.tsx` · "says an unknown token is not valid, without saying whether the workspace exists" | the join page |
 | `clients/terminal/src/minutes/__tests__/workspaceStrip.test.tsx` · "gives a READER the one act that is theirs, and no others"; `memberActs.test.tsx` · "renders no membership control for somebody who is not an owner here" | the front page's buttons |
 | `clients/terminal/src/minutes/__tests__/workspaceDeepLink.test.ts` · "never falls back to the desk — a refusal carries no page at all" | `/w/` links |
+| `core/agent/tests/test_admin_account.py` · `test_an_everyday_account_writes_no_door_of_the_company_layer` (files, flow pages, company pages, reset, acceptance, chat target, membership; the instance admin included), `test_nothing_configured_means_nobody_writes_the_company_layer`, `test_the_admin_account_opens_no_desk_no_workspace_and_no_meeting`, `test_the_workspace_door_resolves_nothing_but_the_company_layer_for_it`, `test_the_admin_account_aims_a_chat_nowhere_else`, `test_the_admin_accounts_mount_table_is_the_company_layer_and_its_system_tier`, `test_the_retired_subject_list_grants_nothing`, `test_identity_unreachable_or_unconfigured_means_nobody` | the admin account, in agent-api |
+| `core/identity/services/admin-api/tests/test_admin_account.py` · `test_unconfigured_means_nobody`, `test_both_halves_are_required`, `test_an_everyday_account_is_never_promoted`, `test_the_named_account_is_created_as_the_admin_account_and_launches_no_bot`, `test_removing_the_address_revokes_the_account`; `test_internal_validate_wire.py` · `test_the_admin_accounts_worker_is_never_the_account_its_person_is` | the admin account, in identity |
+| `core/gateway/services/gateway/tests/test_delegated_mcp.py` · `test_auth_me_says_whether_the_key_is_the_admin_account_and_nothing_else_is`; `core/meetings/services/mcp/tests/test_tool_auth.py` · `test_an_admin_tool_spends_the_deployments_key_for_the_admin_account_only` | flows authoring needs the admin account |
+| `clients/terminal/src/minutes/__tests__/globalTarget.test.tsx` · "the admin account's header is the company layer and nothing else", "an everyday account is never offered Company"; `app/api/auth/__tests__/me.test.ts` · "says whether this is the ADMIN ACCOUNT…" | the terminal |
 | `clients/terminal/src/minutes/__tests__/attachRepo.test.tsx` · "rejects credentials pasted into the repository field before sending" | attach |
 | `core/agent/tests/test_git_gitlab_remotes.py` · `test_a_path_that_is_not_a_plain_nested_name_is_refused`, `test_the_deepest_gitlab_path_is_accepted_and_one_deeper_is_not`, `test_a_nested_path_still_passes_the_host_gate`; `clients/terminal/src/surfaces/__tests__/repoRef.test.ts` · "refuses %s, which is not a plain nested name" | nested paths |
 | `core/agent/tests/test_git_gitlab_remotes.py` · `test_no_provider_puts_a_token_on_a_cleartext_or_ssh_url`, `test_a_clone_presents_oauth2_and_persists_no_credential`, `test_a_push_error_never_carries_any_spelling_of_the_token`, `test_a_malformed_provider_map_stops_the_boot` | token shapes |

@@ -18,6 +18,8 @@
 import type { ActiveMount, Membership } from "../surfaces/workspaceApi";
 import { listSharedMemberships, listWorkspaceTree, readActiveSet, readWorkspaceById } from "../surfaces/workspaceApi";
 import { GLOBAL_SLUG, humanPaths } from "./machinery";
+import { WORKSPACE_FRONT_PAGE } from "./deepLink";
+import { isWorkspaceReadme } from "./workspaceReadme";
 
 /** Desk first, then `_global`, then the groups — decision 27.1's order, and it is not alphabetical
  *  by accident: the reader's own desk is where they write, `_global` is what the company shares. */
@@ -61,12 +63,19 @@ export function buildWorkspaces(src: {
   active?: readonly ActiveMount[];
   subject?: string;
   memberships?: readonly NavMembership[];
+  /** The deployment's ADMIN ACCOUNT: it has the company layer and nothing else — no desk row, no
+   *  group rows, whatever else the inputs carry (founder ruling 2026-10-11). */
+  adminAccount?: boolean;
 }): NavWorkspace[] {
   const active = src.active ?? [];
+  if (src.adminAccount === true) {
+    const g = active.find((m) => m.slug === GLOBAL_SLUG);
+    return [{ key: GLOBAL_SLUG, slug: GLOBAL_SLUG, kind: "global", name: g?.name?.trim() || GLOBAL_SLUG }];
+  }
   const home = active.find((m) => isHomeMount(m, src.subject));
   const desk: NavWorkspace = {
     key: "desk", slug: undefined, kind: "desk",
-    name: home?.name?.trim() || "Desk",
+    name: home?.name?.trim() || "Personal",
   };
 
   const globalMount = active.find((m) => m.slug === GLOBAL_SLUG);
@@ -92,6 +101,19 @@ export function buildWorkspaces(src: {
   }
 
   return [desk, ...(global ? [global] : []), ...[...groups.values()].sort(byName)];
+}
+
+// ── the front page ───────────────────────────────────────────────────────────────────────────────
+
+/** WHAT A CLICK ON A WORKSPACE'S NAME OPENS. Founder, 2026-10-11, on this rail: *"click on
+ *  workspace should open the readme"*. The root README is the workspace's front page — the panel
+ *  renders the who-is-here header above it (`WorkspaceReadmePanel`) — so the name opens that.
+ *
+ *  The file as the tree spells it when the tree has been read (`Readme.md` in an attached repo),
+ *  otherwise the same page `/w/<workspace>` opens with no path. A workspace with no README is not a
+ *  blank pane either way: it opens exactly as that link does. */
+export function frontPagePath(files?: readonly string[] | null): string {
+  return (files ?? []).find((f) => isWorkspaceReadme(f)) ?? WORKSPACE_FRONT_PAGE;
 }
 
 // ── the tree ─────────────────────────────────────────────────────────────────────────────────────
@@ -237,6 +259,7 @@ export async function loadNavWorkspaces(): Promise<NavWorkspace[]> {
     active: set?.active ?? [],
     subject: set?.subject,
     memberships: named.filter((m): m is NavMembership => m !== null),
+    adminAccount: set?.admin_account === true,
   });
 }
 

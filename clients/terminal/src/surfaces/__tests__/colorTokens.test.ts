@@ -10,7 +10,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SRC = join(__dirname, "..", "..");
-const SCAN_DIRS = ["surfaces", "canvas", "workbench", "ui-kit", "app"];
+// `minutes/` is the shell app.dev runs; it was missing from this list, which is how three
+// references to tokens that do not exist got in behind hex fallbacks (terminal UI audit §0).
+const SCAN_DIRS = ["surfaces", "canvas", "workbench", "ui-kit", "app", "minutes", "contributions", "platform"];
 // Non-color or deliberate exceptions:
 //  - routines.tsx switch knob: a white knob is correct on both themes' green track.
 //  - AuthGate/App boxShadow rgba + icon assets are shadows/artwork, not palette colors.
@@ -48,7 +50,7 @@ describe("palette guard", () => {
     for (const dir of SCAN_DIRS) {
       for (const f of sourceFiles(join(SRC, dir))) {
         const rel = f.slice(SRC.length + 1);
-        if (rel === "app/globals.css" || HEX_ALLOWLIST.has(rel)) continue;
+        if (rel === "app/globals.css" || rel === "app/tokens.css" || HEX_ALLOWLIST.has(rel)) continue;
         const src = readFileSync(f, "utf8");
         for (const line of src.split("\n")) {
           if (HEX_RE.test(line)) { offenders.push(`${rel}: ${line.trim().slice(0, 100)}`); break; }

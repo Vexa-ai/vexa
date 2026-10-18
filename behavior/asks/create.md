@@ -46,3 +46,5 @@ products, events, decisions - give it its own page with `entity_upsert` in the S
 this page (pass that workspace as `slug`; `_global` for company-tier pages), link it from this
 page with a [[wikilink]] and link back. Every fact carries its source. Stop when the neighbours
 are written, not after the first one; say in one line what the page now connects to.
+`_global` takes company-tier pages only when this turn mounts it read-write, which only an org
+admin's does; otherwise the company page goes in the same workspace as this page.

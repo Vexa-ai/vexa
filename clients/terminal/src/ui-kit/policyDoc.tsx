@@ -24,6 +24,7 @@
  *  renderer and the flows both read.
  */
 import type { CSSProperties, ReactNode } from "react";
+import { Badge } from "./primitives/Chip";
 
 export const POLICY_KIND = "policies";
 
@@ -111,18 +112,21 @@ const chip = (color: string, bg: string): CSSProperties => ({
 
 function Value({ value }: { value: string }): ReactNode {
   const v = value.trim();
-  if (!v) return <span style={{ color: "var(--t3)", fontSize: 12 }}>unset — the default applies</span>;
-  if (ON.has(v.toLowerCase())) return <span style={chip("var(--green)", "transparent")}>on</span>;
-  if (OFF.has(v.toLowerCase())) return <span style={chip("var(--t3)", "transparent")}>off</span>;
-  return <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--t1)" }}>{v}</span>;
+  // A value is STATIC, so a Badge (on = success with its word, off = neutral) — not a coloured pill.
+  if (!v) return <span className="vx-policy-unset">Unset — the default applies</span>;
+  if (ON.has(v.toLowerCase())) return <Badge tone="success">On</Badge>;
+  if (OFF.has(v.toLowerCase())) return <Badge>Off</Badge>;
+  return <code className="vx-code">{v}</code>;
 }
 
 function Lens({ label, text }: { label: string; text?: string }): ReactNode {
   if (!text) return null;
   return (
-    <div style={{ display: "flex", gap: 8, alignItems: "baseline", lineHeight: 1.5 }}>
-      <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, width: 78, flex: "none" }}>{label}</span>
-      <span style={{ color: "var(--t2)", fontSize: 12.5, minWidth: 0 }}>{text}</span>
+    // the metadata table's rules (guidelines §4.16): sentence case, no uppercase eyebrow, stacked
+    // below 360px of pane width
+    <div className="vx-fact">
+      <span className="vx-kv-key">{label}</span>
+      <span className="vx-kv-val">{text}</span>
     </div>
   );
 }
@@ -133,9 +137,9 @@ export function PolicyRules({ attrs, body, act }: { attrs: Attr[]; body: string;
   const profile = attrs.find(([k]) => k === "profile")?.[1];
   const rules = attrs.filter(([k]) => k !== "kind" && k !== "profile");
   return (
-    <div data-policy-rules="" style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--panel)", padding: "12px 14px", margin: "0 0 16px" }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
-        <span style={{ fontSize: 14, fontWeight: 600, color: "var(--t1)" }}>What this deployment answers</span>
+    <div data-policy-rules="" className="bd r-lg bg-2 pt-3 pr-3 pb-3 pl-3 mt-0 mr-0 mb-4 ml-0">
+      <div className="mb-1" style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+        <span className="t-md fw-600 c-1">What this deployment answers</span>
         {profile ? <span style={chip("var(--blue)", "var(--bluebg)")}>{profile}</span> : null}
         {/* THE WAY TO CHANGE THEM, BESIDE WHAT THEY ARE (Vexa-ai/vexa#1627). The profile chip says
             where this deployment stands; the act is how somebody who does not like that answer
@@ -144,7 +148,7 @@ export function PolicyRules({ attrs, body, act }: { attrs: Attr[]; body: string;
             registered by a shell, and a build with nothing registered simply shows the rules. */}
         {act ? <><span style={{ flex: "1 1 0%" }} />{act}</> : null}
       </div>
-      <div style={{ color: "var(--t3)", fontSize: 12, lineHeight: 1.5, marginBottom: 10 }}>
+      <div className="c-3 t-xs lh-snug mb-2">
         Each rule is written out below with what it changes, what it buys, what it costs and what a
         hostile person does with it. Changing one is an edit to this file, and every edit is a commit
         with an author.
@@ -153,14 +157,14 @@ export function PolicyRules({ attrs, body, act }: { attrs: Attr[]; body: string;
         {rules.map(([key, value]) => {
           const doc = docs[key];
           return (
-            <div key={key} data-policy-rule={key} style={{ borderTop: "1px solid var(--line)", paddingTop: 9 }}>
+            <div key={key} data-policy-rule={key} className="bd-t pt-2">
               <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
-                <a href={`#${key}`} style={{ fontFamily: "var(--mono)", fontSize: 12.5, color: "var(--t1)", textDecoration: "none", borderBottom: "1px dotted var(--line2)" }}>{key}</a>
+                <a href={`#${key}`} className="f-mono t-xs c-1" style={{ textDecoration: "none", borderBottom: "1px dotted var(--line2)" }}>{key}</a>
                 <Value value={value} />
-                {doc?.fallback ? <span style={{ color: "var(--t3)", fontSize: 11.5 }}>{doc.fallback}</span> : null}
+                {doc?.fallback ? <span className="c-3 t-xs">{doc.fallback}</span> : null}
               </div>
               {doc?.title ? (
-                <div style={{ color: "var(--t2)", fontSize: 12.5, lineHeight: 1.5, margin: "3px 0 5px" }}>{doc.title}</div>
+                <div className="c-2 t-xs lh-snug mt-0_5 mr-0 mb-1 ml-0">{doc.title}</div>
               ) : null}
               <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                 <Lens label="adoption" text={doc?.adoption} />
@@ -189,9 +193,9 @@ export function PolicyRules({ attrs, body, act }: { attrs: Attr[]; body: string;
 
 export function ViewSource({ step, children }: { step?: string; children?: ReactNode }): ReactNode {
   return (
-    <details data-view-source={step ?? ""} style={{ border: "1px solid var(--line)", borderRadius: 8, background: "var(--panel)", margin: "8px 0", padding: "6px 10px" }}>
-      <summary style={{ cursor: "pointer", color: "var(--t2)", fontSize: 12.5, userSelect: "none" }}>
-        view source{step ? <> — <code style={{ fontFamily: "var(--mono)" }}>{step}</code></> : null}
+    <details data-view-source={step ?? ""} className="bd r-md bg-2 mt-2 mr-0 mb-2 ml-0 pt-1_5 pr-2 pb-1_5 pl-2">
+      <summary className="c-2 t-xs" style={{ cursor: "pointer", userSelect: "none" }}>
+        view source{step ? <> — <code className="f-mono">{step}</code></> : null}
       </summary>
       {children}
     </details>
@@ -230,8 +234,8 @@ export function flowRules(body: string): string[] {
 
 const flowBit = (label: string, value: ReactNode): ReactNode => (
   <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5, minWidth: 0 }}>
-    <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4 }}>{label}</span>
-    <span style={{ color: "var(--t2)", fontSize: 12.5, minWidth: 0 }}>{value}</span>
+    <span className="c-3 t-xs" style={{ textTransform: "uppercase", letterSpacing: 0.4 }}>{label}</span>
+    <span className="c-2 t-xs" style={{ minWidth: 0 }}>{value}</span>
   </span>
 );
 
@@ -250,10 +254,10 @@ export function FlowHeader({ attrs, body }: { attrs: Attr[]; body: string }): Re
   const generated = at("generated");
   const rules = flowRules(body);
   return (
-    <div data-flow-header={flow} style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--panel)", padding: "10px 14px", margin: "0 0 16px" }}>
+    <div data-flow-header={flow} className="bd r-lg bg-2 pt-2 pr-3 pb-2 pl-3 mt-0 mr-0 mb-4 ml-0">
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", rowGap: 4 }}>
         <span style={chip("var(--blue)", "var(--bluebg)")}>flow</span>
-        {flow ? <span style={{ ...mono, fontSize: 13, fontWeight: 600 }}>{flow}</span> : null}
+        {flow ? <span className="t-sm fw-600" style={{ ...mono }}>{flow}</span> : null}
         {trigger ? flowBit("trigger", <code style={mono}>{trigger}</code>) : null}
         {steps ? flowBit("steps", steps) : null}
         {version ? flowBit("version", version) : null}
@@ -261,10 +265,10 @@ export function FlowHeader({ attrs, body }: { attrs: Attr[]; body: string }): Re
           ? <span>{rules.map((r, i) => (
               <span key={r} data-flow-rule={r}>{i ? ", " : ""}<code style={mono}>{r}</code></span>
             ))}</span>
-          : <span style={{ color: "var(--t3)" }}>none</span>)}
+          : <span className="c-3">none</span>)}
       </div>
       {generated ? (
-        <div style={{ color: "var(--t3)", fontSize: 11.5, lineHeight: 1.5, marginTop: 6 }}>{generated}</div>
+        <div className="c-3 t-xs lh-snug mt-1_5">{generated}</div>
       ) : null}
     </div>
   );
@@ -300,15 +304,15 @@ export function ProposalHeader({ attrs, act }: { attrs: Attr[]; act?: ReactNode 
   const trigger = at("trigger");
   const status = at("status");
   return (
-    <div data-proposal-header={step} style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--panel)", padding: "10px 14px", margin: "0 0 16px" }}>
+    <div data-proposal-header={step} className="bd r-lg bg-2 pt-2 pr-3 pb-2 pl-3 mt-0 mr-0 mb-4 ml-0">
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", rowGap: 4 }}>
         <span style={chip("var(--t3)", "transparent")}>proposal</span>
-        {step ? <span style={{ ...mono, fontSize: 13, fontWeight: 600 }}>{step}</span> : null}
+        {step ? <span className="t-sm fw-600" style={{ ...mono }}>{step}</span> : null}
         {forFlow ? flowBit("for", <code style={mono}>{forFlow}</code>) : null}
         {trigger ? flowBit("trigger", <code style={mono}>{trigger}</code>) : null}
         {act ? <><span style={{ flex: "1 1 0%" }} />{act}</> : null}
       </div>
-      <div style={{ color: "var(--t3)", fontSize: 11.5, lineHeight: 1.5, marginTop: 6 }}>
+      <div className="c-3 t-xs lh-snug mt-1_5">
         {status || "needs code — never executed"}. This deployment does not carry this step; nothing
         here runs, and nothing will until somebody writes it.
       </div>

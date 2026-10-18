@@ -12,6 +12,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from jsonschema.exceptions import ValidationError
 
 from control_plane import dispatch_sink
+from control_plane import routine_refusals
 from control_plane.ceiling import refusal, refused
 from control_plane.events import event_to_invocation
 from shared import delegation as delegation_mod
@@ -22,6 +23,9 @@ def build(**d) -> APIRouter:
     router = APIRouter()
     dispatcher = d['dispatcher']
     settings = d['settings']
+    scheduler = d.get('scheduler')
+    invocations_url = d.get('invocations_url')
+    wsr = d.get('wsr')
 
     def _internal_secret() -> str:
         return settings.internal_api_secret.get_secret_value() if settings is not None else ""
@@ -53,6 +57,15 @@ def build(**d) -> APIRouter:
         if caller != "internal" and str(invocation.get("trigger") or "") in delegation_mod.HUMAN_TRIGGERS:
             raise _refuse(request, 403, "signed_dispatch_runs_unwatched",
                           "a signed dispatch runs without a person")
+        # A ROUTINE REFUSED THE SAME WAY RUN AFTER RUN IS PAUSED, NOT RUN AGAIN
+        # (`routine_refusals.py`). Only a scheduler-fired routine is counted; never a chat.
+        if scheduler is not None and invocations_url and wsr is not None:
+            paused = routine_refusals.before_dispatch(
+                invocation, read_since=dispatcher.unit_events_since, scheduler=scheduler,
+                invocations_url=invocations_url, workspaces_dir=wsr.root,
+                signing_secret=_internal_secret())
+            if paused:
+                return {"workload_id": None, **paused}
         try:
             workload_id = dispatcher.dispatch(invocation)
         except ValidationError as e:  # non-conformant unit.v1 envelope — fail loud (P18)

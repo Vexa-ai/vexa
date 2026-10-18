@@ -4,6 +4,7 @@
  *  {id, platform, native_meeting_id, status, start_time, end_time, data:{recordings:[...]}}, newest-first.
  *  Live meetings carry a `session_uid` so the tab subscribes to the copilot stream; past meetings open a
  *  recorded view whose transcript is fetched on demand from `GET /api/transcripts/{platform}/{native}`. */
+import { sharedWithCount } from "./meetingShareApi";
 import { useSyncExternalStore } from "react";
 import type { MeetingMock, TranscriptLine } from "./meetingModel";
 import { onGatewayWSConnected, onMeetingStatus } from "./gatewayWS";
@@ -18,6 +19,9 @@ export interface MeetingRowDTO {
   shared?: boolean;   // surfaced via a share/membership (not owned by the caller)
   start_time?: string | null;
   end_time?: string | null;
+  /** when the row was made — the request, for a bot sent ad hoc. meeting-api orders the list by
+   *  COALESCE(data.scheduled_at, start_time, created_at), so a call that never started still has a time. */
+  created_at?: string | null;
   constructed_meeting_url?: string | null;
   data?: {
     recordings?: unknown[];
@@ -27,6 +31,8 @@ export interface MeetingRowDTO {
     // planned-meeting keys (POST /meetings / calendar sync)
     title?: string;
     workspace_id?: string;
+    // the reader ids this meeting is shared with — meeting-api ships it to the OWNER only
+    transcript_viewers?: unknown[];
     calendar_uid?: string;
     auto_join?: boolean;
     auto_join_error?: string;
@@ -124,6 +130,11 @@ function whenLabel(d: MeetingRowDTO, live: boolean): string {
   catch { return "Recorded"; }
 }
 
+/** The name a meeting has when nobody named it: platform · code, or "Untitled meeting" without a link. */
+function fallbackTitle(platform: string, native: string | null | undefined): string {
+  return native ? `${platform === "google_meet" ? "Google Meet" : platform} · ${native}` : "Untitled meeting";
+}
+
 function toMock(d: MeetingRowDTO): MeetingMock {
   const raw = displayStatus(d);
   const live = LIVE_STATUSES.has(d.status);
@@ -143,13 +154,13 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     // a planned meeting's user-given title wins; otherwise the platform·native fallback
     // Honest fallbacks (design-spec W3): a link-less plan is "Untitled meeting", never
     // "unknown · (no link)"; a linked one reads "Google Meet · abc-defg-hij".
-    title: d.data?.title
-      || (native ? `${d.platform === "google_meet" ? "Google Meet" : d.platform} · ${native}` : "Untitled meeting"),
+    title: d.data?.title || fallbackTitle(d.platform, native),
     title_custom: d.data?.title ?? undefined,
     when: whenLabel(d, live),
     status: live ? "live" : "past",
     live_status: raw,
     shared: !!d.shared,   // owned by someone else, surfaced via a share/membership (data.shared)
+    shared_with: d.shared ? undefined : sharedWithCount(d.data),
     scheduled_at: d.data?.scheduled_at ?? undefined,
     workspace_id: d.data?.workspace_id ?? undefined,
     calendar_uid: d.data?.calendar_uid ?? undefined,
@@ -159,6 +170,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     meeting_url: d.constructed_meeting_url ?? d.data?.constructed_meeting_url ?? undefined,
     start_time: d.start_time ?? undefined,
     end_time: d.end_time ?? undefined,
+    created_at: d.created_at ?? undefined,
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
     has_recording: !!(d.data?.recordings?.length),
     docs: d.data?.docs ?? [],
@@ -315,6 +327,24 @@ export async function fetchTranscript(meetingId: string): Promise<TranscriptLine
 /** Last-known meeting by id (sync) — lets non-hook lookups resolve a real meeting. */
 export function getLiveMeeting(id: string): MeetingMock | undefined {
   return meetings.find((m) => m.id === id);
+}
+
+/** A RENAME, applied to the store the moment meeting-api has answered 200 — so every view that
+ *  reads this store (the Calls list, the rail's meeting rows, the meeting header, the tab strip)
+ *  shows the new title at once instead of after the next snapshot. meeting-api stays the record:
+ *  this patches the last-known copy of what the annotate route just wrote, and the re-snapshot that
+ *  follows replaces it with the stored row. An empty title is the route's "clear", so the row falls
+ *  back to its default label exactly as `toMock` would build it. */
+export function applyMeetingTitle(id: string, title: string): void {
+  const i = meetings.findIndex((m) => m.id === id);
+  if (i < 0) return;
+  storeRevision += 1;
+  const cur = meetings[i];
+  const t = title.trim();
+  const platformRaw = cur.platform === "Google Meet" ? "google_meet" : cur.platform;
+  const next: MeetingMock = { ...cur, title_custom: t || undefined, title: t || fallbackTitle(platformRaw, cur.native_id) };
+  meetings = [...meetings.slice(0, i), next, ...meetings.slice(i + 1)];
+  subs.forEach((fn) => fn());
 }
 
 /** All last-known real meetings (sync) — used by the auto-open command (prefers a live one). */

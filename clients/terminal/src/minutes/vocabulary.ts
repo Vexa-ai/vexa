@@ -16,8 +16,13 @@
  *  share a literal here. The two lines name each other; together they are the whole rename.
  */
 
-/** What a person's own workspace is CALLED to that person. */
-export const WORKSPACE_WORD = "desk";
+/** What a person's own workspace is CALLED to that person.
+ *
+ *  Founder, 2026-10-11: *"rename desk to personal to remove ambiguity"* — the chat's target chip
+ *  already said "Writes to personal" while the navigator said "Desk". The word a person reads is
+ *  now **Personal** ("your personal workspace" in a sentence); slugs, ids and fields still say
+ *  `desk` where they did. */
+export const WORKSPACE_WORD = "Personal";
 
 /** What the ORGANISATION TIER (`_global`) is called where a person sees it — the header chip an
  *  admin can aim a chat at, and the `+` menu entry that puts it there (Vexa-ai/vexa#1616).

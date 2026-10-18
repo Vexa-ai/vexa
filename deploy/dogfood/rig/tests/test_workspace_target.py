@@ -159,7 +159,7 @@ def test_a_workspace_they_are_not_in_is_refused_by_name(monkeypatch):
 def test_the_empty_slug_puts_the_work_back_on_their_own_desk(monkeypatch):
     as_user(monkeypatch, "7")
     out = json.loads(tool("workspace_target")())
-    assert out["targeted"] == "" and "desk" in out["workspace"]
+    assert out["targeted"] == "" and "personal workspace" in out["workspace"]
 
 
 def test_the_harness_function_this_file_cites_is_where_it_says():

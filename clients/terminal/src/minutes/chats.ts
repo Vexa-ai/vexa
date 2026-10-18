@@ -16,8 +16,8 @@ import { meetingPhase, type MeetingMock, type MeetingPhase } from "../surfaces/m
 
 /** One open document in the right panel — a TAB. Identical in shape to `Page`, and deliberately so:
  *  the panel's tab strip and the chat's saved artifacts are the same list, not two lists kept in
- *  step. `label` is carried rather than recomputed because a phase page's name ("Minutes" vs
- *  "Brief") is a property of the room that produced it, not of the path. */
+ *  step. `label` is carried rather than recomputed because a page's name is a property of the room
+ *  that produced it, not of the path (`withMeetingPages` renames a stored meeting tab in place). */
 export type Artifact = {
   kind?: "doc" | "meeting"; path: string; slug?: string; label: string;
   /** WHEN THIS PAGE WAS LAST IN FRONT — the strip is a history bar, ordered by it (decision 28,
@@ -170,8 +170,9 @@ export function resetChats(): Chat[] {
   saveChats([]);
   return [];
 }
-/** Which side columns the reader has folded away. One key per side, because the two are independent
- *  choices and a combined key would make forgetting one of them the default. */
+/** Which side columns the reader folded away — the LEGACY keys. The shell's layout now lives under one
+ *  key (`vexa.shell.v1`, written only by ui-kit's `useShellLayout`); these are read once, by
+ *  `legacyShellStore`, so a reader who folded a column before the move finds it folded after. */
 export const COLLAPSED_KEY = { left: "vexa.minutes.railCollapsed", right: "vexa.minutes.pagesCollapsed" } as const;
 export type Side = keyof typeof COLLAPSED_KEY;
 
@@ -238,6 +239,10 @@ export type Row = {
    *  On the ROW because the rail shows it: a reader scanning their conversations should be able to
    *  see which one is working in a customer's workspace without opening it. */
   target?: string;
+  /** THE PERSON'S OWN MARKS (`railMarks.ts`), held by agent-api per person. Pinned rows lead the
+   *  list; hidden rows leave it and are listed only in the Hidden view. */
+  pinned?: boolean;
+  hidden?: boolean;
 };
 
 /** The row's status word from the meeting's phase. `prep` deliberately has none — see `Row.status`. */
@@ -284,7 +289,7 @@ export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now(
       // The last guard, at the surface the founder was looking at: a stored label from before
       // the rule (Vexa-ai/vexa#1602) is treated as the placeholder it is, so the row falls back to
       // its meeting's title or to "Chat" rather than putting a mark on the rail.
-      label: (isMachineryLabel(c.label) ? "" : c.label) || (m ? meetingTitle(m) : "Chat"),
+      label: (isMachineryLabel(stripMarkers(c.label)) ? "" : stripMarkers(c.label)) || (m ? meetingTitle(m) : "Chat"),
       when,
       whenLabel: whenShort(m ? meetingWhen(m) : when, { live, now }),
       live, upcoming,
@@ -328,9 +333,13 @@ export function railRows(chats: Chat[], meetings: MeetingMock[], now = Date.now(
  *  `keep` is the selected row: whatever the filter says, the row you are reading never vanishes
  *  under you — opening an untouched meeting materialises an untouched chat, and without this the
  *  row would disappear the moment it was selected. */
-export function visibleRows(rows: Row[], all: boolean, keep?: string | null): Row[] {
-  if (all) return rows;
-  return rows.filter((r) => r.touched || r.live || r.upcoming || (keep != null && r.key === keep));
+export function visibleRows(rows: Row[], all: boolean, keep?: string | null, hiddenView = false): Row[] {
+  // HIDDEN is the person's own choice and outranks both filters: a hidden row is listed only in the
+  // Hidden view, where it can be brought back. A PINNED row always shows — that is what a pin is for.
+  if (hiddenView) return rows.filter((r) => r.hidden);
+  const shown = rows.filter((r) => !r.hidden);
+  if (all) return shown;
+  return shown.filter((r) => r.pinned || r.touched || r.live || r.upcoming || (keep != null && r.key === keep));
 }
 
 // ── the server's sessions — WHERE THE RAIL ACTUALLY COMES FROM ───────────────────────
@@ -417,11 +426,11 @@ export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat
     // the scaffold's label, the act's label, or the person's first words with the machinery
     // stripped — so the rail, a second window and any other client agree by construction rather
     // than by three implementations of one rule.
-    const given = typeof r.label === "string" ? r.label.trim() : "";
+    const given = typeof r.label === "string" ? stripMarkers(r.label) : "";
     // The index defaults an untitled session's title to the session id — a placeholder, not a name.
     // And a server that predates `label` sends the raw stored title, which is where the founder's
     // `Active context: the u…` rows came from: it is read, but never when it is machinery.
-    const title = typeof r.title === "string" ? r.title.trim() : "";
+    const title = typeof r.title === "string" ? stripMarkers(r.title) : "";
     const named = title && title !== id && !isMachineryLabel(title) ? title : "";
     const mounts = Array.isArray(r.workspaces)
       ? r.workspaces.filter((w): w is string => typeof w === "string" && !!w.trim())
@@ -479,9 +488,8 @@ export function chatsFromSessions(rows: ServerSession[], now = Date.now()): Chat
  *     still called "New chat" that sent a bot would have been barred from taking the real title the
  *     server holds for it.
  *
- *  `hidden` is the rail's own delete. Removing a row here never removed the agent session (the
- *  comment on `deleteChat` says so), and with the rail derived from those sessions a delete would
- *  otherwise come back on the next sign-in. */
+ *  `hidden` is the old browser-only delete list (`loadHidden`), applied only until it has been
+ *  migrated into server-side Hide marks; a delete is now the server's (`DELETE /api/sessions/{id}`). */
 export function mergeChats(local: Chat[], server: Chat[], hidden: string[] = []): Chat[] {
   const drop = new Set(hidden ?? []);
   const by = new Map<string, Chat>();
@@ -613,7 +621,15 @@ export function chatForRow(chats: Chat[], row: Row, meetings: MeetingMock[], now
 export function isMachineryLabel(label: string): boolean {
   const t = (label ?? "").trim();
   if (!t) return false;
-  return t.startsWith("[") || t.startsWith("Active context") || t.startsWith("Active meeting");
+  return t.startsWith("[") || t.startsWith("<!--") || t.startsWith("Active context") || t.startsWith("Active meeting");
+}
+
+/** A label without any `<!--vexa:…-->` marker (Vexa-ai/vexa#1641). The composer puts
+ *  `<!--vexa:user-input-below-->` in front of the person's sentence, and rows named before the server
+ *  stripped it read `<!--vexa:user-input-below-->zz-delete…` on the rail and in the delete dialog. An
+ *  HTML comment is never text to show: a stored label is cleaned where it is read, not rewritten. */
+export function stripMarkers(label: string): string {
+  return (label ?? "").replace(/<!--\s*vexa:[\s\S]*?(?:-->|$)/g, " ").replace(/\s+/g, " ").trim();
 }
 
 /** A label NOBODY CHOSE. The `+` button mints "New chat" and a normalised record falls back to
@@ -632,7 +648,7 @@ export const CHAT_TITLE_MAX = 48;
 
 /** The person's first sentence, as a rail row's name: one line, trimmed, cut with an ellipsis. */
 export function titleFromTurn(text: string): string {
-  const one = (text ?? "").replace(/\s+/g, " ").trim();
+  const one = stripMarkers(text ?? "");
   if (!one) return "";
   return one.length > CHAT_TITLE_MAX ? one.slice(0, CHAT_TITLE_MAX - 1).trimEnd() + "…" : one;
 }
@@ -848,7 +864,7 @@ export function homeEntry(workspaces: string[] = []): Artifact {
   const group = workspaces.find((w) => w && w !== "_global" && w !== "personal" && !/^u_/.test(w));
   return group
     ? { path: "README.md", slug: group, label: group, desk: true }
-    : { path: "README.md", label: "Desk", desk: true };
+    : { path: "README.md", label: "Personal", desk: true };
 }
 
 /** Compose a strip with the chat's home at its head. Idempotent, and it never duplicates: a chat
@@ -1060,10 +1076,13 @@ export function saveChats(chats: Chat[]): void {
   try { localStorage.setItem(CHATS_KEY, JSON.stringify(chats)); } catch { /* ignore */ }
 }
 
-/** THE ROWS THIS READER DELETED. A tombstone list, and it exists because the rail now derives from
- *  the server: `deleteChat` has always meant *"off my rail"* rather than *"destroy the thread"*
- *  (its own comment: "its agent session stays on the server"), and without a record of the delete
- *  the next sign-in would fetch the row straight back. Local, like the choice it remembers. */
+/** THE OLD DELETE'S TOMBSTONES — read once, to MIGRATE, and never written again.
+ *
+ *  Delete used to mean "off my rail in this browser": an id in this list and nothing on the server.
+ *  It now deletes the chat on the server (`DELETE /api/sessions/{id}`), and the reversible "off my
+ *  rail" is Hide, a per-person mark the server keeps (`railMarks.ts`). Each id still in this list is
+ *  turned into a Hide once (`MinutesShell`), then the list is cleared. Until that has happened the
+ *  merge still leaves the listed chats out, so nothing a person removed reappears in between. */
 export const RAIL_HIDDEN_KEY = "vexa.minutes.chatsHidden";
 
 export function loadHidden(): string[] {
@@ -1073,11 +1092,9 @@ export function loadHidden(): string[] {
   } catch { return []; }
 }
 
-/** Remember one delete. Returns the new list so a caller never has to re-read to know it landed. */
-export function hideChat(id: string): string[] {
-  const next = [...new Set([...loadHidden(), id])];
-  try { localStorage.setItem(RAIL_HIDDEN_KEY, JSON.stringify(next)); } catch { /* ignore */ }
-  return next;
+/** The migration is done: forget the tombstones. */
+export function clearHidden(): void {
+  try { localStorage.removeItem(RAIL_HIDDEN_KEY); } catch { /* ignore */ }
 }
 
 export function loadRailAll(): boolean {
@@ -1095,6 +1112,19 @@ export function loadCollapsed(side: Side): boolean {
   try { return localStorage.getItem(COLLAPSED_KEY[side]) === "1"; } catch { return false; }
 }
 
-export function saveCollapsed(side: Side, collapsed: boolean): void {
-  try { localStorage.setItem(COLLAPSED_KEY[side], collapsed ? "1" : "0"); } catch { /* ignore */ }
+/** Where the pages panel's dragged width used to live. */
+export const LEGACY_PAGES_W_KEY = "vexa.minutes.pagesW";
+
+/** THE SHELL'S FIRST READ, for a profile that has no `vexa.shell.v1` yet: the reader's old folds and
+ *  the old pages width carried into the new store (the width for both modes the panel docked at
+ *  before — wide and desktop — so it comes back clamped, not reset). Read-only: nothing writes these
+ *  keys any more. */
+export function legacyShellStore(): { prefs: { railOpen: boolean; pagesOpen: boolean }; widths: { wide?: { pages: number }; desktop?: { pages: number } } } {
+  let w = NaN;
+  try { w = Number(localStorage.getItem(LEGACY_PAGES_W_KEY)); } catch { /* ignore */ }
+  const pages = Number.isFinite(w) && w > 0 ? Math.round(w) : undefined;
+  return {
+    prefs: { railOpen: !loadCollapsed("left"), pagesOpen: !loadCollapsed("right") },
+    widths: pages ? { wide: { pages }, desktop: { pages } } : {},
+  };
 }

@@ -331,7 +331,7 @@ def test_the_kick_names_the_desks_it_may_read(monkeypatch):
     reg.steps["process_meeting"](StepCtx(reaction=r, effect_key="k", prior={},
                                          clock_now=1_700_000_000.0, scratch={}, flow=None))
     assert "anna.smith@bank.test, ben@bank.test" in seen["prompt"]
-    assert "READ-ONLY access to the desks" in seen["prompt"]
+    assert "READ-ONLY access to the personal workspaces" in seen["prompt"]
     assert "never copy a line, a note or a phrase out of one into this report" in seen["prompt"]
 
 def test_the_kick_reads_the_transcript_by_the_resolved_row(monkeypatch):

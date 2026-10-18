@@ -36,7 +36,8 @@ import httpx  # the downstream adapter's transport errors are mapped to 502/504 
 from fastapi import FastAPI, Request, Response, WebSocket
 
 from . import identity_token, routes_manifest
-from .delegation import McpReentry, delegated_route_response, is_delegated, reported_admin
+from .delegation import (McpReentry, delegated_route_response, is_delegated, reported_admin,
+                         reported_admin_account)
 from .multiplex import run_multiplex
 from .paths import (forwarded_param, forwarded_target_error, invalid_path_param_response,
                     path_segment, tail_path)
@@ -169,6 +170,12 @@ _DEFAULT_MCP_URL = "http://mcp:8010"
 # ``mcp-session-id`` is minted by the server on initialize and echoed by the client on every later
 # request; drop it at the edge and the session can never be bound. Passed through on BOTH legs.
 _MCP_HEADERS = ("mcp-session-id", "mcp-protocol-version")
+
+#: The meeting-bundle hop's own deadline (`_forward_meeting_bundle`): a bundle is one file of up to
+#: hundreds of MB, so the buffered leg's 30 s total would cap it at whatever a link moves in 30 s.
+#: Connecting and getting a pool slot stay as tight as anywhere; reading and writing may pause for
+#: up to ten minutes between chunks (a slow uplink, a recording master being assembled).
+BUNDLE_TIMEOUT = httpx.Timeout(connect=10.0, read=600.0, write=600.0, pool=10.0)
 
 
 # Every hop's path is built from what the request MATCHED, never interpolated raw: a meetings row's
@@ -314,6 +321,7 @@ def create_app(
         if delegated and not _admits_mcp_reentry(request, user_data):
             return delegated_route_response()
         is_admin = reported_admin(user_data, delegated=delegated)
+        admin_account = reported_admin_account(user_data, delegated=delegated)
         set_user_id(user_data["user_id"])
         return {
             "user_id": user_data["user_id"],
@@ -321,6 +329,7 @@ def create_app(
             "scopes": user_data.get("scopes", []),
             "max_concurrent": user_data.get("max_concurrent", 3),
             "is_admin": is_admin,
+            "admin_account": admin_account,
         }
 
     # --- auth + identity prep, shared by the buffered REST proxy (_forward) and the streaming proxy
@@ -562,6 +571,51 @@ def create_app(
             return error
         return await _forward(request.method, url, request)
 
+    # A MEETING BUNDLE IS ONE FILE OF UP TO HUNDREDS OF MB, and it is the only meetings traffic that
+    # is. Its three rows ride a streamed forward instead of the buffered one: the request body is
+    # relayed as it arrives (never read into this process), the response is relayed chunk by chunk
+    # with its Content-Length and Content-Disposition, and the hop carries its own deadline,
+    # `BUNDLE_TIMEOUT`, in place of the buffered leg's 30 s — scoped to these routes alone, so no
+    # other route's fault detection loosens. Authorization, the target and the identity it carries
+    # are the buffered forward's, unchanged.
+    async def _forward_meeting_bundle(request: Request) -> Response:
+        url, error = _meeting_target(request)
+        if error is not None:
+            return error
+        headers, error = await _authorize(request.method, request)
+        if error is not None:
+            return error
+        content = request.stream() if request.method == "POST" else None
+        stack = AsyncExitStack()
+        try:
+            upstream = await stack.enter_async_context(downstream.open_stream(
+                request.method, url, headers=headers, params=dict(request.query_params) or None,
+                content=content, timeout=BUNDLE_TIMEOUT))
+        except httpx.InvalidURL:
+            await stack.aclose()
+            return invalid_path_param_response()
+        except httpx.TimeoutException:
+            await stack.aclose()
+            return Response(content=json.dumps({"detail": "upstream timeout"}),
+                            status_code=504, media_type="application/json")
+        except httpx.RequestError as e:
+            await stack.aclose()
+            return Response(content=json.dumps({"detail": f"upstream unreachable: {type(e).__name__}"}),
+                            status_code=502, media_type="application/json")
+        log_event("downstream_stream_opened", audience="system", level="debug", span="proxy",
+                  fields={"method": request.method, "path": url, "downstream_status": upstream.status_code})
+
+        async def body():
+            async with stack:  # closes the downstream stream when the client goes away
+                async for chunk in upstream.aiter_bytes():
+                    yield chunk
+
+        up = upstream.headers
+        relayed = {k: up[k] for k in ("content-length", "content-disposition", "x-content-type-options",
+                                     "cache-control") if k in up}
+        return StreamingResponse(body(), status_code=upstream.status_code,
+                                 media_type=up.get("content-type") or "application/json", headers=relayed)
+
     # ---- CORE routes (each forwards to the matching downstream path, per main's route table) ----
     @app.get("/bots")
     async def list_bots(request: Request):
@@ -666,10 +720,28 @@ def create_app(
     async def create_planned_meeting(request: Request):
         return await _forward_meeting(request)
 
+    # Import a meeting-bundle.v1 archive as a new meeting the caller owns (`?dry_run=true` previews
+    # it and writes nothing). A literal segment, so it is never matched as a row id.
+    @app.post("/meetings/import")
+    async def import_meeting_bundle(request: Request):
+        return await _forward_meeting_bundle(request)
+
     # Single meeting — forwards to meeting-api's GET /meetings/{id} (the meeting-detail page reads it).
     @app.get("/meetings/{meeting_id}")
     async def meeting(meeting_id: int, request: Request):
         return await _forward_meeting(request)
+
+    # The meeting as one portable meeting-bundle.v1 file, for its owner. The zip and its
+    # Content-Disposition pass through verbatim.
+    @app.get("/meetings/{meeting_id}/export")
+    async def export_meeting_bundle(meeting_id: int, request: Request):
+        return await _forward_meeting_bundle(request)
+
+    # The same export with a parts archive as the body: the meeting's workspace tree and notes page,
+    # which the owner's client fetched from the agent domain, placed into the bundle by meeting-api.
+    @app.post("/meetings/{meeting_id}/export")
+    async def export_meeting_bundle_with_parts(meeting_id: int, request: Request):
+        return await _forward_meeting_bundle(request)
 
     # Edit / delete a PLANNED meeting by ROW id (owner-scoped; meeting-api refuses FSM rows with 409).
     @app.patch("/meetings/{meeting_id}")
@@ -707,6 +779,27 @@ def create_app(
     # _forward, so the same auth/identity header prep (X-User-Id, X-User-Email, X-User-Workspaces).
     @app.post("/meetings/{meeting_id}/share")
     async def mint_transcript_share_by_id(meeting_id: int, request: Request):
+        return await _forward_meeting(request)
+
+    # The OWNER's side of a share: who can read this meeting, the recording setting, and taking
+    # access back — a grant (an invite or a link) or one reader. Row-id addressed like the mint above;
+    # meeting-api owner-scopes every one (404 for a meeting that is not the caller's). The `int`
+    # meeting id keeps `PATCH /meetings/42/access` off the pair route, whose first segment is a
+    # platform name.
+    @app.get("/meetings/{meeting_id}/access")
+    async def get_meeting_access(meeting_id: int, request: Request):
+        return await _forward_meeting(request)
+
+    @app.patch("/meetings/{meeting_id}/access")
+    async def set_meeting_access(meeting_id: int, request: Request):
+        return await _forward_meeting(request)
+
+    @app.delete("/meetings/{meeting_id}/share/{grant_id}")
+    async def revoke_meeting_share(meeting_id: int, grant_id: str, request: Request):
+        return await _forward_meeting(request)
+
+    @app.delete("/meetings/{meeting_id}/viewers/{viewer_id}")
+    async def remove_meeting_viewer(meeting_id: int, viewer_id: int, request: Request):
         return await _forward_meeting(request)
 
     # Import a transcript into a meeting the caller owns — "this already happened, here are its

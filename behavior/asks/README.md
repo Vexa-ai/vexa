@@ -51,14 +51,14 @@ invite one fill. `prep` deliberately has NO such branch: the prepare mail never 
 (*"if you are only an attendee, meeting prep is probably not what needs to be in the flow for them
 at all"*), so a prepare chat is always with somebody who already knows what this is.
 
-### `personal:pile` — a desk nobody has talked to
+### `personal:pile` — a personal workspace nobody has talked to
 
-Founder rule, 2026-09-02: **a desk nobody talks to is a flat pile of reports.** The drop after each
+Founder rule, 2026-09-02: **a personal workspace nobody talks to is a flat pile of reports.** The drop after each
 meeting writes the report and nothing else — no people, no decisions, no open items — because wiring
 costs tokens and tokens are spent on people who show up, not on people who might.
 
-So when somebody does show up and their desk holds reports that are not wired into entities, the
-agent's **first offer** is to wire them: *"you have N reports on your desk from the last two weeks;
+So when somebody does show up and their personal workspace holds reports that are not wired into entities, the
+agent's **first offer** is to wire them: *"you have N reports in your personal workspace from the last two weeks;
 want me to turn them into people, decisions and open items?"* Proposed, never done unasked — an
 unasked wiring pass spends the tokens this rule exists to protect, and takes the decision away from
 the only person entitled to make it.
@@ -72,6 +72,6 @@ branch at all. Wiring the token is a terminal change and a rebuild; it is not do
 
 The rule appears in `minutes-review-invite`, `minutes-review` and `catch-up`. It carries a
 one-offer-per-turn clause with it: a person asked two things answers neither, and the wiring offer
-outranks the "Vexa in your own meetings" ask because it is about the desk they already have rather
+outranks the "Vexa in your own meetings" ask because it is about the personal workspace they already have rather
 than a meeting they have not had yet.
 

@@ -17,7 +17,7 @@ import re
 import time
 from datetime import datetime
 from html.parser import HTMLParser
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 
@@ -133,9 +133,49 @@ _PROVIDER_STATUS = {
 }
 
 
+#: Gmail ids are opaque URL-safe tokens; anything else never reaches a link.
+_GMAIL_ID = re.compile(r"[a-zA-Z0-9_-]{1,128}")
+#: The only hosts a calendar event's `htmlLink` may name to be passed on as `web_url`.
+CALENDAR_LINK_HOSTS = frozenset({"calendar.google.com", "www.google.com"})
+
+
+def gmail_web_url(account: str, thread_id, message_id=None) -> str:
+    """The Gmail web address of a thread in the CONNECTED mailbox, or "" when none can be built.
+
+    `account` is the address the broker recorded at consent (Gmail's own profile answer), never a
+    caller argument. Gmail's `/mail/u/<address>/` route opens the browser session signed in as that
+    address; an index (`/u/0/`) would open whichever account the browser happens to list first, so
+    without a recorded address no link is built at all. The address is percent-encoded (`+` and any
+    reserved character), keeping only `@`."""
+    if not isinstance(account, str) or not 3 <= len(account) <= 320 or account.count("@") != 1 \
+            or any(ord(c) <= 32 or ord(c) == 127 for c in account):
+        return ""
+    target = thread_id if isinstance(thread_id, str) and thread_id else message_id
+    if not isinstance(target, str) or not _GMAIL_ID.fullmatch(target):
+        return ""
+    return "https://mail.google.com/mail/u/" + quote(account, safe="@") + "/#all/" + target
+
+
+def calendar_web_url(link) -> str:
+    """An event's Google `htmlLink`, passed through only as an https URL on a Google Calendar host."""
+    if not isinstance(link, str) or len(link) > 2048:
+        return ""
+    try:
+        parts = urlsplit(link)
+        port = parts.port
+    except ValueError:
+        return ""
+    if parts.scheme != "https" or parts.hostname not in CALENDAR_LINK_HOSTS or port is not None \
+            or parts.username is not None or parts.password is not None or parts.netloc != parts.hostname:
+        return ""
+    return link
+
+
 def read_account(provider, value, action, *, query="", message_id="", time_min="", time_max="",
-                 limit=10, page_token="", http=None):
-    """On-demand account reads. Fixed hosts and methods, never a general HTTP proxy."""
+                 limit=10, page_token="", account="", http=None):
+    """On-demand account reads. Fixed hosts and methods, never a general HTTP proxy.
+
+    `account` is the connected address from the broker's own metadata; it only shapes `web_url`."""
     if action not in {"gmail.search", "gmail.read", "gmail.thread", "calendar.events"} or \
             provider != ("google_calendar" if action == "calendar.events" else "google_email"):
         raise ProviderError("Operation does not match this connection")
@@ -145,7 +185,7 @@ def read_account(provider, value, action, *, query="", message_id="", time_min="
         with httpx.Client(timeout=15, follow_redirects=False) as session:
             return read_account(provider, value, action, query=query, message_id=message_id,
                                 time_min=time_min, time_max=time_max, limit=limit,
-                                page_token=page_token, http=session)
+                                page_token=page_token, account=account, http=session)
 
     def get(url, params):
         try:
@@ -177,6 +217,9 @@ def read_account(provider, value, action, *, query="", message_id="", time_min="
         payload = data.get("payload", {})
         headers = {h["name"].lower(): h.get("value", "")[:4000] for h in payload.get("headers", [])}
         result = {k: data.get(k) for k in ("id", "threadId", "internalDate", "snippet")}
+        link = gmail_web_url(account, result.get("threadId"), result.get("id"))
+        if link:
+            result["web_url"] = link
         result["headers"] = {k: headers.get(k, "") for k in
                              ("from", "to", "cc", "reply-to", "subject", "date", "message-id", "in-reply-to", "references")}
         if full:
@@ -215,6 +258,9 @@ def read_account(provider, value, action, *, query="", message_id="", time_min="
         if offset < 0:
             raise ProviderError("Invalid thread offset")
         rows = data.get("messages", [])
+        for row in rows:  # a thread's messages link to the thread they were read from
+            if isinstance(row, dict) and not row.get("threadId"):
+                row["threadId"] = data.get("id")
         more = offset + limit < len(rows)
         return {"thread_id": data.get("id"), "messages": [message(m["id"], True, m) for m in rows[offset:offset + limit]],
                 "has_more": more, "next_page_token": str(offset + limit) if more else "", "total_messages": len(rows)}
@@ -236,7 +282,14 @@ def read_account(provider, value, action, *, query="", message_id="", time_min="
                 "orderBy": "startTime", **({"pageToken": page_token} if page_token else {})})
     keep = ("id", "summary", "description", "start", "end", "location", "htmlLink", "status", "attendees",
             "organizer", "creator", "recurringEventId", "originalStartTime", "updated", "attendeesOmitted")
-    return {"events": [{k: e.get(k) for k in keep} for e in data.get("items", [])[:limit]],
+
+    def event(e):
+        row = {k: e.get(k) for k in keep}
+        link = calendar_web_url(e.get("htmlLink"))
+        if link:
+            row["web_url"] = link
+        return row
+    return {"events": [event(e) for e in data.get("items", [])[:limit]],
             "has_more": bool(data.get("nextPageToken")), "next_page_token": data.get("nextPageToken", "")}
 
 

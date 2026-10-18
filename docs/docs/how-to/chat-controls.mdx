@@ -1,6 +1,6 @@
 ---
 title: "Manage your chats"
-description: "The terminal's chat list: see which chats are working, rename and reorder them, reopen their history, copy a meeting transcript, and delete a chat with a second click."
+description: "The terminal's chat list: newest first, pin rows to the top, hide and unhide them, rename chats, reopen their history, copy a meeting transcript, and delete a chat for good."
 ---
 
 The left column of the terminal is one list of your chats. A meeting is a chat too: opening its row
@@ -10,10 +10,18 @@ opens the meeting's page. This page covers the controls on that list and on the 
 |---|---|---|
 | Activity dot | each row | blue while the agent is working in that chat |
 | Rename | the chat's name in the header | gives the chat your own title |
-| Reorder | drag a row | saves your order of the list |
+| Pin / Unpin | `⋯` on a row → **Pin to top** | keeps the row at the top, on every device |
+| Hide / Unhide | `⋯` on a row → **Hide**; **Hidden** in the header to bring it back | takes the row out of the list, reversibly |
+| Reorder pins | drag a pinned row onto another pinned row | saves the order of your pins |
 | History | click a row | reopens the conversation |
 | Copy transcript | the transcript on a meeting page | copies what was said |
-| Delete | `×` on a row, then `✓` | removes the chat from the list in this browser |
+| Delete | `⋯` on a row → **Delete…**, then `✓` | deletes the chat and its conversation for good |
+
+## The order of the list
+
+Pinned rows come first. Every other row follows, newest first: a chat by its last message, a meeting
+by the later of its start and its chat's last message. A meeting that is live right now is lifted to
+the top of the unpinned rows. A chat you start appears at the top of the unpinned rows.
 
 ## See which chats are working
 
@@ -21,8 +29,10 @@ A row shows a blue dot ("Agent is working") while a turn is running in that chat
 background job started from it is running. A job that is only queued does not count. Several chats
 can be working at once, and switching to another chat does not stop a turn.
 
-Other dots: a live meeting's row has an accent dot and shows the time in the accent colour, and a
-finished meeting's chat is tagged `held`.
+Other dots: a meeting's row has a filled dot and a chat's an outlined one. A live meeting's row has
+an accent dot and says `live`, in the accent colour, where the time goes. Every other row, a finished
+meeting included, shows its time there: a clock today, a weekday this week, a date before that. A
+meeting row shows the meeting's own time, not when its chat was last used.
 
 **Limit.** The dot reflects the turns and jobs this browser tab is following. It is not read from the
 server, so another browser or a reload does not show turns that tab is not streaming.
@@ -34,6 +44,9 @@ server, so another browser or a reload does not show turns that tab is not strea
 3. Type a title and press Enter or **Save**. **Escape** or **Cancel** leaves it unchanged.
 
 - Titles are 1 to 100 characters. Spaces are collapsed and an empty title cannot be saved.
+- A chat's automatic name is taken from your own words only. The context the terminal sends ahead
+  of your message, and any `<!--vexa:…-->` marker, never appear in a name; a name saved before this
+  rule is shown without them.
 - A chat you have not sent anything in yet cannot be renamed.
 - If the save fails, the box stays open with "Couldn't save. Try again."
 
@@ -41,14 +54,54 @@ The agent also names chats. Once a task is clear, it gives the chat a short titl
 words with its `chat_name` tool. **A title you chose is never overwritten by the agent.** The list
 picks up new names about every five seconds.
 
-## Reorder the list
+## Pin a row
 
-Drag a row and drop it on another row. The dragged row takes that row's place. Your order is saved
-for your account, so it is the same in every browser you sign in from. Chats that are not in your
-saved order yet, such as new ones, follow the ordered rows, newest first.
+1. Hover a row, or tab to it: a `⋯` button appears at its right (on a touch screen it is always
+   there). Press it, or press Enter on it.
+2. Choose **Pin to top**. The row moves to the top and shows a small pin.
 
-If the order cannot be saved, the list keeps its previous order and shows "Couldn't save chat order.
-Try again."
+Choose **Unpin** to put it back in time order. Pins are saved for your account, so they are the same
+in every browser you sign in from and survive a reload. You can pin a chat or a meeting you can see,
+including a meeting someone shared with you; your pins never change anyone else's list.
+
+To reorder your pins, drag one pinned row onto another. Unpinned rows cannot be dragged: their place
+is their time. If a pin or the order cannot be saved, the list keeps what it had and shows an error.
+
+## Hide a row
+
+Choose **Hide** in the row's `⋯` menu. The row leaves the list, from every device. Hiding deletes
+nothing.
+
+To bring it back, press **Hidden N** in the list's header. The list shows only hidden rows; choose
+**Unhide** in a row's menu, then **Done**. **Hidden** appears only while something is hidden.
+
+The menu works from the keyboard: the first item takes focus, Arrow Up and Down move, Enter chooses,
+Escape closes it and returns focus to `⋯`.
+
+## Keyboard shortcuts
+
+These act on the chat that is open, while its row is in the list you are looking at. The menu shows
+each one beside its item.
+
+| Action | Mac | Windows and Linux | In the open `⋯` menu |
+|---|---|---|---|
+| Pin / Unpin | `⇧⌘P` | `Ctrl+Shift+P` | `P` |
+| Hide / Unhide | `⇧⌘X` | `Ctrl+Shift+X` | `H` |
+| Delete… | `⌘⌫` | `Ctrl+Backspace` | `D` |
+| New chat | `⇧⌘E` | `Ctrl+Shift+E` | |
+
+- **Delete always asks.** The shortcut opens the same `✓` confirmation as the menu; nothing is deleted
+  until you confirm.
+- **Typing is never taken.** Single letters work only inside the open menu. `⌘⌫` / `Ctrl+Backspace`
+  does nothing while you are in a text field, where it deletes text. The `Shift` shortcuts work from
+  the composer too.
+- **Only a row you can see.** If the open chat is not in the list on screen (for example it is
+  filtered out by **All**, or you are in **Hidden** and it is not hidden), the row shortcuts do
+  nothing. While the list is collapsed, none of these shortcuts work.
+- **Other browsers.** None of these is a Chrome, Safari or macOS shortcut. In Firefox, `Ctrl+Shift+P`
+  opens a private window and `Ctrl+Shift+E` opens the network panel; in Edge, `Ctrl+Shift+P` opens an
+  InPrivate window and `Ctrl+Shift+E` opens sidebar search. While the terminal has focus, these keys
+  go to the terminal.
 
 ## Reopen a chat's history
 
@@ -72,21 +125,32 @@ server.
 
 ## Delete a chat
 
-1. Hover a row, or tab to its delete button. A `×` appears at its right.
-2. Click `×`. It turns into a red `✓` ("Click again to delete chat").
-3. Click `✓` to delete.
+1. In the row's `⋯` menu, choose **Delete…**. The `⋯` turns into a red `✓` ("Click again to delete
+   chat").
+2. Click `✓` to delete.
 
-Pressing **Escape**, clicking anywhere else, moving focus away or starting a drag cancels it. A
-meeting row that has no chat has no `×`.
+Escape, clicking anywhere else or moving focus to another control cancels it. A meeting row with no chat has no
+**Delete…**: deleting a meeting is done on the meeting, not in this list.
 
-**What delete does.** It removes the chat from the list **in this browser** and remembers that it is
-hidden there. It does not delete the conversation on the server: the session and its history stay,
-and another browser still lists the chat. A meeting's own row returns, because the meeting still
-exists. If you delete the chat you are in, the terminal opens your most recent other chat, or a new
-one if there is none.
+**What delete does.** It is permanent and applies on every device:
 
-To drop a conversation on the server, use `POST /agent/chat/reset` (see
-[Chat with your workspace](/how-to/chat-workspace#continue-a-conversation)).
+| | After delete |
+|---|---|
+| The chat in your list | gone, everywhere |
+| Its conversation (the turns you and the agent wrote) | deleted from the server; its history can no longer be opened |
+| Pages and files it wrote into a workspace | **kept** — they belong to the workspace |
+| Its pin, its hide and its place in your pin order | removed |
+| A meeting the chat was about | **not deleted**. Its row is hidden for you, so the meeting does not reappear in the chat's place; unhide it from **Hidden** |
+| A turn that is running in it | finishes in its worker; nothing shows it |
+
+A chat that still has messages waiting to run cannot be deleted yet ("This chat still has queued
+messages…"). Wait for them, then delete. A chat you never sent anything in exists only in your
+browser, and delete removes it there. If you delete the chat you are in, the terminal opens your most
+recent other chat, or a new one.
+
+Before this release, delete only removed a chat from the list in one browser. The first time you sign
+in after it, those chats are hidden for your account instead, so they stay out of your list
+everywhere and can be brought back from **Hidden**.
 
 ## How it works
 
@@ -100,28 +164,43 @@ To drop a conversation on the server, use `POST /agent/chat/reset` (see
 4. **Agent naming.** Each chat turn tells the agent its session id. The agent's `chat_name` tool calls
    `POST /agent/chat/name/agent` through the MCP re-entry route. That route always stores an agent
    name and has no field to claim a human one.
-5. **Order.** `GET /api/chat/order` reads your saved order; `PUT /api/chat/order` with `{order}`
-   replaces it. Each entry is a row key: `c:<chat session>` or `m:<meeting id>` (a bare session id
-   is accepted too), the part after the prefix held to the session-name rule.
-6. **History.** `GET /api/sessions/{session}/history` reads the conversation from the harness's
+5. **Order.** The terminal sorts rows newest first and puts your pinned rows on top
+   (`clients/terminal/src/minutes/chatOrder.ts`). `GET /api/chat/order` reads the saved order of
+   your pins; `PUT /api/chat/order` with `{order}` replaces it. Each entry is a row key:
+   `c:<chat session>` or `m:<meeting id>` (a bare session id is accepted too), the part after the
+   prefix held to the session-name rule.
+6. **Pin and hide.** `GET /api/chat/marks` returns `{pinned, hidden}`, lists of row keys.
+   `POST /api/chat/marks` with `{row, pinned?, hidden?}` sets or clears one row's marks. To set a
+   mark, agent-api checks you can see the row: a chat must be in your session index (or be a
+   meeting's own chat, `meet-<id>`, on a meeting you can read); a meeting must pass the same access
+   check that guards its transcript (owner, share recipient, or member of its workspace). The marks
+   are stored under your own subject, so a shared meeting's owner never sees your pins or hides.
+7. **Delete.** `DELETE /api/sessions/{session}` (the route the sealed `api.v1` contract declares).
+   agent-api checks the session is in your index, refuses while its inbox has queued submissions,
+   deletes the transcript and continuity pointer from your own workspace roots, drops the index
+   entry, your marks and your order entry for it, and hides the meeting's row when the chat was a
+   meeting's.
+8. **History.** `GET /api/sessions/{session}/history` reads the conversation from the harness's
    transcript in your workspace and returns simplified turns.
-7. **Activity, copy and delete** run in the browser only. Activity is kept in the page's memory,
-   copy uses the clipboard, and delete writes the hidden list to local storage
-   (`vexa.minutes.chatsHidden`).
+9. **Activity and copy** run in the browser only. Activity is kept in the page's memory and copy
+   uses the clipboard. The old browser-only delete list (`vexa.minutes.chatsHidden`) is read once,
+   turned into hides through `POST /api/chat/marks`, and cleared.
 
 **Who stores what.**
 
 | Data | Writer | Where |
 |---|---|---|
 | Session index: titles, `named_title`, `name_source` | agent-api | Redis hash per session (`_Sessions` in `core/agent/control_plane/api_shared.py`), in memory without Redis |
-| Rail order | agent-api | Redis key `agent:rail-order:{subject}`, a JSON list |
+| Rail order (of your pins) | agent-api | Redis key `agent:rail-order:{subject}`, a JSON list |
+| Pins and hides | agent-api | Redis hash `agent:rail-marks:{subject}`, one field per mark (`p:<row>`, `h:<row>`) |
 | Conversation | the worker's agent harness | the session transcript under the workspace's `.claude/projects/` |
-| Hidden chats, the "All" filter, collapsed columns | the terminal, in the browser | local storage |
+| The "All" filter, collapsed columns | the terminal, in the browser | local storage |
 
 **Routes.** `POST /api/chat/name`, `POST /api/chat/name/agent`, `GET` and `PUT /api/chat/order`,
-`GET /api/sessions`, `GET /api/sessions/{session}/history`, all in
-`core/agent/control_plane/routers/chats.py`. The agent route is declared in `core/agent/routes.v1.json`
-and in the `chat_name` row of `core/agent/mcp.tools.v1.json`.
+`GET` and `POST /api/chat/marks`, `GET /api/sessions`, `DELETE /api/sessions/{session}`,
+`GET /api/sessions/{session}/history`, all in `core/agent/control_plane/routers/chats.py`. The agent
+route is declared in `core/agent/routes.v1.json` and in the `chat_name` row of
+`core/agent/mcp.tools.v1.json`; the delete is a `person: true` verb there.
 
 **Configuration.** None. These controls have no settings.
 
@@ -132,10 +211,11 @@ and in the `chat_name` row of `core/agent/mcp.tools.v1.json`.
 | Rule | How this design meets it | Enforced by |
 |---|---|---|
 | P6 — one front door | The browser reaches agent-api only through the terminal's `/api/*` proxy and the gateway. | `gate:domain-doors` |
-| P4 — sealed contracts | The agent's naming tool is a row in `mcp.tools.v1.json`; its route is a row in `routes.v1.json`. | `gate:schema`, `gate:contract-version` |
-| P23 — one writer per carrier | agent-api alone writes the session index and the rail order. The rail order is a declared carrier with agent-api as its only writer. | `gate:dataflow` (rail order); session index: ungated, reviewed |
-| P18 — fail loud | A failed rename, order save or copy shows an error and keeps the old value; the session-list client (`surfaces/sessionsApi.ts`) throws on a backend error instead of returning an empty list. | ungated: reviewed |
-| P20 — default-deny | Every route is scoped to the caller's own index; a session that is not yours is `404`. | ungated: reviewed; deny tests below |
+| P4 — sealed contracts | The agent's naming tool is a row in `mcp.tools.v1.json`; its route is a row in `routes.v1.json`. Delete is the `DELETE /api/sessions/{session_id}` the sealed `api.v1` already declares, and a `person: true` verb in `routes.v1.json`. | `gate:schema`, `gate:contract-version`, `gate:contract-conformance`; `route_policy` refuses to start agent-api with an unflagged DELETE |
+| P23 — one writer per carrier | agent-api alone writes the session index, the rail order and the pins and hides. The rail order and the marks are declared carriers with agent-api as their only writer; marks are one hash field per flag, so a pin and a hide never overwrite each other. | `gate:dataflow` (rail order, rail marks); session index: ungated, reviewed |
+| P18 — fail loud | A failed rename, order save, pin, hide, delete or copy shows an error and keeps the old value; the session-list client (`surfaces/sessionsApi.ts`) throws on a backend error instead of returning an empty list. | ungated: reviewed |
+| P20 — default-deny | Every route is scoped to the caller's own index; a session that is not yours is `404`; a row you cannot see cannot be pinned or hidden; a failed meeting lookup denies. | deny tests below |
+| One state, server-held | Pins, hides and delete live on the server per person, not in one browser's storage. | tests below |
 
 **Security**
 
@@ -145,7 +225,15 @@ and in the `chat_name` row of `core/agent/mcp.tools.v1.json`.
 - **What is refused.** A rename of a session not in your index (`404`); a title that is empty or over
   100 characters (`422`); a session id outside the session-name rule, in a rename, an order or a
   history path (`422`); an order entry that is not a row key (`422`); an order with duplicates or more than 5000 entries (`422`); an agent claiming
-  a human name (`422`); the agent overwriting a human name (no change).
+  a human name (`422`); the agent overwriting a human name (no change); a pin or hide on a chat that is
+  not yours or a meeting you cannot read (`404`); a mark request with no flag or an extra field (`422`);
+  a delete of a session that is not yours (`404`), of a chat with queued messages (`409`), or by an
+  agent acting for you (`403`).
+- **Shared meetings.** Your pins and hides on a meeting shared with you are stored under your own
+  subject. The owner's list never changes.
+- **Delete removes only your own things.** The transcript and pointer are removed only from the
+  workspace roots the history route would search for you, by descriptor, so a planted link is never
+  followed. Workspace pages are never touched.
 - **History.** The server searches only your own workspaces and those your memberships mount. A
   session it does not find there is `404`, whoever else has a thread of that name.
 
@@ -153,9 +241,13 @@ Deny tests:
 
 | Where | Tests |
 |---|---|
+| `core/agent/tests/test_rail_marks.py` | `test_another_persons_chat_cannot_be_pinned_or_hidden`, `test_a_meeting_is_markable_only_by_someone_who_can_read_it`, `test_a_shared_meeting_is_marked_for_the_viewer_and_never_for_the_owner`, `test_a_failing_meeting_lookup_denies`, `test_a_bad_mark_is_refused`, `test_the_marks_are_bounded` (each on memory and Redis) |
+| `core/agent/tests/test_chat_delete.py` | `test_delete_removes_the_chat_its_conversation_and_its_marks`, `test_deleting_a_meeting_chat_hides_the_meeting_row_and_keeps_the_meeting`, `test_another_persons_chat_cannot_be_deleted`, `test_an_agent_acting_for_the_person_cannot_delete`, `test_a_chat_with_queued_messages_is_not_deleted` |
 | `core/agent/tests/test_chat_names.py` | `test_human_name_is_protected_and_scoped`, `test_order_is_per_person`, `test_routes_validate_and_isolate`, `test_agent_title_and_manual_title_reach_the_rail`, `test_the_agent_names_through_its_own_route_and_never_overrides_the_person`, `test_the_rail_order_takes_the_row_keys_the_terminal_sends` |
 | `core/agent/tests/test_chat_session_bound.py` | `test_the_history_path_refuses_a_session_outside_the_bound`, `test_the_naming_bodies_refuse_a_session_outside_the_bound`, `test_the_rail_order_and_the_target_refuse_a_session_outside_the_bound` |
 | `core/agent/tests/test_identity_guard.py` | `test_an_unsigned_identity_is_refused`, `test_naming_nobody_is_401_and_there_is_no_fallback_subject`, `test_the_gateway_signed_identity_is_believed_and_wins_over_plain_headers` |
 | `core/agent/tests/test_workspace_slug_containment.py` | `test_history_never_returns_another_subjects_thread` |
-| `clients/terminal/src/minutes/__tests__/chatControls.test.tsx` | "saves a clicked title and cancels without a write"; "requires a confirmation and permits cancellation"; "reorders both directions, keeps new chats and ignores invalid drags" |
+| `clients/terminal/src/minutes/__tests__/chatControls.test.tsx` | "saves a clicked title and cancels without a write"; "requires a confirmation and permits cancellation"; "a chat started now is on top even when a saved order exists"; "pinned rows lead…"; "pins, hides and unhides from the row menu, by keyboard too"; "the Hidden view lists hidden rows with Unhide" |
+| `clients/terminal/src/minutes/__tests__/railShortcuts.test.tsx` | each shortcut; "typing is never taken"; "never acts on a row the person cannot see…"; "Ctrl+Backspace only arms the confirm…"; "the armed ✓ survives a blur to nothing…" |
+| `clients/terminal/src/minutes/__tests__/railMarks.test.ts` | "deleting a meeting's chat used to leave the same row behind"; pin and hide filters; server reads and writes |
 | `clients/terminal/src/minutes/__tests__/chatActivity.test.tsx` | "tracks concurrent chats independently and clears completed/failed turns"; "keeps running jobs active after composer is released; queued-only jobs are not active" |

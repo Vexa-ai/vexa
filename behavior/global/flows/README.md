@@ -1,6 +1,6 @@
 ---
 kind: flow-index
-flows: 11
+flows: 12
 generated: from the code that runs them — edits here are overwritten
 ---
 
@@ -18,8 +18,10 @@ Everything this deployment does on its own, one page each. A flow is a trigger a
 | [`invite_intake`](invite_intake.md) | `invite.received` | 9 | — |
 | [`live_meeting`](live_meeting.md) | `meeting.started` | 1 | — |
 | [`meeting_prep`](meeting_prep.md) | `meeting.upcoming` | 1 | `prep_and_invite_mail` |
+| [`meeting_share`](meeting_share.md) | `meeting.shared` | 1 | — |
 | [`onboarding`](onboarding.md) | `onboarding.completed` | 1 | — |
-| [`post_meeting`](post_meeting.md) | `meeting.completed` | 4 | `report_to_participants`, `external_participants`, `attendee_domains`, `data_statement` |
+| [`post_meeting`](post_meeting.md) | `meeting.completed` | 4 | `report_to_participants`, `external_participants`, `minutes_mail`, `attendee_domains`, `data_statement` |
+| [`routine_paused`](routine_paused.md) | `routine.paused` | 1 | — |
 | [`workspace_invite`](workspace_invite.md) | `workspace.invited` | 1 | — |
 
 The rules are answered in [`POLICIES.md`](../POLICIES.md), one directory up.

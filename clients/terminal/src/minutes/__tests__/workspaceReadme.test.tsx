@@ -80,7 +80,7 @@ global_admin_only: on
 
 **Default \`on\`.**
 
-### \`global_admin_only\` — only the admin writes \`_global\` (editors may be added)
+### \`global_admin_only\` — only the admin account writes \`_global\`
 `;
 
 const COMMITS = [
@@ -116,7 +116,7 @@ const open = async (container: HTMLElement, id: "people" | "repo" | "history") =
 const serveFetch = (meetings: unknown[] = [], isAdmin = false) => {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
     ok: true,
-    json: async () => (String(url).includes("/api/auth/me") ? { is_admin: isAdmin } : meetings),
+    json: async () => (String(url).includes("/api/auth/me") ? { admin_account: isAdmin } : meetings),
   })) as unknown as typeof fetch);
 };
 
@@ -154,7 +154,7 @@ describe("the policy sentence is READ from _global/POLICIES.md, never retyped", 
   it("one sentence per kind, in the file's own words", () => {
     expect(policySentence("group", POLICIES)).toBe("a member reads a group; an owner or contributor writes it");
     expect(policySentence("desk", POLICIES)).toBe("an agent may read its user's desk when its user is a participant");
-    expect(policySentence("global", POLICIES)).toBe("only the admin writes _global (editors may be added)");
+    expect(policySentence("global", POLICIES)).toBe("only the admin account writes _global");
   });
   it("says nothing rather than something stale when the file cannot be read or has moved on", () => {
     expect(policySentence("group", null)).toBeNull();
@@ -235,7 +235,9 @@ describe("the panel stands on a workspace README and nowhere else", () => {
     // title, not a clause in the middle of a sentence about people.
     expect(container.querySelector("[data-ws-eyebrow]")?.textContent).toBe("Shared workspace");
     expect(where.textContent).toContain("you");
-    // between the crumb above and the prose below — the reading order is the claim
+    // between the crumb above and the prose below — the reading order is the claim. The body is
+    // compiled as MDX asynchronously, so wait for it rather than racing it (it lost under load).
+    await waitFor(() => expect(container.textContent).toContain("The workspace body."));
     const text = container.textContent ?? "";
     expect(text.indexOf("Shared workspace")).toBeLessThan(text.indexOf("The workspace body."));
     expect(container.querySelector("[data-ws-readme]")?.getAttribute("data-ws-kind")).toBe("group");

@@ -69,6 +69,10 @@ auto-join block list), `meetingApi.transcriptionLanguage` / `meetingApi.transcri
   the gateway, agent-api, the MCP service, the runtime and meeting bots. Agent workers reach neither —
   they act through the gateway. Add your own peers with `networkPolicy.agentApi.extraFrom` /
   `networkPolicy.meetingApi.extraFrom`. The policy needs a CNI that enforces NetworkPolicy.
+- **The admin account.** `adminApi.adminAccount` (admin-api `VEXA_ADMIN_ACCOUNT`) names the one
+  account that writes the company layer `_global`; it has no desk, workspaces or meetings. Use a fresh
+  address, roll admin-api, then sign in as that address. Empty means nobody writes `_global`. The old
+  `agentApi.globalAdminSubjects` value is gone; the chart no longer renders it.
 
 ## Spreading replicas across nodes
 
@@ -170,6 +174,24 @@ sandbox, e.g. under `RuntimeDefault` with `botSandbox.enabled=false`).
 
 Without these, set `runtime.botSandbox.enabled=false`: bots then run under `runtime/default`, and
 their browsers run unsandboxed (said in each bot's log).
+
+## The model catalog
+
+`models.catalog` is the operator's model catalog (`VEXA_MODEL_CATALOG` on agent-api; `models.v1`
+Catalog, ADR-0043): the models people pick per chat. Empty (the default) means no catalog, and every
+turn runs on `models.agentModel` and each person's Settings → Models. agent-api refuses a catalog
+with anything wrong in it at boot, naming every problem.
+
+| Value | Default | Renders as |
+|---|---|---|
+| `models.catalog` | `{}` | `VEXA_MODEL_CATALOG` on agent-api, as one JSON value |
+| `models.catalogSecrets[].env` | — (required) | the variable a provider's `secret_ref: env:VEXA_MODEL_SECRET_<NAME>` names; must match `VEXA_MODEL_SECRET_[A-Z0-9_]+` or the render fails |
+| `models.catalogSecrets[].secretName` | — (required) | the Secret it is read from (`secretKeyRef`). No default, so a catalog key never falls back to the chart's shared admin-token Secret |
+| `models.catalogSecrets[].key` | the `env` name | the key in that Secret |
+
+A credential is never written in `models.catalog` itself. Worked examples: `values.yaml` (under
+`models:`), the [Model catalog](https://docs.vexa.ai/model-catalog) page, and the
+[configuration reference](https://docs.vexa.ai/configuration#agent-inference-bring-your-own).
 
 ## Credentials the runtime forwards into spawned Pods
 

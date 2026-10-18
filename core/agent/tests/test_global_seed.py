@@ -160,6 +160,7 @@ def test_a_read_only_global_is_reported_not_raised(tmp_path):
 def test_a_build_with_no_seed_copies_nothing(tmp_path, monkeypatch):
     monkeypatch.setenv(global_seed.ENV_IMAGE_SEED_DIR, str(tmp_path / "nope"))
     monkeypatch.setenv(global_seed.ENV_IMAGE_MAIL_DIR, str(tmp_path / "nope"))
+    monkeypatch.setenv(global_seed.ENV_IMAGE_TEMPLATES_DIR, str(tmp_path / "nope"))
     assert global_seed.image_seed_dir() is None
     assert global_seed.sources() == []
     assert global_seed.top_up(tmp_path) == []

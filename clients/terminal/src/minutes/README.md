@@ -14,12 +14,15 @@ By concern:
   (`?ask=` / `?meeting=` / `?view=` links and the first visit), `scaffold.ts`,
   `ScaffoldRefusalCard.tsx`.
 - **Pages** — `PagesPanel.tsx`, `Navigator.tsx` and `navigatorApi.ts` (the workspaces and files list),
+  `NavCalls.tsx` and `callsList.ts` (the navigator's Files | Calls switch and the calls list, read from the meeting list), `CallName.tsx` and `callRename.ts` (renaming a call, through meeting-api's annotate route, owner only),
+  `pageDelete.tsx` (Delete, its confirm, and the Undo note),
   `MarkdownEditor.tsx` (editing in place), `assetDrop.ts` (images), `mermaidPreview.ts`,
   `WorkspaceReadmePanel.tsx`, `workspaceReadme.ts` and `workspaceFrontPage.ts` (a workspace's front
   page), `ExtendAction.tsx` and `extend.ts` (Extend and Create as background jobs; a text selection's
   **Ask about this**, which drafts a quote into the chat), `machinery.ts` (what a reader is not shown
   as files), `deskPanel.ts` and `deskTouch.ts` (the right panel when a chat names no page).
-- **Meetings** — `MeetingPageHeader.tsx`, `MeetingControls.tsx`, `meetingNote.ts`,
+- **Meetings** — `MeetingPageHeader.tsx` (the meeting view's header; the view itself is
+  `canvas/MeetingView.tsx`), `MeetingControls.tsx`, `meetingNote.ts` (where the notes are),
   `RecordingPlayer.tsx` and `meetingPlayback.ts` (playback that follows the transcript).
 - **Chat helpers** — `ProposalChips.tsx` and `proposals.ts` (suggested next moves),
   `FlowProposalAct.tsx`, `PoliciesAct.tsx`.

@@ -488,7 +488,8 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
                     calendar_name: Optional[str] = None,
                     bot_name: Optional[str] = None,
                     legacy: bool = False,
-                    rows: Optional[list] = None) -> dict:
+                    rows: Optional[list] = None,
+                    writable_workspaces: "Optional[set[str]]" = None) -> dict:
     """Upsert one user's parsed feed against their meeting rows. Returns
     ``{"created": [...], "updated": [...], "cancelled": [...], counts...}`` where each list entry
     is ``{id, native, status, when}`` for the caller to fan out as WS frames.
@@ -682,6 +683,14 @@ async def sync_user(store, user_id: int, parsed: dict, *, auto_join_default: boo
             continue
 
         inherited_ws = series_ws.get(ev["uid"])  # None = no binding OR tombstoned — both mean "don't"
+        # A NEW OCCURRENCE INHERITS THE SERIES' WORKSPACE ONLY WHILE ITS OWNER MAY STILL WRITE THERE
+        # (R1801-3). Binding publishes the meeting to every member, which takes edit access on every
+        # other path (`workspace_write`); a person demoted to viewer, or removed, since they bound
+        # an earlier occurrence must not keep publishing future ones into it. Unknown (identity did
+        # not answer, or no door is wired) is "may write nowhere": the occurrence is created
+        # private, and the owner can bind it by hand.
+        if inherited_ws and inherited_ws not in (writable_workspaces or set()):
+            inherited_ws = None
         # A spent auto-join attempt on THIS occurrence rides onto the new row, so the sweep sees the
         # backoff it already earned instead of a virgin row that is due on sight.
         spent = _spent_attempt(terminal_attempts[ev["uid"]], ev) \

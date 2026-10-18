@@ -33,7 +33,7 @@ import {
   artifactKey, forgetHistory, PREVIEW_CAP, stripForRecord, togglePinned, touchHistory, withHome,
   CHATS_KEY, loadChats, type Artifact, type Chat,
 } from "../chats";
-import { meetingPages, pagesForPhase, withMeetingPages } from "../roomView";
+import { meetingPages, pagesForPhase, withMeetingPages, withoutRetiredMeetingDocs } from "../roomView";
 import { PagesPanel } from "../PagesPanel";
 import type { Page } from "../types";
 
@@ -43,17 +43,16 @@ const paths = (l: { path: string }[]) => l.map((a) => a.path);
 // ── what is permanent, and what is not ───────────────────────────────────────────────────────────
 
 describe("the MEETING's pages are permanent; the room's are not", () => {
-  it("stamps the transcript and the meeting's own page", () => {
+  it("stamps the meeting view — the one page the meeting has", () => {
     expect(meetingPages("live", "118", NOTE)).toEqual([
-      { kind: "meeting", path: "118", label: "Transcript", permanent: true },
-      { path: NOTE, label: "Brief", permanent: true },
+      { kind: "meeting", path: "118", label: "Meeting", permanent: true },
     ]);
   });
 
-  it("…in every phase, under whichever name the page is read by", () => {
-    expect(meetingPages("post", "118", NOTE).every((pg) => pg.permanent)).toBe(true);
-    // prep has no transcript at all, and the one page it does have is still the meeting's
-    expect(meetingPages("prep", "118", NOTE)).toEqual([{ path: NOTE, label: "Brief", permanent: true }]);
+  it("…in every phase, under one name", () => {
+    for (const phase of ["prep", "live", "post"] as const) {
+      expect(meetingPages(phase, "118", NOTE)).toEqual([{ kind: "meeting", path: "118", label: "Meeting", permanent: true }]);
+    }
   });
 
   it("a `?mock=1` fixture's canned transcript is the meeting's page too", () => {
@@ -65,8 +64,8 @@ describe("the MEETING's pages are permanent; the room's are not", () => {
 
   it("the PERSONAL page is the room's, not the meeting's — it stays closable", () => {
     const room = pagesForPhase("live", "abc", "118", NOTE);
-    expect(room.map((pg) => !!pg.permanent)).toEqual([true, true, false]);
-    expect(room[2].label).toBe("Personal page");
+    expect(room.map((pg) => !!pg.permanent)).toEqual([true, false]);
+    expect(room[1].label).toBe("Personal page");
   });
 
   it("and an ordinary document is never permanent, however it reached the strip", () => {
@@ -176,29 +175,42 @@ describe("a strip stored before the ruling is told which tabs are the meeting's"
     { path: "drafts/plan.md", label: "plan", at: 6 },
   ];
 
-  it("stamps them in place, and touches nothing else", () => {
+  it("stamps the meeting view in place, renames it, and touches nothing else", () => {
     const out = withMeetingPages(stored, meetingPages("post", "118", NOTE));
     const byPath = Object.fromEntries(out.map((a) => [a.path, a]));
-    expect(byPath["118"].permanent).toBe(true);
-    expect(byPath[NOTE].permanent).toBe(true);
+    expect(byPath["118"]).toMatchObject({ kind: "meeting", label: "Meeting", permanent: true, pinned: true });
     // the page the reader was on is theirs, and still closable
     expect(byPath["drafts/plan.md"]).toEqual({ path: "drafts/plan.md", label: "plan", at: 6 });
     expect(byPath["README.md"].permanent).toBeUndefined();
   });
 
-  it("gives back a transcript that was closed under the OLD rule", () => {
-    // there is nothing to preserve here: closing it is not a decision this product offers any more,
-    // and this is the state the founder was in when he asked for the tab (#1597 → #1600)
+  it("gives back a meeting view that was closed under the OLD rule", () => {
     const closed = [desk, { path: "drafts/plan.md", label: "plan", at: 6 } as Artifact];
     const out = withMeetingPages(closed, meetingPages("post", "118", NOTE));
-    expect(paths(out)).toEqual(["README.md", "118", NOTE, "drafts/plan.md"]);
-    expect(out.filter((a) => a.permanent)).toHaveLength(2);
+    expect(paths(out)).toEqual(["README.md", "118", "drafts/plan.md"]);
+    expect(out.filter((a) => a.permanent)).toHaveLength(1);
   });
 
   it("is idempotent — opening the chat twice is opening it once", () => {
     const room = meetingPages("post", "118", NOTE);
     const once = withMeetingPages(stored, room);
     expect(withMeetingPages(once, room)).toEqual(once);
+  });
+});
+
+describe("the two-tab era's notes tab is taken out of a stored strip (one view, 2026-10-11)", () => {
+  const desk: Artifact = { path: "README.md", label: "Desk", desk: true };
+  const view: Artifact = { kind: "meeting", path: "118", label: "Transcript", pinned: true, permanent: true };
+  const minutes: Artifact = { path: NOTE, label: "Minutes", pinned: true, permanent: true };
+  const readers: Artifact = { path: "drafts/plan.md", label: "plan", pinned: true };
+
+  it("removes the permanent Brief/Minutes tab, which the view now renders itself", () => {
+    expect(paths(withoutRetiredMeetingDocs([desk, view, minutes, readers]))).toEqual(["README.md", "118", "drafts/plan.md"]);
+  });
+
+  it("removes only what the meeting stamped — a reader's own pinned copy of the notes stays", () => {
+    const own: Artifact = { path: NOTE, label: "notes", pinned: true };
+    expect(withoutRetiredMeetingDocs([desk, view, own])).toEqual([desk, view, own]);
   });
 });
 

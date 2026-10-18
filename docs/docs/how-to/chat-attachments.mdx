@@ -1,0 +1,130 @@
+---
+title: "Attach files to a chat"
+description: "Drop files anywhere on the chat, paste a screenshot, or pick files with +. Each uploads to your desk, and the agent reads it on your next message."
+---
+
+You can give the agent files to work with in three ways:
+
+- **Drop them anywhere on the chat panel.** The messages area and the composer both accept files.
+  While you drag files over the panel, an outline reads **Drop files to attach**. Dragged text or
+  links are left alone.
+- **Paste into the composer.** A screenshot or files copied in your file manager attach. A paste
+  that also carries text, such as a spreadsheet range, stays a text paste.
+- **Click + in the composer** and pick files.
+
+Attachments appear above the text you type. An image shows as a thumbnail; click it to see it
+larger. Any other file shows as a chip with its name and size. Each file starts uploading as soon
+as you add it, with its own progress. Remove one with its **×**, or focus it with Tab and press
+Backspace or Delete. When you send, the message waits for any upload still in flight.
+
+## What happens to an attached file
+
+The file is stored in your own [desk](/concepts#workspace), the workspace you own:
+
+| File | Stored at | What the agent is told |
+|---|---|---|
+| An image | `assets/<hash>-<name>` | Markdown that would put the image on a page, ready to use |
+| Anything else | `uploads/<hash>-<name>` | An `@file:` reference to read |
+
+`<hash>` is the first 16 characters of the file's SHA-256, so two different files with the same
+name never overwrite each other. The file stays on your desk after the chat ends.
+
+<Warning>
+Your desk is readable by every signed-in member of your Vexa instance, and writable only by you.
+An attached file is readable the same way. Don't attach anything you would not keep on your desk.
+</Warning>
+
+## Limits
+
+| Limit | Value | Where it is enforced |
+|---|---|---|
+| Size of one file | 25 MB | The composer refuses it before uploading; agent-api refuses it again (`413`) |
+| Types | Images, PDF, text, Markdown, CSV/TSV, JSON/JSONL, YAML, logs, Word, Excel, PowerPoint, ZIP | The composer |
+| Files per message | No fixed limit; each uploads on its own request | — |
+
+The type list is the composer's. The upload API accepts any type, and a client that calls it
+directly is held only to the size limit and to the filename rules (a name is reduced to its last
+path segment, and `..`, `.git` and similar are refused).
+
+## When something goes wrong
+
+Nothing you attach is dropped without a word. Each failure stays in the tray, marked in red, with
+the reason:
+
+| You see | Meaning | What to do |
+|---|---|---|
+| **Too large (… MB) — the limit is 25 MB** | The file is over the limit. It was not uploaded. | Remove it. |
+| **This file type isn't supported** | The composer does not take this type. It was not uploaded. | Remove it, or convert the file. |
+| **Failed**, with the server's reason, and a retry button | The upload did not complete: a network error, or a refusal from the server. | Press retry, or remove it. |
+| **Remove … to send** or **… didn't upload — retry or remove it to send** | You pressed send with a refused or failed file in the tray. The message was not sent. | Retry or remove the file, then send again. |
+
+## How it works
+
+1. **Add.** A drop on the chat panel, a paste in the composer, or the + picker adds the files to
+   the composer's tray (`clients/terminal/src/surfaces/attachments.tsx`). Each file is checked
+   against the size limit and the composer's type list first. A refused file stays in the tray
+   with its reason and is never sent anywhere.
+2. **Upload.** Each accepted file goes up alone as `POST /api/workspace/upload` (multipart field
+   `files`) from the browser to the terminal's own server, which reports progress as it goes.
+3. **Terminal proxy.** The terminal route `src/app/api/workspace/[...seg]/route.ts` forwards the
+   request to the gateway at `/agent/workspace/upload`, with the signed-in session's API key. On a
+   single-user deployment with no session, it uses the configured `VEXA_API_KEY` instead. The
+   browser never talks to the gateway or to agent-api directly.
+4. **Gateway.** The gateway resolves the key to a user and strips any `X-User-Id` the request
+   carried. It then sets its own `X-User-Id`, signed, and forwards to agent-api.
+5. **agent-api.** `ws_upload` (`core/agent/control_plane/routers/workspaces.py`) takes the subject
+   from that header (`subject_of`) and from nothing in the request body. It reads every file and
+   checks the size of each. It writes them only when all of them pass, to the caller's own desk
+   (`uploads/` or `assets/`), through `workspace_paths.write_bytes_inside`, which refuses links and
+   paths outside the workspace. It returns `{ files: [{ name, path }] }`.
+6. **Send.** When you send, the chat appends the stored paths to your message, as above, and the
+   turn runs as usual over `/api/chat`. The agent reads each file from your desk with its own tools.
+
+**Data ownership:** the bytes on your desk have one writer, agent-api's upload route, and only on
+your own request. The tray's state, meaning the progress, the errors and the preview images, lives
+only in that browser tab. A preview image is a local `blob:` URL, released when the file is
+removed or the chat closes.
+
+**Configuration:** the 25 MB ceiling is `MAX_UPLOAD_BYTES` in `core/agent/control_plane/api_shared.py`
+(mirrored as `MAX_ATTACHMENT_BYTES` in the composer). The type list is `ATTACHMENT_ACCEPT` in the
+composer. Neither one is configurable at deploy time. The route is documented in
+[the agent API reference](/api/agent).
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| **P2, couple only through contracts** | The composer reaches storage only over the published `POST /api/workspace/upload` route. It imports nothing from agent-api. | `gate:isolation` |
+| **P6, one front door per module** | Attachment UI and upload live in one terminal module, `surfaces/attachments.tsx`; `chat.tsx` uses its exports. | `gate:exports` (packages); within the terminal, ungated: reviewed |
+| **P12, every folder self-documents** | `clients/terminal/src/surfaces/README.md` describes the module. | `gate:readme` |
+| **P18, fail loud and attributable** | Every refused or failed file stays visible with a reason, and a send is refused rather than going without it. The server's own reason (for example its `413`) is shown as sent. | ungated: reviewed; pinned by `chatDrop.test.tsx` |
+| **P20, complete mediation** | Every hop authenticates: session to terminal, API key to gateway, signed identity to agent-api. agent-api writes only to the caller's own desk. | gateway and agent-api deny tests, below |
+| **P23, one writer per data carrier** | The desk's upload drawers have one writer, agent-api. The browser holds no copy that anything reads back. No new carrier is added. | ungated: reviewed |
+| **No duplication** | One upload route serves the + button, drop and paste. No new endpoint or contract was added. The 25 MB value is written twice, client and server; the server is the authority. | ungated: reviewed |
+
+### Security
+
+- **Who may upload:** only a signed-in caller. The gateway refuses a request without a valid key
+  before it reaches agent-api. agent-api refuses a request that names no subject (`401`).
+- **Where it goes:** only the caller's own desk. A subject named in the request body is ignored.
+  The filename is reduced to its last segment, and reserved and escaping paths are refused.
+- **What is refused:** a file over 25 MB (`413`, and nothing from that request is kept), a request
+  with no authenticated subject (`401`), and an unsafe filename (`400`).
+- **Who may read it afterwards:** anyone who may read your desk, which is every signed-in member of
+  the instance. Only you may write to it. Your private `_system` workspace is never used for
+  attachments.
+
+Tests that prove these refusals:
+
+| Test | Proves |
+|---|---|
+| `core/gateway/services/gateway/tests/test_agent_proxy.py::test_keyless_agent_call_is_401_before_downstream` | No key: refused at the gateway |
+| `…/test_agent_proxy.py::test_invalid_key_is_401` | A bad key: refused at the gateway |
+| `…/test_agent_proxy.py::test_client_supplied_user_id_is_stripped_then_reinjected` | A client cannot name its own user |
+| `core/agent/tests/test_workspace_upload_access.py::test_an_upload_without_an_authenticated_subject_is_refused_and_writes_nothing` | No subject: `401`, nothing written |
+| `…/test_workspace_upload_access.py::test_an_upload_lands_only_in_the_callers_own_workspace` | A body-named subject is ignored |
+| `…/test_workspace_upload_access.py::test_an_upload_over_the_ceiling_is_refused_and_writes_nothing` | Over the limit: `413`, nothing from the request kept |
+| `core/agent/tests/test_api.py::test_workspace_upload_saves_hash_prefixed_files_under_subject` | `../` in a name cannot escape the desk |
+| `core/agent/tests/test_workspace_id_api.py::test_a_colleague_may_NOT_WRITE_another_desk` | A colleague can read a desk but not write to it |

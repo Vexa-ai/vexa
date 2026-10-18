@@ -115,6 +115,22 @@ def _upload_scope(authorization: Optional[str], session_uid: str,
         raise HTTPException(status_code=401, detail=f"Invalid recording upload token: {e}")
 
 
+def _attachment_name(rec: dict, mf: dict) -> str:
+    """The filename a ``?download=1`` read is saved under: ``meeting-<id>-<date>-<type>.<ext>``.
+
+    Built only from server-owned fields (ids, the recording's ``created_at`` date and the media
+    file's own ``format``), never from anything the caller sent, so the header cannot be steered.
+    The extension is the real container's; an unknown format falls back to ``bin`` rather than
+    lying about what the bytes are."""
+    fmt = str(mf.get("format") or "")
+    ext = fmt if fmt.isalnum() and len(fmt) <= 8 else "bin"
+    kind = "video" if mf.get("type") == "video" else "audio"
+    date = str(rec.get("created_at") or "")[:10]
+    date_part = f"-{date}" if len(date) == 10 and date[4] == "-" and date[7] == "-" and \
+        date.replace("-", "").isdigit() else ""
+    return f"meeting-{int(rec['meeting_id'])}{date_part}-{kind}.{ext}"
+
+
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
     if not x_user_id:
         raise HTTPException(status_code=401, detail="Missing user identity")
@@ -198,6 +214,23 @@ def build_router(
     token_secret: Optional[str] = None,
 ) -> APIRouter:
     """The recordings routes over the injected ``RecordingRepo`` + ``Storage`` ports."""
+
+    async def _readable(user_id: int, request: Request, *, shared: bool = True) -> list:
+        """The recordings this caller may READ: their own, plus the recordings of meetings shared with
+        them whose owner allowed recipients the recording (``shared_access``) — a transcript-share
+        recipient or a member of the bound workspace. ``shared=False`` keeps exactly the caller's own
+        (the account-wide list stays "my recordings"). Read off ``request`` so the route signatures,
+        which other changes also touch, stay as they are."""
+        recs = await repo.list_meeting_recordings(user_id)
+        if not shared:
+            return recs
+        workspaces = {w.strip() for w in (request.headers.get("x-user-workspaces") or "").split(",")
+                      if w.strip()}
+        raw_mid = request.query_params.get("meeting_id")
+        meeting_id = int(raw_mid) if raw_mid and raw_mid.isdigit() else None
+        own = {r.get("meeting_id") for r in recs}
+        extra = await repo.list_shared_recordings(user_id, workspaces, meeting_id=meeting_id)
+        return recs + [r for r in extra if r.get("meeting_id") not in own]
     router = APIRouter()
 
     @router.post("/internal/recordings/upload", include_in_schema=False)
@@ -299,7 +332,7 @@ def build_router(
         of scope; what changes is that the RESPONSE is bounded, which is what reaches a caller.
         """
         user_id = _resolve_user_id(x_user_id)
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request, shared=meeting_id is not None)
         if meeting_id is not None:
             recs = [r for r in recs if r.get("meeting_id") == meeting_id]
         recs = sorted(recs, key=_list_sort_key, reverse=True)
@@ -325,7 +358,7 @@ def build_router(
         """Recording detail (api/meetings.mdx: GET /recordings/{recording_id}) — the single recording
         record, scoped to the caller. 404 if the id isn't one of the caller's recordings."""
         user_id = _resolve_user_id(x_user_id)
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request)
         rec = next((r for r in recs if r.get("id") == recording_id), None)
         if rec is None:
             raise HTTPException(status_code=404, detail="Recording not found")
@@ -365,7 +398,7 @@ def build_router(
     ):
         user_id = _resolve_user_id(x_user_id)
         # Find which meeting owns this recording (scoped to the caller).
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request)
         rec = next((r for r in recs if r.get("id") == recording_id), None)
         if rec is None:
             raise HTTPException(status_code=404, detail="Recording not found")
@@ -399,12 +432,15 @@ def build_router(
         media_file_id: int,
         request: Request,
         type: str = "audio",
+        download: bool = Query(default=False, description=(
+            "Ask for the bytes as a file to save: adds `Content-Disposition: attachment`. Same "
+            "ownership check as playback; nothing else about the answer changes.")),
         x_user_id: Optional[str] = Header(default=None),
     ):
         # Stream the finalized master bytes from object storage (recordings P3). The player fetches
         # /master first (which finalizes), then this; finalize-on-read here too as a safety net.
         user_id = _resolve_user_id(x_user_id)
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request)
         rec = next((r for r in recs if r.get("id") == recording_id), None)
         if rec is None:
             raise HTTPException(status_code=404, detail="Recording not found")
@@ -425,7 +461,7 @@ def build_router(
             repo, storage, meeting_id=rec["meeting_id"], recording_id=recording_id,
             media_type=mf.get("type", type),
         )
-        recs = await repo.list_meeting_recordings(user_id)
+        recs = await _readable(user_id, request)
         rec = next((r for r in recs if r.get("id") == recording_id), rec)
         mf = next(
             (m for m in (rec or {}).get("media_files", []) if str(m.get("id")) == str(media_file_id)),
@@ -452,13 +488,20 @@ def build_router(
             full_body = await storage.get(storage_path)
             total = len(full_body)
 
+        # A save, not a play: the same owner-scoped bytes, marked as a file. Set only on request so
+        # the <audio> element's reads stay inline.
+        disposition = (
+            {"Content-Disposition": f'attachment; filename="{_attachment_name(rec, mf)}"'}
+            if download else {}
+        )
+
         rng = _parse_range(range_header, total)  # may raise 416
         if rng is None:
             data = full_body if full_body is not None else await storage.get(storage_path)
             return Response(
                 content=data,
                 media_type=content_type,
-                headers={"Accept-Ranges": "bytes", "Content-Length": str(len(data))},
+                headers={"Accept-Ranges": "bytes", "Content-Length": str(len(data)), **disposition},
             )
 
         start, end = rng
@@ -477,6 +520,7 @@ def build_router(
                 "Accept-Ranges": "bytes",
                 "Content-Range": f"bytes {start}-{end}/{total}",
                 "Content-Length": str(len(slice_bytes)),
+                **disposition,
             },
         )
 

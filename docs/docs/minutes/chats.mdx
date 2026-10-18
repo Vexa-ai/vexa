@@ -32,6 +32,13 @@ You never have to wait. A message you send during a turn goes straight to the ag
 at the foot of the chat as *queued · … · queued behind the current turn*. Queued messages run in the
 order you sent them. A reload does not lose them: the list is read back from the server.
 
+Every queued message is answered, and the answer appears in its own reply under your message, even
+when the agent starts on it while it is still finishing the previous reply. If your chat was already
+idle when the agent started it, the chat attaches to it and shows it the same way.
+
+A model change, or a new workspace the agent created, takes effect from the next message you send
+when the chat is idle. A message you send while a turn runs queues on the agent that is running.
+
 If the agent cannot take a message, the row turns red: *blocked — `<source>` · `<kind>` — `<detail>`*,
 with **Retry**. If the network dropped the message before the server saw it, your browser keeps a copy
 and re-sends it when the chat is idle or the page reloads.
@@ -56,26 +63,43 @@ still have finished; reopen the page to see.*
 
 ### Suggestions in an empty chat
 
-An empty chat shows up to 10 **Suggestions**, in this order:
+An empty chat suggests what to do with your email and calendar. What it offers depends on what you
+have connected:
 
-| Suggestion | When |
-|---|---|
-| *Catch me up on `<meeting>` — live now* | a meeting is live |
-| *Prep me for `<meeting>` at `<time>`* | a meeting starts within two hours |
-| *What came out of `<meeting>`?* | the newest finished meeting has nothing written about it |
-| *Review N new item(s)* | there are new items in the rail |
-| *My email is …, set up a workspace for me* | your desk is new |
-| items your agents proposed | each with **×** (*Not now*) to dismiss it |
-| *Connect Google, so I can create meetings for you* · *Paste a meeting link* | always, last |
+| Suggestion | When it shows | A click |
+|---|---|---|
+| *Connect your email* | no Gmail is connected (or one is waiting for your consent, or was disconnected) | opens **Connections** on Gmail |
+| *Connect your calendar* | no Google Calendar is connected (same) | opens **Connections** on Google Calendar |
+| *Check my email* | Gmail is connected | the agent reads your recent inbox and tells you which messages need a reply from you |
+| *Prepare for `<title>` at 3:00 PM* | Google Calendar is connected and a meeting with a title starts in the next 24 hours | the agent reads the event, then your transcripts and workspaces for what is open with those people, and briefs you |
+| items your agents proposed | an agent filed a job for you | runs the job; **×** (*Not now*) dismisses it |
+| *My email is …, set up a workspace for me* | your personal workspace has nothing in it | starts setup |
 
-Pressing a suggestion sends it in the same chat. A meeting suggestion binds the chat to that meeting,
-or opens that meeting's own chat if this one already belongs to another meeting. A used suggestion is
-not offered again in that chat.
+The meeting is always named by its calendar title, and the next titled meeting is the one offered.
+A meeting with no title is never offered as "Google Meet call" or similar. With no meeting coming up,
+there is no prepare suggestion. At most four suggestions show.
+
+If your connections can't be read, the chat shows no suggestions rather than ones that might be wrong.
+
+To send Vexa to a meeting, paste its link into the message box and ask, for example *Send Vexa to https://meet.google.com/abc-defg-hij*.
+
+Pressing a suggestion acts in the same chat. A used suggestion is not offered again in that chat.
+Opening **Connections** does not use the suggestion up, and when you finish connecting, the suggestion
+changes to *Check my email* or *Prepare for …* without a reload.
 
 ### Links in replies
 
 Every page a reply names opens on click: wiki links, `.md` paths and workspace paths. A link to a page
 that does not exist yet opens its path, where you can [create it](/minutes/pages#extend-or-create-a-page-with-the-agent).
+
+**Meetings** show as a meeting chip, beside the people and companies: a microphone, the meeting's
+title and its date, for example *Campbell · Fri 9 Oct*. The title is the meeting's own, so a
+renamed call shows its new name; a meeting nobody named shows its platform
+(*Zoom · Fri 9 Oct*). Click the chip to open the meeting, as from the Calls list. A reply gets the
+chip when it links the meeting (`/?meeting=<id>`) or its notes page (`kg/entities/meeting/….md`),
+including a notes page the turn wrote. The notes filename itself is never shown.
+
+If you cannot open a meeting, its chip shows as plain text, with no title and no date.
 
 ### Choose where a chat writes
 
@@ -85,8 +109,11 @@ workspace in the chat.
 - The highlighted chip is the **target**: *Writes in this chat go here. The others are mounted to
   read.* Click another chip to make it the target.
 - **+** (*Add a workspace to this chat*) mounts another workspace; a chip's remove button takes it out.
-- With no target set, writes go to your own desk.
-- Org admins can also choose **Company** (the `_global` workspace).
+- With no target set, writes go to your own personal workspace.
+- **Company** (the `_global` workspace) is never offered to an everyday account, the instance
+  admin's included. Signed in as the deployment's **admin account**, the bar shows **Company** alone:
+  it is always the target, there is no `+`, and every chat writes there (see
+  [The admin account](/minutes/workspaces#the-admin-account)).
 - You can also say "work in `<workspace>`" and the agent moves the target itself.
 
 The target is where writes go by default. It never grants a right: a workspace you cannot write is
@@ -94,8 +121,8 @@ refused as a target.
 
 ### Name, order and delete chats
 
-A chat is named from your first message until you rename it. Renaming, the activity dot, reordering,
-reopening history and deleting a chat are covered in [Manage your chats](/how-to/chat-controls). What
+A chat is named from your first message until you rename it. Renaming, the activity dot, pinning,
+hiding, reopening history and deleting a chat are covered in [Manage your chats](/how-to/chat-controls). What
 happens when a long turn reaches its tool-call limit is in [Long agent turns](/agent-tool-calls).
 
 ## Limits and errors
@@ -107,11 +134,12 @@ happens when a long turn reaches its tool-call limit is in [Long agent turns](/a
 | a red block *`<Source>` · `<kind>`* with **Retry** | a dependency failed; the turn ended with a typed fault | read the remedy line; retry |
 | *the terminal could not reach the Vexa gateway* | the gateway is down or unreachable | try again in a moment |
 | *not a workspace you can write* | the chosen target is read-only for you | pick a workspace where you are a contributor |
-| *only an org admin may write into _global* | **Company** is admin-only | ask an admin |
+| *only the admin account may write into _global…* | **Company** belongs to the admin account | sign in as the admin account |
+| *the admin account works on the company layer (_global) only…* | the admin account has no desk or other workspace | sign in with your everyday account |
 | *Lost the connection to that background job…* | the stream dropped during a job | reopen the page |
 
 Other limits: a chat id is 1–128 letters, digits, `.`, `_` or `-`; the queue lists at most 200 waiting
-messages and none older than an hour; a chat shows at most 10 suggestions. A chat turn is started by a
+messages and none older than an hour; a chat shows at most 4 suggestions. A chat turn is started by a
 person: an agent acting for someone cannot start one.
 
 ## How it works
@@ -128,10 +156,45 @@ person: an agent acting for someone cannot start one.
    worker. It then relays the worker's output stream back to the browser as server-sent events. A
    reconnect resumes from the last event it saw; nothing is dispatched twice.
 4. **Queue.** A message sent mid-turn goes to `/api/chat/submit`, which runs the same steps without
-   streaming. `/api/chat/pending` lists what is still waiting, and whether the queue is blocked and why.
-5. **Jobs.** For `create`, `extend` and `extend_transcript`, the worker runs the act on its own thread,
+   streaming, on the chat's running worker (it never moves the chat to a new one). `/api/chat/pending`
+   lists what is still waiting, and whether the queue is blocked and why. Given `after=<cursor>`, it
+   also says how many turns the agent has started since that point of the output stream (`taken`).
+5. **One view, every turn that starts on it.** The worker can take the next message while it is still
+   finishing a turn's write-back, so two turns can be on the output stream at once. agent-api keeps a
+   view open until every turn that started on it has ended. The browser routes each event to its turn
+   by `turn_id`, so a second turn gets its own reply under the message it answers.
+6. **Catch up.** When a view ends, the browser asks `/api/chat/pending` with the last event it read.
+   If something is still queued, or a turn started after that event, it attaches from that event and
+   shows it. It asks again when a mid-turn submission is acknowledged, because the turn in front may
+   have ended while the submission was in flight.
+7. **Jobs.** For `create`, `extend` and `extend_transcript`, the worker runs the act on its own thread,
    reports `job-started`, progress and `job-done` or `job-failed` on the chat's stream, and ends the
    chat turn at once so the chat can answer.
+
+### Empty-chat suggestions
+
+1. **Read connections.** The terminal reads your connections through the same route the Connections
+   panel uses: `GET /api/connections/list` → the credential broker's `GET /api/connections`, as you.
+   It returns metadata only (provider, label, status). It is re-read when the tab regains focus or a
+   consent window reports back.
+2. **Read the next meeting.** Only when a Google Calendar connection is `ready`, the terminal calls
+   `GET /api/connections/upcoming`. Its server half asks the broker for the calendar read it already
+   offers (`POST /api/connections/{id}/read`, action `calendar.events`) over a fixed window, now to
+   now + 24 hours, with no input from the browser. It returns each event's title and start time only,
+   and drops cancelled events. At most every five minutes while the tab is visible.
+3. **Decide.** One pure function, `proposals()` in `clients/terminal/src/minutes/proposals.ts`, builds
+   the row. It makes no request and asks no model. A connection counts as connected only when its
+   status is `ready`. The prepare suggestion uses the soonest event that has a title and a start time
+   (not all-day) inside the window (`nextMeeting`, `UPCOMING_WINDOW_MS`). Order: prepare, check email,
+   connect email, connect calendar, then agent-filed items and setup; at most four.
+4. **Fail closed.** Until the connections list answers, no connection suggestion shows. If it can't be
+   read, the row is empty and one `suggestions_unreadable` line is logged in the browser console (once
+   per page). If the calendar read fails, only the prepare suggestion is missing.
+5. **Act.** A click goes through `applyProposal()`. A connect suggestion opens the Connections panel on
+   that provider (and on the existing connection, when one is waiting or disconnected). The other
+   suggestions send your words as a turn in this chat. The agent then uses its existing tools:
+   `gmail_inbox` and `gmail_thread` for email, `calendar_events` and your transcripts and workspaces for
+   meeting prep.
 
 ### Who writes what
 
@@ -139,11 +202,14 @@ person: an agent acting for someone cannot start one.
 |---|---|---|
 | Your chat list (rail) and names | agent-api | Redis, per user |
 | Rail order | agent-api | Redis, per user |
+| Pins and hides | agent-api | Redis, per user |
 | Chat inbox | agent-api (every entry signed) | the chat unit's input stream |
 | Turn output and job events | the agent worker | the chat unit's output stream; agent-api only relays it |
 | Inbox position | the agent worker | the chat unit's cursor |
 | Job records | the agent worker | the chat's working folder |
-| Suggestions | agent-api | `.vexa/proposals.json` on your desk |
+| Suggestions filed by agents | agent-api | `.vexa/proposals.json` in your personal workspace |
+| Connection status | credential broker | the broker's database; the terminal only reads it |
+| The suggestion row and the next-meeting title | nobody: derived in the browser on each render and never stored | — |
 | Open tabs, view, unsent copies | your browser | `localStorage` |
 
 ### Routes
@@ -156,11 +222,25 @@ person: an agent acting for someone cannot start one.
 | `POST /api/chat/target` | `POST /api/chat/target` |
 | `POST /api/chat/name` | `POST /api/chat/name` |
 | `GET`, `PUT /api/chat/order` | `GET`, `PUT /api/chat/order` |
-| `GET /api/sessions`, `/api/sessions/{id}/history` | the same paths |
+| `GET`, `POST /api/chat/marks` | `GET`, `POST /api/chat/marks` |
+| `GET /api/sessions`, `/api/sessions/{id}/history`, `DELETE /api/sessions/{id}` | the same paths |
 | `GET`, `POST /api/proposals`, `POST /api/proposals/resolve` | the same paths |
+| `GET /api/connections/list` | the credential broker's `GET /api/connections` (terminal server only) |
+| `GET /api/connections/upcoming` | the credential broker's `POST /api/connections/{id}/read`, `calendar.events`, fixed 24-hour window (terminal server only) |
 
 `/agent/chat` is a streamed route of its own in `core/agent/routes.v1.json`; the others pass through the
 gateway's `/agent/*` forward. The request and event shapes are in [the agent API](/api/agent).
+
+### Meeting chips
+
+1. A meeting link (`?meeting=<id>` or `?meeting=<platform>/<native id>`) is looked up in your
+   meetings list, the same `GET /api/meetings` list the Calls list shows. Found: the chip. Not
+   found: plain text.
+2. A notes-page link goes to `POST /api/links/resolve`. agent-api finds the page in the workspace
+   you are reading, then on your desk. It reads the meeting id from the page's `meeting:` field and
+   asks meeting-api for that meeting as you. It answers `kind: "meeting"` with the title (`data.title`)
+   and time, or `not-yours` with no title. A page with no `meeting:` field keeps its own title.
+3. The agent is told to name meetings by their link, never by the notes filename.
 
 ### Configuration
 
@@ -174,16 +254,19 @@ gateway's `/agent/*` forward. The request and event shapes are in [the agent API
 | Rule | How this design meets it | Gate |
 |---|---|---|
 | **P2** contracts · **P6** one front door | the browser calls only the terminal's `/api/*`; the terminal calls only the gateway | `gate:isolation`, `gate:exports`, `gate:domain-doors` |
-| **P18** fail loud | a refused spawn, a provider refusal or a gateway outage ends as a typed fault (`source` + `kind`) shown in the chat; the terminal never passes a bare *Internal Server Error*; a blocked queue says what blocked it; a failed job posts a line | `gate:fault-surfacing` (under `gate:node` and `gate:python`) |
-| **P20** authorize every access | the user is the signed identity; the target must be a workspace you can write; suggestions are your own desk's | deny tests below |
-| **P21** state from evidence | the activity line and job rows come from the worker's events, not from the button press | ungated: reviewed |
-| **P23** one writer per carrier | agent-api is the inbox's only writer; the worker is the output stream's only writer and agent-api relays it unchanged | `gate:dataflow` |
+| **P18** fail loud | a refused spawn, a provider refusal or a gateway outage ends as a typed fault (`source` + `kind`) shown in the chat; the terminal never passes a bare *Internal Server Error*; a blocked queue says what blocked it; a failed job posts a line; a message the agent took is always watched: a view stays open until every turn that started on it has ended, and an idle chat attaches to a turn that started after what it read, so an answer never goes to a stream nobody reads | `gate:fault-surfacing` (under `gate:node` and `gate:python`); the race tests below |
+| **P20** authorize every access | the user is the signed identity; the target must be a workspace you can write; suggestions are your own personal workspace's; a meeting chip shows a title only for a meeting meeting-api answers to you | deny tests below |
+| **P21** state from evidence | the activity line and job rows come from the worker's events, not from the button press. Every suggestion comes from the broker's own connection status (`ready` or not) and the calendar's own event title; nothing is offered while the status is unknown | `proposals.test.ts` (one describe per connection state, "not answered yet"); otherwise ungated: reviewed |
+| **P23** one writer per carrier | agent-api is the inbox's only writer; the worker is the output stream's only writer and agent-api relays it unchanged. The suggestion row is derived, never stored, and re-derives nobody's data: connection status stays the broker's | `gate:dataflow` |
+| **P18** fail loud (suggestions) | an unreadable connections list shows no suggestions at all rather than wrong ones, and logs one line; a failed calendar read is a typed `broker_fault` on the server and costs only the prepare suggestion | `proposals.test.ts` ("connections status unreadable"); `routes.test.ts` ("upcoming fails loud as one generic line…") |
+| **P2/P6** one front door (suggestions) | both reads go through the terminal's Connections routes to the credential broker, as the signed-in person; the calendar read is the broker's existing `calendar.events` read, audited there. No new store, no new service, no direct Google call | `routes.test.ts` ("upcoming reads only a READY calendar…"), `gate:isolation`, `gate:domain-doors` |
 
 ### Security
 
 **Who can do what.** Only you can post into your chats. The chat's target is a default, never a grant:
 writes are still checked against your rights in that workspace, and an agent acting for you is held to
-the workspaces of the chat that dispatched it. Only an org admin can target the company workspace.
+the workspaces of the chat that dispatched it. Only the admin account can target the company workspace,
+and the admin account can target nothing else.
 
 **Protections.**
 
@@ -193,6 +276,17 @@ the workspaces of the chat that dispatched it. Only an org admin can target the 
 - A message composed by Vexa or dispatched by a flow is marked, and never shown as your words.
 - An agent acting for someone cannot start a chat turn.
 - Job events carry their chat's id, so one chat's job never shows in another.
+- Suggestions read only your own desk and connections. The connections list returns metadata
+  (provider, label, status), never a token or any mail content, and only the signed-in person's rows.
+- The next-meeting read is your own calendar, through the broker, as you, over a fixed window the
+  browser cannot change. Only titles and start times reach the browser; descriptions, attendees,
+  locations and links do not. Nothing is stored by the terminal; the broker keeps its usual audit row
+  for the read (who, which connection, when, outcome), never the content.
+- Connecting still happens in the Connections panel, on your click. A suggestion never reads mail
+  itself: *Check my email* is your message to the agent, which reads with its own audited tools.
+- A meeting chip's title and date come only from meetings you can open: your meetings list, or
+  meeting-api's access check (owner, shared with you, or a member of its workspace). Holding a copy
+  of someone's notes page does not reveal the meeting's name.
 
 **Deny tests.**
 
@@ -203,16 +297,23 @@ the workspaces of the chat that dispatched it. Only an org admin can target the 
 | `core/agent/tests/test_chat_session_bound.py` · `test_the_routes_answer_422_and_dispatch_nothing`, `test_the_pending_list_refuses_a_session_outside_the_bound`, `test_the_rail_order_and_the_target_refuse_a_session_outside_the_bound` | chat ids |
 | `core/agent/tests/test_meeting_room.py` · `test_the_body_still_refuses_an_unknown_field` | no extra fields |
 | `core/agent/tests/test_chat_workspace_target.py` · `test_a_target_aimed_at_a_guess_is_refused`, `test_a_workspace_this_person_cannot_write_is_refused_at_the_chip`, `test_a_malformed_slug_is_a_400_not_a_stored_guess`, `test_the_target_is_a_default_and_never_a_grant` | the target |
-| `core/agent/tests/test_global_target.py` · `test_a_non_admin_session_cannot_set_global_as_target`, `test_an_instance_with_no_admin_configured_refuses_everybody` | the company target |
+| `core/agent/tests/test_global_target.py` · `test_a_non_admin_session_cannot_set_global_as_target`, `test_an_instance_with_no_admin_configured_refuses_everybody`, `test_the_admin_accounts_plain_chat_works_in_the_company_layer_and_has_no_desk`, `test_an_everyday_chat_never_works_in_the_company_layer`; `test_admin_account.py` · `test_the_admin_account_aims_a_chat_nowhere_else` | the company target |
 | `core/agent/tests/test_delegation_ceiling_verbs.py` · `test_a_workspace_outside_the_ceiling_is_refused_and_nothing_changes` | the agent's ceiling |
 | `core/agent/tests/test_chat_runtime_fault.py` · `test_a_refused_spawn_on_api_chat_is_a_typed_502_not_internal_server_error`, `test_queued_rows_behind_the_refusal_say_they_are_blocked_and_by_what` | typed faults and blocked queues |
 | `core/agent/tests/test_inbox.py` · `test_ten_submissions_during_a_job_all_execute_in_order` | nothing is dropped |
+| `core/agent/tests/test_answer_while_busy.py` · `test_a_view_stays_open_for_the_turn_that_began_before_the_one_in_front_completed`, `test_pending_says_a_turn_was_taken_after_the_cursor_the_chat_read_to`, `test_pending_refuses_a_cursor_that_is_not_a_stream_id`, `test_a_submission_does_not_step_the_mount_generation` | a mid-turn message is answered where the chat is looking; a malformed cursor is refused |
+| `clients/terminal/src/surfaces/__tests__/answerWhileBusy.test.tsx` · "is watched even when the worker took it before the chat looked", "is watched when the turn in front ended while the submission was still in flight", "is answered in its own bubble, below the message, when it streams on the same view" | the client never leaves an answer unwatched |
+| `clients/terminal/src/surfaces/__tests__/chatStream.test.ts` · "never folds another turn into this one when nobody claims it", "a view the chat no longer owns skips the later turn" | one turn's events never render as another's |
 | `core/agent/tests/test_proposals.py` · `test_the_list_is_the_callers_own_never_a_desk_named_in_the_body` | suggestions |
+| `core/agent/services/credential-broker/tests/test_identity.py` · `test_agent_requests_but_cannot_consent_or_read_other_users`; `clients/terminal/src/app/api/connections/__tests__/routes.test.ts` · "refuses cross origin and caller-chosen identity" | the connections list is your own |
+| `clients/terminal/src/app/api/connections/__tests__/routes.test.ts` · "upcoming reads only a READY calendar, over a fixed 24-hour window, and returns title + start only", "upcoming with no ready calendar asks the broker for nothing but the list" | the next-meeting read |
 | `core/agent/tests/test_flow_turn_label.py` · `test_agent_api_marks_a_flow_dispatch_from_the_headers_flows_sends`, `test_half_a_header_is_no_mark` | turn labels |
 | `clients/terminal/src/app/api/__tests__/chatProxyFaults.test.ts` · "never passes a bare 'Internal Server Error' through…" | the proxy's fault floor |
 | `clients/terminal/src/surfaces/__tests__/inbox.test.ts` · "a refused submission is not silently acknowledged" | the client's queue |
 | `clients/terminal/src/surfaces/__tests__/jobs.test.ts` · "a job event from session A never renders in chat B", "posts a line when the job fails — never silence" | job isolation and failure lines |
 | `clients/terminal/src/minutes/__tests__/workspaceTarget.test.tsx` · "refuses a workspace the chat is not over"; `globalTarget.test.tsx` · "does not offer it to anyone else" | the target chips |
+| `core/agent/tests/test_meeting_link.py` · `test_a_reader_the_meeting_is_not_answered_to_gets_no_title`, `test_an_access_check_that_raises_is_a_refusal` | meeting chips name only meetings you can open |
+| `clients/terminal/src/ui-kit/__tests__/meetingChip.test.tsx` · "a notes link the server answers not-yours is plain text — no title, no filename", "a ?meeting= link not in the reader's meetings list is the writer's words, plain" | the client shows no title it was not given |
 
 ## Related
 

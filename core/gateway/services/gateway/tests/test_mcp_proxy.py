@@ -80,7 +80,7 @@ class StreamingDownstream:
         self.last = None
 
     @asynccontextmanager
-    async def open_stream(self, method, url, *, headers=None, params=None, content=None):
+    async def open_stream(self, method, url, *, headers=None, params=None, content=None, timeout=None):
         self.last = {"method": method, "url": url, "headers": headers or {},
                      "params": params, "content": content}
         if self.raises is not None:

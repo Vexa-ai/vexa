@@ -3,109 +3,30 @@
  *  • "meetings" LIST (left): meetings; the live one auto-opens; click any to (re)open its meeting view.
  *  • "meeting" TAB (center): fixed meeting chrome around the Meeting Canvas body.
  *    The generated canvas view consumes this meeting's live MeetingState. */
+import { CallName } from "../minutes/CallName";
 import { minutesOnly } from "../app/mode";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useService } from "../platform";
 import { LayoutServiceId, type TabDescriptor } from "../workbench/layout";
 import { registerList, registerTab, registerCommand, type TabProps } from "../contributions";
-import { Icon } from "../ui-kit";
+import { Badge, Icon, SectionLabel, Spinner, Tag } from "../ui-kit";
 import { ContextMenu, copyText } from "../ui-kit/ContextMenu";
-import { MEETING_CANVAS_CONTENT_INSET, MeetingCanvasView } from "../canvas/MeetingCanvasView";
+import { MeetingView } from "../canvas/MeetingView";
 import { type MeetingMock } from "./meetingModel";
 import { ApiError, presentError, readApiFailure } from "./apiClient";
 import { resolveJoinError, serviceDenialFromError, type ServiceDenialPresentation } from "./serviceDenial";
 import { ServiceDenialPanel } from "./ServiceDenialPanel";
 import { useLiveMeetings, useLiveMeetingsConnection, useLiveMeetingsLoaded, liveMeetingsNow, refreshMeetings } from "./liveMeetings";
 import { usePreviewPinTab } from "./previewPinTab";
+import { ExportMeetingButton, ImportMeetingButton, exportable } from "./MeetingBundleActions";
 import { defaultBotName } from "./defaultBotName";
 import { parseMeetingInput } from "./meetingId";
 import { getJitsiHosts } from "./jitsiHosts";
-import { mintTranscriptShare, mintInvite, listSharedMemberships, type Membership } from "./workspaceApi";
 import { deletePlannedMeeting, MAX_CALENDARS, listCalendars, createCalendar, updateCalendar, syncCalendar, getCalendarSyncStatus, type CalendarConnection, type CalendarSyncStamp } from "./plannedApi";
 import { prepTabDescriptor, prepDraftTabDescriptor } from "./meetingPrep";
 import { SpawnLanguagePicker } from "./TranscriptionLanguagePicker";
 import { DEFAULT_CHOICE, choiceProblem, languageSpawnFields, type LanguageChoice } from "./transcriptionLanguage";
-
-// ── "Share session" — mint a link to this meeting's LIVE FEED (independent transcript share) and,
-//    optionally, BUNDLE a shared-workspace invite into the SAME link (?tshare=…&invite=…). The two are
-//    decoupled capabilities; this is the one-click way to hand someone both at once. ─────────────────
-function platformSlug(display: string): string {
-  return display === "Google Meet" ? "google_meet" : display.toLowerCase().replace(/\s+/g, "_");
-}
-function ShareSessionButton({ platform, native }: { platform: string; native: string }) {
-  const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState("open");
-  const [emails, setEmails] = useState("");
-  const [ttlDays, setTtlDays] = useState(7);
-  const [wsId, setWsId] = useState("");            // "" = transcript only; else also bundle this workspace invite
-  const [shares, setShares] = useState<Membership[]>([]);
-  const [link, setLink] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    void listSharedMemberships().then((ms) => setShares(ms.filter((m) => m.role === "owner" || m.role === "contributor"))).catch(() => {});
-    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
-  const create = async () => {
-    setBusy(true); setErr(null);
-    try {
-      const allowed = mode === "restricted" ? emails.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean) : undefined;
-      const t = await mintTranscriptShare({ platform, native_meeting_id: native, mode, allowed_emails: allowed, expires_in_sec: ttlDays * 86400 });
-      const params = new URLSearchParams();
-      params.set("tshare", t.token);
-      if (wsId) {  // bundle a workspace membership invite into the same link
-        const inv = await mintInvite({ workspace_id: wsId, role: "contributor", mode, expires_in_sec: ttlDays * 86400, max_uses: mode === "open" ? 50 : 1, allowed_emails: allowed });
-        params.set("invite", inv.token);
-      }
-      setLink(`${window.location.origin}/?${params.toString()}`);
-    } catch (e) { setErr(presentError(e).headline); }
-    finally { setBusy(false); }
-  };
-  const fieldStyle = { fontSize: 12, padding: "4px 6px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)" } as const;
-  return (
-    <div ref={ref} style={{ position: "relative", flex: "none" }}>
-      <button onClick={() => { setOpen((v) => !v); setLink(null); }} title="Share this meeting's live feed (and optionally a workspace)"
-        style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 6, padding: "2px 8px", fontSize: 12, cursor: "pointer" }}>
-        <Icon name="upload" size={12} /> Share session
-      </button>
-      {open && (
-        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, width: 280, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.32)", padding: 12, zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>Share session</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <select value={mode} disabled={busy} onChange={(e) => { setMode(e.target.value); setLink(null); }} style={{ ...fieldStyle, flex: 1 }}>
-              <option value="open">anyone with link</option>
-              <option value="restricted">restricted (emails)</option>
-            </select>
-            <select value={ttlDays} disabled={busy} onChange={(e) => { setTtlDays(Number(e.target.value)); setLink(null); }} style={fieldStyle}>
-              <option value={1}>1 day</option><option value={7}>7 days</option><option value={30}>30 days</option>
-            </select>
-          </div>
-          {mode === "restricted" && (
-            <input value={emails} placeholder="allowed emails (comma-separated)" disabled={busy}
-              onChange={(e) => { setEmails(e.target.value); setLink(null); }} style={fieldStyle} />
-          )}
-          <select value={wsId} disabled={busy} onChange={(e) => { setWsId(e.target.value); setLink(null); }} style={fieldStyle} title="Optionally bundle a shared workspace into the link">
-            <option value="">live feed only (no workspace)</option>
-            {shares.map((s) => <option key={s.workspace_id} value={s.workspace_id}>+ workspace: {s.workspace_id}</option>)}
-          </select>
-          {err && <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)" }}>⚠ {err}</div>}
-          {link ? (
-            <div style={{ display: "flex", gap: 6 }}>
-              <input readOnly value={link} onFocus={(e) => e.currentTarget.select()} style={{ ...fieldStyle, flex: 1, fontSize: 11 }} />
-              <button onClick={() => void copyText(link)} style={{ fontSize: 12, padding: "4px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer" }}>Copy</button>
-            </div>
-          ) : (
-            <button disabled={busy} onClick={() => void create()} style={{ fontSize: 12, padding: "5px 10px", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 6, cursor: "pointer", opacity: busy ? 0.5 : 1 }}>{busy ? "Creating…" : "Create link"}</button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+import { MeetingShareButton, SharedIndicator } from "./MeetingShare";
 
 // ── Connected docs — the meeting's knowledge-graph entity + the [[entities]] it links ─────────────
 //  The meeting doc lives at a deterministic path: kg/entities/meeting/<native>.md. When present we show
@@ -125,12 +46,12 @@ function ConnectedDocChip({ doc }: { doc: ConnectedDoc }) {
   const nav = usePreviewPinTab<HTMLButtonElement>(docTabFor(doc.path, label));
   return (
     <button onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} title={`Open ${doc.path}`}
-      style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 10px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer", maxWidth: 280 }}
+      className="pt-1 pr-2 pb-1 pl-2 r-md bg-2 bd c-1 t-xs" style={{ display: "inline-flex", alignItems: "center", gap: 7, cursor: "pointer", maxWidth: 280 }}
       onMouseEnter={(e) => { e.currentTarget.style.background = "var(--panel2)"; e.currentTarget.style.borderColor = "var(--line2)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = "var(--panel)"; e.currentTarget.style.borderColor = "var(--line)"; }}>
-      <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--blue)", flex: "none" }} />
+      <span className="r-full" style={{ width: 5, height: 5, background: "var(--blue)", flex: "none" }} />
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-      {doc.kind && <span style={{ fontSize: 9.5, color: "var(--t3)", fontFamily: "var(--mono)", textTransform: "uppercase", letterSpacing: ".04em" }}>{doc.kind}</span>}
+      {doc.kind && <Tag>{doc.kind[0].toUpperCase() + doc.kind.slice(1)}</Tag>}
     </button>
   );
 }
@@ -139,10 +60,10 @@ function MeetingDocChip({ native, title, hasLinks }: { native: string; title: st
   const nav = usePreviewPinTab<HTMLButtonElement>(docTabFor(`kg/entities/meeting/${native}.md`, title));
   return (
     <button onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} title="Open this meeting's notes"
-      style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 10px 5px 6px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer", maxWidth: 360, marginBottom: hasLinks ? 8 : 0 }}
+      className="pt-1 pr-2 pb-1 pl-1_5 r-md bg-2 bd c-1 t-xs" style={{ display: "inline-flex", alignItems: "center", gap: 7, cursor: "pointer", maxWidth: 360, marginBottom: hasLinks ? 8 : 0 }}
       onMouseEnter={(e) => { e.currentTarget.style.background = "var(--panel2)"; e.currentTarget.style.borderColor = "var(--line2)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = "var(--panel)"; e.currentTarget.style.borderColor = "var(--line)"; }}>
-      <span style={{ width: 18, height: 18, flex: "none", borderRadius: 5, background: "var(--accentbg)", color: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="panel" size={11} /></span>
+      <span className="r-md bg-accent-tint c-accent" style={{ width: 18, height: 18, flex: "none", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="panel" size={11} /></span>
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
     </button>
   );
@@ -152,10 +73,10 @@ function WikiLinkChip({ title, path }: { title: string; path: string }) {
   const nav = usePreviewPinTab<HTMLButtonElement>(docTabFor(path, title));
   return (
     <button onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} title={`Open ${title}`}
-      style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "5px 10px", borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--t1)", fontSize: 12.5, cursor: "pointer", maxWidth: 280 }}
+      className="pt-1 pr-2 pb-1 pl-2 r-md bg-2 bd c-1 t-xs" style={{ display: "inline-flex", alignItems: "center", gap: 7, cursor: "pointer", maxWidth: 280 }}
       onMouseEnter={(e) => { e.currentTarget.style.background = "var(--panel2)"; e.currentTarget.style.borderColor = "var(--line2)"; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = "var(--panel)"; e.currentTarget.style.borderColor = "var(--line)"; }}>
-      <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--blue)", flex: "none" }} />
+      <span className="r-full" style={{ width: 5, height: 5, background: "var(--blue)", flex: "none" }} />
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
     </button>
   );
@@ -174,15 +95,15 @@ function ConnectedDocsPanel({ docs }: { docs: ConnectedDoc[] }) {
     byKind.get(k)!.push(d);
   }
   return (
-    <div style={{ marginTop: 22 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 10px" }}>
-        <span style={{ fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".07em", fontWeight: 600 }}>Connected</span>
-        <span style={{ fontSize: 10.5, color: "var(--t3)", fontFamily: "var(--mono)" }}>{docs.length}</span>
+    <div className="mt-5">
+      <div className="mt-0 mr-0_5 mb-2 ml-0_5" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <SectionLabel>Connected</SectionLabel>
+        <span className="t-xs c-3 f-mono">{docs.length}</span>
         <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
       </div>
       {groups.map((g) => (
-        <div key={g.kind} style={{ marginBottom: 10 }}>
-          {groups.length > 1 && <div style={{ fontSize: 10, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".05em", margin: "0 2px 6px" }}>{g.kind}</div>}
+        <div key={g.kind} className="mb-2">
+          {groups.length > 1 && <SectionLabel as="div">{g.kind[0].toUpperCase() + g.kind.slice(1)}</SectionLabel>}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{g.docs.map((d, i) => <ConnectedDocChip key={`${d.path}-${i}`} doc={d} />)}</div>
         </div>
       ))}
@@ -234,14 +155,14 @@ function ConnectedPanel({ native, docs }: { native: string; docs?: ConnectedDoc[
   if (hasDocs) return <ConnectedDocsPanel docs={docs!} />;
   if (state.status === "loading") return null;
   return (
-    <div style={{ marginTop: 22 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 2px 10px" }}>
-        <span style={{ fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".07em", fontWeight: 600 }}>Connected</span>
-        {state.status === "present" && state.links.length > 0 && <span style={{ fontSize: 10.5, color: "var(--t3)", fontFamily: "var(--mono)" }}>{state.links.length}</span>}
+    <div className="mt-5">
+      <div className="mt-0 mr-0_5 mb-2 ml-0_5" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <SectionLabel>Connected</SectionLabel>
+        {state.status === "present" && state.links.length > 0 && <span className="t-xs c-3 f-mono">{state.links.length}</span>}
         <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
       </div>
       {state.status === "absent" && (
-        <div style={{ fontSize: 12.5, color: "var(--t3)", padding: "2px 2px", lineHeight: 1.5 }}>No notes yet — they&apos;re written when the meeting ends (or a prep routine runs).</div>
+        <div className="t-xs c-3 pt-0_5 pr-0_5 pb-0_5 pl-0_5 lh-snug">No notes yet — they&apos;re written when the meeting ends (or a prep routine runs).</div>
       )}
       {state.status === "present" && (
         <>
@@ -255,7 +176,7 @@ function ConnectedPanel({ native, docs }: { native: string; docs?: ConnectedDoc[
               })}
             </div>
           )}
-          {state.links.length === 0 && <div style={{ fontSize: 12.5, color: "var(--t3)", padding: "2px 2px" }}>Notes recorded — no linked entities yet.</div>}
+          {state.links.length === 0 && <div className="t-xs c-3 pt-0_5 pr-0_5 pb-0_5 pl-0_5">Notes recorded — no linked entities yet.</div>}
         </>
       )}
     </div>
@@ -396,8 +317,8 @@ function StatusBadge({ raw }: { raw?: string }) {
   const b = badgeFor(raw);
   const dot = b.kind === "live" || b.kind === "needshelp";
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "1px 7px", borderRadius: 5, background: b.bg, color: b.color, fontSize: 10, fontWeight: 600, letterSpacing: ".02em", whiteSpace: "nowrap", flex: "none" }}>
-      {dot && <span style={{ width: 5, height: 5, borderRadius: "50%", background: b.color }} />}{b.label}
+    <span className="pt-0 pr-1_5 pb-0 pl-1_5 r-md t-xs fw-600" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: b.bg, color: b.color, letterSpacing: ".02em", whiteSpace: "nowrap", flex: "none" }}>
+      {dot && <span className="r-full" style={{ width: 5, height: 5, background: b.color }} />}{b.label}
     </span>
   );
 }
@@ -419,13 +340,13 @@ function RowActions({ m, showBadge, reveal, onActionStart, onActionFailure }: { 
       {showBadge && <StatusBadge raw={m.live_status} />}
       {acts.length > 0 && (reveal || open) && (
         <button title="Actions" onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
-          style={{ background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 6, padding: "1px 5px", fontSize: 11, lineHeight: 1.4, cursor: "pointer" }}>▾</button>
+          className="bg-none bd-strong c-2 r-md pt-0 pr-1 pb-0 pl-1 t-xs lh-snug" style={{ cursor: "pointer" }}>▾</button>
       )}
       {open && (
-        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 4, minWidth: 132, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,.28)", padding: 4, zIndex: 40 }}>
+        <div className="mt-1 bg-2 bd-strong r-md p-1" style={{ position: "absolute", top: "100%", right: 0, minWidth: 132, boxShadow: "0 6px 20px rgba(0,0,0,.28)", zIndex: 40 }}>
           {acts.map((a) => (
             <button key={a.id} onClick={(e) => { e.stopPropagation(); setOpen(false); onActionStart?.(); void a.run(onActionFailure); }}
-              style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: a.tone === "live" ? "var(--danger)" : a.tone === "muted" ? "var(--t2)" : "var(--accent)", borderRadius: 6, padding: "6px 9px", fontSize: 12, fontWeight: 550, cursor: "pointer" }}
+              className="bg-none bd-none r-md pt-1_5 pr-2 pb-1_5 pl-2 t-xs fw-500" style={{ display: "block", width: "100%", textAlign: "left", color: a.tone === "live" ? "var(--danger)" : a.tone === "muted" ? "var(--t2)" : "var(--accent)", cursor: "pointer" }}
               onMouseEnter={(ev) => (ev.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(ev) => (ev.currentTarget.style.background = "transparent")}>
               {a.label}
             </button>
@@ -470,17 +391,17 @@ function MeetingRow({ m }: { m: MeetingMock }) {
     return () => window.clearTimeout(t);
   }, [actionFailure]);
   return (
-    <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }} style={{ padding: "7px 9px", borderRadius: 7, cursor: "pointer", marginBottom: 1 }}
+    <div onClick={nav.onClick} onDoubleClick={nav.onDoubleClick} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }); }} className="pt-1_5 pr-2 pb-1_5 pl-2 r-md mb-0" style={{ cursor: "pointer" }}
       onMouseEnter={(e) => { setHover(true); e.currentTarget.style.background = "var(--panel2)"; }} onMouseLeave={(e) => { setHover(false); e.currentTarget.style.background = "transparent"; }}>
       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
         {inRoom && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", flex: "none" }} />}
         <span style={{ fontSize: 13, color: live ? "var(--t1)" : "var(--t2)", fontWeight: live ? 600 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-        {m.shared && <span title="Shared with you (you don't own this meeting)" style={{ flex: "none", fontSize: 9.5, color: "var(--t3)", border: "1px solid var(--line)", borderRadius: 5, padding: "0 5px" }}>shared</span>}
+        <SharedIndicator meeting={m} />
         {(m.native_id || isIntent) && !m.shared && <RowActions m={m} showBadge={showBadge} reveal={hover} onActionStart={() => setActionFailure(null)} onActionFailure={setActionFailure} />}
       </div>
-      <div style={{ fontSize: 11, color: inRoom ? "var(--green)" : "var(--t3)", marginTop: 1, paddingLeft: inRoom ? 13 : 0 }}>{inRoom ? "live" : m.when}</div>
+      <div className="t-xs mt-0" style={{ color: inRoom ? "var(--green)" : "var(--t3)", paddingLeft: inRoom ? 13 : 0 }}>{inRoom ? "live" : m.when}</div>
       {isIntent && m.auto_join_error && (
-        <div role="alert" style={{ fontSize: 11, color: "var(--danger)", marginTop: 3, lineHeight: 1.35 }}>
+        <div role="alert" className="t-xs c-danger mt-0_5 lh-tight">
           ⚠ Auto-join failed: {m.auto_join_error}
         </div>
       )}
@@ -489,13 +410,13 @@ function MeetingRow({ m }: { m: MeetingMock }) {
           <ServiceDenialPanel presentation={actionFailure.denial} />
         </div>
       ) : actionFailure && (
-        <div role="status" aria-live="polite" style={{ fontSize: 11, color: "var(--danger)", marginTop: 4, lineHeight: 1.35 }}>
+        <div role="status" aria-live="polite" className="t-xs c-danger mt-1 lh-tight">
           {actionFailure.actionLabel} failed: {actionFailure.message}
         </div>
       )}
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
-          { id: "copy-reference", label: "Copy reference", detail: `@meeting:${native}`, onSelect: () => copyText(`@meeting:${native}`) },
+          { id: "copy-reference", label: "Copy reference", detail: `@meeting:${native}`, mono: true, onSelect: () => copyText(`@meeting:${native}`) },
         ]} />
       )}
     </div>
@@ -509,7 +430,7 @@ function PlanMeetingButton() {
   const layout = useService(LayoutServiceId);
   return (
     <button onClick={() => layout.openTab(prepDraftTabDescriptor())}
-      style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "1px dashed var(--line2)", color: "var(--t2)", borderRadius: 7, padding: "6px 9px", fontSize: 12, cursor: "pointer", marginBottom: 2 }}
+      className="bg-none c-2 r-md pt-1_5 pr-2 pb-1_5 pl-2 t-xs mb-0_5" style={{ display: "block", width: "100%", textAlign: "left", border: "1px dashed var(--line2)", cursor: "pointer" }}
       onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
       + Plan a meeting
     </button>
@@ -526,12 +447,12 @@ function CalendarSyncStatusLine({ stamp }: { stamp: CalendarSyncStamp | null }) 
     return `${Math.round(s / 3600)} h ago`;
   })();
   if (stamp.last_error) {
-    return <div role="alert" style={{ fontSize: 11.5, color: "var(--danger)", lineHeight: 1.5 }}>⚠ Last sync failed ({ago}): {stamp.last_error}</div>;
+    return <div role="alert" className="t-xs c-danger lh-snug">⚠ Last sync failed ({ago}): {stamp.last_error}</div>;
   }
   const c = stamp.counts ?? {};
   const bits = [c.created ? `imported ${c.created}` : "", c.updated ? `updated ${c.updated}` : "", c.cancelled ? `removed ${c.cancelled}` : ""].filter(Boolean);
   return (
-    <div style={{ fontSize: 11.5, color: "var(--green)", lineHeight: 1.5 }}>
+    <div className="t-xs c-success lh-snug">
       ✓ Synced {ago}{bits.length ? ` — ${bits.join(", ")}` : " — no meetings with joinable links found"}
     </div>
   );
@@ -622,34 +543,34 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
     <div ref={ref} style={{ position: "relative", flex: variant === "row" ? "initial" : "none" }}>
       {variant === "row" ? (
         <button onClick={() => setOpen((v) => !v)}
-          style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", textAlign: "left", background: "transparent", border: "1px dashed var(--line2)", color: "var(--t2)", borderRadius: 7, padding: "6px 9px", fontSize: 12, cursor: "pointer", marginTop: 6 }}
+          className="bg-none c-2 r-md pt-1_5 pr-2 pb-1_5 pl-2 t-xs mt-1_5" style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", textAlign: "left", border: "1px dashed var(--line2)", cursor: "pointer" }}
           onMouseEnter={(e) => (e.currentTarget.style.background = "var(--panel2)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
           <Icon name="cal" size={12} /> Connect your calendar
         </button>
       ) : (
         <button onClick={() => setOpen((v) => !v)} title="Calendars — import upcoming meetings from your calendars"
-          style={{ display: "inline-flex", alignItems: "center", background: "transparent", border: "none", color: connected ? "var(--accent)" : "var(--t3)", cursor: "pointer", padding: 2 }}>
+          className="bg-none bd-none p-0_5" style={{ display: "inline-flex", alignItems: "center", color: connected ? "var(--accent)" : "var(--t3)", cursor: "pointer" }}>
           <Icon name="cal" size={13} />
         </button>
       )}
       {open && (
-        <div style={{ position: "absolute", top: "100%", right: 0, marginTop: 6, width: 300, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.32)", padding: 12, zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em" }}>
+        <div className="mt-1_5 bg-2 bd-strong r-lg p-3" style={{ position: "absolute", top: "100%", right: 0, width: 300, boxShadow: "0 8px 28px rgba(0,0,0,.32)", zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="vx-label">
             {connected ? `calendars · ${cals?.length ?? 0} of ${MAX_CALENDARS}` : "calendar sync"}
           </div>
           {connected ? (
             <>
               {cals?.map((c) => (
-                <div key={c.id} style={{ display: "flex", flexDirection: "column", gap: 5, borderBottom: "1px dashed var(--line)", paddingBottom: 7 }}>
+                <div key={c.id} className="pb-1_5" style={{ display: "flex", flexDirection: "column", gap: 5, borderBottom: "1px dashed var(--line)" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ flex: 1, fontSize: 12, color: c.enabled ? "var(--t1)" : "var(--t3)", fontWeight: 600 }}>{c.name}</span>
-                    {!c.enabled && <span style={{ fontSize: 10.5, color: "var(--t3)" }}>paused</span>}
+                    <span className="t-xs fw-600" style={{ flex: 1, color: c.enabled ? "var(--t1)" : "var(--t3)" }}>{c.name}</span>
+                    {!c.enabled && <span className="t-xs c-3">paused</span>}
                     <button disabled={busy || syncing !== null} onClick={() => void syncOne(c.id)}
-                      style={{ fontSize: 11.5, padding: "3px 8px", background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--t1)", borderRadius: 6, cursor: "pointer" }}>
+                      className="t-xs pt-0_5 pr-2 pb-0_5 pl-2 bg-3 bd c-1 r-md" style={{ cursor: "pointer" }}>
                       {syncing === c.id ? "Syncing…" : "Sync"}
                     </button>
                   </div>
-                  <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 11.5, color: "var(--t2)", cursor: "pointer", userSelect: "none" }}>
+                  <label className="t-xs c-2" style={{ display: "inline-flex", alignItems: "center", gap: 7, cursor: "pointer", userSelect: "none" }}>
                     <input type="checkbox" checked={c.auto_join} disabled={busy || syncing !== null}
                       onChange={(e) => void setAutoJoin(c, e.target.checked)} />
                     Auto-join meetings from this calendar
@@ -658,33 +579,33 @@ function CalendarSyncButton({ variant = "icon" }: { variant?: "icon" | "row" }) 
                 </div>
               ))}
               <button onClick={openSettings}
-                style={{ fontSize: 11.5, padding: "4px 10px", background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 6, cursor: "pointer" }}>
+                className="t-xs pt-1 pr-2 pb-1 pl-2 bg-none bd-strong c-2 r-md" style={{ cursor: "pointer" }}>
                 Add, rename or disconnect in Settings → Calendar
               </button>
             </>
           ) : (
             <>
-              <div style={{ fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5 }}>
+              <div className="t-xs c-3 lh-snug">
                 Paste your calendar&apos;s <b>secret ICS address</b> (Google Calendar → Settings → &quot;Secret address in iCal format&quot;).
                 Upcoming meetings with a Meet/Zoom/Teams link appear under Upcoming and auto-join at start.
               </div>
               <input value={name} onChange={(e) => setName(e.target.value)} disabled={busy} maxLength={100}
                 aria-label="Calendar name" placeholder="Calendar name"
-                style={{ fontSize: 11.5, padding: "5px 7px", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)", outline: "none" }} />
+                className="t-xs pt-1 pr-1_5 pb-1 pl-1_5 bg-3 bd r-md c-1" style={{ outline: "none" }} />
               <input value={url} placeholder="https://calendar.google.com/…/basic.ics" disabled={busy}
                 type="password" autoComplete="off" aria-label="Secret ICS address"
                 onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && url.trim()) void connectFirst(); }}
-                style={{ fontSize: 11.5, padding: "5px 7px", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, color: "var(--t1)", outline: "none" }} />
+                className="t-xs pt-1 pr-1_5 pb-1 pl-1_5 bg-3 bd r-md c-1" style={{ outline: "none" }} />
               <button disabled={busy || !url.trim()} onClick={() => void connectFirst()}
-                style={{ fontSize: 12, padding: "5px 10px", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--bg)" : "var(--t3)", border: "none", borderRadius: 6, cursor: url.trim() ? "pointer" : "default" }}>
+                className="t-xs pt-1 pr-2 pb-1 pl-2 bd-none r-md" style={{ background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--bg)" : "var(--t3)", cursor: url.trim() ? "pointer" : "default" }}>
                 {busy || syncing !== null ? "Connecting…" : "Connect"}
               </button>
-              <div style={{ fontSize: 10.5, color: "var(--t3)", lineHeight: 1.45 }}>
+              <div className="t-xs c-3 lh-snug">
                 Tip: the <i>public</i> address only carries events you made public — use the <b>secret</b> one for your full calendar.
               </div>
             </>
           )}
-          {err && <div role="alert" style={{ fontSize: 11, color: "var(--danger)" }}>⚠ {err}</div>}
+          {err && <div role="alert" className="t-xs c-danger">⚠ {err}</div>}
         </div>
       )}
     </div>
@@ -754,25 +675,25 @@ export function MeetingsList() {
     if (!refused) setTimeout(() => setSent(null), 5000);
   };
   return (
-    <div style={{ padding: "8px" }}>
-      <div style={{ display: "flex", alignItems: "center", padding: "6px 4px 6px" }}>
-        <span style={{ fontSize: 11, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".04em", flex: 1 }}>meetings</span>
+    <div className="p-2">
+      <div className="pt-1_5 pr-1 pb-1_5 pl-1" style={{ display: "flex", alignItems: "center" }}>
+        <span className="vx-label vx-grow">Meetings</span>
         {!minutesOnly() && <CalendarSyncButton />}
       </div>
       {/* MINUTES: meetings arrive by INVITATION — no paste-a-link, no bot button, no calendar
           sync, no plan-a-meeting. The rail states the mechanism instead of offering workarounds. */}
       {minutesOnly() ? (
-        <div style={{ padding: "0 8px 10px", fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5 }}>
+        <div className="pt-0 pr-2 pb-2 pl-2 t-xs c-3 lh-snug">
           Invite the assistant&rsquo;s address to any calendar event — meetings appear here after
           they happen.
         </div>
       ) : (
-      <div style={{ padding: "0 4px 10px" }}>
+      <div className="pt-0 pr-1 pb-2 pl-1">
         <div style={{ display: "flex", gap: 6 }}>
           <input value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void addBot(); }}
-            placeholder="Paste a meeting link (Meet / Zoom / Teams / Jitsi)…" style={{ flex: 1, minWidth: 0, background: "var(--panel)", border: "1px solid var(--line2)", borderRadius: 7, padding: "6px 8px", color: "var(--t1)", fontSize: 12, outline: "none" }} />
+            placeholder="Paste a meeting link (Meet / Zoom / Teams / Jitsi)…" className="bg-2 bd-strong r-md pt-1_5 pr-2 pb-1_5 pl-2 c-1 t-xs" style={{ flex: 1, minWidth: 0, outline: "none" }} />
           <button onClick={() => void addBot()} disabled={!url.trim() || sent === "sending"} title="Send the Vexa bot to this meeting"
-            style={{ flex: "none", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--on-accent)" : "var(--t3)", border: "none", borderRadius: 7, padding: "0 10px", fontSize: 12, fontWeight: 600, cursor: url.trim() ? "pointer" : "default" }}>
+            className="bd-none r-md pt-0 pr-2 pb-0 pl-2 t-xs fw-600" style={{ flex: "none", background: url.trim() ? "var(--accent)" : "var(--panel2)", color: url.trim() ? "var(--on-accent)" : "var(--t3)", cursor: url.trim() ? "pointer" : "default" }}>
             {sent === "sending" ? "…" : "Add bot"}
           </button>
         </div>
@@ -780,16 +701,17 @@ export function MeetingsList() {
         {sent === "ok" && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 5, lineHeight: 1.4 }}>Bot sent — admit it in the meeting; it appears here once it starts transcribing.</div>}
         {denial
           ? <ServiceDenialPanel presentation={denial} onRetry={() => void addBot()} />
-          : sent === "err" && <div style={{ fontSize: 11, color: "var(--danger)", marginTop: 5, lineHeight: 1.4 }}>{errMsg ?? "Couldn't send."}</div>}
-        <div style={{ marginTop: 8 }}>
+          : sent === "err" && <div className="t-xs c-danger mt-1 lh-snug">{errMsg ?? "Couldn't send."}</div>}
+        <div className="mt-2">
           <PlanMeetingButton />
           <CalendarSyncButton variant="row" />
+          <ImportMeetingButton />
         </div>
       </div>
       )}
       {/* The day itself renders in the center (Today) — the sidebar only links there. */}
       <button onClick={() => layout.openTab({ id: "today", title: "Today", kind: "today", params: {} })}
-        style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", padding: "10px 9px", fontSize: 11.5, color: "var(--t3)", lineHeight: 1.5, cursor: "pointer" }}
+        className="bg-none bd-none pt-2 pr-2 pb-2 pl-2 t-xs c-3 lh-snug" style={{ display: "block", width: "100%", textAlign: "left", cursor: "pointer" }}
         onMouseEnter={(e) => (e.currentTarget.style.color = "var(--t2)")} onMouseLeave={(e) => (e.currentTarget.style.color = "var(--t3)")}>
         {all.length === 0 ? (minutesOnly() ? "No meetings yet — they arrive by invitation" : "No meetings yet — paste a Meet link above, or open Today →") : "Your meetings are in Today →"}
       </button>
@@ -827,16 +749,12 @@ export function BotControls({ m, connected = true }: { m: MeetingMock; connected
               setErr(null); setBusy(true);
               void Promise.resolve(a.run((f) => setErr(f.message))).finally(() => setBusy(false));
             }}
-            style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "transparent",
-              border: `1px solid ${danger ? "var(--danger)" : "var(--line2)"}`,
-              color: danger ? "var(--danger)" : "var(--accent)",
-              borderRadius: 7, padding: "4px 11px", fontSize: 12, fontWeight: 600,
-              cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.6 : 1 }}>
+            className="bg-none r-md pt-1 pr-3 pb-1 pl-3 t-xs fw-600" style={{ display: "inline-flex", alignItems: "center", gap: 6, border: `1px solid ${danger ? "var(--danger)" : "var(--line2)"}`, color: danger ? "var(--danger)" : "var(--accent)", cursor: disabled ? "default" : "pointer", opacity: disabled ? 0.6 : 1 }}>
             {a.id === "stop" ? "Stop bot" : "Send bot again"}
           </button>
         );
       })}
-      {err && <span role="alert" style={{ fontSize: 11, color: "var(--danger)", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={err}>⚠ {err}</span>}
+      {err && <span role="alert" className="t-xs c-danger" style={{ maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={err}>⚠ {err}</span>}
     </span>
   );
 }
@@ -919,17 +837,17 @@ function useMeetingLookupGrace(missing: boolean, meetingId: string): boolean {
  *  error, not a spinner that never ends. Pure (no services) so it renders in a test as-is. */
 export function MeetingNotFound({ meetingId, onOpenToday }: { meetingId: string; onOpenToday?: () => void }) {
   return (
-    <div role="status" style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+    <div role="status" className="p-6" style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ maxWidth: 380, textAlign: "center" }}>
-        <div style={{ fontSize: 15, color: "var(--t1)", fontWeight: 550, marginBottom: 6 }}>Meeting not found</div>
-        <div style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.55 }}>
+        <div className="t-md c-1 fw-500 mb-1_5">Meeting not found</div>
+        <div className="t-xs c-3 lh-normal">
           {meetingId
-            ? <>Nothing here matches <span style={{ fontFamily: "var(--mono)", color: "var(--t2)" }}>{meetingId}</span>. It may have been deleted, or it belongs to someone who hasn&apos;t shared it with you.</>
+            ? <>Nothing here matches <span className="f-mono c-2">{meetingId}</span>. It may have been deleted, or it belongs to someone who hasn&apos;t shared it with you.</>
             : <>This link doesn&apos;t carry a meeting. Open one from your day.</>}
         </div>
         {onOpenToday && (
           <button onClick={onOpenToday}
-            style={{ marginTop: 16, fontSize: 12.5, padding: "5px 12px", background: "transparent", border: "1px solid var(--line2)", color: "var(--t2)", borderRadius: 7, cursor: "pointer" }}>
+            className="mt-4 t-xs pt-1 pr-3 pb-1 pl-3 bg-none bd-strong c-2 r-md" style={{ cursor: "pointer" }}>
             Open today
           </button>
         )}
@@ -943,12 +861,12 @@ export function MeetingNotFound({ meetingId, onOpenToday }: { meetingId: string;
  *  test renders it as-is. */
 export function MeetingLookingUp({ meetingId }: { meetingId: string }) {
   return (
-    <div role="status" style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+    <div role="status" className="p-6" style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ maxWidth: 380, textAlign: "center" }}>
-        <div style={{ fontSize: 15, color: "var(--t1)", fontWeight: 550, marginBottom: 6 }}>Looking for this meeting…</div>
-        <div style={{ fontSize: 12.5, color: "var(--t3)", lineHeight: 1.55 }}>
+        <div className="t-md c-1 fw-500 mb-1_5">Looking for this meeting…</div>
+        <div className="t-xs c-3 lh-normal">
           {meetingId
-            ? <>Fetching the latest list for <span style={{ fontFamily: "var(--mono)", color: "var(--t2)" }}>{meetingId}</span>. A meeting that was just created can take a moment to appear here.</>
+            ? <>Fetching the latest list for <span className="f-mono c-2">{meetingId}</span>. A meeting that was just created can take a moment to appear here.</>
             : <>Fetching the latest meetings list.</>}
         </div>
       </div>
@@ -960,14 +878,12 @@ function MeetingTab({ params }: TabProps) {
   const layout = useService(LayoutServiceId);
   const liveList = useLiveMeetings();
   const listLoaded = useLiveMeetingsLoaded();
-  const connected = useLiveMeetingsConnection();
   const requestedMeetingId = params.meetingId as string;
   // ONE resolver, shared with the canvas body (useMeeting.resolveMeeting): the real meetings list is the
   // only source of truth — a mock never shadows a real id, and a real id never falls back to a mock. While
   // the async list is still loading the row is simply not-yet-resolved; we render the canvas bound to the
   // id with a neutral header (never a wrong/mock meeting), so the header can't disagree with the body.
   const m = liveList.find((x) => x.id === requestedMeetingId || x.native_id === requestedMeetingId);
-  const header = meetingHeaderState(m, connected);
   // An id the list does not carry is a QUESTION before it is an answer: re-ask the list once, and
   // only call the meeting missing if the fresh snapshot still lacks it (see meetingLookupState).
   const graceExpired = useMeetingLookupGrace(!m && listLoaded, requestedMeetingId);
@@ -988,40 +904,11 @@ function MeetingTab({ params }: TabProps) {
     );
   }
 
-  return (
-    <div style={{ width: "100%", height: "100%", minHeight: 0, display: "flex", flexDirection: "column", padding: "16px 0 24px", boxSizing: "border-box" }}>
-      <header style={{ flex: "none", marginBottom: 16, padding: `0 ${MEETING_CANVAS_CONTENT_INSET}px`, boxSizing: "border-box" }}>
-        {/* WRAPS. This header was written for the full-width centre pane and its controls are all
-            `flex: none`; rendered in a narrower column (minutes mode puts this same canvas in the
-            resizable pages panel) a single non-wrapping row does not truncate, it OVERLAPS — the
-            bot controls paint across the meeting's own name. Wrapping costs nothing at the width it
-            was designed for and stays legible at every width below it. */}
-        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12, rowGap: 8, fontSize: 13, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 9, rowGap: 6, minWidth: 0 }}>
-            {header === "live"
-              ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--green)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase", flex: "none" }}><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", boxShadow: "0 0 0 3px var(--greenbg)" }} />Live</span>
-              : header === "reconnecting"
-                ? <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--accent)", fontWeight: 600, letterSpacing: ".04em", fontSize: 11, textTransform: "uppercase", flex: "none" }} title="Live connection lost — the last known state may be stale"><span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent)", boxShadow: "0 0 0 3px var(--accentbg)" }} />Reconnecting…</span>
-                : header === "recap"
-                  ? <span style={{ display: "inline-flex", alignItems: "center", color: "var(--violet)", background: "var(--violetbg)", fontWeight: 600, letterSpacing: ".06em", fontSize: 10.5, textTransform: "uppercase", borderRadius: 999, padding: "2px 9px", flex: "none" }}>Recap</span>
-                  : <span style={{ fontSize: 11, color: "var(--t3)", fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase", flex: "none" }}>Connecting…</span>}
-            <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--t3)", flex: "none" }} />
-            <span style={{ color: "var(--t1)", fontWeight: 550, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m ? (m.title_custom ?? (m.native_id ?? m.title).replace(/^Google Meet · /, "")) : "Meeting"}</span>
-            {m && <span style={{ color: "var(--t3)", flex: "none", fontSize: 12 }}>{m.platform}</span>}
-            {m && <span style={{ color: "var(--t3)", flex: "none" }}>{m.participants.length} in the room</span>}
-          </div>
-          {/* the spacer keeps the controls right-aligned while they fit on the title's line, and
-              collapses to nothing once they have wrapped to their own */}
-          <div style={{ flex: "1 0 0", minWidth: 0 }} />
-          {m && <BotControls m={m} connected={connected} />}
-          {m?.native_id && <ShareSessionButton platform={platformSlug(m.platform)} native={m.native_id} />}
-        </div>
-      </header>
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <MeetingCanvasView key={requestedMeetingId} meetingId={requestedMeetingId} />
-      </div>
-    </div>
-  );
+  // ONE MEETING VIEW (founder-approved design, 2026-10-11): header, notes, transcript — the same
+  // page the chat's panel shows, so a meeting opened from the list, a link or a chat reads alike.
+  // The old chrome that stood here (a "Recap"/"Live" pill, the name, the bot and share controls)
+  // is the view's header now (`MeetingPageHeader`), which is where those controls live.
+  return <MeetingView key={requestedMeetingId} meetingId={requestedMeetingId} />;
 }
 
 registerList({ id: "meetings", label: "Meetings", icon: "cal", order: 20, component: MeetingsList,

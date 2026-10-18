@@ -156,13 +156,31 @@ export function loadInvocation(env: NodeJS.ProcessEnv = process.env): Invocation
   return parseInvocation(env.VEXA_BOT_CONFIG);
 }
 
-const SPEAKER_STREAM_ENV: Array<[Exclude<keyof SpeakerStreamManagerConfig, 'callbackStampedFrames'>, string]> = [
+const SPEAKER_STREAM_ENV: Array<[Exclude<keyof SpeakerStreamManagerConfig, 'callbackStampedFrames' | 'maxHeldAudioSec'>, string]> = [
   ['minAudioDuration', 'BOT_SPEAKER_MIN_AUDIO_SEC'],
   ['submitInterval', 'BOT_SPEAKER_SUBMIT_INTERVAL_SEC'],
   ['confirmThreshold', 'BOT_SPEAKER_CONFIRM_THRESHOLD'],
   ['maxBufferDuration', 'BOT_SPEAKER_MAX_BUFFER_SEC'],
   ['idleTimeoutSec', 'BOT_SPEAKER_IDLE_TIMEOUT_SEC'],
+  ['minFinalAudioSec', 'BOT_SPEAKER_MIN_FINAL_AUDIO_SEC'],
 ];
+
+/** Per-request STT timeout (ms) from `BOT_STT_TIMEOUT_SEC`, or undefined for the client default
+ *  (90 s). A value under 20 s is refused loudly: a remote realtime STT answers a few seconds of
+ *  audio in 5–30 s, and a shorter timeout aborts requests that would have answered. */
+export function sttTimeoutMsFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  warn: (message: string) => void = (message) => console.warn(`[bot] ${message}`),
+): number | undefined {
+  const raw = env.BOT_STT_TIMEOUT_SEC;
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 20) {
+    warn(`BOT_STT_TIMEOUT_SEC=${JSON.stringify(raw)} is invalid (must be a number of seconds >= 20); using the built-in 90 s`);
+    return undefined;
+  }
+  return Math.round(value * 1000);
+}
 
 /** Read optional Meet speaker-stream tuning knobs from the bot environment. */
 export function speakerStreamConfigFromEnv(

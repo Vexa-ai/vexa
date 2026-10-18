@@ -54,11 +54,22 @@ def looks_like_auth_failure(text: object) -> bool:
     return bool(_AUTH_SIGNATURE_RE.search(str(text)))
 
 
+#: Where the claude CLI sends a turn when no ``ANTHROPIC_BASE_URL`` names another endpoint.
+CLAUDE_DEFAULT_HOST = "api.anthropic.com"
+
+
 def provider_host(base_url: str | None = None) -> str:
-    """The host the credential is being sent to, for the auth-error hint. Resolution order:
-    explicit arg → ``ANTHROPIC_BASE_URL`` (the claude-code harness) → ``"unknown"``."""
-    raw = base_url if base_url is not None else os.environ.get("ANTHROPIC_BASE_URL", "")
-    raw = (raw or "").strip()
+    """The host the credential is being sent to, for the auth-error hint and a provider fault.
+    Resolution order: explicit arg → ``ANTHROPIC_BASE_URL`` (the claude-code harness) → the claude
+    CLI's own default endpoint when that is unset or empty, which is where the turn really went (the
+    deployment's subscription route, and a catalog route to Anthropic, stamp it empty). An explicit
+    empty argument names no endpoint at all: ``"unknown"``."""
+    if base_url is None:
+        raw = (os.environ.get("ANTHROPIC_BASE_URL") or "").strip()
+        if not raw:
+            return CLAUDE_DEFAULT_HOST
+    else:
+        raw = (base_url or "").strip()
     if not raw:
         return "unknown"
     from urllib.parse import urlparse

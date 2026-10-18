@@ -55,7 +55,7 @@
       "requires": ["identity", "flows"],
       "route": { "method": "POST", "path": "/friction" },
       "arguments": ["session", "what_i_tried", "what_happened", "severity", "meeting_id", "tool", "deployment", "worker_image", "kind"],
-      "note": "PRD 40.9 open-decision 8 — friction is not a domain and this is its whole product surface: what did not work, dumped where the dev agent can read it and fix behaviour from it. Requires no agent domain: this is flows-api's own route, so it works in the no-agents profile too. NOTHING ON THIS ROUTE IS REQUIRED and no value a caller sends or omits produces a 400 (F-D27, prod 2026-09-04 11:0xZ: the route answered 400 \"session is required\" and threw away the report describing that refusal). `session` (the chat/meeting session this happened in) is what ties a report back to the conversation that produced it, so the tool description tells the agent to include it whenever it has one — but a report without one is filed, stored, and read back as \"no session\", because a missing join key is our gap and an absent session is signal too. Same for `what_i_tried`/`what_happened`. The only refusal left is authentication (401): a report attributed to nobody is a different object, not a poorer one. THE SINK TAKES ANY REPORT AS SENT (founder ruling 2026-09-04: \"we want to catch all signal … rich data, does not have to be too structured\"): `kind` and `severity` are FREE TEXT, stored verbatim, and any argument this route does not name is kept with the report under `extra` rather than dropped. The eight kinds are SUGGESTIONS, carried as `examples` plus one worked example each in the argument descriptions the MCP tool schema is derived from — never as an `enum`, because the MCP SDK validates a call against the tool schema and an enum there refuses the report instead of forwarding it. Never a 400 on a word; F-D26 lost twelve prod reports in twenty minutes to exactly that. TRANSPORT: the route now takes the whole report as a JSON BODY, which is where a person's own words about a failure belong — a query string is copied into every proxy and ingress access log in front of the service. The nine argument names above are UNCHANGED and still accepted as query parameters for one release (deprecated, warned once per process), because that is what this manifest's consumers already send; the body wins when a field arrives twice."
+      "note": "PRD 40.9 open-decision 8 — friction is not a domain and this is its whole product surface: what did not work, dumped where the dev agent can read it and fix behaviour from it. Requires no agent domain: this is flows-api's own route, so it works in the no-agents profile too. NOTHING ON THIS ROUTE IS REQUIRED and no value a caller sends or omits produces a 400 (F-D27, prod 2026-09-04 11:0xZ: the route answered 400 \"session is required\" and threw away the report describing that refusal). `session` (the chat/meeting session this happened in) is what ties a report back to the conversation that produced it, so the tool description tells the agent to include it whenever it has one — but a report without one is filed, stored, and read back as \"no session\", because a missing join key is our gap and an absent session is signal too. Same for `what_i_tried`/`what_happened`. The only refusal left is authentication (401): a report attributed to nobody is a different object, not a poorer one. THE SINK TAKES ANY REPORT AS SENT (founder ruling 2026-09-04: \"we want to catch all signal … rich data, does not have to be too structured\"): `kind` and `severity` are FREE TEXT, stored verbatim, and any argument this route does not name is kept with the report under `extra` rather than dropped. The eight kinds are SUGGESTIONS, carried as `examples` plus one worked example each in the argument descriptions the MCP tool schema is derived from — never as an `enum`, because the MCP SDK validates a call against the tool schema and an enum there refuses the report instead of forwarding it. Never a 400 on a word; F-D26 lost twelve prod reports in twenty minutes to exactly that. TRANSPORT: the route now takes the whole report as a JSON BODY, which is where a person's own words about a failure belong — a query string is copied into every proxy and ingress access log in front of the service. The nine argument names above are UNCHANGED and still accepted as query parameters for one release (deprecated, warned once per process), because that is what this manifest's consumers already send; the body wins when a field arrives twice. DEDUP: a report with the same subject, `tool` and normalised reason (the refusal reason token when `what_happened` carries one, else the text with ids, digits, hex, timestamps and quoted handles removed) inside the same UTC hour is not admitted again — it bumps `occurrences`/`last_seen` on the first report and answers `{recorded: false, duplicate_of, occurrences, instruction}`, telling the reporter not to file it again this run. The first report answers exactly as before."
     },
     {
       "name": "friction_so_far",
@@ -64,7 +64,24 @@
       "requires": ["identity", "flows"],
       "route": { "method": "GET", "path": "/friction" },
       "arguments": ["since", "limit"],
-      "note": "Your own filed reports, newest first — the subject is taken from your credential, same as reactions_list. The whole-instance dump and the fix verb stay operator-side (the rig's friction_dump/friction_fixed) for now."
+      "note": "Your own filed reports, newest first — the subject is taken from your credential, same as reactions_list. Each report carries `occurrences` (how many identical reports inside its UTC hour were folded into it; 1 when filed once) and `last_seen`. The whole-instance dump and the fix verb stay operator-side (the rig's friction_dump/friction_fixed) for now."
+    },
+    {
+      "name": "friction_list",
+      "identity": "operator",
+      "auth": "admin",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/friction/all" },
+      "arguments": ["since", "kind", "person", "status", "limit"],
+      "note": "The whole friction sink — every person's reports, newest first, with every free-text field scrubbed of credential-shaped text. `auth: admin` because `GET /friction/all` is gated by flows-api's own operator key, and the MCP edge spends that key for the deployment's admin account only (identity.v1 `admin_account`), never for an everyday account, the instance admin's included; everybody else reads their own reports with friction_so_far. Filters: since (epoch or ISO-8601), kind (case-insensitive), person (uid or address), status (open | fixed)."
+    },
+    {
+      "name": "mail_settings",
+      "identity": "operator",
+      "auth": "admin",
+      "requires": ["identity", "flows"],
+      "route": { "method": "GET", "path": "/mail/settings" },
+      "note": "What this deployment's mail does right now: the inbound allow-list and where it comes from, whether invitations are acted on, which outbound mails are on (minutes, prep, attendee follow-up), which mail templates are overridden in _global/mail, and which flows react to inbound mail. A read. Its answers are changed by the admin account editing _global/POLICIES.md and _global/mail/<name>.md (workspace_write, agent domain); credentials are reported as configured or not, never as values. Same admin gate as flows_submit."
     },
     {
       "name": "flows_submit",
@@ -73,7 +90,7 @@
       "requires": ["identity", "flows"],
       "route": { "method": "POST", "path": "/flows" },
       "arguments": ["name", "on_event", "steps", "params", "activate"],
-      "note": "Author a new flow version (ADR-0037 / PRD decision 40.5's own registry write). `auth: admin` because `POST /flows` is gated by flows-api's own operator key (flows_api.auth), not the caller's credential — a person's own key 401s here, so the caller's credential does not travel — and the MCP edge spends that key only for the instance admin calling with their own credential, confirmed with the gateway at call time. `steps` must name vocabulary flows-api already knows (`GET /flows`'s own `steps_vocabulary` lists it); an unknown step is a 400 naming it. `activate` defaults true (live within ~10s); false files a draft version."
+      "note": "Author a new flow version (ADR-0037 / PRD decision 40.5's own registry write). `auth: admin` because `POST /flows` is gated by flows-api's own operator key (flows_api.auth), not the caller's credential — a person's own key 401s here, so the caller's credential does not travel — and the MCP edge spends that key only for the deployment's admin account (the one identity that controls `_global`, identity.v1 `admin_account`) calling with its own credential, confirmed with the gateway at call time — never for an everyday account, the instance admin's included. `steps` must name vocabulary flows-api already knows (`GET /flows`'s own `steps_vocabulary` lists it); an unknown step is a 400 naming it. `activate` defaults true (live within ~10s); false files a draft version."
     },
     {
       "name": "flow_lifecycle",
@@ -81,7 +98,7 @@
       "auth": "admin",
       "requires": ["identity", "flows"],
       "route": { "method": "POST", "path": "/flows/{name}/{version}/{action}" },
-      "note": "`action` is activate | retire on one flow version, addressed by `name` + `version` — the path parameters are arguments without being declared, same shape as reaction_signal. Same admin gate as flows_submit: flows-api's `auth` dependency, not the caller's own credential, spent by the edge for the instance admin only."
+      "note": "`action` is activate | retire on one flow version, addressed by `name` + `version` — the path parameters are arguments without being declared, same shape as reaction_signal. Same admin gate as flows_submit: flows-api's `auth` dependency, not the caller's own credential, spent by the edge for the admin account only."
     }
   ],
   "publishes_events": [

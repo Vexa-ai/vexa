@@ -32,7 +32,7 @@ import {
   type Artifact, type Chat, type ServerSession,
 } from "../chats";
 import { Rail } from "../Rail";
-import { boundMeetingView, meetingPages, pageForArtifact, withMeetingPages, withoutSeparateTranscript } from "../roomView";
+import { meetingPages, pageForArtifact, withMeetingPages } from "../roomView";
 import type { MeetingMock } from "../../surfaces/meetingModel";
 
 const NOW = Date.UTC(2026, 8, 6, 12, 0, 0);
@@ -68,9 +68,9 @@ describe("the send's own event names the meeting to bind", () => {
    *  chat stream hands it to the shell. The shell resolves it with the ONE resolver every panel
    *  route already uses and binds when the answer is a meeting — so the dialect and the binding
    *  cannot drift apart without this failing. */
-  it("resolves to the meeting canvas, by row", () => {
+  it("resolves to the meeting view, by row", () => {
     expect(pageForArtifact({ workspace: "", path: "meeting:118" }))
-      .toEqual({ kind: "meeting", path: "118", label: "Transcript" });
+      .toEqual({ kind: "meeting", path: "118", label: "Meeting" });
   });
 
   it("…and a file the turn wrote names no meeting, so nothing binds", () => {
@@ -214,8 +214,11 @@ describe("the rail renders the status the row carries", () => {
       onNewChat={() => {}} onDeleteChat={() => {}} />,
   );
 
-  it("marks a finished meeting's chat `held`", () => {
-    expect(rail([HELD]).container.querySelector('[data-row-status="held"]')?.textContent).toBe("held");
+  it("a finished meeting's chat carries no status word — its date, in the time column (founder 2026-10-11)", () => {
+    const { container } = rail([HELD]);
+    expect(container.querySelector("[data-row-status]")).toBeNull();
+    expect(container.querySelector("[data-chat-row]")?.textContent).not.toMatch(/held/i);
+    expect(container.querySelector(".vx-row2-meta")?.textContent).not.toBe("");
   });
 
   it("does not say `live` twice — the accent word where the time goes already does", () => {
@@ -232,46 +235,38 @@ const reading: Artifact = { path: "drafts/brief.md", label: "brief", at: 5 };
 const NOTE = "kg/entities/meeting/2026-09-06-1200-google-meet.md";
 
 describe("meetingPages — what binding ADDS, which is not a room", () => {
-  // `permanent` is stamped here and only here (Vexa-ai/vexa#1600) — these pages are the MEETING's,
-  // so they carry no close control and every close path refuses them. See `permanentTab.test.tsx`.
-  it("is the transcript and the meeting's document, and nothing else", () => {
+  // `permanent` is stamped here and only here (Vexa-ai/vexa#1600). See `permanentTab.test.tsx`.
+  it("is the meeting view, and nothing else — the notes are inside it", () => {
     expect(meetingPages("live", "118", NOTE)).toEqual([
-      { kind: "meeting", path: "118", label: "Transcript", permanent: true },
-      { path: NOTE, label: "Brief", permanent: true },
+      { kind: "meeting", path: "118", label: "Meeting", permanent: true },
     ]);
-    // no personal page: the chat already has a home in its strip, and a tab nobody asked for is
-    // exactly what the Obsidian ruling (#1585) removed.
   });
 
-  it("degrades to the transcript alone before a report exists — which is every fresh send", () => {
-    expect(meetingPages("live", "118", null))
-      .toEqual([{ kind: "meeting", path: "118", label: "Transcript", permanent: true }]);
+  it("is the same before a notes file exists — which is every fresh send", () => {
+    expect(meetingPages("live", "118", null)).toEqual(meetingPages("live", "118", NOTE));
   });
 
-  it("names the document for the phase it is read in", () => {
-    expect(meetingPages("post", "118", NOTE)[1].label).toBe("Minutes");
-    expect(meetingPages("prep", "118", NOTE)).toEqual([{ path: NOTE, label: "Brief", permanent: true }]);
+  it("is named the same in every phase — never Brief, never Minutes", () => {
+    for (const phase of ["prep", "live", "post"] as const) {
+      expect(meetingPages(phase, "118", NOTE).map((p) => p.label)).toEqual(["Meeting"]);
+    }
   });
 });
 
-describe("withMeetingPages — the transcript arrives PINNED, behind the reader", () => {
-  it("adds the meeting's pages as pins and leaves the reader's page where it was", () => {
+describe("withMeetingPages — the meeting view arrives PINNED, behind the reader", () => {
+  it("adds the meeting view as a pin and leaves the reader's page where it was", () => {
     const out = withMeetingPages([desk, reading], meetingPages("live", "118", NOTE));
     const byPath = Object.fromEntries(out.map((a) => [a.path, a]));
     expect(byPath["118"].pinned).toBe(true);
-    expect(byPath[NOTE].pinned).toBe(true);
-    // the page they were reading is untouched — still there, still the one preview slot
     expect(byPath["drafts/brief.md"]).toEqual(reading);
-    // …and the pins sit left of it, so the single preview slot cannot evict them
-    expect(out.map((a) => a.path)).toEqual(["README.md", "118", NOTE, "drafts/brief.md"]);
+    expect(out.map((a) => a.path)).toEqual(["README.md", "118", "drafts/brief.md"]);
   });
 
   it("never duplicates, and never pins the desk", () => {
     const already: Artifact = { kind: "meeting", path: "118", label: "Transcript", at: 9 };
     const out = withMeetingPages([desk, already], meetingPages("live", "118", null));
     expect(out.filter((a) => a.kind === "meeting")).toHaveLength(1);
-    expect(out.find((a) => a.kind === "meeting")!.pinned).toBe(true);
-    // the desk is a product default, not something the reader put there (`homeEntry`)
+    expect(out.find((a) => a.kind === "meeting")).toMatchObject({ pinned: true, label: "Meeting" });
     expect(out.find((a) => a.desk)!.pinned).toBeUndefined();
   });
 
@@ -279,66 +274,6 @@ describe("withMeetingPages — the transcript arrives PINNED, behind the reader"
     const room = meetingPages("live", "118", NOTE);
     const once = withMeetingPages([desk, reading], room);
     expect(withMeetingPages(once, room)).toEqual(once);
-  });
-});
-
-// ── the page the send just minted (Vexa-ai/vexa#1601) ───────────────────────────────────────────
-//
-//  Founder, 2026-09-06 12:50Z, in the same live Meet: *"where is it?"* — the meeting doc. There was
-//  none. It was written when the call ENDED, so #1598's one-page room had no page to be, and the
-//  binding above could only ever pin a transcript. agent-api mints it on the send now, before it
-//  relays the event this chat binds off, so by the time the client asks `/api/meeting/note` the
-//  answer is a real page — and when that page declares the widget it IS the room.
-
-describe("boundMeetingView — the minted page is what the send opens", () => {
-  const withWidget = { path: NOTE, transcript: "118" };
-
-  it("fronts the meeting's own page when that page carries the transcript", () => {
-    const room = meetingPages("live", "118", NOTE, null, { noteHasTranscript: true });
-    // ONE page — and it is the meeting's, so it wears `permanent` (#1600) like every page this
-    // composer marks as the room's own
-    expect(room).toEqual([{ path: NOTE, label: "Brief", permanent: true }]);
-    expect(boundMeetingView(room, withWidget)).toBe(room[0]);
-  });
-
-  it("fronts NOTHING for a report written before the widget existed", () => {
-    // those meetings keep the two-page room they have today; fronting a static report over a live
-    // transcript would be the regression `noteHasTranscript` exists to prevent
-    const room = meetingPages("live", "118", NOTE, null, { noteHasTranscript: false });
-    expect(room.map((p) => p.label)).toEqual(["Transcript", "Brief"]);
-    expect(boundMeetingView(room, { path: NOTE, transcript: "" })).toBeNull();
-  });
-
-  it("fronts nothing when there is no page yet — one document fewer, never a tab onto a guess", () => {
-    expect(boundMeetingView(meetingPages("live", "118", null), { path: null, transcript: "" })).toBeNull();
-  });
-
-  it("never fronts the transcript canvas, whatever the note says", () => {
-    const room = meetingPages("live", "118", NOTE);
-    expect(boundMeetingView(room, { path: "118", transcript: "118" })).toBeNull();
-  });
-});
-
-describe("withoutSeparateTranscript — one page, not two", () => {
-  it("drops the tab the send pinned once the page carries the widget", () => {
-    const room = meetingPages("live", "118", NOTE, null, { noteHasTranscript: true });
-    // the strip as the artifact event left it: the transcript canvas, pinned and in front
-    const pinnedByTheSend: Artifact = { kind: "meeting", path: "118", label: "Transcript", pinned: true };
-    const merged = withMeetingPages([desk, pinnedByTheSend], room);
-    const out = withoutSeparateTranscript(merged, "118");
-    expect(out.map((a) => a.path)).toEqual(["README.md", NOTE]);
-    expect(out.find((a) => a.path === NOTE)!.pinned).toBe(true);
-  });
-
-  it("removes ONE identity and leaves everything else — another meeting's tab included", () => {
-    const other: Artifact = { kind: "meeting", path: "42", label: "Transcript" };
-    const out = withoutSeparateTranscript([desk, other, reading], "118");
-    expect(out).toEqual([desk, other, reading]);
-  });
-
-  it("never removes the desk", () => {
-    const homeIsAMeeting: Artifact = { kind: "meeting", path: "118", label: "Desk", desk: true };
-    expect(withoutSeparateTranscript([homeIsAMeeting], "118")).toEqual([homeIsAMeeting]);
   });
 });
 

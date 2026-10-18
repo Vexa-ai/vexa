@@ -14,6 +14,7 @@ from control_plane import deploy_keys as deploy_keys_mod
 from control_plane import front_page as front_page_mod
 from control_plane import git_credentials as git_creds
 from control_plane import global_layer
+from control_plane import kg_templates
 from control_plane import publish as publish_mod
 from control_plane import repo_ref
 from control_plane import scaffolds as scaffolds_mod
@@ -29,7 +30,8 @@ from control_plane.bodies import (
     GitTokenBody, SharedActiveBody, SharedAttachBody, WorkspaceActivateBody,
     WorkspaceDeactivateBody, WorkspaceMoveBody, WorkspaceNewBody, WorkspacePublishBody,
     WorkspaceImportBody, WorkspacePullBody, WorkspacePurposeBody, WorkspacePushBody,
-    WorkspaceRemoveBody, WorkspaceRenameBody, WorkspaceSwapBody, WorkspaceWriteBody)
+    WorkspaceRemoveBody, WorkspaceRenameBody, WorkspaceRestoreBody, WorkspaceSwapBody,
+    WorkspaceWriteBody)
 from control_plane.ceiling import is_unwatched, require_in_ceiling, write_slug
 from control_plane.workspace_attach import (
     CloneError, activate_workspace, active_workspaces, attach_shared_workspace, bind_repository_credential,
@@ -57,6 +59,7 @@ from typing import Optional
 import hashlib
 import stat as stat_mod
 import os
+import re
 
 
 #: HOW FAR BACK THE FRONT PAGE LOOKS for a change a person can read (Vexa-ai/vexa#1634). Deep enough
@@ -149,10 +152,13 @@ def build(**d) -> APIRouter:
                 raise HTTPException(status_code=400, detail="invalid filename") from None
             uploaded.append({"name": stored_name, "path": path})
         return {"files": uploaded}
-    def _write_dir(request: Request, subject, rel: str, slug: Optional[str]) -> Path:
+    def _write_dir(request: Request, subject, rel: str, slug: Optional[str], *,
+                   templates: bool = False) -> Path:
         """WHICH workspace dir a write to ``rel`` lands in, or the refusal. The mount rules, in one
         place: own baseline/_system always; a shared workspace needs contributor+; `_global` only
-        the admin allowlist; `kg/templates/` never.
+        the admin account; `kg/templates/` never — except the COMPANY's templates in `_global`, on
+        the two doors that pass ``templates=True`` (the page write, which validates the shape, and
+        the page remove, which reverts a kind to the baked shape), and only for the admin account.
 
         Extracted from ``ws_file_write`` unchanged when the ASSET writes arrived, because the
         alternative was a second copy of an authorization rule — and a permission check that exists
@@ -165,12 +171,22 @@ def build(**d) -> APIRouter:
         # `kg/templates/` is the SHAPE of an entity, not one. It is hidden from every tree, so a tab
         # can only be open on it deliberately — and a save from that tab would silently rewrite the
         # shape every future entity is copied from.
-        if rel.startswith("kg/templates/"):
-            raise HTTPException(status_code=403, detail="kg/templates/ holds entity shapes, not records")
+        #
+        # THE COMPANY'S TEMPLATES ARE THE ONE EXCEPTION (founder ruling 2026-10-11: the admin account
+        # controls the templates new notes are created from). `_global/kg/templates/<kind>.md` is
+        # the shape `entity_upsert` creates a new card from; it is written only through the doors
+        # that ask for it, and the `_global` branch below still refuses every account but the
+        # admin account.
+        if rel.startswith("kg/templates/") and not (templates and slug == system_mounts.GLOBAL_SLUG):
+            raise HTTPException(status_code=403, detail=(
+                "kg/templates/ holds entity shapes, not records — the company's templates are "
+                "_global/kg/templates/, edited by the admin account"
+                if slug == system_mounts.GLOBAL_SLUG else
+                "kg/templates/ holds entity shapes, not records"))
         if slug == system_mounts.GLOBAL_SLUG:
             require_in_ceiling(request, slug)
-            if not global_layer.is_admin(settings, str(subject)):
-                raise HTTPException(status_code=403, detail="only an org admin may edit _global")
+            if not global_layer.is_admin_account(settings, str(subject)):
+                raise HTTPException(status_code=403, detail="only the admin account may edit _global")
             target = _writable_global()
             if target is None:
                 raise HTTPException(status_code=404, detail="the organisation tier is not writable here")
@@ -375,7 +391,7 @@ def build(**d) -> APIRouter:
     def ws_file_write(request: Request, body: WorkspaceWriteBody = Body(...)):
         """WRITE one page, creating it or replacing it whole — the terminal's in-place page editor and
         the verb behind `workspace_write`. Authorization mirrors the MOUNT rules, not the read rules:
-        own desk and `_system` always; a shared workspace needs contributor+; `_global` only the
+        own personal workspace and `_system` always; a shared workspace needs contributor+; `_global` only the
         admin allowlist. Commits, so the history stays honest.
 
         Never overwrite a page with a note saying it moved or went away: `workspace_move` and
@@ -387,7 +403,14 @@ def build(**d) -> APIRouter:
         content = body.content
         # #1624: an image address nobody checked never reaches the page (see `_screen_images`).
         content = _screen_images(request, [content], path=rel, tool="workspace_write")[0]
-        target = _write_dir(request, subject, rel, slug)
+        target = _write_dir(request, subject, rel, slug, templates=True)
+        # A TEMPLATE IS CHECKED BEFORE IT LANDS: a shape `entity_upsert` cannot create a card from
+        # is refused here with what to put back, rather than discovered on the next new note.
+        if kg_templates.is_template_path(rel):
+            problems = kg_templates.validate(rel, content)
+            if problems:
+                raise HTTPException(status_code=422, detail={
+                    "refused": "not a usable template", "path": rel, "problems": problems})
         try:
             # resolved ONCE (…and again WITH the root, for the symlink half), written nofollow
             fbase, frel = wpaths.locate_inside(target, rel)
@@ -418,7 +441,8 @@ def build(**d) -> APIRouter:
     # `git show` away forever — which is what makes removing a page a safe thing for an agent to do
     # at all, and why neither of these needs a confirmation step the model would have to invent.
 
-    def _movable_dir(request: Request, subject, rel: str, slug: Optional[str]) -> Path:
+    def _movable_dir(request: Request, subject, rel: str, slug: Optional[str], *,
+                     templates: bool = False) -> Path:
         """WHICH workspace dir a REMOVAL (or the source/target half of a move) lands in, or the
         refusal. `_write_dir`'s rules — path guard, `kg/templates/`, `_global` admin-only, shared
         needs contributor+, anything outside the active set 403s — plus ONE more.
@@ -433,8 +457,8 @@ def build(**d) -> APIRouter:
         if str(slug or "") == system_mounts.SYSTEM_SLUG:
             raise HTTPException(status_code=403, detail=(
                 "`_system` holds chats, sessions and identity — the platform writes that tier; "
-                "pages are removed from a desk or a workspace, never from it"))
-        return _write_dir(request, subject, rel, slug)
+                "pages are removed from a personal workspace or a shared one, never from it"))
+        return _write_dir(request, subject, rel, slug, templates=templates)
 
     def _kg_index_after(target: Path, *rels: str) -> list[str]:
         """Refresh `kg/INDEX.md` when one of ``rels`` was an ENTITY page, and say so as a pathspec.
@@ -462,6 +486,17 @@ def build(**d) -> APIRouter:
                 f"Moved to [{name}]({new_rel}).\n\n"
                 f"This page now lives at `{new_rel}`. Its history is in this workspace's git log.\n")
 
+    def _page_subject(ws: str, rel: str, verb: str) -> str:
+        """`<workspace>: <path> — <verb>`, at most 72 characters, and the VERB always survives.
+
+        Clipping the whole string at 72 cut the verb off a long path, and History's Restore finds a
+        removal by it — so a long path is shortened in the middle instead (`kg/…/name.md`)."""
+        whole = f"{ws}: {rel} — {verb}"
+        if len(whole) <= 72:
+            return whole
+        room = max(8, 72 - len(f"{ws}:  — {verb}") - 1)
+        return f"{ws}: …{rel[-room:]} — {verb}"[:72]
+
     @router.post("/api/workspace/remove")
     def ws_file_remove(request: Request, body: WorkspaceRemoveBody = Body(...)):
         """REMOVE one page from a workspace, as a commit — the verb behind `workspace_delete`.
@@ -478,7 +513,9 @@ def build(**d) -> APIRouter:
         subject = subject_of(request)
         rel = str(body.path or "").strip()
         slug = write_slug(request, body.slug)
-        target = _movable_dir(request, subject, rel, slug)
+        # Removing a COMPANY template is allowed (the kind reverts to the baked shape); moving one
+        # is not — a move would land a shape nobody validated, or take one out without a revert.
+        target = _movable_dir(request, subject, rel, slug, templates=True)
         try:
             # CHECK ONCE, ACT ON WHAT WAS CHECKED: the removal goes through the located root and
             # link-free path by descriptor, so a link swapped in after the check removes nothing
@@ -492,8 +529,62 @@ def build(**d) -> APIRouter:
         if st is None or not stat_mod.S_ISREG(st.st_mode) or not wpaths.unlink_inside(froot, frel):
             raise HTTPException(status_code=404, detail="not found")
         sha = _commit(target, [rel, *_kg_index_after(target, rel)],
-                      f"{target.name}: {rel} — removed"[:72])
+                      _page_subject(target.name, rel, "removed"))
         return {"path": rel, "deleted": True, "workspace": slug or "", "commit": sha}
+
+    @router.post("/api/workspace/restore")
+    def ws_file_restore(request: Request, body: WorkspaceRestoreBody = Body(...)):
+        """PUT BACK one page a removal took out — the page view's **Undo** and History's **Restore**.
+
+        Founder, 2026-10-11, on a junk entity page the agent had written: *"we probably need a
+        delete for a note"*. The delete is `ws_file_remove` above, unchanged; this is what makes
+        offering it to a person safe. A removal is a commit, so the bytes are its parent's — read
+        out of git and written back exactly, then committed, so the restore is history too.
+
+        THE SAME DOOR AS THE REMOVAL (`_movable_dir`): whoever could not have removed the page
+        cannot put it back, `_system` and `kg/templates/` included. And it never overwrites: a page
+        already at the path is a 409, because a restore that clobbers a newer page is a second loss
+        dressed as an undo. ``commit`` must be a commit that removed ``path``; omitted, it is the
+        newest such commit."""
+        subject = subject_of(request)
+        rel = str(body.path or "").strip()
+        slug = write_slug(request, body.slug)
+        target = _movable_dir(request, subject, rel, slug)
+        try:
+            froot, frel = wpaths.locate_inside(target, rel)
+        except wpaths.PathRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        if not frel:
+            raise HTTPException(status_code=400, detail="name the page to put back")
+        if not (target / ".git").is_dir():
+            raise HTTPException(status_code=404, detail="this workspace keeps no history to restore from")
+        if wpaths.stat_inside(froot, frel) is not None:
+            raise HTTPException(status_code=409, detail=(
+                "a page is already at that path — move or remove it first; a restore never overwrites"))
+        sha = str(body.commit or "").strip()
+        if sha:
+            if not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha):
+                raise HTTPException(status_code=400, detail="`commit` is not a commit id")
+            took = run_git(target, "show", "--no-renames", "--diff-filter=D", "--name-only",
+                           "--format=", sha, "--", rel)
+            if took.returncode != 0 or rel not in took.stdout.splitlines():
+                raise HTTPException(status_code=404, detail="that commit did not remove this page")
+        else:
+            sha = run_git(target, "log", "-1", "--no-renames", "--diff-filter=D", "--format=%H",
+                          "--", rel).stdout.strip()
+            if not sha:
+                raise HTTPException(status_code=404, detail="no removal of this page in the history")
+        before = run_git(target, "show", f"{sha}^:{rel}", text=False)
+        if before.returncode != 0:
+            raise HTTPException(status_code=404, detail="the history has no copy of this page")
+        try:
+            wpaths.write_bytes_inside(froot, frel, before.stdout)
+        except wpaths.PathRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        head = _commit(target, [rel, *_kg_index_after(target, rel)],
+                       _page_subject(target.name, rel, "restored"))
+        return {"path": rel, "restored": True, "workspace": slug or "", "commit": head,
+                "from_commit": sha}
 
     @router.post("/api/workspace/move")
     def ws_file_move(request: Request, body: WorkspaceMoveBody = Body(...)):
@@ -603,9 +694,9 @@ def build(**d) -> APIRouter:
             # the administrator's desk, where nobody else will ever read it. The five files stay
             # thin; the graph they link to lives HERE, written by the one identity that may write
             # here at all — the same test the file route runs two screens up.
-            if not global_layer.is_admin(settings, str(subject)):
+            if not global_layer.is_admin_account(settings, str(subject)):
                 raise HTTPException(status_code=403,
-                                    detail="only an org admin may write company-tier pages into _global")
+                                    detail="only the admin account may write company-tier pages into _global")
             global_target = _writable_global()
             if global_target is None:
                 raise HTTPException(status_code=404, detail="the organisation tier is not writable here")
@@ -635,7 +726,11 @@ def build(**d) -> APIRouter:
                 fields=body.fields,
                 section=body.section.strip(),
                 connections=body.connections or (),
-                open_questions=questions)
+                open_questions=questions,
+                # THE COMPANY'S SHAPE for this kind, when the admin account wrote one
+                # (`_global/kg/templates/<kind>.md`); a new card takes its sections, and one that is
+                # not a usable shape is ignored in favour of the baked one (`kg_templates`).
+                template=kg_templates.company_template(_global_dir(), kind))
         except entities_mod.EntityMalformed as e:
             # 400, and CAUGHT FIRST — `EntityMalformed` is a subclass, so the broader clause below
             # would swallow it. This is the one refusal that IS a retry: an argument the writer
@@ -891,7 +986,8 @@ def build(**d) -> APIRouter:
         next move on a refusal is to SAY why, not to retry."""
         if not _internal_caller(request):
             raise HTTPException(status_code=403,
-                                detail="resetting a desk to a witnessed sha is an internal-tier capability")
+                                detail="resetting a personal workspace to a witnessed sha is an "
+                                       "internal-tier capability")
         sha = str((body or {}).get("sha") or "").strip()
         if not sha:
             raise HTTPException(status_code=400, detail="`sha` is required — the witness to reset to")
@@ -931,7 +1027,7 @@ def build(**d) -> APIRouter:
         system_existed = (system_mounts.system_store_path(wsr.root, subject) / ".git").exists()
         system_mounts.ensure_system_workspace(str(wsr.root), subject)
         # The desk's id + registry row. Named by the address that signed in when the gateway gave
-        # us one: a desk called "Desk 126" is better than `126` and worse than the person's own
+        # us one: a desk called "Personal 126" is better than `126` and worse than the person's own
         # address, and this is the one seam that has the address.
         _ws_sync(str(subject), kind="desk", owner=str(subject), ws_dir=ws,
                  name=(request.headers.get("x-user-email") or "").strip() or None)
@@ -974,8 +1070,8 @@ def build(**d) -> APIRouter:
         `claim_id` up in the book and blocks on that claim's own words, so one event for a batch
         would be one card for three questions with no way to answer two of them.
 
-        It lives in the workspaces router because the book is a file on a desk and everything this
-        needs — the subject, the reader, the desk path — is already closed over here; the state
+        It lives in the workspaces router because the book is a file in a personal workspace and everything this
+        needs — the subject, the reader, the workspace path — is already closed over here; the state
         machine itself is `control_plane.claims`, which is the concern."""
         subject = subject_of(request)
         batch = [b if isinstance(b, str) else b.model_dump() for b in body.claims]
@@ -985,7 +1081,7 @@ def build(**d) -> APIRouter:
             result = claims_mod.propose(wsr.workspace_dir(subject), batch)
         except wpaths.PathRefused:
             # the book's folder or file is a link, not a plain path on this desk — never followed
-            raise HTTPException(status_code=409, detail="the claims book on this desk is not a plain "
+            raise HTTPException(status_code=409, detail="the claims book in this workspace is not a plain "
                                 "file") from None
         for cid in result["ids"]:
             publish_mod.publish(publish_mod.EVENT_CLAIM_PROPOSED,
@@ -999,7 +1095,7 @@ def build(**d) -> APIRouter:
         correction; the original stays beside it) or `rejected`. Put their whole answer in ONE call,
         and only after asking them: this is their word, never an agent's guess about it.
 
-        The first claim they stand behind makes the desk ready, so answering finishes the setup.
+        The first claim they stand behind makes their personal workspace ready, so answering finishes the setup.
         An unknown id or verdict comes back in `errors` and the rest of the answer still lands."""
         subject = subject_of(request)
         if not body.verdicts:
@@ -1008,7 +1104,7 @@ def build(**d) -> APIRouter:
             return claims_mod.record_verdicts(wsr.workspace_dir(subject),
                                               [v.model_dump() for v in body.verdicts])
         except wpaths.PathRefused:
-            raise HTTPException(status_code=409, detail="the claims book on this desk is not a plain "
+            raise HTTPException(status_code=409, detail="the claims book in this workspace is not a plain "
                                 "file") from None
     @router.get("/api/workspaces/by-slug/{slug}")
     def ws_id_by_slug(slug: str, request: Request):
@@ -1153,8 +1249,21 @@ def build(**d) -> APIRouter:
     @router.get("/api/workspace/active")
     def ws_active(request: Request):
         """The subject's ordered ACTIVE SET — the workspaces the next dispatch mounts (the private baseline
-        first, then any activated extras). Each: ``slug, repo, ref, role, path, write, primary``."""
+        first, then any activated extras). Each: ``slug, repo, ref, role, path, write, primary``.
+
+        THE ADMIN ACCOUNT's set is the company layer and nothing else — the same answer its dispatch
+        mounts (`dispatch.build_mount_set`) — and says so with `admin_account: true`, the one fact the
+        terminal needs to show it only Company. Every other subject's answer carries no such key."""
         subject = subject_of(request)
+        if global_layer.is_admin_account(settings, str(subject)):
+            return {
+                "subject": subject,
+                "active": [{"slug": system_mounts.GLOBAL_SLUG, "repo": "", "ref": "", "role": "global",
+                            "path": str(_global_dir()), "write": True, "primary": False,
+                            "name": None}],
+                "index_degraded": False,
+                "admin_account": True,
+            }
         try:
             mounts = active_workspaces(wsr.root, subject)
         except ValueError:
@@ -1633,8 +1742,8 @@ def build(**d) -> APIRouter:
         target = str(body.get("target") or "")
         require_in_ceiling(request, None if target == "personal" else target)
         if target == "_global":
-            if not global_layer.is_admin(settings, str(subject)):
-                raise HTTPException(status_code=403, detail="only an org admin may reset _global")
+            if not global_layer.is_admin_account(settings, str(subject)):
+                raise HTTPException(status_code=403, detail="only the admin account may reset _global")
             # The `_global` the worker mount serves (`system_mounts.global_root`): unset config is the
             # in-store one (founder ruling 2026-10-08), not "no _global".
             path = system_mounts.global_root(settings, wsr.root)

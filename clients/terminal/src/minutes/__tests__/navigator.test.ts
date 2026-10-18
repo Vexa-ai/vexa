@@ -10,7 +10,7 @@ import {
   frontmatterSaysTemplate, humanPaths, isMachinery, isMachineryEntry,
 } from "../machinery";
 import {
-  MAX_HITS, NAV_OPEN_KEY, buildWorkspaces, filterByName, loadNavOpen, loadNavWorkspaces, parseQuery,
+  MAX_HITS, NAV_OPEN_KEY, buildWorkspaces, filterByName, frontPagePath, loadNavOpen, loadNavWorkspaces, parseQuery,
   saveNavOpen, treeFrom, type NavWorkspace,
 } from "../navigatorApi";
 import { VIEW_NAVIGATE_EVENT, navigateView, pageForDocRef, viewSlotFor } from "../roomView";
@@ -128,7 +128,7 @@ describe("which workspaces are listed, and in what order (decisions 26–27)", (
   });
 
   it("with nothing at all there is still a desk — it is the workspace that always exists", () => {
-    expect(buildWorkspaces({})).toEqual([{ key: "desk", slug: undefined, kind: "desk", name: "Desk" }]);
+    expect(buildWorkspaces({})).toEqual([{ key: "desk", slug: undefined, kind: "desk", name: "Personal" }]);
   });
 });
 
@@ -322,5 +322,19 @@ describe("one mechanism: a navigator click and a chip click land in the same his
     const nav = viewSlotFor("", "README.md");
     expect(nav.workspace).toBeUndefined();
     expect(artifactKey({ path: nav.path, slug: nav.workspace })).toBe("|README.md");
+  });
+});
+
+describe("frontPagePath — what a workspace's name opens (founder, 2026-10-11)", () => {
+  it("the root README, as the tree spells it", () => {
+    expect(frontPagePath(["kg/a.md", "Readme.md"])).toBe("Readme.md");
+    expect(frontPagePath(["README.mdx"])).toBe("README.mdx");
+  });
+  it("a README in a folder is not the front page", () => {
+    expect(frontPagePath(["docs/README.md"])).toBe("README.md");
+  });
+  it("no README, or no tree read yet → the page `/w/<workspace>` opens", () => {
+    expect(frontPagePath(["PRINCIPLES.md"])).toBe("README.md");
+    expect(frontPagePath(undefined)).toBe("README.md");
   });
 });

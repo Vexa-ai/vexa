@@ -146,6 +146,19 @@ class ResetBody(BaseModel):
     room_meeting_id: Optional[str] = None      # accepted-and-ignored (reset mounts nothing)
 
 
+class ChatModelBody(BaseModel):
+    """``POST /api/chat/model`` — pick which of the operator's models one chat runs on."""
+    model_config = {"extra": "forbid"}
+    session: Optional[SessionId] = Field(default=None,
+                                         description="the chat session; the default chat when absent")
+    model: str = Field(max_length=64, description="a model id from GET /api/models/catalog; "
+                                                  "empty puts the chat back on your default")
+    effort: Optional[str] = Field(default=None, max_length=16,
+                                  description="an effort level the model lists in its "
+                                              "capabilities.reasoning_efforts; empty or absent runs "
+                                              "it at its default_effort")
+
+
 class RoutineCreate(BaseModel):
     """The Routines surface / ``/routine`` create form — compiles to a routine.v1 + a schedule.v1 job."""
     model_config = {"extra": "forbid"}
@@ -459,7 +472,7 @@ class WorkspaceRemoveBody(BaseModel):
     """REMOVE one page from a workspace — the body behind `workspace_delete` (Vexa-ai/vexa#1621).
 
     ``path`` is workspace-RELATIVE; ``slug`` names the workspace (omitted = the chat's target, or the
-    caller's own desk when there is none).
+    caller's personal workspace when there is none).
 
     ⚠ WHY THIS IS A POST AND NOT `DELETE /api/workspace/file`, which is what it was written as
     first. `DELETE /api/workspace/{slug}` already exists and DESTROYS A WHOLE WORKSPACE
@@ -472,6 +485,20 @@ class WorkspaceRemoveBody(BaseModel):
     model_config = {"extra": "forbid"}
     path: str = Field(description="workspace-relative path of the page to remove")
     slug: Optional[str] = Field(None, description=WRITE_SLUG_HELP)
+
+
+class WorkspaceRestoreBody(BaseModel):
+    """PUT BACK one page a removal took out — the body behind the page view's **Undo** and History's
+    **Restore** (founder 2026-10-11: *"we probably need a delete for a note"*).
+
+    ``path`` and ``slug`` as on `WorkspaceRemoveBody`. ``commit`` is the removal to undo: the sha
+    `POST /api/workspace/remove` answered with, or a History row's. Omitted = the newest commit that
+    removed ``path``. The bytes come from that commit's parent, so what returns is exactly what went."""
+    model_config = {"extra": "forbid"}
+    path: str = Field(description="workspace-relative path of the page to put back")
+    slug: Optional[str] = Field(None, description=WRITE_SLUG_HELP)
+    commit: Optional[str] = Field(None, description=(
+        "the commit that removed the page; omit it for the newest removal of that path"))
 
 
 class WorkspaceMoveBody(BaseModel):
@@ -490,7 +517,7 @@ class WorkspaceMoveBody(BaseModel):
     slug: Optional[str] = Field(None, description=WRITE_SLUG_HELP)
     to_slug: Optional[str] = Field(None, description=(
         "the workspace it is going to; omit it for a rename inside the same workspace, pass "
-        "`personal` for the person's own desk"))
+        "`personal` for the person's personal workspace"))
 
 
 class WorkspaceDeactivateBody(BaseModel):

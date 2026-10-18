@@ -12,7 +12,7 @@ APIs that are documented elsewhere on this site. Minutes adds no logic of its ow
 |---|---|
 | [Chats](/minutes/chats) | sending, queueing, background jobs, suggestions, where a chat writes |
 | [Pages](/minutes/pages) | the navigator, editing, Extend and Create, images, diagrams, moving pages |
-| [Meetings](/minutes/meetings) | live transcript, Highlight, playback, Ask about this, deleting a meeting's data |
+| [Meetings](/minutes/meetings) | the meeting view: notes, Update notes, the transcript (collapsed or expanded), Highlight, playback, Ask about this, deleting a meeting's data |
 | [Workspaces and connections](/minutes/workspaces) | front page, members and invites, links, attaching a repository, your connected accounts |
 | [Manage your chats](/how-to/chat-controls) | renaming, ordering, activity and deleting chats |
 | [Onboarding research and Extend](/how-to/onboarding-research) | filling your workspace from your accounts |
@@ -37,7 +37,9 @@ The left column is headed **Chats**.
 - By default it shows the chats you wrote in and meetings that are live or upcoming. **All** shows
   everything; the number beside it is how many are hidden.
 - **+** (*New chat*) opens a chat that is saved when you send the first message.
-- A finished meeting's chat is tagged *held*. A chat's target workspace shows on its row.
+- Every row shows its time on the right; a meeting row shows the meeting's time, and a live meeting
+  says *live* there. A meeting's row has a filled dot, a chat's an outlined one. A chat's target
+  workspace shows on its row.
 - With nothing in it: *Meetings arrive by invitation; "+" starts a chat.*
 
 Activity dots, renaming, drag-to-reorder and deleting are in [Manage your chats](/how-to/chat-controls).
@@ -73,8 +75,8 @@ focus.
 | Link | Opens |
 |---|---|
 | `/w/<workspace>/<path>` | that page (the workspace's front page with no path); see [links](/minutes/workspaces#link-to-a-page) |
-| `/?meeting=<platform>/<meeting-id>` | that meeting's room |
-| `/?meeting=…&view=transcript` (or `minutes`, `brief`, `file:<path>`) | the room with that tab in front |
+| `/?meeting=<platform>/<meeting-id>` | that meeting's view: header, notes and transcript |
+| `/?meeting=…&view=file:<path>` | that meeting, with the page at `<path>` in front. Older links with `view=transcript`, `minutes` or `brief` open the meeting view |
 | `/?ask=<name>` | a chat that opens with the question the administrator saved under that name |
 | `/?s=<id>` | a chat prepared for you, for example on your first sign-in or from a link Vexa sent |
 | `/join?i=<token>` | an invite to a workspace; see [Join from an invite](/minutes/workspaces#join-from-an-invite) |

@@ -246,6 +246,42 @@ models:
   llmBaseUrl: ""        # VEXA_LLM_BASE_URL, e.g. http://litellm.ai.svc:4000/v1 — the /v1 base
   llmExtraBody: ""      # VEXA_LLM_EXTRA_BODY: a JSON object merged into every request, e.g.
                         # '{"chat_template_kwargs":{"enable_thinking":false}}' for a Qwen
+  # The model catalog (VEXA_MODEL_CATALOG, ADR-0043; docs: https://docs.vexa.ai/model-catalog): the
+  # models people pick per chat in the terminal. Empty = no catalog — every turn runs on agentModel
+  # and each person's Settings → Models, as before. A credential is never written here: a provider
+  # names a variable (secret_ref: env:VEXA_MODEL_SECRET_<NAME>, the only names allowed) and
+  # catalogSecrets delivers it from a Secret you name.
+  # Two worked examples, a self-hosted Qwen 3 and one OpenRouter model:
+  #
+  #   catalog:
+  #     providers:
+  #       lab-vllm:
+  #         adapter: openai_compatible
+  #         base_url: http://vllm.inference.svc:8000/v1
+  #         auth: none
+  #         extra_body: {chat_template_kwargs: {enable_thinking: false}}
+  #       openrouter:
+  #         adapter: openrouter
+  #         auth: secret
+  #         secret_ref: env:VEXA_MODEL_SECRET_OPENROUTER
+  #     models:
+  #       - id: qwen3-32b
+  #         display_name: Qwen 3 32B (self-hosted)
+  #         provider: lab-vllm
+  #         model: Qwen/Qwen3-32B
+  #         capabilities: {tool_calling: true, streaming: true, context_tokens: 32768}
+  #         default: true
+  #       - id: or-sonnet
+  #         display_name: Claude Sonnet via OpenRouter
+  #         provider: openrouter
+  #         model: anthropic/claude-sonnet-4.5
+  #         access: admins
+  #   catalogSecrets:
+  #     - env: VEXA_MODEL_SECRET_OPENROUTER     # the name secret_ref uses
+  #       secretName: model-keys      # required: the Secret holding the key (never the admin-token Secret)
+  #       key: openrouter             # default: the env name
+  catalog: {}
+  catalogSecrets: []
 
 # ============ Components ============
 
@@ -398,6 +434,13 @@ adminApi:
   # terminal only asks admin-api. A VEXA_ADMIN_EMAILS still set under terminal.extraEnv is carried
   # over when this is empty.
   adminEmails: ""
+  # The ADMIN ACCOUNT (VEXA_ADMIN_ACCOUNT): one fresh address that is nobody's everyday account, e.g.
+  # "admin@example.com". It is the only account that writes the company layer `_global` (its files,
+  # flows, POLICIES.md) and it has nothing else — no desk, no shared workspaces, no meetings. Set it,
+  # roll admin-api, then sign in AS that address; the terminal shows it only Company. An address that
+  # already signed in as an everyday account is never turned into the admin account. Empty = nobody
+  # writes `_global` (everybody reads it). Replaces agentApi.globalAdminSubjects, which is retired.
+  adminAccount: ""
   extraEnv: []
 
 # Meetings + recordings (compose: meeting-api → :8080).
@@ -483,6 +526,8 @@ runtime:
     confirmThreshold: ""
     maxBufferSec: ""
     idleTimeoutSec: ""
+    minFinalAudioSec: ""
+    sttTimeoutSec: ""
   # Active-phase remote-audio silence window. Empty uses the bot's 10-minute default.
   aloneSilenceWindowMs: ""
   resources:

@@ -99,7 +99,7 @@ describe("what the panel does with it", () => {
   it("resolves both dialects through the one function the artifact event already uses", () => {
     // the transcript is a CANVAS bound to a row id, never a file (founder ruling 2026-09-01)
     expect(pageForArtifact({ workspace: "", path: "meeting:147" }))
-      .toEqual({ kind: "meeting", path: "147", label: "Transcript" });
+      .toEqual({ kind: "meeting", path: "147", label: "Meeting" });
     expect(pageForArtifact({ workspace: "team", path: "kg/entities/meeting/2026-03-02-tsc.md" }))
       .toEqual({ path: "kg/entities/meeting/2026-03-02-tsc.md", slug: "team", label: "2026-03-02-tsc" });
   });

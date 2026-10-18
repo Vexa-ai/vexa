@@ -517,3 +517,67 @@ describe("streamChatTurn — a turn that stopped early (F89)", () => {
     expect(state.truncated).toBe("");
   });
 });
+
+/** ONE VIEW, TWO TURNS (the founder, 2026-10-10: *"sometimes chat does not answer if asked while it's
+ *  not yet answered"*). The worker writes a turn's write-back AFTER its `done` and takes the next
+ *  message meanwhile, so the answer to something submitted mid-turn streams on the SAME connection,
+ *  interleaved with the first turn's trailing steps. It used to be folded into the first turn's
+ *  bubble — above the person's own message, where it read as no answer at all. */
+describe("streamChatTurn — a second turn on the same view", () => {
+  const overlapping = () => sseResponse([
+    ev({ type: "turn-accepted", turn_id: "t1" }, "1-0"),
+    ev({ type: "message-delta", text: "A-answer", turn_id: "t1" }, "2-0"),
+    ev({ type: "done", ok: true, turn_id: "t1" }, "3-0"),
+    ev({ type: "turn-accepted", turn_id: "t2" }, "4-0"),
+    ev({ type: "tool-call", tool: "entity_upsert", turn_id: "t1" }, "5-0"),
+    ev({ type: "message-delta", text: "B-answer", turn_id: "t2" }, "6-0"),
+    ev({ type: "turn-complete", turn_id: "t1" }, "7-0"),
+    ev({ type: "done", ok: true, turn_id: "t2" }, "8-0"),
+    ev({ type: "turn-complete", turn_id: "t2" }, "9-0"),
+  ]);
+
+  it("routes each turn's events to its own bubble, and ends only when both have completed", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(overlapping());
+    const byTurn: Record<string, string> = {};
+    const tools: Record<string, string[]> = {};
+    let current = "";
+    const turns: [string, boolean][] = [];
+    const cb: ChatStreamCallbacks = {
+      ...recorder().cb,
+      onTurn: (id, isNew) => { turns.push([id, isNew]); current = id; return true; },
+      onDelta: (t) => { byTurn[current] = (byTurn[current] ?? "") + t; },
+      onTool: (t) => { (tools[current] ??= []).push(t); },
+    };
+
+    const result = await streamChatTurn({ prompt: "A", session: "s1", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+
+    expect(byTurn).toEqual({ t1: "A-answer", t2: "B-answer" });
+    expect(tools).toEqual({ t1: ["entity_upsert"] });      // A's write-back stays on A
+    expect(turns.slice(0, 2)).toEqual([["t1", false], ["t2", true]]);
+    expect(turns.filter(([, isNew]) => isNew)).toEqual([["t2", true]]);   // one new bubble, once
+    expect(result.terminal).toBe(true);
+    expect(result.cursor).toBe("9-0");
+  });
+
+  it("never folds another turn into this one when nobody claims it", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(overlapping());
+    const { state, cb } = recorder();      // no `onTurn`: a second turn is not this view's to render
+
+    await streamChatTurn({ prompt: "A", session: "s1", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+
+    expect(state.text).toBe("A-answer");
+  });
+
+  it("a view the chat no longer owns skips the later turn", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(overlapping());
+    const { state, cb } = recorder();
+    cb.onTurn = (_id, isNew) => !isNew;     // a newer view has it
+
+    await streamChatTurn({ prompt: "A", session: "s1", active: undefined }, cb,
+      { fetchImpl: fetchImpl as unknown as typeof fetch, signal: new AbortController().signal, ...noWait });
+
+    expect(state.text).toBe("A-answer");
+  });
+});

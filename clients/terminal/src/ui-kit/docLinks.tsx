@@ -17,6 +17,7 @@ import { useContext, useEffect, useState, type CSSProperties, type ReactNode } f
 import { Icon } from "./index";
 import { isWsRef } from "./wsLinks";
 import { WsLink } from "./WsLink";
+import { MeetingChip, meetingNotePath, meetingRefOfHref } from "./MeetingChip";
 // The link vocabulary both renderers share. Re-exported below so every existing importer of
 // docLinks keeps working — the extraction is about the dependency graph, not about the API.
 import { DocMetaContext, ENTITY_CHIP, DEFAULT_ENTITY_CHIP, useOpenEntity } from "./docRefs";
@@ -396,7 +397,6 @@ export function Wikilink({ title }: { title: string }) {
  *  Resolves against the doc's workspace (DocMetaContext); a title that matches no entity
  *  doc renders muted with a "not found" tooltip instead of a dead click. */
 function EntityWikilink({ title }: { title: string }) {
-  const [hover, setHover] = useState(false);
   const meta = useContext(DocMetaContext);
   // undefined = resolving, null = not found, ResolvedDoc = found
   const [target, setTarget] = useState<ResolvedDoc | null | undefined>(undefined);
@@ -413,29 +413,27 @@ function EntityWikilink({ title }: { title: string }) {
     // title yet — but it still OPENS, landing on the page's empty state, because a chip that eats
     // its own click is indistinguishable from a broken app. Everything the reader can see says
     // "clickable"; only the handler disagreed.
+    // (a ghost chip, not a dashed one — guidelines §4.5)
     return (
-      <span role="link" onClick={() => openEntity({ wikilink: title })}
-        title={`No doc for “${title}” in the mounted workspaces yet — opens the empty page`}
-        onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-        style={{ display: "inline-flex", alignItems: "center", gap: 5, verticalAlign: "baseline",
-          background: "var(--panel2)", border: `1px dashed ${hover ? "var(--line2)" : "var(--line)"}`, borderRadius: 999,
-          padding: "0.5px 9px 0.5px 7px", color: hover ? "var(--t2)" : "var(--t3)", fontSize: "0.92em",
-          fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap", lineHeight: 1.45 }}>
-        <Icon name="link" size={11} style={{ opacity: 0.5 }} />
-        {title}
+      <span role="link" tabIndex={0} className="vx-chip vx-entity vx-inline-chip" data-missing=""
+        onClick={() => openEntity({ wikilink: title })} onKeyDown={(e) => { if (e.key === "Enter") openEntity({ wikilink: title }); }}
+        title={`No doc for “${title}” in the mounted workspaces yet — opens the empty page`}>
+        <span className="vx-chip-icon" aria-hidden><Icon name="link" size={12} /></span>
+        <span className="vx-chip-label">{title}</span>
       </span>
     );
   }
+  // A [[wikilink]] that lands on a meeting's NOTES is the meeting: its title and date, not the
+  // page's slug (founder, 2026-10-11: "a special label for a meeting alongside people companies").
+  if (target && meetingNotePath(target.path)) return <MeetingChip path={target.path} slug={target.slug} label={title} />;
+  // THE ENTITY CHIP (guidelines §4.5): one shape for every reference — radius 6, a border, the
+  // type ICON in the type's colour; no colour fill per type and no pill.
+  const open = () => { if (target) openEntity({ path: target.path, slug: target.slug }); else openEntity({ wikilink: title }); };
   return (
-    <span onClick={() => { if (target) openEntity({ path: target.path, slug: target.slug }); else openEntity({ wikilink: title }); }}
-      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{ display: "inline-flex", alignItems: "center", gap: 5, verticalAlign: "baseline",
-        background: hover ? c.bg : "var(--panel2)",
-        border: `1px solid ${hover ? c.color : "var(--line)"}`, borderRadius: 999,
-        padding: "0.5px 9px 0.5px 7px", color: c.color, fontSize: "0.92em",
-        fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap", lineHeight: 1.45 }}>
-      <Icon name={c.icon} size={11} style={{ opacity: 0.8 }} />
-      {title}
+    <span role="link" tabIndex={0} className="vx-chip vx-entity vx-inline-chip" data-kind={target?.type ?? "doc"}
+      onClick={open} onKeyDown={(e) => { if (e.key === "Enter") open(); }}>
+      <span className="vx-chip-icon" aria-hidden style={{ color: c.color }}><Icon name={c.icon} size={12} /></span>
+      <span className="vx-chip-label">{title}</span>
     </span>
   );
 }
@@ -456,9 +454,14 @@ function EntityWikilink({ title }: { title: string }) {
  *     live only once it is found in a mounted tree. A miss stays plain monospace, which is why
  *     `package.json` in a reply never becomes a chip that lands nowhere. */
 export function DocPath({ path }: { path: string }) {
+  // A meeting's notes page is named as the MEETING — never as its filename.
+  if (meetingNotePath(path)) return <MeetingChip path={path} />;
+  return <DocPathLink path={path} />;
+}
+
+function DocPathLink({ path }: { path: string }) {
   const meta = useContext(DocMetaContext);
   const openEntity = useOpenEntity();
-  const [hover, setHover] = useState(false);
   const absolute = WORKER_PATH.test(path);
   const [live, setLive] = useState(absolute);
   useEffect(() => {
@@ -467,16 +470,16 @@ export function DocPath({ path }: { path: string }) {
     void docPathExists(path, meta).then((ok) => { if (on) setLive(ok); });
     return () => { on = false; };
   }, [path, absolute, meta.path, meta.slug]);
-  const base: CSSProperties = {
-    fontFamily: "var(--mono)", fontSize: "0.88em", background: "var(--panel2)",
-    border: "1px solid var(--line)", borderRadius: 4, padding: "0.5px 5px",
-  };
-  if (!live) return <code style={{ ...base, color: "var(--t1)" }}>{path}</code>;
+  if (!live) return <code className="vx-code">{path}</code>;
+  // a LIVE path is a reference you can open: the entity chip, showing the file's name (the full
+  // path is the tooltip) — not blue monospace that reads as code (guidelines §4.5)
+  const name = path.split("/").filter(Boolean).pop() ?? path;
   return (
-    <code role="link" title={`Open ${path}`} onClick={() => openEntity({ path })}
-      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{ ...base, borderColor: hover ? "var(--blue)" : "var(--line)", color: "var(--blue)",
-        cursor: "pointer", textDecoration: hover ? "underline" : "none" }}>{path}</code>
+    <span role="link" tabIndex={0} className="vx-chip vx-entity vx-inline-chip" data-kind="doc" title={`Open ${path}`}
+      onClick={() => openEntity({ path })} onKeyDown={(e) => { if (e.key === "Enter") openEntity({ path }); }}>
+      <span className="vx-chip-icon" aria-hidden><Icon name="file" size={12} /></span>
+      <span className="vx-chip-label">{name}</span>
+    </span>
   );
 }
 
@@ -488,21 +491,16 @@ export function DocPath({ path }: { path: string }) {
  *  the seed CLAUDE.md § The README is this workspace's dashboard), so that is the door this opens.
  *  An unwritten README still opens — the honest empty state, same contract as every other chip. */
 export function WorkspaceRef({ token }: { token: string }) {
-  const [hover, setHover] = useState(false);
   const openEntity = useOpenEntity();
   const ws = lookupWorkspace(token);
   if (!ws) return <>{token}</>;    // the snapshot moved under us — plain text, never a dead chip
+  const open = () => openEntity({ path: "README.md", slug: ws.slug, exact: true });
   return (
-    <span role="link" onClick={() => openEntity({ path: "README.md", slug: ws.slug, exact: true })}
-      title={`Open the ${ws.label} workspace README`}
-      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{ display: "inline-flex", alignItems: "center", gap: 5, verticalAlign: "baseline",
-        background: hover ? "var(--violetbg)" : "var(--panel2)",
-        border: `1px solid ${hover ? "var(--violet)" : "var(--line)"}`, borderRadius: 999,
-        padding: "0.5px 9px 0.5px 7px", color: "var(--violet)", fontSize: "0.92em",
-        fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", lineHeight: 1.45 }}>
-      <Icon name="folder" size={11} style={{ opacity: 0.8 }} />
-      {ws.label}
+    <span role="link" tabIndex={0} className="vx-chip vx-entity vx-inline-chip" data-kind="workspace"
+      onClick={open} onKeyDown={(e) => { if (e.key === "Enter") open(); }}
+      title={`Open the ${ws.label} workspace README`}>
+      <span className="vx-chip-icon" aria-hidden><Icon name="folder" size={12} /></span>
+      <span className="vx-chip-label">{ws.label}</span>
     </span>
   );
 }
@@ -511,13 +509,21 @@ export function WorkspaceRef({ token }: { token: string }) {
  *  a tab outside one), resolving relative hrefs against the linking doc. Both renderers
  *  (MdxDoc's `a` mapping and the plain-Markdown fallback) emit this for internal links. */
 export function InternalLink({ href, children }: { href: string; children?: ReactNode }) {
+  // `/?meeting=<ref>` and a link to a meeting's notes page are both the meeting (MeetingChip).
+  const meetingRef = meetingRefOfHref(href);
+  if (meetingRef) return <MeetingChip meetingRef={meetingRef} label={children} />;
+  if (meetingNotePath(href)) return <MeetingChip path={href} label={children} />;
+  return <PathLink href={href}>{children}</PathLink>;
+}
+
+function PathLink({ href, children }: { href: string; children?: ReactNode }) {
   const meta = useContext(DocMetaContext);
   const openEntity = useOpenEntity();
   // absolute = a worker-visible mount path — pass verbatim; resolveDocRef translates it
   const path = href.startsWith("/") ? href : normalizeDocPath(href.replace(/^\.\//, ""), meta.path);
   return (
     <span role="link" onClick={() => openEntity({ path })}
-      style={{ color: "var(--blue)", textDecoration: "underline", cursor: "pointer" }}>{children}</span>
+      className="c-info" style={{ textDecoration: "underline", cursor: "pointer" }}>{children}</span>
   );
 }
 
@@ -538,18 +544,18 @@ export function Card({ title, icon, href, children }: { title?: string; icon?: s
   };
   return (
     <div onClick={clickable ? open : undefined} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{ border: `1px solid ${hover && clickable ? "var(--line2)" : "var(--line)"}`, borderRadius: 10, background: hover && clickable ? "var(--panel2)" : "var(--panel)", padding: "12px 14px", cursor: clickable ? "pointer" : undefined, minWidth: 0 }}>
+      className="r-lg pt-3 pr-3 pb-3 pl-3" style={{ border: `1px solid ${hover && clickable ? "var(--line2)" : "var(--line)"}`, background: hover && clickable ? "var(--panel2)" : "var(--panel)", cursor: clickable ? "pointer" : undefined, minWidth: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: children ? 6 : 0 }}>
-        {icon && <span style={{ color: "var(--blue)" }}><Icon name={icon} size={14} /></span>}
-        <span style={{ fontWeight: 600, color: "var(--t1)", fontSize: 13.5 }}>{title}</span>
+        {icon && <span className="c-info"><Icon name={icon} size={14} /></span>}
+        <span className="fw-600 c-1 t-sm">{title}</span>
       </div>
-      <div style={{ color: "var(--t2)", fontSize: 13, lineHeight: 1.5 }}>{children}</div>
+      <div className="c-2 t-sm lh-snug">{children}</div>
     </div>
   );
 }
 
 export function CardGroup({ cols = 2, children }: { cols?: number; children?: ReactNode }) {
-  return <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: 10, margin: "8px 0 12px" }}>{children}</div>;
+  return <div className="mt-2 mr-0 mb-3 ml-0" style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: 10 }}>{children}</div>;
 }
 
 /** True when an href points inside the workspace (no scheme, not an anchor, not //host). */

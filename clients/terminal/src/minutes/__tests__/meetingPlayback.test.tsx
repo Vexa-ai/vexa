@@ -27,7 +27,7 @@ it("seeks and highlights individual passages within a speaker block, clearing in
 it("does not seek another meeting or hijack selection and links", () => {
   const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
   const { container, rerender } = render(<><RecordingPlayer meetingId="2" originMs={origin} src="/audio" onError={vi.fn()} /><LiveTranscriptEngine meetingId="1" segments={segments} /></>);
-  expect(container.querySelector('[title^="Play from"]')).toBeNull();
+  expect(container.querySelector('[aria-label^="Play from"]')).toBeNull();
   rerender(<><RecordingPlayer meetingId="1" originMs={origin} src="/audio" onError={vi.fn()} /><LiveTranscriptEngine meetingId="1" segments={segments} renderText={text => <a href="#entity">{text}</a>} /></>);
   fireEvent.click(screen.getByText("First passage")); expect(play).not.toHaveBeenCalled();
   const passage = screen.getByText("First passage").parentElement!;
@@ -40,4 +40,18 @@ it("uses explicit clocks, never formatted wall times as audio offsets", () => {
   expect(segmentSeconds({ tsMs: origin - 1000 }, origin)).toBeNull();
   expect(segmentSeconds({ ts: 2.75 })).toEqual({ start: 2.75, end: undefined });
   expect(segmentSeconds({ tsMs: origin + 2750, endMs: origin + 4100 }, origin)).toEqual({ start: 2.75, end: 4.1 });
+});
+
+it("draws Play from just above the hovered line of text, not as a floating native tooltip", () => {
+  render(<><RecordingPlayer meetingId="1" originMs={origin} src="/audio" onError={vi.fn()} /><LiveTranscriptEngine meetingId="1" segments={segments} /></>);
+  const passage = screen.getByText("Second passage").closest("[role=button]") as HTMLElement;
+  expect(passage.getAttribute("title")).toBeNull();
+  passage.getClientRects = () => [{ top: 300, bottom: 320, left: 40, right: 400 }] as unknown as DOMRectList;
+  fireEvent.mouseMove(passage, { clientX: 120, clientY: 310 });
+  const tip = screen.getByRole("tooltip");
+  expect(tip.textContent).toBe("Play from 0:06");
+  expect(tip.style.left).toBe("120px");
+  expect(tip.style.top).toBe("296px");
+  fireEvent.mouseLeave(passage);
+  expect(screen.queryByRole("tooltip")).toBeNull();
 });

@@ -106,6 +106,36 @@ def test_friction_dump_reads_the_whole_instance_and_groups_by_kind_and_tool(monk
     assert finding["also_ids"] == ["fr_1"]
 
 
+def test_friction_dump_sums_folded_occurrences_rather_than_counting_rows(monkeypatch):
+    """flows folds identical reports inside one UTC hour into the first and carries the repeat
+    count as `occurrences`; the dump's group count is the sum of those, not the row count."""
+    rows = [
+        {"id": "fr_1", "at": "2026-10-10T10:00:00Z", "at_epoch": 100.0, "subject": "126",
+         "session": "s1", "severity": "blocker", "tried": "a", "happened": "b",
+         "context": {"kind": "refusal", "tool": "gmail_search"}, "status": "open",
+         "occurrences": 79, "last_seen": "2026-10-10T10:59:00Z"},
+        {"id": "fr_2", "at": "2026-10-10T11:00:00Z", "at_epoch": 200.0, "subject": "126",
+         "session": "s1", "severity": "blocker", "tried": "a", "happened": "b",
+         "context": {"kind": "refusal", "tool": "gmail_search"}, "status": "open"},
+    ]
+    as_user(monkeypatch, "126", admin=True, routes={
+        "/friction?": (200, {"count": 2, "reports": rows}),
+    })
+    finding = json.loads(tool("friction_dump")())["findings"][0]
+    assert finding["occurrences"] == 80
+
+
+def test_report_friction_passes_a_duplicate_answer_through(monkeypatch, tmp_path):
+    monkeypatch.setattr(rig, "FRICTION_LOG", tmp_path / "friction.jsonl")
+    as_user(monkeypatch, "126", routes={"/friction": (201, {
+        "id": "fr_1", "recorded": False, "duplicate_of": "fr_1", "occurrences": 3,
+        "instruction": "already reported 3 times; do not report it again this run"})})
+    out = json.loads(tool("report_friction")(
+        session="s1", what_i_was_doing="x", what_went_wrong="y"))
+    assert out["duplicate_of"] == "fr_1" and out["occurrences"] == 3
+    assert "do not report it again" in out["instruction"]
+
+
 def test_friction_fixed_forwards_to_the_flows_close_out_route(monkeypatch):
     http = as_user(monkeypatch, "126", admin=True, routes={
         "/friction/fr_1/fix": (201, {"id": "fr_1", "status": "fixed", "fix_ref": "PR #1"}),

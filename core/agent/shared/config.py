@@ -95,14 +95,17 @@ class Settings(BaseSettings):
     global_system_workspace_path: str = ""
     # Pin the _global mount to a ref (branch/tag/sha) for safe rollout; empty = mount HEAD (main).
     global_system_workspace_ref: str = ""
-    # Comma-separated user ids whose workers mount _global READ-WRITE — the admin setup
-    # conversation writes the org tier; everyone else stays ro. Empty = nobody writes.
-    global_admin_subjects: str = ""
+    # (VEXA_GLOBAL_ADMIN_SUBJECTS is RETIRED — 2026-10-11. Who writes `_global` is identity's answer:
+    # the deployment's admin account, admin-api `VEXA_ADMIN_ACCOUNT`; see global_layer.is_admin_account.)
     # The ONE model this product runs (PRD decision 34): the agent harness's. The fields that used
     # to sit beside it — `meeting_model`, `llm_provider`, `llm_model`, `meeting_idle_timeout_sec`,
     # `post_meeting_dev_email` — all configured the in-product inference pipeline, which is gone.
     agent_model: str = ""
     model_allowlist: str = ""   # optional comma-separated gate on workspace-pinned models
+    # The operator's model catalog (VEXA_MODEL_CATALOG, models.v1 Catalog JSON): the providers and
+    # models people may pick per chat. Empty = no catalog. Parsed and refused whole at boot by
+    # control_plane.model_providers; credentials in it are secret_ref references, never values.
+    model_catalog: str = ""
     # How long a CHAT worker serves its unit:<id>:in topic after the last turn before exiting
     # (TTL-on-idle). A live worker takes the thread's next message WARM (no container/CLI cold
     # start) — the window is the warm-hit budget; an idle worker costs only its parked memory.

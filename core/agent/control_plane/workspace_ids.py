@@ -259,10 +259,11 @@ def _default_name(slug: str, kind: str) -> str:
     For a group this is its slug, which at least carries the human name it was slugified from. For
     a desk it is deliberately NOT the bare subject id: `126` is the string the founder saw in the
     chat header (F49), and it is the directory name showing through — the exact defect the registry
-    exists to stop. Until something knows the person's name, "Desk 126" is at least a sentence."""
+    exists to stop. Until something knows the person's name, "Personal 126" is at least a sentence
+    (it said "Desk 126" before the 2026-10-11 rename; rows already stored keep that name)."""
     if kind == "global":
         return "The organisation"
-    return slug if kind == "group" else f"Desk {slug}"
+    return slug if kind == "group" else f"Personal {slug}"
 
 
 def _commit_identity(ws_dir: Path) -> None:

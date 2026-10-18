@@ -17,6 +17,8 @@ import { minutesOnly } from "./mode";
 import { VersionBar } from "./VersionBar";
 import { registry } from "../contributions";
 import { AuthGate } from "./AuthGate";
+import { ApiError, presentError } from "../surfaces/apiClient";
+import { SHARED_ARRIVAL_KEY } from "../minutes/roomView";
 import { OnboardingGate } from "./OnboardingGate";
 import { acceptInvite, acceptTranscriptShare, previewInvite, type InvitePreview } from "../surfaces/workspaceApi";
 import { redeemScaffoldShare } from "../minutes/scaffold";
@@ -113,7 +115,7 @@ function InviteGate({ children }: { children: ReactNode }) {
       if (!token) return;
       try {
         const r = await acceptTranscriptShare(token);
-        if (r?.meeting_id != null) localStorage.setItem("vexa.openMeeting", String(r.meeting_id));
+        if (r?.meeting_id != null) stashSharedMeeting(r.meeting_id);
       } catch (e) { console.error("scaffold transcript share redeem failed:", e); }
     })();
   }, [scaffold]);
@@ -131,14 +133,23 @@ function InviteGate({ children }: { children: ReactNode }) {
 
   // Transcript share redeems silently (no consent surface). Clean the URL after — unless an invite is also
   // present, in which case the invite flow owns the reload.
+  //
+  // A REFUSED share is said, not swallowed (P18). It used to log to the console and reload into the
+  // ordinary workbench, so a person whose invite was for another address, or had been withdrawn,
+  // landed on an empty Vexa with no idea why. Now the refusal stays on screen, in words, until they
+  // continue.
+  const [shareRefused, setShareRefused] = useState<string | null>(null);
   useEffect(() => {
     if (!tshare) return;
     acceptTranscriptShare(tshare)
-      .then((r) => { if (r?.meeting_id != null) localStorage.setItem("vexa.openMeeting", String(r.meeting_id)); })
-      .catch((e) => console.error("transcript share redeem failed:", e))
-      .finally(() => { if (!invite) window.location.replace(window.location.pathname); });
+      .then((r) => {
+        if (r?.meeting_id != null) stashSharedMeeting(r.meeting_id);
+        if (!invite) window.location.replace(window.location.pathname);
+      })
+      .catch((e) => setShareRefused(shareRefusalSentence(e)));
   }, [tshare, invite]);
 
+  if (shareRefused) return <ShareRefused message={shareRefused} onContinue={() => window.location.replace(window.location.pathname)} />;
   if (!invite) return <>{children}</>;
 
   const proceed = async () => {
@@ -156,6 +167,44 @@ function InviteGate({ children }: { children: ReactNode }) {
   const decline = () => window.location.replace(window.location.pathname);
 
   return <InviteConsent token={invite} onProceed={proceed} onDecline={decline} busy={redeeming} />;
+}
+
+/** After a share redeems, open THAT meeting. Each shell reads its own key: the workbench consumes
+ *  `vexa.openMeeting`; the minutes shell opens a meeting from `vexa.openMeetingRef` (a row id is a
+ *  valid ref there), which is also what holds its first-room boot back. Found live: a shared link
+ *  opened in the minutes product redeemed correctly and then landed on the reader's last chat. */
+export function stashSharedMeeting(meetingId: number | string): void {
+  try {
+    localStorage.setItem("vexa.openMeeting", String(meetingId));
+    if (minutesOnly()) {
+      localStorage.setItem("vexa.openMeetingRef", String(meetingId));
+      // …and on the MEETING's page, not the reader's desk (minutes/roomView.sharedArrivalFront).
+      localStorage.setItem(SHARED_ARRIVAL_KEY, "meeting");
+    }
+  } catch { /* locked-down storage: the meeting is still in their list */ }
+}
+
+/** Why a meeting share link did not open, in the reader's words. The server's codes (`not_allowed`,
+ *  `revoked`, `expired`, an unknown token) each get a sentence; anything else falls to the presenter. */
+export function shareRefusalSentence(e: unknown): string {
+  const detail = e instanceof ApiError ? (e.detail || "").trim() : "";
+  if (detail === "not_allowed") return "This meeting was shared with a different email address. Sign in with the address the invite was sent to.";
+  if (detail === "revoked") return "The owner has withdrawn this share, or removed your access.";
+  if (detail === "expired") return "This share link has expired. Ask the owner for a new one.";
+  if (e instanceof ApiError && e.status === 404) return "This share link is not valid. Ask the owner for a new one.";
+  return presentError(e).headline;
+}
+
+function ShareRefused({ message, onContinue }: { message: string; onContinue: () => void }) {
+  return (
+    <div style={{ height: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div role="alert" style={{ width: "100%", maxWidth: 440, background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 14, padding: "26px 26px 24px" }}>
+        <div style={{ fontSize: 16, color: "var(--t1)", marginBottom: 8 }}>This meeting could not be opened</div>
+        <div style={{ fontSize: 13, color: "var(--t2)", lineHeight: 1.5, marginBottom: 20 }}>{message}</div>
+        <button onClick={onContinue} style={{ padding: "9px 16px", borderRadius: 8, fontSize: 13, cursor: "pointer", border: "1px solid var(--line)", background: "transparent", color: "var(--t2)" }}>Continue to Vexa</button>
+      </div>
+    </div>
+  );
 }
 
 /** Pre-join CONSENT screen (shown right AFTER login, when a link carries ?invite=). Fetches a read-only
@@ -186,24 +235,24 @@ function InviteConsent({ token, onProceed, onDecline, busy = false }: { token: s
   return (
     <div style={wrap}>
       <div style={card}>
-        <div style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".08em", color: "var(--t3)", marginBottom: 12 }}>You've been invited to a workspace</div>
-        {!pv && !err && <div style={{ color: "var(--t3)", fontSize: 13 }}>Loading invite…</div>}
+        <div className="t-xs c-3 mb-3" style={{ textTransform: "uppercase", letterSpacing: ".08em" }}>You've been invited to a workspace</div>
+        {!pv && !err && <div className="c-3 t-sm">Loading invite…</div>}
         {invalid && (
           <>
-            <div style={{ fontSize: 16, color: "var(--t1)", marginBottom: 6 }}>Invite unavailable</div>
-            <div style={{ fontSize: 13, color: "var(--t3)", marginBottom: 20 }}>{err || "This invite is no longer valid — it may have been revoked, expired, or already used."}</div>
+            <div className="t-lg c-1 mb-1_5">Invite unavailable</div>
+            <div className="t-sm c-3 mb-5">{err || "This invite is no longer valid — it may have been revoked, expired, or already used."}</div>
             <button onClick={onDecline} style={btnGhost}>Continue to Vexa</button>
           </>
         )}
         {pv && pv.valid && (
           <>
-            <div style={{ fontSize: 21, fontWeight: 600, color: "var(--t1)", marginBottom: 5, wordBreak: "break-word" }}>{pv.name}</div>
-            <div style={{ fontSize: 13.5, color: "var(--t2)", lineHeight: 1.5, marginBottom: 18 }}>
-              {pv.purpose || <span style={{ color: "var(--t3)" }}>A shared knowledge workspace.</span>}
+            <div className="t-xl fw-600 c-1 mb-1" style={{ wordBreak: "break-word" }}>{pv.name}</div>
+            <div className="t-sm c-2 lh-snug mb-4">
+              {pv.purpose || <span className="c-3">A shared knowledge workspace.</span>}
             </div>
             <div style={termRow}><span style={termK}>Your access</span><span style={termV}>{roleLabel(pv.role)}</span></div>
             {pv.shared_by && <div style={termRow}><span style={termK}>Shared by</span><span style={termV}>{pv.shared_by}</span></div>}
-            <div style={{ fontSize: 12, color: "var(--t3)", lineHeight: 1.5, margin: "16px 0 20px", paddingTop: 14, borderTop: "1px solid var(--line)" }}>
+            <div className="t-xs c-3 lh-snug mt-4 mr-0 mb-5 ml-0 pt-3 bd-t">
               Joining adds this workspace to your set and mounts it into the agent. You can switch it off or leave any time.
             </div>
             <div style={{ display: "flex", gap: 10 }}>
@@ -233,7 +282,7 @@ export function App() {
   // mounted so the server HTML (which can't see localStorage/dockview) matches — no hydration mismatch.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
-  if (!mounted) return <div style={{ height: "100vh", background: "var(--bg)" }} />;
+  if (!mounted) return <div className="bg-0" style={{ height: "100vh" }} />;
 
   // AuthGate logs the user in first (a ?invite= link preserves its query through the OAuth round-trip);
   // InviteGate then shows the consent screen for any ?invite= INSIDE the authed subtree, so its preview /

@@ -157,6 +157,39 @@ class TranscriptStore(Protocol):
         same one-time token as the pair-keyed mint; ``None`` when the row is unknown OR not the caller's."""
         ...
 
+    async def get_share_access(self, user_id: int, meeting_id: int) -> "Optional[dict]":
+        """OWNER-scoped: who can read this meeting — ``share_access.access_view``. ``None`` when the
+        row is unknown or not the caller's."""
+        ...
+
+    async def stamp_share_mail(self, user_id: int, meeting_id: int, grant_id: str) -> None:
+        """OWNER-scoped: record that an invite mail was handed over for ``grant_id``."""
+        ...
+
+    async def count_share_mails_since(self, user_id: int, since_iso: str) -> int:
+        """Invite mails this owner handed over since ``since_iso`` (the hourly cap's count)."""
+        ...
+
+    async def backfill_share_roster(self, user_id: int, meeting_id: int,
+                                    emails: "dict[int, str]") -> "Optional[dict]":
+        """OWNER-scoped, one-time per reader: name the readers who redeemed before the roster
+        existed, from ``{user_id: address}``. Answers the access view; ``None`` for a row that is
+        not the caller's."""
+        ...
+
+    async def revoke_share_grant(self, user_id: int, meeting_id: int, grant_id: str) -> "Optional[dict]":
+        """OWNER-scoped: revoke one grant and drop the people who joined through it. ``None`` when the
+        row or the grant is not found."""
+        ...
+
+    async def remove_share_viewer(self, user_id: int, meeting_id: int, viewer_id: int) -> "Optional[dict]":
+        """OWNER-scoped: remove one person's access. ``None`` when they had none."""
+        ...
+
+    async def set_share_settings(self, user_id: int, meeting_id: int, *, recording: bool) -> "Optional[dict]":
+        """OWNER-scoped: whether people the meeting is shared with may play its recording."""
+        ...
+
     async def complete_transcript_import(
         self, user_id: int, meeting_id: int, *, segments: list, started_at, ended_at,
         source: str, session_uid: str,
@@ -383,6 +416,7 @@ class TranscriptStore(Protocol):
         self, user_id: int, meeting_id: int, *,
         title: Optional[str] = None,
         metadata: "Optional[dict]" = None,
+        notes: Optional[str] = None,
     ) -> Optional[dict]:
         """Attach the CALLER's own annotations to a row in ANY status — including one the bot FSM
         owns, and including one already completed.
@@ -404,6 +438,10 @@ class TranscriptStore(Protocol):
         name. It is the join key between a Vexa meeting and everything else the caller knows —
         a CRM record, a ticket, its own summary — and it is queryable through
         ``list_meetings(metadata_filter=...)``.
+
+        ``notes`` replaces ``data.notes`` (the meeting's free-text notes; an empty string clears
+        them). No route takes it: it is the meeting-bundle import restoring the notes a bundle
+        carries, through the one writer of the row's description.
 
         Returns the updated row (``list_meetings`` shape), or ``None`` when the user owns no such
         row (→ 404). Never returns a conflict: there is no state in which annotating is refused."""

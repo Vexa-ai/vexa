@@ -63,7 +63,8 @@ finally:
 #: without a test saying so — an assembly that quietly lost one still looks assembled. Written out
 #: rather than counted: a count is satisfied by a swap, and the set is the thing that matters.
 TOOLS = {"flows_list", "reactions_list", "reaction_signal", "timeline", "whats_waiting",
-        "report_friction", "friction_so_far", "flows_submit", "flow_lifecycle"}
+        "report_friction", "friction_so_far", "flows_submit", "flow_lifecycle",
+        "friction_list", "mail_settings"}
 
 
 def _route(path: str, method: str = ""):

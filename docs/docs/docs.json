@@ -33,6 +33,7 @@
           "how-to/stream-transcript",
           "how-to/custom-stt",
           "how-to/recordings",
+          "how-to/move-a-meeting",
           "n8n",
           "obsidian",
           "interactive-bots"
@@ -57,14 +58,17 @@
           "minutes/chats",
           "minutes/pages",
           "minutes/meetings",
-          "minutes/workspaces"
+          "minutes/workspaces",
+          "minutes/admin-account"
         ]
       },
       {
         "group": "How-to: Agents",
         "pages": [
           "how-to/chat-workspace",
+          "how-to/paste-a-meeting-link",
           "how-to/chat-controls",
+          "how-to/chat-attachments",
           "how-to/workspace-files",
           "how-to/onboarding-research",
           "how-to/daily-brief",
@@ -77,6 +81,7 @@
           "how-to/plan-a-meeting",
           "how-to/live-copilot",
           "how-to/post-meeting-report",
+          "how-to/share-a-meeting",
           "chatgpt-transcript-share-links"
         ]
       },
@@ -133,6 +138,7 @@
           "connections",
           "upgrade-from-minio",
           "authenticated-bots",
+          "model-catalog",
           "model-credentials-licensing",
           "agent-web-search",
           "agent-tool-calls",
@@ -160,6 +166,7 @@
           "governance/index",
           "governance/architecture",
           "governance/arch-compliance",
+          "governance/ui-design",
           "governance/delivery",
           "governance/contributor-rights"
         ]

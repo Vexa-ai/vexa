@@ -50,7 +50,9 @@
  *  that sentence rather than a correction of it. */
 import { ChatName } from "./ChatName";
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { ChevronDown, PenLine, Plus, X } from "lucide-react";
+import { Fold, Menu, type MenuItem } from "../ui-kit";
 import type { Membership } from "../surfaces/workspaceApi";
 import type { Sel } from "./types";
 import { header, surface, type as ty } from "./tokens";
@@ -69,20 +71,12 @@ export const GLOBAL_MOUNT = "_global";
  *  the target without the mount in its set — and a header that stayed silent then would be the
  *  exact failure #1611 exists to end: writes landing somewhere the header does not name. */
 export const focusSet = (workspaces: string[], opts: { admin?: boolean; target?: string } = {}) => {
-  const set = workspaces.filter((w) => !IMPLICIT_MOUNTS.includes(w));
-  return opts.admin === true && opts.target === GLOBAL_MOUNT ? [...set, GLOBAL_MOUNT] : set;
+  // THE ADMIN ACCOUNT HAS ONE WORKSPACE (founder ruling 2026-10-11): the company layer, always the
+  // target, whatever the chat's stored set says. No desk chip, no group chip.
+  if (opts.admin === true) return [GLOBAL_MOUNT];
+  return workspaces.filter((w) => !IMPLICIT_MOUNTS.includes(w));
 };
 
-const wsChip: CSSProperties = {
-  ...ty.mono, display: "inline-flex", alignItems: "center", gap: 2, background: surface.raised,
-  border: "1px solid var(--line)", borderRadius: 6, padding: "2px 4px 2px 8px", color: "var(--t2)", flex: "none",
-};
-/** THE TARGET, VISIBLY THE TARGET. Accent on the border and the text — the same accent the rail's
- *  selected row wears, because it answers the same question in the same glance: this is the one. */
-const targetChip: CSSProperties = {
-  ...wsChip, borderColor: "var(--accent)", color: "var(--accent)", background: "var(--accentbg)",
-};
-const xBtn: CSSProperties = { background: "transparent", border: "none", color: "var(--t3)", cursor: "pointer", fontSize: 12, lineHeight: 1, padding: "0 3px", fontFamily: "var(--sans)" };
 const menuItem: CSSProperties = {
   ...ty.chip, display: "block", width: "100%", textAlign: "left", background: "transparent",
   border: "none", borderRadius: 6, padding: "6px 8px", color: "var(--t1)", cursor: "pointer",
@@ -103,13 +97,19 @@ export function ContextBar(p: {
   onAddWorkspace: (id: string) => void; onRemoveWorkspace: (id: string) => void;
   onSetTarget?: (id: string) => void;
   onAttachRepo?: (workspaceId?: string) => void;
-  /** Is the signed-in person this instance's admin (Vexa-ai/vexa#1616)? Absent or false → the
-   *  company layer is not offered and not shown, which is every other person's whole experience
-   *  of this file. Three-valued upstream; only a literal `true` reaches here. */
-  isAdmin?: boolean;
+  /** Is the signed-in account the deployment's ADMIN ACCOUNT (identity's `admin_account`; founder
+   *  ruling 2026-10-11)? Then the header is the company layer and nothing else: one Company chip,
+   *  always the target, and no `+` menu. Absent or false → the company layer is never offered and
+   *  never shown, which is every everyday account's whole experience of this file — the instance
+   *  admin's included. Three-valued upstream; only a literal `true` reaches here. */
+  adminAccount?: boolean;
   /** Aim this chat at the company layer and open it — the menu entry's click and the chip's, which
    *  are the same act by design. */
   onTargetGlobal?: () => void;
+  /** Pane controls the shell puts at the header's edges where a pane is an overlay (the chat list
+   *  in single mode at the left; the pages sheet at the right). */
+  leading?: ReactNode;
+  trailing?: ReactNode;
 }) {
   const [picking, setPicking] = useState(false);
   const box = useRef<HTMLDivElement | null>(null);
@@ -120,37 +120,68 @@ export function ContextBar(p: {
     return () => window.removeEventListener("mousedown", away);
   }, [picking]);
 
-  const admin = p.isAdmin === true;
+  const admin = p.adminAccount === true;
   const set = focusSet(p.sel.workspaces, { admin, target: p.sel.target });
   const addable = p.memberships.map((m) => m.workspace_id).filter((id) => !p.sel.workspaces.includes(id));
-  // Offered while it is not already where this chat writes — an entry that would change nothing is
-  // a menu row that reads as broken.
-  const offerGlobal = admin && !!p.onTargetGlobal && p.sel.target !== GLOBAL_MOUNT;
+  // The admin account's one chip IS its target, and nothing is ever offered beside it — so it has no
+  // `+` menu at all. Everybody else is never offered the company layer (it is not theirs to write).
+
+  // THE HEADER FOLDS BY ITS OWN WIDTH (guidelines §3.3): below 520px of header the workspace chips
+  // become ONE control — "Writes to <target>" — whose menu holds every act the chips offered:
+  // retarget, remove, add, attach. Same handlers, same labels; the chips and the menu are two forms
+  // of one control, never two controls.
+  const target = p.sel.target || DESK;
+  const items: MenuItem[] = [
+    ...set.map((w): MenuItem => {
+      const isGlobal = w === GLOBAL_MOUNT;
+      return {
+        key: `t:${w}`, checked: isTargetChip(p.sel.target, w), data: { "data-ws-target": w },
+        label: <WorkspaceName slug={w} fallback={isGlobal ? COMPANY_WORD : undefined} />,
+        onSelect: () => { if (isGlobal) p.onTargetGlobal?.(); else if (!isTargetChip(p.sel.target, w)) p.onSetTarget?.(w); },
+      };
+    }),
+    ...set.filter((w) => w !== DESK && w !== GLOBAL_MOUNT).map((w, i): MenuItem => ({
+      key: `r:${w}`, separatorBefore: i === 0, label: <>Remove <WorkspaceName slug={w} /></>, onSelect: () => p.onRemoveWorkspace(w),
+    })),
+    ...(offerGlobal ? [{ key: "g", separatorBefore: true, data: { "data-ctx": "global" }, label: <>Add <WorkspaceName slug={GLOBAL_MOUNT} fallback={COMPANY_WORD} /></>, onSelect: () => p.onTargetGlobal?.() } as MenuItem] : []),
+    ...addable.map((id, i): MenuItem => ({
+      key: `a:${id}`, separatorBefore: i === 0 && !offerGlobal, label: <>Add <WorkspaceName slug={id} /></>, onSelect: () => p.onAddWorkspace(id),
+    })),
+    ...(p.onAttachRepo ? [{ key: "attach", separatorBefore: true, data: { "data-ctx": "attach" }, label: "Attach existing repo…", onSelect: () => p.onAttachRepo?.(undefined) } as MenuItem] : []),
+  ];
+  // A meeting's phase is information, so it is a quiet badge; "chat" said nothing the breadcrumb
+  // ("Chat ›") had not, so the pill that printed it is gone (guidelines §4.5).
+  const phase = p.sel.kind === "meeting" ? p.flavor.split(" · ")[1] : undefined;
 
   return (
-    <div style={{ ...header, gridRow: 1, gridColumn: 2 }}>
-      <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green, #5da86a)", flex: "none" }} />
+    <div className="vx-pane pt-0 pr-3 pb-0 pl-4" data-pane="header" style={{ ...header, gridRow: 1, gridColumn: 2, gap: 8 }}>
+      {p.leading}
+      <span className="r-full bg-success" style={{ width: 7, height: 7, flex: "none" }} />
       <div style={{ ...ty.title, flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 4 }}>
-        <span style={{ color: "var(--t3)", fontWeight: 400, whiteSpace: "nowrap", flex: "none" }}>{p.sel.kind === "meeting" ? "Meeting" : "Chat"} › </span><ChatName key={p.sel.chatId} label={p.sel.label} onRename={p.onRename} />
+        <span className="c-3 fw-400" style={{ whiteSpace: "nowrap", flex: "none" }}>{p.sel.kind === "meeting" ? "Meeting" : "Chat"} › </span><ChatName key={p.sel.chatId} label={p.sel.label} onRename={p.onRename} />
       </div>
-      <span style={{ ...ty.pill, flex: "none", color: "var(--accent)", background: "var(--accentbg)", borderRadius: 5, padding: "2px 8px" }}>{p.flavor}</span>
+      {phase && <span data-flavor-badge className="c-2 r-sm pt-0 pr-1_5 pb-0 pl-1_5" style={{ ...ty.meta, flex: "none", background: surface.raised, lineHeight: "18px", whiteSpace: "nowrap" }}>{phase[0].toUpperCase() + phase.slice(1)}</span>}
 
-      <div ref={box} style={{ position: "relative", marginLeft: "auto", display: "flex", alignItems: "center", gap: 5, flex: "none" }}>
+      <Fold at={520} wide={
+      <div ref={box} className="ml-auto" style={{ position: "relative", display: "flex", alignItems: "center", gap: 5, flex: "none" }}>
         {set.map((w) => {
           // NO TARGET IS THE DESK. One spelling of the default, here as everywhere: the record
           // stores an absence and this is where the absence becomes a chip somebody can see.
-          const isTarget = isTargetChip(p.sel.target, w);
+          const isTarget = admin ? w === GLOBAL_MOUNT : isTargetChip(p.sel.target, w);
           // THE COMPANY LAYER'S CHIP IS ALSO ITS DOOR (#1616): it is only on screen while this chat
           // writes there, so a click that did nothing would leave the reader with a chip that names
           // a place and refuses to open it. It opens `_global/README.md` and re-states the target.
           const isGlobal = w === GLOBAL_MOUNT;
           return (
-            <span key={w} style={isTarget ? targetChip : wsChip} data-ws={w}
+            // A WORKSPACE IS A CHIP (guidelines §4.5): sans, sentence case, radius 6; the TARGET is
+            // the selected chip — accent tint, primary text and a 2px accent bar, plus the pen icon
+            // and "Writes to", so it is never colour alone.
+            <span key={w} className="vx-chip" data-selected={isTarget ? "" : undefined} data-ws={w}
               data-target={isTarget ? "1" : undefined} aria-current={isTarget ? "true" : undefined}>
               {/* F49: this printed the workspace's SLUG — for a desk, the opaque subject id (`126`)
                   the reader has never seen. Names live in the registry precisely because slugs and
                   directories change and names are what a person reads. */}
-              <button data-ws-target={w} style={{ ...xBtn, color: "inherit", padding: 0, cursor: isTarget && !isGlobal ? "default" : "pointer", font: "inherit" }}
+              <button data-ws-target={w} className="vx-chip-main" data-static={isTarget && !isGlobal ? "" : undefined}
                 aria-label={isGlobal ? `Open ${COMPANY_WORD}` : isTarget ? `Writes go to ${w}` : `Write into ${w} from now on`}
                 title={isGlobal
                   ? "The company layer. Writes in this chat go here — click to open it."
@@ -161,34 +192,26 @@ export function ContextBar(p: {
                   if (isGlobal) p.onTargetGlobal?.();
                   else if (!isTarget) p.onSetTarget?.(w);
                 }}>
-                <WorkspaceName slug={w} fallback={isGlobal ? COMPANY_WORD : undefined} />
+                {isTarget && <PenLine size={14} strokeWidth={1.75} aria-hidden />}
+                <span className="vx-chip-label">{isTarget ? <>Writes to <WorkspaceName slug={w} fallback={isGlobal ? COMPANY_WORD : undefined} /></> : <WorkspaceName slug={w} fallback={isGlobal ? COMPANY_WORD : undefined} />}</span>
               </button>
               {/* `_global` has no × for the reason the desk has none: it is mounted in every chat by
                   construction, so removing it is not a thing that can happen. Aim elsewhere. */}
               {w !== DESK && !isGlobal && (
-                <button aria-label={`Remove ${w} from this chat`} title={`Remove ${w} from this chat`} style={xBtn}
-                  onClick={() => p.onRemoveWorkspace(w)}>×</button>
+                <button aria-label={`Remove ${w} from this chat`} title={`Remove ${w} from this chat`} className="vx-chip-x"
+                  onClick={() => p.onRemoveWorkspace(w)}><X size={12} strokeWidth={1.75} aria-hidden /></button>
               )}
             </span>
           );
         })}
+        {!admin && <>
         <button aria-label="Add a workspace to this chat" title="Add a workspace to this chat"
           onClick={() => setPicking((v) => !v)}
-          style={{ ...wsChip, padding: "2px 7px", color: "var(--t3)", cursor: "pointer", fontSize: 13, lineHeight: 1.15 }}>+</button>
+          className="vx-chip vx-chip-add" data-ghost=""><Plus size={14} strokeWidth={1.75} aria-hidden /></button>
         {picking && (
-          <div role="menu" style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 30, minWidth: 200, background: "var(--sidebar)", border: "1px solid var(--line2)", borderRadius: 10, padding: 6, boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
-            {/* THE ADMIN'S ONE EXTRA ANSWER (#1616), above the memberships because it is the one
-                workspace in the list nobody had to be invited to. */}
-            {offerGlobal && (
-              <button role="menuitem" data-ctx="global" onClick={() => { p.onTargetGlobal?.(); setPicking(false); }}
-                style={menuItem}
-                onMouseEnter={(e) => { e.currentTarget.style.background = surface.raised; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
-                <WorkspaceName slug={GLOBAL_MOUNT} fallback={COMPANY_WORD} />
-              </button>
-            )}
-            {addable.length === 0 && !offerGlobal
-              ? <div style={{ ...ty.meta, padding: "6px 8px", lineHeight: 1.5 }}>No other workspace to add. New ones are made in conversation.</div>
+          <div role="menu" className="bg-1 bd-strong r-lg p-1_5" style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 30, minWidth: 200, boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
+            {addable.length === 0
+              ? <div className="pt-1_5 pr-2 pb-1_5 pl-2 lh-snug" style={{ ...ty.meta }}>No other workspace to add. New ones are made in conversation.</div>
               : addable.map((id) => (
                   <button key={id} role="menuitem" onClick={() => { p.onAddWorkspace(id); setPicking(false); }}
                     style={menuItem}
@@ -198,13 +221,21 @@ export function ContextBar(p: {
             {p.onAttachRepo && (
               <button role="menuitem" data-ctx="attach"
                 onClick={() => { p.onAttachRepo?.(undefined); setPicking(false); }}
-                style={{ ...ty.chip, display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", borderTop: "1px solid var(--line)", borderRadius: 0, padding: "7px 8px", marginTop: 5, color: "var(--t2)", cursor: "pointer" }}
+                className="bg-none bd-none bd-t r-0 pt-1_5 pr-2 pb-1_5 pl-2 mt-1 c-2" style={{ ...ty.chip, display: "block", width: "100%", textAlign: "left", cursor: "pointer" }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = surface.raised; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>Attach existing repo…</button>
             )}
           </div>
         )}
-      </div>
+        </>}
+      </div>} narrow={
+        <Menu label="Workspaces for this chat" variant="chip" align="end" triggerData={{ "data-ws-fold": "" }}
+          title="Where this chat writes, and what it can read"
+          trigger={<><PenLine size={14} strokeWidth={1.75} aria-hidden /><span style={{ minWidth: 0, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Writes to <WorkspaceName slug={target} fallback={target === GLOBAL_MOUNT ? COMPANY_WORD : undefined} /></span><ChevronDown size={14} strokeWidth={1.75} aria-hidden /></>}
+          items={items}
+          footer={addable.length === 0 && !offerGlobal ? "New workspaces are made in conversation." : undefined} />
+      } />
+      {p.trailing}
     </div>
   );
 }

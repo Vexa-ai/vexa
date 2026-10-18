@@ -167,7 +167,7 @@ export function peopleLine(members: readonly NamedMember[] | null, mySubject?: s
  *  `shared workspace` is what the panel has always shown for it; this is the same gloss in the
  *  middle of a sentence. */
 export const placeWord = (kind: WorkspaceKind): string =>
-  kind === "private" ? "Workspace" : kind === "desk" ? "Your desk" : kind === "global" ? "Company layer" : "shared workspace";
+  kind === "private" ? "Workspace" : kind === "desk" ? "Your personal workspace" : kind === "global" ? "Company layer" : "shared workspace";
 
 /** THE EYEBROW (#1634's design spec, point 1) — the kind, 12px and muted, above the title.
  *
@@ -177,7 +177,7 @@ export const placeWord = (kind: WorkspaceKind): string =>
  *  `Pilot · shared workspace · you, Jane Smith and 2 more` says the kind in the middle of a
  *  sentence about people, where it reads as one more fact in a list. */
 export const eyebrow = (kind: WorkspaceKind): string =>
-  kind === "private" ? "Workspace" : kind === "desk" ? "Your desk" : kind === "global" ? "Company layer" : "Shared workspace";
+  kind === "private" ? "Workspace" : kind === "desk" ? "Your personal workspace" : kind === "global" ? "Company layer" : "Shared workspace";
 
 /** THE PAGE'S OWN TITLE, and the body with that heading taken off it.
  *

@@ -97,6 +97,11 @@ MAIL_REPLY = EventType("mail.reply")
 # they are facts with a flow each, which is what puts them in the queue and what lets the words
 # they are spoken in live in `behavior/` instead of in a tool body.
 STARTED = EventType("meeting.started")
+#: PUBLISHED BY THE MEETINGS DOMAIN (`meeting_api/events.py`), when a meeting's owner invites an
+#: address from the Share dialog and asks for the mail. One fact per address; `meeting_share` mails
+#: that person the sign-in link. Registered HERE, not in `production_agent.py`: its producer is
+#: meeting-api, which every profile with flows carries, and its one step reaches no domain.
+SHARED = EventType("meeting.shared")
 #: PUBLISHED BY THE AGENT DOMAIN. Absent — event and reaction both — where there is no agent-api,
 #: which is correct rather than degraded: there is no desk in that deployment to have a card on.
 DESK_UNSCAFFOLDED = EventType("desk.unscaffolded")
@@ -109,6 +114,9 @@ CLAIM_PROPOSED = EventType("claim.proposed")
 #: who is already looking at the answer. The reaction is the mail carrier and nothing else — see
 #: `production_agent.mail_workspace_invite` for why the leg lives on this side at all.
 WORKSPACE_INVITED = EventType("workspace.invited")
+#: PUBLISHED BY THE AGENT DOMAIN (`control_plane/routine_refusals.py`): a scheduled routine was
+#: switched off because its runs kept being refused the same way. One card per pause.
+ROUTINE_PAUSED = EventType("routine.paused")
 #: PRD 40.9 open-decision 8. PUBLISHED BY FLOWS ITSELF — `POST /friction` calls `admit()` in
 #: process, no publish-edge and no agent-api dependency, which is why the carrier census owns this
 #: one to `flows` rather than `agent`: friction is not a domain, and its one ingestion point lives
@@ -1378,7 +1386,7 @@ def build(reg: Registry, db) -> None:
                     if undo.get("reset"):
                         ctx.scratch["baseline"] = ag.dispatch_turn(
                             uid, session,
-                            "STOP. That turn WROTE TO A DESK, and this run writes to none. It "
+                            "STOP. That turn WROTE TO A WORKSPACE, and this run writes to none. It "
                             f"committed: {landed}. Those commits have been removed. Write the "
                             "report again as your REPLY and nothing else — create no file, update "
                             "no index, update no README. The reply is mailed verbatim, so no "
@@ -1387,10 +1395,10 @@ def build(reg: Registry, db) -> None:
                         return Wait(seconds=12)
                     landed += f" · reset refused: {undo.get('detail') or 'no detail'}"
                 raise StepError(
-                    "this turn committed to the organiser's desk, and it must not (decision 22): "
+                    "this turn committed to the organiser's personal workspace, and it must not (decision 22): "
                     f"HEAD moved {before[:9]} -> {after[:9]}. Landed: {landed}. The report IS the "
-                    "reply; desks are written by drop_to_attendees. This step already tried to undo "
-                    "it once and re-ran the turn. To recover by hand, put the desk back:\n"
+                    "reply; personal workspaces are written by drop_to_attendees. This step already tried to undo "
+                    "it once and re-ran the turn. To recover by hand, put the workspace back:\n"
                     f"  curl -fsS -X POST \"$AGENT_API_URL/api/workspace/git/reset\" "
                     f"-H 'X-User-Id: {uid}' -H \"X-Internal-Secret: $INTERNAL_API_SECRET\" "
                     f"-H 'Content-Type: application/json' -d '{{\"sha\":\"{before}\"}}'\n"
@@ -1434,13 +1442,13 @@ def build(reg: Registry, db) -> None:
             "WRITE NO FILES FOR THIS REPORT. Ignore any instruction above to save the note into a "
             "workspace, to update an index, or to update a README: this report is not filed "
             "anywhere by you. Its home is the meeting itself, and every person in the room gets a "
-            "copy on their own desk afterwards, which is not your job either. Your REPLY is the "
+            "copy in their own personal workspace afterwards, which is not your job either. Your REPLY is the "
             "artefact — it is mailed verbatim, so no preamble and no meta-commentary.\n\n"
-            "MEETING-RELEVANT FACTS ONLY, ATTRIBUTED — a person's desk informs the report, it is "
+            "MEETING-RELEVANT FACTS ONLY, ATTRIBUTED — a person's personal workspace informs the report, it is "
             "never quoted into it. ")
         if room_read:
             block += (
-                "You have READ-ONLY access to the desks of the people who were in this meeting ("
+                "You have READ-ONLY access to the personal workspaces of the people who were in this meeting ("
                 + ", ".join(room_read) + "). Use them to understand what was said and to attribute "
                 "it correctly, and never copy a line, a note or a phrase out of one into this "
                 "report — a report that goes to everyone in the room is not a place where one "
@@ -1449,8 +1457,8 @@ def build(reg: Registry, db) -> None:
                   "Anything person-centric happens when they click the link in the mail, not here.")
         if group:
             block += (
-                f"\n\nTHIS MEETING BELONGS TO THE GROUP #{group}, AND ITS DESK IS YOURS TO "
-                "MAINTAIN. You have it mounted READ/WRITE — the one desk you write to in this "
+                f"\n\nTHIS MEETING BELONGS TO THE GROUP #{group}, AND ITS WORKSPACE IS YOURS TO "
+                "MAINTAIN. You have it mounted READ/WRITE — the one workspace you write to in this "
                 "turn. Maintaining is not appending: bring the group's own pages up to date with "
                 "what this meeting changed.\n"
                 "  - its PEOPLE: who is in this group, what each of them is carrying now\n"
@@ -1459,7 +1467,7 @@ def build(reg: Registry, db) -> None:
                 "  - its OPEN ITEMS: close what closed, add what opened, re-own what moved\n"
                 "  - its README: the dashboard a member reads first — make it true as of today\n"
                 "Edit the pages that exist before creating new ones, and never copy one person's "
-                "desk into the group's.")
+                "personal workspace into the group's.")
         return block
 
     # REACHES THE AGENT DOMAIN (PRD decision 40.7). Declared, not checked inside the body:
@@ -1494,6 +1502,12 @@ def build(reg: Registry, db) -> None:
         layer out.
 
         Reads: refs.{uid,organizer,title,meeting_id} · Effect: one notification."""
+        # THE DEPLOYMENT'S RULE BEFORE THE PERSON'S PREFERENCE, the shape `emit_prep` already has:
+        # `minutes_mail` in `_global/POLICIES.md` is the admin account's answer for everybody (and
+        # covers the group fan-out below, which only this step reaches); `mail_minutes` is one
+        # person's answer for themselves. Deny wins either way; an unreadable `_global` is `on`.
+        if policies.param(ctx, "minutes_mail", str(ctx.refs.get("uid") or "")) is False:
+            return Done({"skipped": "minutes_mail is off for this deployment"})
         if not setting(ctx.refs["uid"], "mail_minutes"):
             return Done({"skipped": "mail_minutes is off for this person"})
         # THE RECIPIENT. `refs["organizer"]` only exists for a calendar-invited meeting — an AD
@@ -2362,7 +2376,7 @@ def build(reg: Registry, db) -> None:
         organizer = _organizer_address(ctx)
         if not organizer:
             raise StepError(
-                f"cannot drop meeting {ctx.refs.get('meeting_id')!r} to any desk: no organizer on "
+                f"cannot drop meeting {ctx.refs.get('meeting_id')!r} to any personal workspace: no organizer on "
                 f"the ref and no address for uid {uid!r}.", retryable=False)
         day = _meeting_stamp(ctx, uid)[:10]          # the MEETING's day, in the organiser's zone
         date_prose = _meeting_date(ctx, uid)
@@ -2448,7 +2462,7 @@ def build(reg: Registry, db) -> None:
                          # every copy is these bytes plus that person's own link
                          "bytes": len(body)})
         raise StepError(
-            f"every desk drop failed for meeting {mid} ({len(room)} person(s) in the room): "
+            f"every personal-workspace drop failed for meeting {mid} ({len(room)} person(s) in the room): "
             + " · ".join(failed), retryable=True)
 
     # ── the live call (PRD decision 42.2) ─────────────────────────────────────
@@ -2655,6 +2669,58 @@ def build(reg: Registry, db) -> None:
         field. No mail, no desk card, no downstream effect."""
         return Done({"recorded": True})
 
+    # ── the meeting-share invite's mail leg ───────────────────────────────────
+    @reg.step(needs=("meetings",))
+    def mail_meeting_share(ctx: StepCtx):
+        """Mail one person the link to a meeting its owner shared with them.
+
+        A person pressed **Invite** in a meeting's Share dialog with this address, so the mail is
+        sent on a human's own act — like `mail_workspace_invite`, and for the same reason no
+        fan-out switch may swallow it.
+
+        THE LINK IS MINTED HERE, AT SEND TIME, and composed from this deployment's own `VEXA_UI_URL`.
+        The fact carries no credential (R1801-5): meeting-api keeps grants as hashes at rest, and
+        the event store is not a second place to keep a working token. So this step mints a fresh
+        grant RESTRICTED to this one address, as the owner (`uid`), through meeting-api — the same
+        mint the attendee fan-out uses — and links the terminal's share arrival (`?tshare=`) to it.
+        A forwarded mail admits nobody else, and the owner's access list shows it as one invite.
+
+        The title is the owner's words and is ONE bounded line of plain text (R1801-2) — cut again
+        here, whatever the producer sent.
+
+        Reads: refs.{email, uid, meeting_id, title?, inviter?}
+        Effect: one restricted grant, one notification · Result: {message_id, to, meeting_id}."""
+        to = str(ctx.refs.get("email") or "").strip()
+        uid = str(ctx.refs.get("uid") or "").strip()
+        meeting_id = str(ctx.refs.get("meeting_id") or "").strip()
+        if not to or not uid or not meeting_id:
+            raise StepError(
+                f"cannot mail the share of meeting {meeting_id or '<unknown>'}: refs carry "
+                f"{'no address' if not to else 'an address'}, {'no owner' if not uid else 'an owner'} "
+                f"and {'no meeting' if not meeting_id else 'a meeting'} — a share mail needs all three.",
+                retryable=False)
+        try:
+            token = mt.mint_transcript_share(uid, meeting_id, to, expires_in_sec=30 * 86400)
+        except mt.ShareMintError as e:
+            # The owner deleted the meeting, or it is no longer theirs: a 4xx is a fact and is not
+            # retried; a 5xx/429 is the platform having a moment and is. No token is in the text.
+            raise StepError(f"no link could be minted for the share of meeting {meeting_id}: {e}",
+                            retryable=bool(getattr(e, "retryable", False))) from e
+        link = _common.ui_link(tshare=token)
+        values = {}
+        for k, cap in (("inviter", 254), ("title", 200)):
+            v = _re.sub(r"[\x00-\x1f\x7f]+", " ", str(ctx.refs.get(k) or "")).strip()
+            if v:
+                values[k] = v if len(v) <= cap else v[:cap - 1].rstrip() + "…"
+        values.setdefault("inviter", "Someone")
+        values.setdefault("title", "a meeting")
+        subject, body = mailtext.render("meeting-share", uid, values)
+        if not subject:
+            logger.warning("the meeting-share template carries no `subject:` line — falling back")
+            subject = f"{values['inviter']} shared a meeting with you"
+        mid = notify(to, subject, body, link=link)
+        return Done({"message_id": mid, "to": to, "meeting_id": meeting_id}, provider_ref=mid)
+
     s = reg.steps
     # VERSION 2 — `spawn_onboardings` removed (decision 29). VERSION 3 — `emit_started` added after
     # `dispatch_bot` (PRD decision 42.2). The version bump is the whole mechanism: `match()` is
@@ -2682,6 +2748,9 @@ def build(reg: Registry, db) -> None:
     # call runs. That row is the queue. Its two siblings, the desk cards, are `production_agent`'s.
     reg.flow(name="live_meeting", version=1, on=STARTED,
              steps=[s["attend_live"]])
+    # THE SHARE MAIL. One step, one effect, no queue row: it tells a person, it waits for nobody.
+    reg.flow(name="meeting_share", version=1, on=SHARED,
+             steps=[s["mail_meeting_share"]])
     # THE SINK (PRD 40.9 open-decision 8). One step, `Done` on its first tick, no effect — see
     # `record_friction`'s own docstring for why this exists at all. Reaches no domain, so it is
     # registered here rather than in `production_agent.py`: friction is reportable with or without

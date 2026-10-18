@@ -15,31 +15,20 @@ const MEETING = {
 };
 
 describe("artifactFromToken", () => {
-  it("meeting:note is the SAME file under the name the reader needs today", () => {
-    // one document, two names — Brief before it happened, Minutes after. The path never moves.
-    expect(artifactFromToken("meeting:note", { ...MEETING, phase: "prep" }))
-      .toEqual({ path: "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md", label: "Brief" });
-    expect(artifactFromToken("meeting:note", MEETING))
-      .toEqual({ path: "kg/entities/meeting/2026-03-02-show-b-lighting-dailies.md", label: "Minutes" });
+  it("meeting:note and meeting:transcript are both the meeting view, bound to the ROW id", () => {
+    // one view holds the notes and the transcript (2026-10-11); the canvas fetches by row id, and a
+    // native here would render another run's transcript
+    for (const phase of ["prep", "live", "post"] as const) {
+      for (const token of ["meeting:note", "meeting:transcript"]) {
+        expect(artifactFromToken(token, { ...MEETING, phase })).toEqual({ kind: "meeting", path: "95", label: "Meeting" });
+      }
+    }
   });
 
-  it("takes the note's path from the SERVER, and never builds one from the native", () => {
-    // THE BUG THIS PINS (F55). This resolver used to return
-    // `kg/entities/meeting/<native>.md` while `drop_to_attendees` wrote
-    // `kg/entities/meeting/<meeting-day>-<title-slug>.md`. One path, two spellings, in two
-    // languages — so the Minutes tab pointed at a file nothing writes and read "No page here
-    // yet" on every meeting that HAD been written, mailed and dropped. Nothing failed; the tab
-    // was simply always empty, which is indistinguishable from an agent that wrote nothing.
-    expect(artifactFromToken("meeting:note", MEETING)!.path).not.toContain("abc-defg-hij");
-    expect(artifactFromToken("meeting:note", MEETING)!.path).toBe(MEETING.notePath);
-    // a native alone is NOT enough any more: no path from the server, no tab.
-    expect(artifactFromToken("meeting:note", { native: "abc-defg-hij", meetingId: "95" })).toBeNull();
-  });
-
-  it("meeting:transcript binds the CANVAS to the row id, not the native", () => {
-    // the canvas fetches by row id; a native here would render another run's transcript
-    expect(artifactFromToken("meeting:transcript", MEETING))
-      .toEqual({ kind: "meeting", path: "95", label: "Transcript" });
+  it("with no row (a mock), meeting:note is the notes file the SERVER named — never one built from the native", () => {
+    const noRow = { ...MEETING, meetingId: null };
+    expect(artifactFromToken("meeting:note", noRow)).toEqual({ path: MEETING.notePath, label: "Notes" });
+    expect(artifactFromToken("meeting:note", { native: "abc-defg-hij", meetingId: null })).toBeNull();
   });
 
   it("a meeting token with no meeting opens one document FEWER, never a broken tab", () => {
@@ -71,8 +60,9 @@ describe("artifactsFromTokens", () => {
   it("keeps the preset's order — it is the author's reading order — and drops duplicates", () => {
     const out = artifactsFromTokens(
       ["_global/README.md", "meeting:transcript", "_global/README.md", "meeting:note"], MEETING);
-    expect(out.map((a) => a.label)).toEqual(["README", "Transcript", "Minutes"]);
-    expect(out.map((a) => a.path)).toEqual(["README.md", "95", MEETING.notePath]);
+    // `meeting:transcript` and `meeting:note` are the same view — it appears once
+    expect(out.map((a) => a.label)).toEqual(["README", "Meeting"]);
+    expect(out.map((a) => a.path)).toEqual(["README.md", "95"]);
   });
 
   it("the setup chat's five files resolve to five tabs on the org tier", () => {

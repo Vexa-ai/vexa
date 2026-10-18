@@ -1,0 +1,9 @@
+{
+  "source": "model-provider",
+  "kind": "unknown_model",
+  "provider": "",
+  "model": "retired-model",
+  "status": null,
+  "detail": "The model 'retired-model' is not offered on this deployment any more.",
+  "remedy": "Pick another model for this chat."
+}

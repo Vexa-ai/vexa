@@ -93,7 +93,13 @@ closed, never forwarding a worker as its person without `delegation`.** Upgrade 
 admin-api, agent-api and flows-api together. A service refuses a verb that needs a person in the
 loop when `x-user-regime` is not `human`. `identity_token.py` carries that rule for every service:
 `is_delegated(headers)` (any delegation header present, an empty one included), `is_unwatched(headers)`
-(delegated, and a regime other than `human`) and `REFUSAL`, the one 403 body a worker reads.
+(delegated, and a regime other than `human`) and `REFUSAL`, the one 403 body a worker reads:
+`status: refused`, `reason: human_session_required`, an `instruction` for the agent, the stable
+machine field `remedy: ask_in_chat` (the one way through is the person asking in chat, where the
+regime is `human`), and `tell_your_person`, the sentence the agent relays to the person word for
+word: the run started without them, these actions work only when they ask in chat, and nothing is
+wrong with their connection. `remedy` and `tell_your_person` were added in v0.13.2 and are
+additive; a reader that knows only the first three keys reads the body as before.
 
 ## Files
 

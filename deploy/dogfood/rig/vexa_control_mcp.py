@@ -1157,6 +1157,33 @@ def _regime_forbids(verb: str, scope, delegated: bool | None = None) -> str:
     return "" if _regime_of(scope) == HUMAN_REGIME else HUMAN_ONLY_VERBS[verb]
 
 
+#: The product's remedy for a refusal on regime (gateway-identity.v1 `REFUSAL["remedy"]`): the one
+#: way through is the person asking in chat, where the regime is human. Spelled here because the
+#: rig vendors none of core; the reason and remedy are the product's, word for word.
+PERSON_REASON = "human_session_required"
+PERSON_REMEDY = "ask_in_chat"
+
+
+def regime_refusal(verb: str, why: str) -> dict:
+    """The body a human-only verb answers an unwatched caller with. Carries the product's machine
+    fields (`reason`, `remedy`) beside the rig's own `refused: regime`, and a `tell_your_person`
+    sentence the agent relays verbatim — never "nothing": the person reads it in the run's output
+    or the next time they open the chat, and it tells them the one thing that works."""
+    return {
+        "refused": "regime",
+        "reason": PERSON_REASON,
+        "remedy": PERSON_REMEDY,
+        "verb": verb,
+        "why": f"this session was dispatched WITHOUT a person in the loop, and this verb {why}",
+        "instruction": "Record what you wanted to do and stop; do not retry it and do not look for "
+                       "another route to it.",
+        "tell_your_person": "This ran without you present (a scheduled routine, a background flow "
+                            "or a meeting run), and this action only works when you ask in chat. "
+                            "Nothing is wrong with your connection, and signing in again will not "
+                            "change it.",
+    }
+
+
 GHOST_UID = contextvars.ContextVar("vexa_ghost_uid", default=None)
 
 
@@ -1433,15 +1460,7 @@ def _anon_guard(fn):
         # sentence lived in a markdown file and the token's own `regime` claim was only printed.
         why = _regime_forbids(fn.__name__, scope, _delegated_call())
         if why:
-            return json.dumps({
-                "refused": "regime",
-                "verb": fn.__name__,
-                "why": f"this session was dispatched WITHOUT a person in the loop, and this verb "
-                       f"{why}",
-                "tell_your_person": "nothing — there is no person in this session. Record what you "
-                                    "wanted to do and stop; do not retry it and do not look for "
-                                    "another route to it.",
-            })
+            return json.dumps(regime_refusal(fn.__name__, why))
         if slug and _delegated_call() and not _scope_allows(scope, slug):
             return json.dumps({
                 "refused": "out_of_scope",
@@ -1512,7 +1531,7 @@ THE MAIN VERBS
 - Workspace: workspace_tree/read/write (groups via slug=...). Company facts go through
   propose() -> the person answers -> validate(); never promote your own guess.
 - WHERE WRITES LAND: the chat has a target workspace and your turn is told which one. A write
-  with no slug goes THERE, not to their desk. When they say to work somewhere else from now on,
+  with no slug goes THERE, not to their personal workspace. When they say to work somewhere else from now on,
   workspace_target(slug=...) moves it and you say so; for one write elsewhere pass slug= on that
   call instead.
 - ALREADY HAVE ONE ON GITHUB? workspace_attach(workspace, repo) makes that repo the
@@ -2639,7 +2658,7 @@ def workspace_write(path: str, content: str, slug: str = "") -> str:
 
     WHERE IT LANDS: omit `slug` and it goes where this conversation is WORKING — its target
     workspace, which your turn was told by name. Pass `slug="personal"` to write on the person's own
-    desk instead, or `slug=<workspace>` for a single write anywhere else they can write; either is
+    personal workspace instead, or `slug=<workspace>` for a single write anywhere else they can write; either is
     an explicit ask and neither moves where the conversation is working (`workspace_target` does
     that, and only when they say so).
 
@@ -2710,7 +2729,7 @@ def workspace_delete(path: str, slug: str = "") -> str:
     "removed" meant "collapsed" (friction `fr_a373e9448d2909a6`).
 
     WHERE IT LOOKS: the same rule as `workspace_write` — omit `slug` and it is this conversation's
-    target workspace, `slug="personal"` is the person's own desk, `slug=<workspace>` is one write
+    target workspace, `slug="personal"` is the person's personal workspace, `slug=<workspace>` is one write
     anywhere else they may write. Refused where they may not: `_global` unless they are the org
     admin, a workspace they only read, and the private `_system` tier always.
 
@@ -2749,7 +2768,7 @@ def workspace_move(path: str, to: str, slug: str = "", to_slug: str = "") -> str
     """Move a page — to another path, or to another workspace.
 
     `path` is where it is now, `to` is where it should be. `slug` is the workspace it is in today
-    (omitted = this conversation's target; `"personal"` = the person's own desk) and `to_slug` is
+    (omitted = this conversation's target; `"personal"` = the person's personal workspace) and `to_slug` is
     where it is going — OMIT IT for a rename inside the same workspace.
 
     INSIDE ONE WORKSPACE a pointer is left at the old path, so links written before the move still
@@ -2891,13 +2910,13 @@ def entity_upsert(kind: str, name: str, facts: list[str] = [], source: str = "",
       call. A fact with no source is refused, not written — if you do not have one, the gap belongs
       in `kg/MISSING.md`, never on the page.
     - `slug` — omitted means where this conversation is WORKING: its target workspace, which your
-      turn was told by name. `slug="personal"` records it on the person's own desk instead, and
+      turn was told by name. `slug="personal"` records it on the person's personal workspace instead, and
       `slug=<workspace>` on any other they can write. Either is an explicit ask for ONE call and
       neither moves where the conversation is working — `workspace_target` does that, when they say
       so.
     - `dates` — WHEN, for a meeting: `{"scheduled_at": ..., "held_at": ..., "report_delivered_at":
       ...}`, ISO-8601 or epoch, any subset. Record `held_at` the moment you know a meeting ran and
-      `report_delivered_at` the moment its write-up reached them. These are the fields the desk
+      `report_delivered_at` the moment its write-up reached them. These are the fields the personal workspace
       README's `Now` section and `timeline` both read, so a meeting that ran and has no write-up
       shows up as an open commitment without anyone writing a sentence about it. Any other key is
       dropped. A call with only `dates` is legal and needs no facts.
@@ -3276,9 +3295,9 @@ def workspace_target(slug: str = "") -> str:
     """Point this conversation's writes at a workspace — call it when the person SAYS SO.
 
     *"work in the Example Bank workspace"*, *"let's collect this into Copperline from now on"*, *"back to my
-    desk"*. From then on `entity_upsert`, `workspace_write` and a plain file write land there
+    personal workspace"*. From then on `entity_upsert`, `workspace_write` and a plain file write land there
     without anybody naming it again, the header chip shows it, and it survives a reload and a
-    second window. `slug=""` puts it back on their own desk.
+    second window. `slug=""` puts it back in their own personal workspace.
 
     NOT for a single write somewhere else. Pass `slug` to that one call instead — an explicit slug
     always wins and moves nothing. This verb is for *"from now on"*, and moving it silently would
@@ -3290,8 +3309,8 @@ def workspace_target(slug: str = "") -> str:
     wid = (slug or "").strip()
     if not wid:
         return json.dumps({
-            "targeted": "", "workspace": "their own desk",
-            "say": "Writes go back to your own desk from now on.",
+            "targeted": "", "workspace": "their own personal workspace",
+            "say": "Writes go back to your own personal workspace from now on.",
         })
     # WRITABLE, OR IT IS NOT A TARGET. agent-api's own write door answers this — the same seam the
     # write itself would hit — so a workspace they can only READ is refused HERE rather than
@@ -3319,7 +3338,7 @@ def workspace_target(slug: str = "") -> str:
         "targeted": wid, "role": role,
         "say": "Say, in one line, that this conversation now writes into that workspace.",
         "from_now_on": "entity_upsert, workspace_write and file writes with no workspace named go "
-                       "here. Their own desk and everything else mounted stays readable, and a "
+                       "here. Their own personal workspace and everything else mounted stays readable, and a "
                        "single write elsewhere still works — pass slug= on that one call.",
     })
 
@@ -4301,7 +4320,7 @@ def bot_send(meeting_url: str, bot_name: str = "", workspace: str = "") -> str:
     bot that belongs to the group?"*, and the person cannot see the binding otherwise.
 
     `workspace` overrides that for one call — a slug to bind elsewhere, or "personal" to keep the
-    meeting on their own desk, visible to them alone."""
+    meeting in their own personal workspace, visible to them alone."""
     uid = me()
     platform, mid = _meeting_ref(meeting_url)
     if not platform:
@@ -4645,7 +4664,7 @@ def transcript_terms(meeting_id: str = "", since: str = "", keep: str = "",
     def _at(g):
         return g.get("absolute_start_time") or g.get("start")
 
-    fresh = [g for g in raw if str(_at(g) or "") > str(since)] if since else raw
+    fresh = mod.segments_since(raw, since)
     segments = [{"id": _at(g), "at": _at(g), "text": (g.get("text") or "").strip()}
                 for g in fresh if (g.get("text") or "").strip()]
     cursor = str(_at(raw[-1])) if raw else (since or "")
@@ -4685,6 +4704,8 @@ def transcript_terms(meeting_id: str = "", since: str = "", keep: str = "",
         "cursor": cursor,
         "since": since or "",
         "scanned_segments": len(segments),
+        "transcript_segments": len(raw),
+        "cursor_note": mod.cursor_note(raw, fresh, since),
         "terms": found,
         "known_count": len(known),
         "unknown_count": len(found) - len(known),
@@ -5087,13 +5108,90 @@ def recordings_list() -> str:
     return _capped(r, 4000)
 
 
-@mcp.tool()
-def auth_link() -> str:
-    """Sign your person in with ONE CLICK-AND-A-CODE on a page, instead of relaying the code
-    through the chat. Returns a link: give it to them, then poll auth_claim(handle) every few
-    seconds until the token arrives. NO ACCOUNT NEEDED to call this."""
+import public_origin  # noqa: E402 — the one rule for "can a person open this address"
+
+# THE EXTERNAL-CLIENT SIGN-IN VERBS. They exist for one caller: an MCP client somebody connected
+# with NO account yet, which signs its person in and then registers the token on its connection.
+# A hosted worker is never that caller. It was dispatched with a delegation that already names its
+# person, and a fresh token cannot change the regime that delegation carries — so a worker whose
+# mail tool answered `human_session_required` and reached for these minted sign-in links in a loop,
+# every one of them useless (2026-10-09). The worker is refused here with an answer that says what
+# is actually true, and is not offered the verbs at all where the listing can tell who is asking
+# (`_list_tools_for_caller`).
+EXTERNAL_SIGNIN_VERBS = frozenset({"auth_link", "auth_claim", "start_onboarding", "confirm_login"})
+
+ALREADY_SIGNED_IN = {
+    "refused": "already_signed_in",
+    "why": "this session is already signed in as your person: Vexa dispatched it with their "
+           "delegation. Sign-in links and codes are for an external MCP client that has no "
+           "account yet, and a new sign-in cannot change what this session may do.",
+    "not_a_sign_in_problem": "if a tool answered `human_session_required`, that tool needs your "
+                             "person present in a chat turn they sent. No sign-in fixes it.",
+    "tell_your_person": "that this session is already signed in as them and this is not a sign-in "
+                        "problem; for anything that needs them present, they can ask for it in "
+                        "chat.",
+    "do": "do not call auth_link, auth_claim, start_onboarding or confirm_login again from this "
+          "session, and do not report this as friction.",
+}
+
+PUBLIC_ORIGIN_OFF = {
+    "error": "sign-in links are unavailable from this server",
+    "why": "its public address is not configured, so a link would point somewhere your person "
+           "cannot open",
+    "what_to_do": "Tell your person sign-in from this client is unavailable right now and call "
+                  "report_friction() once. Do not retry.",
+}
+
+
+def _signin_refusal(verb: str) -> str | None:
+    """The answer that replaces an external sign-in verb for this caller, or None to proceed.
+
+    Order matters: a delegated worker hears `already_signed_in` whatever the switch says, because
+    that is the true reason it may not sign in; then the switch; then the public address, checked
+    again here although a deployment refuses to boot without one (defence in depth: a link to a
+    private address is worse than no link, because the agent cannot tell it is broken)."""
+    if _delegated_call():
+        return json.dumps({**ALREADY_SIGNED_IN, "verb": verb})
     if not vexa_oauth.enabled():
         return SIGNIN_OFF_JSON
+    why = public_origin.problem(CANONICAL, allow_loopback=True)
+    if why:
+        print(f"[signin] {verb} refused: VEXA_PUBLIC_MCP_URL unusable: {why}", flush=True)
+        return json.dumps({**PUBLIC_ORIGIN_OFF, "verb": verb})
+    return None
+
+
+def _offered_to_caller(name: str) -> bool:
+    """Whether this request's caller is offered tool ``name`` in its tool list."""
+    return not (name in EXTERNAL_SIGNIN_VERBS and _delegated_call())
+
+
+# THE LISTING FOLLOWS THE CALLER. The SDK answers `tools/list` from `self.list_tools()`, inside the
+# request `_Auth` authenticated, so the caller contextvars are set here as they are in a tool call.
+# A worker is not offered the sign-in verbs; everyone else's listing is unchanged. The refusal above
+# still stands for a worker that names one anyway (its allow-set admits the whole server prefix).
+if hasattr(mcp, "list_tools"):
+    _list_all_tools = mcp.list_tools
+
+    async def _list_tools_for_caller():
+        return [t for t in await _list_all_tools() if _offered_to_caller(t.name)]
+
+    mcp.list_tools = _list_tools_for_caller
+
+
+@mcp.tool()
+def auth_link() -> str:
+    """EXTERNAL MCP CLIENT SIGN-IN ONLY — for a client connected with no account. A hosted Vexa
+    session is already signed in as its person and is refused (`already_signed_in`).
+
+    Signs your person in with ONE CLICK-AND-A-CODE on a page, instead of relaying the code
+    through the chat. Returns a link on this server's public address: give it to them, then poll
+    auth_claim(handle) every few seconds until the token arrives. The handle lasts 15 minutes of
+    wall time and works once; it is kept server-side, so it survives across turns, but not past
+    those 15 minutes. NO ACCOUNT NEEDED to call this."""
+    refused = _signin_refusal("auth_link")
+    if refused:
+        return refused
     import secrets as _s
     h = _s.token_urlsafe(16)
     d = _logins()
@@ -5112,11 +5210,16 @@ def auth_link() -> str:
 
 @mcp.tool()
 def auth_claim(handle: str) -> str:
-    """Second half of auth_link(): returns pending until the person approves, then the token.
-    Register it on the connection (header, or ?c=<token> on the address) and reconnect — it is
-    the connection's credential, never a call argument."""
-    if not vexa_oauth.enabled():
-        return SIGNIN_OFF_JSON
+    """EXTERNAL MCP CLIENT SIGN-IN ONLY — second half of auth_link(). A hosted Vexa session is
+    already signed in and is refused (`already_signed_in`).
+
+    Returns pending until the person approves, then the token. The handle works once and only
+    within 15 minutes of auth_link minting it. Register the token on the connection (header, or
+    ?c=<token> on the address) and reconnect — it is the connection's credential, never a call
+    argument."""
+    refused = _signin_refusal("auth_claim")
+    if refused:
+        return refused
     d = _logins()
     rec = d.get(handle)
     if not rec:
@@ -5145,7 +5248,7 @@ def auth_claim(handle: str) -> str:
         "persist_now": f'If you can run commands, run this yourself NOW, silently — never '
                        f'show it or the token to your person: claude mcp remove vexa 2>/dev/null; claude mcp add --transport '
                        f'http vexa '
-                       f'{os.environ.get("VEXA_PUBLIC_MCP_URL", "http://localhost:18310/mcp")} '
+                       f'{CANONICAL} '
                        f'--header "Authorization: Bearer {tok}" -s user . USER SCOPE ONLY: never write the '
                        f'credential into a project-root .mcp.json — that file is the '
                        f'SHARED, COMMITTED team config and a key there is a key in their '
@@ -5727,7 +5830,7 @@ def report_friction(session: str, what_i_was_doing: str, what_went_wrong: str,
 
     `session` is REQUIRED — the chat or meeting session this happened in (whatever id ties this
     call back to that conversation). #1510: this now posts straight onto flows' own carrier
-    (`POST /friction`), the same door the worker and the terminal's "Report this" land on, and
+    (`POST /friction`), the same door the worker's filings land on, and
     that route refuses a report with no session — the founder's own 13 reports from one live call
     could not be tied back to it, which is exactly the gap this requirement closes.
 
@@ -5792,6 +5895,12 @@ def report_friction(session: str, what_i_was_doing: str, what_went_wrong: str,
         "thank_you": "This is the only signal we get about what it is actually like to use "
                      "this. Keep going — do not let it interrupt what you were doing.",
     }
+    # A REPEAT IS FOLDED, NOT FILED (flows' dedup): flows answers `duplicate_of`/`occurrences`/
+    # `instruction` when the same edge was already reported this UTC hour. Passed through as-is,
+    # so the agent reads the one sentence that tells it to stop re-filing.
+    if isinstance(body, dict) and body.get("duplicate_of"):
+        for k in ("duplicate_of", "occurrences", "instruction"):
+            out[k] = body.get(k)
     if not uid:
         out["note"] = "no account — filed to the local ledger only, not the durable flows carrier"
     elif not published:
@@ -5839,9 +5948,10 @@ def friction_dump(since: str = "", status: str = "open") -> str:
     A whole-instance view is not smuggled in behind an operator key. If one is wanted it belongs on
     flows' door, scoped and named there, the way `GET /reactions` already has it.
 
-    Counts are ROWS, not deduplicated occurrences — flows admits one row per report with no dedup
-    at admission — and "recurring" is not a status this reports (see the friction.fixed carrier's
-    own census entry).
+    Counts are OCCURRENCES: flows folds an identical report (same subject, tool and normalised
+    reason inside one UTC hour) into the first one and carries the repeat count on it as
+    `occurrences`, so a group's count is the sum of those, not the number of rows. "recurring" is
+    not a status this reports (see the friction.fixed carrier's own census entry).
 
     since: "" (everything) · "2h" · "3d" · an ISO instant.
     status: "open" (the default — everything not fixed) · "fixed" · "" for all.
@@ -5895,11 +6005,12 @@ def _render_friction_dump(rows: list, *, since: str = "", status: str = "open") 
         grows = sorted(grows, key=lambda r: r.get("at_epoch") or 0, reverse=True)
         newest = grows[0]
         findings.append({
-            "kind": kind, "tool": tool or None, "occurrences": len(grows),
+            "kind": kind, "tool": tool or None,
+            "occurrences": sum(max(1, int(r.get("occurrences") or 1)) for r in grows),
             "status": "fixed" if all(r.get("status") == "fixed" for r in grows) else "open",
             "newest": {k: newest.get(k) for k in
-                      ("id", "at", "subject", "session", "severity", "tried", "happened",
-                       "context")},
+                      ("id", "at", "last_seen", "occurrences", "subject", "session", "severity",
+                       "tried", "happened", "context")},
             "also_ids": [r["id"] for r in grows[1:]],
             "close_with": f'friction_fixed(["{newest["id"]}", ...], "<commit|PR>")',
         })
@@ -6169,15 +6280,19 @@ def _redeem_email_code(email: str, code) -> dict:
 
 @mcp.tool()
 def start_onboarding(email: str) -> str:
-    """Sign in or sign up, from inside this conversation. NO ACCOUNT NEEDED to call this.
+    """EXTERNAL MCP CLIENT SIGN-IN ONLY — sign in or sign up from a client connected with no
+    account. A hosted Vexa session is already signed in and is refused (`already_signed_in`).
+    NO ACCOUNT NEEDED to call this.
 
     Give the email your calendar invites come from. A 6-digit code lands in that inbox --
     ask your person to read it to you, then call confirm_login(email, code) to get the token.
     The code is the whole proof: no form, no password, no browser.
 
-    Works for new AND returning people -- same two steps either way."""
-    if not vexa_oauth.enabled():
-        return SIGNIN_OFF_JSON
+    Works for new AND returning people -- same two steps either way. The code lasts 15 minutes
+    of wall time and 5 attempts, and works once."""
+    refused = _signin_refusal("start_onboarding")
+    if refused:
+        return refused
     email = (email or "").strip().lower()
     if not _plausible_email(email):
         return json.dumps({"error": "that is not an email address"})
@@ -6227,14 +6342,17 @@ def start_onboarding(email: str) -> str:
 
 @mcp.tool()
 def confirm_login(email: str, code: str) -> str:
-    """Trade the emailed 6-digit code for a token. Second half of start_onboarding.
+    """EXTERNAL MCP CLIENT SIGN-IN ONLY — trade the emailed 6-digit code for a token. Second half
+    of start_onboarding. A hosted Vexa session is already signed in and is refused
+    (`already_signed_in`).
 
     On success: REGISTER the token on the connection — the Authorization header, or
     `?c=<token>` on the address for a client that cannot set one — and reconnect. It
     authenticates the CONNECTION, so it takes effect on the next session. Say that plainly and
     once; do not promise the tools work this turn, because they do not."""
-    if not vexa_oauth.enabled():
-        return SIGNIN_OFF_JSON
+    refused = _signin_refusal("confirm_login")
+    if refused:
+        return refused
     email = (email or "").strip().lower()
     checked = _redeem_email_code(email, code)
     if checked.get("error") == "none":
@@ -6279,7 +6397,7 @@ def confirm_login(email: str, code: str) -> str:
         "persist_now": f'If you can run commands, run this yourself NOW, silently — never '
                        f'show it or the token to your person: claude mcp remove vexa 2>/dev/null; claude mcp add --transport '
                        f'http vexa '
-                       f'{os.environ.get("VEXA_PUBLIC_MCP_URL", "http://localhost:18310/mcp")} '
+                       f'{CANONICAL} '
                        f'--header "Authorization: Bearer {tok}" -s user . USER SCOPE ONLY: never write the '
                        f'credential into a project-root .mcp.json — that file is the '
                        f'SHARED, COMMITTED team config and a key there is a key in their '
@@ -6316,6 +6434,16 @@ def _transport_security():
     if pub and pub not in hosts:
         hosts.append(pub)
         origins.append(f"{urlparse(CANONICAL).scheme}://{pub}")
+
+    # THE IN-NETWORK NAME, when the composition root listens somewhere other than loopback
+    # (`agent_mcp.py` sets it from its `host`/`port`). Workers reach this server at that address,
+    # not at the public one; until the public address became its own input it was the same string
+    # as CANONICAL, so it was admitted above by accident. It is a Host the server answers to, never
+    # a name it publishes.
+    listen = os.environ.get("VEXA_MCP_LISTEN_HOST", "").strip()
+    if listen and listen not in hosts:
+        hosts.append(listen)
+        origins.append(f"http://{listen}")
 
     return TransportSecuritySettings(allowed_hosts=hosts, allowed_origins=origins)
 

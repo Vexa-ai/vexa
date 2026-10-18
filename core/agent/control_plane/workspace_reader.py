@@ -601,6 +601,27 @@ class WorkspaceReader:
             removed = wpaths.unlink_inside(ws, rel, allow=_PLUMBING) or removed
         return removed
 
+    def drop_history(self, subject: str, session: str,
+                     extra_roots: "list[str | Path] | None" = None) -> int:
+        """DELETE a chat's conversation: its transcript (``.claude/projects/<slug>/<sessionId>.jsonl``)
+        and its continuity pointer, in every root ``locate_session`` searches for THIS subject — so
+        neither ``history`` nor a later turn on the same name finds it again. Returns how many files
+        went. Files the chat wrote into a workspace are not touched: they are the workspace's.
+
+        By descriptor, like ``drop_session``: a link planted anywhere on the way is removed as the
+        link or not followed, never used to delete a file elsewhere."""
+        found = self.locate_session(subject, session, extra_roots)
+        gone = 0
+        if found is not None:
+            sid, roots = found
+            if _PLAIN_ID.fullmatch(sid or ""):
+                for ws in roots:
+                    for slug in list(_real_subdirs(ws, (".claude", "projects"))):
+                        gone += int(wpaths.unlink_inside(ws, f".claude/projects/{slug}/{sid}.jsonl", allow=_PLUMBING))
+                    gone += int(wpaths.unlink_inside(ws, f".claude/sessions/{session}.session", allow=_PLUMBING))
+        gone += int(self.drop_session(subject, session))
+        return gone
+
     def git_state(self, subject: str) -> dict:
         """Real source-control state of the subject's OWN (primary) workspace — thin wrapper over
         ``git_state_at`` with the caller as viewer (so their own commits classify as ``you``)."""

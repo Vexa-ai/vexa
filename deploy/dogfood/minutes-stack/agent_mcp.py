@@ -198,13 +198,34 @@ def hop_guard(app):
     return guarded
 
 
+def public_mcp_url(cfg):
+    """The deployment's public MCP address, from the lock's `public_url` — or the boot stops (P18).
+
+    Every link this server hands a person (the sign-in page `auth_link` returns, the connect
+    command and skill URL after sign-in, workspace view links) is built from it. It used to be
+    derived from the listen `host`/`port`, so on a deployment listening on a Docker bridge every
+    such link pointed at that bridge address and opened nowhere. The listen address is not a
+    public name, and no default stands in for one: a missing, private, loopback or non-https
+    `public_url` refuses to boot (`public_origin.problem`, shared with the rig's own check)."""
+    rule = load('minutes_public_origin', Path(cfg['runtime']).parent / 'public_origin.py')
+    url = str(cfg.get('public_url') or '').strip()
+    why = rule.problem(url, allow_loopback=False)
+    if why:
+        raise SystemExit(f'agent_mcp: refusing to boot: public_url: {why}. Set `public_url` in '
+                         f'the agent-mcp configuration to the https address people reach this '
+                         f'service at, ending in /mcp.')
+    return url
+
+
 def main(config_path):
     cfg = json.loads(Path(config_path).read_text())
+    public_url = public_mcp_url(cfg)
     environment = json.loads(Path(cfg['environment_file']).read_text())
     os.environ.update({k: str(v) for k, v in environment.items()
                       if k.startswith(('VEXA_', 'CRM_')) or k == 'INTERNAL_API_SECRET'})
     os.environ['PORT'] = str(cfg['port'])
-    os.environ['VEXA_PUBLIC_MCP_URL'] = f"http://{cfg['host']}:{cfg['port']}/mcp"
+    os.environ['VEXA_PUBLIC_MCP_URL'] = public_url
+    os.environ['VEXA_MCP_LISTEN_HOST'] = f"{cfg['host']}:{cfg['port']}"
     os.environ['VEXA_AGENT_SRC'] = cfg['agent_source']
     sys.path.insert(0, str(Path(cfg['runtime']).parent))
     runtime = load('minutes_agent_runtime', cfg['runtime'])

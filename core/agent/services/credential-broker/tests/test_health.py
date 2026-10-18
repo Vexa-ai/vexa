@@ -27,7 +27,8 @@ def test_ready_is_503_while_the_store_does_not_answer_and_liveness_stays_up(clie
     capsys.readouterr()
     r = client.get("/ready")
     assert r.status_code == 503
-    assert r.json() == {"status": "unavailable", "service": "credential-broker", "store": "local"}
+    assert r.json() == {"status": "unavailable", "service": "credential-broker", "store": "local",
+                        "reason": "store_unavailable", "kind": "unhealthy"}
     faults = [json.loads(line) for line in capsys.readouterr().out.splitlines() if '"event":"broker_fault"' in line]
     assert faults and faults[-1]["fields"] == {"source": "store", "kind": "unhealthy", "route": "/ready"}
     assert client.get("/health").status_code == 200

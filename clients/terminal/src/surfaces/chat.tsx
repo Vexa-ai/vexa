@@ -3,7 +3,7 @@ import { setChatActivity } from "./chatActivity";
 /** Chat — the persistent right-rail agent window. Streams a real agent turn over /api/chat (SSE) into the
  *  turn timeline, surfacing each tool-call as a visible operation (read/search/edit/git/web) with status,
  *  then the message + commit / rejection badge. The composer carries the active center-tab reference. */
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ClipboardEvent, type ReactNode } from "react";
 import { minutesOnly } from "../app/mode";
 import { liveMeetingsNow } from "./liveMeetings";
 import { useService, useStore, CommandServiceId, ARTIFACT_EVENT, ASK_CHAT_EVENT, CHAT_TOUCHED_EVENT, FOCUS_WORKSPACE_EVENT, MACHINERY_MARK, OPEN_PAGE_EVENT, WORKSPACE_COMMIT_EVENT, MACHINERY_NOTE, ONBOARDING_KICKOFF_MARK, ONBOARDING_REPLY_SEP } from "../platform";
@@ -11,8 +11,9 @@ import { LayoutServiceId, type ActiveTab } from "../workbench/layout";
 import { registerCommand, type TabProps } from "../contributions";
 import { meetingsOnly } from "../app/mode";
 import { AgentWindow, Conversation, opIcon, type Turn, type Op } from "../workbench/agent-window";
-import { Icon } from "../ui-kit";
-import { ReportTurn } from "./ReportThis";
+import { Chip, ChipRow, Fold, Icon, IconButton, Menu, mergeSources, readSources, type MenuItem } from "../ui-kit";
+import { Crosshair, Ellipsis, Mic, Paperclip, Plus, Send, Square } from "lucide-react";
+import { BundleImportCards, useBundleImports } from "./ChatBundleImport";
 import { invalidateDocLinkCaches } from "../ui-kit/docLinks";
 import { startStreamingDictation, type StreamingDictation } from "../ui-kit/micDictation";
 import { sessionTitle, type SessionSummary } from "./sessions";
@@ -23,16 +24,17 @@ import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, w
 import { useLiveMeetings } from "./liveMeetings";
 import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { presentError } from "./apiClient";
+import { ModelPicker } from "./ModelPicker";
 import { promptCarriesActiveContext } from "./surfaceSync";
 import { isPageIntent, type ChatIntent } from "./chatIntent";
-import { surfaceOf, type FrictionSurface } from "./frictionApi";
 import { actEnded, actNoted, actQueued, actSending, actSettled, actStarted, actStepped } from "./actState";
 import { actTarget, endJob, isJobIntent, jobLine, jobTarget, noteJob, promoteJob, queueJob, startJob, stepJob, type JobRec } from "./jobs";
 // THE CHAT'S INBOX (Vexa-ai/vexa#1610) — everything submitted is on the SERVER at once, and the
 // queued rows are read back from it rather than remembered here. See `surfaces/inbox.ts`.
-import { blockSubmission, claimInboxRow, fetchPending, flushOutbox, newSubmissionId, readOutbox, reconcileInbox, runnable, submitToInbox, SubmitRefused } from "./inbox";
+import { blockSubmission, claimInboxRow, fetchPending, flushOutbox, newSubmissionId, readOutbox, reconcileInbox, streamIdAfter, submitToInbox, SubmitRefused, turnsToWatch } from "./inbox";
 import { MINUTES_ONBOARDING_GREETING, MINUTES_PREP_GREETING } from "../canvas/actions";
 import { TERMS_EVENT } from "../canvas/transcriptTerms";
+import { ATTACHMENT_ACCEPT, AttachmentTray, FileDropZone, ImagePreview, pastedFiles, refusalFor, uploadAttachment, type ComposerAttachment, type UploadedWorkspaceFile } from "./attachments";
 
 /** classify a tool name into one of the op icons so the operation line reads at a glance */
 function toolOp(tool: string, args?: Record<string, unknown>): Op {
@@ -155,13 +157,6 @@ type ReferenceSegment = { kind: "text"; text: string } | { kind: "reference"; re
 type ActiveReference = ReferenceToken;
 const REFERENCE_RE = /@(file|meeting):([A-Za-z0-9._~%+@:/=-]+)/g;
 const MAX_TEXTAREA_HEIGHT = 156;
-const ATTACHMENT_ACCEPT = [
-  "image/*", ".pdf", ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".log",
-  ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip",
-].join(",");
-
-type ComposerAttachment = { id: string; file: File; isImage: boolean; previewUrl?: string };
-type UploadedWorkspaceFile = { name: string; path: string };
 
 /** Where a workspace keeps the pictures its pages reference (agent-api `shared/asset_source.py`). */
 const ASSETS_DIR = "assets";
@@ -215,14 +210,15 @@ function fileLabel(path: string): string {
   return path.split("/").filter(Boolean).pop()?.replace(/\.md$/, "") || path;
 }
 
+/** A reference written in the text (`@file:…`, a meeting): static, so a Tag with its type icon —
+ *  not a coloured pill (guidelines §4.5). The raw token is its tooltip. */
 function ReferenceChip({ refToken }: { refToken: ReferenceToken }) {
   const isFile = refToken.kind === "file";
   const label = isFile ? fileLabel(refToken.value) : refToken.value;
   return (
-    <span title={refToken.raw}
-      style={{ display: "inline-flex", alignItems: "center", gap: 5, maxWidth: 220, verticalAlign: "baseline", margin: "0 2px", padding: "1px 7px 1px 5px", borderRadius: 6, border: "1px solid var(--line2)", background: isFile ? "var(--bluebg)" : "var(--accentbg)", color: isFile ? "var(--blue)" : "var(--accent)", fontSize: "0.92em", lineHeight: 1.45, whiteSpace: "nowrap" }}>
-      <Icon name={isFile ? "file" : "cal"} size={11} />
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+    <span title={refToken.raw} className="vx-tag vx-ref" data-kind={isFile ? "file" : "meeting"}>
+      <Icon name={isFile ? "file" : "cal"} size={12} />
+      <span className="vx-ref-label">{label}</span>
     </span>
   );
 }
@@ -489,8 +485,8 @@ function canRetry(j: JobRec): boolean {
   return !!j.outbox || (j.kind === "message" && !!j.display);
 }
 
-function ChatConversation({ turns, busy, empty, surface, jobs = [], onContinue, onRetryRow }: {
-  turns: Turn[]; busy?: boolean; empty?: ReactNode; surface?: FrictionSurface; jobs?: JobRec[];
+function ChatConversation({ turns, busy, empty, jobs = [], onContinue, onRetryRow }: {
+  turns: Turn[]; busy?: boolean; empty?: ReactNode; jobs?: JobRec[];
   /** A STOPPED TURN'S CONTINUE PRESS (Vexa-ai/vexa#1622) — forwarded to the bubble that draws it. */
   onContinue?: (turn: Extract<Turn, { role: "agent" }>) => void;
   /** A BLOCKED ROW'S RETRY PRESS (P18) — forwarded to the row that draws it. */
@@ -501,13 +497,9 @@ function ChatConversation({ turns, busy, empty, surface, jobs = [], onContinue, 
     <>
       {turns.map((t, i) => t.role === "user"
         ? <div key={t.id} style={{ marginBottom: 16 }}><div style={userBubble}><ReferenceText text={t.text} /></div></div>
-        // "REPORT THIS" ON A TURN (PRD decision 33 §2). Only the AGENT's turns carry it: the person
-        // reporting their own sentence is not a rough edge, and an action on every bubble is twice
-        // the chrome for half the meaning. The surface travels with the report — chat, kind, the open
-        // page — so nobody is asked to describe where they were.
-        : <ReportTurn key={t.id} surface={{ ...(surface ?? {}), at: "turn", quote: t.text }}>
-            <Conversation turns={[t]} busy={!!busy && i === turns.length - 1} onContinue={onContinue} />
-          </ReportTurn>)}
+        // No report control on a turn (founder 2026-10-11: "remove - they report friction via
+        // chat"). A person says what did not work to the agent, which files it with `report_friction`.
+        : <Conversation key={t.id} turns={[t]} busy={!!busy && i === turns.length - 1} onContinue={onContinue} />)}
       <JobRows jobs={jobs} onRetry={onRetryRow} />
     </>
   );
@@ -517,29 +509,8 @@ function ComposerReferences({ text }: { text: string }) {
   const refs = referenceTokens(text);
   if (refs.length === 0) return null;
   return (
-    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 5, minWidth: 0 }}>
+    <div className="vx-refs">
       {refs.map((r) => <ReferenceChip key={`${r.kind}:${r.value}`} refToken={r} />)}
-    </div>
-  );
-}
-
-function AttachmentChips({ attachments, onRemove }: { attachments: ComposerAttachment[]; onRemove: (id: string) => void }) {
-  if (attachments.length === 0) return null;
-  return (
-    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6, minWidth: 0 }}>
-      {attachments.map((a) => (
-        <span key={a.id} title={a.file.name}
-          style={{ display: "inline-flex", alignItems: "center", gap: 6, maxWidth: 210, minWidth: 0, border: "1px solid var(--line2)", borderRadius: 7, background: "var(--panel2)", color: "var(--t2)", padding: "3px 5px", fontSize: 12, lineHeight: 1.2 }}>
-          {a.previewUrl
-            ? <img src={a.previewUrl} alt="" style={{ width: 24, height: 24, borderRadius: 4, objectFit: "cover", flex: "none", background: "var(--bg)" }} />
-            : <span style={{ width: 24, height: 24, borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center", flex: "none", background: "var(--bg)", color: "var(--t3)" }}><Icon name="file" size={13} /></span>}
-          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.file.name || "upload"}</span>
-          <button aria-label={`Remove ${a.file.name || "attachment"}`} title="Remove" type="button" onClick={() => onRemove(a.id)}
-            style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 1, flex: "none" }}>
-            <Icon name="x" size={12} />
-          </button>
-        </span>
-      ))}
     </div>
   );
 }
@@ -599,10 +570,12 @@ function activeReference(tab: ActiveTab | null): ActiveReference | null {
 }
 
 // ── chat MODE (design-spec meeting-lifecycle-v2, W3): the composer states its meeting phase ────────
-const MODE_CHIP: Record<MeetingPhase, { label: string; color: string; bg: string }> = {
-  prep: { label: "Preparing", color: "var(--accent)", bg: "var(--accentbg)" },
-  live: { label: "In meeting", color: "var(--green)", bg: "var(--greenbg)" },
-  post: { label: "Recap", color: "var(--violet)", bg: "var(--violetbg)" },
+// A phase is a coloured DOT beside its word (never colour alone): live is success, recap is the
+// meeting colour, preparing is neutral — accent is reserved for "this is the one / do this".
+const MODE_CHIP: Record<MeetingPhase, { label: string; tone: "neutral" | "success" | "meeting" }> = {
+  prep: { label: "Preparing", tone: "neutral" },
+  live: { label: "In meeting", tone: "success" },
+  post: { label: "Recap", tone: "meeting" },
 };
 const MODE_PLACEHOLDER: Record<MeetingPhase, string> = {
   prep: "Ask me to build the agenda, research attendees, or draft the brief…",
@@ -798,7 +771,11 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const [uploading, setUploading] = useState(false);
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  // The model picker's effort levels, offered in the "⋯" menu when the composer is narrow.
+  const [effortItems, setEffortItems] = useState<MenuItem[] | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // A meeting bundle handed to the chat is a call to import, not a file to attach (ChatBundleImport).
+  const bundleImports = useBundleImports();
   const scrollRef = useRef<HTMLDivElement>(null);
   // Follow the stream ONLY while the reader is at the bottom — "chat should not fight with me when
   // it's outputting text and i scroll up to scroll chat history" (founder, Vexa-ai/vexa#1599).
@@ -819,11 +796,14 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   // The transcript is measured AFTER the commit that grew it, which the stream callback below
   // cannot do — a chunk's text is not in the DOM yet when it fires. Keyed on the content itself
   // (every chunk rebuilds `turns`) so that typing in the composer costs no layout read.
-  useEffect(() => { stick.onContent(); }, [stick, turns, chatState.jobs, busy, loading]);
+  useEffect(() => { stick.onContent(); }, [stick, turns, chatState.jobs, busy, loading, bundleImports.cards]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachmentSeqRef = useRef(0);
   const attachmentsRef = useRef<ComposerAttachment[]>([]);
+  const uploadAbortRef = useRef(new Map<string, AbortController>());
+  const uploadPromiseRef = useRef(new Map<string, Promise<UploadedWorkspaceFile | null>>());
+  const [preview, setPreview] = useState<ComposerAttachment | null>(null);
   // ── mic dictation — STREAMING, meeting-pipeline style (sliding window + LocalAgreement
   //    via ui-kit/micDictation): confirmed + pending text land in the composer LIVE while
   //    speaking; stop flushes the final window. STT is proxied via /api/stt.
@@ -878,6 +858,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     for (const a of attachmentsRef.current) {
       if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
     }
+    for (const c of uploadAbortRef.current.values()) c.abort();
   }, []);
 
   // Load history into an idle, empty session snapshot. Live turns stay in the per-session store so switching
@@ -951,24 +932,69 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     })();
   }, [chatKey, session, subject]);
 
+  /** One upload per file, started the moment the file is offered — so the tray shows each file's
+   *  own progress, and a send only waits for whatever is still in flight. The promise resolves to
+   *  the stored file, or null when the upload failed or the file was removed. */
+  const startUpload = (a: ComposerAttachment) => {
+    const ctl = new AbortController();
+    uploadAbortRef.current.set(a.id, ctl);
+    const patch = (fields: Partial<ComposerAttachment>) =>
+      setAttachments((current) => current.map((x) => (x.id === a.id ? { ...x, ...fields } : x)));
+    const p = uploadAttachment(a.file, (progress) => patch({ progress }), ctl.signal)
+      .then((uploaded) => { patch({ status: "done", progress: 1, uploaded, error: undefined }); return uploaded; })
+      .catch((e: unknown) => {
+        if (ctl.signal.aborted) return null;
+        patch({ status: "error", error: (e as Error)?.message || "Upload failed" });
+        return null;
+      })
+      .finally(() => { if (uploadAbortRef.current.get(a.id) === ctl) uploadAbortRef.current.delete(a.id); });
+    uploadPromiseRef.current.set(a.id, p);
+  };
+
+  // EVERY FILE THE CHAT IS HANDED comes through here — dropped, pasted or picked. Meeting bundles
+  // leave for the import route first (their outcome is a card in the conversation); what is left is
+  // attached exactly as before.
   const addFiles = (files: File[]) => {
     if (files.length === 0) return;
+    const { now, check } = bundleImports.split(files);
+    attachFiles(now);
+    if (check.length > 0) void bundleImports.route(check).then(attachFiles);
+  };
+
+  const attachFiles = (files: File[]) => {
+    if (files.length === 0) return;
     setUploadError(null);
-    setAttachments((current) => [
-      ...current,
-      ...files.map((file) => {
-        const isImage = file.type.startsWith("image/");
-        return {
-          id: `att-${attachmentSeqRef.current++}`,
-          file,
-          isImage,
-          previewUrl: isImage ? URL.createObjectURL(file) : undefined,
-        };
-      }),
-    ]);
+    const added = files.map((file): ComposerAttachment => {
+      const isImage = file.type.startsWith("image/");
+      const refusal = refusalFor(file);
+      return {
+        id: `att-${attachmentSeqRef.current++}`,
+        file,
+        isImage,
+        previewUrl: isImage && !refusal ? URL.createObjectURL(file) : undefined,
+        status: refusal ? "refused" : "uploading",
+        progress: 0,
+        error: refusal ?? undefined,
+      };
+    });
+    setAttachments((current) => [...current, ...added]);
+    for (const a of added) if (a.status === "uploading") startUpload(a);
+  };
+
+  const retryAttachment = (id: string) => {
+    const a = attachmentsRef.current.find((x) => x.id === id);
+    if (!a || a.status !== "error") return;
+    setUploadError(null);
+    const again = { ...a, status: "uploading" as const, progress: 0, error: undefined };
+    setAttachments((current) => current.map((x) => (x.id === id ? again : x)));
+    startUpload(again);
   };
 
   const removeAttachment = (id: string) => {
+    uploadAbortRef.current.get(id)?.abort();
+    uploadAbortRef.current.delete(id);
+    uploadPromiseRef.current.delete(id);
+    setPreview((p) => (p?.id === id ? null : p));
     setAttachments((current) => current.filter((a) => {
       if (a.id !== id) return true;
       if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
@@ -977,6 +1003,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   };
 
   const clearAttachments = () => {
+    uploadPromiseRef.current.clear();
     setAttachments((current) => {
       for (const a of current) {
         if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
@@ -985,22 +1012,19 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     });
   };
 
-  const uploadAttachments = async (): Promise<UploadedWorkspaceFile[]> => {
-    const form = new FormData();
-    for (const a of attachments) form.append("files", a.file, a.file.name || "upload");
-    const r = await fetch("/api/workspace/upload", { method: "POST", body: form });
-    if (!r.ok) {
-      let detail = `Upload failed (${r.status})`;
-      try {
-        const data = await r.json() as { detail?: string };
-        if (data.detail) detail = data.detail;
-      } catch {
-        // keep the status-derived message
-      }
-      throw new Error(detail);
-    }
-    const data = await r.json() as { files?: UploadedWorkspaceFile[] };
-    return data.files ?? [];
+  /** Everything in the tray, uploaded — or the reason the send cannot go yet. */
+  const awaitAttachments = async (pending: ComposerAttachment[]): Promise<UploadedWorkspaceFile[] | string> => {
+    const refused = pending.filter((a) => a.status === "refused");
+    if (refused.length) return `Remove ${refused.map((a) => a.file.name || "the refused file").join(", ")} to send — it can't be attached.`;
+    const results = await Promise.all(pending.map((a) => a.uploaded
+      ? Promise.resolve(a.uploaded)
+      : (uploadPromiseRef.current.get(a.id) ?? Promise.resolve(null))));
+    // a file removed while the send waited is simply not sent — the person took it out
+    const still = new Set(attachmentsRef.current.map((a) => a.id));
+    const kept = pending.map((a, i) => ({ a, r: results[i] })).filter(({ a }) => still.has(a.id));
+    const missing = kept.filter(({ r }) => !r).map(({ a }) => a);
+    if (missing.length) return `${missing.map((a) => a.file.name || "A file").join(", ")} didn't upload — retry or remove it to send.`;
+    return kept.map(({ r }) => r as UploadedWorkspaceFile);
   };
 
   // ── WHAT A TURN CARRIES, COMPOSED ONCE ──────────────────────────────────────────────────────
@@ -1092,7 +1116,12 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     // saying it is the same defect as one that says nothing, a minute later.
     if (opts.intent && isJobIntent(opts.intent)) actSending(actTarget(opts.intent));
     const n = state.nextId;
-    const agentId = `a-${n}`;
+    // `let`: THE BUBBLE THE STREAM IS WRITING INTO MOVES when this view carries a second turn — the
+    // answer to something the person submitted while this one was running (`onTurn` below). Every
+    // patch reads it at call time, so routing is this one assignment.
+    let agentId = `a-${n}`;
+    const bubbles = new Map<string, string>();   // worker turn id → the agent bubble that renders it
+    const mySeq = ++sendSeqRef.current;
     const displayText = advertiseFocus ? appendReferenceToken(v, contextRef) : v.trim();
     const ctrl = new AbortController();
     // AN ATTACH DRAWS NO USER BUBBLE for the same reason a hidden turn does not: the person's own
@@ -1132,6 +1161,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     // this send stops touching it: clearing `busy` in its own `finally` would clear a later turn's.
     let ownsBusy = true;
     const startedJobs = new Set<string>();
+    openViewsRef.current += 1;
     try {
       const result = await streamChatTurn(
         // `scaffold_id` on the FIRST turn: dispatch reads the same record the panel rendered from.
@@ -1145,6 +1175,31 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // the queued rows are re-read: the row for the message now answering stops saying it is
           // waiting at the moment it stops waiting, rather than when the answer finishes.
           onAccepted: () => { void refreshPending(); },
+          // ONE VIEW, MORE THAN ONE TURN (the founder, 2026-10-10: *"sometimes chat does not answer
+          // if asked while it's not yet answered"*). A message submitted while this turn ran is
+          // taken by the worker while this turn is still writing its trailing steps, so its answer
+          // streams HERE. It gets its own bubble, below the person's message — never folded into
+          // the bubble above it, where it read as no answer at all. Only while this is the chat's
+          // newest view: a turn sent from the composer after this one has its own connection, and
+          // rendering it twice would be the opposite failure.
+          onTurn: (turnId, isNew) => {
+            const known = bubbles.get(turnId);
+            if (known) { agentId = known; return true; }
+            if (!isNew) { bubbles.set(turnId, agentId); return true; }
+            if (sendSeqRef.current !== mySeq) return false;
+            const prev = agentId;
+            patchAgentTurn(key, prev, (t) => ({ ...t, status: null }));
+            const next = `a-${getChatState(key).nextId}`;
+            updateChatState(key, (s) => ({
+              ...s,
+              turns: [...s.turns, { id: next, role: "agent" as const, text: "", ops: [] }],
+              nextId: s.nextId + 1,
+            }));
+            bubbles.set(turnId, next);
+            agentId = next;
+            breakBeforeNextDelta = false;
+            return true;
+          },
           onDelta: (text) => patchAgentTurn(key, agentId, (t) => {
             const joined = joinInterim(t.text ?? "", text, breakBeforeNextDelta);
             breakBeforeNextDelta = false;
@@ -1304,6 +1359,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           // it saw; the server counted the turn.
           onSteps: (steps) => patchAgentTurn(key, agentId, (t) => ({ ...t, steps })),
           onCompacted: (compacted) => patchAgentTurn(key, agentId, (t) => ({ ...t, compacted })),
+          // agent-api sends one fetched page per frame; a turn's sources are their union by URL
+          onSources: (items) => { const fresh = readSources(items); if (fresh.length) patchAgentTurn(key, agentId, (t) => ({ ...t, sources: mergeSources(t.sources ?? [], fresh) })); },
           onError: (msg) => patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(new Error(msg)).headline })),
           onProgress: () => stick.onContent(),
         },
@@ -1312,7 +1369,9 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       // WHERE THIS CHAT HAS READ TO (Vexa-ai/vexa#1610) — what the NEXT queued item attaches from,
       // so watching a queue costs no gap and replays nothing. Remembered even on a failed turn: the
       // cursor is a position on the Stream, not a verdict about the turn.
-      if (result.cursor) cursorRef.current = result.cursor;
+      // Only ever FORWARD: a job's view can end after a later turn's view did, and moving the cursor
+      // back would make the catch-up attach to a turn that was already watched.
+      if (result.cursor && streamIdAfter(result.cursor, cursorRef.current)) cursorRef.current = result.cursor;
       if (!result.aborted && !result.terminal && startedJobs.size === 0) {
         // The turn never reached a clean end even after resuming past the hard cap — the connection is
         // genuinely lost. Say so (fail-loud, P18): append a note if there was partial output, else the
@@ -1331,9 +1390,12 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       if ((e as Error)?.name === "AbortError") patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + "_stopped_" }));
       else patchAgentTurn(key, agentId, (t) => ({ ...t, status: null, text: (t.text ?? "") + (t.text ? "\n\n" : "") + presentError(e).headline }));
     } finally {
+      openViewsRef.current -= 1;
       // whatever happened — abort, error, timeout — no step is left spinning. A spinner that
-      // outlives its turn is the same lie as a tick that precedes it.
-      patchAgentTurn(key, agentId, (t) => ({ ...t, ops: settleOps(t.ops) }));
+      // outlives its turn is the same lie as a tick that precedes it. Every bubble this view wrote.
+      for (const id of new Set([agentId, ...bubbles.values()])) {
+        patchAgentTurn(key, id, (t) => ({ ...t, status: null, ops: settleOps(t.ops) }));
+      }
       if (ownsBusy) updateChatState(key, (s) => ({ ...s, busy: false, abort: null }));
       // A JOB CHIP MUST NOT OUTLIVE ITS CONNECTION, for the same reason a spinner must not outlive
       // its turn. `onJobEnd` removes each one as it lands, so anything still in this set means the
@@ -1369,14 +1431,23 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   //  …and `catchingUp` is the one-at-a-time latch on the catch-up below. Without it a fast
   //  busy→idle→busy flicker can run two flushes over one outbox, and both would send it.
   const catchingUp = useRef(false);
+  //  `openViewsRef` counts this chat's open connections (a job keeps its turn's open after `busy`
+  //  is handed back), `sendSeqRef` numbers the sends so a view knows whether it is still the newest
+  //  (`onTurn`), and `caughtUp` re-runs the catch-up once a mid-turn submission has been ACKED — the
+  //  turn in front may have ended while the POST was in flight, and then nothing else would.
+  const openViewsRef = useRef(0);
+  const inFlightRef = useRef(new Set<string>());
+  const rerunCatchUp = useRef(false);
+  const sendSeqRef = useRef(0);
+  const [catchUpTick, setCatchUpTick] = useState(0);
   useEffect(() => { cursorRef.current = ""; attachedRef.current = ""; }, [session]);
 
   /** Read the server's pending list back and make the queued rows agree with it. The rows this
    *  chat DREW optimistically are replaced by the ones the server holds — same ids, so nothing
    *  flickers — and a row whose work has been taken disappears because the server stopped listing
    *  it, not because this browser decided it had. */
-  const refreshPending = async () => {
-    const view = await fetchPending(session);
+  const refreshPending = async (after = "") => {
+    const view = await fetchPending(session, fetch, after);
     updateChatState(chatKey, (s) => ({ ...s, jobs: reconcileInbox(s.jobs, view.pending) }));
     return view;
   };
@@ -1388,12 +1459,18 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const submitToServer = async (id: string, prompt: string, referenceSource: string, o: SendOpts) => {
     const { wire } = composePrompt(prompt, referenceSource, o);
     const { active, context } = wireContext(o.ground ?? true);
+    // IN FLIGHT, NOT UNSENT: the outbox holds this copy until the ack, and a catch-up that ran in
+    // between must not send it a second time (the worker may already be answering the first).
+    inFlightRef.current.add(id);
     try {
       const view = await submitToInbox({
         id, session, prompt: wire, active, context, scaffoldId: o.scaffoldId, intent: o.intent,
         display: referenceSource,
       });
       updateChatState(chatKey, (s) => ({ ...s, jobs: reconcileInbox(s.jobs, view.pending) }));
+      // ON THE SERVER NOW — look again. The turn in front may have ended while this POST was in
+      // flight, and the catch-up that ran then could not have seen it.
+      setCatchUpTick((n) => n + 1);
     } catch (e) {
       // Left in the outbox on purpose — `flushOutbox` re-sends it the moment the chat is idle, and
       // again on the next load. Saying nothing is right for a NETWORK gap: the message is not lost,
@@ -1407,6 +1484,8 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         updateChatState(chatKey, (s) => ({ ...s, jobs: blockSubmission(s.jobs,
           { id, kind: o.intent?.kind, display: referenceSource }, fault) }));
       }
+    } finally {
+      inFlightRef.current.delete(id);
     }
   };
 
@@ -1589,24 +1668,37 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   //  comes up, reads the queue it never held, and watches it. One effect rather than a second one
   //  beside it, because two would both flush the outbox and could send one message twice.
   useEffect(() => {
-    if (busy || catchingUp.current) return;
+    if (busy) return;
+    // ONE AT A TIME, BUT NEVER A DROPPED ASK: a trigger that arrives while a catch-up is running
+    // (the ack of a submission that was in flight) runs once more when that one finishes.
+    if (catchingUp.current) { rerunCatchUp.current = true; return; }
     let cancelled = false;
     catchingUp.current = true;
     void (async () => {
       try {
         const sent = await flushOutbox(session, fetch, (sub, fault) =>
           updateChatState(chatKey, (s) => ({ ...s, jobs: blockSubmission(s.jobs,
-            { id: sub.id, kind: sub.intent?.kind, display: sub.display ?? sub.prompt }, fault) })));
+            { id: sub.id, kind: sub.intent?.kind, display: sub.display ?? sub.prompt }, fault) })),
+          (id) => inFlightRef.current.has(id));
         if (sent.length) {
           updateChatState(chatKey, (s) => ({ ...s, jobs: s.jobs.filter((j) => !(j.outbox && sent.includes(j.id))) }));
         }
-        const view = await refreshPending();
+        // A VIEW STILL OPEN (a job's) is still reading the Stream, so "started after my cursor" is
+        // not a question this moment can ask — the cursor is that view's, and it is not done.
+        const watching = openViewsRef.current > 0;
+        const view = await refreshPending(watching ? "" : cursorRef.current);
         // NOTHING BLOCKED IS WATCHED (P18). A row the runtime refused has no worker coming for it,
         // so attaching would wait out the whole timeout and then say the agent did not respond —
         // the second half of the lie. Only a row that can run is worth a view.
-        const next = runnable(view.pending);
-        if (cancelled || !next.length) return;
-        const head = next[0].entry;
+        //
+        // …AND NOTHING TAKEN IS LEFT UNWATCHED (the founder, 2026-10-10: *"sometimes chat does not
+        // answer if asked while it's not yet answered"*). A message submitted mid-turn is taken by
+        // the worker the instant the turn in front ends; a chat that only watched PENDING rows
+        // found nothing here and the answer streamed to nobody. `taken` says a turn started after
+        // the last event this chat read, and that is worth a view exactly as a queued row is.
+        const want = turnsToWatch(view, watching ? "" : cursorRef.current);
+        if (cancelled || !want || getChatState(chatKey).busy) return;
+        const head = want.head;
         if (attachedRef.current === head) return;
         attachedRef.current = head;
         // The cursor of the stream that just ended is EXACT — the next events after it are the
@@ -1615,11 +1707,12 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         void send("", "", "", { attachFrom: cursorRef.current || view.cursor || "0-0" });
       } finally {
         catchingUp.current = false;
+        if (rerunCatchUp.current) { rerunCatchUp.current = false; setCatchUpTick((n) => n + 1); }
       }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busy, session]);
+  }, [busy, session, catchUpTick]);
 
   const onSubmit = async () => {
     const v = value.trim();
@@ -1657,15 +1750,10 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
     if (hasAttachments) {
       setUploading(true);
       setUploadError(null);
-      let uploaded: UploadedWorkspaceFile[];
-      try {
-        uploaded = await uploadAttachments();
-      } catch (e) {
-        setUploadError((e as Error)?.message || "Upload failed");
-        setUploading(false);
-        return;
-      }
+      const settled = await awaitAttachments(attachments);
       setUploading(false);
+      if (typeof settled === "string") { setUploadError(settled); return; }
+      const uploaded = settled;
       prompt = attachmentPrompt(prompt, uploaded);
       referenceSource = [v, uploaded.map((f) => `@file:${f.path}`).join("\n")].filter(Boolean).join("\n");
       displayText = displayText || `Attached files: ${uploaded.map((f) => f.name).join(", ")}`;
@@ -1685,18 +1773,11 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   };
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = Array.from(e.clipboardData.items)
-      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => !!file);
+    // a screenshot, or files copied in the file manager — attached, not pasted as text
+    const files = pastedFiles(e.clipboardData);
     if (files.length === 0) return;
     e.preventDefault();
     addFiles(files);
-  };
-
-  const onDrop = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    addFiles(Array.from(e.dataTransfer.files));
   };
 
   const slash = value.startsWith("/");
@@ -1722,65 +1803,48 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         </div>
       )}
       <div
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={onDrop}
-        style={{ border: "1px solid var(--line2)", borderRadius: 12, background: "var(--panel)", padding: "9px 12px", display: "flex", flexDirection: "column", gap: 7 }}
+        style={{ border: "1px solid var(--line2)", borderRadius: 14, background: "var(--panel)", padding: "10px 10px 6px 12px", display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}
       >
         {((advertiseFocus && contextRef) || (!minutesOnly() && (ambientEligible || includeSchedule === true)) || (bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today"))) && (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
+          <div data-composer-context>
+          {/* ONE LINE OF CONTEXT CHIPS (guidelines §3.3): a "+N" chip says how many are out of
+              view and opens the row; nothing is silently clipped. Chips are interactive (each
+              removes or re-adds a piece of context), so they wear the Chip shape — no dashed
+              borders, no uppercase "FOCUS" label: the crosshair icon says it. */}
+          <ChipRow label="context chips">
             {/* ambient schedule chip — the context bundle's always-visible half: on = the agent
                 sees today's schedule; × turns it off; ghost chip re-adds. HIDDEN in minutes mode
                 for now (founder 2026-08-22) — the context still flows, the chip just doesn't. */}
             {minutesOnly() ? null : ambientOn ? (
-              <span title="The agent sees your schedule (today, upcoming, live) on this surface"
-                style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--t2)", background: "var(--panel2)", border: "1px solid var(--line)", borderRadius: 999, padding: "2px 4px 2px 9px" }}>
-                <Icon name="cal" size={10} /> Schedule · today
-                <button aria-label="Remove schedule context" title="Remove schedule context for this session" onClick={() => setAmbient(false)}
-                  style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 2 }}><Icon name="x" size={10} /></button>
-              </span>
+              <Chip icon={<Icon name="cal" size={14} />} title="The agent sees your schedule (today, upcoming, live) on this surface"
+                onRemove={() => setAmbient(false)} removeLabel="Remove schedule context">Schedule · today</Chip>
             ) : ambientEligible ? (
-              <button onClick={() => setAmbient(null)} title="Include your schedule in the agent's context"
-                style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--t3)", background: "transparent", border: "1px dashed var(--line2)", borderRadius: 999, padding: "2px 9px", cursor: "pointer" }}>
-                + schedule
-              </button>
+              <Chip ghost icon={<Plus size={14} strokeWidth={1.75} />} title="Include your schedule in the agent's context" onClick={() => setAmbient(null)}>Schedule</Chip>
             ) : null}
             {/* B4 carve: the meeting focus is ONE chip — `Preparing · Title ×` — never a mono
                 uppercase label plus a second raw-id Focus chip for the same meeting. */}
             {advertiseFocus && contextRef && contextRef.kind === "meeting" && activeMeeting ? (() => {
               const mode = MODE_CHIP[meetingPhase(activeMeeting)];
               return (
-                <span title={`This chat is grounded in the meeting's ${mode.label.toLowerCase()} state`}
-                  style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5,
-                    fontWeight: 600, color: mode.color, background: mode.bg, borderRadius: 999,
-                    padding: "2px 5px 2px 10px", maxWidth: 260, minWidth: 0 }}>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
-                    {mode.label} · {meetingLabel(activeMeeting)}
-                  </span>
-                  <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)}
-                    style={{ background: "none", border: "none", color: mode.color, opacity: 0.7, cursor: "pointer", display: "flex", padding: 2, flex: "none" }}><Icon name="x" size={10} /></button>
-                </span>
+                <Chip icon={<span className="vx-dot" data-tone={mode.tone} />} title={`This chat is grounded in the meeting's ${mode.label.toLowerCase()} state`}
+                  onRemove={() => setFocusCleared(true)} removeLabel="Clear focus">{mode.label} · {meetingLabel(activeMeeting)}</Chip>
               );
             })() : advertiseFocus && contextRef ? (
-              <>
-                <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
-                <ReferenceChip refToken={contextRef} />
-                <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 0, marginLeft: 2, flex: "none" }}><Icon name="x" size={12} /></button>
-              </>
+              <Chip icon={<Crosshair size={14} strokeWidth={1.75} aria-label="Focus" />} title={`Focus: ${contextRef.raw}`}
+                onRemove={() => setFocusCleared(true)} removeLabel="Clear focus">{contextRef.kind === "file" ? fileLabel(contextRef.value) : contextRef.value}</Chip>
             ) : null}
             {(!advertiseFocus || !contextRef) && bundleFocus && (bundleFocus.kind === "workspace" || bundleFocus.kind === "today") && (
-              <>
-                <span style={{ color: "var(--t3)", fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", flex: "none" }}>Focus</span>
-                <span style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: bundleFocus.kind === "workspace" ? "var(--blue)" : "var(--t2)", background: bundleFocus.kind === "workspace" ? "var(--bluebg)" : "var(--panel2)", border: "1px solid var(--line)", borderRadius: 6, padding: "1px 7px" }}>
-                  <Icon name={bundleFocus.kind === "workspace" ? "panel" : "cal"} size={10} />
-                  {bundleFocus.kind === "workspace" ? `Workspace · ${bundleFocus.slug}` : "Today"}
-                </span>
-                <button aria-label="Clear focus" title="Clear focus" onClick={() => setFocusCleared(true)} style={{ background: "none", border: "none", color: "var(--t3)", cursor: "pointer", display: "flex", padding: 0, marginLeft: 2, flex: "none" }}><Icon name="x" size={12} /></button>
-              </>
+              <Chip icon={bundleFocus.kind === "workspace" ? <Crosshair size={14} strokeWidth={1.75} aria-label="Focus" /> : <Icon name="cal" size={14} />}
+                onRemove={() => setFocusCleared(true)} removeLabel="Clear focus">
+                {bundleFocus.kind === "workspace" ? `Workspace · ${bundleFocus.slug}` : "Today"}
+              </Chip>
             )}
+          </ChipRow>
           </div>
         )}
         <ComposerReferences text={value} />
-        <AttachmentChips attachments={attachments} onRemove={removeAttachment} />
+        <AttachmentTray attachments={attachments} onRemove={removeAttachment} onRetry={retryAttachment}
+          onPreview={(a) => setPreview(a)} onExit={() => inputRef.current?.focus()} />
         {uploadError && <div style={{ color: "var(--danger)", fontSize: 12, lineHeight: 1.35 }}>{uploadError}</div>}
         {micError && <div style={{ color: "var(--danger)", fontSize: 12, lineHeight: 1.35 }}>{micError}</div>}
         <input
@@ -1791,55 +1855,66 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           onChange={(e) => { addFiles(Array.from(e.target.files ?? [])); e.currentTarget.value = ""; }}
           style={{ display: "none" }}
         />
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 9 }}>
-          <span style={{ fontFamily: "var(--mono)", color: "var(--t3)", fontSize: 13, height: 30, display: "flex", alignItems: "center", flex: "none" }}>/</span>
-          <textarea
-            ref={inputRef}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            onInput={(e) => resizeComposerTextarea(e.currentTarget)}
-            onPaste={onPaste}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter" || e.shiftKey) return;
-              e.preventDefault();
-              void onSubmit();
-            }}
-            placeholder={contextRef?.kind === "meeting" && activeMeeting
-              ? MODE_PLACEHOLDER[meetingPhase(activeMeeting)]
-              : "Type / for skills, or ask the agent…"}
-            disabled={uploading}
-            rows={1}
-            style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, lineHeight: "20px", minWidth: 0, minHeight: 28, maxHeight: MAX_TEXTAREA_HEIGHT, resize: "none", overflowY: "hidden", padding: "4px 0", margin: 0, fontFamily: "inherit" }}
-          />
-          <button type="button" aria-label="Attach files" title="Attach files" disabled={busy || uploading} onClick={() => fileInputRef.current?.click()}
-            style={{ background: "transparent", color: "var(--t3)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: busy || uploading ? "default" : "pointer", flex: "none", opacity: busy || uploading ? 0.6 : 1 }}>
-            <Icon name="paperclip" size={15} />
-          </button>
-          <button type="button"
-            aria-label={mic === "rec" ? "Stop recording" : "Dictate"}
-            title={mic === "rec" ? "Stop recording (transcribes into the composer)" : mic === "stt" ? "Transcribing…" : "Dictate"}
-            disabled={uploading || mic === "stt"}
-            onClick={() => void toggleMic()}
-            style={{
-              background: mic === "rec" ? "var(--accentbg)" : "transparent",
-              color: mic === "rec" ? "var(--accent)" : "var(--t3)",
-              border: `1px solid ${mic === "rec" ? "var(--accent)" : "var(--line2)"}`,
-              width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
-              cursor: uploading || mic === "stt" ? "default" : "pointer", flex: "none", opacity: mic === "stt" ? 0.6 : 1,
-            }}>
-            {mic === "stt"
-              ? <span className="vx-op-spin" style={{ width: 12, height: 12, border: "2px solid var(--line2)", borderTopColor: "var(--t2)", borderRadius: "50%", display: "block" }} />
-              : <Icon name="mic" size={15} />}
-          </button>
-          {busy
-            ? <button aria-label="Stop" title="Stop" onClick={stop} style={{ background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flex: "none" }}><span style={{ width: 10, height: 10, background: "var(--t1)", borderRadius: 2, display: "block" }} /></button>
-            : <button aria-label="Send" disabled={uploading} onClick={() => void onSubmit()} style={{ background: "var(--accent)", color: "var(--on-accent)", border: "none", width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", cursor: uploading ? "default" : "pointer", flex: "none", opacity: uploading ? 0.7 : 1 }}><Icon name="send" size={16} /></button>}
+        {/* THE CLAUDE CODE COMPOSER (founder 2026-10-10): the text on top at full width, growing
+            with what is typed; under it one toolbar — attach and dictate as quiet icons on the
+            left, the chat's model and effort as plain text and send on the right. THE TOOLBAR NEVER
+            WRAPS (guidelines §3.3): it answers to the composer's own width — below 560px the
+            effort shows as an icon, below 400px attach and dictate move into a "⋯" menu — and the
+            model and send controls are always visible. */}
+        <textarea
+          data-ring-host
+          ref={inputRef}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onInput={(e) => resizeComposerTextarea(e.currentTarget)}
+          onPaste={onPaste}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || e.shiftKey) return;
+            e.preventDefault();
+            void onSubmit();
+          }}
+          placeholder={contextRef?.kind === "meeting" && activeMeeting
+            ? MODE_PLACEHOLDER[meetingPhase(activeMeeting)]
+            : "Type / for skills, or ask the agent…"}
+          disabled={uploading}
+          rows={2}
+          style={{ width: "100%", boxSizing: "border-box", background: "none", border: "none", outline: "none", color: "var(--t1)", fontSize: 14, lineHeight: "20px", minWidth: 0, minHeight: 44, maxHeight: MAX_TEXTAREA_HEIGHT, resize: "none", overflowY: "hidden", padding: "2px 2px", margin: 0, fontFamily: "inherit" }}
+        />
+        <div data-composer-toolbar className="vx-container" style={{ display: "flex", alignItems: "center", flexWrap: "nowrap", gap: 4, minWidth: 0 }}>
+          <Fold at={400} wide={<>
+            <IconButton label="Attach files" disabled={busy || uploading} onClick={() => fileInputRef.current?.click()}>
+              <Paperclip size={16} strokeWidth={1.75} />
+            </IconButton>
+            <IconButton label={mic === "rec" ? "Stop recording" : mic === "stt" ? "Transcribing…" : "Dictate"}
+              pressed={mic === "rec"} loading={mic === "stt"} disabled={uploading || mic === "stt"} onClick={() => void toggleMic()}>
+              <Mic size={16} strokeWidth={1.75} />
+            </IconButton>
+          </>} narrow={
+            <Menu label="More composer actions" placement="top" triggerData={{ "data-composer-more": "" }}
+              trigger={<Ellipsis size={16} strokeWidth={1.75} aria-hidden />}
+              items={[
+                { key: "attach", label: "Attach files", icon: <Paperclip size={14} strokeWidth={1.75} />, disabled: busy || uploading, onSelect: () => fileInputRef.current?.click() },
+                { key: "mic", label: mic === "rec" ? "Stop recording" : mic === "stt" ? "Transcribing…" : "Dictate", icon: <Mic size={14} strokeWidth={1.75} />, disabled: uploading || mic === "stt", onSelect: () => void toggleMic() },
+                // below 400px the effort control leaves the toolbar and its levels live here
+                ...(effortItems ?? []),
+              ]} />
+          } />
+          <div style={{ flex: "1 1 auto", minWidth: 0, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
+            {/* THE MODEL THIS CHAT RUNS ON, AND ITS EFFORT (ADR-0043) — beside send, because the next
+                turn is when a pick takes effect. Absent on a deployment with no catalog. */}
+            <ModelPicker session={session} onEffortItems={setEffortItems} />
+            {busy
+              ? <IconButton label="Stop" variant="secondary" onClick={stop}><Square size={12} strokeWidth={2.5} fill="currentColor" /></IconButton>
+              : <IconButton label="Send" variant="primary" disabled={uploading} onClick={() => void onSubmit()}><Send size={16} strokeWidth={1.75} /></IconButton>}
+          </div>
         </div>
       </div>
     </>
   );
 
   return (
+    <FileDropZone onFiles={addFiles}>
+    {preview?.previewUrl && <ImagePreview attachment={preview} onClose={() => setPreview(null)} />}
     <AgentWindow top={<ChatHeader subject={subject} session={session} onSelectSession={selectSession} onNewChat={newChat} onClose={() => layout.toggleRight()} />} scrollRef={scrollRef} composer={composer}>
       {/* THE EMPTY STATE. The centered "What organisation are you? / Just the name is enough — I'll
           research the rest…" card that used to sit here is DELETED (F37): it was the pre-scaffold
@@ -1848,7 +1923,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           it in a chat he never made — *"I explain this as stale code."*
           What is left renders the meeting greeting when there IS a meeting, and otherwise renders
           nothing but whatever the host put in `emptyExtra`. */}
-      <ChatConversation turns={turns} busy={busy || loading} jobs={chatState.jobs} surface={surfaceOf(session, activeTab)} onContinue={continueTurn} onRetryRow={(j) => { void retryRow(j); }} empty={
+      <ChatConversation turns={turns} busy={busy || loading} jobs={chatState.jobs} onContinue={continueTurn} onRetryRow={(j) => { void retryRow(j); }} empty={
         <div style={{ color: minutesOnly() ? "var(--t2)" : "var(--t3)", fontSize: 13, textAlign: minutesOnly() ? "left" : "center", lineHeight: 1.6, maxWidth: 560, margin: minutesOnly() ? "26px auto 0" : "40px 0 0", padding: minutesOnly() ? "0 22px" : 0 }}>
             {loading ? "Loading conversation…" : (minutesOnly()
               ? minutesEmptyGreeting(session)
@@ -1857,6 +1932,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
                 an arriving conversation is worse than one that arrives a beat late. */}
             {!loading && emptyExtra}
           </div>} />
+      <BundleImportCards cards={bundleImports.cards} onDismiss={bundleImports.dismiss} />
       {/* JUMP TO LATEST — the only way back to following that costs the reader nothing. Sticky to
           the bottom of the scroller and zero-height, so it adds no scroll height of its own and the
           window shell (owned by parallel work) is untouched. */}
@@ -1869,6 +1945,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
         </div>
       )}
     </AgentWindow>
+    </FileDropZone>
   );
 }
 

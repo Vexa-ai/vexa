@@ -70,6 +70,14 @@ FLOWS_OPENAPI = {"paths": {
         "get": {"summary": "Your own filed reports, newest first", "parameters": [
             {"name": "since", "in": "query", "schema": {"type": "string"}},
             {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
+    # The admin account's two reads (founder ruling 2026-10-11), operator-gated on flows-api.
+    "/friction/all": {"get": {"summary": "Every friction report on this deployment", "parameters": [
+        {"name": "since", "in": "query", "schema": {"type": "string"}},
+        {"name": "kind", "in": "query", "schema": {"type": "string"}},
+        {"name": "person", "in": "query", "schema": {"type": "string"}},
+        {"name": "status", "in": "query", "schema": {"type": "string"}},
+        {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
+    "/mail/settings": {"get": {"summary": "This deployment's mail, as it stands", "parameters": []}},
     "/flows/{name}/{version}/{action}": {
         "post": {"summary": "activate | retire one flow version", "parameters": []}},
 }}

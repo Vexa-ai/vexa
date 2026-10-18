@@ -14,7 +14,8 @@
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
-  claimInboxRow, fetchPending, flushOutbox, inboxRows, readOutbox, reconcileInbox, submitToInbox,
+  claimInboxRow, fetchPending, flushOutbox, inboxRows, readOutbox, reconcileInbox, streamIdAfter, submitToInbox,
+  turnsToWatch,
   type InboxItem,
 } from "../inbox";
 import { QUEUED_LINE, jobLine, type JobRec } from "../jobs";
@@ -133,5 +134,40 @@ describe("reading the pending list", () => {
     expect(await fetchPending("main", dead)).toEqual({ pending: [], cursor: "" });
     const refused = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })) as unknown as typeof fetch;
     expect(await fetchPending("main", refused)).toEqual({ pending: [], cursor: "" });
+  });
+});
+
+/** WHAT AN IDLE CHAT WATCHES (the founder, 2026-10-10: *"sometimes chat does not answer if asked
+ *  while it's not yet answered"*). The worker takes a mid-turn message the instant the turn in front
+ *  ends, so it is gone from `pending` before the chat looks. `taken` is what still says so. */
+describe("turnsToWatch", () => {
+  const row = { entry: "5-0", id: "c-1", kind: "", target: "", display: "x", at: 1 };
+
+  it("watches a queued row first", () => {
+    expect(turnsToWatch({ pending: [row], cursor: "9-0" }, "4-0")).toEqual({ head: "5-0" });
+  });
+
+  it("watches a turn that was TAKEN after the chat's cursor even with nothing queued", () => {
+    expect(turnsToWatch({ pending: [], cursor: "9-0", taken: 1 }, "4-0")).toEqual({ head: "after:4-0" });
+  });
+
+  it("watches nothing when nothing is queued and nothing started", () => {
+    expect(turnsToWatch({ pending: [], cursor: "9-0" }, "4-0")).toBeNull();
+    expect(turnsToWatch({ pending: [], cursor: "9-0", taken: 1 }, "")).toBeNull();
+  });
+
+  it("asks the server what started after the cursor", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ pending: [], cursor: "9-0", taken: 2 }) });
+    const v = await fetchPending("main", fetchImpl as unknown as typeof fetch, "4-0");
+    expect(fetchImpl.mock.calls[0][0]).toBe("/api/chat/pending?session=main&after=4-0");
+    expect(v.taken).toBe(2);
+  });
+
+  it("orders stream ids as numbers, not strings", () => {
+    expect(streamIdAfter("10-0", "9-0")).toBe(true);
+    expect(streamIdAfter("9-1", "9-0")).toBe(true);
+    expect(streamIdAfter("9-0", "9-0")).toBe(false);
+    expect(streamIdAfter("9-0", "")).toBe(true);
+    expect(streamIdAfter("", "9-0")).toBe(false);
   });
 });

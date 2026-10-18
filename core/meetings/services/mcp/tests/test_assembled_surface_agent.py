@@ -90,12 +90,12 @@ def test_no_assembled_agent_tool_takes_a_credential_argument():
         assert not (props & banned), f"{t.name} takes {sorted(props & banned)}"
 
 
-def test_agent_beside_flows_is_twentythree_plus_the_agent_tools():
+def test_agent_beside_flows_is_twentyfive_plus_the_agent_tools():
     """The seam this manifest closes: the assembled edge serves 23 tools with the agent domain
-    PRESENT but none of the agent's own (14 built-in + flows' 9 — 7 query/path tools plus
-    `flows_submit`/`flow_lifecycle`, now bindable via `requestBody`). Wiring this manifest in
-    brings that to 23 + len(agent's tools) once flows is deployed too — the number the issue that
-    shipped this file names as N."""
+    PRESENT but none of the agent's own (14 built-in + flows' 11 — 7 query/path tools plus
+    `flows_submit`/`flow_lifecycle`, now bindable via `requestBody`, plus the admin account's
+    `friction_list`/`mail_settings`). Wiring this manifest in brings that to 25 + len(agent's
+    tools) once flows is deployed too."""
     flows_manifest_path = REPO / "core" / "flows" / "mcp.tools.v1.json"
     flows_manifest = json.loads(flows_manifest_path.read_text())
     flows_openapi = {"paths": {
@@ -120,6 +120,10 @@ def test_agent_beside_flows_is_twentythree_plus_the_agent_tools():
             "get": {"summary": "friction_so_far", "parameters": [
                 {"name": "since", "in": "query", "schema": {"type": "string"}},
                 {"name": "limit", "in": "query", "schema": {"type": "integer"}}]}},
+        "/friction/all": {"get": {"summary": "friction_list", "parameters": [
+            {"name": n, "in": "query", "schema": {"type": "string"}} for n in
+            ["since", "kind", "person", "status", "limit"]]}},
+        "/mail/settings": {"get": {"summary": "mail_settings", "parameters": []}},
         "/flows/{name}/{version}/{action}": {"post": {"summary": "flow_lifecycle", "parameters": []}},
     }}
     flows_openapi["paths"]["/flows"]["post"] = {"summary": "flows_submit", "requestBody": {
@@ -155,8 +159,8 @@ def test_agent_beside_flows_is_twentythree_plus_the_agent_tools():
     )
     names = {t.name for t in app.state.mcp.tools}
     n_agent = len(AGENT_MANIFEST["tools"])
-    assert len(names) == 23 + n_agent, (
-        f"expected 23 + {n_agent} = {23 + n_agent} tools with flows+agent both present, got "
+    assert len(names) == 25 + n_agent, (
+        f"expected 25 + {n_agent} = {25 + n_agent} tools with flows+agent both present, got "
         f"{len(names)}")
 
 

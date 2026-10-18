@@ -14,7 +14,9 @@ newcomer_reads_history: off
 global_admin_only: on
 open_web: on
 prep_and_invite_mail: on
+minutes_mail: on
 attendee_domains:
+mail_domains:
 data_statement:
 ---
 
@@ -25,7 +27,7 @@ what each answer changes, what it buys, what it costs, and what a hostile person
 
 **A rule has one shape: _subject may action object when relation._** The subjects are `user`,
 `participant`, `organizer`, `admin`, `agent` (software acting for exactly one user) and `company`.
-The objects are `meeting`, `transcript`, `report`, `workspace` (a desk, a group, `_global`,
+The objects are `meeting`, `transcript`, `report`, `workspace` (a personal workspace, a group, `_global`,
 `_system`), `page` and `mailbox`. The relations are `participant-of`, `organizer-of`,
 `member-of(role)`, `owner-of`, `agent-for`, `admin-of`, `derived-from`, `lives-in` and
 `bound-to(group, series)`. The actions are `read`, `write`, `deliver`, `join`, `retain` and
@@ -73,7 +75,7 @@ These are the product's, and they hold whatever the front matter says:
 ## The rules
 
 <a id="agent_reads_desk"></a>
-### `agent_reads_desk` — an agent may read its user's desk when its user is a participant
+### `agent_reads_desk` — an agent may read its user's personal workspace when its user is a participant
 
 **Default `on`.** *(founder decision 21, 2026-09-02.)*
 
@@ -81,7 +83,7 @@ These are the product's, and they hold whatever the front matter says:
 your workspaces is visible to the company's agents*. With it off, they are told the opposite, and
 the mail says so in the same breath.
 
-**The effect.** In a post-meeting room, the turn mounts the desks of the people who were in the
+**The effect.** In a post-meeting room, the turn mounts the personal workspaces of the people who were in the
 meeting, read-only, so the report can say what this meeting means for each of them. Off, it mounts
 none of them and writes from the transcript alone.
 
@@ -89,7 +91,7 @@ none of them and writes from the transcript alone.
 between *"we agreed X"* and *"we agreed X, and you own the migration you wrote up last week"*.
 **Security.** It is the widest read in the product: one meeting can pull a dozen people's working
 notes into one turn. It never reaches `_system`. **Adversarial.** Somebody who gets themselves into
-a meeting gets an agent reading the other participants' desks for that meeting — so participation is
+a meeting gets an agent reading the other participants' personal workspaces for that meeting — so participation is
 resolved from the directory, not from a display name, and the bot announces itself in the room.
 
 **The price of turning it off.** Reports stop being personal and the product becomes a transcriber.
@@ -122,7 +124,7 @@ by hand.
 
 **Default `on`.**
 
-**An external is a participant with no desk here** — someone who was in the room and has never
+**An external is a participant with no personal workspace here** — someone who was in the room and has never
 signed in. It is not another word for another domain: the line between inside and outside is
 [`attendee_domains`](#attendee_domains), and *outside the domain, never* holds whatever this rule
 says.
@@ -259,12 +261,15 @@ meeting; with this on, one addition opens the archive.
 somebody decided to, not because it was convenient.
 
 <a id="global_admin_only"></a>
-### `global_admin_only` — only the admin writes `_global` (editors may be added)
+### `global_admin_only` — only the admin account writes `_global`
 
 **Default `on`.**
 
-**The effect.** One admin's session mounts `_global` read-write; every other agent in the deployment
-mounts it read-only. Named editors may be added; the set is never "everyone".
+**The effect.** The deployment's **admin account** — one dedicated account, never a person's everyday
+one — mounts `_global` read-write, and has nothing else: no desk, no shared workspaces, no meetings.
+Every other account in the deployment, the instance admin's included, mounts it read-only. The
+operator names the admin account (`VEXA_ADMIN_ACCOUNT` on admin-api); with none named, nobody writes
+here. The set is never "everyone".
 
 **Adoption.** One person can change how every agent in the company behaves, with no deploy.
 **Security.** That same sentence is the risk: `_global` is loaded into every turn, so a line written
@@ -299,7 +304,7 @@ install that is not a cost, it is the requirement.
 **The sentence it changes.** The prep note before a meeting, and the line that tells an organiser how
 to put Vexa in a meeting of their own.
 
-**The effect.** Before a meeting, the organiser and people who already have a desk get a short prep
+**The effect.** Before a meeting, the organiser and people who already have a personal workspace get a short prep
 note. Off, nothing is sent before a meeting.
 
 **Adoption.** **The second measured lever**, and the cheapest one: the prep line is where a first
@@ -309,6 +314,23 @@ of us. **Adversarial.** A mail before a meeting is a mail about a meeting that h
 it carries no content and claims nothing was built for anybody.
 
 **The price of turning it off.** Vexa becomes something that only ever speaks after the fact.
+
+<a id="minutes_mail"></a>
+### `minutes_mail` — the minutes mail after a meeting
+
+**Default `on`.**
+
+**The effect.** After a meeting, the organiser is mailed the minutes, and the members of a group the
+meeting is bound to get the same mail. Off, nobody is mailed the minutes; the report is still
+written and still readable in the product. Each person's own `mail_minutes` setting sits under this
+rule: deny wins either way.
+
+**Adoption.** The minutes mail is how most people first read what Vexa made. **Security.** It sends
+what was said in a meeting to the people who own it, nobody else. **Adversarial.** Nothing beyond
+what the meeting's own organiser could already read.
+
+**The price of turning it off.** The product stops speaking after a meeting unless someone opens it.
+The attendee follow-up is a separate rule ([`report_to_participants`](#report_to_participants)).
 
 <a id="attendee_domains"></a>
 ### `attendee_domains` — which domains count as inside
@@ -323,6 +345,29 @@ default.
 **The effect.** It is the line between inside and outside for delivery. Together with
 `external_participants` it decides who receives a report: inside always, outside only when externals
 are on.
+
+<a id="mail_domains"></a>
+### `mail_domains` — which domains the mailbox takes invitations and mail from
+
+**Default: empty, which means `VEXA_FLOWS_MAIL_DOMAINS` if the operator set it, else the mailbox's
+own domain.** Comma-separated, with or without a leading `@`. Each entry must be a domain: `*`, a
+bare top-level domain, an address or a URL is ignored and named as a problem, never read as
+"everyone".
+
+**The effect.** The inbound allow-list. Mail and invitations from a person who already has an
+account are always handled. From anybody else, they are handled only when the sender (for an
+invitation, its organiser) is inside one of these domains; everything else is recorded and
+quarantined: no account, no agent turn, no reply. *"Only accept invites from bank.com"* is
+`mail_domains: bank.com`.
+
+**Adoption.** A colleague at a sister company can invite the mailbox without an account first.
+**Security.** This is the door on the public internet; every domain added is a population that can
+make this deployment create accounts and spend model turns, rate-limited. **Adversarial.** A sender
+address is not proof of identity, so a domain here is trusted as far as its mail is.
+
+**What stays deployment configuration.** The mailbox address, its password or app registration, the
+SMTP relay and the rate limits are the operator's (`VEXA_MAIL_*`, `VEXA_GRAPH_*`,
+`VEXA_FLOWS_MAIL_RATE_*`); they are never written here and never shown to an agent.
 
 <a id="data_statement"></a>
 ### `data_statement` — this deployment's own sentence about where the words live
@@ -381,12 +426,15 @@ product does not yet check.
 | `attendee_domains` | the line between inside and outside, for the same fan-out |
 | `data_statement` | the provenance line above every minutes mail |
 | `prep_and_invite_mail` | the prep note before a meeting (`emit_prep`) |
+| `minutes_mail` | the minutes mail after a meeting (`email_minutes`, and its group fan-out) |
+| `mail_domains` | the inbound mailbox: which senders and invitation organisers it acts for |
 | `transcript_retention_days`, `recording_retention_days` | the derived disclosure |
-| `bot_joins_on_invite`, `bot_joins_mixed_meetings` | **declared, not yet enforced** — admission would have to read this file before dispatching a bot |
+| `bot_joins_on_invite` | the inbound mailbox: off, an invitation is recorded and nothing is created, accepted or joined |
+| `bot_joins_mixed_meetings` | **declared, not yet enforced** — admission would have to read this file before dispatching a bot |
 | `organizer_confirms_join` | **declared, not yet enforced** — and it is `off`, which is today's behaviour, so the line records the gate rather than claiming it |
 | `agent_writes_pages` | **declared, not yet enforced** — containment already bounds where a turn writes; this switch does not yet gate whether it writes |
 | `newcomer_reads_history` | **declared, not yet enforced** — and it is `off`, which is the safe direction to be unenforced in |
-| `global_admin_only` | **structural** — the `_global` mount is read-only except in the admin's own session; this line records it rather than deciding it |
+| `global_admin_only` | **structural** — the `_global` mount is read-only except for the admin account, which identity names; this line records it rather than deciding it |
 | `open_web` | **declared, not yet enforced** — the agent's web tools are chosen at dispatch, not read from here |
 
 Every line marked *not yet enforced* is a gap in the software, not in the policy. It belongs in

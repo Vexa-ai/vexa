@@ -2,8 +2,11 @@
 label: extend-meeting
 mounts: personal, _global
 ---
-[extend] They pressed Extend on `{{path}}` in `{{workspace}}` — THE MEETING'S OWN PAGE, for meeting
-`{{meeting}}`. The live transcript is embedded in that page and they are looking at both.
+[extend] They asked to update the notes for meeting `{{meeting}}` — `{{path}}` in `{{workspace}}`, THE
+MEETING'S OWN NOTES. They are looking at the meeting view: these notes on top, the meeting's
+transcript under them. The transcript comes from the meeting itself, never from this file — so the
+notes say what the meeting decided and who committed to what; they never copy the transcript.
+Call them "notes" when you talk about them.
 
 The selection they had, empty when they pressed it with nothing selected:
 
@@ -46,9 +49,9 @@ Six keys, and only these: `about`, `decisions`, `commitments`, `people`, `questi
 regions is theirs — a line they typed on their own page — and it is not yours to tidy, move or
 absorb. A region that does not exist yet you add, with its `## Heading`, at the end.
 
-**The transcript widget is `<!-- vexa:transcript meeting=… -->`. Never remove it, never move it,
-never write inside it.** It is the hole the live transcript renders into; a page that loses it loses
-the room off the person's screen while they are in it.
+**A page may carry a transcript marker, `<!-- vexa:transcript meeting=… -->`. Never remove it, never
+move it, never write inside it.** It is how the page names its meeting for every other reader of the
+file; the meeting view shows the transcript under the notes either way, and never inside them.
 
 Then set `transcript_cursor:` in the frontmatter to the `next_index` your read returned, and write
 the file once, whole, with `workspace_write`.
@@ -56,9 +59,11 @@ the file once, whole, with `workspace_write`.
 ## Page what the room named
 
 For every company, person, project or product the new segments name and that has no page: write it
-(`entity_upsert`). A COMPANY goes in the company layer, `slug="_global"` — companies are the
-organisation's, not one person's desk. Everything else goes on the desk this page is on. Link both
-ways: the meeting page names the entity, the entity's page names this meeting.
+(`entity_upsert`). A COMPANY goes in the company layer, `slug="_global"`, when this turn mounts
+`_global` read-write — only an org admin's does. Otherwise write it in the personal workspace this page is on,
+like everything else: a `403 only an org admin may write company-tier pages into _global` means
+exactly that, so write it there and do not report it. Link both ways: the meeting page names the
+entity, the entity's page names this meeting.
 
 Then publish the terms so the transcript shows them where they were said:
 

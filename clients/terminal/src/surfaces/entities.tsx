@@ -20,7 +20,7 @@ function Tile({ e, size = 28 }: { e: Entity; size?: number }) {
   const t = TYPE[e.type];
   const round = e.type === "person";
   return (
-    <span style={{ width: size, height: size, flex: "none", borderRadius: round ? "50%" : Math.round(size * 0.28), background: t.bg, color: t.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: Math.round(size * 0.4), fontWeight: 600, letterSpacing: e.type === "person" ? ".02em" : 0 }}>
+    <span className="fw-600" style={{ width: size, height: size, flex: "none", borderRadius: round ? "50%" : Math.round(size * 0.28), background: t.bg, color: t.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: Math.round(size * 0.4), letterSpacing: e.type === "person" ? ".02em" : 0 }}>
       {e.type === "person" ? initials(e.title) : <Icon name={t.icon} size={Math.round(size * 0.52)} />}
     </span>
   );
@@ -48,19 +48,19 @@ function EntityRow({ e, onOpen, onResearch }: { e: Entity; onOpen: (e: Entity) =
   };
   return (
     <div className="vx-row" style={row} onClick={() => onOpen(e)} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
-      <span className="vx-row-rail" style={{ position: "absolute", left: 3, top: 8, bottom: 8, width: 2, borderRadius: 2, background: t.color }} />
+      <span className="vx-row-rail r-sm" style={{ position: "absolute", left: 3, top: 8, bottom: 8, width: 2, background: t.color }} />
       <Tile e={e} />
       <div style={{ minWidth: 0, flex: 1, display: "flex", alignItems: "baseline", gap: 8 }}>
-        <span style={{ fontSize: 13, color: "var(--t1)", fontWeight: 550, lineHeight: 1.25, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: "0 1 auto" }}>{e.title}</span>
-        <span style={{ fontSize: 11.5, color: "var(--t3)", lineHeight: 1.25, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: "1 1 auto" }}>{e.subtitle}</span>
+        <span className="t-sm c-1 fw-500 lh-tight" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: "0 1 auto" }}>{e.title}</span>
+        <span className="t-xs c-3 lh-tight" style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: "1 1 auto" }}>{e.subtitle}</span>
       </div>
       {!e.exists && (
-        <span title="not yet in your workspace" style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 600, color: t.color, letterSpacing: ".04em", textTransform: "uppercase", flex: "none" }}>
-          <span style={{ width: 5, height: 5, borderRadius: "50%", background: t.color }} />new
+        <span title="not yet in your workspace" className="t-xs fw-600" style={{ display: "inline-flex", alignItems: "center", gap: 5, color: t.color, letterSpacing: ".04em", textTransform: "uppercase", flex: "none" }}>
+          <span className="r-full" style={{ width: 5, height: 5, background: t.color }} />new
         </span>
       )}
-      <button className="vx-row-act" onClick={(ev) => { ev.stopPropagation(); onResearch(e); }} title={`Research ${e.title}`} aria-label={`Research ${e.title}`}
-        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, border: "1px solid var(--line2)", borderRadius: 7, background: "var(--panel2)", color: "var(--accent)", cursor: "pointer", flex: "none" }}>
+      <button className="vx-row-act bd-strong r-md bg-3 c-accent" onClick={(ev) => { ev.stopPropagation(); onResearch(e); }} title={`Research ${e.title}`} aria-label={`Research ${e.title}`}
+        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, cursor: "pointer", flex: "none" }}>
         <Icon name="spark" size={14} />
       </button>
     </div>
@@ -69,10 +69,10 @@ function EntityRow({ e, onOpen, onResearch }: { e: Entity; onOpen: (e: Entity) =
 
 function Section({ label, count, children }: { label: string; count: number; children: ReactNode }) {
   return (
-    <div style={{ marginBottom: 22 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 8px 6px" }}>
-        <span style={{ fontSize: 10.5, color: "var(--t3)", textTransform: "uppercase", letterSpacing: ".07em", fontWeight: 600 }}>{label}</span>
-        <span style={{ fontSize: 10.5, color: "var(--t3)", fontFamily: "var(--mono)", lineHeight: 1 }}>{count}</span>
+    <div className="mb-5">
+      <div className="mt-0 mr-2 mb-1_5 ml-2" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span className="t-xs c-3 fw-600" style={{ textTransform: "uppercase", letterSpacing: ".07em" }}>{label}</span>
+        <span className="t-xs c-3 f-mono lh-tight">{count}</span>
         <span style={{ flex: 1, height: 1, background: "var(--line)" }} />
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>{children}</div>

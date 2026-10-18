@@ -589,3 +589,5 @@ def test_the_refusal_is_the_one_every_service_answers_with():
     """gateway-identity.v1's `REFUSAL`, word for word (gate:fact-parity holds the copy)."""
     assert subject_auth.REFUSAL["status"] == "refused"
     assert subject_auth.REFUSAL["reason"] == "human_session_required"
+    assert subject_auth.REFUSAL["remedy"] == "ask_in_chat"
+    assert "ask in chat" in subject_auth.REFUSAL["tell_your_person"]

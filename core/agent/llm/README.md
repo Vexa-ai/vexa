@@ -40,7 +40,8 @@ trivial fakes.
   following a link (`core/workspaces/shared/workspace_paths.py`, parity fact `workspace-paths`).
 - **Panel events**: `tool_events.py` — the closed tool vocabularies and the event a successful
   result earns (a write opens its file, a bot send opens the transcript, `open_page`, chips, a
-  workspace joining the chat). Imported by all three harnesses so a turn paints the same screen
+  workspace joining the chat, and a fetched page becomes a `sources` frame — the turn's citations;
+  `claude-code` and `openai-agent` emit it, `codex` does not). Imported by all three harnesses so a turn paints the same screen
   whichever one runs.
 
 ### The runner matrix
@@ -130,6 +131,13 @@ turn if it cannot. A claude CLI with no key of its own signs in from that file, 
 subject's endpoint also needs the subject's own key: without one the dispatch refuses the endpoint
 (`model_endpoint.route_refusal`, which the Test button asks too) and the deployment route applies.
 openai-agent reads no file and sends no credential to a keyless endpoint.
+
+**With a model catalog (`VEXA_MODEL_CATALOG`, ADR-0043), the chat's pick decides the route** — and
+the same dispatch stamps it, whole: `VEXA_RUNNER`, `VEXA_AGENT_MODEL`, every `ANTHROPIC_*` and
+`VEXA_LLM_*` name (the provider's key under the one name its endpoint expects, every other one
+empty), `VEXA_AGENT_STREAM` / `VEXA_AGENT_CONTEXT_TOKENS` from the model's capabilities, and the
+claude CLI's model tiers (pinned to the chosen model on a gateway). Nothing in this module changes:
+a harness reads its environment exactly as above and never learns that a catalog chose it.
 
 ## Rules
 

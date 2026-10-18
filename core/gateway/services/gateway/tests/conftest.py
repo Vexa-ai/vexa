@@ -123,7 +123,7 @@ class FakeDownstream:
             yield chunk
 
     @asynccontextmanager
-    async def open_stream(self, method, url, *, headers=None, params=None, content=None):
+    async def open_stream(self, method, url, *, headers=None, params=None, content=None, timeout=None):
         """The head-aware streaming forward (``ports.StreamedResponse``): status + headers first,
         then the canned chunks. Used by the relay leg (MCP), where the upstream's own verdict must
         reach the caller instead of a gateway-minted envelope."""

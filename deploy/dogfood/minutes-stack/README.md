@@ -40,7 +40,8 @@ deployment lock:
 | `import_tools` | the rig's `workspace_import_tools.py` |
 | `crm_enabled`, `crm_tools` | optional CRM tools (`CRM_API_URL` must be in the environment) |
 | `agent_source` | the `core/agent` tree: exported as `VEXA_AGENT_SRC`, and its `mcp.tools.v1.json` supplies the declared `forward` (boot stops without one) |
-| `host`, `port` | where the server listens; `VEXA_PUBLIC_MCP_URL` is derived from them |
+| `host`, `port` | where the server listens. Exported as `VEXA_MCP_LISTEN_HOST` so the transport's host guard admits workers calling the in-network address; never published |
+| `public_url` | **required.** The https address people reach this service at, ending in `/mcp` (e.g. `https://mcp.example.com/mcp`); exported as `VEXA_PUBLIC_MCP_URL`. Every link the rig hands a person is built on it: the sign-in page, the connect command, workspace view links. The boot stops (P18) when it is missing, not https, or names a private, loopback, link-local or single-label host (`../rig/public_origin.py`). No http exception: a test that needs a loopback address calls the rig directly |
 
 `agent_tools.register(mcp, call=…, guard=…)` takes two explicit ports: `call` reaches
 agent-api as the caller THROUGH THE GATEWAY, so agent-api receives the gateway's signed
@@ -68,6 +69,12 @@ calling itself. The gateway MCP bounds a tool call at 30 s, which is shorter tha
   `workspace_target`, the meeting and auth verbs; `RIG_ONLY` in
   `core/agent/tests/test_prompt_tools_served.py`).
 - Replace `connection_tools`, `time_tools` and `chat_names` in the lock with `agent_tools`.
+- Add `public_url` to the agent-mcp configuration before restarting it: the service refuses to
+  boot without one. The OAuth resource this service advertises becomes that address, so an OAuth
+  token issued against the old listen address stops resolving and that client signs in again.
+- Hosted workers are refused the external sign-in verbs (`auth_link`, `auth_claim`,
+  `start_onboarding`, `confirm_login`) with `already_signed_in` and are not offered them
+  ([`../rig/README.md`](../rig/README.md#sign-in-for-external-mcp-clients)).
 - The gateway's identity keypair: `VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE` on the gateway
   only, `VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE` on agent-api, meeting-api and the credential
   broker; and `VEXA_MCP_DELEGATION_SECRET` on admin-api as well as agent-api and this service

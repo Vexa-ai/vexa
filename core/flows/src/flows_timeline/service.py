@@ -184,6 +184,25 @@ def _fixed_friction_ids(db, ids: set, *, scan: int = SCAN_ROWS) -> set:
             fixed.add(fid)
     return fixed
 #: The refs this row renders as named fields; everything else is passed through under `context`.
+def _friction_occurrences(db, ids: set) -> dict:
+    """`{friction_id: (occurrences, last_seen_epoch)}` from `friction_occurrence` — the repeat
+    counter `POST /friction` keeps when the same report is filed again inside one UTC hour
+    (`flows_integrations.friction_dedup`, its one writer). Summed across hour buckets folded into
+    the same id. A report with no counter row was filed once: the caller defaults it to 1. READ
+    ONLY, by id, so the cost is bounded by the page of reports already read."""
+    wanted = sorted({str(i) for i in ids if i})
+    if not wanted:
+        return {}
+    names = {f"f{n}": v for n, v in enumerate(wanted)}
+    rows = db.execute("SELECT friction_id, occurrences, last_seen FROM friction_occurrence "
+                      f"WHERE friction_id IN ({', '.join(':' + k for k in names)})", names)
+    out: dict = {}
+    for fid, count, last in rows:
+        n, seen = out.get(fid, (0, 0.0))
+        out[fid] = (n + int(count or 0), max(seen, to_epoch(last) or 0.0))
+    return out
+
+
 _FRICTION_RENDERED = ("uid", "session", "friction_id", "severity", "what_i_tried", "what_happened")
 #: What a session-less report reads as. `POST /friction` stopped requiring `session` in F-D27 —
 #: prod refused a report for not having one, and the report it refused was about that refusal. So a
@@ -216,6 +235,7 @@ def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: in
     rows = rows[:max(1, int(limit))]
     ids = {loads(r["subject_refs"]).get("friction_id") or r["reaction_id"] for r in rows}
     fixed_ids = _fixed_friction_ids(db, ids, scan=scan)
+    counts = _friction_occurrences(db, ids)
     out = []
     for r in rows:
         refs = loads(r["subject_refs"])
@@ -241,7 +261,60 @@ def friction_for_subject(db, *, subject: str = "", since: float = 0.0, limit: in
             "tried": refs.get("what_i_tried", ""), "happened": refs.get("what_happened", ""),
             "context": ctx,
             "status": "fixed" if fid in fixed_ids else "open",
+            # HOW MANY TIMES THIS WAS FILED. Identical repeats inside one UTC hour are folded into
+            # the first report rather than admitted as rows of their own; `last_seen` is the newest
+            # of them. A report filed once reads `occurrences: 1`, `last_seen` == `at`.
+            "occurrences": max(1, counts.get(fid, (1, at))[0]),
+            "last_seen": iso(max(at, counts.get(fid, (1, at))[1])),
         })
+    return out
+
+
+#: The statuses a report can be in, and the one value that means "either".
+FRICTION_STATUSES = ("open", "fixed")
+
+
+def _scrubbed(value):
+    """Every string inside `value` with credential-shaped runs masked — dicts and lists walked."""
+    from flows_timeline.redaction import redact
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {k: _scrubbed(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_scrubbed(v) for v in value]
+    return value
+
+
+def friction_sink(db, *, since: float = 0.0, kind: str = "", subject: str = "", status: str = "",
+                  limit: int = 50, scan: int = SCAN_ROWS,
+                  identity: Optional[Callable] = None) -> Optional[list[dict]]:
+    """THE WHOLE SINK, for the deployment's admin account (founder ruling 2026-10-11: *"friction
+    reading from sink"*). Every subject's reports unless `subject` narrows it to one person (a uid
+    or an address — `None` when nobody answers to it, as `friction_for_subject`); `kind` matches
+    the reporter's own word case-insensitively; `status` is `open`, `fixed` or empty for both.
+
+    SCRUBBED ON THE WAY OUT. The sink stores a report as it was sent (F-D26), and a report filed
+    over MCP never passed the worker's scrubber — so a pasted token would otherwise reach whoever
+    reads everybody's reports. Every free-text field, `context` included, goes through the same
+    shape-based scrubber agent-api uses (`redaction.py`, byte-identical to `git_redaction.py`).
+
+    This function authorizes nothing; the route in front of it is operator-gated."""
+    rows = friction_for_subject(db, subject=subject, since=since, limit=scan, scan=scan,
+                                identity=identity)
+    if rows is None:
+        return None
+    want_kind = (kind or "").strip().lower()
+    want_status = (status or "").strip().lower()
+    out = []
+    for r in rows:
+        if want_status and r.get("status") != want_status:
+            continue
+        if want_kind and str((r.get("context") or {}).get("kind") or "").strip().lower() != want_kind:
+            continue
+        out.append(_scrubbed(r))
+        if len(out) >= max(1, int(limit)):
+            break
     return out
 
 

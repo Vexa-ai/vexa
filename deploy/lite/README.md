@@ -132,6 +132,8 @@ The repo-root `.env` (auto-seeded from `deploy/compose/.env` if present, else mi
 
 Agent inference is BYO — point the runtime at your endpoint via `ANTHROPIC_*` / `VEXA_AGENT_MODEL`
 in `.env`; the runtime brokers credentials into spawned workers (nothing leaves the network).
+To let people pick a model per chat, set `VEXA_MODEL_CATALOG` (and each `VEXA_MODEL_SECRET_<NAME>` it
+references) in the same `.env`; see [Model catalog](https://docs.vexa.ai/model-catalog).
 
 ## Debugging
 

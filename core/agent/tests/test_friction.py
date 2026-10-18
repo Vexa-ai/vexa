@@ -237,6 +237,29 @@ def test_a_well_formed_report_forwards_and_returns_flows_own_response(tmp_path, 
     assert seen["rec"]["tried"] == "opened the page" and seen["rec"]["happened"] == "got a 404"
 
 
+def test_a_folded_duplicate_is_passed_through_as_not_recorded(tmp_path, monkeypatch):
+    """flows folds a repeat (same subject, tool, reason, UTC hour) into the first report and says
+    so. The forward must not turn that into `recorded: true` just because an id came back."""
+    monkeypatch.setattr(publish_mod, "post_friction", lambda rec, **kw: (True, {
+        "id": "fr_first", "recorded": False, "duplicate_of": "fr_first", "occurrences": 4,
+        "instruction": "already reported 4 times; do not report it again this run"}))
+    c = _app_client(tmp_path)
+    r = c.post("/api/friction", json={"session": "s1", "tried": "x", "happened": "y"},
+               headers={"X-User-Id": "126"})
+    assert r.status_code == 201
+    assert r.json() == {"id": "fr_first", "recorded": False, "duplicate_of": "fr_first",
+                        "occurrences": 4,
+                        "instruction": "already reported 4 times; do not report it again this run"}
+
+
+def test_a_first_report_carries_no_duplicate_fields(tmp_path, monkeypatch):
+    monkeypatch.setattr(publish_mod, "post_friction",
+                        lambda rec, **kw: (True, {"id": "fr_new", "recorded": True}))
+    c = _app_client(tmp_path)
+    r = c.post("/api/friction", json={"session": "s1", "tried": "x", "happened": "y"})
+    assert r.json() == {"id": "fr_new", "recorded": True}
+
+
 def test_a_person_can_file_without_being_identified(tmp_path, monkeypatch):
     """The most valuable report available is the one from a session too broken to have an
     identity — unchanged from the store era (`_friction_subject` is BEST-EFFORT, never a refusal).

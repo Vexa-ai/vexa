@@ -94,7 +94,7 @@ def test_the_guard_resets_the_desk_to_the_witness_and_retries_itself_once(monkey
     assert seen["reset"] == [("175", "sha-before", "decision 22 · meeting 150")]
     assert len(seen["dispatched"]) == 1
     said = seen["dispatched"][0]
-    assert "WROTE TO A DESK" in said
+    assert "WROTE TO A WORKSPACE" in said
     assert "175: README.md — updated" in said, "the model is told what it actually committed"
     assert "removed" in said
     assert scratch["desk_reset"] is True, "the mark that makes this happen exactly once"
@@ -110,7 +110,7 @@ def test_a_second_failure_is_terminal_and_names_the_commits_and_the_one_command(
         _run(reg, scratch)
 
     msg = str(e.value)
-    assert "committed to the organiser's desk, and it must not (decision 22)" in msg
+    assert "committed to the organiser's personal workspace, and it must not (decision 22)" in msg
     assert "sha-befor -> sha-after" in msg
     assert "175: README.md — updated" in msg
     assert "/api/workspace/git/reset" in msg and '"sha":"sha-before"' in msg

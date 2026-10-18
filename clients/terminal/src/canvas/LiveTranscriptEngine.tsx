@@ -11,6 +11,7 @@
  *  actionable badges under the relevant block. RAW mode passes neither, so it stays plain text. */
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { splitTextIntoSpans, type SpanEntity } from "./inlineSpans";
 import { useMeetingPlayback, seekMeeting, segmentSeconds } from "../minutes/meetingPlayback";
 import { playbackTime } from "../minutes/RecordingPlayer";
@@ -153,6 +154,7 @@ export function LiveTranscriptEngine({
   signals,
   actions,
   renderText,
+  layout = "stack",
 }: {
   segments: EngineSegment[];
   meetingId?: string;
@@ -162,8 +164,21 @@ export function LiveTranscriptEngine({
   actions?: EngineActions;
   /** an outer layer's per-block renderer (decision 35's term chips). See `BlockText`. */
   renderText?: (text: string) => React.ReactNode;
+  /** `rows` — the meeting view's conversational layout: who and when in a fixed left column
+   *  (tabular figures), what was said beside it, smaller than page prose. Default `stack` is the
+   *  original speaker-over-text layout every other caller keeps. */
+  layout?: "stack" | "rows";
 }) {
   const playback = useMeetingPlayback(meetingId);
+  // "Play from m:ss" is drawn here, not as a native `title`: a native tooltip floats wherever the
+  // browser puts it (it landed on the page header's buttons). This one sits just above the line of
+  // text under the pointer, horizontally at the pointer.
+  const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null);
+  const placeTip = (e: React.MouseEvent<HTMLElement>, text: string) => {
+    const rects = Array.from(e.currentTarget.getClientRects());
+    const line = rects.find(r => e.clientY >= r.top && e.clientY <= r.bottom) ?? rects[0];
+    setTip({ text, x: e.clientX, y: line ? line.top : e.clientY });
+  };
   const timed = segments.filter(s => s.completed !== false).map(s => ({ segment: s, timing: segmentSeconds(s, playback.originMs) }));
   // Explicit ends keep silence unhighlighted; start-only transcripts advance at the next passage.
   const active = playback.time === null ? undefined : [...timed].reverse().find(item => {
@@ -179,7 +194,8 @@ export function LiveTranscriptEngine({
       role={canSeek ? "button" : undefined} tabIndex={canSeek ? 0 : undefined}
       aria-label={canSeek ? `Play from ${playbackTime(timing!.start)}: ${s.text}` : undefined}
       aria-current={current ? "true" : undefined}
-      title={canSeek ? `Play from ${playbackTime(timing!.start)}` : undefined}
+      onMouseMove={canSeek ? e => placeTip(e, `Play from ${playbackTime(timing!.start)}`) : undefined}
+      onMouseLeave={canSeek ? () => setTip(null) : undefined}
       style={{ cursor: canSeek ? "pointer" : undefined, borderRadius: 3, background: current ? "color-mix(in srgb, var(--blue) 20%, transparent)" : undefined }}
       onClick={e => {
         if (!canSeek || window.getSelection()?.toString()) return;
@@ -269,6 +285,35 @@ export function LiveTranscriptEngine({
     );
   };
 
+  if (layout === "rows") {
+    const clock = (tsMs?: number) => typeof tsMs === "number"
+      ? new Date(tsMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+    const row = (key: string, speaker: string | undefined, tsMs: number | undefined, body: React.ReactNode, extra?: React.ReactNode) => (
+      <div key={key} data-transcript-row style={{ display: "flex", flexWrap: "wrap", columnGap: 12, rowGap: 2, alignItems: "baseline" }}>
+        <div data-transcript-who style={{ flex: "0 0 112px", minWidth: 0, display: "flex", flexDirection: "column", fontSize: 11.5, lineHeight: 1.45 }}>
+          <span style={{ fontWeight: 600, color: "var(--t2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={speaker}>{speaker ?? ""}</span>
+          <span style={{ color: "var(--t3)", fontVariantNumeric: "tabular-nums" }}>{clock(tsMs)}</span>
+        </div>
+        <div style={{ flex: "1 1 220px", minWidth: 0 }}>{body}{extra}</div>
+      </div>
+    );
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {blocks.map((b, idx) => {
+          const isLast = idx === blocks.length - 1;
+          return row(b.key, b.speaker, b.tsMs,
+            <div style={{ fontSize: 13, color: "var(--t1)", lineHeight: 1.55 }}>
+              {playback.available ? b.segments.map((s, i) => <span key={s.id ?? i}>{i > 0 ? " " : ""}{passage(s, i)}</span>) : <BlockText text={b.text} entities={entities} actions={actions} renderText={renderText} />}
+              {isLast && liveJoinsLast && <span style={{ color: "var(--t3)", fontStyle: "italic" }}> {live} …</span>}
+            </div>,
+            <>{chips(b.tags)}{signalBadges(isLast && !liveOwnBlock)}</>);
+        })}
+        {liveOwnBlock && row("live", liveSpeaker, lastPending?.tsMs,
+          <div style={{ fontSize: 13, color: "var(--t3)", lineHeight: 1.55, fontStyle: "italic" }}>{live} …</div>)}
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 13, maxWidth: 760 }}>
       {blocks.map((b, idx) => {
@@ -294,6 +339,12 @@ export function LiveTranscriptEngine({
           {signalBadges(true)}
         </div>
       )}
+      {tip && typeof document !== "undefined" && createPortal(
+        <div role="tooltip" data-transcript-tip style={{ position: "fixed", left: tip.x, top: tip.y - 4, transform: "translate(-50%, -100%)",
+          zIndex: 70, pointerEvents: "none", whiteSpace: "nowrap", fontSize: 12, padding: "3px 8px", borderRadius: 6,
+          background: "var(--panel2)", color: "var(--t1)", border: "1px solid var(--line2)", boxShadow: "0 4px 14px rgba(0,0,0,.25)" }}>
+          {tip.text}
+        </div>, document.body)}
     </div>
   );
 }

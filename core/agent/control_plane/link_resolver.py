@@ -11,6 +11,12 @@ deleted when in fact they were simply never invited.
 
 Pure over a workspace root plus the registry — no HTTP, no redis of its own — so the three access
 states are provable offline, which is the only way to prove the middle one at all.
+
+A MEETING IS A KIND HERE TOO (founder, 2026-10-11: *"we need a special label for a meeting alongside
+people companies etc"*). A ref that names a meeting's notes page (`kg/entities/meeting/<name>.md`)
+is answered as the meeting behind it — its title and date, `kind: "meeting"` — by the injected
+``meeting`` resolver (`meeting_link.resolve`), which reads the row through the one meeting access
+decision. That resolver holds the access callable; this module stays pure.
 """
 from __future__ import annotations
 
@@ -150,15 +156,23 @@ def resolve(ref_text: str, *, subject: str, root, registry: ids_mod.WorkspaceReg
 
 def resolve_many(refs, *, subject: str, root, registry: ids_mod.WorkspaceRegistry,
                  here: Optional[dict] = None, is_member=None, limit: int = 200,
-                 within=None) -> list[dict]:
+                 within=None, meeting=None) -> list[dict]:
     """A page's worth of refs in one round trip — the shape the panel actually needs.
 
     Capped: a document is rendered one screen at a time and a request that could ask for ten
-    thousand resolutions is a directory walk somebody else pays for."""
+    thousand resolutions is a directory walk somebody else pays for.
+
+    ``meeting`` (ref -> answer | None) answers the refs that name a meeting; ``None`` from it means
+    "not a meeting link", and the ref resolves as a page like any other."""
     seen: dict[str, dict] = {}
     for r in list(refs or [])[:limit]:
         key = str(r)
-        if key not in seen:
+        if key in seen:
+            continue
+        answer = meeting(key) if meeting is not None else None
+        if answer is not None:
+            seen[key] = answer
+        else:
             seen[key] = resolve(key, subject=subject, root=root, registry=registry,
                                 here=here, is_member=is_member, within=within)
     return list(seen.values())

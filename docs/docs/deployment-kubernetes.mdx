@@ -640,7 +640,12 @@ the effective list is both:
 adminApi:
   signinAllow: "@example.com,alice@example.org"
   adminEmails: "admin@example.com"   # optional: names the admins, no claim code needed
+  adminAccount: "company-admin@example.com"   # optional: the one account that writes _global
 ```
+
+`adminAccount` is the deployment's [admin account](/minutes/workspaces#the-admin-account): a fresh
+address, not a person's everyday one. It is the only account that writes the company layer, and it
+has no desk, workspaces or meetings. Leave it empty and nobody writes `_global`.
 
 admin-api reads both and decides every sign-in; the Terminal only asks it. An older install that set
 `VEXA_ADMIN_EMAILS` under `terminal.extraEnv` keeps working: the chart carries it over to admin-api
@@ -665,6 +670,28 @@ only an address on the list may sign in or claim.
 Without an Ingress the Services stay cluster-internal. `helm install` alone does not expose Vexa —
 reach it with `kubectl port-forward` during evaluation, or enable the Ingress above.
 </Note>
+
+## The model catalog
+
+`models.catalog` declares the models people pick per chat (see [Model catalog](/model-catalog)).
+Each provider key it references is delivered to agent-api by `models.catalogSecrets`, from a Secret
+you create and name:
+
+```yaml
+models:
+  catalog:
+    providers:
+      openrouter: { adapter: openrouter, auth: secret, secret_ref: env:VEXA_MODEL_SECRET_OPENROUTER }
+    models:
+      - { id: or-sonnet, display_name: Claude Sonnet via OpenRouter, provider: openrouter, model: anthropic/claude-sonnet-4.5 }
+  catalogSecrets:
+    - env: VEXA_MODEL_SECRET_OPENROUTER   # the name secret_ref uses
+      secretName: model-keys              # required
+      key: openrouter                     # default: the env name
+```
+
+Every `env` must start with `VEXA_MODEL_SECRET_`, and `secretName` is required. The chart refuses
+anything else, so a catalog secret never shares a name, or a Secret, with agent-api's own.
 
 ## The deprecated dashboard (optional)
 

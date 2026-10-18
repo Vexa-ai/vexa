@@ -1,0 +1,293 @@
+---
+title: "Move a meeting between deployments"
+description: "Export a meeting as one file and import it into any other Vexa deployment — transcript, metadata, annotations, notes, recordings and its workspace — as a meeting you own there."
+---
+
+A meeting can leave the deployment it was recorded on as **one file** (a *meeting bundle*) and be
+imported into **any other Vexa deployment** — self-hosted to cloud, staging to production, one
+team's install to another's. On the importing side it is a normal meeting owned by the person who
+imported it: the canvas, search, recordings and the agent see it like any recorded meeting.
+
+Meetings are described in [Meetings](/core/meetings); the routes are in the
+[Meetings API](/api/meetings#export-and-import-a-meeting).
+
+The file format is a sealed, versioned contract, [`meeting-bundle.v1`](https://github.com/Vexa-ai/vexa/tree/main/deploy/contracts/meeting-bundle.v1),
+documented for anyone who wants to produce or read bundles outside Vexa.
+
+## What travels, and what does not
+
+| In the bundle | Not in the bundle |
+|---|---|
+| Platform, meeting link id, title, start and end time, status | Your user id, API keys, tokens |
+| Participants **by display name** (speakers, invitee names) | Invitee email addresses |
+| Every transcript segment: speaker, text, language, time from the start | Share links, the list of people it was shared with |
+| Your annotations (`annotate_meeting` metadata) and the meeting's free-text notes | Webhook configuration and secrets |
+| The meeting's page from your desk (`kg/entities/meeting/…`, as `notes.md`) | Storage paths, internal URLs |
+| Recordings: audio, and video when there is one (optional) | The workspace's member list and policy (`policy/`), and its git history |
+| The files of the workspace the meeting is bound to (`workspace/…`) | — |
+
+## Export
+
+**Terminal:** open the meeting and click **Export**. The file downloads with a progress readout,
+named after the meeting (`release-sync.meeting-bundle.zip`). The button appears on meetings you own
+once they have ended. When the meeting is bound to a workspace you belong to, or has a page on your
+desk, those go in the file too; a workspace file whose name or size a bundle cannot carry is counted
+and named in the status line, never dropped silently. In meetings-only mode (no agent), the export
+says it was made without the workspace and the page.
+
+**API** (key scope `tx`):
+
+```bash
+curl -H "X-API-Key: $VEXA_API_KEY" -OJ \
+  "https://your-vexa/meetings/123/export"            # with recordings
+curl -H "X-API-Key: $VEXA_API_KEY" -OJ \
+  "https://your-vexa/meetings/123/export?media=false" # transcript and metadata only
+
+# with the workspace and the meeting's page: fetch them, then hand them to the export
+curl -H "X-API-Key: $VEXA_API_KEY" -o parts.zip \
+  "https://your-vexa/agent/meeting/bundle-parts?meeting_id=123"   # 204: the meeting has neither
+curl -H "X-API-Key: $VEXA_API_KEY" -H "Content-Type: application/zip" --data-binary @parts.zip -OJ \
+  "https://your-vexa/meetings/123/export"
+```
+
+Only the meeting's **owner** can export it. Someone who reads it through a share link or a shared
+workspace sees a projected meeting, not the whole one, and is answered `403`.
+
+## Import
+
+**Terminal: drop the bundle file into any chat.** Drag it anywhere onto the chat, paste it, or pick
+it with the chat's attach button. The chat recognises a meeting bundle by its own contents — the
+manifest the format requires, not the file's name — and imports it as a call instead of attaching
+it. A card in the conversation shows how it goes:
+
+| You see | What happened |
+|---|---|
+| **Importing a call from** *file* with a progress bar | the file is going up; dropping the same file again meanwhile does not send it twice |
+| **Imported the call** and its title, as a link | the call is yours: the link opens its transcript, and it is in your **Calls** list |
+| **You already imported this call**, with a link | this file was imported before; nothing is imported again — the link opens the call it already is |
+| **Not imported:** and the reason, with its code | the deployment refused the file, e.g. *the file does not match its signature* (`hash_mismatch`), *made in a bundle version this deployment does not read* (`unsupported_version`), *too big* (`too_large`), *you are not allowed to import meetings here* (`403`) |
+
+Drop several files at once and each bundle imports while every other file attaches to your message
+as usual. A zip that is not a meeting bundle is an ordinary attachment.
+
+To see what a file holds before importing it, use **Import meeting** in the meetings list: drop or
+choose the file, and you see the title, time, platform, speakers, number of segments, recordings and
+their sizes, and anything this deployment will not restore, before anything is written. **Import**
+creates the meeting.
+
+**API** (key scope `tx`), the zip as the request body:
+
+```bash
+# preview: what would be created, nothing is written
+curl -H "X-API-Key: $VEXA_API_KEY" -H "Content-Type: application/zip" \
+  --data-binary @release-sync.meeting-bundle.zip "https://other-vexa/meetings/import?dry_run=true"
+# import
+curl -H "X-API-Key: $VEXA_API_KEY" -H "Content-Type: application/zip" \
+  --data-binary @release-sync.meeting-bundle.zip "https://other-vexa/meetings/import"
+```
+
+The answer (`201`) carries the new `meeting_id`. The imported meeting:
+
+- is **owned by you and nobody else** — no share, no workspace, no reader list comes with it;
+- has a **new id** on this deployment; the original deployment and meeting id are kept only as
+  provenance in its annotations, under `imported_from` (and `imported_bundle_id`), so
+  `list_meetings(metadata_filter={"imported_bundle_id": "…"})` finds it;
+- is `completed`, at the time the meeting really happened;
+- never sends a bot: it is imported with auto-join off;
+- gets its free-text notes back.
+
+When the file carries a workspace or a page, the Terminal then hands the same file to the agent:
+the workspace's files become a **new private workspace of yours** (named after the meeting, "…
+(imported)"), and the page lands on **your desk** as this meeting's page, re-pointed at the new
+meeting. Over the API that is one more call with the same file:
+
+```bash
+curl -H "X-API-Key: $VEXA_API_KEY" -H "Content-Type: application/zip" \
+  --data-binary @release-sync.meeting-bundle.zip "https://other-vexa/agent/meeting/bundle-restore?meeting_id=<new id>"
+```
+
+It is refused for a meeting this file did not create, for anyone but that meeting's owner, and a
+second time (`409 duplicate_import`). A page already on your desk for that meeting is kept, never
+overwritten.
+
+Importing the **same file twice** is refused (`409 duplicate_import`, naming the meeting it already
+created); the preview says so first. Delete that meeting to import the file again. A different
+person importing the same file gets their own copy.
+
+## Limits
+
+| Limit | Value |
+|---|---|
+| Bundle size (as uploaded) | 512 MiB |
+| Inflated size, all parts | 1 GiB |
+| A JSON part | 32 MiB |
+| Files in a bundle | 2,000 |
+| Transcript segments | 20,000, at most 8,000 characters each |
+| Annotations | 64 keys, 16 KiB |
+| Recording formats | WebM, WAV, Matroska, MP4 (audio or video) |
+| Workspace | 1,900 files, 16 MiB each, 256 MiB in all; names of letters, digits, `._ -` |
+| The meeting's page | 1 MiB of UTF-8 text |
+
+- **The workspace comes back as a new workspace**, private to the importer: not the shared one, and
+  with none of its members. Share it again from there if you want to.
+- **A transcript is required**: a bundle with no segments is refused.
+- A meeting with a bot still in it cannot be exported (`409`) — export it after it ends.
+- A bundle travels as a stream through the gateway in both directions — the upload is relayed as
+  it arrives and the download chunk by chunk — so a slow link costs time, not success: either side
+  may pause for up to ten minutes between chunks. meeting-api still holds one bundle in memory while
+  it checks or writes it, which is what the 512 MiB cap bounds.
+- The Terminal shows the progress of every transfer: the download, and each upload (the preview,
+  the import, and the workspace restore each send the file once).
+
+## What you see when it is refused
+
+Every refusal names one code, with a sentence saying what was wrong:
+`{"detail": {"code": "hash_mismatch", "detail": "'transcript.json' does not match its manifest length/SHA-256"}}`.
+
+| Code | HTTP | Meaning |
+|---|---|---|
+| `not_a_bundle` | 422 | Not a zip, or no `manifest.json` |
+| `unsupported_version` | 422 | A format major version this deployment does not read |
+| `unsafe_path` | 422 | An entry path that is absolute, climbs with `..`, or is not one a bundle may hold |
+| `unsafe_entry` | 422 | A symlink, special file, encrypted or duplicate entry |
+| `too_large` | 413 | Over a size, count or inflation cap |
+| `manifest_mismatch` | 422 | A file missing from, or not listed in, the manifest |
+| `hash_mismatch` | 422 | A file changed after it was exported |
+| `invalid_part` | 422 | A part does not match the format (an unknown field included) |
+| `unsafe_media` | 422 | A recording that is not the container its name says |
+| `duplicate_import` | 409 | You already imported this file |
+
+Export answers `404` (no such meeting, or not one you can see), `403` (you see it but do not own
+it), `409` (still live), or `502` (a recording could not be read from storage — the export is
+refused rather than produced without it).
+
+## How it works
+
+1. **The agent half.** The Terminal first asks the agent for the meeting's parts
+   (`GET /agent/meeting/bundle-parts`): agent-api asks the meetings domain whether the caller owns
+   the meeting, then zips the bound workspace's files (if the caller is a member; never `policy/`
+   or dot-folders) and the meeting's page on the caller's desk. `204` when there is neither.
+2. **Export request.** The Terminal's export route (its own, so the bytes are never re-encoded) calls
+   the gateway's `GET /meetings/{meeting_id}/export`, or `POST` with the parts as the body. The
+   gateway checks the key holds `tx` against the `core/meetings/routes.v1.json` row and forwards
+   with the signed identity — for these three bundle routes as a STREAM (`_forward_meeting_bundle`):
+   the body relayed as it arrives, the answer chunk by chunk with its length and file name, under
+   the bundle hop's own deadline (`BUNDLE_TIMEOUT`, ten minutes between chunks) instead of the
+   buffered leg's 30 s, which every other route keeps.
+3. **Owner check.** meeting-api re-checks the scope against the same row, then reads the meeting
+   through the transcript store's access union and requires that the caller is the owner.
+4. **Assembly.** meeting-api checks the parts archive (the same entry rules and caps as a bundle,
+   only `workspace/…` and `notes.md`), reads the segments (`get_transcript_by_id`), turns each time into
+   seconds from the meeting's start, keeps title, annotations and participant display names, and
+   for each recording asks the recordings module to finalize its master and reads the bytes from
+   object storage.
+5. **Writing.** The codec (`meeting_api.bundle.codec.write_bundle`) validates every part against the
+   sealed schema, hashes each, writes `manifest.json` and the parts into one deterministic zip, and
+   the route returns it with `Content-Disposition: attachment`.
+6. **Import request.** A file dropped, pasted or attached in a chat is first read by the Terminal
+   (`surfaces/meetingBundleSniff.ts`): the zip's central directory, the way the contract's
+   `validate.mjs` reads it, must hold `manifest.json` and `meeting.json`, and a manifest it can
+   inflate must name a `meeting-bundle` contract. That decides only *where the file goes* — a file
+   that fails it is attached as before; one that passes goes to the import route, which checks
+   everything else. A file the browser has already typed as a picture, text or a document is
+   attached without being read. The chat (`surfaces/ChatBundleImport.tsx`) sends it with the same client call
+   the meetings list's **Import meeting** uses (`confirmImport`), with upload progress, once per
+   file at a time; on `409 duplicate_import` it asks the dry run which meeting the file already is,
+   to link it. **Import meeting** sends `?dry_run=true` first for its preview. Either way the
+   Terminal streams the file to the gateway's `POST /meetings/import`; meeting-api reads the body
+   with a hard size cap.
+7. **Validation.** `read_bundle` checks every entry by name and header (paths, symlinks, encryption,
+   compression, declared and actual sizes, inflation ratio), the manifest's contract and major
+   version, the manifest ↔ archive listing, every length and SHA-256, every part against the schema,
+   and each recording's container signature. Nothing is written before all of it passes.
+8. **Duplicate check.** meeting-api looks for a meeting of the caller's annotated with the bundle id.
+9. **Landing, in order:** a planned row owned by the caller (auto-join off) → each recording's bytes
+   into object storage under the caller's own key prefix, and its record into the row's
+   `data.recordings` → the annotations, notes and `imported_from` provenance → the transcript through
+   the transcript-import write, which completes the row. Completion is last, so a failure before it
+   deletes the planned row and every object written for it.
+10. **Restoring the agent half.** With the same file, `POST /agent/meeting/bundle-restore`: agent-api
+   asks the meetings domain whether the caller owns the new meeting, validates the whole bundle with
+   the same codec, checks the meeting was imported from this bundle (`imported_bundle_id`), then
+   writes the workspace part into a new private workspace and the page onto the caller's desk
+   (re-pointed at the new meeting id, recorded as the meeting's `note_path`), and records the
+   restore so it happens once.
+
+| Data | Its one writer |
+|---|---|
+| The bundle file | meeting-api's exporter (`bundle.export_meeting`) |
+| The parts archive (workspace tree + page) | agent-api (`meeting_bundle.snapshot`) |
+| The restored workspace, the page on the desk | agent-api (`meeting_bundle.restore`, through `create_workspace` and the desk's own writer) |
+| The imported meeting row, segments, annotations | meeting-api's transcript store (`create_planned_meeting`, `annotate_meeting`, `complete_transcript_import`) |
+| The imported recording's bytes and record | meeting-api's recordings ports (`Storage.upload`, `RecordingRepo.mutate_recordings`) |
+
+**Contracts and routes:** `deploy/contracts/meeting-bundle.v1` (schema, goldens, `validate.mjs`,
+README, and `bundle_codec.py`, the codec both services vendor verbatim); `core/meetings/routes.v1.json`
+rows `GET` and `POST /meetings/{meeting_id}/export` and `POST /meetings/import`, scope `tx`; the agent's
+`GET /agent/meeting/bundle-parts` and `POST /agent/meeting/bundle-restore` behind its forward (`tx`),
+the restore a `person` verb in `core/agent/routes.v1.json`. **Configuration:** none — the limits are the contract's, and the
+bundle's deployment id is derived from the deployment's existing `ADMIN_TOKEN` secret (an HMAC, so it
+is stable, distinct per deployment, and reveals nothing).
+
+## Why it complies
+
+**Architecture** ([the P-book](/governance/architecture)):
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P2 · P6 — couple through contracts, one front door | the feature is one meeting-api module, `meeting_api/bundle`, imported through its `__init__`; it reaches the store, recordings and storage only through the ports meeting-api already passes its other modules | `gate:isolation-py`, `gate:exports` |
+| P4 · P8 — a cross-deployment format is sealed and golden-pinned | `meeting-bundle.v1` is sealed in `contracts.seal.json`; its goldens are accepted and refused bundles; the exporter is byte-for-byte the golden, and the Python importer and the Node `validate.mjs` give every refused golden the same code | `gate:schema`, `gate:contract-version`, `test_meeting_bundle_contract.py` |
+| P9 — domain doors | meetings never calls agent-api and agent-api adds no new door: the person's client carries the agent half between them, and agent-api's only meetings read is the access check it already makes | `gate:domain-doors` |
+| No duplication across the two services | one codec, vendored byte-for-byte from the contract into both, with its schema | `gate:fact-parity` (`meeting-bundle-codec`, `meeting-bundle-schema`) |
+| P18 — fail loud | every refusal is a typed code with a sentence and a `meeting_bundle_refused` log event; an export that cannot read a recording is refused, never produced without it; a failed import is rolled back and raised | `test_meeting_bundle.py` (refusal and rollback tests) |
+| P20 — complete mediation, default deny | both rows are scoped `tx` at the gateway and again in meeting-api; export is owner-only; import writes only the caller's own row. Dropping a file into a chat adds no route and no permission: it calls the same import route with the person's own session | `gate:access` scope matrix, the deny tests below |
+| P18 — a refusal reaches the person | a bundle dropped into a chat that the importer refuses is shown as a card with the importer's code and sentence, never attached instead and never silent | `chatBundleDrop.test.tsx` |
+| P23 — one writer per carrier | the bundle file is a registered data carrier with meeting-api as its one writer; an import writes the meeting through the writers that already own each part, adding none | `gate:dataflow` (`architecture.calm.json`, `meeting-bundle-file`) |
+| No duplication | the import reuses the transcript-import write (one definition of a segment upsert) and the recordings record shape; the codec is the only reader and writer of the format | review |
+
+**Security:**
+
+- **Who can do what.** Export: the meeting's owner, with a `tx` key — the agent half too. Import: any
+  `tx` key, into that key's own account only. Restore: the owner of the meeting imported from that
+  file, a person (an unwatched delegated worker is refused), once.
+- **At each hop.** The gateway authorizes the key against the route row and signs the identity;
+  meeting-api verifies the signature, re-checks the row's scopes, and the store applies the owner
+  rule. The Terminal routes add only the caller's own key.
+- **What is refused** — the codes above. Entry paths are checked as names and never joined onto a
+  filesystem path; recordings are written under the importer's own storage prefix with a content
+  type chosen from the declared format, never from the file; transcript text has control characters
+  removed and is stored and rendered as text.
+- **Deny tests** (`core/meetings/services/meeting-api/tests/test_meeting_bundle.py`):
+  `test_a_stranger_cannot_export_and_cannot_tell_the_meeting_exists`,
+  `test_a_share_recipient_cannot_export`, `test_a_workspace_member_cannot_export`,
+  `test_a_live_meeting_is_not_exported`, `test_an_import_grants_access_to_nobody_but_the_importer`,
+  `test_every_malicious_golden_is_refused_over_http_and_writes_nothing` (zip-slip, absolute and
+  backslash paths, symlink, hash mismatch, unknown version, unlisted entry, decompression bomb,
+  not a zip, missing manifest, fake media, a deployment-bound field),
+  `test_an_oversize_upload_is_refused_before_it_is_read`,
+  `test_a_reimport_is_refused_as_a_duplicate_and_a_dry_run_says_so`,
+  `test_a_failed_import_leaves_nothing_behind`,
+  `test_an_exported_bundle_carries_nothing_deployment_bound`, `test_an_export_with_parts_is_still_owner_only`,
+  `test_a_malicious_parts_archive_is_refused`. Agent (`core/agent/tests/test_meeting_bundle_workspace.py`):
+  `test_a_workspace_member_cannot_take_the_parts`, `test_a_stranger_cannot_take_the_parts`,
+  `test_only_the_imported_meetings_owner_can_restore`, `test_a_bundle_that_did_not_create_this_meeting_is_refused`,
+  `test_a_bundle_is_restored_once`, `test_a_tampered_bundle_is_refused_before_anything_is_written`,
+  `test_the_restore_needs_a_person_in_the_loop`, and the roster never leaving
+  (`test_the_owner_gets_the_workspace_tree_and_the_page_never_the_roster`). Terminal:
+  `src/app/api/__tests__/meetingBundleProxy.test.ts`, `src/surfaces/__tests__/meetingBundle.test.tsx`
+  (bundle text renders as text, never markup), and `src/surfaces/__tests__/chatBundleDrop.test.tsx`
+  for the chat path: a bundle dropped into a chat goes to the import route and never to the
+  attachment upload; a file that is not a bundle (a zip with no manifest, a parts archive, text) is
+  attached and never imported, whatever it is named; a refused bundle shows its code and is not
+  attached; a re-import says it is already imported; the same file dropped twice in flight is sent
+  once. The chat path holds no access rule of its own — the deny tests above are the ones it relies on.
+- **In the chat.** Detection reads only the zip's directory and its manifest, never the recordings,
+  and grants nothing: the server's checks are the verdict. Every value from the file or the server
+  is rendered as text.
+
+## Related
+
+- [Meetings](/core/meetings) — what a meeting is, from plan to transcript.
+- [Meetings API § Export and import a meeting](/api/meetings#export-and-import-a-meeting) — the routes, statuses and refusals.
+- [Plan and share a meeting](/how-to/plan-a-meeting) — share a meeting inside one deployment instead of moving it.
+- [`meeting-bundle.v1`](https://github.com/Vexa-ai/vexa/tree/main/deploy/contracts/meeting-bundle.v1) — the file format, for producing or reading bundles outside Vexa.

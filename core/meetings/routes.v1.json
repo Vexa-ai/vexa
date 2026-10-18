@@ -77,6 +77,13 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/meetings/import",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
       "method": "DELETE",
       "path": "/meetings/{meeting_id}",
       "scopes": [
@@ -98,6 +105,20 @@
       ]
     },
     {
+      "method": "GET",
+      "path": "/meetings/{meeting_id}/export",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/meetings/{meeting_id}/export",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
       "method": "POST",
       "path": "/meetings/{meeting_id}/annotate",
       "scopes": [
@@ -106,8 +127,36 @@
       "mcp_reentry": true
     },
     {
+      "method": "GET",
+      "path": "/meetings/{meeting_id}/access",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/meetings/{meeting_id}/access",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
       "method": "POST",
       "path": "/meetings/{meeting_id}/share",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/meetings/{meeting_id}/share/{grant_id}",
+      "scopes": [
+        "tx"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/meetings/{meeting_id}/viewers/{viewer_id}",
       "scopes": [
         "tx"
       ]

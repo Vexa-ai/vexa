@@ -76,6 +76,8 @@ def _entries(reason: str, *keys: str) -> dict:
 
 #: ``<path under core/>::<function qualname>`` → why what it touches is not a work tree.
 ALLOW = {
+    "agent/shared/meeting_bundle_codec.py::_read_bounded":
+        "opens a member of an in-memory zip archive (zipfile.ZipFile.open), never a file by name",
     **_entries(_OPERATOR,
                "agent/control_plane/broker_assertion.py::load_key",
                "agent/control_plane/config_preflight.py::load_declaration",
@@ -85,6 +87,7 @@ ALLOW = {
                "agent/control_plane/identity_token.py::_write"),
     **_entries(_IMAGE,
                "agent/control_plane/route_policy.py::load",
+               "agent/control_plane/routine_needs.py::person_tools",
                "agent/control_plane/routers/health.py::build.mcp_tools_manifest",
                "agent/control_plane/scaffolds.py::read_preset",
                "agent/control_plane/global_seed.py::_shippable",
@@ -92,6 +95,7 @@ ALLOW = {
                "agent/shared/seeding.py::list_templates",
                "agent/shared/seeding.py::_seed_pairs",
                "agent/shared/tools.py::ToolRegistry.from_dir",
+               "agent/shared/meeting_bundle_codec.py::_schema",
                "agent/worker/engine.py::<module>"),
     **_entries(_STORE,
                "agent/control_plane/secret_store.py::read_key",
@@ -121,6 +125,7 @@ ALLOW = {
                "agent/control_plane/workspace_import.py::_store",
                "agent/control_plane/workspace_import.py::status",
                "agent/control_plane/workspace_import.py::start",
+               "agent/control_plane/meeting_bundle.py::restore",
                "agent/control_plane/workspace_membership.py::read_invites",
                "agent/control_plane/workspace_membership.py::_write_invites",
                "agent/control_plane/workspace_membership.py::drop_invites",
@@ -128,6 +133,8 @@ ALLOW = {
                "agent/control_plane/workspace_membership.py::list_memberships",
                "agent/control_plane/workspace_routines.py::_read_approvals",
                "agent/control_plane/workspace_routines.py::_write_approvals",
+               "agent/control_plane/routine_refusals.py::load_state",
+               "agent/control_plane/routine_refusals.py::_save_state",
                "agent/control_plane/workspace_routines.py::_record_existing_approvals",
                "agent/control_plane/workspace_routines.py::scan_workspace_subjects",
                "agent/control_plane/routine_resign.py::resign_unsigned_routines",

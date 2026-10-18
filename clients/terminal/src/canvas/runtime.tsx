@@ -98,15 +98,15 @@ function FailureNotice({ failure, onDismiss }: { failure: CanvasFailure; onDismi
     <div
       data-canvas-view-status="failed"
       data-canvas-view-error={detail}
-      style={{ border: "1px solid var(--line2)", background: "var(--panel)", borderRadius: 8, padding: "8px 10px", marginBottom: 10, color: "var(--t2)", fontSize: 12, minWidth: 0 }}
+      className="bd-strong bg-2 r-md pt-2 pr-2 pb-2 pl-2 mb-2 c-2 t-xs" style={{ minWidth: 0 }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-        <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--danger)", flex: "none" }} />
+        <span className="r-full bg-danger" style={{ width: 7, height: 7, flex: "none" }} />
         <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>View update failed; keeping previous</span>
-        <button type="button" onClick={() => setOpen((next) => !next)} style={{ border: "none", background: "transparent", color: "var(--accent)", fontSize: 12, cursor: "pointer", padding: 0 }}>{open ? "Hide" : "Details"}</button>
-        <button type="button" onClick={onDismiss} style={{ border: "none", background: "transparent", color: "var(--t3)", fontSize: 12, cursor: "pointer", padding: 0 }}>Dismiss</button>
+        <button type="button" onClick={() => setOpen((next) => !next)} className="bd-none bg-none c-accent t-xs p-0" style={{ cursor: "pointer" }}>{open ? "Hide" : "Details"}</button>
+        <button type="button" onClick={onDismiss} className="bd-none bg-none c-3 t-xs p-0" style={{ cursor: "pointer" }}>Dismiss</button>
       </div>
-      {open && <pre style={{ margin: "8px 0 0", maxHeight: 150, overflow: "auto", whiteSpace: "pre-wrap", color: "var(--t3)", fontSize: 11, lineHeight: 1.45 }}>{detail}</pre>}
+      {open && <pre className="mt-2 mr-0 mb-0 ml-0 c-3 t-xs lh-snug" style={{ maxHeight: 150, overflow: "auto", whiteSpace: "pre-wrap" }}>{detail}</pre>}
     </div>
   );
 }

@@ -300,7 +300,7 @@ def test_the_server_substitutes_the_preset_and_the_client_composes_nothing(clien
     assert "{{" not in text                      # every token resolved HERE
     assert "Show B dailies" in text
     assert "personal:new group:absent" in text   # {{state}}, recomputed at open
-    assert "desk" in text                        # {{workspace}} — the founder's word
+    assert "personal workspace" in text          # {{workspace}} — the founder's word
     assert got["opening_preset"] == "minutes-review"
     assert scaffolds_mod.MACHINERY_MARK in text  # the human never sees it as their own words
 

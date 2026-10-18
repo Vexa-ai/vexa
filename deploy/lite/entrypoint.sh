@@ -54,6 +54,9 @@ export VEXA_SIGNIN_ALLOW="${VEXA_SIGNIN_ALLOW:-}"
 # The administrators, comma-separated full addresses (admin-api reads it; the terminal only asks).
 # Naming them closes the admin claim — set it whenever the terminal is reachable from outside.
 export VEXA_ADMIN_EMAILS="${VEXA_ADMIN_EMAILS:-}"
+# The ADMIN ACCOUNT — one fresh address, the only account that writes the company layer `_global`
+# (and that has nothing else). Empty = nobody writes `_global`. `docker run -e VEXA_ADMIN_ACCOUNT=…`.
+export VEXA_ADMIN_ACCOUNT="${VEXA_ADMIN_ACCOUNT:-}"
 # The mail relay the terminal sends the emailed sign-in link through — the deployment's
 # VEXA_MAIL_SMTP_* family (see deploy/compose/.env.example). Empty host: no link is delivered.
 export VEXA_MAIL_SMTP_HOST="${VEXA_MAIL_SMTP_HOST:-}"
@@ -115,6 +118,8 @@ export BOT_SPEAKER_SUBMIT_INTERVAL_SEC="${BOT_SPEAKER_SUBMIT_INTERVAL_SEC:-}"
 export BOT_SPEAKER_CONFIRM_THRESHOLD="${BOT_SPEAKER_CONFIRM_THRESHOLD:-}"
 export BOT_SPEAKER_MAX_BUFFER_SEC="${BOT_SPEAKER_MAX_BUFFER_SEC:-}"
 export BOT_SPEAKER_IDLE_TIMEOUT_SEC="${BOT_SPEAKER_IDLE_TIMEOUT_SEC:-}"
+export BOT_SPEAKER_MIN_FINAL_AUDIO_SEC="${BOT_SPEAKER_MIN_FINAL_AUDIO_SEC:-}"
+export BOT_STT_TIMEOUT_SEC="${BOT_STT_TIMEOUT_SEC:-}"
 
 export TRANSCRIPTION_SERVICE_URL="${TRANSCRIPTION_SERVICE_URL:-}"
 export TRANSCRIPTION_SERVICE_TOKEN="${TRANSCRIPTION_SERVICE_TOKEN:-}"
@@ -166,6 +171,11 @@ export AGENT_WORKER_COMMAND="${AGENT_WORKER_COMMAND:-/usr/local/bin/vexa-agent-w
 # (VEXA_DISPATCH_SIGNING_KEY is set below, once the state directory is known.)
 export VEXA_BOT_API_KEY="${VEXA_BOT_API_KEY:-}"
 export VEXA_AGENT_MODEL="${VEXA_AGENT_MODEL:-}"
+# The model catalog (ADR-0043): the models people pick per chat, one JSON object on one line of .env,
+# exactly as in compose. agent-api inherits it from supervisord and refuses a bad one at boot. A
+# provider's secret_ref (env:VEXA_MODEL_SECRET_<NAME>) names a variable set in .env too, which agent-api inherits the same
+# way; the runtime starts from a cleared environment, so no worker or bot sees either.
+export VEXA_MODEL_CATALOG="${VEXA_MODEL_CATALOG:-}"
 # HOST_CLAUDE_CREDENTIALS (config.v1 `model_inference`): path of a claude credentials JSON as seen
 # INSIDE this lite container. Mount only that FILE, into the root-only /var/lib/vexa/host-claude —
 # `make up` does

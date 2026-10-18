@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from jsonschema.exceptions import ValidationError
 
+from control_plane import routine_needs
 from control_plane import routines as routines_mod
 from control_plane import workspace_routines as workspace_routines_mod
 from control_plane.bodies import RoutineCreate, RoutineEnabledPatch
@@ -51,7 +52,14 @@ def build(**d) -> APIRouter:
                 ran_now = True
             except Exception:  # noqa: BLE001 — the routine is still scheduled even if the demo run fails
                 ran_now = False
-        return {"routine": routine, "job_id": job.get("job_id"), "ran_now": ran_now}
+        # SAVED EITHER WAY, and told what it will be refused (`routine_needs`): a routine that reads
+        # mail or the calendar is refused on every unattended run, so the answer says so now.
+        needs = routine_needs.needs_person(body.prompt or "")
+        out = {"routine": routine, "job_id": job.get("job_id"), "ran_now": ran_now,
+               "needs_person": needs}
+        if needs:
+            out["warning"] = routine_needs.warning_for(needs)
+        return out
     @router.get("/api/routines")
     def list_routines(request: Request):
         if scheduler is None:

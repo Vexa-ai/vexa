@@ -73,6 +73,10 @@ spec:
               value: {{ .Values.runtime.speakerStream.maxBufferSec | default "" | quote }}
             - name: BOT_SPEAKER_IDLE_TIMEOUT_SEC
               value: {{ .Values.runtime.speakerStream.idleTimeoutSec | default "" | quote }}
+            - name: BOT_SPEAKER_MIN_FINAL_AUDIO_SEC
+              value: {{ .Values.runtime.speakerStream.minFinalAudioSec | default "" | quote }}
+            - name: BOT_STT_TIMEOUT_SEC
+              value: {{ .Values.runtime.speakerStream.sttTimeoutSec | default "" | quote }}
             # The runtime caller credential: every route but /health requires it as a bearer. The
             # runtime refuses to boot without it.
             - name: RUNTIME_API_TOKEN

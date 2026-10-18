@@ -24,6 +24,11 @@ GATED = [
     ("POST", "/meetings/1/share", {}),
     ("POST", "/meetings/google_meet/abc-defg-hij/share", {}),
     ("POST", "/meetings/google_meet/abc-defg-hij/workspace", {"workspace_id": "ws_1"}),
+    # the owner's side of a share (#1801): seeing and changing who can read a meeting
+    ("GET", "/meetings/1/access", None),
+    ("PATCH", "/meetings/1/access", {"recording": True}),
+    ("DELETE", "/meetings/1/share/g1", None),
+    ("DELETE", "/meetings/1/viewers/8", None),
 ]
 
 
@@ -36,7 +41,8 @@ def client():
 
 
 def _signed(**delegation) -> dict:
-    claims = {"sub": "7", "scopes": ["bot", "tx"], "limits": 3, "workspaces": ["ws_1"]}
+    claims = {"sub": "7", "scopes": ["bot", "tx"], "limits": 3, "workspaces": ["ws_1"],
+              "writable_workspaces": ["ws_1"]}
     if delegation:
         claims["delegation"] = delegation
     return {identity_token.HEADER: identity_token.sign(KEY, claims)}
@@ -63,7 +69,8 @@ def test_a_worker_with_its_person_in_the_chat_reaches_the_route(client, method, 
 
 @pytest.mark.parametrize("method,path,body", GATED)
 def test_a_person_s_own_credential_and_the_internal_tier_reach_the_route(client, method, path, body):
-    for headers in (_signed(), {"X-User-Id": "7", "X-Internal-Secret": INTERNAL}):
+    for headers in (_signed(), {"X-User-Id": "7", "X-Internal-Secret": INTERNAL,
+                                        "X-User-Writable-Workspaces": "ws_1"}):
         r = _send(client, method, path, body, headers)
         assert r.status_code != 403, r.text
 

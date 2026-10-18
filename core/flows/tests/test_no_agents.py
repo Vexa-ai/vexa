@@ -168,6 +168,8 @@ AGENT_STEPS = {
     # domain has no card to show and, because agent-api is what publishes the events these two
     # react to, no reaction either: absent twice over, which is the correct absence.
     "await_scaffold", "await_claim",
+    # The paused-routine card re-reads the routine file on the desk, which is agent state.
+    "await_routine",
 }
 
 

@@ -62,6 +62,60 @@ degrades a feature, not the process.
 pipeline, which no longer exists: Vexa makes no model calls of its own beside the agent, so there is
 one model left and both keys carry it.
 
+### The model catalog and a chat's model
+
+When the deployment declares a [model catalog](/model-catalog), people pick the model each chat runs
+on.
+
+`GET /api/models/catalog[?session=<chat>]` returns the models the caller may pick (`models.v1`
+ModelList):
+
+```json
+{
+  "models": [
+    { "id": "qwen3-32b", "display_name": "Qwen 3 32B (self-hosted)", "provider": "lab-vllm",
+      "adapter": "openai_compatible", "harness": "openai-agent",
+      "capabilities": { "tool_calling": true, "streaming": true, "context_tokens": 32768,
+                        "reasoning_efforts": ["none", "high"], "default_effort": "none" },
+      "access": "everyone", "default": true }
+  ],
+  "default": "qwen3-32b",
+  "selected": null,
+  "selected_effort": null
+}
+```
+
+- **`models`** holds only what this caller may pick, each a real model by its catalog name. An
+  `admins` model is absent for everyone else. No entry carries an endpoint or a credential.
+- **`default`** is the model the caller runs on before picking: their own `default_model`, else the
+  organisation's, else the catalog's default.
+- **`selected`** is the named chat's own pick (`null` means the chat follows the default). It is
+  present only when `session` is given.
+- **`capabilities.reasoning_efforts`** lists the effort levels a chat may pick for that model, and
+  is empty when the model has no effort control. **`default_effort`** is the level it runs at until
+  the chat picks one.
+- **`selected_effort`** is the named chat's own effort pick (`null` means the model's
+  `default_effort`). It is present with `selected`.
+- **No catalog:** the deployment returns `{"models": [], "default": null}`.
+
+`POST /api/chat/model` with body `{ "session": "<chat>", "model": "<id>", "effort": "<level>" }`
+returns `{ "ok": true, "session", "model", "effort", "changed" }`.
+
+- It pins the chat to a model. `"model": ""` puts the chat back on the default.
+- `effort` is optional. It is checked against the model the chat will run on (the pick, else the
+  default) and stored with it; absent or empty runs the model at its `default_effort`. Changing
+  the model without an `effort` clears the effort pick.
+- The pick takes effect on the chat's next turn, which starts a fresh agent.
+- A pick the next turn could not run is refused and not stored:
+
+  | Status | Reason |
+  |---|---|
+  | `422` | the model is not in the catalog |
+  | `403` | an admins-only model, for anyone else |
+  | `422` | an effort level the model does not offer (`effort_unsupported`) |
+
+  Each refusal is `{ "detail", "fault" }`, and `fault` is the [typed fault](#chat-streamed) below.
+
 ## Dispatch a unit
 
 `POST /invocations` — the sink every trigger funnels through. Body is a conformant `unit.v1` Invocation
@@ -89,9 +143,9 @@ There is **no** top-level `subject`, `workspace_repo`, or `plan` field.
 `session` is 1–128 characters from `A-Z a-z 0-9 . _ -`, starting with a letter or digit (empty or
 absent means `main`); any other value is a `422`, here and at every other door that takes a session:
 `/api/chat/submit`, `/api/chat/reset`, `GET /api/chat/pending?session=`, `GET /api/sessions/{session}/history`,
-`/api/chat/name`, `/api/chat/name/agent` and `/api/chat/target`. Each entry of `PUT /api/chat/order` is a
-rail row key, `c:<session>` or `m:<meeting id>` (or a bare session), the part after the prefix held to the
-same rule.
+`DELETE /api/sessions/{session}`, `/api/chat/name`, `/api/chat/name/agent` and `/api/chat/target`. Each
+entry of `PUT /api/chat/order`, and the `row` of `POST /api/chat/marks`, is a rail row key, `c:<session>` or
+`m:<meeting id>` (or a bare session), the part after the prefix held to the same rule.
 Returns **Server-Sent Events**; each `data:` line is one frame:
 
 | frame | fields |
@@ -99,16 +153,79 @@ Returns **Server-Sent Events**; each `data:` line is one frame:
 | `message-delta` | `text` |
 | `tool-call` | `tool`, `args`, `callId` |
 | `tool-result` | `callId`, `ok`, `summary` |
+| `sources` | `items`: `[{ url, title? }]` — a page the turn successfully fetched (`WebFetch`), one per frame; a client merges a turn's items by `url` and renders them as the answer's citations. Only `http`/`https` URLs. |
 | `commit` | `sha` |
 | `rejected` | `violations` |
 | `done` | `reply`, `sessionId`, `ok` (+ `detail` when a failure's raw provider text was rewritten, + `fault` when the turn failed typed) |
 | `error` | `message` — the turn was refused before dispatch (e.g. no model credential configured); actionable, names what to set (+ `fault` when a dependency refused it) |
+
+A chat whose model cannot run, for example because it was removed from the catalog, is refused
+before anything starts. The answer is `{ "detail", "fault" }` with
+`fault: { source: "model-provider", kind, provider, model, status: null, detail, remedy }`.
+
+- **`kind`** is one of `unknown_model`, `not_permitted`, `not_configured` (the catalog offers this
+  caller nothing), `credential_missing` or `effort_unsupported` (a stored effort level the model no
+  longer offers).
+- **The record's shape** is the one a failed provider call (`unpaid`, `unauthorized`,
+  `rate_limited`, `unavailable`, `refused`) carries on the turn's `done` frame.
+- **No substitution:** the turn never runs on another model instead.
 
 ```bash POST /api/chat  (SSE)
 curl -N -X POST "$API_BASE/agent/chat" -H "Content-Type: application/json" \
   -H "X-API-Key: $VEXA_API_KEY" \
   -d '{"prompt":"Record that Acme renewed."}'
 ```
+
+### Sources: the pages a turn read
+
+When the agent reads a web page with `WebFetch` to answer, the stream carries a `sources` frame for
+that page, so a client can show the answer's citations from data instead of parsing a "Sources" list
+out of the reply text:
+
+```json
+{ "type": "sources", "items": [{ "url": "https://example.com/report", "title": "Example report" }] }
+```
+
+**Limits.**
+
+- Only a fetch that succeeded is a source. A failed fetch and a search result list are not.
+- One item per frame. A turn that read three pages sends three frames; merge them by `url`.
+- `url` is `http` or `https` only, at most 2,048 characters. `title` is present only when the fetch
+  tool's result is JSON carrying a `title`, and is cut to 300 characters.
+- The `claude-code` and `openai-agent` harnesses emit it. The `codex` harness does not.
+
+#### How it works
+
+1. The harness sees a `WebFetch` call and keeps its arguments by call id
+   (`core/agent/llm/claude_code.py`; `core/agent/llm/openai_agent.py` `_panel_events`).
+2. On that call's successful result it calls `_fetched_source(args, content)` in
+   `core/agent/llm/tool_events.py`, the one place both harnesses share. The URL comes from the call's
+   arguments. When the result is JSON, its `title` is added and its own `url` field, if it is
+   `http(s)`, replaces the one asked for.
+3. The frame follows that call's `tool-result` frame on the worker's output and reaches the chat SSE
+   stream unchanged, like the other panel frames.
+
+The harness is the only writer of the frame; nothing stores it. No sealed contract lists the chat
+frames, so the frame is additive: a client that does not know it ignores it. No route and no
+configuration.
+
+#### Why it complies
+
+| Rule | How | Gate |
+|---|---|---|
+| **P2** couple only through contracts | The fetch vocabulary and the frame builder live once in `llm/tool_events.py`; both harnesses import it rather than keep a copy. | `gate:python` (`test_the_openai_runner_derives_the_same_event`); the shared module itself: ungated: reviewed |
+| **P16** additive change | A new optional frame type on an unsealed stream; existing frames are unchanged. | ungated: reviewed |
+| **P18** fail loud, no false success | Only a successful fetch becomes a source, so a citation always names a page the turn read. | `gate:python` (`test_a_failed_fetch_is_not_a_source`, `test_a_search_is_not_a_source`) |
+| **P23** one writer | The harness derives the frame from the tool result; nothing else writes sources. | ungated: reviewed |
+
+**Security.** The frame grants no access: it carries only URLs the person's own turn fetched, on that
+person's own stream, through the same agent-api relay as every other frame. The fetch itself is
+unchanged (`openai-agent`'s `WebFetch` keeps its outbound-address guard). A non-web scheme is never
+passed on as a link, and the title is length-capped data, not markup. Tests in
+`core/agent/tests/test_turn_sources.py`: `test_only_http_urls_are_sources` (refuses `javascript:`,
+`file:` and a missing URL), `test_a_failed_fetch_is_not_a_source`, `test_a_search_is_not_a_source`,
+`test_a_successful_fetch_is_a_source`, `test_the_title_and_final_url_come_from_a_json_result`,
+`test_the_openai_runner_derives_the_same_event`.
 
 **Typed faults.** A failure says who failed and how, as
 `fault: { source, kind, status, detail, remedy }` on a failed `done`, on an `error` frame, and on the
@@ -121,7 +238,7 @@ body of a refused dispatch: `{ detail, fault }` with `503` when the agent runtim
 | `source` | `kind` |
 |---|---|
 | `runtime` | `spawn_refused`, `quota_exceeded`, `unauthorized`, `refused`, `not_found`, `unreachable`, `unavailable`, `bad_response` |
-| `model-provider` | `unpaid`, `unauthorized`, `rate_limited`, `unavailable`, `refused`, `no_tool_calling` |
+| `model-provider` | `unpaid`, `unauthorized`, `rate_limited`, `unavailable`, `refused`, `no_tool_calling`, `unknown_model`, `not_permitted`, `not_configured`, `credential_missing`, `endpoint_refused`, `effort_unsupported` |
 | `vexa-tools` | `access_expired` |
 | `agent-worker` | `tools_unconfined`, `credential_conflict` |
 | `agent-api` | `internal`, `unavailable` |
@@ -132,10 +249,29 @@ body of a refused dispatch: `{ detail, fault }` with `503` when the agent runtim
 caller has no thread for is a `404`; a thread whose transcript is missing or empty returns
 `{ "turns": [] }`.
 
-`GET /api/chat/pending?session=` → `{ pending: [{ entry, id, kind, target, display, at, blocked? }], cursor, fault? }`:
+`DELETE /api/sessions/{session}` → `{ ok, session, files_removed, hidden_meeting }`: deletes one of the
+caller's chats — the index entry, the conversation's transcript and continuity pointer, and the caller's
+own marks and order entry for it. Workspace pages it wrote stay. When the chat was a meeting's,
+`hidden_meeting` is that meeting's row (`m:<id>`), now hidden on the caller's rail; the meeting itself is
+not deleted. `404` for a session not in the caller's index, `409` while it still has queued submissions,
+`403` for a delegated (agent) caller. See [Manage your chats](/how-to/chat-controls).
+
+`GET /api/chat/marks` → `{ pinned: [row], hidden: [row] }` · `POST /api/chat/marks`
+`{ row, pinned?, hidden? }` → the same shape: pins or hides one row of the caller's own rail. Setting a mark
+needs a row the caller can see (their own chat, or a meeting they can read) — otherwise `404`; clearing one
+does not. A request with neither flag, an unknown field or more than 5000 marks is a `422`.
+
+`GET /api/chat/pending?session=&after=` → `{ pending: [{ entry, id, kind, target, display, at, blocked? }], cursor, taken?, fault? }`:
 what the chat submitted that its agent has not taken yet. When a typed fault is stopping the queue,
 each row carries it as `blocked` and the top level once more as `fault`; it clears the moment the agent
-takes anything.
+takes anything. `after` is an output-stream id (`<ms>-<seq>`, anything else is a `422`); with it,
+`taken` counts the turns the agent has started since that id. A client whose stream just ended passes
+its last event id: a message the agent took the moment the previous turn ended is no longer pending,
+and `taken` is what tells the client to attach and watch it.
+
+A streamed `/api/chat` view stays open until every turn that started on it has sent `turn-complete`.
+Two turns can share one view (the agent takes the next message while it finishes the previous turn's
+write-back); every worker event carries its `turn_id`, so a client can tell them apart.
 
 ## Routines
 
@@ -172,7 +308,7 @@ curl -X POST "$AGENT_API/events" -H "Content-Type: application/json" -d '{
 - `GET /api/meeting/relay-health` → typed transcript-relay health (a stale bot key surfaces as
   `native_resolve:{ok:false,kind:"unauthorized"}` rather than silent dead air).
 - `POST /api/meeting/terms/scan` `{ meeting_id, since?, keep? }` → the terms the meeting has named
-  since `since`, each with `known` (the page this reader can open, desk first) or `null`, plus
+  since `since`, each with `known` (the page this reader can open, personal workspace first) or `null`, plus
   `cursor` and `emit`. Without `keep` it publishes nothing; `keep` (comma separated, `*` for all) adds
   those terms to the meeting's highlight map, which `GET /api/meeting/terms?meeting_id=` returns.
   The transcript is read from meeting-api as the caller: `403` for a meeting they cannot read,
@@ -189,9 +325,11 @@ ask about a meeting with `POST /api/chat`, passing
 `GET /api/workspace/tree?hidden=` → `{ "files": ["kg/entities/..."] }` ·
 `GET /api/workspace/file?path=` → `{ "path": "...", "content": "..." }` (`404` if absent) ·
 `PUT /api/workspace/file` `{ path, content, slug? }` → `{ "path": "...", "written": true }` (commits;
-`kg/templates/` is refused `403`, and `_global` needs the admin allowlist) ·
+`kg/templates/` is refused `403`, and `_global` needs the [admin account](/minutes/workspaces#the-admin-account)) ·
 `POST /api/workspace/remove` `{ path, slug? }` → `{ path, deleted, workspace, commit }` (one page, as a
-commit) · `POST /api/workspace/move` `{ path, to, slug?, to_slug? }` → `{ from, to, moved, pointer,
+commit) · `POST /api/workspace/restore` `{ path, slug?, commit? }` → `{ path, restored, workspace,
+commit, from_commit }` (puts back a removed page from the removal's parent, as a commit; `409` if a
+file is at the path) · `POST /api/workspace/move` `{ path, to, slug?, to_slug? }` → `{ from, to, moved, pointer,
 commit, source_commit }` (an omitted `to_slug` is the same workspace) ·
 `POST /api/workspace/asset` `{ url, path?, slug? }` → the stored picture's `path` (the server fetches it) ·
 `GET /api/workspace/git` → `{ branch, changes, commits }` ·
@@ -206,7 +344,7 @@ workspace (parks the current one; omit `repo` to swap back to the seed).
 
 On the page writes — file, remove, move, asset and entity — an omitted `slug` is where the conversation
 is working: an agent worker's identity carries its chat's target workspace, and a caller with none
-writes on its own desk. `slug: "personal"` (or `"desk"`) names the desk explicitly.
+writes in its own personal workspace. `slug: "personal"` (or `"desk"`) names the personal workspace explicitly.
 
 ## Workspace identity and links
 
@@ -222,7 +360,7 @@ renaming either the workspace or the page leaves them resolving.
 as its own title.
 
 `POST /api/workspaces/{workspace_id}/rename` `{ name }` → the same view plus `renamed_from`. A group's
-owner and instance admins only — `403` otherwise, including for a desk's own owner; `404` unknown id,
+owner and instance admins only — `403` otherwise, including for a personal workspace's own owner; `404` unknown id,
 `400` empty name. The rename is audited on the record.
 
 `POST /api/links/resolve` `{ refs: [...], slug? }` →
@@ -231,7 +369,7 @@ trip, capped at 200. A readable ref with no file yet adds `missing: true` and st
 resolved one adds `path` and `slug`.
 
 `POST /api/desk/touch` `{ workspace, path }` → `202 { "recorded": true|false }`. The touch is filed
-under the **caller's own** desk, never a workspace named in the body; a workspace this caller cannot
+under the **caller's own** personal workspace, never a workspace named in the body; a workspace this caller cannot
 read answers `recorded: false` rather than confirming it exists. `400` without both fields.
 
 ## Entities
@@ -256,25 +394,30 @@ person has answered. `POST /api/claims` `{ claims: [{ claim, source?, scope? } |
 claim (`400` on an empty list). `POST /api/claims/verdicts` `{ verdicts: [{ id, verdict, note? }] }` →
 `{ recorded: [{ id, state, usable_as_context }], errors?, workspace_ready? }` — `verdict` is
 `confirmed` · `corrected` · `rejected`; an unknown id or verdict is reported in `errors` and the rest
-still lands. The first claim the person stands behind writes the desk's `.scaffolded` marker.
+still lands. The first claim the person stands behind writes the personal workspace's `.scaffolded` marker.
 
 ## Rough edges
 
+People report friction by telling the chat agent what did not work; the agent files it with the
+`report_friction` tool. The terminal has no separate report control. The route below is what the
+agent's worker and its harness post to.
+
 `POST /api/friction` — body `{ kind?, severity?, tried?, happened?, would_help?, session?, context? }`;
 the context keys `workspace` · `path` · `meeting_id` · `scaffold_id` · `tool` · `error` · `surface` are
-also accepted flat. → `201 { id, status, recurrence, kind, known }`, where `known` is `recurrence > 1`.
-`kind` is `missing-tool` · `refusal` · `no-page` · `wrong-workspace` · `unfulfilled` · `error` · `ux` ·
-`other`; `severity` is `blocker` · `annoyance` · `papercut` · `idea`. Unknown keys are dropped, free
-text is clipped and secret-scrubbed, and identical reports fold into one row with a counter. This is
-the **one route here that files without an identified caller** — `X-User-Id` is recorded when present
-and never required.
+also accepted flat. `session`, `tried` and `happened` must be present (`400` otherwise). `kind` is
+`missing-tool` · `refusal` · `no-page` · `wrong-workspace` · `unfulfilled` · `error` · `ux` · `other`;
+`severity` is `blocker` · `annoyance` · `papercut` · `idea`. Unknown keys are dropped and free text is
+clipped and secret-scrubbed. This is the **one route here that files without an identified caller** —
+`X-User-Id` is recorded when present and never required.
 
-`GET /api/friction/dump?since=&status=open&format=md` → `text/markdown`; `format=json` returns
-`{ since, status, count, findings, records }` from the same renderer.
-
-`POST /api/friction/{friction_id}/fix` `{ fix_ref }` → `{ id, status, fix_ref }`. `fix_ref` is any
-reference a reader can follow — a sha, a PR, a sentence — and is required (`400` when empty); `404` for
-an unknown id. The same edge filed again after a fix comes back as `recurring`.
+agent-api stores nothing: it forwards the report to flows' `POST /friction` and returns its answer,
+`201 { id, recorded }`. When flows cannot be reached or refuses the report, the answer is
+`{ "id": "", "recorded": false }`. When the same subject already filed the same report (same tool,
+same refusal reason or same text once ids are removed) in the same UTC hour, flows counts it against
+the first report instead of storing a new one, and the answer passes that through:
+`{ id, recorded: false, duplicate_of, occurrences, instruction }`, where `instruction` tells the
+reporter not to file it again this run. How reports are folded:
+[Friction reports](/flows/operations#friction-reports-repeats-are-folded-into-one-row).
 
 ## Sharing, membership and invites
 
@@ -335,7 +478,7 @@ do not move ·
 `POST /api/workspace/{slug}/archive` `{ archived }` → `{ slug, archived }` ·
 `DELETE /api/workspace/{slug}` → `{ slug, deleted: true }`, irreversible; the baseline is refused ·
 `POST /api/workspace/reset` `{ target }` → `{ target, reset: true }` for `personal` or `_global` (admin
-only) — the slot survives and the content returns to the seed. `_system` is never resettable.
+account only) — the slot survives and the content returns to the seed. `_system` is never resettable.
 
 ## Git remotes, deploy keys and publish
 
@@ -374,8 +517,8 @@ operator verb waits for it (founder ruling 2026-10-08). Unless `VEXA_GLOBAL_SYST
 names a separate host repo, agent-api keeps `_global` in its own store and creates it empty at boot.
 
 `POST /api/global/ready` `{ author_email?, author_name? }` →
-`{ accepted, company, service, commit, files }` — accept a company layer an admin chose to write.
-Admin only (`403`) and idempotent; it reads the files and commits them itself, authored by the
+`{ accepted, company, service, commit, files }` — accept a company layer the admin account chose to write.
+Admin account only (`403`) and idempotent; it reads the files and commits them itself, authored by the
 admin (the caller's own address unless the body names another) — nothing may mark itself accepted. A layer that is not complete answers
 `409 { accepted: false, missing_files, reasons, next }`. It gates nothing.
 
@@ -415,6 +558,15 @@ other case, probed with the deployment's credential only. `mode` says how: `cust
 one-token completion against the endpoint, `subscription` checks the mounted credentials for expiry. A
 stored key that is not in effect is never sent, and the summary says that nothing of the caller's was
 tested. `config` echoes only `mode`, `model` and `base_url`.
+
+With a [model catalog](/model-catalog), `GET /api/models/test?model=<id>` tests that catalog model
+(the caller's default when `model` is absent). The response is
+`{ ok, summary, mode: "catalog", model, provider, harness }`.
+
+- It resolves the route a turn on that model would take, through the same provider port.
+- It probes that route in its own dialect, at the URL the harness posts to, with exactly that route's
+  credential.
+- A model the caller cannot use answers `ok: false` with its `fault`.
 
 `GET /api/transcription/test` → `{ ok, summary, source }` (plus per-failure detail). Probes the
 effective STT backend with its token and then a real transcribe, so a zero-balance account fails here
