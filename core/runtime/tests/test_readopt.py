@@ -22,9 +22,12 @@ from fastapi.testclient import TestClient
 
 from runtime_kernel import Runtime
 from runtime_kernel.api import create_app
+
+from _caller import TOKEN, caller_client
 from runtime_kernel.backend import WorkloadHandle
 from runtime_kernel.docker_backend import DockerBackend
 from runtime_kernel.models import RuntimeState, WorkloadSpec, WorkloadStatus
+from runtime_kernel.profiles import default_registry, network_envs
 from runtime_kernel.store import InMemoryStore, WorkloadRecord
 
 
@@ -111,7 +114,8 @@ class FakeDockerSession:
 
 
 def _backend(containers: dict[str, dict]) -> tuple[DockerBackend, FakeDockerSession]:
-    be = DockerBackend()
+    # the shipped profiles' network settings, as build_production_app passes them
+    be = DockerBackend(network_envs=network_envs(default_registry()))
     fake = FakeDockerSession(containers)
     be._session = fake  # inject the fake socket
     return be, fake
@@ -272,7 +276,7 @@ def test_adopt_makes_get_truthful_after_restart():
     assert status.profile == "adopted"
 
     # …and over HTTP, exactly what meeting-api polls:
-    client = TestClient(create_app(rt))
+    client = caller_client(create_app(rt, caller_token=TOKEN))
     r = client.get("/workloads/mtg-2-d93eee39")
     assert r.status_code == 200, "recreated runtime must not 404 a live workload"
     assert r.json()["state"] == "running"
@@ -388,7 +392,7 @@ def test_k8s_start_stamps_adoption_labels(monkeypatch):
     (call,) = calls
     pod = _json.loads(call["stdin"])            # the labels ride the submitted manifest
     assert pod["metadata"]["labels"] == {
-        "runtime.managed": "true", "runtime.workload_id": "mtg-2-d93eee39",
+        "runtime.managed": "true", "runtime.workload_id": "mtg-2-d93eee39", "runtime.instance": "default",
     }
 
 
@@ -412,7 +416,7 @@ def test_k8s_discovers_pods_by_label(monkeypatch):
             returncode = 0
             stdout = json.dumps(pods)
             stderr = ""
-        assert "-l" in args and "runtime.managed=true" in args
+        assert "-l" in args and "runtime.managed=true,runtime.instance=default" in args
         return R()
 
     monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
@@ -423,3 +427,54 @@ def test_k8s_discovers_pods_by_label(monkeypatch):
         "workload_id": "mtg-9-dead", "name": "vexa-mtg-9-dead",
         "running": False, "exit_code": 137,
     }
+
+
+def test_docker_discovery_covers_both_workload_networks(monkeypatch):
+    """Bots and workers sit on different stack networks; discovery and find() scope to the UNION
+    (this stack's two networks) and still exclude a foreign stack."""
+    monkeypatch.setenv("DOCKER_NETWORK", "vexa_prod_bots")
+    monkeypatch.setenv("DOCKER_WORKER_NETWORK", "vexa_prod_workers")
+    be, _ = _backend({
+        "vexa-mtg-2-d93eee39": {"labels": dict(LABELS), "running": True, "network": "vexa_prod_bots"},
+        "vexa-worker-58-chat": {
+            "labels": {"runtime.managed": "true", "runtime.workload_id": "agent-58-chat"},
+            "running": True, "network": "vexa_prod_workers",
+        },
+        "vexa-mtg-7-eyeball": {
+            "labels": {"runtime.managed": "true", "runtime.workload_id": "mtg-7-eyeball"},
+            "running": True, "network": "vexa_eyeball_bots",
+        },
+    })
+    ids = sorted(i["workload_id"] for i in be.list_workload_containers())
+    assert ids == ["agent-58-chat", "mtg-2-d93eee39"]
+    assert be.find("agent-58-chat") is not None
+    assert be.find("mtg-7-eyeball") is None
+
+
+
+def test_k8s_adopts_only_its_own_instances_pods(monkeypatch):
+    """Two releases in one namespace: each runtime stamps its instance on what it spawns and adopts
+    by it, so neither re-adopts (and then stops) the other's live Pods."""
+    from runtime_kernel import k8s_backend
+    from runtime_kernel.profiles import Runnable
+
+    submitted, selectors = [], []
+
+    def fake_kubectl(*args: str, check: bool = True, stdin=None):
+        if stdin:
+            submitted.append(json.loads(stdin))
+        if "-l" in args:
+            selectors.append(args[args.index("-l") + 1])
+
+        class R:  # noqa: N801
+            returncode = 0
+            stdout = json.dumps({"items": []})
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
+    monkeypatch.setenv("RUNTIME_K8S_INSTANCE", "release-a")
+    k8s_backend.K8sBackend().start("mtg-1", Runnable(image="img"), {})
+    k8s_backend.K8sBackend(instance="release-b").list_workload_containers()
+    assert submitted[0]["metadata"]["labels"]["runtime.instance"] == "release-a"
+    assert selectors == ["runtime.managed=true,runtime.instance=release-b"]

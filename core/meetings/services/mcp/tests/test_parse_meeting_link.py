@@ -355,3 +355,10 @@ class TestHostnameSpoofing:
         assert parse("https://teams.live.com/meet/9361792952021?p=x").platform == "teams"
         assert parse("https://gov.teams.microsoft.us/meet/12345678901234").platform == "teams"
         assert parse("https://contoso.teams.microsoft.com/meet/12345678901234").platform == "teams"
+
+@pytest.mark.parametrize("host", ["teams.microsoft.com", "teams.live.com"])
+def test_sixteen_digit_teams_meeting_id(host):
+    result = parse(f"https://{host}/meet/1234567890123456?p=fixture")
+    assert result.native_meeting_id == "1234567890123456"
+    assert result.teams_base_host == host
+    assert result.passcode == "fixture"

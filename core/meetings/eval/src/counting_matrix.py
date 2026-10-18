@@ -6,8 +6,11 @@ This stops at stage 5 ON PURPOSE: stages 1–5 are deterministic (TTS/STT/collec
 so they make a reproducible CI gate. Stage 6 (the LLM copilot) is proven separately (counting_replay.py,
 20/20) but its timing is model-bound, so it's not part of the fast gate.
 
-Publishes to `transcription_segments` with native STAMPED (the P23 path) → collector writes
-`tc:meeting:{native}` → reads it back → asserts. Runs against the local vexa-v012 stack via docker exec.
+Publishes to `transcription_segments` with native STAMPED (the P23 path), each entry signed for its
+meeting the way a bot signs (`segment_bus.py`; the collector drops anything else) → collector writes
+`tc:meeting:{meeting_id}` → reads it back → asserts. Runs against the local vexa-v012 stack via
+docker exec, inside the meeting-api container (it mints the session token with that container's
+ADMIN_TOKEN).
 """
 from __future__ import annotations
 
@@ -17,7 +20,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import segment_bus  # noqa: E402
+
 STORE = Path.home() / "vexa-test-rig" / "fixtures" / "google_meet"
+MEETING_ID = 900002   # the meeting every scenario publishes as; its token is minted for this id
 SCENARIOS = ["silence", "overlap", "dynamic", "continuation", "solo"]
 _W = {w: i for i, w in enumerate(
     "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
@@ -39,33 +46,15 @@ def run_one(fx: Path) -> dict:
     truth = [json.loads(l) for l in (fx / "truth.jsonl").read_text().splitlines() if l.strip()]
     n = max(x for t in truth for x in t["numbers"])
     native = f"mtx-{fx.name}"
-    payloads = [json.dumps({"type": "transcription", "meeting_id": "900002",
+    payloads = [json.dumps({"type": "transcription", "meeting_id": MEETING_ID,
                             "native_meeting_id": native, "platform": "google_meet", "segments": [s]})
                 for s in segs]
-    # publish all, then read tc:meeting:{native} back — pure collector path, no copilot.
-    script = f"""
-import os,sys,json,time,redis
-r=redis.from_url(os.environ.get('REDIS_URL','redis://redis:6379/0'),decode_responses=True)
-r.delete('tc:meeting:{native}')
-for line in sys.stdin:
-    line=line.strip()
-    if line: r.xadd('transcription_segments',{{'payload':line}})
-# wait until the collector has DRAINED (native stream stops growing) — robust to batch size / 100s of segs
-prev=-1
-for _ in range(40):
-    time.sleep(1.0)
-    cur=r.xlen('tc:meeting:{native}')
-    if cur>0 and cur==prev: break
-    prev=cur
-rows=r.xrange('tc:meeting:{native}')
-out=[]
-for _id,f in rows:
-    try: p=json.loads(f['payload'])
-    except: continue
-    for sg in p.get('segments',[]):
-        out.append({{'speaker':sg.get('speaker'),'text':sg.get('text')}})
-print(json.dumps(out))
-"""
+    # publish all (signed for MEETING_ID), then read the collector's tc:meeting:{MEETING_ID} back —
+    # pure collector path, no copilot. read_feed waits until the feed stops growing.
+    script = segment_bus.remote(
+        f"clear_feed({MEETING_ID})\n"
+        f"publish(sys.stdin, {MEETING_ID}, {native!r})\n"
+        f"print(json.dumps(read_feed({MEETING_ID})))")
     res = subprocess.run(["docker", "exec", "-i", "vexa-v012-meeting-api-1", "python", "-c", script],
                          input="\n".join(payloads), text=True, capture_output=True)
     native_segs = json.loads(res.stdout.strip().splitlines()[-1]) if res.stdout.strip() else []

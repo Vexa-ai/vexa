@@ -32,7 +32,7 @@ HEADERS = {"x-user-id": str(USER)}
 # ── unit: invocation + workload spec conform to the sealed contracts ─────────────────────────────
 
 def test_invocation_conforms_to_invocation_v1():
-    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET, session_uid="conn-1")
     inv = build_invocation(
         meeting_id=1, platform="google_meet",
         meeting_url="https://meet.google.com/abc-defg-hij", bot_name="VexaBot",
@@ -48,7 +48,7 @@ def test_invocation_carries_stt_creds_when_provided():
     """The bot can only transcribe if the invocation carries the STT URL+token (the mock-bot/dashboard
     validation found these were dropped). When provided they ride the invocation; when not, they are
     omitted (None-stripped) and the bot joins+captures without transcribing."""
-    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET, session_uid="conn-1")
     base = dict(meeting_id=1, platform="google_meet", meeting_url="https://meet.google.com/abc-defg-hij",
                 bot_name="VexaBot", token=token, native_meeting_id="abc-defg-hij",
                 connection_id="conn-1", redis_url="redis://redis:6379/0")
@@ -77,7 +77,7 @@ def test_invocation_carries_capture_signal_enabled_and_strips_only_none():
     operator has just turned collection OFF. ``False`` is not ``None``, so it survives the strip;
     this pins that, because the day it stops being true nothing else would notice.
     """
-    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET, session_uid="conn-1")
     base = dict(_INV_BASE, token=token)
 
     on = build_invocation(**base, capture_signal_enabled=True)
@@ -95,7 +95,7 @@ def test_invocation_carries_capture_signal_enabled_and_strips_only_none():
 def test_invocation_tape_is_independent_of_recording_enabled():
     """A meeting nobody asked to record still yields a fixture — the two flags are orthogonal, and
     the sealed contract says so ("the transcript/recording paths are unaffected either way")."""
-    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET, session_uid="conn-1")
     inv = build_invocation(**dict(_INV_BASE, token=token),
                            recording_enabled=False, capture_signal_enabled=True,
                            recording_upload_url="http://meeting-api:8080/internal/recordings/upload")
@@ -110,7 +110,7 @@ def test_invocation_carries_stt_model_when_provided():
     """#522: a validating OpenAI-compatible backend (Groq, vLLM) needs its served model id on
     every request. The deployment's choice rides the sealed invocation; absent → omitted, and
     the whisper client falls back to whisper-1 (today's wire)."""
-    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET)
+    token = mint_meeting_token(1, USER, "google_meet", "abc-defg-hij", secret=SECRET, session_uid="conn-1")
     base = dict(meeting_id=1, platform="google_meet", meeting_url="https://meet.google.com/abc-defg-hij",
                 bot_name="VexaBot", token=token, native_meeting_id="abc-defg-hij",
                 connection_id="conn-1", redis_url="redis://redis:6379/0")
@@ -118,6 +118,12 @@ def test_invocation_carries_stt_model_when_provided():
     conforms_invocation(inv)
     assert inv["transcriptionModel"] == "whisper-large-v3-turbo"
     assert "transcriptionModel" not in build_invocation(**base)
+    # the endpoint's owner is stated only when it is the customer's
+    owned = build_invocation(**base, transcription_service_owner="customer")
+    conforms_invocation(owned)
+    assert owned["transcriptionServiceOwner"] == "customer"
+    for owner in (None, "vexa"):
+        assert "transcriptionServiceOwner" not in build_invocation(**base, transcription_service_owner=owner)
 
 
 def test_workload_spec_conforms_to_runtime_v1():
@@ -135,10 +141,10 @@ def test_workload_spec_conforms_to_runtime_v1():
 
 
 def test_meeting_token_roundtrips_under_secret():
-    from meeting_api.recordings.service import _verify_meeting_token
+    from meeting_api.meeting_token import verify_meeting_token
 
-    token = mint_meeting_token(42, USER, "google_meet", "abc", secret=SECRET)
-    claims = _verify_meeting_token(token, secret=SECRET)
+    token = mint_meeting_token(42, USER, "google_meet", "abc", secret=SECRET, session_uid="conn-1")
+    claims = verify_meeting_token(token, secret=SECRET)
     assert claims["meeting_id"] == 42
     assert claims["user_id"] == USER
     assert claims["scope"] == "transcribe:write"
@@ -163,6 +169,35 @@ async def test_request_bot_eager_creates_session_and_spawns(monkeypatch):
     assert len(repo.sessions) == 1
     spawned = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
     assert repo.sessions[0]["session_uid"] == spawned["connectionId"]
+
+
+async def test_fresh_spawn_purges_transcript_stream_but_continue_does_not(monkeypatch):
+    """A FRESH meeting must start on an EMPTY transcript stream, so a reused row id (e.g. after a DB
+    id-sequence reset without a redis flush) can't carry a prior generation's session_end → the
+    terminal showing "Meeting ended" before the first word. The injected purge fires with the new row
+    id on a fresh insert, and NOT on continue_meeting (which intentionally keeps the reused stream)."""
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_URL", "https://stt.vexa.ai")
+    monkeypatch.setenv("TRANSCRIPTION_SERVICE_TOKEN", "tok-test")
+    repo, runtime = InMemoryMeetingRepo(), FakeRuntimeClient()
+    purged: list[int] = []
+
+    async def _purge(mid):
+        purged.append(mid)
+
+    kw = dict(redis_url="r", token_secret=SECRET, meeting_api_url="http://meeting-api:8080",
+              transcript_stream_purge=_purge)
+
+    first = await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                              native_meeting_id="abc-defg-hij", **kw)
+    assert purged == [first["id"]]            # fresh insert → the NEW row's stream is purged
+
+    # the meeting completes; a CONTINUED bot reuses the SAME row and must NOT purge (keeps continuity)
+    repo.set_status(first["id"], "completed")
+    purged.clear()
+    second = await request_bot(repo, runtime, user_id=USER, platform="google_meet",
+                               native_meeting_id="abc-defg-hij", continue_meeting=True, **kw)
+    assert second["id"] == first["id"]
+    assert purged == []                       # continue_meeting KEEPS the reused row's stream
 
 
 def test_iso_utc_marks_naive_utc_with_z():
@@ -496,6 +531,7 @@ async def test_request_bot_configured_transcription_backend_overrides_env(monkey
     assert inv["transcriptionServiceUrl"] == "https://stt-mine.example.com"
     assert "transcriptionServiceToken" not in inv  # env token does NOT leak to the custom backend
     assert "transcriptionModel" not in inv  # env model names the ENV backend's model — same rule
+    assert inv["transcriptionServiceOwner"] == "customer"  # the bot holds it to the outbound guard
     row = next(iter(repo._meetings.values()))
     assert row["data"]["transcription_provider"] == "customer"
 
@@ -515,6 +551,7 @@ async def test_request_bot_env_transcription_stays_without_settings(monkeypatch)
     inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
     assert inv["transcriptionServiceUrl"] == "https://stt-env.vexa.ai"
     assert inv["transcriptionServiceToken"] == "tok-env"
+    assert "transcriptionServiceOwner" not in inv  # the deployment's own endpoint: not held to the guard
     row = next(iter(repo._meetings.values()))
     assert row["data"]["transcription_provider"] == "vexa"
 
@@ -998,7 +1035,8 @@ def _spawned_invocation(runtime) -> dict:
     return json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
 
 
-def test_teams_short_id_plus_passcode_builds_the_passcode_bearing_join_url(monkeypatch):
+@pytest.mark.parametrize("short_id", [TEAMS_SHORT_ID, "1234567890123456"])
+def test_teams_short_id_plus_passcode_builds_the_passcode_bearing_join_url(monkeypatch, short_id):
     """#892 A1 — a bare Teams meeting id + its separate `passcode` reaches the bot as the URL
     Teams itself would hand out: `…/meet/<id>?p=<passcode>`.
 
@@ -1010,11 +1048,11 @@ def test_teams_short_id_plus_passcode_builds_the_passcode_bearing_join_url(monke
     monkeypatch.setenv("ADMIN_TOKEN", SECRET)
     runtime = FakeRuntimeClient()
     r = _client(InMemoryMeetingRepo(), runtime).post("/bots", headers=HEADERS, json={
-        "platform": "teams", "native_meeting_id": TEAMS_SHORT_ID, "passcode": TEAMS_PASSCODE,
+        "platform": "teams", "native_meeting_id": short_id, "passcode": TEAMS_PASSCODE,
     })
     assert r.status_code == 201, r.text
     inv = _spawned_invocation(runtime)
-    assert inv["meetingUrl"] == f"https://teams.microsoft.com/meet/{TEAMS_SHORT_ID}?p={TEAMS_PASSCODE}", (
+    assert inv["meetingUrl"] == f"https://teams.microsoft.com/meet/{short_id}?p={TEAMS_PASSCODE}", (
         f"the bot was handed {inv['meetingUrl']!r}"
     )
     # The passcode still rides the invocation's own field too — zoom/jitsi read it from there, and
@@ -1222,3 +1260,101 @@ async def test_spawn_threads_capture_signal_from_bot_context(monkeypatch, ctx, e
                       token_secret=SECRET)
     inv = json.loads(runtime.specs[0]["env"]["BOT_CONFIG"])
     assert inv["captureSignalEnabled"] is expected
+
+
+# ── the workspace a bot belongs to (Vexa-ai/vexa#1648) ───────────────────────────────────────────
+# A bot requested from inside a workspace makes the WORKSPACE's meeting: `data.workspace_id` is
+# written AT SPAWN, and it is the single fact every member-facing surface reads afterwards. Before
+# this, `POST /bots` took no such field and nothing called the after-the-fact bind endpoint, so an
+# ad-hoc meeting was owner-only by construction.
+
+def _spawn(client, body, workspaces=None):
+    headers = dict(HEADERS)
+    if workspaces is not None:
+        headers["x-user-workspaces"] = ",".join(workspaces)
+    return client.post("/bots", headers=headers, json=body)
+
+
+def test_spawn_binds_the_meeting_to_the_callers_workspace(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    repo = InMemoryMeetingRepo()
+    r = _spawn(_client(repo), {"platform": "google_meet", "native_meeting_id": "grp-aaaa-bbb",
+                               "workspace_id": "team-notes"}, ["team-notes", "other-ws"])
+    assert r.status_code == 201, r.text
+    assert r.json()["data"]["workspace_id"] == "team-notes"
+
+
+def test_spawn_without_a_workspace_is_the_meeting_it_has_always_been(monkeypatch):
+    """The bind is additive. A caller that names no workspace gets its own private meeting, exactly
+    as before — which is what keeps every existing integration behaving as it does today."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _spawn(_client(), {"platform": "google_meet", "native_meeting_id": "solo-aaaa-bbb"},
+               ["team-notes"])
+    assert r.status_code == 201, r.text
+    assert "workspace_id" not in (r.json().get("data") or {})
+
+
+def test_spawn_refuses_a_workspace_the_caller_is_not_in(monkeypatch):
+    """THE BODY CANNOT FORGE MEMBERSHIP. `x-user-workspaces` is injected by the gateway from the
+    resolved identity; without this check anyone with an api key could publish a meeting into a
+    workspace they do not belong to, and every member of it would find a stranger's call in their
+    list, on their meeting page and in its live transcript."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _spawn(_client(), {"platform": "google_meet", "native_meeting_id": "sneak-aaaa-bbb",
+                           "workspace_id": "someone-elses"}, ["team-notes"])
+    assert r.status_code == 403
+    assert "someone-elses" in r.json()["detail"]
+
+    # and with no membership header at all — the direct/unresolved caller — it is still refused
+    assert _spawn(_client(), {"platform": "google_meet", "native_meeting_id": "sneak2-aaaa-bbb",
+                              "workspace_id": "team-notes"}).status_code == 403
+
+
+# ── a worker's bot belongs to where its chat is working (the target rides the identity) ─────────
+# An agent worker acting for a person carries its chat's target workspace on the signed identity
+# (`x-user-delegation-target`). A bot it sends with no `workspace_id` of its own is that workspace's
+# meeting when the person is a member of it — the same default agent-api's page writes apply — and
+# `personal` keeps it theirs alone.
+
+def _spawn_as_worker(client, body, workspaces, target):
+    # A chat worker: its person is in the loop (`human`), which is the only regime a bot is sent
+    # under by a delegated identity (`meeting_api/regime.py`; test_regime.py has the refusals).
+    headers = {**HEADERS, "x-user-workspaces": ",".join(workspaces),
+               "x-user-regime": "human", "x-user-delegation-workspaces": "*",
+               "x-user-delegation-target": target}
+    return client.post("/bots", headers=headers, json=body)
+
+
+def test_a_workers_bot_belongs_to_the_workspace_its_chat_is_working_in(monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _spawn_as_worker(_client(), {"platform": "google_meet", "native_meeting_id": "tgt-aaaa-bbb"},
+                         ["team-notes"], "team-notes")
+    assert r.status_code == 201, r.text
+    assert r.json()["data"]["workspace_id"] == "team-notes"
+
+
+def test_a_target_that_is_not_a_shared_workspace_of_theirs_binds_nothing(monkeypatch):
+    """The target can be the person's own desk, which is not a membership. That is a private
+    meeting, exactly as before — never a refusal for a workspace the caller never named."""
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _spawn_as_worker(_client(), {"platform": "google_meet", "native_meeting_id": "desk-aaaa-bbb"},
+                         ["team-notes"], "u_jane")
+    assert r.status_code == 201, r.text
+    assert "workspace_id" not in (r.json().get("data") or {})
+
+
+@pytest.mark.parametrize("word", ["personal", "desk"])
+def test_personal_keeps_a_workers_bot_private(monkeypatch, word):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _spawn_as_worker(_client(), {"platform": "google_meet", "native_meeting_id": f"{word}-aaaa-bbb",
+                                     "workspace_id": word}, ["team-notes"], "team-notes")
+    assert r.status_code == 201, r.text
+    assert "workspace_id" not in (r.json().get("data") or {})
+
+
+@pytest.mark.parametrize("bad", ["", "   ", 7, [], {}])
+def test_spawn_refuses_a_workspace_id_that_is_not_a_slug(monkeypatch, bad):
+    monkeypatch.setenv("ADMIN_TOKEN", SECRET)
+    r = _spawn(_client(), {"platform": "google_meet", "native_meeting_id": "bad-aaaa-bbb",
+                           "workspace_id": bad}, ["team-notes"])
+    assert r.status_code == 422, r.text

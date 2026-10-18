@@ -1,4 +1,7 @@
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { log } from './log.js';
+import { SsrfError, guardedLookup, validateUrl, type Resolver } from './url-guard.js';
 import { isLowConfidenceSegment } from './confidence.js';
 
 export interface TranscriptionWord {
@@ -49,6 +52,13 @@ export interface TranscriptionClientConfig {
    *  (Groq, vLLM, gateways) need their served name; the bundled unit ignores it (its model is
    *  the unit's own MODEL_SIZE). Default: "whisper-1". */
   model?: string;
+  /** The endpoint is the CUSTOMER's (their Settings), not this deployment's: every request is held to
+   *  the outbound URL guard — refused when the URL names, or resolves to, an internal or private
+   *  address, and dialled at the address that was checked. The deployment's own endpoint (env or
+   *  platform setting) may live on a private network and is not held to it. Default: false. */
+  publicOnly?: boolean;
+  /** Replaces DNS for the guard (tests). */
+  resolveHost?: Resolver;
 }
 
 /** The STT boundary's FAILURE vocabulary (P5 + P18: an adapter must translate the
@@ -102,6 +112,8 @@ export class TranscriptionClient {
   private maxSpeechDurationSec: number | undefined;
   private minSilenceDurationMs: number | undefined;
   private model: string;
+  private publicOnly: boolean;
+  private resolveHost: Resolver | undefined;
   private responseFormat: 'verbose_json' | 'json' = 'verbose_json';
   constructor(config: TranscriptionClientConfig) {
     // Ensure serviceUrl ends with the transcriptions endpoint
@@ -117,6 +129,8 @@ export class TranscriptionClient {
     this.maxSpeechDurationSec = config.maxSpeechDurationSec;
     this.minSilenceDurationMs = config.minSilenceDurationMs;
     this.model = config.model ?? 'whisper-1';
+    this.publicOnly = config.publicOnly ?? false;
+    this.resolveHost = config.resolveHost;
   }
 
   /**
@@ -160,6 +174,41 @@ export class TranscriptionClient {
 
     // Should never reach here, but TypeScript needs it
     throw new Error('Transcription failed: exhausted retries');
+  }
+
+  /** POST through the outbound URL guard: the URL is checked as written, the socket is dialled at
+   *  the address the connect-time lookup checked, and a redirect is an answer, not a hop. A refusal
+   *  is a non-retryable `bad_request` fault naming why. */
+  private async guardedPost(headers: Record<string, string>, body: Buffer, signal: AbortSignal):
+      Promise<{ ok: boolean; status: number; text(): Promise<string>; json(): Promise<unknown> }> {
+    const refused = (e: Error) => new TranscriptionError('bad_request', undefined,
+      `customer endpoint refused: ${e.message}`, false);
+    try {
+      await validateUrl(this.serviceUrl, { resolve: false, what: 'transcription endpoint' });
+    } catch (e) {
+      throw e instanceof SsrfError ? refused(e) : e;
+    }
+    const url = new URL(this.serviceUrl);
+    const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
+    return await new Promise((resolve, reject) => {
+      const req = send(url, {
+        method: 'POST', headers: { ...headers, 'Content-Length': String(body.length) }, signal,
+        lookup: guardedLookup(this.resolveHost) as any,
+      }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('error', reject);
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf8');
+          const status = res.statusCode ?? 0;
+          resolve({ ok: status >= 200 && status < 300, status,
+                    text: async () => raw, json: async () => JSON.parse(raw) });
+        });
+      });
+      req.on('error', (e: NodeJS.ErrnoException) =>
+        reject(e.code === 'EVEXAREFUSED' ? refused(e) : e));
+      req.end(body);
+    });
   }
 
   /**
@@ -253,12 +302,14 @@ export class TranscriptionClient {
     const timeoutId = setTimeout(() => controller.abort(), this.requestTimeoutMs);
 
     try {
-      const response = await fetch(this.serviceUrl, {
-        method: 'POST',
-        headers,
-        body,
-        signal: controller.signal,
-      });
+      const response = this.publicOnly
+        ? await this.guardedPost(headers, body, controller.signal)
+        : await fetch(this.serviceUrl, {
+          method: 'POST',
+          headers,
+          body,
+          signal: controller.signal,
+        });
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unable to read error response');

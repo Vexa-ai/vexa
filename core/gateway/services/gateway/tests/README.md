@@ -9,6 +9,8 @@ here rather than being borrowed from `../conformance/`.
   reachable without an api-key.
 - **`test_proxy.py`** — fail-closed auth (no/bad key → 401), scope 403, verbatim body+status
   passthrough, identity-header injection + spoof-strip, route→downstream-base mapping.
+- **`rfc8032.py`** — the RFC 8032 TEST 1 seed the gateway-identity.v1 signing vectors are made
+  with. The goldens carry no signing key; `test_identity_token.py` derives it here.
 - **`test_multiplex.py`** — `/ws`: missing key → close 4401; subscribe→ack→raw forward;
   unsubscribe→ack + fan-in STOPS; ping→pong; invalid_json / unknown_action errors.
 

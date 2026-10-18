@@ -1,0 +1,10 @@
+{
+  "user_id": 42,
+  "email": "jane@example.com",
+  "scopes": [
+    "bot",
+    "tx"
+  ],
+  "max_concurrent": 3,
+  "is_admin": false
+}

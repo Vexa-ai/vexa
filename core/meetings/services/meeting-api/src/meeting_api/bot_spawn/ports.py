@@ -61,6 +61,14 @@ class MeetingRepo(Protocol):
         the identity is deployment-scoped, not per-user."""
         ...
 
+    async def latest_auth_session(self, userdata_s3_path: str) -> Optional[dict]:
+        """The NEWEST bot session (by session start) of any meeting whose spawn carried this
+        ``userdata_s3_path``, any status, as ``{meeting_id, session_uid, status, end_time,
+        updated_at}`` — or ``None``. The session write-back's binding: only this session may
+        replace the stored browser session, so a bot whose run was superseded by a later
+        authenticated spawn can no longer write. Cross-user, like ``find_active_by_userdata``."""
+        ...
+
     async def find_latest(self, user_id: int, platform: str, native_meeting_id: str) -> Optional[dict]:
         """The user's MOST-RECENT meeting for ``(platform, native_id)`` regardless of status, or
         ``None``. ``continue_meeting`` reuses this row when it is TERMINAL (completed/failed)."""

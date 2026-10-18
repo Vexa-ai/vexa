@@ -17,11 +17,10 @@ conformance tests drive the SHIPPED app in-process with a fake gateway — the r
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 import mcp.types as mcp_types
@@ -36,198 +35,19 @@ from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from . import bind as bind_mod
 from . import discover as discover_mod
 from . import notices as notices_mod
+from . import reentry as reentry_mod
 from . import register as register_mod
 from .link_parser import ParseMeetingLinkResponse, parse_meeting_url
+from .paths import path_segment
 from .prompts import PROMPTS, get_prompt_result
 from .streamable_http import install_streaming_http_transport
 from .tool_errors import install_structured_tool_errors, unwrap_detail
+# report_issue's ticket: its bounds, composition and the sink's wire shape (`tickets.py`).
+from .tickets import (_MAX_BODY_BYTES, _MAX_LOGS_CHARS, _MAX_TEXT_CHARS, _SINK_FORMAT_GITHUB,
+                      _caller_fingerprint, _clip, _description_of, _fingerprint, _sink_format,
+                      _sink_request, _summary_of)
 
 _DEFAULT_GATEWAY_URL = "http://gateway:8000"
-
-# --- report_issue (agent-filed tickets) -------------------------------------
-# Caps are defensive, not cosmetic: this route forwards caller-supplied text to an
-# operator webhook, so every field is bounded before it leaves the process.
-_MAX_TEXT_CHARS = 2000
-_MAX_LOGS_CHARS = 4000
-# Linode's ticket shape (POST /v4/support/tickets): summary 1-64, description 1-65,000. We store
-# the same canonical pair so the MCP tool, the future API endpoint and the docs form all land one
-# shape in the sink — the agent-facing arguments below are composed into it server-side.
-_MAX_SUMMARY_CHARS = 64
-# Whole-body ceiling. The handler caps every field, but a caller can still push megabytes at the
-# JSON parser; this refuses before parsing. NOTE this is the HANDLER's cap — the public
-# (key-less) door must ALSO carry a body cap + per-IP limit at the GATEWAY layer (see README).
-_MAX_BODY_BYTES = 64 * 1024
-_FINGERPRINT_SAMPLE_CHARS = 200
-# Default salt for the caller fingerprint. A deployment SHOULD set
-# VEXA_TICKET_FINGERPRINT_SALT so fingerprints are not comparable across deployments.
-_DEFAULT_CALLER_SALT = "vexa-mcp-report-issue"
-
-
-def _clip(value: Optional[str], limit: int) -> Optional[str]:
-    """Trim + hard-cap a caller-supplied string. Returns None for empty/blank input."""
-    if value is None:
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    return text[:limit]
-
-
-def _fingerprint(deployment: str, what_happened: str) -> str:
-    """Stable dedupe key: deployment + the first 200 chars of what_happened."""
-    material = f"{deployment.strip().lower()}|{what_happened.strip()[:_FINGERPRINT_SAMPLE_CHARS]}"
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
-
-
-def _summary_of(what_happened: str) -> str:
-    """The Linode-shaped `summary` (1-64 chars): the first line/clause of what happened."""
-    first_line = what_happened.strip().splitlines()[0].strip()
-    if len(first_line) <= _MAX_SUMMARY_CHARS:
-        return first_line
-    return first_line[: _MAX_SUMMARY_CHARS - 1].rstrip() + "\u2026"
-
-
-def _description_of(data: "ReportIssue") -> str:
-    """The Linode-shaped `description`: the whole story, composed from the agent's answers."""
-    parts = [f"What I tried:\n{data.what_i_tried}", f"What happened:\n{data.what_happened}"]
-    where = data.deployment + (f" {data.version}" if data.version else "")
-    parts.append(f"Deployment: {where}")
-    if data.native_meeting_id:
-        parts.append(f"Meeting: {data.platform or 'unknown platform'} / {data.native_meeting_id}")
-    if data.logs:
-        parts.append(f"Logs:\n{data.logs}")
-    return "\n\n".join(parts)
-
-
-# --- ticket sink adapters ----------------------------------------------------
-# The sink is an OPERATOR surface. `raw` (the default) posts the canonical ticket payload to an
-# opaque webhook — byte-for-byte what self-hosters already get. `github` maps the same payload
-# onto GitHub's issue API so a deployment can use an issue tracker it already runs as the sink,
-# with no new infrastructure. Nothing about the payload's construction changes between the two;
-# only the wire shape of this one hop does.
-_SINK_FORMAT_RAW = "raw"
-_SINK_FORMAT_GITHUB = "github"
-_DEFAULT_SINK_LABELS = "state: incoming"
-_GITHUB_API_VERSION = "2022-11-28"
-
-
-def _sink_format() -> str:
-    """Operator-selected wire shape for the sink hop. Unknown/unset → `raw` (today's behaviour)."""
-    value = (os.getenv("VEXA_TICKET_SINK_FORMAT") or "").strip().lower()
-    return _SINK_FORMAT_GITHUB if value == _SINK_FORMAT_GITHUB else _SINK_FORMAT_RAW
-
-
-def _sink_labels() -> List[str]:
-    """Labels applied to a github-format ticket. Comma-separated; default `state: incoming`."""
-    raw = os.getenv("VEXA_TICKET_SINK_LABELS")
-    if raw is None or not raw.strip():
-        raw = _DEFAULT_SINK_LABELS
-    return [label.strip() for label in raw.split(",") if label.strip()]
-
-
-def _github_issue_body(payload: Dict[str, Any]) -> str:
-    """Render the canonical ticket payload as the markdown body of a GitHub issue.
-
-    Every field the sink would have received in `raw` appears here — nothing is dropped, because
-    the issue IS the ticket on this deployment. The meeting join key gets its own heading: it is
-    what lines the reporter's account up against our own record of the same meeting.
-    """
-    lines: List[str] = []
-    lines.append("_Filed by a calling agent through the Vexa MCP `report_issue` tool._")
-    lines.append("")
-    lines.append("### What I tried")
-    lines.append(str(payload.get("what_i_tried") or "—"))
-    lines.append("")
-    lines.append("### What happened")
-    lines.append(str(payload.get("what_happened") or "—"))
-    lines.append("")
-    lines.append("### Join key")
-    if payload.get("native_meeting_id"):
-        lines.append(f"- **native_meeting_id:** `{payload['native_meeting_id']}`")
-        lines.append(f"- **platform:** `{payload.get('platform') or 'unknown'}`")
-        entity = payload.get("entity")
-        if isinstance(entity, dict):
-            lines.append(f"- **resolved entity:** `{entity.get('type')}` → `{entity.get('url')}`")
-        else:
-            lines.append("- **resolved entity:** none (not owned by the calling key, or not found)")
-    else:
-        lines.append("- none supplied — this ticket is not bound to a meeting.")
-    lines.append("")
-    lines.append("### Deployment")
-    lines.append(f"- **deployment:** {payload.get('deployment')}")
-    lines.append(f"- **version:** {payload.get('version') or 'not stated'}")
-    lines.append(f"- **severity:** {payload.get('severity') if payload.get('severity') is not None else 'not stated'}")
-    lines.append("")
-    if payload.get("logs"):
-        lines.append("### Logs")
-        truncated = " (truncated server-side)" if payload.get("logs_truncated") else ""
-        lines.append(f"Pasted by the reporting agent{truncated}:")
-        lines.append("")
-        lines.append("```")
-        lines.append(str(payload["logs"]))
-        lines.append("```")
-        lines.append("")
-    lines.append("### Provenance")
-    lines.append(f"- **source:** `{payload.get('source')}` · **tool:** `{payload.get('tool')}`")
-    lines.append(f"- **reported_at:** `{payload.get('reported_at')}`")
-    lines.append(f"- **fingerprint:** `{payload.get('fingerprint')}` (content-derived, for dedupe)")
-    lines.append(
-        f"- **caller_fingerprint:** `{payload.get('caller_fingerprint')}` "
-        "(salted hash of the calling key — never the key itself)"
-    )
-    return "\n".join(lines)
-
-
-def _sink_request(payload: Dict[str, Any], sink_token: str) -> tuple:
-    """(headers, json_body) for the sink hop, per VEXA_TICKET_SINK_FORMAT.
-
-    `raw` is byte-unchanged from before the switch existed: the canonical payload, with an
-    optional bearer token. `github` maps it onto `{title, body, labels}` with GitHub's headers.
-    """
-    if _sink_format() == _SINK_FORMAT_GITHUB:
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": _GITHUB_API_VERSION,
-        }
-        if sink_token:
-            headers["Authorization"] = f"Bearer {sink_token}"
-        body: Dict[str, Any] = {
-            "title": payload.get("summary"),
-            "body": _github_issue_body(payload),
-        }
-        labels = _sink_labels()
-        if labels:
-            body["labels"] = labels
-        return headers, body
-
-    headers = {"Content-Type": "application/json"}
-    if sink_token:
-        headers["Authorization"] = f"Bearer {sink_token}"
-    return headers, payload
-
-
-def _caller_fingerprint(api_key: str) -> str:
-    """A pseudonymous, stable handle for the caller — NEVER the API key itself.
-
-    Deliberate choice: the ticket sink is an operator surface, not an auth boundary, so it
-    receives a salted keyed FINGERPRINT of the key instead of the credential. That is enough to
-    join two tickets from the same account (and, with the same salt, to match an account
-    server-side) while a leak of the sink or its logs leaks no usable Vexa credential.
-    The raw key is forwarded to the GATEWAY only, exactly as every other tool does. The raw key
-    is never stored, logged, or returned.
-
-    ``blake2b`` keyed with the deployment salt, not a bare SHA-256: this is a keyed fingerprint,
-    not password storage (there is nothing here to verify a secret AGAINST), and the keyed
-    construction is the right primitive for it — a plain digest of a low-entropy input is
-    guessable by whoever holds the salt-free hash.
-    """
-    salt = os.getenv("VEXA_TICKET_FINGERPRINT_SALT") or _DEFAULT_CALLER_SALT
-    # codeql[py/weak-sensitive-data-hashing] lgtm[py/weak-sensitive-data-hashing]: this is a keyed
-    # fingerprint of a credential used as a sink handle, never password storage or verification —
-    # the key is the secret and the digest is never compared against user input; a slow hash here
-    # would only slow every ticket. Reviewed 2026-09-05 (v0.12.27 car 11).
-    return hashlib.blake2b(api_key.encode("utf-8"), key=salt.encode("utf-8")[:64], digest_size=8).hexdigest()  # codeql[py/weak-sensitive-data-hashing] lgtm[py/weak-sensitive-data-hashing] keyed fingerprint, not password storage — see the note above
 
 # Standard bearer-token auth parsing. We treat the token value as the Vexa API key.
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -280,7 +100,7 @@ class RequestMeetingBot(BaseModel):
         description=(
             "The meeting identifier.\n"
             "- Google Meet: meeting code like 'abc-defg-hij'\n"
-            "- Microsoft Teams: numeric meeting ID only (10-15 digits) from teams.live.com/meet/<id>\n"
+            "- Microsoft Teams: numeric meeting ID only (10-16 digits) from teams.microsoft.com/meet/<id> or teams.live.com/meet/<id>\n"
             "- Zoom: ALWAYS pass meeting_url (the full join link, host included) — meeting-api needs the\n"
             "  host to build the join; a bare numeric id is rejected (422)\n"
             "- Jitsi: ALWAYS pass meeting_url (the full room URL) — a jitsi room is deployment-scoped,\n"
@@ -289,6 +109,14 @@ class RequestMeetingBot(BaseModel):
     )
     language: Optional[str] = Field(None, description="Optional language code for transcription (e.g., 'en', 'es'). If not specified, auto-detected")
     bot_name: Optional[str] = Field(None, description="Optional custom name for the bot in the meeting")
+    workspace_id: Optional[str] = Field(
+        None,
+        description=(
+            "The shared workspace this meeting belongs to: every member then sees it while it runs and "
+            "gets its write-up. You must be a member. Omitted, a bot an agent sends from a chat belongs "
+            "to the shared workspace that chat is working in; 'personal' keeps the meeting yours alone."
+        ),
+    )
     platform: str = Field("google_meet", description="The meeting platform (e.g., 'google_meet', 'teams', 'zoom', 'jitsi'). Default is 'google_meet'.")
     passcode: Optional[str] = Field(
         None,
@@ -489,7 +317,8 @@ _DB_ID_DESC = (
 VALID_PLATFORMS = ("google_meet", "teams", "zoom", "jitsi")
 
 
-def _validate_platform(tool: str, platform: Optional[str]) -> Optional[str]:
+def _validate_platform(tool: str, platform: Optional[str], *,
+                       omitted: str = "Omit `platform` to search every platform.") -> Optional[str]:
     """Reject an unknown platform loudly rather than filtering everything away."""
     if platform is None or platform in VALID_PLATFORMS:
         return platform
@@ -497,7 +326,7 @@ def _validate_platform(tool: str, platform: Optional[str]) -> Optional[str]:
         status_code=422,
         detail=(
             f"{tool}: unknown platform {platform!r}. Valid values: "
-            f"{', '.join(VALID_PLATFORMS)}. Omit `platform` to search every platform."
+            f"{', '.join(VALID_PLATFORMS)}. {omitted}"
         ),
     )
 
@@ -556,6 +385,9 @@ def _resolve_identity(
 
     Only reached when no `meeting_db_id` was supplied, so on the tools that take one the refusal
     names it too — a caller looking at a row they already hold should be told the shortest way in.
+
+    The pair is returned AS SENT (it is echoed back to the caller); every URL that carries it puts
+    each half through `path_segment`. The platform is one of `VALID_PLATFORMS` or a refusal.
     """
     mid = (native_meeting_id or legacy_id or "").strip()
     plat = (platform or legacy_platform or "google_meet").strip()
@@ -570,7 +402,13 @@ def _resolve_identity(
                 f"with `platform`.{also} Received: native_meeting_id=None, meeting_id=None."
             ),
         )
+    _validate_platform(tool, plat, omitted="Omit `platform` for google_meet.")
     return plat, mid
+
+
+def _room(platform: str, native_meeting_id: str) -> str:
+    """The `{platform}/{native_meeting_id}` part of a gateway path — each half ONE segment."""
+    return f"{path_segment(platform)}/{path_segment(native_meeting_id)}"
 
 
 # What a client is told the moment it connects. Per-tool descriptions cannot carry orientation —
@@ -648,8 +486,12 @@ def create_app(
         openapi_url="/openapi.json" if _public_docs else None,
     )
 
+    # Every hop here goes to the GATEWAY, so it carries the identity the gateway signed onto the
+    # request being served (`reentry.py`) — what lets the gateway admit a worker's tool call.
+    app.add_middleware(reentry_mod.ReentryMiddleware)
+
     def get_headers(api_key: str) -> Dict[str, str]:
-        return {"X-API-Key": api_key, "Content-Type": "application/json"}
+        return {"X-API-Key": api_key, "Content-Type": "application/json", **reentry_mod.headers()}
 
     async def make_request(
         method: str,
@@ -827,7 +669,8 @@ def create_app(
         plat, mid = _resolve_identity(
             "update_bot_config", platform, native_meeting_id, meeting_platform, meeting_id
         )
-        return await make_request("PUT", f"{base_url}/bots/{plat}/{mid}/config", api_key, data.model_dump())
+        return await make_request("PUT", f"{base_url}/bots/{_room(plat, mid)}/config", api_key,
+                                  data.model_dump())
 
     @app.delete("/bot", operation_id="stop_bot")
     async def stop_bot(
@@ -843,7 +686,7 @@ def create_app(
         request_meeting_bot, list_meetings and parse_meeting_link hand back.
         """
         plat, mid = _resolve_identity("stop_bot", platform, native_meeting_id, meeting_platform, meeting_id)
-        return await make_request("DELETE", f"{base_url}/bots/{plat}/{mid}", api_key)
+        return await make_request("DELETE", f"{base_url}/bots/{_room(plat, mid)}", api_key)
 
     @app.get("/meetings", operation_id="list_meetings")
     async def list_meetings(
@@ -926,13 +769,13 @@ def create_app(
         call; you get only what has been said since, instead of the whole transcript every time.
         """
         if meeting_db_id is not None:
-            url = f"{base_url}/transcripts/by-id/{meeting_db_id}"
+            url = f"{base_url}/transcripts/by-id/{path_segment(meeting_db_id)}"
         else:
             plat, mid = _resolve_identity(
                 "get_meeting_transcript", platform, native_meeting_id, meeting_platform,
                 meeting_id, accepts_db_id=True,
             )
-            url = f"{base_url}/transcripts/{plat}/{mid}"
+            url = f"{base_url}/transcripts/{_room(plat, mid)}"
         result = await make_request("GET", url, api_key)
 
         # The cursor is applied here rather than at the gateway: the scarce resource is the
@@ -1029,11 +872,11 @@ def create_app(
         """
         plat = mid = None
         if meeting_db_id is not None:
-            url = f"{base_url}/meetings/{meeting_db_id}/annotate"
+            url = f"{base_url}/meetings/{path_segment(meeting_db_id)}/annotate"
         else:
             plat, mid = _resolve_identity("annotate_meeting", platform, native_meeting_id,
                                           None, None, accepts_db_id=True)
-            url = f"{base_url}/meetings/{plat}/{mid}/annotate"
+            url = f"{base_url}/meetings/{_room(plat, mid)}/annotate"
         body: Dict[str, Any] = {}
         if data.title is not None:
             body["title"] = data.title
@@ -1081,7 +924,7 @@ def create_app(
         """
         plat, mid = _resolve_identity("speak_in_meeting", platform, native_meeting_id, None, None)
         return await make_request(
-            "POST", f"{base_url}/bots/{plat}/{mid}/speak", api_key, data.model_dump(exclude_none=True)
+            "POST", f"{base_url}/bots/{_room(plat, mid)}/speak", api_key, data.model_dump(exclude_none=True)
         )
 
     @app.get("/meeting-chat", operation_id="get_meeting_chat")
@@ -1095,7 +938,7 @@ def create_app(
         side comments land in chat and are never spoken aloud.
         """
         plat, mid = _resolve_identity("get_meeting_chat", platform, native_meeting_id, None, None)
-        return await make_request("GET", f"{base_url}/bots/{plat}/{mid}/chat", api_key)
+        return await make_request("GET", f"{base_url}/bots/{_room(plat, mid)}/chat", api_key)
 
     @app.get("/recordings", operation_id="list_recordings")
     async def list_recordings(
@@ -1126,7 +969,7 @@ def create_app(
         """
         Get a single recording and its media files. Wraps: GET /recordings/{recording_id}
         """
-        return await make_request("GET", f"{base_url}/recordings/{recording_id}", api_key)
+        return await make_request("GET", f"{base_url}/recordings/{path_segment(recording_id)}", api_key)
 
     @app.post("/report-issue", operation_id="report_issue")
     async def report_issue(
@@ -1226,7 +1069,8 @@ def create_app(
                     "type": "meeting",
                     "id": data.native_meeting_id,
                     "platform": m.get("platform"),
-                    "url": f"/transcripts/{m.get('platform')}/{data.native_meeting_id}",
+                    "url": (f"/transcripts/{path_segment(m.get('platform'))}/"
+                            f"{path_segment(data.native_meeting_id)}"),
                 }
                 break
 
@@ -1341,13 +1185,15 @@ def create_app(
         with httpx.Client(transport=assembly_transport) as _boot:
             _assembly, _openapi, _bases = discover_mod.discover(_boot, env=_assembly_env)
         _bound = bind_mod.verify(_assembly, _openapi)
-        register_mod.register(app, _bound, _bases, transport=transport, env=_assembly_env)
+        register_mod.register(app, _bound, _bases, transport=transport, env=_assembly_env, gateway_url=base_url)
         app.state.assembly = _assembly
 
     # ---------------------------
     # MCP mount + prompts
     # ---------------------------
-    mcp = FastApiMCP(app, headers=["authorization", "x-api-key"])
+    # `x-vexa-identity` rides into each tool call so the call back into the gateway can carry it
+    # (`reentry.py`); it is not an argument and no tool reads it.
+    mcp = FastApiMCP(app, headers=["authorization", "x-api-key", reentry_mod.INBOUND_HEADER])
     # Orientation at connect time. FastApiMCP has no `instructions` kwarg, but the lowlevel
     # Server it wraps carries the field the spec defines — a client that connects should not have
     # to infer what Vexa is from nine tool descriptions.

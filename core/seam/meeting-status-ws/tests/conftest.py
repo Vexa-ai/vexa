@@ -1,6 +1,6 @@
 """L3 SEAM wiring: put BOTH services' `src` trees AND the gateway's own test-fakes dir on sys.path so
 this one venv can import the REAL producer (`meeting_api.collector.create_app`) and the REAL consumer
-(`gateway.app._run_multiplex`) in-process, and REUSE the gateway's injected fakes (FakeRedis pub/sub +
+(`gateway.run_multiplex`) in-process, and REUSE the gateway's injected fakes (FakeRedis pub/sub +
 FakeAuthorizer) verbatim. Import direction is preserved: the seam imports each service; neither service
 imports the seam.
 """

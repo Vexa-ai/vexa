@@ -44,10 +44,11 @@ export function getLocaleBrowserArgs(): string[] {
   return [`--lang=${locale}`, `--accept-lang=${acceptLang}`];
 }
 
+// No flag here turns Chromium's sandbox off: the bot's launch (@vexa/remote-browser) keeps it on
+// wherever it can start and says why where it cannot; the debug harness, which runs as root, adds
+// the off switch itself.
 export const JOIN_BROWSER_ARGS: readonly string[] = [
   "--incognito",
-  "--no-sandbox",
-  "--disable-setuid-sandbox",
   "--disable-features=IsolateOrigins,site-per-process",
   "--disable-infobars",
   "--disable-gpu",

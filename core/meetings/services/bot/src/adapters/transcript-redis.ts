@@ -10,9 +10,16 @@
  *   2. PUB/SUB `tc:meeting:{meetingId}:mutable`  — the live mutable channel the gateway forwards
  *      to the dashboard. Message is JSON `{ type: 'transcript', meeting: { id }, segment }`.
  *
+ * Every stream entry also carries, beside `payload`, the bot's proof that it may speak for the
+ * meeting (`entryAuth`): `auth` = the header.payload part of its session MeetingToken (the claims
+ * that name the meeting) and `sig` = HMAC-SHA256(payload) keyed with the whole token. The collector
+ * rebuilds the token from `auth` with the secret that minted it — the bearer never enters Redis —
+ * and drops an entry whose signature fails or whose `meeting_id` is not the token's.
+ *
  * L3-testable via an INJECTED minimal `client` ({ xAdd, publish }) — no real redis. The factory
  * `redisClientFrom(url)` wraps node-redis v4 into that minimal interface for the composition root.
  */
+import { createHmac } from 'node:crypto';
 import { createClient } from 'redis';
 import type { TranscriptSegment } from '../contracts.js';
 import type { TranscriptSink } from '../ports.js';
@@ -20,6 +27,15 @@ import { makeLazyConnect } from './redis-lazy-connect.js';
 
 /** The redis stream the collector consumes (durable transcript.v1 feed). */
 export const TRANSCRIPTION_STREAM = 'transcription_segments';
+
+/** The stream-entry fields that authenticate one entry to the collector: `auth` (the token's
+ *  header.payload) and `sig` (hex HMAC-SHA256 of `payload`, keyed with the whole token). A token
+ *  that is not a three-part JWT yields none, and the collector drops the entry. */
+export function entryAuth(token: string | undefined, payload: string): Record<string, string> {
+  const parts = (token ?? '').split('.');
+  if (parts.length !== 3 || parts.some((p) => p.length === 0)) return {};
+  return { auth: `${parts[0]}.${parts[1]}`, sig: createHmac('sha256', token as string).update(payload).digest('hex') };
+}
 
 /** The live mutable pub/sub channel the gateway forwards to the dashboard. */
 export const mutableChannel = (meetingId: string | number): string => `tc:meeting:${meetingId}:mutable`;
@@ -39,6 +55,9 @@ export interface RedisTranscriptSinkOptions {
   /** The native meeting code (e.g. `abc-defg-hij`). Stamped on the segment so the agent watcher keys
    *  on the native id WITHOUT a /meetings lookup (P23: one writer, no re-derivation). */
   nativeMeetingId?: string;
+  /** The session's MeetingToken — signs every stream entry (`entryAuth`). Without it the collector
+   *  admits nothing this sink writes. */
+  token?: string;
   /** Live WebSocket envelope. `speaker-snapshot` is the Dashboard's GMeet-compatible contract:
    * each message replaces the complete pending set for one stable speaker key while confirmed
    * rows remain additive. Keep the legacy one-segment envelope as the default for every platform
@@ -50,7 +69,7 @@ export interface RedisTranscriptSinkOptions {
  *  mutable channel for one segment (best-effort fan-out; rejections propagate to the engine,
  *  which decides whether a publish failure is fatal). */
 export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): TranscriptSink {
-  const { client, meetingId, nativeMeetingId, liveEnvelope = 'segment' } = opts;
+  const { client, meetingId, nativeMeetingId, token, liveEnvelope = 'segment' } = opts;
   const channel = mutableChannel(meetingId);
   const pendingBySpeakerKey = new Map<string, Map<string, TranscriptSegment>>();
 
@@ -92,7 +111,7 @@ export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): Tra
     const payload = JSON.stringify({
       type: 'transcription', meeting_id: meetingId, native_meeting_id: nativeMeetingId, segments: [segment],
     });
-    await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload });
+    await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload, ...entryAuth(token, payload) });
 
     // Leg 2: live mutable channel → gateway → dashboard.
     await client.publish(channel, liveMessage);
@@ -129,7 +148,7 @@ export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): Tra
     const payload = JSON.stringify({
       type: 'transcript_retract', meeting_id: meetingId, native_meeting_id: nativeMeetingId, segment_ids: segmentIds,
     });
-    await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload });
+    await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload, ...entryAuth(token, payload) });
 
     // The withdrawal itself is announced on the mutable channel in BOTH envelopes. A retracted id
     // may live in no pending map at all — a timeout-promoted draft that a later ownership check

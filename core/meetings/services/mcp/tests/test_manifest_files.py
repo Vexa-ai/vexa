@@ -19,6 +19,12 @@ REPO = pathlib.Path(__file__).resolve().parents[5]
 MANIFESTS = sorted(REPO.glob("core/*/mcp.tools.v1.json")) + \
             sorted(REPO.glob("core/*/services/*/mcp.tools.v1.json"))
 
+#: flows' `flows_submit`/`flow_lifecycle` are `auth: admin` — a real operator credential this
+#: SUITE'S environment does not hold. Assembling the real on-disk manifests (this file's whole
+#: point) needs one anyway, or the assertion these tools exist would fail for a reason that has
+#: nothing to do with whether the manifests are well-formed.
+ASSEMBLY_ENV = {"VEXA_FLOWS_API_KEY": "test-operator-key"}
+
 
 def _load():
     return [json.loads(p.read_text()) for p in MANIFESTS]
@@ -39,7 +45,7 @@ def test_one_domain_per_manifest_and_no_name_claimed_twice():
     domains = [d["domain"] for d in docs]
     assert len(domains) == len(set(domains)), f"two manifests for one domain: {domains}"
     deployed = {"identity"} | set(domains)
-    a = m.assemble(docs, deployed=deployed)          # raises on a duplicate name
+    a = m.assemble(docs, deployed=deployed, env=ASSEMBLY_ENV)          # raises on a duplicate name
     assert a.tools, "the union is empty"
 
 
@@ -47,7 +53,8 @@ def test_the_full_deployment_and_the_smallest_one_both_assemble():
     """Eight configurations, not two. Identity alone must still produce a coherent surface, and a
     tool whose domain is absent is ABSENT — never present-and-failing."""
     docs = _load()
-    everything = m.assemble(docs, deployed={"identity", "meetings", "flows", "agent"})
+    everything = m.assemble(docs, deployed={"identity", "meetings", "flows", "agent"},
+                            env=ASSEMBLY_ENV)
     identity_only = m.assemble(docs, deployed={"identity"})
     assert len(identity_only.tools) <= len(everything.tools)
     for t in identity_only.tools:

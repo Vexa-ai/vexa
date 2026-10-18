@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import ipaddress
 import os
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..collector.meeting_link import parse_meeting_url
+from ..regime import require_person
 from ..service_authority import (
     ServiceAuthorityDenied,
     ServiceAuthorityUnavailable,
@@ -49,6 +50,9 @@ from .service import (
 #: varchar(255) column. Bounded at the request boundary so an over-long id is a typed
 #: 422 here rather than an asyncpg truncation 500 deep in the spawn path (#843).
 NATIVE_MEETING_ID_MAX_LEN = 255
+
+#: The words that keep a bot's meeting private to the caller, whatever workspace their chat works in.
+PRIVATE_WORKSPACE_WORDS = frozenset({"personal", "desk"})
 
 #: URL-structural characters that must never appear in a native_meeting_id. The id is
 #: interpolated into a URL PATH SEGMENT (`construct_meeting_url` — google_meet/teams) and reused
@@ -250,6 +254,9 @@ def build_router(
     repo: MeetingRepo,
     runtime: RuntimeClient,
     authority=None,
+    *,
+    transcript_stream_purge: "Optional[Callable[[int], Awaitable[None]]]" = None,
+    redis_grant: "Optional[Callable[[str, int], Awaitable[str]]]" = None,
 ) -> APIRouter:
     """The bot-spawn routes over the injected ``MeetingRepo`` + ``RuntimeClient`` + authority ports.
 
@@ -263,11 +270,18 @@ def build_router(
     the service already has (``service._bot_name_from_context``)."""
     router = APIRouter()
 
-    @router.post("/bots", status_code=201)
+    # A worker dispatched without a person does not put a bot into a meeting (`regime.py`).
+    @router.post("/bots", status_code=201, dependencies=[Depends(require_person)])
     async def create_bot(
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
         x_user_limits: Optional[str] = Header(default=None),
+        # The caller's workspace memberships, injected by the gateway from identity. Read ONLY to
+        # authorize a `workspace_id` — named in the body or defaulted below — against membership.
+        x_user_workspaces: Optional[str] = Header(default=None),
+        # The chat's target workspace, on a worker's signed identity. A DEFAULT for `workspace_id`,
+        # never a grant: it binds only a workspace the caller is already a member of.
+        x_user_delegation_target: Optional[str] = Header(default=None),
         x_user_webhook_url: Optional[str] = Header(default=None),
         x_user_webhook_secret: Optional[str] = Header(default=None),
         x_user_webhook_events: Optional[str] = Header(default=None),
@@ -452,6 +466,38 @@ def build_router(
         # STOPS THE SPAWN: a name is a nicety, joining the call is the product.
         bot_name = body.get("bot_name")
 
+        # WHICH WORKSPACE THIS MEETING BELONGS TO. Optional and additive: a caller that sends nothing
+        # gets exactly the meeting it got before — its own, visible to itself alone.
+        #
+        # The caller's OWN membership is what makes this safe to accept from a request body. The
+        # gateway resolves the api key to an identity and injects `x-user-workspaces` from that
+        # identity's memberships; the body cannot forge that header. So a `workspace_id` the caller
+        # does not belong to is REFUSED here rather than persisted — without the check, anyone with an
+        # api key could publish a meeting into a workspace they are not in, and every member of it
+        # would find a stranger's call in their list, on their meeting page and in its live
+        # transcript, since `data.workspace_id` is exactly what those surfaces trust.
+        #
+        # A WORKER'S BOT BELONGS TO WHERE ITS CHAT IS WORKING. An agent worker carries its chat's
+        # target workspace on the signed identity; with no `workspace_id` of its own, a bot it sends
+        # is that workspace's meeting when the caller is a member of it — the target may be their own
+        # desk, which is not a membership, and that is a private meeting as before. `personal` (or
+        # `desk`) keeps any bot private explicitly.
+        workspace_id = body.get("workspace_id")
+        member_of = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
+        if isinstance(workspace_id, str) and workspace_id.strip() in PRIVATE_WORKSPACE_WORDS:
+            workspace_id = None
+        elif workspace_id is None:
+            target = (x_user_delegation_target or "").strip()
+            workspace_id = target if target and target in member_of else None
+        elif not isinstance(workspace_id, str) or not workspace_id.strip():
+            raise HTTPException(
+                status_code=422, detail="'workspace_id' must be a non-empty string")
+        else:
+            workspace_id = workspace_id.strip()
+            if workspace_id not in member_of:
+                raise HTTPException(
+                    status_code=403, detail=f"not a member of workspace '{workspace_id}'")
+
         try:
             meeting = await request_bot(
                 repo,
@@ -474,10 +520,13 @@ def build_router(
                 # has no additionalProperties:false), so the wire is not rejected; documenting it as
                 # a public typed field needs a vN+1 (lane:contract) — see the bot_spawn README.
                 continue_meeting=bool(body.get("continue_meeting", False)),
+                workspace_id=workspace_id,
                 max_concurrent=max_concurrent,
                 webhook_url=x_user_webhook_url,
                 webhook_secret=x_user_webhook_secret,
                 webhook_events=webhook_events,
+                transcript_stream_purge=transcript_stream_purge,
+                redis_grant=redis_grant,
             )
         except TranscriptionNotConfigured as e:
             raise HTTPException(status_code=503, detail=str(e))

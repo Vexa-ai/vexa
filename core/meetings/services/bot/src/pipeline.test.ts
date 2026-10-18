@@ -176,6 +176,27 @@ async function main(): Promise<void> {
     check('no transcriptionModel → default whisper-1 (wire unchanged)', modelParts[1] === 'whisper-1', JSON.stringify(modelParts[1]));
   }
 
+  // ── 4b) a CUSTOMER-owned endpoint is held to the outbound URL guard; the deployment's own is not ──
+  // The invocation states the owner; an internal address on a customer endpoint is never dialled
+  // (global fetch is not called either: the guarded path refuses before any socket).
+  {
+    const realFetch = globalThis.fetch;
+    let fetched = 0;
+    (globalThis as any).fetch = async () => {
+      fetched++;
+      return new Response(JSON.stringify({ text: 'ok', language: 'en', duration: 0.1, segments: [] }), { status: 200 });
+    };
+    const pcm = new Float32Array(1600).fill(0.05);
+    let refused = '';
+    try {
+      await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://169.254.169.254', transcriptionServiceOwner: 'customer' }))(pcm);
+    } catch (e) { refused = String((e as Error).message); }
+    const own = await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://transcription:8083' }))(pcm);
+    (globalThis as any).fetch = realFetch;
+    check('customer endpoint on an internal address is refused', /internal or private/.test(refused) && fetched === 1, `refused=${refused} fetched=${fetched}`);
+    check("the deployment's own endpoint is called as before", own.text === 'ok', JSON.stringify(own));
+  }
+
   // ── 5) LEGACY MIXED LANE (Zoom/Jitsi) speaker-label boundary (#890): a turn the lane has NOT
   //     yet attributed publishes under its provisional cluster id (speaker 'seg_N'). At the bot
   //     boundary that must become the stable 'Speaker' label — NEVER the seg_N string as a display

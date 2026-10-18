@@ -25,7 +25,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
-from .ports import RedisBus, TranscriptStore
+from .ports import ARTIFACT_DELETION_FIELD, RedisBus, TranscriptStore, deletion_stamp
 
 log = logging.getLogger("meeting_api.collector.adapters")
 
@@ -139,134 +139,6 @@ def _remove_doc(docs: list[dict], path: str) -> list[dict]:
     return [d for d in docs if d.get("path") != path]
 
 
-def _merge_notes_by_id(existing: list[dict], incoming: list[dict]) -> list[dict]:
-    """Merge drained copilot notes into a processed view's ``doc['notes']`` list, keyed by note
-    ``id`` (== segment_id): a refining re-emit UPDATES its note in place (order preserved);
-    a new id appends. Notes without an id append as-is (nothing to key an upsert on)."""
-    out = [dict(n) for n in existing]
-    index = {str(n.get("id")): i for i, n in enumerate(out) if n.get("id") is not None}
-    for note in incoming:
-        nid = note.get("id")
-        if nid is not None and str(nid) in index:
-            out[index[str(nid)]].update(note)
-        else:
-            if nid is not None:
-                index[str(nid)] = len(out)
-            out.append(dict(note))
-    return out
-
-
-def _find_processed_view(data: dict, view_id: str) -> Optional[dict]:
-    """The view with ``view_id`` inside ``data['processed']['views']`` (None when absent)."""
-    processed = data.get("processed") if isinstance(data.get("processed"), dict) else {}
-    views = processed.get("views") if isinstance(processed.get("views"), list) else []
-    return next((v for v in views if isinstance(v, dict) and v.get("id") == view_id), None)
-
-
-def _upsert_processed_view(
-    data: dict, *, view_id: str, kind: str, notes: list[dict],
-    source_cursor: Optional[str], params: Optional[dict],
-) -> dict:
-    """Pure merge of drained copilot notes into the ADDRESSABLE, VERSIONED processed shape
-    (release DoD — multi-consumer, meeting-scoped today, mountable by N consumers later):
-
-        data.processed = {"views": [{id, kind, params, doc, source_cursor, updated_at}]}
-
-    Upserts the view keyed by ``id`` — other views (future per-workspace/other processings) are
-    preserved untouched; merges ``notes`` into the view's ``doc['notes']`` by note id; stamps
-    ``params`` (the processing metadata APPLIED — provider/model/pipeline, stamped by the
-    producing worker — reproducibility) only when the drain carried them, so an idle drain never
-    erases provenance; ``source_cursor`` records the stream position the view reflects.
-    Returns the new ``data`` dict (the caller persists it)."""
-    from datetime import datetime, timezone
-
-    out = dict(data)
-    processed = dict(out.get("processed")) if isinstance(out.get("processed"), dict) else {}
-    views = [dict(v) for v in processed.get("views", []) if isinstance(v, dict)] \
-        if isinstance(processed.get("views"), list) else []
-    view = next((v for v in views if v.get("id") == view_id), None)
-    if view is None:
-        view = {"id": view_id, "kind": kind, "params": {}, "doc": {"notes": []}}
-        views.append(view)
-    doc = dict(view.get("doc")) if isinstance(view.get("doc"), dict) else {}
-    existing_notes = doc.get("notes") if isinstance(doc.get("notes"), list) else []
-    doc["notes"] = _merge_notes_by_id(list(existing_notes), notes)
-    view["doc"] = doc
-    view["kind"] = kind
-    if params:
-        view["params"] = params
-    if source_cursor:
-        view["source_cursor"] = source_cursor
-    view["updated_at"] = datetime.now(timezone.utc).isoformat()
-    processed["views"] = views
-    out["processed"] = processed
-    return out
-
-
-def _merge_notes_by_id(existing: list[dict], incoming: list[dict]) -> list[dict]:
-    """Merge drained copilot notes into a processed view's ``doc['notes']`` list, keyed by note
-    ``id`` (== segment_id): a refining re-emit UPDATES its note in place (order preserved);
-    a new id appends. Notes without an id append as-is (nothing to key an upsert on)."""
-    out = [dict(n) for n in existing]
-    index = {str(n.get("id")): i for i, n in enumerate(out) if n.get("id") is not None}
-    for note in incoming:
-        nid = note.get("id")
-        if nid is not None and str(nid) in index:
-            out[index[str(nid)]].update(note)
-        else:
-            if nid is not None:
-                index[str(nid)] = len(out)
-            out.append(dict(note))
-    return out
-
-
-def _find_processed_view(data: dict, view_id: str) -> Optional[dict]:
-    """The view with ``view_id`` inside ``data['processed']['views']`` (None when absent)."""
-    processed = data.get("processed") if isinstance(data.get("processed"), dict) else {}
-    views = processed.get("views") if isinstance(processed.get("views"), list) else []
-    return next((v for v in views if isinstance(v, dict) and v.get("id") == view_id), None)
-
-
-def _upsert_processed_view(
-    data: dict, *, view_id: str, kind: str, notes: list[dict],
-    source_cursor: Optional[str], params: Optional[dict],
-) -> dict:
-    """Pure merge of drained copilot notes into the ADDRESSABLE, VERSIONED processed shape
-    (release DoD — multi-consumer, meeting-scoped today, mountable by N consumers later):
-
-        data.processed = {"views": [{id, kind, params, doc, source_cursor, updated_at}]}
-
-    Upserts the view keyed by ``id`` — other views (future per-workspace/other processings) are
-    preserved untouched; merges ``notes`` into the view's ``doc['notes']`` by note id; stamps
-    ``params`` (the processing metadata APPLIED — provider/model/pipeline, stamped by the
-    producing worker — reproducibility) only when the drain carried them, so an idle drain never
-    erases provenance; ``source_cursor`` records the stream position the view reflects.
-    Returns the new ``data`` dict (the caller persists it)."""
-    from datetime import datetime, timezone
-
-    out = dict(data)
-    processed = dict(out.get("processed")) if isinstance(out.get("processed"), dict) else {}
-    views = [dict(v) for v in processed.get("views", []) if isinstance(v, dict)] \
-        if isinstance(processed.get("views"), list) else []
-    view = next((v for v in views if v.get("id") == view_id), None)
-    if view is None:
-        view = {"id": view_id, "kind": kind, "params": {}, "doc": {"notes": []}}
-        views.append(view)
-    doc = dict(view.get("doc")) if isinstance(view.get("doc"), dict) else {}
-    existing_notes = doc.get("notes") if isinstance(doc.get("notes"), list) else []
-    doc["notes"] = _merge_notes_by_id(list(existing_notes), notes)
-    view["doc"] = doc
-    view["kind"] = kind
-    if params:
-        view["params"] = params
-    if source_cursor:
-        view["source_cursor"] = source_cursor
-    view["updated_at"] = datetime.now(timezone.utc).isoformat()
-    processed["views"] = views
-    out["processed"] = processed
-    return out
-
-
 # A relative in-meeting offset never approaches this; anything at/above is an absolute epoch.
 _EPOCH_THRESHOLD_S = 1_000_000_000  # ~2001-09-09
 
@@ -314,6 +186,58 @@ def _segment_to_api(seg: dict) -> dict:
     return out
 
 
+# The ONE definition of a durable transcript write. Two callers reach it — the db-writer's flush
+# of a live meeting's redis hash (``upsert_segments``) and the import route's
+# ``complete_transcript_import`` — and a second copy of this statement would be a second place to
+# get the segment identity wrong. Keyed on ``(meeting_id, segment_id)`` (the partial unique index
+# ``ix_transcription_meeting_segment``): a re-write lands as an UPDATE, never a duplicate row.
+_SEGMENT_UPSERT_SQL = """
+    INSERT INTO transcriptions (meeting_id, start_time, end_time, text, speaker, language, session_uid, segment_id, created_at)
+    VALUES (:mid, :start, :end, :text, :speaker, :lang, :uid, :segid, :created)
+    ON CONFLICT (meeting_id, segment_id) WHERE segment_id IS NOT NULL
+    DO UPDATE SET text = EXCLUDED.text, speaker = EXCLUDED.speaker,
+                  start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
+                  language = EXCLUDED.language, created_at = EXCLUDED.created_at
+"""
+
+
+def _segment_upsert_rows(meeting_id, segments) -> "list[dict]":
+    """Normalize a batch of segments into the bind-parameter rows ``_SEGMENT_UPSERT_SQL`` takes.
+    A segment with no ``segment_id`` is skipped (0.12 ingest guarantees one; a legacy stray is
+    skipped, not guessed) and an unparseable start/end likewise."""
+    from datetime import datetime as _dt
+
+    rows = []
+    for seg in segments:
+        sid = seg.get("segment_id")
+        if not sid:
+            continue
+        try:
+            start = float(seg.get("start", seg.get("start_time", 0.0)) or 0.0)
+            end = float(seg.get("end", seg.get("end_time", start)) or start)
+        except (TypeError, ValueError):
+            continue
+        if end < start:
+            start, end = end, start
+        rows.append({
+            "mid": int(meeting_id), "start": start, "end": end,
+            "text": seg.get("text") or "", "speaker": seg.get("speaker"),
+            "lang": seg.get("language"), "uid": seg.get("session_uid"),
+            "segid": str(sid), "created": _dt.utcnow(),
+        })
+    return rows
+
+
+async def _write_segment_rows(db, rows) -> None:
+    """Execute the upsert for every row on an ALREADY-OPEN session, committing nothing. The caller
+    owns the transaction — which is how the import writes the segments and completes the row in one."""
+    from sqlalchemy import text as sql_text  # lazy: not needed for the in-memory fakes
+
+    stmt = sql_text(_SEGMENT_UPSERT_SQL)
+    for row in rows:
+        await db.execute(stmt, row)
+
+
 class SqlAlchemyTranscriptStore:
     """``TranscriptStore`` over a SQLAlchemy-async ``session_factory`` (the ``meetings`` /
     ``transcriptions`` tables; recordings/notes live in ``meeting.data`` JSONB — NO separate
@@ -327,6 +251,39 @@ class SqlAlchemyTranscriptStore:
         # numeric meeting_id → (native_meeting_id, platform). The id→native map is immutable for a
         # meeting row, so cache it forever once resolved (bounded by the live meeting set).
         self._native_cache: dict[int, tuple[str, str]] = {}
+        # Meeting ids whose transcript was deleted. Deletion is one-way, so a positive answer is
+        # cached for the life of the process; a negative one never is.
+        self._erased: set[int] = set()
+
+    async def transcript_erased(self, meeting_id) -> bool:
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return False
+        if mid in self._erased:
+            return True
+        from sqlalchemy import select  # lazy: not needed for the in-memory fakes
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            data = (await db.execute(select(Meeting.data).where(Meeting.id == mid))).scalars().first()
+        erased = isinstance(data, dict) and bool(data.get("artifact_deletion"))
+        if erased:
+            self._erased.add(mid)
+        return erased
+
+    async def erased_meeting_ids(self) -> "list[int]":
+        """Every meeting row carrying the deletion stamp, oldest first — the operator sweep's input
+        (``erased_feed_sweep``). Served by the ``data`` GIN index."""
+        from sqlalchemy import select  # lazy: not needed for the in-memory fakes
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            rows = await db.execute(
+                select(Meeting.id).where(Meeting.data.has_key("artifact_deletion")).order_by(Meeting.id))
+            return [int(mid) for mid in rows.scalars().all()]
 
     async def native_for(self, meeting_id) -> "Optional[tuple[str, str]]":
         """Resolve a NUMERIC meeting_id → (native_meeting_id, platform) from the meetings table.
@@ -951,85 +908,104 @@ class SqlAlchemyTranscriptStore:
         ``ix_transcription_meeting_segment`` in the admin-api authoritative schema), exactly the
         parent db-writer's ON CONFLICT statement: idempotent, a re-flushed rewrite lands as an
         UPDATE, never a duplicate row."""
-        from datetime import datetime as _dt
-
-        from sqlalchemy import text as sql_text  # lazy: not needed for the in-memory fakes
-
-        rows = []
-        for seg in segments:
-            sid = seg.get("segment_id")
-            if not sid:
-                continue  # 0.12 ingest guarantees segment_id; a legacy stray is skipped, not guessed
-            try:
-                start = float(seg.get("start", seg.get("start_time", 0.0)) or 0.0)
-                end = float(seg.get("end", seg.get("end_time", start)) or start)
-            except (TypeError, ValueError):
-                continue
-            if end < start:
-                start, end = end, start
-            rows.append({
-                "mid": int(meeting_id), "start": start, "end": end,
-                "text": seg.get("text") or "", "speaker": seg.get("speaker"),
-                "lang": seg.get("language"), "uid": seg.get("session_uid"),
-                "segid": str(sid), "created": _dt.utcnow(),
-            })
+        rows = _segment_upsert_rows(meeting_id, segments)
         if not rows:
             return
         async with self._session_factory() as db:
-            for row in rows:
-                await db.execute(
-                    sql_text("""
-                        INSERT INTO transcriptions (meeting_id, start_time, end_time, text, speaker, language, session_uid, segment_id, created_at)
-                        VALUES (:mid, :start, :end, :text, :speaker, :lang, :uid, :segid, :created)
-                        ON CONFLICT (meeting_id, segment_id) WHERE segment_id IS NOT NULL
-                        DO UPDATE SET text = EXCLUDED.text, speaker = EXCLUDED.speaker,
-                                      start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
-                                      language = EXCLUDED.language, created_at = EXCLUDED.created_at
-                    """),
-                    row,
-                )
+            await _write_segment_rows(db, rows)
             await db.commit()
 
-    async def processed_view_cursor(self, meeting_id, view_id) -> Optional[str]:
-        """The ``source_cursor`` of the ``view_id`` view inside ``meeting.data['processed']['views']``
-        — the last ``proc:meeting:{id}`` stream entry already durable; the db-writer resumes after it."""
-        from sqlalchemy import select
+    async def complete_transcript_import(self, user_id, meeting_id, *, segments, started_at,
+                                        ended_at, source, session_uid) -> "Optional[dict]":
+        """Land an imported transcript on the caller's row and COMPLETE it — see
+        ``ports.complete_transcript_import`` for the contract.
 
-        from .models import Meeting
+        ONE transaction, under the same per-user advisory lock ``create_planned_meeting`` and
+        ``annotate_meeting`` take, so an import serializes against a concurrent spawn/calendar-sync
+        on the same user rather than racing it. Inside it: the row lock, the idempotency check, the
+        segment upsert, the status/window write. Either the meeting is completed WITH its words or
+        neither happened — a half-import (segments under a `scheduled` row) is exactly the shape
+        that made the founder's walk read "MEETING · UPCOMING" over a finished call.
 
-        async with self._session_factory() as db:
-            m = (await db.execute(select(Meeting).where(Meeting.id == int(meeting_id)))).scalars().first()
-            if not m or not isinstance(m.data, dict):
-                return None
-            view = _find_processed_view(m.data, view_id)
-            return view.get("source_cursor") if view else None
-
-    async def merge_processed_view(
-        self, meeting_id, *, view_id, kind, notes, source_cursor, params=None,
-    ) -> None:
-        """Persist drained copilot notes into the meeting row's ``data['processed']['views']``
-        JSONB (the documented meeting.data home — the same pattern recordings/notes/docs use; NO
-        schema change), in the ADDRESSABLE, VERSIONED multi-consumer shape (release DoD):
-        the view keyed ``view_id`` is upserted (other views preserved), its ``doc['notes']`` merged
-        by note id, ``params`` = the processing metadata APPLIED, ``source_cursor`` = the stream
-        position the view reflects. ONE ``SELECT … FOR UPDATE`` row lock."""
-        from sqlalchemy import select
+        ``start_time``/``end_time`` are written NAIVE UTC, matching the columns (an aware datetime is
+        an asyncpg DataError here — see ``bot_spawn.adapters.update_meeting_status``).
+        """
+        from sqlalchemy import bindparam, func, select, text
         from sqlalchemy.orm.attributes import flag_modified
 
-        from .models import Meeting
+        from .models import Meeting, Transcription
+        from .transcript_import import IN_FLIGHT_STATUSES
+
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return None
 
         async with self._session_factory() as db:
-            stmt = select(Meeting).where(Meeting.id == int(meeting_id)).with_for_update()
-            meeting = (await db.execute(stmt)).scalars().first()
-            if not meeting:
-                return
-            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
-            meeting.data = _upsert_processed_view(
-                data, view_id=view_id, kind=kind, notes=notes,
-                source_cursor=source_cursor, params=params,
+            await db.execute(
+                text("SELECT pg_advisory_xact_lock(:uid)").bindparams(bindparam("uid", user_id))
             )
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == mid, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            # Owner-scoped: a row that is not the caller's answers exactly like one that does not
+            # exist, so this route is no existence oracle — the rule the by-id share mint follows.
+            if meeting is None:
+                return None
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            prior = data.get("transcript_import")
+            if isinstance(prior, dict) and prior.get("session_uid") == session_uid:
+                # The SAME import, again. Nothing is written — not the segments, not the window.
+                # A second call is a no-op that reports what the first one did.
+                return {
+                    "meeting_id": mid, "imported": False, "status": meeting.status,
+                    "segments_imported": int(prior.get("segments") or 0),
+                    "start_time": _iso_utc(meeting.start_time),
+                    "end_time": _iso_utc(meeting.end_time),
+                    "session_uid": session_uid, "source": prior.get("source") or source,
+                    "imported_at": prior.get("imported_at"),
+                }
+            if meeting.status in IN_FLIGHT_STATUSES:
+                return {"error": "conflict", "status": meeting.status}
+
+            rows = _segment_upsert_rows(mid, segments)
+            await _write_segment_rows(db, rows)
+
+            meeting.status = "completed"
+            meeting.start_time = started_at.astimezone(timezone.utc).replace(tzinfo=None)
+            meeting.end_time = ended_at.astimezone(timezone.utc).replace(tzinfo=None)
+            # The provenance, not a completion_reason. `completion_reason` is a BOT fact — why a run
+            # ended — and no bot ran here; writing one would be the double claiming to be a
+            # recording. `transcript_import` says what actually happened, and any reader can tell an
+            # imported meeting from a captured one by asking for it.
+            data["transcript_import"] = {
+                "source": source, "session_uid": session_uid, "segments": len(rows),
+                "started_at": _iso_utc(meeting.start_time),
+                "ended_at": _iso_utc(meeting.end_time),
+                "imported_at": _now().isoformat().replace("+00:00", "Z"),
+            }
+            # The same delivery marker a terminal transition writes (#807), counted the same way —
+            # SELECT COUNT over the durable rows, so it reports what is really in the table rather
+            # than what this call believes it wrote.
+            data["segments_captured"] = (await db.execute(
+                select(func.count()).select_from(Transcription).where(Transcription.meeting_id == mid)
+            )).scalar() or 0
+            meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()
+            await db.refresh(meeting)
+            return {
+                "meeting_id": mid, "imported": True, "status": meeting.status,
+                "segments_imported": len(rows),
+                "segments_captured": data["segments_captured"],
+                "start_time": _iso_utc(meeting.start_time),
+                "end_time": _iso_utc(meeting.end_time),
+                "platform": meeting.platform,
+                "native_meeting_id": meeting.platform_specific_id,
+                "session_uid": session_uid, "source": source,
+                "imported_at": data["transcript_import"]["imported_at"],
+            }
 
     async def processed_view_cursor(self, meeting_id, view_id) -> Optional[str]:
         """The ``source_cursor`` of the ``view_id`` view inside ``meeting.data['processed']['views']``
@@ -1619,13 +1595,9 @@ class SqlAlchemyTranscriptStore:
                 prior and prior.get("state", "completed") == "completed"
             )
             if not already_deleted:
-                data["artifact_deletion"] = {
-                    "state": "pending",
-                    "requested_at": prior.get("requested_at")
-                    or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "scope": "primary_transcript_and_recording_storage",
-                    "backup_residuals": "expire_under_deployment_retention_policy",
-                }
+                data[ARTIFACT_DELETION_FIELD] = deletion_stamp(
+                    "pending", prior=prior,
+                    at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
                 meeting.data = data
                 flag_modified(meeting, "data")
                 await db.commit()
@@ -1656,12 +1628,8 @@ class SqlAlchemyTranscriptStore:
             data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
             for key in ("recordings", "processed", "notes", "share_grants", "transcript_viewers"):
                 data.pop(key, None)
-            data["artifact_deletion"] = {
-                "state": "completed",
-                "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                "scope": "primary_transcript_and_recording_storage",
-                "backup_residuals": "expire_under_deployment_retention_policy",
-            }
+            data[ARTIFACT_DELETION_FIELD] = deletion_stamp(
+                "completed", at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
             meeting.data = data
             flag_modified(meeting, "data")
             await db.commit()
@@ -1669,9 +1637,9 @@ class SqlAlchemyTranscriptStore:
         # The DB tombstone makes this retryable: if Redis cleanup fails, a repeat reaches this same
         # terminal row and tries the cache/stream cleanup again without resurrecting durable data.
         if self._redis is not None:
-            await self._redis.delete(
-                f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}"
-            )
+            from .ports import erased_meeting_cache_keys
+
+            await self._redis.delete(*erased_meeting_cache_keys(meeting_id))
             await self._redis.srem("active_meetings", str(meeting_id))
         return True
 

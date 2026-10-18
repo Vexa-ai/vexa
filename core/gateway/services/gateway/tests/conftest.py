@@ -48,6 +48,13 @@ needs_agent = pytest.mark.skipif(
 VALID_KEY = "vxa_test_unit_key"
 VALID_USER = {"user_id": 7, "scopes": ["bot", "tx", "browser"], "max_concurrent": 3, "email": "u@example.com"}
 
+# gateway-identity.v1: one Ed25519 keypair per test session. The gateway signs with SIGNING_KEY; the
+# services behind it verify with VERIFY_KEY (its public half) and nothing else.
+from gateway import identity_token as _identity_token  # noqa: E402
+
+SIGNING_KEY = _identity_token.generate_signing_key()
+VERIFY_KEY = SIGNING_KEY.public_key()
+
 
 class FakeAuthorizer:
     """Satisfies ``ports.Authorizer``: resolve a single valid key, authorize a fixed subscribe."""

@@ -1,6 +1,8 @@
 """#116 — completed meeting transcript + recording-object erasure."""
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
 from meeting_api import create_app
@@ -134,3 +136,88 @@ def test_completed_artifact_delete_is_idempotent_and_active_lifecycle_is_not_del
     assert response.status_code == 409
     assert active_store._meetings[MEETING_ID]["status"] == "active"
     assert active_storage.blobs
+
+
+def test_deletes_every_fixture_session_and_promotion_without_touching_other_meetings():
+    store, storage, client = _fixture()
+    prefix = f"signal/{OWNER}/{MEETING_ID}/"
+    for name in ("session-a/captured-signal.jsonl", "session-a/PROMOTED", "session-b/botlog.txt"):
+        storage.blobs[prefix + name] = b"private fixture"
+    other = f"signal/{OWNER}/{MEETING_ID + 1}/session-a/captured-signal.jsonl"
+    storage.blobs[other] = b"other meeting"
+    assert client.delete(f"/meetings/{MEETING_ID}", headers={"x-user-id": str(OWNER)}).status_code == 204
+    assert storage.blobs == {other: b"other meeting"}
+
+
+def test_fixtures_without_recordings_are_deleted_and_storage_failure_can_retry():
+    class FailsFixtureOnce(InMemoryStorage):
+        fail = True
+        async def delete(self, key):
+            if key.startswith("signal/") and self.fail:
+                self.fail = False
+                raise RuntimeError("fixture storage unavailable")
+            await super().delete(key)
+    store, storage, client = _fixture(storage_cls=FailsFixtureOnce)
+    store._meetings[MEETING_ID]["data"]["recordings"] = []
+    storage.blobs.clear()
+    key = f"signal/{OWNER}/{MEETING_ID}/session-a/transcript.jsonl"
+    storage.blobs[key] = b"fixture"
+    headers = {"x-user-id": str(OWNER)}
+    assert client.delete(f"/meetings/{MEETING_ID}", headers=headers).status_code == 500
+    assert store._meetings[MEETING_ID]["data"]["artifact_deletion"]["state"] == "pending"
+    assert client.delete(f"/meetings/{MEETING_ID}", headers=headers).status_code == 204
+    assert storage.blobs == {}
+
+
+# ── the transcript held in Redis goes with the rest ──────────────────────────────────────────────
+
+def _cache_keys(meeting_id: int) -> list[str]:
+    return [f"meeting:{meeting_id}:segments", f"proc:meeting:{meeting_id}", f"tc:meeting:{meeting_id}"]
+
+
+def _seed_cache(r, meeting_id: int) -> None:
+    r.hset(f"meeting:{meeting_id}:segments", "s1", json.dumps({"text": "confidential"}))
+    r.xadd(f"proc:meeting:{meeting_id}", {"payload": json.dumps({"notes": "confidential"})})
+    r.xadd(f"tc:meeting:{meeting_id}", {"payload": json.dumps(
+        {"type": "transcription", "segments": [{"segment_id": "s1", "text": "confidential"}]})})
+
+
+def test_delete_erases_every_transcript_key_in_redis_and_no_other_meetings():
+    import fakeredis
+
+    server = fakeredis.FakeServer()
+    sync = fakeredis.FakeRedis(server=server, decode_responses=True)
+    store = InMemoryTranscriptStore(redis_client=fakeredis.aioredis.FakeRedis(server=server))
+    store.seed_meeting(meeting_id=MEETING_ID, user_id=OWNER, platform="google_meet",
+                       native_meeting_id="private-room", status="completed", data={},
+                       segments=[{"segment_id": "s1", "start": 0, "end": 1, "text": "confidential"}])
+    _seed_cache(sync, MEETING_ID)
+    _seed_cache(sync, MEETING_ID + 1)
+    client = TestClient(create_app(transcript_store=store, storage=InMemoryStorage()),
+                        raise_server_exceptions=False)
+
+    assert client.delete(f"/meetings/{MEETING_ID}", headers={"x-user-id": str(OWNER)}).status_code == 204
+    assert [k for k in _cache_keys(MEETING_ID) if sync.exists(k)] == []
+    assert all(sync.exists(k) for k in _cache_keys(MEETING_ID + 1)), "another meeting's keys were touched"
+
+
+def test_the_sql_store_erases_the_same_keys():
+    """The production store's finalize needs a database to run, which this suite does not start, so
+    this pins that it deletes the same tuple the fake does (the fake is exercised end to end above)."""
+    import inspect
+
+    from meeting_api.collector.adapters import SqlAlchemyTranscriptStore
+
+    src = inspect.getsource(SqlAlchemyTranscriptStore.finalize_completed_artifact_deletion)
+    assert "self._redis.delete(*erased_meeting_cache_keys(meeting_id))" in src
+
+
+def test_the_erased_keys_are_the_ones_the_transcript_writers_use():
+    from meeting_api.collector.db_writer import segments_hash_key
+    from meeting_api.collector.ingest import _transcript_stream
+    from meeting_api.collector.ports import erased_meeting_cache_keys
+
+    keys = set(erased_meeting_cache_keys(MEETING_ID))
+    assert segments_hash_key(MEETING_ID) in keys
+    assert _transcript_stream(MEETING_ID) in keys
+    assert f"proc:meeting:{MEETING_ID}" in keys

@@ -137,6 +137,31 @@ class SqlAlchemyMeetingRepo:
             m = (await db.execute(stmt)).scalars().first()
             return _row_to_dict(m) if m else None
 
+    async def latest_auth_session(self, userdata_s3_path) -> Optional[dict]:
+        from sqlalchemy import select
+
+        from ..sessions.models import Meeting, MeetingSession
+
+        async with self._session_factory() as db:
+            stmt = (
+                select(MeetingSession.session_uid, Meeting.id, Meeting.status, Meeting.end_time,
+                       Meeting.updated_at)
+                .join(Meeting, MeetingSession.meeting_id == Meeting.id)
+                .where(Meeting.data["auth_userdata_path"].astext == userdata_s3_path)
+                .order_by(MeetingSession.session_start_time.desc(), MeetingSession.id.desc())
+                .limit(1)
+            )
+            row = (await db.execute(stmt)).first()
+            if row is None:
+                return None
+            return {
+                "meeting_id": row.id,
+                "session_uid": row.session_uid,
+                "status": row.status,
+                "end_time": _iso_utc(row.end_time),
+                "updated_at": _iso_utc(row.updated_at),
+            }
+
     async def find_latest(self, user_id, platform, native_meeting_id) -> Optional[dict]:
         from sqlalchemy import select
 
@@ -936,6 +961,16 @@ class SqlAlchemyMeetingRepo:
             return _row_to_dict(m)
 
 
+def runtime_caller_headers(token: Optional[str] = None) -> dict:
+    """The runtime caller credential (``RUNTIME_API_TOKEN``) as request headers, for the httpx client
+    every runtime.v1 call goes through. The runtime answers 401 to any other caller, so an empty
+    token is refused here rather than discovered on the first spawn."""
+    token = token if token is not None else os.getenv("RUNTIME_API_TOKEN", "")
+    if not token:
+        raise RuntimeError("the runtime caller credential (RUNTIME_API_TOKEN) is required")
+    return {"Authorization": f"Bearer {token}"}
+
+
 class HttpRuntimeClient:
     """``RuntimeClient`` over the runtime.v1 HTTP kernel (``POST /workloads``). 429 → QuotaExceeded;
     non-201 → SpawnFailed (parent ``_spawn_via_runtime_api``)."""
@@ -1010,5 +1045,5 @@ def build_production_router(*, database_url: Optional[str] = None, runtime_api_u
 
     engine = build_engine(database_url)  # #635: env-steered pool
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    http = httpx.AsyncClient(timeout=30.0)
+    http = httpx.AsyncClient(timeout=30.0, headers=runtime_caller_headers())
     return build_router(SqlAlchemyMeetingRepo(session_factory), HttpRuntimeClient(http, runtime_api_url))

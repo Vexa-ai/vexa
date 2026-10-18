@@ -30,6 +30,10 @@ parent's FM-003 discipline). `active → joining` (and any re-open of a terminal
   `update_meeting_status`, so this brick is the sole writer of meeting attribution in production),
   `LifecycleSink` (`apply(event)` / `apply_change(event, transition_source=…)`), `IllegalTransition`,
   `TransitionSource`, `StatusChange`.
+- `mount.py` — `mount_lifecycle(app, ...)`: the lifecycle HTTP mount on the unified app — the
+  bot's `POST /bots/internal/callback/lifecycle`, the runtime's `POST /runtime/callback`, and the
+  one in-process entry both drive (`app.state.apply_lifecycle_event`: FSM advance + persist,
+  finalize, webhooks, flows publish, ws publish, copilot reap).
 - `receiver.py` — `create_app(store, on_status_change)`: the FastAPI receiver.
   `POST /bots/internal/callback/lifecycle` validates → drives the FSM → emits the
   `meeting.status_change` webhook → `200 accepted` / `409 illegal-transition` / `422 schema-violation`.

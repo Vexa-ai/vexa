@@ -14,9 +14,10 @@ redis, never reaches into meeting-api or admin-api directly.
 
 | Direction | Neighbour | Via | What crosses |
 |---|---|---|---|
-| serves | MCP clients | `POST/GET /mcp` (streamable HTTP) | tool calls + prompt gets; auth = `Authorization: Bearer <VEXA_API_KEY>` (back-compat: raw `Authorization` or `X-API-Key`) |
+| serves | MCP clients — a person's own client and every agent worker's toolbelt | `POST/GET /mcp` (streamable HTTP, relayed by the gateway) | tool calls + prompt gets; auth = `Authorization: Bearer <credential>` — a Vexa API key, or a worker's per-dispatch delegation token (`vxd_…`), which the gateway resolves through identity like a key (back-compat: raw `Authorization` or `X-API-Key`) |
+| asks | each deployed domain (`ADMIN_API_URL`, `MEETING_API_URL`, `AGENT_API_URL`, `FLOWS_API_URL`) | `GET /.well-known/mcp-tools.json` + `/openapi.json`, once at boot | the manifests assembled below; a named domain that never answers fails the boot |
 | calls | ticket sink (`VEXA_TICKET_SINK_URL`) | `POST <sink>` | `report_issue` tickets: the agent's words + a server timestamp + a dedupe fingerprint + a **salted fingerprint of the caller's key** (never the key). Unset → `report_issue` returns 503 and nothing else is affected. |
-| calls | gateway (`GATEWAY_URL`) | `POST /bots` · `GET /bots/status` · `PUT/DELETE /bots/{platform}/{native}` · `GET /meetings` · `GET /transcripts/{platform}/{native}` · `GET /recordings[/{id}]` | each tool forwards verbatim with the caller's `X-API-Key` |
+| calls | gateway (`GATEWAY_URL`) | `POST /bots` · `GET /bots/status` · `PUT/DELETE /bots/{platform}/{native}` · `GET /meetings` · `GET /transcripts/{platform}/{native}` · `GET /recordings[/{id}]`, and, for an assembled domain whose manifest declares `forward` (the agent: `/agent/` ↔ `/api/`), its tools at `<edge_prefix><path>` | each tool forwards verbatim with the caller's own credential as `X-API-Key` — plus, when the request it serves came through the gateway, the identity the gateway signed onto it, as `X-Vexa-Internal-Mcp-Identity` (`src/vexa_mcp/reentry.py`; the gateway admits a worker's delegation token on a REST route only with it, and only on a route its `routes.v1` row flags `mcp_reentry` — every route a tool here calls, held so by `tests/test_callback_routes.py`) — and waits as long as the gateway's buffered leg does (30 s). Every caller-supplied value in a path (`platform`, `native_meeting_id`, a row id, an assembled tool's path parameter) is one percent-encoded segment (`src/vexa_mcp/paths.py`), and `platform` is one of the four the link parser produces or a `422` |
 
 ## The manifest contract — `mcp.tools.v1`
 
@@ -38,6 +39,11 @@ Each tool answers two different questions, and conflating them is what issue #14
   must also declare `admin_auth: {"header": …, "key_env": …}`, and this deployment must actually
   hold that key, or **the boot is refused, naming the tool**. A tool that is listed and then refused
   by its own door is worse than one that is absent: an agent that cannot see a tool recovers.
+  Because the key is the deployment's, the edge spends it only for the **instance admin**: before
+  the forward it asks the gateway's `/auth/me` (identity's `is_admin`) with the caller's credential.
+  A worker counts only when the person it acts for is the instance admin **and** that person is in
+  the loop (signed regime `human`, the governance chat); an unwatched run never does. Anything else —
+  another person, an autonomous worker, no answer — is a `403` and nothing is forwarded.
 - **`none`** — nothing travels.
 
 A tool's **arguments** are its `arguments` list plus the path parameters of its route, and both are
@@ -51,7 +57,13 @@ previous shape — including one supplied through `VEXA_MCP_MANIFEST_DIR` — re
 the tool and the field. That is deliberate: a default is a guess applied silently to every tool, and
 the guess was wrong for the four it was applied to.
 
-## Tools (10)
+## Built-in tools
+
+Beside these, every tool a deployed domain declares in its manifest joins the same surface — with the
+agent domain deployed, its workspace, Connections, clock and `chat_name` tools
+([`core/agent/mcp.tools.v1.json`](../../../agent/mcp.tools.v1.json)); with flows, `whats_waiting`,
+`report_friction` and the flow tools ([`core/flows/mcp.tools.v1.json`](../../../flows/mcp.tools.v1.json)).
+An optional object or list argument (`setup`, `receipts`) is published with its own type.
 
 | Tool | Wraps |
 |---|---|

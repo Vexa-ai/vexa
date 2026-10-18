@@ -1,0 +1,19 @@
+{
+  "delegation": {
+    "regime": "autonomous",
+    "target": "ws_7f3a",
+    "workspaces": [
+      "ws_7f3a"
+    ]
+  },
+  "email": "ada@example.com",
+  "exp": 1760000060,
+  "iat": 1760000000,
+  "limits": 3,
+  "scopes": [
+    "bot",
+    "tx"
+  ],
+  "sub": "42",
+  "typ": "vexa-identity"
+}

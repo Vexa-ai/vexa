@@ -203,12 +203,12 @@ def test_internal_tier_header_is_stripped_from_a_public_request():
         "x-internal-secret": "vexa-internal-secret",   # the value that shipped in docker-compose.yml
         "x-vexa-internal-api-secret": "vexa-internal-secret",
         "x-admin-api-key": "changeme",
-        "x-gateway-verified": "1",                     # VEXA_REQUIRE_GATEWAY_IDENTITY's own marker
+        "x-vexa-identity": "v1.forged.forged",         # gateway-identity.v1's signature header
     })
     assert r.status_code == 200
     fwd = downstream.last["headers"]
     for spoofed in ("x-internal-secret", "x-vexa-internal-api-secret",
-                    "x-admin-api-key", "x-gateway-verified"):
+                    "x-admin-api-key", "x-vexa-identity"):
         assert spoofed not in fwd, f"{spoofed} reached the downstream from a public request"
     # The strip is by FAMILY, not by a list that rots: a header nobody has invented yet, spelled
     # inside one of the internal families, is stripped for free.
@@ -221,7 +221,7 @@ def test_authority_header_families_are_recognised_by_prefix():
 
     for name in ("x-internal-secret", "X-Internal-Secret", "x-internal-anything-new",
                  "x-vexa-internal-api-secret", "x-user-id", "x-user-invented-tomorrow",
-                 "x-admin-api-key", "x-gateway-verified"):
+                 "x-admin-api-key", "x-vexa-identity"):
         assert _is_authority_header(name), name
     for name in ("x-api-key", "content-type", "x-trace-id", "authorization", "mcp-session-id"):
         assert not _is_authority_header(name), name
@@ -413,8 +413,12 @@ def test_calendar_id_dot_segments_cannot_walk_up_the_downstream_path():
     assert downstream.last["url"] == "http://admin-api/user/calendars/%2E%2E"
     assert httpx.URL(downstream.last["url"]).path == "/user/calendars/.."
 
-    client.post("/user/calendars/%2E%2E/sync", headers=AUTH)
-    assert downstream.last["url"] == "http://meeting-api/user/calendars/%2E%2E/sync"
+    # The sync verb is a meetings row: a dot-only id is refused there, as on every meetings row
+    # (`_meeting_target`), rather than re-encoded.
+    downstream.last = None
+    r = client.post("/user/calendars/%2E%2E/sync", headers=AUTH)
+    assert r.status_code == 400
+    assert downstream.last is None
 
 
 def test_calendar_id_with_control_character_is_4xx_not_500():

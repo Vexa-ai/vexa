@@ -35,9 +35,10 @@ from typing import Any, Callable, Optional
 
 import json
 
-from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
+from ..regime import require_person
 from .meeting_link import parse_meeting_url
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
@@ -82,10 +83,24 @@ async def _publish_user_meeting_status(
     status: str,
     when: Optional[str],
     log_event: Callable[..., dict],
+    workspace_id: Optional[str] = None,
 ) -> None:
     """Best-effort publish of a FLAT ``meeting.status`` frame to the user-scoped channel
     ``u:{user_id}:meetings`` so the terminal's list surface gets every status change over WS
-    (the gateway forwards the redis payload verbatim). No-op if redis is down / args missing."""
+    (the gateway forwards the redis payload verbatim). No-op if redis is down / args missing.
+
+    A meeting BOUND TO A WORKSPACE is additionally published to ``w:{workspace_id}:meetings``. That
+    is the second channel every member's socket is subscribed to at connect, and it is why a member
+    watching their group's call sees the bot go joining → active in their own terminal instead of a
+    row frozen at whatever it said when the page loaded.
+
+    The alternative — resolving the workspace's roster here and publishing once per member — was
+    rejected: this service does not hold the roster (it lives in the agent's `policy/members.json`),
+    it would add a membership read to a hot best-effort path, and a member added mid-meeting would
+    receive nothing until the next publish. One channel per workspace has none of that: the socket
+    subscribes from the member's OWN identity at connect, so the fan-out follows membership for free.
+    The owner publish is unconditional and unchanged — an owner who is also a member gets the frame
+    on both channels, and the terminal keys the list by meeting id, so a duplicate is idempotent."""
     if redis is None or user_id is None or meeting_id is None:
         return
     import json as _json
@@ -97,11 +112,15 @@ async def _publish_user_meeting_status(
         "status": status,
         "when": when,
     }
-    try:
-        await redis.publish(f"u:{user_id}:meetings", _json.dumps(frame))
-    except Exception as e:  # noqa: BLE001 — publish is best-effort
-        log_event("user_meeting_status_publish_failed", audience="system", level="warning",
-                  span="meetings.intent.publish", fields={"error": str(e)})
+    channels = [f"u:{user_id}:meetings"]
+    if workspace_id:
+        channels.append(f"w:{workspace_id}:meetings")
+    for channel in channels:
+        try:
+            await redis.publish(channel, _json.dumps(frame))
+        except Exception as e:  # noqa: BLE001 — publish is best-effort
+            log_event("user_meeting_status_publish_failed", audience="system", level="warning",
+                      span="meetings.intent.publish", fields={"error": str(e), "channel": channel})
 
 
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
@@ -123,6 +142,7 @@ def build_router(
     calendar_sync_now: Optional[Callable] = None,
     calendar_sync_status: Optional[Callable] = None,
     artifact_object_deleter: Optional[Callable] = None,
+    fixture_object_deleter: Optional[Callable] = None,
 ) -> APIRouter:
     """The collector's READ-side + authorizer routes as a mountable ``APIRouter``.
 
@@ -347,17 +367,27 @@ def build_router(
     # --- GET /meetings/{meeting_id} → the single meeting (api.v1; the meeting-detail page fetches it).
     # Constrained by id IN SQL under the same access union, so a non-owner still cannot read another's
     # meeting — but one row is read instead of the caller's entire history (#803). Full `data` is
-    # retained: this IS the detail view. ---
+    # retained: this IS the detail view.
+    #
+    # `x-user-workspaces` is read here for the SAME reason `GET /meetings` reads it: without it this
+    # route ran the access union with its third branch missing, so a member of the meeting's bound
+    # workspace got a 404 on a meeting their own LIST had just shown them — the row is in the list
+    # (that route passes membership) and absent from its own detail page. Every consumer of the
+    # owner-lookup seam inherited that hole: the meeting page, the live SSE, `/api/meeting/note` and
+    # `/api/meeting/terms` all decide access by calling this route. ---
     @router.get("/meetings/{meeting_id}")
     async def get_meeting(
         request: Request,
         meeting_id: int,
         x_user_id: Optional[str] = Header(default=None),
+        x_user_workspaces: Optional[str] = Header(default=None),
     ):
         from .projection import project_response_data
 
         user_id = _resolve_user_id(x_user_id)
-        meetings = await store.list_meetings(user_id, meeting_id=meeting_id)
+        member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
+        meetings = await store.list_meetings(
+            user_id, meeting_id=meeting_id, member_workspaces=member_workspaces)
         meeting = next((m for m in meetings if m.get("id") == meeting_id), None)
         if meeting is None:
             return JSONResponse(status_code=404, content={"detail": "Meeting not found"})
@@ -608,6 +638,10 @@ def build_router(
                 # scrubbed, so the same owner-scoped request can retry with the original keys.
                 deleted_objects += len(await artifact_object_deleter(recording))
 
+            if fixture_object_deleter is None:
+                raise HTTPException(status_code=503, detail="Fixture storage deletion unavailable")
+            deleted_objects += len(await fixture_object_deleter(user_id, meeting_id))
+
             finalized = await store.finalize_completed_artifact_deletion(user_id, meeting_id)
             if finalized is None:
                 raise HTTPException(status_code=404, detail="Meeting not found")
@@ -652,7 +686,7 @@ def build_router(
 
     # --- DELETE /meetings/{meeting_id} → delete a PLANNED row (intent status only; an FSM row is
     # never deletable from here). Owner-scoped, ROW-id addressed. ---
-    @router.delete("/meetings/{meeting_id}", status_code=204)
+    @router.delete("/meetings/{meeting_id}", status_code=204, dependencies=[Depends(require_person)])
     async def delete_planned_meeting(
         meeting_id: int,
         x_user_id: Optional[str] = Header(default=None),
@@ -788,7 +822,7 @@ def build_router(
         row = await _apply_meeting_patch(user_id, meeting_id, payload)
         return JSONResponse(content=row)
 
-    @router.delete("/meetings/{platform}/{native_meeting_id}")
+    @router.delete("/meetings/{platform}/{native_meeting_id}", dependencies=[Depends(require_person)])
     async def delete_native_meeting(
         platform: str,
         native_meeting_id: str,
@@ -917,7 +951,7 @@ def build_router(
     # --- POST /meetings/{platform}/{native_meeting_id}/workspace → BIND the meeting to a shared workspace
     # (meetings.data.workspace_id). Owner-scoped. Members of that workspace can then subscribe to this
     # meeting's live transcript feed (authorize_subscribe branch b). Many meetings → one workspace. ---
-    @router.post("/meetings/{platform}/{native_meeting_id}/workspace")
+    @router.post("/meetings/{platform}/{native_meeting_id}/workspace", dependencies=[Depends(require_person)])
     async def bind_workspace(
         platform: str,
         native_meeting_id: str,
@@ -1001,6 +1035,115 @@ def build_router(
         ttl = max(SHARE_MIN_TTL_SEC, min(ttl, SHARE_MAX_TTL_SEC))
         return mode, emails, ttl
 
+    # --- POST /meetings/{meeting_id}/transcript-import → complete a meeting FROM A TRANSCRIPT.
+    #
+    # The product feature is "import a transcript": a meeting that already happened somewhere we did
+    # not record — a Zoom export, a TSC recording, minutes from a call nobody sent a bot to — becomes
+    # a first-class Vexa meeting. Everything downstream then treats it as one: the canvas, the by-id
+    # transcript read, search, the post-meeting flows.
+    #
+    # It is ALSO the honest capture double. The rehearsal rig used to build this row by hand —
+    # `docker exec … psql` INSERTing `transcriptions` and UPDATEing `meetings` with the DB password
+    # it read out of another container — because meeting-api owned the two things the double needed
+    # and exposed neither: a way to put words on a row, and a way to say WHEN the meeting was (a bot
+    # run stamps start/end from `now()`, so a call that happened last Tuesday was inexpressible).
+    # That shell-out is the audit's V4/N5 — a second writer on a table this service owns, building
+    # SQL by string-interpolating speaker names, and it produced rows the product never makes
+    # (`scheduled`, NULL start/end) which read as "UPCOMING" over a finished meeting. One route
+    # closes the feature gap and the ownership hole at once, which is why `source` is declared
+    # rather than inferred: a reader can always tell a double from a real import.
+    #
+    # ROW ID, not the (platform, native) pair — the same lesson the by-id share mint above records:
+    # the pair is not an identity, and the rows most likely to be imported into are exactly the ones
+    # no pair addresses. Three segments against the pair routes' four, so neither can shadow the
+    # other; registered before them anyway, matching the `by-id` precedent.
+    #
+    # Owner-scoped, and refused (409) while a bot is in flight on the row — the FSM is never fought.
+    @router.post("/meetings/{meeting_id}/transcript-import")
+    async def import_transcript(
+        meeting_id: int,
+        request: Request,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        from .transcript_import import (SOURCES, normalize_segments, occurrence_window,
+                                        session_uid_for)
+
+        user_id = _resolve_user_id(x_user_id)
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="body must be an object")
+
+        source = str(payload.get("source") or "import").strip()
+        if source not in SOURCES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'source' must be one of {sorted(SOURCES)} — say where the transcript came from",
+            )
+        session_uid = session_uid_for(source, meeting_id)
+        segments, reason = normalize_segments(payload.get("segments"), session_uid)
+        if reason:
+            raise HTTPException(status_code=422, detail=reason)
+        started_at, ended_at, reason = occurrence_window(
+            segments, payload.get("started_at"), payload.get("ended_at"),
+        )
+        if reason:
+            raise HTTPException(status_code=422, detail=reason)
+
+        result = await store.complete_transcript_import(
+            user_id, meeting_id, segments=segments, started_at=started_at, ended_at=ended_at,
+            source=source, session_uid=session_uid,
+        )
+        if result is None:
+            log_event(
+                "transcript_import_failed", audience="system", level="warning",
+                span="meetings.transcript.import", user_id=user_id, meeting_id=str(meeting_id),
+                fields={"source": source, "reason": "no such meeting for this owner"},
+            )
+            raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+        if result.get("error") == "conflict":
+            raise HTTPException(
+                status_code=409,
+                detail=(f"Meeting {meeting_id} is {result.get('status')} — a bot is in flight on it. "
+                        "A live meeting is completed by its bot, not by an import."),
+            )
+
+        if result.get("imported"):
+            # What a real completion emits, emitted here for the same reason: the terminal learns a
+            # meeting's status from the `u:{user}:meetings` frame the gateway `/ws` forwards
+            # (surfaces/gatewayWS.ts), and its live view of a meeting ends on the `session_end`
+            # marker the collector appends to `tc:meeting:{id}` (ingest._transcript_stream). Both are
+            # best-effort, like every other publish on this path — the durable row is the truth.
+            #
+            # What is deliberately NOT emitted: the segments themselves, into the live stream. They
+            # went through it during a real call because the call was happening. Replaying an
+            # already-finished transcript as live frames would be a fake liveness, and the canvas
+            # reads a completed meeting from `GET /transcripts/by-id/{id}` anyway.
+            await _publish_user_meeting_status(
+                redis, user_id=user_id, meeting_id=result.get("meeting_id"),
+                native_id=result.get("native_meeting_id"), status="completed",
+                when=result.get("end_time"), log_event=log_event,
+            )
+            if redis is not None:
+                try:
+                    await redis.xadd(f"tc:meeting:{result['meeting_id']}",
+                                     {"type": "session_end", "session_uid": session_uid})
+                except Exception as e:  # noqa: BLE001 — best-effort marker; never fail the import
+                    log_event("transcript_import_marker_failed", audience="system", level="warning",
+                              span="meetings.transcript.import", user_id=user_id,
+                              meeting_id=str(meeting_id), fields={"error": str(e)})
+
+        log_event(
+            "transcript_imported", audience="user", span="meetings.transcript.import",
+            user_id=user_id, meeting_id=str(meeting_id),
+            fields={"source": source, "segments": result.get("segments_imported"),
+                    "imported": bool(result.get("imported")),
+                    "start_time": result.get("start_time"), "end_time": result.get("end_time")},
+        )
+        return JSONResponse(content=result)
+
     # --- POST /meetings/{meeting_id}/share → the SAME mint, addressed by the ROW's primary key.
     #
     # Why it exists: the (platform, native) pair is not an identity. A meeting planned from an invite
@@ -1017,7 +1160,7 @@ def build_router(
     #
     # Owner-scoped: a row that is not the caller's 404s exactly like an unknown one. Minting a
     # capability is an owner act, and a share route that distinguished the two would leak existence.
-    @router.post("/meetings/{meeting_id}/share")
+    @router.post("/meetings/{meeting_id}/share", dependencies=[Depends(require_person)])
     async def mint_transcript_share_by_id(
         meeting_id: int,
         request: Request,
@@ -1048,7 +1191,7 @@ def build_router(
     # (only its hash is stored). Redeemed at POST /transcripts/share/accept — NO workspace involved.
     # Kept for 0.10 clients and the /transcripts/{platform}/{native}/share alias; new callers use the
     # by-row-id route above, which can address rows this one cannot. ---
-    @router.post("/meetings/{platform}/{native_meeting_id}/share")
+    @router.post("/meetings/{platform}/{native_meeting_id}/share", dependencies=[Depends(require_person)])
     async def mint_transcript_share(
         platform: str,
         native_meeting_id: str,

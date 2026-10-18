@@ -44,7 +44,7 @@ const inv = (over: Partial<Invocation> = {}): Invocation => ({
   connectionId: 'conn-tape-1',
   nativeMeetingId: 'nat-1',
   meeting_id: 42,
-  internalSecret: 'internal-secret',
+  token: 'session-token',
   ...over,
 } as Invocation);
 
@@ -450,8 +450,8 @@ async function withServer(
     check('metadata declares the jsonl format', received.body.includes('"media_format":"jsonl"'));
     check('metadata names the part', received.body.includes('"part":"captured-signal"'));
     check('metadata carries the session_uid', received.body.includes('"session_uid":"conn-tape-1"'));
-    check('bearer is the internal secret',
-      received.headers.authorization === 'Bearer internal-secret', String(received.headers.authorization));
+    check('bearer is the session token',
+      received.headers.authorization === 'Bearer session-token', String(received.headers.authorization));
     check('multipart content-type with boundary',
       String(received.headers['content-type']).startsWith('multipart/form-data; boundary=----VexaSignalTape'),
       String(received.headers['content-type']));

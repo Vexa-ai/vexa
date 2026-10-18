@@ -20,6 +20,7 @@ fakeredis = pytest.importorskip("fakeredis")
 from fakeredis import aioredis as fake_aioredis  # noqa: E402
 
 from meeting_api.collector.fakes import FakeRedisBus, InMemoryTranscriptStore  # noqa: E402
+from _segment_auth import admin_token, signed_xadd  # noqa: E402,F401 — entries are signed as a bot signs them
 from meeting_api.collector.ingest import (  # noqa: E402
     CONSUMER_GROUP,
     STREAM_NAME,
@@ -39,7 +40,7 @@ async def _crashed_consumer_pel(n: int):
     for i in range(1, n + 1):
         sid = f"seg-{i}"
         seg_ids.append(sid)
-        await bus.xadd(STREAM_NAME, {
+        await signed_xadd(bus, {
             "type": "transcript", "meeting_id": 1,
             "segments": [{
                 "segment_id": sid, "start": float(i), "end": float(i) + 1.0,
@@ -182,7 +183,7 @@ async def _consumer_with_acked_read(client, bus, store, name, n=1):
     ACKs them all — the exact state a per-recreate ghost is left in (read its last message, acked it,
     then the container was replaced and this name never reads again)."""
     for i in range(n):
-        await bus.xadd(STREAM_NAME, {
+        await signed_xadd(bus, {
             "type": "transcript", "meeting_id": 1,
             "segments": [{
                 "segment_id": f"{name}-{i}", "start": float(i), "end": float(i) + 1.0,
@@ -329,3 +330,8 @@ async def test_reclaim_orphans_reraises_unrelated_response_error():
             group=CONSUMER_GROUP, stream=STREAM_NAME, consumer="c", min_idle_ms=1
         )
     assert bus._reclaim_unsupported is False, "an unrelated error must NOT flip the unsupported latch"
+
+
+@pytest.fixture(autouse=True)
+def _signed_by_this_secret(admin_token):
+    """The collector admits only session-signed entries; these tests sign with ``admin_token``."""

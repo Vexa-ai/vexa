@@ -218,7 +218,7 @@ def parse_ics(text: str, *, now: datetime,
     # of RECURRENCE-ID override instances sharing the UID, in ARBITRARY feed order. The next
     # occurrence must be resolved across the WHOLE group — first-component-wins silently dropped
     # a series whenever a past override happened to precede its master in the walk (observed live:
-    # the OeNB bi-weekly vanished while its siblings imported fine).
+    # one customer's bi-weekly vanished while its siblings imported fine).
     cal = Calendar.from_ical(text)
     calendar_metadata = _component_metadata(
         cal, include_components=False, redact_values=redact_values,

@@ -1,0 +1,10 @@
+{
+  "secret": "delegation.v1-published-test-vector-key",
+  "now": 1767225600,
+  "token": "vxd_eyJhbGciOiJIUzI1NiIsInR5cCI6InZ4ZGxnIn0.eyJhdWQiOiJ2ZXhhLW1jcCIsImV4cCI6MTc2NzIyOTIwMCwiaWF0IjoxNzY3MjI1NjAwLCJqdGkiOiJ2ZWMtaHVtYW4tMDAwMSIsInNjb3BlIjp7InJlZ2ltZSI6Imh1bWFuIiwid29ya3NwYWNlcyI6IioifSwic3ViIjoiNDIifQ.iwzSMKZsTzEWoWJYZGgr98Si0GQ_SrkMwYjc-TvzhoA",
+  "revoked": [
+    "vec-human-0001"
+  ],
+  "reason": "revoked",
+  "what": "its jti is on the verifier's denylist; only a verifier that keeps one can say this"
+}

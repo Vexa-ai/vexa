@@ -422,6 +422,8 @@ export function createTranscribe(inv: Invocation): Transcribe {
     serviceUrl: inv.transcriptionServiceUrl,
     apiToken: inv.transcriptionServiceToken,
     model: inv.transcriptionModel ?? undefined,
+    // the person's own Settings endpoint: every request held to the outbound URL guard
+    publicOnly: inv.transcriptionServiceOwner === 'customer',
   });
   const language = inv.language ?? undefined;
   return (pcm, prompt) => client.transcribe(pcm, language, prompt);

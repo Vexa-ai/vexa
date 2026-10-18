@@ -77,6 +77,16 @@ def test_request_meeting_bot_with_native_id(client, gateway, auth):
     assert body["bot_name"] == "Vexa"
 
 
+def test_request_meeting_bot_carries_the_workspace_it_names(client, gateway, auth):
+    """meeting-api binds the meeting to a workspace the caller belongs to, or keeps it private on
+    `personal`; this edge passes the word through and decides nothing."""
+    client.post("/request-meeting-bot", headers=auth,
+                json={"native_meeting_id": "abc-defg-hij", "workspace_id": "team-notes"})
+    assert gateway.last_json()["workspace_id"] == "team-notes"
+    client.post("/request-meeting-bot", headers=auth, json={"native_meeting_id": "abc-defg-hij"})
+    assert "workspace_id" not in gateway.last_json()
+
+
 def test_request_meeting_bot_with_url_parses_teams(client, gateway, auth):
     client.post(
         "/request-meeting-bot",

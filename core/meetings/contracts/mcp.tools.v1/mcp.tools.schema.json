@@ -1,0 +1,395 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/schemas/mcp.tools.v1",
+  "title": "mcp.tools.v1 — a domain's declaration of the MCP tools it serves, and the door behind each",
+  "description": "The MCP (`core/meetings/services/mcp`) is an edge: it asks each deployed domain what it serves and presents the union as one tool surface (`vexa_mcp/manifest.py`). `oss` manifests ship in this repository; `mounted` ones come from a directory a private deployment supplies, are stamped `mounted` by the loader whatever they say, and compete for names with no precedence. Every key is named here, so a new one is a contract change (lane:contract). Rules that span tools (aliases, one route one name, a forwarded tool under its upstream prefix, `requires` within the domain and identity unless the manifest composes, no credential argument) are stated on Manifest and checked by validate.mjs; the loader refuses the same at boot.",
+  "$defs": {
+    "Manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "domain",
+        "depends_on"
+      ],
+      "properties": {
+        "contract": {
+          "const": "mcp.tools.v1"
+        },
+        "domain": {
+          "enum": [
+            "meetings",
+            "identity",
+            "flows",
+            "agent",
+            "gateway",
+            "rehearse",
+            "billing",
+            "workspaces"
+          ]
+        },
+        "source": {
+          "enum": [
+            "oss",
+            "mounted"
+          ],
+          "description": "oss: shipped in this repository. A mounted manifest is stamped mounted by the loader, whatever it says"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "base_url_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "description": "the setting holding the domain's door; a domain with a door names a route on every tool"
+        },
+        "served_at": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "depends_on": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "const": "identity"
+          },
+          "description": "identity is the only domain everyone may depend on; identity itself depends on nothing"
+        },
+        "forward": {
+          "$ref": "#/$defs/Forward"
+        },
+        "admin_auth": {
+          "$ref": "#/$defs/AdminAuth"
+        },
+        "composes": {
+          "type": "boolean",
+          "description": "true: a harness whose tools may require any known domain, declared by the manifest that composes"
+        },
+        "entitlement": {
+          "$ref": "#/$defs/Entitlement"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          }
+        },
+        "publishes_events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PublishedEvent"
+          }
+        },
+        "handed_off_events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HandedOffEvent"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "domain": {
+                "const": "identity"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "depends_on": {
+                "maxItems": 0
+              }
+            }
+          },
+          "description": "identity depends on nothing"
+        },
+        {
+          "if": {
+            "required": [
+              "tools"
+            ],
+            "properties": {
+              "tools": {
+                "contains": {
+                  "required": [
+                    "auth"
+                  ],
+                  "properties": {
+                    "auth": {
+                      "const": "admin"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "admin_auth"
+            ]
+          },
+          "description": "a tool whose door reads the deployment's key needs the domain to spell that key's header and setting"
+        },
+        {
+          "if": {
+            "required": [
+              "base_url_env"
+            ]
+          },
+          "then": {
+            "properties": {
+              "tools": {
+                "items": {
+                  "properties": {
+                    "route": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "description": "a tool with a door names its route; only a doorless domain's tools are served by the edge itself"
+        }
+      ],
+      "$comment": "Also checked by validate.mjs: `requires` names only the domain and identity unless `composes` is true; no argument is a CredentialArgument (trimmed, case-insensitive); an alias names another, non-alias tool on the same route with the same arguments, and two non-alias tools never share a route; with a forward, every route path starts with the upstream prefix."
+    },
+    "Tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "identity",
+        "auth",
+        "requires"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identity": {
+          "enum": [
+            "user",
+            "admin",
+            "operator",
+            "none"
+          ],
+          "description": "who the caller must be"
+        },
+        "auth": {
+          "enum": [
+            "subject",
+            "admin",
+            "none"
+          ],
+          "description": "which credential this edge presents to the door: the caller's own (subject), a key the deployment holds (admin), or none. Required: there is no default"
+        },
+        "requires": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "meetings",
+              "identity",
+              "flows",
+              "agent",
+              "gateway",
+              "rehearse",
+              "billing",
+              "workspaces"
+            ]
+          }
+        },
+        "route": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Route"
+            }
+          ]
+        },
+        "arguments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "alias_of": {
+          "type": "string",
+          "minLength": 1,
+          "description": "a second name for another tool's route; it takes exactly that tool's arguments"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "Route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "path"
+      ],
+      "properties": {
+        "method": {
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        }
+      }
+    },
+    "Forward": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "edge_prefix",
+        "upstream_prefix"
+      ],
+      "description": "the same mapping the domain's routes.v1 gives the gateway: a tool at `<upstream_prefix><tail>` is called back through the gateway at `<edge_prefix><tail>`",
+      "properties": {
+        "edge_prefix": {
+          "type": "string",
+          "pattern": "^/(?:[^/{}]+/)*$"
+        },
+        "upstream_prefix": {
+          "type": "string",
+          "pattern": "^/(?:[^/{}]+/)*$"
+        }
+      }
+    },
+    "AdminAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "header",
+        "key_env"
+      ],
+      "properties": {
+        "header": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]+$"
+        },
+        "key_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        }
+      }
+    },
+    "Entitlement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "route",
+        "answers"
+      ],
+      "description": "the one hook that answers whether a person may act; at most one across the deployment",
+      "properties": {
+        "route": {
+          "$ref": "#/$defs/Route"
+        },
+        "answers": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "PublishedEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event"
+      ],
+      "properties": {
+        "event": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string"
+        },
+        "triggers": {
+          "type": "string"
+        }
+      }
+    },
+    "HandedOffEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event",
+        "event_v2_owner"
+      ],
+      "properties": {
+        "event": {
+          "type": "string",
+          "minLength": 1
+        },
+        "event_v2_owner": {
+          "enum": [
+            "meetings",
+            "identity",
+            "flows",
+            "agent",
+            "gateway",
+            "rehearse",
+            "billing",
+            "workspaces"
+          ]
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "CredentialArgument": {
+      "enum": [
+        "token",
+        "api_key",
+        "apikey",
+        "key",
+        "access_token",
+        "bearer",
+        "credential",
+        "password",
+        "secret"
+      ],
+      "description": "argument names a tool may never take, compared trimmed and lower-cased: the edge has one authentication path, a bearer header bound to the session"
+    },
+    "Refused": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "why",
+        "manifest"
+      ],
+      "description": "a refusal vector: `manifest` must be refused, for the reason `why` names",
+      "properties": {
+        "why": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifest": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

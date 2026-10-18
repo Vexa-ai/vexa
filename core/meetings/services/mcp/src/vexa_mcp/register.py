@@ -10,7 +10,9 @@ WHAT TRAVELS: whichever credential the tool's `auth` names, and nothing else (is
 `subject` sends the caller's own, as `X-API-Key`, exactly as the fourteen do — the case this edge
 was built for. `admin` sends the key the DEPLOYMENT holds, in the header the owning domain named,
 and the caller's own credential does NOT travel with it: a door that reads an operator key has no
-use for a person's, and forwarding both would let the weaker one look like it was checked.
+use for a person's, and forwarding both would let the weaker one look like it was checked. Because
+that key is the deployment's, it is spent only for the instance admin calling with their own
+credential, confirmed with the gateway at call time (`_require_instance_admin`).
 `none` sends neither.
 
 There is one authentication path INTO this edge (PRD 40.8) — a bearer in the header, the session
@@ -35,23 +37,42 @@ So the signature is BUILT — one query parameter per path parameter (required: 
 addressed without them) and one per declared argument (optional, carrying the owning route's own
 type and description). It also re-arms the app-wide unknown-argument guard, which reads a route's
 declared query parameters and would otherwise refuse every argument to every assembled tool.
+
+A DECLARED ARGUMENT THAT CAME FROM `requestBody` (`bind.BoundTool.body_params`) is published as a
+`Body(..., embed=True)` parameter instead of `Query`, so THIS edge's own OpenAPI shows it under
+`requestBody` rather than `parameters` — which is what tells `fastapi-mcp`'s own call-execution
+(`_execute_api_tool`) to send it as a JSON body field rather than a query string parameter when an
+agent calls the tool. `embed=True` on every one of them, regardless of count, because FastAPI's rule
+for a SINGLE singular `Body` parameter is to treat the whole request body AS that one value —
+`{"name": "x"}` becomes bare `"x"` — and every body model bound here (`WorkspaceNewBody`, one field)
+would silently hit exactly that rule without it. Multiple `Body` parameters already embed by
+themselves; passing it unconditionally keeps the one-field and many-field cases identical rather
+than depending on a count nobody is watching.
 """
 from __future__ import annotations
 
 import inspect
 import os
 from typing import Dict, List, Optional
-from urllib.parse import quote
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
+from . import reentry as reentry_mod
 from .bind import BoundTool
+from .paths import path_segment
 
 #: JSON Schema type -> the Python annotation FastAPI needs to publish it again. Anything else is a
-#: string: a wrong-but-honest type is recoverable, a guessed structure is not.
-_PY_TYPE = {"integer": int, "number": float, "boolean": bool, "string": str}
+#: string: a wrong-but-honest type is recoverable, a guessed structure is not. `array`/`object` cover
+#: the requestBody-derived fields query parameters never needed (`FlowSubmission.steps: list[str]`,
+#: `.params: dict`) — a query-origin field never publishes either shape, so widening the map here
+#: changes nothing for a query-declared argument.
+#: How long an assembled tool waits for its owning route — the gateway's buffered-forward bound.
+TOOL_TIMEOUT_S = 30
+
+_PY_TYPE = {"integer": int, "number": float, "boolean": bool, "string": str,
+           "array": list, "object": dict}
 
 
 def _caller_key(request: Request) -> str:
@@ -70,13 +91,42 @@ def _caller_key(request: Request) -> str:
 
 def register(app: FastAPI, bound: List[BoundTool], base_urls: Dict[str, str], *,
              transport: Optional[httpx.AsyncBaseTransport] = None,
-             env: Optional[dict] = None) -> List[str]:
+             env: Optional[dict] = None, gateway_url: Optional[str] = None) -> List[str]:
     """Add one route per bound tool. Returns the names registered, in order."""
     env = os.environ if env is None else env
     names: List[str] = []
     for bt in bound:
-        names.append(_add(app, bt, base_urls[bt.tool.domain], transport, env))
+        names.append(_add(app, bt, base_urls[bt.tool.domain], transport, env, gateway_url))
     return names
+
+
+#: The answer to a caller who is not the instance admin speaking for themselves.
+ADMIN_REFUSAL = ("this tool acts with the deployment's own operator key, so only the instance "
+                 "admin, calling with their own credential, may use it")
+
+
+async def _require_instance_admin(caller_key: str, gateway_url: Optional[str],
+                                  transport: Optional[httpx.AsyncBaseTransport]) -> None:
+    """An `auth: admin` tool spends a key the DEPLOYMENT holds, so this edge spends it only for the
+    instance admin calling with their own credential — asked of the gateway at call time (`/auth/me`
+    answers `is_admin` from identity), never read from anything the caller sent. For a worker's
+    delegation token the gateway answers only on this edge's re-entry (the identity it signed onto
+    the `/mcp` request, `reentry.py`), and says admin only when the person the worker acts for is
+    the instance admin and is in the loop (regime `human`). No gateway to ask is a refusal too."""
+    if not gateway_url or not caller_key:
+        raise HTTPException(status_code=403, detail=ADMIN_REFUSAL)
+    try:
+        async with httpx.AsyncClient(timeout=TOOL_TIMEOUT_S, transport=transport) as client:
+            r = await client.get(gateway_url.rstrip("/") + "/auth/me",
+                                 headers={"X-API-Key": caller_key, **reentry_mod.headers()})
+    except httpx.RequestError:
+        raise HTTPException(status_code=503, detail="could not confirm who is calling; try again")
+    try:
+        me = r.json() if r.status_code == 200 else {}
+    except Exception:  # noqa: BLE001 — an unreadable answer confirms nothing
+        me = {}
+    if not isinstance(me, dict) or me.get("is_admin") is not True:
+        raise HTTPException(status_code=403, detail=ADMIN_REFUSAL)
 
 
 def _outbound(bt: BoundTool, caller_key: str, env: dict) -> Dict[str, str]:
@@ -98,7 +148,10 @@ def _signature(bt: BoundTool) -> inspect.Signature:
 
     Path parameters are REQUIRED and declared arguments are optional, which is what the owning route
     already says: `/reactions/{reaction_id}/{verb}` cannot be addressed without both, and every
-    declared argument is a query parameter with a default.
+    declared argument is optional, carrying the owning route's own type and description — as a query
+    parameter, unless `bind.py` derived it from the route's `requestBody`, in which case it is a
+    `Body` parameter instead so this edge's own OpenAPI keeps the same query/body split the owning
+    route has (see the module docstring for why `embed=True` is unconditional).
     """
     params = [inspect.Parameter("request", inspect.Parameter.KEYWORD_ONLY, annotation=Request)]
     for name in bt.path_params:
@@ -108,12 +161,72 @@ def _signature(bt: BoundTool) -> inspect.Signature:
     for name, schema in bt.parameters.items():
         if name in bt.path_params:
             continue
-        params.append(inspect.Parameter(
-            name, inspect.Parameter.KEYWORD_ONLY,
-            annotation=Optional[_PY_TYPE.get(str(schema.get("type")), str)],
-            default=Query(None, description=schema.get("description") or None,
-                          json_schema_extra=_vocabulary(schema) or None)))
+        annotation = Optional[_PY_TYPE.get(_json_type(schema), str)]
+        description = schema.get("description") or None
+        vocabulary = _vocabulary(schema) or None
+        # QUERY OR BODY, decided by where the OWNING ROUTE publishes the argument (bind.py read its
+        # `requestBody`), never guessed here — see the module docstring for why `embed=True` is
+        # unconditional. The vocabulary annotation rides either one: an agent needs the words
+        # whichever half of the forward the argument travels in.
+        if name in bt.body_params and _declares_keys(schema):
+            # A NESTED MODEL TRAVELS WHOLE: its keys, their types and `additionalProperties: false`,
+            # exactly as the owning route publishes it (`bind._inline`), so the tool's input schema
+            # tells an agent every key it may write and the MCP refuses any other one by name.
+            default = Body(None, embed=True, description=description,
+                           json_schema_extra=_publish_as(schema, description))
+        elif name in bt.body_params:
+            default = Body(None, embed=True, description=description, json_schema_extra=vocabulary)
+        else:
+            default = Query(None, description=description, json_schema_extra=vocabulary)
+        params.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY,
+                                        annotation=annotation, default=default))
     return inspect.Signature(params)
+
+
+def _declares_keys(schema: dict) -> bool:
+    """Is this an object with a closed set of named keys (directly, or as a nullable `anyOf`)?"""
+    if not isinstance(schema, dict):
+        return False
+    if isinstance(schema.get("properties"), dict) and schema.get("additionalProperties") is False:
+        return True
+    return any(_declares_keys(b) for b in (schema.get("anyOf") or schema.get("oneOf") or [])
+               if isinstance(b, dict))
+
+
+def _publish_as(schema: dict, description: Optional[str]):
+    """A `json_schema_extra` that replaces what FastAPI derived from the edge's loose annotation with
+    the owning route's own schema for the argument. Any `enum` inside it is the route's own
+    validation (a `Literal` it enforces), so the edge refuses exactly what the route would — never
+    more (the reason `_vocabulary` keeps a route's SUGGESTED words out of `enum`)."""
+    declared = {k: v for k, v in schema.items() if k != "title"}
+    if description and "description" not in declared:
+        declared["description"] = description
+
+    def replace(generated: dict) -> None:
+        title = generated.get("title")
+        generated.clear()
+        generated.update(declared)
+        if title:
+            generated["title"] = title
+    return replace
+
+
+def _json_type(schema: dict) -> str:
+    """The JSON type an owning route published for one argument.
+
+    A pydantic `Optional[X]` publishes `anyOf: [X, {"type": "null"}]` with no top-level `type`, and
+    a nested model publishes a `$ref`; reading only `type` turned `setup: dict | None` and
+    `receipts: list[Receipt]` into strings an agent could not fill. The first non-null branch is
+    the argument's type, and a `$ref` is an object."""
+    if schema.get("type"):
+        return str(schema["type"])
+    if schema.get("$ref"):
+        return "object"
+    for key in ("anyOf", "oneOf"):
+        for branch in schema.get(key) or []:
+            if isinstance(branch, dict) and branch.get("type") != "null":
+                return _json_type(branch)
+    return "string"
 
 
 def _vocabulary(schema: dict) -> dict:
@@ -148,23 +261,27 @@ def _vocabulary(schema: dict) -> dict:
 
 
 def _add(app: FastAPI, bt: BoundTool, base: str,
-         transport: Optional[httpx.AsyncBaseTransport], env: dict) -> str:
+         transport: Optional[httpx.AsyncBaseTransport], env: dict, gateway_url: Optional[str] = None) -> str:
     method = bt.tool.route["method"]
     template = bt.tool.route["path"]
     declared = tuple(n for n in bt.parameters if n not in bt.path_params)
+    body_declared = tuple(n for n in declared if n in bt.body_params)
+    query_declared = tuple(n for n in declared if n not in bt.body_params)
     path_params = tuple(bt.path_params)
 
     async def endpoint(*, request: Request, **argument):
         key = _caller_key(request)
         if key == "" and bt.tool.identity != "none":
             raise HTTPException(status_code=401, detail="this tool needs your Vexa credential")
-        body = {}
+        if bt.tool.auth == "admin":
+            await _require_instance_admin(key, gateway_url, transport)
+        raw_body = {}
         if method in ("POST", "PUT", "PATCH"):
             try:
-                body = await request.json()
+                raw_body = await request.json()
             except Exception:  # noqa: BLE001 — an empty body is a legitimate call
-                body = {}
-        body = body if isinstance(body, dict) else {}
+                raw_body = {}
+        raw_body = raw_body if isinstance(raw_body, dict) else {}
 
         path = template
         for name in path_params:
@@ -173,25 +290,50 @@ def _add(app: FastAPI, bt: BoundTool, base: str,
             value = argument.get(name)
             if value in (None, ""):
                 raise HTTPException(status_code=422, detail=f"{bt.name} needs {name}")
-            # PERCENT-ENCODED, EVERY CHARACTER, `/` INCLUDED. A path parameter is one segment of the
-            # tool's own route and nothing else; substituted raw it is a caller-supplied fragment of
-            # URL. `reaction_id="../../admin/keys"` composed `/reactions/../../admin/keys/retry`,
-            # which httpx resolves before it goes out — so an agent could address ANY route on the
-            # owning domain's internal address, under whichever credential the tool's `auth` names.
-            # `safe=""` leaves nothing that can end the segment, so the request stays under the
-            # route the manifest declared and a traversal attempt arrives as a literal 404 id.
-            path = path.replace("{" + name + "}", quote(str(value), safe=""))
+            # ONE SEGMENT OF THE TOOL'S OWN ROUTE AND NOTHING ELSE (`paths.py`): every character
+            # but the unreserved ones percent-encoded, `/` included, and a dot-only value encoded
+            # too, so neither a separator nor a `.`/`..` segment httpx would resolve survives. The
+            # request reaches the gateway under the route the manifest declared; there a dot-only
+            # value or a separator is refused with a 400, and any other value goes on as one
+            # literal segment (`gateway/paths.py` `forwarded_param`).
+            path = path.replace("{" + name + "}", path_segment(value))
 
-        params = {n: argument[n] for n in declared if argument.get(n) is not None}
-        for n in declared:
-            if n not in params and n in body:
-                params[n] = body.pop(n)
+        params = {n: argument[n] for n in query_declared if argument.get(n) is not None}
+        for n in query_declared:
+            if n not in params and n in raw_body:
+                params[n] = raw_body.pop(n)
 
+        # A TYPED body (bind.py derived it from the route's own `requestBody`): only the DECLARED
+        # fields travel — the manifest's promise, kept both ways. Anything else the caller sent is
+        # dropped here, never guessed at, same as an undeclared query argument always was.
+        #
+        # No declared body fields at all (every tool before this change, and every path-only verb
+        # like `reaction_signal` today): the caller's raw JSON passes through untouched, exactly as
+        # it always has — `signal_reaction`'s own `body: dict = Body(default={})` is the freeform
+        # shape this preserves.
+        if body_declared:
+            body = {n: argument[n] for n in body_declared if argument.get(n) is not None}
+        else:
+            body = raw_body
+
+        headers = _outbound(bt, key, env)
+        if bt.tool.forward and gateway_url:
+            # Back through the gateway, at the path the domain's `forward` declares, carrying the
+            # identity the gateway signed onto this request so it can admit a worker's tool call
+            # (`reentry.py`). Never sent to a domain directly.
+            edge, upstream = bt.tool.forward
+            url = gateway_url.rstrip("/") + edge + path[len(upstream):]
+            headers.update(reentry_mod.headers())
+        else:
+            url = f"{base}{path}"
         try:
-            async with httpx.AsyncClient(timeout=10, transport=transport) as client:
+            # The forward crosses the gateway, whose buffered leg allows 30 s; a tool that waits
+            # less than its own door gives up on calls the door would have answered (a mailbox
+            # read through the credential broker is routinely several seconds).
+            async with httpx.AsyncClient(timeout=TOOL_TIMEOUT_S, transport=transport) as client:
                 r = await client.request(
-                    method, f"{base}{path}",
-                    headers=_outbound(bt, key, env),
+                    method, url,
+                    headers=headers,
                     params=params or None,
                     json=body if method in ("POST", "PUT", "PATCH") else None)
         except httpx.TimeoutException:

@@ -131,7 +131,7 @@ def test_refs_shapes_carry_what_process_meeting_reads_without_a_default():
 def test_started_publishes_once_on_the_active_transition(published):
     repo = InMemoryMeetingRepo()
     m = _seed(repo)
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _post(client, {"connection_id": "sess-flows", "status": "joining", "timestamp": "2026-09-03T10:00:00Z"})
     _post(client, {"connection_id": "sess-flows", "status": "active", "timestamp": "2026-09-03T10:00:10Z"})
 
@@ -151,7 +151,7 @@ def test_completed_publishes_once_with_the_reason_and_a_replay_is_inert(publishe
     flows' own `source_event_id` dedup is reached."""
     repo = InMemoryMeetingRepo()
     m = _seed(repo)
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     for body in (
         {"connection_id": "sess-flows", "status": "joining", "timestamp": "2026-09-03T10:00:00Z"},
         {"connection_id": "sess-flows", "status": "active", "timestamp": "2026-09-03T10:00:10Z"},
@@ -175,7 +175,7 @@ def test_failed_terminal_does_not_publish_meeting_completed(published):
     inventing a third carrier this change was not asked to add."""
     repo = InMemoryMeetingRepo()
     _seed(repo)
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _post(client, {"connection_id": "sess-flows", "status": "joining", "timestamp": "2026-09-03T10:00:00Z"})
     _post(client, {"connection_id": "sess-flows", "status": "failed", "failure_stage": "awaiting_admission",
                    "completion_reason": "awaiting_admission_rejected", "reason": "host denied admission",
@@ -198,7 +198,7 @@ def test_no_flows_configured_makes_no_http_call_and_the_callback_still_succeeds(
     monkeypatch.setattr(httpx, "AsyncClient", _no_client)
     repo = InMemoryMeetingRepo()
     _seed(repo)
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _post(client, {"connection_id": "sess-flows", "status": "joining", "timestamp": "2026-09-03T10:00:00Z"})
     r = _post(client, {"connection_id": "sess-flows", "status": "active", "timestamp": "2026-09-03T10:00:10Z"})
     assert r.status_code == 200
@@ -213,7 +213,7 @@ def test_a_publish_that_raises_never_fails_the_lifecycle_callback(monkeypatch):
     monkeypatch.setattr(events_mod, "publish", boom)
     repo = InMemoryMeetingRepo()
     _seed(repo)
-    client = TestClient(create_app(meeting_repo=repo))
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
     _post(client, {"connection_id": "sess-flows", "status": "joining", "timestamp": "2026-09-03T10:00:00Z"})
     r = _post(client, {"connection_id": "sess-flows", "status": "active", "timestamp": "2026-09-03T10:00:10Z"})
     assert r.status_code == 200
@@ -296,7 +296,7 @@ def test_the_lifecycle_callback_is_not_delayed_by_a_hanging_flows(monkeypatch):
     try:
         repo = InMemoryMeetingRepo()
         _seed(repo)
-        client = TestClient(create_app(meeting_repo=repo))
+        client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
         _post(client, {"connection_id": "sess-flows", "status": "joining",
                        "timestamp": "2026-09-03T10:00:00Z"})
         started = time.monotonic()

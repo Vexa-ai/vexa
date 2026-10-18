@@ -1,89 +1,118 @@
-"""SSRF-safe webhook URL validation + connect-time IP pinning.
+"""ssrf.py — the ONE answer to "may this server fetch a URL a user gave it".
 
-Derived from the parent's `webhook_url.py`, reimplemented clean. Rejects URLs that
-target internal networks, localhost, cloud metadata, link-local, or internal Docker
-service hostnames. Reference: OWASP SSRF Prevention Cheat Sheet.
+Every service that dereferences a user-supplied URL server-side (customer webhooks, calendar feeds,
+the agent's web and asset fetches) asks this module, and the module is vendored VERBATIM into each
+image that needs it — ``scripts/parity.json`` (fact ``outbound-url-guard``) fails the build when a
+copy drifts. Stdlib only; ``httpx`` is imported inside the transport builders, so importing this
+module never requires it.
 
-WH2 — TOCTOU / DNS-rebinding hardening
---------------------------------------
-A plain "validate the hostname, then let httpx re-resolve at connect" guard is
-TOCTOU-vulnerable: an attacker who flips the A-record between the validate call and the
-connect reaches an internal IP even though validation saw a public one. Two defences,
-applied together:
+THREE RULES, applied together:
 
-1. **Resolve + validate at submit time** — `validate_webhook_url` resolves the hostname
-   to its IP(s) and validates every resolved IP against the same private/loopback/
-   link-local/multicast blocklist literal IPs get. It returns a `PinnedURL` (a `str`
-   subclass carrying the resolved-and-validated IPs), NOT a bare hostname string, so a
-   caller cannot accidentally hand a re-resolvable hostname to the transport.
-2. **Re-validate + pin at connect time** — `build_pinned_transport` wraps an httpx
-   transport so that, for every dial, it re-resolves the host, re-validates the IP(s),
-   and PINS the connection to a validated IP (preserving the Host header + TLS SNI via
-   `sni_hostname`). The rebinding window between submit and connect is closed: a flipped
-   A-record is re-checked and rejected at the moment the socket is opened.
+1. **Every address is checked as what it reaches.** An IPv6 address can carry an IPv4 address —
+   IPv4-mapped (``::ffff:a.b.c.d``), IPv4-compatible (``::a.b.c.d``), IPv4-translated
+   (``::ffff:0:a.b.c.d``), 6to4 (``2002:AABB:CCDD::``), Teredo, NAT64 (``64:ff9b::/96``) and an
+   ISATAP interface identifier — and a socket dialled at one of those reaches the IPv4 address
+   inside it. ``ip.is_private`` answers for the IPv6 notation, not for that destination, and its
+   answer differs between Python patch releases. So the embedded IPv4 address is extracted and
+   checked against the IPv4 list, and the IPv6 address is checked against the IPv6 list; either
+   being refused refuses the URL. A numeric host that the resolver reads as IPv4 (``2130706433``,
+   ``0x7f.1``, ``0177.0.0.1``) is the same address and is read the same way here.
+2. **The lists are explicit.** Loopback, private, shared (CGNAT), link-local (cloud metadata),
+   unspecified, documentation, benchmarking, reserved, multicast, discard, local-use NAT64, unique
+   local and site-local ranges are refused by network, not by ``ipaddress`` flags.
+3. **The connection is pinned to the checked address.** Checking a hostname and then letting the
+   HTTP client resolve it again is a time-of-check/time-of-use gap: a record flipped between the two
+   reaches an internal address. ``validate_url`` resolves the host and checks EVERY address it
+   resolves to, returning a ``PinnedURL`` (not a re-resolvable string); the transports re-resolve,
+   re-check, and dial the checked address with the original Host header and TLS SNI, on every
+   request — redirects included.
 
-Only the resolve step touches the network (`socket.getaddrinfo`) — it is skipped for
-literal-IP and blocked-hostname URLs, which is the only path the autonomous eval
-exercises (no DNS, no live receiver). The eval can also pass `resolver=...` to stub
-resolution deterministically.
+A host name is refused before any lookup when it can only name this deployment: ``localhost`` and
+anything under ``.localhost``, a cloud metadata name, or a single label (``redis``, ``admin-api`` —
+a name with no dot resolves only inside the deployment's own network).
 """
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
-from typing import Any, Callable, List, Optional
-from urllib.parse import urlparse
+from typing import Any, Callable, List, Optional, Union
+from urllib.parse import urlsplit
 
-# Blocked IP ranges per OWASP (localhost, private, link-local, multicast).
-_BLOCKED_IPV4_NETWORKS = [
-    ipaddress.ip_network("0.0.0.0/8"),       # current network
-    ipaddress.ip_network("10.0.0.0/8"),      # private
-    ipaddress.ip_network("127.0.0.0/8"),     # loopback
-    ipaddress.ip_network("169.254.0.0/16"),  # link-local (incl. cloud metadata 169.254.169.254)
-    ipaddress.ip_network("172.16.0.0/12"),   # private
-    ipaddress.ip_network("192.168.0.0/16"),  # private
-    ipaddress.ip_network("224.0.0.0/4"),     # multicast
-]
+IPAddress = Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
+Resolver = Callable[[str], List[str]]
 
-_BLOCKED_IPV6_NETWORKS = [
-    ipaddress.ip_network("::1/128"),         # loopback
-    ipaddress.ip_network("fc00::/7"),        # unique local
-    ipaddress.ip_network("fe80::/10"),       # link-local
-    ipaddress.ip_network("ff00::/8"),        # multicast
-]
+_BLOCKED_IPV4_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "0.0.0.0/8",          # this network; 0.0.0.0 is the unspecified address
+    "10.0.0.0/8",         # private
+    "100.64.0.0/10",      # shared address space (CGNAT; also a cloud metadata address)
+    "127.0.0.0/8",        # loopback
+    "169.254.0.0/16",     # link-local, including cloud metadata 169.254.169.254
+    "172.16.0.0/12",      # private
+    "192.0.0.0/24",       # IETF protocol assignments
+    "192.0.2.0/24",       # documentation
+    "192.88.99.0/24",     # 6to4 relay anycast
+    "192.168.0.0/16",     # private
+    "198.18.0.0/15",      # benchmarking
+    "198.51.100.0/24",    # documentation
+    "203.0.113.0/24",     # documentation
+    "224.0.0.0/4",        # multicast
+    "240.0.0.0/4",        # reserved, including 255.255.255.255
+))
 
-# Internal hostnames (Docker services + cloud metadata).
-_BLOCKED_HOSTNAMES = frozenset([
+_BLOCKED_IPV6_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "::/128",             # unspecified
+    "::1/128",            # loopback
+    "64:ff9b:1::/48",     # local-use IPv4/IPv6 translation
+    "100::/64",           # discard-only
+    "2001::/23",          # IETF protocol assignments, including Teredo 2001::/32
+    "2001:db8::/32",      # documentation
+    "3fff::/20",          # documentation
+    "5f00::/16",          # segment routing SIDs
+    "fc00::/7",           # unique local, including cloud metadata fd00:ec2::254
+    "fe80::/10",          # link-local
+    "fec0::/10",          # site-local
+    "ff00::/8",           # multicast
+))
+
+#: ``::/8`` holds the mapped, compatible and translated forms (each checked through the IPv4 address
+#: it carries). Anything else in it is reserved and refused.
+_IPV6_RESERVED_LOW = ipaddress.ip_network("::/8")
+_IPV4_COMPATIBLE = ipaddress.ip_network("::/96")
+_IPV4_TRANSLATED = ipaddress.ip_network("::ffff:0:0:0/96")
+_NAT64_WELL_KNOWN = ipaddress.ip_network("64:ff9b::/96")
+_ISATAP_IDS = (0x00005EFE, 0x01005EFE, 0x02005EFE, 0x03005EFE)
+
+_BLOCKED_HOSTNAMES = frozenset({
     "localhost",
-    "metadata.google.internal",
-    "metadata.amazonaws.com",
     "metadata",
-    "api-gateway",
-    "admin-api",
-    "meeting-api",
-    "runtime-api",
-    "transcription-collector",
-    "redis",
-    "postgres",
-    "mcp",
-])
+    "metadata.google.internal",
+    "metadata.goog",
+    "metadata.amazonaws.com",
+    "instance-data",
+    "instance-data.ec2.internal",
+})
+
+#: What a resolver may read as an IPv4 address in the classic ``inet_aton`` forms: up to four
+#: decimal, octal or hex parts. Read here so a stub resolver and the real one agree.
+_NUMERIC_V4 = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)(?:\.(?:0x[0-9a-f]*|[0-9]+)){0,3}")
+
+REFUSED = "URL cannot target internal or private networks"
 
 
 class SSRFError(ValueError):
-    """Raised when a webhook URL is rejected by the SSRF guard."""
+    """A URL this module refuses. The message is safe to show the person who supplied it."""
 
 
 class PinnedURL:
-    """A validated webhook URL that carries the resolved-and-validated IP(s) it was pinned to.
+    """A checked URL and the address(es) it was checked at.
 
-    Deliberately NOT a bare ``str``: a `PinnedURL` is a *connection-safe handle*. The whole
-    point of WH2 is that handing a re-resolvable hostname string to the transport is the
-    TOCTOU bug — so the guard returns this richer object instead. It is therefore not ``==``
-    to the original hostname URL string (that comparison is exactly the conflation WH2 closes).
+    Deliberately NOT a ``str``: handing a re-resolvable hostname to a transport is the gap rule 3
+    closes, so the guard returns this handle and it is not ``==`` to the URL text.
 
-    * ``.url``        — the raw URL text the transport dials (Host header + TLS SNI preserved).
-    * ``.host`` / ``.port`` / ``.scheme`` — parsed components.
-    * ``.pinned_ips`` — the resolved IP(s) validated against the blocklist at submit time.
+    * ``.url`` — the URL text the transport dials (Host header and TLS SNI are the original host);
+    * ``.host`` / ``.port`` / ``.scheme`` — parsed components;
+    * ``.pinned_ips`` — every address the host resolved to, each one checked.
     """
 
     __slots__ = ("url", "host", "port", "scheme", "pinned_ips")
@@ -110,152 +139,183 @@ class PinnedURL:
         return f"PinnedURL({self.url!r}, pinned_ips={self.pinned_ips!r})"
 
 
-def _is_blocked_ip(ip_str: str) -> bool:
+def embedded_ipv4(ip: IPAddress) -> List[ipaddress.IPv4Address]:
+    """Every IPv4 address ``ip`` carries — what a socket dialled at it would reach. ``[]`` for an
+    IPv4 address or an IPv6 address that carries none."""
+    if ip.version == 4:
+        return []
+    out: List[ipaddress.IPv4Address] = []
+    low32 = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    if ip.ipv4_mapped is not None:
+        out.append(ip.ipv4_mapped)
+    elif ip in _IPV4_TRANSLATED:
+        out.append(low32)
+    elif ip in _IPV4_COMPATIBLE and int(ip) > 1:          # not :: and not ::1
+        out.append(low32)
+    if ip in _NAT64_WELL_KNOWN:
+        out.append(low32)
+    if ip.sixtofour is not None:
+        out.append(ip.sixtofour)
+    if ip.teredo is not None:
+        out.extend(ip.teredo)                              # (server, client)
+    if (int(ip) >> 32) & 0xFFFFFFFF in _ISATAP_IDS:
+        out.append(low32)
+    return out
+
+
+def literal_address(text: str) -> Optional[IPAddress]:
+    """``text`` as an address, or None — including the numeric forms a resolver reads as IPv4."""
+    t = (text or "").strip().strip("[]")
     try:
-        ip = ipaddress.ip_address(ip_str)
+        return ipaddress.ip_address(t)
     except ValueError:
-        return True  # not a valid IP — block
-    nets = _BLOCKED_IPV4_NETWORKS if ip.version == 4 else _BLOCKED_IPV6_NETWORKS
-    return any(ip in net for net in nets)
+        pass
+    if _NUMERIC_V4.fullmatch(t.lower()):
+        try:
+            return ipaddress.IPv4Address(socket.inet_aton(t))
+        except (OSError, ValueError):
+            return None
+    return None
 
 
-def _is_blocked_hostname(hostname: str) -> bool:
-    return hostname.lower() in _BLOCKED_HOSTNAMES
+def is_blocked_ip(addr: Union[str, IPAddress]) -> bool:
+    """True when a socket dialled at ``addr`` would reach an address this module refuses. Anything
+    that is not an address is refused: unreadable is not the same as safe."""
+    ip = addr if isinstance(addr, (ipaddress.IPv4Address, ipaddress.IPv6Address)) else literal_address(str(addr))
+    if ip is None:
+        return True
+    if ip.version == 4:
+        return any(ip in net for net in _BLOCKED_IPV4_NETWORKS)
+    carried = embedded_ipv4(ip)
+    if any(is_blocked_ip(v4) for v4 in carried):
+        return True
+    if any(ip in net for net in _BLOCKED_IPV6_NETWORKS):
+        return True
+    return ip in _IPV6_RESERVED_LOW and not carried
 
 
-def _resolve_host(hostname: str) -> List[str]:
-    """Resolve hostname to IPs. Returns [] on failure."""
+def is_blocked_hostname(hostname: str) -> bool:
+    """True for a name that can only name this deployment: ``localhost`` (and ``*.localhost``), a
+    cloud metadata name, or a single label."""
+    host = (hostname or "").strip().rstrip(".").lower()
+    if not host:
+        return True
+    if host in _BLOCKED_HOSTNAMES or host.endswith(".localhost"):
+        return True
+    return "." not in host and literal_address(host) is None
+
+
+def resolve_host(hostname: str) -> List[str]:
+    """Every address ``hostname`` resolves to (``[]`` when it does not)."""
     try:
         results = socket.getaddrinfo(hostname, None)
-    except (socket.gaierror, socket.error, OSError):
+    except (socket.gaierror, OSError, UnicodeError):
         return []
     ips: List[str] = []
     for (_, _, _, _, sockaddr) in results:
-        addr = sockaddr[0]
+        addr = str(sockaddr[0]).split("%", 1)[0]
         if addr and addr not in ips:
             ips.append(addr)
     return ips
 
 
-def _validate_resolved_ips(ips: List[str]) -> None:
-    """Reject if resolution failed or ANY resolved IP is in the blocklist (anti-rebinding)."""
+def _checked(host: str, resolver: Optional[Resolver], what: str) -> List[str]:
+    """The address(es) ``host`` is dialled at, every one checked — or ``SSRFError``."""
+    refused = f"{what} cannot target internal or private networks"
+    literal = literal_address(host)
+    if literal is not None:
+        if is_blocked_ip(literal):
+            raise SSRFError(refused)
+        return [str(literal)]
+    if is_blocked_hostname(host):
+        raise SSRFError(refused)
+    ips = (resolver or resolve_host)(host)
     if not ips:
-        raise SSRFError("Webhook URL hostname could not be resolved")
-    for ip_str in ips:
-        if _is_blocked_ip(ip_str):
-            raise SSRFError("Webhook URL cannot target internal or private networks")
+        raise SSRFError(f"{what} hostname could not be resolved")
+    if any(is_blocked_ip(ip) for ip in ips):
+        raise SSRFError(refused)
+    return [str(literal_address(ip)) for ip in ips]
 
 
-def validate_webhook_url(url: str, resolver: Callable[[str], List[str]] | None = None) -> PinnedURL:
-    """Validate a webhook URL is safe (not SSRF-vulnerable). Return a ``PinnedURL`` if valid.
+def validate_url(url: str, resolver: Optional[Resolver] = None, *, what: str = "URL",
+                 resolve: bool = True) -> PinnedURL:
+    """Check ``url`` and return a ``PinnedURL``, or raise ``SSRFError``.
 
-    - Only http:// and https:// schemes.
-    - Block private/loopback/link-local/multicast IPs and internal hostnames.
-    - Resolve DNS names and validate every resolved IP (anti-rebinding). The `resolver`
-      hook lets the eval stub resolution; defaults to `socket.getaddrinfo`.
-    - Return a ``PinnedURL`` carrying the resolved-and-validated IP(s) so delivery can PIN
-      the connection (rather than re-resolving an attacker-controlled hostname at connect
-      time — the TOCTOU window). The string value is the original URL (Host/SNI preserved).
-
-    Raises `SSRFError` (a ValueError) with a user-friendly message when blocked.
-    """
-    parsed = urlparse(url)
-
-    if parsed.scheme not in ("http", "https"):
-        raise SSRFError("Webhook URL must use http or https scheme")
-
-    hostname = parsed.hostname
-    if not hostname:
-        raise SSRFError("Webhook URL must have a valid hostname")
-
-    if _is_blocked_hostname(hostname):
-        raise SSRFError("Webhook URL cannot target internal or private networks")
-
-    port = parsed.port
-    # Literal IP — check directly, no DNS. The "resolved" set is the literal itself.
+    http(s) only, a host, and every address the host reaches checked (rule 1). ``resolver`` replaces
+    DNS (tests); ``resolve=False`` checks the URL as written — scheme, literal address, host name —
+    without a lookup, for a WRITE that only stores the URL (the fetch that follows resolves and
+    pins). ``what`` names the URL in the message the person sees."""
     try:
-        ipaddress.ip_address(hostname)
-        if _is_blocked_ip(hostname):
-            raise SSRFError("Webhook URL cannot target internal or private networks")
-        return PinnedURL(url, host=hostname, port=port, scheme=parsed.scheme, pinned_ips=[hostname])
+        parts = urlsplit((url or "").strip())
+        port = parts.port
     except ValueError:
-        pass  # not a literal IP — resolve below
-
-    ips = (resolver or _resolve_host)(hostname)
-    _validate_resolved_ips(ips)
-    return PinnedURL(url, host=hostname, port=port, scheme=parsed.scheme, pinned_ips=ips)
-
-
-def revalidate_at_connect(hostname: str, resolver: Callable[[str], List[str]] | None = None) -> List[str]:
-    """Re-resolve + re-validate a host at connect time, returning the validated IP(s).
-
-    This is the second half of the WH2 defence: even with a `PinnedURL` from submit-time,
-    the connection layer re-checks at the moment it dials, so a freshly-flipped A-record is
-    caught. Raises `SSRFError` if the host now resolves to a blocked IP (or won't resolve).
-    """
-    if _is_blocked_hostname(hostname):
-        raise SSRFError("Webhook URL cannot target internal or private networks")
-    try:
-        ipaddress.ip_address(hostname)
-        if _is_blocked_ip(hostname):
-            raise SSRFError("Webhook URL cannot target internal or private networks")
-        return [hostname]
-    except ValueError:
-        pass
-    ips = (resolver or _resolve_host)(hostname)
-    _validate_resolved_ips(ips)
-    return ips
+        raise SSRFError(f"{what} is not a valid URL") from None
+    if parts.scheme.lower() not in ("http", "https"):
+        raise SSRFError(f"{what} must use http or https scheme")
+    host = (parts.hostname or "").lower()
+    if not host:
+        raise SSRFError(f"{what} must have a valid hostname")
+    if resolve:
+        ips = _checked(host, resolver, what)
+    else:
+        literal = literal_address(host)
+        if (literal is not None and is_blocked_ip(literal)) or (literal is None and is_blocked_hostname(host)):
+            raise SSRFError(f"{what} cannot target internal or private networks")
+        ips = [str(literal)] if literal is not None else []
+    return PinnedURL(url, host=host, port=port, scheme=parts.scheme.lower(), pinned_ips=ips)
 
 
-def build_pinned_transport(
-    inner: "Any" = None,
-    resolver: Callable[[str], List[str]] | None = None,
-) -> "Any":
-    """Wrap an httpx async transport so every dial re-validates + PINS the resolved IP (WH2).
+def validate_webhook_url(url: str, resolver: Optional[Resolver] = None) -> PinnedURL:
+    """``validate_url`` for a customer webhook destination."""
+    return validate_url(url, resolver, what="Webhook URL")
 
-    For each request the wrapper:
-      1. re-resolves + re-validates the host (`revalidate_at_connect`) — closing the TOCTOU
-         window between submit-time validation and the actual connect;
-      2. rewrites the request URL host to a validated IP while preserving the original Host
-         header and setting TLS SNI to the original hostname (`sni_hostname` extension), so
-         certificate verification still matches the real host.
 
-    Returns an `httpx.AsyncBaseTransport`. Import is local so merely importing this module
-    never requires httpx (it is not in the offline gate venv).
-    """
+def revalidate_at_connect(hostname: str, resolver: Optional[Resolver] = None) -> List[str]:
+    """Re-resolve and re-check ``hostname`` at the moment of dialling; the checked address(es)."""
+    return _checked((hostname or "").lower(), resolver, "URL")
+
+
+def _pin(request: Any, resolver: Optional[Resolver]) -> None:
+    """Point ``request`` at a checked address, keeping the original Host header and TLS SNI."""
+    host = request.url.host
+    ips = revalidate_at_connect(host, resolver)
+    if literal_address(host) is not None:
+        return                                   # a literal address, already checked: dial as is
+    request.headers.setdefault("Host", request.url.netloc.decode("ascii"))
+    request.extensions = dict(request.extensions)
+    request.extensions["sni_hostname"] = host
+    request.url = request.url.copy_with(host=ips[0])
+
+
+def build_pinned_transport(inner: Any = None, resolver: Optional[Resolver] = None) -> Any:
+    """An ``httpx.AsyncBaseTransport`` that checks and pins every request it sends (rule 3)."""
     import httpx
 
     base = inner if inner is not None else httpx.AsyncHTTPTransport()
 
     class _PinnedTransport(httpx.AsyncBaseTransport):
-        def __init__(self, _base, _resolver):
-            self._base = _base
-            self._resolver = _resolver
-
         async def handle_async_request(self, request: "httpx.Request") -> "httpx.Response":
-            host = request.url.host
-            # Literal IPs are validated directly; hostnames are re-resolved + re-validated.
-            try:
-                ipaddress.ip_address(host)
-                is_literal = True
-            except ValueError:
-                is_literal = False
-
-            validated_ips = revalidate_at_connect(host, resolver=self._resolver)
-            if is_literal:
-                # Already an IP and already validated — dial as-is.
-                return await self._base.handle_async_request(request)
-
-            pinned_ip = validated_ips[0]
-            # Pin: dial the validated IP, keep the original Host header + TLS SNI so the
-            # certificate still verifies against the real hostname.
-            request.headers.setdefault("Host", host)
-            request.extensions = dict(request.extensions)
-            request.extensions["sni_hostname"] = host
-            request.url = request.url.copy_with(host=pinned_ip)
-            return await self._base.handle_async_request(request)
+            _pin(request, resolver)
+            return await base.handle_async_request(request)
 
         async def aclose(self) -> None:
-            await self._base.aclose()
+            await base.aclose()
 
-    return _PinnedTransport(base, resolver)
+    return _PinnedTransport()
+
+
+def build_pinned_sync_transport(inner: Any = None, resolver: Optional[Resolver] = None) -> Any:
+    """The same, as an ``httpx.BaseTransport`` for a synchronous client."""
+    import httpx
+
+    base = inner if inner is not None else httpx.HTTPTransport()
+
+    class _PinnedSyncTransport(httpx.BaseTransport):
+        def handle_request(self, request: "httpx.Request") -> "httpx.Response":
+            _pin(request, resolver)
+            return base.handle_request(request)
+
+        def close(self) -> None:
+            base.close()
+
+    return _PinnedSyncTransport()

@@ -198,6 +198,7 @@ async def auto_join_tick(
     retry_backoff_s: float = DEFAULT_RETRY_BACKOFF_S,
     token_secret: Optional[str] = None,
     redis_url: Optional[str] = None,
+    redis_grant=None,
     allow_uncapped: bool = False,
 ) -> dict:
     """One sweep: spawn every due scheduled meeting. Returns counters for observability:
@@ -330,6 +331,7 @@ async def auto_join_tick(
                 webhook_events=ctx.get("webhook_events"),
                 token_secret=token_secret,
                 redis_url=redis_url,
+                redis_grant=redis_grant,
             )
         except DuplicateMeeting:
             # a manual "Send bot now" (or a racing sweep) already claimed it — success, not an error

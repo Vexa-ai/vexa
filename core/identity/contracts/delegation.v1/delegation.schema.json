@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vexa.ai/contracts/delegation.v1",
+  "title": "delegation.v1 — the per-dispatch token a worker presents as the person it acts for",
+  "description": "agent-api mints one token per worker dispatch; identity's /internal/validate verifies it and answers with the person it names plus the dispatch's ceiling (identity.v1 ValidateResponse.delegation). Wire form: \"vxd_\" + base64url(header JSON) + \".\" + base64url(claims JSON) + \".\" + base64url(HMAC-SHA256(key, base64url(header) + \".\" + base64url(claims))). Both JSON documents are canonical: keys sorted at every depth, no whitespace, ASCII-escaped. base64url is unpadded. The key is the symmetric VEXA_MCP_DELEGATION_SECRET, which agent-api (mint) and admin-api (verify) both hold; an empty key is refused on both sides. A verifier checks, in this order: the vxd_ prefix (else not_delegated), three parts (else malformed), the signature in constant time (else bad_signature), that the claims decode to an object (else malformed), aud = vexa-mcp (else bad_audience), a non-empty sub (else malformed), now < exp (else expired), and, only if it keeps a denylist, jti (else revoked). No claim is read before the signature verifies.",
+  "$defs": {
+    "Header": {
+      "type": "object",
+      "required": ["alg", "typ"],
+      "additionalProperties": false,
+      "properties": {
+        "alg": { "const": "HS256" },
+        "typ": { "const": "vxdlg" }
+      }
+    },
+    "Regime": {
+      "description": "human: a person is in the loop this turn (unit.v1 trigger `message`). autonomous: a schedule, an event or a transcription fired it and nobody is watching (every other trigger).",
+      "enum": ["human", "autonomous"]
+    },
+    "Scope": {
+      "description": "The dispatch's ceiling, never a grant: it narrows what the account can already reach. `workspaces` is \"*\" (everything already the person's) or the isolation set, sorted and de-duplicated. An autonomous dispatch always carries an explicit set; the minter refuses autonomous with \"*\".",
+      "type": "object",
+      "required": ["regime", "workspaces"],
+      "additionalProperties": false,
+      "properties": {
+        "regime": { "$ref": "#/$defs/Regime" },
+        "workspaces": {
+          "oneOf": [ { "const": "*" }, { "type": "array", "items": { "type": "string" }, "uniqueItems": true } ]
+        }
+      },
+      "if": { "properties": { "regime": { "const": "autonomous" } } },
+      "then": { "properties": { "workspaces": { "type": "array" } } }
+    },
+    "Claims": {
+      "type": "object",
+      "required": ["sub", "aud", "scope", "iat", "exp", "jti"],
+      "additionalProperties": false,
+      "properties": {
+        "sub": { "type": "string", "minLength": 1, "description": "the person's identity user id, resolved by agent-api from the dispatch and never asserted by the worker" },
+        "aud": { "const": "vexa-mcp", "description": "the audience pin: the token is for the MCP edge and its re-entry, nothing else" },
+        "scope": { "$ref": "#/$defs/Scope" },
+        "iat": { "type": "integer", "description": "issued at, unix seconds" },
+        "exp": { "type": "integer", "description": "expires at, unix seconds; valid while now < exp. agent-api mints with a 3600 s lifetime" },
+        "jti": { "type": "string", "minLength": 1, "description": "a random id, so a verifier that keeps a denylist can strike one token off" },
+        "target": { "type": "string", "minLength": 1, "description": "the chat's target workspace: the slug a workspace verb with no slug of its own defaults to. A default, never a grant, so it is outside `scope`. Absent when there is none" }
+      }
+    },
+    "RefusalReason": {
+      "description": "Why a verifier refused a token. Safe to show a caller: it names the failure class, never the token or the key. identity answers 401 \"Invalid delegation: <reason>\" for every reason but not_delegated, which sends the bearer to the API-key lookup instead.",
+      "enum": ["not_delegated", "malformed", "bad_signature", "bad_audience", "expired", "revoked"]
+    },
+    "Vector": {
+      "type": "object",
+      "description": "A minting vector. Minting for subject, regime, workspaces, target and ttl_sec at now with jti and secret must produce `token` exactly (HMAC is deterministic), and `token` must decode to `header` and `claims`. The secret is published test data and authenticates nothing.",
+      "required": ["secret", "now", "subject", "regime", "workspaces", "ttl_sec", "jti", "header", "claims", "token"],
+      "additionalProperties": false,
+      "properties": {
+        "secret": { "type": "string", "minLength": 1 },
+        "now": { "type": "integer" },
+        "subject": { "type": "string" },
+        "regime": { "$ref": "#/$defs/Regime" },
+        "workspaces": { "oneOf": [ { "const": "*" }, { "type": "array", "items": { "type": "string" } } ] },
+        "target": { "type": "string" },
+        "ttl_sec": { "type": "integer", "minimum": 1 },
+        "jti": { "type": "string" },
+        "header": { "$ref": "#/$defs/Header" },
+        "claims": { "$ref": "#/$defs/Claims" },
+        "token": { "type": "string", "pattern": "^vxd_[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$" }
+      }
+    },
+    "Refusal": {
+      "type": "object",
+      "description": "A refusal vector: verifying `token` with `secret` at `now` (and the `revoked` denylist, when given) must fail with `reason`.",
+      "required": ["secret", "now", "token", "reason", "what"],
+      "additionalProperties": false,
+      "properties": {
+        "secret": { "type": "string", "minLength": 1 },
+        "now": { "type": "integer" },
+        "token": { "type": "string" },
+        "revoked": { "type": "array", "items": { "type": "string" } },
+        "reason": { "$ref": "#/$defs/RefusalReason" },
+        "what": { "type": "string" }
+      }
+    }
+  }
+}

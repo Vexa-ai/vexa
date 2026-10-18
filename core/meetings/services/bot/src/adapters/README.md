@@ -5,8 +5,8 @@ orchestrator never imports these — it speaks only the port interfaces (`../por
 stays offline-provable; these adapters bind those ports to redis / HTTP.
 
 **Surface (increment 2a — live):**
-- `lifecycle-http.ts` — `createHttpLifecycleSink` → `LifecycleSink`: POST `lifecycle.v1` to `meetingApiCallbackUrl` (`x-internal-secret` header, bounded retry/backoff, never throws out of `emit`). Native `fetch`, no dep.
-- `transcript-redis.ts` — `createRedisTranscriptSink` + `redisClientFrom` → `TranscriptSink`: `XADD transcription_segments` + `PUBLISH tc:meeting:{id}:mutable` (`transcript.v1`).
+- `lifecycle-http.ts` — `createHttpLifecycleSink` → `LifecycleSink`: POST `lifecycle.v1` to `meetingApiCallbackUrl` (`authorization: Bearer <session MeetingToken>`, bounded retry/backoff, never throws out of `emit`). Native `fetch`, no dep.
+- `transcript-redis.ts` — `createRedisTranscriptSink` + `redisClientFrom` → `TranscriptSink`: `XADD transcription_segments` + `PUBLISH tc:meeting:{id}:mutable` (`transcript.v1`); every stream entry is signed for its meeting with the session MeetingToken (`entryAuth`: `auth` + `sig` beside `payload`), and the collector drops any other.
 - `acts-redis.ts` — `createRedisActsSource` + `redisActsClientFrom` → `ActsSource`: `SUBSCRIBE bot_commands:meeting:{id}` → `parseAct` → handler (`acts.v1`).
 
 **Deps:** `redis` (node-redis v4) for the redis factories; native `fetch` for HTTP. **May depend on:** the bot's own `../ports.ts`/`../contracts.ts` + the redis client. **Tests:** `*.test.ts` here are L3 — offline, with injected fake clients/fetch (no real redis, no network); the real node-redis bindings are type-checked, validated live against a real broker at the P3 integration barrier.

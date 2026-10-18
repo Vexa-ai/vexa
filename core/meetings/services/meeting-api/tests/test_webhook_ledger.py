@@ -34,7 +34,7 @@ def _seed(repo, *, session_uid, data, user_id=1):
 
 def _app(repo, receiver, ledger):
     sink = WebhookSink(transport=receiver, resolver=_PUBLIC)
-    return create_app(meeting_repo=repo, webhook_sink=sink, delivery_ledger=ledger)
+    return create_app(open_callbacks=True, meeting_repo=repo, webhook_sink=sink, delivery_ledger=ledger)
 
 
 # ── the fix: a real delivery appears in the user-visible history ────────────────────────────────

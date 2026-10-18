@@ -88,9 +88,9 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
 
     # Teams personal (teams.live.com/meet/<digits>?p=<passcode>)
     if _host_is(host, "teams.live.com"):
-        m = re.match(r"^/meet/(\d{10,15})/?$", path)
+        m = re.match(r"^/meet/(\d{10,16})/?$", path)
         if not m:
-            raise HTTPException(status_code=422, detail="Unsupported teams.live.com URL format. Expected /meet/<10-15 digit id>.")
+            raise HTTPException(status_code=422, detail="Unsupported teams.live.com URL format. Expected /meet/<10-16 digit id>.")
         native_id = m.group(1)
         passcode = (query.get("p") or [None])[0]
         if not passcode:
@@ -114,7 +114,7 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
         fragment = parsed.fragment or ""
         if path.rstrip("/") in ("/v2", "") and fragment.startswith("/meet/"):
             frag_parsed = urlparse("https://x" + fragment)
-            fm = re.match(r"^/meet/(\d{10,15})/?$", frag_parsed.path)
+            fm = re.match(r"^/meet/(\d{10,16})/?$", frag_parsed.path)
             if fm:
                 native_id = fm.group(1)
                 frag_query = parse_qs(frag_parsed.query or "")
@@ -130,7 +130,7 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
                 )
 
         # Short new-style URL: /meet/<numeric_id>?p=<passcode>
-        m = re.match(r"^/meet/(\d{10,15})/?$", path)
+        m = re.match(r"^/meet/(\d{10,16})/?$", path)
         if m:
             native_id = m.group(1)
             passcode = (query.get("p") or [None])[0]

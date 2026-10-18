@@ -9,7 +9,9 @@
  *   1. provisionLogin()  — start browser + VNC → human logs in → persist session.
  *   2. launchPersistentBrowser({dataDir}) + validateLoggedIn() — restore + confirm.
  *
- * Backends: S3 (syncBrowserData{To,From}S3 — production) or local (save/loadSessionLocal).
+ * Backends: S3 (syncBrowserData{To,From}S3 — production) or local (save/loadSessionLocal), both
+ * limited to SESSION_PROFILE (the session-profile.v1 contract's profile); readSessionProfile builds
+ * the body of a bot's write-back, which goes through meeting-api, never to the store directly.
  * Carved from vexa-bot/core/src/{s3-sync.ts, browser-session.ts, constans.ts}; the bot
  * now imports these instead of re-declaring them (one-way rule: services import bricks).
  */
@@ -28,14 +30,24 @@ export {
   makeEphemeralProfileDir,
   removeProfileDir,
   SessionSyncError,
+  SESSION_PROFILE,
+  isSessionProfilePath,
+  collectSessionProfile,
+  readSessionProfile,
 } from './session-store';
-export type { S3Config } from './session-store';
+export type { S3Config, SessionProfileSpec, ProfileFile } from './session-store';
 
 // Launch flags (persistent-context / interactive)
 export { getAuthenticatedBrowserArgs, getBrowserSessionArgs, CDP_DEBUG_ARGS } from './args';
 
-// The one true persistent-context launch
+// The one true persistent-context launch (sandboxed where it can be, with a scrubbed environment)
 export { launchPersistentBrowser } from './browser';
+export { browserEnv, BROWSER_ENV_KEYS, NO_SANDBOX_ARGS, launchWithSandbox } from './sandbox';
+// Where an authenticated browser may navigate (the meeting's host and the platform's domains)
+export {
+  restrictNavigation, authenticatedNavigationDomains, AUTH_NAVIGATION_DOMAINS, hostAllowed,
+  withSiteIsolation, MeetingHostRefused,
+} from './navigation';
 export type { LaunchPersistentOptions } from './browser';
 // Re-export the Playwright handles this brick's API traffics in, so consumers (the bot
 // composition root + its adapters) type against ONE Page/BrowserContext without a direct

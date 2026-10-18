@@ -165,7 +165,7 @@ def get_prompt_result(name: str, arguments: Optional[Dict[str, str]] = None) -> 
                         f"User link: {meeting_url or '(none provided)'}\n\n"
                         "Checklist:\n"
                         "- If link is `teams.live.com/meet/<id>?p=<passcode>`:\n"
-                        "  - native_meeting_id = <id> (10-15 digits)\n"
+                        "  - native_meeting_id = <id> (10-16 digits)\n"
                         "  - passcode = value of ?p= (often required)\n"
                         "  - Prefer using `meeting_url` directly with `request_meeting_bot`.\n"
                         "- Enterprise `teams.microsoft.com/meet/<id>?p=<passcode>` short links are supported; "

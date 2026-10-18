@@ -1,0 +1,11 @@
+{
+  "why": "data is base64",
+  "body": {
+    "files": [
+      {
+        "path": "Default/Cookies",
+        "data": "not base64!"
+      }
+    ]
+  }
+}

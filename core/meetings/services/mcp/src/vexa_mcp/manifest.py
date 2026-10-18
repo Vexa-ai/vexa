@@ -31,7 +31,6 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
@@ -49,19 +48,7 @@ CONTRACT = "mcp.tools.v1"
 # reintroduces one on purpose.
 CREDENTIAL_ARGUMENTS = {"token", "api_key", "apikey", "key", "access_token", "bearer",
                         "credential", "password", "secret"}
-# A DOMAIN NAME IS CHECKED FOR SHAPE, NOT FOR MEMBERSHIP. A closed list here had to spell every
-# domain any deployment might ever mount, so this OSS module carried the names of surfaces this
-# repository does not ship and cannot describe — a reader learns a private product's shape from a
-# constant in the open assembler, and a private deployment cannot add a domain without a change
-# landing here first. Neither is the mount's design: `load_mounted` exists so a paid domain composes
-# onto this line without a line of it living here.
-#
-# What actually has to be true of a name is that it is a stable lowercase identifier, because the
-# name is a key in three places at once — `depends_on`, every tool's `requires`, and the
-# `<DOMAIN>_API_URL` env var discovery reads. Anything outside this pattern makes one of those
-# unspellable, and that is the whole of the rule. Everything a manifest may CLAIM is still checked
-# below; nothing here decides whether a domain is real, because `deployed` already does.
-DOMAIN_NAME = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
+DOMAINS = {"meetings", "identity", "flows", "agent", "gateway", "rehearse", "billing", "workspaces"}
 IDENTITIES = {"user", "admin", "operator", "none"}
 METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 
@@ -83,8 +70,16 @@ METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 AUTHS = {"subject", "admin", "none"}
 #: Published literals a stock deploy surface once supplied — the same refusal list flows-api and the
 #: services' `config.v1` keep. A key that is in this repository authenticates nobody and everybody.
-PLACEHOLDER_KEYS = {"changeme", "change-me", "default", "secret", "vexa-internal-secret",
+PLACEHOLDER_KEYS = {"changeme", "change-me", "CHANGE-ME", "default", "secret", "vexa-internal-secret",
                     "lite-internal-secret"}
+
+
+#: WHERE A DOMAIN'S TOOLS ARE CALLED. A domain the gateway fronts wholesale declares `forward` —
+#: `{"edge_prefix": "/agent/", "upstream_prefix": "/api/"}`, the same mapping its `routes.v1` gives
+#: the gateway — and its tools are then called back THROUGH the gateway at
+#: `<edge_prefix><path after upstream_prefix>`, so a worker's own bearer is admitted there on this
+#: edge's re-entry (`reentry.py`). A domain that declares none is called at its own door. The
+#: decision is the manifest's, never a domain name this assembler recognises.
 
 
 class ManifestError(Exception):
@@ -106,6 +101,8 @@ class Tool:
     auth: str = "subject"
     #: for `auth: admin`, the domain's `{"header": …, "key_env": …}`. None for every other value.
     admin_auth: Optional[dict] = None
+    #: the domain's `forward` as `(edge_prefix, upstream_prefix)`, or None — see `forward_of`.
+    forward: Optional[tuple] = None
 
 
 @dataclass(frozen=True)
@@ -128,10 +125,8 @@ def validate(doc: dict) -> dict:
     if not isinstance(doc, dict) or doc.get("contract") != CONTRACT:
         raise ManifestError(f"not a {CONTRACT} manifest")
     domain = doc.get("domain")
-    if not isinstance(domain, str) or not DOMAIN_NAME.match(domain):
-        raise ManifestError(
-            f"unknown domain {domain!r} — a domain name keys depends_on, requires and "
-            f"<DOMAIN>_API_URL, so it must match {DOMAIN_NAME.pattern}")
+    if domain not in DOMAINS:
+        raise ManifestError(f"unknown domain {domain!r}")
     if doc.get("source") not in ("oss", "mounted"):
         raise ManifestError(f"{domain}: source must be oss or mounted")
 
@@ -166,16 +161,21 @@ def validate(doc: dict) -> dict:
         requires = t.get("requires")
         if not isinstance(requires, list) or not requires:
             raise ManifestError(f"{domain}/{name}: requires must name at least one domain")
-        bad = sorted(r for r in requires if not (isinstance(r, str) and DOMAIN_NAME.match(r)))
-        if bad:
-            raise ManifestError(f"{domain}/{name}: requires names {bad} — not domain names")
+        allowed = {domain, "identity"}
         # A HARNESS DECLARES ITSELF; IT IS NOT RECOGNISED BY NAME. This exemption used to be
-        # `if domain == "rehearse"`, which put a hosted-only domain's name in the OSS assembler and
-        # meant a private deployment could not ship a second harness without changing this file.
-        # `composes: true` says the same thing in the manifest that needs it — the door across
-        # domains is opened by whoever owns the manifest, on the record, once.
-        allowed = None if doc.get("composes") is True else {domain, "identity"}
-        if allowed is not None and not set(requires) <= allowed:
+        # `if domain == "rehearse"` — one deployment's domain name, hard-coded in the assembler, so
+        # a second harness could not ship without a change landing here first. `composes: true`
+        # says the same thing in the manifest that needs it: the door across domains is opened by
+        # whoever owns the manifest, on the record, once.
+        #
+        # MEMBERSHIP IS STILL CLOSED. `composes` widens the set to the domains this assembler
+        # knows; it does not admit a name `DOMAINS` has never heard of. A manifest for an unknown
+        # domain is already refused above, and declaring a composition does not buy past that —
+        # the two rules answer different questions ("is this a domain" vs "may this tool reach
+        # across domains") and only the second one is delegated to the manifest.
+        if doc.get("composes") is True:
+            allowed = DOMAINS
+        if not set(requires) <= allowed:
             raise ManifestError(
                 f"{domain}/{name}: requires may name {sorted(allowed)} (got {sorted(requires)}) — "
                 "a tool that needs another domain is a composition, and a composition has an owner. "
@@ -197,11 +197,69 @@ def validate(doc: dict) -> dict:
         else:
             if route.get("method") not in METHODS or not str(route.get("path", "")).startswith("/"):
                 raise ManifestError(f"{domain}/{name}: route needs a method and an absolute path")
+    _check_aliases(domain, doc.get("tools") or [])
+    forward = forward_of(doc)
+    if forward:
+        for t in doc.get("tools") or []:
+            path = str((t.get("route") or {}).get("path", ""))
+            if not path.startswith(forward[1]):
+                raise ManifestError(
+                    f"{domain}/{t.get('name')}: route {path!r} is outside the domain's forward "
+                    f"({forward[1]}…) — a forwarded domain's tools live under its upstream prefix")
     ent = doc.get("entitlement")
     if ent is not None:
         if not isinstance(ent, dict) or not ent.get("route") or not ent.get("answers"):
             raise ManifestError(f"{domain}: entitlement needs a route and what it answers")
     return doc
+
+
+def _check_aliases(domain: str, tools: list) -> None:
+    """One route, one name — a second name for a route declares `alias_of` the first one and takes
+    exactly its arguments, so the two cannot drift into two different tools on one door."""
+    first: Dict[tuple, dict] = {}
+    by_name = {t.get("name"): t for t in tools}
+    for t in tools:
+        route = t.get("route") or {}
+        key = (route.get("method"), route.get("path"))
+        alias = t.get("alias_of")
+        if alias is not None:
+            target = by_name.get(alias)
+            if (alias == t.get("name") or target is None
+                    or (target.get("route") or {}) != route
+                    or list(target.get("arguments") or []) != list(t.get("arguments") or [])
+                    or target.get("alias_of") is not None):
+                raise ManifestError(
+                    f"{domain}/{t.get('name')}: alias_of must name another, non-alias tool on the "
+                    f"same route with the same arguments (got {alias!r})")
+            continue
+        if route and key in first:
+            raise ManifestError(
+                f"{domain}: {first[key]['name']!r} and {t.get('name')!r} are bound to the same route "
+                f"{key[0]} {key[1]} — declare the second as \"alias_of\": {first[key]['name']!r} if "
+                "the second name is deliberate")
+        if route:
+            first[key] = t
+
+
+def _prefix(value) -> Optional[str]:
+    if isinstance(value, str) and value.startswith("/") and value.endswith("/") and "{" not in value:
+        return value
+    return None
+
+
+def forward_of(doc: dict) -> Optional[tuple]:
+    """A manifest's `forward` as `(edge_prefix, upstream_prefix)`, None when it declares none, or
+    :class:`ManifestError` when it declares one this edge cannot read."""
+    raw = doc.get("forward")
+    if raw is None:
+        return None
+    edge = _prefix(raw.get("edge_prefix")) if isinstance(raw, dict) else None
+    upstream = _prefix(raw.get("upstream_prefix")) if isinstance(raw, dict) else None
+    if not (edge and upstream):
+        raise ManifestError(
+            f"{doc.get('domain')}: forward must be two absolute prefixes ending at a segment, "
+            f'{{"edge_prefix": "/x/", "upstream_prefix": "/y/"}} (got {raw!r})')
+    return edge, upstream
 
 
 def _admin_auth(doc: dict) -> Optional[dict]:
@@ -294,7 +352,7 @@ def assemble(manifests: List[dict], *, deployed: Set[str],
                 requires=frozenset(t["requires"]), route=t.get("route"),
                 base_url_env=doc.get("base_url_env"),
                 arguments=tuple(t.get("arguments") or ()), note=t.get("note", ""),
-                auth=t["auth"], admin_auth=admin_auth))
+                auth=t["auth"], admin_auth=admin_auth, forward=forward_of(doc)))
     for doc in manifests:
         if doc["domain"] not in deployed:
             out.absent_domains.add(doc["domain"])

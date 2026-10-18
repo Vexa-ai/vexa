@@ -1,0 +1,12 @@
+{
+  "claims_golden": "claims-delegated.json",
+  "headers": {
+    "x-user-id": "42",
+    "x-user-email": "ada@example.com",
+    "x-user-scopes": "bot,tx",
+    "x-user-limits": "3",
+    "x-user-regime": "autonomous",
+    "x-user-delegation-workspaces": "ws_7f3a",
+    "x-user-delegation-target": "ws_7f3a"
+  }
+}

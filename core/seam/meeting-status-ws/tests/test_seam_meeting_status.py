@@ -4,7 +4,7 @@ Flow proven (the user-scoped meeting.status WS feature):
   1. Drive the REAL meeting-api intent endpoint (PUT /meetings/{platform}/{native}/intent) over its
      in-memory store, with a SHARED FakeRedis bus injected as its publisher.
   2. meeting-api publishes the flat meeting.status frame to `u:{user_id}:meetings` on that bus.
-  3. The REAL gateway `_run_multiplex` (same bus injected) auto-subscribes `u:{user_id}:meetings` and its
+  3. The REAL gateway `run_multiplex` (same bus injected) auto-subscribes `u:{user_id}:meetings` and its
      verbatim `fan_in` forwards the raw payload to the socket.
   4. A faked socket receives the frame UNCHANGED, and it conforms to the ws.v1 golden.
 
@@ -27,7 +27,7 @@ from meeting_api.collector.fakes import InMemoryTranscriptStore
 from fastapi.testclient import TestClient
 
 # REAL consumer forward path + the gateway's own injected fakes (reused verbatim)
-from gateway.app import _run_multiplex
+from gateway import run_multiplex
 from gateway_fakes import FakeAuthorizer, FakeRedis  # re-export of gateway/services/gateway/tests/conftest.py
 
 USER = 7
@@ -96,7 +96,7 @@ async def test_intent_publish_forward_seam_golden_conforming():
 
     # ── consumer up FIRST: gateway auto-subscribes u:{USER}:meetings on the shared bus ──
     ws = _FakeWS()
-    gw_task = asyncio.ensure_future(_run_multiplex(ws, auth, bus))
+    gw_task = asyncio.ensure_future(run_multiplex(ws, auth, bus))
     for _ in range(10):
         await asyncio.sleep(0)  # let connect() resolve + fan_in subscribe
 

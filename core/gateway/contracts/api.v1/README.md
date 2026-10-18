@@ -17,7 +17,9 @@ tale — it must be reconciled to the shapes below).
   `GET /recordings/{recording_id}`, `GET /meetings`.
 - **Shapes** (goldens conform to the frozen `#/components/schemas/*`): `MeetingResponse`,
   `MeetingListResponse`, `TranscriptionResponse`, `TranscriptionSegment`,
-  `BotStatusResponse`. Canonical `MeetingStatus` enum =
+  `BotStatusResponse`. One additive field since the capture: `MeetingResponse.data.artifact_deletion`
+  (`ArtifactDeletion`, `state: pending | completed`) — the stamp meeting-api writes when the owner
+  deletes a meeting's transcript and recordings, which agent-api and the terminal read. Canonical `MeetingStatus` enum =
   `[requested, joining, awaiting_admission, active, needs_human_help, stopping, completed, failed]`.
 
 ## The seam (what conforms to this)

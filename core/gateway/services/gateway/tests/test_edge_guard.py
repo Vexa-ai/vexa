@@ -27,7 +27,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from conftest import FakeAuthorizer, FakeDownstream, FakeRedis, VALID_KEY
 from gateway import edge_guard as _edge_guard
-from gateway.app import run_multiplex
+from gateway.multiplex import run_multiplex
 from gateway.edge_guard import (
     _GUARD_EXCLUDE_PATHS,
     apply_guard,

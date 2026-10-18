@@ -8,13 +8,16 @@ k8s uses native ``subPath`` + ``readOnly``. The whole-store bind is never emitte
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
 from runtime_kernel.mounts import MountBind, k8s_volume_mounts, mount_set, workspace_binds
 from runtime_kernel.docker_backend import DockerBackend  # for the docker bind-string shape
-from runtime_kernel.k8s_backend import pod_overrides
+from runtime_kernel.k8s_backend import build_pod, pod_overrides
 from runtime_kernel.profiles import Runnable
+
+import _profiles
 
 
 def _env(mounts=None, *, source="agent-workspaces", target="/workspaces", path="/workspaces/u1"):
@@ -259,7 +262,10 @@ def test_k8s_start_overlays_runtime_process_scheduling_env(monkeypatch):
 def test_process_backend_reads_the_mount_set_without_binding(tmp_path):
     """The lite/process backend shares the host FS: it materializes NO binds but still resolves the
     mount set (POSIX isolation is its wall — see test_isolation.py). Non-root test run → the isolation
-    plan is unavailable and the spawn degrades loudly to shared-trust, which is exactly this path."""
+    plan is unavailable and the spawn degrades loudly to shared-trust, which is exactly this path.
+    Under a ROOT runtime the same spawn names no subject, so it is refused (test_isolation_root.py
+    covers the isolated spawn)."""
+    from runtime_kernel.isolation import IsolationRefused
     from runtime_kernel.process_backend import ProcessBackend
     mounts = [
         {"slug": "seed", "path": str(tmp_path / "u1"), "primary": True, "write": True},
@@ -267,8 +273,81 @@ def test_process_backend_reads_the_mount_set_without_binding(tmp_path):
     ]
     assert [m["slug"] for m in mount_set(_env(mounts))] == ["seed", "shared-x"]
     b = ProcessBackend()
+    if os.geteuid() == 0:
+        with pytest.raises(IsolationRefused):
+            b.start("rt-mnt", Runnable(command=["true"]), _env(mounts))
+        return
     h = b.start("rt-mnt", Runnable(command=["true"]), _env(mounts))
     try:
         assert h.id == "rt-mnt"
     finally:
         b.cleanup(h)
+
+
+# ── k8s: file-shaped credential mounts for agent workers (the codex seam) ─────
+
+_SM = '[{"secret": "codex-auth", "mountPath": "/tmp/.codex"}]'
+
+
+def test_k8s_secret_mounts_reach_agent_worker_pods_read_only():
+    """An agent-worker Pod + RUNTIME_K8S_SECRET_MOUNTS ⇒ the worker Pod carries the Secret volume
+    mounted read-only at the harness's credential path."""
+    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1",
+           "RUNTIME_K8S_SECRET_MOUNTS": _SM}
+    spec = pod_overrides(env, container_name="w", credential_mounts=True)["spec"]
+    assert {"name": "cred-0-codex-auth", "secret": {"secretName": "codex-auth"}} in spec["volumes"]
+    assert {"name": "cred-0-codex-auth", "mountPath": "/tmp/.codex", "readOnly": True} \
+        in spec["containers"][0]["volumeMounts"]
+
+
+def test_k8s_secret_mounts_never_reach_bot_pods():
+    """A meeting bot is not a worker — it must not carry a model credential, whatever its env says."""
+    ov = pod_overrides({"VEXA_UNIT_ID": "u-1", "RUNTIME_K8S_SECRET_MOUNTS": _SM}, container_name="mtg")
+    assert ov is None
+
+
+def test_k8s_secret_mounts_malformed_entry_fails_loud():
+    import pytest
+    with pytest.raises(ValueError):
+        pod_overrides({"RUNTIME_K8S_SECRET_MOUNTS": '[{"secret": "x"}]'}, container_name="w",
+                      credential_mounts=True)
+
+
+def test_k8s_submitted_container_survives_the_mount_overlay():
+    """The 2026-08-23 regression, asserted at the layer that now owns the merge. A partial containers
+    entry WIPED the generated container under ``kubectl run --overrides`` json-merge
+    ('spec.containers[0].image: Required value', first real agent-worker spawn on k8s). ``build_pod``
+    owns the object and merges the overlay BY CONTAINER NAME, so image, command and env survive while
+    the workspace + credential mounts are added — and the runtime's knobs, which ride overlay_env
+    only, never become container config."""
+    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1", "FOO": "bar"}
+    pod = build_pod(
+        name="w", workload_id="w", namespace=None, resources=None,
+        runnable=_profiles.agent("img:1"),
+        env=env,
+        overlay_env={**env, "RUNTIME_K8S_SECRET_MOUNTS": _SM},
+    )
+    c = pod["spec"]["containers"][0]
+    assert c["image"] == "img:1" and c["command"] == ["python", "-m", "worker"]
+    env_names = {e["name"] for e in c["env"]}
+    assert "FOO" in env_names and "RUNTIME_K8S_SECRET_MOUNTS" not in env_names
+    paths = {vm["mountPath"] for vm in c["volumeMounts"]}
+    assert "/workspaces/u1" in paths and "/tmp/.codex" in paths
+
+
+def test_k8s_pod_overrides_needs_no_image():
+    """The overlay is minimal by design — ``build_pod`` supplies image/env/command — so a mount-only
+    overlay is built without one (the complete-container workaround this replaced required it)."""
+    c = pod_overrides(_env(source="vexa-agent-workspaces"), container_name="w")["spec"]["containers"][0]
+    assert set(c) == {"name", "volumeMounts"}
+
+
+def test_k8s_secret_mount_file_uses_subpath_and_keeps_dir_writable():
+    """{'file': ...} mounts ONE key at mountPath via subPath — the directory stays writable (codex
+    keeps sqlite state under ~/.codex; a whole-dir read-only mount killed its app-server on launch)."""
+    env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1",
+           "RUNTIME_K8S_SECRET_MOUNTS":
+               '[{"secret": "codex-auth", "mountPath": "/tmp/.codex/auth.json", "file": "auth.json"}]'}
+    c = pod_overrides(env, container_name="w", credential_mounts=True)["spec"]["containers"][0]
+    assert {"name": "cred-0-codex-auth", "mountPath": "/tmp/.codex/auth.json",
+            "readOnly": True, "subPath": "auth.json"} in c["volumeMounts"]

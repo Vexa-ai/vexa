@@ -11,6 +11,8 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from fastapi import HTTPException, status
 
+from .ssrf import SSRFError, validate_url
+
 MAX_CALENDAR_CONNECTIONS = 10
 
 
@@ -33,6 +35,12 @@ def validate_ics_url(value: str) -> str:
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             detail="ics_url must be an http(s) URL")
+    try:
+        # The feed is fetched by meeting-api through the same guard, resolved and pinned; refusing
+        # an internal destination here tells the person when they save it, not on the next sync.
+        validate_url(url, what="ics_url", resolve=False)
+    except SSRFError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     if "/calendar/embed" in (parsed.path or "").lower():
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,

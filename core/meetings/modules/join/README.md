@@ -36,3 +36,7 @@ walker cannot drift between the injected hook and the direct leave.
 ## Prove it
 - `pnpm --filter @vexa/join build` · `pnpm --filter @vexa/join test` (L1/L2 admission oracle — DOM fixtures, no browser)
 - Live smoke (on a VM): `Dockerfile.debug` + noVNC — see `scripts/` and the `Makefile`.
+
+## Native backend
+
+`@vexa/join/node` exports `createSdkJoinSession(runtime, config, options)` and its port/types. Inject a `NativeJoinPort` from the host. The module resolves admission only on `in_meeting`, observes waiting/failure/removal, applies the admission deadline and supports cancellation and idempotent leave. It owns no native process and never disposes the shared session. The host stops capture, leaves through join, then disposes its runtime. SDK capture is a separate responsibility and is not implemented here. The existing browser API remains compatible.
