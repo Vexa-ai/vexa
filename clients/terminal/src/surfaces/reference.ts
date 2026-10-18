@@ -14,7 +14,7 @@
  *  A reference never grants: whoever opens it sees what their own access allows. */
 import { parseMeetingInput, type ParsedMeeting } from "./meetingId";
 import { toast } from "../ui-kit/primitives/Toast";
-import { pastedRefs, refChip, refUrl } from "../ui-kit/universalRefs";
+import { pastedRefs, splitRefs, refChip, refUrl } from "../ui-kit/universalRefs";
 
 export type RefTarget = { kind: string; id: string; anchor?: string; label?: string };
 
@@ -56,7 +56,9 @@ export function referenceFromPaste(data: Pick<DataTransfer, "getData">): string 
   const html = data.getData("text/html") || "";
   const m = /data-vexa-ref="([^"]+)"/.exec(html);
   if (m) return m[1].replace(/&quot;/g, '"');
-  return pastedRefs(data.getData("text/plain") || "");
+  // a copied BADGE is its reference in the plain text (`[[meeting:142]]`): it pastes as the badge again
+  const plain = data.getData("text/plain") || "";
+  return pastedRefs(plain) ?? (splitRefs(plain).some((p) => p.kind === "ref") ? plain : null);
 }
 
 /** Insert `raw` (what was pasted), then replace it with `chips` — two native edits, so the first ⌘Z

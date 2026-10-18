@@ -36,7 +36,7 @@ from typing import Optional, Union
 
 #: Every kind a reference may name (7gg: one form for every object).
 REF_KINDS = ("workspace", "room", "chat", "page", "file", "entity", "meeting", "card", "person",
-             "routine", "sensor", "message", "query", "series", "join")
+             "routine", "sensor", "message", "query", "series", "join", "commit", "policy")
 #: Older spellings, accepted and normalised (the rich-README grammar and links.REF_KINDS used them).
 KIND_ALIASES = {"call": "meeting", "flow": "routine"}
 ALL_KINDS = REF_KINDS + tuple(KIND_ALIASES)

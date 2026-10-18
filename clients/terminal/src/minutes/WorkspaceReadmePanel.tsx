@@ -77,6 +77,7 @@
  *     rather than rendering as a zero — and, since #1628, *no repo attached* is a STATE and not a
  *     failure: the red line is reserved for a read that actually broke, and it names what broke.
  */
+import { PersonChip } from "./shell2/PersonChip";
 import { Identity } from "../ui-kit/Identity";
 import {
   useCallback, useEffect, useLayoutEffect, useRef, useState,
@@ -296,10 +297,10 @@ function Section(p: { id: string; name: string; first?: boolean; children: React
 function Avatars(p: { people: { key: string; name: string; you: boolean }[] }) {
   if (!p.people.length) return null;
   return (
-    <span data-ws-avatars aria-hidden className="pl-1_5" style={{ display: "inline-flex", flex: "none", alignSelf: "center" }}>
+    <span data-ws-avatars className="pl-1_5" style={{ display: "inline-flex", flex: "none", alignSelf: "center" }}>
       {p.people.map((a) => (
         <span key={a.key} data-ws-avatar={a.key} title={a.name} className="vx-ws-face">
-          <Identity kind="person" id={a.key} name={a.name} size={22} />
+          <PersonChip person={{ name: a.name, subject: a.key }}><Identity kind="person" id={a.key} name={a.name} size={22} /></PersonChip>
         </span>
       ))}
     </span>

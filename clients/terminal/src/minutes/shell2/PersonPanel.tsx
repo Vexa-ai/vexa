@@ -9,6 +9,7 @@
  *  returns them, each marked when only you see it. Message opens the room of two once S4 lands;
  *  until then it says so. Someone not on Vexa reads "Not on Vexa yet" with Invite. Your own panel is
  *  your profile, with Edit and the "Public profile" switch (the existing public-profile settings). */
+import { CopyRefButton } from "../readme/ObjectActions";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Clock, Github, Globe, Linkedin, MapPin, MessageSquare, Phone, Twitter, UserPlus } from "lucide-react";
 import { Button, EmptyState, ExternalLink, Identity, ListRow, SectionLabel, formatDate } from "../../ui-kit";
@@ -36,6 +37,13 @@ const LINK_ICON = { linkedin: Linkedin, github: Github, x: Twitter, website: Glo
 const LINK_NAME = { linkedin: "LinkedIn", github: "GitHub", x: "X", website: "Website" } as const;
 
 /** Find the person a panel address names: by key, then account, address or name. */
+/** A person's full reference: their address, else their account id — never their bare name. */
+export function personRef(p: { email?: string; subject?: string | null; name?: string }): string {
+  const id = p.email || p.subject || "";
+  const label = String(p.name ?? "").replace(/[|\]]/g, " ").trim();
+  return id ? `[[person:${id}${label ? `|${label}` : ""}]]` : label;
+}
+
 export function findPerson(people: Person[], key: string): Person | null {
   const k = key.trim();
   return people.find((p) => p.key === k || (p.aliases ?? []).includes(k))
@@ -99,8 +107,11 @@ export function PersonPanel({ path }: { path: string }) {
   const company = profile?.company || companyOf(p.email);
   const onVexa = p.vexa || profile?.claimed;
   const tz = localTime(profile?.timezone);
-  const call = () => { fire(NEW_CHAT_AT_EVENT, { workspace: "" }); window.setTimeout(() => fire(ASK_CHAT_EVENT, { prompt: `Call ${p.name}${p.email ? ` (${p.email})` : ""}: ring them in Vexa, or draft the call link for me to send.`, display: `Call ${p.name}` }), 150); };
-  const invite = () => { fire(NEW_CHAT_AT_EVENT, { workspace: "" }); window.setTimeout(() => fire(ASK_CHAT_EVENT, { mode: "draft", prompt: `Draft an invitation to Vexa for ${p.name}${p.email ? ` <${p.email}>` : ""} — I'll review it before anything is sent.` }), 150); };
+  // the person by their FULL reference (founder 2026-10-18): a badge to the reader, an id to the agent
+  const who = personRef(p);
+  const call = () => { fire(NEW_CHAT_AT_EVENT, { workspace: "" }); window.setTimeout(() => fire(ASK_CHAT_EVENT, { prompt: `Call ${who}${p.email ? ` (${p.email})` : ""}: ring them in Vexa, or draft the call link for me to send.`, display: `Call ${who}` }), 150); };
+  const invite = () => { fire(NEW_CHAT_AT_EVENT, { workspace: "" }); window.setTimeout(() => fire(ASK_CHAT_EVENT, { mode: "draft", prompt: `${who} Draft an invitation to Vexa for them${p.email ? ` <${p.email}>` : ""} — I'll review it before anything is sent.` }), 150); };
+  const copyTarget = { kind: "person", id: p.email || p.subject || "", label: p.name };
   return (
     <article className="vx-s2-pp" data-person-panel={p.key}>
       <Header name={p.name} photo={profile?.photo || photoOf(p)} subject={p.subject}
@@ -115,7 +126,9 @@ export function PersonPanel({ path }: { path: string }) {
               }}>Message</Button>
             : <Button variant="secondary" icon={<MessageSquare size={14} />} disabled title="Coming with rooms of two">Message · coming</Button>}
           <Button variant="secondary" icon={<Phone size={14} />} onClick={call}>Start call</Button>
-        </> : <Button variant="secondary" icon={<UserPlus size={14} />} onClick={invite}>Invite</Button>} />
+          {copyTarget.id && <CopyRefButton target={copyTarget} />}
+        </> : <><Button variant="secondary" icon={<UserPlus size={14} />} onClick={invite}>Invite</Button>
+          {copyTarget.id && <CopyRefButton target={copyTarget} />}</>} />
       {msgError && <p className="vx-s2-note" role="alert">{msgError}</p>}
       {(profile?.bio || profile?.location || tz || (profile?.links?.length ?? 0) > 0) && <section className="vx-s2-pp-about" data-profile="">
         {profile?.bio && <p className="vx-s2-pp-bio">{profile.bio}</p>}

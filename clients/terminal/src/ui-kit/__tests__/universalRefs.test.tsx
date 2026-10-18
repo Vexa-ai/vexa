@@ -70,9 +70,9 @@ describe("RefChip — the server's answer for this reader", () => {
     expect(await screen.findByText("Access requested")).toBeTruthy();
   });
 
-  it("gone: a calm word, not a dead chip", async () => {
+  it("gone: a calm, muted Unavailable — never the raw reference (founder 2026-10-18)", async () => {
     render(<RefChip text="https://app.dev.vexa.ai/r/chat/nope" />);
-    expect(await screen.findByText("Not found")).toBeTruthy();
+    expect(await screen.findByText("Unavailable")).toBeTruthy();
   });
 });
 

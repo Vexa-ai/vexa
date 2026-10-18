@@ -11,6 +11,7 @@
  *  hover, so a touch screen never puts a destructive control under the first tap; Decline is only in
  *  "⋯" or the sheet, and it is held with Undo. Accept / Confirm / Approve act in one press from the
  *  row; Answer and Deliver need input, so they open the sheet. */
+import { copyReference } from "../../surfaces/reference";
 import { useRef } from "react";
 import { CalendarCheck, Check, CircleHelp, Hand, MoreHorizontal, ScrollText, ShieldCheck, Sparkles, SquareCheck, UserPlus, X, type LucideIcon } from "lucide-react";
 import type { CardAction, CardKind, CoreCard as CardView } from "../../platform/desktop";
@@ -62,7 +63,7 @@ export function CardRow({ card, onOpen, roomName }: { card: CardView; onOpen?: (
   const more: MenuItem[] = [
     { key: "open", label: "Open the card", onSelect: open },
     { key: "discuss", label: "Discuss", onSelect: () => discussCard(card.id) },
-    { key: "copy-ref", label: "Copy reference", onSelect: () => { void navigator.clipboard?.writeText(`[[card:${card.id}]]`).catch(() => undefined); } },
+    { key: "copy-ref", label: "Copy reference", onSelect: () => { void copyReference({ kind: "card", id: card.id }); } },
     ...(acts.includes("decline") ? [{ key: "decline", label: "Decline", danger: true, separatorBefore: true,
       onSelect: () => holdDecline(card.id, () => void decideNow(card, "decline"), `Declined: ${card.title}`) }] : []),
   ];

@@ -20,6 +20,8 @@
  *  and opens as a page.
  *
  *  The chat bound to the meeting stays beside this view; nothing here replaces it. */
+import { CopyRefButton } from "../minutes/readme/ObjectActions";
+import { MeetingPrep } from "../minutes/MeetingPrep";
 import { SelectionAct, referenceInChat } from "../minutes/ExtendAction";
 import "./meetingView.css";
 import { ChatAboutButton } from "../minutes/shell2/ChatAbout";
@@ -77,6 +79,12 @@ type Notes =
 export const NOTES_POLL_MS = 4000;
 
 /** Did the note change? Only a change re-renders it: a poll that finds the same file is silent. */
+/** The meeting's row id (what every reference names), whether the view was opened by row or native id. */
+export function meetingRowId(row: { id?: string | number } | undefined, meetingId: string): string {
+  const id = row?.id !== undefined && row?.id !== null ? String(row.id) : "";
+  return /^\d+$/.test(id) ? id : meetingId;
+}
+
 export function sameNote(a: Notes, b: Notes): boolean {
   if (a.phase !== b.phase) return false;
   if (a.phase === "ready" && b.phase === "ready") {
@@ -509,6 +517,8 @@ function MeetingViewBody({ meetingId }: { meetingId: string }) {
   const brief = useMemo(() => (noteBody ? readListenBrief(noteBody) : null), [noteBody]);
   // shell2 (UI 7h, 7q): "Chat about this" / "Resume chat" in the meeting's own header
   const shell2 = useFeature("shell2");
+  // PREP (validation log O2, founder-felt): a planned meeting's panel carries its prep above the notes
+  const prepOn = useFeature("meeting_prep");
   return (
     <div data-meeting-view={meetingId} className="vx-mv-root"
       style={{ position: "relative", height: "100%", flex: "1 1 0%", width: "100%", display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, "--mv-inset": `${MEETING_VIEW_INSET}px` } as CSSProperties}>
@@ -520,7 +530,10 @@ function MeetingViewBody({ meetingId }: { meetingId: string }) {
             speakers={speakers}
             notesAct={<NotesControl meetingId={meetingId} notes={notes} lines={transcriptLines(transcript.segments)} liveNote={liveNote} />}
             onEditNotes={notes.phase === "ready" && !notes.readonly && !liveNote ? () => window.dispatchEvent(new CustomEvent(EDIT_NOTE_EVENT, { detail: { meetingId } })) : undefined}>
-            {shell2 && <div className="vx-mv-about"><ChatAboutButton a={{ key: `meeting:${meetingId}`, path: `meeting:${meetingId}`, label: chatNameForMeeting(meetingId) || (row ? meetingDisplayName(row) : "the meeting"), kind: "meeting", slug: row?.workspace_id }} /></div>}
+            {shell2 && <div className="vx-mv-about"><ChatAboutButton a={{ key: `meeting:${meetingId}`, path: `meeting:${meetingId}`, label: chatNameForMeeting(meetingId) || (row ? meetingDisplayName(row) : "the meeting"), kind: "meeting", slug: row?.workspace_id,
+              // the ROW id, never the title: "Call with Vexa" names many meetings (founder 2026-10-18)
+              ref: `[[meeting:${meetingRowId(row, meetingId)}]]` }} />
+              <CopyRefButton target={{ kind: "meeting", id: meetingRowId(row, meetingId), label: row ? meetingDisplayName(row) : undefined }} /></div>}
             <div className="vx-mv-recorder"><MeetingControls meetingId={meetingId} showBot={false} showDelete={false} /></div>
           </MeetingViewHeader>
         </div>
@@ -530,6 +543,7 @@ function MeetingViewBody({ meetingId }: { meetingId: string }) {
         {/* MIDDLE, SCROLLING: the meeting's note */}
         <div data-meeting-main data-centred="" style={{ flex: "1 1 0%", minWidth: 0, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
           <div className="vx-mv-content">
+            {prepOn && (row?.live_status === "scheduled" || row?.live_status === "planned") && <MeetingPrep meetingId={meetingId} notes={notes} reload={notes.reload} />}
             <NotesSection meetingId={meetingId} notes={notes} liveNote={liveNote} />
           </div>
         </div>

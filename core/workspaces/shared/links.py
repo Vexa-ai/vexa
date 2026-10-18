@@ -212,7 +212,7 @@ def entity_slug_index(root, *, workspace_id: str, kinds=None, slugify=None) -> d
 
 #: One form for every object (PRD 0.13.4 D18, UI 7gg). `control_plane/page_grammar.py` uses this list.
 REF_KINDS = ("workspace", "room", "chat", "page", "file", "entity", "meeting", "card", "person",
-             "routine", "sensor", "message", "query", "series", "flow")
+             "routine", "sensor", "message", "query", "series", "flow", "commit", "policy")
 #: Older spellings that name the same kind (the rich-README `call:`; `flow:` stays its own kind here
 #: because the resolver answers flows and routines through the same seam).
 REF_KIND_ALIASES = {"call": "meeting"}

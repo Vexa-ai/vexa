@@ -411,6 +411,21 @@ _DB_ID_DESC = (
 VALID_PLATFORMS = ("google_meet", "teams", "zoom", "jitsi", "voice_note", "vexa_call")
 
 
+
+def with_meeting_refs(result: Any) -> Any:
+    """Each meeting carries its FULL REFERENCE, ``ref: [[meeting:<id>|<title>]]`` (founder 2026-10-18:
+    "we need full reference for everything" — many meetings share a title). The agent copies it into
+    its reply, where it renders as a badge with the meeting's time; the id is never read out."""
+    rows = result.get("meetings") if isinstance(result, dict) else None
+    if not isinstance(rows, list):
+        return result
+    for m in rows:
+        if isinstance(m, dict) and m.get("id") is not None and "ref" not in m:
+            data = m.get("data") if isinstance(m.get("data"), dict) else {}
+            title = str(data.get("title") or m.get("title") or "").replace("|", " ").replace("]", " ").strip()
+            m["ref"] = f"[[meeting:{m['id']}|{title}]]" if title else f"[[meeting:{m['id']}]]"
+    return result
+
 def _validate_platform(tool: str, platform: Optional[str], *,
                        omitted: str = "Omit `platform` to search every platform.") -> Optional[str]:
     """Reject an unknown platform loudly rather than filtering everything away."""
@@ -857,7 +872,7 @@ def create_app(
                     detail="list_meetings: 'metadata_filter' must be a JSON OBJECT, not a bare value or array.",
                 )
             params["metadata"] = metadata_filter
-        return await make_request("GET", f"{base_url}/meetings", api_key, params=params or None)
+        return with_meeting_refs(await make_request("GET", f"{base_url}/meetings", api_key, params=params or None))
 
     #: The most segments one transcript answer carries (see the paging note in the tool).
     TRANSCRIPT_PAGE = 200

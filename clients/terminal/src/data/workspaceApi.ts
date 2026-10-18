@@ -172,6 +172,9 @@ export interface RefAnswer {
   open: Record<string, string | number> | null;
   request_access: boolean;
   target?: { kind: string; id: string };
+  /** the badge's disambiguator, for a reader who may open it: `at`/`by` (a meeting), `workspace` (a
+   *  page), `role` (a person), `sha` (a commit), `state` (a card) */
+  hint?: Record<string, string>;
 }
 
 export async function resolveRef(ref: string): Promise<RefAnswer> {

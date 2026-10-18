@@ -1123,7 +1123,9 @@ def run_harness_turn(
             except subprocess.CalledProcessError:
                 sha = None
             if sha:
-                yield {"type": "commit", "sha": sha}
+                # the WORKSPACE rides with the sha, so the reply's commit badge is a full reference
+                # (`[[commit:<workspace>/<sha>]]`) and opens that commit's review
+                yield {"type": "commit", "sha": sha, "workspace": home.name}
     # Per-mount: (1) rebuild policy/ from THIS mount's pre-turn baseline — the security guard, applied to
     # every workspace mount so no agent-authored policy/ change survives anywhere (a no-op on a mount with
     # no policy/); (2) commit the mount's remaining (legitimate) changes, authored by the principal. Each
@@ -1168,7 +1170,7 @@ def run_harness_turn(
         except subprocess.CalledProcessError:
             continue  # one mount's commit failing must not abort the rest of the set
         if sha:
-            yield {"type": "commit", "sha": sha}
+            yield {"type": "commit", "sha": sha, "workspace": mount.name}
     if done is not None:
         if withheld:
             from llm.private_writes import withheld_line  # noqa: PLC0415

@@ -59,7 +59,8 @@ import { AskSessionProvider } from "../ui-kit/InlineCard";
 import { Button as KitButton } from "../ui-kit/primitives/Button";
 import { ModelChip } from "./usage/ModelChip";
 import { CALL_PERSON_EVENT, NEW_CHAT_AT_LEVEL_EVENT } from "../platform/events";
-import { splitRefs } from "../ui-kit/universalRefs";
+import { liftRefs, splitRefs } from "../ui-kit/universalRefs";
+import { MeetingChip } from "../ui-kit/MeetingChip";
 import { longPressProps, meetingLinkIn, pasteToChip, raiseMessageActions, referenceFromPaste, sendVexa } from "./reference";
 /** The conversation a message line belongs to, for its reference (`message:<session>/<seq>`). */
 const MessageScope = createContext<string | null>(null);
@@ -166,7 +167,7 @@ type HistoryTurn =
       attachments?: { name: string; path: string; type?: string; size?: number; kind?: "image" | "file" }[];
       /** set when another agent sent this turn (ADR-0046 decision 13) */
       from_agent?: { uid?: string; thread?: string; label?: string } }
-  | { role: "agent"; text: string; ops?: { label: string; file?: string; wrote?: boolean; skill?: string; outcome?: string }[]; commit?: string; at?: number };
+  | { role: "agent"; text: string; ops?: { label: string; file?: string; wrote?: boolean; skill?: string; outcome?: string }[]; commit?: string; commit_workspace?: string; at?: number };
 /** Why a turn ran, when the history says (a signal-woken turn: `"signal"`). */
 type HistoryTrigger = { trigger?: string };
 
@@ -311,6 +312,13 @@ function fileLabel(path: string): string {
 /** A reference written in the text (`@file:…`, a meeting): static, so a Tag with its type icon —
  *  not a coloured pill (guidelines §4.5). The raw token is its tooltip. */
 function ReferenceChip({ refToken }: { refToken: ReferenceToken }) {
+  // A MEETING IS ITS BADGE (founder 2026-10-18: "rendered as badge (not string uuid)"): a row id is
+  // the universal reference, a native id the meeting chip — never the id as the label.
+  if (refToken.kind !== "file") {
+    return /^\d+$/.test(refToken.value)
+      ? <RefChip text={`[[meeting:${refToken.value}]]`} />
+      : <MeetingChip meetingRef={refToken.value} label="Meeting" />;
+  }
   const isFile = refToken.kind === "file";
   const label = isFile ? fileLabel(refToken.value) : refToken.value;
   return (
@@ -722,6 +730,12 @@ export function ChatConversation({ turns, busy, empty, jobs = [], room, onContin
   );
 }
 
+/** The composer's reference badges, sent AHEAD of the words as their full references. */
+export function withRefs(text: string, refs: string[]): string {
+  if (!refs.length) return text;
+  return text ? `${refs.join(" ")}\n\n${text}` : refs.join(" ");
+}
+
 function ComposerReferences({ text }: { text: string }) {
   const refs = referenceTokens(text);
   if (refs.length === 0) return null;
@@ -1002,11 +1016,16 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const micDictRef = useRef<ComposerDictation | null>(null);   // the box's dictation, while the mic streams
   // LONG PASTES, COLLAPSED (`pastedText.tsx`): each one a chip above the box until the message goes.
   const [pastes, setPastes] = useState<string[]>([]);
+  // REFERENCES IN THE COMPOSER ARE BADGES (founder 2026-10-18): "Chat about this", a pasted link or a
+  // copied badge puts the object's full reference here — drawn as a badge with its disambiguator,
+  // sent ahead of the words — so the person never sees `[[…]]` and the agent always gets the id.
+  const [refs, setRefs] = useState<string[]>([]);
+  const addRefs = (xs: string[]) => { if (xs.length) setRefs((r) => [...r, ...xs.filter((x) => !r.includes(x))]); };
   // S7: a pasted meeting link offers "Send Vexa" (7gg / 7t)
   const [meetingOffer, setMeetingOffer] = useState<ReturnType<typeof meetingLinkIn>>(null);
   // Every send path clears the box through here; a send while the mic streams also hands the sent
   // text over, so it is not shown again (see micDictRef).
-  const clearInput = () => { setValue(""); setPastes([]); setMeetingOffer(null); micDictRef.current?.sent(); };
+  const clearInput = () => { setValue(""); setPastes([]); setRefs([]); setMeetingOffer(null); micDictRef.current?.sent(); };
   // ADR-0048 — @-mentions: who the picker may offer, who was picked into this message, where the
   // caret is (the picker reads the `@query` before it), and the one question Enter may ask.
   const [mentionPeople, setMentionPeople] = useState<{ people: MentionablePerson[]; agents: { name: string }[] } | null>(null);
@@ -1231,7 +1250,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
                   ...(t.from_agent?.thread ? { fromAgent: {
                     uid: String(t.from_agent.uid ?? ""), thread: String(t.from_agent.thread),
                     label: String(t.from_agent.label ?? "") } } : {}) }
-              : { id: `h-a-${i}`, role: "agent", text: t.text, ops: (t.ops ?? []).map(historyOp), commit: t.commit, ...(typeof t.at === "number" ? { at: t.at } : {}),
+              : { id: `h-a-${i}`, role: "agent", text: t.text, ops: (t.ops ?? []).map(historyOp), commit: t.commit, ...(t.commit_workspace ? { commitWs: String(t.commit_workspace) } : {}), ...(typeof t.at === "number" ? { at: t.at } : {}),
                   ...(t.fromMeeting ? { fromMeeting: true, ...(t.wokeBy ? { wokeBy: t.wokeBy } : {}) } : {}) });
         // A REPLY THE STORE REFUSED IS SAID, NOT LOST (ADR-0048 S5): the history carries the typed
         // fault until the next save lands, and it renders as every typed fault does, at the end.
@@ -1597,7 +1616,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
               ops: [...t.ops.map((o) => (o.status === "running" ? { ...o, status: "done" as const } : o)), op],
             }));
           },
-          onCommit: (sha) => {
+          onCommit: (sha, workspace) => {
             invalidateDocLinkCaches();
             // The panel may be showing a document this turn just CREATED. A chat declares its
             // tabs up front (PRD decision 18), so the setup conversation opens five pages
@@ -1605,7 +1624,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
             // something else happens to remount them. A commit is the durable moment the files
             // became real, so it is the one that tells the panel to look again.
             window.dispatchEvent(new CustomEvent(WORKSPACE_COMMIT_EVENT));
-            patchAgentTurn(key, agentId, (t) => ({ ...t, commit: sha }));
+            patchAgentTurn(key, agentId, (t) => ({ ...t, commit: sha, ...(workspace ? { commitWs: workspace } : {}) }));
           },
           // THE TURN HANDED ITS WORK OFF AND IS DONE. Settle its steps, drop the live indicator and
           // give the composer back — the acknowledgement line has already arrived as a delta, and
@@ -1975,7 +1994,9 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       }
       if (layout.store.getState().rightCollapsed) layout.toggleRight();
       if (detail.mode === "draft") {
-        setValue((current) => current ? `${current}\n\n${prompt}` : prompt);
+        const lifted = liftRefs(prompt);
+        addRefs(lifted.refs);
+        if (lifted.text.trim()) setValue((current) => current ? `${current}\n\n${lifted.text}` : lifted.text);
         window.setTimeout(() => inputRef.current?.focus(), 0);
         return;
       }
@@ -2110,7 +2131,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   }, [busy, session, catchUpTick]);
 
   const onSubmit = async (opts: { answered?: boolean; plain?: boolean } = {}) => {
-    const v = withPastes(value.trim(), pastes);
+    const v = withRefs(withPastes(value.trim(), pastes), refs);
     const hasAttachments = attachments.length > 0;
     if ((!v && !hasAttachments) || uploading) return;
     // the user WROTE here — the minutes rail keeps a `touched` flag per chat and this is its
@@ -2264,7 +2285,9 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
       const chips = e.clipboardData ? referenceFromPaste(e.clipboardData) : null;
       if (chips !== null) {
         e.preventDefault();
-        setValue(pasteToChip(e.currentTarget, text, chips));
+        const lifted = liftRefs(chips);
+        addRefs(lifted.refs);
+        if (lifted.text.trim()) setValue(pasteToChip(e.currentTarget, text, lifted.text));
         return;
       }
       setMeetingOffer(meetingLinkIn(text));
@@ -2373,6 +2396,11 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           </div>
         )}
         <ComposerReferences text={value} />
+        {refs.length > 0 && <div className="vx-paste-tray" data-composer-refs="">{refs.map((r) => (
+          <span key={r} data-composer-ref="" className="vx-composer-ref">
+            <RefChip text={r} />
+            <button type="button" className="vx-chip-x" aria-label="Remove reference" onClick={() => setRefs((p) => p.filter((x) => x !== r))}>×</button>
+          </span>))}</div>}
         <MentionChips mentions={shownMentions} onRemove={(m) => setPicked((prev) => prev.filter((x) => x.subject !== m.subject))} />
         {meetingOffer && <div className="vx-paste-tray" data-send-vexa="">
           <KitButton size="sm" onClick={() => { const m = meetingOffer; setMeetingOffer(null); void sendVexa(m); }}>Send Vexa to this meeting</KitButton>
@@ -2414,6 +2442,16 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
           onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
           onInput={(e) => resizeComposerTextarea(e.currentTarget)}
           onPaste={onPaste}
+          onDrop={(e) => {
+            // A BADGE OR A ROW DROPPED IN carries its reference: it becomes a badge, never its text
+            const dt = e.dataTransfer;
+            if (!dt || typeof dt.getData !== "function") return;
+            const t = dt.getData("application/x-vexa-ref") || dt.getData("text/plain") || "";
+            const lifted = liftRefs(t);
+            if (!lifted.refs.length) return;
+            e.preventDefault();
+            addRefs(lifted.refs);
+          }}
           onKeyDown={(e) => {
             if (pickRows.length) {
               if (e.key === "ArrowDown" || e.key === "ArrowUp") {

@@ -10,7 +10,7 @@
  *  `DO_VERBS` (`{{verb …}}`) are one table here; the old spellings are aliases. */
 
 export const REF_KINDS = ["workspace", "room", "chat", "page", "file", "entity", "meeting", "card", "person",
-  "routine", "sensor", "message", "query", "series", "join"] as const;
+  "routine", "sensor", "message", "query", "series", "join", "commit", "policy"] as const;
 export type RefKind = (typeof REF_KINDS)[number];
 export const KIND_ALIASES: Record<string, RefKind> = { call: "meeting", flow: "routine" };
 const ALL_KINDS = [...REF_KINDS, ...Object.keys(KIND_ALIASES)];

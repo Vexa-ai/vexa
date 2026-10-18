@@ -161,3 +161,12 @@
 .vx-s2-choice-list { display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow-y: auto; }
 .vx-s2-other { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; }
 .vx-s2-livewho { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; }
+/* UI 7mm: every person chip and avatar opens the person; the hover card carries the same doors */
+.vx-person-chip { position: relative; display: inline-flex; align-items: center; min-width: 0; }
+.vx-person-chip-hit { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; cursor: pointer; border-radius: var(--radius-sm); }
+.vx-person-chip-hit:hover .vx-mvh-name, .vx-person-chip-hit:hover > b { text-decoration: underline; }
+.vx-person-card { position: absolute; top: 100%; left: 0; z-index: 30; display: flex; flex-direction: column; gap: var(--space-1);
+  min-width: 180px; padding: var(--space-2); background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.vx-person-card-name { font-weight: var(--weight-medium); }
+.vx-person-card-sub { color: var(--text-3); }
+.vx-person-card-acts { display: flex; gap: var(--space-1); }

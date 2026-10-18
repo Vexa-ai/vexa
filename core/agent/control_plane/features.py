@@ -168,6 +168,28 @@ FEATURES: dict[str, dict] = {
         "routes": [("POST", r"^/api/desktop/page/?$"), ("GET", r"^/api/pins/?$"), ("POST", r"^/api/pins/?$")],
         "elsewhere": "the terminal shows the home2 workspace page (status block over the README)",
     },
+    # MEETING PREP (validation log O2, founder-felt 2026-10-18): a planned meeting's panel shows its
+    # Prep above the notes — my goal (`goals:` on the meeting's page), the people as the viewer knows
+    # them, open cards from the last occurrence, the agenda and material on the page, three readiness
+    # ticks. Client-only: a read projection over existing owners (no store, no route of its own).
+    # Needs `shell2`. EXPLICIT: on by name or for named accounts (`features_accounts`).
+    "meeting_prep": {
+        "summary": "Prep in a planned meeting's panel: goal, people with sources, open from last time, agenda, material",
+        "explicit": True,
+        "needs": ["shell2"],
+        "routes": [],
+        "elsewhere": "the terminal shows the meeting panel without its Prep section",
+    },
+    # PREPARE FROM HOME (founder 2026-10-18): the next planned meeting heads Home's Now strip; Prepare
+    # opens its conversation in the centre, the meeting with its Prep on the right, and the composer
+    # focused with the meeting's reference. Client-only. Needs `shell2`. EXPLICIT.
+    "home_prepare": {
+        "summary": "the next meeting at the top of Home with Prepare: its chat, its Prep and a focused composer in one click",
+        "explicit": True,
+        "needs": ["shell2"],
+        "routes": [],
+        "elsewhere": "the terminal shows the upcoming-call row on Home instead",
+    },
     # VEXA CREDITS (PLAN-8H 6.2, decision G1): credits at market cost x the markup, 5-hour and weekly
     # windows, the usage meter, extra usage (data only). Off: nothing is debited or refused by window.
     "usage": {

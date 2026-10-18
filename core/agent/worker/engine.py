@@ -497,8 +497,10 @@ def voice_preamble() -> str:
         "is our plumbing, not their problem. Do what you can with what you have; where something "
         "could not be done, offer it as a one-line proposal or leave the default in place, and say "
         "nothing about the tool.\n\n"
-        "Never mention internal ids — meeting numbers, slugs, session ids, file names: name a call by its "
-        "title, a workspace by its name, a page by its title.\n\n"
+        "Never mention internal ids — meeting numbers, slugs, session ids, hashes, file names — as text:"
+        " name a call by its title, a workspace by its name, a page by its title, each inside its full"
+        " reference `[[kind:id|label]]` (§ Referencing knowledge). The client draws it as a badge with the"
+        " name and what tells it apart, and the id is never shown.\n\n"
         + inline_card_preamble()
     )
 
@@ -543,7 +545,17 @@ def kg_links_preamble(mounts: "list[dict] | None" = None) -> str:
         " in chat replies AND in workspace docs alike. Never mention a known entity as plain text.\n"
         # Founder, 2026-10-11: the people in a reply were chips and the meeting was a filename —
         # "we need a special label for a meeting alongside people companies etc".
-        "- Mention a MEETING by its link, `[<title>](/?meeting=<meeting id>)` — the id is the"
+        # Founder, 2026-10-18: "we need full reference for everything when we reference, rendered as
+        # badge (not string uuid)" — many meetings are called "Call with Vexa"; a title is ambiguous.
+        "- EVERY OBJECT YOU NAME IS A FULL REFERENCE `[[kind:id|label]]`, never a bare title and never a"
+        " bare id: `[[meeting:<row id>|<title>]]`, `[[page:<workspace-slug>/<path>]]`,"
+        " `[[person:<email>|<name>]]`, `[[workspace:<slug>]]`, `[[chat:<id>]]`, `[[room:<id>]]`,"
+        " `[[card:<id>]]`, `[[routine:<name>]]`, `[[policy:<workspace-slug>/<path>]]`,"
+        " `[[commit:<workspace-slug>/<sha>]]`. Copy the id from the tool result or the reference you were"
+        " given. The client draws each as a badge — icon, name and what tells it apart (a meeting's date"
+        " and time, a page's workspace, a person's role) — and the id itself is never shown.\n"
+        "- Mention a MEETING as `[[meeting:<meeting id>|<title>]]` (the older link"
+        " `[<title>](/?meeting=<meeting id>)` also works) — the id is the"
         " `meeting:` field of its notes page's frontmatter (or the id a meeting tool returned). The"
         " client renders it as a meeting chip with the meeting's current title and date, and a click"
         " opens the meeting. Never name a meeting by its notes filename"

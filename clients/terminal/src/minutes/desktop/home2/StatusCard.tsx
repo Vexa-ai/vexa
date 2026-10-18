@@ -127,7 +127,7 @@ export function StatusCard({ w: given, drag }: { w: WorkspaceItem; drag: TileDra
           <span data-tile-inner="" className="vx-scard-more">
             <Menu label={`More for ${w.name}`} variant="ghost" align="end" trigger={<span aria-hidden>⋯</span>} items={[
               ...(!readOnly ? [{ key: "write", label: "Write here from home", onSelect: () => aimHome(slug) },
-                { key: "ask", label: "Ask about this workspace", onSelect: () => { aimHome(slug); askAgent(`What is going on in ${w.name}?`, { draft: true }); } }] : []),
+                { key: "ask", label: "Ask about this workspace", onSelect: () => { aimHome(slug); askAgent(`[[workspace:${slug}]] What is going on here?`, { draft: true }); } }] : []),
               { key: "open", label: "Open", onSelect: () => { void openWorkspaceView(w); } },
               // your own view of this workspace: the CRM member_of relation, written by crm-api
               ...(settingsOn ? [

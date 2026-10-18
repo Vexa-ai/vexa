@@ -14,6 +14,7 @@
  *
  *  Every act calls what already exists: the player the transcript seeks, the share dialog, the
  *  Extend act on the meeting's page, the meeting delete route. Nothing here is a new backend. */
+import { PersonChip } from "../minutes/shell2/PersonChip";
 import { useEffect, useState, type ReactNode } from "react";
 import { Wikilink } from "../ui-kit/docLinks";
 import { resolveLink } from "../ui-kit/wsLinks";
@@ -82,16 +83,16 @@ function initials(name: string): string {
 export function peopleOf(m: MeetingMock, speakers: string[] = []): Participant[] {
   const seen = new Set<string>();
   const out: Participant[] = [];
-  const add = (name: string, role = "") => {
+  const add = (name: string, role = "", email = "") => {
     const n = name.trim();
     // only people somebody identified: a speaker label is nobody, and is not shown as one
     if (!isIdentifiedPerson(n) || seen.has(n.toLowerCase())) return;
     seen.add(n.toLowerCase());
-    out.push({ name: n, role, initials: initials(n) });
+    out.push({ name: n, role, initials: initials(n), ...(email ? { email } : {}) });
   };
   for (const p of m.participants ?? []) add(p.name, p.role);
   for (const s of speakers) add(s);
-  if (!out.length) for (const a of m.attendees ?? []) add(a.name || a.email.split("@")[0]);
+  if (!out.length) for (const a of m.attendees ?? []) add(a.name || a.email.split("@")[0], "", a.email);
   return out;
 }
 
@@ -107,10 +108,13 @@ function Person({ p }: { p: Participant }) {
     }).catch(() => {});
     return () => { on = false; };
   }, [p.name]);
-  if (entity) return <span data-meeting-person-chip className="vx-mvh-person"><Wikilink title={p.name} /></span>;
-  return <span className="vx-mvh-person" title={p.name}>
-    <span aria-hidden className="vx-mvh-avatar">{p.initials}</span>
-    <span className="vx-mvh-name">{p.name}</span>
+  // EVERY PERSON OPENS THEIR PROFILE (UI 7mm, founder 2026-10-18: these names were unclickable); one
+  // with a knowledge page keeps that page's chip inside the same door
+  return <span data-meeting-person-chip={entity ? "" : undefined} className="vx-mvh-person" title={p.name}>
+    <PersonChip person={{ name: p.name, email: p.email }}>
+      {entity ? <Wikilink title={p.name} /> : <><span aria-hidden className="vx-mvh-avatar">{p.initials}</span>
+        <span className="vx-mvh-name">{p.name}</span></>}
+    </PersonChip>
   </span>;
 }
 

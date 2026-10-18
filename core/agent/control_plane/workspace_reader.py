@@ -927,6 +927,25 @@ class WorkspaceReader:
         return {"branch": git("rev-parse", "--abbrev-ref", "HEAD") or "main", "path": rel, "limit": n,
                 "commits": _commit_records(git(*args), viewer_email)}
 
+    def git_commit_at(self, base: Path, sha: str) -> Optional[dict]:
+        """ONE commit's own words — ``{"sha", "subject", "at"}`` — for a commit badge (the subject
+        line, never a file list), or None when there is no such commit here. A sha that is not hex
+        never reaches git."""
+        import re
+
+        from shared.gitexec import run_git
+
+        base = self._guard_under_root(base)
+        if not (base / ".git").exists() or not re.fullmatch(r"[0-9a-fA-F]{4,40}", sha or ""):
+            return None
+        res = run_git(base, "log", "-1", "--format=%H%x1f%s%x1f%aI", f"{sha}^{{commit}}", "--")
+        out = (getattr(res, "stdout", "") or "").strip()
+        if getattr(res, "returncode", 0) != 0 or not out:
+            return None
+        full, _, rest = out.partition("\x1f")
+        subject, _, at = rest.partition("\x1f")
+        return {"sha": full, "subject": subject.strip(), "at": at.strip()}
+
     def git_diff_at(self, base: Path, sha: str, path: Optional[str] = None) -> dict:
         """Unified diff of ONE commit (optionally scoped to a single file) in the workspace at ``base`` —
         so the terminal can HIGHLIGHT exactly what changed. Capped so a huge commit can't flood the UI."""

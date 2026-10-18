@@ -6,6 +6,7 @@
  *  workspace with, only with the CRM on) · All, which groups Recent → My workspaces → Contacts.
  *  A row opens the person panel on the right. "Waiting on you · n" joins the row when cards land
  *  (S5); until then there is nothing to count, so nothing is shown. */
+import { copyRefItem, refDrag } from "../readme/ObjectActions";
 import { useMemo, useState } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { Chip, EmptyState, EntityChip, Identity, Input, ListRow, Menu, RowCell, SectionLabel, Tabs } from "../../ui-kit";
@@ -56,7 +57,7 @@ function PersonRow({ p, wsName }: { p: Person; wsName: (s: string) => string }) 
   const words = [presenceWord(p.presence), p.headline, company].filter(Boolean).join(" · ");
   const ws = p.workspaces.slice(0, 2);
   return (
-    <div className="vx-s2-person" data-person={p.key}>
+    <div className="vx-s2-person" data-person={p.key} {...(p.email || p.subject ? refDrag({ kind: "person", id: p.email || p.subject || "" }) : {})}>
       <ListRow size="md" strong label={`Open ${p.name}`} onSelect={() => openPerson(p)}
         leading={<span className="vx-s2-face" data-presence={p.presence ?? undefined}><Identity kind="person" id={p.subject || p.email || p.name} name={p.name} size={20} user={p.vexa} src={photoOf(p)} logo={p.logo} /></span>}
         title={p.name} detail={words || (p.vexa ? undefined : "Not on Vexa yet")}
@@ -70,7 +71,8 @@ function PersonRow({ p, wsName }: { p: Person; wsName: (s: string) => string }) 
             {p.workspaces.length > 1 && <MoreChip p={p} wsName={wsName} from={1} data="narrow" />}
           </span>}</RowCell>
           <RowCell w={28}><Menu label={`More for ${p.name}`} align="end" variant="ghost" trigger={<MoreHorizontal size={14} strokeWidth={1.75} aria-hidden />}
-            items={[{ key: "open", label: "Open", onSelect: () => openPerson(p) }]} /></RowCell>
+            items={[{ key: "open", label: "Open", onSelect: () => openPerson(p) },
+              ...(p.email || p.subject ? [copyRefItem({ kind: "person", id: p.email || p.subject || "", label: p.name })] : [])]} /></RowCell>
         </>} />
     </div>
   );

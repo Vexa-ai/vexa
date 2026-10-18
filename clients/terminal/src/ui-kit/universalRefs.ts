@@ -13,7 +13,7 @@ import type { RefAnswer } from "../data/workspaceApi";
 
 /** Every kind (PRD 0.13.4 D18, UI 7gg) — the same list as `links.REF_KINDS` and `readme/grammar.ts`. */
 export const REF_KINDS = ["workspace", "room", "chat", "page", "file", "entity", "meeting", "card", "person",
-  "routine", "sensor", "message", "query", "series", "flow"] as const;
+  "routine", "sensor", "message", "query", "series", "flow", "commit", "policy"] as const;
 /** `anchor`: a place inside the object — `t=00:12:30` (a meeting moment), `L42`, a heading slug. */
 export interface UniversalRef { kind: string; id: string; label?: string; anchor?: string }
 
@@ -82,6 +82,44 @@ export function parseUniversalRef(text: string): UniversalRef | null {
   return null;
 }
 
+/** A meeting's time as a badge says it: "Sun 18 Oct 17:26", in the reader's own zone. */
+export function formatRefWhen(iso: string | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const day = d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }).replace(",", "");
+  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  return `${day} ${time}`;
+}
+
+/** THE DISAMBIGUATOR a badge draws after the name (founder 2026-10-18: many meetings are called "Call
+ *  with Vexa"). From the server's `hint` for this reader: a meeting's date and time and its owner, a
+ *  page's workspace, a person's role, a commit's short hash, a card's state. Never an id. */
+export function refHint(kind: string, hint?: Record<string, string> | null): string {
+  const h = hint ?? {};
+  switch (kind) {
+    case "meeting": case "series": return [formatRefWhen(h.at), h.by].filter(Boolean).join(" · ");
+    case "page": case "file": case "entity": case "policy": return h.workspace ?? "";
+    case "person": return h.role || h.workspace || "";
+    case "commit": return [h.sha, h.workspace].filter(Boolean).join(" · ");
+    case "card": return h.state ?? "";
+    default: return h.workspace ?? "";
+  }
+}
+
+/** Every reference in a draft, lifted out of its text: the composer shows them as badges and sends
+ *  them ahead of the words, so the person never sees `[[…]]` and the agent always gets the id. */
+export function liftRefs(text: string): { refs: string[]; text: string } {
+  const refs: string[] = [];
+  const rest = splitRefs(text).map((p) => {
+    if (p.kind !== "ref") return p.text;
+    const chip = refChip(p.ref.kind, p.ref.id, p.ref.label, p.ref.anchor);
+    if (!refs.includes(chip)) refs.push(chip);
+    return "";
+  }).join("");
+  return { refs, text: rest.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").replace(/^[\s:·,-]+$/, "") };
+}
+
 export type RefPart = { kind: "text"; text: string } | { kind: "ref"; text: string; ref: UniversalRef };
 
 /** Text → words and references, in order (chips and bare `/r/` URLs). A URL's trailing punctuation
@@ -137,11 +175,15 @@ async function resolveCard(r: UniversalRef): Promise<RefAnswer> {
   } catch { return { ...base, access: "unavailable", label: null, open: null }; }
 }
 
+// one import of the api for every badge on a page (a page of badges asked for it once each)
+let apiModule: Promise<typeof import("../data/workspaceApi")> | null = null;
+const workspaceApi = () => (apiModule ??= import("../data/workspaceApi"));
+
 export function resolveUniversalRef(text: string): Promise<RefAnswer> {
   const hit = cache.get(text);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.p;
   const parsed = parseUniversalRef(text);
-  const p = (parsed?.kind === "card" ? resolveCard(parsed) : import("../data/workspaceApi")
+  const p = (parsed?.kind === "card" ? resolveCard(parsed) : workspaceApi()
     .then((api) => api.resolveRef(text)))
     .catch(() => unknownAnswer(parseUniversalRef(text)));
   cache.set(text, { at: Date.now(), p });

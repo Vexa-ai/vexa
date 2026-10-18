@@ -38,12 +38,15 @@ export const SWITCHABLE = [
   // UI-1 (0.13.4): the approved shell — one-list sidebar, Inbox and Meetings in the centre, My desk,
   // the kit's rows, outlined primaries, two-way panels, the phone fixes. Needs home2.
   "shell2",
+  // 0.13.x founder-felt deltas (validation log O2, 2026-10-18): Prep in a planned meeting's panel, and
+  // the next meeting with Prepare at the top of Home. Client-only, read from existing owners. Need shell2.
+  "meeting_prep", "home_prepare",
 ] as const;
 export type FeatureName = (typeof SWITCHABLE)[number];
 /** Switched on only BY NAME — never by "all" (the server's `explicit` features): they change what
  *  people already rely on (rooms; the new home and the sidebar by workspace), so a test or an install
  *  that asks for "all" keeps today's behaviour. */
-export const EXPLICIT: readonly string[] = ["rooms", "home2", "shell2", "readme_page"];
+export const EXPLICIT: readonly string[] = ["rooms", "home2", "shell2", "readme_page", "meeting_prep", "home_prepare"];
 
 /** FAIL CLOSED: on only when the server's answer names it on. A server that does not know the name
  *  (not registered yet, or one release behind) answers nothing about it, and that reads as OFF. */

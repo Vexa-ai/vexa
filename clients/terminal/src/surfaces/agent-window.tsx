@@ -4,6 +4,9 @@
  *  visible — read/search/edit/git/web steps with live status, not just final text) · the composer ·
  *  proposed actions directly under the input. The right-rail chat and the `meeting` copilot render
  *  through this, so they look and behave like one product. */
+import { RefChip } from "../ui-kit/RefChip";
+import { splitRefs } from "../ui-kit/universalRefs";
+import { Wikilink } from "../ui-kit/docLinks";
 import { ApprovalCard, type PrivateApproval } from "./approvalCard";
 import { workspaceLabel } from "../ui-kit/wsLinks";
 import { type CSSProperties, type ReactNode, type RefObject, useEffect, useState } from "react";
@@ -58,7 +61,9 @@ export type Turn =
       at?: number;
       /** the files the message carried — drawn as thumbnails/chips above the bubble, never as text */
       attachments?: MessageAttachment[] }
-  | { id: string; role: "agent"; text: string; ops: Op[]; commit?: string; rejected?: string; status?: TurnStatus | null;
+  | { id: string; role: "agent"; text: string; ops: Op[]; commit?: string;
+      /** the workspace the commit landed in — with the sha, the commit badge's full reference */
+      commitWs?: string; rejected?: string; status?: TurnStatus | null;
       at?: number;
       /** the meeting's signals woke the agent for this turn (ADR transcript signals): drawn with a
        *  small "From the meeting" marker, the composed wake prompt never shown */
@@ -110,9 +115,12 @@ function StatusLine({ status }: { status: TurnStatus }) {
 
 export const opIcon: Record<string, string> = { read: "file", search: "search", edit: "edit", write: "file", git: "git", web: "web", tool: "zap" };
 
-/** render [[wikilinks]] in agent/insight prose as accented spans (click wiring lives in the entity rail) */
+/** An insight's prose: every reference a badge (`[[kind:id]]`, a `/r/` link, an entity `[[Title]]`) —
+ *  never the raw brackets (founder 2026-10-18). */
 function linkify(text: string): ReactNode[] {
-  return text.split(/(\[\[[^\]]+\]\])/).map((p, i) => (p.startsWith("[[") ? <span key={i} className="c-info">{p}</span> : <span key={i}>{p}</span>));
+  return text.split(/(\[\[[^\]]+\]\])/).flatMap((p, i) => (p.startsWith("[[")
+    ? [<Wikilink key={i} title={p.slice(2, -2)} />]
+    : splitRefs(p).map((x, j) => x.kind === "text" ? <span key={`${i}-${j}`}>{x.text}</span> : <RefChip key={`${i}-${j}`} text={x.text} />)));
 }
 
 /** A finished turn's text, with its SOURCES as a citation list (guidelines §4.17): the structured
@@ -443,7 +451,10 @@ export function Conversation({ turns, busy, empty, onContinue, onStopRunning, on
               ? <StatusLine status={t.status} />
               : (!t.text && !t.failed && <div className="t-sm c-3">…</div>))}
             {t.commit && (
-              <div className="vx-turn-meta"><Badge tone="success"><Icon name="git" size={12} />Committed · <code className="vx-tabular">{t.commit.slice(0, 7)}</code></Badge></div>
+              // A COMMIT IS A BADGE (founder 2026-10-18): its own message and short hash, opening its
+              // review — never a bare hash. A turn from before the workspace rode with the sha names
+              // the desk, where a turn's commits land unless it wrote elsewhere.
+              <div className="vx-turn-meta" data-turn-commit=""><RefChip text={`[[commit:${t.commitWs || "personal"}/${t.commit}]]`} /></div>
             )}
             {t.rejected && (
               <div className="vx-turn-meta"><Badge tone="danger"><Icon name="x" size={12} />{t.rejected}</Badge></div>

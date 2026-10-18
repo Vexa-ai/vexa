@@ -24,6 +24,7 @@ import { useActiveCall } from "../../callState";
 import { elapsed, inNowLine } from "../../shell2/callNames";
 import { isMe } from "../../shell2/me";
 import { nowLiveRows, type NowLiveRow } from "./nowLive";
+import { HomePrepare, nextPlanned } from "./HomePrepare";
 import "./home2.css";
 
 /** ONE LIVE MEETING ON HOME (founder O1, 2026-10-18): its name, who is in, how long, and Rejoin / Open —
@@ -70,15 +71,20 @@ export function NowStrip({ workspaces }: { workspaces: WorkspaceItem[] }) {
   const liveRows = nowLiveRows(live.map(({ w, call }) => ({ session: call!.session, meeting: call!.meeting, line: call!.line, people: call!.people, since: call!.since, where: w.name })),
     meetings, inCall ? { session: inCall.session, meetingId: inCall.join.call.meeting_id } : null);
   const all: Need[] = (data?.needs ?? []).filter((n) => nameOf(n.workspace) !== null && !quiet(n.workspace) && (cards === null || n.kind !== "card"));
-  const upcoming = all.filter((n) => n.kind === "upcoming").slice(0, 1);
-  const rest = all.filter((n) => n.kind !== "upcoming").slice(0, NOW_NEEDS);
   const shell2 = useFeature("shell2");
-  if (!liveRows.length && !upcoming.length && !rest.length && !cards) return null;
+  // PREPARE FROM HOME (`home_prepare`, shell2): the next planned meeting heads the strip with Prepare,
+  // in place of the upcoming-call need (one row per meeting, never two)
+  const prepOn = useFeature("home_prepare") && shell2;
+  const planned = nextPlanned(meetings);
+  const upcoming = prepOn ? [] : all.filter((n) => n.kind === "upcoming").slice(0, 1);
+  const rest = all.filter((n) => n.kind !== "upcoming").slice(0, NOW_NEEDS);
+  if (!liveRows.length && !upcoming.length && !rest.length && !cards && !(prepOn && planned)) return null;
   // shell2 (UI 7m, 7r): the same calm rows as the Inbox — kind icon, title, muted tail, one outlined
   // verb in a fixed column, ⋯ — and "Inbox · N" under them. Nothing is filled; Join is outlined.
   if (shell2) return (
     <section className="vx-pb-now vx-s2-now" aria-label="Now" data-now-strip="">
       <h3 className="vx-kh-h">Now</h3>
+      {prepOn && <HomePrepare />}
       {liveRows.map((r) => <NowLive key={r.key} r={r} />)}
       {cards ? <NowCards /> : null}
       {[...upcoming, ...rest].map((n) => <NeedRow key={n.id} n={n} where={nameOf(n.workspace) ?? undefined} act={(x) => void act(x)} />)}

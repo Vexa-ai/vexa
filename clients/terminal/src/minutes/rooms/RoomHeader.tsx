@@ -12,6 +12,7 @@
  *
  *  ON A PHONE (ui-design §3; PRD §11.3 fix 6): below 520px of header width the header folds to
  *  name · people · ⋯, and Start call, Invite and both switches sit inside ⋯. 56 px at most. */
+import { PersonChip } from "../shell2/PersonChip";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Hash, Lock, MoreHorizontal, Phone, UserPlus } from "lucide-react";
 import { Identity, IdentityStack, Menu, type MenuItem } from "../../ui-kit";
@@ -131,9 +132,9 @@ export function RoomHeader({ session, label, room, workspaceName: givenName, lea
       data-narrow={narrow ? "" : undefined} style={header}>
       {leading}
       {pair && other ? <>
-        <Identity kind="person" id={other.principal} name={other.name} size={28} />
+        <PersonChip person={{ name: other.name, subject: other.principal }}><Identity kind="person" id={other.principal} name={other.name} size={28} /></PersonChip>
         <div className="vx-rh-id">
-          <div className="vx-rh-name"><span>{other.name}</span></div>
+          <div className="vx-rh-name"><PersonChip person={{ name: other.name, subject: other.principal }}>{other.name}</PersonChip></div>
           <div className="vx-rh-sub">A room of two{room.agent_busy ? <> · <span className="vx-rh-busy" role="status">Vexa is checking…</span></> : ""}</div>
         </div>
       </> : <>

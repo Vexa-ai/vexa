@@ -74,6 +74,10 @@ def seams_for(request: Request, subject: str, d: dict, *, cards: Optional[list] 
         return rec, access
 
     def page(wid, target):
+        # `personal` is the reader's own desk — the name the terminal uses for it (its slug is the
+        # subject), so "Chat about this" on a desk page can write a qualified reference.
+        if wid == "personal":
+            wid = subject
         rec = registry.get(wid) or registry.by_slug(wid)
         if rec and rec.get("id"):
             wid = rec["id"]
@@ -179,7 +183,10 @@ def seams_for(request: Request, subject: str, d: dict, *, cards: Optional[list] 
                     continue
                 for m in members:
                     if key in {str(m.get("subject") or "").lower(), str(m.get("email") or "").lower()}:
-                        return {"name": m.get("name") or m.get("email") or m.get("subject")}, refs_mod.READABLE
+                        # the badge's disambiguator: their role, else the workspace they share
+                        return {"name": m.get("name") or m.get("email") or m.get("subject"),
+                                "role": m.get("role") or m.get("title") or "",
+                                "workspace": rec.get("name") or ""}, refs_mod.READABLE
         except Exception:  # noqa: BLE001 — a roster that cannot be read names nobody
             pass
         return None, refs_mod.NOT_YOURS
@@ -207,9 +214,33 @@ def seams_for(request: Request, subject: str, d: dict, *, cards: Optional[list] 
         from control_plane import pair_rooms  # noqa: PLC0415
         return pair_rooms.peer_name(store, wsr.root, cid, subject, mindex.list)
 
+    def commit(wid, sha):
+        """A commit in a workspace, read exactly as the workspace's files are (`_read_target`): a
+        workspace outside the reader's reach is not-yours, and only its own message names it."""
+        read_target = d.get("_read_target")
+        if read_target is None:
+            return None, refs_mod.UNAVAILABLE
+        slug = None if wid in ("", "personal", subject) else wid
+        if slug and not within(slug):
+            return None, refs_mod.NOT_YOURS
+        try:
+            base = read_target(request, slug)
+        except HTTPException as exc:
+            return None, (refs_mod.NOT_YOURS if exc.status_code == 403 else refs_mod.GONE)
+        except ValueError:
+            return None, refs_mod.GONE
+        try:
+            rec = wsr.git_commit_at(base, sha)
+        except Exception:  # noqa: BLE001 — a repository that cannot be read names nothing
+            return None, refs_mod.UNAVAILABLE
+        if rec is None:
+            return None, refs_mod.GONE
+        ws_rec = (registry.get(wid) or registry.by_slug(wid) or {}) if slug else {}
+        return {**rec, "workspace": ws_rec.get("name") or ""}, refs_mod.READABLE
+
     return refs_mod.Seams(workspace=workspace, page=page, chat=chat, meeting=meeting, join=join,
                           message=message, card=card, person=person, flow=flow, page_workspace=page_workspace,
-                          peer=peer)
+                          peer=peer, commit=commit)
 
 
 def build(**d) -> APIRouter:

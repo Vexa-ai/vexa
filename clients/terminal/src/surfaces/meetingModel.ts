@@ -3,7 +3,7 @@ import type { MeetingLanguage } from "./transcriptionLanguage";
 /** meetingModel — the meeting/transcript/entity SHAPES the live path works in. Real types only; the
  *  backend (meeting-api via the gateway) fills them. No fixtures, no fallbacks. */
 
-export interface Participant { name: string; role: string; initials: string }
+export interface Participant { name: string; role: string; initials: string; /** the invite's address, when the calendar gave one — what opens their profile */ email?: string }
 /** A calendar-invited human (data.attendees, prep-v3 slice b) — email is the identity key. */
 export interface Attendee { email: string; name?: string; partstat?: string }
 export interface ProposedAction { id: string; label: string; detail: string }

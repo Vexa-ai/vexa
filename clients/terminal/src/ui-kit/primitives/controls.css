@@ -82,6 +82,13 @@
 .vx-chip:hover, .vx-entity:hover { border-color: var(--border-control); }
 .vx-chip-icon { display: inline-flex; color: var(--text-3); flex: none; }
 .vx-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a badge's disambiguator (a meeting's time, a page's workspace) — quiet, never truncating the name first */
+.vx-chip-hint { color: var(--text-3); white-space: nowrap; margin-left: var(--space-1); flex: none; }
+.vx-composer-ref { display: inline-flex; align-items: center; gap: 2px; }
+.vx-commit-sha { margin-bottom: var(--space-2); }
+.vx-commit-diff { max-height: 480px; overflow: auto; font-size: var(--text-xs); margin: 0; }
+.vx-commit-diff [data-line="add"] { color: var(--success-text); }
+.vx-commit-diff [data-line="del"] { color: var(--danger-text); }
 .vx-chip-x { display: inline-flex; align-items: center; justify-content: center; width: var(--control-xs); height: 100%; background: none; border: none; color: var(--text-3); cursor: pointer; border-radius: inherit; }
 .vx-chip-x:hover { color: var(--text-1); }
 

@@ -125,6 +125,18 @@ def test_shell2_is_registered_off_explicit_needing_home2():
     assert F.feature_of("POST", "/api/desktop/sections") == "desktop"
 
 
+def test_meeting_prep_and_home_prepare_are_client_only_off_explicit_needing_shell2():
+    """The founder-felt deltas (validation log O2): read projections over existing owners — no route of
+    their own, off by default and not in `all`, on by name or for named accounts only."""
+    for name in ("meeting_prep", "home_prepare"):
+        f = F.FEATURES[name]
+        assert f.get("explicit") is True and f["needs"] == ["shell2"] and f["routes"] == [] and "scope" not in f
+        assert F.install_defaults({})[name] is False and F.install_defaults({F.ENV: "all"})[name] is False
+        assert F.install_defaults({F.ENV: f"all,{name}"})[name] is True
+    assert F.account_answers("---\nfeatures_accounts: {meeting_prep: 2, home_prepare: 2}\n---\n") == {
+        "meeting_prep": frozenset({"2"}), "home_prepare": frozenset({"2"})}
+
+
 def test_a_later_feature_is_registered_off():
     for name in ("home_stream", "people", "event_agents", "rooms", "transcript_signals"):
         assert F.install_defaults({})[name] is False

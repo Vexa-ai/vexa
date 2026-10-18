@@ -24,6 +24,7 @@
  *  name in the listing opens it as a tab. Plain names, no icons — this panel is for reading, not
  *  file management.
  */
+import { copyReference } from "../surfaces/reference";
 import { Identity } from "../ui-kit/Identity";
 import { editableNote } from "./noteMarkers";
 import { AttachMeetingDialog } from "./AttachMeetingDialog";
@@ -383,6 +384,7 @@ export function PagesPanel(p: {
               <Menu label="Page actions" align="end" triggerData={{ "data-doc-more": "" }}
                 trigger={<MoreHorizontal size={15} strokeWidth={1.75} aria-hidden />}
                 items={[
+                  ...(p.docPath && !p.docPath.startsWith(".") && p.docKind !== "meeting" ? [{ key: "copy-ref", label: "Copy reference", data: { "data-doc-act": "copy-ref" }, onSelect: () => { void copyReference({ kind: "page", id: `${p.docSlug || "personal"}/${p.docPath}` }); } }] : []),
                   { key: "copy", label: copied ? "Copied" : "Copy contents", data: { "data-doc-act": "copy" }, onSelect: () => { void copyText(p.body ?? ""); setCopied(true); } },
                   { key: "edit", label: "Edit", data: { "data-doc-act": "edit" }, onSelect: () => {
                     // A MEETING NOTE'S MARKERS ARE NEVER SHOWN (#1783): the editor gets the words, the

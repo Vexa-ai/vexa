@@ -6,6 +6,8 @@
  *  calm accent pill, never red: being added to a chat is news, not an alarm.
  *
  *  The live half (toasts, the socket) is `notifications.ts`; this only draws the shared store. */
+import { RefChip } from "../ui-kit/RefChip";
+import { splitRefs } from "../ui-kit/universalRefs";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { Bell } from "lucide-react";
@@ -26,7 +28,7 @@ export function NoticeRow({ n, onOpen, onActed }: { n: Notice; onOpen: (n: Notic
       <button type="button" className="vx-notice-row" data-notice={n.kind} data-unread={n.read ? undefined : ""}
         onClick={() => onOpen(n)}>
         <span aria-hidden className="vx-notice-dot" />
-        <span className="vx-notice-text">{readableSentence(n.text)}</span>
+        <span className="vx-notice-text">{splitRefs(readableSentence(n.text)).map((x, i) => x.kind === "text" ? x.text : <RefChip key={i} text={x.text} />)}</span>
         <span className="vx-notice-when">{relTime(n.created * 1000)}</span>
       </button>
       <NoticeActs n={n} onDone={onActed} />

@@ -12,6 +12,7 @@
  *    meetings** with search, a workspace and a person filter, and week/month groups, 50 at a time.
  *
  *  Every row opens in the right panel (7d). The rows are the meetings store — nothing else is read. */
+import { copyRefItem } from "../readme/ObjectActions";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Bot, MoreHorizontal, Phone } from "lucide-react";
 import { AvatarStack, Badge, Button, EntityChip, Input, ListRow, Menu, RowCell, SectionLabel, Select, StatusDot, Switch, formatDate } from "../../ui-kit";
@@ -57,7 +58,8 @@ function WsChip({ slug, name }: { slug: string; name: string }) {
 }
 /** ⋯ on a meeting row: the object's own acts (Open; more land with share and references) */
 const MoreCell = ({ m }: { m: MeetingMock }) => <RowCell w={28}><Menu label={`More for ${callLabel(m)}`} align="end" variant="ghost"
-  trigger={<MoreHorizontal size={14} strokeWidth={1.75} aria-hidden />} items={[{ key: "open", label: "Open", onSelect: () => openMeeting(m) }]} /></RowCell>;
+  trigger={<MoreHorizontal size={14} strokeWidth={1.75} aria-hidden />} items={[{ key: "open", label: "Open", onSelect: () => openMeeting(m) },
+    ...(/^\d+$/.test(String(m.id)) ? [copyRefItem({ kind: "meeting", id: String(m.id), label: callLabel(m) })] : [])]} /></RowCell>;
 
 /** The send block: a link sends the bot; anything else goes to an agent chat. */
 function SendVexa({ inputRef }: { inputRef?: RefObject<HTMLDivElement | null> }) {

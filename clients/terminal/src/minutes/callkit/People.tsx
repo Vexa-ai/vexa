@@ -1,5 +1,6 @@
 "use client";
 /** Who is in a call: an avatar, a video tile, the roster line, and Vexa's own presence. */
+import { PersonChip } from "../shell2/PersonChip";
 import { Identity } from "../../ui-kit/Identity";
 import type { CSSProperties, ReactNode } from "react";
 import { MicOff } from "lucide-react";
@@ -27,7 +28,7 @@ export function CallAvatar({ p, size = 28, ring }: { p: CallPerson; size?: numbe
   return (
     <span className="vx-ck-avatar" data-speaking={ring && p.speaking ? "" : undefined}
       style={ckVars(p.id, size)}>
-      {p.image ? <img src={p.image} alt="" /> : <Identity kind="person" id={p.id} name={p.name} size={size} />}
+      <PersonChip person={{ name: p.name, subject: p.id }}>{p.image ? <img src={p.image} alt="" /> : <Identity kind="person" id={p.id} name={p.name} size={size} />}</PersonChip>
     </span>
   );
 }

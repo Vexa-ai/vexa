@@ -21,7 +21,10 @@ import { isPersonPath } from "./shell2/personOpen";
 import { BottomBar } from "./shell2/BottomBar";
 import { StripNav } from "./shell2/StripNav";
 import { useBackCloses } from "./shell2/useBackCloses";
-import { CHAT_ABOUT_EVENT, consumeKeepPanel, rememberAbout, setKnownChats, type Artifact as AboutArtifact } from "./shell2/about";
+import { CHAT_ABOUT_EVENT, chatAboutPrompt, consumeKeepPanel, rememberAbout, setKnownChats, type Artifact as AboutArtifact } from "./shell2/about";
+import { CARD_DISCUSS_EVENT } from "./cards/api";
+import { OPEN_PERSON_EVENT } from "../ui-kit/RefChip";
+import { openPerson } from "./shell2/personOpen";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ARTIFACT_EVENT, CHOOSE_TARGET_EVENT, CHAT_ARTIFACTS_EVENT, ASK_CHAT_EVENT, CALL_PLACED_EVENT, CALL_START_EVENT, CHAT_TOUCHED_EVENT, OPEN_SESSION_EVENT, FOCUS_WORKSPACE_EVENT, WORKSPACE_COMMIT_EVENT, OPEN_ENTITY_EVENT, PAGE_REMOVED_EVENT, OPEN_MEETING_EVENT, OPEN_PAGE_EVENT, OPEN_WORKSPACE_FILES_EVENT, useService } from "../platform";
 import { LEVEL_SET_EVENT, NEW_CHAT_AT_LEVEL_EVENT } from "../platform";
@@ -514,12 +517,29 @@ export function MinutesShell() {
       // the new chat is the focused input for that artifact's workspace — not the whole home
       noteHomeTarget(ws || HOME_PERSONAL); setHomeFocus(true);
       window.setTimeout(() => {
-        window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { mode: "draft", prompt: `About ${a.kind === "meeting" ? "the meeting" : "the page"} “${a.label}”${a.kind === "page" ? ` (${a.slug || "personal"}/${a.path})` : ""}: ` } }));
+        // THE FULL REFERENCE, NEVER THE TITLE (founder 2026-10-18: "About the meeting "Call with Vexa""
+        // was ambiguous — he has many). The composer draws it as a badge; the agent gets the id.
+        const prompt = chatAboutPrompt(a);
+        if (!prompt) return;
+        window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: { mode: "draft", prompt } }));
         window.dispatchEvent(new CustomEvent("vexa:terminal:focus-chat"));
       }, 80);
     };
     window.addEventListener(CHAT_ABOUT_EVENT, on);
-    return () => window.removeEventListener(CHAT_ABOUT_EVENT, on);
+    // "Discuss" on a card is "chat about this" for the card: a new chat with its reference
+    const onCard = (e: Event) => {
+      const id = String((e as CustomEvent<{ card?: string }>).detail?.card ?? "");
+      if (id) on(new CustomEvent(CHAT_ABOUT_EVENT, { detail: { key: `card:${id}`, path: "", label: "", kind: "card", ref: `[[card:${id}]]` } }));
+    };
+    window.addEventListener(CARD_DISCUSS_EVENT, onCard);
+    // a person badge opens their profile (UI 7mm): by address or account, never by a guessed name
+    const onPerson = (e: Event) => {
+      const d = (e as CustomEvent<{ id?: string; name?: string }>).detail ?? {};
+      const id = String(d.id ?? "");
+      if (id) openPerson({ name: d.name || id, ...(id.includes("@") ? { email: id } : { subject: id }) });
+    };
+    window.addEventListener(OPEN_PERSON_EVENT, onPerson);
+    return () => { window.removeEventListener(CHAT_ABOUT_EVENT, on); window.removeEventListener(CARD_DISCUSS_EVENT, onCard); window.removeEventListener(OPEN_PERSON_EVENT, onPerson); };
   }, []);
   // THE SIDEBAR BY WORKSPACE (home2): Pinned · one group per workspace · Hidden, and no folders. A
   // chat lives in the group of the workspace it writes to; one with no workspace lives in Personal.

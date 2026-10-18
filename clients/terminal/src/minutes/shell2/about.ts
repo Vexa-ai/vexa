@@ -11,7 +11,16 @@
 import { useSyncExternalStore } from "react";
 
 export const CHAT_ABOUT_EVENT = "vexa:terminal:chat-about";
-export type Artifact = { key: string; slug?: string; path: string; label: string; kind: "page" | "meeting" };
+/** `ref` is the artifact's FULL reference (`[[meeting:<id>]]`, `[[page:<ws>/<path>]]`, `[[card:<id>]]`…):
+ *  what "Chat about this" puts in the composer — never its title (founder 2026-10-18: many meetings
+ *  are called "Call with Vexa"). */
+export type Artifact = { key: string; slug?: string; path: string; label: string; kind: "page" | "meeting" | "card" | "person" | "room" | "workspace"; ref?: string };
+
+/** The full reference of a page or a meeting, as the composer receives it. */
+export function artifactRef(kind: string, slug: string | undefined, path: string): string {
+  if (kind === "meeting") return `[[meeting:${path.replace(/^meeting:/, "")}]]`;
+  return `[[page:${slug || "personal"}/${path.replace(/^\/+/, "")}]]`;
+}
 type Entry = { session: string; at: number };
 const KEY = "vexa.about.v1";
 const subs = new Set<() => void>();
@@ -25,11 +34,19 @@ function read(): Record<string, Entry[]> {
 }
 function write(v: Record<string, Entry[]>): void { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch { /* storage off: no Resume count */ } }
 
+/** What "Chat about this" puts in the composer: the artifact's full reference and nothing else — the
+ *  composer draws it as a badge (name · date and time · owner), the agent receives the id. "" when the
+ *  artifact has no reference (nothing is inserted rather than a bare title). */
+export function chatAboutPrompt(a: Pick<Artifact, "kind" | "slug" | "path" | "ref">): string {
+  const ref = a.ref || (a.kind === "meeting" || a.kind === "page" ? artifactRef(a.kind, a.slug, a.path) : "");
+  return ref ? `${ref} ` : "";
+}
+
 /** The artifact key a panel path is known by. */
 export function artifactOf(slug: string | undefined, path: string, kind: string | undefined, label: string): Artifact | null {
   if (!path || path.startsWith(".")) return null;
-  if (kind === "meeting" || path.startsWith("meeting:")) return { key: `meeting:${path.replace(/^meeting:/, "")}`, slug, path, label, kind: "meeting" };
-  return { key: `page:${slug || "personal"}/${path}`, slug, path, label, kind: "page" };
+  if (kind === "meeting" || path.startsWith("meeting:")) return { key: `meeting:${path.replace(/^meeting:/, "")}`, slug, path, label, kind: "meeting", ref: artifactRef("meeting", slug, path) };
+  return { key: `page:${slug || "personal"}/${path}`, slug, path, label, kind: "page", ref: artifactRef("page", slug, path) };
 }
 
 /** The shell says which chats exist (so a deleted one is not offered for Resume). */

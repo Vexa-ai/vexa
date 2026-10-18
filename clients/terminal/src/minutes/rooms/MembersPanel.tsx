@@ -8,6 +8,7 @@
  *    · In the workspace, not here — a closed room only, each with Add (the same card, no message).
  *  Invite opens the same picker as a panel: a name or an address; each pick becomes the tag card.
  *  Names only, never another person's address (security review M1). */
+import { PersonChip } from "../shell2/PersonChip";
 import { useEffect, useState } from "react";
 import { UserPlus, X } from "lucide-react";
 import { Identity } from "../../ui-kit";
@@ -78,8 +79,8 @@ export function MembersPanel({ session, label, open, onClose, startWith = "membe
           <h4 className="vx-mp-sec">In {room} · {data.members.filter((x) => x.kind === "human").length}</h4>
           {data.members.filter((x) => x.kind === "human").map((x) => (
             <div key={x.principal} className="vx-mp-row" data-pending={x.opened ? undefined : ""}>
-              <Identity kind="person" id={x.principal} name={x.name} size={26} />
-              <span><b>{x.name}{x.principal === data.you ? " (you)" : ""}</b>
+              <PersonChip person={{ name: x.name, subject: x.principal }}><Identity kind="person" id={x.principal} name={x.name} size={26} /></PersonChip>
+              <span><b><PersonChip person={{ name: x.name, subject: x.principal }}>{x.name}</PersonChip>{x.principal === data.you ? " (you)" : ""}</b>
                 <small>{[x.role === "owner" ? "owner" : x.derived ? `in ${data.workspace_name}` : "member",
                   x.added_by_name && x.role !== "owner" ? `added by ${x.added_by_name}` : "",
                   x.opened ? `opened ${formatDate(new Date(x.opened * 1000))}` : "not opened yet"].filter(Boolean).join(" · ")}</small></span>

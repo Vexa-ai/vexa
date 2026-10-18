@@ -8,8 +8,8 @@
  *  `ObjectMenu` is the ⋯ button; `useLongPress` opens the same sheet on touch (phone pass);
  *  ⌘⇧C copies the reference of the object under focus or hover. */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { MoreHorizontal } from "lucide-react";
-import { Menu, type MenuItem } from "../../ui-kit";
+import { Link2, MoreHorizontal } from "lucide-react";
+import { Button, Menu, type MenuItem } from "../../ui-kit";
 import { toast } from "../../ui-kit/primitives/Toast";
 import { refChip } from "../../ui-kit/universalRefs";
 import { copyReference, MESSAGE_ACTIONS_EVENT, nativeShare, type RefTarget } from "../../surfaces/reference";
@@ -41,6 +41,28 @@ export function objectActions(target: RefTarget, opts: { onShare: () => void; wo
     items.push({ key: "pin", label: "Pin for everyone", onSelect: () => { void pin(target, { workspace: opts.workspace!, room: opts.room }); } });
   }
   return items;
+}
+
+/** "Copy reference" as a header action (UI 7mm, founder 2026-10-18: "we need to be able to reference
+ *  any object in the system"): the full reference on the clipboard, a toast, and a paste anywhere is
+ *  the badge again — answered for whoever reads it. */
+export function CopyRefButton({ target }: { target: RefTarget }) {
+  return <Button variant="ghost" icon={<Link2 size={14} />} data-copy-ref={refChip(target.kind, target.id, undefined, target.anchor)}
+    onClick={() => { void copyReference(target); }}>Copy reference</Button>;
+}
+
+/** The ⋯ item every object row carries. */
+export function copyRefItem(target: RefTarget): MenuItem {
+  return { key: "copy-ref", label: "Copy reference", onSelect: () => { void copyReference(target); } };
+}
+
+/** DRAG A ROW OR A BADGE INTO THE COMPOSER: it carries the reference (the composer lifts it into a badge). */
+export function refDrag(target: RefTarget): { draggable: true; onDragStart: (e: { dataTransfer: DataTransfer | null }) => void } {
+  return { draggable: true, onDragStart: (e) => {
+    const chip = refChip(target.kind, target.id, undefined, target.anchor);
+    e.dataTransfer?.setData("text/plain", chip);
+    e.dataTransfer?.setData("application/x-vexa-ref", chip);
+  } };
 }
 
 /** A list's ⋯: Copy link only (the recipient opens their own version of the list). */

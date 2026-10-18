@@ -34,6 +34,7 @@ Pure over injected seams (one per kind), so the access states are provable offli
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -69,13 +70,20 @@ class Seams:
     #: ``peer(session_id) -> name|None``: for a room of two, the OTHER person's name as the viewer
     #: sees it — that is the room's label (UI 7ii, humans by name); None for any other session.
     peer: Optional[Callable] = None
+    #: ``commit(workspace, sha) -> (record|None, access)``; a record carries ``subject``, ``sha``
+    #: and ``at`` (the commit's own message, never a file list).
+    commit: Optional[Callable] = None
 
 
 class RefError(ValueError):
     """Not a reference at all — a 400, with words a person can act on."""
 
 
-def _answer(r: links.UniversalRef, access: str, *, label=None, open_=None, request=False, **extra) -> dict:
+def _answer(r: links.UniversalRef, access: str, *, label=None, open_=None, request=False, hint=None,
+            **extra) -> dict:
+    """``hint`` is the DISAMBIGUATOR a badge draws beside the name (founder 2026-10-18: "Call with
+    Vexa" names many meetings): a meeting's time and owner, a page's workspace, a person's role.
+    Like the label it is shown only to a reader who may open the object."""
     anchor = getattr(r, "anchor", None)
     opened = dict(open_ or {}) if access in (READABLE, GRANT) else None
     if opened is not None and anchor:
@@ -87,8 +95,22 @@ def _answer(r: links.UniversalRef, access: str, *, label=None, open_=None, reque
            "request_access": bool(request) and access == NOT_YOURS}
     if anchor:
         out["anchor"] = anchor
+    if access in (READABLE, GRANT):
+        h = {k: str(v) for k, v in (hint or {}).items() if v not in (None, "")}
+        if h:
+            out["hint"] = h
     out.update(extra)
     return out
+
+
+def meeting_hint(row: dict) -> dict:
+    """A meeting's disambiguator: WHEN it was (start, else scheduled, else created — ISO; the
+    client formats it in the reader's zone) and WHO it belongs to, when the row says."""
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    at = row.get("start_time") or data.get("scheduled_at") or data.get("start") or row.get("created_at")
+    by = (row.get("owner_name") or data.get("owner_name") or data.get("organizer_name")
+          or data.get("requested_by_name") or "")
+    return {"at": at, "by": by}
 
 
 def _query_label(spec: str) -> str:
@@ -124,7 +146,8 @@ def resolve_ref(r: links.UniversalRef, seams: Seams) -> dict:
         if access == READABLE and a.get("missing"):
             access = GONE
         return _answer(r, access, label=a.get("title"),
-                       open_={"path": a.get("path"), "slug": a.get("slug")}, request=True)
+                       open_={"path": a.get("path"), "slug": a.get("slug")}, request=True,
+                       hint={"workspace": a.get("workspace")})
     if r.kind == "message":
         cid, _, mid = r.id.partition("/")
         if not mid or seams.message is None:
@@ -142,7 +165,9 @@ def resolve_ref(r: links.UniversalRef, seams: Seams) -> dict:
             return _answer(r, UNAVAILABLE)
         rec, access = seam(r.id)
         label = (rec or {}).get("title") or (rec or {}).get("name")
-        return _answer(r, access, label=label, open_={r.kind: r.id})
+        return _answer(r, access, label=label, open_={r.kind: r.id},
+                       hint={"role": (rec or {}).get("role"), "workspace": (rec or {}).get("workspace"),
+                             "state": (rec or {}).get("state")})
     if r.kind == "query":
         # a query is a description of a list: each viewer opens THEIR OWN version of it (7ff)
         return _answer(r, READABLE, label=_query_label(r.id), open_={"query": r.id})
@@ -154,7 +179,9 @@ def resolve_ref(r: links.UniversalRef, seams: Seams) -> dict:
         rec, access = seams.workspace(r.id)
         return _answer(r, access, label=(rec or {}).get("name") or (rec or {}).get("slug"),
                        open_={"workspace": (rec or {}).get("slug")}, request=bool((rec or {}).get("owner")))
-    if r.kind in ("page", "entity"):
+    if r.kind in ("page", "entity", "policy"):
+        # A POLICY is a page in a workspace (`policy:<workspace>/<path>`): its own kind so the badge
+        # says what it is, answered by the page's own access decision.
         wid, _, target = r.id.partition("/")
         if not target:
             return _answer(r, GONE)
@@ -163,7 +190,23 @@ def resolve_ref(r: links.UniversalRef, seams: Seams) -> dict:
         if access == READABLE and a.get("missing"):
             access = GONE
         return _answer(r, access, label=a.get("title"),
-                       open_={"path": a.get("path"), "slug": a.get("slug")}, request=True)
+                       open_={"path": a.get("path"), "slug": a.get("slug")}, request=True,
+                       hint={"workspace": a.get("workspace")})
+    if r.kind == "commit":
+        # `commit:<workspace>/<sha>` — named by its own message, told apart by its short hash; it
+        # opens the commit's review. Answered by the workspace's read decision (the file read's).
+        wid, _, sha = r.id.partition("/")
+        if not wid or not re.fullmatch(r"[0-9a-fA-F]{4,40}", sha or ""):
+            return _answer(r, GONE)
+        if seams.commit is None:
+            return _answer(r, UNAVAILABLE)
+        rec, access = seams.commit(wid, sha)
+        if access == READABLE and not rec:
+            access = GONE
+        full = str((rec or {}).get("sha") or sha)
+        return _answer(r, access, label=(rec or {}).get("subject") or "Commit",
+                       open_={"commit": full, "slug": wid},
+                       hint={"sha": full[:7], "at": (rec or {}).get("at"), "workspace": (rec or {}).get("workspace")})
     if r.kind == "chat":
         row, readable = seams.chat(r.id)
         if row is None:
@@ -181,8 +224,11 @@ def resolve_ref(r: links.UniversalRef, seams: Seams) -> dict:
         row = seams.meeting(mid)
         if not row:
             return _answer(r, UNAVAILABLE)
-        return _answer(r, READABLE, label=row.get("title") or row.get("native_meeting_id") or f"Meeting {mid}",
-                       open_={"meeting": mid})
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        # NEVER AN ID AS A NAME (founder 2026-10-18: "not string uuid"): an untitled meeting is called
+        # so, and its time and owner (the hint) tell it apart from every other "Call with Vexa".
+        return _answer(r, READABLE, label=row.get("title") or data.get("title") or "Untitled meeting",
+                       open_={"meeting": mid}, hint=meeting_hint(row))
     if r.kind in ("flow", "sensor"):
         seam = seams.flow if r.kind == "flow" else seams.sensor
         if seam is None:

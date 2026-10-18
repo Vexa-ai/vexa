@@ -276,7 +276,7 @@ export function WorkspacePage({ slug: given }: { slug?: string }) {
               ...(shared ? [{ key: "schedule", label: "Schedule a call", onSelect: () => { window.dispatchEvent(new CustomEvent(NEW_CHAT_AT_EVENT, { detail: { workspace: slug, draft: `Schedule a call in ${name}: find a time that suits everyone and draft the invitation.` } })); } }] : []),
             ] : []),
             { key: "readme", label: readmePage ? "Edit README" : "Open README", separatorBefore: folded && !readOnly, onSelect: openReadme },
-            ...(readmePage && slug !== PERSONAL ? [{ key: "copy-link", label: "Copy link", onSelect: () => { void copyReference({ kind: "workspace", id: slug, label: name }); } }] : []),
+            ...(readmePage && slug !== PERSONAL ? [{ key: "copy-link", label: "Copy reference", onSelect: () => { void copyReference({ kind: "workspace", id: slug, label: name }); } }] : []),
             ...(settings.phase === "ready" ? [
               { key: "pin", label: mine.pinned ? "Unpin from the top of home" : "Pin to the top of home", separatorBefore: true, onSelect: () => { void setSettings(slug, { pinned: !mine.pinned }); } },
               { key: "mute", label: mine.muted ? "Unmute" : "Mute", onSelect: () => { void setSettings(slug, { muted: !mine.muted }); } },

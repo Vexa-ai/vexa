@@ -2119,7 +2119,96 @@ def _readable_meeting_focus(
     return _focus_from_row(rid, row)
 
 
+#: How many meetings one message may reference and have folded (each brings its transcript).
+REFERENCED_MEETINGS_MAX = 3
+REFERENCED_MEETING_SEGMENTS = 200
+
+
+def _referenced_meetings_block(
+    text: str, meeting_access: "Callable[[str], dict | None] | None", redis_url: "str | None", *,
+    skip: "set[str] | None" = None,
+) -> str:
+    """THE MEETINGS A MESSAGE NAMES BY REFERENCE, resolved to exactly those meetings for this viewer.
+
+    Founder, 2026-10-18: "Chat about this" put `About the meeting "Call with Vexa":` in the composer,
+    and he has many meetings by that name — "this reference is ambiguous". The composer now inserts
+    `[[meeting:<row id>]]`; this is the other half: the agent is told which meeting that IS (title,
+    time, platform, status, participants) and gets its transcript, so it never goes looking for a
+    meeting by its title. Each one passes the meeting's one access decision first; a meeting this
+    viewer may not read is named as unavailable and nothing of it is folded. ``skip`` is the focus
+    meeting, which the focus fold already carries."""
+    from workspaces.shared import links as links_mod  # noqa: PLC0415
+
+    try:
+        refs = [r for r in links_mod.universal_refs_in(text or "") if r.kind == "meeting"]
+    except Exception:  # noqa: BLE001 — a message that cannot be scanned folds nothing
+        return ""
+    seen: list[str] = []
+    for r in refs:
+        if r.id not in seen and r.id not in (skip or set()):
+            seen.append(r.id)
+    if not seen:
+        return ""
+    parts = ["## Meetings referenced in this message\n",
+             "The person named these meetings by reference. Each reference is EXACTLY the meeting"
+             " described below — never another meeting with the same title. Answer about that one; in"
+             " your reply write it as `[[meeting:<id>|<title>]]`.\n"]
+    for mid in seen[:REFERENCED_MEETINGS_MAX]:
+        row = None
+        if meeting_access is not None and mid.isdigit():
+            try:
+                row = meeting_access(mid)
+            except Exception:  # noqa: BLE001 — an access check that cannot answer refuses
+                row = None
+        if not isinstance(row, dict) or transcript_erased(row):
+            parts.append(f"### [[meeting:{mid}]]\nNot available to this person (not theirs, deleted, or"
+                         " unreachable). Say you cannot open it; do not guess which meeting it was.\n")
+            continue
+        focus = _focus_from_row(mid, row)
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        title = focus.get("title") or "Untitled meeting"
+        when = str(row.get("start_time") or focus.get("scheduled_at") or row.get("created_at") or "").strip()
+        bits = [b for b in (f"started {when}" if when else "", focus.get("platform") or "",
+                            f"status {focus.get('status')}" if focus.get("status") else "") if b]
+        people = data.get("participants") if isinstance(data.get("participants"), list) else []
+        names = [str(p.get("name") if isinstance(p, dict) else p).strip() for p in people][:20]
+        lines = [f"### [[meeting:{mid}|{title}]]", " · ".join(bits)]
+        if any(names):
+            lines.append("Participants: " + ", ".join(n for n in names if n))
+        if focus.get("workspace_id"):
+            lines.append(f"Bound workspace: {focus['workspace_id']}")
+        lines.append(f"Its notes page is the kg/entities/meeting/ page whose frontmatter says `meeting: {mid}`.")
+        folded = _fold_meeting_transcript(redis_url, mid, limit=REFERENCED_MEETING_SEGMENTS)
+        lines.append("Transcript (raw, most recent last):\n" + folded if folded else "No transcript recorded.")
+        parts.append("\n".join(lines) + "\n")
+    if len(seen) > REFERENCED_MEETINGS_MAX:
+        parts.append(f"({len(seen) - REFERENCED_MEETINGS_MAX} more referenced meetings not folded — read them with"
+                     " the meeting tools by id.)\n")
+    return "\n".join(parts) + "\n"
+
+
 def _context_grounding(
+    body: "ChatBody", session: str, redis_url: "str | None", *,
+    schedule_rows: "Callable[[], list[dict]]",
+    workspace_mounts: "Callable[[], list]",
+    meeting_access: "Callable[[str], dict | None] | None" = None,
+) -> "tuple[dict, list[str], str]":
+    """The focus grounding (`_focus_grounding`) plus the meetings the message names by reference
+    (`_referenced_meetings_block`), folded in front — the prompt still ENDS with the person's words,
+    which the sentinel cut relies on."""
+    ctx, tools, prompt = _focus_grounding(body, session, redis_url, schedule_rows=schedule_rows,
+                                          workspace_mounts=workspace_mounts, meeting_access=meeting_access)
+    context = body.context
+    focus = (context.focus if context is not None else body.active) or {}
+    skip: set = set()
+    if isinstance(focus, dict) and focus.get("kind") == "meeting":
+        level = _meeting_focus_level(focus)
+        skip = {str(level.get(k)) for k in ("meeting_id", "native_id", "ref") if level.get(k)}
+    block = _referenced_meetings_block(body.prompt, meeting_access, redis_url, skip=skip)
+    return (ctx, tools, block + prompt) if block else (ctx, tools, prompt)
+
+
+def _focus_grounding(
     body: "ChatBody", session: str, redis_url: "str | None", *,
     schedule_rows: "Callable[[], list[dict]]",
     workspace_mounts: "Callable[[], list]",

@@ -147,7 +147,8 @@ def test_the_agent_is_told_to_name_a_meeting_by_its_link():
     from worker import engine
 
     rule = engine.kg_links_preamble()
-    assert "[<title>](/?meeting=<meeting id>)" in rule
+    assert "[[meeting:<meeting id>|<title>]]" in rule
+    assert "[<title>](/?meeting=<meeting id>)" in rule          # the older link still renders
     assert "Never name a meeting by its notes filename" in rule
     guide = (Path(__file__).resolve().parents[3] / "behavior/workspaces/default/CLAUDE.md").read_text()
     assert "Reference a meeting by its link, not its notes file." in guide

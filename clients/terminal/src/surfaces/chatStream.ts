@@ -214,7 +214,7 @@ export type ChatStreamCallbacks = {
    *  the tool call said ok, the commit did not land them. */
   onWithheld?: (w: { workspace: string; paths: string[]; code?: string; readers: string[]; sources: string[] }) => void;
   /** the turn committed to the workspace (terminal) */
-  onCommit: (sha: string | undefined) => void;
+  onCommit: (sha: string | undefined, workspace?: string) => void;
   /** the turn was rejected by workspace.v1 governance (terminal) */
   onRejected: () => void;
   /** a done event with ok=false — model inference failed (terminal, surfaced) */
@@ -747,7 +747,7 @@ export async function streamChatTurn(
           } else if (ev.type === "commit") {
             // The one event the job shares with a turn verbatim: the panel re-reads the open
             // document on a commit, which is what makes the page the job wrote appear by itself.
-            cb.onCommit(ev.sha);
+            cb.onCommit(ev.sha, typeof ev.workspace === "string" ? ev.workspace : undefined);
           } else if (ev.type === "artifact" && ev.path) {
             cb.onArtifact?.({ workspace: ev.workspace ?? "", path: ev.path, focus: ev.focus === true, pin: ev.pin === true });
           } else if (ev.type === "open" && ev.path) {
@@ -870,7 +870,7 @@ export async function streamChatTurn(
             break;
           case "commit":
             if (endsView(ev)) terminal = true;
-            cb.onCommit(ev.sha);
+            cb.onCommit(ev.sha, typeof ev.workspace === "string" ? ev.workspace : undefined);
             break;
           case "rejected":
             if (endsView(ev)) terminal = true;

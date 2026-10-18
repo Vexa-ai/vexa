@@ -9,6 +9,7 @@
  *
  *  `CardSheetHost` listens for `OPEN_CARD_SHEET_EVENT`; it may be mounted by several surfaces — only
  *  the first mounted host draws. */
+import { copyReference } from "../../surfaces/reference";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronLeft, Link2, Lock, MessageSquare, MoreHorizontal, User } from "lucide-react";
 import type { CoreCard as CardView } from "../../platform/desktop";
@@ -120,7 +121,7 @@ export function CardSheet({ id, onClose }: { id: string; onClose: () => void }) 
         <h2 className="vx-cs-title">{title}</h2>
         <Menu label="More" align="end" trigger={<MoreHorizontal size={14} aria-hidden />} items={[
           { key: "discuss", label: "Discuss", onSelect: () => { discussCard(id); back(); } },
-          { key: "copy-ref", label: "Copy reference", onSelect: () => { void navigator.clipboard?.writeText(`[[card:${id}]]`).catch(() => undefined); } },
+          { key: "copy-ref", label: "Copy reference", onSelect: () => { void copyReference({ kind: "card", id: id }); } },
         ]} />
       </header>
       {failed && !card && <p className="vx-cs-note">This card is not available to you.</p>}
