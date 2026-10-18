@@ -17,6 +17,7 @@ import hashlib
 from typing import Optional
 
 import contracts
+from control_plane import dispatch_sink
 from shared.units import entrypoint, make_dispatch
 
 
@@ -67,15 +68,22 @@ def build_invocation(routine: dict, *, workspace_ref: str = "main") -> dict:
     return invocation
 
 
-def compile_to_job(routine: dict, *, invocations_url: str) -> dict:
+def compile_to_job(routine: dict, *, invocations_url: str, signing_secret: str = "") -> dict:
     """Compile a Routine into a ``schedule.v1`` job: the cron, and the HTTP request that fires the
     Invocation at agent-api ``/invocations``. The job ``metadata`` carries the routine summary so the
-    Routines surface can list it straight from the scheduler (no separate store)."""
+    Routines surface can list it straight from the scheduler (no separate store).
+
+    ``signing_secret`` (the internal secret) signs the Invocation into the request's headers —
+    `/invocations` runs a dispatch only from the internal tier or with that signature
+    (`dispatch_sink.py`). Without it the job carries none and every fire of it is refused."""
     invocation = build_invocation(routine)
     plan = routine["plan"]
+    request = {"method": "POST", "url": invocations_url, "body": invocation}
+    if signing_secret:
+        request["headers"] = {dispatch_sink.HEADER: dispatch_sink.sign(signing_secret, invocation)}
     return {
         "cron": routine["trigger"]["cron"],
-        "request": {"method": "POST", "url": invocations_url, "body": invocation},
+        "request": request,
         "idempotency_key": routine["id"],
         "metadata": {
             "routine_id": routine["id"],

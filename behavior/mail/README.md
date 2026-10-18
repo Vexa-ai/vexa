@@ -21,25 +21,24 @@ mails correctly before anyone has edited anything.
 Plain text. One link at most, and the step appends it — a template never writes a URL, because a
 link that a template could write is a link anyone who can edit a file can point anywhere.
 
-## The template this cut ships
+## The four templates
 
 | file | who reads it | when |
 |---|---|---|
+| `prepare.md` | the ORGANISER, and people who are already users | before the meeting |
 | `attendee-head.md` | **a stranger** — an attendee who is not a user | after the meeting, above the shared report |
+| `minutes-head.md` | somebody who already knows what Vexa is | after the meeting |
+| `workspace-invite.md` | **a stranger** — somebody a person here named by address | when they are invited to a group |
 
-**One file, and that is the whole directory.** Two others are named throughout this README and
-neither is here, because neither is a template in this cut — said plainly rather than left for the
-next reader to discover:
-
-| named | where its words actually are |
-|---|---|
-| `prepare.md` | nowhere in this repository. Its renderer is `prepare_meeting`, which lives in `flows_defs/production_agent.py` — the agent half, **not registered at all** when the agent domain is absent, and not part of the OSS cut. There is no baked default either: `mailtext.render("prepare", …)` would raise `KeyError`. |
-| `minutes-head.md` | not a template. `email_minutes` composes the minutes mail in code — [`flows_defs/production.py`](../../core/flows/src/flows_defs/production.py) — from the provenance line, the committed report verbatim and the ask. Editing a file here changes nothing about it. |
-
-So the substitution tables below describe `attendee-head.md` plus two renderers that are not in this
-cut; they are kept because the agent half reads them when it is present. **Adding `prepare.md` or
-`minutes-head.md` to this directory has no effect on a deployment without the agent domain** — the
-step that would read the first is not registered, and the second has no reader at all.
+**`workspace-invite.md` is the only mail here that nothing about a meeting produced**
+(Vexa-ai/vexa#1632). A person pressed **Add a member…**, was asked for an address and a role, read
+one sentence back and said yes — so it is sent on a human's own act rather than on a fan-out, and
+no switch on this page can swallow it. It goes only to an address this deployment does not already
+know: somebody with an account here is handed the link in the chat instead, because mailing a person
+who is signed in on the other side of the same screen is a worse product. Like `attendee-head.md`
+it may be the first thing a stranger ever reads from us, so it carries the introduction; unlike it,
+it is rendered by `mailtext.render`, so `{{visibility}}` travels as a token rather than as literal
+text.
 
 **`prepare.md` never goes to a stranger and never claims a workspace was started.** Founder,
 2026-09-02, on a pre-meeting fan-out: *"I'm afraid this will not work for a 50 attendee meeting."*
@@ -59,6 +58,24 @@ that cannot be wrong about any of them, and the button is where "what does this 
 gets answered by something that actually knows. It is also why the head has to earn the click on its
 own — it is the whole mail besides the report.
 
+## The one sentence that is not in a file
+
+`email_minutes` composes the organiser's body inline and renders no template, so the sentence that
+tells the creator sharing is on — *"Everyone else inside your organisation who was on the invite
+gets these notes too. To keep one meeting to yourself, put `#noshare` in the invite."* — lives in
+the step, not here. It is written down rather than left to be discovered: it moves into
+`minutes-head.md` the moment that step renders it.
+
+**`#noshare` is the per-meeting opt-out** (PRD §16.2 item 3). Sharing is creator-controlled and
+default ON — that one value is the loop — and the token in the invite is how a creator excludes a
+single meeting without an administrator. It is read by `mailbox.NOSHARE`, anywhere in the ICS, and
+it is a whole word: `#noshareholders` is a hashtag about shareholders. The deployment-wide switch
+beside it is the `attendee_followup` flow param, which is an admin's, not a creator's.
+
+The sentence is CONDITIONAL on the fan-out actually being on. A mail that announces sharing on a
+deployment that does not share is the same class of untruth as a mail titled "Minutes" with no
+minutes under it.
+
 ## Substitutions
 
 **Each template gets only the tokens its own step fills**, and they are not the same set. A token a
@@ -66,17 +83,19 @@ step does not fill is left STANDING, not blanked — a visible `{{organizer}}` i
 report; a silently empty sentence is not — so putting a token into the wrong file ships braces to a
 customer.
 
-`prepare.md` and `minutes-head.md` (rendered by `flows_steps/mailtext.render`):
+`prepare.md`, `minutes-head.md` and `workspace-invite.md` (rendered by `flows_steps/mailtext.render`):
 
 | token | becomes |
 |---|---|
-| `{{company}}` | the company's name — `_global/README.md`'s first heading, written by the admin at setup |
+| `{{company}}` | the company's name — `_global/README.md`'s first heading, if an admin wrote one; **this organisation** while `_global` names none (it may stay empty) |
 | `{{service}}` | one sentence of what Vexa does — **fixed product text**, see below |
 | `{{title}}` | the meeting's title |
 | `{{when}}` | when it is, or was, in the reader's own clock |
 | `{{organizer}}` | who had Vexa in the room |
 
 `prepare.md` and `minutes-head.md` also get `{{visibility}}` and `{{workspace}}` — see below.
+
+`workspace-invite.md` gets `{{company}}`, `{{service}}` and `{{visibility}}` from the renderer, plus four its own step fills: `{{inviter}}` (who asked), `{{workspace_name}}` (the group they were invited to), `{{role}}` and `{{role_sentence}}` (what that role IS, derived in `workspace_membership.ROLE_SENTENCES` from `behavior/global/POLICIES.md`'s own line). It gets none of the meeting tokens, because no meeting produced it.
 
 `attendee-head.md` (rendered by `email_attendees` in `flows_defs/production.py`):
 

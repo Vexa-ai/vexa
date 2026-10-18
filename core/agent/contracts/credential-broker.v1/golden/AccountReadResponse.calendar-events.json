@@ -1,0 +1,39 @@
+{
+  "operation_id": "6a5b4c3d2e1f00112233445566778899",
+  "source": "google_calendar",
+  "untrusted_content": true,
+  "events": [
+    {
+      "id": "evt1",
+      "summary": "fixture standup",
+      "description": null,
+      "start": {
+        "dateTime": "2026-10-09T09:00:00Z"
+      },
+      "end": {
+        "dateTime": "2026-10-09T09:15:00Z"
+      },
+      "location": null,
+      "htmlLink": "https://calendar.example.test/event?eid=evt1",
+      "status": "confirmed",
+      "attendees": [
+        {
+          "email": "person@example.test",
+          "responseStatus": "accepted"
+        }
+      ],
+      "organizer": {
+        "email": "person@example.test"
+      },
+      "creator": {
+        "email": "person@example.test"
+      },
+      "recurringEventId": null,
+      "originalStartTime": null,
+      "updated": "2026-10-01T00:00:00Z",
+      "attendeesOmitted": null
+    }
+  ],
+  "has_more": false,
+  "next_page_token": ""
+}

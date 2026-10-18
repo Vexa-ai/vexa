@@ -5,8 +5,10 @@ never by importing meetings code — the same ``meetings ⊥ agent`` boundary th
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,6 +24,40 @@ from shared.gitenv import GIT_REPO_DISCOVERY_VARS
 # (monkeypatch.setenv), which happens after this runs at import time.
 for _var in GIT_REPO_DISCOVERY_VARS:
     os.environ.pop(_var, None)
+
+
+def _register_workspaces_package() -> None:
+    """Make ``workspaces.shared.<module>`` importable (PRD decision 47, step 2) WITHOUT putting
+    ``core/`` on ``sys.path``. control_plane, worker and several tests now read the portable
+    workspace primitives (workspace_id/workspace_paths/entities/links) as
+    ``workspaces.shared.<module>`` — inside the Docker images this is free (``PYTHONPATH=/app``
+    holds only this domain's own tree plus ``workspaces/``, nothing else). Here, run against the
+    monorepo checkout, ``core/meetings``, ``core/flows`` etc. sit RIGHT BESIDE ``core/workspaces``,
+    so the obvious fix — add ``core/`` to ``pythonpath`` — makes every sibling domain an
+    importable (if empty) namespace package too, and ``test_no_meetings_internals_imported``
+    exists precisely to catch that: ``import meetings`` must raise, not silently succeed on an
+    empty namespace. So: inject ONLY ``workspaces`` into ``sys.modules`` by file location, the
+    same by-path mechanism ``contracts/loader.py`` already uses for schemas — no ``sys.path``
+    entry ever gains a sibling domain."""
+    if "workspaces" in sys.modules:
+        return
+    marker = Path("meetings/contracts/transcript.v1/golden")
+    for parent in Path(__file__).resolve().parents:
+        if (parent / marker).is_dir():
+            workspaces_dir = parent / "workspaces"
+            break
+    else:
+        raise FileNotFoundError("monorepo root with transcript.v1 goldens not found")
+    spec = importlib.util.spec_from_file_location(
+        "workspaces", workspaces_dir / "__init__.py",
+        submodule_search_locations=[str(workspaces_dir)],
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["workspaces"] = module
+    spec.loader.exec_module(module)
+
+
+_register_workspaces_package()
 
 
 def _repo_root() -> Path:
@@ -44,11 +80,27 @@ def transcription_golden() -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _default_subject(monkeypatch):
-    """The HTTP tests exercise agent-api with no gateway in front, so set the single-user fallback
-    (``VEXA_AGENT_DEFAULT_SUBJECT``) — agent-api derives the subject from it when ``X-User-Id`` is absent.
-    Tests that assert per-user *isolation* pass an explicit ``X-User-Id`` header, which always wins (P20)."""
-    monkeypatch.setenv("VEXA_AGENT_DEFAULT_SUBJECT", "u_jane")
+def _mandatory_global_workspace(monkeypatch, tmp_path_factory):
+    """Dispatch tests obey production's mandatory _global invariant by default."""
+    global_dir = tmp_path_factory.mktemp("global-system")
+    monkeypatch.setenv("VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH", str(global_dir))
+
+
+#: The unit input key every worker test serves with (shared/unit_input.py): a worker runs only the
+#: input entries signed with it, so tests enqueue through :func:`signed_turn`.
+TEST_UNIT_IN_KEY = "11" * 32
+
+
+def signed_turn(body: dict) -> dict:
+    """The stream fields agent-api writes for one message to a unit whose key is TEST_UNIT_IN_KEY."""
+    from shared import unit_input
+
+    return unit_input.signed_entry(TEST_UNIT_IN_KEY, body)
+
+
+@pytest.fixture(autouse=True)
+def _unit_input_key(monkeypatch):
+    monkeypatch.setenv("VEXA_UNIT_IN_KEY", TEST_UNIT_IN_KEY)
 
 
 @pytest.fixture(autouse=True)

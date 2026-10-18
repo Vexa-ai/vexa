@@ -1,12 +1,13 @@
 """Contract loading + validation — the published seams the agent touches.
 
 The agent CONSUMES ``meetings/contracts/transcript.v1`` and PRODUCES documents conforming to
-``agent/contracts/workspace.v1``. Both are crossed as language-neutral JSON Schema **read by path**
-(P4): we never import meetings (or any other domain's) Python — that ``meetings ⊥ agent`` boundary
-is enforced by the language/format seam, not by trust.
+``workspaces/contracts/workspace.v1`` (moved out of ``agent/contracts`` in PRD decision 47, step 1 —
+the workspaces domain owns it now, agent only reads it). Both are crossed as language-neutral JSON
+Schema **read by path** (P4): we never import meetings (or workspaces', or any other domain's)
+Python — that boundary is enforced by the language/format seam, not by trust.
 
-Schemas are located by walking up to the monorepo root (the dir that holds ``meetings/`` and
-``agent/``), so the package stays liftable regardless of where it is invoked from.
+Schemas are located by walking up to the monorepo root (the dir that holds ``meetings/``,
+``workspaces/`` and ``agent/``), so the package stays liftable regardless of where it is invoked from.
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ from referencing import Registry, Resource
 
 # The published seams, relative to the monorepo root.
 _TRANSCRIPT_SCHEMA = Path("meetings/contracts/transcript.v1/transcript.schema.json")
-_WORKSPACE_SCHEMA = Path("agent/contracts/workspace.v1/workspace.schema.json")
+_WORKSPACE_SCHEMA = Path("workspaces/contracts/workspace.v1/workspace.schema.json")
 _INVOKE_SCHEMA = Path("agent/contracts/invoke.v1/invoke.schema.json")
 _UNIT_SCHEMA = Path("agent/contracts/unit.v1/unit.schema.json")
 _ROUTINE_SCHEMA = Path("agent/contracts/routine.v1/routine.schema.json")
@@ -35,7 +36,7 @@ def _repo_root() -> Path:
             return parent
     raise FileNotFoundError(
         "could not locate the monorepo root (a dir containing both "
-        "meetings/contracts/transcript.v1 and agent/contracts/workspace.v1)"
+        "meetings/contracts/transcript.v1 and workspaces/contracts/workspace.v1)"
     )
 
 

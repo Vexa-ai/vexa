@@ -13,17 +13,23 @@ from llm.errors import (
     preflight_provider_guard,
     provider_host,
 )
+# THE MODEL PROVIDER'S TYPED FAULT (P18) — one shape for every harness and provider adapter.
+from llm.faults import ProviderError, ProviderFault
+from llm.faults import classify as classify_provider_failure
 from llm.ports import (
-    CompletionPort,
-    CompletionResult,
     HarnessExec,
     HarnessPort,
+    ToolsAccessRefused,
+    close_event_stream,
+    grant_tools_access,
+    hand_fd_to_tools,
+    hand_to_tools,
+    show_tools,
+    harden_worker_process,
     run_harness_turn,
 )
 from llm.registry import (
-    COMPLETION_PROVIDERS,
     HARNESS_RUNNERS,
-    completion_from_env,
     harness_from_env,
 )
 
@@ -36,13 +42,19 @@ __all__ = [
     "model_error_event",
     "preflight_provider_guard",
     "provider_host",
-    "CompletionPort",
-    "CompletionResult",
+    "ProviderError",
+    "ProviderFault",
+    "classify_provider_failure",
     "HarnessExec",
     "HarnessPort",
+    "ToolsAccessRefused",
+    "close_event_stream",
+    "grant_tools_access",
+    "hand_fd_to_tools",
+    "hand_to_tools",
+    "show_tools",
+    "harden_worker_process",
     "run_harness_turn",
-    "COMPLETION_PROVIDERS",
     "HARNESS_RUNNERS",
-    "completion_from_env",
     "harness_from_env",
 ]

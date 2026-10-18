@@ -1,0 +1,19 @@
+{
+  "operation_id": "5f4e3d2c1b0a99887766554433221100",
+  "source": "google_email",
+  "untrusted_content": true,
+  "messages": [
+    {
+      "id": "abc",
+      "threadId": "abc",
+      "internalDate": "1760000000000",
+      "snippet": "fixture",
+      "headers": {
+        "from": "person@example.test",
+        "subject": "fixture"
+      }
+    }
+  ],
+  "has_more": false,
+  "next_page_token": ""
+}

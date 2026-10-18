@@ -1,0 +1,107 @@
+{
+  "contract": "config.v1",
+  "service": "credential-broker",
+  "keys": [
+    {
+      "key": "VEXA_CONNECTIONS_AGENT_KEY_FILE",
+      "class": "required-explicit",
+      "description": "file holding the agent role's assertion key (at least 32 bytes). agent-api holds the same file; no other process does. Without it no agent request can be verified",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_HUMAN_KEY_FILE",
+      "class": "required-explicit",
+      "description": "file holding the human role's assertion key (at least 32 bytes). The terminal holds the same file; never agent-api, never a worker. Without it nobody can consent or store a credential",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE",
+      "class": "required-explicit",
+      "description": "file holding the gateway's Ed25519 PUBLIC identity key (gateway-identity.v1, SubjectPublicKeyInfo PEM) — the same file agent-api and meeting-api verify with. Every agent-role and git-role call must carry the gateway's X-Vexa-Identity naming the assertion's actor, forwarded unchanged by agent-api; without a valid one the call is refused, so the agent key alone cannot act for anybody. The broker verifies and cannot sign; a private key here refuses the boot",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_GIT_KEY_FILE",
+      "class": "capability",
+      "capability": "git_store",
+      "description": "file holding the git role's assertion key. agent-api's Git credential store holds the same file when it is switched to the broker",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_STATE_DIR",
+      "class": "defaulted",
+      "default": "/state",
+      "description": "the broker's private state directory: connection metadata and audit (metadata.sqlite), the encrypted local store (secrets.sqlite), and the generated key that derives PKCE verifiers. A persistent volume no other service mounts",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_STORE",
+      "class": "defaulted",
+      "default": "local",
+      "description": "credential store backend: `local` (AES-256-GCM in the state directory, keyed by VEXA_CONNECTIONS_STORE_KEY_FILE) or `openbao` (an OpenBao or Vault KV v2 mount the operator runs). Any other value refuses the boot (ADR-0040)",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_STORE_KEY_FILE",
+      "class": "defaulted",
+      "default": "(unset — required when VEXA_CONNECTIONS_STORE=local, and the boot refuses without it)",
+      "description": "file holding the local store's AES-256 key as 64 hex characters (`openssl rand -hex 32`). Mounted from a secret, never from the state volume, so a copied volume or backup is ciphertext only",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_OPENBAO_ADDR",
+      "class": "defaulted",
+      "default": "(unset — required when VEXA_CONNECTIONS_STORE=openbao)",
+      "description": "base URL of the operator's OpenBao or Vault server: https://, or plain http:// only to a loopback address on this host (the boot refuses anything else)",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_OPENBAO_TOKEN_FILE",
+      "class": "defaulted",
+      "default": "(unset — required when VEXA_CONNECTIONS_STORE=openbao)",
+      "description": "file holding a token whose policy grants create, update and read on <mount>/data/*. Read on every request, so a renewed token file takes effect without a restart",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_OPENBAO_MOUNT",
+      "class": "defaulted",
+      "default": "connections",
+      "description": "the KV v2 mount the broker writes under",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_GOOGLE_CLIENT_ID",
+      "class": "capability",
+      "capability": "google_oauth",
+      "description": "the Google OAuth client id Gmail and Calendar consent uses. Usually the same client the terminal signs in with (GOOGLE_CLIENT_ID)",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_GOOGLE_CLIENT_SECRET",
+      "class": "capability",
+      "capability": "google_oauth",
+      "secret": true,
+      "description": "that client's secret",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "VEXA_CONNECTIONS_PRODUCT_REDIRECT",
+      "class": "capability",
+      "capability": "google_oauth",
+      "description": "the registered callback, exactly `<terminal public origin>/api/auth/callback/google` over https. The terminal routes `vxc_` states arriving there to the broker and leaves sign-in callbacks alone",
+      "targets": ["compose", "helm"]
+    }
+  ],
+  "capabilities": {
+    "google_oauth": {
+      "description": "Gmail and Google Calendar connections: the broker can start Google consent and exchange its code",
+      "mode": "all",
+      "when_unconfigured": "authorizing a Gmail or Calendar connection answers 409 'Provider application is not configured on this deployment'; custom-secret connections are unaffected"
+    },
+    "git_store": {
+      "description": "agent-api's Git credential store may keep saved tokens and deploy keys in this broker",
+      "mode": "all",
+      "when_unconfigured": "POST /api/internal/git-secret refuses every caller (403); agent-api keeps Git credentials in its own encrypted store"
+    }
+  }
+}

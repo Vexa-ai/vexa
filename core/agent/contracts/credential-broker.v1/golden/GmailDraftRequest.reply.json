@@ -1,0 +1,6 @@
+{
+  "request_id": "fixture-draft-0001",
+  "recipient": "person@example.test",
+  "subject": "Re: fixture",
+  "body": "Thanks \u2014 fixture body."
+}

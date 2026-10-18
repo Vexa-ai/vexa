@@ -1,0 +1,13 @@
+# GENERATED FROM `shared/entities.py` (`tool_connection_text`) — the `connections` shape, exactly
+# as the `entity_upsert` tool description must state it.
+#
+# A file for the same reason `entity_sections.v1.txt` is one: the writer is in `core/workspaces/`
+# and the description an agent actually reads is in `deploy/dogfood/rig/`, which imports nothing
+# from it. On 2026-09-06 the description said the shape only by example and a live agent guessed
+# `{"from": …, "type": …}` from it — `KeyError: 'name'`, a 500 naming nothing, and a reciprocal
+# chip already on the neighbour's page (Vexa-ai/vexa#1589).
+#
+# `core/agent/tests/test_entity_connections.py` asserts the generator still produces exactly this;
+# the rig's own suite asserts its description carries every line. Neither reads the other's source.
+- `connections` — `["Acme"]` or `[{"name": "Acme", "relation": "works at"}]`: a bare string, or an object whose `name` is the OTHER page, `relation` what the edge means from HERE, `reverse` what it means from THERE (both optional).
+- The keys read are `name`, `relation`, `reverse` and no others: an unknown key is refused by name, never ignored, so a relation you wrote is either recorded or handed back to you.

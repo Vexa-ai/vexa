@@ -47,16 +47,21 @@ _PAST = {"completed", "failed", "stopped"}
 # ── fetch (raw HTTP hop to meeting-api, gateway-style identity headers) ──────────────────────
 def fetch_user_meetings(meeting_api_url: str, user_id: str,
                         member_workspaces: "list[str] | None" = None,
-                        *, timeout_s: float = 3.0) -> "list[dict]":
+                        *, timeout_s: float = 3.0, internal_secret: str = "") -> "list[dict]":
     """The caller's meetings from meeting-api — three bounded queries merged by row id.
 
     Why three: ``GET /meetings`` orders ``created_at DESC``, so one page can miss future
     scheduled rows created long ago; per-status queries make the schedule sections reliable.
-    Raises on transport errors — ``digest_source`` is the layer that degrades."""
+    Raises on transport errors — ``digest_source`` is the layer that degrades.
+
+    agent-api asks AS the subject over the internal tier (``X-Internal-Secret`` + ``X-User-Id``):
+    meeting-api believes an asserted identity only from the gateway's signature or that tier."""
     base = (meeting_api_url or "").rstrip("/")
     if not base:
         return []
     headers = {"X-User-Id": str(user_id)}
+    if internal_secret:
+        headers["X-Internal-Secret"] = internal_secret
     if member_workspaces:
         headers["X-User-Workspaces"] = ",".join(member_workspaces)
 
@@ -79,7 +84,7 @@ def fetch_user_meetings(meeting_api_url: str, user_id: str,
 
 def digest_source(meeting_api_url: str,
                   membership_lister: "Optional[Callable[[str], list]]" = None,
-                  *, ttl_s: float = 30.0) -> "Callable[[str], list[dict]]":
+                  *, ttl_s: float = 30.0, internal_secret: str = "") -> "Callable[[str], list[dict]]":
     """Per-subject TTL-cached, NEVER-raising rows source — the ``schedule_source`` seam
     ``create_app`` wires (injectable in tests). Failure → ``[]`` now, retried after a short
     (5s) cool-off rather than the full TTL."""
@@ -106,7 +111,8 @@ def digest_source(meeting_api_url: str,
         if hit and now - hit[0] < ttl_s and hit[1] is not None:
             return hit[1]
         try:
-            rows = fetch_user_meetings(meeting_api_url, subject, _workspaces(subject))
+            rows = fetch_user_meetings(meeting_api_url, subject, _workspaces(subject),
+                                       internal_secret=internal_secret)
         except Exception as exc:  # noqa: BLE001 — a digest must never fail the chat turn
             logger.warning("schedule fetch failed subject=%s (%s) — no digest this turn", subject, exc)
             cache[subject] = (now - ttl_s + FAIL_COOLOFF_S, [])

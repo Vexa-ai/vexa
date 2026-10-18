@@ -29,6 +29,7 @@ from tests.test_routines import _FakeScheduler
 
 ROUTINE_PROMPT = "Append the current UTC timestamp as a new bullet line to notes/heartbeat-log.md"
 INVOCATIONS_URL = "http://agent-api:8100/invocations"
+SIGNING_SECRET = "agent-test-internal-secret"
 
 
 class _RecordingRuntime:
@@ -57,7 +58,8 @@ def _write_routine(workspaces, subject, name, body):
     return p
 
 
-def test_full_routine_lifecycle_creation_then_execution(tmp_path):
+def test_full_routine_lifecycle_creation_then_execution(tmp_path, monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", SIGNING_SECRET)
     workspaces = tmp_path / "workspaces"
     _write_routine(
         workspaces,
@@ -77,6 +79,7 @@ def test_full_routine_lifecycle_creation_then_execution(tmp_path):
         scheduler=scheduler,
         invocations_url=INVOCATIONS_URL,
         workspaces_dir=workspaces,
+        signing_secret=SIGNING_SECRET,
     )
 
     assert result.scanned == 1
@@ -97,7 +100,8 @@ def test_full_routine_lifecycle_creation_then_execution(tmp_path):
 
     # Reconcile is idempotent — a second pass keeps the job, schedules nothing new.
     second = reconcile_workspace_routines(
-        "u_live", scheduler=scheduler, invocations_url=INVOCATIONS_URL, workspaces_dir=workspaces
+        "u_live", scheduler=scheduler, invocations_url=INVOCATIONS_URL, workspaces_dir=workspaces,
+        signing_secret=SIGNING_SECRET,
     )
     assert second.scheduled == 0 and second.kept == 1 and len(scheduler.jobs) == 1
 
@@ -109,7 +113,8 @@ def test_full_routine_lifecycle_creation_then_execution(tmp_path):
     )
 
     fired_body = job["request"]["body"]
-    resp = client.post("/invocations", json=fired_body)
+    # The scheduler sends back the headers agent-api compiled into the job — the body's signature.
+    resp = client.post("/invocations", json=fired_body, headers=job["request"]["headers"])
 
     assert resp.status_code == 202, resp.text
     workload_id = resp.json()["workload_id"]

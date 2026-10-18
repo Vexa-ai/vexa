@@ -1,0 +1,5 @@
+{
+  "status": "ok",
+  "service": "credential-broker",
+  "store": "local"
+}

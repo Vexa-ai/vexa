@@ -1,0 +1,8 @@
+{
+  "type": "contact",
+  "id": "alice-doe",
+  "title": "Alice Doe",
+  "created": "2026-06-18T10:00:00.000Z",
+  "tags": ["investor"],
+  "linkedin": "https://linkedin.com/in/alice-doe"
+}

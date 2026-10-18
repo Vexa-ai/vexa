@@ -1,0 +1,17 @@
+{
+  "key": "fixture-git-key-not-a-deployment-secret-000001",
+  "claims": {
+    "role": "git",
+    "actor": "42",
+    "session": "git-request-a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "at": 1760000000,
+    "nonce": "9a8b7c6d5e4f30211203f4e5d6c7b8a9",
+    "method": "POST",
+    "path": "/api/internal/git-secret",
+    "body": "7fd5d19d357e7871099b1957daf6bef4075e930a6b26755104a5917fd9ec6e65"
+  },
+  "request_body": "{\"name\":\"pat/42\",\"action\":\"put\",\"value\":\"fixture-token-value\"}",
+  "encoded": "eyJyb2xlIjoiZ2l0IiwiYWN0b3IiOiI0MiIsInNlc3Npb24iOiJnaXQtcmVxdWVzdC1hMWIyYzNkNGU1ZjYwNzE4MjkzYTRiNWM2ZDdlOGY5MCIsImF0IjoxNzYwMDAwMDAwLCJub25jZSI6IjlhOGI3YzZkNWU0ZjMwMjExMjAzZjRlNWQ2YzdiOGE5IiwibWV0aG9kIjoiUE9TVCIsInBhdGgiOiIvYXBpL2ludGVybmFsL2dpdC1zZWNyZXQiLCJib2R5IjoiN2ZkNWQxOWQzNTdlNzg3MTA5OWIxOTU3ZGFmNmJlZjQwNzVlOTMwYTZiMjY3NTUxMDRhNTkxN2ZkOWVjNmU2NSJ9",
+  "signature": "85c202a0f0c8191f1ced8079382bc26e1d18ca2f9247fed76800acee213fdb08",
+  "header": "eyJyb2xlIjoiZ2l0IiwiYWN0b3IiOiI0MiIsInNlc3Npb24iOiJnaXQtcmVxdWVzdC1hMWIyYzNkNGU1ZjYwNzE4MjkzYTRiNWM2ZDdlOGY5MCIsImF0IjoxNzYwMDAwMDAwLCJub25jZSI6IjlhOGI3YzZkNWU0ZjMwMjExMjAzZjRlNWQ2YzdiOGE5IiwibWV0aG9kIjoiUE9TVCIsInBhdGgiOiIvYXBpL2ludGVybmFsL2dpdC1zZWNyZXQiLCJib2R5IjoiN2ZkNWQxOWQzNTdlNzg3MTA5OWIxOTU3ZGFmNmJlZjQwNzVlOTMwYTZiMjY3NTUxMDRhNTkxN2ZkOWVjNmU2NSJ9.85c202a0f0c8191f1ced8079382bc26e1d18ca2f9247fed76800acee213fdb08"
+}
