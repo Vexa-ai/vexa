@@ -33,12 +33,33 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-%s" (include "vexa.fullname" $root) $component | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- /* The chart's redis requires a password on its default user; a consumer of this URL carries the
+REDIS_PASSWORD env entry (vexa.redisPasswordEnv) BEFORE it, which Kubernetes expands into $(REDIS_PASSWORD). */ -}}
 {{- define "vexa.redisUrl" -}}
 {{- if .Values.redis.enabled -}}
-{{- printf "redis://%s.%s.svc.%s:%d/0" (include "vexa.componentName" (list . "redis")) .Release.Namespace .Values.global.clusterDomain (.Values.redis.service.port | int) -}}
+{{- printf "redis://:$(REDIS_PASSWORD)@%s.%s.svc.%s:%d/0" (include "vexa.componentName" (list . "redis")) .Release.Namespace .Values.global.clusterDomain (.Values.redis.service.port | int) -}}
 {{- else -}}
 {{- required "redisConfig.url is required when redis.enabled=false" .Values.redisConfig.url -}}
 {{- end -}}
+{{- end -}}
+
+{{- define "vexa.redisPasswordEnv" -}}
+{{- if .Values.redis.enabled }}
+- name: REDIS_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "vexa.adminTokenSecretName" . }}
+      key: REDIS_PASSWORD
+{{- end }}
+{{- end -}}
+
+{{/*
+The workspace store's path inside agent-api and inside every worker — agent-api's VEXA_WORKSPACES_DIR,
+its store mountPath, and the runtime's VEXA_WORKSPACE_MOUNT_TARGET. They must be equal, or every
+dispatch is refused, so all three are rendered from here.
+*/}}
+{{- define "vexa.workspacesDir" -}}
+/workspaces
 {{- end -}}
 
 {{- define "vexa.redisHost" -}}
@@ -88,6 +109,40 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{/*
+Where flows' operator key (VEXA_FLOWS_API_KEY) comes from when it is a Secret you manage rather than
+a chart value: `flows.existingSecret`, else `secrets.existingSecretName` when `flows.apiKey` is empty.
+Empty ⇒ the chart renders `flows.apiKey` into its own flows Secret, as it always has. A template-only
+render (GitOps) names a Secret here so the key never sits in values.
+*/}}
+{{- define "vexa.flowsApiKeyExistingSecret" -}}
+{{- if and .Values.flows.existingSecret .Values.flows.apiKey -}}
+{{- fail "flows.apiKey and flows.existingSecret are both set — keep one: the key in values, or the Secret that carries VEXA_FLOWS_API_KEY" -}}
+{{- end -}}
+{{- if .Values.flows.existingSecret -}}
+{{- .Values.flows.existingSecret -}}
+{{- else if and (not .Values.flows.apiKey) .Values.secrets.existingSecretName -}}
+{{- .Values.secrets.existingSecretName -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The Secret every consumer of VEXA_FLOWS_API_KEY reads it from. */}}
+{{- define "vexa.flowsApiKeySecretName" -}}
+{{- include "vexa.flowsApiKeyExistingSecret" . | default (include "vexa.componentName" (list . "flows")) -}}
+{{- end -}}
+
+{{/* flows' own containers take the flows Secret by envFrom; when the key lives in a Secret you
+manage, they read it from there by name instead (an explicit env entry wins over envFrom). */}}
+{{- define "vexa.flowsApiKeyEnv" -}}
+{{- with include "vexa.flowsApiKeyExistingSecret" . -}}
+- name: VEXA_FLOWS_API_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ . | quote }}
+      key: VEXA_FLOWS_API_KEY
+{{- end -}}
+{{- end -}}
+
 {{- define "vexa.adminTokenSecretName" -}}
 {{- if .Values.secrets.existingSecretName -}}
 {{- .Values.secrets.existingSecretName -}}
@@ -98,6 +153,24 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/* The on-demand bot image the runtime spawns (BROWSER_IMAGE). The bot is published, never built by
 this chart. runtime.browserImage is the explicit value; global.imageTag (set) pins the standard repo. */}}
+{{/*
+The instance's administrators for admin-api's VEXA_ADMIN_EMAILS: `adminApi.adminEmails`. Before
+admin-api read this list the terminal did, and the chart told operators to set it in
+`terminal.extraEnv`; an install that still sets it there is carried over here rather than silently
+losing its admins on upgrade.
+*/}}
+{{- define "vexa.adminEmails" -}}
+{{- $emails := .Values.adminApi.adminEmails | default "" -}}
+{{- if not $emails -}}
+{{- range (.Values.terminal.extraEnv | default list) -}}
+{{- if and (kindIs "map" .) (eq (.name | default "") "VEXA_ADMIN_EMAILS") -}}
+{{- $emails = .value | default "" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $emails -}}
+{{- end -}}
+
 {{- define "vexa.botImage" -}}
 {{- if .Values.runtime.browserImage -}}
 {{- .Values.runtime.browserImage -}}
@@ -133,17 +206,44 @@ default tag. It used to be a bare `vexaai/v012-flows:dev` value — a MUTABLE ta
 release's build-once promotion could never pin, so the flows tier alone floated while every other
 service moved to the release digest (A12). */}}
 {{- define "vexa.flowsImage" -}}
-{{- if .Values.flows.image -}}
-{{- .Values.flows.image -}}
-{{- else if .Values.global.imageTag -}}
-{{- printf "%s:%s" (.Values.flows.imageRepository | default "vexaai/v012-flows") .Values.global.imageTag -}}
+{{- /* BOTH SHAPES, on purpose (0.12.27). `flows.image` is the STRUCTURED {repository, tag} every
+other v0.12 component uses — it had to become one for #1537, because the publisher's pin injector
+merges {flows: {image: {tag: <version>@sha256:...}}} over these values and merging a map over a
+string drops the repository silently. It is ALSO still accepted as a FLAT REF string, which is how
+a publisher digest-pins the whole tier in one value; that override wins over everything. Otherwise
+the tag follows `global.imageTag` exactly like admin-api, gateway, meeting-api, runtime and
+terminal do, so the flows tier can no longer float on a mutable `:dev` while the rest of a release
+moves to its digest (A12). One resolver, six call sites. */}}
+{{- $img := .Values.flows.image -}}
+{{- if and (kindIs "string" $img) (ne ($img | toString) "") -}}
+{{- $img -}}
 {{- else -}}
-{{- printf "%s:%s" (.Values.flows.imageRepository | default "vexaai/v012-flows") (.Values.flows.imageTag | default "v012") -}}
+{{- $repo := "vexaai/v012-flows" -}}
+{{- $tag := "v012" -}}
+{{- if .Values.flows.imageRepository -}}{{- $repo = .Values.flows.imageRepository -}}{{- end -}}
+{{- if .Values.flows.imageTag -}}{{- $tag = .Values.flows.imageTag -}}{{- end -}}
+{{- if kindIs "map" $img -}}
+{{- if (get $img "repository") -}}{{- $repo = (get $img "repository") -}}{{- end -}}
+{{- if (get $img "tag") -}}{{- $tag = (get $img "tag") -}}{{- end -}}
+{{- end -}}
+{{- if .Values.global.imageTag -}}{{- $tag = .Values.global.imageTag -}}{{- end -}}
+{{- printf "%s:%s" $repo $tag -}}
 {{- end -}}
 {{- end -}}
 
+{{/*
+The database passwords published in this repository — the bundled database refuses them as an
+explicit value, and the postgres-password hook moves an install off them. The same list compose's
+postgres and Lite's entrypoint refuse.
+*/}}
+{{- define "vexa.publishedDbPasswords" -}}
+["postgres","password","vexa-internal-secret","lite-internal-secret","changeme","change-me","CHANGE-ME","default","secret"]
+{{- end -}}
+
 {{- define "vexa.postgresCredentialsSecretName" -}}
-{{- if .Values.postgres.enabled -}}
+{{- if .Values.database.existingSecret -}}
+{{- .Values.database.existingSecret -}}
+{{- else if .Values.postgres.enabled -}}
 {{- .Values.postgres.credentialsSecretName | default "postgres-credentials" -}}
 {{- else -}}
 {{- required "postgres.credentialsSecretName must name a pre-existing Secret when postgres.enabled=false (keys: POSTGRES_PASSWORD, POSTGRES_USER, POSTGRES_DB)" .Values.postgres.credentialsSecretName -}}
@@ -303,5 +403,77 @@ storage inside a pod.
 {{- if $clash -}}
 {{- fail (printf "meetingApi.extraEnv sets %s, which the chart now sets from storage.s3. Put the value in storage.s3 and remove it from meetingApi.extraEnv." (join ", " $clash)) -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Pod-level and container-level securityContext, both gated by `global.securityContext.deliver`.
+
+Emitted as the WHOLE key (`securityContext:` included) so that `deliver: false` renders no key at
+all rather than an empty map — on OpenShift the absence is the point: `restricted-v2` injects the
+context and rejects a spec that supplies a conflicting one. `deliver` is stripped from the rendered
+container context (it is our switch, not a Kubernetes field).
+
+A values file that replaces `global.securityContext` wholesale without naming `deliver` keeps the
+old behaviour: missing key == true, so no existing install changes shape on upgrade.
+
+Call with the root context and the indent of the key itself:
+    {{- include "vexa.podSecurityContext" . | nindent 6 }}          # under spec.template.spec
+    {{- include "vexa.containerSecurityContext" . | nindent 10 }}   # under a container
+*/}}
+{{- define "vexa.securityContextDeliver" -}}
+{{- $sc := .Values.global.securityContext | default dict -}}
+{{- if hasKey $sc "deliver" }}{{ $sc.deliver }}{{ else }}true{{ end }}
+{{- end -}}
+
+{{- define "vexa.podSecurityContext" -}}
+{{- if eq (include "vexa.securityContextDeliver" .) "true" -}}
+securityContext:
+  {{- toYaml (.Values.global.podSecurityContext | default dict) | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The pod securityContext for a workload whose image runs as the unprivileged uid 10001 (its
+Dockerfile USER: gateway, admin-api, meeting-api, mcp, terminal, flows): the global pod context plus
+runAsNonRoot, that uid and gid, and fsGroup 10001 so a Secret it mounts group-readable (the
+gateway's signing key, 0440) is readable by it. The global values win where both are set (an
+OpenShift range, say). Same `deliver` gate as vexa.podSecurityContext.
+*/}}
+{{- define "vexa.nonRootPodSecurityContext" -}}
+{{- if eq (include "vexa.securityContextDeliver" .) "true" -}}
+securityContext:
+  {{- toYaml (merge (deepCopy (.Values.global.podSecurityContext | default dict)) (dict "runAsNonRoot" true "runAsUser" 10001 "runAsGroup" 10001 "fsGroup" 10001)) | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{- define "vexa.containerSecurityContext" -}}
+{{- if eq (include "vexa.securityContextDeliver" .) "true" -}}
+{{- $sc := omit (.Values.global.securityContext | default dict) "deliver" -}}
+securityContext:
+  {{- toYaml $sc | nindent 2 }}
+{{- end -}}
+{{- end -}}
+
+{{/* Connections (ADR-0040): the broker deploys with agent-api, never without it. */}}
+{{- define "vexa.credentialBrokerEnabled" -}}
+{{- if and .Values.agentApi.enabled .Values.credentialBroker.enabled -}}true{{- end -}}
+{{- end -}}
+
+{{/* The Secret holding agent.key, human.key, git.key, store.key (and google-client-secret). */}}
+{{- define "vexa.credentialBrokerKeys" -}}
+{{- .Values.credentialBroker.existingSecret | default (include "vexa.componentName" (list . "credential-broker-keys")) -}}
+{{- end -}}
+
+{{- define "vexa.credentialBrokerUrl" -}}
+{{- printf "http://%s:%v" (include "vexa.componentName" (list . "credential-broker")) .Values.credentialBroker.service.port -}}
+{{- end -}}
+
+{{/* The OAuth callback the broker sends Google: explicit, else the terminal's https public URL. */}}
+{{- define "vexa.credentialBrokerRedirect" -}}
+{{- if .Values.credentialBroker.productRedirect -}}
+{{- .Values.credentialBroker.productRedirect -}}
+{{- else if hasPrefix "https://" (.Values.terminal.publicUrl | default "") -}}
+{{- printf "%s/api/auth/callback/google" (trimSuffix "/" .Values.terminal.publicUrl) -}}
 {{- end -}}
 {{- end -}}

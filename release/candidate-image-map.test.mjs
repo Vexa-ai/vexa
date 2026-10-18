@@ -10,6 +10,8 @@ import {
   PROD_DEPLOYED_IMAGES,
   REQUIRED_IMAGES,
   FLOWS_IMAGE,
+  CREDENTIAL_BROKER_IMAGE,
+  CURRENT_SCHEMA_VERSION,
   CURRENT_REQUIRED_IMAGES,
   requiredImagesFor,
   BUILD_MATRIX_BY_IMAGE,
@@ -20,6 +22,9 @@ import {
   candidateInputDrift,
   validateCandidateMap,
 } from "./candidate-image-map.mjs";
+import { guardTree } from "../scripts/test-tree.mjs";
+
+guardTree();
 
 const digest = (n) => `sha256:${n.repeat(64)}`;
 
@@ -142,7 +147,7 @@ test("schema 2 names the flows image as the eleventh; schema 1 stays ten", () =>
   assert.throws(() => validateCandidateMap({ ...eleven, schema_version: 1 }), /image set mismatch/);
   const plan = candidateBuildPlan(null);
   assert.equal(plan.mode, "full");
-  assert.equal(plan.changed_images.length, 11);
+  assert.equal(plan.changed_images.length, CURRENT_REQUIRED_IMAGES.length);
   assert.deepEqual(plan.build_matrix.find((row) => row.name === "flows"), {
     name: "flows",
     repository: "v012-flows",
@@ -150,6 +155,32 @@ test("schema 2 names the flows image as the eleventh; schema 1 stays ten", () =>
     dockerfile: "core/flows/Dockerfile",
     use_registry_cache: true,
   });
+});
+
+test("schema 3 names the credential broker as the twelfth; schema 2 stays eleven", () => {
+  assert.equal(CURRENT_SCHEMA_VERSION, 3);
+  const eleven = validMap();
+  eleven.schema_version = 2;
+  eleven.images[FLOWS_IMAGE] = { ...eleven.images["vexaai/v012-mcp"], digest: "sha256:" + "f".repeat(64) };
+  assert.throws(() => validateCandidateMap({ ...eleven, schema_version: 3 }), /image set mismatch/);
+  const twelve = structuredClone(eleven);
+  twelve.schema_version = 3;
+  twelve.images[CREDENTIAL_BROKER_IMAGE] = { ...eleven.images["vexaai/v012-mcp"], digest: "sha256:" + "e".repeat(64) };
+  const map = validateCandidateMap(twelve, twelve.release);
+  assert.equal(requiredImagesFor(map).length, 12);
+  assert.equal(map.images[CREDENTIAL_BROKER_IMAGE].class, "oss_only");
+  assert.throws(() => validateCandidateMap({ ...twelve, schema_version: 2 }), /image set mismatch/);
+  assert.throws(() => validateCandidateMap({ ...twelve, schema_version: 4 }), /schema_version must be 1, 2 or 3/);
+  const plan = candidateBuildPlan(null);
+  assert.equal(plan.changed_images.length, 12);
+  assert.deepEqual(plan.build_matrix.find((row) => row.name === "credential-broker"), {
+    name: "credential-broker",
+    repository: "v012-credential-broker",
+    context: "core/agent/services/credential-broker",
+    dockerfile: "core/agent/services/credential-broker/Dockerfile",
+    use_registry_cache: true,
+  });
+  assert.deepEqual(RUNTIME_INPUTS_BY_IMAGE[CREDENTIAL_BROKER_IMAGE], ["core/agent/services/credential-broker"]);
 });
 
 test("refuses a missing image", () => {
@@ -425,4 +456,64 @@ test("v0.12.26 canonical packet binds the rc.1 train candidate", () => {
   const map = validateCandidateMap(JSON.parse(raw), "v0.12.26");
   assert.equal(map.candidate_tag, "v0.12.26-rc.1");
   assert.equal(map.images["vexaai/vexa-bot"].digest, "sha256:d0d0444e04932a911866b8e9c4e6629a7830339bafb0c76117186479f62cbffa");
+});
+
+test("v0.13.0 canonical packet binds the alpha.3 train candidate (schema 2, eleven images)", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.13.0/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "274e2e6a2dfae70fc00fe7c99eb44af29864d7a07bc69ed25b4f73e0f4c8dae8",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.13.0");
+  assert.equal(map.schema_version, 2);
+  assert.equal(map.candidate_tag, "v0.13.0-alpha.3");
+  assert.equal(map.build_source, "a549fef5e9664299e385e585f3b3cbf907888e6f");
+  assert.equal(
+    map.build_run,
+    "https://github.com/Vexa-ai/vexa/actions/runs/34053444728",
+  );
+  assert.equal(
+    map.images["vexaai/vexa-bot"].digest,
+    "sha256:d3a80ff329f94b2ac58ce0e92af53fb0324ddddd5539f319ae06aa935c76d337",
+  );
+  assert.equal(Object.keys(map.images).length, 11);
+  assert.equal(
+    Object.values(map.images).reduce(
+      (count, image) => count + Object.keys(image.platform_manifests).length,
+      0,
+    ),
+    21,
+  );
+});
+
+test("v0.13.1 canonical packet binds the alpha.2 train candidate (schema 2, eleven images)", () => {
+  const raw = readFileSync(
+    new URL("../releases/v0.13.1/candidate-images.json", import.meta.url),
+  );
+  assert.equal(
+    createHash("sha256").update(raw).digest("hex"),
+    "b59c9279b37c0be9854122e9b3eb61238641666c0c5fdef49ead36c00443944a",
+  );
+  const map = validateCandidateMap(JSON.parse(raw), "v0.13.1");
+  assert.equal(map.schema_version, 2);
+  assert.equal(map.candidate_tag, "v0.13.1-alpha.2");
+  assert.equal(map.build_source, "036911efa92dc1e97f597926fbbbe7ea09f337c5");
+  assert.equal(
+    map.build_run,
+    "https://github.com/Vexa-ai/vexa/actions/runs/34096619850",
+  );
+  assert.equal(
+    map.images["vexaai/vexa-bot"].digest,
+    "sha256:e9a9876ed7c2ccfd140c61624d7e471a10aabf22647f5a48d3ceb986b12f1ce4",
+  );
+  assert.equal(Object.keys(map.images).length, 11);
+  assert.equal(
+    Object.values(map.images).reduce(
+      (count, image) => count + Object.keys(image.platform_manifests).length,
+      0,
+    ),
+    21,
+  );
 });

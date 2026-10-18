@@ -25,16 +25,14 @@ spec:
       annotations:
         {{- toYaml .Values.global.podAnnotations | nindent 8 }}
     spec:
-      securityContext:
-        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- include "vexa.podSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: dashboard
-          securityContext:
-            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           # NB: deliberately NOT prefixed by global.imageTag — the dashboard is a deprecated
           # external image on its own pinned tag, not part of the release image set.
           image: "{{ .Values.dashboard.image.repository }}:{{ .Values.dashboard.image.tag }}"

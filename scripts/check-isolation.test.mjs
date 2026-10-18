@@ -11,16 +11,19 @@
 // literal, which is code and survives the comment strip. So the fixtures below are planted as REAL
 // FILES in the tree the gate actually walks, and the real gate is run as a subprocess: a test that
 // fed a fixture string to an exported regex would prove the regex, not the gate, and the specifier
-// scan is the whole of what is under test.
+// scan is the whole of what is under test. The tree they are planted in is this file's PRIVATE
+// copy of the checkout (scripts/test-tree.mjs): every other test file runs in parallel over the
+// real one, and a plant there is a write any of them can read.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { writeFileSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { guardTree, sandboxTree } from "./test-tree.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+guardTree();
+const ROOT = sandboxTree();
 // An existing directory, so nothing is left behind for gate:readme to find (an empty leftover dir
 // is invisible to `git status` and very visible to that gate).
 const PLANTED = "clients/terminal/src/ui-kit/zzPlantedIsolation.tsx";

@@ -1,0 +1,188 @@
+---
+title: "Minutes overview"
+description: "The Minutes terminal: one screen with your chats, a conversation with your agent, and the pages it reads and writes. How to reach it, find your way around, and link into it."
+---
+
+**Minutes** is the browser app where people use Vexa day to day. It has three columns: on the left,
+your **chats** (a meeting is a chat too); in the middle, the **conversation** with your agent; on the
+right, the **pages** that conversation reads and writes. Everything in Minutes goes through the same
+APIs that are documented elsewhere on this site. Minutes adds no logic of its own.
+
+| Read | For |
+|---|---|
+| [Chats](/minutes/chats) | sending, queueing, background jobs, suggestions, where a chat writes |
+| [Pages](/minutes/pages) | the navigator, editing, Extend and Create, images, diagrams, moving pages |
+| [Meetings](/minutes/meetings) | live transcript, Highlight, playback, Ask about this, deleting a meeting's data |
+| [Workspaces and connections](/minutes/workspaces) | front page, members and invites, links, attaching a repository, your connected accounts |
+| [Manage your chats](/how-to/chat-controls) | renaming, ordering, activity and deleting chats |
+| [Onboarding research and Extend](/how-to/onboarding-research) | filling your workspace from your accounts |
+
+## What you can do
+
+### Open Minutes and sign in
+
+Open your deployment's terminal address. The sign-in card offers **Continue with Google** or
+**Continue with Microsoft** when they are configured, and **Send me a link** to get a one-time sign-in
+link by email. Any link you followed (to a meeting, a page or a question) is kept through sign-in.
+Who may sign in is set by the operator; see [Authentication](/authentication).
+
+On a new deployment, the first person sees **Set up your instance** and enters the one-time claim code
+from the operator's logs to become the administrator. The screen disappears once an administrator
+exists.
+
+### The rail
+
+The left column is headed **Chats**.
+
+- By default it shows the chats you wrote in and meetings that are live or upcoming. **All** shows
+  everything; the number beside it is how many are hidden.
+- **+** (*New chat*) opens a chat that is saved when you send the first message.
+- A finished meeting's chat is tagged *held*. A chat's target workspace shows on its row.
+- With nothing in it: *Meetings arrive by invitation; "+" starts a chat.*
+
+Activity dots, renaming, drag-to-reorder and deleting are in [Manage your chats](/how-to/chat-controls).
+
+### The context bar
+
+Above the conversation: *Chat ›* or *Meeting ›*, the chat's name, a pill saying what kind of chat it is
+(*chat*, *chat · admin*, or *meeting · upcoming*, *live* or *held*), and one chip per workspace in the
+chat. The chips choose where the chat writes; see [Chats](/minutes/chats#choose-where-a-chat-writes).
+
+### Fold and resize
+
+- **‹** / **›** fold the chat list (*Hide the chat list*) or the pages panel (*Hide the pages panel*)
+  to a thin strip; click the strip to show it again. Your browser remembers the choice.
+- Drag the **Resize pages panel** handle, or focus it and press <kbd>←</kbd> / <kbd>→</kbd> (24 px a
+  step). The pages panel is at least 240 px and at most 60% of the window, and never leaves the
+  conversation less than 280 px. The width is remembered.
+
+### Your account
+
+The badge at the foot of the rail shows your initials, name and email. Its menu has **Connections**
+([your connected accounts](/minutes/workspaces#connect-your-accounts)), **Dark mode** / **Day mode**,
+and **Sign out**, which also clears what this browser stored for you.
+
+### When a new version is deployed
+
+A bar appears at the top: *A new version is ready — reload*, with **Reload**. Minutes never reloads by
+itself, so nothing you are typing is lost. The check runs every minute and when the tab regains
+focus.
+
+### Links into Minutes
+
+| Link | Opens |
+|---|---|
+| `/w/<workspace>/<path>` | that page (the workspace's front page with no path); see [links](/minutes/workspaces#link-to-a-page) |
+| `/?meeting=<platform>/<meeting-id>` | that meeting's room |
+| `/?meeting=…&view=transcript` (or `minutes`, `brief`, `file:<path>`) | the room with that tab in front |
+| `/?ask=<name>` | a chat that opens with the question the administrator saved under that name |
+| `/?s=<id>` | a chat prepared for you, for example on your first sign-in or from a link Vexa sent |
+| `/join?i=<token>` | an invite to a workspace; see [Join from an invite](/minutes/workspaces#join-from-an-invite) |
+
+A prepared chat (`?s=`) opens only for the person it was made for. Vexa removes its id from the address
+bar once it has been read.
+
+## Limits and errors
+
+| You see | Why | What to do |
+|---|---|---|
+| *This link isn't open to you.* · *This link belongs to someone else.* | a prepared chat made for another address, or one that no longer exists | **Switch account**, or ask for a new link |
+| *This link is not readable.* | the link is malformed; nothing was opened | ask for a fresh link |
+| *We could not reach the service that holds this link.* | the service did not answer; the link is kept | reload in a moment |
+| *Your session ended — sign in again.* | your sign-in expired or was revoked | **Sign in again** |
+| *That is not this instance's claim code…* · *This instance already has an administrator.* | a wrong claim code, or the instance is already claimed | use the code from the logs, or sign in |
+
+A `?ask=` name must be lowercase letters, digits, `-` or `_` (up to 64 characters). Other names are
+ignored.
+
+## How it works
+
+### Flow
+
+1. **Sign-in.** The terminal's `/api/auth/*` routes call admin-api. On success the terminal sets two
+   `httpOnly` cookies (`vexa-token`, `vexa-user-info`; `SameSite=Lax`, 30 days). The browser's
+   JavaScript cannot read the token.
+2. **Every request.** The browser calls only the terminal's own `/api/*`. The terminal server reads
+   your token from the cookie and forwards to the gateway (`GATEWAY_URL`) as `X-API-Key`. The gateway
+   resolves the key, strips any identity headers the request carried, and forwards to the owning
+   service with your identity signed. Paths starting `meetings`, `transcripts`, `bots`, `recordings`
+   or `user` go to meeting-api; everything else goes to agent-api under `/agent/*`.
+3. **The rail.** `GET /api/sessions` returns your chats from agent-api; the browser merges in chats it
+   has not saved yet, and the server's list wins. Names are refreshed every five seconds.
+4. **Arrival.** After a first sign-in, the terminal asks agent-api over its internal interface whether
+   you have history; if not, it prepares a first chat and lands you on `/?s=<id>`. Opening `?s=` reads
+   the prepared chat once, as you.
+5. **Version.** `GET /api/version` reports the terminal's build and agent-api's version, and whether
+   they are a matching pair. The bar appears when either changes or they stop matching.
+
+### Who writes what
+
+| Data | Single writer | Where |
+|---|---|---|
+| Accounts, sign-in tokens | admin-api | the identity database |
+| Your chat list, names, order | agent-api | Redis, per user |
+| Prepared chats (`?s=`) | agent-api | Redis |
+| Folding, panel width, theme, unsaved chats | your browser | `localStorage` |
+
+### Routes
+
+| Browser calls (terminal) | Goes to |
+|---|---|
+| `/api/auth/*` (login, request-link, redeem, me, logout, claim-admin) | admin-api |
+| `/api/sessions`, `/api/chat/*`, `/api/workspace/*`, `/api/scaffolds/*` | agent-api, through the gateway's `/agent/*` |
+| `/api/meetings`, `/api/transcripts/*`, `/api/bots/*`, `/api/recordings/*` | meeting-api, through the gateway |
+| `/api/version` | the terminal itself, plus agent-api `/api/version` |
+
+### Configuration
+
+Minutes is a build of the terminal: set `NEXT_PUBLIC_TERMINAL_MODE=minutes` when the image is built
+(in Compose, `TERMINAL_MODE=minutes` in `.env`). It is baked in at build time; changing it needs a
+rebuild. The value `meetings` builds a meetings-only terminal instead, which refuses every agent path
+with `404`. The terminal server reads `GATEWAY_URL` and `AGENT_API_URL`, and refuses to start without a
+`NEXTAUTH_SECRET` of at least 32 bytes; see [Configuration](/configuration).
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P2** contracts · **P6** one front door | the browser calls only the terminal's `/api/*`; the terminal opens only the gateway, plus the agent-api and admin-api doors listed and reasoned in the domain-doors allowlist | `gate:isolation`, `gate:exports`, `gate:domain-doors` |
+| **P12** every folder self-documents | each terminal folder, and this docs section, carries a README | `gate:readme` |
+| **P18** fail loud | an unreachable gateway is a `502 upstream_unreachable`; a link that cannot be checked says so and keeps the link; the version bar reports a mismatched pair | ungated: reviewed |
+| **P20** authorize every access | identity is the gateway-signed one, never a value from the browser; a prepared chat is readable only by its recipient | `gate:access` and the deny tests below |
+| **P23** one writer per carrier | agent-api writes the chat list and order; admin-api writes accounts; the terminal stores nothing server-side | `gate:dataflow` |
+
+### Security
+
+**Who can do what.** Anyone the operator allows can sign in. You see only your own chats. The first
+administrator is set only with the one-time claim code.
+
+**Protections.**
+
+- The sign-in token lives in an `httpOnly` cookie and is never exposed to page scripts. The
+  user-info cookie is for display only; the server confirms identity with admin-api.
+- The gateway rejects a missing or invalid key and strips identity headers a caller tries to supply.
+- A `401` from the identity check ends the session; other refusals do not sign you out.
+- Prepared chats are minted only over the internal interface, read only by their recipient, and never
+  carry a share token in the address.
+- A claim is refused without a valid sign-in, with a wrong code, or once an administrator exists, and
+  uses the identity admin-api returns, never one from a cookie.
+
+**Deny tests.**
+
+| Test | Proves |
+|---|---|
+| `core/gateway/services/gateway/tests/test_proxy.py` · `test_missing_api_key_is_401`, `test_invalid_api_key_is_401`, `test_identity_headers_injected_and_spoof_stripped` | the edge |
+| `core/agent/tests/test_scaffold.py` · `test_the_recipient_reads_it_and_anybody_else_gets_a_404`, `test_minting_is_internal_tier_only`, `test_a_share_token_does_not_ride_the_url` | prepared chats |
+| `core/agent/tests/test_scaffold_share.py` · `test_a_stranger_gets_no_token_and_cannot_learn_the_scaffold_exists` | shared transcripts in prepared chats |
+| `core/agent/tests/test_rail_sessions.py` · `test_has_history_is_internal_tier` | the arrival check |
+| `clients/terminal/src/app/api/__tests__/proxyMode.test.ts` · "meetings mode passes the meeting domain and refuses everything else" | meetings-only builds |
+| `clients/terminal/src/app/api/auth/__tests__/claimAdmin.test.ts` · "a token the oracle REFUSES → 401, no claim written", "an instance that already has an admin is refused, and told to reload" | the claim |
+| `clients/terminal/src/app/__tests__/sessionExpiry.test.tsx` · "a confirmed 401 replaces the app with the signed-out state…" | session end |
+| `clients/terminal/src/minutes/__tests__/arrival.test.tsx` · "someone who is not the recipient gets the refusal, not an empty chat" | arrival |
+| `clients/terminal/src/minutes/__tests__/scaffold.test.ts` · "404 is not-found, 403 is forbidden, 500 is unavailable" | refusal wording |
+
+## Related
+
+- [Authentication](/authentication) · [Configuration](/configuration) · [Identity and trust](/architecture/identity-and-trust) · [Architecture rules](/governance/architecture)

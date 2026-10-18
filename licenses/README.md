@@ -13,6 +13,7 @@ SBOM ([`scripts/sbom.mjs`](../scripts/sbom.mjs)).
 | File | Artifact | Licence |
 | --- | --- | --- |
 | `onnx-community-pyannote-segmentation-3.0.LICENSE.txt` | `onnx-community/pyannote-segmentation-3.0` (mixed-lane diarization weights) | MIT |
+| `moby-profiles.LICENSE.txt` | Moby's default seccomp profile, modified and vendored as `core/runtime/src/runtime_kernel/seccomp-userns.json` (copied beside it as `seccomp-userns.LICENSE.txt`) | Apache-2.0 |
 
 **Adding an artifact:** drop its verbatim upstream licence here, `COPY` it next to the
 artifact in the Dockerfile(s) that bake it, add a row to `THIRD_PARTY_LICENSES.md`, and (for

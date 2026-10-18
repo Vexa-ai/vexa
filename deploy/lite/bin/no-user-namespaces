@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""no-user-namespaces <program> [args...] — run a Lite service unable to create user namespaces.
+
+The container's seccomp profile (core/runtime/src/runtime_kernel/seccomp-userns.json) lets an unprivileged process create a user
+namespace, for the meeting bots' Chromium sandbox. No service needs one, so supervisord starts every
+service but the runtime through this: it sets no_new_privs, installs the runtime's own user-namespace
+refusal (runtime_kernel.userns, loaded from its file — standard library only), and execs the program,
+which keeps the refusal for itself and everything it starts. A refusal that cannot be installed stops
+the service rather than starting it without.
+"""
+import importlib.util
+import os
+import sys
+
+USERNS = "/app/runtime/src/runtime_kernel/userns.py"
+
+
+def main(argv) -> int:
+    if len(argv) < 2:
+        print("usage: no-user-namespaces <program> [args...]", file=sys.stderr)
+        return 2
+    spec = importlib.util.spec_from_file_location("_vexa_userns", USERNS)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        module.refuse_user_namespaces()
+    except OSError as e:
+        print(f"no-user-namespaces: cannot refuse user namespaces here ({e}); not starting {argv[1]}",
+              file=sys.stderr)
+        return 1
+    os.execvp(argv[1], argv[1:])
+    return 127
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

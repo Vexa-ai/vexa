@@ -1,0 +1,45 @@
+[project]
+name = "vexa-control-mcp"
+version = "0.12.0"
+description = "The storm rig's control MCP — one agent-facing surface over meetings, flows, workspaces, entities and sign-in, plus its own OAuth door and file viewer."
+requires-python = ">=3.11"
+
+# THE RIG'S OWN RUNTIME DEPENDENCIES. Until 2026-09-03 this file did not exist, so nothing anywhere
+# said what the server needs to run — and `rig.sh` started it out of
+# `~/dev/vexa-flows1315/core/flows/.venv`, a SHARED venv belonging to a stale checkout that
+# happened to be lying around. On 2026-09-03 that venv was missing a module the rig's import chain
+# reached, the server would not start, and it was down 2.5 minutes while stage-1 installed a
+# package into a venv three other things also run out of.
+#
+# Two halves to the fix and this is one of them: the rig declares what it imports, and `rig.sh`
+# builds `deploy/dogfood/rig/.venv` from this file. `tests/test_runtime_deps.py` fails if the rig
+# imports something this list does not name, so the declaration cannot quietly fall behind the code.
+#
+# NOT LISTED, deliberately:
+#   * `shared.git_redaction` / `control_plane.secret_store` — loaded BY PATH out of `core/agent`
+#     (see `rig_secrets._load_agent_module`). Both are stdlib-pure and a test holds them to it.
+#     Importing them as package members is what dragged pydantic into this process and took it
+#     down; they are source the rig reads, not a wheel it installs.
+#   * `flows`, `flows_defs` — imported in-process by `fact_emit` alone, out of the checkout
+#     `VEXA_FLOWS_SRC` names. A deployment input, not a pinned dependency: when the tree is absent
+#     the server still starts and that one tool reports itself unavailable, by name.
+dependencies = [
+    # The MCP server itself. `mcp.server.mcpserver.MCPServer` is 2.x — 1.16 does not carry it
+    # (checked, not assumed), so the floor is real and a 1.x venv fails at the first import.
+    "mcp>=2.0,<3",
+    # The ASGI server `__main__` runs. Starlette arrives with `mcp`; uvicorn does not.
+    "uvicorn>=0.30,<1",
+    # `_fdb()` — the friction table's legacy rows, read out of the flows Postgres.
+    "psycopg[binary]>=3.1,<4",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The server is a single file imported by name, the way `rig.sh` runs it.
+pythonpath = ["."]

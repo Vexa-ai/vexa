@@ -1,0 +1,220 @@
+---
+title: "Chats"
+description: "Talk to your agent in Minutes: sending and queueing messages, background jobs, suggestions, links, and choosing which workspace a chat writes to."
+---
+
+The middle column of Minutes is a chat with your agent. The agent reads the workspaces mounted in the
+chat and writes into one of them. This page explains how a turn behaves, what happens to messages you
+send while it works, how long acts run as background jobs, and how to choose where a chat writes.
+
+## What you can do
+
+### Send a message
+
+1. Type in the composer (*Type / for skills, or ask the agent…*). In a meeting chat the placeholder
+   follows the meeting: preparing, live, or after.
+2. Press <kbd>Enter</kbd> to send; <kbd>Shift</kbd> + <kbd>Enter</kbd> starts a new line. The composer
+   also has **Attach files**, **Dictate** and **Send**.
+3. While the agent works, one line under its reply shows what it is doing and how many steps it has
+   taken. The composer itself shows no status; it only offers **Stop**.
+4. When the turn finishes, the reply is rendered in full (notes, cards, steps, tabs and wiki links).
+   Every file the turn wrote appears as a chip you can open, and a commit shows as
+   *committed · `<sha>`*.
+
+**Stop** stops your browser from reading the turn. It does not cancel work already handed to the agent.
+
+The transcript follows new output while you are at the bottom. Scroll up and it stays where you are;
+**Jump to latest** brings you back.
+
+### Send while the agent is busy
+
+You never have to wait. A message you send during a turn goes straight to the agent's inbox and shows
+at the foot of the chat as *queued · … · queued behind the current turn*. Queued messages run in the
+order you sent them. A reload does not lose them: the list is read back from the server.
+
+If the agent cannot take a message, the row turns red: *blocked — `<source>` · `<kind>` — `<detail>`*,
+with **Retry**. If the network dropped the message before the server saw it, your browser keeps a copy
+and re-sends it when the chat is idle or the page reloads.
+
+### Background jobs
+
+**Extend** and **Create** on a [page](/minutes/pages#extend-or-create-a-page-with-the-agent) run as
+*jobs*: the agent works on the page in the background, and the chat stays free.
+
+- A running job shows at the foot of the chat as *job · `<workspace/path>` · N steps · `<label>`*, and
+  also on the card you pressed.
+- When it finishes, the agent posts one line in the chat and the page refreshes. If it fails, a line
+  says so.
+- Pressing a second act on the same page queues it behind the first (*queued behind the one running*).
+  Pressing the same act again joins the running job instead of starting another.
+- There is no cancel. A job stops early only if the agent restarts; the chat then says the job stopped
+  and that you can ask again.
+- The start and finish lines are live only. After a reload, look at the page itself.
+
+If the connection drops mid-job, the chat says *Lost the connection to that background job — it may
+still have finished; reopen the page to see.*
+
+### Suggestions in an empty chat
+
+An empty chat shows up to 10 **Suggestions**, in this order:
+
+| Suggestion | When |
+|---|---|
+| *Catch me up on `<meeting>` — live now* | a meeting is live |
+| *Prep me for `<meeting>` at `<time>`* | a meeting starts within two hours |
+| *What came out of `<meeting>`?* | the newest finished meeting has nothing written about it |
+| *Review N new item(s)* | there are new items in the rail |
+| *My email is …, set up a workspace for me* | your desk is new |
+| items your agents proposed | each with **×** (*Not now*) to dismiss it |
+| *Connect Google, so I can create meetings for you* · *Paste a meeting link* | always, last |
+
+Pressing a suggestion sends it in the same chat. A meeting suggestion binds the chat to that meeting,
+or opens that meeting's own chat if this one already belongs to another meeting. A used suggestion is
+not offered again in that chat.
+
+### Links in replies
+
+Every page a reply names opens on click: wiki links, `.md` paths and workspace paths. A link to a page
+that does not exist yet opens its path, where you can [create it](/minutes/pages#extend-or-create-a-page-with-the-agent).
+
+### Choose where a chat writes
+
+The bar above the chat reads *Chat ›* or *Meeting ›* followed by the chat's name, then one chip per
+workspace in the chat.
+
+- The highlighted chip is the **target**: *Writes in this chat go here. The others are mounted to
+  read.* Click another chip to make it the target.
+- **+** (*Add a workspace to this chat*) mounts another workspace; a chip's remove button takes it out.
+- With no target set, writes go to your own desk.
+- Org admins can also choose **Company** (the `_global` workspace).
+- You can also say "work in `<workspace>`" and the agent moves the target itself.
+
+The target is where writes go by default. It never grants a right: a workspace you cannot write is
+refused as a target.
+
+### Name, order and delete chats
+
+A chat is named from your first message until you rename it. Renaming, the activity dot, reordering,
+reopening history and deleting a chat are covered in [Manage your chats](/how-to/chat-controls). What
+happens when a long turn reaches its tool-call limit is in [Long agent turns](/agent-tool-calls).
+
+## Limits and errors
+
+| You see | Why | What to do |
+|---|---|---|
+| *That message did not reach your agent — nothing was lost on your side, please send it again.* | the server could not hand the message to the agent | send it again |
+| *No model credentials are configured, so the agent cannot run…* | the deployment has no model provider | an operator adds one ([model credentials](/model-credentials-licensing)) |
+| a red block *`<Source>` · `<kind>`* with **Retry** | a dependency failed; the turn ended with a typed fault | read the remedy line; retry |
+| *the terminal could not reach the Vexa gateway* | the gateway is down or unreachable | try again in a moment |
+| *not a workspace you can write* | the chosen target is read-only for you | pick a workspace where you are a contributor |
+| *only an org admin may write into _global* | **Company** is admin-only | ask an admin |
+| *Lost the connection to that background job…* | the stream dropped during a job | reopen the page |
+
+Other limits: a chat id is 1–128 letters, digits, `.`, `_` or `-`; the queue lists at most 200 waiting
+messages and none older than an hour; a chat shows at most 10 suggestions. A chat turn is started by a
+person: an agent acting for someone cannot start one.
+
+## How it works
+
+### Flow
+
+1. **Send.** The browser posts to the terminal's `/api/chat`. The terminal forwards to the gateway's
+   `/agent/chat` with your API key from the sign-in cookie. The gateway resolves the key to you and
+   forwards to agent-api `/api/chat` with your identity signed.
+2. **Prepare.** agent-api takes the user from the signed identity, never from the body. It keeps your
+   words as typed, adds any context (the target workspace, a job or flow mark) after a separator, checks
+   that model credentials exist, and records the chat in your session list.
+3. **Dispatch.** agent-api writes the message into the chat's inbox and starts or wakes the agent
+   worker. It then relays the worker's output stream back to the browser as server-sent events. A
+   reconnect resumes from the last event it saw; nothing is dispatched twice.
+4. **Queue.** A message sent mid-turn goes to `/api/chat/submit`, which runs the same steps without
+   streaming. `/api/chat/pending` lists what is still waiting, and whether the queue is blocked and why.
+5. **Jobs.** For `create`, `extend` and `extend_transcript`, the worker runs the act on its own thread,
+   reports `job-started`, progress and `job-done` or `job-failed` on the chat's stream, and ends the
+   chat turn at once so the chat can answer.
+
+### Who writes what
+
+| Data | Single writer | Where |
+|---|---|---|
+| Your chat list (rail) and names | agent-api | Redis, per user |
+| Rail order | agent-api | Redis, per user |
+| Chat inbox | agent-api (every entry signed) | the chat unit's input stream |
+| Turn output and job events | the agent worker | the chat unit's output stream; agent-api only relays it |
+| Inbox position | the agent worker | the chat unit's cursor |
+| Job records | the agent worker | the chat's working folder |
+| Suggestions | agent-api | `.vexa/proposals.json` on your desk |
+| Open tabs, view, unsent copies | your browser | `localStorage` |
+
+### Routes
+
+| Browser calls (terminal) | agent-api (through the gateway's `/agent/*`) |
+|---|---|
+| `POST /api/chat` (streamed) | `POST /api/chat` |
+| `POST /api/chat/submit` | `POST /api/chat/submit` |
+| `GET /api/chat/pending` | `GET /api/chat/pending` |
+| `POST /api/chat/target` | `POST /api/chat/target` |
+| `POST /api/chat/name` | `POST /api/chat/name` |
+| `GET`, `PUT /api/chat/order` | `GET`, `PUT /api/chat/order` |
+| `GET /api/sessions`, `/api/sessions/{id}/history` | the same paths |
+| `GET`, `POST /api/proposals`, `POST /api/proposals/resolve` | the same paths |
+
+`/agent/chat` is a streamed route of its own in `core/agent/routes.v1.json`; the others pass through the
+gateway's `/agent/*` forward. The request and event shapes are in [the agent API](/api/agent).
+
+### Configuration
+
+`GATEWAY_URL` on the terminal server. The job and tool-budget limits are worker settings
+(`VEXA_AGENT_JOB_MAX_TOOL_CALLS` and related, see `core/agent/llm/JOBS.md`).
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P2** contracts · **P6** one front door | the browser calls only the terminal's `/api/*`; the terminal calls only the gateway | `gate:isolation`, `gate:exports`, `gate:domain-doors` |
+| **P18** fail loud | a refused spawn, a provider refusal or a gateway outage ends as a typed fault (`source` + `kind`) shown in the chat; the terminal never passes a bare *Internal Server Error*; a blocked queue says what blocked it; a failed job posts a line | `gate:fault-surfacing` (under `gate:node` and `gate:python`) |
+| **P20** authorize every access | the user is the signed identity; the target must be a workspace you can write; suggestions are your own desk's | deny tests below |
+| **P21** state from evidence | the activity line and job rows come from the worker's events, not from the button press | ungated: reviewed |
+| **P23** one writer per carrier | agent-api is the inbox's only writer; the worker is the output stream's only writer and agent-api relays it unchanged | `gate:dataflow` |
+
+### Security
+
+**Who can do what.** Only you can post into your chats. The chat's target is a default, never a grant:
+writes are still checked against your rights in that workspace, and an agent acting for you is held to
+the workspaces of the chat that dispatched it. Only an org admin can target the company workspace.
+
+**Protections.**
+
+- The user comes from the gateway-signed identity; an unsigned or missing identity is refused, and a
+  `subject` in the body is ignored.
+- Unknown request fields are refused, so no field can widen a request.
+- A message composed by Vexa or dispatched by a flow is marked, and never shown as your words.
+- An agent acting for someone cannot start a chat turn.
+- Job events carry their chat's id, so one chat's job never shows in another.
+
+**Deny tests.**
+
+| Test | Proves |
+|---|---|
+| `core/agent/tests/test_identity_guard.py` · `test_an_unsigned_identity_is_refused`, `test_naming_nobody_is_401_and_there_is_no_fallback_subject`, `test_a_delegated_worker_is_held_to_its_workspace_ceiling` | identity |
+| `core/agent/tests/test_dispatch_sink.py` · `test_a_worker_starts_no_chat_turn`, `test_a_caller_with_no_credential_is_refused_and_nothing_spawns` | who can start a turn |
+| `core/agent/tests/test_chat_session_bound.py` · `test_the_routes_answer_422_and_dispatch_nothing`, `test_the_pending_list_refuses_a_session_outside_the_bound`, `test_the_rail_order_and_the_target_refuse_a_session_outside_the_bound` | chat ids |
+| `core/agent/tests/test_meeting_room.py` · `test_the_body_still_refuses_an_unknown_field` | no extra fields |
+| `core/agent/tests/test_chat_workspace_target.py` · `test_a_target_aimed_at_a_guess_is_refused`, `test_a_workspace_this_person_cannot_write_is_refused_at_the_chip`, `test_a_malformed_slug_is_a_400_not_a_stored_guess`, `test_the_target_is_a_default_and_never_a_grant` | the target |
+| `core/agent/tests/test_global_target.py` · `test_a_non_admin_session_cannot_set_global_as_target`, `test_an_instance_with_no_admin_configured_refuses_everybody` | the company target |
+| `core/agent/tests/test_delegation_ceiling_verbs.py` · `test_a_workspace_outside_the_ceiling_is_refused_and_nothing_changes` | the agent's ceiling |
+| `core/agent/tests/test_chat_runtime_fault.py` · `test_a_refused_spawn_on_api_chat_is_a_typed_502_not_internal_server_error`, `test_queued_rows_behind_the_refusal_say_they_are_blocked_and_by_what` | typed faults and blocked queues |
+| `core/agent/tests/test_inbox.py` · `test_ten_submissions_during_a_job_all_execute_in_order` | nothing is dropped |
+| `core/agent/tests/test_proposals.py` · `test_the_list_is_the_callers_own_never_a_desk_named_in_the_body` | suggestions |
+| `core/agent/tests/test_flow_turn_label.py` · `test_agent_api_marks_a_flow_dispatch_from_the_headers_flows_sends`, `test_half_a_header_is_no_mark` | turn labels |
+| `clients/terminal/src/app/api/__tests__/chatProxyFaults.test.ts` · "never passes a bare 'Internal Server Error' through…" | the proxy's fault floor |
+| `clients/terminal/src/surfaces/__tests__/inbox.test.ts` · "a refused submission is not silently acknowledged" | the client's queue |
+| `clients/terminal/src/surfaces/__tests__/jobs.test.ts` · "a job event from session A never renders in chat B", "posts a line when the job fails — never silence" | job isolation and failure lines |
+| `clients/terminal/src/minutes/__tests__/workspaceTarget.test.tsx` · "refuses a workspace the chat is not over"; `globalTarget.test.tsx` · "does not offer it to anyone else" | the target chips |
+
+## Related
+
+- [Chat with your workspace](/how-to/chat-workspace) — the same chat over the API
+- [Manage your chats](/how-to/chat-controls) · [Long agent turns](/agent-tool-calls) · [Agent API](/api/agent) · [Errors](/api/errors) · [Agents](/core/agents)

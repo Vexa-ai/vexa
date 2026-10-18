@@ -10,6 +10,7 @@ module when docker is absent (the green-or-skip contract the gate relies on).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
@@ -64,8 +65,25 @@ MEETING_API_URL = f"http://127.0.0.1:{MEETING_API_HOST_PORT}"
 RUNTIME_URL = f"http://127.0.0.1:{RUNTIME_HOST_PORT}"
 
 # Env the stack boots with — pinned so the test knows the secrets it must present.
-ADMIN_TOKEN = "gate-admin-token"
+# Not `gate-admin-token`: that value shipped as the dashboard harness's fallback, and every service now
+# refuses a value published for the admin key (fact admin-token-placeholders).
+# Derived rather than written out: a token-shaped literal reads to secret scanners as a leaked
+# provider key. It is a fixed function of a public label, so every run boots with the same value.
+ADMIN_TOKEN = "compose-test-admin-" + hashlib.sha256(b"deploy/compose/tests ADMIN_TOKEN").hexdigest()[:32]
 INTERNAL_API_SECRET = "gate-internal-secret"
+# Compose requires NEXTAUTH_SECRET for the whole file, whichever services a test brings up.
+NEXTAUTH_SECRET = "gate-nextauth-secret-0123456789abcdef0123"
+# gateway-identity.v1: the gateway signs the identity it resolved with an Ed25519 key the stack's
+# `identity-keys` one-shot generates, and meeting-api / agent-api verify it with the public half. The
+# proof calls meeting-api directly as an internal-tier caller (X-Internal-Secret beside X-User-Id),
+# never as a forged identity.
+MCP_DELEGATION_SECRET = "gate-delegation-signing-key"
+# The runtime caller credential: the runtime answers only agent-api and meeting-api, and the proof
+# presents it when it reads or tears down a workload directly.
+RUNTIME_API_TOKEN = "gate-runtime-caller-token-0123456789abcdef"
+# postgres and redis refuse an unset or published password.
+DB_PASSWORD = "gate-db-password-0123456789abcdef"
+REDIS_PASSWORD = "0123456789abcdef0123456789abcdef"
 MINIO_BUCKET = "vexa"
 
 SERVICES = ["redis", "postgres", "storage", "admin-api", "runtime", "meeting-api", "gateway"]
@@ -126,11 +144,16 @@ def _stack_env() -> dict:
         # PUBLISHED :vX.Y.Z tag (with COMPOSE_NO_BUILD=1), so the proof runs against the artifacts.
         "IMAGE_TAG": os.getenv("IMAGE_TAG", "dev"),
         # Pin the project name into the interpolation env too (not just `-p`), so the compose's
-        # DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_vexa resolves to the SAME network compose creates —
+        # DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_bots resolves to the SAME network compose creates —
         # the bot must be spawned onto it to reach meeting-api/redis.
         "COMPOSE_PROJECT_NAME": PROJECT,
         "ADMIN_TOKEN": ADMIN_TOKEN,
         "INTERNAL_API_SECRET": INTERNAL_API_SECRET,
+        "NEXTAUTH_SECRET": NEXTAUTH_SECRET,
+        "VEXA_MCP_DELEGATION_SECRET": MCP_DELEGATION_SECRET,
+        "RUNTIME_API_TOKEN": RUNTIME_API_TOKEN,
+        "DB_PASSWORD": DB_PASSWORD,
+        "REDIS_PASSWORD": REDIS_PASSWORD,
         "MINIO_BUCKET": MINIO_BUCKET,
         "BROWSER_IMAGE": os.getenv("BROWSER_IMAGE", "vexaai/vexa-bot:v012"),
         "API_GATEWAY_HOST_PORT": GATEWAY_PORT,
@@ -202,6 +225,11 @@ class Stack:
     internal_secret: str = INTERNAL_API_SECRET
     bucket: str = MINIO_BUCKET
 
+    @property
+    def runtime_auth(self) -> dict:
+        """The runtime caller credential, as the headers the runtime requires."""
+        return {"Authorization": f"Bearer {RUNTIME_API_TOKEN}"}
+
     # ---- exec helpers (the docker CLI is our DB + S3 probe; no extra client deps) ----
     def exec(self, service: str, *cmd: str, check: bool = True) -> str:
         r = _compose("exec", "-T", service, *cmd, check=check, timeout=120)
@@ -237,12 +265,25 @@ class Stack:
     def redis_cli(self, *args: str) -> str:
         return self.exec("redis", "redis-cli", *args, check=False)
 
+    def xadd_segment_entry(self, payload: str, meeting_id: int) -> str:
+        """Append ``payload`` to ``transcription_segments`` as the meeting's own bot session would:
+        signed with a MeetingToken for ``meeting_id`` by transcript.v1's signer (``_segment_entry.py``,
+        vendored byte for byte). The collector drops anything else."""
+        from _segment_entry import signed_entry
+        from _token import mint_meeting_token
+
+        token = mint_meeting_token(int(meeting_id), 0, "google_meet", "", secret=self.admin_token,
+                                   session_uid=f"segment-writer-{meeting_id}")
+        fields = signed_entry(token, payload)
+        return self.redis_cli("XADD", "transcription_segments", "*",
+                              *[v for kv in fields.items() for v in kv])
+
     def logs(self, service: str, *, tail: int = 400) -> str:
         return _compose("logs", "--no-color", "--tail", str(tail), service, check=False).stdout
 
     def redis_host_url(self) -> str:
         port = self.redis_host_port
-        return f"redis://127.0.0.1:{port}/0"
+        return f"redis://:{REDIS_PASSWORD}@127.0.0.1:{port}/0"
 
     redis_host_port: int = 0
 
@@ -295,12 +336,12 @@ def stack():
 def _cleanup(s: Stack) -> None:
     # Remove any bot containers the runtime spawned on the HOST daemon (outside the compose project)
     # so `down -v` leaves nothing behind. Scoped to THIS project's network: the runtime attaches every
-    # workload to DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_vexa, and a bare name=^vexa-mtg- would rm -f
+    # bot to DOCKER_NETWORK=${COMPOSE_PROJECT_NAME}_bots, and a bare name=^vexa-mtg- would rm -f
     # ANOTHER stack's live meeting bots on a shared host (the exact shared-host scenario COMPOSE_PROJECT
     # exists for).
     try:
         names = subprocess.run(
-            ["docker", "ps", "-aq", "--filter", "name=^vexa-mtg-", "--filter", f"network={PROJECT}_vexa"],
+            ["docker", "ps", "-aq", "--filter", "name=^vexa-mtg-", "--filter", f"network={PROJECT}_bots"],
             capture_output=True, text=True, timeout=30,
         ).stdout.split()
         if names:

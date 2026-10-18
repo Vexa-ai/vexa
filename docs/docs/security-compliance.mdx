@@ -44,6 +44,83 @@ transit a vendor's infrastructure. This page collects what a security review ask
 - **Identity at the edge.** The gateway derives identity from your API key server-side;
   internal services trust only the gateway's asserted identity, not client-supplied fields.
 
+## Outbound URLs
+
+A person can give the deployment a URL it will call: a webhook, a calendar feed, their own
+transcription endpoint, a model endpoint, a page for the agent to fetch. Every server-side fetch
+of such a URL goes through one guard, which refuses loopback, private, link-local (cloud
+metadata) and other internal ranges in every address notation, and pins the connection to the
+address it checked. The rule, where it is enforced and its tests are in the
+[`outbound-url.v1` contract](https://github.com/Vexa-ai/vexa/blob/main/deploy/contracts/outbound-url.v1/README.md).
+The deployment's own endpoints (its bundled transcription service, its own model gateway) are
+configuration, not user input, and are not held to it.
+
+## Bot and runtime credentials
+
+Two internal hops carry their own credential: a meeting bot calling back into meeting-api, and
+the runtime reporting a workload's state to meeting-api.
+
+### How it works
+
+**The MeetingToken (bot → meeting-api).**
+
+1. meeting-api derives the MeetingToken key from the deployment's admin secret:
+   `HMAC-SHA256(ADMIN_TOKEN, "vexa/meeting-token/v1")`. The admin secret itself never signs a
+   token, and no new secret is distributed. meeting-api is the only service that mints or
+   verifies one.
+2. At each spawn, `bot_spawn` mints one HS256 token for that bot session. It carries
+   `session_uid` (the spawn's connection id), `meeting_id`, `user_id`, `aud`
+   (`transcription-collector`), `scope` (`transcribe:write`), `iat`, `exp` and a `jti`. Its
+   lifetime is `MEETING_TOKEN_TTL_SECONDS` (default 18000 s). It rides in the bot's
+   `invocation.v1` as `token`.
+3. The bot presents it as `Authorization: Bearer <token>` on the three meeting-api doors it calls:
+   `POST /bots/internal/callback/lifecycle` (the session is the event's `connection_id`),
+   `POST /internal/recordings/upload` (the request's `session_uid`), and an authenticated bot's
+   `PUT /internal/browser-session/{session_uid}`. Each door admits it through one function,
+   `admit_session`: valid signature, unexpired `exp`, the MeetingToken `aud` and `scope`, and bound
+   to exactly the session the request names.
+4. The transcript entries a bot writes to Redis carry the token's header and payload and a
+   signature; the collector recomputes the token under the same key and drops an entry whose
+   meeting is not the token's.
+
+**Runtime callbacks (runtime → meeting-api).**
+
+1. The runtime and meeting-api share the runtime caller credential, `RUNTIME_API_TOKEN`.
+   meeting-api presents it as a bearer token to call the runtime.
+2. The runtime does not send that token to a callback URL. It signs each delivery:
+   `X-Runtime-Signature: t=<unix seconds>,v2=<hex>`, an HMAC keyed from the token over the signing
+   time, the URL it delivers to and the event (canonical JSON). A retry is signed again when sent.
+3. `POST /runtime/callback` accepts a callback only when the signature is valid for the URL it was
+   received on, its time is within 300 s of meeting-api's clock, and the same signature has not
+   been accepted before (a replay guard in Redis, shared by every meeting-api replica, else in
+   process). Anything else is a 401 and a `runtime_callback_rejected` log line.
+
+**Who owns what.** meeting-api mints and verifies MeetingTokens and keeps no token table. The
+runtime signs callbacks; meeting-api verifies them. Code:
+`core/meetings/services/meeting-api/src/meeting_api/meeting_token.py`,
+`core/meetings/services/meeting-api/src/meeting_api/runtime_signature.py` and the runtime's
+`runtime_kernel/caller_auth.py`. Configuration: `ADMIN_TOKEN`, `RUNTIME_API_TOKEN` and
+`MEETING_TOKEN_TTL_SECONDS` in meeting-api's `config.v1.json`.
+
+### Why it complies
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| P14: config validated at boot | meeting-api refuses to boot without `ADMIN_TOKEN` or with a value published in this repository; the runtime refuses to boot without a usable `RUNTIME_API_TOKEN` | `gate:config-contract`, `gate:python` |
+| P23 and ADR-0044: no duplicated fact drifts | The key label is one fact across meeting-api and the two recording proofs that mint tokens; the callback signer and verifier are pinned to one shared vector | `gate:fact-parity` (fact `meeting-token-key-label`), `gate:python` |
+| P20: every access is checked, default deny | Every bot door admits one session per token; a callback door with no key configured refuses every caller | `gate:python` |
+| P18: fail loud | A refused callback is a 401 with a logged reason, never a silent accept | ungated: reviewed |
+
+Deny tests:
+
+| Protection | Test file | Tests |
+|---|---|---|
+| MeetingToken key, claims and session binding | `core/meetings/services/meeting-api/tests/test_meeting_token.py` | `test_the_meeting_token_key_is_derived_from_the_admin_secret`, `test_a_token_signed_with_the_raw_admin_secret_is_refused`, `test_a_token_missing_exp_aud_or_scope_is_refused`, `test_a_token_with_another_aud_scope_or_a_bad_exp_is_refused`, `test_forged_and_expired_tokens_are_refused`, `test_admit_refuses_another_session_or_none`, `test_both_doors_refuse_a_token_signed_with_the_raw_admin_secret` |
+| Transcript entries | `core/meetings/services/meeting-api/tests/test_segment_entry_auth.py` | `test_a_bot_cannot_write_another_meetings_transcript`, `test_every_other_entry_is_dropped` |
+| Callbacks fail closed | `core/meetings/services/meeting-api/tests/test_callbacks_fail_closed.py` | `test_no_meeting_token_key_refuses_every_lifecycle_callback`, `test_no_runtime_key_refuses_every_runtime_callback`, `test_the_production_entrypoint_never_opens_the_doors` |
+| Runtime callback signature | `core/meetings/services/meeting-api/tests/test_runtime_callback_signature.py` | `test_the_verifier_matches_the_runtimes_signer`, `test_an_unsigned_forged_stale_misdirected_or_replayed_callback_is_refused`, `test_a_refused_callback_moves_no_meeting` |
+| The runtime's side | `core/runtime/tests/test_caller_auth.py` | `test_every_control_route_refuses_a_caller_without_the_credential`, `test_production_boot_refuses_without_a_token`, `test_the_signature_covers_the_time_the_url_and_the_event`, `test_every_callback_carries_the_runtimes_signature_and_never_its_token` |
+
 ## Audit artifacts in the repo
 
 | Artifact | What it gives a reviewer |

@@ -1,0 +1,147 @@
+{{- if and .Values.networkPolicy.enabled .Values.runtime.enabled }}
+{{- /*
+THE RUNTIME AND THE PODS IT SPAWNS.
+
+  runtime (8090)
+    agent-api     spawns agent workers, registers routine jobs
+    meeting-api   spawns, probes and tears down meeting bots
+  Nothing else: the runtime starts Pods on its caller's word, so no workload and no other component
+  may reach it (it also requires its caller credential, RUNTIME_API_TOKEN).
+
+  Spawned workloads (runtime.managed=true) take no inbound connection at all, and reach only what
+  their class needs — the class is the `vexa.role` label the runtime stamps from the PROFILE:
+    worker   the gateway (its delegation-token toolbelt at /mcp), redis (its unit streams), flows-api
+             (the timeline, when flows is deployed), DNS, and addresses outside the private ranges
+             (the model provider, the open web)
+    bot      meeting-api (lifecycle callbacks, recording uploads), redis (transcript stream, commands),
+             DNS, and addresses outside the private ranges (meeting platforms and their media, STT)
+  A Pod with no role label is held to the bot policy. In-cluster dependencies this chart does not
+  render (an in-cluster STT, LLM endpoint or S3) are added per class with
+  networkPolicy.workloads.<class>.extraEgress, as NetworkPolicy egress rules.
+
+  All of this is inert without a CNI that enforces NetworkPolicy.
+*/}}
+{{- $sel := include "vexa.selectorLabels" . }}
+{{- $wl := .Values.networkPolicy.workloads }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list . "runtime-ingress") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $sel | nindent 6 }}
+      app.kubernetes.io/component: runtime
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 8090
+          protocol: TCP
+      from:
+        {{- range $c := list "agent-api" "meeting-api" }}
+        - podSelector:
+            matchLabels:
+              {{- $sel | nindent 14 }}
+              app.kubernetes.io/component: {{ $c }}
+        {{- end }}
+        {{- with .Values.networkPolicy.runtime.extraFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list . "workloads-ingress") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      runtime.managed: "true"
+  policyTypes: [Ingress]
+---
+{{- range $class := list "worker" "bot" }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list $ (printf "%s-egress" $class)) }}
+  labels:
+    {{- include "vexa.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      runtime.managed: "true"
+      {{- if eq $class "worker" }}
+      vexa.role: worker
+      {{- end }}
+    {{- if eq $class "bot" }}
+    matchExpressions:
+      - key: vexa.role
+        operator: NotIn
+        values: [worker]
+    {{- end }}
+  policyTypes: [Egress]
+  egress:
+    # name resolution, wherever the cluster serves it (kube-dns, NodeLocal DNSCache, OpenShift DNS)
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- $sel | nindent 14 }}
+              app.kubernetes.io/component: redis
+      ports:
+        - port: 6379
+          protocol: TCP
+    {{- if eq $class "worker" }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- $sel | nindent 14 }}
+              app.kubernetes.io/component: gateway
+      ports:
+        - port: 8000
+          protocol: TCP
+    {{- if $.Values.flows.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- $sel | nindent 14 }}
+              app.kubernetes.io/component: flows-api
+      ports:
+        - port: 18200
+          protocol: TCP
+    {{- end }}
+    {{- else }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- $sel | nindent 14 }}
+              app.kubernetes.io/component: meeting-api
+      ports:
+        - port: 8080
+          protocol: TCP
+    {{- end }}
+    # everything outside the private ranges: no cluster Pod, Service, node or metadata endpoint
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml $wl.privateCidrs.ipv4 | nindent 14 }}
+        {{- if $wl.ipv6 }}
+        - ipBlock:
+            cidr: ::/0
+            except:
+              {{- toYaml $wl.privateCidrs.ipv6 | nindent 14 }}
+        {{- end }}
+    {{- with (index $wl $class).extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+{{- end }}
+{{- end }}

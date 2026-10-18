@@ -1,68 +1,60 @@
 ---
-title: "Run a live meeting copilot"
-description: "Surface people, action items, and decisions as a call happens — approve them into the workspace."
+title: "Follow a live meeting"
+description: "Stream the transcript as the call happens, and put your agent on it from the chat."
 ---
 
-A **meeting copilot** rides the live transcript: a dispatch stays non-idle on
-the stream and emits **proactive cards** — a new person, an action item, a decision — as they come up.
-Approving a card commits it to your [workspace](/concepts#workspace). Same agent and governance as
-everything else; only the trigger (the transcript stream) differs.
+<Note>
+**This page changed with 0.12.** Vexa used to run a second model of its own during a call — a
+"meeting copilot" that turned the live transcript into cleaned notes and proactive cards, switched on
+per meeting with `POST /agent/meeting/process`. **That pipeline is removed**, along with
+`POST /agent/meeting/start`, the processing toggle and every `VEXA_LLM_*` provider setting behind it.
+Both endpoints now return `404`.
+
+There is one intelligence in Vexa and it is **your agent**. The live view streams the raw transcript;
+anything to be made of a meeting is a turn in the chat, over the MCP, where you can see it and steer
+it.
+</Note>
 
 The flow usually starts before the call: [plan the meeting](/how-to/plan-a-meeting) (or let
 [calendar sync](/how-to/calendar-sync) plan it), bind its prep workspace, and the bot auto-joins at
-start — members of the bound workspace get the same live feed the copilot rides.
+start — members of the bound workspace get the same live feed.
 
-## 1. Start the copilot
-
-The id invariant is `meeting_id == session_uid == native_id`.
+## 1. Put a bot in the meeting
 
 ```bash
-curl -X POST "$API_BASE/agent/meeting/start" \
+curl -X POST "$API_BASE/bots" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"native_id":"abc-defg-hij","platform":"google_meet","title":"Acme renewal"}'
-# → 202, the live-meeting record
+  -d '{"platform":"google_meet","native_meeting_id":"abc-defg-hij","meeting_url":"https://meet.google.com/abc-defg-hij"}'
 ```
 
-## 2. Turn processing on
+See [send a bot](/how-to/send-a-bot) for the full set of options.
 
-Processing is opt-in. Toggle it on to start consuming the transcript:
-
-```bash
-curl -X POST "$API_BASE/agent/meeting/process" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"native_id":"abc-defg-hij","platform":"google_meet","on":true}'
-# → { ..., "processing": true, "resumed_from": "<cursor-id>" }
-```
-
-## 3. Stream the merged feed
-
-Subscribe to the SSE stream that merges transcript and copilot output:
+## 2. Stream the live transcript
 
 ```bash
 curl -N -H "X-API-Key: $API_KEY" \
-  "$API_BASE/agent/meeting/stream?meeting_id=abc-defg-hij&session_uid=abc-defg-hij"
+  "$API_BASE/agent/meeting/stream?meeting_id=<row-id>&session_uid=<row-id>"
 ```
 
-Event types on the stream: `transcript`, `card` (a proposal), `message-delta`, `tool-call`, `ping`,
-`meeting-end`. Every event carries an SSE `id:` — on reconnect, echo it as `Last-Event-ID` to **resume
-gaplessly**.
+Event types on the stream: `transcript` (a segment — speaker, text, time; pending segments refine in
+place by `id`), `retract` (the capture withdrew a superseded draft), `ping`, `meeting-end`. Every
+event carries an SSE `id:` — on reconnect, echo it as `Last-Event-ID` to **resume gaplessly**.
 
-Approving a `card` commits it to the workspace (a person, an action item, a decision).
+The feed is owner-scoped: the caller must own the meeting row.
 
-## Pause and resume mid-call
+## 3. Ask your agent about it
 
-Toggle processing off to stop consuming without ending the meeting; the per-meeting **cursor freezes**.
-Turn it back on and it resumes from exactly where it stopped:
+The agent reads the meeting over the MCP, on your turn — during the call or after it:
 
 ```bash
-# pause — clears the flag, freezes the cursor
-curl -X POST "$API_BASE/agent/meeting/process" \
+curl -X POST "$API_BASE/agent/api/chat" \
   -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"native_id":"abc-defg-hij","platform":"google_meet","on":false}'
-# → { ..., "processing": false }
+  -d '{"prompt":"who has committed to what so far?",
+       "active":{"kind":"meeting","meeting":{"native_id":"abc-defg-hij","meeting_id":"<row-id>","platform":"google_meet"}}}'
 ```
 
-`on:true` later resumes from the saved cursor (`"resumed_from":"<id>"`) — no re-processing, no gap.
+What it writes lands in your [workspace](/concepts#workspace) as a normal, attributed commit — the
+same agent and the same governance as everything else.
 
 ## Health
 
@@ -74,5 +66,5 @@ A stale bot key surfaces as `native_resolve:{ok:false,kind:"unauthorized"}` rath
 
 ## After the call
 
-To write the durable record once the meeting ends — notes, decisions, follow-ups linked to people and
-companies — see [Report after every meeting](/how-to/post-meeting-report).
+The transcript is durable — read it with [`GET /transcripts`](/api/meetings) — and the
+[post-meeting report](/how-to/post-meeting-report) is an agent turn over it.

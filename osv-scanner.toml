@@ -1,0 +1,13 @@
+# OSV-Scanner allow list (.github/workflows/cve-scanning.yml). Each entry is a reviewed decision with a
+# reason and an expiry: on that date the finding fails the scan again and is re-read. The reasoning in
+# full is in security/known-advisories.md.
+
+[[IgnoredVulns]]
+id = "GHSA-hp3w-g68c-fv3c"
+ignoreUntil = 2026-12-31
+reason = "sprintf-js 1.1.3, DoS through an unbounded precision specifier; no fixed release exists. Reached only through roarr <- global-agent <- onnxruntime-node, which formats its own log lines during the postinstall download of the ONNX runtime; no request data reaches it."
+
+[[IgnoredVulns]]
+id = "GHSA-238p-pmpm-9mq7"
+ignoreUntil = 2026-12-31
+reason = "katex 0.16.47 (LOW): a trust bypass that needs prototype pollution to exist already. Reached through mermaid in the terminal's diagram rendering; the fix is in 0.18.2, outside mermaid 11's ^0.16 range, so it waits for mermaid."

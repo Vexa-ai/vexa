@@ -1,0 +1,110 @@
+{{- if .Values.mcp.enabled }}
+# The ONE MCP server (ADR-0037 §2). The gateway relays /mcp here; at boot this service asks each
+# deployed domain for its tool manifest (/.well-known/mcp-tools.json) and OpenAPI and serves the
+# union, so a person's own client and a cloud worker's toolbelt see the same tools. Every tool call
+# goes back out through the gateway with the caller's own bearer — this service holds no identity.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "mcp") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.mcp.replicaCount }}
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mcp
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mcp
+      annotations:
+        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+    spec:
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mcp
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.mcp.image.repository }}:{{ .Values.global.imageTag | default .Values.mcp.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8010
+          env:
+            - name: PORT
+              value: "8010"
+            # Tool calls go back out through the edge with the caller's own bearer.
+            - name: GATEWAY_URL
+              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+            # The deployed domains — each one named is asked for its manifest at boot, and a named
+            # domain that never answers fails the boot by name.
+            - name: ADMIN_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+            - name: MEETING_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "meeting-api") }}:{{ .Values.meetingApi.service.port }}"
+            {{- if .Values.agentApi.enabled }}
+            - name: AGENT_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+            {{- end }}
+            {{- if .Values.flows.enabled }}
+            - name: FLOWS_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "flows-api") }}:18200"
+            # flows' two operator-keyed tools (flows_submit, flow_lifecycle) need the key this edge
+            # presents on their behalf; without it the boot refuses to list a tool it cannot call.
+            - name: VEXA_FLOWS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.flowsApiKeySecretName" . }}
+                  key: VEXA_FLOWS_API_KEY
+            {{- end }}
+            - name: VEXA_ENV
+              value: {{ .Values.vexaEnv | default "development" | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.mcp.logLevel | default "info" | quote }}
+            {{- with .Values.mcp.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # The boot asks every deployed domain for its manifest before it listens, waiting out a
+          # cold start; give it the time that takes.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.mcp.resources | nindent 12 }}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -55,8 +55,9 @@ PY
 )
 
 if [ -n "$TOKS" ]; then
-    mkdir -p /run/vexa
-    printf '%s\n' "$TOKS" > /run/vexa/key.env
+    # Root's alone: a new file under umask 077, renamed over any earlier one (which may predate that).
+    rm -f /run/vexa/key.env.new
+    ( umask 077; printf '%s\n' "$TOKS" > /run/vexa/key.env.new ) && mv -f /run/vexa/key.env.new /run/vexa/key.env
     supervisorctl -c /etc/supervisor/conf.d/vexa.conf restart vexa:dashboard vexa:terminal >/dev/null 2>&1 || true
     echo "[provision-key] self-host keys provisioned; dashboard + terminal restarted (zero-login)"
 else

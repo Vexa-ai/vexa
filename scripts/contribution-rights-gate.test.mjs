@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { editedOnlyByAuthor, evaluatePullRequest, mergedDeclaration, registeredStanding, run } from "./contribution-rights-gate.mjs";
+import { guardTree } from "./test-tree.mjs";
+
+guardTree();
 
 const sha = "a".repeat(40);
 const oldSha = "b".repeat(40);
@@ -111,7 +114,7 @@ test("corporate path requires a designated current-head receipt", () => {
 test("verifier identity is case-insensitive but receipt format is strict", () => {
   const corporate = pr({ body: body("corporate") });
   assert.equal(evaluatePullRequest(corporate, [decision({ login: "RIGHTS-VERIFIER" })], config).ok, true);
-  assert.equal(evaluatePullRequest(corporate, [decision({ receipt: "sony-email" })], config).ok, false);
+  assert.equal(evaluatePullRequest(corporate, [decision({ receipt: "corp-email" })], config).ok, false);
 });
 
 test("a decision for another PR cannot authorize this PR", () => {
@@ -186,6 +189,29 @@ test("issue-comment event re-evaluates the current PR head", async () => {
     let payload = {};
     if (url.endsWith("/pulls/101")) payload = corporate;
     else if (url.includes("/issues/101/comments")) payload = [decision()];
+    return { ok: true, status: options.method === "POST" ? 201 : 200, json: async () => payload, text: async () => "" };
+  };
+  try {
+    assert.equal(await run({ event, config, token: "test", apiBase: "https://example.test" }), true);
+    const publish = calls.find((call) => call.url.endsWith("/check-runs"));
+    assert.equal(JSON.parse(publish.options.body).conclusion, "success");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a run re-reads before publishing, so a decision posted while it ran is not lost (L1)", async () => {
+  // Runs for one pull request can finish out of order. This run first reads no decision; by the time it
+  // publishes, a verifier's decision is on the PR. It must publish the verdict the decision gives.
+  const event = { repository: { full_name: "Vexa-ai/vexa" }, pull_request: pr({ body: body("corporate") }) };
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  let commentReads = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    let payload = {};
+    if (url.includes("/issues/101/comments")) payload = commentReads++ === 0 ? [] : [decision()];
+    else if (url.endsWith("/pulls/101")) payload = pr({ body: body("corporate") });
     return { ok: true, status: options.method === "POST" ? 201 : 200, json: async () => payload, text: async () => "" };
   };
   try {

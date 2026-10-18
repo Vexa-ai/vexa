@@ -1,0 +1,643 @@
+# Trivy allow list for the THIRD-PARTY images the repository pins, base images included (.github/workflows/cve-scanning.yml,
+# list from scripts/pinned-images.mjs). Each entry is a fixed CRITICAL/HIGH advisory inside an upstream image
+# that Vexa cannot patch, scoped by package URL to the package it was found in, with the reason and an expiry:
+# on that date the finding fails the scan again and is re-read. Produced from a Trivy 0.74.0 scan on
+# 2026-10-10; security/known-advisories.md carries the reasoning. Never used for Vexa's own images.
+vulnerabilities:
+  - id: CVE-2024-47867
+    purls:
+      - "pkg:pypi/gradio@4.44.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2024-47870
+    purls:
+      - "pkg:pypi/gradio@4.44.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2024-47871
+    purls:
+      - "pkg:pypi/gradio@4.44.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2024-47874
+    purls:
+      - "pkg:pypi/starlette@0.38.6"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2024-53981
+    purls:
+      - "pkg:pypi/python-multipart@0.0.10"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2025-23042
+    purls:
+      - "pkg:pypi/gradio@4.44.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2025-43859
+    purls:
+      - "pkg:pypi/h11@0.14.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2025-4565
+    purls:
+      - "pkg:pypi/protobuf@5.28.2"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2025-47273
+    purls:
+      - "pkg:pypi/setuptools@75.1.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2025-61726
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2025-61729
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2025-64756
+    purls:
+      - "pkg:npm/glob@10.4.5"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision."
+    expired_at: 2026-12-31
+  - id: CVE-2025-66418
+    purls:
+      - "pkg:pypi/urllib3@2.2.3"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2025-66471
+    purls:
+      - "pkg:pypi/urllib3@2.2.3"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2025-67221
+    purls:
+      - "pkg:pypi/orjson@3.10.7"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2025-68121
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2025-68973
+    purls:
+      - "pkg:deb/ubuntu/dirmngr@2.2.27-3ubuntu2.1?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/dirmngr@2.4.4-2ubuntu17.3?arch=amd64&distro=ubuntu-24.04"
+      - "pkg:deb/ubuntu/gnupg-l10n@2.2.27-3ubuntu2.1?arch=all&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/gnupg-utils@2.2.27-3ubuntu2.1?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/gnupg2@2.2.27-3ubuntu2.1?arch=all&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/gnupg@2.2.27-3ubuntu2.1?arch=all&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/gpg-agent@2.2.27-3ubuntu2.1?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/gpg-agent@2.4.4-2ubuntu17.3?arch=amd64&distro=ubuntu-24.04"
+      - "pkg:deb/ubuntu/gpg-wks-client@2.2.27-3ubuntu2.1?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/gpg-wks-server@2.2.27-3ubuntu2.1?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/gpg@2.2.27-3ubuntu2.1?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/gpg@2.4.4-2ubuntu17.3?arch=amd64&distro=ubuntu-24.04"
+      - "pkg:deb/ubuntu/gpgconf@2.2.27-3ubuntu2.1?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/gpgconf@2.4.4-2ubuntu17.3?arch=amd64&distro=ubuntu-24.04"
+      - "pkg:deb/ubuntu/gpgsm@2.2.27-3ubuntu2.1?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/gpgv@2.2.27-3ubuntu2.1?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/gpgv@2.4.4-2ubuntu17.3?arch=amd64&distro=ubuntu-24.04"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change. mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision. nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04 (base of the GPU transcription image, which the operator builds; Vexa publishes no transcription image). Ubuntu 22.04 packages (OpenSSL, GnuPG) with security updates newer than the base; the operator's build inherits them. Moving the CUDA base is part of the transcription image decision (S72)."
+    expired_at: 2026-12-31
+  - id: CVE-2025-9900
+    purls:
+      - "pkg:deb/ubuntu/libtiff5@4.3.0-6ubuntu0.10?arch=amd64&distro=ubuntu-22.04"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-0994
+    purls:
+      - "pkg:pypi/protobuf@5.28.2"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102266
+    purls:
+      - "pkg:pypi/pyjwt@2.13.0"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102267
+    purls:
+      - "pkg:pypi/pyjwt@2.13.0"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102268
+    purls:
+      - "pkg:pypi/pyjwt@2.13.0"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102271
+    purls:
+      - "pkg:pypi/pyjwt@2.13.0"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102272
+    purls:
+      - "pkg:pypi/pyjwt@2.13.0"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102273
+    purls:
+      - "pkg:pypi/pyjwt@2.13.0"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102276
+    purls:
+      - "pkg:npm/brace-expansion@2.0.2"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision. node:22-trixie-slim, pinned by digest (base of the terminal image and of the mock-bot CI test image). npm's own bundled dependencies under the image's global npm. The terminal's runtime stage removes npm, npx, corepack and yarn, and image-cve-scan.yml finds none of these in the built terminal image; the mock bot is a CI-only test image, never published. They clear when the pinned base digest carries a newer npm."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102278
+    purls:
+      - "pkg:npm/brace-expansion@2.0.2"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision. node:22-trixie-slim, pinned by digest (base of the terminal image and of the mock-bot CI test image). npm's own bundled dependencies under the image's global npm. The terminal's runtime stage removes npm, npx, corepack and yarn, and image-cve-scan.yml finds none of these in the built terminal image; the mock bot is a CI-only test image, never published. They clear when the pinned base digest carries a newer npm."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102993
+    purls:
+      - "pkg:pypi/pypdf@6.16.1"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102994
+    purls:
+      - "pkg:pypi/pypdf@6.16.1"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102995
+    purls:
+      - "pkg:pypi/pypdf@6.16.1"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102996
+    purls:
+      - "pkg:pypi/pypdf@6.16.1"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102997
+    purls:
+      - "pkg:pypi/pypdf@6.16.1"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102998
+    purls:
+      - "pkg:pypi/pypdf@6.16.1"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-102999
+    purls:
+      - "pkg:pypi/pypdf@6.16.1"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-103000
+    purls:
+      - "pkg:pypi/pypdf@6.16.1"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-103111
+    purls:
+      - "pkg:apk/alpine/pcre2@10.48-r0?arch=x86_64&distro=3.24.2"
+    statement: "nginx:alpine (the transcription stack's load balancer, deploy/transcription, operator-pulled). Alpine packages in the upstream image, which has not taken the fix yet; the floating tag picks it up on the next pull."
+    expired_at: 2026-12-31
+  - id: CVE-2026-104851
+    purls:
+      - "pkg:pypi/fsspec@2024.9.0"
+      - "pkg:pypi/fsspec@2026.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change. litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-13149
+    purls:
+      - "pkg:npm/brace-expansion@2.0.2"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision. node:22-trixie-slim, pinned by digest (base of the terminal image and of the mock-bot CI test image). npm's own bundled dependencies under the image's global npm. The terminal's runtime stage removes npm, npx, corepack and yarn, and image-cve-scan.yml finds none of these in the built terminal image; the mock bot is a CI-only test image, never published. They clear when the pinned base digest carries a newer npm."
+    expired_at: 2026-12-31
+  - id: CVE-2026-14257
+    purls:
+      - "pkg:npm/brace-expansion@2.0.2"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision. node:22-trixie-slim, pinned by digest (base of the terminal image and of the mock-bot CI test image). npm's own bundled dependencies under the image's global npm. The terminal's runtime stage removes npm, npx, corepack and yarn, and image-cve-scan.yml finds none of these in the built terminal image; the mock bot is a CI-only test image, never published. They clear when the pinned base digest carries a newer npm."
+    expired_at: 2026-12-31
+  - id: CVE-2026-14456
+    purls:
+      - "pkg:apk/alpine/libcrypto3@3.5.7-r0?arch=x86_64&distro=3.24.1"
+      - "pkg:apk/alpine/libssl3@3.5.7-r0?arch=x86_64&distro=3.24.1"
+    statement: "versity/versitygw v1.8.0 (Lite and Compose object storage; v1.8.0 is the latest release, 2026-09-04). Go's standard library and golang.org/x/net in the versitygw binary, and Alpine's OpenSSL. The gateway is reachable on the stack's own networks and, in Compose, on host loopback only; the next versitygw release is taken when it is published."
+    expired_at: 2026-12-31
+  - id: CVE-2026-21441
+    purls:
+      - "pkg:pypi/urllib3@2.2.3"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-23745
+    purls:
+      - "pkg:npm/tar@6.2.1"
+      - "pkg:npm/tar@7.4.3"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision."
+    expired_at: 2026-12-31
+  - id: CVE-2026-23949
+    purls:
+      - "pkg:pypi/jaraco.context@5.3.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change. python:3.10-slim (base of the CPU transcription image, which the operator builds; Vexa publishes no transcription image). The wheel and jaraco.context packages that ship with the base's packaging tools; the operator's build inherits them. Taken with the transcription image decision (S72)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-23950
+    purls:
+      - "pkg:npm/tar@6.2.1"
+      - "pkg:npm/tar@7.4.3"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision."
+    expired_at: 2026-12-31
+  - id: CVE-2026-24049
+    purls:
+      - "pkg:pypi/wheel@0.43.0"
+      - "pkg:pypi/wheel@0.45.1"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change. python:3.10-slim (base of the CPU transcription image, which the operator builds; Vexa publishes no transcription image). The wheel and jaraco.context packages that ship with the base's packaging tools; the operator's build inherits them. Taken with the transcription image decision (S72)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-24486
+    purls:
+      - "pkg:pypi/python-multipart@0.0.10"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-24842
+    purls:
+      - "pkg:npm/tar@6.2.1"
+      - "pkg:npm/tar@7.4.3"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision."
+    expired_at: 2026-12-31
+  - id: CVE-2026-25679
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-25990
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-26960
+    purls:
+      - "pkg:npm/tar@6.2.1"
+      - "pkg:npm/tar@7.4.3"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision."
+    expired_at: 2026-12-31
+  - id: CVE-2026-26996
+    purls:
+      - "pkg:npm/minimatch@9.0.5"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision."
+    expired_at: 2026-12-31
+  - id: CVE-2026-27145
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-27903
+    purls:
+      - "pkg:npm/minimatch@9.0.5"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision."
+    expired_at: 2026-12-31
+  - id: CVE-2026-27904
+    purls:
+      - "pkg:npm/minimatch@9.0.5"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision."
+    expired_at: 2026-12-31
+  - id: CVE-2026-28414
+    purls:
+      - "pkg:pypi/gradio@4.44.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-28416
+    purls:
+      - "pkg:pypi/gradio@4.44.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-29786
+    purls:
+      - "pkg:npm/tar@6.2.1"
+      - "pkg:npm/tar@7.4.3"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision."
+    expired_at: 2026-12-31
+  - id: CVE-2026-31802
+    purls:
+      - "pkg:npm/tar@6.2.1"
+      - "pkg:npm/tar@7.4.3"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision."
+    expired_at: 2026-12-31
+  - id: CVE-2026-32280
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-32281
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-32283
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-33671
+    purls:
+      - "pkg:npm/picomatch@4.0.2"
+      - "pkg:npm/picomatch@4.0.3"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision. node:22-trixie-slim, pinned by digest (base of the terminal image and of the mock-bot CI test image). npm's own bundled dependencies under the image's global npm. The terminal's runtime stage removes npm, npx, corepack and yarn, and image-cve-scan.yml finds none of these in the built terminal image; the mock bot is a CI-only test image, never published. They clear when the pinned base digest carries a newer npm."
+    expired_at: 2026-12-31
+  - id: CVE-2026-33811
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-33814
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-33818
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-39820
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-39821
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-39822
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-39836
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-40192
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-41651
+    purls:
+      - "pkg:deb/ubuntu/gir1.2-packagekitglib-1.0@1.2.5-2ubuntu2?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/libpackagekit-glib2-18@1.2.5-2ubuntu2?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/packagekit-tools@1.2.5-2ubuntu2?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/packagekit@1.2.5-2ubuntu2?arch=amd64&distro=ubuntu-22.04"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-42311
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-42499
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-42504
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-42561
+    purls:
+      - "pkg:pypi/python-multipart@0.0.10"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-44431
+    purls:
+      - "pkg:pypi/urllib3@2.2.3"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-45447
+    purls:
+      - "pkg:deb/ubuntu/libssl3@3.0.2-0ubuntu1.14?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/libssl3@3.0.2-0ubuntu1.18?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/libssl3t64@3.0.13-0ubuntu3.6?arch=amd64&distro=ubuntu-24.04"
+      - "pkg:deb/ubuntu/openssl@3.0.13-0ubuntu3.6?arch=amd64&distro=ubuntu-24.04"
+      - "pkg:deb/ubuntu/openssl@3.0.2-0ubuntu1.15?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/openssl@3.0.2-0ubuntu1.18?arch=amd64&distro=ubuntu-22.04"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change. mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision. nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04 (base of the GPU transcription image, which the operator builds; Vexa publishes no transcription image). Ubuntu 22.04 packages (OpenSSL, GnuPG) with security updates newer than the base; the operator's build inherits them. Moving the CUDA base is part of the transcription image decision (S72)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-4775
+    purls:
+      - "pkg:apk/alpine/tiff@4.7.1-r0?arch=x86_64&distro=3.24.2"
+    statement: "nginx:alpine (the transcription stack's load balancer, deploy/transcription, operator-pulled). Alpine packages in the upstream image, which has not taken the fix yet; the floating tag picks it up on the next pull."
+    expired_at: 2026-12-31
+  - id: CVE-2026-48545
+    purls:
+      - "pkg:pypi/gradio@4.44.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-48815
+    purls:
+      - "pkg:npm/sigstore@3.1.0"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision. node:22-trixie-slim, pinned by digest (base of the terminal image and of the mock-bot CI test image). npm's own bundled dependencies under the image's global npm. The terminal's runtime stage removes npm, npx, corepack and yarn, and image-cve-scan.yml finds none of these in the built terminal image; the mock bot is a CI-only test image, never published. They clear when the pinned base digest carries a newer npm."
+    expired_at: 2026-12-31
+  - id: CVE-2026-48818
+    purls:
+      - "pkg:pypi/starlette@0.38.6"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-49119
+    purls:
+      - "pkg:pypi/gradio@4.44.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-53539
+    purls:
+      - "pkg:pypi/python-multipart@0.0.10"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-54058
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-54059
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-54060
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-54283
+    purls:
+      - "pkg:pypi/starlette@0.38.6"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-55379
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-55380
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-56853
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-56858
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-56859
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-56860
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-56862
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it."
+    expired_at: 2026-12-31
+  - id: CVE-2026-59197
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-59199
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-59200
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-59204
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-59205
+    purls:
+      - "pkg:pypi/pillow@10.4.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change."
+    expired_at: 2026-12-31
+  - id: CVE-2026-59873
+    purls:
+      - "pkg:npm/tar@6.2.1"
+      - "pkg:npm/tar@7.4.3"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision."
+    expired_at: 2026-12-31
+  - id: CVE-2026-59874
+    purls:
+      - "pkg:npm/tar@6.2.1"
+      - "pkg:npm/tar@7.4.3"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision."
+    expired_at: 2026-12-31
+  - id: CVE-2026-63374
+    purls:
+      - "pkg:pypi/anyio@4.13.0"
+      - "pkg:pypi/anyio@4.6.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change. litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-69152
+    purls:
+      - "pkg:npm/brace-expansion@2.0.2"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision. node:22-trixie-slim, pinned by digest (base of the terminal image and of the mock-bot CI test image). npm's own bundled dependencies under the image's global npm. The terminal's runtime stage removes npm, npx, corepack and yarn, and image-cve-scan.yml finds none of these in the built terminal image; the mock bot is a CI-only test image, never published. They clear when the pinned base digest carries a newer npm."
+    expired_at: 2026-12-31
+  - id: CVE-2026-69192
+    purls:
+      - "pkg:npm/ip-address@10.1.0"
+      - "pkg:npm/ip-address@9.0.5"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision. node:22-trixie-slim, pinned by digest (base of the terminal image and of the mock-bot CI test image). npm's own bundled dependencies under the image's global npm. The terminal's runtime stage removes npm, npx, corepack and yarn, and image-cve-scan.yml finds none of these in the built terminal image; the mock bot is a CI-only test image, never published. They clear when the pinned base digest carries a newer npm."
+    expired_at: 2026-12-31
+  - id: CVE-2026-73566
+    purls:
+      - "pkg:npm/tar@6.2.1"
+      - "pkg:npm/tar@7.4.3"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision."
+    expired_at: 2026-12-31
+  - id: CVE-2026-78667
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+      - "pkg:golang/stdlib@v1.27.1"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it. versity/versitygw v1.8.0 (Lite and Compose object storage; v1.8.0 is the latest release, 2026-09-04). Go's standard library and golang.org/x/net in the versitygw binary, and Alpine's OpenSSL. The gateway is reachable on the stack's own networks and, in Compose, on host loopback only; the next versitygw release is taken when it is published. axllent/mailpit:latest (the dogfood rig's local mail catcher, bound to 127.0.0.1 on the rig host, never part of a deployment). Go's standard library and golang.org/x/net compiled into the upstream binary."
+    expired_at: 2026-12-31
+  - id: CVE-2026-78669
+    purls:
+      - "pkg:golang/golang.org/x/net@v0.58.0"
+      - "pkg:golang/golang.org/x/net@v0.59.0"
+      - "pkg:golang/stdlib@v1.24.6"
+      - "pkg:golang/stdlib@v1.27.1"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it. versity/versitygw v1.8.0 (Lite and Compose object storage; v1.8.0 is the latest release, 2026-09-04). Go's standard library and golang.org/x/net in the versitygw binary, and Alpine's OpenSSL. The gateway is reachable on the stack's own networks and, in Compose, on host loopback only; the next versitygw release is taken when it is published. axllent/mailpit:latest (the dogfood rig's local mail catcher, bound to 127.0.0.1 on the rig host, never part of a deployment). Go's standard library and golang.org/x/net compiled into the upstream binary."
+    expired_at: 2026-12-31
+  - id: CVE-2026-82049
+    purls:
+      - "pkg:apk/wolfi/python-3.13-base@3.13.15-r4?arch=x86_64&distro=20230201"
+      - "pkg:apk/wolfi/python-3.13@3.13.15-r4?arch=x86_64&distro=20230201"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-84782
+    purls:
+      - "pkg:deb/ubuntu/libssl3@3.0.2-0ubuntu1.14?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/libssl3@3.0.2-0ubuntu1.18?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/libssl3t64@3.0.13-0ubuntu3.6?arch=amd64&distro=ubuntu-24.04"
+      - "pkg:deb/ubuntu/openssl@3.0.13-0ubuntu3.6?arch=amd64&distro=ubuntu-24.04"
+      - "pkg:deb/ubuntu/openssl@3.0.2-0ubuntu1.15?arch=amd64&distro=ubuntu-22.04"
+      - "pkg:deb/ubuntu/openssl@3.0.2-0ubuntu1.18?arch=amd64&distro=ubuntu-22.04"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change. mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision. nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04 (base of the GPU transcription image, which the operator builds; Vexa publishes no transcription image). Ubuntu 22.04 packages (OpenSSL, GnuPG) with security updates newer than the base; the operator's build inherits them. Moving the CUDA base is part of the transcription image decision (S72)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-93990
+    purls:
+      - "pkg:apk/alpine/libexpat@2.8.4-r0?arch=x86_64&distro=3.24.2"
+    statement: "nginx:alpine (the transcription stack's load balancer, deploy/transcription, operator-pulled). Alpine packages in the upstream image, which has not taken the fix yet; the floating tag picks it up on the next pull."
+    expired_at: 2026-12-31
+  - id: CVE-2026-9496
+    purls:
+      - "pkg:npm/pacote@19.0.1"
+      - "pkg:npm/pacote@19.0.2"
+      - "pkg:npm/pacote@20.0.0"
+      - "pkg:npm/pacote@20.0.1"
+    statement: "mcr.microsoft.com/playwright:v1.56.0-noble (base of vexa-lite and vexa-bot). npm's own bundled dependencies (tar, glob, minimatch, brace-expansion, picomatch, sigstore, pacote, ip-address) under the global npm, which those images use only while building, and Ubuntu packages (OpenSSL, GnuPG) with security updates newer than the base. Moving the base moves the browser the bot joins meetings with, which is a release decision. node:22-trixie-slim, pinned by digest (base of the terminal image and of the mock-bot CI test image). npm's own bundled dependencies under the image's global npm. The terminal's runtime stage removes npm, npx, corepack and yarn, and image-cve-scan.yml finds none of these in the built terminal image; the mock bot is a CI-only test image, never published. They clear when the pinned base digest carries a newer npm."
+    expired_at: 2026-12-31
+  - id: CVE-2026-97031
+    purls:
+      - "pkg:golang/stdlib@v1.24.6"
+      - "pkg:golang/stdlib@v1.27.1"
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it. versity/versitygw v1.8.0 (Lite and Compose object storage; v1.8.0 is the latest release, 2026-09-04). Go's standard library and golang.org/x/net in the versitygw binary, and Alpine's OpenSSL. The gateway is reachable on the stack's own networks and, in Compose, on host loopback only; the next versitygw release is taken when it is published. axllent/mailpit:latest (the dogfood rig's local mail catcher, bound to 127.0.0.1 on the rig host, never part of a deployment). Go's standard library and golang.org/x/net compiled into the upstream binary."
+    expired_at: 2026-12-31
+  - id: CVE-2026-97687
+    purls:
+      - "pkg:apk/wolfi/py3-pip-wheel@26.2.1-r0?arch=x86_64&distro=20230201"
+      - "pkg:pypi/urllib3@2.2.3"
+      - "pkg:pypi/urllib3@2.7.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change. litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: CVE-2026-97689
+    purls:
+      - "pkg:apk/wolfi/py3-pip-wheel@26.2.1-r0?arch=x86_64&distro=20230201"
+      - "pkg:pypi/urllib3@2.2.3"
+      - "pkg:pypi/urllib3@2.7.0"
+    statement: "fedirz/faster-whisper-server:latest-cpu (Lite LOCAL_STT sidecar, opt-in, operator-pulled). The upstream image is no longer maintained (the project continues as speaches) and ships Python and Ubuntu packages with fixed advisories it will not take. Replacing the sidecar is a separate change. litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: GHSA-c2m8-h5v5-343r
+    purls:
+      - "pkg:pypi/tornado@6.5.8"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31
+  - id: GHSA-chx6-46f5-w4vp
+    purls:
+      - "pkg:pypi/tornado@6.5.8"
+    statement: "litellm/litellm v1.97.2 (llm-shim, off by default behind the llm-shim Compose profile; the operator pulls it from LiteLLM's registry). Python and Wolfi packages inside LiteLLM's own image; no LiteLLM release scanned on 2026-10-10 (v1.97.2, v1.101.2, v1.102.1) is free of them. The shim is bumped on purpose with its configuration (deploy/compose/llm-shim/README.md)."
+    expired_at: 2026-12-31

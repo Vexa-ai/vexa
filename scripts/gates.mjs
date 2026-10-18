@@ -5,7 +5,7 @@
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|config-contract|python|stack|node|health|access|
  *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|
- *                                lite-makefile|all]
+ *                                lite-makefile|domain-doors|fact-parity|vendor-payload|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -17,6 +17,12 @@ import { execSync, execFileSync } from "node:child_process";
 // calls are either constant command strings or genuine shell pipelines (grep … | grep -v …
 // || true), which need a shell by construction.
 import { createHash } from "node:crypto";
+import { checkDomainDoors, ALLOW_PATH as DOORS_ALLOW } from "./check-domain-doors.mjs";
+import { checkParity, MANIFEST_PATH as PARITY_MANIFEST } from "./check-parity.mjs";
+import { checkVendorPayload, NATIVE_DIR } from "./check-vendor-payload.mjs";
+import { checkPythonLicenses, INDEX_FILE as PY_LICENSE_INDEX } from "./check-python-licenses.mjs";
+import { collectPinnedImages, trackedFiles, isDockerfile } from "./pinned-images.mjs";
+import { npmLockInventory } from "./npm-locks.mjs";
 
 const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", "test-results", "playwright-report", "coverage"]);
@@ -149,8 +155,14 @@ function gateExports() {
   return true;
 }
 
-// gate:isolation (P2) — run every brick's own check-isolation
+// gate:isolation (P2) — run every brick's own check-isolation. A package without one is a brick nobody
+// checks, and nothing would say so, so every package carries one, bar the reasoned exemptions below.
+const ISOLATION_EXEMPT = {
+  "core/meetings/eval": "the L4 eval harness: run by hand against a live deployment, outside the pnpm workspace, and it declares no dependencies, so there is no declared boundary for a check to hold",
+};
 function gateIsolation() {
+  const missing = packageDirs().filter((d) => !existsSync(join(d, "scripts", "check-isolation.js")) && !ISOLATION_EXEMPT[rel(d)]);
+  if (missing.length) return fail(missing.map((d) => `package with no scripts/check-isolation.js: ${rel(d)}`));
   const found = walkDirs()
     .map((d) => [d, join(d, "scripts", "check-isolation.js")])
     .filter(([, s]) => existsSync(s));
@@ -213,15 +225,16 @@ function gateTestIsolation() {
 }
 
 // gate:arch-report (P9) — the architecture-compliance map is GREEN: every modularity principle
-// (P2·P3·P4·P6·P12) resolves to a passing gate. scripts/arch-report.mjs --check re-runs each and fails
-// loud if any is red — so "fully modular" is a claim backed by mechanical evidence, and docs/docs/governance/arch-compliance.mdx
-// is regenerable + current. Green-on-empty before the report generator lands.
+// (P2·P3·P4·P6·P12·P23) resolves to a passing gate. scripts/arch-report.mjs --check re-runs each and
+// fails loud if any is red, AND fails when docs/docs/governance/arch-compliance.mdx differs from what
+// the tree renders now — so "fully modular" is a claim backed by mechanical evidence, and the map
+// says what is true today. Green-on-empty before the report generator lands.
 function gateArchReport() {
   const s = join(ROOT, "scripts", "arch-report.mjs");
   if (!existsSync(s)) { console.log("  ✓ gate:arch-report — no report generator yet (green-on-empty)"); return true; }
   try { execFileSync("node", [s, "--check"], { stdio: "pipe" }); }
   catch (e) { return fail([`arch-report:\n${errText(e).slice(0, 900)}`]); }
-  console.log("  ✓ gate:arch-report — every modularity principle maps to a green gate (P9)");
+  console.log("  ✓ gate:arch-report — every modularity principle maps to a green gate, and the committed map is current (P9)");
   return true;
 }
 
@@ -299,13 +312,24 @@ function gateContractVersion() {
 }
 
 // gate:python — pytest in every Python package (a dir with pyproject.toml + tests/)
+//
+// F209: `catch (e) { return fail(...) }` used to sit INSIDE this loop, so the first red package
+// returned immediately and every later package was never even invoked — not run, not skipped,
+// just silently absent from the log. The gate under-reported by construction: this is the
+// mechanism behind #1434's "CI never executed core/flows, lite or the rig" (#1473 fixed the one
+// package that happened to be red, not the loop that stopped after it). Collect every package's
+// result, run the WHOLE population every time, then fail once naming every red package — so one
+// `pnpm gate:python` run shows the real blast radius instead of red → fix → push → discover the
+// next one.
 function gatePython() {
   const pkgs = walkDirs().filter((d) => existsSync(join(d, "pyproject.toml")) && existsSync(join(d, "tests")));
   if (!pkgs.length) { console.log("  ✓ gate:python — no Python packages yet (green-on-empty)"); return true; }
+  const failures = [];
   for (const d of pkgs) {
     try { execSync("uv run pytest -q", { cwd: d, stdio: "pipe" }); }
-    catch (e) { return fail([`pytest ${rel(d)}:\n${errText(e)}`]); }
+    catch (e) { failures.push(`pytest ${rel(d)}:\n${errText(e)}`); }
   }
+  if (failures.length) return fail([`${failures.length}/${pkgs.length} package(s) failed pytest:`, ...failures]);
   console.log(`  ✓ gate:python — ${pkgs.length} package(s) · pytest green`);
   return true;
 }
@@ -405,34 +429,113 @@ function gateEvalBaseline() {
   return true;
 }
 
-// gate:licenses (P17) — every resolved dep is OSS-licence-clean (FINOS Cat A/B/X). Uses pnpm's
-// built-in licence index (no added dependency to vet — itself a P17 win). Cat A (permissive) passes;
-// Cat B (LGPL/MPL/EPL) must be listed in license-exceptions.json; Cat X (GPL/AGPL/SSPL/BSL/…) and
-// any unclassified licence fail the build. B is checked before X so LGPL never trips the GPL match.
+// gate:licenses (P17) — every resolved dep is OSS-licence-clean (FINOS Cat A/B/X), npm and Python.
+// npm: pnpm's built-in licence index (no added dependency to vet — itself a P17 win). Python: every
+// package a Dockerfile installs, from the uv.lock it syncs and the pip lines it runs, against the
+// reviewed python-licenses.json (scripts/check-python-licenses.mjs). Cat A (permissive) passes;
+// Cat B (MPL/EPL/CDDL/OFL) must be listed in license-exceptions.json; Cat X (GPL/LGPL/AGPL/SSPL/BSL/…)
+// and any unclassified licence fail the build.
 // FINOS licence classifier (ADR-0004), shared by gate:licenses (npm/py deps) and gate:image-licenses
-// (baked apt packages + pinned container images). B is tested before X so LGPL never trips the GPL
-// match. Cat X is where Redis ≥7.4's RSALv2/SSPLv1 lands — the exact class #653 keeps out of our images.
-const LICENSE_A = [/^MIT/, /^Apache-2\.0/i, /^BSD\b/, /^BSD-/, /^ISC/, /^0BSD/, /^Unlicense/, /^CC0-/, /^CC-BY-/, /^Python-2\.0/, /^PostgreSQL$/i, /^BlueOak/, /^Zlib/i, /^MIT-0/, /^WTFPL/i, /^SIL OPEN FONT LICENSE/i, /OR CC0-1\.0/];
-const LICENSE_B = [/LGPL/i, /^MPL/i, /^EPL/i];                                    // weak copyleft — needs a logged exception
-const LICENSE_X = [/(^|[^L])GPL/i, /AGPL/i, /SSPL/i, /\bBSL\b/i, /Business Source/i, /Elastic-/i, /Commons.?Clause/i, /Proprietary/i, /UNLICENSED/, /\bRSALv?\d/i, /Redis Source Available/i];
-// → "A" (permissive, passes) | "B" (weak-copyleft, needs a logged exception) | "X" (forbidden) | "?" (unclassified)
-function classifyLicense(lic) {
+// (baked apt packages + pinned container images). The categories are FINOS's own list
+// (community.finos.org, "License Categories"): LGPL is Category X there, beside GPL and AGPL, and CDDL
+// and OFL are Category B. Cat X is also where Redis ≥7.4's RSALv2/SSPLv1 lands — the exact class #653
+// keeps out of our images. `.github/workflows/dependency-review.yml`'s allow-list is held to this
+// classifier by scripts/gates.test.mjs: every licence it allows must classify A or B here.
+const LICENSE_A = [/^MIT/, /^Apache-2\.0/i, /^BSD\b/, /^BSD-/, /^ISC/, /^0BSD/, /^Unlicense/, /^CC0-/, /^CC-BY-/, /^Python-2\.0/, /^PSF-2\.0$/, /^PostgreSQL$/i, /^BlueOak/, /^Zlib/i, /^MIT-0/, /^WTFPL/i];
+const LICENSE_B = [/^MPL/i, /^EPL/i, /^CDDL/i, /^OFL-/i, /^SIL OPEN FONT LICENSE/i];   // weak copyleft — needs a logged exception
+const LICENSE_X = [/GPL/i, /AGPL/i, /SSPL/i, /\bBSL\b/i, /Business Source/i, /Elastic-/i, /Commons.?Clause/i, /Proprietary/i, /UNLICENSED/, /\bRSALv?\d/i, /Redis Source Available/i];
+// One licence NAME, matched whole. → "A" | "B" | "X" | "?"; see classifyLicense for expressions.
+function classifyTerm(lic) {
   if (LICENSE_A.some((re) => re.test(lic))) return "A";
   if (LICENSE_B.some((re) => re.test(lic))) return "B";
   if (LICENSE_X.some((re) => re.test(lic))) return "X";
   return "?";
+}
+// → "A" (permissive, passes) | "B" (weak-copyleft, needs a logged exception) | "X" (forbidden) | "?" (unclassified)
+//
+// AN SPDX DISJUNCTION IS A CHOICE WE MAKE, so the expression is as clean as its cleanest option:
+// `(MPL-2.0 OR Apache-2.0)` — how dompurify, and therefore every mermaid diagram, reaches us —
+// is taken under Apache-2.0 and is Cat A. Matched as a whole string it was none of A, B or X (it
+// starts with a paren), so it landed on "?" and failed the build. The single `/OR CC0-1.0/` pattern
+// that used to sit in LICENSE_A was this same rule, hand-written for one package; it is gone
+// because the general one subsumes it.
+//
+// AN `AND` BINDS US TO EVERY TERM AT ONCE, so a conjunction is as restrictive as its most restrictive
+// term: `MPL-2.0 AND MIT` (tqdm) is Cat B, `Apache-2.0 AND LGPL-3.0-or-later` is Cat X, and a term
+// nobody has classified leaves the whole conjunction unclassified. Matched as a whole string, the
+// leading term decided alone — `Apache-2.0 AND LGPL-3.0-or-later` read as Cat A.
+const CAT_RANK = { A: 0, B: 1, "?": 2, X: 3 };
+function classifyConjunction(expr) {
+  const terms = expr.replace(/^\(\s*|\s*\)$/g, "").split(/\s+AND\s+/i).map((t) => t.trim());
+  if (terms.length < 2) return classifyTerm(expr);
+  return terms.map(classifyTerm).reduce((w, c) => (CAT_RANK[c] > CAT_RANK[w] ? c : w), "A");
+}
+function classifyLicense(lic) {
+  const terms = String(lic).replace(/^\(\s*|\s*\)$/g, "").split(/\s+OR\s+/i).map((t) => t.trim());
+  if (terms.length < 2) return classifyConjunction(String(lic));
+  const cats = terms.map(classifyConjunction);
+  return cats.includes("A") ? "A" : cats.includes("B") ? "B" : cats.includes("X") ? "X" : "?";
+}
+
+// Every licence `.github/workflows/dependency-review.yml` allows, classified here. → error strings.
+function dependencyReviewDrift(root) {
+  const wf = join(root, ".github", "workflows", "dependency-review.yml");
+  if (!existsSync(wf)) return [];
+  const m = readFileSync(wf, "utf8").match(/^\s*allow-licenses:\s*>-?\s*\n((?:[ \t]+[^\s#][^\n]*\n?)+)/m);
+  if (!m) return [`${rel(wf)}: no \`allow-licenses\` list found — the gate cannot hold it to the classifier`];
+  const ids = m[1].split(/[,\s]+/).map((t) => t.trim()).filter(Boolean);
+  return ids
+    .map((id) => [id, classifyLicense(id)])
+    .filter(([, cat]) => cat !== "A" && cat !== "B")
+    .map(([id, cat]) => `${rel(wf)} allows ${id}, which this classifier puts in Cat ${cat} — dependency review must admit FINOS Categories A and B only`);
 }
 
 function gateLicenses() {
   let raw;
   try { raw = execSync("pnpm licenses list --json", { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] }).toString(); }
   catch (e) { raw = (e.stdout || "").toString(); }
-  if (!raw.trim()) { console.log("  ✓ gate:licenses — no resolved deps yet (green-on-empty)"); return true; }
+  // No resolved npm tree yet is green-on-empty for the npm half only; the Python half still runs.
+  if (!raw.trim()) raw = "{}";
   let data; try { data = JSON.parse(raw); } catch { return fail(["`pnpm licenses list --json` returned non-JSON — run `pnpm install` first"]); }
+  // pnpm answers a query it COULD NOT ANSWER with `{ "error": { code, message } }` on stdout —
+  // valid JSON, shaped nothing like a licence index. Read it before the loop: without this the gate
+  // dies on `pkgs.map is not a function`, which names nothing an operator can act on. The common way
+  // in is a store that has never seen a newly-locked package (a worktree where `pnpm install` has
+  // not run since the lockfile grew). "Cannot read the tree" is a FAILURE, not green-on-empty — the
+  // gate has verified nothing.
+  if (data?.error) return fail([`\`pnpm licenses list\` could not read the dependency tree: ${data.error.message ?? data.error.code ?? "unknown error"}`]);
+  // THE npm PROJECTS OUTSIDE THE pnpm TREE (scripts/npm-locks.mjs). The terminal's images install from
+  // clients/terminal/package-lock.json with `npm ci`, whose overrides differ from pnpm's, so the pnpm
+  // index does not describe them (S73). Each such lock is folded into the same index and classified by
+  // the same rules, exceptions included.
+  let lockInv;
+  try { lockInv = npmLockInventory(ROOT); }
+  catch (e) { return fail([`npm lockfiles: could not be read — ${errText(e).slice(0, 400)}`]); }
+  let lockAdded = 0;
+  for (const p of lockInv.packages) {
+    const list = (data[p.license] ||= []);
+    if (list.some((q) => q.name === p.name)) continue;
+    list.push({ name: p.name, versions: [p.version], from: p.locks });
+    lockAdded++;
+  }
   const exFile = join(ROOT, "license-exceptions.json");
-  const exceptions = existsSync(exFile) ? (JSON.parse(readFileSync(exFile, "utf8")).categoryB || []) : [];
-  const excepted = (name) => exceptions.some((e) => name === e.package || name.startsWith(e.package));
+  const exFileData = existsSync(exFile) ? JSON.parse(readFileSync(exFile, "utf8")) : {};
+  // npm rows only: a `"ecosystem": "pypi"` row is the Python half's, matched by exact name there.
+  const exceptions = (exFileData.categoryB || []).filter((e) => (e.ecosystem || "npm") === "npm");
+  // A package that DECLARES NO LICENCE AT ALL is reported by pnpm as "Unknown". That is not a
+  // licence to classify — it is a package.json field somebody left out — so the only honest
+  // resolution is a human reading the licence file the package actually ships and recording what it
+  // says. `undeclared` is that record; anything not in it still fails, exactly as Cat B does.
+  const undeclared = exFileData.undeclared || [];
+  const listedIn = (list, name) => list.some((e) => name === e.package || name.startsWith(e.package));
+  const excepted = (name) => listedIn(exceptions, name);
   const bad = [], flagged = [];
+  // A categoryB row holds FINOS Category B only. LGPL is Category X (ADR-0004, amended 2026-10-10), so an
+  // LGPL row here would be a Cat X licence admitted by exception, which P17 forbids.
+  for (const r of exFileData.categoryB || []) {
+    const cat = classifyLicense(r.license || "");
+    if (cat !== "B") bad.push(`license-exceptions.json categoryB row "${r.package}" is ${r.license || "(no licence)"}, Cat ${cat} — a categoryB row may hold Category B only (MPL/EPL/CDDL/OFL)`);
+  }
   for (const [lic, pkgs] of Object.entries(data)) {
     const names = pkgs.map((p) => p.name);
     const cat = classifyLicense(lic);
@@ -444,20 +547,35 @@ function gateLicenses() {
       continue;
     }
     if (cat === "X") { bad.push(`FORBIDDEN (Cat X) ${lic}: ${names.join(", ")} — replace this dependency`); continue; }
+    if (lic === "Unknown") {
+      const unlisted = names.filter((n) => !listedIn(undeclared, n));
+      if (unlisted.length) bad.push(`no licence declared by: ${unlisted.join(", ")} — read the package's own licence file and log it in license-exceptions.json (undeclared), or replace the dep`);
+      else flagged.push(`undeclared (${names.join(", ")})`);
+      continue;
+    }
     bad.push(`unclassified licence "${lic}": ${names.join(", ")} — classify it in scripts/gates.mjs or replace the dep`);
   }
+  // DEPENDENCY REVIEW READS THE SAME CATEGORIES. Its `allow-licenses` list is the pull-request-time
+  // copy of this policy (GitHub's dependency graph, the diff only); every licence it admits must be
+  // Cat A or B here, so the two can never disagree about a category again (S71: they did about LGPL).
+  bad.push(...dependencyReviewDrift(ROOT));
+  let py;
+  try { py = checkPythonLicenses(ROOT, classifyLicense); }
+  catch (e) { return fail([...bad, `Python licences: the checker itself failed — ${errText(e).slice(0, 800)}`]); }
+  bad.push(...py.errs);
   if (bad.length) return fail(bad);
   const total = Object.values(data).reduce((n, p) => n + p.length, 0);
-  console.log(`  ✓ gate:licenses — ${total} deps OSS-clean (Cat A${flagged.length ? `; ${flagged.length} Cat-B by exception: ${flagged.join("; ")}` : ""})`);
+  console.log(`  ✓ gate:licenses — ${total} npm deps OSS-clean, ${lockAdded} of them only in ${lockInv.locks.join(", ") || "no npm lockfile"} (Cat A${flagged.length ? `; ${flagged.length} by logged exception: ${flagged.join("; ")}` : ""})`);
+  console.log(`  ✓ gate:licenses — ${py.total} Python packages from ${py.installs} install line(s) in ${py.dockerfiles} Dockerfile(s) OSS-clean against ${PY_LICENSE_INDEX} (Cat A${py.flagged.length ? `; ${py.flagged.length} by logged exception: ${py.flagged.join("; ")}` : ""})`);
   return true;
 }
 
 // gate:image-licenses (P17, #653) — the packaging-side complement to gate:licenses. That gate scans the
 // npm/py DEPENDENCY tree; it is blind to two license surfaces the project actually ships, the class the
 // #653 audit exposed — "the thing we ship is not the thing the gate checks":
-//   (1) third-party container images our deploy surfaces PIN (compose/helm `image:` refs, Lite Dockerfile
-//       FROM refs, and Lite Makefile `*_IMAGE` variables) — user-pulled
-//       sidecars. Each is DECLARED in image-licenses.json; an undeclared pin fails (the "green gate ships
+//   (1) third-party container images the repository PINS (scripts/pinned-images.mjs: every compose file
+//       and Helm chart under deploy/, every tracked Dockerfile's FROM, `docker run` in deploy/ scripts and
+//       Makefiles, Makefile `*_IMAGE` variables) — user-pulled sidecars and base images. Each is DECLARED in image-licenses.json; an undeclared pin fails (the "green gate ships
 //       an un-audited component" hole); a non-permissive licence (e.g. a source-available Redis ≥7.4
 //       RSALv2/SSPL, or AGPL MinIO) requires a logged `reason`, so it is a reviewed decision, never silent.
 //   (2) components BAKED INTO a published vexaai/* image (`bundled`) — redistribution, so strict: Cat A
@@ -473,87 +591,9 @@ function gateImageLicenses() {
   const declaredImages = new Map((man.images || []).map((e) => [e.name, e]));
   const bad = [], flagged = [];
 
-  // (1) third-party image pins across the deploy-owned forms:
-  //     • scalar `image: ref` in compose, Helm values, and Helm templates;
-  //     • structured Helm `image: { repository, tag }` blocks;
-  //     • every `FROM ref` in the Lite Dockerfile (including builder stages whose bytes feed final);
-  //     • non-recipe `*_IMAGE` variable assignments in the Lite Makefile.
-  //     Skip our own vexaai/* / vexa/* images — those are built here, not third-party inputs.
-  const chartDir = join(ROOT, "deploy", "helm", "charts", "vexa");
-  const tplDir = join(chartDir, "templates");
-  const helmValueFiles = existsSync(chartDir)
-    ? readdirSync(chartDir).filter((f) => /^values.*\.yaml$/.test(f)).map((f) => join(chartDir, f))
-    : [];
-  const deployFiles = [
-    join(ROOT, "deploy", "compose", "docker-compose.yml"),
-    ...helmValueFiles,
-    ...(existsSync(tplDir) ? readdirSync(tplDir).filter((f) => /\.ya?ml$/.test(f)).map((f) => join(tplDir, f)) : []),
-  ].filter(existsSync);
-  const foundImages = new Map();   // name → { ref, source } (first sighting)
-  const recordImage = (rawRef, source) => {
-    let ref = rawRef.replace(/^["']|["']$/g, "");
-    if (ref.includes("{{")) return;                                          // helm template expression
-    ref = ref.replace(/\$\{[^:}]*:-([^}]+)\}/g, "$1");                       // ${VAR:-default} → default image
-    if (ref.includes("$")) return;                                           // unresolved variable → no auditable pin
-    if (ref.startsWith("vexaai/") || ref.startsWith("vexa/")) return;         // first-party
-    const name = ref.replace(/@sha256:.*$/, "").replace(/:[^/:]+$/, "");     // strip digest / :tag
-    if (!name || (!ref.includes("/") && !ref.includes(":"))) return;         // Docker stage alias / invalid ref
-    if (!foundImages.has(name)) foundImages.set(name, { ref, source });
-  };
-
-  for (const f of deployFiles)
-    // same-line values only ([ \t]*, never \s* which would cross a newline into a structured
-    // `image:\n  repository:` block — that shape is enumerated separately below). The value may carry
-    // `${VAR:-default}` interpolation ⇒ capture the whole token (no `{}` exclusion) and resolve.
-    for (const m of readFileSync(f, "utf8").matchAll(/^[ \t]*image:[ \t]*["']?([^\s"']+)/gm)) {
-      recordImage(m[1], rel(f));
-    }
-
-  // Helm's established structured values shape:
-  //   image:
-  //     repository: <registry>/<image>
-  //     tag: <tag>
-  // Use indentation to bind repository+tag to the same image block.
-  for (const f of helmValueFiles) {
-    const lines = readFileSync(f, "utf8").split(/\r?\n/);
-    for (let i = 0; i < lines.length; i++) {
-      const image = lines[i].match(/^([ \t]*)image:[ \t]*(?:#.*)?$/);
-      if (!image) continue;
-      const baseIndent = image[1].length;
-      let repository;
-      let tag;
-      for (let j = i + 1; j < lines.length; j++) {
-        if (!lines[j].trim() || lines[j].trimStart().startsWith("#")) continue;
-        const indent = (lines[j].match(/^[ \t]*/) || [""])[0].length;
-        if (indent <= baseIndent) break;
-        const repoMatch = lines[j].match(/^[ \t]*repository:[ \t]*["']?([^\s"']+)/);
-        const tagMatch = lines[j].match(/^[ \t]*tag:[ \t]*["']?([^\s"']+)/);
-        if (repoMatch) repository = repoMatch[1];
-        if (tagMatch) tag = tagMatch[1];
-      }
-      if (repository && tag) recordImage(`${repository}:${tag}`, rel(f));
-    }
-  }
-
-  const liteDockerfile = join(ROOT, "deploy", "lite", "Dockerfile.lite");
-  if (existsSync(liteDockerfile)) {
-    for (const m of readFileSync(liteDockerfile, "utf8").matchAll(
-      /^FROM[ \t]+(?:--platform=\S+[ \t]+)?(\S+)/gmi,
-    )) recordImage(m[1], rel(liteDockerfile));
-  }
-
-  const liteMakefile = join(ROOT, "deploy", "lite", "Makefile");
-  if (existsSync(liteMakefile)) {
-    // Scan ?=, :=, ::=, = with optional export/override; not target-specific assignments, define blocks or \-continued values.
-    for (const line of readFileSync(liteMakefile, "utf8").split(/\r?\n/)) {
-      if (line.startsWith("\t")) continue;
-      const assignment = line.match(/^[ \t]*(?:(?:export|override)[ \t]+)*[A-Za-z_][A-Za-z0-9_]*_IMAGE[ \t]*(?:\?=|::?=|=)[ \t]*([^\s#]+)/);
-      if (assignment) {
-        const value = assignment[1];
-        recordImage(/[/@:$]/.test(value) ? value : `${value}:latest`, rel(liteMakefile));
-      }
-    }
-  }
+  // (1) third-party image pins, discovered across the repository (scripts/pinned-images.mjs, which the
+  //     CVE-scanning workflow reads too, so the scanned list and the audited list are one list).
+  const foundImages = collectPinnedImages(ROOT);
 
   for (const [name, { ref, source }] of foundImages) {
     const e = declaredImages.get(name);
@@ -582,9 +622,114 @@ function gateImageLicenses() {
   if (existsSync(lite) && /\bapt(?:-get)? install\b[^&]*?\bredis-server\b/.test(readFileSync(lite, "utf8")))
     bad.push("Lite bakes `apt install redis-server` (jammy 6.0.16 — no XAUTOCLAIM, the #653 parity trap). Use the Valkey source-build stage (BSD-3, XAUTOCLAIM) instead.");
 
+  // (4) The terminal ships without sharp. next loads sharp, and through it the LGPL-3.0-or-later
+  //     @img/sharp-libvips-* binary, only for the image optimizer; clients/terminal/next.config.ts
+  //     turns the optimizer off, and every stage that assembles the terminal's runtime node_modules
+  //     removes sharp and @img/* by name after its production install. The two halves are checked
+  //     together because each is a regression without the other: sharp removed with the optimizer
+  //     on breaks /_next/image, sharp kept with the optimizer off ships a binary nothing loads.
+  const SHARP_PRUNE = /rm -rf node_modules\/sharp node_modules\/@img(?:\s|$)/m;
+  const stageText = (text, stage) => {
+    const at = text.search(new RegExp(`^FROM[ \\t]+\\S+[ \\t]+AS[ \\t]+${stage}[ \\t]*$`, "mi"));
+    if (at < 0) return null;
+    const rest = text.slice(at);
+    const next = rest.slice(1).search(/^FROM[ \t]/m);
+    return next < 0 ? rest : rest.slice(0, next + 1);
+  };
+  for (const [file, stage] of [[join("clients", "terminal", "Dockerfile"), "deps-prod"], [join("deploy", "lite", "Dockerfile.lite"), "terminal-builder"]]) {
+    if (!existsSync(join(ROOT, file))) continue;
+    const body = stageText(readFileSync(join(ROOT, file), "utf8"), stage);
+    if (body === null) bad.push(`${file}: no \`${stage}\` stage — this gate cannot see where the terminal's runtime node_modules are assembled; update gate:image-licenses with the new stage`);
+    else if (!SHARP_PRUNE.test(body)) bad.push(`${file} (${stage}) ships sharp and @img/sharp-libvips-* (LGPL-3.0-or-later) in the terminal's runtime tree — remove them after the production install (\`rm -rf node_modules/sharp node_modules/@img\`); the terminal's image optimizer is off, so nothing loads them`);
+  }
+  const termConfig = join(ROOT, "clients", "terminal", "next.config.ts");
+  if (existsSync(termConfig) && !/\bimages:\s*\{\s*unoptimized:\s*true\b/.test(readFileSync(termConfig, "utf8")))
+    bad.push("clients/terminal/next.config.ts no longer sets `images: { unoptimized: true }` — the terminal images remove sharp, which the image optimizer needs. Turn the optimizer back off, or keep sharp and log the LGPL libvips binary it ships in license-exceptions.json");
+
+  // (5) …and the bot ships without it too. @huggingface/transformers imports sharp at module scope for
+  //     its IMAGE pipeline, which the audio-only mixed lane never reaches, so pnpm-workspace.yaml
+  //     overrides sharp with core/meetings/modules/no-image-backend (a stand-in that throws a typed
+  //     ImageBackendAbsent). Any @img/sharp-* package back in pnpm-lock.yaml is libvips back in
+  //     vexaai/vexa-bot and vexaai/vexa-lite.
+  const pnpmLock = join(ROOT, "pnpm-lock.yaml");
+  if (existsSync(pnpmLock)) {
+    const lockText = readFileSync(pnpmLock, "utf8");
+    const natives = [...new Set([...lockText.matchAll(/^ {2}'?(@img\/sharp-[a-z0-9-]+)@/gm)].map((m) => m[1]))];
+    if (natives.length)
+      bad.push(`pnpm-lock.yaml locks ${natives.join(", ")} — libvips (LGPL-3.0-or-later) is back in the bot images. sharp must resolve to the stand-in: pnpm-workspace.yaml overrides "sharp": "link:./core/meetings/modules/no-image-backend"`);
+    if (!/^ {2}sharp: link:(?:\.\/)?core\/meetings\/modules\/no-image-backend$/m.test(lockText))
+      bad.push("pnpm-lock.yaml does not override sharp with core/meetings/modules/no-image-backend — the real sharp, and libvips with it, would install for @huggingface/transformers");
+  }
+
+  // (7) How every tracked Dockerfile gets its bytes (D-3, D-4, D-5). A base or `COPY --from` image from
+  //     outside the repository is pinned by digest, so a build runs reviewed bytes; nothing is piped
+  //     from the network into a shell; nothing is pip-installed beside the lock (only uv itself, the
+  //     tool that installs the lock); and uv is at least the release that fixed its advisories.
+  bad.push(...dockerfileSupplyChain(ROOT));
+
+  // (6) …and the terminal's npm lock, which every terminal image installs from (`npm ci`), carries
+  //     none either: package.json points sharp at its own stand-in (clients/terminal/no-image-backend,
+  //     byte-held to the bot's by the parity fact no-image-backend-terminal), so no stage, build
+  //     stages included, downloads libvips.
+  const termLock = join(ROOT, "clients", "terminal", "package-lock.json");
+  if (existsSync(termLock)) {
+    const pk = JSON.parse(readFileSync(termLock, "utf8")).packages || {};
+    const natives = Object.keys(pk).filter((k) => /(^|\/)node_modules\/@img\/sharp-/.test(k));
+    if (natives.length)
+      bad.push(`clients/terminal/package-lock.json locks ${natives.map((k) => k.replace(/^.*node_modules\//, "")).join(", ")} — libvips (LGPL, FINOS Category X) is back in the terminal's installs. sharp must resolve to the stand-in: package.json "sharp": "file:./no-image-backend" with the override "$sharp"`);
+    if (pk["node_modules/sharp"]?.resolved !== "no-image-backend" || pk["node_modules/sharp"]?.link !== true)
+      bad.push("clients/terminal/package-lock.json does not resolve sharp to ./no-image-backend — the real sharp, and libvips with it, would install for next");
+  }
+
   if (bad.length) return fail(bad);
   console.log(`  ✓ gate:image-licenses — ${foundImages.size} pinned image(s) + ${(man.bundled || []).length} bundled component(s) declared & audited${flagged.length ? ` (${flagged.length} non-A by logged reason: ${flagged.join("; ")})` : ""}`);
   return true;
+}
+
+// The first uv release with no open advisory: 0.11.15 fixed the two that affected 0.9.22 (D-4).
+const UV_FLOOR = [0, 11, 15];
+const versionAtLeast = (v, floor) => {
+  const parts = v.split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < floor.length; i++) if ((parts[i] || 0) !== floor[i]) return (parts[i] || 0) > floor[i];
+  return true;
+};
+export function dockerfileSupplyChain(root) {
+  const errs = [];
+  for (const f of trackedFiles(root).filter(isDockerfile)) {
+    const text = readFileSync(join(root, f), "utf8");
+    const stages = new Set();
+    const args = new Map();
+    const logical = text.replace(/\\\r?\n/g, " ").split(/\r?\n/);
+    for (const line of logical) {
+      const arg = line.match(/^\s*ARG\s+([A-Za-z_]\w*)=["']?([^\s"']*)/i);
+      if (arg) { args.set(arg[1], arg[2]); continue; }
+      const sub = (r) => r.replace(/\$\{?([A-Za-z_]\w*)\}?/g, (m, n) => (args.has(n) ? args.get(n) : m));
+      const from = line.match(/^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?/i);
+      const copyFrom = line.match(/^\s*COPY\s+(?:--\S+\s+)*?--from=(\S+)/i);
+      const ref = from ? sub(from[1]) : copyFrom ? sub(copyFrom[1]) : null;
+      if (from && from[2]) stages.add(from[2].toLowerCase());
+      if (ref && !stages.has(ref.toLowerCase()) && !/^\d+$/.test(ref) && !/^(vexa|vexaai)\//.test(ref)
+          && (ref.includes("/") || ref.includes(":")) && !/@sha256:[0-9a-f]{64}$/.test(ref))
+        errs.push(`${f}: ${from ? "FROM" : "COPY --from"} ${ref} is not pinned by digest — pin it (@sha256:…) so the build runs reviewed bytes`);
+      if (!/^\s*RUN\b/i.test(line)) continue;
+      if (/\b(curl|wget)\b[^|;&]*\|\s*(env\s+[^|;&]*?)?\b(ba|z|da)?sh\b/.test(line))
+        errs.push(`${f}: a RUN pipes a download into a shell — fetch a pinned artifact and check its SHA-256, or copy it from a digest-pinned image`);
+      for (const m of line.matchAll(/\b(?:uv\s+pip|pip3?)\s+install\b([^&;|]*)/g)) {
+        const pkgs = m[1].split(/\s+/).filter((t) => t && !t.startsWith("-") && !t.startsWith("/"));
+        const others = pkgs.filter((t) => !/^["']?uv==/.test(t));
+        if (others.length) errs.push(`${f}: installs ${others.join(" ")} beside the lock — put it in the project's uv.lock (a dependency group) and \`uv sync\` it`);
+        for (const t of pkgs) {
+          const uv = t.match(/^["']?uv==([\d.]+)/);
+          if (uv && !versionAtLeast(uv[1], UV_FLOOR)) errs.push(`${f}: uv==${uv[1]} is older than ${UV_FLOOR.join(".")}, which fixed its advisories`);
+        }
+      }
+      for (const m of line.matchAll(/astral-sh\/uv\/releases\/download\/\$\{?(\w+)\}?|astral-sh\/uv\/releases\/download\/([\d.]+)/g)) {
+        const v = m[2] || args.get(m[1]) || "";
+        if (!versionAtLeast(v, UV_FLOOR)) errs.push(`${f}: uv ${v || "(unresolved)"} is older than ${UV_FLOOR.join(".")}, which fixed its advisories`);
+      }
+    }
+  }
+  return errs;
 }
 
 // gate:runtime-parity (P17, #653 · catches the #636/#637 class) — asserts the cache/stream commands
@@ -890,9 +1035,12 @@ function gateDataflow() {
   for (const r of [...required].sort()) if (!modelPaths.has(r)) errs.push(`completeness: '${r}' exists on disk but is not registered in architecture.calm.json`);
   for (const n of nodes) for (const m of (n.metadata || [])) if (m.path && !existsSync(join(ROOT, m.path))) errs.push(`completeness: node '${n["unique-id"]}' points at missing path '${m.path}'`);
 
-  // path -> owning node (longest-prefix wins)
-  const paths = nodes.filter((n) => (n.metadata || []).some((m) => m.path))
-    .map((n) => ({ id: n["unique-id"], path: n.metadata.find((m) => m.path).path }))
+  // path -> owning node (longest-prefix wins). EVERY path a node names counts, not only its first:
+  // a service whose image is built from code outside its own directory (agent-api's is
+  // core/agent/control_plane) names that code too, so its writes are attributed to it and not to
+  // the domain around it.
+  const paths = nodes.flatMap((n) => (n.metadata || []).filter((m) => m.path)
+    .map((m) => ({ id: n["unique-id"], path: m.path })))
     .sort((a, b) => b.path.length - a.path.length);
   const ownerOf = (f) => (paths.find((p) => f.startsWith(p.path)) || {}).id;
   const grepFiles = (re) => {
@@ -919,7 +1067,16 @@ function gateDataflow() {
   // attributable, so this is REPORT-ONLY: it prints the detected ownership map and a soft note on any
   // literal undeclared writer, but never hard-fails (precise cross-language attribution is out of scope
   // for a static gate; (b) render-only is the enforcing check for reader re-derivation).
-  const opRe = { xadd: "x[aA]dd", publish: "publish", "db-write": "session\\.add|INSERT INTO|\\.insert\\(" };
+  // KEY-VALUE WRITES ARE SEEN TOO (S60). A carrier that is a Redis key, hash or set — a revocation
+  // record, a published credential, a recorded fault — is written with SET/HSET/SADD, and an op this
+  // map did not name was grepped as its own literal, which finds nothing and reads as "no writer
+  // to diff": green because unseen (ADR-0042). `kv-write` is any of the key-value writes, for a
+  // carrier written with more than one of them.
+  const opRe = {
+    xadd: "x[aA]dd", publish: "publish", "db-write": "session\\.add|INSERT INTO|\\.insert\\(",
+    set: "\\.set\\(", hset: "\\.hset\\(", sadd: "\\.sadd\\(",
+    "kv-write": "\\.(set|hset|sadd|hdel|srem|delete|expire)\\(",
+  };
   const grepLines = (re) => {
     try { return execSync(`grep -rnE ${JSON.stringify(re)} --include=*.py --include=*.ts --include=*.tsx core clients 2>/dev/null | grep -vE 'node_modules|/dist/|\\.test\\.|/tests/|/eval/' || true`,
       { cwd: ROOT, encoding: "utf8" }).split("\n").filter(Boolean); } catch { return []; }
@@ -929,9 +1086,11 @@ function gateDataflow() {
     const own = (n.controls || {}).ownership; if (!own) continue;
     for (const req of (own.requirements || [])) {
       const { writers = [], match, op } = req.config || {}; if (!match) continue;
+      // An op this gate cannot grep for is refused, not grepped as its own literal (ADR-0042).
+      if (!opRe[op]) { errs.push(`carrier ${n["unique-id"]}: op '${op}' is not one gate:dataflow can see (${Object.keys(opRe).join(", ")})`); continue; }
       if (writers.length > 1) shared.push(`${n["unique-id"]}[${writers.join("+")}]`);
       const mre = new RegExp(match);
-      const actual = new Set(grepLines(opRe[op] || op)
+      const actual = new Set(grepLines(opRe[op])
         .filter((l) => mre.test(l.replace(/^[^:]*:\d+:/, "")))
         .map((l) => ownerOf(l.split(":")[0])).filter(Boolean));
       if (actual.size) report.push(`${n["unique-id"]}<-{${[...actual].join(",")}}`);
@@ -982,7 +1141,13 @@ const CONFIG_CONTRACT_DIR = join(ROOT, "deploy", "contracts", "config.v1");
 // a service that actually reads it. `HOME` and `TMPDIR` were added by 01-foundation with neither and
 // were removed again on the 0.12.27 candidate: no deploy surface sets them and no adopted service
 // reads them, so all they did was pre-authorise two undeclared reads of values an operator controls.
-const CONFIG_SURFACE_ALLOW = new Set(["PYTHONUNBUFFERED", "PYTHONPATH", "DISPLAY", "NODE_ENV", "HOSTNAME", "TZ", "PGTZ"]);
+// HOME and TMPDIR are back (0.12.27). The candidate dropped them as dead entries, and that was
+// true of ITS tree and false of the merged one: `core/agent/llm/claude_code.py` reads HOME to
+// find `~/.claude`, and `core/agent/worker/friction.py` reads TMPDIR for its fallback log —
+// both line-only files, both with a literal fallback. Neither is deployment configuration: a
+// process environment every OS supplies is exactly what this allow-list is for, and declaring
+// them in a service config.v1 would assert an operator must set them.
+const CONFIG_SURFACE_ALLOW = new Set(["PYTHONUNBUFFERED", "PYTHONPATH", "DISPLAY", "NODE_ENV", "HOSTNAME", "TZ", "PGTZ", "HOME", "TMPDIR"]);
 // literal env-read spellings the scanner recognizes (Python; `_os` aliases included by substring match)
 const CONFIG_READ_RES = [
   /os\.getenv\(\s*["']([A-Z][A-Z0-9_]*)["']/g,
@@ -1024,7 +1189,11 @@ const CONFIG_ADOPTED = [
     service: "agent-api",
     decl: "core/agent/control_plane/config.v1.json",
     preflight: "core/agent/control_plane/config_preflight.py",
-    scan: ["core/agent/control_plane", "core/agent/shared"],
+    // F91: the WORKER and the HARNESS adapters are part of this service's config surface. agent-api
+    // does not read their keys itself - it STAMPS them into every worker spec env (build_unit_env)
+    // - so scanning only the control plane made every dial the turn actually runs on invisible to
+    // the contract, and VEXA_LLM_EXTRA_BODY was declared nowhere at all.
+    scan: ["core/agent/control_plane", "core/agent/shared", "core/agent/llm", "core/agent/worker"],
     compose: "agent-api", helm: ["deployment-agent-api.yaml"], lite: "agent-api",
   },
   {
@@ -1036,17 +1205,16 @@ const CONFIG_ADOPTED = [
     compose: "admin-api", helm: ["deployment-admin-api.yaml"], lite: "admin-api",
   },
   {
-    // PRD decision 40 — the MCP surface a person's own agent connects to. Adopted late: it shipped
+    // PRD decision 40 — the MCP surface a person's own agent connects to, and (ADR-0037) the ONE
+    // MCP server every agent worker's toolbelt reaches through the gateway. Adopted late: it shipped
     // with ELEVEN env keys and no declaration and no preflight, so the one service whose whole job
-    // is to be the product's front door was the one service nothing checked.
-    // helm/lite are EMPTY because it has no template and no supervisord program — every key it does
-    // plumb is declared for compose, and the ones it does not are `targets: []` rather than a
-    // pretence that a surface carries them.
+    // is to be the product's front door was the one service nothing checked. Deployed on every
+    // surface now — compose, the chart's deployment-mcp.yaml and lite's [program:mcp].
     service: "mcp",
     decl: "core/meetings/services/mcp/src/vexa_mcp/config.v1.json",
     preflight: "core/meetings/services/mcp/src/vexa_mcp/config_preflight.py",
     scan: ["core/meetings/services/mcp/src"],
-    compose: "mcp", helm: [], lite: null,
+    compose: "mcp", helm: ["deployment-mcp.yaml"], lite: "mcp",
   },
   {
     // #1453 + the compose-service branch: flows is a DEPLOYABLE DOMAIN now, not a pair of host
@@ -1075,7 +1243,62 @@ const CONFIG_ADOPTED = [
     scan: ["core/gateway/services/gateway/src"],
     compose: "gateway", helm: ["deployment-gateway.yaml"], lite: "gateway",
   },
+  {
+    // Connections (ADR-0040). Adopted the day it entered the product tree. lite is null on
+    // purpose: Lite spawns agent workers as child processes of the one container, so no process
+    // boundary could keep the human key from a worker, and Lite does not carry Connections.
+    service: "credential-broker",
+    decl: "core/agent/services/credential-broker/src/credential_broker/config.v1.json",
+    preflight: "core/agent/services/credential-broker/src/credential_broker/config_preflight.py",
+    scan: ["core/agent/services/credential-broker/src"],
+    compose: "credential-broker", helm: ["deployment-credential-broker.yaml"], lite: null,
+  },
+  {
+    // THE TERMINAL, ADOPTED BY FAMILY. It is TypeScript, so there is no vendored Python preflight to
+    // compare and its reads are scanned as `process.env.KEY`. And it is adopted for the key families
+    // named in `families` only: checks 4 and 5 look at keys in those families and nowhere else, so
+    // a family is held on compose, Helm and Lite in both directions while the rest of the terminal's
+    // environment stays the backlog it was (CONFIG_LITE_UNADOPTED). Widening the adoption is adding a
+    // family here and its keys to the declaration. The sign-in mail family came first: it was a
+    // second, unprefixed SMTP family next to flows' declared one, pinned only by a one-off test.
+    // Connections (the broker's human role) came second; its keys target compose and Helm, because
+    // Lite carries no Connections.
+    service: "terminal",
+    decl: "clients/terminal/config.v1.json",
+    preflight: null,
+    scan: [], scanTs: ["clients/terminal/src", "clients/terminal/server.mjs"],
+    families: ["VEXA_MAIL_SMTP_", "VEXA_CONNECTIONS_"],
+    compose: "terminal", helm: ["deployment-terminal.yaml"], lite: "terminal",
+  },
 ];
+
+// TypeScript env reads (the terminal): `process.env.KEY` and `process.env["KEY"]`.
+const CONFIG_READ_RES_TS = [
+  /process\.env\.([A-Z][A-Z0-9_]*)/g,
+  /process\.env\[\s*["'`]([A-Z][A-Z0-9_]*)["'`]\s*\]/g,
+];
+function scanTsEnvReads(paths) {
+  const found = new Map();
+  const visit = (p) => {
+    let st; try { st = statSync(p); } catch { return; }
+    if (st.isDirectory()) {
+      for (const name of readdirSync(p)) {
+        if (skippable(name) || name === "__tests__") continue;
+        visit(join(p, name));
+      }
+      return;
+    }
+    const name = p.split("/").pop();
+    if (!/\.(ts|tsx|mjs|js)$/.test(name) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(name)) return;
+    const text = readFileSync(p, "utf8");
+    for (const re of CONFIG_READ_RES_TS) {
+      re.lastIndex = 0;
+      for (const m of text.matchAll(re)) if (!found.has(m[1])) found.set(m[1], rel(p));
+    }
+  };
+  for (const d of paths) if (existsSync(join(ROOT, d))) visit(join(ROOT, d));
+  return found;
+}
 
 // docker-compose.yml is parsed line-wise (no YAML dep): a service block runs from `  name:` to the
 // next 2-space key; its `environment:` list items are `- KEY=…`; `env_file:` marks .env-fed services.
@@ -1114,13 +1337,17 @@ function liteProgramEnv(program) {
   return new Set([...envLine.matchAll(/([A-Z][A-Z0-9_]*)=/g)].map((x) => x[1]));
 }
 // key -> the entrypoint.sh line that exports it. A Map, not a Set, so check 6 can name file:line;
-// `.has()` keeps it a drop-in for check 3's fallback use.
+// `.has()` keeps it a drop-in for check 3's fallback use. An `export` is read wherever it stands as a
+// shell word — indented inside an `if` or a `{ … }` group, after a `case` label on the same line,
+// after `;`, `&&` or `||` — not only at column 0: a setting the entrypoint exports from a branch
+// reaches every program all the same (architecture pass 6, S74). Comment lines are skipped.
+const LITE_EXPORT_RE = /(?:^|[\s;&|()])export\s+([A-Z][A-Z0-9_]*)=/g;
 const liteEntrypointExports = () => {
   const lines = readFileSync(join(ROOT, "deploy", "lite", "entrypoint.sh"), "utf8").split("\n");
   const out = new Map();
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^export ([A-Z][A-Z0-9_]*)=/);
-    if (m && !out.has(m[1])) out.set(m[1], i + 1);
+    if (lines[i].trimStart().startsWith("#")) continue;
+    for (const m of lines[i].matchAll(LITE_EXPORT_RE)) if (!out.has(m[1])) out.set(m[1], i + 1);
   }
   return out;
 };
@@ -1137,6 +1364,10 @@ const CONFIG_LITE_UNADOPTED = {
   NEXTAUTH_SECRET: "clients/terminal — NextAuth's signing secret; same",
   JWT_SECRET: "clients/terminal — the session secret; same",
   VEXA_API_KEY: "the lite bootstrap's own key for the smoke calls it makes at start-up; belongs to no service's declaration",
+  REDIS_PASSWORD: "the internal valkey's default-user password ([program:redis] --requirepass); the services receive it inside REDIS_URL, and no adopted service reads it by this name",
+  VEXA_LITE_STATE_DIR: "the Lite entrypoint's own state directory (the persisted NEXTAUTH_SECRET and the gateway-identity.v1 keypair); supervisord interpolates it into the gateway's signing-key path and the verifiers' public-key path, and no service reads it",
+  REDIS_HOST: "the Lite entrypoint's own part of the internal REDIS_URL it composes (an operator may point it elsewhere); every service receives REDIS_URL, and none reads this",
+  REDIS_PORT: "the same, the port part of the internal REDIS_URL; no service reads it",
 };
 function scanEnvReads(dirs) {
   const found = new Map(); // key -> first "file" it was seen in
@@ -1175,8 +1406,8 @@ function gateConfigContract() {
     // 1. schema conformance (the contract's own validator — same oracle as gate:schema)
     try { execFileSync("node", [join(CONFIG_CONTRACT_DIR, "validate.mjs"), "--check", "--file", declPath], { stdio: "pipe" }); }
     catch (e) { errs.push(`${svc.service}: declaration does not conform:\n${errText(e).slice(-800)}`); continue; }
-    // 2. the vendored preflight is the canonical one, byte for byte
-    if (!existsSync(join(ROOT, svc.preflight)) || readFileSync(join(ROOT, svc.preflight), "utf8") !== canonical)
+    // 2. the vendored preflight is the canonical one, byte for byte (a TypeScript service has none)
+    if (svc.preflight !== null && (!existsSync(join(ROOT, svc.preflight)) || readFileSync(join(ROOT, svc.preflight), "utf8") !== canonical))
       errs.push(`${svc.service}: ${svc.preflight} is missing or has drifted from deploy/contracts/config.v1/preflight.py (vendor it VERBATIM)`);
     const decl = JSON.parse(readFileSync(declPath, "utf8"));
     const declared = new Set((decl.keys || []).map((k) => k.key));
@@ -1198,17 +1429,20 @@ function gateConfigContract() {
       if (targets.includes("lite") && !lite.has(k.key) && !entrypointExports.has(k.key))
         errs.push(`${svc.service}: ${k.key} declared for lite but absent from [program:${svc.lite}] env and entrypoint.sh exports`);
     }
-    // 4. surfaces → declaration (explicit entries only; env_file feeds the whole .env by design)
+    // 4. surfaces → declaration (explicit entries only; env_file feeds the whole .env by design).
+    //    A service adopted by family is held to its families only.
+    const inScope = (key) => !svc.families || svc.families.some((f) => key.startsWith(f));
     const surfaceSets = [["compose", compose.keys], ["helm", helm], ["lite", lite]];
     for (const [surface, keys] of surfaceSets) {
       for (const key of keys) {
-        if (!declared.has(key) && !surfaceOnly.has(key) && !CONFIG_SURFACE_ALLOW.has(key))
+        if (inScope(key) && !declared.has(key) && !surfaceOnly.has(key) && !CONFIG_SURFACE_ALLOW.has(key))
           errs.push(`${svc.service}: ${surface} sets ${key} but the declaration does not carry it (declare it, or list it in surface_only with a reason)`);
       }
     }
-    // 5. undeclared literal env reads in the service's source
-    for (const [key, where] of scanEnvReads(svc.scan)) {
-      if (!declared.has(key) && !CONFIG_SURFACE_ALLOW.has(key))
+    // 5. undeclared literal env reads in the service's source (Python, and TypeScript for the terminal)
+    const reads = new Map([...scanEnvReads(svc.scan), ...(svc.scanTs ? scanTsEnvReads(svc.scanTs) : [])]);
+    for (const [key, where] of reads) {
+      if (inScope(key) && !declared.has(key) && !CONFIG_SURFACE_ALLOW.has(key))
         errs.push(`${svc.service}: undeclared env read ${key} at ${where} — add it to ${svc.decl}`);
     }
     // 6. publish edges → the carrier census (one producing domain per carrier)
@@ -1234,13 +1468,24 @@ function gateConfigContract() {
   //    reached nothing. Attribution is by construction impossible here (see CONFIG_LITE_UNADOPTED),
   //    so the rule is: SOME adopted service declares it, or it is listed with the program it serves.
   const declaredAnywhere = new Set();
+  const secrecy = new Map();   // key -> Map(secret flag -> [service])
   for (const svc of CONFIG_ADOPTED) {
     const declPath = join(ROOT, svc.decl);
     if (!existsSync(declPath)) continue;
     const decl = JSON.parse(readFileSync(declPath, "utf8"));
-    for (const k of decl.keys || []) declaredAnywhere.add(k.key);
+    for (const k of decl.keys || []) {
+      declaredAnywhere.add(k.key);
+      if (!secrecy.has(k.key)) secrecy.set(k.key, new Map());
+      const flag = k.secret === true;
+      secrecy.get(k.key).set(flag, [...(secrecy.get(k.key).get(flag) || []), svc.service]);
+    }
     for (const k of decl.surface_only || []) declaredAnywhere.add(k.key);
   }
+  // 6. ONE KEY, ONE SECRECY (architecture pass 4, N56). A setting declared by two services is one
+  //    value an operator sets once; if one declaration calls it a secret and the other does not, one
+  //    service's docs and logs treat it as a credential and the other's print it.
+  for (const [key, flags] of secrecy) if (flags.size > 1)
+    errs.push(`${key}: declared secret by ${flags.get(true).join(", ")} and not by ${flags.get(false).join(", ")} — one setting, one "secret" flag`);
   for (const [key, line] of entrypointExports) {
     if (declaredAnywhere.has(key) || CONFIG_SURFACE_ALLOW.has(key) || key in CONFIG_LITE_UNADOPTED) continue;
     errs.push(`lite: deploy/lite/entrypoint.sh:${line} exports ${key} but no adopted service's config.v1 declares it — declare it on the service that reads it, or list it in CONFIG_LITE_UNADOPTED (scripts/gates.mjs) naming the program it serves`);
@@ -1430,7 +1675,76 @@ function gateLiteMakefile() {
   return true;
 }
 
-const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance };
+
+// gate:domain-doors (P9, ADR-0037) — the HTTP twin of gate:graph-py. `gate:graph` bans a
+// cross-domain IMPORT and there are none; every cross-domain edge on this tree is a DOOR — an
+// env-configured base URL plus an HTTP call — and until this gate none of the suite read one. So
+// "identity is the only shared dependency; meetings, agents and flows work independently and in
+// any configuration" (40.7) was a sentence in a PRD, not a property of the code.
+//
+// A domain may name its own door, identity's, and the runtime primitive's. Another domain's door
+// needs a DECLARATION — class `capability` with a degrade in that domain's config contract (the
+// #1453 `domain_present` pattern) — or a PUBLISH edge into flows. The edge and the clients reach a
+// domain only through a declared route binding (routes.v1 / mcp.tools.v1). The rule, the scanner
+// and the reasons live in scripts/check-domain-doors.mjs, measured against ADR-0037's figure; the
+// doors already open on the line live
+// in scripts/domain-doors.allow.json, each pinned to path:line and each naming the ruling that
+// closes it — checked in BOTH directions, so a stale entry is a failure and the list cannot rot.
+function gateDomainDoors() {
+  let res;
+  try { res = checkDomainDoors(ROOT); }
+  catch (e) { return fail([`domain-doors: the checker itself failed — ${errText(e).slice(0, 800)}`]); }
+  const errs = [];
+  for (const v of res.violations)
+    errs.push(`${v.site} — ${v.from} → ${v.to} (${v.door}): ${v.why}`);
+  for (const e of res.stale)
+    errs.push(`STALE allowlist entry: ${e.door} in ${e.path} (${e.from} → ${e.to}) no longer matches any violation — DELETE it from ${DOORS_ALLOW}. The list is the migration backlog, not a permanent exemption.`);
+  if (errs.length) return fail([`domain-doors (P9, ADR-0037) — undeclared cross-domain doors:`, ...errs.map((e) => "   " + e)]);
+  console.log(`  ✓ gate:domain-doors — ${res.sites.length} door site(s) · every cross-domain door declared or allowlisted (${res.allowlisted} on the dated backlog in ${DOORS_ALLOW})`);
+  return true;
+}
+
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity, "vendor-payload": gateVendorPayload };
+// gate:fact-parity (P23 — one writer per fact) — the generalisation of the ONE control case in this
+// repository. `config_preflight.py` is vendored byte-identically into seven packages and has never
+// drifted, because check 2 of gate:config-contract fails the build on byte-inequality. Every other
+// multiply-written fact in the tree either has drifted or is one edit away — the 2026-09-03 SSOT
+// survey found an entity slug with three implementations that already resolve a non-ASCII name to
+// two different filenames, a "live meeting" status set with ten declarations and four memberships,
+// and four comments asserting that copies are "kept identical on purpose" beside copies that are not.
+//
+// scripts/parity.json names each fact and where it is written. A fact is ENFORCED (every site must
+// agree — the teeth) or on the DRIFT LEDGER (it has already disagreed and agreeing needs a product
+// decision, so the gate records both answers, names the decision, and refuses to let either side
+// move silently). The gate does not pick winners: a gate that guesses a product decision makes the
+// wrong answer permanent and calls it enforcement.
+function gateFactParity() {
+  let res;
+  try { res = checkParity(ROOT); }
+  catch (e) { return fail([`fact-parity: the checker or ${PARITY_MANIFEST} itself failed — ${errText(e).slice(0, 800)}`]); }
+  if (!(res.manifest.facts || []).length) { console.log("  ✓ gate:fact-parity — no parity manifest yet (green-on-empty)"); return true; }
+  if (res.errs.length) return fail([`fact-parity (P23, one writer per fact) — facts written twice that disagree:`, ...res.errs.map((e) => "   " + e)]);
+  console.log(`  ✓ gate:fact-parity — ${res.enforced.length} enforced fact(s) agree across ${res.enforced.reduce((n, f) => n + f.sites.length, 0)} site(s) · ${res.ledger.length} on the drift ledger, each pinned and naming its pending decision (\`node scripts/check-parity.mjs --ledger\`)`);
+  return true;
+}
+
+// gate:vendor-payload (P17, ADR-0039) — the optional operator-supplied native meeting runtime is not a
+// dependency, and P17 allows it only on conditions this gate proves: no tracked payload (archives
+// included); the native-sdk-exclusion block, deny-by-default under native-meeting/native/, byte-identical
+// in .gitignore and both image build contexts (a parity fact); no manifest, image recipe, workflow,
+// Makefile or shell script that fetches or builds it; only the declared subprocess loads an addon;
+// nothing a stock install runs or declares names it, bar named and reasoned mentions; and every library a
+// binding.gyp links logged in license-exceptions.json. The rule and its reasons live in
+// scripts/check-vendor-payload.mjs.
+function gateVendorPayload() {
+  let res;
+  try { res = checkVendorPayload(ROOT); }
+  catch (e) { return fail([`vendor-payload: the checker itself failed — ${errText(e).slice(0, 800)}`]); }
+  if (res.errs.length) return fail([`vendor-payload (P17, ADR-0039) — the optional native runtime leaked into what Vexa ships:`, ...res.errs.map((e) => "   " + e)]);
+  console.log(`  ✓ gate:vendor-payload — ${res.tracked} tracked file(s), no native payload · ${NATIVE_DIR}/ denies by default in .gitignore and both build contexts (${res.probes} probes ignored, ${res.reincluded} source file(s) re-included) · ${res.scanned} stock file(s) and ${res.installers} manifest(s) name no native path · linked ${res.linked.join(", ") || "nothing"}, each logged`);
+  return true;
+}
+
 const which = process.argv[2] || "all";
 
 // `seal` (not a gate) — (re)freeze the current published contracts into contracts.seal.json.

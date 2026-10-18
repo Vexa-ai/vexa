@@ -1,0 +1,211 @@
+---
+title: "Meetings"
+description: "Follow a meeting live in Minutes, highlight what it names, play the recording against the transcript, ask about a passage, and delete a meeting's data."
+---
+
+A meeting in Minutes is a chat bound to that meeting, with its pages beside it. Before and during the
+meeting the page is the **Brief**; afterwards it is the **Minutes**. A **Transcript** tab shows the
+words as they are said. This page covers what you can do with a meeting from the moment the bot is sent.
+
+## What you can do
+
+### Send a bot
+
+In an empty chat, press **Paste a meeting link** (or paste one) and ask the agent to join. When the bot
+is sent, the chat binds to that meeting and its pages are pinned. A meeting you start inside a shared
+workspace belongs to that workspace, so its members can open it too; a meeting from your desk stays
+yours. Meetings also arrive by calendar invitation. See [Send a bot](/how-to/send-a-bot) for platforms
+and links.
+
+### Follow it live
+
+- The page header shows the meeting's title and one metadata line: platform, start time, status and
+  the number of participants.
+- A state card says what the bot is doing: *Bot at the door*, *Bot needs someone to let it in*,
+  *Bot admitted · no words for …*, *Reconnecting to the bot…*, *Bot left*, or *Bot feed error*.
+- The transcript fills in as people talk (*Nothing said yet — this fills in as the room talks.*).
+  Opening a meeting part-way through replays everything said so far, then continues live.
+- **Stop bot** takes the bot out of the meeting. It is shown while the bot is requested, joining,
+  waiting, active or stopping, and only to the meeting's owner.
+
+### Highlight
+
+Press **Highlight** on the transcript. The agent picks out the people, companies and projects the
+meeting has named and marks them on the transcript; nothing is posted to the chat. Pressing it again
+adds only what was said since (*Highlight · N* shows how many terms there are).
+
+- A **solid** term has a page: click to open it.
+- A **dashed** term has none yet: click (*Find out what … is*) and the chat looks it up.
+
+Highlight works on live and finished meetings.
+
+### Ask about a passage
+
+Select text in the transcript and press **Ask about this** (*Add this quote to your chat*). The quote,
+with the meeting it came from, is drafted into the chat box. Nothing is sent until you send it.
+
+To bring a whole meeting page up to date, use **Extend this meeting page** under the page; it reads only
+what was said since the last extend. See [Pages](/minutes/pages#extend-or-create-a-page-with-the-agent).
+
+### Copy the transcript
+
+**Copy transcript** copies every confirmed line with its speaker; see
+[Manage your chats](/how-to/chat-controls#copy-a-meeting-transcript).
+
+### Play the recording
+
+On a finished meeting, the controls load the recording (*Loading recording…*). Then:
+
+1. Press **Play**. Nothing plays by itself.
+2. Click any transcript passage (*Play from m:ss*), or press <kbd>Enter</kbd> or <kbd>Space</kbd> on it,
+   to jump there. The passage being played is shaded.
+3. Drag the **Seek recording** slider to move anywhere in the audio.
+
+There is one player per audio file, and starting one meeting pauses any other. Older recordings have
+no exact start mark, so timing uses the meeting's start and may be off by a little (the controls say
+so).
+
+### Download the audio
+
+**Pending ([#1798](https://github.com/Vexa-ai/vexa/pull/1798)).** A download button is not on this line
+yet. Until it lands, recordings can be fetched over the API; see [Recordings](/how-to/recordings).
+
+### Delete a meeting's data
+
+On a finished meeting, the owner sees **Delete**:
+
+1. Press **Delete**. The dialog reads *Delete meeting data?*: *Permanently delete this meeting's audio,
+   transcript and captured fixtures, including promoted fixtures. Saved pages are kept.*
+2. Type `delete`. **Delete permanently** stays disabled until you do.
+3. When it is done: *Meeting audio, transcript and fixtures deleted. Saved pages are kept.*
+
+The meeting stays in your list, marked as deleted, and its transcript says *This meeting's transcript
+and recording were deleted.* Pages written from it are not touched.
+
+### Open a meeting by link
+
+`/?meeting=<platform>/<meeting-id>` (or a meeting's row number) opens that meeting's room. Add
+`&view=transcript`, `minutes`, `brief` or `file:<path>` to choose what is in front; see
+[Links into Minutes](/minutes/overview#links-into-minutes).
+
+## Limits and errors
+
+| You see | Why | What to do |
+|---|---|---|
+| *No audio recording available.* | the meeting has no recording, or you are a workspace member rather than the owner: recordings are served to the meeting's owner only | ask the owner |
+| *Could not load recording* · *Audio could not be played. Retry loading the recording.* | the recording could not be fetched or played | press **Retry** |
+| *Could not stop bot. Retry.* | the stop request failed | retry; the bot is also ended when the meeting ends |
+| *Could not delete meeting data. Retry.* | the delete failed; storage may be unavailable | retry later |
+| *This page declares a transcript, but names no meeting.* | a page has a transcript slot without a meeting id | fix the slot or ask the agent |
+| *This meeting's transcript and recording were deleted.* | the meeting's data was deleted | — |
+| *Bot feed error* · *Unreadable transcript frame* | the live feed failed or sent something unreadable | the card reconnects; dismiss it |
+
+Delete is offered only after a meeting has finished; the server refuses it while the meeting is still
+running. Stop and Delete are not shown on a meeting someone shared with you.
+
+## How it works
+
+### Flow
+
+1. **List and open.** The terminal's catch-all proxy sends `/api/meetings` and
+   `/api/transcripts/by-id/{id}` to meeting-api through the gateway. The meeting's page path comes from
+   agent-api (`/api/meeting/note`), which creates the page if it is missing and never overwrites one.
+2. **Live transcript.** The browser opens `/api/meeting/stream?meeting_id=…&session_uid=…` as
+   server-sent events. agent-api checks that you may read the meeting, then reads the meeting's
+   transcript stream: from the start on a fresh connection, then live. A reconnect resumes from the last
+   event it saw.
+3. **Playback.** The controls list recordings at `/api/recordings?meeting_id=…` and stream
+   `/api/recordings/{id}/media/{media}/raw?type=audio`. The terminal passes byte ranges through, so the
+   player can seek; meeting-api serves the ranges from object storage. A transcript line's play position
+   is its timestamp minus the recording's capture start.
+4. **Highlight.** The button sends a silent `highlight` request into the chat. The agent scans the
+   transcript for candidates and publishes the ones it keeps; the terminal reads them from
+   `/api/meeting/terms`. Terms are added, never overwritten.
+5. **Delete.** `DELETE /api/meetings/{id}` reaches meeting-api, which deletes the stored objects first,
+   then the fixtures, then the transcript rows and the meeting's data keys, and marks the meeting as
+   deleted.
+6. **Stop.** `DELETE /api/bots/{platform}/{meeting-id}` reaches meeting-api's stop route.
+
+### Who writes what
+
+| Data | Single writer | Where |
+|---|---|---|
+| Meeting rows | meeting-api | Postgres |
+| Transcript segments | meeting-api | Postgres, and the meeting's transcript stream in Redis (agent-api and the terminal only read it) |
+| Recording master | meeting-api (from the bot's chunks) | object storage |
+| Meeting pages | agent-api | the workspace's git repository |
+| Highlight terms | agent-api | `.vexa/meeting-terms/<meeting>.json` on the reader's desk |
+
+### Routes
+
+| Browser calls (terminal) | Goes to |
+|---|---|
+| `GET /api/meetings`, `GET /api/transcripts/by-id/{id}` | meeting-api, through the gateway |
+| `GET /api/recordings`, `GET /api/recordings/{id}/media/{media}/raw` (with `Range`) | meeting-api, through the gateway |
+| `DELETE /api/meetings/{id}`, `DELETE /api/bots/{platform}/{id}` | meeting-api, through the gateway |
+| `GET /api/meeting/stream` (server-sent events) | agent-api `/api/meeting/stream`, through the gateway's `/agent/*` |
+| `GET`, `POST /api/meeting/note`; `GET /api/meeting/terms` | agent-api, through the gateway's `/agent/*` |
+
+The terminal decides the destination by path: `meetings`, `transcripts`, `bots`, `recordings` and `user`
+go to the meetings side, everything else to the agent. The meetings routes are documented in the
+[Meetings API](/api/meetings).
+
+### Configuration
+
+`GATEWAY_URL` on the terminal server. Recording storage is configured on meeting-api; see
+[Recordings](/how-to/recordings).
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P2** contracts · **P6** one front door | the browser calls only the terminal; meeting routes are meeting-api's sealed `api.v1` | `gate:isolation`, `gate:exports`, `gate:contract-conformance` |
+| **P18** fail loud | an unreachable gateway is a `502`; a stream failure arrives as a `stream-error` event; a recording that cannot be made seekable is a typed fault; each control says when it failed | ungated: reviewed |
+| **P20** authorize every access | agent-api and meeting-api check every read: the owner, a share recipient, or a member of the meeting's workspace; recordings and delete are owner-only | `gate:access` and the deny tests below |
+| **P21** state from evidence | the bot card reports what the bot is observed doing, including *admitted · no words for …* | ungated: reviewed |
+| **P22** guaranteed teardown | **Stop bot** uses meeting-api's stop route, which ends the bot directly when it cannot confirm the bot is listening | the meeting-lifecycle eval under `gate:python` |
+| **P23** one writer per carrier | meeting-api is the only writer of the transcript stream; agent-api and the terminal read it, and the terminal renders it with one engine | `gate:dataflow` |
+
+### Security
+
+**Who can do what.** You can open a meeting you own, a meeting shared with you, and a meeting that
+belongs to a workspace you are a member of. Only the owner can play the recording, stop the bot or
+delete the meeting's data.
+
+**Protections.**
+
+- The user is the gateway-signed identity. Workspace membership is read from the workspace's roster,
+  never from a request header.
+- A meeting you may not read is refused before the live stream opens, and a stream for someone else's
+  bot session is refused.
+- Someone who is not the owner gets the same `404` as for a meeting that does not exist, so meetings
+  cannot be discovered.
+- A deleted meeting's transcript is refused, and new segments for it are refused.
+- Recording responses are `private, no-store`. A bot-only API key cannot subscribe to a transcript.
+- Meeting ids in links are checked so they cannot escape their path segment.
+
+**Deny tests.**
+
+| Test | Proves |
+|---|---|
+| `core/agent/tests/test_api.py` · `test_sse_cross_tenant_meeting_stream_is_refused`, `test_sse_owned_row_but_foreign_session_uid_is_refused` | the live stream |
+| `core/agent/tests/test_meeting_workspace_access.py` · `test_the_live_transcript_refuses_a_non_member_before_the_stream_opens`, `test_membership_comes_from_the_roster_on_disk_not_from_a_header`, `test_a_row_id_that_is_not_a_row_is_refused_before_any_hop` | workspace meetings |
+| `core/agent/tests/test_deleted_meeting_transcript.py` · `test_the_live_view_refuses_a_deleted_meeting` | deleted meetings |
+| `core/agent/tests/test_transcript_terms_route.py` · `test_a_meeting_the_caller_may_not_read_is_refused` | Highlight |
+| `core/agent/tests/test_meeting_mint.py` · `test_the_mint_route_refuses_a_meeting_the_caller_does_not_own` | meeting pages |
+| `core/meetings/services/meeting-api/tests/test_completed_artifact_deletion.py` · `test_non_owner_gets_indistinguishable_404_and_cannot_delete_any_artifact`, `test_completed_artifact_delete_is_idempotent_and_active_lifecycle_is_not_deleted` | delete |
+| `core/meetings/services/meeting-api/tests/test_recordings_list_page.py` · `test_the_filter_still_only_sees_the_callers_own_recordings` | recordings |
+| `core/meetings/services/meeting-api/tests/test_collector_api.py` · `test_get_transcript_other_user_is_404` | transcripts |
+| `core/meetings/services/meeting-api/tests/test_ingest_after_delete.py` · `test_segments_for_a_deleted_meeting_are_refused` | no writes after delete |
+| `core/meetings/services/meeting-api/tests/test_recordings_range.py` · `test_unsatisfiable_range_returns_416` | byte ranges |
+| `core/identity/tests/test_access.py` · `test_other_user_denied_on_each_read_path`, `test_unowned_resource_default_denies` | the access rule's default |
+| `core/gateway/services/gateway/tests/test_multiplex.py` · `test_a_bot_only_key_cannot_subscribe_to_a_transcript`, `test_invalid_api_key_closes_4401` | live subscriptions |
+| `clients/terminal/src/minutes/__tests__/meetingControls.test.tsx` · "offers playback without autoplay and requires the exact confirmation word before deleting" | the delete ceremony |
+| `clients/terminal/src/app/api/__tests__/catchAllProxy.test.ts` · "streams recording bytes and preserves range seeking through the meetings gateway" | seeking through the proxy |
+| `clients/terminal/src/app/__tests__/meetingRoute.test.ts` · "rejects an id that could escape the segment" | meeting links |
+
+## Related
+
+- [Send a bot](/how-to/send-a-bot) · [Stream a transcript](/how-to/stream-transcript) · [Recordings](/how-to/recordings) · [Post-meeting report](/how-to/post-meeting-report) · [Meetings API](/api/meetings)

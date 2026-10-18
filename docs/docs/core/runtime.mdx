@@ -65,8 +65,10 @@ deliberate:
   quotas). A Pod that resurrected itself would defeat the kernel's "has it stopped?" detection, so the
   Pod must stay dead once it exits.
 - **A bare Pod, not a Deployment/Job** — a dispatch is a single ephemeral run, not a replicated
-  service. The Pod is named `vexa-<workloadId>` (DNS-1123) in the namespace the runtime reads from the
-  downward API (`POD_NAMESPACE`). Pod phase drives the backend's exit check (`Pending`/`Running` → still
+  service. The Pod is named `vexa-<workloadId>` in the namespace the runtime reads from the
+  downward API (`POD_NAMESPACE`). When that is not a valid DNS-1123 name of at most 63 characters (a
+  chat id carries the client's session), it is lowercased, reduced to `[a-z0-9-]`, cut, and suffixed
+  with a hash of the id; the id itself rides the Pod's `runtime.workload_id` annotation. Pod phase drives the backend's exit check (`Pending`/`Running` → still
   running; `Succeeded` → exit 0; `Failed` → the container's terminated exit code), which the kernel turns
   into the terminal state `stopped` with reason `completed` (exit 0) or `failed` (nonzero).
 

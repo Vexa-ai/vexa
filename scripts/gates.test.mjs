@@ -2,50 +2,29 @@
 // Run: node --test scripts/gates.test.mjs   (CI: the gates.yml `static` job runs scripts/*.test.mjs
 // directly — scripts/ is not a workspace package, so `pnpm test` never reaches these files)
 //
-// These plant real files in the checkout and run the real gate as a subprocess, deliberately: the
+// These plant real files in a tree and run the real gate as a subprocess, deliberately: the
 // defect class here lives in the SHELL PIPELINE, not the parse. A scan that strips the filename
 // (`grep -h`) silently disarms every path-based filter downstream of it, and the bare numbers it
 // emits still parse perfectly — so a test that stubs the grep and feeds the parse a fixture would
 // stay green through exactly the bug it was written to catch. The planted file IS the input
 // population: `git grep --untracked` reads the working tree, so a file on disk is a real input.
+//
+// THE TREE IS THIS FILE'S OWN COPY of the checkout (scripts/test-tree.mjs `sandboxTree`), never the
+// checkout. Every test file runs in its own process, in parallel, over the real tree; a plant or an
+// in-place edit there — even one restored in a `finally` — is a window the others read through. On
+// 2026-10-10 publish-edge.test.mjs failed gate:config-contract on the phantom export and the phantom
+// mailer read this file had planted. `guardTree` fails any test that leaves the checkout changed.
 
-import test, { after } from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { writeFileSync, readFileSync, rmSync, mkdirSync, existsSync, mkdtempSync, copyFileSync, symlinkSync } from "node:fs";
+import { writeFileSync, readFileSync, rmSync, mkdirSync, mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { guardTree, sandboxTree } from "./test-tree.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-
-// The tree every gate in this file runs against: a private copy of the checkout's files (tracked,
-// plus untracked and not ignored: the population `git grep --untracked` reads), made once per run,
-// with git pointed at the checkout's own repository. Fixtures plant and edit files in the COPY.
-// node --test runs test FILES in parallel, and other files run gates over the real checkout (for
-// example publish-edge.test.mjs expects gate:config-contract green), so a fixture written into the
-// checkout reds them whenever their read lands in its window; on CI's three-wide runner it did on
-// every run. Tests in this file run one at a time, so editing the copy in place and restoring it
-// stays race-free.
-let TREE = null;
-let GIT_ENV = null;
-after(() => { if (TREE) rmSync(TREE, { recursive: true, force: true }); }); // once, after every test in the file
-function tree() {
-  if (TREE) return TREE;
-  const copy = mkdtempSync(join(tmpdir(), "vexa-gates-tree-"));
-  const files = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: ROOT })
-    .toString().split("\0").filter(Boolean);
-  for (const f of files) {
-    if (!existsSync(join(ROOT, f))) continue; // deleted in the working tree, not yet committed
-    mkdirSync(dirname(join(copy, f)), { recursive: true });
-    copyFileSync(join(ROOT, f), join(copy, f));
-  }
-  // installed packages are read, never written: the gates' own imports (ajv, for example) resolve through a link
-  if (existsSync(join(ROOT, "node_modules"))) symlinkSync(join(ROOT, "node_modules"), join(copy, "node_modules"));
-  const gitDir = execFileSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: ROOT, encoding: "utf8" }).trim();
-  GIT_ENV = { ...process.env, GIT_DIR: gitDir, GIT_WORK_TREE: copy };
-  return (TREE = copy);
-}
+guardTree();
+const ROOT = sandboxTree();
 
 // admin-api is declared in deploy/db-budget.json (pool_size 5 / max_overflow 10), so a literal
 // planted here is compared against a real ceiling. agent-api is a real service dir that is NOT
@@ -64,7 +43,7 @@ const POOL_LITERALS = "configure(url, pool_size=20, max_overflow=30)\n";
 // another run, with no trace of who dropped it. So remember the topmost ancestor that did not
 // already exist and prune from there.
 function withPlanted(relPath, body, fn) {
-  const abs = join(tree(), relPath);
+  const abs = join(ROOT, relPath);
   const dir = dirname(abs);
   let prune = null;
   for (let d = dir; !existsSync(d); d = dirname(d)) prune = d;
@@ -80,7 +59,7 @@ function withPlanted(relPath, body, fn) {
 
 function runDbBudget() {
   try {
-    return { green: true, out: execFileSync("node", ["scripts/gates.mjs", "db-budget"], { cwd: tree(), env: GIT_ENV, encoding: "utf8" }) };
+    return { green: true, out: execFileSync("node", ["scripts/gates.mjs", "db-budget"], { cwd: ROOT, encoding: "utf8" }) };
   } catch (e) {
     return { green: false, out: `${e.stdout || ""}${e.stderr || ""}` };
   }
@@ -152,13 +131,15 @@ test("a test-only create_async_engine does not invent a service in the budget", 
 // is green (a red there would invalidate the fixture below it).
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
-function runGate(name) {
-  try { return { green: true, out: execFileSync("node", ["scripts/gates.mjs", name], { cwd: tree(), env: GIT_ENV, encoding: "utf8" }) }; }
+// `cwd` IS the gate's root — gates.mjs takes `ROOT = process.cwd()` — so a caller can point a gate
+// at a fixture tree instead of at the checkout. The script path is absolute for that reason.
+function runGate(name, cwd = ROOT) {
+  try { return { green: true, out: execFileSync("node", [join(ROOT, "scripts", "gates.mjs"), name], { cwd, encoding: "utf8" }) }; }
   catch (e) { return { green: false, out: `${e.stdout || ""}${e.stderr || ""}` }; }
 }
-// Temporarily replace `find`→`repl` in a tracked file of the copy, run fn, always restore the exact original bytes.
+// Temporarily replace `find`→`repl` in a tracked file, run fn, always restore the exact original bytes.
 function withEdited(relPath, find, repl, fn) {
-  const abs = join(tree(), relPath);
+  const abs = join(ROOT, relPath);
   const orig = readFileSync(abs, "utf8");
   const edited = orig.replace(find, repl);
   assert.notEqual(edited, orig, `fixture setup: pattern not found in ${relPath} — the test would prove nothing`);
@@ -172,6 +153,7 @@ function withEdited(relPath, find, repl, fn) {
 // deploy/lite/entrypoint.sh was read ONLY as check 3's fallback, so it was the one surface, in the
 // one direction, that nothing walked: an export whose declaration AND reader were both deleted left
 // no refusal and no warning. Measured on the tip before the fix — the same plant was green.
+// The edit below is made in this file's private tree, so no other test file can read it.
 const LITE_ENTRYPOINT = "deploy/lite/entrypoint.sh";
 
 test("config-contract vacuity: the committed lite entrypoint is green", () => {
@@ -185,6 +167,35 @@ test("an entrypoint.sh export that no adopted declaration carries is RED, named 
   assert.equal(r.green, false, `a phantom lite export passed the contract gate:\n${r.out}`);
   assert.match(r.out, /entrypoint\.sh:\d+ exports VEXA_PHANTOM_ENTRY/,
     `the failure must name the FILE AND LINE the operator has to open:\n${r.out}`);
+});
+
+// ── gate:config-contract — the terminal, adopted for the VEXA_MAIL_SMTP_* family (S2) ────────────
+// A TypeScript service with no vendored preflight, scanned as `process.env.KEY`, and held to its
+// families only: a family key read or set without a declaration is RED; a key outside the family is
+// the terminal's backlog, not this gate's business yet.
+const TERMINAL_MAILER = "clients/terminal/src/app/api/auth/mailer.ts";
+
+test("a mail-family key the terminal reads but does not declare is RED, naming the file", () => {
+  const r = withEdited(TERMINAL_MAILER, "export function mailerConfig(): MailerConfig {",
+    "export function mailerConfig(): MailerConfig {\n  void process.env.VEXA_MAIL_SMTP_PHANTOM;",
+    () => runGate("config-contract"));
+  assert.equal(r.green, false, `an undeclared family read passed:\n${r.out}`);
+  assert.match(r.out, /terminal: undeclared env read VEXA_MAIL_SMTP_PHANTOM at clients\/terminal\/src\/app\/api\/auth\/mailer\.ts/);
+});
+
+test("a mail-family key compose sets on the terminal without a declaration is RED", () => {
+  const r = withEdited("deploy/compose/docker-compose.yml", "      - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}\n      - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-}\n",
+    "      - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}\n      - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-}\n      - VEXA_MAIL_SMTP_PHANTOM=1\n",
+    () => runGate("config-contract"));
+  assert.equal(r.green, false, `an undeclared family key on the terminal passed:\n${r.out}`);
+  assert.match(r.out, /terminal: compose sets VEXA_MAIL_SMTP_PHANTOM/);
+});
+
+test("a declared mail-family key missing from a terminal surface is RED", () => {
+  const r = withEdited("deploy/helm/charts/vexa/templates/deployment-terminal.yaml", "- name: VEXA_MAIL_SMTP_FROM",
+    "- name: VEXA_MAIL_SMTP_FROM_RENAMED", () => runGate("config-contract"));
+  assert.equal(r.green, false, `a declared key the Helm terminal does not set passed:\n${r.out}`);
+  assert.match(r.out, /terminal: VEXA_MAIL_SMTP_FROM declared for helm but absent/);
 });
 
 const COMPOSE = "deploy/compose/docker-compose.yml";
@@ -313,7 +324,7 @@ test("image-licenses RED: an undeclared structured Helm repository/tag pin reds"
 });
 
 test("image-licenses RED: an undeclared Dockerfile FROM pin reds", () => {
-  const base = "FROM mcr.microsoft.com/playwright:v1.56.0-noble AS bot-builder";
+  const base = "FROM mcr.microsoft.com/playwright:v1.56.0-noble@sha256:35246d87a7c88ea9b771c65d33171b2611b02a8253b4b12ce6f94376c55f99f2 AS bot-builder";
   const injected = `FROM somevendor/unaudited:1.2 AS review-probe\n${base}`;
   const r = withEdited(LITE, base, injected, () => runGate("image-licenses"));
   assert.equal(r.green, false, "an undeclared Dockerfile FROM image pin sailed through");
@@ -321,30 +332,358 @@ test("image-licenses RED: an undeclared Dockerfile FROM pin reds", () => {
   assert.match(r.out, /somevendor\/unaudited:1\.2/);
 });
 
+// ── S75: the pinned list is discovered, not listed ──────────────────────────────────────────────
+// pinned-images.mjs read compose's main file, the vexa chart and the Lite Dockerfile only, so the
+// transcription stack, the dogfood rig and every other Dockerfile's base were neither licence-audited
+// nor CVE-scanned. Each plant below was green before.
+
+test("image-licenses RED: an undeclared image in the transcription compose reds", () => {
+  const r = withEdited("deploy/transcription/docker-compose.yml", "image: nginx:alpine", "image: somevendor/unaudited:1.2",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "the transcription stack's image was not read");
+  assert.match(r.out, /undeclared pinned image "somevendor\/unaudited:1\.2" in deploy\/transcription\/docker-compose\.yml/);
+});
+
+test("image-licenses RED: an undeclared base in a service Dockerfile reds, ARG defaults resolved", () => {
+  const f = "core/identity/services/admin-api/Dockerfile";
+  const r = withEdited(f, /^FROM python:3\.12-slim\S*$/m, "ARG BASE=somevendor/unaudited:1.2\nFROM ${BASE}",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "a service Dockerfile's base was not read");
+  assert.match(r.out, /undeclared pinned image "somevendor\/unaudited:1\.2" in core\/identity\/services\/admin-api\/Dockerfile/);
+});
+
+test("image-licenses RED: an undeclared image a deploy script runs reds", () => {
+  const r = withEdited("deploy/dogfood/rig/rig.sh", "axllent/mailpit:latest", "somevendor/unaudited:1.2",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "the dogfood rig's docker run image was not read");
+  assert.match(r.out, /undeclared pinned image "somevendor\/unaudited:1\.2" in deploy\/dogfood\/rig\/rig\.sh/);
+});
+
+test("pinned images: the list carries every surface, and an image built here is first-party", () => {
+  const refs = JSON.parse(execFileSync("node", [join(ROOT, "scripts", "pinned-images.mjs"), "--json"], { cwd: ROOT, encoding: "utf8" }));
+  for (const ref of ["nginx:alpine", "python:3.12-slim", "axllent/mailpit:latest", "valkey/valkey"])
+    assert(refs.some((r) => r.startsWith(ref)), `${ref} is missing from the pinned list`);
+  assert(!refs.some((r) => r.startsWith("mock-bot")), "mock-bot:dev is built by this repository, not pulled");
+  assert(!refs.some((r) => r.startsWith("node:20-alpine")), "the gate-ignored dashboard's base was read");
+});
+
+// ── D-3 · D-4 · D-5: how every Dockerfile gets its bytes ───────────────────────────────────────
+// Each plant below was green before: a tag-only base, a download piped into a shell, a package
+// pip-installed beside the lock, and a uv older than the release that fixed its advisories.
+const ADMIN_DF = "core/identity/services/admin-api/Dockerfile";
+
+test("image-licenses RED: a base image pinned by tag only reds", () => {
+  const r = withEdited(ADMIN_DF, /^FROM python:3\.12-slim@sha256:[0-9a-f]{64}/m, "FROM python:3.12-slim", () => runGate("image-licenses"));
+  assert.equal(r.green, false);
+  assert.match(r.out, /admin-api\/Dockerfile: FROM python:3\.12-slim is not pinned by digest/);
+});
+
+test("image-licenses RED: a download piped into a shell reds", () => {
+  const r = withEdited(ADMIN_DF, /^RUN pip install --no-cache-dir uv==[\d.]+$/m,
+    "RUN curl -LsSf https://astral.sh/uv/install.sh | sh", () => runGate("image-licenses"));
+  assert.equal(r.green, false);
+  assert.match(r.out, /admin-api\/Dockerfile: a RUN pipes a download into a shell/);
+});
+
+test("image-licenses RED: a package installed beside the lock, or an old uv, reds", () => {
+  const r = withEdited(ADMIN_DF, /^RUN pip install --no-cache-dir uv==[\d.]+$/m,
+    'RUN pip install --no-cache-dir uv==0.9.22 && uv pip install --system "uvicorn[standard]==0.34.0"', () => runGate("image-licenses"));
+  assert.equal(r.green, false);
+  assert.match(r.out, /admin-api\/Dockerfile: installs "uvicorn\[standard\]==0\.34\.0" beside the lock/);
+  assert.match(r.out, /admin-api\/Dockerfile: uv==0\.9\.22 is older than 0\.11\.15/);
+});
+
+const TERMINAL_DOCKERFILE = "clients/terminal/Dockerfile";
+const TERMINAL_NEXT_CONFIG = "clients/terminal/next.config.ts";
+const SHARP_PRUNE = " && rm -rf node_modules/sharp node_modules/@img";
+
+test("image-licenses RED: the terminal image keeping sharp (LGPL libvips) reds", () => {
+  const r = withEdited(TERMINAL_DOCKERFILE, SHARP_PRUNE, "", () => runGate("image-licenses"));
+  assert.equal(r.green, false, "the terminal's runtime tree kept sharp and the gate stayed green");
+  assert.match(r.out, /clients\/terminal\/Dockerfile \(deps-prod\) ships sharp/);
+});
+
+test("image-licenses RED: libvips back in the terminal's npm lock reds", () => {
+  const r = withEdited("clients/terminal/package-lock.json", `    "node_modules/sharp": {`,
+    `    "node_modules/@img/sharp-libvips-linux-x64": {\n      "version": "1.3.4",\n      "license": "LGPL-3.0-or-later",\n      "optional": true\n    },\n    "node_modules/sharp": {`,
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "a locked libvips sailed through");
+  assert.match(r.out, /clients\/terminal\/package-lock\.json locks @img\/sharp-libvips-linux-x64/);
+});
+
+test("image-licenses RED: Lite's terminal tree keeping sharp reds", () => {
+  const r = withEdited(LITE, SHARP_PRUNE, "", () => runGate("image-licenses"));
+  assert.equal(r.green, false, "Lite's terminal-builder kept sharp and the gate stayed green");
+  assert.match(r.out, /Dockerfile\.lite \(terminal-builder\) ships sharp/);
+});
+
+test("image-licenses RED: the terminal's image optimizer turned back on reds", () => {
+  const r = withEdited(TERMINAL_NEXT_CONFIG, "  images: { unoptimized: true },\n", "",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "the optimizer came back on while the images remove sharp, and the gate stayed green");
+  assert.match(r.out, /unoptimized/);
+});
+
+const PNPM_LOCK = "pnpm-lock.yaml";
+
+test("image-licenses RED: libvips locked again for the bot (an @img/sharp-* package in pnpm-lock) reds", () => {
+  const r = withEdited(PNPM_LOCK, "\npackages:\n",
+    "\npackages:\n\n  '@img/sharp-libvips-linux-x64@1.3.4':\n    resolution: {integrity: sha512-planted}\n",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "a libvips package in pnpm-lock.yaml passed");
+  assert.match(r.out, /pnpm-lock\.yaml locks @img\/sharp-libvips-linux-x64/);
+});
+
+test("image-licenses RED: sharp no longer overridden by the stand-in reds", () => {
+  const r = withEdited(PNPM_LOCK, "  sharp: link:./core/meetings/modules/no-image-backend\n", "  sharp: ^0.35.5\n",
+    () => runGate("image-licenses"));
+  assert.equal(r.green, false, "the sharp override was dropped and the gate stayed green");
+  assert.match(r.out, /does not override sharp/);
+});
+
 test("runtime-parity RED: the bare `apt install` form (not just apt-get) is caught too", () => {
   // A contributor who writes `apt install redis-server` (no -get) must not bypass the #636 guard.
-  const inject = "RUN apt install -y redis-server\nFROM mcr.microsoft.com/playwright:v1.56.0-noble AS final";
-  const r = withEdited(LITE, "FROM mcr.microsoft.com/playwright:v1.56.0-noble AS final", inject,
+  const inject = "RUN apt install -y redis-server\nFROM mcr.microsoft.com/playwright:v1.56.0-noble@sha256:35246d87a7c88ea9b771c65d33171b2611b02a8253b4b12ce6f94376c55f99f2 AS final";
+  const r = withEdited(LITE, "FROM mcr.microsoft.com/playwright:v1.56.0-noble@sha256:35246d87a7c88ea9b771c65d33171b2611b02a8253b4b12ce6f94376c55f99f2 AS final", inject,
     () => runGate("runtime-parity"));
   assert.equal(r.green, false, "`apt install redis-server` (no -get) bypassed the parity guard");
   assert.match(r.out, /lite/);
   assert.match(r.out, /XAUTOCLAIM/);
 });
 
-// ── fixtures never write the checkout ────────────────────────────────────────────────────────────
-// node --test runs test FILES in parallel, and other files run gates over the real tree (for
-// example publish-edge.test.mjs runs gate:config-contract and expects it green). A fixture written
-// into the checkout reds them whenever their read lands inside its window, which CI's three-wide
-// file concurrency hit on every run. So every fixture here lives in this file's private copy.
-test("a fixture is visible to the gate it runs, and never to the checkout other test files read", () => {
-  const entry = readFileSync(join(ROOT, LITE_ENTRYPOINT), "utf8");
-  const seen = withEdited(LITE_ENTRYPOINT, "\nexport ", "\nexport VEXA_PHANTOM_ENTRY=1\nexport ", () => ({
-    checkout: readFileSync(join(ROOT, LITE_ENTRYPOINT), "utf8"),
-    gate: runGate("config-contract"),
-  }));
-  assert.equal(seen.checkout, entry, "the edit stays out of the checkout");
-  assert.equal(seen.gate.green, false, "and the gate still reads it");
-  const planted = withPlanted(PROD_FILE, POOL_LITERALS, () => ({ checkout: existsSync(join(ROOT, PROD_FILE)), gate: runDbBudget() }));
-  assert.equal(planted.checkout, false, "a planted file stays out of the checkout");
-  assert.equal(planted.gate.green, false, "and the gate still reads it");
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// #209 (F209) — gate:python used to `return fail(...)` INSIDE its per-package loop, so the first
+// red package stopped the run and every later package was never even invoked. This is the
+// mechanism behind #1434's "CI never executed core/flows, lite or the rig": #1473 fixed the
+// package that happened to be red, not the loop that stopped after it. Real uv-backed Python
+// packages are planted, a real `uv run pytest` decides each one, and the real gate runs as a
+// subprocess — same plant-and-run discipline as the fixtures above.
+//
+// THE POPULATION IS THE FIXTURE TREE, NOT THE CHECKOUT (Vexa-ai/vexa#1625). `gates.mjs` takes its
+// root from `process.cwd()`, so these rows run the gate over a temp tree holding only the planted
+// packages. Two reasons, and neither is about making the test easier:
+//
+//   · COST. Over the checkout the gate is 16 packages and ~5 min a run (measured in the `python`
+//     job, run 34047177138); these five rows would be ~25 min of the `static` leg, which exists to
+//     be the fast one, re-proving what the `python` job proves once and authoritatively. It would
+//     also drag core/runtime's docker-socket fixture into a job that has no pre-pulled image.
+//   · MEANING. The defect under test is the LOOP — collect every package, name every red one — and
+//     a fixture tree states that population exactly, instead of leaving each assertion at the mercy
+//     of 16 unrelated packages' health. The vacuity control moves with it: it now asserts the
+//     fixture harness is green when nothing is planted red, which is the claim the rows below
+//     actually depend on.
+//
+// Planting outside the checkout also closes the hazard `withPlanted` above documents at length: a
+// crashed run cannot leave a stray package dir inside the repo for a sibling gate to trip over.
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+
+const PY_PYPROJECT = (name) => `[project]
+name = "${name}"
+version = "0.0.0"
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=9.0.3"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+`;
+const PY_TEST_PASS = "def test_zz_planted():\n    assert True\n";
+const PY_TEST_FAIL = "def test_zz_planted():\n    assert False, \"planted failure\"\n";
+
+// Plants N fixture Python packages (each { dir, pass }) in a fresh temp tree, runs the gate with
+// that tree as its root, then removes the tree whole — it is owned entirely by this helper
+// (created here, nothing pre-existing under it), so a recursive rm cannot eat anything else.
+function withPlantedPyPkgs(specs, fn) {
+  const tree = mkdtempSync(join(tmpdir(), "vexa-gatepy-"));
+  try {
+    for (const { dir, pass } of specs) {
+      const abs = join(tree, dir);
+      mkdirSync(join(abs, "tests"), { recursive: true });
+      writeFileSync(join(abs, "pyproject.toml"), PY_PYPROJECT(dir.replace(/[^a-z0-9]+/gi, "-")));
+      writeFileSync(join(abs, "tests", "test_zz_planted.py"), pass ? PY_TEST_PASS : PY_TEST_FAIL);
+    }
+    return fn(tree);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+}
+
+const PKG_A = "zz-gatepy-fixture-a";
+const PKG_B = "zz-gatepy-fixture-b";
+const rxPkg = (p) => new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
+test("gate:python vacuity: a fixture tree of passing packages is green (a red here invalidates every row below)", () => {
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }], (tree) => runGate("python", tree));
+  assert.equal(r.green, true, `the harness itself reds — uv/pytest cannot run here, so the fixtures below prove nothing:\n${r.out}`);
+});
+
+test("gate:python RED (#209): a single failing package still fails the gate", () => {
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: false }], (tree) => runGate("python", tree));
+  assert.equal(r.green, false, `a planted failing package did not red the gate:\n${r.out}`);
+  assert.match(r.out, rxPkg(PKG_A));
+});
+
+test("gate:python RED (#209): two failing packages are BOTH named in the one failure — the loop must not stop at the first", () => {
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: false }, { dir: PKG_B, pass: false }], (tree) => runGate("python", tree));
+  assert.equal(r.green, false, `two planted failing packages did not red the gate:\n${r.out}`);
+  // both packages must appear — a `return` inside the loop would report only PKG_A (the first
+  // walked) and PKG_B would never even be run, let alone named.
+  assert.match(r.out, rxPkg(PKG_A), `PKG_A missing from output:\n${r.out}`);
+  assert.match(r.out, rxPkg(PKG_B), `PKG_B missing — the gate stopped after the first red package:\n${r.out}`);
+  // the failure names how many of the population went red, not just that "a" package did
+  assert.match(r.out, /2\/\d+ package\(s\) failed pytest/, `no failing-package count in the output:\n${r.out}`);
+});
+
+test("gate:python: one red package alongside a green one still runs (and names) both — green does not mask red, red does not skip green", () => {
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }, { dir: PKG_B, pass: false }], (tree) => runGate("python", tree));
+  assert.equal(r.green, false, `a genuinely red package among green ones did not red the gate:\n${r.out}`);
+  assert.match(r.out, rxPkg(PKG_B), `the red package (PKG_B) is not named:\n${r.out}`);
+  assert.doesNotMatch(r.out, rxPkg(PKG_A), `the green package (PKG_A) was wrongly named as a failure:\n${r.out}`);
+});
+
+test("gate:python GREEN: multiple passing planted packages do not red the gate", () => {
+  const r = withPlantedPyPkgs([{ dir: PKG_A, pass: true }, { dir: PKG_B, pass: true }], (tree) => runGate("python", tree));
+  assert.equal(r.green, true, `two genuinely green planted packages reded the gate:\n${r.out}`);
+});
+
+// ── gate:licenses, Python half (scripts/check-python-licenses.mjs) ──────────────────────────────
+// Planted through the real gate: a Dockerfile, the licence index or the exception log is edited in
+// place and restored byte-for-byte, so each red is the one the committed tree would produce.
+
+const PY_INDEX = "python-licenses.json";
+const EXCEPTIONS = "license-exceptions.json";
+const GATEWAY_DOCKERFILE = "core/gateway/services/gateway/Dockerfile";
+const RUNTIME_DOCKERFILE = "core/runtime/Dockerfile";
+const indexRows = () => JSON.parse(readFileSync(join(ROOT, PY_INDEX), "utf8")).licenses;
+const firstKey = (prefix) => Object.keys(indexRows()).find((k) => k.startsWith(prefix));
+
+test("licenses vacuity: the committed tree (npm and Python) is green", () => {
+  const r = runGate("licenses");
+  assert.equal(r.green, true, `the clean tree already reds — the fixtures below prove nothing:\n${r.out}`);
+  assert.match(r.out, /Python packages from \d+ install line/);
+});
+
+test("licenses RED: a uv sync that would install the dev group reds", () => {
+  const r = withEdited(GATEWAY_DOCKERFILE, "uv sync --frozen --no-install-project --no-dev", "uv sync --frozen --no-install-project",
+    () => runGate("licenses"));
+  assert.equal(r.green, false, "a sync shipping the dev group passed");
+  assert.match(r.out, /gateway\/Dockerfile: `uv sync` for core\/gateway\/services\/gateway installs the default dev group/);
+});
+
+test("licenses RED: a shipped Python version with no licence row reds", () => {
+  const key = firstKey("anyio==");
+  const r = withEdited(PY_INDEX, `"${key}"`, `"${key}.0"`, () => runGate("licenses"));
+  assert.equal(r.green, false, "a locked version the index has never read passed");
+  assert.match(r.out, new RegExp(`${key.replace(/[.]/g, "\\.")} ships but has no licence row`));
+});
+
+test("licenses RED: a pip install line with no recorded closure reds", () => {
+  // the runtime image's one pip line is uv itself (its ASGI server comes from uv.lock)
+  const r = withEdited(RUNTIME_DOCKERFILE, "uv==0.11.33", "uv==0.11.34", () => runGate("licenses"));
+  assert.equal(r.green, false, "an unresolved pip install line passed");
+  assert.match(r.out, /core\/runtime\/Dockerfile: `pip install uv==0\.11\.34` has no resolved closure/);
+});
+
+test("licenses RED: a Python Cat-B package without its exception row reds", () => {
+  const r = withEdited(EXCEPTIONS, '"package": "certifi",', '"package": "certifi-removed",', () => runGate("licenses"));
+  assert.equal(r.green, false, "certifi (MPL-2.0) shipped with no exception row");
+  assert.match(r.out, /Cat-B MPL-2\.0 needs a license-exceptions\.json categoryB row with "ecosystem": "pypi": certifi/);
+});
+
+test("licenses RED: a Python package under a Cat X licence is FORBIDDEN", () => {
+  const key = firstKey("h11==");
+  const r = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "GPL-3.0-only"`, () => runGate("licenses"));
+  assert.equal(r.green, false, "a GPL package passed");
+  assert.match(r.out, /FORBIDDEN \(Cat X\) GPL-3\.0-only/);
+});
+
+test("licenses RED: an AND expression is as restrictive as its worst term (Apache-2.0 AND MPL is Cat B)", () => {
+  const key = firstKey("h11==");
+  const r = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "Apache-2.0 AND MPL-2.0"`, () => runGate("licenses"));
+  assert.equal(r.green, false, "an AND with an MPL term was read as Cat A from its leading term");
+  assert.match(r.out, /Cat-B Apache-2\.0 AND MPL-2\.0 needs a license-exceptions\.json categoryB row/);
+});
+
+// ── S71: one LGPL category, FINOS's ─────────────────────────────────────────────────────────────
+// FINOS lists LGPL-2.1 and LGPL-3.0 as Category X and CDDL and OFL-1.1 as Category B. The classifier
+// used to put LGPL in B (so a logged row admitted it) and OFL in A; dependency review already used
+// FINOS's list, and nothing held the two together.
+
+test("licenses RED: LGPL is Category X, so no exception row admits it", () => {
+  const key = firstKey("h11==");
+  const r = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "LGPL-2.1-or-later"`, () => runGate("licenses"));
+  assert.equal(r.green, false, "an LGPL package passed");
+  assert.match(r.out, /FORBIDDEN \(Cat X\) LGPL-2\.1-or-later/);
+  const and = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "Apache-2.0 AND LGPL-3.0-or-later"`, () => runGate("licenses"));
+  assert.match(and.out, /FORBIDDEN \(Cat X\) Apache-2\.0 AND LGPL-3\.0-or-later/);
+});
+
+test("licenses RED: CDDL is Category B and needs a logged row", () => {
+  const key = firstKey("h11==");
+  const r = withEdited(PY_INDEX, `"${key}": "MIT"`, `"${key}": "CDDL-1.0"`, () => runGate("licenses"));
+  assert.equal(r.green, false, "a CDDL package passed with no logged row");
+  assert.match(r.out, /Cat-B CDDL-1\.0 needs a license-exceptions\.json categoryB row/);
+});
+
+test("licenses RED: a categoryB row may not hold an LGPL licence", () => {
+  const r = withEdited("license-exceptions.json", `"license": "MPL-2.0",\n      "reason": "Native CSS`,
+    `"license": "LGPL-3.0-only",\n      "reason": "Native CSS`, () => runGate("licenses"));
+  assert.equal(r.green, false, "an LGPL row sat in categoryB");
+  assert.match(r.out, /categoryB row "lightningcss" is LGPL-3\.0-only, Cat X/);
+});
+
+test("licenses RED: dependency review may not allow a licence the classifier calls Cat X", () => {
+  const r = withEdited(".github/workflows/dependency-review.yml", "            0BSD,\n",
+    "            0BSD,\n            LGPL-3.0-only,\n", () => runGate("licenses"));
+  assert.equal(r.green, false, "dependency review admitted LGPL and the gate stayed green");
+  assert.match(r.out, /dependency-review\.yml allows LGPL-3\.0-only, which this classifier puts in Cat X/);
+});
+
+// ── S73: the terminal's npm lock is in the gate ─────────────────────────────────────────────────
+// Its images install with `npm ci` from clients/terminal/package-lock.json, which pnpm's index does
+// not read. Before S73 this plant was green.
+
+test("licenses RED: a Cat X package in the terminal's npm lock is forbidden", () => {
+  const r = withEdited("clients/terminal/package-lock.json",
+    /("node_modules\/zod": \{[^}]*?"license": ")MIT(")/, "$1LGPL-3.0-only$2", () => runGate("licenses"));
+  assert.equal(r.green, false, "the terminal's npm lock was not read");
+  assert.match(r.out, /FORBIDDEN \(Cat X\) LGPL-3\.0-only: zod/);
+});
+
+// ── gate:dataflow sees key-value writes, and refuses an op it cannot see (S60, ADR-0042) ───────────
+
+// Change the sandbox's chart, re-seal it and regenerate its projection (so only the change is
+// under test, not the seal), run fn, then put the chart back the same way.
+function withChart(edit, fn) {
+  const file = join(ROOT, "architecture.calm.json");
+  const original = readFileSync(file, "utf8");
+  const reseal = () => {
+    execFileSync("node", ["scripts/gates.mjs", "seal-arch"], { cwd: ROOT, stdio: "pipe" });
+    execFileSync("node", ["scripts/arch-dsl.mjs", "--write"], { cwd: ROOT, stdio: "pipe" });
+  };
+  writeFileSync(file, edit(original));
+  try {
+    reseal();
+    return fn();
+  } finally {
+    writeFileSync(file, original);
+    reseal();
+  }
+}
+
+test("dataflow: SET/HSET/SADD carriers are seen and attributed to the service whose code writes them", () => {
+  const { green, out } = runGate("dataflow");
+  assert.ok(green, out);
+  for (const carrier of ["delegation-revoked", "delegation-records", "delegation-current", "unit-delegation", "unit-fault"])
+    assert.match(out, new RegExp(`${carrier}<-\\{agent-api\\}`), `${carrier} not detected as written by agent-api:\n${out}`);
+});
+
+test("dataflow RED: a carrier whose op the gate cannot grep for is refused, not passed unseen", () => {
+  const { green, out } = withChart(
+    (s) => s.replace('"match": "fault_key\\\\(",\n        "op": "set"', '"match": "fault_key\\\\(",\n        "op": "frobnicate"'),
+    () => runGate("dataflow"));
+  assert.equal(green, false, out);
+  assert.match(out, /carrier unit-fault: op 'frobnicate' is not one gate:dataflow can see/);
 });

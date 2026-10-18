@@ -12,7 +12,7 @@ deploys the same control plane as the Compose stack, with the runtime pointed at
 
 | Component | Form |
 |---|---|
-| gateway · admin-api · meeting-api · agent-api · runtime | Deployments (RollingUpdate, `maxUnavailable: 0`) |
+| gateway · admin-api · meeting-api · agent-api · runtime · mcp | Deployments (RollingUpdate, `maxUnavailable: 0`); `mcp` is the one assembled MCP server the gateway relays `/mcp` to |
 | terminal (web workbench) | Deployment + ingress |
 | postgres | StatefulSet (or point values at your managed DB) |
 | redis (Valkey) | Deployment |
@@ -21,11 +21,23 @@ deploys the same control plane as the Compose stack, with the runtime pointed at
 | pgbouncer | optional connection pooling |
 | dashboard (deprecated 0.10 UI) | optional Deployment + Service, **off by default** |
 | RBAC for the k8s spawn backend | Role/RoleBinding scoped to Pod create/watch/delete |
+| NetworkPolicy for agent-api, meeting-api, the runtime and spawned Pods | on by default (`networkPolicy.enabled`): only the gateway, the MCP service, the runtime, flows, the terminal and (for meeting-api) agent-api and meeting bots reach agent-api and meeting-api; only agent-api and meeting-api reach the runtime. Spawned bots and workers take no inbound connection and reach only DNS, addresses outside `networkPolicy.workloads.privateCidrs`, and their own dependencies — workers the gateway, redis and flows-api, bots meeting-api and redis. **An STT service, LLM endpoint, S3 or proxy your bots or workers reach on a private address must be added** with `networkPolicy.workloads.bot.extraEgress` / `.worker.extraEgress`. Spawned Pods mount no ServiceAccount token. Needs a CNI that enforces NetworkPolicy |
 
-The chart sets no pod security context by default and the service images run as root; set
-`global.podSecurityContext` / `global.securityContext` to run as a non-root UID.
+The gateway, admin-api, meeting-api (and the migrations Job), MCP, terminal and flows images run as
+uid 10001, and their pods set `runAsNonRoot` with that uid and `fsGroup`. The runtime and agent-api
+run as root (the runtime starts workloads; agent-api moves workspace trees other uids write);
+`global.podSecurityContext` / `global.securityContext` apply on top.
 Containers have all capabilities dropped, with PodDisruptionBudgets on the control plane and
 rolling updates that never take the last replica down.
+
+The chart generates the gateway's identity keypair on first install and keeps it across upgrades: the
+Ed25519 private key in the `<release>-identity-signing-key` Secret, mounted by the gateway alone, and
+the public key in the `<release>-identity-public-key` ConfigMap, mounted by agent-api, meeting-api and
+the credential broker. The gateway signs every request it forwards; the others can verify that
+signature and cannot make one. If you render with `helm template` (GitOps), set `identity.signingKey`
+to a key from `openssl genpkey -algorithm ed25519`, or every render mints a new pair. The chart Secret
+also generates `VEXA_MCP_DELEGATION_SECRET`; with `secrets.existingSecretName`, your Secret must carry
+it.
 
 ## Install
 
@@ -49,6 +61,12 @@ helm install vexa deploy/helm/charts/vexa -n vexa \
 ```
 
 Keep these four secret values: every later `helm upgrade` must pass the same ones (or use `--reuse-values`).
+`secrets.nextauthSecret` and `secrets.dispatchSigningKey` may also be left out: the chart then keeps the
+value its own Secret already holds, or generates one on first install. It refuses a value shorter than
+32 bytes or one published in this repository. When a GitOps tool renders the chart with `helm template`
+(no cluster to look the Secret up in), set them explicitly, or every render generates new ones; the
+full list of what such a render must supply is under
+[One-time steps after upgrading](/deployment#one-time-steps-after-upgrading).
 
 `values-staging.yaml` and `values-test.yaml` show environment overlays. Chart tests
 (`helm lint` + template tests) live under `deploy/helm/tests/`.
@@ -204,6 +222,60 @@ global:
 Set `runtime.tolerations` / `runtime.nodeSelector` only to send spawned workloads to a **different**
 pool than the kernel (e.g. GPU bots). Both values are serialized to JSON; malformed JSON fails the
 spawn loudly rather than dropping the constraint (a dropped constraint is the stranded-Pod bug).
+
+To place one class on its own, set `runtime.workloadScheduling.meetingBot` or `.agentWorker`. For
+example, to put bots and workers on a dedicated tainted pool, pull them with a private registry's
+Secret, and run them below the priority of the workloads they must not displace:
+
+```yaml
+runtime:
+  workloadScheduling:
+    meetingBot:
+      nodeSelector: {vexa.ai/pool: bots}
+      tolerations:
+        - {key: vexa.ai/pool, operator: Equal, value: bots, effect: NoSchedule}
+      priorityClassName: vexa-bots          # a PriorityClass you create
+      imagePullSecrets: [regcred]
+    agentWorker:
+      priorityClassName: vexa-bots
+      imagePullSecrets: [regcred]
+```
+
+| Value (per class) | Env on the runtime | Applied to that class's Pods |
+|---|---|---|
+| `nodeSelector` | `RUNTIME_K8S_BOT_NODE_SELECTOR` / `RUNTIME_K8S_AGENT_WORKER_NODE_SELECTOR` | `spec.nodeSelector`, replacing the runtime-wide one |
+| `tolerations` | `RUNTIME_K8S_BOT_TOLERATIONS` / `RUNTIME_K8S_AGENT_WORKER_TOLERATIONS` | `spec.tolerations`, replacing the runtime-wide ones |
+| `priorityClassName` | `RUNTIME_K8S_BOT_PRIORITY_CLASS_NAME` / `RUNTIME_K8S_AGENT_WORKER_PRIORITY_CLASS_NAME` | `spec.priorityClassName`; Kubernetes' own `system-*` classes are refused |
+| `imagePullSecrets` | `RUNTIME_K8S_BOT_IMAGE_PULL_SECRETS` / `RUNTIME_K8S_AGENT_WORKER_IMAGE_PULL_SECRETS` | `spec.imagePullSecrets`. Kubernetes then skips the ServiceAccount's own pull secrets for that Pod |
+| `capabilities` | `RUNTIME_K8S_BOT_CAPABILITIES` / `RUNTIME_K8S_AGENT_WORKER_CAPABILITIES` | the Linux capabilities the class's containers keep; every other one is dropped. `null` (the default) keeps the profile's own — none for a bot; `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `FSETID`, `KILL`, `SETGID`, `SETUID` for a worker, which a root worker needs to give the model's tools a user of their own. `[]` keeps none (OpenShift's restricted SCC) |
+| `seccompProfile` | `RUNTIME_K8S_BOT_SECCOMP_PROFILE` / `RUNTIME_K8S_AGENT_WORKER_SECCOMP_PROFILE` | a `Localhost` seccomp profile for the class's containers, a path under the kubelet's seccomp root; empty means `RuntimeDefault`. For bots the chart sets it from `runtime.botSandbox` (below) while that is on |
+
+The scheduling values are empty by default and add nothing to a Pod's placement. Every spawned Pod's
+container does get a security context: privilege escalation off, every capability dropped except the
+class's list above, the class's seccomp profile (`RuntimeDefault` unless one is named), and
+`runAsNonRoot` where the profile's image runs non-root (a meeting bot's does).
+
+`runtime.botSandbox` (on by default) gives meeting bots the seccomp profile Chromium needs to build its
+sandbox, `vexa/seccomp-userns.json`, and a `<release>-bot-seccomp` DaemonSet writes that file to
+`runtime.botSandbox.installer.kubeletSeccompDir` on each node; the DaemonSet needs a namespace that
+admits a hostPath volume. Where node files are managed another way, turn the installer off and point
+`localhostProfile` at the installed path (the chart README covers OpenShift). With `botSandbox` off,
+bots take `meetingBot.seccompProfile` if set and `RuntimeDefault` otherwise, and each bot without the
+profile logs that its browser runs without its sandbox.
+
+Two settings apply to the runtime as a whole:
+
+- `runtime.workloadScheduling.allowBroadTolerations` (`RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS`, default
+  `false`): a toleration with no key, which tolerates every taint, or one for a control-plane or
+  system taint (`node-role.kubernetes.io/control-plane`, `…/master`, `CriticalAddonsOnly`) is refused
+  at boot unless this is `true`, in the runtime-wide `runtime.tolerations`/`global.tolerations` too.
+- `RUNTIME_K8S_INSTANCE`, which the chart sets to the Helm release name: every spawned Pod carries it
+  as the label `runtime.instance`, and the runtime's boot-time re-adoption selects on it, so two
+  releases in one namespace never adopt each other's Pods.
+
+The runtime checks all of these when it starts and refuses to boot on a malformed one, naming it. A
+caller cannot set any of them: they are not part of a `runtime.v1` `WorkloadSpec`, and the runtime
+drops a spec's `RUNTIME_K8S_*` env keys.
 
 <Warning>
 **Spawned-workload commands must exist in the target image under k8s (entrypoint-replace)
@@ -448,9 +520,10 @@ terminal:                                 # the same `terminal:` key as above �
     - name: MICROSOFT_CLIENT_SECRET
       valueFrom:
         secretKeyRef: { name: vexa-oauth, key: microsoft-client-secret }
-    # "common" = work/school + personal; or a single org tenant id. Unset ⇒ common.
+    # Your tenant id (a GUID) admits only that tenant's accounts. "common" (or unset) admits any
+    # tenant, and then each sign-in must carry the xms_edov optional ID-token claim, or it is refused.
     - name: MICROSOFT_TENANT_ID
-      value: "common"
+      value: "<directory (tenant) id>"
     # Google is the same shape, minus the tenant:
     - name: GOOGLE_CLIENT_ID
       value: "<client id>"
@@ -461,6 +534,45 @@ terminal:                                 # the same `terminal:` key as above �
 
 Register the redirect URI in the provider console as `<publicUrl>/api/auth/callback/microsoft`
 (or `.../google`) — so `terminal.publicUrl` above is a prerequisite, not an optional extra.
+
+The terminal uses a provider's email only when the provider verified it: Google must report
+`email_verified`, and a Microsoft sign-in must come from the pinned tenant, or — with `common` — carry
+the `xms_edov` claim (Entra admin center → App registrations → your app → Token configuration → Add
+optional claim → ID → `xms_edov`). Anything else is refused with a sentence on the sign-in card.
+
+### Who may sign in
+
+A provider vouches for an address; it does not decide whether that address belongs here. Every
+sign-in — Google, Microsoft, or the emailed link — is admitted only for an **existing user** of the
+instance, an **admin**, or an address on the **sign-in allow-list**. Anybody else is refused before an
+account is created. Seed the list with `adminApi.signinAllow` (exact addresses and `@domain`
+entries, comma-separated); the admin can add more in the Terminal under **Settings → Sign-in**, and
+the effective list is both:
+
+```yaml
+adminApi:
+  signinAllow: "@example.com,alice@example.org"
+  adminEmails: "admin@example.com"   # optional: names the admins, no claim code needed
+```
+
+admin-api reads both and decides every sign-in; the Terminal only asks it. An older install that set
+`VEXA_ADMIN_EMAILS` under `terminal.extraEnv` keeps working: the chart carries it over to admin-api
+while `adminApi.adminEmails` is empty.
+
+<Warning>
+**The first administrator needs the admin claim code.** On an instance nobody has claimed, admin-api
+writes a one-time code to its log at boot. With several replicas, one of them holds it:
+
+```bash
+kubectl -n vexa logs -l app.kubernetes.io/component=admin-api --prefix --tail=-1 | grep -A4 'ADMIN CLAIM CODE'
+```
+
+Open the Terminal, enter the code on the claim screen, then sign in: that sign-in becomes the
+administrator. The code works once; restarting admin-api issues a new one. Without it nobody new can
+sign in and nobody can claim the role. To name the admins instead, set `adminApi.adminEmails` before
+the first install; no code is issued then. A non-empty `adminApi.signinAllow` narrows the claim too:
+only an address on the list may sign in or claim.
+</Warning>
 
 <Note>
 Without an Ingress the Services stay cluster-internal. `helm install` alone does not expose Vexa —

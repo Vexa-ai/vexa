@@ -26,16 +26,14 @@ spec:
         {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.meetingApi.terminationGracePeriodSeconds | default 30 }}
-      securityContext:
-        {{- toYaml .Values.global.podSecurityContext | nindent 8 }}
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: meeting-api
-          securityContext:
-            {{- toYaml .Values.global.securityContext | nindent 12 }}
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
           image: "{{ .Values.meetingApi.image.repository }}:{{ .Values.global.imageTag | default .Values.meetingApi.image.tag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           lifecycle:
@@ -68,6 +66,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
                   key: POSTGRES_PASSWORD
+            {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
             - name: REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
             - name: RUNTIME_API_URL
@@ -84,6 +83,17 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            # The runtime caller credential meeting-api presents on every runtime.v1 call. Never
+            # placed in a bot invocation.
+            - name: RUNTIME_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: RUNTIME_API_TOKEN
+            # gateway-identity.v1: the gateway's PUBLIC key (the identity-public-key ConfigMap, mounted
+            # below). This service verifies the gateway's signature and cannot make one.
+            - name: VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE
+              value: /run/vexa-identity/public/key.pem
             # MeetingToken is signed AND verified with the SAME admin secret admin-api holds.
             - name: ADMIN_TOKEN
               valueFrom:
@@ -161,7 +171,8 @@ spec:
               value: /etc/vexa/s3/config
             - name: LOG_LEVEL
               value: {{ .Values.meetingApi.logLevel | default "info" | quote }}
-            # Authenticated-bot mode (deployment-scoped) — docs: /authenticated-bots.
+            # Authenticated-bot mode (deployment-scoped) — docs: /authenticated-bots. BOT_S3_* is the
+            # bots' read-only pair; the write-back is stored with the MINIO_* pair above.
             - name: BOT_AUTHENTICATED
               value: {{ .Values.meetingApi.botAuthenticated | default "false" | quote }}
             - name: BOT_USERDATA_S3_PATH
@@ -203,6 +214,9 @@ spec:
             - name: s3-client
               mountPath: /etc/vexa/s3
               readOnly: true
+            - name: identity-public-key
+              mountPath: /run/vexa-identity/public
+              readOnly: true
             {{- if or $s3.caConfigMap $s3.caSecret }}
             - name: s3-ca
               mountPath: /etc/vexa/s3-ca
@@ -215,6 +229,13 @@ spec:
           configMap:
             name: {{ include "vexa.componentName" (list . "s3-client") }}
             defaultMode: 0444
+        # gateway-identity.v1: the public key only — the signing key is mounted by the gateway alone.
+        - name: identity-public-key
+          configMap:
+            name: {{ include "vexa.componentName" (list . "identity-public-key") }}
+            defaultMode: 0444
+            items:
+              - { key: public-key.pem, path: key.pem }
         {{- if $s3.caConfigMap }}
         - name: s3-ca
           configMap:

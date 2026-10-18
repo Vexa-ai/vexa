@@ -1,0 +1,273 @@
+---
+title: "Connections"
+description: "Set up Connections on a self-hosted install: the credential broker, its keys, Google consent, and the optional OpenBao backend."
+---
+
+Connections lets a person connect Gmail, Google Calendar or any HTTPS API to their agent. The person
+consents, or pastes the key, in the terminal's **Connections** panel; from then on the agent reads
+mail and events, saves Gmail drafts, or calls the service — and never receives the credential.
+
+The credentials live in the **credential broker**, a small service that runs beside agent-api. It is
+part of a standard Docker Compose or Helm install whenever agent-api is. [Vexa Lite](/deployment-lite)
+does not include Connections: Lite runs agent workers inside its one container, so nothing could
+keep the person's key away from them.
+
+## What runs
+
+| Piece | Compose | Helm |
+|---|---|---|
+| The broker | `credential-broker` | `<release>-credential-broker` Deployment (one replica) |
+| Its state | the `connections-state` volume | the `<release>-credential-broker-state` PVC |
+| Keys | generated once by `connections-keys` into four volumes | the `<release>-credential-broker-keys` Secret, generated once |
+| Who can reach it | agent-api and the terminal, on the internal `connections` network | agent-api and terminal Pods, by NetworkPolicy |
+
+The broker answers two probes without a key: `GET /health` (the process is up) and `GET /ready`,
+which answers `503` while its credential store does not, so a readiness check sends it no traffic
+it would refuse.
+
+Each service holds only its own key. agent-api signs as the **agent**: it can request a connection
+and use one, and only for the person whose request the gateway signed. The terminal signs as the **human**, for the person signed in: only it can consent,
+save a credential, disconnect or delete. Agent workers hold no key and cannot reach the broker.
+
+Credentials are encrypted with AES-256-GCM. The encryption key lives apart from the state volume,
+so a copy or backup of the volume alone is unreadable. Keep a copy of the keys: **if the store key
+is lost, every stored credential is lost** and people reconnect.
+
+## Compose
+
+Connections works with no extra configuration: `docker compose up -d` starts the broker and the key
+generator with the rest of the stack. Two settings in `.env` decide what people can connect:
+
+```bash
+# The address people use for the terminal. Browser saves must come from this origin.
+# Defaults to NEXTAUTH_URL, which you set when you publish the terminal.
+VEXA_CONNECTIONS_PUBLIC_ORIGIN=https://vexa.example.com
+
+# Gmail and Google Calendar (optional). Usually the client the terminal signs in with.
+VEXA_CONNECTIONS_GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+VEXA_CONNECTIONS_GOOGLE_CLIENT_SECRET=...
+VEXA_CONNECTIONS_PRODUCT_REDIRECT=https://vexa.example.com/api/auth/callback/google
+```
+
+Without the Google settings, Gmail and Calendar answer "not configured" and custom-service
+connections still work. To run without Connections at all, set `VEXA_CONNECTIONS_BROKER_URL=` (empty).
+
+## Helm
+
+The chart deploys the broker with agent-api. Set the terminal's public URL and, for Gmail and
+Calendar, the Google client:
+
+```yaml
+terminal:
+  publicUrl: https://vexa.example.com     # also the default consent callback
+credentialBroker:
+  google:
+    clientId: "...apps.googleusercontent.com"
+    clientSecret: "..."                    # stored in the keys Secret
+```
+
+The keys Secret is generated on first install and kept across upgrades and uninstalls. If you deploy
+with `helm template` (GitOps), the chart cannot look up an existing Secret and would generate new
+keys on every render — create the Secret yourself instead:
+
+```bash
+kubectl create secret generic vexa-connections-keys \
+  --from-literal=agent.key="$(openssl rand -hex 32)" \
+  --from-literal=human.key="$(openssl rand -hex 32)" \
+  --from-literal=git.key="$(openssl rand -hex 32)" \
+  --from-literal=store.key="$(openssl rand -hex 32)"
+```
+
+and set `credentialBroker.existingSecret: vexa-connections-keys`. Add `google-client-secret` to the
+same Secret if you use Google. The NetworkPolicy needs a network plugin that enforces policies.
+
+## Google consent
+
+Register `https://<your terminal>/api/auth/callback/google` as an authorized redirect URI on the
+Google OAuth client. It is the same callback the terminal's Google sign-in uses; consent requests
+carry their own state, and the terminal routes them to the broker. Enable the Gmail API and the
+Google Calendar API on the client's project. The broker asks for read-only Calendar access, and for
+Gmail read plus draft creation; Vexa never sends mail.
+
+## Custom services
+
+A person, or their agent, can prepare a custom connection: an HTTPS endpoint and how the key is
+presented, or a full OAuth application. Only the person can save the secret, in the panel. The panel
+shows every host a credential will be sent to (for OAuth, the token endpoint and the service
+endpoint that receives the access token), flags a host that is not a known provider, and on the
+first save to a new host asks the person to type it; the broker refuses the save otherwise. The
+broker sends only to public addresses, refuses redirects, and redacts the key from responses.
+
+Deleting a connection destroys every stored version of its credential and OAuth application;
+disconnecting destroys the credential and keeps the application for reconnecting. Otherwise a
+credential keeps its current version and the one before it. Backups you take keep what they hold.
+
+## Using your own OpenBao
+
+To keep credentials in an OpenBao or Vault you already run, set the backend to `openbao`:
+
+| | Compose (`.env`) | Helm |
+|---|---|---|
+| Backend | `VEXA_CONNECTIONS_STORE=openbao` | `credentialBroker.store.backend: openbao` |
+| Address | `VEXA_CONNECTIONS_OPENBAO_ADDR=https://openbao.example:8200` (https; plain http only to this host's loopback) | `credentialBroker.openbao.address` |
+| Token | `VEXA_CONNECTIONS_OPENBAO_TOKEN_FILE` (mount the file into the broker) | `credentialBroker.openbao.tokenSecret` (a Secret with key `token`) |
+| Mount | `VEXA_CONNECTIONS_OPENBAO_MOUNT=connections` | `credentialBroker.openbao.mount` |
+
+The mount is KV version 2, and the token's policy needs `create`, `update` and `read` on
+`<mount>/data/*`, plus `update` and `delete` on `<mount>/metadata/*` (version retention, and
+deleting a connection). The broker reads the token file on every request, so a renewed token takes effect
+without a restart. Vexa does not ship OpenBao; it is MPL-2.0 software you run yourself.
+
+## Git credentials in the broker (optional)
+
+agent-api keeps saved Git tokens and deploy keys in its own encrypted store (`VEXA_SECRETS_KEY`).
+To keep them in the broker instead, set `VEXA_GIT_STORE_BROKER_URL=http://credential-broker:8100`
+(compose) or `credentialBroker.gitStore: true` (Helm). Existing credentials move on first use. With
+it on, a broker outage stops Git operations instead of falling back to disk. agent-api holds the
+broker's git key only while this is on.
+
+## When something fails
+
+Every broker failure is logged as one JSON line with `"event":"broker_fault"`, a `source` and a
+`kind` — never a key or a value:
+
+| `kind` | Where | Meaning |
+|---|---|---|
+| `config` | agent-api, terminal | the broker URL or this service's key is not set or not readable |
+| `transport` | agent-api, terminal | the broker did not answer |
+| `http_401` | agent-api, terminal | the broker refused the signature: the two sides hold different keys, or clocks differ by more than 30 seconds |
+| `http_503` | agent-api, terminal | the broker could not reach its store (see the broker's own `store` fault), or Google or a custom service is down or rate-limiting |
+| `http_502` | agent-api, terminal | Google or a custom service answered with something unusable |
+| `expired`, `signature`, `replay` | broker (`assertion_refused`) | a request was refused before any route ran |
+| `transport`, `integrity`, `config` | broker (`source: store`) | the store is unreachable, a stored version did not decrypt (wrong store key), or the backend is misconfigured |
+| `owner_mismatch` | broker (`source: store`) | a connection's metadata names a different person from the one its stored credential is sealed to; the credential is not used |
+
+## How it works
+
+Three callers reach the broker, each with its own role key. The broker checks a signed assertion
+(`credential-broker.v1`) on every route except the two probes.
+
+| Role | Held by | May do |
+|---|---|---|
+| `agent` | agent-api (`VEXA_CONNECTIONS_AGENT_KEY_FILE`) | request, prepare, list, read mail and events, save a Gmail draft, call a custom service. Never consent, save, disconnect or delete. |
+| `human` | the terminal's server (`VEXA_CONNECTIONS_HUMAN_KEY_FILE`) | everything above, plus consent, save a credential or OAuth application, disconnect and delete |
+| `git` | agent-api, only when the Git store is on (`VEXA_GIT_STORE_KEY_FILE`) | read and write the person's Git token and deploy keys (`/api/internal/git-secret`) |
+
+**An agent asks for and uses a connection:**
+
+1. The agent calls agent-api through the gateway (`/agent/connections/request`, `/agent/connections/gmail/search`, …).
+   The gateway resolves the person and signs their identity (`gateway-identity.v1`, header `X-Vexa-Identity`).
+2. agent-api's `routers/connections.py` signs an `agent` assertion for that person and forwards the
+   gateway's signature unchanged. A request with no gateway signature is refused there, before the broker.
+3. The broker verifies the assertion (key, expiry, single use, bound to method, path and body), then
+   verifies the forwarded signature with the gateway's public key (`VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE`)
+   and requires it to name the assertion's actor.
+4. A request creates a connection row `awaiting_user`. For a custom service the agent can also
+   `prepare` a setup: endpoint, header and scheme, never a secret.
+5. Once the person has connected it, a read or call loads the credential from the store, checks the
+   owner sealed inside it, refreshes an expired Google token (writing the new version), and calls
+   Google or the custom service. Only the result goes back to agent-api.
+
+**A person consents or saves a secret:**
+
+1. The Connections panel calls the terminal's own server (`/api/connections/...`). It refuses a
+   request whose `Origin` is not `VEXA_CONNECTIONS_PUBLIC_ORIGIN` (else `NEXTAUTH_URL`).
+2. The terminal resolves the person from the sign-in cookie, checked against identity, and signs a
+   `human` assertion for them.
+3. For Google, the broker returns a consent URL bound to a single-use state, a PKCE challenge and the
+   browser session that started it. The callback (`/api/auth/callback/google`) must come back for the
+   same person and session within ten minutes.
+4. For a custom service, the broker refuses the save until every host that will receive a credential
+   has been confirmed (see below), then encrypts and stores it.
+
+**agent-api uses a Git credential** (only with `VEXA_GIT_STORE_BROKER_URL` set): `git_secret_store.py`
+signs a `git` assertion for the person the current request acts for and forwards the gateway's
+signature. The broker serves only `pat/<person>`, `deploy/user-<person>.*`, and `deploy/ws-<id>.*`
+for a shared workspace among the memberships the gateway signed. This is the one route that returns
+a stored value, and only to the `git` role. With the setting off, Git credentials stay in agent-api's
+own sealed store (`VEXA_SECRETS_KEY`).
+
+### Who writes what
+
+| Data | Only writer | Where |
+|---|---|---|
+| Connection metadata, audit trail, OAuth state, used assertion nonces | the broker | `metadata.sqlite` on the state volume |
+| Credential versions | the broker, through its `Store` port | `secrets.sqlite` beside it (`local`), or the operator's OpenBao (`openbao`) |
+| The role keys and the store key | generated once by the deployment (`connections-keys`, or the chart's Secret) | mounted files, apart from the state volume |
+
+The audit row is committed before the action it records; if the insert fails, the action does not run.
+
+### The two stores
+
+Both are implemented (`src/credential_broker/store.py`); `VEXA_CONNECTIONS_STORE` picks one at boot.
+
+| | `local` (default) | `openbao` |
+|---|---|---|
+| Storage | SQLite file in `VEXA_CONNECTIONS_STATE_DIR` (default `/state`) | KV version 2 on `VEXA_CONNECTIONS_OPENBAO_MOUNT` (default `connections`) |
+| Encryption | AES-256-GCM, a random nonce per version, path and version bound as associated data | OpenBao's |
+| Key | `VEXA_CONNECTIONS_STORE_KEY_FILE`, 64 hex characters | token in `VEXA_CONNECTIONS_OPENBAO_TOKEN_FILE`, re-read on every request |
+| Address | — | `VEXA_CONNECTIONS_OPENBAO_ADDR`: https, or plain http to this host's loopback only |
+
+Either way a write keeps the new version and the one before it; delete destroys every version.
+
+### Contracts, routes and configuration
+
+- **Contract:** [`core/agent/contracts/credential-broker.v1`](https://github.com/Vexa-ai/vexa/blob/main/core/agent/contracts/credential-broker.v1)
+  (the assertion and every route body). The broker also consumes `gateway-identity.v1`.
+- **Broker routes:** `/api/setup`, `/api/connections`, `/api/connections/{id}/request | prepare |
+  custom-secret | oauth-application | authorize | disconnect | delete | read | draft | call`,
+  `/api/auth/callback/google`, `/api/internal/git-secret`, and the probes `/health` and `/ready`.
+- **Configuration:** the broker's keys are declared in
+  `core/agent/services/credential-broker/src/credential_broker/config.v1.json` and set from compose
+  `.env` or the chart's `credentialBroker` values. The broker checks them at boot and refuses to start
+  when a role key is a published test key, the gateway key is missing or is not a public key, the
+  store key is unreadable, or the store settings do not fit the backend.
+
+## Why it complies
+
+### Architecture
+
+| Rule | How the broker meets it | Enforced by |
+|---|---|---|
+| P10 (a service only when a force requires it) | It is a separate service because its human key must live in no process an agent can reach. See [ADR-0040](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0040-connections-credential-broker-is-a-product-service.md). | ungated: reviewed |
+| P2, P4 (couple through sealed contracts) | Every caller reaches it only through `credential-broker.v1`, which is sealed and golden-pinned. The Python signer is vendored byte for byte into the broker and agent-api; the terminal's TypeScript twin reproduces the same golden vectors. | `gate:schema`, `gate:contract-version`, `gate:fact-parity` (`credential-broker-assertion`, `identity-token`) |
+| P23 (one writer per carrier) | The broker alone writes its metadata, audit and credential store (`credentials-store` in the chart). agent-api and the terminal only call it. | `gate:dataflow` |
+| P14 (config is a validated contract) | Its environment is declared in `config.v1.json` and checked against compose and Helm in both directions; a bad configuration stops the boot. | `gate:config-contract` |
+| P15 (secrets behind a port, brokered access) | Credentials sit behind the `Store` port with two adapters. The agent gets results, never the credential. | ungated: reviewed |
+| P18 (fail loud) | Every failure is a typed `broker_fault` line (`source`, `kind`), never a value. `/ready` answers 503 while the store does not. An outage stays a 502 or 503 and is never reported as "reconnect". | `gate:python` (`test_health.py`, `test_upstream_faults.py`) |
+| P20 (authorize every access) | Every route checks the role and the owner; see below. | `gate:python` (deny tests below) |
+
+### Security
+
+- **Who can reach it.** Only agent-api and the terminal, on the internal `connections` network
+  (compose) or by NetworkPolicy (Helm). Agent workers hold no key.
+- **Each hop is signed.** Every call carries a role assertion that expires, is bound to the method,
+  path and body, and is accepted once. A wrong role answers 403.
+- **The agent and git roles act only for a person the gateway signed.** agent-api's keys alone act for
+  nobody: the broker verifies the forwarded gateway signature and requires it to name the actor. The
+  broker holds only the gateway's public key, so it cannot sign one.
+- **A worker without a person in the loop** may list connections, and nothing else.
+- **Owner only.** Every lookup is filtered by the signed person. Each stored credential also carries
+  its owner inside the encrypted value. If the metadata names someone else, the credential is not
+  used (`owner_mismatch`).
+- **Host confirmation.** The first save that sends a credential to a host needs that host typed back
+  by the person. For OAuth that is both the token endpoint and the service endpoint. The broker
+  enforces it, so a UI defect cannot skip it.
+- **Outbound calls** go only to public addresses, with DNS pinned and no redirects, and the key is
+  redacted from responses.
+- **Consent** starts only from the human role, is single-use, and is bound to the person and session.
+
+Deny tests, all in `core/agent/services/credential-broker/tests/` unless named otherwise:
+
+| Protection | Tests |
+|---|---|
+| Assertion forged, expired, replayed, wrong role, wrong body | `test_identity.py`: `test_forged_signature_refused`, `test_agent_key_cannot_sign_human_role`, `test_expired_or_future_assertion_refused`, `test_tampering_and_replay_refused`, `test_body_and_path_binding`, `test_git_role_is_separate_from_agent_and_human` · `test_assertion.py`: `test_replay_refused`, `test_every_golden_key_is_published_and_never_loads_as_a_deployment_key` |
+| Forwarded identity required and verified | `test_forwarded_identity.py`: `test_an_agent_call_without_a_valid_gateway_signature_is_refused`, `test_a_signature_by_any_key_but_the_gateways_is_refused`, `test_an_expired_signature_is_refused`, `test_a_signature_for_another_person_is_refused`, `test_every_agent_route_needs_the_signature`, `test_the_broker_holds_a_key_that_cannot_sign` |
+| Agent cannot consent or reach another person's connection | `test_identity.py`: `test_agent_requests_but_cannot_consent_or_read_other_users`, `test_callback_bound_to_session_and_single_use` · `test_secret_service.py`: `test_only_human_stores_agent_uses_own_reference` |
+| No person in the loop | `test_unwatched_regime.py`: `test_a_worker_without_a_person_is_refused`, `test_a_worker_without_a_person_may_list` |
+| Owner sealed in the credential | `test_owner_sealed.py`: `test_a_connection_reassigned_in_the_metadata_does_not_hand_over_its_credential`, `test_a_reassigned_oauth_application_does_not_start_a_consent`, `test_a_record_without_an_owner_is_refused_once_owners_are_sealed` |
+| Host confirmation | `test_endpoint_host_confirmation.py`: `test_an_oauth_save_needs_the_service_endpoint_host_confirmed_too`, `test_a_new_service_endpoint_host_is_confirmed_again` |
+| Outbound destinations | `test_secret_service.py`: `test_private_mixed_multicast_and_linklocal_refused`, `test_endpoint_and_header_injection_refused`, `test_fixed_endpoint_pinned_ip_redirect_and_secret_redaction` |
+| Git credentials by signed person and membership | `test_git_identity.py`: `test_another_persons_credentials_are_refused`, `test_a_shared_workspace_key_needs_the_signed_membership`, `test_naming_the_owner_as_the_actor_is_no_longer_enough`, `test_a_call_without_the_gateway_signature_is_refused` |
+| agent-api side | `core/agent/tests/test_connections.py`: `test_unconfigured_broker_fails_closed`, `test_multiple_accounts_require_selection_and_cannot_select_foreign_account` · `core/agent/tests/test_git_store_identity.py`: `test_without_a_signed_person_nothing_is_sent`, `test_outside_any_request_the_store_refuses` · `core/agent/tests/test_git_broker_store.py`: `test_unavailable_never_falls_back_or_deletes` |
+| Terminal side | `clients/terminal/src/app/api/connections/__tests__/routes.test.ts`: "refuses cross origin and caller-chosen identity", "arbitrary proxy routes and destinations refused", "custom secret submission projects no credential back to the UI and carries the host confirmation" |

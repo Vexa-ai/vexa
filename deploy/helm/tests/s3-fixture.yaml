@@ -100,3 +100,23 @@ spec:
             - name: ADMIN_SECRET_KEY
               valueFrom:
                 secretKeyRef: { name: s3-fixture-credentials, key: AWS_SECRET_ACCESS_KEY }
+---
+# The chart's namespace default-deny (networkPolicy.defaultDeny) denies every Pod it does not name,
+# this fixture's included: let the fixture take connections and its bucket Job make them.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: s3-fixture
+  labels:
+    app.kubernetes.io/name: s3-fixture
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [s3-fixture, s3-fixture-bucket]
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - {}
+  egress:
+    - {}

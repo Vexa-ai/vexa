@@ -16,6 +16,16 @@ slim image from `<service>/Dockerfile`:
 | flows-api    | repo root, `core/flows/Dockerfile`     | 18200     | `python -m flows_integrations.flows_api` |
 | flows-mailbox| repo root, `core/flows/Dockerfile`     | —         | `python -m flows_integrations.mailbox` (profile `mailbox`) |
 
+### Networks
+
+The control plane shares the `vexa` network. Nothing the runtime spawns joins it: meeting bots go on
+`bots` (`DOCKER_NETWORK` — meeting-api, redis, storage) and agent workers on `workers`
+(`DOCKER_WORKER_NETWORK` — the gateway, redis, flows-api, and the optional `llm-shim` / `searxng`).
+Neither reaches the runtime, Postgres, admin-api, agent-api or the terminal. A service you add that a
+bot or worker must reach joins the matching network. The runtime's own API requires
+`RUNTIME_API_TOKEN`, which only agent-api and meeting-api hold, and Postgres refuses to start on an
+empty or published `DB_PASSWORD` (`make rotate-db-password` moves an existing install off one).
+
 ### flows, and what it replaces
 
 `flows-api` is the reaction engine's HTTP surface and one of the domains the MCP assembly asks for
@@ -46,6 +56,27 @@ unconfigured deployment look configured), and it will refuse to compose a mailed
 terminal. Every key it reads is declared in `core/flows/src/config.v1.json` and checked against
 this file by `gate:config-contract`.
 
+**First run needs no setup step beyond the admin claim.** The first administrator is whoever signs in
+with the one-time admin claim code (below), or an address in `VEXA_ADMIN_EMAILS`; signing in first
+grants nothing. There is no company-layer gate (founder ruling 2026-10-08): `_global` lives in the `agent-workspaces` volume, agent-api creates it empty at boot,
+and flows act on the world whether or not anybody ever writes it. `VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH`
+is optional — set it only to manage `_global` as a separate host repo.
+
+**Who may sign in.** Every terminal door — the emailed link, Google, Microsoft — admits only an
+existing user of this instance, an admin, or an address on the sign-in allow-list; anybody else is
+refused before an account is created, and the emailed-link form answers "check your email" either
+way without sending them anything. The allow-list is `VEXA_SIGNIN_ALLOW` on `admin-api` (exact
+addresses and `@domain` entries, comma-separated, e.g. `@example.com,alice@example.org`) plus
+whatever the admin adds in the terminal under Settings → Sign-in. If admin-api cannot be reached,
+new sign-ins are refused; sessions that already exist are untouched. Upgrading admits every
+account that already exists, so nobody is locked out by it.
+
+**The first administrator needs the admin claim code.** On an instance nobody has claimed, admin-api
+writes a one-time code to its log at boot (`docker compose logs admin-api | grep -A4 'ADMIN CLAIM
+CODE'`); the terminal's claim screen asks for it, and the sign-in that carries it becomes the admin.
+Without it nobody new can sign in. `VEXA_ADMIN_EMAILS` names the admins instead (no code is issued
+then). admin-api reads it (and `VEXA_SIGNIN_ALLOW`) and decides every sign-in; the terminal only asks.
+
 Every service answers `GET /health` and carries a compose healthcheck; `depends_on` waits on
 `condition: service_healthy` so the bring-up is ordered. The `runtime` mounts
 `/var/run/docker.sock` and spawns the bot (`BROWSER_IMAGE=vexaai/vexa-bot:v012`, published — a
@@ -53,6 +84,13 @@ reference, never built here; never point it at the published `vexaai/vexa-bot:de
 old 0.10 line and incompatible with this stack's `lifecycle.v1`) on demand and the per-dispatch
 agent worker (`vexaai/v012-agent-worker:v012`, a `build-only` compose profile); neither is a
 long-running compose service.
+
+Each bot container is created by the runtime, not by compose, so its hardening is set there (the
+Docker API's `HostConfig`, the fields compose's `cap_drop`/`security_opt` set): every capability
+dropped, `no-new-privileges`, and a seccomp profile that lets the bot's Chromium build its sandbox
+(`core/runtime/src/runtime_kernel/seccomp-userns.json`: Docker's default profile plus user
+namespaces, for the bot's own container only). The bot image runs as a non-root uid (10002), which
+Chromium's sandbox requires; each bot logs `Chromium runs with its sandbox`, or why it does not.
 
 ## Usage
 

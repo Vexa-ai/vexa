@@ -65,7 +65,7 @@ def test_stress_max_bots_never_overspills(stack):
             f"{stack.meeting_api}/bots",
             {"platform": "google_meet", "native_meeting_id": f"cont-{i}-{uuid.uuid4().hex[:4]}", "bot_name": "mock:immediate-stop",
              "transcribe_enabled": False},
-            headers={"x-user-id": str(user_id), "x-user-limits": str(cap)},
+            headers={"x-internal-secret": stack.internal_secret, "x-user-id": str(user_id), "x-user-limits": str(cap)},
         )
         return code
 

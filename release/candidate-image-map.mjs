@@ -24,11 +24,19 @@ export const REQUIRED_IMAGES = [
 // oss_only.
 export const FLOWS_IMAGE = "vexaai/v012-flows";
 export const REQUIRED_IMAGES_V2 = [...REQUIRED_IMAGES, FLOWS_IMAGE];
-export const CURRENT_SCHEMA_VERSION = 2;
-export const CURRENT_REQUIRED_IMAGES = REQUIRED_IMAGES_V2;
+
+// schema_version 3 (v0.13.2+): Connections ships the credential broker as its own image
+// (core/agent/services/credential-broker, ADR-0040) — compose and the chart run it beside
+// agent-api. Frozen schema-1 and schema-2 packets keep validating against ten and eleven; a
+// v0.13.2+ map must name twelve. Hosted production does not deploy it yet, so it is oss_only.
+export const CREDENTIAL_BROKER_IMAGE = "vexaai/v012-credential-broker";
+export const REQUIRED_IMAGES_V3 = [...REQUIRED_IMAGES_V2, CREDENTIAL_BROKER_IMAGE];
+export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_REQUIRED_IMAGES = REQUIRED_IMAGES_V3;
 
 export function requiredImagesFor(doc) {
   if (!doc) return CURRENT_REQUIRED_IMAGES;
+  if (doc.schema_version === 3) return REQUIRED_IMAGES_V3;
   return doc.schema_version === 2 ? REQUIRED_IMAGES_V2 : REQUIRED_IMAGES;
 }
 
@@ -99,6 +107,9 @@ export const RUNTIME_INPUTS_BY_IMAGE = {
     "core/flows",
     "behavior",
   ],
+  "vexaai/v012-credential-broker": [
+    "core/agent/services/credential-broker",
+  ],
   "vexaai/vexa-lite": [
     "deploy/lite",
     "core",
@@ -161,6 +172,18 @@ export const BUILD_MATRIX_BY_IMAGE = {
     repository: "v012-terminal",
     context: "clients/terminal",
     dockerfile: "clients/terminal/Dockerfile",
+    // THE VARIANT THIS LINE SHIPS. NEXT_PUBLIC_TERMINAL_MODE is baked into the Next.js bundle at
+    // build time (clients/terminal/Dockerfile:33,78; src/app/mode.ts:25) — it cannot be switched
+    // by a runtime env var, so the release matrix is the only place that decides which terminal
+    // the channel publishes. Until this line existed the matrix passed NO build args at all, so
+    // vexaai/v012-terminal:<tag> was the full workbench while the demo the pilot was shown
+    // (app.dev.vexa.ai) was the minutes lane — the same variant/tag mismatch the Dockerfile's own
+    // note at :85-95 records from 2026-09-02, one layer up. The published image records the
+    // outcome in LABEL ai.vexa.terminal.mode, which release-validate asserts on both the amd64
+    // and arm64 identity legs; the packet (candidate-images.json) pins digests and knows nothing
+    // about variant, so that label assertion is the only thing standing between this line and a
+    // full-terminal publish.
+    build_args: "NEXT_PUBLIC_TERMINAL_MODE=minutes",
   },
   "vexaai/vexa-lite": {
     name: "lite",
@@ -174,6 +197,14 @@ export const BUILD_MATRIX_BY_IMAGE = {
     repository: "v012-flows",
     context: ".",
     dockerfile: "core/flows/Dockerfile",
+  },
+  // Narrow context: the broker's signer is vendored into its own src/, so nothing outside its
+  // directory enters the image.
+  "vexaai/v012-credential-broker": {
+    name: "credential-broker",
+    repository: "v012-credential-broker",
+    context: "core/agent/services/credential-broker",
+    dockerfile: "core/agent/services/credential-broker/Dockerfile",
   },
 };
 
@@ -191,7 +222,7 @@ const fail = (message) => {
 
 export function validateCandidateMap(doc, expectedVersion) {
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) fail("map must be an object");
-  if (doc.schema_version !== 1 && doc.schema_version !== 2) fail("schema_version must be 1 or 2");
+  if (![1, 2, 3].includes(doc.schema_version)) fail("schema_version must be 1, 2 or 3");
   if (!VERSION.test(doc.release)) fail(`invalid stable release: ${doc.release}`);
   if (expectedVersion && doc.release !== expectedVersion) {
     fail(`map release ${doc.release} does not match requested ${expectedVersion}`);

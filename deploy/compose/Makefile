@@ -14,14 +14,37 @@ COMPOSE  = docker compose -p $(PROJECT) -f docker-compose.yml
 REPO_ROOT := $(abspath ../..)
 BOT_IMAGE ?= vexa/vexa-bot:dev
 
-.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up dev digest-audit down destroy help build ps logs bot _preflight _bot_check _creds_check _access _storage_note migrate-storage
+.PHONY: stack-test stack-test-bot stack-test-mock stack-test-v010 dashboard-harness provision-token up dev digest-audit down destroy help build ps logs bot _preflight _bot_check _creds_check _access _storage_note migrate-storage rotate-db-password
 
 ## provision-token — mint (idempotently) the self-host dashboard's API token (compose bring-up step 2).
 ## Needs ADMIN_TOKEN (the stack admin secret). Prints ONLY the token, so it pipes into the deploy:
 ##   DASHBOARD_API_KEY=$$(make -s provision-token ADMIN_TOKEN=<secret>) \
 ##     docker compose -f docker-compose.yml -f docker-compose.dashboard.yml up -d dashboard
+## ADMIN_API_URL is resolved HERE, from this deployment's own .env, because the script has no
+## default any more: it mints a token, and a guessed host port mints it on a neighbouring stack.
+## Same resolution `_access` already does — one deployment, one place that knows its port.
 provision-token:
-	@ADMIN_TOKEN="$(ADMIN_TOKEN)" EMAIL="$(EMAIL)" SCOPES="$(SCOPES)" ./bin/provision-token
+	@APORT=$$(grep -E "^ADMIN_API_PORT=" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'); APORT=$${APORT:-18057}; \
+	 ADMIN_TOKEN="$(ADMIN_TOKEN)" EMAIL="$(EMAIL)" SCOPES="$(SCOPES)" \
+	 ADMIN_API_URL="$${ADMIN_API_URL:-http://127.0.0.1:$$APORT}" ./bin/provision-token
+
+## rotate-db-password — give an EXISTING database a fresh password (postgres refuses to start on an
+## unset or published DB_PASSWORD, and an install made from an older .env.example holds `postgres`).
+## Mints the value into .env, starts postgres alone with it (an initialised data directory ignores
+## POSTGRES_PASSWORD), applies it inside the database over the local socket — no old password needed,
+## and the value is never on a command line or printed — then recreates the stack on the new value.
+rotate-db-password:
+	@test -f .env || { echo "no .env here — a new install mints DB_PASSWORD with 'make up'"; exit 1; }
+	@user=$$(grep -E '^DB_USER=' .env | head -1 | cut -d= -f2- | tr -d '[:space:]'); user=$${user:-postgres}; \
+	 new=$$(openssl rand -hex 32); \
+	 if grep -qE '^DB_PASSWORD=' .env; then sed -i.bak "s|^DB_PASSWORD=.*|DB_PASSWORD=$$new|" .env && rm -f .env.bak; \
+	 else echo "DB_PASSWORD=$$new" >> .env; fi; \
+	 $(COMPOSE) up -d --no-build postgres; \
+	 for i in $$(seq 1 30); do $(COMPOSE) exec -T postgres pg_isready -U "$$user" -q && break; sleep 2; done; \
+	 printf "ALTER USER \"%s\" PASSWORD '%s';\n" "$$user" "$$new" \
+	   | $(COMPOSE) exec -T postgres psql -U "$$user" -d postgres -v ON_ERROR_STOP=1 -q; \
+	 $(COMPOSE) up -d --no-build; \
+	 echo "rotated the database password of $$user; the new value is in .env"
 
 ## dashboard-harness — the dashboard FULL-SURFACE proof: send-bot + live WS transcript through the
 ## vendored dashboard, against the real stack + the mock bot (deterministic, no browser/STT/meeting).
@@ -200,7 +223,7 @@ _bot_check:
 _creds_check:
 	@_envv() { grep -E "^$$1=" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
 	 stt=1; [ -n "$$(_envv TRANSCRIPTION_SERVICE_URL)" ] && [ -n "$$(_envv TRANSCRIPTION_SERVICE_TOKEN)" ] && stt=0; \
-	 model=1; for k in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN VEXA_LLM_API_KEY HOST_CLAUDE_CREDENTIALS; do \
+	 model=1; for k in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN HOST_CLAUDE_CREDENTIALS; do \
 	   [ -n "$$(_envv $$k)" ] && model=0; done; \
 	 if [ $$stt -eq 1 ] || [ $$model -eq 1 ]; then \
 	   echo ""; \
@@ -216,7 +239,7 @@ _creds_check:
 	   if [ $$model -eq 1 ]; then \
 	     echo "  ⚠️  no model credential is configured — agent chat will refuse to run."; \
 	     echo "      Set ONE of CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY,"; \
-	     echo "      ANTHROPIC_AUTH_TOKEN, VEXA_LLM_API_KEY or HOST_CLAUDE_CREDENTIALS"; \
+	     echo "      ANTHROPIC_AUTH_TOKEN or HOST_CLAUDE_CREDENTIALS"; \
 	     echo "      in .env, then: make all — or configure Settings → Models in the UI."; \
 	   fi; \
 	   echo "═══════════════════════════════════════════════════════════"; \
@@ -227,7 +250,8 @@ _creds_check:
 ## run with the meeting-api image's Python). Resumable; deletes nothing; the old volume is only read.
 ## It reads through the old `minio` container while Compose still runs it as an orphan, else through a
 ## temporary MinIO started from that container's image, else LEGACY_MINIO_IMAGE if it is on this
-## machine (nothing is pulled). Credentials default to the .env MINIO_* values, which both servers use.
+## machine (nothing is pulled). The new storage uses the .env MINIO_* pair; the old MinIO the pair
+## mint-dev-env.sh kept as LEGACY_MINIO_* when it replaced a published one, else the same MINIO_* pair.
 ## Guide: docs/docs/upgrade-from-minio.mdx.
 LEGACY_MINIO_CONTAINER ?= $(PROJECT)-minio-1
 LEGACY_MINIO_VOLUME    ?= $(PROJECT)_minio-data
@@ -237,12 +261,14 @@ MIGRATE_BUCKET        ?=
 migrate-storage:
 	@set -e; \
 	envv() { grep -E "^$$1=" .env 2>/dev/null | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'; }; \
-	AK=$$(envv MINIO_ACCESS_KEY); AK=$${AK:-vexa-access-key}; SK=$$(envv MINIO_SECRET_KEY); SK=$${SK:-vexa-secret-key}; \
+	AK=$$(envv MINIO_ACCESS_KEY); SK=$$(envv MINIO_SECRET_KEY); \
+	[ -n "$$AK" ] && [ -n "$$SK" ] || { echo "no MINIO_ACCESS_KEY / MINIO_SECRET_KEY in .env — run ./mint-dev-env.sh .env (make up does)"; exit 1; }; \
+	LAK=$$(envv LEGACY_MINIO_ACCESS_KEY); LSK=$$(envv LEGACY_MINIO_SECRET_KEY); \
 	BK="$(MIGRATE_BUCKET)"; BK=$${BK:-$$(envv MINIO_BUCKET)}; BK=$${BK:-vexa}; TAG=$$(envv IMAGE_TAG); TAG=$${IMAGE_TAG:-$${TAG:-dev}}; \
 	$(COMPOSE) up -d --no-build storage; \
 	NETWORK=$(PROJECT)_vexa LEGACY_VOLUME=$(LEGACY_MINIO_VOLUME) LEGACY_CONTAINER=$(LEGACY_MINIO_CONTAINER) \
-	LEGACY_IMAGE="$(LEGACY_MINIO_IMAGE)" LEGACY_ACCESS_KEY="$${LEGACY_MINIO_ACCESS_KEY:-$$AK}" \
-	LEGACY_SECRET_KEY="$${LEGACY_MINIO_SECRET_KEY:-$$SK}" LEGACY_BUCKET="$${LEGACY_MINIO_BUCKET:-$$BK}" \
+	LEGACY_IMAGE="$(LEGACY_MINIO_IMAGE)" LEGACY_ACCESS_KEY="$${LEGACY_MINIO_ACCESS_KEY:-$${LAK:-$$AK}}" \
+	LEGACY_SECRET_KEY="$${LEGACY_MINIO_SECRET_KEY:-$${LSK:-$$SK}}" LEGACY_BUCKET="$${LEGACY_MINIO_BUCKET:-$$BK}" \
 	TARGET_ENDPOINT=http://storage:9000 TARGET_ACCESS_KEY="$$AK" TARGET_SECRET_KEY="$$SK" TARGET_BUCKET="$$BK" \
 	STORAGE_VOLUME=$(PROJECT)_storage-data RUN_IMAGE="vexaai/v012-meeting-api:$$TAG" RUN_PYTHON=python \
 	TOOLS_DIR=$(REPO_ROOT)/deploy/storage NAME_PREFIX=$(PROJECT) RETRY_HINT="make -C deploy/compose migrate-storage" \
@@ -288,7 +314,7 @@ _access:
 	 else echo "    API key     : admin-api not ready — mint later with:"; \
 	      echo "                  make -s provision-token ADMIN_TOKEN=<your ADMIN_TOKEN>"; fi; \
 	 STT=1; [ -n "$$(_envv TRANSCRIPTION_SERVICE_URL)" ] && [ -n "$$(_envv TRANSCRIPTION_SERVICE_TOKEN)" ] && STT=0; \
-	 MODEL=1; for k in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN VEXA_LLM_API_KEY HOST_CLAUDE_CREDENTIALS; do \
+	 MODEL=1; for k in CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN HOST_CLAUDE_CREDENTIALS; do \
 	   [ -n "$$(_envv $$k)" ] && MODEL=0; done; \
 	 if [ $$STT -eq 1 ]; then echo "    ⚠ transcription: not configured — bots record, NO transcript"; fi; \
 	 if [ $$MODEL -eq 1 ]; then echo "    ⚠ agent chat  : no model credential — chat will refuse"; fi; \

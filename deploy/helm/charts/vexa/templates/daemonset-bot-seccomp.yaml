@@ -1,0 +1,84 @@
+{{- /*
+The seccomp profile meeting bots run under (runtime.botSandbox), written onto every node bots may
+land on. Bot Pods name it as a Localhost profile; the kubelet reads it from its seccomp root. The
+file comes from the runtime image (runtime_kernel/seccomp-userns.json, with its Apache-2.0 licence
+beside it), so the chart carries no copy of its own. Root only to write into the root-owned kubelet
+directory: no capability, no privilege escalation, a read-only root filesystem.
+*/ -}}
+{{- $sandbox := .Values.runtime.botSandbox | default dict }}
+{{- $installer := $sandbox.installer | default dict }}
+{{- if and .Values.runtime.enabled (eq .Values.runtime.backend "k8s") $sandbox.enabled $installer.enabled }}
+{{- $placement := .Values.runtime.workloadScheduling | default dict }}
+{{- $bot := get $placement "meetingBot" | default dict }}
+{{- $profile := $sandbox.localhostProfile | default "vexa/seccomp-userns.json" }}
+{{- if or (hasPrefix "/" $profile) (has ".." (splitList "/" $profile)) }}
+{{- fail "runtime.botSandbox.localhostProfile must be a path relative to the kubelet's seccomp root" }}
+{{- end }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "vexa.componentName" (list . "bot-seccomp") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: bot-seccomp
+spec:
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: bot-seccomp
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: bot-seccomp
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: install
+          image: "{{ .Values.runtime.image.repository }}:{{ .Values.global.imageTag | default .Values.runtime.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              dest="/host-seccomp/{{ $profile }}"
+              dir="$(dirname "$dest")"
+              mkdir -p "$dir"
+              cp /app/src/runtime_kernel/seccomp-userns.json "$dest.tmp"
+              cp /app/src/runtime_kernel/seccomp-userns.LICENSE.txt "$dir/seccomp-userns.LICENSE.txt"
+              mv -f "$dest.tmp" "$dest"
+              echo "installed the meeting-bot seccomp profile at {{ $installer.kubeletSeccompDir }}/{{ $profile }}"
+              exec sleep infinity
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: kubelet-seccomp
+              mountPath: /host-seccomp
+          resources:
+            {{- toYaml ($installer.resources | default dict) | nindent 12 }}
+      volumes:
+        - name: kubelet-seccomp
+          hostPath:
+            path: {{ $installer.kubeletSeccompDir | default "/var/lib/kubelet/seccomp" | quote }}
+            type: DirectoryOrCreate
+      {{- with ($bot.nodeSelector | default .Values.runtime.nodeSelector | default .Values.global.nodeSelector) }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with ($bot.tolerations | default .Values.runtime.tolerations | default .Values.global.tolerations) }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

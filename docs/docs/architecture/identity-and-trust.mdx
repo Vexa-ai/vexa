@@ -11,9 +11,9 @@ the launcher by virtue of it running — it must **prove** it was authorized, an
 every hop to the tool that finally sends an email. The agent is **untrusted** and carries proof but never
 enforces it.
 
-The flow — authenticate the launcher (OIDC session, or a **signed delegation grant**) → the identity
-service **mints a short-lived signed dispatch token** → the runtime **attests the workload** → every
-**boundary verifies**:
+The target design — authenticate the launcher (OIDC session, or a **signed delegation grant**) → the
+identity service **mints a short-lived signed dispatch token** → the runtime **attests the workload** →
+every **boundary verifies**:
 
 - **Workspace store** mounts only granted workspaces, `rw` only where the token says.
 - **Tool calls** route through the **MCP Gateway**, which does an **RFC 8693 token exchange** (the agent's
@@ -21,8 +21,11 @@ service **mints a short-lived signed dispatch token** → the runtime **attests 
   never holds the credential.
 - **Stream** tags every event with `dispatch_id`; audit resolves it to `(subject · launcher · scope)`.
 
-We adopt **[kagenti](https://github.com/kagenti/kagenti)**: **SPIRE** (workload identity) + **Keycloak**
-(RFC 8693) + Envoy **MCP Gateway**. Dev uses a token-bound secret behind the same interface; k8s uses SPIRE.
+The production form of this design adopts **[kagenti](https://github.com/kagenti/kagenti)**: **SPIRE**
+(workload identity) + **Keycloak** (RFC 8693) + Envoy **MCP Gateway**. That part is **planned**, not
+shipped (see [Identity → roadmap](/core/identity)). What ships today is below: the gateway signs the
+identity it resolved onto every forward (`gateway-identity.v1`), and a worker reaches Vexa's tools with a
+per-dispatch **delegation token** (`delegation.v1`).
 
 <Note>The agent (LLM) is outside the trust boundary. Compromise it via prompt injection and it still
 cannot exceed the token's scope — the boundaries enforce, not the model.</Note>
@@ -33,3 +36,122 @@ in the clear only on the internal, secret-gated hop the sync poller calls. And b
 dereferences a user-controlled URL, the fetch runs on the same **IP-pinned, SSRF-guarded
 transport** as webhook delivery — re-resolved and validated at connect time, so a DNS-rebinding
 flip can never turn calendar sync into an internal-network probe.
+
+## Worker delegation tokens
+
+An agent worker holds no API key of its own. For each dispatch, agent-api mints a short-lived
+**delegation token** (`vxd_…`, contract `delegation.v1`) that names the person the worker acts for.
+The worker presents it to the vexa MCP through the gateway; identity verifies it on every request.
+The decision record is [ADR-0045](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0045-a-workers-delegation-token-lives-as-long-as-its-unit.md).
+For the request path through the gateway and the MCP, see [MCP server → How it works](/vexa-mcp#how-it-works).
+
+### Minting and binding
+
+agent-api mints the token while it builds the worker's environment (`core/agent/control_plane/dispatch.py`),
+signed HMAC-SHA256 with `VEXA_MCP_DELEGATION_SECRET`, a key only agent-api and admin-api hold.
+
+| Claim | What it binds |
+|---|---|
+| `sub` | the person the worker acts for |
+| `scope.regime` | `human` when the trigger is `message` (a person is in the loop); `autonomous` for `scheduled`, `event` and `transcription` |
+| `scope.workspaces` | the ceiling: `"*"` for a human turn; the dispatch's exact workspaces for an autonomous one (the minter refuses `"*"` there) |
+| `target` | optional default workspace for verbs that name none. It is not a grant: the route still checks it |
+| `aud` | always `vexa-mcp` |
+| `jti`, `iat`, `exp` | a unique id per token, and its lifetime: `VEXA_MCP_DELEGATION_TTL_SEC`, by default the chat warm window plus one turn (1800 s) |
+
+The ceiling never grants what the account could not already reach. Identity narrows the person's
+workspace memberships to the ceiling when it answers, and agent-api checks every named workspace
+against both the ceiling and the person's own access (`control_plane/ceiling.py`).
+
+Before the spawn, agent-api **records** the token against its unit in Redis
+(`control_plane/delegation_revocation.py`):
+
+| Key | Holds |
+|---|---|
+| `vexa:delegation:units` | the unit ids with a recorded token |
+| `vexa:delegation:unit:<unit id>` | `jti` → expiry and mint time, for each token the unit holds |
+| `vexa:delegation:live:<jti>` | the live record identity admits the token by, expiring with the token |
+| `vexa:delegation:current:<unit id>` | agent-api's own copy of the unit's current token, the one a refresh re-mints from |
+| `unit:<unit id>:delegation` | the worker's copy of its current token; the worker's Redis user may read it and not write it |
+
+A token that cannot be recorded could never be revoked, so agent-api withholds it: the worker runs
+without the vexa toolbelt, and the log says so. When a second person's dispatch reaches a unit that
+already holds someone else's token (a meeting's unit is keyed on the meeting), agent-api withdraws
+the published token and publishes the new one only if the runtime reports the previous worker ended.
+With `REDIS_WORKLOAD_ACL=shared`, every worker shares the service connection, so no token is published
+to Redis at all; the unit keeps its boot token, unrefreshed, until it expires.
+
+### Refresh
+
+A warm unit (a conversation that keeps going, a background job) can outlive one token.
+
+1. Every 30 s, agent-api's reaper reads its unit records, then the runtime's live set.
+2. For each unit still running, once half of the current token's life has passed, agent-api mints a
+   new token with the same `sub`, regime, ceiling and `target`, a new `jti` and a full lifetime
+   (`control_plane/delegation_refresh.py`). It re-mints from `vexa:delegation:current:<id>`, its own
+   record, never from the worker's copy.
+3. It records the new token (so it is revoked with the unit) and publishes it to
+   `vexa:delegation:current:<id>` and `unit:<id>:delegation`.
+4. The worker reads `unit:<id>:delegation` before every turn, write-back and job, and rewrites its MCP
+   attachment when the token changed (`worker/engine.py`, `DelegationRefresh`). The boot token arrives by
+   env; the worker removes it from its own environment at boot so harness subprocesses do not inherit it.
+
+The replaced token is not revoked while the unit runs: a turn that started with it keeps it until its
+own `exp`. A unit the runtime no longer runs is never refreshed. A turn that outlives its token ends
+with a typed fault (`source: "vexa-tools"`, `kind: "access_expired"`, `worker/tool_access.py`), which
+the chat shows with a Retry.
+
+### Revocation
+
+A token ends with the unit it was minted for. On each sweep, every recorded unit the runtime no longer
+reports starting or running has ended (completed, idled out, stopped, crashed or failed to start). For
+each of its tokens, agent-api deletes `vexa:delegation:live:<jti>` first, then writes
+`vexa:delegation:revoked:<jti>` with the token's remaining lifetime as its expiry.
+
+- A token younger than 120 s is spared, because its spawn may not have reached the runtime yet. A
+  refreshed token is recorded as past this grace, so it is revoked on the first sweep after its unit
+  ends.
+- A unit id is reused across warm windows, so a new dispatch also revokes the previous incarnation's
+  tokens when the runtime reports it ended.
+- A sweep that cannot read the runtime's live set revokes nothing: an unreadable answer is an error,
+  never "nothing is live".
+- A revocation that cannot be written is kept for the next sweep.
+
+Revocation therefore lags a unit's end by up to one sweep interval, plus the grace for a young token.
+
+### Admission at identity
+
+The gateway, and flows, resolve every bearer through identity's `POST /internal/validate`
+(`core/identity/services/admin-api/src/admin_api/app/validate.py`). For a `vxd_` bearer, identity:
+
+1. refuses it like an unknown token (`401 Invalid token`) unless the caller declared it reads
+   delegation answers (`X-Vexa-Internal-Accepts-Delegation: 1`), so an older resolver fails closed;
+2. refuses it (`401`) when `VEXA_MCP_DELEGATION_SECRET` is unset;
+3. verifies prefix, format, signature, audience, subject and expiry; a failure answers
+   `401 Invalid delegation: <reason>`;
+4. checks Redis (`admin_api/app/delegation_revocation.py`): the token is admitted only while
+   `vexa:delegation:live:<jti>` exists and `vexa:delegation:revoked:<jti>` does not. Otherwise it
+   answers `401 Invalid delegation: revoked`;
+5. answers `503` when it cannot read Redis. An unreadable store never reads as "not revoked";
+6. checks the scope shape and that the account still exists, then answers with the person, scopes
+   `bot` and `tx`, the narrowed workspaces and the `delegation` block.
+
+The live record is what makes this **fail closed**. A denylist alone would admit a token whose
+revocation key the store evicted, or one agent-api never recorded. With the live record, an evicted
+or missing record refuses the token instead. agent-api is the only writer of every `vexa:delegation:*`
+key; identity only reads `live:<jti>` and `revoked:<jti>`. The key names are held equal on both sides by
+`gate:fact-parity` (facts `delegation-revocation-key`, `delegation-live-key`).
+
+People's own API keys never touch this store. A Redis outage costs workers their tools (`503`) and
+costs people nothing. If Redis loses its data, live records go with it and the affected tokens are
+refused.
+
+### Tests
+
+| Behaviour | Tests |
+|---|---|
+| Minting, claims and refusals | `core/agent/tests/test_delegation.py` |
+| Recording, revocation at unit end, the grace, cross-person publication | `core/agent/tests/test_delegation_revocation.py` |
+| Refresh at half life, the worker's pick-up, the loud fault on expiry | `core/agent/tests/test_delegation_refresh.py` |
+| Identity's answer for a delegation token | `core/identity/services/admin-api/tests/test_internal_validate_delegation.py` |
+| Live-record admission, revocation and the unreadable store | `core/identity/services/admin-api/tests/test_internal_validate_revocation.py` (`test_a_token_whose_unit_ended_is_refused`, `test_a_token_whose_live_record_is_gone_is_refused`, `test_a_revoked_token_stays_refused_if_its_live_record_lingers`, `test_an_unreachable_store_refuses_the_delegation_token`, `test_an_unreachable_store_does_not_touch_an_api_key`, `test_the_key_is_the_one_agent_api_writes`) |
