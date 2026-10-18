@@ -111,6 +111,13 @@ or an older page whose cursor is not a whole number, is read from the top.
 To ask about *part* of a page or transcript, select the text. An **Ask about this** button appears; it
 drafts a quote into the chat box, and you decide whether to send it. A selection never starts a job.
 
+### Two people editing one page
+
+When two people, or their agents, change the same page at about the same time, the second save is
+merged with the first: changes in different places are both kept, and new lines added at the same
+spot are both kept. If both changed the same lines, the second save is refused with the page as it
+is now and nothing is written; the agent reads it again and applies its change.
+
 ### Images
 
 - **Drop or paste** files into the editor. They are stored in the workspace under `assets/`, with a
@@ -133,15 +140,37 @@ drafts a quote into the chat box, and you decide whether to send it. A selection
   meeting's title and date, opening the meeting. A meeting you cannot open shows as plain text. See
   [Links in replies](/minutes/chats#links-in-replies).
 
+### Links, tasks and richer pages
+
+Pages stay plain markdown in git; the panel and the chat read more of it:
+
+- **Links go anywhere you can read.** `[[Name]]` opens the page here; `[[biz:graph/sg/Growth]]` (or
+  `vexa://ws/biz/graph/sg/Growth.md`, or a relative link that climbs out of the workspace) opens a
+  page in another workspace. Matching ignores case and dashes, and `.md` is optional. A `[[name]]`
+  with no page here is looked for in every workspace you can read; several matches open a small
+  picker. A link into a workspace you cannot read shows as **restricted**, with the link's own words
+  and never the page's title. A person's or company's name written in plain text links at its first
+  mention when it has a page here.
+- **Mentioned in** at the foot of a page lists the pages that link to it, from workspaces you can
+  read.
+- **Tasks.** `- [ ]` items are checkboxes: ticking one writes `- [x]` to the file, committed as you.
+  `TBD:` lines under a *Follow-ups* (or *Next steps*, *To-do*) heading are open tasks too. **Ask
+  agent** beside a task sends it, with the page, to the chat. In a chat reply tasks are shown only.
+- **Properties.** Front matter shows as the page's header: the company as a link, the email with
+  **Copy**, dates relative.
+- **Callouts** (`> [!note] Title`, `> [!warning] Title`), **heading anchors**, an **On this page**
+  outline on long pages, and **dates** that read relatively ("3 days ago", exact on hover). A
+  ` ```vexa ` block is drawn by the shared block renderer.
+
 ### Delete a page
 
 1. Press the **trash icon** in the page header (beside Copy and Edit), or press **⋯** on the file's row
    in the navigator (or right-click the row) and choose **Delete…**.
-2. The dialog reads *Delete <page>? It's removed from <workspace>; you can restore it from History.*
+2. The dialog reads *Delete \<page\>? It's removed from \<workspace\>; you can restore it from History.*
    **Delete page** has the focus, so <kbd>Enter</kbd> deletes and <kbd>Esc</kbd> cancels.
 3. The page is removed as a commit. Every tab on it closes; if it was in front, the next tab comes
    forward. Links to it from other pages show as dashed *no page yet* chips.
-4. A note at the bottom of the screen says *Deleted <page>.* with **Undo** for 10 seconds. Undo puts
+4. A note at the bottom of the screen says *Deleted \<page\>.* with **Undo** for 10 seconds. Undo puts
    the page back exactly as it was, as a new commit, and opens it.
 
 After that, open the workspace's README, press **History**, and press **Restore** on the row that
@@ -287,10 +316,44 @@ A call's workspace is the meeting's own `workspace_id`. The folder button and th
 workspace row are both read from it, so nothing is copied onto the workspace. A workspace you cannot
 read is not in the navigator, so its calls show no folder button.
 
+### Two writers on one page
+
+`PUT /api/workspace/file` (the agent's `workspace_write`) runs read, merge, write and commit under one
+lock per workspace (`core/agent/control_plane/page_merge.py`). A write that does not start from the
+page's current version is matched against the page's versions committed in the last 15 minutes (at
+most 12): the closest one the new text still mostly contains is taken as the version the writer read,
+and the two changes are merged three ways in memory. A clean merge is written and the answer says
+`merged`; a change to the same lines is refused with `409` and the current page; a write from the
+current version, a full rewrite, or a return to an earlier version is taken as written. A page edited
+outside the page routes since its last commit is taken as written. Every writer's commit is
+authored `vexa-terminal`.
+
 ### Configuration
 
 `GATEWAY_URL` on the terminal server (default `http://127.0.0.1:18056`). A terminal built in
 [meetings mode](/minutes/overview#configuration) refuses page writes with `404`; reads still work.
+
+### References to anything: `/r/<kind>/<id>` and `[[kind:id]]`
+
+Every workspace, chat, page, entity, meeting, flow and sensor has one reference: the link
+`https://<your Vexa>/r/<kind>/<id>`, which you can paste anywhere (a chat, an email, a calendar event,
+another app), and the chip `[[kind:id|label]]` the agent writes in a reply. A join link (`/join/<token>`)
+is a reference that also lets the holder in.
+
+Opening a reference asks the server what it points at **for you, now**. If you can open it, the chip
+shows its name and opens it. If you cannot, it says **No access** and offers **Request access**, which
+tells the owner who asked. If it no longer exists, it says **Not found**. Pasting a reference link into
+the composer turns it into a chip. A `[[Title]]` chip is found by the server's own spelling rule, so a
+name with accents (`[[mühlemann+popp AG]]`) opens its page. The agent uses `ref_resolve` before it
+quotes or opens anything a reference names.
+
+How a reference is answered: the grammar lives once on the server (`core/workspaces/shared/links.py`)
+with a twin in the terminal (`ui-kit/universalRefs.ts`). `GET /api/refs/resolve?ref=` (agent tool
+`ref_resolve`) is the one resolver (`core/agent/control_plane/universal_refs.py`); it asks each
+kind's own access decision for the person asking and answers `readable`, `not-yours`, `unavailable`,
+`gone` or `grant`. `POST /api/refs/request-access` is a person verb: agent-api writes the owner's
+`access_requested` notice (a kind in the sealed `ws.v1`) and answers only `{requested: true}`. Flows
+and sensors answer `unavailable` until flows exposes a per-viewer read. Nothing is configured.
 
 ## Why it complies
 
@@ -349,6 +412,14 @@ title only when the meeting's owner is you. A call shared with you is read-only 
 | `core/meetings/services/meeting-api/tests/test_meeting_by_db_id.py` · `test_another_users_meeting_id_is_a_404_not_a_write`, `test_a_person_the_meeting_is_shared_with_sees_it_but_cannot_rename_it`; `test_meeting_annotate.py` · `test_another_users_meeting_is_404_not_403` | only the owner can rename a call; a person it is shared with, or anyone else, gets `404` and nothing is written |
 | `clients/terminal/src/minutes/__tests__/navigatorCalls.test.tsx` · "DENY: a call shared with you offers no rename — no ⋯, and F2 does nothing"; `callRename.test.tsx` · "DENY: a call shared with you shows its name with no rename control", "DENY: a refusal (another person's meeting is a 404) throws and changes nothing locally" | the terminal offers rename only to the owner, and a refused rename changes nothing |
 
+### Links and tasks
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P20 — default-deny | A link is resolved by agent-api for the reader: a bare name is searched only in workspaces they can read, and a link into one they cannot read answers `not-yours` with the link's own words, never the page's title. *Mentioned in* reads only readable workspaces. | `core/agent/tests/test_cross_workspace_links.py` (restricted target, unreadable workspace never searched, backlinks never from an unreadable workspace); `crossWorkspaceLinks.test.tsx` |
+| One writer | A ticked task is a write to the page's file through the workspace write route, committed as the reader; the panel never edits a file another way. | `richMarkdown.test.tsx` |
+| Paths stay inside | A qualified path cannot climb out of the workspace it names; lookups list and read through `workspace_paths`, following no link. | `test_a_qualified_path_cannot_climb_out`; `test_worktree_io_single_path.py` |
+
 ### Name write-back
 
 | Rule | How this design meets it | Gate |
@@ -356,8 +427,59 @@ title only when the meeting's owner is you. A call shared with you is read-only 
 | **One owner per rule** | the list of spoken sentence openers lives once, in `core/workspaces/shared/entities.py` (`LEADING_SPEECH_NOISE`, `strip_leading_noise`); the transcript-terms extractor and the write-back check both import it | `gate:python` (`test_the_chip_extractor_and_the_write_back_share_one_noise_list`) |
 | **No page from a transcript artefact** | openers are stripped and near spellings are matched before a name is offered | `gate:python`: `core/agent/tests/test_entity_name_extraction.py` · `test_so_vexam_is_not_a_new_page`, `test_every_discourse_opener_is_stripped_before_the_desk_is_asked`, `test_an_opener_before_a_genuinely_new_name_still_yields_that_name`, `test_a_one_letter_variant_of_an_existing_page_is_that_page`, `test_near_variant_has_a_floor_and_does_not_swallow_different_names` |
 | **A single hearing is not evidence** | the write-back prompt and the workspace rules send a once-heard transcript name to open questions | `gate:python`: `core/agent/tests/test_entity_writeback.py` · `test_a_name_heard_once_in_a_transcript_goes_to_open_questions_not_a_page` |
+| **A page only for a person, company, meeting, project or decision** | the check reads the person's own words and the agent's whole reply — never routine or preset instructions, and never a reply cut into streamed pieces; it skips code, diagrams, tables and bold labels; names may use any alphabet; it does not offer UI labels, components, format placeholders, HTTP status text, tokens or sentence starts; the prompt tells the agent to skip anything else that is not one of the five kinds; a name is offered at most once per chat session | `gate:python`: `core/agent/tests/test_writeback_name_corpus.py` |
+
+### References
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **Access is decided by the server for the current viewer** | `GET /api/refs/resolve` reads each kind through the access decision it already has: workspace membership (narrowed by a delegated run's ceiling), chat participants (and, in a shared chat, every participant), the one meeting access decision, the join-link store | `gate:python`: `core/agent/tests/test_universal_refs.py` |
+| **No leakage** | a reader without access gets no title, no name and not the label the writer typed into the chip; a meeting the reader cannot see is `unavailable`, never "someone else's" | `gate:python`: `test_universal_refs.py` · `test_workspace_readable_for_a_member_and_nothing_leaks_to_others`, `test_chat_readable_for_its_people_only`, `test_page_and_entity_by_id_with_a_unicode_name`, `test_meeting_through_the_one_meeting_access_decision`; `gate:node`: `ui-kit/__tests__/universalRefs.test.tsx` |
+| **P4** published schemas | the routes and the tool are in `routes.v1` and `mcp.tools.v1`; `access_requested` is added to the notice kinds in `ws.v1`, re-sealed | `gate:schema`, `gate:contract-version` |
+| **Asking for access reveals nothing** | the owner is notified (`access_requested`, actor and object only); the asker is told only that the request was sent | `gate:python`: `test_request_access_notifies_the_owner_and_tells_the_asker_nothing_more` |
+
+### Merging two writers
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P18** fail loud | a change to the same lines is a `409` naming the page, with its current text; nothing is written | `core/agent/tests/test_page_concurrent_write.py` · `test_the_route_refuses_a_same_line_change_and_writes_nothing` |
+| **P23** one writer per carrier | agent-api stays the only writer of the page; the lock serialises its own concurrent writes | `test_simultaneous_writes_keep_both_lines`, `test_the_route_merges_and_says_so` |
+| **P20** authorize every access | the merge runs after the route's existing path and write checks, and reads only the page's own history in the same workspace | ungated: reviewed |
 
 ## Related
 
 - [Browse, upload, and swap the workspace](/how-to/workspace-files) — the same files over the API
 - [Workspaces](/core/workspaces) · [Obsidian](/obsidian) · [Chats](/minutes/chats) · [Workspaces and connections](/minutes/workspaces) · [Meetings](/minutes/meetings)
+
+## Live pages (`home2`)
+
+With the `home2` feature on, a page in the right panel can be live. It stays plain markdown, so
+people and the agent edit it as before; the panel draws these extras:
+
+| Write | You see |
+|---|---|
+| `[[room:<id>]]`, `[[chat:<id>]]`, `[[call:<id>]]`, `[[file:<path>]]`, `[[person:<id>]]`, `[[card:<id>]]`, `[[routine:<id>]]`, `[[workspace:<slug>]]` | a live chip (unread count, stage, last run…) that opens the thing |
+| `{{status}}`, `{{needs-you}}`, `{{working-here}}`, `{{members}}`, `{{upcoming}}` | the workspace's own state |
+| `:::columns` … `---` … `:::`, `:::callout` … `:::`, `:::stats source=<file.json>` … `:::` | columns, a callout, figure tiles |
+| `[[action:<verb>:<target> \| label]]` | a button: `run-routine`, `start-call`, `join-call`, `new-chat`, `accept-proposal`, `prepare`, `move-card`, `schedule-call` |
+| a ```` ```view ```` block: `source: pages \| crm.card \| meetings \| rooms`, `as: table \| board`, `group:`, `columns:`, `folder:`, `filter:` | a live table or board |
+
+Any plain table can be searched, filtered by a column and sorted.
+
+### How it works
+
+The panel asks agent-api once per page what each reference is **for you**. A view's rows are things
+you can already open (pages from the workspace, cards on your desk, your meetings, the workspace's
+rooms). Editing a view writes through the owner: a page's field is saved into its front matter as a
+page save, and a card's stage goes through the CRM's own update. Actions run as you, through the same
+routes the rest of the app uses; anything the agent does (running a routine, preparing a meeting,
+drafting a schedule) is said in your own chat, and scheduling is only ever a draft you send.
+
+### Why it complies
+
+- **No code in pages.** Only the verbs above are buttons; any other `[[action:…]]` is just its words.
+  Raw HTML is cleaned of scripts, frames, styles, handlers and `javascript:` links before it is drawn.
+- **Never named if you cannot see it.** A reference you cannot open shows nothing (a room shows only
+  "a private room"), never its name and never the label the writer typed.
+- **Confirmed when it reaches others.** Running a routine, starting a call, accepting a proposal,
+  moving a card and scheduling a call ask first.

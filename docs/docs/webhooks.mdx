@@ -20,6 +20,10 @@ curl -X PUT "$API_BASE/user/webhook" \
 <ParamField body="webhook_secret" type="string">Shared secret used to sign each payload. Omit to leave the stored secret unchanged.</ParamField>
 <ParamField body="webhook_events" type="object">A map of event name to boolean, e.g. `{"meeting.completed": true}`. An array is rejected with `422`. Omit to leave the stored selection unchanged; when no selection is stored, the default events fire.</ParamField>
 
+Every delivery passes the same outbound URL guard as calendar feeds and the agent's fetches: the
+address is checked where a connection to it lands, and the connection goes to the checked address.
+See [Security & compliance](/security-compliance).
+
 ```bash GET /user/webhook
 curl -H "X-API-Key: $API_KEY" "$API_BASE/user/webhook"
 ```
@@ -105,6 +109,43 @@ history as "nothing was delivered."**
 **Don't have a key yet?** Hosted: sign in at [vexa.ai/signin](https://vexa.ai/signin) with a Google
 account and copy your key from [your account page](https://vexa.ai/account) — free credit, no card
 required. Self-hosted: `make all` prints a key when the stack comes up.
+
+## How it works
+
+1. **Save.** `PUT /user/webhook` goes through the gateway to admin-api, which checks the URL as
+   written (scheme, address, host name), refuses an internal one with `422`, and stores the URL,
+   secret and event map on the user.
+2. **Spawn.** When your key resolves, the gateway carries that config in the identity it forwards
+   to meeting-api. `POST /bots` copies it into the meeting's record.
+3. **Fire.** On a lifecycle transition meeting-api builds the `webhook.v1` envelope and drops
+   events you did not select.
+4. **Guard.** It resolves the host, checks every address, and posts through a transport that
+   resolves again and dials a checked address, with the original Host header and TLS name. A URL
+   saved before 0.13 keeps the delivery 0.12 gave it: with `VEXA_WEBHOOK_STORED_URL_POLICY=v012`
+   (the default) the delivery check also admits shared (100.64/10), documentation and benchmarking
+   addresses, which the save check refuses. It never admits loopback, private, link-local or
+   metadata addresses. `strict` drops that allowance.
+5. **Sign and send.** It signs `"<timestamp>." + body` with your secret and posts (10 s timeout).
+6. **Retry.** A `5xx`, `429` or transport error goes on a Redis retry queue and is tried again
+   after 1 min, 5 min, 30 min and 2 h; an entry older than 24 h is dropped. Each outcome is logged
+   with the target host only, never the URL or secret.
+
+## Why it complies
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P4: a cross-process contract is sealed | The envelope and headers are `webhook.v1`, sealed in `contracts.seal.json` | `gate:schema`, `gate:contract-version` |
+| P23 and ADR-0044: no duplicated fact drifts | admin-api's save check and meeting-api's delivery guard are byte-identical copies of `outbound-url.v1`'s `ssrf.py` | `gate:fact-parity` (fact `outbound-url-guard`) |
+| P18: fail loud | A blocked, suppressed or failed delivery is logged as a warning with its outcome | ungated: reviewed; `test_silent_non_delivery_outcomes_are_logged_as_warnings` |
+| An upgrade does not silently stop a working webhook | URLs stored on 0.12 are delivered under the 0.12 ranges by default, through the same operator-allowance path every other fetch uses; nothing internal is admitted | `core/meetings/services/meeting-api/tests/test_webhook_stored_url_policy.py` |
+
+**Security.** `/user/webhook` needs a `bot` or `tx` key and reads and writes only the key owner's
+config. The secret is masked on read-back and never appears in the delivery record. Deny tests:
+`core/identity/services/admin-api/tests/test_user_webhook_response.py`
+(`test_an_internal_webhook_destination_is_refused_when_saved`,
+`test_a_narrow_key_reads_back_the_webhook_and_no_stored_credential`) and
+`core/meetings/services/meeting-api/tests/test_webhook_ssrf.py` (`test_blocked_urls`,
+`test_dns_rebinding_to_private_blocked`, `test_every_form_of_an_internal_address_is_refused`).
 
 ## What is proven, and what is not
 

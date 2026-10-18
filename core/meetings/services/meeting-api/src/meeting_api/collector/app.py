@@ -40,13 +40,26 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
-from ..regime import require_person
+from ..regime import require_person, shared_meeting_readable
 from ..workspace_write import require_writable
 from . import reader_directory as _reader_directory
+from . import room_plan as _room_plan
 from .meeting_link import parse_meeting_url
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
 from .ports import RedisBus, TranscriptStore
+
+
+#: What `DELETE /meetings/...` does while the meeting's bot is still in it or finishing.
+DELETE_LIVE_ENV = "VEXA_MEETING_DELETE_LIVE"
+
+
+def delete_live_mode() -> str:
+    """``refuse`` (default — the 0.12 contract: 409 until the lifecycle is terminal) or ``stop`` (ask the
+    bot to leave, answer 202 ``deletion_scheduled``, delete when the meeting ends). Unknown → refuse."""
+    import os
+
+    return "stop" if (os.environ.get(DELETE_LIVE_ENV) or "").strip().lower() == "stop" else "refuse"
 
 
 # The two INTENT states the USER owns (pre-FSM). The user dropdown is the source of truth for
@@ -142,6 +155,12 @@ def _resolve_user_id(x_user_id: Optional[str]) -> int:
         raise HTTPException(status_code=401, detail="Invalid user identity")
 
 
+def _scheduled_body(meeting_id: int) -> dict:
+    """The answer to a delete while the bot is still running: accepted, finished when it ends."""
+    return {"status": "deletion_scheduled", "id": meeting_id,
+            "detail": "The bot is leaving this meeting; its transcript and recordings are deleted when it ends."}
+
+
 def build_router(
     store: TranscriptStore,
     redis: RedisBus,
@@ -152,6 +171,7 @@ def build_router(
     artifact_object_deleter: Optional[Callable] = None,
     fixture_object_deleter: Optional[Callable] = None,
     reader_email: Optional[Callable] = None,
+    meeting_stopper: Optional[Callable] = None,
 ) -> APIRouter:
     """The collector's READ-side + authorizer routes as a mountable ``APIRouter``.
 
@@ -163,16 +183,64 @@ def build_router(
     """
     router = APIRouter()
 
+    async def _visible_rows(user_id, member_workspaces, *, platform=None, meeting_id=None) -> list:
+        """The rows this caller can see — owner, transcript viewer or bound-workspace member, the
+        SAME access union ``GET /meetings`` lists — narrowed by platform or exact id. Never raises:
+        a failed read narrows to nothing, which keeps the plain 404."""
+        try:
+            got = await store.list_meetings(user_id, platform=platform, meeting_id=meeting_id,
+                                            limit=50, member_workspaces=member_workspaces)
+        except Exception:  # noqa: BLE001 — the transcript read already answered; this is the extra
+            return []
+        return list(got[0] if isinstance(got, tuple) else (got or []))
+
+    def _raise_if_erased(row) -> None:
+        """410 when ``row`` — a meeting this caller can SEE — had its transcript deleted.
+
+        THE ROW SURVIVES A DELETE AS HISTORY, so it is still in the caller's list, and a 404 "Meeting
+        not found" on the pair that list just returned read as "this id does not resolve" (friction
+        2026-10-13, a deleted voice note). Only a caller who can see the meeting is told; anyone else
+        gets the same 404 an absent meeting gets, so a delete reveals nothing to a stranger."""
+        data = (row or {}).get("data") if isinstance((row or {}).get("data"), dict) else {}
+        stamp = data.get("artifact_deletion") or {}
+        if not (row and stamp and stamp.get("state", "completed") == "completed"):
+            return
+        raise HTTPException(status_code=410, detail={
+            "error": "transcript_deleted",
+            "meeting_id": row.get("id"),
+            "deleted_at": stamp.get("completed_at"),
+            "message": ("This meeting's transcript and recording were deleted by its owner. The "
+                        "meeting stays in the list as history; there are no words to read."),
+        })
+
     # --- GET /transcripts/by-id/{meeting_id} → api.v1 TranscriptionResponse for an EXACT row (P0).
     # Registered BEFORE /transcripts/{platform}/{native_meeting_id} so `by-id` is not swallowed as a
     # platform. Owner-scoped: the row must belong to the caller (X-User-Id) or 404 — so it can neither
     # leak another tenant's transcript NOR (unlike the native path, which resolves to the NEWEST row)
     # hydrate the wrong one of a user's several rows on the same meeting link. The terminal fetches the
     # EXACT row it is displaying by its id. ---
+    async def _attach_gaps(doc: dict) -> None:
+        """``gaps`` for a reader that asked (prod-cutover R4). The row is already authorized — the
+        document was served to this caller — so this only reads its stored report. A store without
+        the method (an older fake) answers ``[]``; a read fault never fails the transcript."""
+        from .gaps import render_gaps
+
+        reader = getattr(store, "get_transcript_gaps", None)
+        raw: list = []
+        if reader is not None and doc.get("id") is not None:
+            try:
+                raw = await reader(doc["id"])
+            except Exception:  # noqa: BLE001 — the transcript is served regardless
+                raw = []
+        doc["gaps"] = render_gaps(raw, doc.get("start_time"))
+
     @router.get("/transcripts/by-id/{meeting_id}")
     async def get_transcript_by_id(
         meeting_id: int,
         request: Request,
+        include_gaps: bool = Query(False, description=(
+            "Add a top-level `gaps` list: stretches of captured audio that were never transcribed, "
+            "with their place on the meeting's clock. Off by default, so the document is unchanged.")),
         x_user_id: Optional[str] = Header(default=None),
         x_user_workspaces: Optional[str] = Header(default=None),
     ):
@@ -180,11 +248,16 @@ def build_router(
         member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
         doc = await store.get_transcript_by_id(user_id, meeting_id, member_workspaces)
         if doc is None:
+            rows = await _visible_rows(user_id, member_workspaces, meeting_id=meeting_id)
+            _raise_if_erased(rows[0] if rows else None)
             log_event(
                 "transcript_not_found", audience="system", level="warning",
                 span="transcripts.get_by_id", user_id=user_id, meeting_id=str(meeting_id),
             )
             raise HTTPException(status_code=404, detail=f"Meeting {meeting_id} not found")
+        shared_meeting_readable(request, doc)
+        if include_gaps:
+            await _attach_gaps(doc)
         log_event(
             "transcript_served", audience="user", span="transcripts.get_by_id",
             user_id=user_id, meeting_id=str(meeting_id),
@@ -240,10 +313,28 @@ def build_router(
         platform: str,
         native_meeting_id: str,
         request: Request,
+        include_gaps: bool = Query(False, description=(
+            "Add a top-level `gaps` list: stretches of captured audio that were never transcribed, "
+            "with their place on the meeting's clock. Off by default, so the document is unchanged.")),
         x_user_id: Optional[str] = Header(default=None),
+        x_user_workspaces: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
         doc = await store.get_transcript(user_id, platform, native_meeting_id)
+        if doc is None:
+            # A MEETING SENT INTO A WORKSPACE IS ITS MEMBERS' TOO (#1783, founder's call 2026-10-14):
+            # a member asking by the meeting link got 404, because the link resolves to the caller's
+            # own rows only. The newest row on that link the caller reads as a workspace member (or a
+            # transcript viewer) is read through the exact-row door, which decides access again.
+            member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
+            rows = [r for r in await _visible_rows(user_id, member_workspaces, platform=platform)
+                    if str(r.get("native_meeting_id") or "") == native_meeting_id
+                    and r.get("id") is not None]
+            if rows:
+                newest = max(rows, key=lambda r: r["id"])
+                doc = await store.get_transcript_by_id(user_id, newest["id"], member_workspaces)
+                if doc is None:
+                    _raise_if_erased(newest)
         if doc is None:
             log_event(
                 "transcript_not_found",
@@ -257,6 +348,9 @@ def build_router(
                 status_code=404,
                 detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
             )
+        shared_meeting_readable(request, doc)
+        if include_gaps:
+            await _attach_gaps(doc)
         # USER-facing: this user read their transcript.
         log_event(
             "transcript_served",
@@ -355,6 +449,7 @@ def build_router(
         x_user_id: Optional[str] = Header(default=None),
         platform: Optional[str] = Query(default=None),
     ):
+        """Get the status of currently running bots under your API key."""
         user_id = _resolve_user_id(x_user_id)
         # Filtered + projected IN SQL (#803). Reading the caller's whole history and filtering here
         # meant a running-bots badge materialized every meeting they ever had, with full `data` —
@@ -506,10 +601,19 @@ def build_router(
         if not isinstance(auto_join, bool):
             raise HTTPException(status_code=422, detail="'auto_join' must be a boolean")
 
+        # A ROOM'S PLANNED CALL (rooms, F1): the room, its agenda and calendar event, its invitees.
+        plan, err = _room_plan.parse(payload)
+        invitees, err2 = _room_plan.attendees(payload)
+        if err or err2:
+            raise HTTPException(status_code=422, detail=err or err2)
+        if (any(v for v in plan.values()) or invitees) and not _room_plan.switched_on(headers=request.headers):
+            raise HTTPException(status_code=403, detail=_room_plan.refusal())
         row = await store.create_planned_meeting(
             user_id, platform=platform, native_meeting_id=native_id,
             title=title, scheduled_at=scheduled_at, meeting_url=meeting_url,
             workspace_id=workspace_id, auto_join=auto_join,
+            **({"attendees": invitees} if invitees else {}),
+            **({"room_plan": {k: v for k, v in plan.items() if v}} if plan else {}),
         )
         if isinstance(row, dict) and row.get("error") == "duplicate":
             raise HTTPException(
@@ -592,6 +696,16 @@ def build_router(
             # A per-meeting choice, marked as the user's: calendar sync derives `auto_join` from
             # the connected calendars' policy on every pass, and stands down on a marked row.
             updates["auto_join_user_set"] = True
+        plan, err = _room_plan.parse(payload)
+        invitees, err2 = _room_plan.attendees(payload)
+        if err or err2:
+            raise HTTPException(status_code=422, detail=err or err2)
+        if plan or invitees is not None:
+            if not _room_plan.switched_on(headers=headers):
+                raise HTTPException(status_code=403, detail=_room_plan.refusal())
+            updates.update(plan)
+            if invitees is not None:
+                updates["attendees"] = invitees
         if not updates:
             raise HTTPException(status_code=422, detail="no editable fields in body")
 
@@ -626,7 +740,28 @@ def build_router(
         # PATCH has no share or workspace branch. The echo is the owner reading their own row back.
         return {**row, "data": project_response_data(row.get("data"), viewer_is_owner=True)}
 
-    async def _apply_meeting_delete(user_id: int, meeting_id: int) -> dict:
+    async def _delete_when_ended(user_id: int, meeting_id: int) -> Optional[dict]:
+        """The bot is still running or finishing: ask it to leave and record the deletion, which
+        completes when the lifecycle ends (``complete_deferred_delete``). ``None`` = it ended
+        meanwhile, so the caller deletes now."""
+        marked = await store.mark_delete_when_ended(user_id, meeting_id)
+        if marked is None:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        if marked.get("terminal"):
+            return None
+        try:
+            await meeting_stopper(user_id, marked["platform"], marked["native_meeting_id"])
+        except HTTPException as e:
+            # 404 = no bot left to ask, or it is already leaving: the end it reaches does the delete.
+            if e.status_code != 404:
+                raise
+        log_event(
+            "meeting_delete_scheduled", audience="user", span="meetings.artifacts.delete",
+            user_id=user_id, meeting_id=str(meeting_id), fields={},
+        )
+        return {"kind": "deferred"}
+
+    async def _apply_meeting_delete(user_id: int, meeting_id: int, *, may_defer: bool = True) -> dict:
         result = await store.delete_planned_meeting(user_id, meeting_id)
         if result is None:
             raise HTTPException(status_code=404, detail="Meeting not found")
@@ -634,6 +769,16 @@ def build_router(
             plan = await store.prepare_completed_artifact_deletion(user_id, meeting_id)
             if plan is None:
                 raise HTTPException(status_code=404, detail="Meeting not found")
+            # VEXA_MEETING_DELETE_LIVE: `refuse` (default) keeps the 0.12 answer, 409 while the
+            # lifecycle is not terminal; `stop` asks the bot to leave and deletes at the end (202).
+            if (plan.get("error") == "conflict" and may_defer and meeting_stopper is not None
+                    and delete_live_mode() == "stop"):
+                deferred = await _delete_when_ended(user_id, meeting_id)
+                if deferred is not None:
+                    return deferred
+                plan = await store.prepare_completed_artifact_deletion(user_id, meeting_id)
+                if plan is None:
+                    raise HTTPException(status_code=404, detail="Meeting not found")
             if plan.get("error") == "conflict":
                 raise HTTPException(
                     status_code=409,
@@ -757,6 +902,58 @@ def build_router(
                   user_id=user_id, meeting_id=str(meeting_id), fields={"viewer_id": viewer_id})
         return JSONResponse(content=view)
 
+    # --- POST /meetings/calendar-sync → SYNC BACK (rooms, PLAN-8H 8.4). The flows worker's calendar
+    # sensor reports a change to the owner's calendar event (`calendar.event.updated|cancelled`) as
+    # that owner; every room call of theirs whose `calendar_event_ref` is that event follows it — its
+    # time, or `cancelled_at`. Not on the edge (no gateway row): the internal tier calls it.
+    @router.post("/meetings/calendar-sync")
+    async def planned_meeting_calendar_sync(request: Request, x_user_id: Optional[str] = Header(default=None)):
+        user_id = _resolve_user_id(x_user_id)
+        if not _room_plan.switched_on(headers=request.headers):
+            raise HTTPException(status_code=403, detail=_room_plan.refusal())
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=422, detail="invalid JSON body")
+        if not isinstance(body, dict) or not isinstance(body.get("event_id"), str) or body.get("status") not in ("updated", "cancelled"):
+            raise HTTPException(status_code=422, detail="event_id and status (updated|cancelled) are required")
+        synced, changes = [], []
+        for row in await store.list_meetings(user_id):
+            updates = _room_plan.sync_updates(row, event_id=body["event_id"], status=body["status"],
+                                              start=body.get("start"), end=body.get("end"))
+            if not updates:
+                continue
+            out = await store.update_planned_meeting(user_id, row["id"], updates)
+            if out and not out.get("error"):
+                synced.append(row["id"])
+                d = row.get("data") or {}
+                change = {"meeting_id": row["id"], "room": d.get("room"), "title": d.get("title") or "Call",
+                          "status": "cancelled" if updates.get("cancelled_at") else "updated"}
+                if updates.get("scheduled_at"):
+                    change["start"] = updates["scheduled_at"]
+                changes.append(change)
+        log_event("meeting_calendar_synced", audience="user", span="meetings.plan.calendar_sync",
+                  user_id=user_id, fields={"status": body["status"], "rows": len(synced)})
+        return {"synced": synced, "changes": changes}
+
+    # --- GET /meetings/{meeting_id}/ics → the planned call as an iCalendar event, for its creator to
+    # send from their own calendar when none is connected (rooms, F1). Owner only; never sent here.
+    @router.get("/meetings/{meeting_id}/ics")
+    async def planned_meeting_ics(meeting_id: int, request: Request,
+                                  x_user_id: Optional[str] = Header(default=None)):
+        user_id = _resolve_user_id(x_user_id)
+        if not _room_plan.switched_on(headers=request.headers):
+            raise HTTPException(status_code=403, detail=_room_plan.refusal())
+        row = next((m for m in await store.list_meetings(user_id)
+                    if m.get("id") == meeting_id and not m.get("shared")), None)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        body = _room_plan.ics(row)
+        if body is None:
+            raise HTTPException(status_code=409, detail="this meeting has no time yet")
+        return Response(content=body, media_type="text/calendar; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="meeting-{meeting_id}.ics"'})
+
     @router.patch("/meetings/{meeting_id}")
     async def patch_planned_meeting(
         meeting_id: int,
@@ -779,7 +976,9 @@ def build_router(
         x_user_id: Optional[str] = Header(default=None),
     ):
         user_id = _resolve_user_id(x_user_id)
-        await _apply_meeting_delete(user_id, meeting_id)
+        receipt = await _apply_meeting_delete(user_id, meeting_id)
+        if receipt["kind"] == "deferred":
+            return JSONResponse(status_code=202, content=_scheduled_body(meeting_id))
         return Response(status_code=204)
 
     # --- native-keyed PATCH/DELETE /meetings/{platform}/{native_meeting_id} (#579 C1) — the sealed
@@ -923,6 +1122,9 @@ def build_router(
                 detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
             )
         receipt = await _apply_meeting_delete(user_id, meeting_id)
+        if receipt["kind"] == "deferred":
+            return JSONResponse(status_code=202, content={
+                **_scheduled_body(meeting_id), "platform": platform, "native_meeting_id": native_meeting_id})
         body = {
             "status": "deleted", "id": meeting_id,
             "platform": platform, "native_meeting_id": native_meeting_id,
@@ -1592,6 +1794,14 @@ def build_router(
         )
         return JSONResponse(content={"authorized": authorized, "errors": errors, "user_id": user_id})
 
+    async def complete_deferred_delete(user_id: int, meeting_id: int) -> Optional[dict]:
+        """Called when a meeting's lifecycle ends: finish a deletion the person asked for while its
+        bot was still running. Nothing happens for a meeting nobody asked to delete."""
+        if not await store.delete_when_ended_requested(user_id, meeting_id):
+            return None
+        return await _apply_meeting_delete(user_id, meeting_id, may_defer=False)
+
+    router.complete_deferred_delete = complete_deferred_delete   # type: ignore[attr-defined]
     return router
 
 

@@ -3,7 +3,9 @@
 Checked by [`../validate.mjs`](../validate.mjs) against [`../session-profile.schema.json`](../session-profile.schema.json):
 
 - `WritebackBody.<case>.json` — accepted write-back bodies: they conform to the shape and pass the
-  profile's rules. `max-files` is the count limit itself (128 entries).
+  profile's rules. `max-files` is the count limit itself (128 entries). The restore route
+  (`GET /internal/browser-session/{session_uid}`) answers the same shape, so these are its answers too;
+  a `Refused` body is one the bot refuses whole when a restore answers it.
 - `WritebackResult.<case>.json` — the route's 200 answer.
 - `Refused.<case>.json` — `{why, body}`: the body must be refused, for the reason `why` gives
   (`too-many-files` is one entry past the limit).

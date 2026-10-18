@@ -453,13 +453,30 @@ def test_the_old_company_layer_door_is_still_gone(make_client):
 
 
 def test_the_instance_state_is_served_on_the_internal_tier_only(make_client):
-    """`GET /internal/instance` is the one door for "does this instance have an admin". The same
-    answer over the admin key had no product caller and is gone."""
+    """`GET /internal/instance` is the one door for "does this instance have an admin"."""
     c = make_client(FakeDB(admin_exists=False))
-    assert c.get("/admin/instance", headers={"X-Admin-API-Key": ADMIN}).status_code == 404
     assert c.get("/internal/instance", headers={"X-Internal-Secret": SECRET}).json() == {
         "admin_exists": False}
 
+
+def test_the_admin_instance_read_keeps_the_0_12_flows_engine_running(make_client):
+    """Upgrade compatibility: a 0.12 flows engine (still deployed beside a 0.13 identity tier) gates
+    every reaction on `GET /admin/instance` with the admin key and reads `global_setup`. It gets the
+    0.12 document computed by the 0.12 rule from the row the instance already stores, so an
+    upgraded instance keeps doing exactly what it did; a fresh one (no row) reads `missing`."""
+    db = FakeDB(admin_exists=True)
+    c = make_client(db)
+    assert c.get("/admin/instance").status_code in (401, 403)
+    assert c.get("/admin/instance", headers={"X-Admin-API-Key": "wrong"}).status_code in (401, 403)
+    assert c.get("/admin/instance", headers={"X-Admin-API-Key": ADMIN}).json() == {
+        "admin_exists": True, "global_setup": "missing", "company": None}
+    db.rows["global_setup"] = SimpleNamespace(key="global_setup",
+                                              value={"state": "completed", "company": "Example"})
+    assert c.get("/admin/instance", headers={"X-Admin-API-Key": ADMIN}).json() == {
+        "admin_exists": True, "global_setup": "completed", "company": "Example"}
+    db.rows["global_setup"].value = {"state": "complete"}  # anything but the exact word
+    r = c.get("/admin/instance", headers={"X-Admin-API-Key": ADMIN}).json()
+    assert r["global_setup"] == "missing"
 
 def test_the_settings_door_canonicalises_the_list(make_client):
     db = FakeDB()

@@ -1,0 +1,456 @@
+---
+title: "Shared chats"
+description: "Add people to a chat, how the agent behaves with more than one person in it, and how conversations are stored apart from workspaces."
+---
+
+A chat is a conversation. Vexa keeps every conversation in its session store, apart from all of your
+workspaces: no workspace, not even your private `_system`, holds a chat, so you can add people to one
+without sharing anything else. Adding someone shares the conversation and nothing else:
+they do not get your workspaces.
+
+## What you can do
+
+### Add people with @
+
+1. In the message box, type **@** and pick a person. The list holds the people you share a workspace
+   with, and nobody else. The message shows `@Name`, and it carries that person's account, so the
+   name always means exactly one person.
+2. Press **Enter**. If someone you mentioned is not in the chat yet, Vexa asks first, above the
+   message box: **Share this chat with Anna?**
+   - In a chat only you are in, the question says what Anna will see: this chat, with what was said
+     in it and the agent's answers, and which of your private reads (Gmail, Calendar, meetings) that
+     history holds.
+   - In a chat that already has other people, Anna joins it and sees it, as everyone there does.
+3. Choose one:
+   - **Share and send** adds them to this chat, history included, then sends the message here.
+   - **New chat with them** (a chat only you are in) starts a new shared chat with them that begins
+     with this message. This chat and what you said in it stay yours.
+   - **Send without sharing** sends the message with the name as plain text. Nobody is told, and the
+     agent is not given their account.
+   - **Cancel** sends nothing.
+
+Only the chat's owner shares its history. A member who adds someone starts a new chat of their own
+with that person, which starts empty.
+
+### See and remove people
+
+The bar above the chat shows who is in it (**Just you**, or **N people**). Press it to see the list.
+The owner can press **Remove** beside a person. Anyone except the owner can press **Leave**. The owner
+cannot be removed. People are not added here: mention them with **@**.
+
+### Find a chat shared with you
+
+When someone adds you to a chat, it appears in your chat list at once, without a reload, in a section
+called **Shared with me**, and a [notification](/minutes/notifications) says who added you. The row
+carries a **shared** chip with the owner's initials. Drag it into one of your own folders like any
+other chat; where you file it is yours alone. A chat of yours that has other people in it shows a
+plain **shared** chip. When you leave a chat, or its owner removes you, it leaves your list.
+
+### Share by asking the agent
+
+You can ask for shares in one message, for example: *share Acme with @Joe and share this chat with
+him*.
+
+- Enter asks you once whether to share the chat with Joe. That is the only question.
+- The agent grants the workspace with its `workspace_member_add` tool and replies in one line, for
+  example *Joe can now read and write Acme; he's in this chat from now on.*
+- The agent grants a workspace only when your message asks for it, and only if you own that
+  workspace.
+- It names people only by the account your **@** mention carried. A name it was not given an account
+  for is not looked up.
+
+When you ask the agent to share a chat only you are in, for example *share this chat with
+@Eugenia*, it first answers in one line, naming anything sensitive it sees in the history, for
+example *This chat has usage and payment figures and an internal memo. Share it all, share from a
+point, or start a new chat with her?* Your answer decides:
+
+- **all** (the default for a plain "share this chat"): she joins this chat and sees its history.
+- **from a point**: a new shared chat starts with what was said from that point on.
+- **fresh**: a new shared chat starts empty.
+
+The agent also has `chat_participants`, `chat_participant_add` and `chat_participant_remove`. Every
+add and remove needs you present (a scheduled run cannot do it) and follows the same rules as the
+message box. Sharing a chat never gives anyone a workspace.
+
+### Share a routine's chat
+
+A routine's chat (the thread its scheduled runs post into) is shared the same way: mention someone in
+it and choose **Share and send**.
+
+- The routine stays yours. Only you can pause, edit or delete it.
+- Everyone in the chat sees every run and can reply. A reply steers the next run.
+- Once others are in the chat, each run uses only what everyone there can read. Your Gmail, Calendar,
+  meetings and other connections are refused (`shared_conversation`).
+- If the routine reads your private connections, the question says so first, for example *This
+  routine reads your Gmail. Shared, it can't — its runs would only use what everyone here can see.* The
+  button then reads **Share anyway**.
+- A run that needs a refused read ends refused and the routine pauses, with one line in the chat
+  naming who it is shared with and what could not be read. Unshare the chat, or move the routine to
+  a private chat, then resume it ([Routines](/flows/routines#share-a-routines-chat)).
+- A routine that reads only workspaces everyone in the chat can read, or public sources, keeps
+  working as before.
+- Its earlier runs stay in your private chat history. The shared chat starts with the message you
+  sent.
+
+### Talk with the agent and with each other
+
+- In a chat with only you, the agent answers every message.
+- With two or more people, the agent answers when you write **@vexa** (or an agent's name) or address
+  it directly (*vexa, …*). Other messages stay in the chat for everyone to read, and the agent reads
+  them before its next answer.
+- It is one conversation: what people write to each other and the agent's turns are shown
+  together in time order, each with who wrote it. The box says who a message reaches, for example
+  *Message Alex and Vexa*. The same notice repeated by a routine shows once, with a count and
+  its times. Suggestions appear only in a new, empty chat.
+- An admin can make the agent answer every message with the `session_agent_speaks` policy
+  (`always` or `mentioned`) in `_global/POLICIES.md`. It applies to the whole deployment; there is no
+  per-workspace setting.
+
+### See each other live
+
+- A message you post without addressing the agent shows to everyone in the chat within a few
+  seconds, with the name of who wrote it, and is still there after a reload.
+- When another person's turn with the agent finishes, your chat reads the conversation again and
+  shows their question and the answer.
+- The agent in a shared chat may read the transcript of a meeting that was sent into a workspace
+  every person in the chat reads, and may send a bot into a meeting bound to such a workspace. A
+  meeting kept private stays out.
+
+### What the agent may use in a shared chat
+
+Everyone in the chat reads every answer, so in a chat with other people the agent uses only the
+workspaces **every** participant can read. Your Personal workspace and your private `_system` workspace are never
+used there. If your question needs something only you can read, the agent says it can't use it here
+and offers to answer in your private chat.
+
+To use one specific page anyway, share it for that message (the `share` field of
+[`POST /agent/chat`](/api/agent), `workspace/path`, up to five). The page is read with your access and
+quoted into that turn only.
+
+### Your private sources stay out of shared workspaces
+
+In your own chat the agent may read your mail, calendar and connected services. If it then writes a
+page into a workspace someone else also reads, nothing is written: the agent tells you what it is
+holding back, from which workspace and who else reads it, with a short code. Reply `confirm <code>`
+to write that one page; anything else stays off the shared workspace. Pages on your own desk are
+written as usual.
+
+## Limits and errors
+
+| You see | Why | What to do |
+|---|---|---|
+| *Sharing chats is not available on this deployment.* | agent-api has no database configured | an operator sets `DB_HOST` (below) |
+| *Only the chat's owner can add people.* (in the share question) | you are a member of someone else's chat | send without sharing, or ask the owner |
+| Nobody is listed after **@** | you share no workspace with anyone yet | share a workspace first; inviting someone new is done from the workspace |
+| `403 session_read_only` | you were added as a viewer | ask the owner to make you a member |
+| `404 session not found` | you are not in that chat | ask to be added |
+
+A chat holds one conversation: if two people's turns finish on the same version at once, the second
+save is refused and logged rather than merged, and that turn's reply stays in its own stream.
+
+## How it works
+
+### Where a conversation lives
+
+| Data | Single writer | Where |
+|---|---|---|
+| Session (owner, title, participants, roles, flow, channel) | agent-api | the instance's Postgres, `agent_session*` tables, reached as the store's own role |
+| Transcript versions (the harness's files and your turn records) | agent-api | the store's own bucket (`vexa-sessions`), under `sessions/`, one object per turn version |
+| Messages the agent was not asked to answer | agent-api | its database |
+| The conversation during a turn | the agent worker | a private folder under the worker's home, outside every workspace |
+
+### A chat becoming shared
+
+Turns made while you were alone used everything you can read, so what the next person sees of that
+conversation is the owner's decision. `POST /agent/sessions/{id}/participants` on a chat only its
+owner is in takes `history`:
+
+| `history` | What happens |
+|---|---|
+| `all` | The person joins this session. They read its history, and their turns continue its transcript. |
+| `from:<turn>` | A new session carries the visible text from that turn (its index in the history) on, as messages. |
+| `none` | A new session starts at version 0, with no transcript. |
+
+Without `history` the owner's add is `all`. `share-preview` returns the options and the private reads
+the history holds. The person added gets a "chat shared with you" notification and the chat in their
+rail, under **Shared with me**.
+Carried messages are only the words a person typed and the agent's visible replies, never tool calls
+or their results. `excerpt` (explicit turn indices) still works, in place of `history`.
+
+Anyone but the owner adding a person starts a new empty session that they own. Naming `history` is
+refused with `403` `history_is_the_owners`. A viewer adds nobody.
+
+From the moment a second person is in, every turn follows the shared-turn rule below. No workspace
+is granted: the newcomer's turns run without the workspaces they cannot read. An address with no
+account gets the same answer as one with an account, and nobody is added.
+
+### Mentions and the share question
+
+1. The first **@** fetches `GET /agent/people/mentionable`: every member of every group workspace you
+   are a member of, from each workspace's `policy/members.json`, with their account id. `_global` and
+   `_system` do not count, so being in the same organisation lists nobody.
+2. A message sends its mentions as `mentions` (account ids) on [`POST /agent/chat`](/api/agent).
+   agent-api keeps only ids from your list and tells the agent who each one is.
+3. On Enter, the message box reads the chat's participants. If a mentioned person is missing and you
+   are the owner, it reads `GET /agent/sessions/{id}/share-preview`: whether the chat forks, whether it
+   is a routine's chat, and which private reads its turns have made or are asked to make.
+4. **Share and send** calls `POST /agent/sessions/{id}/participants` with `subject` for each person,
+   and `history: all` on the first add to a private chat. **New chat with them** sends `history:
+   none`: the first add answers a new `session_id`, the message box opens that chat, and the message
+   is sent there with `to_agent`. A person by id must be on your list; anyone else gets the answer an
+   unknown address gets, and nobody is added.
+
+### A routine's chat becoming shared
+
+The new shared session takes the routine's flow binding and the thread name its runs are posted to,
+so every later run lands in the shared chat. The private session keeps the earlier runs under a new
+name and is no longer bound. A run is posted by flows over the internal tier, so agent-api answers
+it without a mention; it is still a shared turn. A routine made with `params.thread: "new"` starts a
+fresh thread for each run, and those threads are not shared.
+
+### Workspace grants by the agent
+
+`workspace_member_add` (`POST /agent/workspace/members/add`) takes a workspace slug or name, a person
+(the account id a mention carried, or the email of an existing account) and `read` or `write`
+(stored as `reader` or `contributor`). Only the workspace's owner adds. `_system` and `_global` are
+refused. A person with no account is refused and pointed to `workspace_invite`; this tool invites
+nobody.
+
+### A turn
+
+1. agent-api checks the session: you must be a participant with a member or owner role.
+2. With other people in the chat, agent-api decides whether the agent answers (`session_agent_speaks`).
+   If not, the message is stored for everyone and nothing runs.
+3. agent-api works out the workspaces every participant can read. The worker is started with only
+   those mounted, and its tools' ceiling is the same set. A change of participants starts a new worker.
+   The turn is marked *shared*, so the worker is also refused everything that is yours alone: your
+   connections (Gmail, Calendar and any other), their tokens and secrets, and your meetings,
+   transcripts, recordings and bots, and your flows, reactions and timeline. The agent says it cannot use them here and offers your private
+   chat. A workspace page you share for the turn is read with your own access and put into the prompt.
+4. The turn's input carries the conversation (`SessionBundle` in unit.v1). The worker writes it into
+   its private folder and runs claude-code, codex or openai-agent with that folder as the place they
+   keep their history.
+5. Before the turn completes, the worker hands the conversation back (`session-bundle`). agent-api saves
+   it as the next version only if the version it was based on is still the latest. The browser never
+   receives it.
+
+**One turn at a time.** A chat runs one turn at a time. A message that would start a second turn while
+one is running is refused with `409 session_conflict`; send it again when the answer arrives. If a
+turn's save is still refused, the chat's history (`GET /api/sessions/{id}/history`) shows a
+`session_conflict` fault until the next turn saves, and the chat shows it as the last row, so a
+lost reply is never silent. In a chat only you write, a reply whose save found a newer version is saved
+onto it whenever it carries the stored conversation further, so you are not asked to send it again.
+
+### One stream
+
+The chat reads `GET /api/sessions/{id}/messages` every few seconds (lines people wrote and their
+names) and `GET /api/sessions/{id}/history` (the agent's turns, each with `at`, when it was said,
+taken from the conversation's own record). The browser places each line before the first turn said
+after it; a turn without a time takes its neighbour's. agent-api stays the one writer of both; the
+browser only orders them. A person who is not in the chat gets `404` from both
+(`core/agent/tests/test_access_sessions_share.py` · `test_the_newcomer_cannot_read_the_private_session`).
+Tests: `core/agent/tests/test_history_turn_times.py`;
+`clients/terminal/src/surfaces/__tests__/sharedConversation.test.tsx`, `repeatedNotices.test.tsx`;
+`clients/terminal/src/minutes/__tests__/startersOnlyNew.test.ts`.
+
+### Private sources and shared writes
+
+A session that calls a private-source route (mail, calendar, a connected service, onboarding
+research) is marked for 12 hours, in agent-api for its tool writes (`workspace_write`,
+`entity_upsert`) and in the worker for the files the turn writes itself. A write from a marked
+session into a workspace whose `policy/members.json` names anyone besides the person is refused
+(`409 private_sources_to_shared`, with `confirm_code`); at the commit the worker puts that workspace
+back and keeps the change on the person's desk under `.vexa/held-writes/` (git-excluded). The
+person's own chat message `confirm <code>` releases that write once: agent-api takes the code only
+from a chat message the person sent themselves, never from a delegated caller, and the worker writes
+held files back when the turn it runs carries the code. Marks and codes live in agent-api's memory
+(one replica), so a restart forgets them.
+
+### Live lines, meetings and bots in a shared chat
+
+- **Lines.** A message that does not address the agent is stored by agent-api as a note on the
+  conversation, holding only the person's words (the terminal's context line is cut off). The chat
+  reads `GET /api/sessions/{session}/messages` every 3 seconds while the tab is visible (every 15
+  seconds while the store does not hold the chat yet) and at once after it posts a line. The answer
+  carries `you`, the conversation's `version` and `names` (each person's roster name). agent-api is
+  the only writer of notes and of the version; the terminal only reads them.
+- **Another person's turn.** When `version` moves and this tab is not in a turn of its own, the
+  chat reads the conversation history again and replaces what it shows.
+- **A meeting's transcript and a bot.** meeting-api refuses a shared turn every person-wide route.
+  Three requests pass that app-wide rule and are decided again by their route: `GET
+  /transcripts/by-id/{id}` and `GET /transcripts/{platform}/{native_meeting_id}` answer only for a
+  meeting bound to a workspace inside the turn's ceiling (the workspaces every participant reads),
+  and `POST /bots` only for a bot bound to such a workspace. Transcript search and meeting lists stay
+  refused. The ceiling arrives on the gateway-signed delegation headers.
+- **A member reads a meeting by its link.** When the caller owns no meeting on that link,
+  `GET /transcripts/{platform}/{native_meeting_id}` takes the newest one bound to a workspace the
+  caller is a member of and reads it through the same by-id access decision.
+
+### Configuration
+
+agent-api reaches the store with credentials of its own, never the instance's:
+
+- **Database.** A login role, `vexa_agent_sessions` by default, with no admin power and grants on the
+  `agent_session*` tables only. The migrations path creates it with the admin credential:
+  `python -m control_plane.session_schema init` (the compose `agent-sessions-init` service, the Helm
+  `agent-sessions-schema` Job, the Lite entrypoint). agent-api runs no DDL; it refuses a superuser
+  login and a schema version it does not know, and the store stays off.
+- **Objects.** Its own bucket, `vexa-sessions`, with a key scoped to that bucket alone. On the bundled
+  storage, storage-init creates both and proves the key is refused everywhere in the recordings bucket.
+  Transcripts go to S3 only; there is no directory store.
+
+| | Compose | Helm | Lite |
+|---|---|---|---|
+| On by default | yes | no: the chart makes no bucket | yes, with object storage |
+| `VEXA_SESSIONS_DB_PASSWORD` | minted into `.env` by `make up` | generated Secret, or `agentApi.sessions.existingSecret` | minted into the state dir |
+| `VEXA_SESSIONS_S3_ACCESS_KEY`, `_SECRET_KEY` | minted into `.env`; scoped by storage-init | `agentApi.sessions.s3.existingSecret` (you make the bucket and key) | minted into the state dir; scoped by the entrypoint |
+| `VEXA_SESSIONS_S3_BUCKET` | `vexa-sessions` | `agentApi.sessions.s3.bucket` | `vexa-sessions` |
+| `VEXA_SESSIONS_S3_ENDPOINT` | `S3_ENDPOINT` if set, else the `storage` service | `storage.s3.endpoint` | `MINIO_ENDPOINT` |
+
+With your own S3 on compose, create the bucket and a key limited to it and set the three
+`VEXA_SESSIONS_S3_*` values. Rendering and storage-init refuse the recordings bucket or a storage root
+key as the store's. `VEXA_SESSIONS_DB_URL` (`postgresql://…`) overrides the database parts. Without
+the role's password or the store's key, the store is off and chats keep the old layout. agent-api
+holds one database connection per replica.
+
+### Upgrading
+
+Older builds kept chats inside workspaces (`.claude/` in your private `_system` workspace or your
+desk). Existing chats keep working: for one release agent-api reads that old layout when the store
+holds nothing for a chat, and the first turn afterwards saves it into the store. To move every chat at
+once, run the migration where agent-api runs:
+
+```bash
+# Docker Compose
+docker compose exec agent-api python -m control_plane.session_migrate --dry-run
+
+# Helm
+kubectl exec deploy/<release>-vexa-agent-api -- python -m control_plane.session_migrate --dry-run
+
+# Vexa Lite: agent-api runs under supervisord; the command takes the store settings the entrypoint
+# set (read from PID 1's environment as data, so a value holding a quote or a space is passed intact)
+docker exec -w /app/agent vexa-lite /opt/venvs/agent/bin/python -c 'import os
+e = dict(x.split("=", 1) for x in open("/proc/1/environ").read().split("\0") if "=" in x)
+env = {k: v for k, v in e.items() if k in ("DB_HOST", "DB_PORT", "DB_NAME") or k.startswith("VEXA_SESSIONS_")}
+env.update(PATH=os.environ["PATH"], PYTHONPATH="/app/agent", VEXA_WORKSPACES_DIR="/workspaces")
+os.execve("/opt/venvs/agent/bin/python", ["python", "-m", "control_plane.session_migrate", "--dry-run"], env)'
+```
+
+| Flag | Effect |
+|---|---|
+| `--dry-run` | counts only |
+| *(none)* | copy and verify by reading back |
+| `--clean` | also remove the old files, only where verified |
+| `--clean --retire` | move every old-layout chat file out of the workspaces, after the store's copy is verified; a copy that diverged from the store's is moved too. Nothing is deleted: each file goes to `<workspaces>/.sessions-retired/<run>/`, a folder no workspace, mount or person ever names |
+| `--restore` | move every file `--retire` moved back to where it was; a file written at that name since is never overwritten (it stays archived and is counted) |
+| `--workspaces <dir>` | the workspaces volume, if not agent-api's own |
+
+Without a configured store the command exits with code 2 and migrates nothing.
+
+It is safe to run more than once; a chat already in the store is skipped. It logs counts, never names
+or content, and ends with `left_in_workspaces`: how many old-layout chat files are still inside a
+workspace (0 after `--clean --retire`).
+
+**Recommended upgrade:** back up the workspaces volume, run `--dry-run`, then `--clean --retire`, and
+check that `copied` + `skipped` equals `threads` and `left_in_workspaces` is 0. Once a release has
+passed with no `--restore` needed, the archive can be removed by the operator. A forget
+(*"forget this"*) redacts the archive as well as the store.
+
+`--restore` is for rolling back to a build that reads chats from workspaces. It puts the files back
+as they were when retired; turns taken since live only in the store. While the store is on, restored
+files are chat files under a mount again, so run `--clean --retire` again once the rollback is over.
+The archive holds the only copy of a diverged file (the run counts them as `diverged`); keep it until
+you have checked those.
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P2** contracts | the conversation's wire shapes are `SessionBundle` and `SessionBundleEvent` in unit.v1, with goldens | `gate:schema`, `gate:contract-version` |
+| **P18** fail loud | a second concurrent turn is a typed 409; a refused save is a `session_conflict` fault in the history; a store that cannot answer refuses a shared chat or a store id with 503, and only a private chat falls back to the old layout | deny tests below |
+| **P20** authorize every access | the session gate (participants and roles) and the workspace gate (your own membership) are separate; sharing a chat grants no workspace | deny tests below |
+| **P23** one writer per carrier | agent-api is the only writer of the store; the worker only hands the conversation back on its own output stream | `gate:dataflow` |
+
+### Security
+
+**Who can do what.** Participants read a chat; members and the owner post; only the owner shares
+a chat's history or removes people; a member who adds someone starts a new chat of their own; anyone
+may leave. A participant's turn runs as that participant, on their own
+workspaces, narrowed to what everyone in the chat can read.
+
+**Protections.**
+
+- A shared chat's turn mounts neither the speaker's Personal workspace nor `_system`, and its tools cannot reach a
+  workspace outside the shared set.
+- A shared chat's turn is refused the speaker's connections, secrets, meetings and flows, by agent-api, the
+  credential broker, meeting-api and flows-api (`shared_conversation`), not only by the prompt.
+- A worker can save only into the chat and version it was handed, and only while the speaker can
+  still write.
+- A conversation never reaches a workspace volume or a browser; workers never hold object-store
+  credentials. With the store on, a worker keeps a turn's harness state in a private folder outside
+  every mount, and the agent reads another chat only through `chats_search` and `chat_read`, which
+  apply these rules; there is no chat file under any mount for it to find.
+- agent-api holds neither the database's admin credential nor the recordings bucket's key: its role
+  reads and writes the `agent_session*` tables only, and its key reaches its own bucket only.
+- Bundle paths are plain relative paths; anything else is refused, never repaired.
+- A private chat's history is shared only by its owner (an agent in the owner's own turn names what
+  in it is sensitive first). Shared from a point or
+  fresh, the new chat carries no tool call, tool result or composed prompt, and nobody but the owner
+  can read the private one.
+- Adding and removing people needs a person in the loop: a scheduled or background worker is
+  refused (`human_session_required`). An agent acting in your own typed turn may add, as you, under
+  the same rules.
+- The @ list and every add by id are limited to the people you share a group workspace with. Nobody
+  else is named, and an id outside that set adds nobody.
+- A workspace is granted only by its owner, only to an existing account, and only when the message
+  asks for it.
+- A routine's runs in a shared chat are shared turns: the routine cannot read its owner's private
+  connections there, and only its owner can change or stop it.
+
+**Deny tests.**
+
+| Test | Proves |
+|---|---|
+| `core/agent/tests/test_session_turn.py` · `test_the_leak_rule_founder_scenario`, `test_a_non_participant_is_refused`, `test_a_viewer_cannot_post` | the leak rule and the session gate |
+| `core/agent/tests/test_session_access.py` · `test_a_shared_turn_mounts_only_the_intersection_and_its_tools_reach_no_further` | mounts and the tools' ceiling |
+| `core/agent/tests/test_session_routes.py` · `test_a_member_adding_someone_starts_their_own_chat_and_outsiders_get_404`, `test_the_stream_never_relays_the_conversation_to_the_browser` | the routes |
+| `core/agent/tests/test_access_sessions_share.py` · `test_adding_a_person_forks_to_a_new_empty_session`, `test_the_newcomer_cannot_read_the_private_session`, `test_an_excerpt_carries_only_the_chosen_visible_text`, `test_known_and_unknown_addresses_get_the_same_answer`, `test_the_leak_preamble_does_not_name_withheld_workspaces` | a private chat is never handed over; adding by email reveals no account |
+| `core/agent/tests/test_access_sessions_share_history.py` · `test_the_owner_sharing_with_no_choice_shares_in_place`, `test_the_owner_shares_in_place_with_history`, `test_the_owner_shares_from_a_turn`, `test_a_non_owner_adding_a_person_gets_a_new_empty_chat`, `test_a_non_owner_cannot_choose_the_owners_history`, `test_a_viewer_adds_nobody`, `test_sharing_a_chat_grants_no_workspace` | only the owner shares the history, and only by choosing; no workspace comes with it |
+| `core/agent/tests/test_access_chat_mentions.py` · `test_the_picker_names_only_people_who_share_a_workspace`, `test_adding_someone_outside_the_picker_by_id_creates_nothing`, `test_a_mention_add_of_a_private_chat_forks_it`, `test_a_member_adding_by_mention_starts_their_own_chat`, `test_a_worker_without_a_person_is_refused_the_add`, `test_a_worker_for_a_speaker_who_is_not_the_owner_cannot_share_the_history` | the @ list and the mention path |
+| `core/agent/tests/test_access_chat_mentions.py` · `test_a_private_connection_routine_warns_then_runs_restricted`, `test_a_shared_workspace_routine_shares_without_loss`, `test_a_routine_run_needs_the_internal_tier_to_be_answered_unmentioned` | a routine's chat |
+| `core/agent/tests/test_access_chat_mentions.py` · `test_a_non_owner_cannot_add_to_a_workspace`, `test_an_id_outside_the_owners_people_or_an_unknown_address_adds_nobody`, `test_a_background_worker_is_refused_the_workspace_add`, `test_one_sentence_makes_both_shares_with_the_mentioned_account` | workspace grants by the agent |
+| `clients/terminal/src/surfaces/__tests__/chatMentions.test.tsx`, `shareFlow.test.ts`, `minutes/__tests__/participants.test.tsx` | the picker, the share question and its four answers; the header adds nobody |
+| `core/agent/tests/test_session_store.py` · `test_a_stale_base_is_refused_never_merged`, `test_bundle_paths_are_plain_relative_paths` | the store |
+| `core/agent/tests/test_private_writes_held.py` · `test_a_private_read_holds_the_write_into_a_shared_workspace`, `test_entity_upsert_is_held_the_same_way`, `test_the_agent_cannot_confirm_its_own_write`, `test_the_person_confirms_that_one_write_once`; `test_private_writes_commit.py` · `test_a_turn_that_read_mail_is_held_from_the_shared_workspace`, `test_the_mark_outlives_the_turn`, `test_the_person_confirms_and_it_is_written_once` | a session that read private sources writes no shared page unless the person confirms that one write |
+| `core/agent/tests/test_shared_turn_reads.py` · `test_a_shared_turn_is_refused_every_person_wide_read` | agent-api refuses a shared turn its connections and meeting routes |
+| `core/agent/services/credential-broker/tests/test_unwatched_regime.py` · `test_gmail_and_calendar_reads_are_refused_on_a_shared_turn`, `test_a_shared_turn_is_refused_every_connection_verb` | the broker refuses Gmail, Calendar and every connection verb |
+| `core/meetings/services/meeting-api/tests/test_regime.py` · `test_a_shared_turn_is_refused_the_person_s_meetings` | meeting-api refuses meetings and transcripts |
+| `core/flows/tests/test_subject_bearer.py` · `test_a_shared_turn_is_refused_every_flows_route` | flows-api refuses flows, reactions, timeline and queue |
+| `core/agent/tests/test_session_sync.py` · `test_a_worker_naming_a_foreign_session_is_refused`, `test_a_second_concurrent_turn_in_a_session_is_refused_up_front` | a foreign save and a second turn |
+| `core/agent/tests/test_session_routes.py` · `test_a_store_error_on_a_shared_own_thread_is_503`, `test_a_busy_session_is_a_typed_409`, `test_history_carries_a_refused_save` | fail closed, the 409 and the fault |
+| `core/agent/tests/test_session_carry.py` · `test_a_bad_path_in_a_bundle_is_refused`, `test_an_older_delivery_never_overwrites_a_newer_local_copy` | the worker |
+| `core/agent/tests/test_session_sync.py` · `test_with_the_store_on_a_turn_without_a_conversation_never_writes_under_system`, `test_a_routine_run_in_its_thread_carries_the_conversation` | with the store on, no turn leaves a chat under a mount |
+| `core/agent/tests/test_session_access.py` · `test_a_shared_turn_reaches_the_speaker_s_other_chats_by_no_file_path`, `test_the_agent_is_never_told_chats_live_in_a_workspace` | a shared turn finds no other chat by path |
+| `core/agent/tests/test_session_migrate.py` · `test_retire_leaves_no_conversation_under_any_mount_and_counts_match`, `test_the_archive_is_no_person_and_no_workspace`, `test_restore_puts_every_file_back_byte_for_byte_and_never_overwrites` | the migration empties every mount, the archive is in none, and it is reversible |
+| `core/agent/tests/test_workspace_forget.py` · `test_forget_reaches_old_chats_left_in_system_and_the_retired_archive` | a forget reaches the archive |
+
+### Lines, meeting reads and bots from a shared chat
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P20** authorize every access | a chat's lines answer only to its participants (the session gate); a shared turn reaches one meeting's transcript, or sends a bot, only for a workspace inside its signed ceiling, checked in the route after the app-wide rule lets the request through | deny tests below |
+| **P23** one writer per carrier | agent-api writes notes and the conversation's version; meeting-api writes meetings; the terminal only reads | `gate:dataflow` |
+| **P18** fail loud | a refused read or bot is the same `shared_conversation` refusal as every other person-wide route | ungated: reviewed |
+
+| Test | Proves |
+|---|---|
+| `core/agent/tests/test_access_sessions_share.py` · `test_the_newcomer_cannot_read_the_private_session` | someone not in a chat reads none of its lines (`404`) |
+| `core/agent/tests/test_shared_chat_live.py` · `test_a_line_carries_the_person_s_words_never_the_terminal_s_context` | the others see only what the person wrote |
+| `core/meetings/services/meeting-api/tests/test_shared_transcript_read.py` · `test_a_private_meeting_stays_refused_in_a_shared_chat`, `test_a_meeting_in_a_workspace_outside_the_shared_ceiling_stays_refused`, `test_search_and_lists_stay_refused_in_a_shared_chat`, `test_someone_outside_the_workspace_does_not_find_it_by_its_link` | transcript reads from a shared chat, and by link |
+| `core/meetings/services/meeting-api/tests/test_regime.py` · `test_a_shared_turn_may_not_send_a_bot_into_a_workspace_outside_its_ceiling` | bots from a shared chat |
+
+## Related
+
+- [Chats](/minutes/chats) · [Agents](/core/agents) · [Agent API](/api/agent)

@@ -23,7 +23,7 @@
  * lazy redis connect.
  */
 import { createClient } from 'redis';
-import { isMixedLanePlatform, loadInvocation, InvocationError, speakerStreamConfigFromEnv, type Invocation } from './config.js';
+import { isMixedLanePlatform, loadInvocation, InvocationError, speakerStreamConfigFromEnv, withLatencyProfile, type Invocation } from './config.js';
 import type { Act, LifecycleEvent, TranscriptSegment } from './contracts.js';
 import { createOrchestrator } from './orchestrator.js';
 import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
@@ -35,10 +35,17 @@ import { languageActHandler, observationOf, summarize, type LanguageObservation 
 import { createBotRecordingSink } from './recording.js';
 import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap, wrapTranscriptWithSnapshot, type CaptureSignalRecorder } from './telemetry.js';
 import { uploadSignalTapes } from './signal-upload.js';
+import { describeGaps, mergeDegraded, transcriptGapsReport } from './transcript-gaps.js';
 import { createSttFaultReporter } from './stt-faults.js';
 import { launchBrowser, startCaptureBridge, startRecording, restartMixedCapture, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
 import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
+import { createVoiceNoteJoinDriver, createVoiceNotePipeline, createVoiceNoteSource, voiceNoteIdleMs, voiceNoteMaxActiveMs } from './voice-note.js';
+import { createRedisAudioStreamReader, redisStreamClientFrom, type LiveRedisStreamClient } from './adapters/voice-note-redis.js';
+import { createSessionEnd } from './adapters/redis-terminal.js';
+import { callMaxActiveMs, createCallJoinDriver, createCallPipeline, createCallSource } from './call.js';
+import { createLiveKitRoom, type LiveKitSdk } from './adapters/livekit-room.js';
+import { runBrowserSession } from './browser-session.js';
 import type {
   JoinDriver,
   Pipeline,
@@ -151,6 +158,9 @@ async function pingRedis(redisUrl: string, timeoutMs = 3000): Promise<boolean> {
 }
 
 export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number> {
+  // ── browser-session mode: a bot-account sign-in or check, not a meeting (browser-session.ts) ──
+  if (env.VEXA_BROWSER_SESSION) return runBrowserSession(env);
+
   // ── validate config (P14: fail fast) ──
   let inv: Invocation;
   try {
@@ -179,8 +189,11 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   // transcript.v1 + acts.v1: redis. Connect LAZILY — constructing the clients does NOT dial
   // redis, so an unreachable broker doesn't crash the composition root; the first publish/
   // subscribe surfaces the error and the orchestrator drives to a clean terminal `failed`.
-  const transcriptClient = redisClientFrom(inv.redisUrl);
-  const actsClient = redisActsClientFrom(inv.redisUrl);
+  // Every client stops reconnecting once the session is over: meeting-api removes this bot's Redis
+  // user on the terminal callback, and a client that kept retrying would never let the bot exit.
+  const redisSession = createSessionEnd();
+  const transcriptClient = redisClientFrom(inv.redisUrl, { session: redisSession });
+  const actsClient = redisActsClientFrom(inv.redisUrl, { session: redisSession });
   const liveTranscript: TranscriptSink = createRedisTranscriptSink({
     client: transcriptClient,
     meetingId,
@@ -201,7 +214,12 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   let pipeline: Pipeline;
   let botPipeline: BotPipeline | null = null;
   let acts: ActsSource = liveActs;
-  const recording = inv.recordingEnabled ? createBotRecordingSink({ inv, log: (m) => console.log(`[bot] ${m}`) }) : undefined;
+  // A voice note has no page to record from (its audio arrives as frames), so it records nothing here.
+  const isVoiceNote = inv.platform === 'voice_note';
+  // A call (#1783) is the same: its audio arrives as the room's tracks, not from a page.
+  const isCall = inv.platform === 'vexa_call';
+  const noBrowser = isVoiceNote || isCall;
+  const recording = inv.recordingEnabled && !noBrowser ? createBotRecordingSink({ inv, log: (m) => console.log(`[bot] ${m}`) }) : undefined;
   // O-TEL-1: persist the raw captured-signal.v1 stream for offline replay. Off ⇒ the tap is a
   // single undefined-check and the capture path is byte-for-byte unchanged. VEXA_CAPTURE_SIGNAL=1
   // enables it without a control plane (the local hot-loop path).
@@ -222,7 +240,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   // Counts STT failures across the meeting so the terminal lifecycle event can carry WHY a
   // transcript is short or empty, instead of leaving it indistinguishable from a silent room.
   const sttFaults = createSttFaultReporter();
-  const speakerStreamConfig = speakerStreamConfigFromEnv(env);
+  const speakerStreamConfig = withLatencyProfile(inv.platform, speakerStreamConfigFromEnv(env), env);
   const remoteAudioActivity = createRemoteAudioActivityTap();
   const aloneSilenceWindowMs = resolveAloneSilenceWindowMs(inv.automaticLeave?.everyoneLeftTimeout, env);
   // #1192: the guard's one repair attempt, resolved late — the aloneness monitor is built before
@@ -252,7 +270,67 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   observeLanguage(observationOf(languageControl.get(), 'invocation'));
   const languageActs = languageActHandler(languageControl, { observe: observeLanguage });
 
-  try {
+// ── voice note (#1783): no browser, no join. The note's Redis stream is the capture; the lane,
+  // STT and the sinks are the meeting bot's own. Stop (the end marker) ends the note `stopped`; a
+  // browser that went away without Stop ends it `left_alone` after the idle timeout. ──
+  let voiceStreamClient: LiveRedisStreamClient | null = null;
+  let endVoiceNote: ((reason: 'stopped' | 'left_alone') => void) | null = null;
+  let aloneHook: (() => void) | null = null;
+  let callStats: (() => unknown) | null = null;
+  if (isVoiceNote && inv.voiceNote) {
+    const vn = inv.voiceNote;
+    const engine = createBotPipeline(inv, transcript, {
+      transcribe: signalRecorder ? wrapTranscribeWithTap(createTranscribe(inv, languageControl), signalRecorder.path) : undefined,
+      languageControl,
+      config: speakerStreamConfig,
+      onError: (e) => { sttFaults.record(e); console.error(`[bot] pipeline fault: ${String(e)}`); },
+    });
+    botPipeline = engine;
+    voiceStreamClient = redisStreamClientFrom(inv.redisUrl, { session: redisSession });
+    const source = createVoiceNoteSource({
+      reader: createRedisAudioStreamReader({ client: voiceStreamClient, key: vn.audioStream }),
+      feed: (pcm, tsMs) => engine.feedAudio(0, vn.speakerName, pcm, tsMs),
+      onEnd: () => endVoiceNote?.('stopped'),
+      onIdle: () => endVoiceNote?.('left_alone'),
+      idleMs: voiceNoteIdleMs(inv),
+      log: (m) => console.log(m),
+    });
+    join = createVoiceNoteJoinDriver();
+    const notePipeline = createVoiceNotePipeline({ source, engine });
+    // The note's audio stream is read to its end before the lane flushes; its connection is closed
+    // right then, before the terminal callback revokes this bot's Redis user. Left open, the revoke
+    // dropped it and every reconnect logged "WRONGPASS invalid username-password pair".
+    const streamClient = voiceStreamClient;
+    pipeline = {
+      start: () => notePipeline.start(),
+      async stop() { await notePipeline.stop(); await streamClient.quit().catch(() => { /* best-effort */ }); },
+    };
+    console.log(`[bot] voice note: reading ${vn.audioStream} (cap ${vn.maxDurationSec}s)`);
+  } else if (isCall && inv.call) {
+    // ── call (#1783): no browser, no admission. The listener joins the LiveKit room hidden and
+    // subscribe-only; each participant's microphone track is its own channel, named by the
+    // participant. The room emptying ends the call through the orchestrator's left_alone path. ──
+    const c = inv.call;
+    const engine = createBotPipeline(inv, transcript, {
+      transcribe: signalRecorder ? wrapTranscribeWithTap(createTranscribe(inv), signalRecorder.path) : undefined,
+      config: speakerStreamConfig,
+      onError: (e) => { sttFaults.record(e); console.error(`[bot] pipeline fault: ${String(e)}`); },
+    });
+    botPipeline = engine;
+    const sdk = (await import('@livekit/rtc-node')) as unknown as LiveKitSdk;
+    const source = createCallSource({
+      room: createLiveKitRoom({ sdk, url: c.url, token: c.token, log: (m) => console.log(m) }),
+      feed: (channel, name, pcm, tsMs) => engine.feedAudio(channel, name, pcm, tsMs),
+      onEmpty: (why) => { console.log(`[bot] call: ${why}`); aloneHook?.(); },
+      emptyGraceMs: (c.emptyGraceSec ?? 30) * 1000,
+      firstJoinTimeoutMs: (c.firstJoinTimeoutSec ?? 300) * 1000,
+      log: (m) => console.log(m),
+    });
+    callStats = () => source.stats();
+    join = createCallJoinDriver();
+    pipeline = createCallPipeline({ source, engine });
+    console.log(`[bot] call: listening in room ${c.room} (cap ${c.maxDurationSec}s)`);
+  } else try {
     session = await launchBrowser(inv);                                   // L4 (O6/VM)
     join = createBrowserJoinDriver(session.page, inv);
     botPipeline = createBotPipeline(inv, transcript, {
@@ -336,15 +414,27 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     ? { probeSecondary: () => pingRedis(inv.redisUrl) }
     : undefined;
 
+  // A voice note is never "alone" by silence (a pause is not a departure): its only lonely end is the
+  // source's idle timeout, which fires the orchestrator's own left_alone path through this hook.
+  const voiceAloneness = {
+    onAlone(cb: () => void) { aloneHook = cb; return () => { aloneHook = null; }; },
+  };
   const orchestrator = createOrchestrator(inv, {
     lifecycle,
     join,
     pipeline,
     acts,
-    aloneness,
+    aloneness: noBrowser ? voiceAloneness : aloneness,
     recording: recording as RecordingSink | undefined,
     reachability,
-    degraded: () => sttFaults.report(),
+    // What degraded the meeting, on the terminal event: the STT faults AND every stretch of audio a
+    // lane will never transcribe (prod-cutover R4: a loss is a recorded gap, never silent).
+    degraded: () => {
+      const ranges = botPipeline?.missingRanges?.() ?? [];
+      const line = describeGaps(ranges);
+      if (line) console.error(line);
+      return mergeDegraded(sttFaults.report(), transcriptGapsReport(ranges));
+    },
   });
 
   // Disposability (P7): a termination signal ends the active phase gracefully (leave → flush →
@@ -352,11 +442,22 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   // force-exit watchdog in signals.ts (<25s, inside the runtime's SIGTERM→SIGKILL stop grace) so
   // a wedged teardown can never ride a `docker stop` all the way to a silent 137 (the incident's
   // exit code on BOTH orphaned bots). Wire before run(); release the listeners after.
+  endVoiceNote = (reason) => {
+    if (reason === 'left_alone') aloneHook?.();
+    else orchestrator.stop('stopped');
+  };
   const releaseSignals = installSignalHandlers({ stop: (reason) => orchestrator.stop(reason) });
   try {
-    const result = await orchestrator.run({ maxActiveMs: deriveMaxActiveMs(inv, aloneSilenceWindowMs, env) });
+    const maxActiveMs = isVoiceNote ? voiceNoteMaxActiveMs(inv)
+      : isCall ? callMaxActiveMs(inv) : deriveMaxActiveMs(inv, aloneSilenceWindowMs, env);
+    const result = await orchestrator.run({ maxActiveMs });
+    // Per speaker: frames and seconds of audio the room delivered (the E2E reads this line).
+    if (callStats) console.log(`[bot] call: speakers ${JSON.stringify(callStats())}`);
     return result.exitCode;
   } finally {
+    // The session is over (its terminal callback is sent): a Redis auth failure from here on is
+    // the revoked credential, and ends the client instead of looping (adapters/redis-terminal.ts).
+    redisSession.end();
     releaseSignals();
     // Tear down the pipeline (capture bridge + recording + engine) + browser (best-effort — a
     // teardown failure must not change the exit code). The orchestrator already stopped the pipeline
@@ -380,6 +481,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // exit code; they may never have connected if redis was unreachable).
     await transcriptClient.quit().catch(() => { /* best-effort */ });
     await actsClient.quit().catch(() => { /* best-effort */ });
+    await voiceStreamClient?.quit().catch(() => { /* best-effort */ });
   }
 }
 

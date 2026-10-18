@@ -47,6 +47,16 @@ export DB_PASSWORD="${DB_PASSWORD}"
 # ─── Defaults for every var supervisord interpolates (empty is fine; must be SET) ─────────────────
 export LOG_LEVEL="${LOG_LEVEL:-info}"
 export DISPLAY="${DISPLAY:-:99}"
+# Unproven features (agent-api, mcp and meeting-api read it; the list is
+# core/agent/control_plane/features.py). Empty = the release default, every one off; `all` switches
+# every one on (a dev box), a comma list just those. Pass it with `docker run -e VEXA_FEATURES=all …`.
+export VEXA_FEATURES="${VEXA_FEATURES:-}"
+# Which MCP tools a caller is shown and may call (vexa_mcp/visibility.py). Empty = every tool.
+export VEXA_MCP_TOOLS_ALLOW="${VEXA_MCP_TOOLS_ALLOW:-}"
+export VEXA_MCP_TOOLS_DENY="${VEXA_MCP_TOOLS_DENY:-}"
+export VEXA_MCP_TOOLS_COHORT="${VEXA_MCP_TOOLS_COHORT:-}"
+# The kill switch for model calls (agent-api, control_plane/llm_budget.py): 1 refuses every turn.
+export VEXA_LLM_KILL_SWITCH="${VEXA_LLM_KILL_SWITCH:-}"
 # Who may sign in to the terminal besides existing users and admins — exact addresses and @domain
 # entries, comma-separated (admin-api reads it; see deploy/compose/.env.example). Empty = nobody new
 # once an admin exists. Pass it with `docker run -e VEXA_SIGNIN_ALLOW=@example.com …`.
@@ -120,6 +130,9 @@ export BOT_SPEAKER_MAX_BUFFER_SEC="${BOT_SPEAKER_MAX_BUFFER_SEC:-}"
 export BOT_SPEAKER_IDLE_TIMEOUT_SEC="${BOT_SPEAKER_IDLE_TIMEOUT_SEC:-}"
 export BOT_SPEAKER_MIN_FINAL_AUDIO_SEC="${BOT_SPEAKER_MIN_FINAL_AUDIO_SEC:-}"
 export BOT_STT_TIMEOUT_SEC="${BOT_STT_TIMEOUT_SEC:-}"
+export BOT_TRANSCRIPTION_LATENCY="${BOT_TRANSCRIPTION_LATENCY:-}"
+export BOT_STT_CONFIDENCE_FILTER="${BOT_STT_CONFIDENCE_FILTER:-}"
+export BOT_TRANSCRIPT_RECONFIRM_SEC="${BOT_TRANSCRIPT_RECONFIRM_SEC:-}"
 
 export TRANSCRIPTION_SERVICE_URL="${TRANSCRIPTION_SERVICE_URL:-}"
 export TRANSCRIPTION_SERVICE_TOKEN="${TRANSCRIPTION_SERVICE_TOKEN:-}"
@@ -277,6 +290,41 @@ if [ -n "$DB_HOST" ]; then
     done
     echo ""
 fi
+
+# ─── The session store (ADR-0048): its own database role and its own bucket ─────────────────────
+# agent-api never holds the database admin credential or the storage root pair. Here, with both,
+# the store's role is made (grants on agent_session* only) and, on the bundled storage, its bucket
+# and a key scoped to it. Its secrets are minted once into $VEXA_LITE_STATE_DIR (or pass them). A
+# step that fails leaves the store off — chats keep the workspace layout — and never stops Lite.
+# With no object storage (MINIO_ENDPOINT unset) the store is off: transcripts go to S3 only.
+export VEXA_SESSIONS_DB_USER="${VEXA_SESSIONS_DB_USER:-vexa_agent_sessions}"
+export VEXA_SESSIONS_S3_BUCKET="${VEXA_SESSIONS_S3_BUCKET:-vexa-sessions}"
+export VEXA_SESSIONS_S3_ENDPOINT="${VEXA_SESSIONS_S3_ENDPOINT:-$MINIO_ENDPOINT}"
+sessions_operator_key=false
+if [ -n "${VEXA_SESSIONS_S3_ACCESS_KEY:-}" ]; then sessions_operator_key=true; fi
+if [ -z "${VEXA_SESSIONS_DB_PASSWORD:-}" ]; then
+    VEXA_SESSIONS_DB_PASSWORD="$(/usr/local/bin/persisted-secret "$lite_state_dir/sessions-db-password")"
+fi
+export VEXA_SESSIONS_DB_PASSWORD="$VEXA_SESSIONS_DB_PASSWORD"
+if [ -n "$VEXA_SESSIONS_S3_ENDPOINT" ]; then
+    export VEXA_SESSIONS_S3_ACCESS_KEY="${VEXA_SESSIONS_S3_ACCESS_KEY:-vexa-sessions-$(/usr/local/bin/persisted-secret "$lite_state_dir/sessions-s3-access" | cut -c1-24)}"
+    export VEXA_SESSIONS_S3_SECRET_KEY="${VEXA_SESSIONS_S3_SECRET_KEY:-$(/usr/local/bin/persisted-secret "$lite_state_dir/sessions-s3-secret")}"
+    case "$VEXA_SESSIONS_S3_ENDPOINT" in http://*|https://*) storage_url="$VEXA_SESSIONS_S3_ENDPOINT";;
+        *) if [ "$MINIO_SECURE" = "true" ]; then storage_url="https://$VEXA_SESSIONS_S3_ENDPOINT"; else storage_url="http://$VEXA_SESSIONS_S3_ENDPOINT"; fi;; esac
+    VEXA_SESSIONS_S3_OPERATOR_KEY="$sessions_operator_key" STORAGE_ENDPOINT="$storage_url" /opt/venvs/meeting/bin/python /app/storage-tools/storage_init.py --sessions-only \
+        || { echo "WARNING: the session store's bucket and key are not ready; chats keep the workspace layout." >&2
+             VEXA_SESSIONS_S3_ACCESS_KEY=""; VEXA_SESSIONS_S3_SECRET_KEY=""; }
+    unset storage_url
+else
+    export VEXA_SESSIONS_S3_ACCESS_KEY=""
+    export VEXA_SESSIONS_S3_SECRET_KEY=""
+fi
+if [ -n "$DB_HOST" ]; then
+    PYTHONPATH=/app/agent /opt/venvs/agent/bin/python -m control_plane.session_schema init \
+        || { echo "WARNING: the session store's database role is not ready; chats keep the workspace layout." >&2
+             VEXA_SESSIONS_DB_PASSWORD=""; }
+fi
+unset sessions_operator_key
 
 # Background: once admin-api is up, mint a self-host API key and hand it to the UIs (zero-login).
 # No-op if VEXA_API_KEY was supplied. Only meaningful for the supervisord CMD (the real bring-up).

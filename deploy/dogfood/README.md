@@ -3,7 +3,7 @@
 A Vexa stack that stays up, fronted by a real hostname over real TLS, so two things can happen that
 a `docker compose up` in a terminal cannot do:
 
-1. **Validate the MCP service as deployed.** `core/meetings/services/mcp/tests/` proves the app
+1. **Validate the MCP service as deployed.** `core/gateway/services/mcp/tests/` proves the app
    in-process against a faked gateway. That is the right test and it does not answer the question
    an MCP client asks: *does the transport work through the proxy chain, with a real key, against a
    real gateway?* `bin/mcp-validate` answers that one.
@@ -29,9 +29,8 @@ stack's shape, that change belongs in the stack, where users get it too.
 | `nginx/mcp.dev.vexa.ai.conf` | the two vhosts, on the host's existing `*.dev.vexa.ai` wildcard cert |
 | `bin/mcp-validate` | drives the endpoint as a real MCP client; stdlib-only, runs from anywhere |
 | `Makefile` | `up · down · ps · logs · key · validate · connect · nginx-check` |
-| `rig/` | the rehearsal rig: provenance for the code the product rehearsal runs on — not a service, not for main |
 | `rehearse/` | user states as data, invokable without rebuilding |
-| `minutes-stack/` | read-only verification of the Minutes deployment against its private lock, and its agent MCP composition root |
+| `minutes-stack/` | read-only verification of the Minutes deployment against its private lock, and the note for moving it off the retired control rig (`MIGRATION-app-dev.md`) |
 
 The Connections credential broker used to live here as a harness (`credentials-mvp/`). It is a
 product service now — `core/agent/services/credential-broker`, deployed by the stock compose file

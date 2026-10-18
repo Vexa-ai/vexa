@@ -21,7 +21,9 @@ KEY = identity_token.generate_signing_key()
 INTERNAL = "route-scopes-internal-secret"
 MANIFEST = json.loads((Path(__file__).resolve().parents[3] / "routes.v1.json").read_text())
 _VALUES = {"platform": "google_meet", "native_meeting_id": "abc-defg-hij", "meeting_id": "1",
-           "recording_id": "1", "media_file_id": "1", "calendar_id": "work-1"}
+           "recording_id": "1", "media_file_id": "1", "calendar_id": "work-1",
+           "session_id": "0123456789abcdef0123456789abcdef",
+           "account_id": "fedcba9876543210fedcba9876543210", "path:path": "vnc.html"}
 #: Rows the edge declares whose meeting-api route does not exist yet (api.v1 known gaps): the hop
 #: answers 404 and no scope is read. Held exactly, so a row that loses its route is noticed.
 _KNOWN_UNSERVED = {("POST", "/bots/{platform}/{native_meeting_id}/speak")}
@@ -142,12 +144,28 @@ def test_a_signed_identity_on_a_route_no_row_reaches_is_refused(client, method, 
 
 
 @pytest.mark.parametrize("scopes", [["browser"], ["bot"], ["bot", "browser"]])
-def test_the_edge_s_subscribe_hop_refuses_a_key_that_may_not_read_transcripts(client, scopes):
-    """`/ws` subscribing opens a meeting's live transcript: the hop takes the transcript read's
-    scopes, as the gateway's socket does before it asks (R6-9)."""
+def test_the_edge_s_subscribe_hop_refuses_a_key_that_may_not_read_transcripts(client, scopes, monkeypatch):
+    """`/ws` subscribing opens a meeting's live transcript: under `VEXA_WS_SCOPE_MODE=strict` the
+    hop takes the transcript read's scopes, as the gateway's socket does before it asks (R6-9)."""
+    monkeypatch.setenv("VEXA_WS_SCOPE_MODE", "strict")
     r = client.post("/ws/authorize-subscribe", headers=_signed(scopes),
                     json={"meetings": [{"platform": "google_meet", "native_meeting_id": "abc-defg-hij"}]})
     assert _scope_refused(r), r.text
+
+
+@pytest.mark.parametrize("scopes", [["browser"], ["bot"], ["bot", "browser"]])
+def test_legacy_mode_lets_the_subscribe_hop_through_for_any_signed_key(client, scopes, monkeypatch):
+    """`VEXA_WS_SCOPE_MODE=legacy` (the default): the 0.12 `/ws` contract — the hop is not held to the
+    transcript read's scopes; the handler's ownership check still decides each meeting."""
+    monkeypatch.delenv("VEXA_WS_SCOPE_MODE", raising=False)
+    r = client.post("/ws/authorize-subscribe", headers=_signed(scopes),
+                    json={"meetings": [{"platform": "google_meet", "native_meeting_id": "abc-defg-hij"}]})
+    assert not _scope_refused(r), r.text
+
+
+def test_legacy_mode_is_only_the_subscribe_hop(client, monkeypatch):
+    monkeypatch.delenv("VEXA_WS_SCOPE_MODE", raising=False)
+    assert _scope_refused(client.get("/meetings", headers=_signed(["bot"])))
 
 
 def test_the_edge_s_subscribe_hop_takes_a_transcript_key(client):

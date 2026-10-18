@@ -7,7 +7,9 @@
   workspace (binding a meeting, for one).
 - `claims-delegated.json` — the payload for a worker's delegation token: the same person, with the
   dispatch's `delegation` ceiling (`autonomous`, one workspace, a target).
-- `vector-human.json`, `vector-delegated.json` — signing vectors. Signing `claims` at `now` with
+- `claims-session.json` — a chat worker's payload: a `human` delegation carrying the agent `unit`
+  (the session) its token was minted for, which becomes `x-user-delegation-unit`.
+- `vector-human.json`, `vector-delegated.json`, `vector-session.json` — signing vectors. Signing `claims` at `now` with
   the RFC 8032 section 7.1 TEST 1 key must produce `token` exactly (Ed25519 is deterministic), and
   `public_key` (its public half) must verify it. No golden carries a signing key: `validate.mjs`
   and the gateway's `tests/rfc8032.py` each derive it from the seed the RFC publishes
@@ -20,12 +22,13 @@
 
 - `refused-expired.json`, `refused-not-yet-valid.json` — the human vector's own token verified past
   `exp` plus the 30 s skew, and more than 30 s before its `iat`.
-- `headers-*.json` — the `x-user-*` headers a service rebuilds from `claims-human.json` and
-  `claims-delegated.json`; `validate.mjs` re-derives them from the mapping restated in Node.
+- `headers-*.json` — the `x-user-*` headers a service rebuilds from `claims-human.json`,
+  `claims-delegated.json` and `claims-session.json`; `validate.mjs` re-derives them from the mapping restated in Node.
 - `reentry-*.json` — the MCP re-entry match rule, after the signature checks: the bearer's
   `/internal/validate` answer, the signed claims presented in `X-Vexa-Internal-Mcp-Identity`, and
-  whether the gateway admits the call. One admitted (same person, same delegation) and four refused:
-  another person, a wider delegation, the person's own identity, and an API-key bearer.
+  whether the gateway admits the call. One admitted (same person, same delegation) and five refused:
+  another person, a wider delegation, the person's own identity, an API-key bearer, and an identity
+  signed for another session (`unit`) of the same person.
 
 The gateway's `tests/test_identity_vectors.py` drives the `reentry-*` and `headers-*` vectors
 through `delegation.McpReentry` and `identity_token.headers_from_claims`.

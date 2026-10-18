@@ -170,6 +170,10 @@ of audio.
   within it are waited for, however long they take.
 - Repeated `[SpeakerStreams] [FILTERED] Hallucination … "Thank you."` lines on short windows are the
   STT answering near-silence. They are filtered out and are not missing speech.
+- `[TranscriptionClient] [STT-OVERLOAD]` and `[SttGate] [BREAKER-OPEN]` lines mean the transcription
+  service answered 429, 503 or a 5xx relaying a rate limit. The bot pauses all its requests and sends
+  them again in order when the service answers; nothing is lost unless a speaker's held audio passes
+  300 s, which logs `[AUDIO-DROPPED]` with the missing time range.
 
 ### How it works
 
@@ -190,6 +194,14 @@ the buffer and rides the next request, so a slow STT makes windows longer instea
   its quietest recent frame is sent as a final request, and the rest stays buffered.
 - **Bound.** Audio held behind a request that never answers is capped at 300 s per speaker. Past the
   cap, new frames are dropped and counted.
+- **Overload.** All of a bot's STT requests pass one gate: at most 8 in flight, released in arrival
+  order. An overload answer (429, 503, or a 5xx whose body relays a rate limit or saturation) pauses
+  every request of that bot for the service's `Retry-After` (at most 120 s), or else a jittered
+  backoff from 2 s up to 30 s. After 3 overload answers in a row one probe goes out, and the rest
+  follow when it succeeds. While the gate holds requests the lane sends no window a second time and
+  no pipelined draft, and a request's stall clock starts when the hold ends. A slow (not overloaded)
+  request gets at most one duplicate beside it. Audio dropped past the 300 s bound is recorded as a
+  missing range (speaker, start, end, reason) and logged with its ISO times.
 - **Retries.** A timed-out or failed request is retried with the same window (up to 4 attempts).
   The caller receives one answer, so the same audio is never transcribed twice. If the final window
   still fails, its seconds are counted as dropped.
@@ -205,6 +217,12 @@ to every spawned bot.
   faults still reach the host through `onError` as typed `TranscriptionError`s. Gate: the
   `@vexa/gmeet-pipeline` test suite (`slow-stt`, `fault-surfacing`, `count-channelswitch`), which
   runs in `gate:node`.
+- **Back-pressure, not retry storms.** The STT's overload answer is honoured once per bot, not per
+  request, and a held request is not counted as stalled. Tests: `@vexa/transcribe-whisper`
+  `overload.test.ts` (Retry-After, backoff, breaker, bound in flight) and `@vexa/gmeet-pipeline`
+  `stt-overload.test.ts` ("no window is sent again while the client is backing off", "requests in
+  flight never exceed the gate's bound", "a hung request gets one duplicate beside it, not a chain of
+  them", "the loss line names the missing time range"). Ungated beyond the package suites: reviewed.
 - **P7, configuration by environment.** The new keys are declared in the runtime's `config.v1`
   contract and forwarded the same way as the existing `BOT_SPEAKER_*` keys. A timeout under 20 s is
   refused with a warning, and the default stays in force. Gates: `gate:config-contract` and the bot
@@ -330,6 +348,25 @@ deployment"** (a `done` frame, `ok:false`) is the mid-flight variant: a credenti
 dispatch went stale — on macOS typically the Keychain-exported `HOST_CLAUDE_CREDENTIALS` file
 (install the [sync daemon](/configuration#claude-subscription-credentials-host_claude_credentials));
 otherwise refresh/rotate the key. The raw provider text rides in the frame's `detail` field.
+
+## Agent chat says the model provider is out of credits
+
+When the model provider refuses a turn for lack of credit, the chat ends the turn with one block:
+
+- the headline `Model provider · out of credits (402)` (the status is the one the provider sent;
+  some providers report an empty balance as `400` or `429`, and their wording still marks it out
+  of credits);
+- the provider's own explanation, on one line, with anything key-shaped redacted;
+- a remedy line: `Add credits at <provider>, or choose another model under Settings → Models.`
+
+When the provider says the balance covers a smaller answer ("can only afford", "fewer
+max_tokens"), the remedy also names the output cap: lower `VEXA_AGENT_MAX_OUTPUT_TOKENS` (see
+[Configuration](/configuration)). The provider's raw `API Error` text does not appear as the agent's
+reply, and no second "Model inference failed" line follows.
+
+Links in the provider's message, such as its key-management page, are for the operator. They are
+left out of the chat and written to the agent worker's log on the `model provider fault:` line,
+with the provider, kind, status and model.
 
 ## Containers don't spawn (self-host)
 

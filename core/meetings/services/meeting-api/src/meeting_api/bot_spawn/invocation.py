@@ -115,6 +115,9 @@ def build_invocation(
     s3_access_key: Optional[str] = None,
     s3_secret_key: Optional[str] = None,
     session_writeback_url: Optional[str] = None,
+    voice_note: Optional[dict] = None,
+    call: Optional[dict] = None,
+    session_restore_url: Optional[str] = None,
 ) -> dict:
     """Assemble the bot's ``invocation.v1`` Invocation (the parent's ``BOT_CONFIG``).
 
@@ -123,9 +126,12 @@ def build_invocation(
 
     ``session_writeback_url`` rides only beside ``authenticated``: it is where the bot PUTs its
     session-profile.v1 write-back, and a bot older than v0.13.2 refuses an invocation carrying it.
+    ``session_restore_url`` likewise: where a bot joining as a saved bot account GETs its profile.
     """
     if session_writeback_url is not None and not authenticated:
         raise ValueError("sessionWritebackUrl is sent only in authenticated mode")
+    if session_restore_url is not None and not authenticated:
+        raise ValueError("sessionRestoreUrl is sent only in authenticated mode")
     invocation: dict[str, Any] = {
         "platform": platform,
         "meetingUrl": meeting_url,
@@ -173,8 +179,18 @@ def build_invocation(
         # The authenticated bot's session write-back sink (session-profile.v1's route, this session's
         # uid in the path). The bot reads it from here and derives no URL from the others.
         "sessionWritebackUrl": session_writeback_url,
+        # A voice note (#1783): the note's audio stream and limits; present exactly when the platform
+        # is voice_note (the schema requires it there and refuses it anywhere else).
+        "voiceNote": voice_note,
+        # A call (#1783): the LiveKit room the listener joins hidden, with its own token; present
+        # exactly when the platform is vexa_call.
+        "call": call,
+        # A bot-account bot's restore source (session-profile.v1's GET route, this session's uid in
+        # the path): it restores its profile from here instead of the userdata store.
+        "sessionRestoreUrl": session_restore_url,
     }
-    invocation = {k: v for k, v in invocation.items() if v is not None}
+    # `meetingUrl` is required and nullable: a voice note has nothing to join and says so with null.
+    invocation = {k: v for k, v in invocation.items() if v is not None or k == "meetingUrl"}
     conforms_invocation(invocation)
     return invocation
 

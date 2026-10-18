@@ -201,6 +201,13 @@ def load_signing_key(path: str):
         raise ConfigError(f"gateway refuses to boot: VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE — {e}") from None
 
 
+
+#: The buffered forward's deadline. THE HOPS ARE ORDERED (Vexa-ai/vexa#1783): each inner hop gives
+#: up before the one that called it, so the hop that was slow is the one that says so — the MCP
+#: tool call waits 35 s (vexa_mcp.register.TOOL_TIMEOUT_S), this forward 30 s, agent-api's whole
+#: budget for the credential broker 25 s, the broker's call to a connected service 12 s.
+FORWARD_TIMEOUT_S = 30.0
+
 def build_auth_and_downstream(admin_api_url: str, meeting_api_url: str, *, identity_key=None):
     """#495: build the authorizer + downstream over TWO httpx clients with SEPARATE connection
     pools, and return ``(authorizer, downstream)``. This is the load-bearing decision the whole fix
@@ -221,7 +228,7 @@ def build_auth_and_downstream(admin_api_url: str, meeting_api_url: str, *, ident
     import httpx
 
     forward_client = httpx.AsyncClient(
-        timeout=30.0,
+        timeout=FORWARD_TIMEOUT_S,
         limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
     )
     auth_client = httpx.AsyncClient(
@@ -269,6 +276,8 @@ def build_production_app(
     # here would assert the domain exists and make absence unsayable, which is the same defect a
     # host-port default has one layer down. Every shipped deployment names it: compose, helm, lite.
     agent_api_url = os.getenv("AGENT_API_URL", "")
+    # The optional CRM (ADR-0047): fronted under /crm/* only where its door is named.
+    crm_api_url = os.getenv("CRM_API_URL", "")
     # #795: the MCP service, fronted at the gateway edge under /mcp (streamable-HTTP transport).
     mcp_url = os.getenv("MCP_URL", "http://mcp:8010")
     redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
@@ -293,6 +302,7 @@ def build_production_app(
         redis_client,
         meeting_api_url=meeting_api_url,
         agent_api_url=agent_api_url,  # P20·Stage 2: the agent control plane fronted under /api/*
+        crm_api_url=crm_api_url,      # ADR-0047: the record page's read, history and review
         admin_api_url=admin_api_url,  # /user/webhook self-serve proxies to identity (admin-api)
         mcp_url=mcp_url,              # #795: the MCP streamable-HTTP front door under /mcp
         # gateway-identity.v1: the resolved identity is signed onto every forward with the key loaded
@@ -309,6 +319,52 @@ def build_production_app(
 
     apply_guard(app)
     return app
+
+
+class WebsocketsDialer:
+    """The voice-note relay's upstream dial (voice_relay.SocketDialer) over the ``websockets``
+    client. Imported lazily: only the image carries it (production dependency group)."""
+
+    def __init__(self, *, open_timeout: float = 10.0, max_size: int = 256 * 1024) -> None:
+        self._open_timeout = open_timeout
+        self._max_size = max_size
+
+    def connect(self, url, headers):
+        import contextlib
+
+        from websockets.asyncio.client import connect
+        from websockets.exceptions import ConnectionClosed
+
+        from .voice_relay import UpstreamClosed
+
+        open_timeout, max_size = self._open_timeout, self._max_size
+
+        class _Socket:
+            def __init__(self, conn) -> None:
+                self._c = conn
+
+            async def send(self, data) -> None:
+                try:
+                    await self._c.send(data)
+                except ConnectionClosed as e:
+                    raise UpstreamClosed(e.rcvd.code if e.rcvd else None) from e
+
+            async def recv(self):
+                try:
+                    return await self._c.recv()
+                except ConnectionClosed as e:
+                    raise UpstreamClosed(e.rcvd.code if e.rcvd else None) from e
+
+            async def close(self, code: int = 1000) -> None:
+                await self._c.close(code=code)
+
+        @contextlib.asynccontextmanager
+        async def _cm():
+            async with connect(url, additional_headers=dict(headers), open_timeout=open_timeout,
+                               max_size=max_size, ping_interval=20) as conn:
+                yield _Socket(conn)
+
+        return _cm()
 
 
 # ── ASGI entrypoint (P4) ─────────────────────────────────────────────────────────────────────

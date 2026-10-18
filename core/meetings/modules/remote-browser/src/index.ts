@@ -34,6 +34,7 @@ export {
   isSessionProfilePath,
   collectSessionProfile,
   readSessionProfile,
+  writeSessionProfile,
 } from './session-store';
 export type { S3Config, SessionProfileSpec, ProfileFile } from './session-store';
 

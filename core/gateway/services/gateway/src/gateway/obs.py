@@ -34,6 +34,9 @@ TRACE_HEADER = "x-trace-id"
 # Process-wide context: the current request's trace_id + user_id (None outside a request).
 _trace_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("trace_id", default=None)
 _user_id: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar("user_id", default=None)
+# The agent session (logevent.v1 `session`): the unit a worker's delegation token was minted for, as
+# identity answered it from inside the token's signature. Never read from a client header.
+_session: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("session", default=None)
 
 # Optional test sink: when a list is installed, every emitted envelope is also appended to it
 # (an eval captures lines deterministically without relying on stdout capture across threads).
@@ -61,6 +64,18 @@ def set_trace_id(trace_id: str) -> contextvars.Token:
 
 def set_user_id(user_id: Any) -> contextvars.Token:
     return _user_id.set(user_id)
+
+
+def set_session(session: Optional[str]) -> contextvars.Token:
+    """Bind the agent session for the rest of this request (``None``/empty clears it)."""
+    return _session.set(str(session).strip() if session and str(session).strip() else None)
+
+
+def session_of_validation(user_data: Any) -> Optional[str]:
+    """The session identity's validate answer names: ``delegation.unit``, only for a worker's token."""
+    dlg = user_data.get("delegation") if isinstance(user_data, dict) else None
+    unit = dlg.get("unit") if isinstance(dlg, dict) else None
+    return str(unit).strip() if isinstance(unit, str) and unit.strip() else None
 
 
 def make_log_event(service: str) -> Callable[..., dict]:
@@ -98,6 +113,9 @@ def make_log_event(service: str) -> Callable[..., dict]:
             envelope["user_id"] = uid
         if meeting_id is not None:
             envelope["meeting_id"] = meeting_id
+        session = _session.get()
+        if session:
+            envelope["session"] = session
         if fields:
             envelope["fields"] = fields
         print(json.dumps(envelope, separators=(",", ":")), file=stream or sys.stdout, flush=True)
@@ -119,6 +137,7 @@ def make_trace_middleware(log_event: Callable[..., dict]) -> type:
             incoming = request.headers.get(TRACE_HEADER)
             trace_id = incoming or new_trace_id()
             token = _trace_id.set(trace_id)
+            session_token = _session.set(None)
             try:
                 request.state.trace_id = trace_id
                 log_event(
@@ -136,6 +155,7 @@ def make_trace_middleware(log_event: Callable[..., dict]) -> type:
                 response.headers[TRACE_HEADER] = trace_id
                 return response
             finally:
+                _session.reset(session_token)
                 _trace_id.reset(token)
 
     return TraceMiddleware

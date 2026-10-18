@@ -52,3 +52,12 @@ shared libraries, an FFmpeg build licensed LGPL-3.0-or-later that links
 libx264 and libx265 (GPL-2.0-or-later). Vexa does not publish a
 transcription image; an operator who builds one from
 core/meetings/services/transcription redistributes these libraries.
+
+Pillow (admin-api, re-encoding people's photos) is licensed under
+MIT-CMU. Its binary wheels bundle, as separate shared libraries,
+permissively licensed image and font libraries: libjpeg-turbo (IJG,
+BSD-3-Clause, Zlib), libpng (libpng-2.0), zlib (Zlib), libwebp
+(BSD-3-Clause), libtiff (libtiff), OpenJPEG (BSD-2-Clause), libavif,
+dav1d and aom (BSD-2-Clause), Little CMS (MIT), HarfBuzz (MIT), Brotli
+(MIT), xz (0BSD), libxcb (MIT) and FreeType (FTL, at Vexa's choice of
+its dual licence).

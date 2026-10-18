@@ -162,9 +162,15 @@ def test_an_exported_bundle_carries_nothing_deployment_bound(a):
     archive = _export(a, a.mid).content
     text = b"\n".join(v for k, v in _parts(archive).items() if k.endswith(".json")).decode()
     for leak in ("whsec_do_not_export", "deadbeef", "internal-hooks", "transcript_viewers",
-                 "share_grants", "webhook", "ws-team", "workspace_id", "@example.test",
+                 "share_grants", "webhook", "@example.test",
                  "recordings/", "sess-1", "user_id", str(OWNER) + ","):
         assert leak not in text, leak
+    # The workspace is named once, as provenance in meeting.context (format 1.1), and nowhere else.
+    parts = _parts(archive)
+    meeting = json.loads(parts["meeting.json"])
+    assert meeting["context"]["workspace_id"] == "ws-team"
+    others = b"\n".join(v for k, v in parts.items() if k.endswith(".json") and k != "meeting.json")
+    assert b"ws-team" not in others
 
 
 def test_transcript_only_bundle_imports_without_media(a, b):
@@ -342,3 +348,56 @@ def test_a_malicious_parts_archive_is_refused(a, name):
                       content=(G.GOLDEN / "parts" / f"{name}.zip").read_bytes(), headers=_h(OWNER))
     assert r.status_code == 422
     assert r.json()["detail"]["code"] == G.REFUSED_PARTS[name][0]
+
+
+# ── format 1.1: the bundle says what the meeting was, and carries no token ─────────────────────────
+# A real export (2026-10-14) had a null duration and no link, calendar event, workspace, language or
+# bot timeline — and a live workspace invite link in a page.
+
+def test_the_bundle_carries_the_meetings_context(a):
+    row = a.store._meetings[a.mid] if hasattr(a.store, "_meetings") else None
+    data = (row or {}).get("data") if isinstance(row, dict) else None
+    if isinstance(data, dict):
+        data.update({
+            "constructed_meeting_url": "https://meet.google.com/abc-defg-hij?authuser=1&pwd=SECRET",
+            "calendar_uid": "evt-123@google.com",
+            "transcription_language": {"language": None, "allowed_languages": ["ru", "en"], "source": "history"},
+            "completion_reason": "left_alone",
+            "status_transition": [
+                {"from": "requested", "to": "joining", "timestamp": "2026-10-01T08:59:30Z"},
+                {"from": "joining", "to": "active", "timestamp": "2026-10-01T09:00:00Z"},
+                {"from": "active", "to": "stopping", "timestamp": "2026-10-01T09:30:00Z"},
+                {"from": "stopping", "to": "completed", "timestamp": "2026-10-01T09:30:05Z"},
+            ],
+        })
+    meeting = json.loads(_parts(_export(a, a.mid).content)["meeting.json"])
+    ctx = meeting["context"]
+    assert ctx["duration_seconds"] == 1800.0
+    assert meeting["media"][0]["duration_seconds"] == 450.0
+    assert ctx["workspace_id"] == "ws-team"
+    if isinstance(data, dict):
+        assert ctx["meeting_url"] == "https://meet.google.com/abc-defg-hij"
+        assert ctx["calendar_event_id"] == "evt-123@google.com"
+        assert ctx["language"] == {"language": None, "allowed_languages": ["ru", "en"], "source": "history"}
+        assert ctx["bot"]["joined_at"] == "2026-10-01T08:59:30Z"
+        assert ctx["bot"]["admitted_at"] == "2026-10-01T09:00:00Z"
+        assert ctx["bot"]["left_at"] == "2026-10-01T09:30:00Z"
+        assert ctx["bot"]["exit_reason"] == "left_alone"
+    assert "SECRET" not in json.dumps(meeting)
+
+
+def test_no_invite_or_join_token_leaves_in_a_bundle():
+    from meeting_api.bundle.codec import read_bundle, redact_tokens, write_bundle
+    page = (b"# Project\n\nJoin: https://app.example.test/join?i=LIVEINVITETOKEN123\n"
+            b"Call: https://zoom.us/j/123?pwd=ZOOMPASS&uname=a\n")
+    archive = write_bundle(
+        meeting=G.meeting([]), transcript={"segments": G.SEGMENTS},
+        annotations={"metadata": {"link": "https://x.test/join?i=ANNOTTOKEN"}, "notes": None}, media=[],
+        bundle_id=G.BUNDLE_ID, exported_at=G.EXPORTED_AT, deployment_id="0" * 32, source_meeting_id=1,
+        workspace=[("workspace/kg/entities/project/p.md", page)], notes_page=page)
+    raw = b"".join(_parts(archive).values())
+    for token in (b"LIVEINVITETOKEN123", b"ZOOMPASS", b"ANNOTTOKEN"):
+        assert token not in raw
+    assert b"join?i=[removed]" in raw and b"uname=a" in raw
+    assert read_bundle(archive).manifest["format_version"] == "1.1"
+    assert redact_tokens("see ?page=2") == "see ?page=2"

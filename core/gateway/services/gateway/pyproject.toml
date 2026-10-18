@@ -17,6 +17,9 @@ dependencies = [
     # gateway-identity.v1: the gateway signs the identity it resolved with an Ed25519 private key
     # (OpenSSL through cryptography). Apache-2.0 OR BSD-3-Clause.
     "cryptography>=50.0.1,<51",
+    # The bot-account live view: the edge relays /bot-accounts/sessions/{id}/vnc to meeting-api's
+    # websocket as a client (vnc_relay.py). Already in the lock through uvicorn[standard].
+    "websockets>=15,<18",
 ]
 
 [dependency-groups]
@@ -25,7 +28,7 @@ dependencies = [
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
 # What only the image runs: the ASGI server and the production database/storage clients. Installed
 # from the lock with `uv sync --group production` by the Dockerfile and Lite, never `uv pip install`d beside it.
-production = ["uvicorn[standard]>=0.34,<1", "redis>=5.2.1,<6"]
+production = ["uvicorn[standard]>=0.34,<1", "redis>=5.2.1,<6", "websockets>=15,<18"]
 
 [tool.uv]
 package = false

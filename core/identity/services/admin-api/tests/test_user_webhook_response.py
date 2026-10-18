@@ -66,15 +66,32 @@ def test_a_narrow_key_reads_back_the_webhook_and_no_stored_credential(client, wh
                    json={"webhook_url": "https://hooks.example.com/vexa", "webhook_secret": "whsec-0123456789",
                          "webhook_events": {"meeting.completed": True}})
     assert r.status_code == 200, r.text
-    assert r.json() == {
+    view = {
         "webhook_url": "https://hooks.example.com/vexa",
         "webhook_secret_set": True,
         "webhook_secret": "********6789",
         "webhook_events": {"meeting.completed": True},
     }
+    body = r.json()
+    assert {k: body[k] for k in view} == view
     for secret in (MODEL_KEY, STT_TOKEN, "private-feedsecret0042", "whsec-0123456789"):
         assert secret not in r.text
-    assert r.json() == client.get("/user/webhook", headers={"X-API-Key": narrow}).json()
+    assert client.get("/user/webhook", headers={"X-API-Key": narrow}).json() == view
+
+
+def test_the_answer_still_carries_the_0_12_user_record(client):
+    """0.12.28 answered `PUT /user/webhook` with `UserResponse`; callers that read `id`, `email`,
+    `max_concurrent_bots` or `data.webhook_url` from it keep working."""
+    uid, full, _bot, _tx = _keys(client, "record@vexa.ai")
+    r = client.put("/user/webhook", headers={"X-API-Key": full},
+                   json={"webhook_url": "https://hooks.example.com/rec", "webhook_secret": "whsec-abcdefgh1234"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["id"] == uid and body["email"] == "record@vexa.ai"
+    assert isinstance(body["max_concurrent_bots"], int)
+    assert body["data"]["webhook_url"] == "https://hooks.example.com/rec"
+    assert "webhook_secret" not in body["data"]
+    assert "whsec-abcdefgh1234" not in r.text
 
 
 @pytest.mark.parametrize("url", [
@@ -82,6 +99,9 @@ def test_a_narrow_key_reads_back_the_webhook_and_no_stored_credential(client, wh
     "http://[64:ff9b::a9fe:a9fe]/", "http://[2002:a9fe:a9fe::1]/", "http://[::10.0.0.1]/",
     "http://169.254.169.254/latest", "http://2130706433/", "http://redis:6379/", "http://localhost/hook",
     "http://metadata.google.internal/", "ftp://example.com/hook",
+    # 0.13's ranges: refused when SAVED, whatever VEXA_WEBHOOK_STORED_URL_POLICY says about URLs
+    # stored before (meeting-api webhooks/stored_url_policy.py).
+    "http://100.64.1.5/hook", "http://198.18.0.7/hook", "http://internal-receiver/hook",
 ])
 def test_an_internal_webhook_destination_is_refused_when_saved(client, url):
     _uid, full, _bot, _tx = _keys(client, "dest@vexa.ai")

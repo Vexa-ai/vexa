@@ -85,16 +85,16 @@ on:
         type: choice
         options:
           - all
-          - vexaai/v012-admin-api
-          - vexaai/v012-runtime
-          - vexaai/v012-agent-worker
-          - vexaai/v012-agent-api
-          - vexaai/v012-meeting-api
-          - vexaai/v012-gateway
-          - vexaai/v012-mcp
-          - vexaai/v012-terminal
-          - vexaai/v012-flows
-          - vexaai/v012-credential-broker
+          - vexaai/vexa-admin-api
+          - vexaai/vexa-runtime
+          - vexaai/vexa-agent-worker
+          - vexaai/vexa-agent-api
+          - vexaai/vexa-meeting-api
+          - vexaai/vexa-gateway
+          - vexaai/vexa-mcp
+          - vexaai/vexa-terminal
+          - vexaai/vexa-flows
+          - vexaai/vexa-credential-broker
           - vexaai/vexa-bot
           - vexaai/vexa-lite
       validation_leg:
@@ -110,23 +110,25 @@ permissions:
   contents: read
 
 env:
-  # Every image the release publishes — must stay in lockstep with release-images.yml.
+  # Every image the release publishes. Names come from release/image-names.mjs (whose test pins
+  # this list to it); v0.13.3 also publishes each service image under its old v012- name with the
+  # same digest, and validating the vexa- name validates those bytes.
   ALL_IMAGES: >-
-    vexaai/v012-admin-api
-    vexaai/v012-runtime
-    vexaai/v012-agent-worker
-    vexaai/v012-agent-api
-    vexaai/v012-meeting-api
-    vexaai/v012-gateway
-    vexaai/v012-mcp
-    vexaai/v012-terminal
-    vexaai/v012-flows
-    vexaai/v012-credential-broker
+    vexaai/vexa-admin-api
+    vexaai/vexa-runtime
+    vexaai/vexa-agent-worker
+    vexaai/vexa-agent-api
+    vexaai/vexa-meeting-api
+    vexaai/vexa-gateway
+    vexaai/vexa-mcp
+    vexaai/vexa-terminal
+    vexaai/vexa-flows
+    vexaai/vexa-credential-broker
     vexaai/vexa-bot
     vexaai/vexa-lite
   # The terminal variant THIS release line publishes, asserted against the published image's own
   # LABEL ai.vexa.terminal.mode on both identity legs. NEXT_PUBLIC_TERMINAL_MODE is compiled into
-  # the Next.js bundle (clients/terminal/Dockerfile:33,78 → src/app/mode.ts:25), so the variant is
+  # the Next.js bundle (clients/terminal/Dockerfile:33,78 → src/platform/mode.ts:25), so the variant is
   # a property of the BYTES and no runtime flag can change it — which is why it has to be proved on
   # the artifact rather than trusted from the build. This line ships the minutes terminal: bytes
   # identical to the demo the pilot was shown at app.dev.vexa.ai. A line that ships the full
@@ -499,7 +501,7 @@ jobs:
           }
           # "What its name promises" includes WHICH TERMINAL it is. NEXT_PUBLIC_TERMINAL_MODE is
           # compiled into the Next.js bundle at build time (clients/terminal/Dockerfile:33,78 →
-          # src/app/mode.ts:25), so the variant is a property of the published bytes that no
+          # src/platform/mode.ts:25), so the variant is a property of the published bytes that no
           # runtime flag can change — and the default and minutes variants both build, both start
           # and both pass every other probe here (the Dockerfile's own note at :85-95 records the
           # 2026-09-02 instance where only three grepped UI strings told them apart). The image
@@ -510,7 +512,7 @@ jobs:
             mode="$(docker inspect --format '{{ with .Config.Labels }}{{ index . "ai.vexa.terminal.mode" }}{{ end }}' "$ref" 2>/dev/null || true)"
             case "$mode" in ""|"<no value>") mode="(absent)" ;; esac
             [ "$mode" = "$EXPECTED_TERMINAL_MODE" ] || {
-              echo "::error title=image-identity::$ref carries LABEL ai.vexa.terminal.mode=\"$mode\", expected \"$EXPECTED_TERMINAL_MODE\" — this release line publishes the minutes terminal, the same bundle the pilot was shown. NEXT_PUBLIC_TERMINAL_MODE is baked in at build time, so this image cannot be reduced at runtime: it IS the wrong variant. Fix the build (build_args on vexaai/v012-terminal in release/candidate-image-map.mjs) and re-publish — do not relax this check."
+              echo "::error title=image-identity::$ref carries LABEL ai.vexa.terminal.mode=\"$mode\", expected \"$EXPECTED_TERMINAL_MODE\" — this release line publishes the minutes terminal, the same bundle the pilot was shown. NEXT_PUBLIC_TERMINAL_MODE is baked in at build time, so this image cannot be reduced at runtime: it IS the wrong variant. Fix the build (build_args on vexaai/vexa-terminal in release/candidate-image-map.mjs) and re-publish — do not relax this check."
               exit 1
             }
             echo "   ✓ $ref terminal variant: ai.vexa.terminal.mode=$mode"
@@ -520,9 +522,9 @@ jobs:
             echo "== $ref"
             docker pull -q "$ref"
             case "$img" in
-              vexaai/v012-admin-api)    probe "$ref" python -c "import admin_api" ;;
-              vexaai/v012-runtime)      probe "$ref" python -c "import runtime_kernel" ;;
-              vexaai/v012-agent-worker)
+              vexaai/vexa-admin-api)    probe "$ref" python -c "import admin_api" ;;
+              vexaai/vexa-runtime)      probe "$ref" python -c "import runtime_kernel" ;;
+              vexaai/vexa-agent-worker)
                 # The per-dispatch claude-in-container harness — NOT the control plane. It must
                 # carry the worker + llm packages and boot via `python -m worker` (profiles.py
                 # spawns it with exactly that command).
@@ -533,11 +535,11 @@ jobs:
                   exit 1
                 fi
                 ;;
-              vexaai/v012-agent-api)    probe "$ref" python -c "import control_plane.api" ;;
-              vexaai/v012-meeting-api)  probe "$ref" python -c "import meeting_api" ;;
-              vexaai/v012-gateway)      probe "$ref" python -c "import gateway" ;;
-              vexaai/v012-mcp)          probe "$ref" python -c "import vexa_mcp" ;;
-              vexaai/v012-terminal)
+              vexaai/vexa-agent-api)    probe "$ref" python -c "import control_plane.api" ;;
+              vexaai/vexa-meeting-api)  probe "$ref" python -c "import meeting_api" ;;
+              vexaai/vexa-gateway)      probe "$ref" python -c "import gateway" ;;
+              vexaai/vexa-mcp)          probe "$ref" python -c "import vexa_mcp" ;;
+              vexaai/vexa-terminal)
                 probe "$ref" node -e "require('fs').accessSync('/app/server.mjs')"
                 assert_terminal_mode "$ref"
                 ;;
@@ -545,9 +547,9 @@ jobs:
               # identity claim is that all three import, plus the MCP tool manifest flows_api serves
               # from /.well-known/mcp-tools.json (absent ⇒ that route 503s and the assembled MCP
               # surface silently loses this domain's tools).
-              vexaai/v012-flows)        probe "$ref" python -c "import flows_worker, flows_integrations.mailbox, flows_integrations.flows_api, os; assert os.path.exists('/app/mcp.tools.v1.json')" ;;
+              vexaai/vexa-flows)        probe "$ref" python -c "import flows_worker, flows_integrations.mailbox, flows_integrations.flows_api, os; assert os.path.exists('/app/mcp.tools.v1.json')" ;;
               # The broker and its vendored contract signer import, and the image runs unprivileged.
-              vexaai/v012-credential-broker) probe "$ref" python -c "import os, credential_broker.app, credential_broker.store, credential_broker.assertion; assert os.getuid() != 0" ;;
+              vexaai/vexa-credential-broker) probe "$ref" python -c "import os, credential_broker.app, credential_broker.store, credential_broker.assertion; assert os.getuid() != 0" ;;
               vexaai/vexa-bot)          probe "$ref" bash -c 'test -x /app/entrypoint.sh && test -f /app/browser-utils.global.js' ;;
               vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
               *)
@@ -571,14 +573,14 @@ jobs:
       - name: Profile commands resolve inside their target images (#675)
         run: |
           set -euo pipefail
-          RUNTIME_REF="vexaai/v012-runtime:$VERSION"
+          RUNTIME_REF="vexaai/vexa-runtime:$VERSION"
           BOT_REF="vexaai/vexa-bot:$VERSION"
-          WORKER_REF="vexaai/v012-agent-worker:$VERSION"
+          WORKER_REF="vexaai/vexa-agent-worker:$VERSION"
           docker pull -q "$RUNTIME_REF"
           # Emit {profile: command-argv-or-null} from the deployment-shaped registry (post BOT_COMMAND
           # / AGENT_WORKER_COMMAND override — container backends set neither, so these are the defaults).
           PROFILES_JSON="$(docker run --rm --entrypoint "" \
-            -e BROWSER_IMAGE="$BOT_REF" -e AGENT_IMAGE="vexaai/v012-agent-api:$VERSION" \
+            -e BROWSER_IMAGE="$BOT_REF" -e AGENT_IMAGE="vexaai/vexa-agent-api:$VERSION" \
             "$RUNTIME_REF" python -c 'import json; from runtime_kernel import default_registry; from runtime_kernel.profiles import apply_command_overrides; reg = apply_command_overrides(default_registry()); print(json.dumps({n: reg.resolve(n).command for n in reg.names()}))')"
           echo "profiles: $PROFILES_JSON"
           # Profile → the published image its command must resolve inside. Every profile MUST be mapped
@@ -720,9 +722,8 @@ jobs:
             docker pull -q "$@" "$ref" >/dev/null
             echo "   ✓ $ref ← Docker Hub"
           }
-          for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
-            mirror_pull "vexaai/$img:$VERSION"
+          for img in $(node release/image-names.mjs service-images); do
+            mirror_pull "$img:$VERSION"
           done
           for ref in valkey/valkey:8-alpine postgres:17-alpine; do
             mirror_pull "$ref"
@@ -782,9 +783,8 @@ jobs:
             docker pull -q "$@" "$ref" >/dev/null
             echo "   ✓ $ref ← Docker Hub"
           }
-          for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
-            mirror_pull "vexaai/$img:$VERSION"
+          for img in $(node release/image-names.mjs service-images); do
+            mirror_pull "$img:$VERSION"
           done
           for ref in valkey/valkey:8-alpine postgres:17-alpine node:20-slim; do
             mirror_pull "$ref"
@@ -847,9 +847,8 @@ jobs:
             docker pull -q "$@" "$ref" >/dev/null
             echo "   ✓ $ref ← Docker Hub"
           }
-          for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
-            mirror_pull "vexaai/$img:$VERSION"
+          for img in $(node release/image-names.mjs service-images); do
+            mirror_pull "$img:$VERSION"
           done
           for ref in valkey/valkey:8-alpine postgres:17-alpine node:20-slim; do
             mirror_pull "$ref"
@@ -913,9 +912,8 @@ jobs:
             echo "   ✓ $ref ← Docker Hub"
           }
           mirror_pull "vexaai/vexa-bot:$VERSION"
-          for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
-            mirror_pull "vexaai/$img:$VERSION"
+          for img in $(node release/image-names.mjs service-images); do
+            mirror_pull "$img:$VERSION"
           done
           for ref in valkey/valkey:8-alpine postgres:17-alpine; do
             mirror_pull "$ref"
@@ -1060,7 +1058,7 @@ jobs:
             mode="$(docker inspect --format '{{ with .Config.Labels }}{{ index . "ai.vexa.terminal.mode" }}{{ end }}' "$ref" 2>/dev/null || true)"
             case "$mode" in ""|"<no value>") mode="(absent)" ;; esac
             [ "$mode" = "$EXPECTED_TERMINAL_MODE" ] || {
-              echo "::error title=validate-arm64::$ref carries LABEL ai.vexa.terminal.mode=\"$mode\", expected \"$EXPECTED_TERMINAL_MODE\" — this release line publishes the minutes terminal, the same bundle the pilot was shown. NEXT_PUBLIC_TERMINAL_MODE is baked in at build time, so this image cannot be reduced at runtime: it IS the wrong variant. Fix the build (build_args on vexaai/v012-terminal in release/candidate-image-map.mjs) and re-publish — do not relax this check."
+              echo "::error title=validate-arm64::$ref carries LABEL ai.vexa.terminal.mode=\"$mode\", expected \"$EXPECTED_TERMINAL_MODE\" — this release line publishes the minutes terminal, the same bundle the pilot was shown. NEXT_PUBLIC_TERMINAL_MODE is baked in at build time, so this image cannot be reduced at runtime: it IS the wrong variant. Fix the build (build_args on vexaai/vexa-terminal in release/candidate-image-map.mjs) and re-publish — do not relax this check."
               exit 1
             }
             echo "   ✓ $ref terminal variant: ai.vexa.terminal.mode=$mode (arm64)"
@@ -1074,9 +1072,9 @@ jobs:
             echo "== $ref"
             docker pull -q --platform linux/arm64 "$ref"
             case "$img" in
-              vexaai/v012-admin-api)    probe "$ref" python -c "import admin_api" ;;
-              vexaai/v012-runtime)      probe "$ref" python -c "import runtime_kernel" ;;
-              vexaai/v012-agent-worker)
+              vexaai/vexa-admin-api)    probe "$ref" python -c "import admin_api" ;;
+              vexaai/vexa-runtime)      probe "$ref" python -c "import runtime_kernel" ;;
+              vexaai/vexa-agent-worker)
                 probe "$ref" python -c "import worker, llm"
                 CMD="$(docker inspect --format '{{json .Config.Cmd}}' "$ref")"
                 if [ "$CMD" != '["python","-m","worker"]' ]; then
@@ -1084,17 +1082,17 @@ jobs:
                   exit 1
                 fi
                 ;;
-              vexaai/v012-agent-api)    probe "$ref" python -c "import control_plane.api" ;;
-              vexaai/v012-meeting-api)  probe "$ref" python -c "import meeting_api" ;;
-              vexaai/v012-gateway)      probe "$ref" python -c "import gateway" ;;
-              vexaai/v012-mcp)          probe "$ref" python -c "import vexa_mcp" ;;
-              vexaai/v012-terminal)
+              vexaai/vexa-agent-api)    probe "$ref" python -c "import control_plane.api" ;;
+              vexaai/vexa-meeting-api)  probe "$ref" python -c "import meeting_api" ;;
+              vexaai/vexa-gateway)      probe "$ref" python -c "import gateway" ;;
+              vexaai/vexa-mcp)          probe "$ref" python -c "import vexa_mcp" ;;
+              vexaai/vexa-terminal)
                 probe "$ref" node -e "require('fs').accessSync('/app/server.mjs')"
                 assert_terminal_mode "$ref"
                 ;;
-              vexaai/v012-flows)        probe "$ref" python -c "import flows_worker, flows_integrations.mailbox, flows_integrations.flows_api, os; assert os.path.exists('/app/mcp.tools.v1.json')" ;;
+              vexaai/vexa-flows)        probe "$ref" python -c "import flows_worker, flows_integrations.mailbox, flows_integrations.flows_api, os; assert os.path.exists('/app/mcp.tools.v1.json')" ;;
               # The broker and its vendored contract signer import, and the image runs unprivileged.
-              vexaai/v012-credential-broker) probe "$ref" python -c "import os, credential_broker.app, credential_broker.store, credential_broker.assertion; assert os.getuid() != 0" ;;
+              vexaai/vexa-credential-broker) probe "$ref" python -c "import os, credential_broker.app, credential_broker.store, credential_broker.assertion; assert os.getuid() != 0" ;;
               vexaai/vexa-lite)         probe "$ref" bash -c 'test -f /etc/supervisor/conf.d/vexa.conf && test -x /entrypoint.sh' ;;
               *)
                 echo "::error title=validate-arm64::no identity assertion for $img — every matrix image must state what proves its contents match its name"
@@ -1436,9 +1434,12 @@ jobs:
               "${unchanged[@]}"
           }
 
+          # The repositories a frozen map names, under the names it was frozen with (the
+          # promotable maps above are all schema 1-3, i.e. v012- names).
+          MAP_IMAGES="$(jq -r '.images | keys[]' "releases/$VERSION/candidate-images.json" | tr '\n' ' ')"
           if [ "$PROMOTE_REPOSITORY" = "all" ]; then
-            images="$ALL_IMAGES"
-          elif grep -Fxq "$PROMOTE_REPOSITORY" < <(tr ' ' '\n' <<<"$ALL_IMAGES"); then
+            images="$MAP_IMAGES"
+          elif grep -Fxq "$PROMOTE_REPOSITORY" < <(tr ' ' '\n' <<<"$MAP_IMAGES"); then
             images="$PROMOTE_REPOSITORY"
           else
             echo "::error ::$PROMOTE_REPOSITORY is not a frozen release repository"

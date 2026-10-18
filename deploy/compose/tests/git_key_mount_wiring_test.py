@@ -1,9 +1,8 @@
-"""agent-api holds the broker's git role key only while the Git store is switched on (offline — no
+"""agent-api holds the broker's git role key, and keeps no Git credential of its own (offline — no
 stack, no docker).
 
-The key lets its holder read every person's saved Git token and the workspaces' deploy keys through
-the broker. With ``VEXA_GIT_STORE_BROKER_URL`` unset agent-api keeps those in its own store and never
-uses the key, so it must not be mounted: the mount point is then an empty volume.
+Saved Git tokens and deploy keys live in the credential broker (ADR-0040); agent-api reaches them as
+the `git` role, so the key is mounted by default and the URL points at the broker compose deploys.
 """
 from __future__ import annotations
 
@@ -35,19 +34,15 @@ def _agent_api_mounts(env: dict) -> dict:
     return {target: source for source, target in mounts}
 
 
-def test_the_git_key_is_not_mounted_while_the_git_store_is_off():
+def test_the_git_key_and_the_broker_are_wired_by_default():
     mounts = _agent_api_mounts({})
-    assert mounts["/run/vexa-connections/git"] != "connections-git-key"
-    assert mounts["/run/vexa-connections/agent"] == "connections-agent-key"
-
-
-def test_the_git_key_is_mounted_once_the_git_store_is_on():
-    mounts = _agent_api_mounts({"VEXA_GIT_STORE_BROKER_URL": "http://credential-broker:8100"})
     assert mounts["/run/vexa-connections/git"] == "connections-git-key"
+    assert mounts["/run/vexa-connections/agent"] == "connections-agent-key"
+    block = _interpolate(_service("agent-api"), {})
+    assert "VEXA_GIT_STORE_BROKER_URL=http://credential-broker:8100" in block
+    assert "VEXA_GIT_STORE_KEY_FILE=/run/vexa-connections/git/key" in block
 
 
-def test_the_empty_mount_point_is_a_declared_volume_nobody_writes():
-    source = _agent_api_mounts({})["/run/vexa-connections/git"]
-    text = COMPOSE.read_text()
-    assert re.search(rf"^  {re.escape(source)}:\s*$", text, flags=re.M)
-    assert not re.search(rf"^\s+- {re.escape(source)}:/(?!run/vexa-connections/git:ro)", text, flags=re.M)
+def test_agent_api_never_mounts_the_human_or_store_key():
+    mounts = _agent_api_mounts({})
+    assert set(mounts) == {"/run/vexa-connections/agent", "/run/vexa-connections/git"}

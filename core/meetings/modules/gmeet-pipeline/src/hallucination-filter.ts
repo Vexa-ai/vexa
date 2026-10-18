@@ -37,10 +37,34 @@ function loadPhrases(): Set<string> {
   return phrases;
 }
 
+/** CREDIT LINES — subtitle and caption credits Whisper learned from subtitled video, with whatever
+ *  names it attaches. Never speech, whatever the audio did, so they are dropped on a voiced window
+ *  too. (A real call, 2026-10-14: "Редактор субтитров А.Семкин Корректор А.Егорова" mid-meeting.)
+ *  No `\b` next to Cyrillic: JS word boundaries are ASCII-only. */
+const CREDIT_PATTERNS: RegExp[] = [
+  /(?:^|[\s.,])(?:редактор|корректор)(?:ы)?\s+субтитров(?:$|[\s.,!])/i,
+  /(?:^|[\s.,])субтитры\s+(?:сделал|сделала|делал|делала|создавал|создал|создала|подогнал|подготовил|подготовила|сделаны|выполнил|перевёл|перевел)(?:$|[\s.,!])/i,
+  /\bsubtitles?\s+(?:by|made by|created by|edited by)\b/i,
+  /\bamara\.org\b/i,
+];
+
+/** OUTROS — sign-offs from the end of a video. People do say some of these, so they are dropped
+ *  only from a window with no speech energy behind it (`voiced` false or unknown). */
+const OUTRO_PATTERNS: RegExp[] = [
+  /^(?:thanks|thank you)(?:\s+(?:so|very)\s+much)?\s+for\s+watching\b/i,
+  /^(?:please\s+)?(?:like\s+and\s+)?subscribe\b/i,
+  /^спасибо\s+за\s+(?:просмотр|внимание)[.!…]*$/i,
+  /^продолжение\s+следует[.!…]*$/i,
+  /^vielen\s+dank\s+fürs\s+zuschauen/i,
+  /^obrigad[oa]\s+por\s+assistir/i,
+];
+
 /**
  * Returns true if the text is a hallucination and should be dropped.
  */
-export function isHallucination(text: string): boolean {
+/** `voiced`: the window this text came from carries speech-level audio. A short answer on such a
+ *  window is a real short utterance ("Да.", "Один."), not junk, so the short-text rule is skipped. */
+export function isHallucination(text: string, opts: { voiced?: boolean } = {}): boolean {
   if (!text?.trim()) return true;
 
   const trimmed = text.trim();
@@ -54,9 +78,13 @@ export function isHallucination(text: string): boolean {
   if (stripped !== lower && db.has(stripped + '...')) return true;
   if (stripped !== lower && db.has(stripped + '.')) return true;
 
+  // Credit lines (always) and outros (only where no speech energy supports them)
+  if (CREDIT_PATTERNS.some((re) => re.test(trimmed))) return true;
+  if (!opts.voiced && OUTRO_PATTERNS.some((re) => re.test(trimmed))) return true;
+
   // Too short (single word < 10 chars)
   const words = trimmed.split(/\s+/);
-  if (words.length <= 1 && trimmed.length < 10) return true;
+  if (!opts.voiced && words.length <= 1 && trimmed.length < 10) return true;
 
   // Repetition loop: same 3-6 word phrase repeated 3+ times
   if (words.length >= 9) {

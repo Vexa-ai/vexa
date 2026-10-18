@@ -85,8 +85,13 @@ def build_router(
     token_secret: Optional[str] = None,
     writer_factory: Optional[Callable[[AuthSessionConfig], SessionWriter]] = None,
     clock: Optional[Callable[[], datetime]] = None,
+    bot_accounts: Any = None,
 ) -> APIRouter:
-    """The write-back route over the meeting repo (``latest_auth_session``) and a session writer."""
+    """The write-back route over the meeting repo (``latest_auth_session``) and a session writer.
+
+    ``bot_accounts`` (``meeting_api.bot_accounts.BotAccounts``): a meeting spawned with a bot account
+    (``meeting.data.bot_account_id``) writes back to that account in the credential broker instead
+    of the userdata store, under the same checks keyed on the account (``bot-account:<id>``)."""
     router = APIRouter()
     now = clock or (lambda: datetime.now(timezone.utc))
     make_writer = writer_factory or _default_writer
@@ -107,17 +112,41 @@ def build_router(
         except (InvalidMeetingToken, KeyError, TypeError, ValueError) as e:
             raise HTTPException(status_code=401, detail=f"invalid session token: {e}")
 
-        # 2. authenticated mode, configured
-        try:
-            cfg = auth_session_config()
-        except AuthSessionNotConfigured as e:
-            raise HTTPException(status_code=503, detail=str(e))
-        if cfg is None:
-            raise HTTPException(status_code=409,
-                                detail="authenticated-bot mode is off: there is no stored session to write")
+        # 2. where this session's profile lives: its bot account, or the deployment's userdata store
+        account_id = None
+        if bot_accounts is not None and getattr(meeting_repo, "get_meeting", None) is not None:
+            meeting = await meeting_repo.get_meeting(meeting_id)
+            meeting_data = (meeting or {}).get("data") or {}
+            account_id = meeting_data.get("bot_account_id")
+            if account_id and (
+                (meeting_data.get("bot_account") or {}).get("state") == "signed_out"
+                or meeting_data.get("completion_reason") == "auth_session_missing"
+            ):
+                # A bot that found itself signed out must not overwrite the account with that profile.
+                log_event("session_writeback_refused", audience="system", level="warning",
+                          span="session.writeback", meeting_id=str(meeting_id),
+                          fields={"reason": "the bot account is signed out"})
+                raise HTTPException(status_code=409,
+                                    detail="this bot account is signed out: its profile is not written back")
+        cfg = None
+        if account_id:
+            if not getattr(bot_accounts, "configured", False):
+                raise HTTPException(status_code=409,
+                                    detail="bot accounts are not configured on this deployment")
+            identity_key = f"bot-account:{account_id}"
+        else:
+            # authenticated mode, configured
+            try:
+                cfg = auth_session_config()
+            except AuthSessionNotConfigured as e:
+                raise HTTPException(status_code=503, detail=str(e))
+            if cfg is None:
+                raise HTTPException(status_code=409,
+                                    detail="authenticated-bot mode is off: there is no stored session to write")
+            identity_key = cfg.userdata_path
 
         # 3. the live authenticated bot
-        latest = await meeting_repo.latest_auth_session(cfg.userdata_path)
+        latest = await meeting_repo.latest_auth_session(identity_key)
         if (
             latest is None
             or latest.get("session_uid") != session_uid
@@ -146,6 +175,20 @@ def build_router(
             log_event("session_writeback_refused", audience="system", level="warning",
                       span="session.writeback", meeting_id=str(meeting_id), fields={"reason": str(e)})
             raise HTTPException(status_code=422, detail=str(e))
+
+        if account_id:
+            try:
+                await bot_accounts.write_back(account_id, files)
+            except Exception as e:  # noqa: BLE001 — any store failure is one attributed 502
+                log_event("session_writeback_store_failed", audience="system", level="error",
+                          span="session.writeback", meeting_id=str(meeting_id),
+                          fields={"written": 0, "of": len(files), "error": type(e).__name__})
+                raise HTTPException(status_code=502, detail="the session store did not accept the write-back")
+            total = sum(len(d) for _, d in files)
+            log_event("session_writeback_stored", audience="system", span="session.writeback",
+                      meeting_id=str(meeting_id),
+                      fields={"files": len(files), "bytes": total, "bot_account_id": account_id})
+            return {"written": len(files), "bytes": total}
 
         prefix = f"{cfg.userdata_path.strip('/')}/browser-data"
         writer = make_writer(cfg)

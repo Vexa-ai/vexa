@@ -7,11 +7,16 @@ callable that records every delivery; the redis is `fakeredis.aioredis` (no serv
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
+
+# The suite runs as a dev stack: every switchable feature on (`VEXA_FEATURES=all`), so the bot-account
+# routes are served. tests/test_bot_accounts_feature.py sets or clears it to test the release default.
+os.environ.setdefault("VEXA_FEATURES", "all")
 
 
 @pytest.fixture(autouse=True)

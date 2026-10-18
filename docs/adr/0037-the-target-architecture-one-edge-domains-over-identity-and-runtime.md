@@ -5,6 +5,21 @@ against · supersedes decision 2 of
 [ADR-0036](0036-the-mcp-is-an-edge-core-mcp-beside-the-gateway.md) (`core/mcp` as a tree beside the
 gateway; the rest of 0036 stands) · the reference the domain-doors gate (P9) is written against
 
+> **2026-10-12 note (0.13.3, #1783).** Decision 2 now matches the tree: the assembling MCP service
+> lives in the gateway module at `core/gateway/services/mcp` (moved from
+> `core/meetings/services/mcp`), and the manifest contract every domain exports, `mcp.tools.v1`,
+> is owned by the gateway at `core/gateway/contracts/mcp.tools.v1`. Behaviour unchanged; still its
+> own container. Paths in the body below are as of this ADR's date.
+>
+> **2026-10-13 note (0.13.3, #1783) — known debt: the edge still holds two credentials of its own.**
+> An edge should carry only the caller's credential. `core/gateway/services/mcp` also holds
+> `VEXA_FLOWS_API_KEY` (flows' operator key, sent on `flows_submit` and `flow_lifecycle`) and
+> `VEXA_TICKET_SINK_TOKEN` (the `report_issue` sink), and `architecture.calm.json` still types the
+> MCP node `service`, not an edge. This predates the move and is not changed by it. It closes when
+> flows' two admin doors authorise the caller's delegated credential instead of an operator key,
+> the ticket sink sits behind a domain door the MCP forwards to, the MCP's config contract lists no
+> `secret: true` key at all (today it lists exactly these two), and the CALM node is retyped to match.
+
 ## Context
 
 Two days of reading the line's call sites — not running it — turned a taxonomy question into a

@@ -11,7 +11,7 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/confidence.test.ts && tsx src/errors.test.ts && tsx src/model.test.ts && tsx src/url-guard.test.ts && tsx src/timeout.test.ts",
+    "test": "tsx src/confidence.test.ts && tsx src/errors.test.ts && tsx src/model.test.ts && tsx src/url-guard.test.ts && tsx src/timeout.test.ts && tsx src/timeout-sizing.test.ts && tsx src/body-size.test.ts && tsx src/silent-segment.test.ts && tsx src/overload.test.ts && tsx src/confidence-filter.test.ts",
     "check:isolation": "node scripts/check-isolation.js"
   },
   "devDependencies": {

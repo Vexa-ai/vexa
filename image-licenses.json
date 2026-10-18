@@ -45,6 +45,12 @@
       "note": "Opt-in local CPU speech-to-text sidecar for Lite (LOCAL_STT, WHISPER_IMAGE in deploy/lite/Makefile). Upstream speaches-ai/speaches (formerly fedirz/faster-whisper-server), MIT, Category A. User-pulled and not redistributed inside any vexaai/* artifact."
     },
     {
+      "name": "livekit/livekit-server",
+      "license": "Apache-2.0",
+      "disposition": "sidecar",
+      "note": "Calls (#1783, ADR-0048 decision 6): the self-hosted LiveKit media server, pulled unmodified from LiveKit's own registry and pinned by digest. OFF by default \u2014 the `calls` compose profile and the Helm `livekit.enabled` toggle; Lite does not carry it. Not bundled into any vexaai/* artifact."
+    },
+    {
       "name": "searxng/searxng",
       "license": "AGPL-3.0-or-later",
       "disposition": "sidecar",
@@ -79,12 +85,6 @@
       "license": "BSD-2-Clause",
       "disposition": "sidecar",
       "note": "The transcription stack's load balancer (deploy/transcription/docker-compose*.yml, nginx:alpine). nginx is BSD-2-Clause, Category A; operator-pulled and not redistributed."
-    },
-    {
-      "name": "axllent/mailpit",
-      "license": "MIT",
-      "disposition": "dev-tool",
-      "note": "The dogfood rig's mail catcher (deploy/dogfood/rig/rig.sh, axllent/mailpit:latest), bound to 127.0.0.1 on the rig host only. MIT, Category A; never part of a deployment or a vexaai/* artifact."
     }
   ],
   "bundled": [
@@ -94,6 +94,13 @@
       "artifact": "vexaai/vexa-lite",
       "how": "source-build from the pinned git tag 8.1.9 (deploy/lite/Dockerfile.lite valkey-builder stage); valkey-server + valkey-cli copied into the final image, COPYING preserved at /usr/local/share/valkey/LICENSE",
       "reason": "XAUTOCLAIM parity with compose/helm and off BOTH jammy apt's stale Redis 6.0.16 (no XAUTOCLAIM) and source-available Redis \u22657.4 (RSALv2/SSPLv1). BSD-3 is Category A \u2014 clean to redistribute (#653)."
+    },
+    {
+      "name": "mediapipe-selfie-segmenter",
+      "license": "Apache-2.0",
+      "artifact": "vexaai/vexa-terminal, vexaai/vexa-lite",
+      "how": "vendored model file clients/terminal/vendor/mediapipe/selfie_segmenter.tflite (float16 v1, sha256 191ac9529ae506ee0beefa6b2c945a172dab9d07d1e802a290a4e4038226658b, from storage.googleapis.com/mediapipe-models), copied by scripts/copy-mediapipe.mjs to public/mediapipe/ with selfie_segmenter.LICENSE.txt beside it",
+      "reason": "The in-call background blur's segmentation model, served same-origin so no call fetches from Google. Apache-2.0 per Google's model card \u2014 Category A, clean to redistribute."
     }
   ]
 }

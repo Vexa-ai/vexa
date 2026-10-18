@@ -26,7 +26,7 @@ failures (`422`).
 | `422` | semantic validation failed — bad field, invalid scope, event with no plan | `Invalid scope(s): ['foo']. Valid: ['bot', 'browser', 'tx']` |
 | `429` | rate-limited — per-IP edge throttle or per-user limiter; honor the `Retry-After` header (seconds) | — |
 | `500` | unexpected server error | — |
-| `503` | a dependency is unavailable — for any route, the gateway could not check your key with admin-api (the key was not rejected; retry after `Retry-After`) | `Authentication temporarily unavailable, retry` |
+| `503` | a dependency is unavailable — for any route, the gateway could not check your key with admin-api (the key was not rejected; retry after `Retry-After`) | `Authentication temporarily unavailable, retry` (the body also carries `code: auth_unavailable`, `reason: vexa_sign_in_unavailable`, `source: vexa` and a `message`) |
 
 ## By surface
 
@@ -43,7 +43,9 @@ failures (`422`).
 - `PATCH /meetings/{id}` → `409` once the bot lifecycle owns the record (a planned meeting is only
   editable while it's still planned); `409` when the new link collides with another active meeting.
 - `DELETE /meetings/{id}` deletes a plan before spawn or deletes transcript/recording artifacts after
-  the lifecycle is terminal; it returns `409` while the meeting is in flight.
+  the lifecycle is terminal; while the meeting is in flight it answers `409` (the default), or, with
+  `VEXA_MEETING_DELETE_LIVE=stop`, asks the bot to leave and returns `202` (`deletion_scheduled`), and
+  the deletion completes when the meeting ends.
 - `POST /bots` → `409` when a bot is already active on that link (a *planned* record on the link is
   fine — the spawn claims it); `429` past your concurrency limit.
 - `DELETE /bots/{platform}/{native_meeting_id}` → `200` with a body

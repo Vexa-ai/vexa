@@ -45,6 +45,7 @@ jobs:
       # each gate its own step so a failure is unambiguous
       - run: pnpm gate:readme
       - run: pnpm gate:docs-version
+      - run: pnpm gate:docs-links
       - run: pnpm gate:isolation
       - run: pnpm gate:exports
       - run: pnpm gate:graph

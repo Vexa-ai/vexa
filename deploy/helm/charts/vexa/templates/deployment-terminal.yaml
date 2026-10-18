@@ -28,7 +28,7 @@ spec:
       containers:
         - name: terminal
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
-          image: "{{ .Values.terminal.image.repository }}:{{ .Values.global.imageTag | default .Values.terminal.image.tag }}"
+          image: "{{ .Values.terminal.image.repository }}:{{ .Values.global.imageTag | default .Values.terminal.image.tag | default (include "vexa.releaseTag" .) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
@@ -81,6 +81,10 @@ spec:
             # peers and loopback are believed; see values.yaml terminal.trustedProxies.
             - name: TERMINAL_TRUSTED_PROXIES
               value: {{ .Values.terminal.trustedProxies | default (ternary "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7" "" (eq .Values.terminal.service.type "ClusterIP")) | quote }}
+            # The admin account's address (adminApi.adminAccount, as admin-api reads it): the Company
+            # profile switch opens it for an instance administrator (ADR-0049). Empty = no switch.
+            - name: VEXA_ADMIN_ACCOUNT
+              value: {{ .Values.adminApi.adminAccount | default "" | quote }}
             {{- if .Values.terminal.publicUrl }}
             # External origin (set when ingress/LB fronts the terminal) — cookie security + OAuth callbacks.
             - name: NEXTAUTH_URL

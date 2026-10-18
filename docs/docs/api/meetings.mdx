@@ -34,8 +34,24 @@ Pass one of these as `platform`:
 | Zoom | `zoom` |
 | Microsoft Teams | `teams` |
 | Jitsi Meet | `jitsi` * |
+| Voice note (no meeting) | `voice_note` |
+| Call in Minutes (a LiveKit room on this deployment) | `vexa_call` |
 
 The bot joins like any participant — no plugins, no host configuration.
+
+A **`voice_note`** joins nothing: `POST /bots {"platform": "voice_note"}` (no `meeting_url`,
+`passcode` or `teams_base_host`; `native_meeting_id` is minted as `vn-…` when omitted; optional
+`speaker_name`) makes the meeting and its bot, and the audio is then streamed over
+`WS /voice-notes/{native_meeting_id}/stream`. Everything else — status, transcript, stop, delete —
+is a meeting's. See [Voice notes](/minutes/voice-notes#how-it-works) for the socket protocol.
+
+A **`vexa_call`** is a room meeting-api creates on the deployment's LiveKit server:
+`POST /bots {"platform": "vexa_call", "session_id": "s-…"}`. Send no `meeting_url`, `passcode`,
+`teams_base_host` or `native_meeting_id`: the room name (`call-…`) is minted and becomes the
+`native_meeting_id`. `session_id` (optional) names the chat the call belongs to. `transcribe`
+(optional boolean, default `true`) may be `false` only when the deployment sets
+`CALL_TRANSCRIPTION_SWITCHABLE=true`; otherwise `false` answers `422`. A deployment without a LiveKit
+server answers `503` with `{"error": "calls_not_deployed"}`. See [Calls](/minutes/calls#how-it-works).
 
 \* **Jitsi is join + capture offline-proven; live validation is pending.** Meet, Zoom and Teams are
 production. On Jitsi the bot joins and records audio, but transcripts are not yet proven live —
@@ -124,15 +140,23 @@ curl -X DELETE "$API_BASE/meetings/12345" -H "X-API-Key: $API_KEY"
   notes/shares, recording objects from primary object storage, and recording metadata. The terminal
   meeting row remains as lifecycle evidence, but transcript reads return `404`.
 
-Both answer an owner-indistinguishable `404` for an unknown or unowned record. An in-flight meeting
-(`requested` through `stopping`) answers `409`; use `DELETE /bots/{platform}/{native_meeting_id}` to
-stop a bot, then delete artifacts after the meeting becomes terminal.
+Both answer an owner-indistinguishable `404` for an unknown or unowned record.
+
+**Deleting a meeting whose bot is still running or finishing** answers `409` by default, as 0.12 did.
+With `VEXA_MEETING_DELETE_LIVE=stop` on meeting-api it answers `202` with
+`{"status":"deletion_scheduled","id":…}`. The request is recorded on the meeting, the bot is asked to
+leave (the same stop as `DELETE /bots/{platform}/{native_meeting_id}`), and the transcript and
+recordings are deleted when the meeting's lifecycle ends. A meeting that ends without a bot callback
+(for example, one ended by a sweep) keeps the request; deleting it again then deletes at once,
+because it is terminal.
 
 The same edit/delete is also reachable **by native key** — `PATCH`/`DELETE
 /meetings/{platform}/{native_meeting_id}` — which resolves `(platform, native_meeting_id)` to your
-newest owned row and applies the same rules (`404` unknown/unowned, `409` while in flight). Use it
-when you address meetings by their join-link identity rather than the record id; `DELETE` answers
-`200` on this path (the by-record-id `DELETE` answers `204`).
+newest owned row and applies the same rules (`404` unknown/unowned; `PATCH` answers `409` while in
+flight, `DELETE` answers `409`, or under `stop` `202` with `deletion_scheduled`, plus `platform` and
+`native_meeting_id`).
+Use it when you address meetings by their join-link identity rather than the record id; a finished
+`DELETE` answers `200` on this path (the by-record-id `DELETE` answers `204`).
 
 <Warning>
 Deletion confirms erasure from the live Postgres/Redis state and configured primary object storage.
@@ -279,8 +303,9 @@ request/response schemas, compatibility endpoints, error statuses, and metadata 
 
 ## Send a bot to a meeting
 
-<ParamField body="platform" type="string" required>`google_meet` · `zoom` · `teams`</ParamField>
-<ParamField body="native_meeting_id" type="string" required>The meeting id from the join URL (e.g. `abc-defg-hij`).</ParamField>
+<ParamField body="platform" type="string" required>`google_meet` · `zoom` · `teams` · `jitsi` · `voice_note` · `vexa_call` (see [Platforms](#platforms)).</ParamField>
+<ParamField body="native_meeting_id" type="string">The meeting id from the join URL (e.g. `abc-defg-hij`). Required for `google_meet` and `teams` unless `meeting_url` is sent. Optional for `voice_note`: omitted, a `vn-…` id is minted and returned. Refused with `422` for `vexa_call`, whose id is always minted.</ParamField>
+<ParamField body="meeting_url" type="string">The full join link. Required for `zoom` and `jitsi`. Refused with `422` for `voice_note` and `vexa_call`.</ParamField>
 <ParamField body="bot_name" type="string">Display name the bot uses in the call. Defaults to `Vexa`.</ParamField>
 <ParamField body="language" type="string">Language code (e.g. `de`). **Set** = every STT call is pinned
 to this code and every segment carries it. `"auto"` = each window's language is detected independently,
@@ -400,6 +425,9 @@ curl -X DELETE "$API_BASE/bots/google_meet/abc-defg-hij" -H "X-API-Key: $API_KEY
 ```
 
 Stop answers `200` with `{"status":"stopping","meeting_id":…,"also_stopped":[],"cancelled":[]}`.
+The answer comes as soon as the stop is recorded and the leave command is published. Tearing down a
+bot that is still starting happens after the answer, so a slow teardown never turns a working stop
+into a timeout.
 
 ```bash Running bots — GET /bots/status
 curl -H "X-API-Key: $API_KEY" "$API_BASE/bots/status"
@@ -566,6 +594,36 @@ honours a `Range` header and returns `206 Partial Content` with `Content-Range` 
 these are preserved **through the gateway**, not only on a direct hit, so browser playback and seeking work. Add
 `download=1` for `Content-Disposition: attachment` (same ownership check; the filename carries the
 real container's extension).
+
+## How it works
+
+1. **Gateway.** Your request reaches the gateway with `X-API-Key`. The gateway checks the key with
+   admin-api and fails closed: `401` for a missing, unknown, revoked or expired key, `403` when the
+   key lacks the route's scope. Each route's scopes come from `core/meetings/routes.v1.json`.
+2. **Signed identity.** The gateway forwards the request to meeting-api with the caller's identity,
+   signed with the gateway's Ed25519 key (`gateway-identity.v1`). meeting-api checks the signature
+   with the public key and refuses an unsigned or forged identity. It also checks the route's scopes
+   against the same manifest.
+3. **meeting-api.** It answers from Postgres (meetings, transcripts) and from object storage
+   (recordings). `POST /bots` asks the [runtime](/core/runtime) to start the bot.
+4. **Ownership.** A meeting, transcript or recording you do not own answers `404`, the same as one that
+   does not exist.
+
+## Why it complies
+
+- **P4 sealed contracts.** `api.v1`, `routes.v1` and `gateway-identity.v1` are sealed; `gate:schema`
+  and `gate:contract-version` enforce it.
+- **P8 the shipped API matches its contract.** `gate:contract-conformance` checks meeting-api's routes
+  against `api.v1` in both directions.
+- **P6 one front door.** `gate:domain-doors` fails when a client or the gateway reaches the meetings
+  domain other than through a route declared in `routes.v1.json`.
+- **P20 authorize every access.** Deny tests under `gate:python`, in
+  `core/meetings/services/meeting-api/tests/`: `test_identity_guard.py`
+  (`test_an_unsigned_identity_is_refused`, `test_a_forged_signature_is_refused`),
+  `test_route_scopes.py` (`test_a_key_without_the_route_s_scope_is_refused`), `test_collector_api.py`
+  (`test_get_transcript_other_user_is_404`), `test_completed_artifact_deletion.py`
+  (`test_non_owner_gets_indistinguishable_404_and_cannot_delete_any_artifact`). `gate:access` proves
+  the default-deny rule itself.
 
 ---
 

@@ -1,0 +1,642 @@
+---
+title: "Upgrading from 0.12 to 0.13"
+description: "What an operator on 0.12.x must change before and after moving to 0.13.3, on Docker Compose, Vexa Lite and Helm."
+---
+
+This page takes an install on 0.12.x to 0.13.3. Read it to the end before you start: several steps
+must happen before the new images boot, or a service refuses to start.
+
+## Before you start
+
+**Check the version you run.**
+
+| Surface | Command | 0.12 shows |
+|---|---|---|
+| Docker Compose | `grep '^IMAGE_TAG=' deploy/compose/.env` | `v012` or a `v0.12.x` tag |
+| Vexa Lite | `docker inspect vexa-lite --format '{{.Config.Image}}'` | `vexaai/vexa-lite:v012` or a `v0.12.x` tag |
+| Helm | `helm list -n vexa` | `APP VERSION` `0.12.x` |
+
+On 0.10, go to the latest 0.12.x first, using the runbook in the [changelog](/changelog).
+
+**Back up.** 0.13 adds tables to the database and changes one primary key (see
+[Database schema](#database-schema)), and the upgrade rotates passwords and keys. A rollback needs
+the old ones.
+
+```bash
+# Docker Compose (from the repo root)
+cp deploy/compose/.env deploy/compose/.env.pre-0.13
+docker compose -p vexa-v012 -f deploy/compose/docker-compose.yml exec -T postgres \
+  pg_dump -U postgres vexa > vexa-0.12.sql
+docker run --rm -v vexa-v012_storage-data:/data -v "$PWD":/out alpine \
+  tar czf /out/storage-data.tgz -C /data .
+docker run --rm -v vexa-v012_agent-workspaces:/data -v "$PWD":/out alpine \
+  tar czf /out/agent-workspaces.tgz -C /data .
+
+# Vexa Lite
+cp .env .env.pre-0.13
+docker exec vexa-lite-postgres pg_dump -U postgres vexa > vexa-0.12.sql
+docker run --rm -v vexa-lite-storagedata:/data -v "$PWD":/out alpine \
+  tar czf /out/storage-data.tgz -C /data .
+
+# Helm
+helm get values vexa -n vexa > values-0.12.yaml
+kubectl -n vexa get secret -o yaml > secrets-0.12.yaml        # keep this file private
+kubectl -n vexa exec statefulset/<release>-vexa-postgres -- pg_dump -U postgres vexa > vexa-0.12.sql
+kubectl -n vexa exec deploy/<release>-vexa-agent-api -- tar czf - -C /workspaces . > agent-workspaces.tgz
+```
+
+The workspace archive also holds every `routines/*.md` file, which the upgrade converts and removes
+(see [Routines become flows, once](#routines-become-flows-once)).
+
+On Helm, recordings live in your own bucket; back it up with your provider's tools. A managed
+database: take a snapshot.
+
+**Pick a window with no meeting.** Upgrade when no bot is in a call. A bot started by 0.12 cannot
+talk to 0.13 services (see [Upgrade every component together](#upgrade-every-component-together)).
+
+## Upgrade steps
+
+<Tabs>
+<Tab title="Docker Compose">
+```bash
+git fetch --tags && git checkout v0.13.3
+# pin the release
+sed -i.bak 's/^IMAGE_TAG=.*/IMAGE_TAG=v0.13.3/' deploy/compose/.env
+# mint every secret 0.13 requires; replaces the old published defaults
+(cd deploy/compose && ./mint-dev-env.sh .env)
+# only if deploy/compose/.env still says DB_PASSWORD=postgres
+make -C deploy/compose rotate-db-password
+make up
+```
+
+Then read [Required changes](#required-changes) for anything you set by hand.
+</Tab>
+<Tab title="Vexa Lite">
+```bash
+git fetch --tags && git checkout v0.13.3
+sed -i.bak 's/^IMAGE_TAG=.*/IMAGE_TAG=v0.13.3/' .env
+make lite
+```
+
+`make lite` mints the database password and the storage root pair into `.env`, sets them on the
+bundled postgres and storage over the same volumes, and mints the sign-in and signing secrets
+into the `vexa-lite-state` volume. If you run the Lite image with your own `docker run`, read
+[Vexa Lite run by hand](#vexa-lite-run-by-hand).
+</Tab>
+<Tab title="Helm">
+1. Edit your values file as described under [Required changes](#required-changes), at least:
+   remove `database.password: postgres` and `secrets.adminApiToken: CHANGE_ME`, add
+   `networkPolicy.workloads.*.extraEgress` for private endpoints, and check
+   `global.tolerations`.
+2. Upgrade without `--reuse-values` (it carries the old published defaults, and the render
+   refuses them):
+
+```bash
+git fetch --tags && git checkout v0.13.3
+helm upgrade vexa deploy/helm/charts/vexa -n vexa -f my-values.yaml
+```
+
+If you must keep `--reuse-values`, add `--set secrets.adminApiToken= --set database.password=`.
+</Tab>
+</Tabs>
+
+## Required changes
+
+Each change below says who it hits, what you see if you skip it, and what to do.
+
+### Upgrade every component together
+
+The connections between Vexa's own components now carry a signature or token that a 0.12 peer does
+not send. The newer side refuses what it does not find.
+
+- **Hits:** every surface, and any image you pin apart from the stack's tag (`BROWSER_IMAGE`,
+  `AGENT_WORKER_IMAGE`, `runtime.browserImage`).
+- **If you skip it:** an old bot's lifecycle callbacks and uploads get `401` and its transcript
+  entries are dropped; an old runtime's callbacks get `401`; an old agent-api's messages to a new
+  agent worker are dropped silently; an old gateway gets `401` on every agent worker's tool call.
+- **Do:** move the bot image, runtime, agent-api, agent worker image, meeting-api, gateway,
+  admin-api, MCP, flows-api, flows-worker, flows-mailbox, credential-broker and terminal to v0.13.3
+  in one step. `make up`, `make lite` and
+  `helm upgrade` do this.
+
+**A bot that is in a call during the upgrade keeps its transcript.** A deploy does not restart bots,
+so a 0.12 bot can still be in its meeting when the services around it are 0.13. Three things keep
+that meeting whole:
+
+- **Transcript.** For `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S` seconds after meeting-api starts
+  (default 14400, four hours), it admits the unsigned transcript entries a 0.12 bot writes, for the
+  meetings that were in flight and spawned before 0.13 only. A meeting spawned on 0.13 is never on
+  that list, and an entry whose signature does not verify is still refused. meeting-api logs
+  `segment_entry_legacy_admitted` for each one. `0` turns this off.
+- **Status.** The 0.12 bot's lifecycle callbacks carry `x-internal-secret`, which 0.13 accepts. Keep
+  `INTERNAL_API_SECRET` unchanged across the upgrade, and keep meeting-api's Service name, which is in
+  the callback URL the bot was given.
+- **Tracking.** A 0.13 runtime re-adopts bot Pods a 0.12 runtime spawned (they carry no
+  `runtime.instance` label; `RUNTIME_K8S_ADOPT_UNLABELLED`, default `true`), so meeting-api does not
+  fail a live meeting as untracked.
+
+Do not restart Redis or change its password while such a bot runs: its connection uses the 0.12
+Redis URL. Do the Redis password change of [Redis password and per-workload users](#redis-password-and-per-workload-users)
+after the last 0.12 bot has left, or in a window with no meeting in flight.
+
+### Image names
+
+The service images are now `vexaai/vexa-<service>`; they were `vexaai/v012-<service>`. The bot
+(`vexaai/vexa-bot`) and Lite (`vexaai/vexa-lite`) keep their names. v0.13.3 is published under both
+names with the same digests; later releases only under the new ones.
+
+- **Hits:** Compose `.env` that sets `AGENT_IMAGE` or `AGENT_WORKER_IMAGE`; Helm values that
+  override a component's `image.repository`, `runtime.agentImage` or `runtime.agentWorkerImage`;
+  registry mirrors, pull-through caches and admission or scanning policies that list images by name;
+  builds from source that name the MCP service's directory.
+- **If you skip it:** v0.13.3 still pulls under the old names, and the next release does not.
+- **Do:** change those names to `vexaai/vexa-*` and add the ten new repositories to a mirror's
+  allow-list. The MCP service's source moved from `core/meetings/services/mcp` to
+  `core/gateway/services/mcp`. The full table is in [Image names from v0.13.3](/upgrade-image-names).
+
+### Database schema
+
+0.13.3 changes the instance database (`vexa`), which admin-api, meeting-api, agent-api and flows
+share. The tables admin-api and meeting-api own (`users`, `api_tokens`, `platform_settings`,
+`meetings`, `meeting_sessions`, `transcriptions`) are the same as in 0.12.28.
+
+| Change | Written by | When it is applied |
+|---|---|---|
+| New tables for the session store, where chats are now kept: `agent_session`, `agent_session_version`, `agent_session_participant`, `agent_session_note`, `agent_session_call`, `agent_session_proposal`, `agent_session_attachment`, `agent_session_folder`, `agent_session_filing`, `agent_session_notification` and `agent_session_schema` (store version `1`); `agent_session_notification` gains `source` and `acted` on a store made by an earlier 0.13 pre-release | agent-api | `session_schema init`: on Compose when agent-api starts, on Helm by the session-schema Job of the release (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) |
+| `flow_version` gains `scope` (`TEXT NOT NULL DEFAULT 'instance'`, so every existing flow is an instance flow) and `cron`, and its primary key changes from `(name, version)` to `(scope, name, version)` | flows | the first time a flows process (flows-api, flows-worker or flows-mailbox) uses the database, in one transaction; the key is swapped only while it lacks `scope` |
+| New table `friction_occurrence`, with index `friction_occurrence_by_id` | flows | the same moment |
+| `friction_occurrence` gains `admitted`; new tables `keyed_schedule` (gains `person` on a pre-release database), `sensor`, `mail_send` and `mail_test_send` | flows | the same moment (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) |
+
+There is no separate migration command for the schema: every step is idempotent and runs on each
+start.
+
+- **Hits:** every surface. On a database you run yourself, the user agent-api and flows connect as
+  must be allowed to create tables and to alter `flow_version`.
+- **If it cannot:** agent-api logs `session store did not open (…); chats keep the workspace layout`
+  and runs without the store, so shared chats and calls are unavailable; flows fails on its first
+  database call.
+- **Check it:**
+
+```bash
+docker compose -p vexa-v012 -f deploy/compose/docker-compose.yml exec -T postgres \
+  psql -U postgres vexa -c '\dt agent_session*' -c 'SELECT version FROM agent_session_schema' \
+  -c '\d flow_version'
+```
+
+The store version is `1` and `flow_version` shows `PRIMARY KEY, btree (scope, name, version)`.
+
+**Existing chats.** For one release agent-api still reads a chat from its old place (`.claude/` in
+the person's private workspace) while the store holds nothing for it, and saves it into the store on
+its next turn. To move every chat at once, run in the agent-api container:
+
+```bash
+# Compose; on Helm: kubectl -n vexa exec deploy/<release>-vexa-agent-api -- python -m …
+docker compose -p vexa-v012 -f deploy/compose/docker-compose.yml exec agent-api \
+  python -m control_plane.session_migrate --dry-run   # counts only
+docker compose -p vexa-v012 -f deploy/compose/docker-compose.yml exec agent-api \
+  python -m control_plane.session_migrate             # copy, then read each copy back
+```
+
+It copies each chat's pointer, turn records and harness transcript into the store as version 1 and
+prints counts (`people`, `threads`, `copied`, `skipped`, `verified`, `mismatched`, `empty`). It skips
+a chat the store already holds, so it is safe to run again, and exits `1` if any read-back differs.
+`--clean` also deletes the old files of every chat whose read-back matched; leave it until you no
+longer need [Rollback](#rollback). `--clean --retire` deletes nothing: it moves every old chat file,
+including a copy that differs from the store's, to `<workspaces>/.sessions-retired/<run>/`, and
+`--restore` moves them back. Neither runs on its own; deploys and the Helm chart never run them. See
+[Shared chats](/minutes/shared-chats).
+
+### Secrets and passwords now required
+
+Every service refuses to boot on an unset value or on any value this repository ever published as a
+default. The services' message is:
+
+```text
+<service> is misconfigured and refuses to boot — <KEY> still hold(s) a documented PLACEHOLDER value.
+<service> is misconfigured and refuses to boot — required environment variable(s) not set: <KEY> (…)
+```
+
+| Key | Old default | Refused by | What to do |
+|---|---|---|---|
+| `ADMIN_TOKEN` (admin-api `ADMIN_API_TOKEN`, flows `VEXA_FLOWS_ADMIN_KEY`, Helm `secrets.adminApiToken`) | `dev-admin-token`, Helm `CHANGE_ME` | admin-api, meeting-api, flows; Helm render | Compose and Lite mint one. Helm: leave it empty or set your own. Scripts that call the admin API need the new value; API keys already minted keep working. |
+| `DB_PASSWORD` (Helm `database.password`) | `postgres` | postgres container, admin-api, meeting-api, Lite entrypoint; Helm render | See [Database password](#database-password). |
+| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | `vexa-access-key` / `vexa-secret-key` | Compose `storage`, Lite | Compose and Lite mint a pair and restart storage on the same volume. Recordings stay readable. |
+| `NEXTAUTH_SECRET` (Helm `secrets.nextauthSecret`) | `dev-nextauth-secret` | terminal | Minted on every surface. At least 32 bytes. Everyone is signed out of the web UI once. |
+| `VEXA_DISPATCH_SIGNING_KEY` (Helm `secrets.dispatchSigningKey`) | `dev-dispatch-signing-key` | agent-api; Helm render | Minted on every surface. Nothing a running stack depends on changes. |
+| `REDIS_PASSWORD` (Helm `secrets.redisPassword`) | none (new) | Compose `redis` | See [Redis](#redis-password-and-per-workload-users). |
+| `RUNTIME_API_TOKEN` (Helm `secrets.runtimeApiToken`) | none (new) | runtime, agent-api, meeting-api | Minted on every surface. |
+| `VEXA_MCP_DELEGATION_SECRET` (Helm `secrets.mcpDelegationSecret`) | none (new) | agent-api, admin-api (published values) | Minted on every surface. |
+
+The terminal prints its own line and exits:
+
+```text
+[terminal] refusing to start: NEXTAUTH_SECRET is a value published in the Vexa repository; set it to a random value of at least 32 bytes, e.g. `openssl rand -hex 32`
+```
+
+**Docker Compose started with plain `docker compose`.** Run `deploy/compose/mint-dev-env.sh .env`
+from `deploy/compose` first. It never overwrites a value you set, except a published default.
+
+**Helm with `secrets.existingSecretName`.** Your Secret must now also carry `RUNTIME_API_TOKEN`,
+`REDIS_PASSWORD`, `NEXTAUTH_SECRET`, `VEXA_MCP_DELEGATION_SECRET` and `VEXA_DISPATCH_SIGNING_KEY`.
+
+**Helm rendered with `helm template` (GitOps).** The chart keeps generated values by reading its own
+Secrets, which `helm template` cannot do. Supply every one of them, plus `identity.signingKey`
+(`openssl genpkey -algorithm ed25519`) and `credentialBroker.existingSecret`. The full list is in
+[Deployment → One-time steps after upgrading](/deployment#one-time-steps-after-upgrading).
+
+### Database password
+
+- **Hits:** Compose and Lite installs whose `.env` holds `DB_PASSWORD=postgres` (the 0.12 example
+  value); Helm values that set `database.password: postgres`; anyone running admin-api or
+  meeting-api themselves.
+- **If you skip it:** Compose `postgres` exits with
+  `postgres: DB_PASSWORD is unset or a value published in the Vexa repository - refusing to start.`
+  Helm stops the render with `database.password must be 32+ bytes and not a value published…`.
+- **Do:**
+  - Compose: `make -C deploy/compose rotate-db-password`. It writes a new value to `.env`, applies
+    it inside the database and brings the stack up.
+  - Lite: `make lite` does it.
+  - Helm, bundled database: remove `database.password` from your values. The chart moves a database
+    still on `postgres` to a new password with a hook after the upgrade, and restarts the services
+    that read it. An external database is not touched.
+
+### File ownership: services run as uid 10001
+
+The gateway, admin-api, meeting-api, MCP, terminal, flows (flows-api, flows-worker, flows-mailbox)
+and credential-broker images run as uid 10001. Meeting bots
+run as uid 10002. The runtime and agent-api still run as root.
+
+- **Hits:** files you mount into those services yourself (a CA bundle, a credentials file, a
+  custom tool manifest), on any surface. The bundled Compose volumes need nothing: the
+  `identity-keys` one-shot hands the gateway's key to uid 10001 on every start.
+- **If you skip it:** the service cannot read the file and fails at the step that needs it.
+- **Do:** make each mounted file readable by uid 10001, for example
+  `chown 10001:10001 <file>` or mode `0644`. On Kubernetes those pods set `runAsNonRoot`,
+  `runAsUser: 10001` and `fsGroup: 10001`; values in `global.podSecurityContext` win.
+
+### Sign-in
+
+**Unknown addresses can no longer create accounts.**
+
+- **Hits:** every surface with terminal sign-in.
+- **If you skip it:** a new person's sign-in is refused with "This email address is not allowed to
+  sign in to this Vexa. Ask its administrator to add it." Existing users and admins keep signing in.
+- **Do:** list who may sign in on admin-api: `VEXA_SIGNIN_ALLOW` (exact addresses and `@domain`
+  entries; Helm `adminApi.signinAllow`), or add them in the terminal under **Settings → Sign-in**.
+  `VEXA_SIGNIN_ALLOW=*` opens sign-in to everyone; use it only on a dev or demo stack. See
+  [Who may sign in](/deployment#who-may-sign-in).
+
+**`VEXA_ADMIN_EMAILS` is read by admin-api.**
+
+- **Hits:** Helm installs that set it under `terminal.extraEnv`.
+- **Do:** move it to `adminApi.adminEmails`. A value left under `terminal.extraEnv` is carried over
+  while `adminApi.adminEmails` is empty. Compose `.env` needs no change.
+- On an instance with no admin yet and no `VEXA_ADMIN_EMAILS`, the first admin needs the one-time
+  claim code admin-api writes to its log: `docker compose logs admin-api | grep -A4 'ADMIN CLAIM CODE'`.
+
+**Microsoft sign-in needs a pinned tenant or the `xms_edov` claim.**
+
+- **Hits:** installs with `MICROSOFT_CLIENT_ID` set and `MICROSOFT_TENANT_ID` unset, `common`,
+  `organizations` or `consumers` (Compose defaults it to `common`).
+- **If you skip it:** every Microsoft sign-in lands back on the card with "That account's email
+  address isn't verified by its provider, so it can't sign in here."
+- **Do:** set `MICROSOFT_TENANT_ID` to your tenant id (a GUID), or add the `xms_edov` optional claim
+  to the ID token in the app registration (Entra admin center → App registrations → Token
+  configuration). See [Kubernetes](/deployment-kubernetes).
+
+**Google sign-in needs a verified address**, and an account is bound to the first Google or
+Microsoft identity that signs in to it. A second identity of the same provider with the same address
+is refused.
+
+### Removed and changed APIs
+
+| What changed | Symptom | What to do |
+|---|---|---|
+| The meeting copilot is removed: `POST /api/meeting/start` and `POST /api/meeting/process` on agent-api. | `404` | Remove the calls. Ask about a meeting in the chat instead. |
+| `meeting_model` is gone from `/api/models` and `/user/models`. | Field missing; ignored on write | Stop reading or writing it. |
+| `GET /admin/instance` on admin-api is removed. | `404` | Read `GET /internal/instance` with `X-Internal-Secret` instead. |
+| Workspace swap, import, activate and shared attach no longer return `nested`. | Field missing | Stop reading it. |
+| `PUT /user/webhook` adds the webhook config (`webhook_url`, `webhook_secret_set`, masked `webhook_secret`, `webhook_events`) to the account record it returned in 0.12. The record's `data` never carries a stored credential. | New top-level fields | Nothing; read either. See [Webhooks](/webhooks). |
+| `/admin/users*` reads show stored credentials as `api_key_set`, `token_set` and `ics_url_set` with a masked tail. | Credential values missing | Store credentials where you write them; reads never return them. |
+| agent-api accepts a user only from the gateway's signed identity. `VEXA_AGENT_DEFAULT_SUBJECT` and `VEXA_REQUIRE_GATEWAY_IDENTITY` are gone. | `401` on direct calls to agent-api | Call it through the gateway (`/agent/*` with an API key). |
+| The live WebSocket `/ws` can apply the REST key scopes: `VEXA_WS_SCOPE_MODE=strict` on the gateway and on meeting-api (set both). The default, `legacy`, keeps the 0.12 contract (any valid key opens the socket and subscribes to the meetings it owns) and logs `ws_scope_legacy_allowed` for each key `strict` would refuse. | Under `strict`: a key that cannot read meeting status is closed with `4403`; a key without the `tx` scope gets `insufficient_scope` on transcript subscribe | Before switching to `strict`, count `ws_scope_legacy_allowed` in the gateway log and give those callers keys with the scopes the matching REST routes need. See [Authentication → Scopes](/authentication#scopes). |
+| A webhook URL, calendar feed or personal transcription endpoint that points at a private or internal address is refused when saved. | `422` | Use a public address. |
+| A webhook URL saved before the upgrade keeps the delivery 0.12 gave it: `VEXA_WEBHOOK_STORED_URL_POLICY=v012` (default) on meeting-api still delivers to shared (100.64/10), documentation and benchmarking addresses, which 0.13 refuses on save. Loopback, private, link-local and metadata addresses stay refused in every form. `strict` applies the 0.13 guard to stored URLs too. | Under `strict`: deliveries to such a URL are recorded `blocked` | Under `strict`, re-save the webhook with a public address. |
+| Deleting a meeting whose bot is still in it can stop the bot and delete at the end (`202 deletion_scheduled`): `VEXA_MEETING_DELETE_LIVE=stop` on meeting-api. The default, `refuse`, keeps the 0.12 answer. | Default: `409` until the meeting ends, as on 0.12 | Set `stop` to let a delete end the meeting. |
+| A person who set no language can get the languages of their recent meetings: `VEXA_LANGUAGE_HISTORY_TIER=on` on meeting-api, ranked above `DEFAULT_TRANSCRIPTION_*`. Off by default, as 0.12 had no such tier. | None by default | Turn it on to cut wrong-language windows for multilingual people. |
+| `POST /bots` reads a 0.12 `language` value as the code it names: `en-US`, `EN`, `pt_BR` and `English` become `en`, `en`, `pt` and `en`; a value that names no language is ignored (the person's or deployment's default applies). A request that also sends `allowed_languages`, and `PUT /bots/{platform}/{id}/config`, take codes only. | None | Send lower-case codes (`de`, `en`). |
+| A personal model endpoint (Settings → Models) must be on `VEXA_MODEL_BASE_URL_ALLOW`. Unset, it admits the deployment's own gateway, `api.anthropic.com` and `openrouter.ai`. On the claude-code harness it also needs its own API key. | The endpoint is not used; turns run on the deployment's model and the Test button says why | Add the host to `VEXA_MODEL_BASE_URL_ALLOW` on agent-api, and set the key in Settings. |
+
+### Redis password and per-workload users
+
+- **Hits:** Compose (the bundled Redis now requires a password); Helm and Compose installs that point
+  at their own Redis.
+- **If you skip it:** Compose `redis` exits with
+  `redis: REDIS_PASSWORD is unset or a value published in the Vexa repository - refusing to start.`
+  With your own Redis and no ACL rights, spawns fail with
+  `the worker's Redis user could not be defined`.
+- **Do:**
+  - Compose: `mint-dev-env.sh` (run by `make up`) mints `REDIS_PASSWORD`. Helm generates
+    `secrets.redisPassword` and Lite mints one per boot.
+  - Your own Redis: agent-api and meeting-api create a Redis user per bot and per agent worker, so
+    their user needs `ACL SETUSER`, `ACL DELUSER` and `ACL GETUSER`. A Redis that cannot define
+    users can set `REDIS_WORKLOAD_ACL=shared` on agent-api and meeting-api; then every workload uses
+    the services' connection, which is safe only where every person on the instance trusts every
+    other. Any other value stops both services at boot.
+
+### Flows database with `sslmode=verify-ca`
+
+- **Hits:** installs whose `VEXA_FLOWS_DB_URL` uses `sslmode=verify-ca` without `sslrootcert`, or
+  `sslrootcert=system` with any mode but `verify-full`.
+- **If you skip it:** flows stops at startup with
+  `sslmode=verify-ca needs sslrootcert naming the CA file to check the server against`.
+- **Do:** add `sslrootcert=<path to the CA file>` (readable by uid 10001), or use
+  `sslmode=verify-full`.
+
+### Helm: your own S3 bucket is required
+
+The chart no longer runs MinIO or any other object store. Recordings, chat transcripts and
+captured-signal tapes go to an S3-compatible bucket you provide.
+
+- **Hits:** every Helm release. A release that ran the built-in MinIO also has recordings to copy.
+- **If you skip it:** `helm upgrade` stops before anything changes: `storage.s3 is incomplete,
+  missing: …`, or `minio.enabled=true is no longer supported` for values kept from 0.12.
+- **Do:** create the bucket and a Secret with its key pair, then set
+  `storage.s3.endpoint` (a full URL), `storage.s3.bucket` and `storage.s3.existingSecret`, and
+  remove `minio.enabled`. Copy the old MinIO objects to the bucket **before** the upgrade:
+  [Upgrading from the built-in MinIO](/deployment-kubernetes#upgrading-from-the-built-in-minio).
+  The upgrade does not delete the old MinIO volume.
+
+```bash
+kubectl -n vexa create secret generic vexa-s3 \
+  --from-literal=AWS_ACCESS_KEY_ID=… --from-literal=AWS_SECRET_ACCESS_KEY=…
+helm upgrade vexa deploy/helm/charts/vexa -n vexa -f my-values.yaml \
+  --set storage.s3.endpoint=https://s3.eu-central-1.amazonaws.com \
+  --set storage.s3.bucket=my-vexa-recordings --set storage.s3.existingSecret=vexa-s3
+```
+
+Compose and Lite keep their bundled store; see [Where your recordings live now](/upgrade-from-minio).
+
+### Routines become flows, once
+
+0.13 has one mechanism for routines: a person's own flows. On its first start, agent-api converts
+what 0.12 held, once.
+
+- **Hits:** every install with routines, that is any `routines/<name>.md` file in a workspace or any
+  job armed through `POST /api/routines`. It runs on Compose and Helm, where agent-api has
+  `VEXA_FLOWS_API_URL` and `VEXA_FLOWS_API_KEY` (`mint-dev-env.sh` mints the key on Compose; the chart sets both).
+- **What happens to the files:**
+  - Each `routines/<name>.md` becomes a flow of its owner, and each scheduler job becomes one too
+    (the old job is cancelled).
+  - Files with the same intent, as each other or as an existing flow, become one flow.
+  - A file written by a run nobody watched becomes a **paused** flow.
+  - A file that cannot be read, or that flows refuses, runs nothing and is shown on the Routines board
+    with the reason.
+  - Every converted or refused file is **removed from the workspace**. A copy stays outside every
+    workspace mount, in `/workspaces/.routines/retired/<subject>/` on agent-api.
+  - A `routines/*.md` file written after the upgrade does nothing.
+- **Without flows** (Vexa Lite, or a deployment without the two keys) nothing is converted. The files
+  stay as they are, nothing runs them, and `/api/routines` answers `501 routines_need_flows`.
+- **Back up first:** the workspace archive from [Before you start](#before-you-start) holds every
+  routine file. The retired copies are a second copy, not a backup.
+- **Verify:** agent-api logs `routines → flows: {…}` with counts (`files_converted`, `files_merged`,
+  `files_paused`, `files_refused`, `jobs_converted`, `failures`), never a routine's text. When a pass
+  leaves nothing behind it logs `routines → flows migration complete; it will not run again` and
+  writes `/workspaces/.routines/migration.v1.json`. Until then it retries every minute. Then open the
+  Routines board: each routine is listed, and any refused file is shown with its reason.
+
+```bash
+# Compose; on Helm: kubectl -n vexa exec deploy/<release>-vexa-agent-api -- cat …
+docker compose -p vexa-v012 -f deploy/compose/docker-compose.yml exec agent-api \
+  cat /workspaces/.routines/migration.v1.json
+```
+
+`/api/routines` stays for one release as a deprecated adapter onto flows (it answers
+`Deprecation: true`) and is removed in 0.14.0. Move callers to the flows routes. Details:
+[Routines and agent messages](/flows/routines#upgrading).
+
+### Unproven features are off by default
+
+Features that are built but not yet proven ship behind switches, and the release default is **off**:
+`shared_chats`, `notifications`, `calls`, `crm`, `browser_bots`, `folder_drop`, `chat_history_tools`,
+`calendar_write`, `workspace_forget` and `agent_messages`.
+
+- **Hits:** anyone who used one of them on a 0.13 pre-release.
+- **If you skip it:** their buttons are hidden, their tools are not offered to the agent, and their
+  routes answer `403 feature_disabled`. Data they wrote stays and is there again when switched on.
+- **Do:** switch on what you want. The install default is `VEXA_FEATURES` (Compose and Lite `.env`,
+  Helm `features`): empty is the release default, `all` switches every one on, a list such as
+  `calls,notifications` switches on just those, and `all,-crm` takes one back. A company can then
+  override it per feature with one line in `_global/POLICIES.md`:
+  `features: {notifications: on, calls: off}`. `crm` and `browser_bots` follow `VEXA_FEATURES` alone.
+  `calls` and `crm` also need their service: Compose profile `calls` / `crm`, Helm
+  `livekit.enabled` / `crm.enabled`. 0.13.3 publishes no CRM image, so `crm` needs one you build from
+  `core/crm`. Full table: [Feature switches](/configuration#feature-switches).
+
+### New MCP tools
+
+0.13 adds MCP tools (among them `get_meeting`, `get_meeting_participants`, `delete_meeting` and
+`record_voice_note`, plus the agent, mail and sensor tools of the domains you deploy).
+
+- **Hits:** clients that pin or snapshot the tool list of an existing key.
+- **If you skip it:** existing keys see the new tools in `tools/list`.
+- **Do:** to keep existing keys on the 0.12 list, set `VEXA_MCP_TOOLS_ALLOW` (Helm `mcp.tools.allow`)
+  to the 0.12 tool names and name early users in `VEXA_MCP_TOOLS_COHORT`. A hidden tool is also
+  refused when called by name. See [MCP tool visibility](/configuration#mcp-tool-visibility).
+
+### Helm: network default-deny
+
+With `networkPolicy.enabled` (the default), the chart now installs a namespace-wide default-deny and
+allows only its own traffic. Spawned bots and agent workers reach only DNS, public addresses and
+their own dependencies.
+
+- **Hits:** Helm installs on a CNI that enforces NetworkPolicy.
+- **If you skip it:**
+  - Other Pods in the same namespace lose all traffic.
+  - Bots cannot reach a transcription service, S3 or proxy on a private address: no transcript.
+  - Agent workers cannot reach an in-cluster model endpoint.
+  - A metrics scraper in another namespace cannot reach the chart's Pods.
+  - A control-plane Pod that authenticates through the cloud metadata server (GKE Workload
+    Identity, EKS Pod Identity) cannot.
+- **Do:**
+  - Install Vexa in a namespace of its own, or give other Pods there their own policies.
+  - Add private endpoints with `networkPolicy.workloads.bot.extraEgress` and
+    `networkPolicy.workloads.worker.extraEgress` (NetworkPolicy egress rules).
+  - Add a scraper with `networkPolicy.controlPlane.extraIngress`.
+  - Empty `networkPolicy.controlPlane.egressExcept` if a Pod needs the metadata server.
+  - `networkPolicy.defaultDeny.enabled: false` turns off only the namespace default-deny.
+
+### Helm: spawned Pods
+
+**Broad tolerations need an opt-in.**
+
+- **Hits:** `runtime.tolerations` or `global.tolerations` with a toleration that has no key, or one
+  for a control-plane or system taint.
+- **If you skip it:** the runtime does not start; it names the toleration and
+  `RUNTIME_K8S_ALLOW_BROAD_TOLERATIONS`.
+- **Do:** narrow the toleration, or set `runtime.workloadScheduling.allowBroadTolerations: true`.
+
+**Bots run in Chromium's sandbox, under a seccomp profile the chart installs.**
+
+- **Hits:** Helm installs in a namespace whose Pod Security level is `baseline` or `restricted`, and
+  OpenShift.
+- **If you skip it:** the `<release>-bot-seccomp` DaemonSet cannot mount its `hostPath`, so the
+  profile never reaches the nodes and bot Pods that name it do not start.
+- **Do:** admit `hostPath` in the namespace, install the profile another way (OpenShift: a
+  MachineConfig or the Security Profiles Operator, see the chart README), or set
+  `runtime.botSandbox.enabled: false`. On OpenShift's restricted SCC also set
+  `runtime.workloadScheduling.agentWorker.capabilities: []`.
+
+**Bot Pods set `runAsNonRoot`.** A 0.12 bot image runs as root and will not start under a 0.13
+runtime. Keep `runtime.browserImage` on the release tag.
+
+### Docker Compose: bots and workers on their own networks
+
+The runtime starts meeting bots on the `bots` network (meeting-api, redis, storage) and agent workers
+on the `workers` network (gateway, redis, flows-api, and the optional `llm-shim` and `searxng`).
+
+- **Hits:** Compose stacks where you added a service that a bot or worker must reach, such as a local
+  transcription service or model endpoint.
+- **If you skip it:** the bot or worker cannot resolve or reach that service.
+- **Do:** add that service to the `bots` or `workers` network.
+
+### Authenticated bots
+
+- **Hits:** installs with `BOT_AUTHENTICATED` on.
+- **If you skip it:** meeting-api refuses to boot when `BOT_USERDATA_S3_PATH`, `BOT_S3_ENDPOINT` or
+  `BOT_S3_BUCKET` is incomplete, and `POST /bots` refuses to spawn when a `BOT_S3_*` key equals a
+  `MINIO_*` or `S3_*` key.
+- **Do:** give the bots a key of their own, read-only on `BOT_USERDATA_S3_PATH`; meeting-api writes the
+  session with its own storage credentials. `make login` now uploads with `LOGIN_S3_ACCESS_KEY` /
+  `LOGIN_S3_SECRET_KEY` (on Compose, `.env`'s `MINIO_*` pair). See
+  [Authenticated bots](/authenticated-bots#storage-layout-and-security).
+
+### Vexa Lite run by hand
+
+If you start the Lite image with your own `docker run` instead of `make lite`:
+
+- Pass `DB_PASSWORD` (your database's password). The image no longer falls back to `postgres` and
+  exits with `ERROR: DB_PASSWORD is unset or a value published in the Vexa repository - refusing to start.`
+- With `MINIO_ENDPOINT` set, pass a `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` pair that is not
+  `vexa-access-key` / `vexa-secret-key`.
+- Mount a volume at `/var/lib/vexa/state` so the minted sign-in secret, signing key and gateway
+  identity keys survive re-creating the container.
+- Start it with `--security-opt seccomp=core/runtime/src/runtime_kernel/seccomp-userns.json`, as
+  `make lite` does, so bots get Chromium's sandbox.
+- `VEXA_LITE_VNC` is gone; each bot has its own display.
+
+### Outbound mail kinds start off
+
+0.13.3 gives each kind of mail the deployment sends (minutes, recording, attendee report, bot scheduled, prepare, quarantine reply) its own switch, owned by the company’s `_global` account, and with the default `VEXA_MAIL_KINDS_DEFAULT=shipped` those kinds start **off**. Mail to the bot’s mailbox is also filtered by default (`VEXA_MAIL_INBOUND_FILTER=vexa`).
+
+- **Hits:** every deployment that sends mail from flows today.
+- **If you skip it:** people stop receiving those mails after the upgrade, with no error.
+- **Do:** from the `_global` account, test-send each kind you want and switch it on, or set `VEXA_MAIL_KINDS_DEFAULT=on` (Compose) or the kinds in `_global/POLICIES.md` (Helm). Details: [Upgrading an existing deployment](/flows/mail-design#upgrading-an-existing-deployment).
+
+### Mailbox invitations and calendar sensors
+
+A mailbox invitation now sends its bot from a keyed schedule one minute before the start (`invite_intake` v4 with the company flow `invite_join`), and the schedule moves with a reschedule and is removed on a cancellation. Sensors exist but run nothing until a person creates and enables one; the calendar kind needs the broker’s `sensors` key (Compose: re-run `connections-keys`). Details: [What is on after an upgrade](/flows/sensors#what-is-on-after-an-upgrade).
+
+## After the upgrade, once
+
+**Clear the transcript feeds of meetings deleted on 0.12.** Optional; it frees Redis memory and
+touches nothing else. Commands for each surface are in
+[Deployment → One-time steps after upgrading](/deployment#one-time-steps-after-upgrading).
+
+## New features
+
+On without configuration:
+
+- **Chats in the session store.** Chats are kept by agent-api in the session store (see
+  [Database schema](#database-schema)): their metadata in the database, each turn's transcript in
+  the recordings store under `sessions/` (Lite without object storage: `<state dir>/sessions`).
+  Adding people to a chat is the `shared_chats` switch, off by default (see
+  [Unproven features are off by default](#unproven-features-are-off-by-default) and
+  [Shared chats](/minutes/shared-chats)).
+- **Voice notes.** The microphone in the chats rail records a note that is transcribed live and kept
+  as a meeting (platform `voice_note`). Limits: `VOICE_NOTE_MAX_DURATION_SEC` (default `1800`) and
+  `VOICE_NOTE_IDLE_TIMEOUT_SEC` (default `120`) on meeting-api. See [Voice notes](/minutes/voice-notes).
+
+None of these is on until you configure it:
+
+- **Calls** in a chat with other people, on the deployment's own LiveKit server: Compose profile
+  `calls` (`docker compose --profile calls up -d livekit`) with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
+  `LIVEKIT_API_SECRET` in `.env`; Helm `livekit.enabled: true` and `livekit.url`; not in Lite. The
+  firewall must admit the UDP media range. Also switch on `calls` in `VEXA_FEATURES`. See
+  [Calls](/minutes/calls).
+
+- **Minutes**, the terminal's chat, meetings and workspaces. See [Minutes](/minutes/overview).
+- **Connections**: Gmail, Calendar, Git and custom services, held by the new credential broker
+  (Compose and Helm, not Lite). Keep its store key: on Helm set `credentialBroker.existingSecret`;
+  losing it makes every stored credential unreadable. See [Connections](/connections).
+- **Sign-in by emailed link**: set `NEXTAUTH_URL` (Helm `terminal.publicUrl`) and the
+  `VEXA_MAIL_SMTP_*` relay. See [Publishing behind a reverse proxy](/deployment#publishing-behind-a-reverse-proxy).
+- **Sign-in through your own OpenID Connect provider** (ADFS, Keycloak), and
+  `VEXA_SIGNIN_METHODS` (Helm `terminal.signinMethods`) to offer only some doors.
+- **Bot mailbox on any IMAP server**, not only Gmail: `VEXA_MAIL_IMAP_*` (Helm `flows.mail.imap`).
+- **Transcription language** per deployment, person and meeting (Helm
+  `meetingApi.transcriptionLanguage`).
+- **Agent tools on Helm**: `models.runner`, `models.llmBaseUrl` and `secrets.llmApiKey` give the
+  chat agent its meeting tools on Kubernetes.
+
+## Helm: captured-signal tapes are off
+
+From 0.13.3 the chart sets `diagnostics.captureSignal: "false"`. A bot on Kubernetes stores no
+captured-signal tape (raw audio, captions, speaker events) unless you set it to `"true"`, or turn it
+on for the fleet or one account. Compose and Lite are unchanged. A value other than `"true"` or
+`"false"` stops the render.
+
+## Verify
+
+1. **Services up.** `docker compose -p vexa-v012 -f deploy/compose/docker-compose.yml ps` (or
+   `kubectl -n vexa get pods`) shows every service running, none restarting.
+   `curl http://localhost:18056/health` answers from the gateway (Lite: port `8056`).
+2. **Sign-in.** An existing user signs in to the terminal. A new person on the allow-list signs in.
+3. **Send a bot.** `POST /bots` with a meeting URL; the bot joins and reaches `active`.
+4. **Transcript.** `GET /transcripts/{platform}/{native_meeting_id}` returns segments while the
+   meeting runs, and the live view in the terminal follows them.
+5. **Webhooks.** `GET /user/webhook` shows your URL, and the bot's status changes reach it.
+6. **The full journey in one command.** `make probe SURFACE=compose` (or `lite`, `helm`) spawns a
+   bot, follows it and stops it, then sweeps the logs.
+7. **Routines.** `/workspaces/.routines/migration.v1.json` exists on agent-api, and the Routines board
+   lists your routines (see [Routines become flows, once](#routines-become-flows-once)).
+8. **Feature switches.** Signed in to the terminal, `GET /api/features` (what the app reads to show
+   or hide each entry point) lists every switch as you set it.
+
+## Rollback
+
+| What | Reversible? |
+|---|---|
+| Database schema | Yes, with two limits. 0.12.28 runs on the 0.13 database: it ignores the `agent_session*` and `friction_occurrence` tables and the new `flow_version` columns, and a flow it writes takes the `instance` scope. It does not know scopes, so it runs every active flow as an instance flow: before rolling back, list `SELECT scope, name, version FROM flow_version WHERE scope <> 'instance' AND status = 'active'` and set those rows to `status = 'draft'`. |
+| Chats | Partly. 0.12 reads chats only from workspaces, so a chat shows the turns it had before the upgrade; turns taken on 0.13 stay in the session store. After `session_migrate --clean` the old files are gone; after `--clean --retire`, run `session_migrate --restore` before starting 0.12. |
+| Data written by 0.13 (sign-in settings, provider bindings, connections) | Stays where it is; 0.12 does not use it. Connections are unavailable on 0.12. |
+| Rotated passwords and keys | Keep the new values. 0.12 reads the same keys from `.env` and the Helm Secrets. Do not restore the old published defaults. |
+| Routines | Partly. 0.12 runs `routines/<name>.md` files, and the conversion removed them from the workspaces. There is no restore command: copy the files you want back from `/workspaces/.routines/retired/<subject>/` on agent-api into each workspace’s `routines/` folder (each copy carries a time stamp in its name; drop it), or restore them from the workspace archive you took before the upgrade. Set the converted person flows to `draft` as above. |
+| Meetings in progress | No. A bot started by one version is refused by the other; roll back between meetings. |
+
+To roll back Compose or Lite: check out the 0.12 tag, keep the current `.env` (with
+`IMAGE_TAG` set back to the 0.12 tag), and run `make up` or `make lite`.
+
+To roll back Helm, do not use `helm rollback` alone: it restores the 0.12 Secrets, including the
+database password `postgres` and the admin key `CHANGE_ME`, while the database now has a new
+password. Read the current values first, then run `helm upgrade` with the 0.12 chart and pass them:
+
+```bash
+kubectl -n vexa get secret postgres-credentials -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d
+kubectl -n vexa get secret <release>-vexa-secrets -o jsonpath='{.data.ADMIN_API_TOKEN}' | base64 -d
+# then, from the 0.12 checkout:
+helm upgrade vexa deploy/helm/charts/vexa -n vexa -f values-0.12.yaml \
+  --set database.password=<value> --set secrets.adminApiToken=<value>
+```
+
+If the database itself is damaged, restore the dump you took before the upgrade.
+
+## Why it complies
+
+| Rule | How this upgrade meets it | Enforced by |
+|---|---|---|
+| An upgrade is invisible to an existing caller | `POST /bots` reads 0.12 `language` values; `/ws` keeps the 0.12 key contract until `VEXA_WS_SCOPE_MODE=strict`; `PUT /user/webhook` keeps the 0.12 record; stored webhook URLs keep their 0.12 delivery under `VEXA_WEBHOOK_STORED_URL_POLICY=v012` | `core/meetings/services/meeting-api/tests/test_transcription_language.py`, `core/gateway/services/gateway/tests/test_multiplex.py`, `core/identity/services/admin-api/tests/test_user_webhook_response.py`, `core/meetings/services/meeting-api/tests/test_webhook_stored_url_policy.py` |
+| No meeting in flight loses its transcript to an upgrade | unsigned 0.12 entries admitted for pre-0.13 in-flight meetings inside a bounded window; 0.12 bot Pods re-adopted | `core/meetings/services/meeting-api/tests/test_segment_legacy_handoff.py`, `core/runtime/tests/test_readopt.py` |
+| One mechanism per concern ([ADR-0046](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0046-flows-absorb-routines-flows-own-time-flows-are-scoped.md)) | routine files are converted once, retired with a copy outside every mount, and never read again | `core/agent/tests/test_routines_once.py` |
+| Unproven features are not on by default | the release default of `VEXA_FEATURES` is empty: every switch off, data kept | `core/agent/tests/test_features.py`; `gate:config-contract` |
+| No published defaults, no hidden store | the chart refuses to render without your own S3 bucket and refuses a leftover `minio.enabled` | `deploy/helm/tests/test_template.sh` |

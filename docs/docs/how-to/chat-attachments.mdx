@@ -1,6 +1,6 @@
 ---
 title: "Attach files to a chat"
-description: "Drop files anywhere on the chat, paste a screenshot, or pick files with +. Each uploads to your desk, and the agent reads it on your next message."
+description: "Drop files anywhere on the chat, paste a screenshot, or pick files with +. Your message shows them as thumbnails, and the agent sees the picture and gets the exact path."
 ---
 
 You can give the agent files to work with in three ways:
@@ -15,16 +15,34 @@ You can give the agent files to work with in three ways:
 Attachments appear above the text you type. An image shows as a thumbnail; click it to see it
 larger. Any other file shows as a chip with its name and size. Each file starts uploading as soon
 as you add it, with its own progress. Remove one with its **×**, or focus it with Tab and press
-Backspace or Delete. When you send, the message waits for any upload still in flight.
+Backspace or Delete. When you send, the message waits for any upload still in flight. A picture
+alone, with no text, is a message too.
+
+## In the conversation
+
+Your sent message shows what it carried, above your words: each picture as a small rounded
+thumbnail that opens full size when you click it, and every other file as a chip with its name and
+size that downloads it. The name is the one you picked; the stored hash never shows. The same
+thumbnails come back when you reload the page or open the chat on another device.
+
+In a shared chat, every participant of the conversation sees the files posted in it. Being a member
+of a workspace does not show them; being in the conversation does.
 
 ## What happens to an attached file
 
 The file is stored in your own [desk](/concepts#workspace), the workspace you own:
 
-| File | Stored at | What the agent is told |
+| File | Stored at | What the agent gets |
 |---|---|---|
-| An image | `assets/<hash>-<name>` | Markdown that would put the image on a page, ready to use |
-| Anything else | `uploads/<hash>-<name>` | An `@file:` reference to read |
+| An image | `assets/<hash>-<name>` | The picture itself, plus its exact path |
+| Anything else | `uploads/<hash>-<name>` | Its exact path, to open directly |
+
+The agent never has to search for an attachment. The picture is sent as an image with Claude Code
+and Codex; with the OpenAI-compatible harness it is sent when the endpoint takes images
+(`VEXA_LLM_IMAGES`, on by default only for OpenAI's own API). In a shared chat the agent's turn mounts
+nobody's desk (the shared-chat leak rule), but a file posted in the chat is already read by every
+participant, so it travels with the conversation: any participant's turn there can see it, and
+nothing else on the poster's desk travels.
 
 `<hash>` is the first 16 characters of the file's SHA-256, so two different files with the same
 name never overwrite each other. The file stays on your desk after the chat ends.
@@ -77,8 +95,28 @@ the reason:
    checks the size of each. It writes them only when all of them pass, to the caller's own desk
    (`uploads/` or `assets/`), through `workspace_paths.write_bytes_inside`, which refuses links and
    paths outside the workspace. It returns `{ files: [{ name, path }] }`.
-6. **Send.** When you send, the chat appends the stored paths to your message, as above, and the
-   turn runs as usual over `/api/chat`. The agent reads each file from your desk with its own tools.
+6. **Send.** The chat appends one mark to your words, `<!--vexa:attachments [{path, name}]-->`
+   (`attachmentPrompt` in `chat.tsx`), and the turn runs as usual over `/api/chat`. The mark is the
+   only carrier; the bubble draws the files from the same list.
+7. **Vouch.** agent-api (`_vouch_attachments` in `routers/chats.py`) keeps only items that name a
+   file the upload route stored on the speaker's own desk, and writes whose desk, the size and the
+   type itself. In a shared conversation it records each file against the session
+   (`agent_session_attachment`).
+8. **Expand.** The worker (`expand_attachments` in `worker/engine.py`) resolves each file inside the
+   turn's mounts and writes its exact absolute path under the mark. Each harness reads the same mark
+   and sends a picture as an image block (`llm/claude_code.py`, `llm/codex.py`,
+   `llm/openai_agent.py`). The person's own words are recorded without the mark.
+9. **History.** The history reader (`parse_history`) returns the files as `attachments` on the user
+   turn and the words without them. Turns sent before the mark existed (`Attached files:` lines)
+   are read the same way.
+10. **Serve.** A thumbnail loads from `GET /api/sessions/{session}/attachment?path=…`, proxied as
+    bytes by the terminal (`src/app/api/sessions/[session]/attachment/route.ts`). agent-api answers
+    the caller's own files, and files recorded as posted in that session to its participants.
+11. **Shared chats.** A turn in a shared conversation carries that session's posted files on its
+    transcript bundle (`session_sync.session_attachments`, read from each poster's desk, at most
+    24 MB, newest first). The worker writes them beside the conversation, outside every mount
+    (`session_carry`), and resolves a mark to them there. Files in messages the agent was not asked
+    to answer join the next turn's mark.
 
 **Data ownership:** the bytes on your desk have one writer, agent-api's upload route, and only on
 your own request. The tray's state, meaning the progress, the errors and the preview images, lives
@@ -102,7 +140,7 @@ composer. Neither one is configurable at deploy time. The route is documented in
 | **P18, fail loud and attributable** | Every refused or failed file stays visible with a reason, and a send is refused rather than going without it. The server's own reason (for example its `413`) is shown as sent. | ungated: reviewed; pinned by `chatDrop.test.tsx` |
 | **P20, complete mediation** | Every hop authenticates: session to terminal, API key to gateway, signed identity to agent-api. agent-api writes only to the caller's own desk. | gateway and agent-api deny tests, below |
 | **P23, one writer per data carrier** | The desk's upload drawers have one writer, agent-api. The browser holds no copy that anything reads back. No new carrier is added. | ungated: reviewed |
-| **No duplication** | One upload route serves the + button, drop and paste. No new endpoint or contract was added. The 25 MB value is written twice, client and server; the server is the authority. | ungated: reviewed |
+| **No duplication** | One upload route serves the + button, drop and paste. The attachments mark is defined once in Python (`shared/attachments.py`) and mirrored once in the terminal. The 25 MB value is written twice, client and server; the server is the authority. | `gate:fact-parity` (`attachments-mark`) |
 
 ### Security
 
@@ -115,6 +153,10 @@ composer. Neither one is configurable at deploy time. The route is documented in
 - **Who may read it afterwards:** anyone who may read your desk, which is every signed-in member of
   the instance. Only you may write to it. Your private `_system` workspace is never used for
   attachments.
+- **What a conversation opens:** the attachment route answers by session participation (ADR-0048),
+  never by workspace membership, and only for files recorded as posted in that session. Anything
+  else on the poster's desk does not open through it, and a non-participant gets `404`, the same
+  answer as a missing file. A mark naming a file not on the speaker's own desk is dropped.
 
 Tests that prove these refusals:
 
@@ -128,3 +170,6 @@ Tests that prove these refusals:
 | `…/test_workspace_upload_access.py::test_an_upload_over_the_ceiling_is_refused_and_writes_nothing` | Over the limit: `413`, nothing from the request kept |
 | `core/agent/tests/test_api.py::test_workspace_upload_saves_hash_prefixed_files_under_subject` | `../` in a name cannot escape the desk |
 | `core/agent/tests/test_workspace_id_api.py::test_a_colleague_may_NOT_WRITE_another_desk` | A colleague can read a desk but not write to it |
+| `core/agent/tests/test_chat_attachments.py::test_a_participant_reads_an_attachment_posted_in_the_shared_chat` | A participant reads what was posted; not the rest of the desk; a non-participant gets `404` |
+| `…/test_chat_attachments.py::test_workspace_membership_does_not_open_an_attachment` | Workspace membership grants nothing here |
+| `…/test_chat_attachments.py::test_a_private_chat_dispatches_the_normalised_mark` | Only the speaker's own stored files reach the agent |

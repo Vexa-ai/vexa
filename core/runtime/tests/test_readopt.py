@@ -412,11 +412,14 @@ def test_k8s_discovers_pods_by_label(monkeypatch):
     ]}
 
     def fake_kubectl(*args: str, check: bool = True):
+        selector = args[args.index("-l") + 1]
+        assert selector in ("runtime.managed=true,runtime.instance=default",
+                            "runtime.managed=true,!runtime.instance")
+
         class R:  # noqa: N801
             returncode = 0
-            stdout = json.dumps(pods)
+            stdout = json.dumps(pods if "instance=default" in selector else {"items": []})
             stderr = ""
-        assert "-l" in args and "runtime.managed=true,runtime.instance=default" in args
         return R()
 
     monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
@@ -477,4 +480,56 @@ def test_k8s_adopts_only_its_own_instances_pods(monkeypatch):
     k8s_backend.K8sBackend().start("mtg-1", Runnable(image="img"), {})
     k8s_backend.K8sBackend(instance="release-b").list_workload_containers()
     assert submitted[0]["metadata"]["labels"]["runtime.instance"] == "release-a"
-    assert selectors == ["runtime.managed=true,runtime.instance=release-b"]
+    # its own instance, plus Pods no instance-aware runtime spawned (0.12) — never release-a's
+    assert selectors == ["runtime.managed=true,runtime.instance=release-b",
+                         "runtime.managed=true,!runtime.instance"]
+
+
+def _k8s_with(monkeypatch, by_selector: dict):
+    from runtime_kernel import k8s_backend
+
+    asked = []
+
+    def fake_kubectl(*args: str, check: bool = True, stdin=None):
+        selector = args[args.index("-l") + 1] if "-l" in args else ""
+        asked.append(selector)
+
+        class R:  # noqa: N801
+            returncode = 0
+            stdout = json.dumps({"items": by_selector.get(selector, [])})
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
+    return k8s_backend, asked
+
+
+_V012_BOT = {"metadata": {"name": "vexa-mtg-32686-e21ffd55",
+                          "labels": {"runtime.managed": "true", "runtime.workload_id": "mtg-32686-e21ffd55"}},
+             "status": {"phase": "Running"}}
+
+
+def test_k8s_adopts_a_0_12_bot_still_in_its_meeting_across_the_upgrade(monkeypatch):
+    """A 0.12 runtime labelled its bot Pods without `runtime.instance`. A 0.13 runtime that came up
+    while that bot was still in a meeting must adopt it: otherwise meeting-api sees the live bot as
+    untracked and fails its meeting after the escalation window."""
+    monkeypatch.delenv("RUNTIME_K8S_ADOPT_UNLABELLED", raising=False)
+    k8s_backend, _ = _k8s_with(monkeypatch, {"runtime.managed=true,!runtime.instance": [_V012_BOT]})
+    found = k8s_backend.K8sBackend().list_workload_containers()
+    assert [i["workload_id"] for i in found] == ["mtg-32686-e21ffd55"]
+    assert found[0]["running"] is True
+
+
+def test_k8s_unlabelled_adoption_can_be_turned_off(monkeypatch):
+    monkeypatch.setenv("RUNTIME_K8S_ADOPT_UNLABELLED", "false")
+    k8s_backend, asked = _k8s_with(monkeypatch, {"runtime.managed=true,!runtime.instance": [_V012_BOT]})
+    assert k8s_backend.K8sBackend().list_workload_containers() == []
+    assert asked == ["runtime.managed=true,runtime.instance=default"]
+
+
+def test_k8s_a_pod_matched_twice_is_adopted_once(monkeypatch):
+    k8s_backend, _ = _k8s_with(monkeypatch, {
+        "runtime.managed=true,runtime.instance=default": [_V012_BOT],
+        "runtime.managed=true,!runtime.instance": [_V012_BOT],
+    })
+    assert len(k8s_backend.K8sBackend().list_workload_containers()) == 1

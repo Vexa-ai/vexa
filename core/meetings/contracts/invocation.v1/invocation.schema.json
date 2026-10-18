@@ -4,7 +4,33 @@
   "title": "invocation.v1",
   "description": "The meeting-bot's constructor — delivered as one JSON env var VEXA_BOT_CONFIG (ADR-0002), validated at boot. A config contract legitimately carries the secrets the bot needs (marked SECRET below; placeholders in goldens, P14). No tenancy fields (deferred, ADR-0003).",
   "$defs": {
-    "Platform": { "enum": ["google_meet", "zoom", "teams", "jitsi"] },
+    "Platform": { "enum": ["google_meet", "zoom", "teams", "jitsi", "voice_note", "vexa_call"] },
+    "VoiceNote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["audioStream", "maxDurationSec"],
+      "description": "A voice note: no meeting to join. The person's browser streams capture.v1 audio frames through the gateway to meeting-api, which appends each one to `audioStream`; the bot reads that stream in order and runs it through the same pipeline a meeting's audio takes. Present exactly when `platform` is `voice_note`",
+      "properties": {
+        "audioStream": { "type": "string", "pattern": "^voice_note:meeting:[0-9]+:audio$", "description": "the Redis stream the bot reads (XREAD), `voice_note:meeting:{meeting_id}:audio`. Each entry is one capture.v1 audio frame (field `f`) or the end of the note (field `end`)" },
+        "maxDurationSec": { "type": "integer", "minimum": 1, "description": "the longest note, in seconds of audio. meeting-api accepts no audio past it; the bot ends a note still running a minute later with `max_bot_time_exceeded`" },
+        "idleTimeoutSec": { "type": "integer", "minimum": 1, "default": 120, "description": "how long the bot waits with neither audio nor an end before it ends the note (`left_alone`): the browser went away without Stop" },
+        "speakerName": { "type": "string", "description": "the name the note's words are attributed to (the person recording); absent ⇒ the lane's unnamed label" }
+      }
+    },
+    "Call": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "room", "token", "maxDurationSec"],
+      "description": "A Vexa call: a room on the deployment's self-hosted LiveKit server. The bot joins it hidden and subscribe-only and reads each participant's microphone track as its own channel, named by the participant; no browser. Present exactly when `platform` is `vexa_call`",
+      "properties": {
+        "url": { "type": "string", "pattern": "^wss?://", "description": "the LiveKit server as the bot reaches it inside the deployment" },
+        "room": { "type": "string", "pattern": "^call-[a-z0-9-]{4,64}$", "description": "the room name meeting-api minted for this call" },
+        "token": { "type": "string", "description": "SECRET — the listener's LiveKit access token: hidden, subscribe-only, this room only, expiring with the call's cap. Placeholder in goldens" },
+        "maxDurationSec": { "type": "integer", "minimum": 1, "description": "the longest call; the bot ends a call still running at it with `max_bot_time_exceeded`" },
+        "emptyGraceSec": { "type": "integer", "minimum": 0, "default": 30, "description": "how long an emptied room is given for someone to come back before the call ends (`left_alone`)" },
+        "firstJoinTimeoutSec": { "type": "integer", "minimum": 1, "default": 300, "description": "how long the bot waits for the first participant before the call ends (`left_alone`)" }
+      }
+    },
     "AutomaticLeave": {
       "type": "object",
       "additionalProperties": false,
@@ -18,17 +44,31 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["platform", "meetingUrl", "botName", "redisUrl"],
+      "allOf": [
+        {
+          "if": { "required": ["platform"], "properties": { "platform": { "const": "voice_note" } } },
+          "then": { "required": ["voiceNote"] },
+          "else": { "not": { "required": ["voiceNote"] } }
+        },
+        {
+          "if": { "required": ["platform"], "properties": { "platform": { "const": "vexa_call" } } },
+          "then": { "required": ["call"] },
+          "else": { "not": { "required": ["call"] } }
+        }
+      ],
       "properties": {
         "platform": { "$ref": "#/$defs/Platform" },
-        "meetingUrl": { "type": ["string", "null"], "description": "null only for native-SDK zoom" },
+        "meetingUrl": { "type": ["string", "null"], "description": "null for native-SDK zoom, for voice_note (nothing to join) and for vexa_call (the room is in `call`)" },
         "botName": { "type": "string" },
         "passcode": { "type": "string", "description": "meeting passcode (zoom passcode screen / jitsi room password); placeholder in goldens" },
         "nativeMeetingId": { "type": "string" },
-        "token": { "type": "string", "description": "SECRET — the session's MeetingToken and the bot's only credential: an HS256 token meeting-api mints per spawn, bound to this session's connectionId (claim session_uid). It is the transport bearer, `Authorization: Bearer <token>`, at three doors: every lifecycle.v1 event the bot POSTs to meetingApiCallbackUrl, every upload to recordingUploadUrl, and an authenticated bot's session-profile.v1 write-back to sessionWritebackUrl; meeting-api refuses it for any other session, and requires its exp, aud and scope. Required by a meeting-api from v0.13.2: a bot that sends no bearer is refused (401). Placeholder in goldens" },
+        "voiceNote": { "$ref": "#/$defs/VoiceNote" },
+        "call": { "$ref": "#/$defs/Call" },
+        "token": { "type": "string", "description": "SECRET — the session's MeetingToken and the bot's only credential: an HS256 token meeting-api mints per spawn, bound to this session's connectionId (claim session_uid). It is the transport bearer, `Authorization: Bearer <token>`, at four doors: every lifecycle.v1 event the bot POSTs to meetingApiCallbackUrl, every upload to recordingUploadUrl, an authenticated bot's session-profile.v1 write-back to sessionWritebackUrl, and its restore from sessionRestoreUrl; meeting-api refuses it for any other session, and requires its exp, aud and scope. Required by a meeting-api from v0.13.2: a bot that sends no bearer is refused (401). Placeholder in goldens" },
         "connectionId": { "type": "string" },
         "meeting_id": { "type": "integer" },
         "container_name": { "type": "string" },
-        "redisUrl": { "type": "string", "description": "SECRET — the Redis URL for the acts.v1 command channel and the transcript egress, with credentials. Per-workload ACL (the default) puts a Redis user of the bot's own session in it, granted exactly: append to transcription_segments, publish on tc:meeting:{meeting_id}:mutable, subscribe to bot_commands:meeting:{meeting_id}, and the commands xadd publish subscribe unsubscribe ping quit; the user is removed when the session ends. With REDIS_WORKLOAD_ACL=shared it carries meeting-api's own service connection instead. Placeholder in goldens" },
+        "redisUrl": { "type": "string", "description": "SECRET — the Redis URL for the acts.v1 command channel and the transcript egress, with credentials. Per-workload ACL (the default) puts a Redis user of the bot's own session in it, granted exactly: append to transcription_segments, publish on tc:meeting:{meeting_id}:mutable, subscribe to bot_commands:meeting:{meeting_id}, and the commands xadd publish subscribe unsubscribe ping quit; for a voice note also xread on its own voiceNote.audioStream and no other key; the user is removed when the session ends. With REDIS_WORKLOAD_ACL=shared it carries meeting-api's own service connection instead. Placeholder in goldens" },
         "meetingApiCallbackUrl": { "type": "string", "format": "uri", "description": "lifecycle.v1 sink" },
         "internalSecret": { "type": "string", "deprecated": true, "description": "DEPRECATED, MUST NOT be set. A producer from v0.13.2 never sends it and a bot ignores it: the bot authenticates with `token`. It stays in the schema only so a bot can still parse an invocation from an older meeting-api" },
         "language": { "type": ["string", "null"] },
@@ -53,6 +93,7 @@
         "authenticated": { "type": "boolean", "description": "persistent browser context from S3" },
         "userdataS3Path": { "type": "string" },
         "sessionWritebackUrl": { "type": "string", "format": "uri", "description": "an authenticated bot's session write-back sink: the full URL, session uid included, the bot PUTs its session-profile.v1 WritebackBody to on clean teardown, with `Authorization: Bearer <token>`. Sent by a meeting-api from v0.13.2, and only beside `authenticated`; absent, the bot writes nothing back and derives no URL. A bot older than v0.13.2 refuses an invocation that carries it" },
+        "sessionRestoreUrl": { "type": "string", "format": "uri", "description": "an authenticated bot's session source when its profile is a saved bot account rather than the userdata store: the full URL, session uid included, the bot GETs before launch with `Authorization: Bearer <token>`; the answer is a session-profile.v1 WritebackBody, and the bot writes only its SESSION_PROFILE paths into its profile dir. Any failure is fail-loud (the session-restore failure, as for the store). Sent only beside `authenticated`; absent, the bot restores from the store or not at all and derives no URL. A bot that predates the field refuses an invocation that carries it" },
         "s3Endpoint": { "type": "string" },
         "s3Bucket": { "type": "string" },
         "s3AccessKey": { "type": "string", "description": "SECRET; placeholder in goldens" },

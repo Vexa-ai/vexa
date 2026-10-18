@@ -5,12 +5,15 @@ description: "Set up Connections on a self-hosted install: the credential broker
 
 Connections lets a person connect Gmail, Google Calendar or any HTTPS API to their agent. The person
 consents, or pastes the key, in the terminal's **Connections** panel; from then on the agent reads
-mail and events, saves Gmail drafts, or calls the service — and never receives the credential.
+mail and events, saves and updates Gmail drafts (replies included), changes calendar events when the
+person has turned that on, or calls the service — and never receives the credential. What an agent
+may do with mail and calendar is the administrator's [policy](#what-an-agent-may-do-the-policy).
 
 The credentials live in the **credential broker**, a small service that runs beside agent-api. It is
 part of a standard Docker Compose or Helm install whenever agent-api is. [Vexa Lite](/deployment-lite)
 does not include Connections: Lite runs agent workers inside its one container, so nothing could
-keep the person's key away from them.
+keep the person's key away from them. For the same reason Lite saves no Git token or deploy key; a
+token typed for one Git operation still works.
 
 ## What runs
 
@@ -96,11 +99,15 @@ and `mail_read` return, and every event `calendar_events` returns, can carry a `
 that opens it in the browser. When the agent gives a person a link to an email or an event, it uses
 that field and nothing else. It never builds a Gmail or Calendar address itself.
 
-- **Gmail:** `https://mail.google.com/mail/u/<connected address>/#all/<thread id>`. The address is the
-  mailbox the person connected, so a person with several Google accounts lands in the right one, not
-  in whichever account the browser lists first (`/u/0/`). Characters such as `+` are percent-encoded
-  (`robin.vale%2Bwork@example.test`). The thread id is used; the message id only when Google gave no
-  thread id.
+- **Gmail:** `https://mail.google.com/mail/?authuser=<connected address>#all/<thread id>`.
+  `authuser` is Google's own way to pick a signed-in account, so a person with several Google
+  accounts lands in the mailbox they connected, not in whichever account the browser lists first
+  (`/u/0/`). Characters such as `+` are percent-encoded (`robin.vale%2Bwork@example.test`). The
+  thread id is used; the message id only when Google gave no thread id.
+  Before 0.13.3 the link was `https://mail.google.com/mail/u/<address>/#all/<thread id>`. Gmail
+  answers that path with its own "Temporary Error (404) … your account is temporarily unavailable"
+  page, even for a signed-in person, so those links did not open. A page written with them needs to
+  be regenerated: ask the agent to refresh it.
 - **Calendar:** Google's own link for the event (`htmlLink`), passed on only when it is an `https`
   address on `calendar.google.com` or `www.google.com`.
 
@@ -114,6 +121,60 @@ Limits:
 - A Calendar event has no `web_url` when Google's link is missing or points anywhere else.
 - `web_url` is read-only metadata. The tool does not take an account, an index or a URL as input.
 
+**Calendar changes are a second, opt-in consent.** A connected calendar is read-only until the person
+presses **Enable calendar changes** in the panel. That consent asks Google, incrementally, for
+`https://www.googleapis.com/auth/calendar.events` ("view and edit events on all your calendars");
+until it is granted, every create, update or cancel answers `permission_required` and nothing is
+written. The panel shows *Calendar changes: on* or *off* for each calendar. Add the scope to the
+OAuth consent screen if your Google project lists scopes explicitly.
+
+## What an agent may do with mail and calendar
+
+| Tool | What it does | Never |
+|---|---|---|
+| `gmail_draft_create` | saves a draft: To, Cc, Bcc, subject, plain text; with `thread_id` (and optionally `in_reply_to`), a reply filed in that conversation with `In-Reply-To`, `References` and a `Re:` subject; workspace files attached when policy allows | sends |
+| `gmail_draft_update` | replaces the content of a draft **Vexa created** for this person in this mailbox | touches a draft the person wrote, or one another mailbox created |
+| `calendar_event_create` | creates an event: title, start and end with a time zone (or all-day dates), description, location, attendees, an optional Google Meet link | emails attendees, unless `notify: true` and policy allows it |
+| `calendar_event_update` | changes the fields given on an event from a calendar read, if the person organizes it or guests may modify it | resolves an id it was not given by a read |
+| `calendar_event_cancel` | deletes an event the person organizes (Google's cancellation: attendees see it cancelled) | tells attendees, unless `notify: true` and policy allows it |
+| `connection_policy_get` / `connection_policy_set` | reads the policy; saves the person's own, narrower setting (`set` from the person's own client only) | widens past the administrator's policy; `set` is refused to every agent, even in a chat the person is watching |
+
+Each write takes a `request_id`. A retry with the same id and the same content returns the first
+result and writes nothing; the same id with other content is refused. If Google's answer is lost,
+the next retry answers *outcome unknown — check your calendar (or Gmail Drafts) before retrying*
+rather than guessing; a new event's Google id is derived from the request, so even a forced retry
+cannot create it twice.
+
+**Out of scope:** Microsoft Outlook mail and calendar. Connections supports Google only; there is no
+Outlook draft or calendar change.
+
+## What an agent may do: the policy
+
+The administrator decides, in `_global/POLICIES.md` (the same file as the meeting rules; the
+policies wizard can write it). The keys and their defaults:
+
+| Key | Default | Decides |
+|---|---|---|
+| `connection_actions` | `all` | which actions an agent may take while its person is in the chat |
+| `connection_actions_unattended` | `none` | which reads a background routine may take (never a write) |
+| `calendar_notify_attendees` | `off` | whether an agent may ask Google to email attendees |
+| `calendar_attendee_domains` | `any` | which domains may be added as attendees |
+| `calendar_ids` | `primary` | which calendars may be changed |
+| `draft_recipient_domains` | `any` | which domains a draft's To, Cc and Bcc may use |
+| `draft_attachments` / `draft_attachment_max_kb` | `off` / `5120` | whether a draft may carry workspace files (PDF, PNG, JPEG, text, CSV, Markdown), and the total size |
+
+Actions are `gmail.search`, `gmail.read`, `gmail.thread`, `calendar.events`, `gmail.draft`,
+`gmail.draft.update`, `calendar.event.create`, `calendar.event.update`, `calendar.event.cancel`.
+A write that changes one of these keys in `_global/POLICIES.md` is refused to a background routine;
+any other change lands with a commit in `_global` naming the keys and who changed them
+(`connection policy changed: …`), and a `connection_policy_changed` log line.
+
+Each person can narrow any key for themselves (`connection_policy_set`, from their own client — an
+agent never saves it, so text an agent read cannot loosen it); a value wider than the
+administrator's is refused, naming the key. A refusal names its key too, so the person can see which
+line said no. A value the software cannot read, or a misspelt key starting `connection_`,
+`calendar_` or `draft_`, stops every mail and calendar action until it is fixed.
+
 ## Custom services
 
 A person, or their agent, can prepare a custom connection: an HTTPS endpoint and how the key is
@@ -122,6 +183,20 @@ shows every host a credential will be sent to (for OAuth, the token endpoint and
 endpoint that receives the access token), flags a host that is not a known provider, and on the
 first save to a new host asks the person to type it; the broker refuses the save otherwise. The
 broker sends only to public addresses, refuses redirects, and redacts the key from responses.
+
+How the key is presented is the setup's `scheme`: `bearer` sends `Authorization: Bearer <key>`,
+`raw` sends the key alone in the named header, `telegram` puts a bot token in Telegram's fixed URL,
+and `prefix` sends `<prefix> <key>` for a service that names another word. Discord bots, for
+example, need `scheme: prefix` with `prefix: Bot`. A prefix is one HTTP token of at most 32
+characters (letters, digits and `-` among them), never a space or a colon. To fix a connection set
+up with the wrong scheme, ask the agent to set it up again with the right one and save the key
+again.
+
+Asking again for a service whose setup is not finished reuses that setup instead of adding a second
+one; a new setup for the same service (same name or same destination host, or an unaccepted one
+from the same chat) replaces the unfinished ones. An unfinished setup nobody has asked for in 24
+hours is no longer listed. A connection with a saved key or OAuth application is never replaced or
+hidden by either rule.
 
 Deleting a connection destroys every stored version of its credential and OAuth application;
 disconnecting destroys the credential and keeps the application for reconnecting. Otherwise a
@@ -149,13 +224,68 @@ is ever written there, so a live token gets a 404 and the broker is ready; an ex
 narrowed token gets 401 or 403 and `/ready` answers 503 with `"kind": "config"`. The read is covered
 by the `read` grant above; no extra policy is needed.
 
-## Git credentials in the broker (optional)
+## Git credentials
 
-agent-api keeps saved Git tokens and deploy keys in its own encrypted store (`VEXA_SECRETS_KEY`).
-To keep them in the broker instead, set `VEXA_GIT_STORE_BROKER_URL=http://credential-broker:8100`
-(compose) or `credentialBroker.gitStore: true` (Helm). Existing credentials move on first use. With
-it on, a broker outage stops Git operations instead of falling back to disk. agent-api holds the
-broker's git key only while this is on.
+Saved GitHub tokens and workspace deploy keys are kept in the broker. agent-api holds the broker's
+`git` role key and no store of its own; compose and the chart set `VEXA_GIT_STORE_BROKER_URL` to the
+broker they deploy. With the broker unconfigured or down, saving a token or generating a deploy key
+answers `503` with `"fault": "git_credentials_unavailable"`, and a Git operation that needs a saved
+credential is refused rather than run without it. A token typed for one operation still works.
+
+**Upgrading from a release that kept them in agent-api.** Credentials an older agent-api sealed under
+`<workspaces>/.secrets/` move into the broker on their owner's next Git operation, and the old file
+is removed once the broker has confirmed the value. Keep `VEXA_SECRETS_KEY` as it was until then;
+agent-api logs at boot how many are still waiting (counts only). To move them all at once, run the
+broker's one-shot import with agent-api's workspaces volume mounted:
+
+```bash
+# the workspaces volume is <compose project>_agent-workspaces — `docker volume ls | grep agent-workspaces`
+docker compose run --rm -T --user 0:0 -v <project>_agent-workspaces:/legacy credential-broker \
+  python -m credential_broker.import_git_legacy /legacy/.secrets --operator-key-file - <<< "$VEXA_SECRETS_KEY"
+```
+
+It runs as root only to read agent-api's files, and hands the broker's state back to the broker's
+own user before it exits. It reads only regular files inside the directory it is given: an entry,
+key, subdirectory or directory that is a symbolic link is skipped, and handing the state back never
+follows a link. agent-api's own reader follows the same rule, and once the broker holds a name it
+removes any old copy agent-api still has of it.
+
+With the Helm chart, run it as a one-off Pod built from the broker's own Pod spec (same image,
+environment, state volume and key files), with agent-api's workspaces PVC added at `/legacy`. Both
+PVCs default to `ReadWriteOnce`, so the Pod is pinned to the node the broker runs on; agent-api must
+run on that node too (true on a single-node cluster), or set `agentApi.workspaces.accessMode:
+ReadWriteMany`. The volume is mounted writable because the import removes each old file it has moved.
+
+```bash
+NS=vexa; F=<release>-vexa   # the chart's fullname: <release>-vexa unless fullnameOverride is set
+NODE=$(kubectl -n $NS get pod -l app.kubernetes.io/component=credential-broker -o jsonpath='{.items[0].spec.nodeName}')
+kubectl -n $NS get deploy $F-credential-broker -o json | jq --arg node "$NODE" --arg pvc "$F-agent-workspaces" '
+  {apiVersion: "v1", kind: "Pod", metadata: {name: "git-legacy-import"},
+   spec: (.spec.template.spec
+     | .restartPolicy = "Never" | .nodeName = $node
+     | .securityContext = ((.securityContext // {}) + {runAsNonRoot: false, runAsUser: 0, runAsGroup: 0})
+     | .volumes += [{name: "legacy", persistentVolumeClaim: {claimName: $pvc}}]
+     | .containers[0] |= (del(.ports, .livenessProbe, .readinessProbe, .startupProbe)
+         | .securityContext = ((.securityContext // {}) + {runAsNonRoot: false, runAsUser: 0})
+         | .stdin = true | .stdinOnce = true
+         | .command = ["python", "-m", "credential_broker.import_git_legacy", "/legacy/.secrets", "--operator-key-file", "-"]
+         | .volumeMounts += [{name: "legacy", mountPath: "/legacy"}]))}' \
+  | kubectl -n $NS apply -f -
+kubectl -n $NS wait --for=condition=Ready pod/git-legacy-import --timeout=120s
+kubectl -n $NS get secret $F-secrets -o jsonpath='{.data.VEXA_SECRETS_KEY}' | base64 -d \
+  | kubectl -n $NS attach -i git-legacy-import -c credential-broker
+kubectl -n $NS logs git-legacy-import && kubectl -n $NS delete pod git-legacy-import
+```
+
+Use `secrets.existingSecretName` in place of `$F-secrets` if you set it, and drop
+`"--operator-key-file", "-"` (and the `attach` line, then read the logs) if `VEXA_SECRETS_KEY` was
+never set. A cluster whose Pod Security admission refuses root, or that cannot place both volumes
+on one node, skips the import: each credential still moves on its owner's next Git operation.
+
+Omit `--operator-key-file` if `VEXA_SECRETS_KEY` was never set (the old store's generated key is
+read from the same directory). The import never overwrites a credential the broker already holds,
+removes each old file only after reading the value back, prints counts only, and is safe to run
+again. When nothing is left, it removes the old directory and its key; then `VEXA_SECRETS_KEY` can go.
 
 ## When something fails
 
@@ -200,9 +330,9 @@ Three callers reach the broker, each with its own role key. The broker checks a 
 
 | Role | Held by | May do |
 |---|---|---|
-| `agent` | agent-api (`VEXA_CONNECTIONS_AGENT_KEY_FILE`) | request, prepare, list, read mail and events, save a Gmail draft, call a custom service. Never consent, save, disconnect or delete. |
+| `agent` | agent-api (`VEXA_CONNECTIONS_AGENT_KEY_FILE`) | request, prepare, list, read mail and events, save or update a Gmail draft, change a calendar event, read and narrow the person's policy setting, call a custom service. Never consent, save, disconnect or delete. |
 | `human` | the terminal's server (`VEXA_CONNECTIONS_HUMAN_KEY_FILE`) | everything above, plus consent, save a credential or OAuth application, disconnect and delete |
-| `git` | agent-api, only when the Git store is on (`VEXA_GIT_STORE_KEY_FILE`) | read and write the person's Git token and deploy keys (`/api/internal/git-secret`) |
+| `git` | agent-api (`VEXA_GIT_STORE_KEY_FILE`) | read and write the person's Git token and deploy keys (`/api/internal/git-secret`) |
 
 **An agent asks for and uses a connection:**
 
@@ -213,8 +343,11 @@ Three callers reach the broker, each with its own role key. The broker checks a 
 3. The broker verifies the assertion (key, expiry, single use, bound to method, path and body), then
    verifies the forwarded signature with the gateway's public key (`VEXA_GATEWAY_IDENTITY_PUBLIC_KEY_FILE`)
    and requires it to name the assertion's actor.
-4. A request creates a connection row `awaiting_user`. For a custom service the agent can also
-   `prepare` a setup: endpoint, header and scheme, never a secret.
+4. A request creates a connection row `awaiting_user`, or reuses the person's unfinished one with the
+   same name. For a custom service the agent can also `prepare` a setup: endpoint, header, scheme and
+   prefix, never a secret. Preparing marks the person's other unfinished setups for the same service
+   `deleted` (audit `setup.prepare` · `superseded`); an unfinished row untouched for
+   `PENDING_SETUP_TTL` (24 h, `routes_connections.py`) is left out of the list.
 5. Once the person has connected it, a read or call loads the credential from the store, checks the
    owner sealed inside it, refreshes an expired Google token (writing the new version), and calls
    Google or the custom service. Only the result goes back to agent-api.
@@ -233,6 +366,24 @@ not answer, or refuses the token, makes `/ready` 503 with `reason: store_unavail
 `kind`, logged as a `broker_fault` line (`source: store`, `route: /ready`), so the orchestrator stops
 sending traffic before every Gmail call fails.
 
+**An agent drafts mail or changes the calendar:**
+
+1. agent-api reads `_global/POLICIES.md` (`control_plane/connection_policy.py`) on every request. If
+   the administrator's answer refuses the action — not listed, or a background routine and not listed
+   for that — it answers `403` with the `policy_key` and never calls the broker.
+2. It reads the person's own setting from the broker (`GET /api/preferences`), intersects it with the
+   administrator's answer, and refuses again if that narrower answer says no.
+3. It sends the action to the broker with the effective answer attached (`ActionPolicy`). For an
+   attachment it reads the workspace file itself, as the person, and checks the size cap first.
+4. The broker enforces the same answer again: a worker without a person is never served a draft or a
+   calendar change, whatever policy is forwarded, and is served a read only when the policy allows it
+   unattended; calendar id, attendee and recipient domains, notification and
+   attachments are checked against it; refusals are `409 Refused by policy <key>: …`.
+5. Then the idempotency row (keyed fingerprint, never the text), the audit row, the credential, the
+   permission check (`permission_required` if the grant lacks the scope), the Google call. A draft id
+   the broker created is recorded, and only those ids can be updated. An update or cancel first reads
+   the event by its id and refuses one that does not resolve or that the person cannot change.
+
 **A person consents or saves a secret:**
 
 1. The Connections panel calls the terminal's own server (`/api/connections/...`). It refuses a
@@ -240,7 +391,8 @@ sending traffic before every Gmail call fails.
 2. The terminal resolves the person from the sign-in cookie, checked against identity, and signs a
    `human` assertion for them.
 3. For Google, the broker returns a consent URL bound to a single-use state, a PKCE challenge and the
-   browser session that started it. The callback (`/api/auth/callback/google`) must come back for the
+   browser session that started it. *Enable calendar changes* sends `{"grant": "calendar_write"}`;
+   the state remembers it, and the callback refuses a consent that did not grant the write scope. The callback (`/api/auth/callback/google`) must come back for the
    same person and session within ten minutes.
 4. For a custom service, the broker refuses the save until every host that will receive a credential
    has been confirmed (see below), then encrypts and stores it.
@@ -260,22 +412,24 @@ sending traffic before every Gmail call fails.
    `credential-broker.v1` `AccountReadResponse` (`AccountReadMessage.web_url`,
    `AccountReadEvent.web_url`), optional and back-compatible.
 5. Every read tool's description (the agent-api docstrings published in `mcp.tools.v1.openapi.json`,
-   the notes in `core/agent/mcp.tools.v1.json`, the dogfood adapter's tools) and the worker's
+   the notes in `core/agent/mcp.tools.v1.json`) and the worker's
    per-turn reference rules (`worker/engine.py` `kg_links_preamble`) say: link only with `web_url`,
    never construct a provider URL. There is no configuration.
 
-**agent-api uses a Git credential** (only with `VEXA_GIT_STORE_BROKER_URL` set): `git_secret_store.py`
-signs a `git` assertion for the person the current request acts for and forwards the gateway's
-signature. The broker serves only `pat/<person>`, `deploy/user-<person>.*`, and `deploy/ws-<id>.*`
-for a shared workspace among the memberships the gateway signed. This is the one route that returns
-a stored value, and only to the `git` role. With the setting off, Git credentials stay in agent-api's
-own sealed store (`VEXA_SECRETS_KEY`).
+**agent-api uses a Git credential:** `git_secret_store.py` signs a `git` assertion for the person
+the current request acts for and forwards the gateway's signature. The broker serves only
+`pat/<person>`, `deploy/user-<person>.*`, and `deploy/ws-<id>.*` for a shared workspace among the
+memberships the gateway signed. This is the one route that returns a stored value, and only to the
+`git` role. agent-api uses the value for that one Git operation (a deploy key's private half exists
+on disk only inside a `0700` temporary directory for the length of the operation) and never writes
+it to a workspace, a response or a log.
 
 ### Who writes what
 
 | Data | Only writer | Where |
 |---|---|---|
-| Connection metadata, audit trail, OAuth state, used assertion nonces | the broker | `metadata.sqlite` on the state volume |
+| Connection metadata (including the permissions each grant carries), audit trail, OAuth state, used assertion nonces, idempotency rows, the ids of drafts it created, each person's narrower policy setting | the broker | `metadata.sqlite` on the state volume |
+| The administrator's connection policy | the administrator (a commit in `_global`) | `_global/POLICIES.md` front matter |
 | Credential versions | the broker, through its `Store` port | `secrets.sqlite` beside it (`local`), or the operator's OpenBao (`openbao`) |
 | The role keys and the store key | generated once by the deployment (`connections-keys`, or the chart's Secret) | mounted files, apart from the state volume |
 
@@ -299,8 +453,12 @@ Either way a write keeps the new version and the one before it; delete destroys 
 - **Contract:** [`core/agent/contracts/credential-broker.v1`](https://github.com/Vexa-ai/vexa/blob/main/core/agent/contracts/credential-broker.v1)
   (the assertion and every route body). The broker also consumes `gateway-identity.v1`.
 - **Broker routes:** `/api/setup`, `/api/connections`, `/api/connections/{id}/request | prepare |
-  custom-secret | oauth-application | authorize | disconnect | delete | read | draft | call`,
-  `/api/auth/callback/google`, `/api/internal/git-secret`, and the probes `/health` and `/ready`.
+  custom-secret | oauth-application | authorize | disconnect | delete | read | draft | draft-update |
+  calendar-event | call`, `/api/preferences`, `/api/auth/callback/google`, `/api/internal/git-secret`,
+  and the probes `/health` and `/ready`.
+- **agent-api routes (the tools):** `/agent/connections/gmail/draft`, `…/gmail/draft/update`,
+  `…/calendar/event/create | update | cancel`, `…/policy` (GET, PUT), declared in
+  `core/agent/routes.v1.json` and `core/agent/mcp.tools.v1.json`.
 - **Configuration:** the broker's keys are declared in
   `core/agent/services/credential-broker/src/credential_broker/config.v1.json` and set from compose
   `.env` or the chart's `credentialBroker` values. The broker checks them at boot and refuses to start
@@ -333,7 +491,18 @@ Either way a write keeps the new version and the one before it; delete destroys 
 - **The agent and git roles act only for a person the gateway signed.** agent-api's keys alone act for
   nobody: the broker verifies the forwarded gateway signature and requires it to name the actor. The
   broker holds only the gateway's public key, so it cannot sign one.
-- **A worker without a person in the loop** may list connections, and nothing else.
+- **A worker without a person in the loop** may list connections, read the person's policy setting,
+  and take only the mail and calendar reads `connection_actions_unattended` lists (none by
+  default). It never drafts or changes a calendar — agent-api's person gate and the broker both
+  refuse that from the signed regime, not from a policy. It can never change the person's setting,
+  request, prepare or call a custom service.
+- **Policy is enforced twice.** agent-api refuses before the broker; the broker refuses the same
+  rules again from the policy forwarded with the action. A person's setting can only narrow the
+  administrator's.
+- **Writes are bounded.** A draft is never sent. A draft update is refused unless the broker created
+  that draft for this person and mailbox. A calendar change needs the separate write consent, and an
+  update or cancel needs an event that resolves and that the person can change. Attendees are not
+  emailed unless policy and the request both say so.
 - **Owner only.** Every lookup is filtered by the signed person. Each stored credential also carries
   its owner inside the encrypted value. If the metadata names someone else, the credential is not
   used (`owner_mismatch`).
@@ -341,7 +510,10 @@ Either way a write keeps the new version and the one before it; delete destroys 
   by the person. For OAuth that is both the token endpoint and the service endpoint. The broker
   enforces it, so a UI defect cannot skip it.
 - **Outbound calls** go only to public addresses, with DNS pinned and no redirects, and the key is
-  redacted from responses.
+  redacted from responses. A `prefix` is validated as one HTTP token, so it cannot add a header or
+  split the value.
+- **Cleanup never touches a credential.** Reuse, replacement and expiry apply only to rows with no
+  stored key and no OAuth application, and only to the signed person's own rows.
 - **Consent** starts only from the human role, is single-use, and is bound to the person and session.
 - **Links are built by the broker.** A `web_url` names the address recorded at consent, never an
   account index and never a value from the caller; a Calendar link survives only on a Google Calendar
@@ -354,7 +526,10 @@ Deny tests, all in `core/agent/services/credential-broker/tests/` unless named o
 | Assertion forged, expired, replayed, wrong role, wrong body | `test_identity.py`: `test_forged_signature_refused`, `test_agent_key_cannot_sign_human_role`, `test_expired_or_future_assertion_refused`, `test_tampering_and_replay_refused`, `test_body_and_path_binding`, `test_git_role_is_separate_from_agent_and_human` · `test_assertion.py`: `test_replay_refused`, `test_every_golden_key_is_published_and_never_loads_as_a_deployment_key` |
 | Forwarded identity required and verified | `test_forwarded_identity.py`: `test_an_agent_call_without_a_valid_gateway_signature_is_refused`, `test_a_signature_by_any_key_but_the_gateways_is_refused`, `test_an_expired_signature_is_refused`, `test_a_signature_for_another_person_is_refused`, `test_every_agent_route_needs_the_signature`, `test_the_broker_holds_a_key_that_cannot_sign` |
 | Agent cannot consent or reach another person's connection | `test_identity.py`: `test_agent_requests_but_cannot_consent_or_read_other_users`, `test_callback_bound_to_session_and_single_use` · `test_secret_service.py`: `test_only_human_stores_agent_uses_own_reference` |
-| No person in the loop | `test_unwatched_regime.py`: `test_a_worker_without_a_person_is_refused`, `test_a_worker_without_a_person_may_list` |
+| No person in the loop | `test_unwatched_regime.py`: `test_a_worker_without_a_person_is_refused`, `test_a_worker_without_a_person_may_list`, `test_a_worker_is_served_a_read_only_when_the_forwarded_policy_allows_it`, `test_a_worker_reads_the_persons_setting_but_cannot_change_it` · `test_a_worker_without_a_person_never_writes_a_draft_whatever_policy_it_forwards` · `test_calendar_changes.py`: `test_a_background_routine_is_refused_whatever_policy_it_forwards` |
+| Calendar changes | `test_calendar_changes.py`: `test_without_the_write_permission_nothing_is_written`, `test_an_idempotent_retry_returns_the_first_result`, `test_an_unknown_outcome_is_not_retried`, `test_each_policy_key_refuses_by_name`, `test_update_and_cancel_of_an_event_that_does_not_resolve_are_refused`, `test_an_event_the_person_does_not_organize_cannot_be_changed`, `test_consent_that_did_not_grant_the_write_scope_is_refused` |
+| Drafts | `test_drafts.py`: `test_permission_required_then_idempotent_creation`, `test_a_reply_draft_lands_in_the_thread_with_correct_headers`, `test_only_drafts_this_broker_created_can_be_updated`, `test_draft_policy_keys_refuse_by_name` |
+| The policy, at agent-api | `core/agent/tests/test_connection_policy.py`: each key flips behaviour, `test_an_unreadable_policy_refuses_every_action_by_key`, `test_the_persons_setting_narrows`, `test_widening_is_refused_and_nothing_is_saved`, `test_every_governed_route_refuses_a_worker_at_the_default_before_the_broker` |
 | Owner sealed in the credential | `test_owner_sealed.py`: `test_a_connection_reassigned_in_the_metadata_does_not_hand_over_its_credential`, `test_a_reassigned_oauth_application_does_not_start_a_consent`, `test_a_record_without_an_owner_is_refused_once_owners_are_sealed` |
 | Host confirmation | `test_endpoint_host_confirmation.py`: `test_an_oauth_save_needs_the_service_endpoint_host_confirmed_too`, `test_a_new_service_endpoint_host_is_confirmed_again` |
 | Provider links built by the broker | `test_web_url.py`: `test_gmail_web_url_names_the_connected_account_not_an_index`, `test_gmail_web_url_percent_encodes_the_account_address`, `test_gmail_web_url_is_omitted_without_a_recorded_account`, `test_gmail_web_url_refuses_an_id_that_is_not_a_gmail_id`, `test_calendar_html_link_with_a_non_google_host_is_dropped`, `test_route_builds_web_url_from_the_brokers_recorded_account`, `test_caller_cannot_name_the_account_for_web_url` · `core/agent/tests/test_web_url_passthrough.py`: `test_agent_api_passes_the_brokers_web_url_through_unchanged`, `test_a_read_tool_cannot_be_given_an_account_for_the_link`, `test_every_read_tool_description_forbids_constructing_a_provider_url`, `test_the_worker_reference_rules_forbid_constructing_a_provider_url` · `deploy/dogfood/minutes-stack/test_agent_tools.py`: `test_account_read_tools_forbid_constructing_a_provider_url` |

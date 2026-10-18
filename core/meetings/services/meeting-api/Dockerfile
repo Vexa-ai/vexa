@@ -43,6 +43,8 @@ COPY core/runtime/contracts/schedule.v1/schedule.schema.json        ./runtime/co
 # The meetings domain's route manifest: route_scopes.py reads, per route, the key scopes of the
 # edge rows that reach it, from the same walk-up.
 COPY core/meetings/routes.v1.json                                   ./meetings/routes.v1.json
+# The meetings domain's MCP tool manifest, served at /.well-known/mcp-tools.json (same walk-up).
+COPY core/meetings/mcp.tools.v1.json                                ./meetings/mcp.tools.v1.json
 
 # An unprivileged user runs the service: it writes nothing outside /tmp, and reads its mounted keys
 # through the group the deploy surfaces give it (compose's key one-shot, the chart's fsGroup).

@@ -26,7 +26,10 @@
 #   DOCKERHUB_USERNAME — Docker Hub account with push rights to the vexaai org
 #   DOCKERHUB_TOKEN    — a Read & Write access token for that account
 # Missing secrets fail in preflight with a pointed message; no build job starts.
-# Docker Hub repos auto-created on first push (e.g. vexaai/v012-mcp) must be PUBLIC —
+# Image names come from release/image-names.mjs (vexaai/vexa-<service>). v0.13.3 is the one
+# transition release that ALSO pushes each service image under its old vexaai/v012-<service>
+# name, from the same build, so both names carry one digest; v0.13.4 publishes vexa- names only.
+# Docker Hub repos auto-created on first push (e.g. vexaai/vexa-gateway) must be PUBLIC —
 # the validation legs and end users pull anonymously.
 name: release-images
 
@@ -77,6 +80,7 @@ jobs:
       build_matrix: ${{ steps.build_plan.outputs.build_matrix }}
       build_bot: ${{ steps.build_plan.outputs.build_bot }}
       base_candidate_tag: ${{ steps.build_plan.outputs.base_candidate_tag }}
+      base_service_images: ${{ steps.build_plan.outputs.base_service_images }}
     steps:
       - name: Docker Hub credentials present?
         env:
@@ -161,11 +165,18 @@ jobs:
             PLAN="$(node release/candidate-image-map.mjs emit-build-plan - "$GITHUB_SHA")"
           fi
 
+          # The dual push (release/image-names.mjs) is decided by the version, not the plan: past
+          # the transition release no legacy tag is pushed.
+          if [ "$(node release/image-names.mjs dual-pushes "$VERSION")" != "true" ]; then
+            PLAN="$(jq -c '.build_matrix |= map(del(.legacy_repository))' <<<"$PLAN")"
+          fi
+
           {
             echo "build_mode=$(jq -r '.mode' <<<"$PLAN")"
             echo "build_matrix=$(jq -c '.build_matrix' <<<"$PLAN")"
             echo "build_bot=$(jq -r '.build_bot' <<<"$PLAN")"
             echo "base_candidate_tag=$(jq -r '.base_candidate_tag // ""' <<<"$PLAN")"
+            echo "base_service_images=$(jq -r '(.base_service_images // []) | join(" ")' <<<"$PLAN")"
           } >> "$GITHUB_OUTPUT"
           echo "✓ build plan: $PLAN"
 
@@ -207,13 +218,16 @@ jobs:
           RENDER="$(helm template vexa deploy/helm/charts/vexa -n vexa \
             -f deploy/helm/charts/vexa/values-test.yaml --set flows.enabled=true \
             --set flows.mail.enabled=true --set global.imageTag="$VERSION")"
-          N="$(grep -cE "image: \"vexaai/v012-[a-z-]+:$VERSION\"" <<<"$RENDER" || true)"
-          [ "$N" -ge 12 ] || { echo "::error ::expected >=12 v012 component images pinned to $VERSION, got $N"; exit 1; }
-          F="$(grep -cE "image: \"vexaai/v012-flows:$VERSION\"" <<<"$RENDER" || true)"
+          N="$(grep -cE "image: \"vexaai/vexa-[a-z-]+:$VERSION\"" <<<"$RENDER" || true)"
+          [ "$N" -ge 12 ] || { echo "::error ::expected >=12 component images pinned to $VERSION, got $N"; exit 1; }
+          if grep -nE 'vexaai/v012-' <<<"$RENDER"; then
+            echo "::error ::the chart still renders a v012- image name (release/image-names.mjs)"; exit 1
+          fi
+          F="$(grep -cE "image: \"vexaai/vexa-flows:$VERSION\"" <<<"$RENDER" || true)"
           [ "$F" -eq 6 ] || { echo "::error ::expected the 6 flows containers pinned to $VERSION, got $F"; exit 1; }
           grep -q "vexaai/vexa-bot:$VERSION" <<<"$RENDER" \
             || { echo "::error ::bot image (runtime BROWSER_IMAGE) does not follow global.imageTag"; exit 1; }
-          grep -q "vexaai/v012-agent-worker:$VERSION" <<<"$RENDER" \
+          grep -q "vexaai/vexa-agent-worker:$VERSION" <<<"$RENDER" \
             || { echo "::error ::agent-worker image does not follow global.imageTag"; exit 1; }
           if grep -nE 'vexaai/[a-z0-9-]+:dev' <<<"$RENDER"; then
             echo "::error ::pinned render still references :dev images"; exit 1
@@ -281,7 +295,11 @@ jobs:
           file: ${{ matrix.dockerfile }}
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: vexaai/${{ matrix.repository }}:${{ needs.preflight.outputs.version }}
+          # One build, one digest; during the v0.13.3 transition the planner adds the legacy
+          # vexaai/v012-<service> name as a second tag of the same push (empty lines are ignored).
+          tags: |
+            vexaai/${{ matrix.repository }}:${{ needs.preflight.outputs.version }}
+            ${{ matrix.legacy_repository && format('vexaai/{0}:{1}', matrix.legacy_repository, needs.preflight.outputs.version) || '' }}
           build-args: ${{ matrix.build_args }}
           cache-from: ${{ matrix.use_registry_cache && format('type=gha,scope=release-{0}', matrix.repository) || '' }}
           cache-to: ${{ matrix.use_registry_cache && format('type=gha,mode=max,ignore-error=true,scope=release-{0}', matrix.repository) || '' }}
@@ -482,6 +500,35 @@ jobs:
             }
             printf '%s\t%s\t%s\n' "$stable" "$readback" "$candidate" |
               tee -a stable-image-aliases.tsv
+
+            # The v0.13.3 transition: the same digest under the legacy v012- name, with the same
+            # refuse-to-overwrite and readback rules. Empty past the transition release.
+            legacy="$(node release/image-names.mjs legacy-alias "$image" "$VERSION")"
+            if [ -n "$legacy" ]; then
+              legacy_stable="vexaai/$legacy:$VERSION"
+              if legacy_json="$(docker buildx imagetools inspect "$legacy_stable" --format '{{json .}}' 2>/dev/null)"; then
+                legacy_digest="$(jq -r '.manifest.digest' <<<"$legacy_json")"
+                [ "$legacy_digest" = "$digest" ] || {
+                  echo "::error ::refusing to overwrite $legacy_stable at $legacy_digest (packet pins $digest)"
+                  exit 1
+                }
+              else
+                docker buildx imagetools create \
+                  --prefer-index=false \
+                  -t "$legacy_stable" \
+                  "$image@$digest"
+              fi
+              legacy_readback="$(
+                docker buildx imagetools inspect "$legacy_stable" --format '{{json .}}' |
+                  jq -r '.manifest.digest'
+              )"
+              [ "$legacy_readback" = "$digest" ] || {
+                echo "::error ::$legacy_stable readback $legacy_readback != witnessed $digest"
+                exit 1
+              }
+              printf '%s\t%s\t%s\n' "$legacy_stable" "$legacy_readback" "$candidate" |
+                tee -a stable-image-aliases.tsv
+            fi
           done < <(node release/candidate-image-map.mjs emit-tsv "$MAP")
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -551,6 +598,8 @@ jobs:
     env:
       VERSION: ${{ needs.preflight.outputs.version }}
       BASE_VERSION: ${{ needs.preflight.outputs.base_candidate_tag }}
+      # The base candidate's own image names (schema 1-3 froze vexaai/v012-<service>).
+      BASE_SERVICE_IMAGES: ${{ needs.preflight.outputs.base_service_images }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
@@ -592,9 +641,19 @@ jobs:
             echo "   ✓ $ref ← Docker Hub"
           }
           mirror_pull "vexaai/vexa-bot:$VERSION" --platform linux/amd64
-          for img in v012-admin-api v012-runtime v012-agent-api v012-meeting-api \
-                     v012-gateway v012-flows v012-mcp v012-terminal v012-agent-worker v012-credential-broker; do
-            mirror_pull "vexaai/$img:$BASE_VERSION"
+          [ -n "$BASE_SERVICE_IMAGES" ] || {
+            echo "::error ::Bot+Lite delta has no base service images"
+            exit 1
+          }
+          # Pull each under the name the base candidate was published with, then tag it with the
+          # name compose runs (vexaai/vexa-<service>) so `compose up --no-build` finds it resident.
+          for img in $BASE_SERVICE_IMAGES; do
+            mirror_pull "$img:$BASE_VERSION"
+            case "$img" in
+              vexaai/v012-*) current="vexaai/vexa-${img#vexaai/v012-}" ;;
+              *) current="$img" ;;
+            esac
+            [ "$current" = "$img" ] || docker tag "$img:$BASE_VERSION" "$current:$BASE_VERSION"
           done
           for ref in valkey/valkey:8-alpine postgres:17-alpine; do
             mirror_pull "$ref"

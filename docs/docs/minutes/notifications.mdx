@@ -1,0 +1,195 @@
+---
+title: "Notifications"
+description: "What tells you that someone added you to a chat, mentioned you, invited you to a workspace or started a call, and how those notices are kept private."
+---
+
+Vexa tells you when something happens to you that you did not do yourself: someone added you to a
+chat or shared one with you, mentioned you, invited you to a workspace or added you to one, accepted
+or declined your invite, started a call in a chat you are in, or a routine posted a run there.
+
+## What you can do
+
+### See a notification as it happens
+
+A notice slides in at the top right and stays for six seconds. Up to three stack, newest on top.
+Click it to open what it is about: the chat, the workspace, or the invite's join page. Click **×** to
+dismiss it. Every tab you have open shows it at once.
+
+### Read the list
+
+The bell in the header of your chat list shows how many notices you have not read. Press it for the
+list, newest first. Opening the list marks what it shows as read; **Mark all read** clears the rest.
+Pressing a notice opens its object.
+
+### Ask the agent
+
+Ask *"what did I miss?"* in any chat. The agent reads the same list with `notifications_list` and
+answers in a few lines, naming who and where. It can mark them read with `notifications_mark_read`
+when you say you have seen them.
+
+### Your agent can notify you
+
+An agent working for you, in a chat or a routine's run, can post a notice with the `notify` tool:
+one line naming what needs you, for example *3 emails need a reply today: the bank, the landlord, the
+school*. A routine that says *notify me of important ones* uses it, so the bell lights up for important
+mail. The notice opens the chat it came from, or a page or meeting the agent names. It goes to you;
+in a shared chat the agent may notify the other people in that chat, never anyone else.
+
+### Act on a notice in one tap
+
+Each notice carries its first act as a button, in the toast and in the list:
+
+| Notice | First act | Also |
+|---|---|---|
+| Someone invited you to a workspace | **Accept**: you join, and the workspace opens in your current chat | **Decline**: the invite stops working and its sender is told |
+| A chat was shared with you, or you were added to one | **Open chat** | |
+| Someone mentioned you | **Open chat** | |
+| A meeting was shared with you | **Open transcript** | |
+| A bot joined your meeting | **Open** | |
+| A bot will join your calendar meeting | (nothing to open yet) | |
+
+Acting marks the notice read in every tab you have open. An answered invite reads **Joined · Open**
+or **Declined**. You can also ask the agent: *"accept the invite from Alice"* — it calls
+`notifications_act` and confirms in one line.
+
+### When the tab is in the background
+
+The first time you open the bell, it offers one line: *Get an alert when this tab is in the
+background?* **Turn on** asks your browser for permission once; **Not now** hides the offer for
+good. With permission, a new notice that arrives while the tab is hidden shows as a browser
+notification with a soft two-note chime; clicking it brings the tab forward and opens the notice.
+
+### The list
+
+Unread notices come first under **New**, the rest under **Earlier**, each with a relative time
+("5 min ago"). An empty list says *You're all caught up*. The list fits a phone screen.
+
+## Limits and errors
+
+| You see | Why | What to do |
+|---|---|---|
+| no bell count and an empty list | the deployment has no session store, which keeps notifications | an operator turns the session store on ([Shared chats](/minutes/shared-chats#configuration)) |
+| a notice arrives only after a reload | the live socket was down; notices are stored, so the list shows them on load | nothing: they are not lost |
+
+Agent notices: one line of at most 200 characters; at most 20 an hour per person; a routine's run
+posts at most one; the same text to the same person within ten minutes is posted once; a page link
+goes only to people who can read the page, a meeting link to you only. Refusals are typed
+(`rate_limited`, `one_per_run`, `not_a_participant`, `link_not_readable`, `agent_notifications_off`).
+An operator turns agent notices off with `agent_notifications: off` in the front matter of
+`_global/POLICIES.md` (default on).
+
+Each person keeps their latest 500 notices; older read ones are dropped, unread ones never. A second
+identical notice (same person, same chat, same kind) while the first is unread within ten minutes
+refreshes the first instead of stacking.
+
+## How it works
+
+### One store, one writer per kind
+
+Notices live in the session store's database, in the `agent_session_notification` table, one row per
+recipient: who did it, what kind, which object, the sentence, when, and whether it was read. agent-api
+is the only writer, through the store's own database role. Each kind is written by the route that does
+the act, and nowhere else:
+
+| Kind | Written by | Goes to |
+|---|---|---|
+| added to a chat / a chat shared with you | `POST /api/sessions/{id}/participants` | the person added |
+| mentioned | `POST /api/chat`, `/api/chat/submit` (a message's `mentions`) | each mentioned person already in the chat |
+| a routine posted a run | the same routes, for a routine's scheduled run in a shared chat | everyone in it but the owner |
+| a call started | `POST /api/sessions/{id}/call` | everyone in the chat but the caller |
+| invited to a workspace | `POST /api/workspace/invite` (an address with an account here) | the invitee |
+| added to a workspace | `POST /api/workspace/members/add` | the person added |
+| your invite accepted / declined | `POST /api/workspace/invites/accept` / `…/decline` | whoever made the invite |
+| your agent's own notice (kind `agent`) | `POST /api/notifications/notify` (the `notify` tool) | you, or people in the same chat it names |
+
+### Delivery
+
+Each new row is published on the recipient's own Redis channel, `u:{user_id}:notifications`. The
+gateway's `/ws` socket subscribes every connection to its own person's channel when it opens, beside
+the meeting-status channel, so each open tab receives it. The terminal shows the toast and updates the
+bell. On load, and after a reconnect, the terminal reads `GET /api/notifications`. The same channel
+carries `rail` frames, which tell your chat list to read itself again when a chat joins or leaves it;
+these are not stored.
+
+### Routes
+
+| Browser calls (terminal) | agent-api (through the gateway's `/agent/*`) |
+|---|---|
+| `GET /api/notifications` (`unread`, `limit`, `before`) | the same path (also the agent tool `notifications_list`) |
+| `POST /api/notifications/read` (`ids` or `all`) | the same path (also `notifications_mark_read`) |
+| `POST /api/workspace/invites/decline` (`token`) | the same path |
+| `POST /api/notifications/act` (`id`, `action`: `accept`, `decline`, `join`, `open`) | the same path (also `notifications_act`); a person verb, refused to a routine |
+| — | `POST /api/notifications/notify` (`text`, `session`, `to`, `link`; the agent tool `notify`) |
+| — | `POST /internal/notifications` (internal tier only): flows names a meeting fact, agent-api writes it |
+
+The frames are `Notification`, `NotificationUpdate` (a notice acted on, in any tab), `NotificationRead`
+and `Rail` in the `ws.v1` contract. Each row carries `actions` (what it offers now) and `state`
+(`accepted`, `declined`, `joined`).
+
+### Meeting notices
+
+Three kinds come from facts flows holds: `meeting_shared` (flows mails a meeting's share link; the
+account behind the address gets the same link as **Open transcript**), `bot_scheduled` (a calendar
+invite set a bot to join) and `bot_joined` (the bot went live). flows names the fact on agent-api's
+internal tier; agent-api composes the sentence and stores the row, so the store keeps one writer. An
+address with no account is told by the mail alone. A refused or failed hand-over never fails the mail
+or the bot.
+
+### Configuration
+
+Nothing new. Notifications are on wherever the session store is on; live delivery uses the Redis URL
+agent-api already has. Upgrading adds one table and its index, created by the session store's
+migrations step (`session_schema init`), which every deployment path already runs.
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P2** contracts | the frames are in `ws.v1` with goldens; the routes are agent-api's own | `gate:schema`, `gate:contract-version` |
+| **P20** authorize every access | every read and mark-read is keyed by the signed-in person; no parameter names another | deny tests below |
+| **P23** one writer per carrier | agent-api is the only writer of the table and the channel; each kind has one emitting route | `gate:dataflow` |
+| **P4** published schemas | `Notice` (with `actions` and `state`) and `NotificationUpdate` are in `ws.v1`, pinned by goldens; `notifications_act` is in `mcp.tools.v1` and `routes.v1` | `gate:schema`, `gate:contract-version` |
+| **P20** person verbs | accept, decline and join from a notice are `person` verbs in `routes.v1`, refused to a routine by the app-wide gate; the internal door answers only the internal tier | deny tests below |
+| **P21** state from evidence | a deployment that already had the table gains `source` and `acted` from the store's init step (`ADD COLUMN IF NOT EXISTS`, nullable), never from a guess at start-up | `core/agent/tests/test_session_schema.py` · `test_init_adds_the_columns_an_existing_table_lacks`, `test_a_sqlite_store_made_before_the_columns_gains_them` |
+| **P18** fail loud, never fail the act | a notice that cannot be stored or published is logged; the act it reports has already happened and is never undone or refused for it | `test_a_failed_publish_keeps_the_row` |
+
+### Security
+
+**Who can do what.** You read, mark and act on only your own notices; another person's id answers
+404. Nobody can write one except agent-api, as a side effect of an act it performed or of a meeting
+fact flows handed it on the internal tier (meeting kinds only, a link only to a path in this app).
+Accepting, declining and joining from a notice are the same acts as the join page and need you in the
+loop: a routine cannot do them.
+
+**Protections.**
+
+- **A notice never reveals content you cannot read.** The sentence is composed by agent-api from two
+  names only, the actor's and the object's (a chat's title, a workspace's name, a routine's name).
+  There is no field that could carry a message, a page or a transcript line. A chat's title is named
+  only to people who can read that chat; a mention of someone not in the chat tells them nothing.
+- An agent's own notice is its one line, bounded to 200 characters, and goes only to its owner or to
+  people in the same chat, whose shared turn reads only what every one of them can read. A page link
+  is refused for anyone who cannot read the page.
+- A workspace invite's notice holds its join link. The link is restricted to the invitee's verified
+  address, so it grants nobody else anything, and only the invitee can read the row.
+- Only the person an invite names can decline it; any other token gets the same answer as an unknown
+  one.
+- The socket subscribes to its own person's channel, resolved from the key at connect. A client cannot
+  name another channel.
+
+**Deny tests.**
+
+| Test | Proves |
+|---|---|
+| `core/agent/tests/test_notifications_store.py` · `test_per_recipient_isolation_list_count_and_mark`, `test_the_leak_rule_text_has_only_the_actor_and_the_object`, `test_the_actor_is_never_notified_of_their_own_act` | isolation and the leak rule in the store |
+| `core/agent/tests/test_notifications_routes.py` · `test_sharing_a_private_chat_notifies_the_person_added_and_only_them`, `test_mark_read_and_mark_all_are_the_callers_own`, `test_a_mention_notifies_the_mentioned_participant_and_never_carries_the_message`, `test_accepting_and_declining_tell_whoever_invited` | the routes and the decline gate |
+| `core/agent/tests/test_notify_tool.py` · `test_to_names_participants_of_the_same_chat_only`, `test_a_worker_cannot_name_a_chat_other_than_its_own`, `test_a_page_link_goes_only_to_people_who_can_read_it`, `test_twenty_an_hour_per_person`, `test_a_routine_run_posts_at_most_one`, `test_the_policy_turns_it_off` | the agent's notify tool |
+| `core/gateway/services/gateway/tests/test_multiplex.py` · `test_connect_also_fans_in_the_persons_own_notifications` | a socket hears only its own person |
+| `clients/terminal/src/minutes/__tests__/notifications.test.tsx` | toasts, the bell, and a shared chat in the recipient's rail |
+| `core/agent/tests/test_notifications_actions.py` · `test_nobody_acts_on_another_persons_notice`, `test_an_act_the_notice_does_not_offer_is_refused`, `test_a_routine_cannot_accept_an_invite`, `test_the_internal_door_needs_the_internal_secret`, `test_the_internal_door_writes_meeting_kinds_only_and_never_a_link_off_this_app`, `test_meeting_notices_carry_the_title_only_never_content`, `test_an_address_with_no_account_is_told_nothing_and_that_is_not_an_error` | acting on a notice, and the internal door |
+
+## Related
+
+- [Shared chats](/minutes/shared-chats) · [Chats](/minutes/chats) · [Vexa MCP](/vexa-mcp)

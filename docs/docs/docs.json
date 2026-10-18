@@ -44,11 +44,14 @@
         "pages": [
           "flows/overview",
           "flows/authoring",
+          "flows/routines",
+          "flows/sensors",
           "flows/vocabulary",
           "flows/examples",
           "flows/developing",
           "flows/operations",
-          "flows/mailbox"
+          "flows/mailbox",
+          "flows/mail-design"
         ]
       },
       {
@@ -56,15 +59,27 @@
         "pages": [
           "minutes/overview",
           "minutes/chats",
+          "minutes/shared-chats",
+          "minutes/notifications",
           "minutes/pages",
           "minutes/meetings",
+          "minutes/voice-notes",
+          "minutes/calls",
           "minutes/workspaces",
+          "minutes/workspace-templates",
+          "minutes/self-hosted-gitlab",
+          "minutes/crm",
+          "minutes/orgs",
+          "minutes/bot-accounts",
           "minutes/admin-account"
         ]
       },
       {
         "group": "How-to: Agents",
         "pages": [
+          "how-to/home",
+          "how-to/people",
+          "how-to/your-photo",
           "how-to/chat-workspace",
           "how-to/paste-a-meeting-link",
           "how-to/chat-controls",
@@ -134,13 +149,18 @@
           "deployment-kubernetes",
           "sign-in-oidc",
           "deployment-helm-agent-tools",
+          "deployment-zoom-sdk",
           "configuration",
           "connections",
+          "transcript-signals",
           "upgrade-from-minio",
+          "upgrade-from-0-12",
+          "upgrade-image-names",
           "authenticated-bots",
           "model-catalog",
           "model-credentials-licensing",
           "agent-web-search",
+          "workspace-identity",
           "agent-tool-calls",
           "security-compliance",
           "troubleshooting",

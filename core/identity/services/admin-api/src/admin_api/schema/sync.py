@@ -13,9 +13,13 @@ NOT need the `prerequisites=` two-base bridge the parent used (it split identity
 bases) because the v0.12 schema co-locates both in one `Base.metadata` — create_all already
 emits tables in FK order.
 """
+import asyncio
 import logging
+import os
+import time
 
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.engine import Connection
 
 from .errors import SchemaInvariantError
@@ -37,6 +41,7 @@ _TYPE_MAP = {
     "TIMESTAMP": lambda c: "TIMESTAMP WITHOUT TIME ZONE",
     "JSONB": lambda c: "JSONB",
     "JSON": lambda c: "JSON",
+    "LARGEBINARY": lambda c: "BYTEA",
     "ARRAY": lambda c: _array_type(c),
 }
 
@@ -220,25 +225,90 @@ $fn$
 """
 
 
+# MIGRATION-0008 — the org as a first-class object. The convergence above makes `orgs` and
+# `org_members` (new tables) and adds `users.org_id` with a constant default (a catalog change on
+# Postgres >= 11: no rewrite, no per-row UPDATE). This makes sure the default org EXISTS, so every
+# `users.org_id` points at a real row. Idempotent: ON CONFLICT DO NOTHING, and the CRM binding is
+# stamped only while it is still unset, so an operator's later choice is never overwritten.
+DEFAULT_ORG_NAME = "Default"
+
+
+def _ensure_default_org(conn: Connection):
+    from .models import DEFAULT_ORG_ID  # noqa: PLC0415 — models imports nothing from here
+
+    inspector = inspect(conn)
+    if "orgs" not in set(inspector.get_table_names()):
+        return
+    crm = (os.environ.get("CRM_ORG_ID") or "").strip() or None
+    conn.execute(text(
+        "INSERT INTO orgs (id, name, policy_source, crm_org_id, data, created_at) "
+        "VALUES (:id, :name, '_global', :crm, '{}'::jsonb, now()) ON CONFLICT (id) DO NOTHING"
+    ), {"id": DEFAULT_ORG_ID, "name": DEFAULT_ORG_NAME, "crm": crm})
+    if crm:
+        conn.execute(text("UPDATE orgs SET crm_org_id = :crm WHERE id = :id AND crm_org_id IS NULL"),
+                     {"id": DEFAULT_ORG_ID, "crm": crm})
+
+
 def _sync_functions(conn: Connection):
     conn.execute(text(_MEETING_EVENT_TIME_FN))
 
 
+#: A CONVERGENCE NEVER QUEUES LIVE READS BEHIND A LOCK IT IS WAITING FOR (2026-10-13: validate at
+#: 23–38 s with Postgres sessions waiting on a lock during deploys). A waiting `ALTER TABLE` keeps its
+#: place in the table's lock queue and every later reader — every `/internal/validate` — waits behind
+#: it. Each lock is therefore asked for with this timeout (below validate's own 1 s read bound), and
+#: a convergence that could not get one is rolled back and tried again after LOCK_RETRY_BACKOFF_S.
+LOCK_TIMEOUT_MS = 500
+LOCK_RETRY_BACKOFF_S = (0.5, 1, 2, 4, 8, 15)
+_LOCK_NOT_AVAILABLE = "55P03"
+
+
+def _lock_not_available(e: Exception) -> bool:
+    orig = getattr(e, "orig", None)
+    code = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    return code == _LOCK_NOT_AVAILABLE or "lock timeout" in str(e).lower()
+
+
+def _bound_locks(conn: Connection):
+    if conn.dialect.name == "postgresql":
+        conn.execute(text(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT_MS}ms'"))
+
+
 def _ensure_schema_sync(conn: Connection, base):
+    _bound_locks(conn)
     _sync_functions(conn)                              # MIGRATION-0005 fn (indexes reference it)
     base.metadata.create_all(conn, checkfirst=True)   # missing tables, FK order
     _sync_columns(conn, base)                          # additive columns
     _backfill_token_scopes(conn)                       # MIGRATION-0004 data backfill
+    _ensure_default_org(conn)                          # MIGRATION-0008 the default org row
     _sync_indexes(conn, base)                          # additive indexes
 
 
 async def ensure_schema(engine, base):
     """Converge the DB to `base.metadata`. Never drops. Idempotent. async-engine entry."""
-    async with engine.begin() as conn:
-        await conn.run_sync(_ensure_schema_sync, base)
+    for wait in (*LOCK_RETRY_BACKOFF_S, None):
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(_ensure_schema_sync, base)
+            return
+        except DBAPIError as e:
+            if wait is None or not _lock_not_available(e):
+                raise
+            logger.warning("schema-sync: a lock was not available in %d ms; retrying in %ss",
+                           LOCK_TIMEOUT_MS, wait)
+            await asyncio.sleep(wait)
 
 
 def ensure_schema_sync(engine, base):
-    """Sync-engine entry (same convergence) — used by the testcontainers evals."""
-    with engine.begin() as conn:
-        _ensure_schema_sync(conn, base)
+    """Sync-engine entry (same convergence and retry) — used by the testcontainers evals."""
+    for wait in (*LOCK_RETRY_BACKOFF_S, None):
+        try:
+            with engine.begin() as conn:
+                _ensure_schema_sync(conn, base)
+            return
+        except DBAPIError as e:
+            if wait is None or not _lock_not_available(e):
+                raise
+            logger.warning("schema-sync: a lock was not available in %d ms; retrying in %ss",
+                           LOCK_TIMEOUT_MS, wait)
+            time.sleep(wait)

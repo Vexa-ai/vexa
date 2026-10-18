@@ -9,6 +9,10 @@ A flow is a list of these names. This page is **generated from the registry** (`
 
 Acknowledge by email: when Vexa joins, plus the finalize-your-workspace ask when onboarding is pending. Registers the mail as a THREAD ANCHOR (replies become conversation). Reads: refs.\{organizer,url,start,title\} · Prior: ensure_user · Effect: one notification Result: \{message_id, workspace_ready\}.
 
+### `agent_run`
+
+Run the flow's owner's agent once, on `params.instruction`, as a turn in the routine's own chat thread (one thread per flow; `params.thread: new` for a fresh one each run). The turn runs with nobody in the loop — the `autonomous` regime — and waits while the thread is busy. It reports into that chat; `params.notify` names the one connection it may also send through. Result: \{session, unit\}. THE RUN ENDS AS ITS TURN ENDED (flows phase 0). Posting the turn is not the run: the step waits on flows' own clock for agent-api to say how the turn ended, and a turn whose acts were refused — or a one-shot that never did what it was granted to do — ends the run `failed` with the reason and one calm line in the chat, never `done`. The routine's grants (`params.grants`, capped by `_global/POLICIES.md`) ride the turn to agent-api.
+
 ### `attend_live`
 
 PENDING WHILE THE CALL RUNS — the reaction that makes "a meeting is happening right now" a queue item instead of a `/bots/status` read at the edge. It does nothing and that is the point. `Wait` burns no attempt and costs nothing while parked (`flows/loop.tick`), so the value here is entirely in the ROW: a person's queue can say a call is live because flows is holding a pending reaction that says so, with the flow that produced it attached — which is what `behavior/queue/live_meeting.pending.md` speaks. Reaches no domain: `needs` is empty on purpose, so this works in every profile.
@@ -28,6 +32,14 @@ The SETUP card: a desk exists and has never been filled in. Reads: refs.uid. It 
 ### `await_start`
 
 Sleep until start − 2 min — time is a column (Wait until), zero cost while parked. Reads: refs.start.
+
+### `compose_home`
+
+COMPOSE THIS PERSON'S NEW-CHAT HOME NOW — agent-api collects the candidates, ranks them with at most one call to the cheapest configured model, and appends the composition. Debounced on agent-api's side (ten minutes; one after a meeting ended), so a burst of facts costs one composition; a skipped compose is `Done` with `skipped`, and so is one agent-api did not answer — the home is best-effort and never a waiting item. Reads: refs.\{uid|subject\} · Effect: one home composition appended · Result: \{id, stage, cards, model\} or \{skipped\}.
+
+### `deliver_message`
+
+Deliver one agent's message into another agent's chat thread as a queued turn, marked as from the sending agent (its thread, and its person or routine) and never as the person's words; waits while the thread is busy. Result: \{thread, uid\}.
 
 ### `dispatch_bot`
 
@@ -97,6 +109,14 @@ Open the onboarding conversation: seed the workspace, dispatch the agent kickoff
 
 Open the onboarding conversation: seed the workspace, dispatch the agent kickoff (non-blocking — the freeze law). The agent's replies arrive via the FILE-OUTBOX contract; the human's via threaded email. Reads: refs.uid (+person/group). THE KICKOFF IS RESOLVED FIRST, before the workspace is seeded: a deployment with no behavior tree mounted has no words to open the conversation with, and seeding a workspace for a conversation that will never be opened leaves a side effect behind for an outcome that is terminal.
 
+### `post_event_card`
+
+A SINK: post the event as one compact card into the subscribed chat (`params.thread`) — no agent run, never counted as a run — when it matches `params.filter`; wake the chat's agent only as `params.wake` says (never | per_event | batch:\<min> | match:\<text>), and only within the person's daily run limit. Cards are capped per chat per hour. Result: \{posted, woke\}.
+
+### `post_message`
+
+Post one line into the flow's chat — no agent run (ADR-0050 decision 4.1). `params.text`, where `{{payload.<ref>}}` slots copy the event's own values (never instructions) and `{{date}}` is today's date (UTC). Result: \{posted\}.
+
 ### `prepare_meeting`
 
 The front door of the loop whose back door is email_minutes: one short note asking whether they want to walk in ready, carrying `?ask=prep&meeting=<ref>`. A TEMPLATE — substitutions only, no agent turn — read from `_global/mail/prepare.md` so the wording is a file edit rather than a rebuild. Five lines, plain text, one link: a prepare mail that has to be read twice has already failed. Honours mail_prep exactly as email_minutes honours mail_minutes. IT NEVER GOES TO A STRANGER. Founder, 2026-09-02, on a pre-meeting fan-out across a room: *"I am afraid this will not work for a 50 attendee meeting."* Before the meeting there is nothing yet to justify a mail to somebody who has never heard of us — and the recipient of this one is the organiser, or a person who is already a user. A stranger meets Vexa AFTER their meeting, in the attendee follow-up, which is why that mail carries the introduction and this one does not. Relatedly: this mail must never claim a workspace was started for anyone. Nothing is built for a person who has not clicked. Reads: refs.\{organizer|person, title, start, uid?, meeting_id?, url?\} Effect: one notification · Result: \{message_id, meeting_ref\}.
@@ -105,6 +125,10 @@ The front door of the loop whose back door is email_minutes: one short note aski
 
 ONE REAL AGENT TURN on session meet-\<id>, producing ONE SHARED ARTEFACT: the meeting's report, the same words for everybody who was in the room. IT WRITES INTO NO DESK (founder decision 22, 2026-09-02). Not the organiser's either. The canonical home of the note is THE MEETING ROW AND ITS TRANSCRIPT STORE; every attendee's desk — the organiser's included, nobody special — receives the artefact itself afterwards, from `drop_to_attendees`. One meeting, one artefact, and the desks are where it lands, not where it lives. AND THAT IS ENFORCED BY THE MOUNTS (Vexa-ai/vexa#1606, 2026-09-06). agent-api mounts every desk this subject owns READ-ONLY for a room run, so the turn cannot write one however it is instructed. The HEAD-before/HEAD-after check below stays as the last line — it measures the repository rather than trusting the mount table — but it is no longer the thing standing between decision 22 and a desk write, which is why it could fail a meeting's minutes twice in one day while being entirely correct. COMPLETION IS THE REPLY, GROUNDED IN THE TRANSCRIPT. It used to be a new commit touching `kg/entities/meeting/` in the organiser's repo (`ag.latest_meeting_note`, now deleted with its baseline). With no desk write that commit never happens, so that detector would wait fifteen minutes and fail every meeting — a silently never-completing step, which is worse than a loud one. The turn's own reply IS the artefact: the kick already required the reply to BE the report, because it was already being mailed verbatim. THE GROUNDING GATE IS UNCHANGED and now matters more, since the reply is no longer cross-checkable against a committed file: does the report share any six-word run with the actual transcript? If not the agent is told exactly that, once, and asked again; if it still cannot ground it the reaction FAILS LOUDLY rather than mailing a report nobody can trace to the meeting. THE ROOM. The turn may READ the desks of the people on the invite, prioritised by speaking time and capped by `room_read_max`. Flows proposes; agent-api verifies, resolves each address to a subject, and mounts only those who already have a desk — so nothing here mounts anything and no account is ever minted for the room. THE GROUP, and ONLY when there is one: the group desk is mounted read/write and this turn MAINTAINS it — its people, decisions, open items, README — rather than appending an artefact to it. A meeting with no group gets none of that. Reads: refs.\{uid,meeting_id,native,participants?,participant_names?,group?\} Effect: one agent turn · Result: \{report, group, room_read\}.
 
+### `propose_call_changes`
+
+Prior: process_meeting\{report\}. Effect: proposals in the call's session. Result: \{proposed, session\} or \{skipped\}.
+
 ### `record_friction`
 
 THE WHOLE OF THE FLOW SIDE OF PRD 40.9 open-decision 8. `POST /friction` already wrote the fact by calling `admit()` directly (`flows_integrations/flows_api.py`) — this step exists ONLY so that admission has a matching flow to create a REACTION ROW for. `admit()` creates one reaction per matching flow and zero for none (`flows/admission.py`): without a registered flow here, `friction.reported` would be admitted into nothing, and `flows_timeline` — which reads only `reaction`/`effect_receipt`, never a raw event log — would never show a single report. It does nothing else: no mail, no desk card, no downstream effect, and it finishes on its first tick. Reaches no domain: `needs` is empty on purpose, so this runs — and the sink stays a sink — in every profile, agent or not.
@@ -112,6 +136,10 @@ THE WHOLE OF THE FLOW SIDE OF PRD 40.9 open-decision 8. `POST /friction` already
 ### `record_friction_fixed`
 
 #1510's C3 — the same reasoning as `record_friction`, one door over: `POST /friction/{id}/fix` calls `admit()` directly, and this step exists only so THAT admission creates a reaction row `flows_timeline.friction_for_subject` can fold into its `status` field. No mail, no desk card, no downstream effect.
+
+### `request_meeting_bot`
+
+Send the flow owner's bot into `params.meeting_url` — no agent run (flows phase 0). Use it with a one-shot trigger for "a bot to this meeting at 12:13". The routine must carry the grant `bot.request` (`params.grants`, capped by `_global/POLICIES.md`); without it the step refuses and says so in the routine's chat. A meeting the bot is already in is adopted, not re-sent. Says the outcome in one line in the routine's chat. Result: \{meeting_id, native, platform\}.
 
 ### `require_workspace`
 
@@ -128,3 +156,7 @@ Poll-composite until completed, over the transcribe window.
 ### `spawn_onboardings`
 
 RETIRED BY DECISION 29 (2026-09-02). Kept as a no-op, for the reason above. It emitted `onboarding.person.needed` / `onboarding.group.needed`, which started the email conversations that chased a person until they finished setup. Those flows are gone, so the facts now have no consumer — and a step that emits a fact nothing reacts to is worse than one that does nothing, because it leaves rows in the log implying work that never existed. The invite's touches are RSVP accept, the ack mail, and the prepare mail. Three, and no others. Group setup happens in a chat behind a `group-setup` scaffold, where the person is there to be asked. Result: \{\} — no reactions created, deliberately.
+
+### `wake_meeting_chat`
+
+Wake the meeting's agent in the meeting's chat with what was just said: ask agent-api which chat the meeting wakes, then post `meeting.signal` with that chat as `target.chat` and the plan; the buffer rides as data, never as instructions. Result: \{chat, queued\}.

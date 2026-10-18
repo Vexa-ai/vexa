@@ -9,6 +9,7 @@ WHO MAY REACH agent-api AND meeting-api — derived from the callers in the code
     flows-*       flow steps act for a person over the internal tier
     terminal      server-side admin probes and the internal scaffold routes
     agent-api     itself (VEXA_AGENT_API_SELF_URL)
+    crm-api       when the CRM is on: reads _global/POLICIES.md for the desk's limits (internal tier)
 
   meeting-api (8080)
     gateway       the meetings proxy and the /ws subscribe-authorization hop
@@ -45,6 +46,12 @@ spec:
             matchLabels:
               {{- $sel | nindent 14 }}
               app.kubernetes.io/component: {{ $c }}
+        {{- end }}
+        {{- if and .Values.crm .Values.crm.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- $sel | nindent 14 }}
+              app.kubernetes.io/component: crm-api
         {{- end }}
         - podSelector:
             matchLabels:

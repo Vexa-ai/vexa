@@ -212,6 +212,15 @@ export interface ChunkedTranscriberCallbacks {
    *  degrades gracefully, but the host gets the fault to make it observable instead of
    *  a silent "no transcript". Receives the thrown value (e.g. a TranscriptionError). */
   onError?: (fault: unknown) => void;
+  /** A CLOSING window whose transcribe threw (the client already spent its per-window attempts) is
+   *  kept and sent again after this delay, doubling per retry. Default 30000 — one Retry-After. */
+  sttRetryBaseMs?: number;
+  /** How many times a failed closing window is sent again before it is declared lost and recorded
+   *  as a missing range. Default 3. 0 records it at once. */
+  sttRetryMax?: number;
+  /** Bound on the audio held for retry (seconds, all windows). Past it a new failure is recorded
+   *  as missing at once instead of held. Default 120. */
+  sttRetryHoldSec?: number;
   /** A segment the hallucination gate refused to publish. Suppression is a JUDGEMENT the
    *  lane made about real STT output, so it is reported, never silent — the host logs it as
    *  an observation and can audit what the gate ate. */
@@ -334,7 +343,24 @@ interface Turn {
   /** The transport's live edge for the OPEN turn: audio up to here belongs to it and no further.
    *  Absent ⇒ read to the newest audio frame, which is what the pyannote spine has always done. */
   edgeMs?: number;
+  /** A closed turn whose closing window the STT refused: the exact audio sent, kept so a retry
+   *  sends the same window even after the ring has moved on. */
+  heldPcm?: Float32Array;
+  /** Failed closing attempts so far (each one the client's whole per-window budget). */
+  closeFailures?: number;
 }
+
+/** A stretch of captured audio that will never be transcribed, by capture time (epoch ms). The
+ *  same shape the per-channel lane reports, so the host publishes both lanes one way. */
+export interface MissingRange {
+  speakerName: string;
+  startMs: number;
+  endMs: number;
+  reason: string;
+}
+
+/** A closed turn waiting to send its closing window again. */
+interface DeferredClose { turn: Turn; dueAt: number }
 /** A committed turn whose hint hasn't arrived yet (provisional segmentation id) —
  *  re-resolved when a later hint produces a window match. Segments live in
  *  clusterSegments, so only the window + key are kept here. */
@@ -404,6 +430,14 @@ export class ChunkedTranscriber {
 
   /** The open turn. */
   private turn: Turn | null = null;
+  /** Closed turns whose closing window failed, waiting for their retry (bounded). */
+  private deferred: DeferredClose[] = [];
+  /** Audio that will never be transcribed — a loss is a marked range, never silent. */
+  private missing: MissingRange[] = [];
+  /** Closed turns whose closing window is at the STT right now. */
+  private closingInFlight = new Set<Turn>();
+  /** The host gave up waiting (its stop budget): everything still owed is already recorded. */
+  private abandoned = false;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private cancelHeartbeat: (() => void) | null = null;
   /** The lane's "now". Wall clock in production; the tape's clock under a virtual-time replay. */
@@ -489,6 +523,8 @@ export class ChunkedTranscriber {
       // Liveness: an item enqueued during the pump's closing pass misses the
       // drain loop; with no further boundaries nothing would re-pump it.
       if (t.queue.length > 0) { void t.pump(); return; }
+      // A refused closing window whose retry is due: the pump's tick sends it again.
+      if (t.deferred.some((d) => d.dueAt <= t.now())) { t.queue.push('tick'); void t.pump(); return; }
       if (!t.turn) return;
       // A monologue confirms on a cadence instead of waiting for a pause. Only fires while the
       // turn is genuinely growing (unconfirmed audio beyond the cut length) and has text pending,
@@ -816,7 +852,106 @@ export class ChunkedTranscriber {
     while (this.pumping) await new Promise(r => setTimeout(r, 50));
     await this.pump(true);
     while (this.pumping) await new Promise(r => setTimeout(r, 50));
+    // Windows still waiting for their retry cannot wait any longer: each is recorded as missing
+    // (with the fault that refused it) and its turn closed — never dropped in silence.
+    for (const d of this.deferred.splice(0)) {
+      this.markMissing(d.turn, `stt refused the window and the meeting ended before its retry (${d.turn.closeFailures ?? 1} attempt(s))`);
+      d.turn.heldPcm = undefined;
+      await this.closeOut(d.turn);
+    }
     try { this.segmenter?.reset(); } catch { /* best effort */ }
+  }
+
+  /** Every stretch of captured audio this lane will never transcribe, by capture time (epoch ms):
+   *  a closing window the STT refused past its retries, or one still waiting for a retry at stop. */
+  missingRanges(): MissingRange[] {
+    return this.missing.map((r) => ({ ...r }));
+  }
+
+  /** STOP BUDGET. The host will not wait any longer (the runtime destroys a stopping bot after its
+   *  grace, and a bot still draining a refusing STT then never reports at all). Every window still
+   *  owed — a closing window at the STT, one waiting for its retry, the open turn, audio the queue
+   *  has not reached — is recorded as missing now, with `reason`. Idempotent; later answers are
+   *  still published, later failures are not recorded twice. */
+  abandon(reason: string): void {
+    if (this.abandoned) return;
+    const owed: Turn[] = [...this.deferred.map((d) => d.turn), ...this.closingInFlight];
+    if (this.turn) {
+      this.turn.t1 = Math.max(this.turn.t1, this.turn.edgeMs ?? 0, this.latestAudioMs || this.turn.t1);
+      owed.push(this.turn);
+    }
+    this.deferred = [];
+    let coveredTo = this.confirmedHighWaterMs;
+    for (const t of new Set(owed)) {
+      this.markMissing(t, reason);
+      coveredTo = Math.max(coveredTo, t.t1);
+    }
+    // Audio captured past every turn the lane knows of (boundaries still queued behind the STT).
+    if (this.queue.length > 0 && this.latestAudioMs > coveredTo) {
+      this.missing.push({ speakerName: PROVISIONAL_SPEAKER, startMs: coveredTo, endMs: this.latestAudioMs, reason });
+    }
+    this.abandoned = true;
+    this.log(`[ChunkedTranscriber] [AUDIO-DROPPED] abandoned at stop — ${this.missing.length} missing range(s) recorded (${reason})`);
+  }
+
+  /** The closing window of `turn`, as the failed submission sent it. */
+  private closingSpan(turn: Turn): { startMs: number; endMs: number } {
+    return { startMs: turn.confirmedUpToMs, endMs: Math.max(turn.t1, turn.confirmedUpToMs) };
+  }
+
+  private markMissing(turn: Turn, reason: string): void {
+    if (this.abandoned) return;            // abandon() already recorded everything still owed
+    const span = this.closingSpan(turn);
+    // Drafts an earlier open-turn pass produced are promoted by closeOut, so the words they cover
+    // are not lost: the missing range starts where the last of them ends.
+    const draftEnd = turn.pendingTail.length > 0 ? turn.pendingTail[turn.pendingTail.length - 1].endMs : span.startMs;
+    const startMs = Math.min(span.endMs, Math.max(span.startMs, draftEnd));
+    const endMs = span.endMs;
+    if (!(endMs > startMs)) return;
+    const speakerName = turn.resolvedName ?? turn.pendingName ?? PROVISIONAL_SPEAKER;
+    this.missing.push({ speakerName, startMs, endMs, reason });
+    this.log(`[ChunkedTranscriber] [AUDIO-DROPPED] turn ${turn.turnId} "${speakerName}": ` +
+      `${((endMs - startMs) / 1000).toFixed(1)}s lost (${startMs}..${endMs}) — ${reason}`);
+  }
+
+  /** A closing window whose transcribe threw. Kept and sent again later while the retry budget and
+   *  the hold bound allow; otherwise recorded as a missing range. Returns true when kept (the turn
+   *  stays open for its retry and must not be closed out now). */
+  private deferClose(turn: Turn, pcm: Float32Array, fault: unknown): boolean {
+    turn.closeFailures = (turn.closeFailures ?? 0) + 1;
+    const f = fault as { kind?: string; status?: number; message?: string } | undefined;
+    const what = `${f?.kind ?? 'error'}${f?.status ? ` HTTP ${f.status}` : ''}`;
+    const maxRetries = Math.max(0, this.cb.sttRetryMax ?? 3);
+    const holdSec = this.cb.sttRetryHoldSec ?? 120;
+    const heldSec = this.deferred.reduce((n, d) => n + (d.turn.heldPcm?.length ?? 0), 0) / SAMPLE_RATE;
+    // The closed span is adjudicated now, retry or not: the next turn must not re-cover it.
+    this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, turn.t1, turn.confirmedUpToMs);
+    if (!this.disposed && turn.closeFailures <= maxRetries && heldSec + pcm.length / SAMPLE_RATE <= holdSec) {
+      const delay = (this.cb.sttRetryBaseMs ?? 30_000) * 2 ** (turn.closeFailures - 1);
+      turn.heldPcm = pcm;
+      this.deferred.push({ turn, dueAt: this.now() + delay });
+      this.log(`[ChunkedTranscriber] [STT-RETRY] turn ${turn.turnId} closing window ` +
+        `(${(pcm.length / SAMPLE_RATE).toFixed(1)}s) refused (${what}, attempt ${turn.closeFailures}) — kept, sending again in ${(delay / 1000).toFixed(1)}s`);
+      return true;
+    }
+    const why = this.disposed && turn.closeFailures <= maxRetries
+      ? `stt refused the window at stop (${what})`
+      : heldSec + pcm.length / SAMPLE_RATE > holdSec && turn.closeFailures <= maxRetries
+        ? `stt refused the window and the retry hold bound (${holdSec}s) is full (${what})`
+        : `stt refused the window after ${turn.closeFailures} attempt(s) (${what})`;
+    this.markMissing(turn, why);
+    turn.heldPcm = undefined;
+    return false;
+  }
+
+  /** Send every due deferred closing window again (serially, inside the pump). */
+  private async retryDeferred(): Promise<void> {
+    if (this.abandoned) return;
+    const now = this.now();
+    const due = this.deferred.filter((d) => d.dueAt <= now);
+    if (due.length === 0) return;
+    this.deferred = this.deferred.filter((d) => d.dueAt > now);
+    for (const d of due) await this.submitTurn(d.turn, true);
   }
 
   // ── Cutting (the authoritative TurnSource opens/closes turns) ──────────
@@ -887,6 +1022,8 @@ export class ChunkedTranscriber {
           } else if (item !== 'tick' && item.kind === 'close') {
             await this.closeTurnApply(item);   // submits + closes the open turn
             continue;
+          } else if (item === 'tick') {
+            await this.retryDeferred();         // a refused closing window whose retry is due
           }
           // COALESCE: with a backlog, every tick would submit the same
           // [confirmedUpTo..liveEdge] window — N identical, ever-larger Whisper
@@ -996,6 +1133,28 @@ export class ChunkedTranscriber {
    *  confirmation is LocalAgreement-2 (the bot's word-prefix stability); on
    *  close everything confirms. */
   private async submitTurn(turn: Turn, closing: boolean): Promise<void> {
+    // HOLD BOUND. The ring keeps RING_MS of audio; a pump held behind a refusing STT can fall
+    // further behind than that, and the start of this turn's window is then no longer there to
+    // send. That stretch is lost — recorded as a missing range, and the window starts where the
+    // audio still is.
+    const ringStartMs = this.ring.length > 0 ? this.ring[0].tMs : undefined;
+    if (!(closing && turn.heldPcm) && ringStartMs !== undefined && ringStartMs > turn.confirmedUpToMs) {
+      const lostEnd = Math.min(ringStartMs, Math.max(turn.t1, this.latestAudioMs || turn.t1));
+      if (lostEnd > turn.confirmedUpToMs) {
+        const speakerName = turn.resolvedName ?? turn.pendingName ?? PROVISIONAL_SPEAKER;
+        const reason = `held-audio bound (${RING_MS / 1000}s) passed while transcription was behind`;
+        const last = this.missing[this.missing.length - 1];
+        if (last && last.reason === reason && last.speakerName === speakerName && turn.confirmedUpToMs - last.endMs <= 50) {
+          last.endMs = Math.max(last.endMs, lostEnd);
+        } else {
+          this.missing.push({ speakerName, startMs: turn.confirmedUpToMs, endMs: lostEnd, reason });
+        }
+        this.log(`[ChunkedTranscriber] [AUDIO-DROPPED] turn ${turn.turnId}: ${((lostEnd - turn.confirmedUpToMs) / 1000).toFixed(1)}s ` +
+          `no longer held (${turn.confirmedUpToMs}..${lostEnd}) — ${reason}`);
+        turn.confirmedUpToMs = lostEnd;
+        this.confirmedHighWaterMs = Math.max(this.confirmedHighWaterMs, lostEnd);
+      }
+    }
     const spanStart = turn.confirmedUpToMs;
     // Open turns read to the LIVE AUDIO EDGE, not the last commit — pending
     // tracks speech in near-real-time and stability builds at tick cadence.
@@ -1023,7 +1182,9 @@ export class ChunkedTranscriber {
     if (!closing && spanEnd - turn.lastSubmitEndMs < 500) return;
     turn.lastSubmitEndMs = spanEnd;
 
-    const pcm = this.cut(spanStart, spanEnd);
+    // A retried closing window sends exactly the audio its failed attempt sent: the ring may have
+    // moved past it while it waited.
+    const pcm = closing && turn.heldPcm ? turn.heldPcm : this.cut(spanStart, spanEnd);
     if (pcm.length < SAMPLE_RATE * 0.2 || rms(pcm) < DROP_RMS) {
       this.trace(`skip-quiet turn=${turn.turnId} ${spanStart}..${spanEnd} rms=${rms(pcm).toFixed(4)} closing=${closing}`);
       if (closing) await this.closeOut(turn);
@@ -1033,12 +1194,24 @@ export class ChunkedTranscriber {
 
     const prompt = this.lastConfirmedText ? this.lastConfirmedText.slice(-PROMPT_TAIL_CHARS) : undefined;
     let result: TranscriptionResult | null = null;
+    if (closing) this.closingInFlight.add(turn);
     try {
       result = await this.cb.transcribe(pcm, prompt);
     } catch (e: any) {
       this.cb.onError?.(e);                                            // P18: surface the fault…
       this.log(`[ChunkedTranscriber] transcribe failed: ${e?.message}`);   // …keep the local log too
+      // An open turn keeps its audio (the next tick sends it again). A CLOSING window is the
+      // turn's last chance: it is kept for a bounded retry, or recorded as missing — never closed
+      // out as if the room had been silent (prod-cutover R4).
+      if (closing) {
+        this.closingInFlight.delete(turn);
+        if (!this.abandoned && this.deferClose(turn, pcm, e)) return;
+        await this.closeOut(turn);
+        return;
+      }
     }
+    if (closing) this.closingInFlight.delete(turn);
+    if (closing) turn.heldPcm = undefined;
     const gated = result ? this.applyGates(result, spanEnd - spanStart) : null;
     if (!gated || gated.length === 0) {
       if (closing) await this.closeOut(turn);

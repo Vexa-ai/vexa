@@ -15,6 +15,8 @@
  *  4. THE PATH RULE — isSessionProfilePath answers every path vector of the session-profile.v1
  *     contract (golden/PathVectors.*.json, which meeting-api's matcher answers too), and refuses
  *     traversal, absolute, backslash and NUL names; SESSION_PROFILE is the contract's profile.
+ *  5. IN-MEMORY RESTORE — writeSessionProfile writes profile paths only and refuses a set with one
+ *     bad entry (traversal, outside the profile, twice, oversized, symlinked parent) whole.
  *
  * Same shape as auth.smoke.test.ts (tsx + exit code, no assert lib).
  */
@@ -24,7 +26,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   syncBrowserDataToS3, syncBrowserDataFromS3, SessionSyncError, SESSION_PROFILE, isSessionProfilePath,
-  collectSessionProfile, readSessionProfile, saveSessionLocal, type S3Config,
+  collectSessionProfile, readSessionProfile, writeSessionProfile, saveSessionLocal, type S3Config,
 } from './session-store';
 
 const fails: string[] = [];
@@ -231,6 +233,43 @@ process.env.PATH = realPath;
 let noopThrew = false;
 try { syncBrowserDataFromS3({}, liveDir); } catch { noopThrew = true; }
 check(!noopThrew, 'restore with no S3 config must be a no-op');
+
+// ── 5. an in-memory restore writes the profile only, and refuses a bad set whole ──
+const memDir = mkdtempSync(join(tmpdir(), 'session-store-mem-'));
+const good = [
+  { path: 'Local State', data: Buffer.from('{"os_crypt":{}}') },
+  { path: 'Default/Cookies', data: Buffer.from('restored-cookies') },
+  { path: 'Default/Local Storage/leveldb/000003.log', data: Buffer.from('ls') },
+];
+let memErr: unknown;
+let wrote = 0;
+try { wrote = writeSessionProfile(memDir, good); } catch (e) { memErr = e; }
+check(!memErr && wrote === 3, `in-memory restore writes the 3 profile files, got ${wrote} (${String(memErr)})`);
+check(readFileSync(join(memDir, 'Default', 'Cookies'), 'utf8') === 'restored-cookies', 'restored bytes land at the profile path');
+check(JSON.stringify(readSessionProfile(memDir).map((f) => f.path)) === JSON.stringify(good.map((f) => f.path)),
+  'what was restored reads back as the same session profile');
+for (const [why, set] of [
+  ['a traversal path', [...good, { path: '../escape', data: Buffer.from('x') }]],
+  ['a path outside the profile', [{ path: 'Default/Extensions/x/manifest.json', data: Buffer.from('{}') }, ...good]],
+  ['an absolute path', [{ path: '/etc/passwd', data: Buffer.from('x') }]],
+  ['a path named twice', [good[1], good[1]]],
+  ['an oversized file', [{ path: 'Default/Cookies', data: Buffer.alloc(SESSION_PROFILE.maxFileBytes + 1) }]],
+] as Array<[string, Array<{ path: string; data: Buffer }>]>) {
+  const dir = mkdtempSync(join(tmpdir(), 'session-store-refuse-'));
+  let err: unknown;
+  try { writeSessionProfile(dir, set); } catch (e) { err = e; }
+  check(err instanceof SessionSyncError && (err as SessionSyncError).step === 'session-restore', `${why}: refused as a session-restore SessionSyncError`);
+  check(readdirSync(dir).length === 0, `${why}: nothing is written when one entry is refused`);
+  rmSync(dir, { recursive: true, force: true });
+}
+const linkDir = mkdtempSync(join(tmpdir(), 'session-store-link-'));
+const elsewhere = mkdtempSync(join(tmpdir(), 'session-store-elsewhere-'));
+symlinkSync(elsewhere, join(linkDir, 'Default'));
+let linkErr: unknown;
+try { writeSessionProfile(linkDir, [good[1]]); } catch (e) { linkErr = e; }
+check(linkErr instanceof SessionSyncError, 'a symlinked parent directory refuses the write');
+check(readdirSync(elsewhere).length === 0, 'nothing is written through a symlinked parent');
+for (const d of [memDir, linkDir, elsewhere]) rmSync(d, { recursive: true, force: true });
 
 // ── verdict ─────────────────────────────────────────────────────────────────
 for (const d of [work, liveDir, restoreDir, saved]) rmSync(d, { recursive: true, force: true });

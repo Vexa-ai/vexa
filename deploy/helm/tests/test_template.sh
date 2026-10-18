@@ -53,6 +53,17 @@ need 2 'name: MEETING_API_URL' "MEETING_API_URL set on gateway AND meeting-api"
 # while another replica remains Ready.
 need 1 'terminationGracePeriodSeconds: 30' "meeting-api termination budget rendered"
 need 1 '^[[:space:]]+- "sleep 5"$' "meeting-api preStop endpoint-drain delay rendered"
+# F13: the schema's migrations path runs as a PreSync/pre-upgrade Job BEFORE any new admin-api or
+# meeting-api pod starts, so both roll new-beside-old. It is admin-api's own convergence
+# (`python -m admin_api.migrate`, additive) from the admin-api image — the meeting_api.database
+# module the old Job called no longer exists.
+MIG="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set migrations.enabled=true --show-only templates/job-migrations.yaml)"
+if grep -q 'admin_api.migrate' <<< "$MIG" && grep -q 'vexa-admin-api' <<< "$MIG" && ! grep -q 'meeting_api.database' <<< "$MIG" \
+   && grep -q '"helm.sh/hook": pre-upgrade' <<< "$MIG"; then
+  echo "  OK: migrations Job runs admin_api.migrate from the admin-api image, pre-upgrade"
+else
+  echo "  FAIL: migrations Job does not run admin_api.migrate from the admin-api image before the upgrade"; fail=1
+fi
 # #677: agent-api MUST get VEXA_MEETING_API_URL or its live-SSE owner-lookup calls the compose-only
 # http://meeting-api:8080 (unresolvable in-cluster) → fail-closed 403 for the meeting's own owner.
 # Only agent-api carries the VEXA_-prefixed spelling, so assert exactly 1.
@@ -177,7 +188,7 @@ check_sb "$RENDER" RUNTIME_K8S_AGENT_WORKER_SECCOMP_PROFILE '""'
 for want in 'automountServiceAccountToken: false' 'runAsUser: 0' 'allowPrivilegeEscalation: false' \
             'readOnlyRootFilesystem: true' 'drop: \["ALL"\]' 'path: "/var/lib/kubelet/seccomp"' \
             'type: DirectoryOrCreate' 'cp /app/src/runtime_kernel/seccomp-userns.json' \
-            'dest="/host-seccomp/vexa/seccomp-userns.json"' 'image: "vexaai/v012-runtime:'; do
+            'dest="/host-seccomp/vexa/seccomp-userns.json"' 'image: "vexaai/vexa-runtime:'; do
   grep -qE -- "$want" <<< "$DS" || { echo "  FAIL: bot-seccomp DaemonSet lacks: $want"; sb_ok=0; }
 done
 grep -qE 'privileged: true|hostNetwork|hostPID|add:' <<< "$DS" && { echo "  FAIL: bot-seccomp DaemonSet is privileged"; sb_ok=0; }
@@ -288,6 +299,69 @@ if grep -q 'image: "vexaai/dashboard:vSHOULD-NOT-APPLY"' <<< "$RENDER_DASH"; the
   echo "  FAIL: dashboard image followed global.imageTag — it must stay on its own pinned tag"; fail=1
 else
   echo "  OK: dashboard image ignores global.imageTag (own pinned tag)"
+fi
+
+# #1783 — calls: the LiveKit server is OPT-IN (absent by default, so the counts above never grow by
+# it); enabled, it renders its Deployment + Service, meeting-api gets the LIVEKIT_* env, and the
+# release Secret carries a generated LIVEKIT_API_SECRET.
+if grep -q 'app.kubernetes.io/component: livekit' <<< "$RENDER"; then
+  echo "  FAIL: livekit rendered in the DEFAULT (disabled) state"; fail=1
+else
+  echo "  OK: livekit absent by default (calls are opt-in)"
+fi
+RENDER_LK="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set livekit.enabled=true --set livekit.url=wss://calls.example.test)"
+lk_count="$(grep -c 'app.kubernetes.io/component: livekit' <<< "$RENDER_LK" || true)"
+if [ "$lk_count" -ge 3 ] && grep -q 'value: "ws://vexa-vexa-livekit:7880"' <<< "$RENDER_LK" \
+   && grep -q 'LIVEKIT_API_SECRET: "' <<< "$RENDER_LK"; then
+  echo "  OK: livekit.enabled=true renders the server, its Service, the services' env and the secret"
+else
+  echo "  FAIL: livekit.enabled=true did not render server + Service + env + secret ($lk_count labels)"; fail=1
+fi
+# The LiveKit pod runs unprivileged (non-root, no privilege escalation, every capability dropped),
+# and its signalling port binds the pod's own address, not every interface of the node.
+LK_DEP="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set livekit.enabled=true --set livekit.url=wss://calls.example.test \
+  --show-only templates/deployment-livekit.yaml)"
+if grep -q 'runAsNonRoot: true' <<< "$LK_DEP" && grep -q 'allowPrivilegeEscalation: false' <<< "$LK_DEP" \
+   && grep -qE '^\s+- ALL$' <<< "$LK_DEP" && grep -q 'fieldPath: status.podIP' <<< "$LK_DEP" \
+   && grep -q 'bind_addresses: \["\$(POD_IP)"\]' <<< "$LK_DEP"; then
+  echo "  OK: livekit runs non-root with every capability dropped, signalling on the pod IP"
+else
+  echo "  FAIL: livekit Deployment lacks the non-root/drop-ALL context or the pod-IP signalling bind"; fail=1
+fi
+LK_BIND="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  --set livekit.enabled=true --set livekit.url=wss://calls.example.test \
+  --set 'livekit.bindAddresses={127.0.0.1}' --show-only templates/deployment-livekit.yaml)"
+if grep -q 'bind_addresses: \["127.0.0.1"\]' <<< "$LK_BIND"; then
+  echo "  OK: livekit.bindAddresses overrides the signalling bind"
+else
+  echo "  FAIL: livekit.bindAddresses did not reach the server config"; fail=1
+fi
+# TURN over TLS is off by default; on, it renders the TLS port, the certificate paths and the Secret
+# mount, and it refuses to render without a domain and a Secret, or on a privileged port.
+LK_TLS_ARGS=(--set livekit.enabled=true --set livekit.url=wss://calls.example.test --set livekit.turn.enabled=true
+  --set livekit.turn.domain=turn.example.test --set livekit.turn.tlsPort=5349 --set livekit.turn.tlsSecretName=turn-tls)
+LK_TLS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${LK_TLS_ARGS[@]}" \
+  --show-only templates/deployment-livekit.yaml)"
+if ! grep -q 'tls_port' <<< "$LK_DEP" && grep -q 'tls_port: 5349' <<< "$LK_TLS" \
+   && grep -q 'cert_file: /etc/livekit/turn/tls.crt' <<< "$LK_TLS" && grep -q 'secretName: turn-tls' <<< "$LK_TLS"; then
+  echo "  OK: livekit TURN over TLS is off by default and renders port, certificate and Secret when on"
+else
+  echo "  FAIL: livekit TURN over TLS did not render as expected"; fail=1
+fi
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${LK_TLS_ARGS[@]}" \
+     --set livekit.turn.tlsSecretName= >/dev/null 2>&1 \
+   || helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${LK_TLS_ARGS[@]}" \
+     --set livekit.turn.tlsPort=443 >/dev/null 2>&1; then
+  echo "  FAIL: livekit TURN over TLS rendered without a Secret, or on port 443"; fail=1
+else
+  echo "  OK: livekit TURN over TLS refuses a missing Secret and a privileged port"
+fi
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set livekit.enabled=true >/dev/null 2>&1; then
+  echo "  FAIL: livekit.enabled=true without livekit.url rendered"; fail=1
+else
+  echo "  OK: livekit.enabled=true without livekit.url is refused"
 fi
 
 # #900 — the migrations Job must follow global.imageTag (it runs release code against the
@@ -497,7 +571,7 @@ else
 fi
 
 # ── the flows tier is PUBLISHABLE: {repository, tag}, not a flat string ────────────────────────
-# Until 2026-09-03 flows.image was ONE string ("vexaai/v012-flows:dev"). Two consequences, both
+# Until 2026-09-03 flows.image was ONE string ("vexaai/vexa-flows:dev"). Two consequences, both
 # only visible from outside the repo:
 #   (a) it was the single component that ignored global.imageTag, so a release-pinned render still
 #       pulled a mutable :dev tag for the Minutes product;
@@ -508,7 +582,7 @@ fi
 # These four assertions are the shape check. Against the flat-string chart the first three fail.
 FLOWS_PINNED="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
   --set flows.enabled=true --set flows.mail.enabled=true --set global.imageTag=vPINNED --show-only templates/flows.yaml)"
-flows_pinned_count="$(grep -cE '^\s+image: "vexaai/v012-flows:vPINNED"$' <<< "$FLOWS_PINNED" || true)"
+flows_pinned_count="$(grep -cE '^\s+image: "vexaai/vexa-flows:vPINNED"$' <<< "$FLOWS_PINNED" || true)"
 if [ "$flows_pinned_count" -eq 6 ]; then
   echo "  OK: all 6 flows containers follow global.imageTag ($flows_pinned_count)"
 else
@@ -519,22 +593,36 @@ fi
 PIN_REF='v0.12.27@sha256:1111111111111111111111111111111111111111111111111111111111111111'
 FLOWS_DIGEST="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
   --set flows.enabled=true --set flows.mail.enabled=true --set "flows.image.tag=$PIN_REF" --show-only templates/flows.yaml)"
-digest_count="$(grep -cE "^\s+image: \"vexaai/v012-flows:${PIN_REF//./\\.}\"$" <<< "$FLOWS_DIGEST" || true)"
+digest_count="$(grep -cE "^\s+image: \"vexaai/vexa-flows:${PIN_REF//./\\.}\"$" <<< "$FLOWS_DIGEST" || true)"
 if [ "$digest_count" -eq 6 ]; then
   echo "  OK: publisher pin shape flows.image.tag=<version>@sha256 reaches all 6 containers ($digest_count)"
 else
   echo "  FAIL: flows.image.tag digest pin reached $digest_count of 6 containers"; fail=1
 fi
 # The default (unpinned) render must name a repository and a tag, never a mutable :dev.
-if grep -qE '^\s+image: "vexaai/v012-flows:dev"$' <<< "$FLOWS_DEFAULT"; then
+if grep -qE '^\s+image: "vexaai/vexa-flows:dev"$' <<< "$FLOWS_DEFAULT"; then
   echo "  FAIL: flows default image is still the mutable :dev tag"; fail=1
 else
   echo "  OK: flows default image is not :dev"
 fi
-if grep -qE '^\s+image: "vexaai/v012-flows:v012"$' <<< "$FLOWS_DEFAULT"; then
-  echo "  OK: flows default image is repository:tag at the component default (v012)"
+# With no tag set anywhere, every image defaults to the chart's own release, v<appVersion> — an
+# immutable tag. A moving pointer (v012, latest) must never be the default an install pulls.
+RELEASE_TAG="v$(awk -F'"' '/^appVersion:/ {print $2}' "$CHART/Chart.yaml")"
+if grep -qE "^\s+image: \"vexaai/vexa-flows:${RELEASE_TAG//./\\.}\"$" <<< "$FLOWS_DEFAULT"; then
+  echo "  OK: flows default image is repository:tag at the chart's release ($RELEASE_TAG)"
 else
-  echo "  FAIL: flows default image is not vexaai/v012-flows:v012"; fail=1
+  echo "  FAIL: flows default image is not vexaai/vexa-flows:$RELEASE_TAG"; fail=1
+fi
+DEFAULT_RENDER="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true 2>&1)"
+if grep -nE 'vexaai/vexa-[a-z-]+:(v012|latest)"?$' <<< "$DEFAULT_RENDER"; then
+  echo "  FAIL: an image defaults to a moving tag (above)"; fail=1
+else
+  echo "  OK: no image defaults to a moving tag (v012, latest)"
+fi
+if [ "$(grep -cE "vexaai/vexa-[a-z-]+:${RELEASE_TAG//./\\.}\"?$" <<< "$DEFAULT_RENDER")" -ge 12 ]; then
+  echo "  OK: the unpinned render pulls the chart's release tag"
+else
+  echo "  FAIL: the unpinned render does not pull $RELEASE_TAG"; fail=1
 fi
 
 # ── S6: the ensure-db initContainer is a container and must declare its resources ──────────────
@@ -626,7 +714,7 @@ fi
 # `:dev`, and an explicit flows.image still wins (that is how a publisher digest-pins a release).
 FLOWS_PINNED="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
   --set flows.enabled=true --set flows.mail.enabled=true --set global.imageTag=vPIN --show-only templates/flows.yaml)"
-if grep -q 'image: "vexaai/v012-flows:vPIN"' <<< "$FLOWS_PINNED" \
+if grep -q 'image: "vexaai/vexa-flows:vPIN"' <<< "$FLOWS_PINNED" \
   && ! grep -q 'v012-flows:dev' <<< "$FLOWS_PINNED"; then
   echo "  OK: flows image honors global.imageTag (no mutable :dev left) (#A12)"
 else
@@ -1045,8 +1133,9 @@ check_admins "terminal.extraEnv VEXA_ADMIN_EMAILS is carried over to admin-api" 
 check_admins "unset is empty" ""
 
 # ── Connections: the credential broker (credential-broker.v1, ADR-0040) ──────────────────────────
-# The broker renders with agent-api, admits only agent-api and terminal Pods, and each consumer
-# mounts only its own role key: agent-api never the human key, the terminal never the agent key.
+# The broker renders with agent-api, admits only agent-api, terminal and (bot accounts on)
+# meeting-api Pods, and each consumer mounts only its own role key: agent-api never the human key,
+# the terminal never the agent key, meeting-api only the bots key.
 echo "=== credential broker ==="
 need 1 'name: vexa-vexa-credential-broker$'        "broker Deployment/Service name"
 need 1 '^kind: NetworkPolicy'                      "broker NetworkPolicy"
@@ -1055,23 +1144,32 @@ need 1 'helm.sh/resource-policy: keep'             "broker keys Secret kept acro
 need 2 'name: VEXA_CONNECTIONS_BROKER_URL'         "broker URL on agent-api AND terminal"
 need 1 'name: VEXA_CONNECTIONS_AGENT_KEY_FILE'     "agent role key path"
 need 1 'name: VEXA_CONNECTIONS_HUMAN_KEY_FILE'     "human role key path"
-# 4 component labels: the policy's own two (metadata + podSelector) and the two admitted sources.
+# 5 component labels: the policy's own two (metadata + podSelector) and the three admitted sources.
 NP="$(awk '/Source: vexa\/templates\/networkpolicy-credential-broker.yaml/,/^---/' <<< "$RENDER")"
 if grep -q 'component: agent-api' <<< "$NP" && grep -q 'component: terminal' <<< "$NP" \
-   && [ "$(grep -c 'component: ' <<< "$NP")" -eq 4 ]; then echo "  OK: NetworkPolicy admits exactly agent-api + terminal"
-else echo "  FAIL: NetworkPolicy ingress is not exactly agent-api + terminal"; fail=1; fi
+   && grep -q 'component: meeting-api' <<< "$NP" \
+   && [ "$(grep -c 'component: ' <<< "$NP")" -eq 5 ]; then echo "  OK: NetworkPolicy admits exactly agent-api + terminal + meeting-api"
+else echo "  FAIL: NetworkPolicy ingress is not exactly agent-api + terminal + meeting-api"; fail=1; fi
+MAPI="$(awk '/Source: vexa\/templates\/deployment-meeting-api.yaml/,/^---/' <<< "$RENDER")"
+if grep -q 'key: bots.key, path: bots/key' <<< "$MAPI" && ! grep -qE 'key: (agent|human|git|store).key' <<< "$MAPI" \
+   && grep -q 'name: VEXA_BOT_ACCOUNTS_BROKER_URL' <<< "$MAPI" && grep -q 'name: VEXA_BOT_ACCOUNTS_KEY_FILE' <<< "$MAPI" \
+   && grep -q 'name: VEXA_CONNECTIONS_BOTS_KEY_FILE' <<< "$RENDER"; then
+  echo "  OK: meeting-api mounts the bots key only, and the broker reads it"
+else echo "  FAIL: bot-account key wiring"; fail=1; fi
+NOBOTS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set credentialBroker.botAccounts=false)"
+NOBOTS_NP="$(awk '/Source: vexa\/templates\/networkpolicy-credential-broker.yaml/,/^---/' <<< "$NOBOTS")"
+if ! grep -qE 'VEXA_BOT_ACCOUNTS_|VEXA_CONNECTIONS_BOTS_KEY_FILE|bots.key, path' <<< "$NOBOTS" \
+   && ! grep -q 'component: meeting-api' <<< "$NOBOTS_NP"; then echo "  OK: botAccounts=false renders no bots role"
+else echo "  FAIL: botAccounts=false still wires the bots role"; fail=1; fi
 AGENT="$(awk '/Source: vexa\/templates\/deployment-agent-api.yaml/,/^---/' <<< "$RENDER")"
 TERM="$(awk '/Source: vexa\/templates\/deployment-terminal.yaml/,/^---/' <<< "$RENDER")"
-if grep -q 'key: agent.key' <<< "$AGENT" && ! grep -q 'key: human.key' <<< "$AGENT" && ! grep -q 'key: git.key' <<< "$AGENT"; then
-  echo "  OK: agent-api mounts the agent key only (gitStore off)"
+if grep -q 'key: agent.key' <<< "$AGENT" && grep -q 'key: git.key, path: git/key' <<< "$AGENT" \
+   && ! grep -qE 'key: (human|store).key' <<< "$AGENT" && [ "$(grep -c 'name: VEXA_GIT_STORE_BROKER_URL' <<< "$AGENT")" -eq 1 ]; then
+  echo "  OK: agent-api mounts the agent and git keys only, and keeps Git credentials in the broker"
 else echo "  FAIL: agent-api key mounts wrong"; fail=1; fi
 if grep -q 'key: human.key' <<< "$TERM" && ! grep -qE 'key: (agent|git|store).key' <<< "$TERM"; then
   echo "  OK: terminal mounts the human key only"
 else echo "  FAIL: terminal key mounts wrong"; fail=1; fi
-GIT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set credentialBroker.gitStore=true)"
-if [ "$(grep -c 'name: VEXA_GIT_STORE_BROKER_URL' <<< "$GIT")" -eq 1 ] && grep -q 'key: git.key, path: git/key' <<< "$GIT"; then
-  echo "  OK: gitStore=true wires the git role into agent-api"
-else echo "  FAIL: gitStore=true did not wire the git store"; fail=1; fi
 NOAGENT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set agentApi.enabled=false)"
 if ! grep -q 'credential-broker' <<< "$NOAGENT"; then echo "  OK: no agent-api → no broker (no-agents profile)"
 else echo "  FAIL: broker rendered without agent-api"; fail=1; fi
@@ -1083,8 +1181,8 @@ else echo "  FAIL: Google consent wiring"; fail=1; fi
 refuse "openbao backend without an address" 'credentialBroker\.openbao\.address is required' \
   -f "$CHART/values-test.yaml" --set credentialBroker.store.backend=openbao
 EXT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set credentialBroker.existingSecret=my-keys)"
-if ! grep -q 'name: vexa-vexa-credential-broker-keys' <<< "$EXT" && [ "$(grep -c 'secretName: my-keys' <<< "$EXT")" -eq 3 ]; then
-  echo "  OK: existingSecret replaces the generated keys on all three consumers"
+if ! grep -q 'name: vexa-vexa-credential-broker-keys' <<< "$EXT" && [ "$(grep -c 'secretName: my-keys' <<< "$EXT")" -eq 4 ]; then
+  echo "  OK: existingSecret replaces the generated keys on all four consumers"
 else echo "  FAIL: existingSecret wiring"; fail=1; fi
 
 # agent-api's VEXA_WORKSPACES_DIR, its store mountPath and the runtime's VEXA_WORKSPACE_MOUNT_TARGET
@@ -1189,8 +1287,9 @@ for c in gateway terminal admin-api mcp postgres redis agent-api meeting-api run
 done
 echo "  OK: every serving component has an explicit ingress allow"
 pg="$(np_doc vexa-vexa-postgres-ingress)"
-if grep -q 'values: \[admin-api, meeting-api, pgbouncer, migrations\]' <<< "$pg" \
-   && ! grep -qE 'runtime.managed|component: (gateway|runtime|agent-api|mcp|terminal)$' <<< "$pg"; then
+# agent-api holds the database's credentials since ADR-0048 (its session store), so it is listed.
+if grep -q 'values: \[admin-api, meeting-api, agent-api, pgbouncer, migrations\]' <<< "$pg" \
+   && ! grep -qE 'runtime.managed|component: (gateway|runtime|mcp|terminal)$' <<< "$pg"; then
   echo "  OK: only the database's credential holders reach postgres"
 else echo "  FAIL: postgres admits more than its credential holders"; fail=1; fi
 cpe="$(np_doc vexa-vexa-control-plane-egress)"
@@ -1228,8 +1327,8 @@ else echo "  FAIL: identity.existingSecret rendered without a public key"; fail=
 
 # flows' operator key (VEXA_FLOWS_API_KEY) from a Secret you manage, so a template-only render can
 # turn flows on without the key in values: flows.existingSecret, or secrets.existingSecretName when
-# flows.apiKey is empty. Then the chart's flows Secret omits the key and all four consumers (three
-# flows containers, the MCP edge) read it from that Secret by name. With flows.apiKey set, nothing
+# flows.apiKey is empty. Then the chart's flows Secret omits the key and all five consumers (three
+# flows containers, the MCP edge, agent-api) read it from that Secret by name. With flows.apiKey set, nothing
 # changes; both apiKey and existingSecret is refused.
 flows_key_refs() {  # flows_key_refs <render> → "<secret> <count>" lines for VEXA_FLOWS_API_KEY refs
   grep -A4 -E '^[[:space:]]+- name: VEXA_FLOWS_API_KEY$' <<< "$1" | grep 'key: VEXA_FLOWS_API_KEY' -B1 \
@@ -1239,12 +1338,12 @@ for src in "secrets.existingSecretName=shared-secrets shared-secrets" "flows.exi
   set -- $src
   fk="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true --set "$1")"
   if grep -qE '^  VEXA_FLOWS_API_KEY:' <<< "$fk"; then echo "  FAIL: $1 still renders the key into the flows Secret"; fail=1
-  elif [ "$(flows_key_refs "$fk")" = "$2 4" ]; then echo "  OK: $1 — flows' three containers and the MCP edge read VEXA_FLOWS_API_KEY from $2"
+  elif [ "$(flows_key_refs "$fk")" = "$2 5" ]; then echo "  OK: $1 — flows' three containers, the MCP edge and agent-api read VEXA_FLOWS_API_KEY from $2"
   else echo "  FAIL: $1 — VEXA_FLOWS_API_KEY refs: $(flows_key_refs "$fk" | tr '\n' ';')"; fail=1; fi
 done
 fk="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true \
   --set secrets.existingSecretName=shared-secrets --set flows.apiKey=inline-test-key)"
-if grep -qE '^  VEXA_FLOWS_API_KEY: "inline-test-key"$' <<< "$fk" && [ "$(flows_key_refs "$fk")" = "vexa-vexa-flows 1" ]; then
+if grep -qE '^  VEXA_FLOWS_API_KEY: "inline-test-key"$' <<< "$fk" && [ "$(flows_key_refs "$fk")" = "vexa-vexa-flows 2" ]; then
   echo "  OK: flows.apiKey in values keeps the key in the chart's flows Secret, as before"
 else echo "  FAIL: flows.apiKey with secrets.existingSecretName"; fail=1; fi
 fboth="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true \
@@ -1333,6 +1432,29 @@ if grep -q '"git.example.com=gitlab,code.example.org=basic:svc-vexa"' <<< "$git_
    && grep -q 'value: ""' <<< "$git_default"; then
   echo "  OK: agentApi.gitProviders reaches agent-api as VEXA_GIT_PROVIDERS (empty by default)"
 else echo "  FAIL: VEXA_GIT_PROVIDERS not rendered as set: [$git_hosts] default [$git_default]"; fail=1; fi
+
+# A list of providers (the git provider port) renders as one JSON value, private CA included.
+GP_VALUES="$(mktemp)"
+cat > "$GP_VALUES" <<'YAML'
+agentApi:
+  gitProviders:
+    - name: corp
+      kind: gitlab
+      baseUrl: https://git.example.com:8443/gitlab
+      label: Company GitLab
+      caBundle: |
+        -----BEGIN CERTIFICATE-----
+        MIIBtest
+        -----END CERTIFICATE-----
+YAML
+git_list="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -f "$GP_VALUES" \
+  | grep -A1 'name: VEXA_GIT_PROVIDERS' | grep 'value:' || true)"
+rm -f "$GP_VALUES"
+if grep -qF '\"name\":\"corp\"' <<< "$git_list" && grep -qF '\"kind\":\"gitlab\"' <<< "$git_list" \
+   && grep -qF '\"baseUrl\":\"https://git.example.com:8443/gitlab\"' <<< "$git_list" \
+   && grep -qF -- '-----BEGIN CERTIFICATE-----\\nMIIBtest' <<< "$git_list"; then
+  echo "  OK: a gitProviders list reaches agent-api as one JSON VEXA_GIT_PROVIDERS"
+else echo "  FAIL: gitProviders list not rendered as JSON: [$git_list]"; fail=1; fi
 
 # ── the bot mailbox against an on-premises Exchange (flows.mail) ───────────────────────────────
 # Before: IMAP was imap.gmail.com in code, the chart had no IMAP or relay values for flows, the
@@ -1518,12 +1640,126 @@ done
 tb "the chart Secret carries VEXA_LLM_API_KEY when set" 'grep -q "VEXA_LLM_API_KEY: \"sk-render-test-only\"" <<< "$(doc Secret vexa-vexa-secrets "$route")"'
 tb "and not when unset" '! grep -q "VEXA_LLM_API_KEY" <<< "$sec"'
 # A mirrored install (Harbor / GitLab registry) pinning one tag spawns its chat workers FROM THE MIRROR.
-# This was the literal vexaai/v012-agent-worker:<tag>: offline, no chat worker ever started.
+# This was a literal Docker Hub agent-worker:<tag> reference: offline, no chat worker ever started.
 for img in harbor.example/vexa/v012-agent-worker:v012 registry.example:5000/vexa/agent-worker@sha256:0123abcd; do
   mir="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set global.imageTag=0.13.3 --set "runtime.agentWorkerImage=$img")"
   want="\"$(sed -E 's#(@sha256:[a-f0-9]+|:[^:/]+)$##' <<< "$img"):0.13.3\""
   tb "global.imageTag keeps the mirror's worker repository ($img)" '[ "$(envval AGENT_WORKER_IMAGE "$(doc Deployment vexa-vexa-runtime "$mir")")" = "$want" ]'
 done
 [ "$tb_ok" -eq 1 ] && echo "  OK: the chat agent's toolbelt is wired end to end on Helm"
+
+# ADR-0046 — routines are flows: agent-api reaches flows-api with its operator key whenever flows is on
+aa_flows="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+  --show-only templates/deployment-agent-api.yaml)"
+aa_noflows="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=false \
+  --show-only templates/deployment-agent-api.yaml)"
+if grep -q 'name: VEXA_FLOWS_API_URL' <<< "$aa_flows" && grep -q 'flows-api:18200' <<< "$aa_flows" \
+   && grep -A4 'name: VEXA_FLOWS_API_KEY' <<< "$aa_flows" | grep -q 'secretKeyRef' \
+   && ! grep -q 'VEXA_FLOWS_API' <<< "$aa_noflows"; then
+  echo "  OK: agent-api carries VEXA_FLOWS_API_URL and the flows operator key (from its Secret) when flows is on, neither when off"
+else echo "  FAIL: agent-api is not wired to flows-api (VEXA_FLOWS_API_URL / VEXA_FLOWS_API_KEY)"; fail=1; fi
+# ADR-0048: the session store. Off by default (the chart makes no bucket). With its own scoped key
+# named: agent-api logs in as the store's own role and never holds the database admin credential or
+# the recordings key; the migrations Job makes the role; the store's bucket is never the recordings
+# bucket and its key Secret never the recordings key Secret.
+api_default="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-agent-api.yaml)"
+if ! grep -q 'VEXA_SESSIONS_' <<< "$api_default" && ! grep -q 'key: POSTGRES_PASSWORD' <<< "$api_default"; then
+  echo "  OK: the session store is off by default and agent-api holds no database credential"
+else echo "  FAIL: agent-api carries session-store or database credentials with the store off"; fail=1; fi
+SS=(--set agentApi.sessions.s3.existingSecret=vexa-sessions-s3)
+api_on="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${SS[@]}" --show-only templates/deployment-agent-api.yaml)"
+if grep -q 'name: VEXA_SESSIONS_DB_USER' <<< "$api_on" && grep -q 'name: "vexa-sessions-s3"' <<< "$api_on" \
+   && grep -q 'value: "vexa-sessions"' <<< "$api_on" \
+   && ! grep -qE 'key: (POSTGRES_USER|POSTGRES_PASSWORD)' <<< "$api_on" \
+   && ! grep -q 's3-fixture-credentials' <<< "$api_on"; then
+  echo "  OK: agent-api reaches the session store as its own role, with its own bucket and key"
+else echo "  FAIL: agent-api session-store wiring holds an admin or recordings credential"; fail=1; fi
+job_on="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${SS[@]}" --show-only templates/job-agent-sessions.yaml)"
+if grep -q 'name: agent-sessions' <<< "$job_on" && grep -q 'control_plane.session_schema' <<< "$job_on"; then
+  echo "  OK: the session-schema Job makes the session store's role and tables"
+else echo "  FAIL: the session-schema Job does not make the session store's role"; fail=1; fi
+rec_bucket="vexa-recordings"   # storage.s3.bucket in values-test.yaml
+if [ -n "$rec_bucket" ] && ! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${SS[@]}" \
+     --set agentApi.sessions.s3.bucket="$rec_bucket" >/dev/null 2>&1; then
+  echo "  OK: rendering refuses the recordings bucket as the session store's bucket"
+else echo "  FAIL: the session store may be pointed at the recordings bucket ($rec_bucket)"; fail=1; fi
+
+# ADR-0047: the optional CRM. Off by default — no crm-api, and no service names its door. On: crm-api
+# logs in as its own role (never the admin credential), the crm-schema Job makes the role, and the
+# gateway and the MCP name its door.
+crm_off="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml")"
+if ! grep -q 'crm-api' <<< "$crm_off" && ! grep -q 'name: CRM_API_URL' <<< "$crm_off"; then
+  echo "  OK: the CRM is off by default and nothing names its door"
+else echo "  FAIL: a default render carries the CRM"; fail=1; fi
+CRM=(--set crm.enabled=true --set crm.orgId=acme --set crm.existingSecret=crm-db)
+crm_on="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --show-only templates/crm.yaml)"
+if grep -q 'crm.migrate", "init"' <<< "$crm_on" && grep -q 'crm.migrate", "check"' <<< "$crm_on" \
+   && grep -q 'postgresql+pg8000://vexa_crm:' <<< "$crm_on" && grep -q 'name: "crm-db"' <<< "$crm_on" \
+   && [ "$(grep -c 'key: POSTGRES_PASSWORD' <<< "$crm_on")" -eq 1 ]; then
+  echo "  OK: crm-api reaches Postgres as its own role; only the crm-schema Job holds the admin credential"
+else echo "  FAIL: the CRM's database wiring is not its own role"; fail=1; fi
+gw_on="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --show-only templates/deployment-gateway.yaml)"
+mcp_on="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --show-only templates/deployment-mcp.yaml)"
+if grep -q 'name: CRM_API_URL' <<< "$gw_on" && grep -q 'name: CRM_API_URL' <<< "$mcp_on"; then
+  echo "  OK: with the CRM on, the gateway fronts it and the MCP assembles its tools"
+else echo "  FAIL: the gateway or the MCP does not name the CRM's door"; fail=1; fi
+if ! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set crm.enabled=true >/dev/null 2>&1; then
+  echo "  OK: rendering refuses a CRM with no organisation"
+else echo "  FAIL: the CRM renders without crm.orgId"; fail=1; fi
+crm_np="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set networkPolicy.enabled=true --show-only templates/networkpolicy-namespace.yaml)"
+if grep -q 'values: \[admin-api, meeting-api, agent-api, pgbouncer, migrations, crm-api\]' <<< "$crm_np" \
+   && grep -q 'name: vexa-vexa-crm-api-ingress' <<< "$crm_np"; then
+  echo "  OK: with the CRM on, crm-api reaches Postgres and the chart's pods reach crm-api"
+else echo "  FAIL: the network policy does not admit the CRM"; fail=1; fi
+
+# ── THE SESSION STORE'S SCHEMA JOB RUNS ON A FIRST INSTALL ──────────────────────────────────────────
+# Helm takes every manifest carrying a helm.sh/hook annotation out of the release and runs it only on
+# the events it names. Annotated `pre-upgrade` alone, the agent-sessions-schema Job was never created
+# by `helm install` (measured on a fresh OpenShift-shaped install of 0.13.3-alpha.1: agent-api held in
+# its session-schema initContainer, the MCP crash-looping, until a second `helm upgrade`). A
+# `post-install` hook would deadlock `helm install --wait` and an Argo CD PostSync instead. So it is a
+# release resource whose name carries a hash of its own spec: created on install, a new Job when its
+# image changes (never a patch of an immutable one), the same name when nothing changed.
+ss_job() { helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set agentApi.sessions.s3.existingSecret=sessions-s3 "$@" --show-only templates/job-agent-sessions.yaml; }
+j1="$(ss_job)"; j1b="$(ss_job)"; j2="$(ss_job --set agentApi.image.tag=other-tag)"
+n1="$(awk '/^kind: Job$/{k=1} k&&/^  name:/{print $2; exit}' <<< "$j1")"
+n1b="$(awk '/^kind: Job$/{k=1} k&&/^  name:/{print $2; exit}' <<< "$j1b")"
+n2="$(awk '/^kind: Job$/{k=1} k&&/^  name:/{print $2; exit}' <<< "$j2")"
+tb "the session-schema Job is a release resource (no helm.sh/hook), so helm install creates it" '[ -n "$n1" ] && ! grep -q "helm.sh/hook" <<< "$j1"'
+tb "its name is stable when nothing changed" '[ "$n1" = "$n1b" ]'
+tb "its name changes with the image, so an upgrade never patches an immutable Job" '[ "$n1" != "$n2" ] && [[ "$n1" == vexa-vexa-agent-sessions-schema-* ]]'
+
+# ── Production-shape options (prod-shape-0133): a hosted install runs this chart unpatched ──
+echo "=== production-shape options ==="
+PS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+  --set 'global.tolerations[0].key=vexa.ai/pool' --set 'global.tolerations[0].operator=Exists' \
+  --set 'global.nodeSelector.vexa\.ai/pool=main' --set 'global.imagePullSecrets[0].name=pull' \
+  --set 'flows.extraEnv[0].name=PS_FLOWS_EXTRA' --set 'flows.extraEnv[0].value=1' \
+  --set 'gateway.deploymentAnnotations.argocd\.argoproj\.io/sync-wave=5' \
+  --set runtime.backend=k8s --set runtime.botSandbox.installer.namespace=vexa-node-bootstrap)"
+PSJ="$(python3 -c '
+import sys, yaml, json
+docs=[d for d in yaml.safe_load_all(sys.stdin) if d]
+out={}
+for d in docs:
+  n=d["metadata"]["name"]; sp=d.get("spec",{}).get("template",{}).get("spec",{})
+  out[n]={"kind":d["kind"],"ns":d["metadata"].get("namespace",""),"ann":d["metadata"].get("annotations") or {},
+   "strategy":d.get("spec",{}).get("strategy"),"tol":bool(sp.get("tolerations")),"ns_sel":bool(sp.get("nodeSelector")),
+   "pull":[x["name"] for x in sp.get("imagePullSecrets",[])],
+   "env":[e["name"] for c in sp.get("containers",[]) for e in c.get("env",[])]}
+print(json.dumps(out))' <<< "$PS")"
+q() { python3 -c "import json,sys; o=json.loads(sys.argv[1]); print($2)" "$PSJ"; }
+for c in flows-worker flows-api; do
+  tb "$c takes global tolerations, nodeSelector and pull secrets" "[ \"\$(q x \"o['vexa-vexa-$c']['tol'] and o['vexa-vexa-$c']['ns_sel'] and o['vexa-vexa-$c']['pull']==['pull']\")\" = True ]"
+  tb "$c rolls surge-first (maxUnavailable 0)" "[ \"\$(q x \"o['vexa-vexa-$c']['strategy']['rollingUpdate']['maxUnavailable']\")\" = 0 ]"
+  tb "$c carries flows.extraEnv" "[ \"\$(q x \"'PS_FLOWS_EXTRA' in o['vexa-vexa-$c']['env']\")\" = True ]"
+done
+tb "gateway Deployment carries gateway.deploymentAnnotations" "[ \"\$(q x \"o['vexa-vexa-gateway']['ann'].get('argocd.argoproj.io/sync-wave')\")\" = 5 ]"
+tb "the seccomp installer renders into installer.namespace" "[ \"\$(q x \"o['vexa-vexa-bot-seccomp']['ns']\")\" = vexa-node-bootstrap ]"
+DEF="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-gateway.yaml)"
+tb "no annotations block on the gateway Deployment by default" '! awk "/^metadata:/{m=1} /^spec:/{m=0} m" <<< "$DEF" | grep -q "^  annotations:"'
+
+BS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set meetingApi.botS3ExistingSecret=bot-s3 --show-only templates/deployment-meeting-api.yaml)"
+tb "meetingApi.botS3ExistingSecret reads the bots' S3 pair from a Secret" 'grep -A3 "name: BOT_S3_ACCESS_KEY" <<< "$BS" | grep -q "name: \"bot-s3\""'
 
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

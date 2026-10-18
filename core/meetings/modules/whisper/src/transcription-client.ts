@@ -2,7 +2,9 @@ import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { log } from './log.js';
 import { SsrfError, guardedLookup, validateUrl, type Resolver } from './url-guard.js';
-import { isLowConfidenceSegment } from './confidence.js';
+import { isLowConfidenceSegment, STRICT_MIN_AUDIO_SEC, type ConfidenceFilterMode } from './confidence.js';
+import { encodeFlac } from './flac.js';
+import { SttGate, bodySaysOverloaded, parseRetryAfter, type SttPressure } from './stt-gate.js';
 
 export interface TranscriptionWord {
   word: string;
@@ -42,6 +44,20 @@ export interface TranscriptionClientConfig {
    *  a 6 s window in 15–28 s at the tail (measured 2026-10-11 against transcription.vexa.ai), so a
    *  30 s timeout aborted live requests and retried the same audio from scratch. */
   requestTimeoutMs?: number;
+  /** Floor of the per-request timeout (ms). Each request's timeout is sized to its window —
+   *  max(this, timeoutPerAudioSec × audio seconds), never above `requestTimeoutMs` — so a request
+   *  carrying a few seconds is not waited on for the full ceiling. Default 30000 (the measured tail
+   *  for a 6 s window is 15–28 s). */
+  minRequestTimeoutMs?: number;
+  /** Per-request timeout per second of audio (ms of timeout per audio second ÷ 1000). Default 3. */
+  timeoutPerAudioSec?: number;
+  /** The slowest uplink a request's upload is given time for (bytes/s): the timeout adds
+   *  body bytes ÷ this, so a larger body gets proportionally longer. Default 16384 (16 KB/s; a bot
+   *  host measured 17–100 KB/s to the remote STT). */
+  minUploadBytesPerSec?: number;
+  /** Upload encoding. 'flac' (default) is lossless and about half the bytes of 'wav' for speech; a
+   *  backend that refuses it is switched to 'wav' once, for this and later requests. */
+  audioFormat?: 'flac' | 'wav';
   /** Sample rate of input audio. Default: 16000 */
   sampleRate?: number;
   /** Max speech segment duration in seconds. Whisper forces a segment split at this length.
@@ -61,10 +77,46 @@ export interface TranscriptionClientConfig {
   publicOnly?: boolean;
   /** Replaces DNS for the guard (tests). */
   resolveHost?: Resolver;
+  /** The bot's shared STT gate (in-flight bound, overload pause, circuit breaker). Pass one gate to
+   *  every client of one bot; default: a gate of this client's own, built from the options below. */
+  gate?: SttGate;
+  /** Requests at the STT at once (own gate only). Default 8. */
+  maxConcurrent?: number;
+  /** Consecutive overload answers that open the breaker (own gate only). Default 3. */
+  breakerThreshold?: number;
+  /** Overload backoff without Retry-After: first pause and ceiling (ms, own gate only). Defaults 2000 / 30000. */
+  overloadBackoffBaseMs?: number;
+  overloadBackoffMaxMs?: number;
+  /** 'strict' also drops segments Whisper decoded with a low average log-probability (see
+   *  confidence.ts for the measured rule); 'off' keeps only the always-on rule. Default 'off'. */
+  confidenceFilter?: ConfidenceFilterMode;
 }
+
+/** Segment audio RMS below which the STT's text for it is treated as invented over silence. */
+const SILENT_SEGMENT_RMS = 0.004;
 
 /** Default per-request STT timeout (ms) — sized to a remote, realtime-tier STT's measured tail. */
 export const DEFAULT_STT_REQUEST_TIMEOUT_MS = 90_000;
+/** Default floor of a sized per-request timeout (ms). */
+export const DEFAULT_STT_MIN_REQUEST_TIMEOUT_MS = 30_000;
+/** Default timeout multiple of the window's audio length. */
+export const DEFAULT_STT_TIMEOUT_PER_AUDIO_SEC = 3;
+
+/** Default slowest uplink a request is given time for (bytes/s). */
+export const DEFAULT_STT_MIN_UPLOAD_BYTES_PER_SEC = 16 * 1024;
+
+/** The timeout one request gets: max(floor, perAudioSec × audio seconds + body bytes ÷ the slowest
+ *  uplink), capped at `capMs`. Bigger bodies get proportionally longer; none gets past the cap. */
+export function sttRequestTimeoutMs(
+  audioSec: number,
+  opts: { capMs?: number; minMs?: number; perAudioSec?: number; bodyBytes?: number; minUploadBytesPerSec?: number } = {},
+): number {
+  const cap = opts.capMs ?? DEFAULT_STT_REQUEST_TIMEOUT_MS;
+  const min = opts.minMs ?? DEFAULT_STT_MIN_REQUEST_TIMEOUT_MS;
+  const per = opts.perAudioSec ?? DEFAULT_STT_TIMEOUT_PER_AUDIO_SEC;
+  const uploadMs = ((opts.bodyBytes ?? 0) / (opts.minUploadBytesPerSec ?? DEFAULT_STT_MIN_UPLOAD_BYTES_PER_SEC)) * 1000;
+  return Math.round(Math.min(cap, Math.max(min, per * audioSec * 1000 + uploadMs)));
+}
 
 /** The STT boundary's FAILURE vocabulary (P5 + P18: an adapter must translate the
  *  dependency's failures, not just its successes). A consumer reads `.kind` to surface
@@ -86,6 +138,10 @@ export class TranscriptionError extends Error {
     readonly status: number | undefined,
     readonly detail: string | undefined,
     readonly retryable: boolean,
+    /** The STT said it is overloaded (429, 503, or a 5xx relaying an upstream 429/saturation). */
+    readonly overloaded: boolean = false,
+    /** The STT's Retry-After, in ms, when it gave one. */
+    readonly retryAfterMs?: number,
   ) {
     super(`stt ${kind}${status ? ` (HTTP ${status})` : ''}${detail ? `: ${detail}` : ''}`);
     this.name = 'TranscriptionError';
@@ -93,10 +149,13 @@ export class TranscriptionError extends Error {
 }
 
 /** Map an HTTP status to a typed fault (the anti-corruption translation, P5). */
-function classifyHttp(status: number, detail?: string): TranscriptionError {
+function classifyHttp(status: number, detail?: string, retryAfterMs?: number): TranscriptionError {
   if (status === 402) return new TranscriptionError('payment_required', status, detail, false);
   if (status === 401 || status === 403) return new TranscriptionError('unauthorized', status, detail, false);
-  if (status === 429) return new TranscriptionError('rate_limited', status, detail, true);
+  if (status === 429) return new TranscriptionError('rate_limited', status, detail, true, true, retryAfterMs);
+  if (status === 503 || (status >= 500 && bodySaysOverloaded(detail))) {
+    return new TranscriptionError('unavailable', status, detail, true, true, retryAfterMs);
+  }
   if (status >= 500) return new TranscriptionError('unavailable', status, detail, true);
   if (status >= 400) return new TranscriptionError('bad_request', status, detail, false);
   return new TranscriptionError('unknown', status, detail, false);
@@ -113,6 +172,14 @@ export class TranscriptionClient {
   private maxRetries: number;
   private retryDelayMs: number;
   private requestTimeoutMs: number;
+  private minRequestTimeoutMs: number;
+  private timeoutPerAudioSec: number;
+  private minUploadBytesPerSec: number;
+  private audioFormat: 'flac' | 'wav';
+  /** Body bytes of the most recent request (observability and tests). */
+  lastBodyBytes = 0;
+  /** Monotonic request number — what a timeout line names (no audio, no text). */
+  private requestSeq = 0;
   private sampleRate: number;
   private maxSpeechDurationSec: number | undefined;
   private minSilenceDurationMs: number | undefined;
@@ -120,6 +187,8 @@ export class TranscriptionClient {
   private publicOnly: boolean;
   private resolveHost: Resolver | undefined;
   private responseFormat: 'verbose_json' | 'json' = 'verbose_json';
+  private confidenceFilter: ConfidenceFilterMode;
+  private gate: SttGate;
   constructor(config: TranscriptionClientConfig) {
     // Ensure serviceUrl ends with the transcriptions endpoint
     this.serviceUrl = config.serviceUrl.replace(/\/+$/, '');
@@ -130,12 +199,26 @@ export class TranscriptionClient {
     this.maxRetries = config.maxRetries ?? 3;
     this.retryDelayMs = config.retryDelayMs ?? 1000;
     this.requestTimeoutMs = config.requestTimeoutMs ?? DEFAULT_STT_REQUEST_TIMEOUT_MS;
+    this.minRequestTimeoutMs = config.minRequestTimeoutMs ?? DEFAULT_STT_MIN_REQUEST_TIMEOUT_MS;
+    this.timeoutPerAudioSec = config.timeoutPerAudioSec ?? DEFAULT_STT_TIMEOUT_PER_AUDIO_SEC;
+    this.minUploadBytesPerSec = config.minUploadBytesPerSec ?? DEFAULT_STT_MIN_UPLOAD_BYTES_PER_SEC;
+    this.audioFormat = config.audioFormat ?? 'flac';
     this.sampleRate = config.sampleRate ?? 16000;
     this.maxSpeechDurationSec = config.maxSpeechDurationSec;
     this.minSilenceDurationMs = config.minSilenceDurationMs;
     this.model = config.model ?? 'whisper-1';
+    this.confidenceFilter = config.confidenceFilter ?? 'off';
     this.publicOnly = config.publicOnly ?? false;
     this.resolveHost = config.resolveHost;
+    this.gate = config.gate ?? new SttGate({
+      maxConcurrent: config.maxConcurrent, breakerThreshold: config.breakerThreshold,
+      backoffBaseMs: config.overloadBackoffBaseMs, backoffMaxMs: config.overloadBackoffMaxMs,
+    });
+  }
+
+  /** The STT back-pressure this client's requests pass through (shared per bot). */
+  pressure(): SttPressure {
+    return this.gate;
   }
 
   /**
@@ -144,27 +227,70 @@ export class TranscriptionClient {
    * Retries on transient failures (503, network errors).
    */
   async transcribe(audioData: Float32Array, language?: string, prompt?: string): Promise<TranscriptionResult> {
-    const wavBuffer = this.float32ToWav(audioData);
+    const audioSec = audioData.length / this.sampleRate;
+    const requestId = ++this.requestSeq;
+    let format = this.audioFormat;
+    let body = this.encode(audioData, format);
+    let timeoutMs = this.timeoutFor(audioSec, body.length);
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
-        const result = await this.sendRequest(wavBuffer, language, prompt);
-        return result;
+        if (format !== this.audioFormat) {         // negotiated down to WAV by an earlier request
+          format = this.audioFormat;
+          body = this.encode(audioData, format);
+          timeoutMs = this.timeoutFor(audioSec, body.length);
+        }
+        this.lastBodyBytes = body.length;
+        // Every request waits its turn at the bot's shared gate: bounded in flight, held while the
+        // STT is overloaded, released in arrival order.
+        const release = await this.gate.acquire();
+        let result: TranscriptionResult;
+        try {
+          result = await this.sendRequest(body, language, prompt, timeoutMs, format, audioSec);
+        } finally {
+          release();
+        }
+        this.gate.onSuccess();
+        return this.dropSilentSegments(result, audioData);
       } catch (err: any) {
         // Normalize anything non-HTTP (abort/network) into a typed fault too, so the
         // thrown value is ALWAYS a TranscriptionError the consumer can attribute (P18).
         const fault: TranscriptionError = err instanceof TranscriptionError
           ? err
           : new TranscriptionError(err?.name === 'AbortError' ? 'timeout' : 'unavailable', undefined, err?.message, true);
+        if (fault.kind === 'timeout') {
+          // One attributable line per timed-out attempt: which request, how much audio, what limit.
+          log(`[TranscriptionClient] [STT-TIMEOUT] request ${requestId} (${audioSec.toFixed(1)}s audio) ` +
+              `exceeded ${timeoutMs}ms on attempt ${attempt + 1}/${this.maxRetries + 1}`);
+        }
         if (fault.kind === 'bad_request' && this.responseFormat === 'verbose_json' && /verbose_json/i.test(fault.detail ?? '')) {
           log('[TranscriptionClient] backend rejected verbose_json; falling back to json for this and later requests');
           this.responseFormat = 'json';
           attempt--; // Capability negotiation does not consume a configured retry.
           continue;
         }
+        if (fault.kind === 'bad_request' && format === 'flac' && /flac|format|decode|unsupported|invalid (audio|file)/i.test(fault.detail ?? '')) {
+          log('[TranscriptionClient] backend rejected FLAC; sending WAV for this and later requests');
+          this.audioFormat = 'wav';
+          attempt--;
+          continue;
+        }
         const isLastAttempt = attempt === this.maxRetries;
 
-        if (fault.retryable && !isLastAttempt) {
+        if (fault.overloaded) {
+          // Overload is the STT's state, not this request's: the shared gate pauses every submission
+          // (Retry-After, else jittered exponential backoff) — no per-request retry schedule.
+          const pause = this.gate.onOverload(fault.retryAfterMs);
+          if (!isLastAttempt) {
+            log(`[TranscriptionClient] [STT-OVERLOAD] ${fault.message} (attempt ${attempt + 1}/${this.maxRetries + 1}) — ` +
+                `all submissions paused ${pause}ms${fault.retryAfterMs !== undefined ? ' (Retry-After)' : ''}`);
+            continue;
+          }
+        } else {
+          this.gate.onOtherFailure();
+        }
+
+        if (fault.retryable && !isLastAttempt && !fault.overloaded) {
           const delay = this.retryDelayMs * Math.pow(2, attempt);
           log(`[TranscriptionClient] ${fault.kind} (attempt ${attempt + 1}/${this.maxRetries + 1}): ${fault.message}. Retrying in ${delay}ms...`);
           await new Promise(resolve => setTimeout(resolve, delay));
@@ -185,7 +311,8 @@ export class TranscriptionClient {
    *  the address the connect-time lookup checked, and a redirect is an answer, not a hop. A refusal
    *  is a non-retryable `bad_request` fault naming why. */
   private async guardedPost(headers: Record<string, string>, body: Buffer, signal: AbortSignal):
-      Promise<{ ok: boolean; status: number; text(): Promise<string>; json(): Promise<unknown> }> {
+      Promise<{ ok: boolean; status: number; headers: { get(name: string): string | null };
+        text(): Promise<string>; json(): Promise<unknown> }> {
     const refused = (e: Error) => new TranscriptionError('bad_request', undefined,
       `customer endpoint refused: ${e.message}`, false);
     try {
@@ -206,7 +333,11 @@ export class TranscriptionClient {
         res.on('end', () => {
           const raw = Buffer.concat(chunks).toString('utf8');
           const status = res.statusCode ?? 0;
-          resolve({ ok: status >= 200 && status < 300, status,
+          const headers = { get: (name: string) => {
+            const v = res.headers[name.toLowerCase()];
+            return v === undefined ? null : Array.isArray(v) ? v.join(', ') : String(v);
+          } };
+          resolve({ ok: status >= 200 && status < 300, status, headers,
                     text: async () => raw, json: async () => JSON.parse(raw) });
         });
       });
@@ -219,7 +350,39 @@ export class TranscriptionClient {
   /**
    * Send the WAV buffer to the transcription-service as multipart form data.
    */
-  private async sendRequest(wavBuffer: Buffer, language?: string, prompt?: string): Promise<TranscriptionResult> {
+  /** Drop segments the STT placed over near-silence (the "Thank you." / "Продолжение следует…" it
+   *  invents at the end of a window), checked against the audio itself, and rebuild the text. */
+  private dropSilentSegments(result: TranscriptionResult, audio: Float32Array): TranscriptionResult {
+    if (!result.segments.length) return result;
+    const kept = result.segments.filter((seg) => {
+      const a = Math.max(0, Math.floor(seg.start * this.sampleRate));
+      const b = Math.min(audio.length, Math.ceil(seg.end * this.sampleRate));
+      if (b <= a) return true;                    // no usable span: keep, judge elsewhere
+      let sum = 0;
+      for (let i = a; i < b; i++) sum += audio[i] * audio[i];
+      return Math.sqrt(sum / (b - a)) >= SILENT_SEGMENT_RMS;
+    });
+    if (kept.length === result.segments.length) return result;
+    log(`[STT] dropped ${result.segments.length - kept.length}/${result.segments.length} segment(s) placed over silence`);
+    return { ...result, segments: kept, text: kept.map((s) => s.text.trim()).filter(Boolean).join(' ') };
+  }
+
+  private encode(audio: Float32Array, format: 'flac' | 'wav'): Buffer {
+    return format === 'flac' ? Buffer.from(encodeFlac(audio, this.sampleRate)) : this.float32ToWav(audio);
+  }
+
+  private timeoutFor(audioSec: number, bodyBytes: number): number {
+    return sttRequestTimeoutMs(audioSec, {
+      capMs: this.requestTimeoutMs, minMs: this.minRequestTimeoutMs, perAudioSec: this.timeoutPerAudioSec,
+      bodyBytes, minUploadBytesPerSec: this.minUploadBytesPerSec,
+    });
+  }
+
+  private async sendRequest(audioBody: Buffer, language?: string, prompt?: string,
+      timeoutMs: number = this.requestTimeoutMs, format: 'flac' | 'wav' = 'wav', audioSec = Infinity): Promise<TranscriptionResult> {
+    // Strict applies only to windows as long as the ones it was measured on: a short window's
+    // average log-probability is lower for real speech too.
+    const filterMode = audioSec >= STRICT_MIN_AUDIO_SEC ? this.confidenceFilter : 'off';
     // Build multipart form data manually (no external dependency needed)
     const boundary = `----FormBoundary${Date.now().toString(36)}`;
 
@@ -228,10 +391,10 @@ export class TranscriptionClient {
     // File part
     parts.push(Buffer.from(
       `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n` +
-      `Content-Type: audio/wav\r\n\r\n`
+      `Content-Disposition: form-data; name="file"; filename="audio.${format}"\r\n` +
+      `Content-Type: audio/${format}\r\n\r\n`
     ));
-    parts.push(wavBuffer);
+    parts.push(audioBody);
     parts.push(Buffer.from('\r\n'));
 
     // Model part (required by OpenAI-compatible API; validating backends reject unknown ids)
@@ -304,7 +467,7 @@ export class TranscriptionClient {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = this.publicOnly
@@ -318,7 +481,8 @@ export class TranscriptionClient {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unable to read error response');
-        throw classifyHttp(response.status, errorText);   // typed fault (P5/P18), not a bare Error
+        const retryAfterMs = parseRetryAfter(response.headers?.get?.('retry-after'));
+        throw classifyHttp(response.status, errorText, retryAfterMs);   // typed fault (P5/P18), not a bare Error
       }
 
       const data = await response.json() as any;
@@ -335,12 +499,17 @@ export class TranscriptionClient {
       // Drop low-confidence (hallucinated / faint-bleed) segments at the source and
       // rebuild the text from what survives, so phantoms never reach the pipeline.
       // If the model returned no segments we can't score, so keep its text as-is.
-      const segments = allSegments.filter((s: any) => !isLowConfidenceSegment(s));
+      const segments = allSegments.filter((s: any) => !isLowConfidenceSegment(s, filterMode));
       const text = allSegments.length
         ? segments.map((s: any) => (s.text || '').trim()).filter(Boolean).join(' ')
         : (data.text || '');
       if (allSegments.length && segments.length < allSegments.length) {
         log(`[STT] dropped ${allSegments.length - segments.length}/${allSegments.length} low-confidence segment(s)`);
+        if (filterMode === 'strict') {
+          const dropped = allSegments.filter((s: any) => !segments.includes(s));
+          log(`[STT-CONFIDENCE] strict: dropped ${dropped.map((s: any) =>
+            `${(+s.start).toFixed(1)}-${(+s.end).toFixed(1)}s avg_logprob=${s.avg_logprob?.toFixed?.(2)} no_speech=${s.no_speech_prob?.toFixed?.(2)}`).join('; ')}`);
+        }
       }
       return {
         text,

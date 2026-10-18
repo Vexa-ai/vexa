@@ -290,6 +290,11 @@ class MeetingRecord:
     #: What degraded the meeting without ending it — today the STT backend refusing chunks
     #: (kinds + counts + the backend's own detail), reported by the bot on the terminal event.
     stt_fault: Optional[Dict[str, Any]] = None
+    #: Every stretch of captured audio the bot's lanes will never transcribe (prod-cutover R4),
+    #: reported once on the terminal event: ``[{start, end, absolute_start_time, absolute_end_time,
+    #: speaker?, reason}]``, epoch seconds. Persisted at ``meeting.data.transcript_gaps`` — and kept
+    #: OFF every response edge unless a reader asks (``collector.projection.OPT_IN_KEYS``).
+    transcript_gaps: Optional[List[Dict[str, Any]]] = None
     #: WHY a pre-active run never reached the meeting (#1059/#1058) — the typed
     #: `join_evidence.JoinFailureReason` plus the stage, the stage timings, and the platform's own
     #: signal. Set on a `failed` terminal only; see `data` below for how it lands in the JSONB.
@@ -350,7 +355,61 @@ class MeetingRecord:
             d["stop_requested"] = True
         if self.stt_fault is not None:
             d["stt_fault"] = dict(self.stt_fault)
+        if self.transcript_gaps:
+            d["transcript_gaps"] = [dict(g) for g in self.transcript_gaps]
         return d
+
+
+#: One terminal event carries at most this many gaps (the bot caps at the same number).
+MAX_TRANSCRIPT_GAPS = 500
+_GAP_KEYS = ("start", "end", "absolute_start_time", "absolute_end_time", "speaker", "reason")
+
+
+def sanitize_transcript_gaps(raw: Any) -> List[Dict[str, Any]]:
+    """The well-formed entries of a bot's ``transcript_gaps`` report, bounded and key-limited.
+
+    A gap needs numeric ``start < end``; anything else is dropped (a report is evidence, and a
+    malformed one is not evidence of anything). Only the known keys are kept, so the field cannot
+    become a channel for arbitrary data into ``meeting.data``."""
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for g in raw:
+        if len(out) >= MAX_TRANSCRIPT_GAPS:
+            break
+        if not isinstance(g, dict):
+            continue
+        start, end = g.get("start"), g.get("end")
+        if isinstance(start, bool) or isinstance(end, bool):
+            continue
+        if not isinstance(start, (int, float)) or not isinstance(end, (int, float)) or not end > start:
+            continue
+        kept = {k: g[k] for k in _GAP_KEYS if k in g and g[k] is not None}
+        for k in ("absolute_start_time", "absolute_end_time", "speaker", "reason"):
+            if k in kept:
+                kept[k] = str(kept[k])[:300]
+        out.append(kept)
+    return out
+
+
+def _count_transcript_gaps(connection_id: Optional[str], gaps: List[Dict[str, Any]]) -> None:
+    """The gap METRIC: one logevent.v1 line per meeting that lost audio — count, seconds, reasons.
+    Never raises (a counter must not break the terminal it counts)."""
+    try:
+        from ..obs import log_event
+
+        seconds = sum(float(g["end"]) - float(g["start"]) for g in gaps)
+        reasons: Dict[str, int] = {}
+        for g in gaps:
+            key = str(g.get("reason") or "unspecified").split(" (", 1)[0][:80]
+            reasons[key] = reasons.get(key, 0) + 1
+        log_event(
+            "transcript_gaps_recorded", audience="system", level="warning",
+            span="lifecycle.terminal", meeting_id=connection_id,
+            fields={"gap_count": len(gaps), "gap_seconds": round(seconds, 3), "reasons": reasons},
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class MeetingStore:
@@ -588,6 +647,14 @@ class LifecycleSink:
             # lifecycle.v1 (additionalProperties: true), same as infra_fault.
             if event.get("stt_fault"):
                 rec.stt_fault = dict(event["stt_fault"])
+            # WHAT of the meeting was never transcribed (prod-cutover R4): the bot's lanes record
+            # every lost window as a range and report them here, so a gap is part of the meeting's
+            # record instead of a silent hole. Additive, like stt_fault. Malformed entries are
+            # dropped, never persisted; FAIL-OPEN — a bad report can never alter the terminal.
+            gaps = sanitize_transcript_gaps(event.get("transcript_gaps"))
+            if gaps:
+                rec.transcript_gaps = gaps
+                _count_transcript_gaps(rec.connection_id, gaps)
 
         rec.status = to
         rec.history.append(to)

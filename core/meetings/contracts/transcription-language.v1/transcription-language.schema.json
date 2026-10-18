@@ -27,8 +27,8 @@
       }
     },
     "Source": {
-      "description": "Which tier supplied a meeting's setting. Precedence, first tier that sets either field wins as a whole: meeting, then user, then deployment, then auto.",
-      "enum": ["meeting", "user", "deployment", "auto"]
+      "description": "Which tier supplied a meeting's setting. Precedence, first tier that sets either field wins as a whole: meeting, then user, then history (the languages the person's recent meetings were spoken in, restricted to that list, set only when the person has no default), then deployment, then auto.",
+      "enum": ["meeting", "user", "history", "deployment", "auto"]
     },
     "EffectiveSetting": {
       "description": "The setting a meeting's bot runs with, stored on the meeting as `data.transcription_language` and returned on every meeting read. meeting-api is its one writer: at spawn, and on every accepted live change.",

@@ -1,0 +1,193 @@
+---
+title: "Voice notes"
+description: "Record a note in Minutes with no meeting to join; it is transcribed live and kept as a meeting."
+---
+
+A voice note is a recording you make in Minutes, with no meeting platform involved. It is transcribed
+as you speak, by the same pipeline a meeting's bot uses, and it is kept as a meeting: the meeting
+page, the transcript, notes, search, sharing and export all work on it unchanged.
+
+## What you can do
+
+### Record
+
+1. Start it one of two ways:
+   - in a new, empty chat, press the suggestion **Record a voice note**; or
+   - ask the agent, in any chat: *"record a voice note"*. The agent calls its `record_voice_note` tool,
+     which opens the recorder in this tab. The agent cannot hear or record you: the microphone is
+     yours, and the note is what you say into it.
+
+   The browser asks for the microphone the first time.
+2. The note opens as its own meeting, titled *Voice note*. Its page header shows *Recording m:ss / max*
+   with a level dot, **Pause** and **Stop**; the chats rail shows a running clock too.
+3. Speak. The transcript fills in as you talk, under your own name, and while the note records it is
+   most of the page: it wraps, follows the newest line, and counts the line still being said. The
+   notes are written after you stop, the way a meeting's are after it ends.
+
+The microphone in the chat composer is dictation: it types what you say into the message box, and
+makes no voice note.
+
+### Pause, resume and stop
+
+- **Pause** stops sending audio without ending the note; **Resume** continues the same note.
+- **Stop** (on the meeting page, or the clock in the rail) sends what is left of the audio, then ends
+  the note. The bot finishes the transcript and the note becomes a finished meeting.
+- Closing the tab without Stop ends the note after two minutes of silence (`VOICE_NOTE_IDLE_TIMEOUT_SEC`);
+  what was sent is kept. A paused note stays open while the tab is open, but not past the limit below:
+  the clock keeps running while you are paused.
+
+### Limits
+
+A note can last up to 30 minutes of audio (`VOICE_NOTE_MAX_DURATION_SEC`). At the limit the note is
+saved and ended for you (*The note reached its maximum length and was saved.*). Paused time counts
+too: a note ends at most a minute after `VOICE_NOTE_MAX_DURATION_SEC` of wall-clock time, however much
+of it was paused. A voice note counts toward your number of concurrent bots.
+
+| What you see | Why | What to do |
+|---|---|---|
+| *Microphone access was refused…* | the browser denied the microphone | allow it in the browser's site settings, then record again |
+| *Your key cannot record voice notes (it needs the bot scope).* | your sign-in key has no `bot` scope | ask your administrator |
+| *This voice note has already ended.* | the note was stopped elsewhere, or timed out | start a new note |
+| *The connection to the recorder closed. What was sent is kept.* | the network dropped | start a new note; the transcript so far stays |
+| *Your sign-in was not accepted for recording. Sign out, sign in again, and retry.* | the recorder refused the sign-in the page sent | sign out and in again |
+| *Could not reach the recorder. Nothing was saved; try again.* | the recorder did not answer within 10 seconds | record again |
+| *No audio from your microphone…* (while recording) | the microphone has delivered nothing for 5 seconds | unmute it or close the app using it; the note keeps running |
+
+These messages show on the note's meeting page. A note that could not start at all (the microphone
+refused, for example) shows *Not recording* in the chats rail; hover it for the reason, press it to
+dismiss it. When a note ends on the server
+(Stop on another device, the idle rule, the limit) while this tab is still recording it, the page lets
+the microphone go.
+
+## How it works
+
+### Flow
+
+1. **Open the recorder.** The empty chat's *Record a voice note* suggestion, or the agent's
+   `record_voice_note` tool, raises one event in the tab, and the recorder starts. The tool is
+   `POST /voice-notes/recorder` on meeting-api (scope `bot`): it creates nothing and answers
+   `{"status": "awaiting_user", "ui_action": "open_voice_note", "instruction": …}`; the terminal acts on
+   the tool call the way it does for `connection_request`. In a run with nobody present (a routine, a
+   background flow, a meeting run) the tool is refused with `human_session_required`.
+2. **Start.** The terminal posts `POST /api/bots {"platform": "voice_note"}`. meeting-api makes the
+   meeting row (`vn-…` id) and spawns a bot whose invocation has no meeting URL and a `voiceNote` block:
+   the note's audio stream, its cap and idle timeout.
+3. **Capture.** The browser captures the microphone with `getUserMedia` and an `AudioWorklet`,
+   resamples to 16 kHz mono, and cuts 100 ms capture.v1 audio frames, each stamped with its capture
+   time (the same frame the extension and the bot use).
+4. **Stream.** The frames go over the same-origin socket `/voice-notes/{id}/stream`. The terminal
+   server takes the upgrade only from its own origin and only with your session cookie, adds your key
+   from that cookie and relays the socket to the gateway, which authorizes the upgrade (scope `bot`,
+   and your per-user request budget), signs your identity onto the hop and relays it to meeting-api.
+5. **Buffer.** meeting-api checks the note is yours and live, validates each frame, counts the audio
+   against the cap and appends the frame to the note's Redis stream. Audio is taken at up to 1.5×
+   realtime after a 5-second burst; a faster sender waits. Audio sent while the bot is still starting
+   waits there.
+6. **Transcribe.** The bot reads the stream in order and feeds the frames to the same per-speaker lane,
+   speech-to-text service and transcript and lifecycle sinks a meeting's audio takes. It joins
+   nothing and launches no browser.
+7. **Stop.** Stop appends an end marker. The bot drains what is left, flushes the last words and
+   reports the meeting `completed`, as at the end of a meeting.
+
+### The socket
+
+`WS /voice-notes/{native_meeting_id}/stream` (through the gateway; a plain `GET` answers `426`).
+
+| Direction | Frame |
+|---|---|
+| server | `{"type":"ready","max_duration_sec":N,"received_sec":s}` |
+| client | binary capture.v1 audio frame: Int32 track, Float64 capture epoch ms, mono 16 kHz Float32 PCM, at most one second |
+| server | `{"type":"progress","received_sec":s}` about once a second of audio |
+| client → server | `{"type":"ping"}` → `{"type":"pong"}`, every 15 s; keeps a paused note open (at most one keepalive is stored per 5 s) |
+| client → server | `{"type":"stop"}` → `{"type":"stopped","received_sec":s}`, then close `1000` |
+
+Refusals are an `{"type":"error","error":…}` frame, then a close: `missing_api_key` / `invalid_api_key`
+4401, `insufficient_scope` 4403, `rate_limited` 4429, `auth_unavailable` 4503, `upstream_unavailable`
+4502, `frame_too_large` 4400 for a frame over 128 KiB (at the gateway); `not_found` 4404, `bad_frame`
+4400, `max_duration` 4413, `rate_limited` 4429 (text frames past a budget of 20, refilled 2 a second)
+(at meeting-api). A text frame meeting-api does not recognise is answered with
+`{"type":"error","error":"unknown_message"}` and the socket stays open. The terminal server refuses an
+upgrade from another origin (`403`) and a voice-note upgrade without a session cookie (`401`). A
+reconnect to a live note continues it; the audio count survives.
+
+### Who writes what
+
+| Data | Single writer | Where |
+|---|---|---|
+| The note's audio stream (`voice_note:meeting:{id}:audio`) | meeting-api | Redis; see *Retention* |
+| Transcript segments | the bot, then meeting-api | the transcript stream in Redis, then Postgres |
+| Meeting row and status | meeting-api | Postgres |
+
+### Configuration
+
+| Key | Service | Default | Compose (`deploy/compose/.env`) | Helm value |
+|---|---|---|---|---|
+| `VOICE_NOTE_MAX_DURATION_SEC` | meeting-api | `1800` | `VOICE_NOTE_MAX_DURATION_SEC=1800` | `meetingApi.voiceNoteMaxDurationSeconds` |
+| `VOICE_NOTE_IDLE_TIMEOUT_SEC` | meeting-api | `120` | `VOICE_NOTE_IDLE_TIMEOUT_SEC=120` | `meetingApi.voiceNoteIdleTimeoutSeconds` |
+
+On Compose, set the key in `deploy/compose/.env` and apply it with `docker compose up -d meeting-api`
+(a `restart` does not re-read `.env`). On Helm, set the value and run `helm upgrade`. meeting-api reads
+both keys at each note's start and hands the bot its cap and idle timeout in the invocation.
+
+No recording file is kept for a voice note; the transcript is the record.
+
+### Retention
+
+The raw audio exists only in the note's Redis stream, and only as long as the bot needs it:
+
+- while the note runs, the stream and its audio count expire 10 minutes after the last write (or
+  twice `VOICE_NOTE_IDLE_TIMEOUT_SEC`, whichever is longer);
+- after Stop or the cap, they expire 5 minutes after the end marker;
+- when the note completes or fails, meeting-api deletes them;
+- deleting the meeting deletes them too, if anything is left.
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P2** contracts | a voice note is the sealed `invocation.v1` / `api.v1` / `ws.v1` platform value `voice_note`; the audio is capture.v1 frames; the socket is a declared `routes.v1` meetings row | `gate:schema`, `gate:contract-version` |
+| **P7** disposable workers | the bot is the ordinary meeting bot, without its browser; it boots, drains, emits, dies | bot `voice-note.test.ts` |
+| **P18** fail loud | every refusal is a typed close with a reason the terminal turns into words | meeting-api `test_voice_note.py`, gateway `test_voice_relay.py` |
+| **P20** authorize every access | the gateway checks the key and its scope at the upgrade; meeting-api checks the signed identity owns the note | the deny tests below |
+| **P22** guaranteed teardown | Stop ends the note; a vanished browser ends it on the idle timeout; the bot cannot outlive the cap by more than a minute | bot `voice-note.test.ts` |
+| **P23** one writer per carrier | meeting-api alone writes the audio stream; the bot alone reads it | `bot_spawn.workload_redis` ACL rules |
+
+### Security
+
+**Who can do what.** Only the note's owner can stream into it, and only with a key that has the `bot`
+scope. A worker's delegation token cannot open the socket. The agent's `record_voice_note` tool only
+asks the person's open tab to start the recorder: it creates no note, carries no audio, and is
+refused to a worker running with nobody present.
+
+**Protections.**
+
+- The identity on the hop is the gateway's signed identity; meeting-api refuses an unsigned one.
+- The bot's own Redis user may read its note's audio stream and nothing else: a read-only selector
+  for that one key, so it can never read the shared transcript stream.
+- Frames are validated (shape, size, capture time) before they are stored; nothing else is accepted.
+- The note's length is capped across reconnects, and audio is taken at no more than 1.5× realtime.
+  Keepalives and text frames are budgeted. The stream is deleted when the note ends and expires
+  minutes after its last write.
+- The terminal server takes the socket only from its own origin, and only with your session cookie;
+  a voice note never falls back to a deployment key.
+- The browser never holds your key: the terminal server adds it.
+
+**Deny tests.**
+
+| Test | Proves |
+|---|---|
+| `core/meetings/services/meeting-api/tests/test_voice_note.py` · `test_the_note_is_the_callers_own`, `test_a_frame_that_is_not_capture_audio_is_refused`, `test_the_cap_ends_the_note_and_counts_across_reconnects` | ownership, frames, the cap |
+| `core/meetings/services/meeting-api/tests/test_voice_note_limits.py` | pace, keepalive and text-frame budgets, the stream's expiry and deletion |
+| `core/gateway/services/gateway/tests/test_voice_relay.py` · `test_a_caller_the_edge_does_not_accept_is_refused_before_any_dial`, `test_a_key_without_the_bot_scope_is_refused`, `test_the_per_user_rate_limit_applies_when_the_socket_opens` | the edge |
+| `clients/terminal/src/app/api/__tests__/socketUpgrade.test.ts` | a foreign origin, a cookieless voice-note upgrade |
+| `core/meetings/services/meeting-api/tests/test_voice_note_recorder.py` · `test_a_background_worker_is_refused`; `test_regime.py` (`POST /voice-notes/recorder` in `GATED`) | the recorder tool is refused with nobody present |
+| `core/meetings/services/meeting-api/tests/test_bot_redis_users.py` · `test_a_bot_may_read_its_own_voice_note_stream_and_nothing_else` | the bot's Redis reach |
+
+### End to end
+
+`core/meetings/eval/voice-note-e2e/run.sh` streams a synthetic speech WAV through this socket to a real
+bot and speech-to-text service. On 2026-10-12: 34.89 s sent, 34.89 s acknowledged, 34.14 s
+transcribed in 5 segments, every sentence returned in order, the note `completed` one second after
+Stop.

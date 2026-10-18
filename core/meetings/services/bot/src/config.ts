@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
 import type { SpeakerStreamManagerConfig } from '@vexa/gmeet-pipeline';
 import { settingProblem } from './transcription-language.js';
 
-export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi';
+export type Platform = 'google_meet' | 'zoom' | 'teams' | 'jitsi' | 'voice_note' | 'vexa_call';
 export type TranscriptionTier = 'realtime' | 'deferred';
 
 /** True for platforms that ride the MIXED capture lane (one combined WebRTC audio
@@ -48,6 +48,28 @@ export function isPerTrackLanePlatform(p: Platform | string): boolean {
   return p === 'zoom';
 }
 
+/** invocation.v1 `VoiceNote`: the note's stream and its limits (present iff platform is voice_note). */
+export interface VoiceNote {
+  audioStream: string;
+  maxDurationSec: number;
+  idleTimeoutSec?: number;
+  speakerName?: string;
+}
+
+/** invocation.v1 `Call`: the LiveKit room the listener joins hidden (present iff platform is vexa_call). */
+export interface Call {
+  /** The LiveKit server address inside the deployment (ws:// or wss://). */
+  url: string;
+  room: string;
+  /** The listener's own token: hidden, subscribe-only, this room only. */
+  token: string;
+  maxDurationSec: number;
+  /** How long an emptied room is given before the call ends. */
+  emptyGraceSec?: number;
+  /** How long the listener waits for the first participant. */
+  firstJoinTimeoutSec?: number;
+}
+
 export interface AutomaticLeave {
   waitingRoomTimeout?: number;
   noOneJoinedTimeout?: number;
@@ -62,6 +84,8 @@ export interface Invocation {
   botName: string;
   passcode?: string;
   nativeMeetingId?: string;
+  voiceNote?: VoiceNote;
+  call?: Call;
   // ── identity / control plane ──
   token?: string;
   connectionId?: string;
@@ -101,6 +125,8 @@ export interface Invocation {
   s3SecretKey?: string;
   /** where the authenticated bot PUTs its session-profile.v1 write-back (sent only in authenticated mode) */
   sessionWritebackUrl?: string;
+  /** where an authenticated bot GETs a saved bot account's session-profile.v1 profile before launch (sent only in authenticated mode) */
+  sessionRestoreUrl?: string;
 }
 
 /** Thrown when VEXA_BOT_CONFIG is missing / not JSON / off-contract. The composition root
@@ -182,6 +208,43 @@ export function sttTimeoutMsFromEnv(
   return Math.round(value * 1000);
 }
 
+/** Show fast, then reconfirm: every window is shown at once as a draft, and each speaker's drafts are
+ *  replaced by ONE segment transcribed again with context when the speaker pauses or this many
+ *  seconds accumulate. BOT_TRANSCRIPT_RECONFIRM_SEC (forwarded by the runtime); unset → 10; 0 → off. */
+export const DEFAULT_RECONFIRM_SEC = 10;
+export function reconfirmSecFromEnv(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = (env.BOT_TRANSCRIPT_RECONFIRM_SEC ?? '').trim();
+  if (raw === '') return DEFAULT_RECONFIRM_SEC;
+  const v = Number(raw);
+  return Number.isFinite(v) && v >= 0 ? Math.min(v, 30) : DEFAULT_RECONFIRM_SEC;
+}
+
+/** The lane tuning. ONE pipeline by default — show fast, then reconfirm: a pause of 500–700 ms ends
+ *  an utterance and sends it once, one answer confirms it as a DRAFT shown at once, windows stay
+ *  under 10 s, and per-participant tracks pipeline a fresh draft about every second; the drafts are
+ *  then replaced by one reconfirmed segment (pipeline.ts, BOT_TRANSCRIPT_RECONFIRM_SEC). Measured on
+ *  the guarantee harness against 0.12 (3 speakers, real STT): visible p95 0.1 s vs 0.7 s, confirmed
+ *  p95 3.5 s vs 3.2 s, coverage 0.946 vs 0.935. Without reconfirmation the same tuning publishes its
+ *  first versions as final (coverage 0.914, short fragments), so it is used only with it — or when
+ *  `BOT_TRANSCRIPTION_LATENCY=low` asks for it explicitly. `BOT_TRANSCRIPTION_LATENCY=standard` keeps
+ *  the built-in confirm-on-agreement lane. A voice note's microphone streams continuously and
+ *  pipelined drafts starve there, so it takes the tuning without them. Explicit BOT_SPEAKER_* knobs
+ *  still win. */
+export function withLatencyProfile(
+  platform: string,
+  config: SpeakerStreamManagerConfig | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): SpeakerStreamManagerConfig | undefined {
+  const mode = (env.BOT_TRANSCRIPTION_LATENCY ?? '').trim().toLowerCase();
+  const fast = mode === 'low' || (mode !== 'standard' && reconfirmSecFromEnv(env) > 0);
+  if (!fast) return config;
+  const base: SpeakerStreamManagerConfig = platform === 'voice_note'
+    ? { pauseFinalMs: 700, idleTimeoutSec: 1, submitInterval: 1, maxBufferDuration: 10, confirmThreshold: 1 }
+    : { pauseFinalMs: 500, idleTimeoutSec: 1, submitInterval: 1, maxBufferDuration: 10, confirmThreshold: 1,
+        pipelineDrafts: true, minAudioDuration: 0.75 };
+  return { ...base, ...(config ?? {}) };
+}
+
 /** Read optional Meet speaker-stream tuning knobs from the bot environment. */
 export function speakerStreamConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env,
@@ -199,7 +262,7 @@ export function speakerStreamConfigFromEnv(
       warn(`${key}=${JSON.stringify(raw)} is invalid; using the built-in speaker-stream default`);
       continue;
     }
-    config[property] = value;
+    (config as Record<string, number>)[property] = value;   // every env-tunable knob is numeric
     configured = true;
   }
   return configured ? config : undefined;

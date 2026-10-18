@@ -40,7 +40,8 @@ Event types on the stream: `transcript` (a segment — speaker, text, time; pend
 place by `id`), `retract` (the capture withdrew a superseded draft), `ping`, `meeting-end`. Every
 event carries an SSE `id:` — on reconnect, echo it as `Last-Event-ID` to **resume gaplessly**.
 
-The feed is owner-scoped: the caller must own the meeting row.
+The feed is access-scoped: the caller must own the meeting, have its transcript shared with them, or
+be a member of the workspace the meeting is bound to. Anyone else gets `403` before the stream opens.
 
 ## 3. Ask your agent about it
 
@@ -63,6 +64,37 @@ curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/meeting/relay-health"
 ```
 
 A stale bot key surfaces as `native_resolve:{ok:false,kind:"unauthorized"}` rather than silent dead air.
+
+## How it works
+
+1. **Capture.** The bot's collector in meeting-api appends each segment, `retract` and session marker
+   to the Redis stream `tc:meeting:{row id}`. It is the only writer of that stream.
+2. **Gateway.** `GET /agent/meeting/stream` is a declared `stream` route in
+   `core/agent/routes.v1.json` (scopes `bot`, `tx`). The gateway relays it as server-sent events to
+   agent-api's `/api/meeting/stream`, with the signed caller identity.
+3. **Access.** agent-api asks meeting-api one question: may this person read this meeting (owner,
+   share recipient, or member of the bound workspace)? Memberships are read from the workspace's
+   `policy/members.json`, never from a header. `session_uid` must match that same meeting.
+4. **Replay, then tail.** The route reads the stream from the start, or from the cursor in
+   `Last-Event-ID`, then follows it live. Every event's `id:` is that cursor.
+5. **End.** A `session_end` marker waits one more poll for a resumed session, then sends `meeting-end`.
+   Ten idle minutes close the stream.
+6. **The agent.** Nothing runs a model on the stream. Your chat turn reads the meeting over the MCP.
+
+## Why it complies
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P23 — one writer per carrier | meeting-api alone writes `tc:meeting:{id}`; the live view only reads it. | `gate:dataflow` |
+| P4 — sealed contracts | The route is a row in `routes.v1.json`; segments follow `transcript.v1`. | `gate:schema`, `gate:contract-version` |
+| P20 — authorize every access | Every key reaching the route has a declared scope, and every meeting is checked per person before the stream opens ([ADR 0012](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0012-complete-mediation-authorize-every-access.md)). | `test_scope_matrix`; deny tests below |
+| P18 — fail loud | A stale bot key shows on `relay-health` as `unauthorized` and fails the admin probe's relay stage, not as silence. The retired copilot routes answer `404`, never a silent no-op. | `test_probe_native_resolve_fault_fails_relay_stage`, `test_the_retired_copilot_endpoints_are_gone` |
+
+Deny tests in `core/agent/tests/`: `test_api.py` `test_sse_cross_tenant_meeting_stream_is_refused`,
+`test_sse_owned_row_but_foreign_session_uid_is_refused`; `test_meeting_workspace_access.py`
+`test_the_live_transcript_refuses_a_non_member_before_the_stream_opens`,
+`test_membership_comes_from_the_roster_on_disk_not_from_a_header`; `test_deleted_meeting_transcript.py`
+`test_the_live_view_refuses_a_deleted_meeting`.
 
 ## After the call
 

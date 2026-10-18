@@ -32,6 +32,9 @@ are public.
 | `BOT_SPEAKER_IDLE_TIMEOUT_SEC` | `15` | Flush/reset timeout after a speaker stops producing audio. |
 | `BOT_SPEAKER_MIN_FINAL_AUDIO_SEC` | `1` | A speaker turn whose whole audio is shorter than this is not sent to STT as a final window (the sub-second tail of a longer turn always is): sub-second fragments come back as phrases like "Thank you." that the hallucination filter discards. Skipped seconds are counted as `short` in the bot's `[COVERAGE]` line. |
 | `BOT_STT_TIMEOUT_SEC` | `90` | Per-request STT timeout for meeting bots, in seconds (minimum `20`). A remote STT can take 15–30 s for a few seconds of audio; a shorter timeout aborts requests that would have answered. Audio is never dropped while a request is in flight. See [Troubleshooting](/troubleshooting#transcript-covers-only-part-of-the-meeting). |
+| `BOT_TRANSCRIPTION_LATENCY` | unset | Unset: one pipeline, show fast and then reconfirm. A pause of 0.5–0.7 s ends an utterance, which is shown at once as a draft; per-participant tracks refresh their draft about every second, and no request carries more than 10 s. The drafts are then replaced by reconfirmed segments (see `BOT_TRANSCRIPT_RECONFIRM_SEC`). `standard` keeps the confirm-on-agreement lane. `low` keeps the fast tuning even with reconfirmation off; it then publishes first versions as final. Explicit `BOT_SPEAKER_*` knobs still win. Teams uses its own lane and is unaffected. |
+| `BOT_STT_CONFIDENCE_FILTER` | unset | `strict` makes meeting bots also drop transcript segments that Whisper itself decoded with low confidence: an average log-probability under −1.0 for the window. This removes text the model invents over noise or music, such as an outro line or a lone "you". It runs after the speech gate and the always-on rule, and only on requests of 8 s or more (shorter windows score lower for real speech too). Measured on real English and Russian recordings, it removed every invented segment found in correctly detected windows and lost under 1% of real words, all short mumbled phrases. Off by default. |
+| `BOT_TRANSCRIPT_RECONFIRM_SEC` | `10` | Show fast, then reconfirm (Google Meet, Zoom, calls). Every window is shown at once as a draft, greyed until confirmed. When a speaker pauses, or this many seconds of their speech accumulate, that stretch is transcribed again in one request with the speaker's earlier text as context. One confirmed segment then replaces the drafts. Under STT overload the reconfirmation waits; if it cannot run, the drafts are confirmed as they are, so no words are lost. `0` turns it off. |
 
 The STT service is the **GPU workload, deployed separately** from this stack — see
 [Deployment → Transcription](/deployment#transcription-the-separate-gpu-unit). The main stack
@@ -138,13 +141,14 @@ anyone who read the repo can mint an API key for any account. Generate each with
 | `VEXA_TERMINAL_DESIGN_CATALOGUE` | — (off) | Terminal: `1` serves the design catalogue at `/design` in a production build — every design token and UI primitive rendered from placeholder fixtures, for people building the terminal. Unset (or anything but `1`), `/design` is a 404. It holds no user data and asks no sign-in; it is `noindex` and excluded from analytics. Set it on development and staging deployments, not production. See [Terminal UI design](/governance/ui-design#the-design-catalogue). |
 | `MAGIC_LINK_SECRET` | — | Optional separate key for emailed sign-in links (32+ bytes, different from `NEXTAUTH_SECRET`). Unset, the link key is derived from `NEXTAUTH_SECRET`. |
 | `VEXA_ADMIN_EMAILS` | — | admin-api: the instance's administrators, comma-separated full addresses. They may always sign in and are the admins; naming them turns off the admin claim, and no claim code is issued. A malformed entry (not a full address) refuses admin-api's boot. The terminal holds no copy: it asks admin-api. |
-| `VEXA_ADMIN_ACCOUNT` | — | admin-api: the deployment's **admin account**, normally one fresh address that is nobody's everyday account (at most five; no `@domain`, no `*`). It is the only account that writes the company layer `_global` — its pages, `POLICIES.md`, flows and reset — and it has no desk, no shared workspaces and no meetings. A row is the admin account only if it was created while its address was named here; an existing everyday account is never converted (admin-api logs it at boot), and removing the address revokes it at the next restart. Empty: nobody writes `_global`. Helm `adminApi.adminAccount`. See [The admin account](/minutes/workspaces#the-admin-account). Replaces agent-api's `VEXA_GLOBAL_ADMIN_SUBJECTS`, which is retired and ignored. |
+| `VEXA_ADMIN_ACCOUNT` | — | admin-api: the deployment's **admin account**, normally one fresh address that is nobody's everyday account (at most five; no `@domain`, no `*`). It is the only account that writes the company layer `_global` — its pages, `POLICIES.md`, flows and reset — and it has no Personal workspace, no shared workspaces and no meetings. A row is the admin account only if it was created while its address was named here; an existing everyday account is never converted (admin-api logs it at boot), and removing the address revokes it at the next restart. Empty: nobody writes `_global`. Helm `adminApi.adminAccount`. See [The admin account](/minutes/workspaces#the-admin-account). Replaces agent-api's `VEXA_GLOBAL_ADMIN_SUBJECTS`, which is retired and ignored. |
 | `VEXA_SIGNIN_ALLOW` | — | admin-api: who else may sign in to the terminal besides existing users and admins — exact addresses and `@domain` entries, comma-separated (`@example.com,alice@example.org`). Merged with the list the admin edits under Settings → Sign-in. A malformed entry refuses admin-api's boot, naming the entry. See [Who may sign in](/deployment#who-may-sign-in). |
+| `VEXA_AGENT_ALLOW` | — (everyone) | agent-api: who is served the agent (chat, workspaces, the agent tools), checked on every request after the gateway signature. Empty or `*` serves every signed-in person; otherwise user ids, exact addresses and `@domain` entries, comma-separated and case-insensitive. Anyone else is refused `403 agent_tier_not_enabled`; health checks, the internal tier and a person's own agent worker are not. Helm: `gateway.agentAllow` (one value for the gateway and agent-api). |
 | `VEXA_OIDC_ISSUER` · `_CLIENT_ID` · `_CLIENT_SECRET` | — | Terminal: sign-in through your own OpenID Connect provider (ADFS, Keycloak). Unset issuer = no OIDC button. With an issuer (`https://` only) the client id and secret are required, or the terminal refuses to start naming the key. Redirect URI to register: `<public URL>/api/auth/callback/oidc`. Helm: `terminal.oidc.issuer`, `.clientId`, `.existingSecret` / `.existingSecretKey` (the secret only from an existing Secret). See [Sign-in with your own identity provider](/sign-in-oidc). |
 | `VEXA_OIDC_SCOPES` · `_RESOURCE` · `_DISPLAY_NAME` · `_EMAIL_CLAIM` · `_NAME_CLAIM` · `_REQUIRE_EMAIL_VERIFIED` | `openid email profile` · — · `Single sign-on` · `email` · `name` · `0` | Terminal: the OIDC request and how the verified ID token is read. Scopes must include `openid` (ADFS: add `allatclaims`); `_RESOURCE` is sent as `resource` (ADFS: the Web API identifier); `_REQUIRE_EMAIL_VERIFIED=1` refuses a token without `email_verified: true`. Helm: `terminal.oidc.scopes`, `.resource`, `.displayName`, `.emailClaim`, `.nameClaim`, `.requireEmailVerified`. |
 | `VEXA_OIDC_CA_FILE` | — (Node's public roots) | Terminal: path to a PEM CA bundle for an IdP on an internal PKI, **added** to the public roots. Unreadable or empty refuses the start. Helm: `terminal.oidc.caBundle` (a ConfigMap or a Secret, mounted at `/etc/vexa-oidc/ca/ca.pem`). |
 | `VEXA_SIGNIN_METHODS` | — (every configured door) | Terminal: which sign-in doors to offer, a comma-separated subset of `google`, `microsoft`, `oidc`, `email`. A door left out is not registered (its routes refuse). An unknown entry, or `oidc` without an issuer, refuses the start. Helm: `terminal.signinMethods`. |
-| `VEXA_MAIL_SMTP_HOST` · `_PORT` · `_FROM` · `_USER` · `_PASSWORD` · `_SECURE` · `_TLS_INSECURE` | — | The deployment's mail relay: the terminal mails the one-time sign-in link through it, and flows sends through it too. Unset host = no sign-in link is delivered (flows falls back to Gmail with `VEXA_MAIL_ADDR`). `_PORT` defaults to 25; a relay that offers STARTTLS (:587) is upgraded with its certificate checked, and `_SECURE=1` is implicit TLS (:465); `_USER` + `_PASSWORD` enable AUTH LOGIN, which is sent only over TLS — a relay that offers neither is refused; `_TLS_INSECURE=1` skips the certificate check (dev only). Helm: `terminal.mail.*` and `secrets.mailSmtpPassword`. The pre-v0.13.2 `SMTP_*` names still work, with a warning. |
+| `VEXA_MAIL_SMTP_HOST` · `_PORT` · `_FROM` · `_USER` · `_PASSWORD` · `_SECURE` · `_TLS_INSECURE` | — | The deployment's mail relay: the terminal mails the one-time sign-in link through it, and flows sends through it too. Unset host = no sign-in link is delivered (flows falls back to Gmail with `VEXA_MAIL_ADDR`). `_PORT` defaults to 25; a relay that offers STARTTLS (:587) is upgraded with its certificate checked, and `_SECURE=1` is implicit TLS (:465); `_USER` + `_PASSWORD` enable AUTH LOGIN, which is sent only over TLS — a relay that offers neither is refused; `_TLS_INSECURE=1` skips the certificate check (dev only). Helm: `terminal.mail.*` and `secrets.mailSmtpPassword`. The pre-v0.13.2 `SMTP_*` names are no longer read: set the `VEXA_MAIL_SMTP_*` names. |
 | `VEXA_BOT_API_KEY` | — | Pre-shared key a bot uses to call back into the stack. |
 
 <Warning>
@@ -261,9 +265,10 @@ and the [chart README](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/cha
 | `ANTHROPIC_API_KEY` | — | Key for Anthropic-backed runners. |
 | `ANTHROPIC_MODEL` · `ANTHROPIC_DEFAULT_OPUS_MODEL` · `…_SONNET_MODEL` · `…_HAIKU_MODEL` | — | Per-tier model overrides. |
 | `HOST_CLAUDE_CREDENTIALS` | — | Host path to Claude credentials mounted into agent containers (see below). |
+| `VEXA_MODEL_BASE_URL_ALLOW` | — (the deployment's own gateway, `api.anthropic.com`, `openrouter.ai`) | Comma-separated host globs a user's own **Settings → Models** endpoint may name. The hosts of `ANTHROPIC_BASE_URL` and `VEXA_LLM_BASE_URL` are always allowed. Setting the key replaces the two hosted defaults, so list them again if you still want them. A private inference server must be named here: loopback, private and link-local addresses and single-label names (`redis`) need an exact entry, never a wildcard. Anything else is refused at dispatch. |
 | `VEXA_MCP_URL` | the gateway's `/mcp` | The MCP server each agent worker attaches as its `vexa` toolbelt — the gateway's one assembled MCP server on every shipped surface. |
 | `VEXA_MCP_DELEGATION_SECRET` | generated at install | Signs each worker's short-lived delegation token (agent-api) and verifies it (admin-api, where the gateway resolves it). Empty: workers run without vexa tools, and every spawn says so in its log. |
-| `VEXA_GIT_PROVIDERS` | — | Self-hosted git hosts and their provider: comma-separated `<host>=github\|gitlab\|basic:<username>`. Decides how a typed token is sent (`oauth2:<token>` for GitLab, `<username>:<token>` for basic) and lets publish create on a `gitlab` host. Helm: `agentApi.gitProviders` (empty by default). A malformed value stops agent-api at boot. See [Repositories on GitLab](/minutes/workspaces#repositories-on-gitlab-or-another-self-hosted-server). |
+| `VEXA_GIT_PROVIDERS` | — | The git providers besides the built-in GitHub: a JSON list of `{name, kind: gitlab\|github, baseUrl, label?, caBundle?\|caFile?}` (the earlier comma form `<host>=github\|gitlab\|basic:<username>` is still read). Each is a place workspaces clone from, push to and publish on, with its own CA and its own saved token per person. Helm: `agentApi.gitProviders` (empty by default). A malformed value stops agent-api at boot. See [Use a self-hosted GitLab](/minutes/self-hosted-gitlab). |
 | `VEXA_ALLOW_LOCAL_REPO_ROOT` | — | `os.pathsep`-separated directories a workspace repo may be attached from as a local path (`POST /agent/workspace/swap`). Unset refuses local paths. |
 
 ### Claude subscription credentials (`HOST_CLAUDE_CREDENTIALS`)
@@ -332,15 +337,253 @@ server, Gmail as the preset) on [Connect the bot mailbox](/flows/mailbox).
 | `VEXA_FLOWS_API_URL` | — | Where admin-api and meeting-api publish facts to. Empty (the stock default) means they publish nothing. Formerly `FLOWS_API_URL`, honoured for one release. |
 | `VEXA_UI_URL` | — | The link port. Unset, nothing is mailed with a link. |
 
+### Per-person flow quotas
+
+A person's own flows (routines) run under these limits; an instance flow does not. All are optional,
+read from `.env` on Compose (interpolated into flows-api, flows-worker and flows-mailbox). **Helm has no
+route for them yet**: the flows templates carry no `extraEnv`, so on Kubernetes they take the default.
+
+| Variable | Default | Read by | Purpose |
+|---|---|---|---|
+| `VEXA_FLOWS_USER_ACTIVE_FLOWS` | `20` | flows-api | Active flows one person may own; over it, `quota_active_flows`. |
+| `VEXA_FLOWS_USER_MIN_INTERVAL_S` | `900` | flows-api | Shortest gap between two fires of a person's schedule flow; closer, `quota_min_interval`. |
+| `VEXA_FLOWS_USER_RUNS_PER_DAY` | `48` | flows-api, flows-worker | Runs one person's flows may start in any 24 hours, together. |
+| `VEXA_FLOWS_USER_MESSAGES_PER_DAY` | `100` | flows-api, flows-worker | Messages one person's agents may send other agents (`message_agent`) in 24 hours — a cap of its own, not counted against runs. |
+| `VEXA_FLOWS_LOOP_LIMIT` | `1` | flows-api, flows-worker | Times an event may start a flow already in the chain that produced it. |
+| `VEXA_FLOWS_MAX_HOPS` | `8` | flows-api, flows-worker | Longest chain of flows an event may carry. |
+| `VEXA_FLOWS_SCHEDULE_CATCHUP_S` | `3600` | flows-worker | After downtime, a schedule flow's most recent missed slot fires once if younger than this; older slots are skipped and counted. |
+| `VEXA_FLOWS_USER_KEY_TTL_S` | `900` | flows | Lifetime (and reuse window) of a gateway token minted for a person's run. |
+
+See [Routines](/flows/routines) for what each refusal looks like to the person.
+
 ## Images & runtime
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `IMAGE_TAG` | `dev` | Tag for the built service images. |
-| `BROWSER_IMAGE` | `vexaai/vexa-bot:v012` | Browser/bot container the runtime spawns per meeting. **Built from source** (`make bot`), spawned without pulling — the published `vexaai/vexa-bot:dev` is the old 0.10 line and is incompatible. |
-| `AGENT_IMAGE` / `AGENT_WORKER_IMAGE` | `vexaai/v012-agent-*` | Agent container the runtime spawns per dispatch. |
+| `IMAGE_TAG` | the release, e.g. `v0.13.3` | Tag of the service images (`vexaai/vexa-<service>`). `make dev` builds `dev`. See [Image names](/upgrade-image-names). |
+| `BROWSER_IMAGE` | `vexaai/vexa-bot:${IMAGE_TAG}` | Browser/bot container the runtime spawns per meeting. `make up` / `make all` pull it at `IMAGE_TAG` (release-validated); `make bot` builds it from source as `vexa/vexa-bot:dev` for development. The published `vexaai/vexa-bot:dev` is the old 0.10 line and is incompatible. |
+| `AGENT_IMAGE` / `AGENT_WORKER_IMAGE` | `vexaai/vexa-agent-*` | Agent container the runtime spawns per dispatch. |
 | `DOCKER_GID` | `0` | Host docker group id, so the runtime can use the Docker socket. |
+| `RUNTIME_K8S_SECRET_MOUNTS` | unset | **runtime, Kubernetes only.** A JSON array of `{"secret", "mountPath"[, "file"]}`: Secrets mounted read-only into every agent worker Pod the runtime spawns, never into bots, for credentials a harness reads from a file (a Codex `auth.json`). With `file`, only that key of the Secret is mounted, at `mountPath`. A malformed value fails the spawn. Set it with `runtime.extraEnv`; see [Kubernetes → Codex subscription credentials](/deployment-kubernetes#codex-subscription-credentials). |
 | `LOG_LEVEL` | `info` | Log verbosity. |
+
+## Chats (session store)
+
+In 0.13 a chat's conversation lives in the instance Postgres (`agent_session*` tables) and its
+files in a sessions bucket, not in a workspace. agent-api reads every key below. The store is on when
+it has a database password and an object-storage endpoint. The per-surface wiring (Compose, Helm, Lite) and the migration
+command are on [Shared chats](/minutes/shared-chats).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VEXA_SESSIONS_DB_URL` | — | Full DSN; when set it overrides the parts below. |
+| `DB_HOST` · `DB_PORT` · `DB_NAME` | — · `5432` · `vexa` | The instance Postgres, as agent-api reaches it. |
+| `VEXA_SESSIONS_DB_USER` · `VEXA_SESSIONS_DB_PASSWORD` | `vexa_agent_sessions` · — | The store's own database role. **No password, no store.** |
+| `VEXA_SESSIONS_S3_ENDPOINT` | — | Object storage for chat files. |
+| `VEXA_SESSIONS_S3_BUCKET` | `vexa-sessions` | Its own bucket, never the recordings bucket. |
+| `VEXA_SESSIONS_S3_REGION` | `us-east-1` | |
+| `VEXA_SESSIONS_S3_ACCESS_KEY` · `VEXA_SESSIONS_S3_SECRET_KEY` | — | A key scoped to that bucket. |
+| `VEXA_SESSIONS_S3_SECURE` | `false` | TLS to the endpoint. |
+| `VEXA_SESSIONS_WAIT_SEC` | `600` | How long agent-api waits for the store at boot. |
+
+`VEXA_SHARED_SCRATCH` and `VEXA_TRACE_ID` are set by agent-api on a worker it starts; an operator does
+not set them. `VEXA_TRACE_ID` carries the dispatching request's trace into the worker
+([Tracing a session](/security-compliance#tracing-a-session)).
+
+## MCP tool sinks
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VEXA_TICKET_SINK_URL` | — | Where `report_issue` files an agent-written ticket. Point it at a dedicated tickets repository: ticket bodies are third-party text. |
+| `VEXA_TICKET_SINK_TOKEN` | — | Credential for that sink: single-repository, issues write only, from a secret store. |
+| `VEXA_TICKET_SINK_FORMAT` | `raw` | `raw` POSTs the ticket JSON to a webhook; `github` files it as an issue. |
+| `VEXA_TICKET_SINK_LABELS` | — | Labels applied to filed tickets. |
+| `VEXA_MCP_MANIFEST_DIR` | — | A directory a deployment mounts its own tool manifests into; they are assembled like the built-in ones and may not take a built-in tool's name. |
+
+All five are read by the MCP service and set from `.env` on Compose.
+
+## Tool providers that are late
+
+Identity must answer when the MCP service starts, or it refuses to start. Every tool provider —
+meetings, flows, agent and CRM — that does not answer at start (or, for meetings, answers without its
+tool list because an older pod is still rolling) is logged, and the service starts with the tools that
+did answer. It asks each missing provider again every `VEXA_MCP_REFRESH_SECONDS` (default 30) until it
+answers; its tools then join `tools/list`, under the same visibility settings as every other tool.
+Readiness does not wait for a late provider: the tool list heals within one refresh interval.
+
+## MCP tool visibility
+
+Which tools a caller is shown in `tools/list` and may call. Unset, every tool the deployment serves
+is shown to every caller, as before.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VEXA_MCP_TOOLS_ALLOW` | — (every tool) | Comma-separated tool names an ordinary caller is shown and may call. Helm: `mcp.tools.allow`. |
+| `VEXA_MCP_TOOLS_DENY` | — | Comma-separated tool names nobody is shown or may call. Helm: `mcp.tools.deny`. |
+| `VEXA_MCP_TOOLS_COHORT` | — (nobody) | The people shown every tool despite the allow-list: user ids, exact addresses and `@domain` entries, comma-separated and case-insensitive; `*` is everyone. The deny-list still applies to them. Helm: `mcp.tools.cohort`. |
+
+To keep existing keys on the 0.12 surface after an upgrade, set the allow-list to the 0.12 tool list
+(`core/gateway/services/mcp/tests/fixtures/tools-list-v0.12.json`, comma-joined) and name the people
+who try the new tools in the cohort.
+
+**How it works.** The MCP service reads the three settings at boot. On `tools/list` it removes every
+tool the caller is not shown; the descriptors that remain are unchanged. On `tools/call` a tool the
+caller is not shown is answered `Unknown tool: <name>`, the same answer as for a tool that does not
+exist, and nothing is forwarded. The caller is identified by the identity the gateway stamped on the
+`/mcp` request; a request without one is an ordinary caller. A name in the allow-list or deny-list
+that the deployment does not serve is logged at boot.
+
+**Why it complies.** The setting only narrows what a caller is offered. Every tool still acts through
+the gateway with the caller's own credential, so key scopes and `VEXA_AGENT_ALLOW` keep deciding what
+that credential may do; visibility is not an authorization boundary and does not replace them. A
+hidden tool cannot be reached by naming it, and its refusal does not reveal that it exists. With the
+settings unset the surface is exactly what it was.
+
+## Policy keys (`_global/POLICIES.md`)
+
+Some behaviour is set by the admin account in the company layer, not by an environment variable. The
+keys added in 0.13, each documented where it acts:
+
+| Key | Default | Where it is documented |
+|---|---|---|
+| `user_flow_steps` | (empty: every step) | [Routines](/flows/routines) |
+| `routine_unattended_actions` | `bot.request, bot.stop, flow.retire_self` | [Routines](/flows/routines#what-a-run-may-do) |
+| `routine_pauses_when_shared` | `on` | [Routines](/flows/routines#share-a-routines-chat) |
+| `agent_messages_own` · `agent_messages_shared` · `agent_messages_from_routines` | `on` · `on` · `off` | [Routines](/flows/routines) |
+| `session_agent_speaks` | `mentioned` | [Shared chats](/minutes/shared-chats) (instance-wide only) |
+| `connection_actions` · `connection_actions_unattended` | `all` · `none` | [Connections](/connections) — `none` refuses every mail and calendar action in a background routine |
+| `calendar_notify_attendees` · `calendar_attendee_domains` · `calendar_ids` | `off` · `any` · `primary` | [Connections](/connections) |
+| `draft_recipient_domains` · `draft_attachments` · `draft_attachment_max_kb` | `any` · `off` · `5120` | [Connections](/connections) |
+| `folder_import_max_mb` · `folder_import_max_files` · `folder_import_file_max_mb` | `200` · `10000` · `25` | [Drop a folder](/how-to/chat-workspace#drop-a-folder) — a value that cannot be read refuses every folder import |
+| `chat_turn_max_tool_calls` | `40` | [Agent tool calls](/agent-tool-calls#configure-it) — a workspace or a person may only lower it |
+| `features` | (empty: the install's `VEXA_FEATURES`) | [Feature switches](#feature-switches) |
+| `presence_visibility` | `workspace_members` | [The desktop](/how-to/home#the-desktop) — `off` · `shared_chats` · `workspace_members`; a value that cannot be read is `off`, and a person's own switch wins |
+| `desk_placements_max` · `card_proposals_pending_max` · `card_proposals_per_agent_per_day` · `card_proposal_ttl_days` | `50` · `5` · `20` · `7` | [The desktop](/how-to/home#turn-it-on-operators) — narrow only; a value above the default or not a whole number is the default |
+| `lifecycles.card` · `card_stalled_days` | `To do > Doing > Done \| Dropped` · `14` | [Cards](/minutes/crm#cards) |
+| `llm_budget_org_daily_usd` · `llm_budget_org_monthly_usd` · `llm_budget_user_daily_usd` · `llm_budget_user_monthly_usd` · `llm_price_input_usd_per_mtok` · `llm_price_output_usd_per_mtok` · `llm_budget_notify` | `25` · `250` · `5` · `50` · (empty) · (empty) · (empty) | [LLM spend cap](#llm-spend-cap) |
+
+## LLM spend cap
+
+Agent turns are capped by what they spend on model calls, in US dollars per UTC day and per UTC month,
+for the whole deployment and for each person. The caps are `_global/POLICIES.md` keys, so the admin
+account changes them without a restart; `off` removes one cap.
+
+| Key / variable | Default | Purpose |
+|---|---|---|
+| `llm_budget_org_daily_usd` · `llm_budget_org_monthly_usd` | `25` · `250` | The deployment's caps. |
+| `llm_budget_user_daily_usd` · `llm_budget_user_monthly_usd` | `5` · `50` | Each person's caps. |
+| `llm_price_input_usd_per_mtok` · `llm_price_output_usd_per_mtok` | — | What a million tokens of a model no price table names count at. Empty: the base open-weight model's market price. Never applied to a model the table prices. |
+| `llm_budget_notify` | — | User ids notified in-app at 80% and 100% of a cap. |
+| `credit_markup` · `credits_5h` · `credits_week` | `1.3` · — · — | With the `usage` feature on: credits per call = market cost × markup (default 1.3; a value below 1.0 or unreadable is refused and 1.3 applies); the plan's 5-hour and weekly allowances in credits ($). A full window refuses the next turn unless extra usage is on. |
+| `VEXA_LLM_KILL_SWITCH` (agent-api env) | — | `1` refuses every agent turn at once. Helm: `agentApi.llmKillSwitch`. |
+| `VEXA_MODEL_PRICES_URL` (agent-api env) | OpenRouter's public `/api/v1/models` | Where market prices are read, once a day. `off` never reads the network; the snapshot bundled with the release prices every call. |
+
+**How it works.** agent-api asks the ledger before it dispatches any turn — a chat message, a routine's
+run, a sensor's or an event agent's turn all go through the same dispatch. If a cap that applies is
+spent, or the kill switch is on, nothing is spawned or delivered: the person reads "You have reached
+your AI usage limit for today. It resets at …" in the chat, and a routine's run fails with that line.
+Each turn reports what its model calls used on its result (the provider's own cost when it gives one,
+as OpenRouter and the Claude CLI do; otherwise its tokens, priced at that model's market price from
+OpenRouter's public price table, read at most once a day and cached in Redis, or from the snapshot
+bundled with the release when the table cannot be read; a model neither names counts at the two price
+keys, or, when they are empty, at the base open-weight model's market price; a call that reports
+nothing is estimated from its text). The same record adds the call's tokens to the rolling-day token
+view the token budgets read, so the dollar ledger and the token budgets count one set of calls. agent-api reads that from the worker's output stream,
+whether or not anyone is watching the turn, and adds it to per-day and per-month counters in Redis for
+the person and the deployment. The first time a cap passes 80% and 100% in its period, the crossing is
+logged (`llm_budget_threshold`), listed in the admin panel and sent to the people `llm_budget_notify`
+names. A turn already running when a cap is reached finishes; the next one is refused. A ledger that
+cannot be read refuses turns rather than letting them run uncounted. Codex-harness turns report no
+usage yet and are not counted.
+
+**Why it complies.** The cap bounds the cost a deployment and each person can incur, independently of
+the provider's own credit limit, which stays the last line of defence. The counters hold amounts and
+user ids only, never prompts or replies, and expire after their period. A refusal is a typed answer
+before any model call, so a refused turn sends nothing to the provider. The kill switch is an operator
+setting on agent-api and stops new model calls without touching stored data. Reading the price table is one
+unauthenticated GET of a public list: no prompt, person or usage figure leaves the deployment, and
+`VEXA_MODEL_PRICES_URL=off` keeps an air-gapped install off the network entirely. Meeting bots and
+transcription make no calls through this path and are not affected.
+
+## Public profiles
+
+Behind the `public_profiles` switch, which is switched on only by name (`all,public_profiles`).
+
+**How it works.**
+- **The profile.** A person's public profile is theirs.
+  - Identity is its only writer. It keeps the profile in the person's own account record.
+  - Each field is published separately: name, photo, role, company, links (https only) and a short bio.
+  - Nothing is public until the person publishes. Withdrawing hides the whole profile at once.
+- **Links from a CRM.** An organisation's CRM contact can link to a published profile. Linking needs someone who may change the contact.
+  - The contact then reads the profile's public fields live from identity each time it is shown, next to the organisation's own record.
+  - Nothing from the profile is copied into the CRM.
+  - When the profile is withdrawn, the contact shows only the organisation's own data.
+- **The count.** Identity learns only that an organisation linked or unlinked. It keeps that as a salted hash, so the person sees how many organisations link to them and never which ones.
+- **The directory.**
+  - It answers a query of at least 3 letters with at most 10 published profiles, matched on public name, role and company.
+  - It never reports how many matched.
+  - It reaches a profile only by an opaque handle, and an unpublished handle answers as if it never existed.
+  - Each person gets `VEXA_DIRECTORY_READS_PER_MINUTE` reads a minute (30 by default).
+- **Company verification.** A company domain is verified by a DNS TXT record identity gives, or by the person's own verified email on that domain. It is recorded on the profile, with no payment involved.
+
+**Why it complies.**
+- Publishing is opt-in, field by field, and withdrawable at any time.
+- Each organisation's CRM stays inside its own partition. No organisation's notes, fields or record ids are sent to identity or to another organisation, and a contact never stores the profile.
+- The directory is built so that people cannot be enumerated.
+
+## Feature switches
+
+Some features ship switched off because they have not been proven in real use yet. Each is one
+switch. Nothing it stored is deleted while it is off.
+
+| Name | What it switches |
+|---|---|
+| `shared_chats` | adding another person to a chat (the @ picker, Add people, the agent adding someone) |
+| `notifications` | the bell, toasts, and the agent's `notifications_list`, `notifications_mark_read` and `notify` tools |
+| `calls` | calls in a chat (needs the `calls` profile / `livekit.enabled` too) |
+| `crm` | the CRM record page, the `crm_*` tools and crm-api (needs the `crm` profile / `crm.enabled` too) |
+| `browser_bots` | browser sessions and bot accounts |
+| `folder_drop` | dropping or picking a folder to make a workspace |
+| `chat_history_tools` | the agent's `chats_search` and `chat_read` |
+| `calendar_write` | calendar changes (creating, moving, cancelling events) and mail drafts (saving, editing; the "Enable drafts" setting) |
+| `workspace_forget` | `workspace_forget` |
+| `agent_messages` | `message_agent` |
+| `desktop` | the desktop home: workspaces, chosen agents and files, arranged by you or your agent (needs `crm`) |
+| `desktop_cards` | cards on the desktop and on workspace boards: shared CRM cards with stages, members and faces; agents propose them (needs `crm` and `desktop`) |
+| `usage` | Vexa credits: each model call debited at market cost × `credit_markup`, 5-hour and weekly windows, the usage meter (`GET/POST /api/usage`), extra usage (recorded only; no payment). Not included in `all`: switched on only by name (`all,usage`) |
+| `levels` | hosted plans: model levels 1–5 in place of the model picker (`GET /api/models/levels`, `POST /api/chat/level`); a chat keeps its level unless switched. Self-host keeps the picker. Not included in `all` |
+| `public_profiles` | public profiles: a person publishes their own profile field by field (name, photo, role, company, links, bio) and can withdraw it; an organisation's contact can link to it and shows its public fields live beside the organisation's private notes; the directory finds published profiles; company domain verification. Not included in `all`: switched on only by name |
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VEXA_FEATURES` | (empty: all of the above off) | The install's answer: `all`, a comma list (`calls,notifications`), or `all,-crm`. Read by agent-api, the MCP service, meeting-api and crm-api. |
+
+**How it works.** agent-api decides, per request: `VEXA_FEATURES` first, then the
+`features: {name: on|off}` line in `_global/POLICIES.md`, which overrides it. `crm`,
+`browser_bots`, `desktop` and `desktop_cards` are decided by `VEXA_FEATURES` alone, because the services that serve them do not read
+`_global`. When a feature is off:
+- its routes answer `403` with `{"status": "refused", "reason": "feature_disabled", "feature": "<name>"}`;
+- its tools are not in the tool list the MCP service builds when it starts;
+- the app reads `/api/features` and does not show its buttons or pages.
+
+A name nobody registered is off, on the server and in the app alike: the app shows a feature only
+when `/api/features` answers it `true`, and hides it while the answer loads, when it cannot be read,
+and when the answer does not name it. Every switch the app reads is registered in agent-api (a test
+checks both lists). agent-api refuses to start if a switch names a route it does not serve.
+
+**Why it complies.** Switching a feature off withdraws a capability and keeps the data, so nothing
+is lost or exposed. Only the administrator can switch a feature on, in the install or in `_global`
+(which only the admin account writes), and each such edit is a commit with an author. Answers carry
+names and on/off only, never data.
+| `home_history_retention_days` | `forever` | [The home](/how-to/home) — how long the home's compositions and card outcomes are kept, in days |
+| `external_images` | `on` | [The home](/how-to/home) — whether avatars and company logos are fetched (server-side, cached); `off` draws initials |
+| `budget_tokens_per_user_day` · `budget_tokens_routines_share` | `2000000` · `50` | Tokens one person's agents may use in a rolling day, and the most of it background work may use. Chat warns at 80% and stops at 100%; background work pauses, said on the bell and in its chat |
+| `routine_runs_per_day` · `routine_min_interval_minutes` | `48` · `10` | Routine quotas, read live (they replace `VEXA_FLOWS_USER_RUNS_PER_DAY` / `VEXA_FLOWS_USER_MIN_INTERVAL_S`, which stay as install defaults) |
+| `home_compose_per_day` · `home_expand_per_day` · `event_agent_runs_per_day` | `14` · `40` · `30` | Daily caps per person for the home's model ranking, in-place elaborations and event-started runs |
+| `model_chat_default` · `models_allowed` · `models_for` | empty · `all` · empty | Which models are allowed and the default a chat starts on; `models_for` (`model=all\|email\|@domain\|group:name; …`) replaces a catalog entry's `allowed_subjects`. The catalog (`VEXA_MODEL_CATALOG`) still declares what is available; a named model it does not offer shows as unavailable |
+| `model_routines` · `model_home` · `model_event_agents` | `cheapest` | The models background work runs on; `cheapest` is the smallest allowed model the install offers |
+| `model_rules` | (empty) | The router's rules, task type → model (`{routines: cheapest, events: 'level:2'}`); overlays the keys above, inside `models_allowed`. `cheapest` is by market price |
+| `model_levels` | (empty) | With the `levels` switch (hosted plans): the model each level 1–5 runs on; gaps are filled from the allowed models by market price |
 
 ## Ports
 
@@ -376,6 +619,10 @@ driving too much traffic. On by default.
 | `GATEWAY_RATE_LIMIT_DISABLED` | — | `1` / `true` / `yes` / `on` disables the per-user limiter entirely. |
 | `GATEWAY_RATE_LIMIT_BURST` | `120` | Bucket size (max burst). |
 | `GATEWAY_RATE_LIMIT_RPS` | `40` | Refill rate (tokens/sec). High enough for normal use; lower for stricter throttling. |
+
+### Agent tier admission
+
+`VEXA_AGENT_ALLOW` (gateway and agent-api, default empty) enables the agent tier (`/agent/*`) per person: empty admits everyone a key scope admits, `*` admits everyone, otherwise a comma-separated list of user ids and emails (case-insensitive; `@example.com` admits a whole domain). Anyone else gets `403 agent_tier_not_enabled` at the edge, before anything is forwarded; a worker is admitted by the person it acts for.
 
 ### Edge guard (pre-auth, off by default)
 

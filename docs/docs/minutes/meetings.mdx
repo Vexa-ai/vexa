@@ -7,10 +7,29 @@ A meeting in Minutes is a chat bound to that meeting, with the **meeting view** 
 the same wherever you open the meeting (the chat, the Calls list, or a `/?meeting=…` link). It has
 three parts, top to bottom:
 
-1. **Header.** The meeting's title, then platform · date and time · number of people. While the bot is
-   in the meeting the line ends in *live · N min*; after the meeting the recording player is under it.
-2. **Notes.** The meeting's notes, a Markdown file in your desk.
-3. **Transcript.** What was said, from the meeting itself. It is never copied into the notes.
+1. **Meeting tools (top, fixed).** The meeting's name — its calendar title or the name you gave it,
+   else its chat's name, else the people in it (*Call with Valeriia*), else *Call with Vexa*; never a
+   meeting id — with its status (*Live*, *Joining*, *Ended*…), then the platform as an icon, date and
+   time, how long it ran, and who was there (initials and names). One row of actions: **Share**,
+   **Update notes**, and **…** (Edit notes, Delete, and Stop bot while it runs; rename, export,
+   language and *Send bot again*). The recording player sits here and is the one playback control.
+2. **The meeting's note (middle, scrolling).** The note file, rendered exactly as a page is: people,
+   companies, projects and other meetings it names are chips, and a section with nothing in it is
+   not shown. Edit it from **…** → **Edit notes** (the editor shows the words only) or ask the agent;
+   a click on the note follows links, it does not open an editor. No file path is shown; the file is
+   in Files like any page, where it opens as a plain page with a *Meeting: (its name) · open* chip and
+   none of the meeting's tools. A meeting has one note, and every update, chat request and the
+   post-meeting report write that one. The note lives in your Personal workspace, or in the workspace your chat
+   works in when Personal is switched off; the sidebar finds it by its meeting wherever it is, and a
+   report left in a switched-off Personal workspace is shown read-only.
+3. **Transcript (bottom drawer).** What was said, from the meeting itself, never copied into the note.
+   Collapsed it is the latest line only — a live dot while live, then *Speaker: what was said* — or
+   *Listening…* before anyone has spoken. Opened, its header shows *Transcript*, the number of lines,
+   search and copy.
+
+A live meeting's tab is pinned first in the right panel of every chat, marked *Live*, until it ends.
+The note file opened on its own (from Files) is a plain page with a *Meeting: (its name) · open* chip at
+its top; it does not embed the meeting.
 
 This page covers what you can do with a meeting from the moment the bot is sent.
 
@@ -24,37 +43,76 @@ workspace belongs to that workspace, so its members can open it too; a meeting f
 yours. Meetings also arrive by calendar invitation. See [Send a bot](/how-to/send-a-bot) for platforms
 and links.
 
+### A page made before the meeting
+
+An agenda or brief written for a meeting becomes the meeting's page when it is bound to the meeting:
+the sidebar shows it, **Update notes** writes it and the post-meeting report lands in it. A meeting has
+one page.
+
+- **Before the meeting exists**, the agent's `meeting_attach_page` (with the meeting's link, or its
+  native id from `parse_meeting_link`) stamps the page; when the bot joins, the meeting adopts the
+  page whose `native`, `meeting_url` or `calendar_event` equals its own. Only an exact match is
+  adopted; a title that looks alike is not.
+- **After**, on the page's **…** choose **Use as meeting page…** and pick the meeting, or ask the
+  agent. If the meeting already has a page with words in it, you are told which; merge, or use this
+  page instead on purpose.
+
+The page must be in `kg/entities/meeting/` in one of your workspaces. The binding is recorded on the
+meeting with the page's workspace.
+
 ### Follow it live
 
 - A state card says what the bot is doing: *Bot at the door*, *Bot needs someone to let it in*,
   *Bot admitted · no words for …*, *Reconnecting to the bot…*, *Bot left*, or *Bot feed error*.
 - The transcript panel shows the newest lines, and moves as people talk (*Nothing said yet —
-  this fills in as the room talks.*). Opening a meeting part-way through replays everything said so
-  far, then continues live.
+  this fills in as the room talks.*). Opening a meeting part-way through loads its whole history,
+  then continues live. The replay keeps lines the bot withdrew out of the view and carries on across
+  a resumed session. After a dropped connection, the transcript continues from the last line it received.
 - **Stop bot** takes the bot out of the meeting. It is shown while the bot is requested, joining,
   waiting, active or stopping, and only to the meeting's owner.
 
 ### Read and update the notes
 
-The notes sit at the top of the view, labelled **Notes** with the file's path beside it. A line under
-the label says how current they are: *Updated 14:32 · from transcript up to 12:05* (the time of the
+The notes sit at the top of the view, labelled **Notes**. A line beside the label says how current
+they are: *Updated 14:32 · transcript to 12:05* (the time of the
 last change to the file, and how far into the meeting the last update read).
 
 - **Update notes** asks the agent, in the meeting's chat, to read what was said since the last update
   and rewrite the notes from it: what the meeting is about, decisions, commitments, people and open
-  questions. Text you wrote yourself outside those sections is left alone. The update runs as a
+  questions. Each person, company, project or other meeting the notes name is linked to its page;
+  a clearly identified person or company with no page gets one, with the meeting as its source, and
+  each linked page names the meeting back. A speaker the transcript could not identify stays plain
+  text. Text you wrote yourself outside those sections is left alone. The update runs as a
   [background job](/minutes/chats#background-jobs); the button shows its progress, and the notes
-  re-render when it is done.
+  re-render when it is done. An open meeting view checks its note every few seconds, so a change
+  written from another chat or by the post-meeting report shows up without a reload.
 - Notes change only when you press **Update notes** or ask for a change in the chat (for example
-  "add that Ravi owns the pricing follow-up"). They are never rewritten on their own.
+  "add that Ravi owns the pricing follow-up"), and once when the meeting ends: the post-meeting report
+  is written into **Report**, and fills **Decisions**, **Commitments** and **Open questions** only
+  where those are still empty. A page still named after the platform ("Google Meet meeting") takes
+  the meeting's name (the calendar event's, or the one it was given). Sections and titles you wrote
+  are never replaced.
 - You can also open the file itself from the navigator and edit it; see [Pages](/minutes/pages).
 
 When a meeting has no notes yet, the view is the same with *No notes for this meeting yet* in place of
-the notes and a **Create notes** button. **Create notes** creates the file and, if anything has been
+the notes, and the header's notes button reads **Create notes**. **Create notes** creates the file and, if anything has been
 said, fills it from the transcript the same way **Update notes** does. A notes file can contain a
 transcript marker (`<!-- vexa:transcript meeting=… -->`, which older versions rendered as a live
 transcript inside the page). The view leaves it out when it shows the notes, because the transcript is
 right below. The file itself is not changed.
+
+### Search the transcript
+
+Open the drawer and press the search icon. Only the speaker turns that say it (or whose
+speaker's name matches) stay, with the words marked; *Nothing matches "…"* when none do. Clear the box
+to see everything again. Each turn shows the speaker and the time; click a line to play from there.
+
+### Resize the transcript
+
+Drag the drawer's top edge (or touch and drag on a phone) to show anywhere from the one collapsed line
+to nearly the whole sidebar; the note above shrinks to match. It snaps shut near the bottom and to
+about a third and two thirds. Double-click the edge to toggle between collapsed and your last height,
+which is remembered in this browser.
 
 ### Expand the transcript
 
@@ -122,14 +180,18 @@ under the page's title: the play/pause icon, the time (*0:00 / 51:13*), the **Se
 filling the rest of the row, and the download icon. On a narrow panel the slider shrinks; the row stays
 on one line. There is no mute: use your system volume.
 
-1. Press the play icon (*Play recording*; it turns into *Pause recording*). Nothing plays by itself.
+1. Press the play icon in the player row (it turns into
+   *Pause*). Nothing plays by itself.
 2. Click any transcript passage, or press <kbd>Enter</kbd> or <kbd>Space</kbd> on it, to jump there.
    Hovering a passage shows *Play from m:ss* just above that line. The passage being played is shaded.
 3. Drag the **Seek recording** slider to move anywhere in the audio.
 
-There is one player per audio file, and starting one meeting pauses any other. Older recordings have
-no exact start mark, so timing uses the meeting's start and may be off by a little (the controls say
-so).
+Highlighting follows the passage, not each word. Selecting text does not jump the recording, so
+**Ask about this** still works, and a highlighted term's link opens as before.
+
+There is one player per audio file, and starting one meeting pauses any other. New recordings carry
+the time capture started, so passages line up with the audio. Older recordings have no exact start
+mark, so timing uses the meeting's start and may be off by a little (the controls say so).
 
 ### Download the audio
 
@@ -142,12 +204,11 @@ controls say so under the player (*Could not download audio…*). Over the API, 
 
 ### Delete a meeting's data
 
-On a finished meeting, the owner sees the trash icon (*Delete meeting data*) with the other icons in the
-page header. It turns red only when you point at it.
+On a finished meeting, the owner finds **Delete** in the tools' **…** menu.
 
-1. Press it. The dialog reads *Delete meeting data?*: *Permanently delete this meeting's audio,
-   transcript and captured fixtures, including promoted fixtures. Saved pages are kept.*
-2. Type `delete`. **Delete permanently** stays disabled until you do.
+1. Press it. The dialog reads *Delete this meeting?*: *Its transcript, notes and recording are deleted
+   for good, on every device. Pages saved in a workspace stay.*
+2. Type `delete`. **Delete meeting** stays disabled until you do.
 3. When it is done: *Meeting audio, transcript and fixtures deleted. Saved pages are kept.*
 
 The meeting stays in your list, marked as deleted, and its transcript says *This meeting's transcript
@@ -208,7 +269,12 @@ running. Stop and Delete are not shown on a meeting someone shared with you.
    (`intent: {kind: "extend", path, meeting}`) into the meeting's chat. agent-api checks that you may
    read the meeting, then runs the `extend-meeting` ask as a background job: the agent reads the
    transcript from meeting-api since the page's `transcript_cursor`, rewrites the notes' sections, and
-   moves the cursor. Asking for a change in the chat goes through the same agent.
+   moves the cursor. The ask names the note's workspace (your personal workspace when the note is
+   there), and a write of a meeting's note that names no workspace lands where the note is, never in
+   the workspace the chat works in. The same holds for a note the agent writes with its own file
+   tools: when the turn commits, that change is merged into the meeting's note and the stray copy is
+   removed. Asking for a change in the chat goes through the same agent.
+   A new note starts empty: sections appear with their first content.
 5. **Live transcript.** The browser opens `/api/meeting/stream?meeting_id=…&session_uid=…` as
    server-sent events. agent-api checks that you may read the meeting, then reads the meeting's
    transcript stream: from the start on a fresh connection, then live. A reconnect resumes from the last
@@ -273,7 +339,7 @@ go to the meetings side, everything else to the agent. The meetings routes are d
 | **P20** authorize every access | agent-api and meeting-api check every read: the owner, a share recipient, or a member of the meeting's workspace; a recording also needs the owner's permission for anyone but the owner; delete is owner-only Reading, creating and updating notes are refused for a meeting you may not read, before anything is read, written or queued | `gate:access` and the deny tests below |
 | **P21** state from evidence | the bot card reports what the bot is observed doing, including *admitted · no words for …* | ungated: reviewed |
 | **P22** guaranteed teardown | **Stop bot** uses meeting-api's stop route, which ends the bot directly when it cannot confirm the bot is listening | the meeting-lifecycle eval under `gate:python` |
-| **P23** one writer per carrier | meeting-api is the only writer of the transcript stream; agent-api and the terminal read it, and the terminal renders it with one engine. agent-api is the only writer of the notes: the terminal creates them through the mint route and updates them through the existing Extend act, and never writes the file itself. The transcript is never copied into the notes | `gate:dataflow`; `meetingView.test.tsx` |
+| **P23** one writer per carrier | meeting-api is the only writer of the transcript stream; agent-api and the terminal read it, and the terminal renders it with one engine. agent-api's workspace routes are the only writers of the note file: the terminal creates it through the mint route, updates it through the existing Extend act, and saves an inline edit through the workspace file write; the post-meeting flow (through agent-api) rewrites only its Report region, fills sections that are still empty and replaces a placeholder title. The transcript is never copied into the notes | `gate:dataflow`; `meetingView.test.tsx` |
 
 ### Security
 
@@ -311,6 +377,7 @@ data or change who has access.
 | `core/agent/tests/test_meeting_mint.py` · `test_the_mint_route_refuses_a_meeting_the_caller_does_not_own` | **Create notes**: another person's meeting writes nothing |
 | `core/agent/tests/test_meeting_workspace_access.py` · `test_a_member_is_not_refused_where_only_the_owner_used_to_pass` | where the notes are (`GET`) and **Create notes** (`POST`): a non-member gets `403`, members do not |
 | `core/agent/tests/test_chat_meeting_grounding_access.py` · `test_update_notes_for_another_persons_meeting_is_refused_before_any_turn`, `test_update_notes_for_a_meeting_that_does_not_exist_is_the_same_refusal` | **Update notes**: another person's meeting is refused with `403` before a turn is queued |
+| `clients/terminal/src/canvas/__tests__/meetingViewOnePage.test.tsx` · "Delete asks for the word first, says saved pages stay, then calls the existing delete", "no raw path anywhere on the view" | the delete ceremony on the view; no file path is shown |
 | `clients/terminal/src/canvas/__tests__/meetingView.test.tsx` · "a refused create says so and leaves the placeholder", "Update notes posts the EXISTING Extend act on the meeting's page — and the view stays put" | the view shows a refusal and writes nothing itself |
 | `core/meetings/services/meeting-api/tests/test_meeting_share_access.py` · `test_recording_needs_the_owners_permission_as_well_as_access`, `test_recording_for_a_workspace_member_follows_the_same_rule` | a shared recording needs the owner's permission |
 | `core/meetings/services/meeting-api/tests/test_completed_artifact_deletion.py` · `test_non_owner_gets_indistinguishable_404_and_cannot_delete_any_artifact`, `test_completed_artifact_delete_is_idempotent_and_active_lifecycle_is_not_deleted` | delete |
@@ -323,7 +390,7 @@ data or change who has access.
 | `core/gateway/services/gateway/tests/test_multiplex.py` · `test_a_bot_only_key_cannot_subscribe_to_a_transcript`, `test_invalid_api_key_closes_4401` | live subscriptions |
 | `clients/terminal/src/minutes/__tests__/meetingControls.test.tsx` · "offers playback without autoplay and requires the exact confirmation word before deleting" | the delete ceremony |
 | `clients/terminal/src/app/api/__tests__/catchAllProxy.test.ts` · "streams recording bytes and preserves range seeking through the meetings gateway" | seeking through the proxy |
-| `clients/terminal/src/minutes/__tests__/audioDownload.test.tsx` · "saves the recording through the playback route, named <platform>-<native_id>-<date>.<ext>", "shows an explicit error when the download is refused, and saves nothing" | download goes through the owner-scoped route with no credential in the URL; a refusal saves nothing |
+| `clients/terminal/src/minutes/__tests__/audioDownload.test.tsx` · "saves the recording through the playback route, named `<platform>-<native_id>-<date>.<ext>`", "shows an explicit error when the download is refused, and saves nothing" | download goes through the owner-scoped route with no credential in the URL; a refusal saves nothing |
 | `clients/terminal/src/app/__tests__/meetingRoute.test.ts` · "rejects an id that could escape the segment" | meeting links |
 
 ## Related

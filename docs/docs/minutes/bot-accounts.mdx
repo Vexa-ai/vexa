@@ -1,0 +1,119 @@
+---
+title: "Bot accounts"
+description: "Sign a Google, Microsoft or Zoom account in once, in a browser shown inside Minutes, and let your meeting bots join signed in as it."
+---
+
+A **bot account** is a signed-in browser your meeting bots can join as. Instead of knocking on the
+lobby as a guest, a bot that uses one joins as that account, so meetings that refuse anonymous
+participants open to it. You sign the account in yourself, in a **browser session**: a short-lived
+browser shown live inside Minutes. When the sign-in is confirmed, it is saved as a bot account.
+
+## What you can do
+
+### Sign in a bot account
+
+Open **Connections** from your account menu. In **Bot accounts**, pick **Google**, **Microsoft** or
+**Zoom** and press **Sign in a bot account**. A window opens with a live browser on that platform's
+sign-in page. Sign in as you normally would, including any second factor. The status line reads
+*Starting a secure browser…*, then *Sign in below.*, and finally **Signed in — saved as a bot
+account**. Press **Done**.
+
+You can also ask the agent in any chat: *"sign in a Google bot account"*. It opens the same window.
+
+### See your accounts
+
+Each row shows the account's name, its platform, whose it is (**Me** or **Company**) and its state:
+**OK**, or **Signed out** when the platform ended the sign-in. Company accounts are visible to
+everyone who may use them, and only the [admin account](/minutes/admin-account) changes them.
+Accounts the admin account signs in are saved for the company.
+
+### Sign in again
+
+A **Signed out** account has **Sign in again**. It opens a browser session for that same account;
+signing in replaces its saved sign-in and the account goes back to **OK**.
+
+### Delete
+
+**Delete**, then **Delete bot account** to confirm. The saved sign-in is destroyed and bots stop
+joining as it.
+
+## Limits and errors
+
+- **Close** ends a browser session before it saves anything; nothing is stored.
+- A session that is not signed in before it times out ends with *Sign-in did not complete.* and the
+  reason. Start a new one.
+- *Bot accounts are not available on this deployment* means the operator has not enabled them (the
+  credential broker has no `bots` key). See [Connections](/connections).
+
+## How it works
+
+### Flow
+
+1. **Open.** The panel (or the agent's `browser_session_open` tool) calls
+   `POST /api/bot-accounts/sessions` with the platform, and for a re-sign-in the account id.
+   meeting-api starts a browser workload and answers with the session id and a one-time view
+   password.
+2. **Show.** The terminal opens a window with an iframe of the session's noVNC client,
+   `/api/bot-accounts/sessions/<id>/view/vnc.html`. The view password travels in the URL
+   **fragment**, which the browser never sends to a server. The client's socket,
+   `/bot-accounts/sessions/<id>/vnc`, goes to the terminal server, which forwards it to the gateway
+   with your key, exactly as it forwards the live-meetings socket.
+3. **Watch.** The window reads `GET /api/bot-accounts/sessions/<id>` every two seconds:
+   `starting` → `ready` → `saved` (or `failed`, `closed`).
+4. **Save.** When the workload confirms you are signed in, it hands the browser's sign-in files to
+   meeting-api, which stores them in the credential broker as the bot account, sealed to its owner.
+5. **Use.** A bot sent with a bot account restores those files before it joins.
+
+### Who writes what
+
+| Data | Single writer | Where |
+|---|---|---|
+| Browser sessions | meeting-api | its own session records |
+| Bot accounts (metadata and sign-in files) | meeting-api, as the broker's `bots` role | the credential broker, encrypted |
+| What you see | the terminal | nothing stored; it reads the routes below |
+
+### Routes
+
+| Browser calls (terminal) | Goes to |
+|---|---|
+| `GET /api/bot-accounts`, `DELETE /api/bot-accounts/{id}` | meeting-api, through the gateway |
+| `POST /api/bot-accounts/sessions`, `GET`/`DELETE /api/bot-accounts/sessions/{id}` | meeting-api, through the gateway |
+| `GET /api/bot-accounts/sessions/{id}/view/*` (bytes and type passed through) | meeting-api, through the gateway |
+| WebSocket `/bot-accounts/sessions/{id}/vnc` | the terminal server → the gateway's same path, with your key |
+
+### Configuration
+
+`GATEWAY_URL` on the terminal server. Bot accounts need the credential broker's `bots` key on
+meeting-api; see [Connections](/connections).
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P6** one front door | the browser calls only the terminal; the terminal reaches meeting-api only through the gateway | `gate:isolation` |
+| **P18** fail loud | a refused start shows its reason; a failed sign-in shows why; an unavailable deployment says so | ungated: reviewed |
+| **P20** authorize every access | only the person who opened a session may view, read or close it; company accounts change only from the admin account | the deny tests below |
+| **P23** one writer per carrier | meeting-api is the only writer of bot accounts; the terminal stores nothing | ungated: reviewed |
+
+### Security
+
+- Your password is typed into the platform's own page inside the workload's browser; Minutes has no
+  field for it.
+- The view password is never in a query string, a request or a log: it rides the URL fragment.
+- The live-view socket is accepted only for `/bot-accounts/sessions/<32 hex>/vnc`; any other
+  `/bot-accounts/` socket is refused before it reaches the gateway.
+- Saved sign-ins are encrypted in the credential broker and sealed to their owner.
+
+**Deny tests.**
+
+| Test | Proves |
+|---|---|
+| `clients/terminal/src/app/api/__tests__/wsUpstream.test.ts` · "refuses %s" | only the live-view socket shape is forwarded |
+| `clients/terminal/src/minutes/__tests__/browserSessionView.test.tsx` · "carries the password in the fragment only" | the view password stays out of requests |
+| `clients/terminal/src/minutes/__tests__/botAccounts.test.tsx` · "shows a company account read-only to everyone but the admin account" | company accounts |
+
+## Related
+
+- [Authenticated bots](/authenticated-bots) · [Connections](/connections) · [Admin account](/minutes/admin-account) · [Meetings](/minutes/meetings)

@@ -10,7 +10,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseInvocation, loadInvocation, InvocationError, speakerStreamConfigFromEnv, sttTimeoutMsFromEnv } from './config.js';
+import { parseInvocation, loadInvocation, InvocationError, speakerStreamConfigFromEnv, sttTimeoutMsFromEnv, withLatencyProfile, reconfirmSecFromEnv } from './config.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GOLDEN_DIR = join(HERE, '..', '..', '..', 'contracts', 'invocation.v1', 'golden');
@@ -24,7 +24,7 @@ const throws = (fn: () => unknown): Error | null => { try { fn(); return null; }
 
 // ── every committed invocation.v1 golden parses ──
 const goldens = readdirSync(GOLDEN_DIR).filter((n) => n.startsWith('Invocation.') && n.endsWith('.json'));
-check('found all invocation goldens', goldens.length === 3, `got ${goldens.join(', ')}`);
+check('found all invocation goldens', goldens.length === 6, `got ${goldens.join(', ')}`);
 for (const g of goldens) {
   const raw = readFileSync(join(GOLDEN_DIR, g), 'utf8');
   const err = throws(() => parseInvocation(raw));
@@ -40,6 +40,13 @@ for (const g of goldens) {
   check('full: secret token present (not logged)', typeof full.token === 'string' && full.token.length > 0);
   check('full: transcriptionModel threaded (#522)', full.transcriptionModel === 'whisper-large-v3-turbo', String(full.transcriptionModel));
   check('full: captureSignalEnabled threaded (O-TEL-1)', full.captureSignalEnabled === true, String(full.captureSignalEnabled));
+}
+
+// ── typed access on the bot-account golden (a saved bot account restores over HTTP) ──
+{
+  const acct = parseInvocation(readFileSync(join(GOLDEN_DIR, 'Invocation.bot-account.json'), 'utf8'));
+  check('bot-account: authenticated with sessionRestoreUrl, no store fields',
+    acct.authenticated === true && typeof acct.sessionRestoreUrl === 'string' && acct.userdataS3Path === undefined, String(acct.sessionRestoreUrl));
 }
 
 // ── typed access on the jitsi golden (the platform enum accepts jitsi) ──
@@ -103,6 +110,23 @@ console.log('\n✅ config (L1/L2): the goldens parse, the env helper round-trips
   check('BOT_STT_TIMEOUT_SEC=45 → 45000 ms', sttTimeoutMsFromEnv({ BOT_STT_TIMEOUT_SEC: '45' }) === 45_000);
   check('BOT_STT_TIMEOUT_SEC under 20 s is refused loudly (default kept)',
     sttTimeoutMsFromEnv({ BOT_STT_TIMEOUT_SEC: '5' }, (m) => warnings.push(m)) === undefined && warnings.length === 1, warnings.join('; '));
+}
+
+{
+  const dflt = withLatencyProfile('google_meet', undefined, {});
+  check('default (unset): ONE pipeline — fast drafts (pause finals, pipelined drafts) because reconfirmation is on',
+    dflt?.pauseFinalMs === 500 && dflt?.confirmThreshold === 1 && dflt?.pipelineDrafts === true, JSON.stringify(dflt));
+  check('BOT_TRANSCRIPTION_LATENCY=standard → config unchanged', withLatencyProfile('google_meet', undefined, { BOT_TRANSCRIPTION_LATENCY: 'standard' }) === undefined);
+  check('reconfirmation off (BOT_TRANSCRIPT_RECONFIRM_SEC=0) → the confirm-on-agreement lane, never first versions as final',
+    withLatencyProfile('google_meet', undefined, { BOT_TRANSCRIPT_RECONFIRM_SEC: '0' }) === undefined);
+  check('reconfirm seconds: unset 10, 0 off, junk falls back to 10, capped at 30',
+    reconfirmSecFromEnv({}) === 10 && reconfirmSecFromEnv({ BOT_TRANSCRIPT_RECONFIRM_SEC: '0' }) === 0
+      && reconfirmSecFromEnv({ BOT_TRANSCRIPT_RECONFIRM_SEC: 'x' }) === 10 && reconfirmSecFromEnv({ BOT_TRANSCRIPT_RECONFIRM_SEC: '99' }) === 30);
+  const meet = withLatencyProfile('google_meet', { maxBufferDuration: 12 }, { BOT_TRANSCRIPTION_LATENCY: 'low' });
+  check('low on a per-participant track: pause finals, single-answer confirm, pipelined drafts; explicit knobs win',
+    meet?.pauseFinalMs === 500 && meet?.confirmThreshold === 1 && meet?.pipelineDrafts === true && meet?.maxBufferDuration === 12, JSON.stringify(meet));
+  const note = withLatencyProfile('voice_note', undefined, { BOT_TRANSCRIPTION_LATENCY: 'low' });
+  check('low on a voice note: pause finals without pipelined drafts', note?.pauseFinalMs === 700 && !note?.pipelineDrafts, JSON.stringify(note));
 }
 
 if (failed) { console.error(`\n❌ config env tuning: ${failed} check(s) FAILED.`); process.exit(1); }

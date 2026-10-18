@@ -146,7 +146,7 @@ services:
     build:
       context: ../..
       dockerfile: core/meetings/services/meeting-api/Dockerfile
-    image: vexaai/v012-meeting-api:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-meeting-api:${IMAGE_TAG:-dev}
     entrypoint: ["python", "/vexa-storage-tools/storage_init.py"]
     depends_on:
       storage:
@@ -166,16 +166,132 @@ services:
       - BOT_S3_ACCESS_KEY=${BOT_S3_ACCESS_KEY:-}
       - BOT_S3_SECRET_KEY=${BOT_S3_SECRET_KEY:-}
       - BOT_USERDATA_S3_PATH=${BOT_USERDATA_S3_PATH:-}
+      # The session store's own bucket and scoped key (ADR-0048): made here on the bundled storage.
+      - VEXA_SESSIONS_S3_ENDPOINT=${VEXA_SESSIONS_S3_ENDPOINT:-}
+      - VEXA_SESSIONS_S3_BUCKET=${VEXA_SESSIONS_S3_BUCKET:-vexa-sessions}
+      - VEXA_SESSIONS_S3_ACCESS_KEY=${VEXA_SESSIONS_S3_ACCESS_KEY:-}
+      - VEXA_SESSIONS_S3_SECRET_KEY=${VEXA_SESSIONS_S3_SECRET_KEY:-}
     volumes:
       - ../storage:/vexa-storage-tools:ro
     networks: [vexa]
+
+  admin-schema-init:
+    # The identity + meetings schema's migrations path, as a one-shot: admin-api's own convergence
+    # (additive, never drops, idempotent, lock-retried) run to completion BEFORE admin-api or
+    # meeting-api starts. The new schema is then in place while the old processes still serve, so a
+    # deploy can start each new version beside the old one instead of stopping it first (F13).
+    # admin-api still converges on boot too; on an unchanged schema both are no-ops.
+    build:
+      context: ../../core/identity/services/admin-api
+      dockerfile: Dockerfile
+    image: vexaai/vexa-admin-api:${IMAGE_TAG:-dev}
+    command: ["python", "-m", "admin_api.migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-vexa}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-}
+    networks: [vexa]
+    restart: "no"
+
+  agent-sessions-init:
+    # The session store's migrations path (ADR-0048): with the instance's admin credential, creates
+    # (or re-asserts) the store's own login role — no superuser, no createdb/createrole, grants on
+    # the agent_session* tables only — and the tables themselves, then exits. agent-api waits for it
+    # and logs in as that role; it never holds the admin credential and runs no DDL.
+    build:
+      context: ../..
+      dockerfile: core/agent/services/agent-api/Dockerfile
+    image: vexaai/vexa-agent-api:${IMAGE_TAG:-dev}
+    command: ["python", "-m", "control_plane.session_schema", "init"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-vexa}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-}
+      - VEXA_SESSIONS_DB_USER=${VEXA_SESSIONS_DB_USER:-vexa_agent_sessions}
+      - VEXA_SESSIONS_DB_PASSWORD=${VEXA_SESSIONS_DB_PASSWORD:-}
+    networks: [vexa]
+    restart: "no"
+
+  # ─── The optional CRM (ADR-0047) — profile `crm` ──────────────────────────────────────────
+  # Off unless COMPOSE_PROFILES names `crm`. crm-init is its migrations path: with the instance's
+  # admin credential it creates the CRM's OWN login role (no superuser; grants on the crm_* tables
+  # only), the tables, and the organisation with its stable entity types, then exits. crm-api logs
+  # in as that role, refuses a superuser and any schema version but its own, and runs no DDL. To
+  # wire the rest of the stack to it set CRM_API_URL=http://crm-api:8300 (the MCP's crm tools, the
+  # flows pack's door, the terminal's record page) and VEXA_CRM_REFERENCES_POLL_S (backlinks).
+  # v0.13.3 publishes no vexa-crm image: "docker compose --profile crm up --build" builds it here.
+  crm-init:
+    profiles: ["crm"]
+    build:
+      context: ../../core/crm
+      dockerfile: Dockerfile
+    image: vexaai/vexa-crm:${IMAGE_TAG:-dev}
+    command: ["python", "-m", "crm.migrate", "init"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-vexa}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-}
+      - CRM_DB_USER=${CRM_DB_USER:-vexa_crm}
+      - CRM_DB_PASSWORD=${CRM_DB_PASSWORD:-}
+      - CRM_ORG_ID=${CRM_ORG_ID:-}
+      - CRM_ORG_NAME=${CRM_ORG_NAME:-}
+    networks: [vexa]
+    restart: "no"
+
+  crm-api:
+    profiles: ["crm"]
+    build:
+      context: ../../core/crm
+      dockerfile: Dockerfile
+    image: vexaai/vexa-crm:${IMAGE_TAG:-dev}
+    ports:
+      - "127.0.0.1:${CRM_API_HOST_PORT:-18300}:8300"
+    environment:
+      # its own role, never the admin credential (crm-init above made it)
+      - CRM_DATABASE_URL=postgresql+pg8000://${CRM_DB_USER:-vexa_crm}:${CRM_DB_PASSWORD:-}@postgres:5432/${DB_NAME:-vexa}
+      - CRM_ORG_ID=${CRM_ORG_ID:-}
+      # every caller is resolved by identity's /internal/validate, the one resolver
+      - ADMIN_API_URL=http://admin-api:8001
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
+      # Unproven features (VEXA_FEATURES): empty = the release default, every one off; `all` on a dev stack.
+      - VEXA_FEATURES=${VEXA_FEATURES:-}
+      # where the desk's limits are read (_global/POLICIES.md, internal secret); unreachable = the defaults
+      - CRM_AGENT_API_URL=${CRM_AGENT_API_URL:-http://agent-api:8100}
+    depends_on:
+      crm-init:
+        condition: service_completed_successfully
+      admin-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8300/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks: [vexa]
+    restart: unless-stopped
 
   # ─── Core services ────────────────────────────────────────────────────────────────────────────
   admin-api:
     build:
       context: ../../core/identity/services/admin-api
       dockerfile: Dockerfile
-    image: vexaai/v012-admin-api:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-admin-api:${IMAGE_TAG:-dev}
     ports:
       - "127.0.0.1:${ADMIN_API_PORT:-18057}:8001"
     environment:
@@ -190,6 +306,8 @@ services:
       # the admin surface answers 500 rather than accepting a secret everybody has.
       - ADMIN_API_TOKEN=${ADMIN_TOKEN:-}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # Unproven features (VEXA_FEATURES): identity answers `public_profiles` (by name only; `all` does not).
+      - VEXA_FEATURES=${VEXA_FEATURES:-}
       # identity resolves a worker's delegation token (vxd_) in /internal/validate, so the gateway and
       # flows authenticate a worker's tool calls without holding this key (agent_delegation).
       - VEXA_MCP_DELEGATION_SECRET=${VEXA_MCP_DELEGATION_SECRET:-}
@@ -213,6 +331,10 @@ services:
       # that writes the company layer `_global`, and it has nothing else: no desk, no workspaces, no
       # meetings. Empty = no admin account, nobody writes `_global`. See .env.example.
       - VEXA_ADMIN_ACCOUNT=${VEXA_ADMIN_ACCOUNT:-}
+      # the default org's CRM organisation (MIGRATION-0008): the same value crm-api runs as
+      - CRM_ORG_ID=${CRM_ORG_ID:-}
+      # account delete erases a person's own CRM (an individual's org of one) through the CRM's door
+      - CRM_API_URL=${CRM_API_URL:-}
       # ── the publish edge (config.v1 class `publish-edge`) ──────────────────────────────────
       # Identity hands `onboarding.completed` to flows here. Same variable, same default-empty
       # shape as the mcp service's assembly URLs: EMPTY IS A PROFILE, not a misconfiguration —
@@ -220,6 +342,25 @@ services:
       # the person either way. The key authenticates the same edge; flows' POST /events is not open.
       - VEXA_FLOWS_API_URL=${VEXA_FLOWS_API_URL:-}
       - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
+      # People's photos (UI 15g): the bytes go to the install's object store — the same service and
+      # bucket recordings use, under person-photos/<user id>/ — with the same names meeting-api reads.
+      # Unset = no photos (initials). Gravatar at sign-in is on unless VEXA_PERSON_GRAVATAR=false.
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-storage:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-}
+      - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - VEXA_PERSON_GRAVATAR=${VEXA_PERSON_GRAVATAR:-true}
+      # A provider photo's address is read only from the sign-in's own ID token, which admin-api
+      # verifies against the same client ids and issuer the terminal signs people in with. For an
+      # internal PKI, mount the CA bundle here too (docker-compose.override.yml).
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - VEXA_OIDC_ISSUER=${VEXA_OIDC_ISSUER:-}
+      - VEXA_OIDC_CLIENT_ID=${VEXA_OIDC_CLIENT_ID:-}
+      - VEXA_OIDC_CA_FILE=${VEXA_OIDC_CA_FILE:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/health').status==200 else 1)"]
       interval: 10s
@@ -228,6 +369,8 @@ services:
       start_period: 15s
     init: true
     depends_on:
+      admin-schema-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     networks: [vexa]
@@ -237,7 +380,7 @@ services:
     build:
       context: ../../core/runtime
       dockerfile: Dockerfile
-    image: vexaai/v012-runtime:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-runtime:${IMAGE_TAG:-dev}
     # The runtime spawns bot containers via the host Docker socket (DockerBackend → socket API,
     # requests_unixsocket — no docker CLI in the image, like main).
     group_add:
@@ -256,8 +399,8 @@ services:
       - BROWSER_IMAGE=${BROWSER_IMAGE:-vexaai/vexa-bot:${IMAGE_TAG:-dev}}
       # The per-dispatch WORKER image the runtime spawns (control-plane ⊥ worker split). AGENT_WORKER_IMAGE
       # is set EXPLICITLY (no suffix derivation); AGENT_IMAGE now matches the built control-plane tag.
-      - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/v012-agent-api:${IMAGE_TAG:-dev}}
-      - AGENT_WORKER_IMAGE=${AGENT_WORKER_IMAGE:-vexaai/v012-agent-worker:${IMAGE_TAG:-dev}}
+      - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent-api:${IMAGE_TAG:-dev}}
+      - AGENT_WORKER_IMAGE=${AGENT_WORKER_IMAGE:-vexaai/vexa-agent-worker:${IMAGE_TAG:-dev}}
       # THE MODEL EVERY SPAWNED WORKER RUNS (decision 36, founder: "let's move to sonnet"). Unset =
       # the CLI's own default, which on 2.1.197 is `claude-opus-4-8[1m]` — measured, not assumed.
       # Set it here and the runtime forwards it into each spawned worker (docker_backend's forward
@@ -273,6 +416,9 @@ services:
       - BOT_SPEAKER_IDLE_TIMEOUT_SEC=${BOT_SPEAKER_IDLE_TIMEOUT_SEC:-}
       - BOT_SPEAKER_MIN_FINAL_AUDIO_SEC=${BOT_SPEAKER_MIN_FINAL_AUDIO_SEC:-}
       - BOT_STT_TIMEOUT_SEC=${BOT_STT_TIMEOUT_SEC:-}
+      - BOT_TRANSCRIPTION_LATENCY=${BOT_TRANSCRIPTION_LATENCY:-}
+      - BOT_STT_CONFIDENCE_FILTER=${BOT_STT_CONFIDENCE_FILTER:-}
+      - BOT_TRANSCRIPT_RECONFIRM_SEC=${BOT_TRANSCRIPT_RECONFIRM_SEC:-}
       - VEXA_AGENT_SRC_MOUNT=${VEXA_AGENT_SRC_MOUNT:-}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       # The Runtime brokers model credentials into spawned agents. Subscription credentials may be
@@ -300,6 +446,9 @@ services:
       # meeting-api present it. No default — the runtime refuses to boot without one (mint-dev-env.sh
       # mints it into .env). No spawned workload receives it.
       - RUNTIME_API_TOKEN=${RUNTIME_API_TOKEN:-}
+      # The env_file above carries the whole .env, so the LiveKit API secret is blanked here: the
+      # runtime reads no LiveKit key, and the secret stays with LiveKit, meeting-api and agent-api.
+      - LIVEKIT_API_SECRET=
       # The workspace store as the RUNTIME serves it: what backs it (the named volume agent-api also
       # mounts) and where it sits inside a worker. A workload spec cannot move either; every mount a
       # spec declares must sit under the target. The target must equal agent-api's
@@ -364,7 +513,7 @@ services:
     build:
       context: ../..
       dockerfile: core/agent/worker/Dockerfile
-    image: vexaai/v012-agent-worker:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-agent-worker:${IMAGE_TAG:-dev}
     profiles: ["build-only"]
     command: ["true"]
 
@@ -375,7 +524,7 @@ services:
     build:
       context: ../..
       dockerfile: core/agent/services/agent-api/Dockerfile
-    image: vexaai/v012-agent-api:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-agent-api:${IMAGE_TAG:-dev}
     ports:
       - "127.0.0.1:${AGENT_API_PORT:-18100}:8100"
     # Provider auth (ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL) is sourced from .env via env_file so it is
@@ -401,18 +550,10 @@ services:
       # Unset reads as "unknown" and the bar simply never fires (PRD decision 39).
       - VEXA_BUILD_SHA=${VEXA_BUILD_SHA:-${IMAGE_TAG:-dev}}
       - VEXA_WORKSPACES_DIR=/workspaces
-      # THE CREDENTIAL STORE'S KEY, and the profile that decides whether it may be absent (R-E08).
-      # `secret_store` seals saved PATs and per-workspace deploy-key private halves. With no key it
-      # GENERATES one under `<workspaces>/.secrets/`, beside the ciphertext it seals — which defends
-      # a stray read and not a stolen volume or a backup, and the module has always said so. It was
-      # settable nowhere, so no deployment ever set it and every deployment quietly took the weaker
-      # property. Mint one (`openssl rand -hex 32`) to hold the key outside the data volume.
-      #
-      # VEXA_ENV is the same profile word the mcp and transcription services already read: unset or
-      # anything but `production` keeps the generated key (with a warning on every boot that needs
-      # it); `production` makes an unset VEXA_SECRETS_KEY a refusal naming the fix.
+      # DEPRECATED, migration only: the key an older build sealed saved Git tokens and deploy keys
+      # with on this volume. They now live in the credential broker (below); agent-api reads this
+      # only to move what is still here, and the boot log counts what is left.
       - VEXA_SECRETS_KEY=${VEXA_SECRETS_KEY:-}
-      - VEXA_ENV=${VEXA_ENV:-development}
       # Self-hosted git hosts and the provider each runs, so a typed token is presented the way the
       # host expects: `gitlab.example.com=gitlab,git.example.org=basic:svc-user`. Unlisted hosts keep
       # GitHub's bare-token form. A malformed value stops agent-api at boot.
@@ -492,11 +633,11 @@ services:
       # ever mounts it. Set VEXA_CONNECTIONS_BROKER_URL empty to run without Connections.
       - VEXA_CONNECTIONS_BROKER_URL=${VEXA_CONNECTIONS_BROKER_URL-http://credential-broker:8100}
       - VEXA_CONNECTIONS_AGENT_KEY_FILE=/run/vexa-connections/agent/key
-      # Opt-in: Git tokens and deploy keys move from this service's own encrypted store into the
-      # broker. Set VEXA_GIT_STORE_BROKER_URL=http://credential-broker:8100 to switch; the key
-      # path follows it, so the pair is set together or not at all.
-      - VEXA_GIT_STORE_BROKER_URL=${VEXA_GIT_STORE_BROKER_URL:-}
-      - VEXA_GIT_STORE_KEY_FILE=${VEXA_GIT_STORE_BROKER_URL:+/run/vexa-connections/git/key}
+      # Saved Git tokens and deploy keys live in the broker, never on this service's volume:
+      # agent-api signs as the `git` role for the person a request acts for. Set the URL empty
+      # and saving one is refused (a token typed for one operation still works).
+      - VEXA_GIT_STORE_BROKER_URL=${VEXA_GIT_STORE_BROKER_URL-http://credential-broker:8100}
+      - VEXA_GIT_STORE_KEY_FILE=/run/vexa-connections/git/key
       # ── the publish edge (config.v1 class `publish-edge`) ─────────────────────────────────
       # The agent domain hands `desk.unscaffolded` and `claim.proposed` to flows here — the two
       # desk cards. A PUBLISH IS NOT A DEPENDENCY: the calls are bounded at 2s and swallowed, and
@@ -508,18 +649,50 @@ services:
       # the queue would be empty on a plain `up -d` with every part of the mechanism green. Set it
       # empty to run a deployment that genuinely does not carry the flows domain.
       - VEXA_FLOWS_API_URL=${VEXA_FLOWS_API_URL:-http://flows-api:8200}
+      # ADR-0047 d5: publish each workspace's links to CRM records per commit (0 = off: no CRM)
+      - VEXA_CRM_REFERENCES_POLL_S=${VEXA_CRM_REFERENCES_POLL_S:-0}
       # The same operator key flows-api itself reads, passed through and never re-defaulted to a
       # literal (F95). flows' POST /events is not open, so a target without its credential is a
       # target that always 401s — which looks exactly like a deployment running no flows, and is
       # not one. Empty here and empty on flows-api is a stack whose intake refuses everybody,
       # which is the fail-closed shape #1453 chose on purpose.
       - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
+      # ── the session store (ADR-0048): conversations apart from workspaces, ON by default ─────
+      # Session rows, participants and heads in the instance's Postgres (agent_session* tables),
+      # logged in as the store's OWN role — agent-sessions-init creates it with grants on those
+      # tables only; agent-api never holds the instance's admin credential. Each turn's transcript
+      # is one object in the store's OWN bucket (vexa-sessions), with a key storage-init scopes to
+      # that bucket alone — never the recordings bucket or the storage root pair. Workers never hold
+      # these: the conversation travels on their own unit's streams. mint-dev-env.sh mints both.
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-vexa}
+      - VEXA_SESSIONS_DB_USER=${VEXA_SESSIONS_DB_USER:-vexa_agent_sessions}
+      - VEXA_SESSIONS_DB_PASSWORD=${VEXA_SESSIONS_DB_PASSWORD:-}
+      - VEXA_SESSIONS_S3_ENDPOINT=${VEXA_SESSIONS_S3_ENDPOINT:-${S3_ENDPOINT:-${MINIO_ENDPOINT:-storage:9000}}}
+      - VEXA_SESSIONS_S3_SECURE=${MINIO_SECURE:-false}
+      - VEXA_SESSIONS_S3_BUCKET=${VEXA_SESSIONS_S3_BUCKET:-vexa-sessions}
+      - VEXA_SESSIONS_S3_ACCESS_KEY=${VEXA_SESSIONS_S3_ACCESS_KEY:-}
+      - VEXA_SESSIONS_S3_SECRET_KEY=${VEXA_SESSIONS_S3_SECRET_KEY:-}
+      # Calls (ADR-0048 decision 6): agent-api mints participants' room tokens on the `calls` profile's
+      # LiveKit server; the same four values meeting-api reads. Unset LIVEKIT_URL ⇒ no Call button.
+      - LIVEKIT_URL=${LIVEKIT_URL:-}
+      - LIVEKIT_INTERNAL_URL=${LIVEKIT_INTERNAL_URL:-}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-}
       # The credential is MOUNTED below, but the capability oracle reads this env to know a
       # subscription path is CONFIGURED at all. Without the pair, a correctly-mounted credential
       # reports "No model credentials are configured" and the turn is refused before dispatch
       # (found by dogfooding 2026-08-30).
       - HOST_CLAUDE_CREDENTIALS=${HOST_CLAUDE_CREDENTIALS:-}
       - HOST_CLAUDE_DIR=${HOST_CLAUDE_DIR:-}
+      # Unproven features (VEXA_FEATURES): empty = the release default, every one off; `all` on a dev stack.
+      - VEXA_FEATURES=${VEXA_FEATURES:-}
+      # Who is served the agent tier (VEXA_AGENT_ALLOW): empty = everyone; else ids, emails, @domain.
+      - VEXA_AGENT_ALLOW=${VEXA_AGENT_ALLOW:-}
+      # THE KILL SWITCH for model calls (control_plane/llm_budget.py): 1 refuses every agent turn.
+      # The spend caps are _global/POLICIES.md keys (llm_budget_*), not env.
+      - VEXA_LLM_KILL_SWITCH=${VEXA_LLM_KILL_SWITCH:-}
     volumes:
       # The Workspace store backing (dev): the worker mounts the subject's subdir; agent-api reads the tree.
       - agent-workspaces:/workspaces
@@ -538,11 +711,10 @@ services:
       # the volume, which then blocked the directory. Only an operator-supplied OUT-OF-STORE path is
       # bound, at its own host path, where the control plane's exists() check runs.
       - ${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/dev/null}:${VEXA_GLOBAL_SYSTEM_WORKSPACE_PATH:-/var/lib/vexa/no-global2}:ro
-      # The agent role key, and the git role key only while the Git store is switched on
-      # (VEXA_GIT_STORE_BROKER_URL set): otherwise its mount point is the empty `connections-git`
-      # volume and this service holds no git key. Nothing else of the broker's (Connections).
+      # The agent and git role keys. Nothing else of the broker's: never the human key, never
+      # the store key (Connections, ADR-0040).
       - connections-agent-key:/run/vexa-connections/agent:ro
-      - connections-git${VEXA_GIT_STORE_BROKER_URL:+-key}:/run/vexa-connections/git:ro
+      - connections-git-key:/run/vexa-connections/git:ro
       # gateway-identity.v1: the gateway's public key (never the signing key).
       - identity-public-key:/run/vexa-identity/public:ro
     healthcheck:
@@ -559,6 +731,11 @@ services:
         condition: service_completed_successfully
       identity-keys:
         condition: service_completed_successfully
+      # the session store (ADR-0048): its role and tables, its bucket and scoped key
+      agent-sessions-init:
+        condition: service_completed_successfully
+      storage-init:
+        condition: service_completed_successfully
     # `connections` reaches the credential broker; spawned workers join `vexa` only and cannot.
     networks: [vexa, connections]
     restart: unless-stopped
@@ -570,7 +747,7 @@ services:
       # those frozen contract files are vendored into the image (see the Dockerfile).
       context: ../..
       dockerfile: core/meetings/services/meeting-api/Dockerfile
-    image: vexaai/v012-meeting-api:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-meeting-api:${IMAGE_TAG:-dev}
     ports:
       - "127.0.0.1:${MEETING_API_PORT:-18080}:8080"
     environment:
@@ -638,11 +815,27 @@ services:
       - BOT_S3_SECRET_KEY=${BOT_S3_SECRET_KEY:-}
       # Optional operator-owned service-authority.v1 boundary. Empty is explicit OSS allow-all.
       - VEXA_SERVICE_AUTHORITY_CONFIG=${VEXA_SERVICE_AUTHORITY_CONFIG:-}
+      # Calls (#1783): the LiveKit server (compose profile `calls`). Unset LIVEKIT_URL ⇒ no calls, and
+      # POST /bots {"platform": "vexa_call"} answers 503. LIVEKIT_URL is what a browser reaches (wss://
+      # behind your TLS proxy); LIVEKIT_INTERNAL_URL is where meeting-api and the listener reach it.
+      - LIVEKIT_URL=${LIVEKIT_URL:-}
+      - LIVEKIT_INTERNAL_URL=${LIVEKIT_INTERNAL_URL:-}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-}
+      # A call's limits and whether it may start untranscribed (/minutes/calls#configuration).
+      - CALL_MAX_DURATION_SEC=${CALL_MAX_DURATION_SEC:-14400}
+      - CALL_EMPTY_GRACE_SEC=${CALL_EMPTY_GRACE_SEC:-30}
+      - CALL_FIRST_JOIN_TIMEOUT_SEC=${CALL_FIRST_JOIN_TIMEOUT_SEC:-30}
+      - CALL_MAX_PARTICIPANTS=${CALL_MAX_PARTICIPANTS:-50}
+      - CALL_TRANSCRIPTION_SWITCHABLE=${CALL_TRANSCRIPTION_SWITCHABLE:-false}
       - VEXA_SERVICE_AUTHORITY_SECRET=${VEXA_SERVICE_AUTHORITY_SECRET:-}
       - VEXA_SYSTEM_WEBHOOK_URL=${VEXA_SYSTEM_WEBHOOK_URL:-}
       - VEXA_SYSTEM_WEBHOOK_SECRET=${VEXA_SYSTEM_WEBHOOK_SECRET:-}
       - VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP=${VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP:-false}
       - VEXA_SYSTEM_WEBHOOK_TIMEOUT_S=${VEXA_SYSTEM_WEBHOOK_TIMEOUT_S:-10}
+      # Voice notes (/minutes/voice-notes): the longest note in seconds of audio, and the idle wait.
+      - VOICE_NOTE_MAX_DURATION_SEC=${VOICE_NOTE_MAX_DURATION_SEC:-1800}
+      - VOICE_NOTE_IDLE_TIMEOUT_SEC=${VOICE_NOTE_IDLE_TIMEOUT_SEC:-120}
       # F168/F181: meetings→flows publish edge (config.v1 publish-edge, meeting_api/events.py) —
       # meeting-api telling flows a bot it dispatched went active / completed, best-effort and
       # swallowed on failure, the same as admin-api's onboarding.completed edge just below it in
@@ -663,8 +856,16 @@ services:
       - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
       - MINIO_SECURE=${MINIO_SECURE:-false}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Bot accounts (ADR-0049): saved signed-in browser profiles, kept in the credential broker.
+      # meeting-api signs as the broker's `bots` role (credential-broker.v1); the key is generated
+      # by `connections-keys`. Set VEXA_BOT_ACCOUNTS_BROKER_URL= (empty) to run without them.
+      - VEXA_BOT_ACCOUNTS_BROKER_URL=${VEXA_BOT_ACCOUNTS_BROKER_URL-http://credential-broker:8100}
+      - VEXA_BOT_ACCOUNTS_KEY_FILE=/run/vexa-connections/bots/key
+      # Unproven features (VEXA_FEATURES): empty = the release default, every one off; `all` on a dev stack.
+      - VEXA_FEATURES=${VEXA_FEATURES:-}
     volumes:
       - identity-public-key:/run/vexa-identity/public:ro
+      - connections-bots-key:/run/vexa-connections/bots:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health').status==200 else 1)"]
       interval: 10s
@@ -673,6 +874,8 @@ services:
       start_period: 15s
     init: true
     depends_on:
+      admin-schema-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -683,7 +886,11 @@ services:
         condition: service_completed_successfully
       identity-keys:
         condition: service_completed_successfully
-    networks: [vexa, bots]   # bots post their lifecycle callbacks and uploads here
+      connections-keys:
+        condition: service_completed_successfully
+    # `bots`: bots post their lifecycle callbacks and uploads here. `connections`: the credential
+    # broker, which keeps bot accounts.
+    networks: [vexa, bots, connections]
     restart: unless-stopped
 
   gateway:
@@ -693,7 +900,7 @@ services:
       # manifests of the domains it fronts; a context scoped to the service cannot reach them.
       context: ../..
       dockerfile: core/gateway/services/gateway/Dockerfile
-    image: vexaai/v012-gateway:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-gateway:${IMAGE_TAG:-dev}
     ports:
       - "127.0.0.1:${API_GATEWAY_HOST_PORT:-18056}:8000"
     environment:
@@ -717,6 +924,12 @@ services:
       # `.env.example` never set it either. An OPT-OUT (set it empty) is a deployment saying it has
       # no agents; a MISSING default was nobody saying anything and the product answering "no".
       - AGENT_API_URL=${AGENT_API_URL:-http://agent-api:8100}
+      # The optional CRM (ADR-0047): the edge fronts the record page's verbs under /crm/* only where
+      # this names crm-api; empty is a deployment without it.
+      - CRM_API_URL=${CRM_API_URL:-}
+      # Who the agent tier is enabled for (empty = everyone a key scope admits; `*`; or ids, emails,
+      # `@domain`). agent-api reads the same value; the edge refuses a caller it does not name.
+      - VEXA_AGENT_ALLOW=${VEXA_AGENT_ALLOW:-}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
       # gateway-identity.v1: the Ed25519 PRIVATE key the gateway signs the identity it resolved with,
@@ -781,7 +994,7 @@ services:
     build:
       context: ../..
       dockerfile: core/gateway/services/gateway/Dockerfile
-    image: vexaai/v012-gateway:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-gateway:${IMAGE_TAG:-dev}
     user: "0:0"
     command: ["sh", "-c", "python /app/src/gateway/identity_token.py keygen /keys/signing/key.pem /keys/public/key.pem && chown 10001:10001 /keys/signing/key.pem"]
     volumes:
@@ -813,7 +1026,7 @@ services:
       # The repo ROOT: the image COPYs core/flows/src AND the behavior showcase at behavior/.
       context: ../..
       dockerfile: core/flows/Dockerfile
-    image: vexaai/v012-flows:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-flows:${IMAGE_TAG:-dev}
     command: ["python", "-m", "flows_integrations.flows_api"]
     ports:
       # Loopback-published for debugging, like every other service here; overridable so two stacks
@@ -852,6 +1065,9 @@ services:
       # says a deployment may not run the agent domain at all. Unset, steps that need it answer
       # `not_present` instead of reaching for a door that is not there (#1453).
       - VEXA_FLOWS_AGENT_API_URL=${VEXA_FLOWS_AGENT_API_URL:-}
+      # The optional CRM's door (ADR-0047) for the flows_defs.crm pack; unset = no CRM (not_present).
+      - VEXA_FLOWS_CRM_API_URL=${CRM_API_URL:-}
+      - VEXA_FLOWS_DEFS_EXTRA=${VEXA_FLOWS_DEFS_EXTRA:-}
       # THE LINK PORT, not a door (PRD decision 4: flows owns a link port, the terminal is one
       # adapter, the no-agents product has none). Unset, nothing is mailed with a link and any step
       # that would compose one refuses naming this key — it no longer decides whether flows BOOTS.
@@ -869,6 +1085,13 @@ services:
       # the relay's TLS policy and trust, and the IMAP endpoint — every default is the Gmail preset;
       # a *_CA_FILE is a path INSIDE the container (mount the bundle in an override)
       - VEXA_MAIL_SMTP_TLS=${VEXA_MAIL_SMTP_TLS:-auto}
+      - VEXA_MAIL_SMTP_FROM=${VEXA_MAIL_SMTP_FROM:-}
+      - VEXA_MAIL_REPLY_TO=${VEXA_MAIL_REPLY_TO:-}
+      - VEXA_MAIL_RELAY=${VEXA_MAIL_RELAY:-}
+      - VEXA_MAIL_CAPTURE_SMTP=${VEXA_MAIL_CAPTURE_SMTP:-mailpit:1025}
+      - VEXA_MAIL_MAX_PER_DAY=${VEXA_MAIL_MAX_PER_DAY:-2000}
+      - VEXA_MAIL_KINDS_DEFAULT=${VEXA_MAIL_KINDS_DEFAULT:-shipped}
+      - VEXA_MAIL_INBOUND_FILTER=${VEXA_MAIL_INBOUND_FILTER:-vexa}
       - VEXA_MAIL_SMTP_CA_FILE=${VEXA_MAIL_SMTP_CA_FILE:-}
       - VEXA_MAIL_IMAP_HOST=${VEXA_MAIL_IMAP_HOST:-imap.gmail.com}
       - VEXA_MAIL_IMAP_PORT=${VEXA_MAIL_IMAP_PORT:-}
@@ -894,6 +1117,13 @@ services:
       - VEXA_FLOWS_MAIL_QUARANTINE_REPLY=${VEXA_FLOWS_MAIL_QUARANTINE_REPLY:-}
       - VEXA_FLOWS_MAIL_RATE_PER_SENDER=${VEXA_FLOWS_MAIL_RATE_PER_SENDER:-12}
       - VEXA_FLOWS_MAIL_RATE_GLOBAL=${VEXA_FLOWS_MAIL_RATE_GLOBAL:-120}
+      - VEXA_FLOWS_SCHEDULE_CATCHUP_S=${VEXA_FLOWS_SCHEDULE_CATCHUP_S:-3600}
+      - VEXA_FLOWS_LOOP_LIMIT=${VEXA_FLOWS_LOOP_LIMIT:-1}
+      - VEXA_FLOWS_MAX_HOPS=${VEXA_FLOWS_MAX_HOPS:-8}
+      - VEXA_FLOWS_USER_ACTIVE_FLOWS=${VEXA_FLOWS_USER_ACTIVE_FLOWS:-20}
+      - VEXA_FLOWS_USER_MIN_INTERVAL_S=${VEXA_FLOWS_USER_MIN_INTERVAL_S:-900}
+      - VEXA_FLOWS_USER_RUNS_PER_DAY=${VEXA_FLOWS_USER_RUNS_PER_DAY:-48}
+      - VEXA_FLOWS_USER_MESSAGES_PER_DAY=${VEXA_FLOWS_USER_MESSAGES_PER_DAY:-100}
       - VEXA_FLOWS_MAIL_RATE_WINDOW_S=${VEXA_FLOWS_MAIL_RATE_WINDOW_S:-3600}
       - VEXA_FLOWS_MAIL_BODY_MAX=${VEXA_FLOWS_MAIL_BODY_MAX:-4000}
       # ── behaviour and content ───────────────────────────────────────────────────────────────
@@ -908,6 +1138,9 @@ services:
       # Set uniformly across this stack; the flows processes log through uvicorn's own level and do
       # not read it. Carried in the declaration's `surface_only` list with that reason, so
       # `gate:config-contract` records the drift instead of ignoring it.
+      # Sensors (ADR-0050): read-only provider calls through the broker, signed as its `sensors` role.
+      - VEXA_FLOWS_SENSORS_BROKER_URL=${VEXA_FLOWS_SENSORS_BROKER_URL-http://credential-broker:8100}
+      - VEXA_FLOWS_SENSORS_KEY_FILE=/run/vexa-connections/sensors/key
       - LOG_LEVEL=${LOG_LEVEL:-info}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8200/health').status==200 else 1)"]
@@ -925,7 +1158,9 @@ services:
         condition: service_healthy
       admin-api:
         condition: service_healthy
-    networks: [vexa, workers]   # workers read the timeline here
+    volumes:
+      - connections-sensors-key:/run/vexa-connections/sensors:ro   # sensor_test reads through the broker
+    networks: [vexa, workers, connections]   # workers read the timeline here; the broker for sensors
     restart: unless-stopped
 
   # flows-mailbox — the inbound mail lane: IMAP poll → `POST /events` on the engine. Same image,
@@ -944,7 +1179,7 @@ services:
     build:
       context: ../..
       dockerfile: core/flows/Dockerfile
-    image: vexaai/v012-flows:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-flows:${IMAGE_TAG:-dev}
     command: ["python", "-m", "flows_integrations.mailbox"]
     environment:
       # ── the listener ────────────────────────────────────────────────────────────────────────
@@ -979,6 +1214,9 @@ services:
       # says a deployment may not run the agent domain at all. Unset, steps that need it answer
       # `not_present` instead of reaching for a door that is not there (#1453).
       - VEXA_FLOWS_AGENT_API_URL=${VEXA_FLOWS_AGENT_API_URL:-}
+      # The optional CRM's door (ADR-0047) for the flows_defs.crm pack; unset = no CRM (not_present).
+      - VEXA_FLOWS_CRM_API_URL=${CRM_API_URL:-}
+      - VEXA_FLOWS_DEFS_EXTRA=${VEXA_FLOWS_DEFS_EXTRA:-}
       # THE LINK PORT, not a door (PRD decision 4: flows owns a link port, the terminal is one
       # adapter, the no-agents product has none). Unset, nothing is mailed with a link and any step
       # that would compose one refuses naming this key — it no longer decides whether flows BOOTS.
@@ -996,6 +1234,13 @@ services:
       # the relay's TLS policy and trust, and the IMAP endpoint — every default is the Gmail preset;
       # a *_CA_FILE is a path INSIDE the container (mount the bundle in an override)
       - VEXA_MAIL_SMTP_TLS=${VEXA_MAIL_SMTP_TLS:-auto}
+      - VEXA_MAIL_SMTP_FROM=${VEXA_MAIL_SMTP_FROM:-}
+      - VEXA_MAIL_REPLY_TO=${VEXA_MAIL_REPLY_TO:-}
+      - VEXA_MAIL_RELAY=${VEXA_MAIL_RELAY:-}
+      - VEXA_MAIL_CAPTURE_SMTP=${VEXA_MAIL_CAPTURE_SMTP:-mailpit:1025}
+      - VEXA_MAIL_MAX_PER_DAY=${VEXA_MAIL_MAX_PER_DAY:-2000}
+      - VEXA_MAIL_KINDS_DEFAULT=${VEXA_MAIL_KINDS_DEFAULT:-shipped}
+      - VEXA_MAIL_INBOUND_FILTER=${VEXA_MAIL_INBOUND_FILTER:-vexa}
       - VEXA_MAIL_SMTP_CA_FILE=${VEXA_MAIL_SMTP_CA_FILE:-}
       - VEXA_MAIL_IMAP_HOST=${VEXA_MAIL_IMAP_HOST:-imap.gmail.com}
       - VEXA_MAIL_IMAP_PORT=${VEXA_MAIL_IMAP_PORT:-}
@@ -1021,6 +1266,13 @@ services:
       - VEXA_FLOWS_MAIL_QUARANTINE_REPLY=${VEXA_FLOWS_MAIL_QUARANTINE_REPLY:-}
       - VEXA_FLOWS_MAIL_RATE_PER_SENDER=${VEXA_FLOWS_MAIL_RATE_PER_SENDER:-12}
       - VEXA_FLOWS_MAIL_RATE_GLOBAL=${VEXA_FLOWS_MAIL_RATE_GLOBAL:-120}
+      - VEXA_FLOWS_SCHEDULE_CATCHUP_S=${VEXA_FLOWS_SCHEDULE_CATCHUP_S:-3600}
+      - VEXA_FLOWS_LOOP_LIMIT=${VEXA_FLOWS_LOOP_LIMIT:-1}
+      - VEXA_FLOWS_MAX_HOPS=${VEXA_FLOWS_MAX_HOPS:-8}
+      - VEXA_FLOWS_USER_ACTIVE_FLOWS=${VEXA_FLOWS_USER_ACTIVE_FLOWS:-20}
+      - VEXA_FLOWS_USER_MIN_INTERVAL_S=${VEXA_FLOWS_USER_MIN_INTERVAL_S:-900}
+      - VEXA_FLOWS_USER_RUNS_PER_DAY=${VEXA_FLOWS_USER_RUNS_PER_DAY:-48}
+      - VEXA_FLOWS_USER_MESSAGES_PER_DAY=${VEXA_FLOWS_USER_MESSAGES_PER_DAY:-100}
       - VEXA_FLOWS_MAIL_RATE_WINDOW_S=${VEXA_FLOWS_MAIL_RATE_WINDOW_S:-3600}
       - VEXA_FLOWS_MAIL_BODY_MAX=${VEXA_FLOWS_MAIL_BODY_MAX:-4000}
       # ── behaviour and content ───────────────────────────────────────────────────────────────
@@ -1071,7 +1323,7 @@ services:
     build:
       context: ../..
       dockerfile: core/flows/Dockerfile
-    image: vexaai/v012-flows:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-flows:${IMAGE_TAG:-dev}
     command: ["python", "-m", "flows_worker"]
     environment:
       # ── the listener ────────────────────────────────────────────────────────────────────────
@@ -1106,6 +1358,9 @@ services:
       # says a deployment may not run the agent domain at all. Unset, steps that need it answer
       # `not_present` instead of reaching for a door that is not there (#1453).
       - VEXA_FLOWS_AGENT_API_URL=${VEXA_FLOWS_AGENT_API_URL:-}
+      # The optional CRM's door (ADR-0047) for the flows_defs.crm pack; unset = no CRM (not_present).
+      - VEXA_FLOWS_CRM_API_URL=${CRM_API_URL:-}
+      - VEXA_FLOWS_DEFS_EXTRA=${VEXA_FLOWS_DEFS_EXTRA:-}
       # THE LINK PORT, not a door (PRD decision 4: flows owns a link port, the terminal is one
       # adapter, the no-agents product has none). Unset, nothing is mailed with a link and any step
       # that would compose one refuses naming this key — it no longer decides whether flows BOOTS.
@@ -1123,6 +1378,13 @@ services:
       # the relay's TLS policy and trust, and the IMAP endpoint — every default is the Gmail preset;
       # a *_CA_FILE is a path INSIDE the container (mount the bundle in an override)
       - VEXA_MAIL_SMTP_TLS=${VEXA_MAIL_SMTP_TLS:-auto}
+      - VEXA_MAIL_SMTP_FROM=${VEXA_MAIL_SMTP_FROM:-}
+      - VEXA_MAIL_REPLY_TO=${VEXA_MAIL_REPLY_TO:-}
+      - VEXA_MAIL_RELAY=${VEXA_MAIL_RELAY:-}
+      - VEXA_MAIL_CAPTURE_SMTP=${VEXA_MAIL_CAPTURE_SMTP:-mailpit:1025}
+      - VEXA_MAIL_MAX_PER_DAY=${VEXA_MAIL_MAX_PER_DAY:-2000}
+      - VEXA_MAIL_KINDS_DEFAULT=${VEXA_MAIL_KINDS_DEFAULT:-shipped}
+      - VEXA_MAIL_INBOUND_FILTER=${VEXA_MAIL_INBOUND_FILTER:-vexa}
       - VEXA_MAIL_SMTP_CA_FILE=${VEXA_MAIL_SMTP_CA_FILE:-}
       - VEXA_MAIL_IMAP_HOST=${VEXA_MAIL_IMAP_HOST:-imap.gmail.com}
       - VEXA_MAIL_IMAP_PORT=${VEXA_MAIL_IMAP_PORT:-}
@@ -1148,6 +1410,13 @@ services:
       - VEXA_FLOWS_MAIL_QUARANTINE_REPLY=${VEXA_FLOWS_MAIL_QUARANTINE_REPLY:-}
       - VEXA_FLOWS_MAIL_RATE_PER_SENDER=${VEXA_FLOWS_MAIL_RATE_PER_SENDER:-12}
       - VEXA_FLOWS_MAIL_RATE_GLOBAL=${VEXA_FLOWS_MAIL_RATE_GLOBAL:-120}
+      - VEXA_FLOWS_SCHEDULE_CATCHUP_S=${VEXA_FLOWS_SCHEDULE_CATCHUP_S:-3600}
+      - VEXA_FLOWS_LOOP_LIMIT=${VEXA_FLOWS_LOOP_LIMIT:-1}
+      - VEXA_FLOWS_MAX_HOPS=${VEXA_FLOWS_MAX_HOPS:-8}
+      - VEXA_FLOWS_USER_ACTIVE_FLOWS=${VEXA_FLOWS_USER_ACTIVE_FLOWS:-20}
+      - VEXA_FLOWS_USER_MIN_INTERVAL_S=${VEXA_FLOWS_USER_MIN_INTERVAL_S:-900}
+      - VEXA_FLOWS_USER_RUNS_PER_DAY=${VEXA_FLOWS_USER_RUNS_PER_DAY:-48}
+      - VEXA_FLOWS_USER_MESSAGES_PER_DAY=${VEXA_FLOWS_USER_MESSAGES_PER_DAY:-100}
       - VEXA_FLOWS_MAIL_RATE_WINDOW_S=${VEXA_FLOWS_MAIL_RATE_WINDOW_S:-3600}
       - VEXA_FLOWS_MAIL_BODY_MAX=${VEXA_FLOWS_MAIL_BODY_MAX:-4000}
       # ── behaviour and content ───────────────────────────────────────────────────────────────
@@ -1162,6 +1431,9 @@ services:
       # Set uniformly across this stack; the flows processes log through uvicorn's own level and do
       # not read it. Carried in the declaration's `surface_only` list with that reason, so
       # `gate:config-contract` records the drift instead of ignoring it.
+      # Sensors (ADR-0050): read-only provider calls through the broker, signed as its `sensors` role.
+      - VEXA_FLOWS_SENSORS_BROKER_URL=${VEXA_FLOWS_SENSORS_BROKER_URL-http://credential-broker:8100}
+      - VEXA_FLOWS_SENSORS_KEY_FILE=/run/vexa-connections/sensors/key
       - LOG_LEVEL=${LOG_LEVEL:-info}
     init: true
     depends_on:
@@ -1169,7 +1441,9 @@ services:
         condition: service_healthy
       admin-api:
         condition: service_healthy
-    networks: [vexa]
+    volumes:
+      - connections-sensors-key:/run/vexa-connections/sensors:ro
+    networks: [vexa, connections]
     restart: unless-stopped
 
   # MCP service — the Model Context Protocol front for the PUBLIC API (v0.12 port of 0.10.6
@@ -1179,9 +1453,9 @@ services:
   # local debugging (bypasses the edge, so it bypasses the edge's auth too).
   mcp:
     build:
-      context: ../../core/meetings/services/mcp
+      context: ../../core/gateway/services/mcp
       dockerfile: Dockerfile
-    image: vexaai/v012-mcp:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-mcp:${IMAGE_TAG:-dev}
     ports:
       - "127.0.0.1:${MCP_HOST_PORT:-18010}:8010"
     environment:
@@ -1205,6 +1479,10 @@ services:
       # docker bridge address came to be the answer. Override to point at a flows elsewhere;
       # set it empty to run a deployment that genuinely does not carry the domain.
       - FLOWS_API_URL=${VEXA_FLOWS_API_URL:-http://flows-api:8200}
+      # The optional CRM (ADR-0047): its tools join the surface only where its door is named.
+      - CRM_API_URL=${CRM_API_URL:-}
+      # Unproven features (VEXA_FEATURES): empty = the release default, every one off; `all` on a dev stack.
+      - VEXA_FEATURES=${VEXA_FEATURES:-}
       # flows_submit / flow_lifecycle are `auth: admin` (core/flows/mcp.tools.v1.json): flows-api's
       # own `POST /flows` and `POST /flows/{name}/{version}/{action}` are gated by ITS operator key
       # (flows_api.auth), not the caller's credential, so THIS service needs its own copy to forward
@@ -1218,6 +1496,12 @@ services:
       # are assembled exactly like the OSS ones, competing for names in the same space so a mount
       # can collide but never shadow. EMPTY IS THE OSS PRODUCT, exactly.
       - VEXA_MCP_MANIFEST_DIR=${VEXA_MCP_MANIFEST_DIR:-}
+      # WHICH MCP TOOLS A CALLER IS SHOWN AND MAY CALL (vexa_mcp/visibility.py). Empty = every
+      # registered tool. An upgrade that must not change existing keys pins ALLOW to the previous
+      # release's list and names the people who try the new tools in COHORT; DENY holds for everyone.
+      - VEXA_MCP_TOOLS_ALLOW=${VEXA_MCP_TOOLS_ALLOW:-}
+      - VEXA_MCP_TOOLS_DENY=${VEXA_MCP_TOOLS_DENY:-}
+      - VEXA_MCP_TOOLS_COHORT=${VEXA_MCP_TOOLS_COHORT:-}
       - VEXA_ENV=${VEXA_ENV:-development}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       # Same declared-jitsi-hosts setting meeting-api reads — the two parsers must agree.
@@ -1278,7 +1562,7 @@ services:
         # Google Analytics 4 measurement id, baked into the client bundle at build time (NEXT_PUBLIC_*).
         # Set GA_MEASUREMENT_ID in .env, then rebuild the terminal image. Empty → GA stays off.
         NEXT_PUBLIC_GA_MEASUREMENT_ID: ${GA_MEASUREMENT_ID:-}
-        # Terminal mode, baked at build time (NEXT_PUBLIC_* — see clients/terminal/src/app/mode.ts).
+        # Terminal mode, baked at build time (NEXT_PUBLIC_* — see clients/terminal/src/platform/mode.ts).
         # "meetings" = meetings-only terminal; "minutes" = the minutes terminal; empty = the full
         # default. WIRED, not commented out (F67): while this line was a comment the ONLY way to
         # build a non-default variant was a direct `docker build --build-arg`, so `docker compose
@@ -1296,7 +1580,7 @@ services:
         # under the hot overlay's NODE_ENV=development — dev-mode Next needs the dev toolchain at
         # runtime and otherwise npm-installs it AT BOOT (slow, network-dependent, currently broken).
         RUNTIME_DEPS: ${TERMINAL_RUNTIME_DEPS:-prod}
-    image: vexaai/v012-terminal:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-terminal:${IMAGE_TAG:-dev}
     ports:
       - "127.0.0.1:${TERMINAL_PORT:-13000}:3000"
     environment:
@@ -1340,6 +1624,9 @@ services:
       # on this host reaches the container from the compose network's gateway, so name it (for example
       # the network's /16, or 172.16.0.0/12); unset, every client behind it shares one limit.
       - TERMINAL_TRUSTED_PROXIES=${TERMINAL_TRUSTED_PROXIES:-}
+      # The admin account's address, the same value admin-api reads: the Company profile switch
+      # (ADR-0049) opens it for an instance administrator. Empty = no switch is offered.
+      - VEXA_ADMIN_ACCOUNT=${VEXA_ADMIN_ACCOUNT:-}
       # OAuth login providers (NextAuth). Each provider self-gates on its creds: set BOTH the id and
       # secret to expose that sign-in button on the login page; leave empty to hide it (the dev
       # type-any-email login still works). Register the redirect URI in the provider console:
@@ -1370,6 +1657,7 @@ services:
       - VEXA_OIDC_REQUIRE_EMAIL_VERIFIED=${VEXA_OIDC_REQUIRE_EMAIL_VERIFIED:-}
       # Which sign-in doors to offer: a subset of google,microsoft,oidc,email (empty = all configured).
       - VEXA_SIGNIN_METHODS=${VEXA_SIGNIN_METHODS:-}
+      - VEXA_DEV_TEST_USERS=${VEXA_DEV_TEST_USERS:-}
       # Sign-in link mail (clients/terminal/src/app/api/auth/mailer.ts) goes through the deployment's
       # mail relay — the VEXA_MAIL_SMTP_* family flows sends through too (declared in
       # clients/terminal/config.v1.json). Unset, the mailer dials localhost:1025 inside THIS
@@ -1377,6 +1665,10 @@ services:
       - VEXA_MAIL_SMTP_HOST=${VEXA_MAIL_SMTP_HOST:-}
       - VEXA_MAIL_SMTP_PORT=${VEXA_MAIL_SMTP_PORT:-}
       - VEXA_MAIL_SMTP_FROM=${VEXA_MAIL_SMTP_FROM:-}
+      - VEXA_MAIL_REPLY_TO=${VEXA_MAIL_REPLY_TO:-}
+      - VEXA_MAIL_RELAY=${VEXA_MAIL_RELAY:-}
+      - VEXA_MAIL_CAPTURE_SMTP=${VEXA_MAIL_CAPTURE_SMTP:-mailpit:1025}
+      - VEXA_FLOWS_API_URL=${VEXA_FLOWS_API_URL:-http://flows-api:8200}
       - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
       - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
       - VEXA_MAIL_SMTP_SECURE=${VEXA_MAIL_SMTP_SECURE:-}
@@ -1407,10 +1699,10 @@ services:
     networks: [vexa, connections]
     restart: unless-stopped
   # ─── Connections: the credential broker (credential-broker.v1, ADR-0040) ────────────────────────
-  # One-shot: generates the three role keys and the store key, each into its own volume, the first
+  # One-shot: generates the four role keys and the store key, each into its own volume, the first
   # time the stack starts, and leaves them alone afterwards. Each consumer mounts only its own:
   # agent-api the agent key (and the git key while the Git store is on), the terminal the human
-  # key, the broker all four. No worker mounts any of them. To rotate a key, remove its volume and
+  # key, meeting-api the bots key, the broker all five. No worker mounts any of them. To rotate a key, remove its volume and
   # restart the stack (rotating the store key also makes every stored credential unreadable —
   # reconnect them).
   connections-keys:
@@ -1419,14 +1711,14 @@ services:
     build:
       context: ../../core/agent/services/credential-broker
       dockerfile: Dockerfile
-    image: vexaai/v012-credential-broker:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-credential-broker:${IMAGE_TAG:-dev}
     user: "0:0"
     command:
       - python
       - -c
       - |
         import pathlib, secrets
-        for role in ("agent", "human", "git", "store"):
+        for role in ("agent", "human", "git", "bots", "sensors", "signals", "store"):
             key = pathlib.Path("/keys", role, "key")
             if not key.exists():
                 key.write_text(secrets.token_hex(32) + "\n")
@@ -1435,6 +1727,9 @@ services:
       - connections-agent-key:/keys/agent
       - connections-human-key:/keys/human
       - connections-git-key:/keys/git
+      - connections-bots-key:/keys/bots
+      - connections-sensors-key:/keys/sensors
+      - connections-signals-key:/keys/signals
       - connections-store-key:/keys/store
     network_mode: none
     restart: "no"
@@ -1442,12 +1737,18 @@ services:
     build:
       context: ../../core/agent/services/credential-broker
       dockerfile: Dockerfile
-    image: vexaai/v012-credential-broker:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-credential-broker:${IMAGE_TAG:-dev}
     environment:
       - PYTHONUNBUFFERED=1
       - VEXA_CONNECTIONS_AGENT_KEY_FILE=/run/vexa-connections/agent/key
       - VEXA_CONNECTIONS_HUMAN_KEY_FILE=/run/vexa-connections/human/key
       - VEXA_CONNECTIONS_GIT_KEY_FILE=/run/vexa-connections/git/key
+      # meeting-api's bot accounts (ADR-0049); meeting-api mounts the same key.
+      - VEXA_CONNECTIONS_BOTS_KEY_FILE=/run/vexa-connections/bots/key
+      # flows' sensor pool (ADR-0050): read-only calendar changes; flows-worker mounts the same key.
+      - VEXA_CONNECTIONS_SENSORS_KEY_FILE=/run/vexa-connections/sensors/key
+      # transcript signals: the signal model's company key (service/signals/<name>); signals mounts the same key.
+      - VEXA_CONNECTIONS_SIGNALS_KEY_FILE=/run/vexa-connections/signals/key
       - VEXA_CONNECTIONS_STATE_DIR=/state
       # `local` (default): AES-256-GCM in the state volume, keyed from its own volume. `openbao`:
       # an OpenBao or Vault KV v2 mount you run — set the three OPENBAO values and mount the token.
@@ -1470,6 +1771,9 @@ services:
       - connections-agent-key:/run/vexa-connections/agent:ro
       - connections-human-key:/run/vexa-connections/human:ro
       - connections-git-key:/run/vexa-connections/git:ro
+      - connections-bots-key:/run/vexa-connections/bots:ro
+      - connections-sensors-key:/run/vexa-connections/sensors:ro
+      - connections-signals-key:/run/vexa-connections/signals:ro
       - connections-store-key:/run/vexa-connections/store:ro
       - identity-public-key:/run/vexa-identity/public:ro
     read_only: true
@@ -1488,10 +1792,53 @@ services:
         condition: service_completed_successfully
       identity-keys:
         condition: service_completed_successfully
-    # `connections` is internal: only agent-api and the terminal join it, so a worker container
+    # `connections` is internal: only agent-api, the terminal and meeting-api join it, so a worker container
     # cannot open a socket to the broker. `connections-egress` is the broker's own way out to
     # Google and to the HTTPS services a person approved.
     networks: [connections, connections-egress]
+    restart: unless-stopped
+  # Transcript signals (profile `signals`): a small company-chosen model listens to live meetings
+  # against the listening brief the meeting's agent wrote and wakes it through the company's flow.
+  # It does nothing until `_global/POLICIES.md` says `transcript_signals: on` and names a
+  # `model_signals`. The model's key lives in the credential broker (`python -m
+  # credential_broker.signals_key put <name>` in that container); SIGNALS_OPENROUTER_API_KEY is read
+  # only with VEXA_ENV=dev. docs/docs/transcript-signals.mdx.
+  signals:
+    profiles: ["signals"]
+    build:
+      context: ../../core/signals
+      dockerfile: Dockerfile
+    image: vexaai/vexa-signals:${IMAGE_TAG:-dev}
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - SIGNALS_AGENT_API_URL=${SIGNALS_AGENT_API_URL:-http://agent-api:8100}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
+      - VEXA_FLOWS_API_URL=${VEXA_FLOWS_API_URL:-http://flows-api:8200}
+      - VEXA_SIGNALS_BROKER_URL=http://credential-broker:8100
+      - VEXA_SIGNALS_BROKER_KEY_FILE=/run/vexa-connections/signals/key
+      # `dev` alone lets SIGNALS_OPENROUTER_API_KEY stand in for the broker; SIGNALS_VEXA_ENV sets it for
+      # signals without changing the stack-wide profile word.
+      - VEXA_ENV=${SIGNALS_VEXA_ENV:-${VEXA_ENV:-}}
+      - SIGNALS_OPENROUTER_API_KEY=${SIGNALS_OPENROUTER_API_KEY:-}
+    volumes:
+      - connections-signals-key:/run/vexa-connections/signals:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8310/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      connections-keys:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    # `vexa` for redis, agent-api, flows-api and the model endpoint; `connections` for the broker.
+    networks: [vexa, connections]
     restart: unless-stopped
   # DEPRECATED — the 0.10 dashboard, kept as an OFF-BY-DEFAULT profile while it is still
   # load-bearing (#813). It is the multi-user web UI hosted production runs against the 0.12 core
@@ -1625,6 +1972,65 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  # ── calls (#1783, ADR-0048 decision 6) — the self-hosted LiveKit media server (Apache-2.0) ──────
+  # OFF by default. A session's Call button joins a room here; meeting-api creates the room and its
+  # listener (a bot, on `bots`) transcribes each participant's track. Turn it on with:
+  #     docker compose --profile calls up -d livekit
+  # and set LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET in .env (the secret ≥ 32 characters).
+  # Network: browsers reach 7880 (signalling; put it behind your TLS proxy as wss://), media flows over
+  # the UDP range below (open it in the firewall), 7881/tcp is the ICE-over-TCP fallback, and the
+  # embedded TURN on 3478/udp serves networks that allow UDP but block the media range
+  # (LIVEKIT_TURN_ENABLED=true), and TURN over TLS (LIVEKIT_TURN_TLS_PORT + a certificate for
+  # LIVEKIT_TURN_DOMAIN) serves networks that block UDP altogether.
+  # Docs: docs/docs/minutes/calls.mdx. Lite does not carry calls.
+  livekit:
+    profiles: ["calls"]
+    # PINNED BY DIGEST (= livekit/livekit-server:v1.13.7). Bump it on purpose, never implicitly.
+    image: ${LIVEKIT_IMAGE:-livekit/livekit-server:v1.13.7@sha256:6fd3b7088874c4d119160dd688798dfec852bc014786d392caad15f6f63912a3}
+    networks: [vexa, bots]
+    ports:
+      - "${LIVEKIT_SIGNAL_BIND:-127.0.0.1}:${LIVEKIT_SIGNAL_PORT:-7880}:7880"
+      - "7881:7881/tcp"
+      - "${LIVEKIT_UDP_PORT_START:-50000}-${LIVEKIT_UDP_PORT_END:-50100}:${LIVEKIT_UDP_PORT_START:-50000}-${LIVEKIT_UDP_PORT_END:-50100}/udp"
+      - "3478:3478/udp"
+      # TURN over TLS (off by default): set LIVEKIT_TURN_TLS_PORT (5349, or 443 on a host whose 443 is
+      # free) and it is published on every interface; unset, the mapping stays on loopback with
+      # nothing listening behind it.
+      - "${LIVEKIT_TURN_TLS_PORT:+0.0.0.0:}${LIVEKIT_TURN_TLS_PORT:-127.0.0.1:5349}:${LIVEKIT_TURN_TLS_PORT:-5349}/tcp"
+    volumes:
+      # The certificate and key for TURN over TLS, for the name LIVEKIT_TURN_DOMAIN (PEM files on the
+      # host). Read only when LIVEKIT_TURN_TLS_PORT is set; unset, /dev/null stands in.
+      - ${LIVEKIT_TURN_CERT_FILE:-/dev/null}:/etc/livekit/turn/tls.crt:ro
+      - ${LIVEKIT_TURN_KEY_FILE:-/dev/null}:/etc/livekit/turn/tls.key:ro
+    environment:
+      # "<key>: <secret>" — the same pair meeting-api and agent-api sign room tokens with.
+      - "LIVEKIT_KEYS=${LIVEKIT_API_KEY:-}: ${LIVEKIT_API_SECRET:-}"
+      - |
+        LIVEKIT_CONFIG=port: 7880
+        log_level: info
+        rtc:
+          tcp_port: 7881
+          port_range_start: ${LIVEKIT_UDP_PORT_START:-50000}
+          port_range_end: ${LIVEKIT_UDP_PORT_END:-50100}
+          use_external_ip: ${LIVEKIT_USE_EXTERNAL_IP:-false}
+          node_ip: "${LIVEKIT_NODE_IP:-}"
+        turn:
+          enabled: ${LIVEKIT_TURN_ENABLED:-false}
+          udp_port: 3478
+          tls_port: ${LIVEKIT_TURN_TLS_PORT:-0}
+          cert_file: /etc/livekit/turn/tls.crt
+          key_file: /etc/livekit/turn/tls.key
+          domain: "${LIVEKIT_TURN_DOMAIN:-}"
+        room:
+          auto_create: false
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:7880/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
 volumes:
   redis-data:
   postgres-data:
@@ -1635,9 +2041,10 @@ volumes:
   connections-agent-key:
   connections-human-key:
   connections-git-key:
+  connections-bots-key:
+  connections-sensors-key:
+  connections-signals-key:
   connections-store-key:
-  # Deliberately empty: agent-api's git-key mount point while the Git store is off.
-  connections-git:
   # gateway-identity.v1: the gateway's signing key (the gateway only) and its public half.
   identity-signing-key:
   identity-public-key:
@@ -1653,7 +2060,7 @@ networks:
   # the opt-in llm-shim / searxng only.
   workers:
     driver: bridge
-  # Connections: agent-api, the terminal and the broker only. internal = no route out, and no
+  # Connections: agent-api, the terminal, meeting-api, signals and the broker only. internal = no route out, and no
   # worker container joins it.
   connections:
     driver: bridge

@@ -8,7 +8,7 @@
  * And the contract holds together:
  *   - SessionProfile's const is a Profile, its `leveldbFile` compiles, and its limits are the ones
  *     WritebackBody states (files.maxItems = maxFiles, data.maxLength = base64 of maxFileBytes);
- *   - every x-routes row names request/response shapes that exist.
+ *   - every x-routes row names request/response shapes that exist (a GET names a response only).
  * The profile rules restate meeting-api's `session_profile/profile.py` and @vexa/remote-browser's
  * `isSessionProfilePath`; both runtimes are tested against these same goldens, so this is the third,
  * independent reading of one rule.
@@ -39,7 +39,10 @@ const encodedMax = Math.ceil(PROFILE.maxFileBytes / 3) * 4;
 const dataMax = schema.$defs.WritebackEntry.properties.data.maxLength;
 if (dataMax !== encodedMax) bad(`WritebackEntry data.maxLength ${dataMax} is not the base64 length of maxFileBytes (${encodedMax})`);
 for (const r of schema["x-routes"] || []) {
-  for (const k of ["request", "response"]) {
+  // A GET carries no body: it names a response shape only, and must not name a request.
+  const keys = r.method === "GET" ? ["response"] : ["request", "response"];
+  if (r.method === "GET" && "request" in r) bad(`route ${r.method} ${r.path}: a GET names no request shape`);
+  for (const k of keys) {
     if (!schema.$defs[r[k]]) bad(`route ${r.method} ${r.path}: ${k} shape ${r[k]} is not a $def`);
   }
 }
@@ -96,5 +99,5 @@ if (!files.some((f) => f.startsWith("PathVectors."))) bad("no PathVectors golden
 
 console.log(failed
   ? `session-profile.v1: ${failed} check(s) FAILED`
-  : `session-profile.v1: ${checked} goldens conform (${vectors} path vectors); the profile, its limits and ${(schema["x-routes"] || []).length} route hold`);
+  : `session-profile.v1: ${checked} goldens conform (${vectors} path vectors); the profile, its limits and ${(schema["x-routes"] || []).length} routes hold`);
 process.exit(failed ? 1 : 0);

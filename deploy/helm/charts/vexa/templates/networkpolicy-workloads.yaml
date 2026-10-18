@@ -14,7 +14,8 @@ THE RUNTIME AND THE PODS IT SPAWNS.
              (the timeline, when flows is deployed), DNS, and addresses outside the private ranges
              (the model provider, the open web)
     bot      meeting-api (lifecycle callbacks, recording uploads), redis (transcript stream, commands),
-             DNS, and addresses outside the private ranges (meeting platforms and their media, STT)
+             the LiveKit server when calls are on, DNS, and addresses outside the private ranges
+             (meeting platforms and their media, STT)
   A Pod with no role label is held to the bot policy. In-cluster dependencies this chart does not
   render (an in-cluster STT, LLM endpoint or S3) are added per class with
   networkPolicy.workloads.<class>.extraEgress, as NetworkPolicy egress rules.
@@ -126,6 +127,17 @@ spec:
       ports:
         - port: 8080
           protocol: TCP
+    {{- if $.Values.livekit.enabled }}
+    # a call's listener joins its room on the LiveKit server (signalling, then media). With
+    # livekit.hostNetwork the server is on its node's address instead: add a /32 rule for that
+    # node's IP and the server's ports to networkPolicy.workloads.bot.extraEgress (never the whole
+    # node range).
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- $sel | nindent 14 }}
+              app.kubernetes.io/component: livekit
+    {{- end }}
     {{- end }}
     # everything outside the private ranges: no cluster Pod, Service, node or metadata endpoint
     - to:

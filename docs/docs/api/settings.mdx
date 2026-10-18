@@ -238,8 +238,9 @@ curl -X PUT "$API_BASE/user/webhook" \
   default.
 </ParamField>
 
-The write answers **200 OK** with the same webhook shape `GET /user/webhook` returns — the secret
-masked, nothing else from the account. A `webhook_url` naming a loopback, private, link-local or
+The write answers **200 OK** with the same webhook fields `GET /user/webhook` returns (the secret
+masked) alongside the account record 0.12 returned (`id`, `email`, `name`, `max_concurrent_bots`,
+`data`); `data` never carries a stored credential. A `webhook_url` naming a loopback, private, link-local or
 metadata address, or a host name only this deployment resolves, is refused with **422**.
 
 ### Delivery history
@@ -305,6 +306,35 @@ The same patch also accepts a `data` object of platform-billing fields, which th
 deployment's billing integration writes. A self-hosted deployment does not need it.
 
 Creating accounts and minting keys are covered in [Authentication](/authentication).
+
+## How it works
+
+1. **Gateway.** `/user/models`, `/user/transcription` and `/user/webhook` are rows in
+   `core/identity/routes.v1.json` with scopes `bot` + `tx`. The gateway forwards them to admin-api.
+2. **Whose settings.** admin-api looks up the key itself and loads its account. A key with neither
+   `bot` nor `tx` is refused.
+3. **Validate.** One rulebook (`validate_config_fields` in admin-api's `platform_settings.py`) checks
+   every model and transcription field: `mode`, `http(s)` URLs, 2,048 characters. A masked value sent
+   back is skipped, so echoing a read changes nothing. Transcription and webhook URLs also pass the
+   outbound URL guard.
+4. **Store.** The values live in the account's `users.data`: `model_prefs`, `transcription_prefs` and
+   the webhook keys. A fully cleared section is removed, which returns it to the deployment default.
+5. **Read back.** Every read masks the stored secret to its last four characters.
+6. **Delivery history.** `GET /user/webhook/deliveries` is forwarded to meeting-api, which records
+   each attempt and answers only for the caller's own account.
+
+## Why it complies
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P23 — one writer per carrier | admin-api alone writes the identity database, including `users.data`. | `gate:dataflow` (`identity-db`) |
+| P4 — sealed contracts | Each route and its scopes is a row in a domain `routes.v1.json`. | `gate:schema`, `gate:contract-version`; `test_scope_matrix.py` |
+| P15 — secrets protected | No read returns a stored credential in the clear, from the user tier or the admin tier. | `test_user_webhook_response.py`: `test_a_narrow_key_reads_back_the_webhook_and_no_stored_credential`; `test_admin_user_secrets.py`: `test_no_admin_user_read_returns_a_stored_credential`; `test_model_settings.py`: `test_user_models_set_masked_readback_and_clear` |
+| Outbound URLs | An internal webhook or transcription address is refused when saved. | `test_an_internal_webhook_destination_is_refused_when_saved`, `test_an_internal_transcription_endpoint_is_refused_when_saved` |
+| P20 — authorize every access | Delivery history is scoped to its owner and never carries the URL or secret. | meeting-api `test_webhook_ledger.py`: `test_delivery_history_is_owner_scoped`, `test_ledger_sanitizes_url_and_secret_even_if_a_caller_passes_them` |
+| Own endpoint, own key | A person's `base_url` never inherits the organisation's credential. | `test_a_persons_own_endpoint_never_inherits_the_platform_credential` |
+
+admin-api tests are in `core/identity/services/admin-api/tests/`.
 
 ## What is not configurable through the API
 

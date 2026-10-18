@@ -2,6 +2,10 @@
   "contract": "config.v1",
   "service": "gateway",
   "capabilities": {
+    "crm_domain": {
+      "description": "Whether this deployment fronts the optional CRM (ADR-0047) under /crm/*, for the terminal's record page.",
+      "when_unconfigured": "No /crm/* route is registered, so a request there is 404. The CRM's agent tools are the MCP's and absent with it."
+    },
     "agent_domain": {
       "description": "Whether this deployment fronts the AGENT domain (PRD decision 40.7: meetings, agents and flows work independently and in any configuration, identity being the only shared dependency). Presence is a configuration fact \u2014 whether the deployment named the door \u2014 never a probe: a probe makes \"agent-api is restarting\" and \"there is no agent-api\" the same answer, and the second is a shipped product.",
       "when_unconfigured": "The edge registers no /agent/* route and assembles no agent rows into its scope table, so a request to /agent/anything is 404 \u2014 this deployment does not serve it \u2014 rather than a 401 about a route that is not here. Everything else is unchanged: this is the `no-agents` product of decision 40.6 (gateway + meetings + flows + identity), not a degraded gateway."
@@ -52,6 +56,16 @@
       ]
     },
     {
+      "key": "CRM_API_URL",
+      "class": "capability",
+      "capability": "crm_domain",
+      "description": "The optional CRM's base URL (ADR-0047); the edge fronts its read, history and review under /crm/* (routes.v1 `forward`) for the terminal's record page. UNSET MEANS NO CRM IS DEPLOYED: no /crm/* route is registered and a request there is 404.",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
       "key": "MCP_URL",
       "class": "defaulted",
       "default": "http://mcp:8010",
@@ -61,6 +75,16 @@
         "helm",
         "lite"
       ]
+    },
+    {
+      "key": "VEXA_AGENT_ALLOW",
+      "class": "defaulted",
+      "default": "",
+      "targets": [
+        "compose",
+        "helm"
+      ],
+      "description": "Who the agent tier (every /agent/* row) is enabled for. Empty: everyone a key scope admits (no restriction). '*': everyone. Otherwise a comma-separated list of user ids and/or email addresses, compared without case; an entry starting with '@' admits every address at that domain. A caller it does not name is answered 403 agent_tier_not_enabled before anything is forwarded; a worker's delegation token is admitted by the person it acts for. agent-api reads the same setting the same way."
     },
     {
       "key": "REDIS_URL",
@@ -98,6 +122,13 @@
       "class": "defaulted",
       "default": "true",
       "description": "edge protection (fastapi-guard) master switch \u2014 ON by default (#555)"
+    },
+    {
+      "key": "VEXA_WS_SCOPE_MODE",
+      "class": "defaulted",
+      "default": "legacy",
+      "description": "how /ws holds a key to the REST routes' scopes. legacy (default) = the 0.12 contract: any valid key opens the socket and subscribes to the meetings the authorize hop grants it, logging ws_scope_legacy_allowed when strict would refuse. strict = opening takes a meeting-status scope and subscribing takes the transcript read's scope (tx); a refused key gets insufficient_scope / close 4403.",
+      "targets": []
     },
     {
       "key": "GUARD_WS_ENABLED",

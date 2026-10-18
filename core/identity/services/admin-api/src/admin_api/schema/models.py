@@ -31,6 +31,58 @@ Base = declarative_base()
 # --------------------------------------------------------------------------- #
 # identity tables (parent: libs/admin-models/admin_models/models.py)
 # --------------------------------------------------------------------------- #
+#: The org every install has (MIGRATION-0008). One org per install for now: every existing and new
+#: account belongs to it, and its policy source is the install's `_global`.
+DEFAULT_ORG_ID = "default"
+#: An individual account's org of one is ``p-<user id>`` (kind ``personal``).
+PERSONAL_ORG_PREFIX = "p-"
+
+
+class Org(Base):
+    """The org as a first-class object (MIGRATION-0008, architecture decision A1).
+
+    Identity is its one writer. One row per install for now (`DEFAULT_ORG_ID`, created by the
+    convergence); the columns are what later per-org policy, CRM and billing hang on, so a second org
+    is a data change rather than a refactor:
+
+    - ``policy_source`` names the policy tier agent-api resolves for this org: ``_global`` (the
+      install's company layer) for the default org; later ``_orgs/<id>``.
+    - ``crm_org_id`` ties the org to its CRM organisation (crm-api's ``CRM_ORG_ID``, its ``org_id``
+      key). NULL means "not bound yet"; the convergence stamps it from ``CRM_ORG_ID`` when admin-api
+      is given it.
+    - ``billing_account`` is where the org's billing account will hang. A field only: nothing reads
+      it yet."""
+    __tablename__ = "orgs"
+
+    id = Column(String(64), primary_key=True)
+    name = Column(String(200), nullable=False)
+    policy_source = Column(String(255), nullable=False, server_default=text("'_global'"),
+                           default="_global")
+    #: ``org`` (a company) or ``personal`` (an individual account's org of one, ``p-<user id>``: the
+    #: boundary of their personal CRM). Every org a migration creates is ``org``.
+    kind = Column(String(16), nullable=False, server_default=text("'org'"), default="org")
+    crm_org_id = Column(String(255), nullable=True)
+    billing_account = Column(String(255), nullable=True)
+    data = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})
+    created_at = Column(DateTime, server_default=func.now(), default=func.now())
+
+
+class OrgMember(Base):
+    """An EXPLICIT membership of an account in an org, with its role (MIGRATION-0008).
+
+    An account's home org is ``users.org_id``, and it is a member there without a row here: the
+    role is then derived (``admin`` for the instance admin, else ``member``; `app/orgs.py`). So the
+    migration writes no row per user. A row here is a role override in the home org, or (later) a
+    membership in a second org."""
+    __tablename__ = "org_members"
+
+    org_id = Column(String(64), ForeignKey("orgs.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True,
+                     index=True)
+    role = Column(String(32), nullable=False, server_default=text("'member'"), default="member")
+    created_at = Column(DateTime, server_default=func.now(), default=func.now())
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -42,6 +94,12 @@ class User(Base):
     max_concurrent_bots = Column(Integer, nullable=False, server_default="3", default=3)
     # webhook_url / webhook_secret / webhook_events live here (surfaced by /internal/validate)
     data = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})
+    # MIGRATION-0008 — the account's home org. A constant server default, so on Postgres >= 11 the
+    # additive ADD COLUMN is a catalog change (no table rewrite, no per-row UPDATE): every existing
+    # row reads the default org. Deliberately no FK and no index yet: both would scan or lock
+    # `users` in-band; they are out-of-band steps for when a second org exists (the MIGRATION doc).
+    org_id = Column(String(64), nullable=False, server_default=text("'default'"),
+                    default=DEFAULT_ORG_ID)
 
     api_tokens = relationship("APIToken", back_populates="user")
 
@@ -65,6 +123,10 @@ class User(Base):
         # UNIQUE upgrade is an operator step AFTER reconciling the duplicates — the SQL to find
         # them, and the CONCURRENTLY build, are in schema/MIGRATION-0007-users-email-lower.md.
         Index("ix_users_email_lower", text("lower(email)")),
+        # The public profile's opaque handle (app/public_profile.py): directory reads and crm-api's live
+        # reads find a profile by it. NON-UNIQUE: a handle is random (16+ bytes), and a unique build
+        # that ever met a collision would fail the boot (`_sync_indexes`, #1186).
+        Index("ix_users_public_profile_handle", text("((data -> 'public_profile') ->> 'handle')")),
     )
 
 
@@ -78,6 +140,27 @@ class PlatformSetting(Base):
     key = Column(String(64), primary_key=True)
     value = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=lambda: {})
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class PersonPhoto(Base):
+    """A person's photo, one row per source (Vexa-ai/vexa#1783, UI 15g): ``upload`` (the person's
+    own), ``provider`` (their sign-in provider's picture) or ``gravatar``. The first present in that
+    order is shown (`app/person_photos.py`). Identity is the one writer. The BYTES are not here: they
+    live in the install's object store under ``person-photos/<user id>/`` (`app/photo_storage.py`),
+    re-encoded so no metadata survives; the row keeps the key, the SHA-256 and the type. A
+    ``gravatar`` row with no key is a remembered miss. Kept out of ``users.data`` and out of the
+    database's bytes on purpose: every token check reads this database."""
+    __tablename__ = "person_photos"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    source = Column(String(16), primary_key=True)
+    object_key = Column(String(255), nullable=False, server_default="")
+    content_type = Column(String(32), nullable=False, server_default="")
+    sha256 = Column(String(64), nullable=False, server_default="")
+    origin = Column(String(64), nullable=False, server_default="")
+    provider = Column(String(16), nullable=False, server_default="")
+    checked_at = Column(Float, nullable=False, server_default="0")
+    updated_at = Column(Float, nullable=False, server_default="0")
 
 
 class APIToken(Base):

@@ -29,6 +29,16 @@ path); it derives none.
 A store failure is a 502 naming nothing secret. Every refusal past the token is a `logevent.v1`
 `session_writeback_refused` line with the reason; a stored write-back is `session_writeback_stored`.
 
+## A bot account's write-back
+
+A meeting spawned with a bot account (`meeting.data.bot_account_id`, [`bot_accounts`](../bot_accounts/README.md))
+writes back to **that account in the credential broker**, not to the userdata store: step 2 is then
+"bot accounts are configured" (409 otherwise) instead of `BOT_AUTHENTICATED`, step 3 matches the newest
+session spawned on `bot-account:<id>`, and the body rules are the same. A bot whose meeting ended
+`auth_session_missing` (the account found signed out) is refused (409): its profile is not written over
+the account. The matching restore (`GET /internal/browser-session/{session_uid}`, the contract's
+second route) lives in `bot_accounts/router.py`.
+
 ## The profile
 
 The profile is the `session-profile.v1` contract's `$defs.SessionProfile`, read from

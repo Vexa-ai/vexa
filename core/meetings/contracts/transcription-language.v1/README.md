@@ -24,9 +24,12 @@ The first tier that sets either field supplies the whole setting:
    accepted live change (`ConfigUpdate`);
 2. **user** — the person's default, `PUT /user/transcription` (`UserPreferenceUpdate`), stored by identity
    and handed to meeting-api in the internal bot-context answer as `transcription_language`;
-3. **deployment** — meeting-api's `DEFAULT_TRANSCRIPTION_LANGUAGE` + `DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES`
+3. **history** — with neither of the above, the languages the person's recent completed meetings
+   were spoken in (each at least 5% of their last 10 meetings' segments, 2 to 3 of them, from at least
+   50 segments), as a restricted list with no pinned language;
+4. **deployment** — meeting-api's `DEFAULT_TRANSCRIPTION_LANGUAGE` + `DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES`
    (`DeploymentDefault`; Helm `meetingApi.transcriptionLanguage` / `transcriptionAllowedLanguages`);
-4. **auto**.
+5. **auto**.
 
 meeting-api resolves it once per spawn, on every spawn path (API, terminal, MCP, calendar auto-join,
 invite-by-email), stores the result on the meeting as `data.transcription_language`

@@ -100,3 +100,21 @@ test("GREEN: a TypeScript import-TYPE query names a types package, not a runtime
   const r = withPlanted(`export type T = { C: import("${UNDECLARED}").Thing };\n`, runIsolation);
   assert.equal(r.green, true, r.out);
 });
+
+test("RED: a THREE-folder cycle is refused, though no two of its folders import each other", () => {
+  // data → canvas → workbench → data. workbench → data is real; the plants add the other two
+  // edges. No pair is mutual, so a check that only refused `a<->b` pairs passed this (Vexa-ai/vexa#1783).
+  const plants = [
+    ["clients/terminal/src/data/zzPlantedCycle.ts", `import { x } from "../canvas/zzPlantedCycle";\nexport const y = x;\n`],
+    ["clients/terminal/src/canvas/zzPlantedCycle.ts", `import { createPaletteService } from "../workbench/palette";\nexport const x = createPaletteService;\n`],
+  ];
+  for (const [p, body] of plants) writeFileSync(join(ROOT, p), body);
+  let r;
+  try { r = runIsolation(); } finally { for (const [p] of plants) rmSync(join(ROOT, p), { force: true }); }
+  assert.equal(r.green, false, r.out);
+  assert.match(r.out, /FOLDER CYCLE/);
+  // the report names a closed path through the planted edge (every folder that reaches data/ joins
+  // the component, so the exact route is the checker's choice; that it closes and uses the plant is not)
+  assert.match(r.out, /\b([a-z-]+)(?: -> [a-z-]+)+ -> \1\b/);
+  assert.match(r.out, /data -> canvas/);
+});

@@ -56,6 +56,13 @@ def meeting(media: list) -> dict:
         "participants": ["Ada", "Grace"],
         "media": [{"path": m.path, "type": m.type, "format": m.format,
                    "duration_seconds": m.duration_seconds} for m in media],
+        # format 1.1: what the exporter derives for the seeded row (`test_the_shipped_exporter_…`)
+        "context": {
+            "duration_seconds": 15.0, "meeting_url": None, "calendar_event_id": None,
+            "workspace_id": None, "language": None,
+            "bot": {"requested_at": "2026-06-20T08:59:00Z", "joined_at": None, "admitted_at": None,
+                    "left_at": None, "exit_reason": None},
+        },
     }
 
 

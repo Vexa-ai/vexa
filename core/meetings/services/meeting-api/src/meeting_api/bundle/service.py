@@ -128,6 +128,70 @@ def _participants(data: dict, segments: list) -> list:
     return out[:500]
 
 
+_MEET_HOSTS = {"google_meet": "https://meet.google.com/{id}"}
+
+
+def _clean_url(value) -> Optional[str]:
+    """A meeting link with no query and no fragment — a passcode, a Teams context or any token
+    rides there — and only over https; otherwise None."""
+    u = str(value or "").strip()
+    if not u.lower().startswith("https://"):
+        return None
+    u = u.split("#", 1)[0].split("?", 1)[0]
+    if not u or any(c.isspace() for c in u) or len(u) > 512:
+        return None
+    return u
+
+
+def _first_at(transitions: list, statuses: tuple) -> Optional[str]:
+    for t in transitions:
+        if isinstance(t, dict) and t.get("to") in statuses:
+            return _iso(_parse(t.get("timestamp")))
+    return None
+
+
+def _context(row: dict, data: dict, base: Optional[datetime], end: Optional[datetime],
+             media: list) -> dict:
+    """``meeting.context`` (format 1.1): duration, the meeting's link, its calendar event, its
+    workspace, the language the bot ran with, and the bot's own timeline — provenance for whoever
+    reads the bundle later. Never a token: the link loses its query and fragment."""
+    duration = None
+    if base is not None and end is not None and end >= base:
+        duration = round((end - base).total_seconds(), 3)
+    elif media:
+        duration = max((m.duration_seconds or 0) for m in media) or None
+    url = None
+    for cand in (data.get("constructed_meeting_url"), data.get("meeting_url"), row.get("meeting_url")):
+        url = _clean_url(cand)
+        if url:
+            break
+    if url is None and row.get("platform") in _MEET_HOSTS and row.get("native_meeting_id"):
+        url = _clean_url(_MEET_HOSTS[row["platform"]].format(id=row["native_meeting_id"]))
+    lang = data.get("transcription_language") if isinstance(data.get("transcription_language"), dict) else None
+    language = None
+    if lang is not None:
+        allowed = [c for c in (lang.get("allowed_languages") or []) if isinstance(c, str)][:16]
+        one = lang.get("language") if isinstance(lang.get("language"), str) else None
+        language = {"language": one, "allowed_languages": allowed,
+                    "source": clean_text(lang.get("source"), 32) or None}
+    trail = [t for t in (data.get("status_transition") or []) if isinstance(t, dict)]
+    bot = {
+        "requested_at": _iso(_parse(row.get("created_at"))),
+        "joined_at": _first_at(trail, ("joining",)),
+        "admitted_at": _first_at(trail, ("active",)),
+        "left_at": _first_at(trail, ("stopping", "completed", "failed")),
+        "exit_reason": clean_text(data.get("completion_reason") or data.get("reason"), 64) or None,
+    }
+    return {
+        "duration_seconds": duration,
+        "meeting_url": url,
+        "calendar_event_id": clean_text(data.get("calendar_uid"), 256) or None,
+        "workspace_id": clean_text(data.get("workspace_id"), 128) or None,
+        "language": language,
+        "bot": bot,
+    }
+
+
 async def export_meeting(
     store, recording_repo, storage, *,
     user_id: int, meeting_id: int, secret: Optional[str], include_media: bool = True,
@@ -193,6 +257,13 @@ async def export_meeting(
         "media": [{"path": m.path, "type": m.type, "format": m.format,
                    "duration_seconds": m.duration_seconds} for m in media],
     }
+    end = _parse(row.get("end_time"))
+    meeting["context"] = _context(row, data, base, end, media)
+    # A recording with no stored duration takes the meeting's (a real export had null here).
+    if meeting["context"]["duration_seconds"] is not None:
+        for m in meeting["media"]:
+            if m["duration_seconds"] is None:
+                m["duration_seconds"] = meeting["context"]["duration_seconds"]
     metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
     notes = data.get("notes") if isinstance(data.get("notes"), str) else None
     annotations = {"metadata": metadata, "notes": notes}

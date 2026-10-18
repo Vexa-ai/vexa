@@ -31,7 +31,7 @@ import asyncio
 import time
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
 from . import bot_spawn as _bot_spawn
@@ -197,6 +197,17 @@ def create_app(
     # wired. Without it, a callback door whose key (token_secret / runtime_callback_token) is unset
     # refuses every caller with 401. The production entrypoint never sets it.
     open_callbacks: bool = False,
+    # A voice note's audio door (voice_notes): appends the frames a person streams to the note's
+    # Redis stream. None → the in-memory writer (the in-process harness).
+    voice_note_writer: Optional["object"] = None,
+    # A call's LiveKit server (calls.Calls): None → this deployment has no calls, and
+    # POST /bots {"platform": "vexa_call"} answers 503 calls_not_deployed.
+    calls: Optional["object"] = None,
+    # bot_accounts.BotAccounts — saved signed-in browser profiles a bot joins as (ADR-0049): the
+    # browser-session routes, the spawn's account resolution, the restore/write-back and the
+    # signed-out hook. None → one with no broker (every bot-account route answers 409) over the
+    # runtime below and an in-memory session store.
+    bot_accounts: Optional["object"] = None,
 ) -> FastAPI:
     """Build the unified meeting-api app from the injected ports.
 
@@ -210,8 +221,13 @@ def create_app(
     # meetings rows that reach this route, or when no row reaches it at all — so a hop that landed
     # on a route other than the one the edge checked is refused here too. App-level, so every route
     # is covered and none asks for it by hand.
+    # …AND A TURN OTHER PEOPLE READ REACHES NOTHING HERE (ADR-0048 decision 4, `regime.refuse_shared`).
+    from fastapi import Depends as _Depends
+
+    from .regime import refuse_shared as _refuse_shared
+
     app = FastAPI(title="Vexa Meeting API (v0.12)", version="0.12.0",
-                  dependencies=[route_scopes.SCOPE_GATE])
+                  dependencies=[route_scopes.SCOPE_GATE, _Depends(_refuse_shared)])
     # The edge: read/mint X-Trace-Id and bind it for the request (logevent.v1 trace_id).
     app.add_middleware(TraceMiddleware)
     # THE DOOR FOR x-user-* (gateway-identity.v1). meeting-api derives the owner, the bot limit, the
@@ -221,6 +237,11 @@ def create_app(
     if identity_key is not None:
         app.add_middleware(identity_token.IdentityGuard, verify_key=identity_key,
                            internal_secret=internal_secret or "", service="meeting-api")
+    # VEXA_FEATURES (bot_accounts/feature.py): a release install does not serve the unproven
+    # browser_bots feature — every public /bot-accounts… route refuses `feature_disabled` here,
+    # outermost, before identity. Added last so it runs first.
+    from .bot_accounts import BrowserBotsGate as _BrowserBotsGate
+    app.add_middleware(_BrowserBotsGate)
 
     # --- shared liveness probe (gate:health): the unified process is up. No auth. The ADDITIVE
     # `capabilities` rows are the config.v1 tri-states (stt · object_storage) incl. the cached STT
@@ -244,6 +265,22 @@ def create_app(
                 return JSONResponse(body, status_code=503)
         return body
 
+    # --- the meetings domain's MCP tool manifest (ADR-0037), SERVED rather than baked into the MCP
+    # edge, so the tools it lists are the routes this build runs. OPEN, like /health: it names
+    # routes, never data or a credential. `core/meetings/mcp.tools.v1.json` in the repository;
+    # `meetings/mcp.tools.v1.json` under /app in the image, found by the same walk-up as
+    # route_scopes' routes.v1.json. ---
+    @app.get("/.well-known/mcp-tools.json", include_in_schema=False)
+    async def mcp_tools_manifest():
+        import json as _json
+        from pathlib import Path as _Path
+
+        for parent in _Path(__file__).resolve().parents:
+            candidate = parent / "meetings" / "mcp.tools.v1.json"
+            if candidate.is_file():
+                return _json.loads(candidate.read_text(encoding="utf-8"))
+        raise HTTPException(status_code=503, detail="this build carries no tool manifest")
+
     # --- bot_spawn ports (resolved FIRST: the meeting_repo is also the lifecycle-persistence target) ---
     if meeting_repo is None:
         meeting_repo = _bot_spawn_fakes().InMemoryMeetingRepo()
@@ -254,6 +291,29 @@ def create_app(
 
         service_authority = AllowAllServiceAuthority()
     app.state.service_authority = service_authority
+
+    # A voice note's audio stream (voice_notes): the writer is resolved here because the lifecycle
+    # (a note ended) and meeting erasure both drop the stream through it.
+    from .voice_notes import InMemoryAudioStreamWriter, drop_voice_note_stream
+    if voice_note_writer is None:
+        voice_note_writer = InMemoryAudioStreamWriter()
+
+    async def _drop_voice_note_stream(meeting_id: int) -> None:
+        await drop_voice_note_stream(voice_note_writer, meeting_id)
+
+    if bot_accounts is None:
+        from .bot_accounts import BotAccounts
+
+        bot_accounts = BotAccounts(broker=None, runtime=runtime)
+    app.state.bot_accounts = bot_accounts
+
+    # A delete made while the bot was still running completes when the lifecycle ends; the collector
+    # (mounted below) owns that deletion, so the hook reaches it through this late binding.
+    _deferred_delete: list = []
+
+    async def _meeting_ended(user_id, meeting_id):
+        if _deferred_delete and user_id is not None:
+            await _deferred_delete[0](int(user_id), int(meeting_id))
 
     # --- lifecycle: bot lifecycle callbacks + FSM (lifecycle.v1), PERSISTED to the meeting row ---
     sink = LifecycleSink(store=meeting_store if meeting_store is not None else MeetingStore())
@@ -283,6 +343,9 @@ def create_app(
         bot_redis=bot_redis,
         runtime_callback_token=runtime_callback_token,
         open_callbacks=open_callbacks,
+        voice_note_drop=_drop_voice_note_stream,
+        bot_account_terminal=bot_accounts.on_terminal,
+        meeting_ended=_meeting_ended,
     )
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---
@@ -302,6 +365,8 @@ def create_app(
         service_authority,
         transcript_stream_purge=_stream_purge,
         redis_grant=bot_redis.grant if bot_redis is not None else None,
+        calls=calls,
+        bot_accounts=bot_accounts,
     ))
 
     # --- user-stop: DELETE /bots/{platform}/{native_meeting_id} (lifecycle/stop.py over redis) ---
@@ -312,7 +377,8 @@ def create_app(
     app.state.command_publisher = command_publisher
     # The stop router also gets the runtime client so a stop can directly tear down a still-booting bot's
     # workload (the leave command alone is fire-and-forget — a booting bot may never receive it → orphan).
-    app.include_router(build_stop_router(meeting_repo, command_publisher, runtime))
+    stop_router = build_stop_router(meeting_repo, command_publisher, runtime)
+    app.include_router(stop_router)
 
     # --- live language change: PUT /bots/{platform}/{native_meeting_id}/config (acts.v1 reconfigure,
     #     transcription-language.v1) over the same command bus ---
@@ -333,16 +399,22 @@ def create_app(
 
     async def _delete_meeting_fixtures(user_id: int, meeting_id: int) -> list[str]:
         from .recordings.deletion import delete_meeting_fixtures
-        return await delete_meeting_fixtures(storage, user_id=user_id, meeting_id=meeting_id)
+        deleted = await delete_meeting_fixtures(storage, user_id=user_id, meeting_id=meeting_id)
+        # Erasing a meeting's artifacts also drops a voice note's audio stream, if one is left.
+        await _drop_voice_note_stream(meeting_id)
+        return deleted
 
     # --- collector: transcripts + meetings + ws-authorize (api.v1) ---
     if transcript_store is None:
         transcript_store = _collector_fakes().InMemoryTranscriptStore()
-    app.include_router(_build_collector_router(transcript_store, redis,
-                                            calendar_sync_now=calendar_sync_now,
-                                            calendar_sync_status=calendar_sync_status,
-                                            artifact_object_deleter=_delete_recording_objects,
-                                            fixture_object_deleter=_delete_meeting_fixtures))
+    collector_router = _build_collector_router(transcript_store, redis,
+                                               calendar_sync_now=calendar_sync_now,
+                                               calendar_sync_status=calendar_sync_status,
+                                               artifact_object_deleter=_delete_recording_objects,
+                                               fixture_object_deleter=_delete_meeting_fixtures,
+                                               meeting_stopper=stop_router.stop_meeting)
+    _deferred_delete.append(collector_router.complete_deferred_delete)
+    app.include_router(collector_router)
 
     # --- recordings: chunk upload + finalize → meeting.data JSONB (recording.v1) ---
     if recording_repo is None:
@@ -362,7 +434,20 @@ def create_app(
 
     # --- session_profile: PUT /internal/browser-session/{session_uid} — the authenticated bot's write-back ---
     from .session_profile import build_router as _build_session_profile_router
-    app.include_router(_build_session_profile_router(meeting_repo, token_secret=token_secret))
+    app.include_router(_build_session_profile_router(meeting_repo, token_secret=token_secret,
+                                                     bot_accounts=bot_accounts))
+
+    # --- bot_accounts: browser sessions, bot accounts, the restore route (ADR-0049) ---
+    from .bot_accounts import build_router as _build_bot_accounts_router
+    app.include_router(_build_bot_accounts_router(bot_accounts, meeting_repo=meeting_repo,
+                                                  token_secret=token_secret))
+
+    # --- voice notes: WS /voice-notes/{native_meeting_id}/stream — the person's audio (#1783) ---
+    from .voice_notes import build_router as _build_voice_note_router
+    app.include_router(_build_voice_note_router(meeting_repo, voice_note_writer))
+    # --- voice notes: POST /voice-notes/recorder — the MCP tool record_voice_note (#1783) ---
+    from .voice_notes import build_recorder_router as _build_voice_note_recorder_router
+    app.include_router(_build_voice_note_recorder_router())
 
     # --- webhooks: GET /webhooks/deliveries — the per-user delivery history the dashboard reads (#841) ---
     app.include_router(_build_webhooks_router(delivery_ledger))

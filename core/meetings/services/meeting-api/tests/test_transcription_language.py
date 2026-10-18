@@ -179,7 +179,7 @@ def test_nothing_set_anywhere_is_auto(monkeypatch):
 
 
 @pytest.mark.parametrize("body", [
-    {"language": "German"},
+    {"language": "German", "allowed_languages": ["de"]},
     {"allowed_languages": "de,en"},
     {"language": "fr", "allowed_languages": ["de", "en"]},
     {"allowed_languages": ["de", "de"]},
@@ -190,6 +190,42 @@ def test_a_refused_language_is_a_422_before_any_row_or_bot(monkeypatch, body):
     r = _spawn(client, **body)
     assert r.status_code == 422, r.text
     assert not repo._meetings and not runtime.specs
+
+
+# ── 0.12 request shapes on POST /bots (prod compatibility) ─────────────────────────────────────────
+# 0.12.28 forwarded `language` to the bot untouched, so these were accepted; 0.13 must accept them too
+# and give the bot the code they name.
+
+@pytest.mark.parametrize("sent,code", [
+    ("en", "en"), ("en-US", "en"), ("en_GB", "en"), ("EN", "en"), ("De", "de"), ("pt-BR", "pt"),
+    ("English", "en"), ("german", "de"), ("Portuguese", "pt"), ("iw", "he"), ("zh-Hant-TW", "zh"),
+])
+def test_a_0_12_language_value_spawns_with_the_code_it_names(monkeypatch, sent, code):
+    client, repo, runtime = _spawn_client(monkeypatch)
+    r = _spawn(client, language=sent)
+    assert r.status_code == 201, r.text
+    assert _invocation(runtime)["language"] == code
+    assert _stored(repo) == {"language": code, "allowed_languages": [], "source": "meeting"}
+
+
+@pytest.mark.parametrize("sent", ["AUTO", "Auto"])
+def test_a_0_12_auto_in_any_case_is_auto(monkeypatch, sent):
+    client, repo, _ = _spawn_client(monkeypatch)
+    assert _spawn(client, language=sent).status_code == 201
+    assert _stored(repo)["source"] == "meeting" and _stored(repo)["language"] is None
+
+
+def test_a_0_12_language_value_naming_nothing_spawns_on_the_lower_tiers(monkeypatch):
+    client, repo, runtime = _spawn_client(monkeypatch, context=DE_EN_USER)
+    r = _spawn(client, language="Klingon (Qo'noS)")
+    assert r.status_code == 201, r.text
+    assert _stored(repo)["source"] == "user"
+
+
+def test_the_legacy_reading_never_applies_with_allowed_languages():
+    assert tlang.legacy_spawn_language("en-US", ["en"]) == ("en-US", None)
+    with pytest.raises(tlang.LanguageRefused):
+        tlang.spawn_tier(*tlang.legacy_spawn_language("en-US", ["en"]))
 
 
 def test_an_unreadable_stored_default_does_not_stop_the_spawn(monkeypatch):
@@ -392,3 +428,88 @@ def test_a_refused_change_is_a_422_and_nothing_is_sent(body):
     _seed(repo)
     assert _put(client, body).status_code == 422
     assert bus.published == []
+
+
+# ── the history tier: a person who set nothing gets the languages they actually speak ─────────────
+#
+# A real call (2026-10-14) in Russian and English came back with segments tagged pt, de, pl, fr, cs:
+# nothing was set, so every short window was detected freely. The person's own recent meetings say
+# which languages they speak.
+
+RU_EN_HISTORY = {"ru": 457, "en": 59, "pt": 7, "de": 3, "pl": 3, "fr": 2, "cs": 1}
+
+
+@pytest.fixture
+def history_on(monkeypatch):
+    monkeypatch.setenv(tlang.ENV_HISTORY, "on")
+
+
+def test_history_tier_is_off_by_default_as_on_0_12(monkeypatch):
+    """0.12.28 had no history tier: a person who set nothing got the deployment default, then auto.
+    `VEXA_LANGUAGE_HISTORY_TIER` unset keeps that, however much history the person has."""
+    monkeypatch.delenv(tlang.ENV_HISTORY, raising=False)
+    monkeypatch.setenv(tlang.ENV_ALLOWED, "de,en")
+    client, repo, runtime = _spawn_client(monkeypatch)
+    asked = []
+    async def _recent(user_id, meetings=10):
+        asked.append(user_id)
+        return RU_EN_HISTORY
+    repo.recent_transcript_languages = _recent
+    assert _spawn(client).status_code == 201
+    assert _stored(repo)["source"] == "deployment" and _stored(repo)["allowed_languages"] == ["de", "en"]
+    assert asked == []                       # the history is not even read
+    client, repo, runtime = _spawn_client(monkeypatch)
+    monkeypatch.delenv(tlang.ENV_ALLOWED, raising=False)
+    repo.recent_transcript_languages = _recent
+    assert _spawn(client).status_code == 201
+    assert _stored(repo)["source"] == "auto"
+
+
+@pytest.mark.parametrize("value,on", [("on", True), ("true", True), ("off", False), ("", False), ("x", False)])
+def test_the_history_switch(value, on):
+    assert tlang.history_tier_enabled({tlang.ENV_HISTORY: value}) is on
+
+
+def test_history_restricts_to_the_languages_actually_spoken():
+    s = tlang.history_tier(RU_EN_HISTORY)
+    assert s is not None and s.language is None and s.allowed_languages == ("ru", "en")
+
+
+@pytest.mark.parametrize("counts", [None, {}, {"en": 400}, {"ru": 30, "en": 10}, {"xx-1": 900, "en": 5}])
+def test_one_language_or_a_thin_history_sets_nothing(counts):
+    assert tlang.history_tier(counts) is None
+
+
+def test_the_persons_history_reaches_the_bot_when_they_set_nothing(monkeypatch, history_on):
+    client, repo, runtime = _spawn_client(monkeypatch)
+    async def _recent(user_id, meetings=10):
+        assert user_id == USER
+        return RU_EN_HISTORY
+    repo.recent_transcript_languages = _recent
+    assert _spawn(client).status_code == 201
+    inv = _invocation(runtime)
+    assert inv["allowedLanguages"] == ["ru", "en"] and "language" not in inv
+    assert _stored(repo) == {"language": None, "allowed_languages": ["ru", "en"], "source": "history"}
+
+
+def test_the_persons_default_and_the_meeting_beat_their_history(monkeypatch, history_on):
+    client, repo, runtime = _spawn_client(monkeypatch, context=DE_EN_USER)
+    async def _recent(user_id, meetings=10):
+        return RU_EN_HISTORY
+    repo.recent_transcript_languages = _recent
+    assert _spawn(client).status_code == 201
+    assert _stored(repo)["source"] == "user"
+    client, repo, runtime = _spawn_client(monkeypatch)
+    repo.recent_transcript_languages = _recent
+    assert _spawn(client, language="auto").status_code == 201
+    assert _stored(repo)["source"] == "meeting"
+
+
+def test_an_unreadable_history_leaves_the_deployment_default(monkeypatch, history_on):
+    monkeypatch.setenv(tlang.ENV_ALLOWED, "de,en")
+    client, repo, runtime = _spawn_client(monkeypatch)
+    async def _broken(user_id, meetings=10):
+        raise RuntimeError("db down")
+    repo.recent_transcript_languages = _broken
+    assert _spawn(client).status_code == 201
+    assert _stored(repo)["source"] == "deployment"

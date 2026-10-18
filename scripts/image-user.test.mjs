@@ -47,7 +47,7 @@ const HELM_COMPONENTS = {
   "core/gateway/services/gateway/Dockerfile": ["gateway"],
   "core/identity/services/admin-api/Dockerfile": ["admin-api"],
   "core/meetings/services/meeting-api/Dockerfile": ["meeting-api", "migrations"],
-  "core/meetings/services/mcp/Dockerfile": ["mcp"],
+  "core/gateway/services/mcp/Dockerfile": ["mcp"],
   "clients/terminal/Dockerfile": ["terminal"],
   "core/flows/Dockerfile": ["flows-worker", "flows-mailbox", "flows-api"],
   "core/agent/services/credential-broker/Dockerfile": ["credential-broker"],

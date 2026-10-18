@@ -50,7 +50,23 @@ A person can give the deployment a URL it will call: a webhook, a calendar feed,
 transcription endpoint, a model endpoint, a page for the agent to fetch. Every server-side fetch
 of such a URL goes through one guard, which refuses loopback, private, link-local (cloud
 metadata) and other internal ranges in every address notation, and pins the connection to the
-address it checked. The rule, where it is enforced and its tests are in the
+address it checked. An address is judged by where a connection to it lands, whichever notation it
+is written in, and the connection is made to the address that was checked, on every request and
+redirect.
+
+The same check covers every caller:
+
+- webhook deliveries, and the webhook URL when it is saved;
+- calendar feeds, when the feed is saved and when it is fetched;
+- the agent's web fetches and image fetches;
+- custom-service connections and their OAuth exchanges, in the credential broker;
+- repository attaches;
+- the model endpoint check under Settings → Models;
+- a person's own transcription endpoint, when it is saved and on every request the bot makes.
+
+A URL that is stored before it is used is checked as written when it is saved. A calendar feed,
+webhook or transcription endpoint that names an internal destination is refused with `422` at save
+time, not at the first fetch. The rule, where it is enforced and its tests are in the
 [`outbound-url.v1` contract](https://github.com/Vexa-ai/vexa/blob/main/deploy/contracts/outbound-url.v1/README.md).
 The deployment's own endpoints (its bundled transcription service, its own model gateway) are
 configuration, not user input, and are not held to it.
@@ -78,7 +94,9 @@ the runtime reporting a workload's state to meeting-api.
    `POST /internal/recordings/upload` (the request's `session_uid`), and an authenticated bot's
    `PUT /internal/browser-session/{session_uid}`. Each door admits it through one function,
    `admit_session`: valid signature, unexpired `exp`, the MeetingToken `aud` and `scope`, and bound
-   to exactly the session the request names.
+   to exactly the session the request names. A recording chunk and a signal tape both arrive on the
+   upload door, so a token bound to another session, or to none, uploads nothing. A token is never
+   minted without a session.
 4. The transcript entries a bot writes to Redis carry the token's header and payload and a
    signature; the collector recomputes the token under the same key and drops an entry whose
    meeting is not the token's.
@@ -94,6 +112,15 @@ the runtime reporting a workload's state to meeting-api.
    received on, its time is within 300 s of meeting-api's clock, and the same signature has not
    been accepted before (a replay guard in Redis, shared by every meeting-api replica, else in
    process). Anything else is a 401 and a `runtime_callback_rejected` log line.
+
+**Without a key, every callback is refused.** When meeting-api starts without `ADMIN_TOKEN`
+(the MeetingToken key) the lifecycle callback refuses every caller, and without `RUNTIME_API_TOKEN`
+the runtime callback refuses every caller. Neither door falls back to open.
+
+<Note>
+Upgrade the bot image and meeting-api together. A meeting-api that checks the session binding on
+uploads should run with bots of the same release.
+</Note>
 
 **Who owns what.** meeting-api mints and verifies MeetingTokens and keeps no token table. The
 runtime signs callbacks; meeting-api verifies them. Code:
@@ -115,11 +142,102 @@ Deny tests:
 
 | Protection | Test file | Tests |
 |---|---|---|
-| MeetingToken key, claims and session binding | `core/meetings/services/meeting-api/tests/test_meeting_token.py` | `test_the_meeting_token_key_is_derived_from_the_admin_secret`, `test_a_token_signed_with_the_raw_admin_secret_is_refused`, `test_a_token_missing_exp_aud_or_scope_is_refused`, `test_a_token_with_another_aud_scope_or_a_bad_exp_is_refused`, `test_forged_and_expired_tokens_are_refused`, `test_admit_refuses_another_session_or_none`, `test_both_doors_refuse_a_token_signed_with_the_raw_admin_secret` |
+| MeetingToken key, claims and session binding | `core/meetings/services/meeting-api/tests/test_meeting_token.py` | `test_the_meeting_token_key_is_derived_from_the_admin_secret`, `test_a_token_signed_with_the_raw_admin_secret_is_refused`, `test_a_token_missing_exp_aud_or_scope_is_refused`, `test_a_token_with_another_aud_scope_or_a_bad_exp_is_refused`, `test_forged_and_expired_tokens_are_refused`, `test_admit_refuses_another_session_or_none`, `test_no_token_is_minted_without_a_session`, `test_the_upload_refuses_a_token_bound_to_no_session`, `test_the_lifecycle_callback_refuses_a_token_bound_to_no_session`, `test_both_doors_refuse_a_token_signed_with_the_raw_admin_secret` |
 | Transcript entries | `core/meetings/services/meeting-api/tests/test_segment_entry_auth.py` | `test_a_bot_cannot_write_another_meetings_transcript`, `test_every_other_entry_is_dropped` |
 | Callbacks fail closed | `core/meetings/services/meeting-api/tests/test_callbacks_fail_closed.py` | `test_no_meeting_token_key_refuses_every_lifecycle_callback`, `test_no_runtime_key_refuses_every_runtime_callback`, `test_the_production_entrypoint_never_opens_the_doors` |
 | Runtime callback signature | `core/meetings/services/meeting-api/tests/test_runtime_callback_signature.py` | `test_the_verifier_matches_the_runtimes_signer`, `test_an_unsigned_forged_stale_misdirected_or_replayed_callback_is_refused`, `test_a_refused_callback_moves_no_meeting` |
 | The runtime's side | `core/runtime/tests/test_caller_auth.py` | `test_every_control_route_refuses_a_caller_without_the_credential`, `test_production_boot_refuses_without_a_token`, `test_the_signature_covers_the_time_the_url_and_the_event`, `test_every_callback_carries_the_runtimes_signature_and_never_its_token` |
+
+## Agent workers
+
+An agent worker acts for one person with a **delegation token** that agent-api mints for each
+dispatch. The token names the person, a **regime** (`human` when the person is in the chat this
+turn) and a **ceiling**: the workspaces the dispatch may touch. A chat with the person present
+carries every workspace the person can reach; a scheduled or event-triggered run carries only the
+workspaces it has mounted: it may write those mounted read-write and only read those mounted
+read-only (the mount table is the one source), and an event agent may write none.
+
+### How it works
+
+1. **The ceiling holds on every route.** agent-api checks a named workspace against the ceiling
+   where the workspace is resolved, before anything else runs. A workspace outside the set is
+   refused with `403` (`out_of_scope`). This covers identity, activate, swap, import, rename,
+   sharing, invites, members, reset, the chat target and the desk touch.
+2. **Meeting reads follow the ceiling.** When a worker's token reaches identity, identity answers
+   with only the person's shared-workspace memberships that fall inside the ceiling. The meeting
+   tools list and read a colleague's meeting only when it is bound to one of those workspaces.
+3. **Some verbs need a person.** Publishing, pushing, pulling and detaching a Git remote, and every
+   other verb marked as needing a person, are refused to a worker with nobody in the loop:
+   `403 human_session_required`. agent-api, meeting-api and flows-api give the same refusal.
+4. **One rule for "is a person in the loop".** agent-api and meeting-api read it from one shared
+   file. An identity that carries delegation headers is a worker. A worker whose regime is anything
+   but `human` (empty, missing or unknown included) runs with nobody watching. On flows-api such a
+   worker can still read the person's queue, reactions, timeline and flows and file friction;
+   `reaction_signal` (retry, resume, wake or cancel a reaction) is refused.
+5. **The token is refreshed while the worker runs.** The token lives for
+   `VEXA_MCP_DELEGATION_TTL_SEC` when set, else `VEXA_CHAT_IDLE_TIMEOUT_SEC` + 900 s (1800 s at
+   the defaults).
+   Once half its life has passed, agent-api mints a new one for the same person, regime and ceiling,
+   and the worker uses it from its next turn. The replaced token keeps working until its own expiry,
+   so a turn that started with it has 900 s of headroom at the default. A worker that has stopped
+   gets no new token, and its tokens are revoked.
+6. **A turn that outlives its tool access fails loud.** Its Vexa tool calls are refused and the turn
+   ends with the fault `Vexa tools · tool access expired`, with a Retry. It does not carry on
+   without its tools.
+7. **The worker runs no hooks, and workspace skills cannot grant tools.** See
+   [Agents → Skills and hooks in the worker](/core/agents#skills-and-hooks-in-the-worker).
+
+### Why it complies
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| P20: every access is checked, default deny | The ceiling is checked by every resolver of a named workspace; a generated test calls every such route as a worker outside its ceiling | `gate:python` |
+| P23 and ADR-0044: no duplicated fact drifts | The ceiling rule is one file shared by identity and agent-api; the person-in-the-loop rule and its refusal are one file shared by agent-api and meeting-api | `gate:fact-parity` (facts `delegation-token`, `identity-token`) |
+| P7, P18, P21 | A token lives as long as its unit; a turn past its access ends with a typed fault | [ADR-0045](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0045-a-workers-delegation-token-lives-as-long-as-its-unit.md), `gate:python` |
+
+Deny tests:
+
+| Protection | Test file | Tests |
+|---|---|---|
+| Workspace ceiling | `core/agent/tests/test_delegation_ceiling_verbs.py` | `test_a_workspace_outside_the_ceiling_is_refused_and_nothing_changes`, `test_an_empty_ceiling_refuses_every_named_workspace`, `test_the_generated_set_does_not_shrink` |
+| Person-only verbs | `core/agent/tests/test_identity_guard.py`, `core/meetings/services/meeting-api/tests/test_regime.py` | `test_a_delegated_worker_without_a_person_is_refused_a_person_verb`, `test_a_present_but_empty_regime_counts_as_delegated` |
+| Meeting reads | `core/identity/services/admin-api/tests/test_delegation_workspaces.py` | `test_a_ceiling_bounded_worker_is_answered_only_the_memberships_inside_it`, `test_a_person_in_the_loop_keeps_every_membership` |
+| flows-api | `core/flows/tests/test_subject_bearer.py` | `test_a_worker_with_nobody_in_the_loop_is_refused_every_person_only_verb`, `test_a_worker_with_nobody_in_the_loop_still_reads_and_reports`, `test_every_route_a_person_reaches_is_classified_for_a_worker` |
+| Token refresh | `core/agent/tests/test_delegation_refresh.py` | `test_a_unit_alive_past_the_ttl_keeps_its_tools`, `test_a_stopped_unit_is_never_refreshed_and_its_token_is_refused`, `test_end_to_end_a_turn_that_outlives_its_token_fails_loud` |
+| Skills and hooks | `core/agent/tests/test_llm_claude_code.py`, `core/agent/tests/test_claude_skills_staging.py` | `test_build_argv_turns_every_hook_off`, `test_a_workspace_skill_grants_no_tools_and_registers_no_hooks`, `test_a_platform_skill_keeps_its_name_over_a_workspace_copy`, `test_a_workspace_skill_past_the_turns_budget_is_not_staged` |
+
+## Tracing a session
+
+Every control-plane service writes one JSON object per log line, in one shape
+([`logevent.v1`](https://github.com/Vexa-ai/vexa/tree/main/core/gateway/contracts/logevent.v1)). Two ids
+let you follow what an agent did:
+
+| Id | What it is | Where it comes from |
+|---|---|---|
+| `trace_id` | One request, or one agent turn. | Minted by the gateway (or taken from your `X-Trace-Id`) and forwarded on every hop: gateway, meeting-api, runtime, agent-api, the agent worker, the MCP service, the credential broker, identity, flows-api, flows-worker and the mailbox. agent-api hands a turn's trace to its worker, and the worker sends it on its tool calls. |
+| `session` | One chat thread, or one background job: the agent **unit**. A chat's unit is `agent-<user id>-chat-<thread>`, with `-g<n>` appended after the chat creates a workspace. A job's unit is `agent-<user id>-<trigger>-<digest>`. | agent-api writes it into the worker's delegation token, and the token is signed. Identity, the gateway, agent-api, flows-api and the broker read it only from that signature, and never from a header a client can set. The credential broker records the same value in `audit.session`. |
+
+Lines carry ids and outcomes only. They never carry tokens, credentials, prompts, message or mail
+text.
+
+To list everything one chat caused:
+
+```bash
+UNIT=agent-42-chat-main                       # the chat; a prefix match also covers its -g<n> units
+# 1. every trace the session started (gateway, agent-api, worker, identity, flows, broker lines)
+docker compose logs --no-log-prefix > all.jsonl            # or your log store's export
+jq -R -r --arg u "$UNIT" 'fromjson? | select((.session // "") | startswith($u)) | .trace_id' all.jsonl | sort -u > traces.txt
+# 2. every line on those traces, including the hops that only know the trace (meeting-api, MCP, runtime)
+jq -R -c --rawfile t traces.txt 'fromjson? | select(.trace_id as $x | ($t | split("\n") | index($x)))' all.jsonl
+# 3. every credential use, from the broker's own audit table
+sqlite3 /state/metadata.sqlite \
+  "SELECT datetime(at,'unixepoch'), actor, action, outcome, connection FROM audit
+   WHERE session LIKE '$UNIT%' ORDER BY seq"
+```
+
+A worker's own lines (`service: agent-worker`) go to its container's stderr, so collect them
+wherever your runtime keeps workload logs. The bot's in-meeting pipeline does not carry the trace
+yet.
 
 ## Audit artifacts in the repo
 

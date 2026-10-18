@@ -15,7 +15,7 @@ flowchart LR
   bot_commands[("bot_commands:meeting:{id} (pubsub)")]
   unit_in[("unit:{id}:in (stream)")]
   va_chat[("va:meeting:{id}:chat (pubsub)")]
-  identity_db[("identity (users/api_tokens)")]
+  identity_db[("identity (users/api_tokens/orgs)")]
   flows_rows[("flows-rows")]
   credentials_store[("broker state (metadata.sqlite, secrets.sqlite)")]
   imports_status[("<store>/.imports/{subject}/ (files)")]
@@ -27,6 +27,7 @@ flowchart LR
   style redis_acl_users stroke-dasharray: 5 5,stroke-width:3px
   acl_units_index[("vexa:acl:units (redis hash)")]
   delegation_revoked[("vexa:delegation:revoked:{jti} (redis key)")]
+  session_store[("sessions: metadata in agent-api's database, transcript versions in object storage")]
   delegation_live[("vexa:delegation:live:{jti} (redis key)")]
   delegation_records[("vexa:delegation:units + vexa:delegation:unit:{id} (redis set + hash)")]
   delegation_current[("vexa:delegation:current:{id} (redis key)")]
@@ -36,6 +37,9 @@ flowchart LR
   routine_state[("<store>/.routines/ (files)")]
   meeting_bundle_file[("meeting bundle (portable file)")]
   meeting_bundle_parts[("meeting bundle parts (workspace tree + notes page)")]
+  crm_records[("crm_* tables")]
+  sig_annotations[("sig:meeting:{row} | sig:chat:{session} (streams)")]
+  signals_state[("sig:state|seen|lease|live:*")]
   bot -->|write| segments_stream
   bot -->|write| tc_mutable
   meeting_api -.->|read| segments_stream

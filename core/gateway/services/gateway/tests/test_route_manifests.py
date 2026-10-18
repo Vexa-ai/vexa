@@ -7,9 +7,9 @@ flows + identity).
 
 What these tests hold down, in the order they matter:
 
-  1. the FULL profile is byte-for-byte what shipped — 106 scoped rows and 2 unscoped, and every one
+  1. the FULL profile is byte-for-byte what shipped — 150 scoped rows and 2 unscoped, and every one
      of them still matched to a route that exists;
-  2. without the agent domain the table lacks EXACTLY its forty rows and nothing else;
+  2. without the agent domain the table lacks EXACTLY its fifty rows and nothing else;
   3. an absent domain's routes are absent from the APP too, so a request 404s rather than 403s;
   4. the refusals that make the assembly safe to compose from files.
 """
@@ -32,39 +32,105 @@ from conftest import AGENT_CARRIED, VALID_KEY, FakeAuthorizer, FakeDownstream, F
 #: The rows the agent's MCP tools call back into (`"mcp_reentry": true`), one per route a tool in
 #: `core/agent/mcp.tools.v1.json` calls — held to that file by `core/agent/tests/test_edge_forward.py`.
 AGENT_CALLBACK_ROWS = frozenset({
+    ("POST", "/agent/agents/message"),
+    ("GET", "/agent/chats/search"),
+    ("GET", "/agent/chats/{session}/turns"),
+    ("GET", "/agent/chat/folders"),
+    ("POST", "/agent/chat/folders"),
+    ("POST", "/agent/chat/folders/delete"),
+    ("POST", "/agent/chat/folders/update"),
+    ("POST", "/agent/chat/move"),
+    ("GET", "/agent/notifications"),
+    ("POST", "/agent/notifications/read"),
+    ("POST", "/agent/notifications/notify"),
+    ("POST", "/agent/notifications/act"),
+    ("POST", "/agent/workspace/invite-link"),
+    ("GET", "/agent/workspace/invite-links"),
+    ("POST", "/agent/workspace/invite-link/revoke"),
+    ("GET", "/agent/refs/resolve"),
+    ("GET", "/agent/home/history"),
+    ("GET", "/agent/home/customer"),
+    ("POST", "/agent/home/customer/correct"),
+    ("POST", "/agent/home/item"),
+    ("GET", "/agent/budgets"),
+    ("GET", "/agent/budgets/usage"),
+    ("GET", "/agent/usage"),
+    ("GET", "/agent/models/levels"),
+    ("GET", "/agent/people/followups"),
+    ("GET", "/agent/people/discover"),
     ("POST", "/agent/chat/name/agent"),
+    ("GET", "/agent/claims"),
     ("POST", "/agent/claims"),
     ("POST", "/agent/claims/verdicts"),
     ("GET", "/agent/connections"),
+    ("POST", "/agent/connections/calendar/event/cancel"),
+    ("POST", "/agent/connections/calendar/event/create"),
+    ("POST", "/agent/connections/calendar/event/update"),
     ("POST", "/agent/connections/calendar/events"),
     ("POST", "/agent/connections/gmail/draft"),
+    ("POST", "/agent/connections/gmail/draft/update"),
     ("POST", "/agent/connections/gmail/inbox"),
     ("POST", "/agent/connections/gmail/read"),
     ("POST", "/agent/connections/gmail/search"),
     ("POST", "/agent/connections/gmail/thread"),
+    ("GET", "/agent/connections/policy"),
+    ("PUT", "/agent/connections/policy"),
     ("POST", "/agent/connections/request"),
     ("POST", "/agent/connections/service/call"),
     ("POST", "/agent/global/ready"),
     ("POST", "/agent/meeting/terms/scan"),
+    ("POST", "/agent/meeting/note/attach"),
     ("GET", "/agent/models/catalog"),
     ("POST", "/agent/onboarding/research"),
+    ("POST", "/agent/page/open"),
+    ("POST", "/agent/meeting/listen"),
     ("GET", "/agent/time"),
     ("PUT", "/agent/time/zone"),
+    ("GET", "/agent/sessions/{session}/participants"),
+    ("POST", "/agent/sessions/{session}/participants"),
+    ("DELETE", "/agent/sessions/{session}/participants/{principal}"),
+    ("POST", "/agent/sessions/{session}/call/show"),
+    ("POST", "/agent/sessions/{session}/call/highlight"),
     ("POST", "/agent/workspace/asset"),
+    ("GET", "/agent/workspaces/{slug}/identity/state"),
+    ("PUT", "/agent/workspaces/{slug}/identity/icon"),
     ("POST", "/agent/workspace/entity"),
     ("GET", "/agent/workspace/file"),
     ("PUT", "/agent/workspace/file"),
     ("POST", "/agent/workspace/import"),
     ("GET", "/agent/workspace/import/{operation_id}/status"),
+    ("GET", "/agent/workspace/folder/{plan_id}/status"),
     ("POST", "/agent/workspace/invite"),
     ("GET", "/agent/workspace/members"),
+    ("POST", "/agent/workspace/members/add"),
     ("POST", "/agent/workspace/membership"),
     ("POST", "/agent/workspace/move"),
     ("POST", "/agent/workspace/new"),
+    ("POST", "/agent/workspace/rename"),
+    ("POST", "/agent/workspace/forget"),
+    ("DELETE", "/agent/workspace/{slug}"),
+    ("POST", "/agent/workspace/pull"),
     ("GET", "/agent/workspace/purpose"),
+    ("POST", "/agent/workspace/push"),
+    ("POST", "/agent/workspace/publish"),
+    ("GET", "/agent/workspace/git-providers"),
     ("POST", "/agent/workspace/remove"),
     ("GET", "/agent/workspace/shared"),
+    ("POST", "/agent/workspace/shared/{workspace_id}/attach"),
+    ("POST", "/agent/workspace/status"),
+    ("POST", "/agent/workspace/target"),
+    ("POST", "/agent/workspace/propose-target"),   # UI decision 6b — the agent asks, the person switches
     ("GET", "/agent/workspace/tree"),
+    ("GET", "/agent/workspace/states"),
+    ("POST", "/agent/workspace/state"),
+    ("POST", "/agent/workspace/defaults"),
+    ("GET", "/agent/workspace/profiles"),
+    ("POST", "/agent/workspace/profile"),
+    ("POST", "/agent/workspace/profiles/edit"),
+    ("POST", "/agent/workspace/profiles/delete"),
+    ("GET", "/agent/workspace/templates"),
+    ("POST", "/agent/workspace/create"),
+    ("POST", "/agent/workspace/templates/save"),
 })
 #: The agent domain's whole share of the edge — the rows that vanish in `no-agents`: its own eight
 #: and the MCP callback rows above.
@@ -78,13 +144,13 @@ AGENT_ROWS = frozenset({
     ("PATCH", "/agent/{path:path}"),
     ("DELETE", "/agent/{path:path}"),
 }) | AGENT_CALLBACK_ROWS
-#: What shipped. A count, not a copy of the table: a second copy of 106 rows is a second thing to
+#: What shipped. A count, not a copy of the table: a second copy of 188 rows is a second thing to
 #: keep in step, and `test_the_assembled_table_matches_the_app_exactly` is what proves the
 #: CONTENT — against the routes themselves, which is a stronger anchor than a literal.
-FULL_SCOPED, FULL_UNSCOPED = 108, 2
+FULL_SCOPED, FULL_UNSCOPED = 201, 2
 #: What THIS BUILD publishes — the full profile, less the agent rows when the build omits them.
 #: DERIVED, so the count stays exact in either build rather than softening to a range or a
-#: subset check. 106 on the line; 66 in a build with no agent manifest.
+#: subset check.
 CARRIED_SCOPED = FULL_SCOPED - (0 if AGENT_CARRIED else len(AGENT_ROWS))
 
 
@@ -95,7 +161,7 @@ def _app(**kw):
 # ── 1 · the full profile is unchanged ────────────────────────────────────────────────────────────
 
 def test_the_published_table_is_exactly_what_this_build_serves():
-    """An exact count either way: five domains publish 106 scoped rows, four publish 66. The
+    """An exact count either way: five domains publish 180 scoped rows, four publish 83. The
     expectation is derived from what the build carries, never relaxed to accommodate it."""
     assert (len(ROUTE_SCOPES), len(UNSCOPED_ROUTES)) == (CARRIED_SCOPED, FULL_UNSCOPED)
 
@@ -125,14 +191,38 @@ def test_the_assembled_table_matches_the_app_exactly():
 @needs_agent
 def test_every_domain_declares_its_own_and_only_its_own():
     a = routes_manifest.load({"gateway", "meetings", "identity", "mcp", "agent"})
-    # 41+2+12+12+43 = 110 rows, less the edge's own 2 unscoped = 108 = FULL_SCOPED above. The agent's
-    # 41 are its own eight plus one row per route its MCP tools call back into. meetings is
+    # 105+2+19+12+56 = 194 rows, less the edges own 2 unscoped = 192 = FULL_SCOPED above. The agents
+    # 105 are its own eight plus one row per route its MCP tools call back into. meetings is
     # 39 because 0.12.27 ships the UNION of the three disputed edge routes: transcript-import and
     # the by-id share (the line's), and annotate-by-row-id (the candidate's). Both sides were
     # internally consistent before the merge — 38/69 and 37/68 — and neither literal survives it.
     # +4: the owner's side of a meeting share (GET/PATCH …/access, DELETE …/share/{grant_id},
     # DELETE …/viewers/{viewer_id}).
-    assert a.domains == {"agent": 41, "gateway": 2, "identity": 12, "mcp": 12, "meetings": 43}
+    # The agent's 55th is workspace_status, the look-only half of a sync (Vexa-ai/vexa#1783); 56-60
+    # are the chat-folder tools (list, create, update, delete, move — Vexa-ai/vexa#1783); 61-64 are
+    # workspace_member_add and the three chat-participant verbs (ADR-0048); 65-66 are the
+    # notification tools (list, mark read — Vexa-ai/vexa#1783); 67 is workspace_folder_import_status (a dropped folder becomes a workspace); 68-69 are
+    # workspace_rename and workspace_remove (Vexa-ai/vexa#1783); 70 is notify (an agent tells a person);
+    # 74-76 are the workspace-state verbs (workspace_list, workspace_state_set, workspace_defaults_set);
+    # 77-79 the chat-profile verbs (chat_profile_list, chat_profile_set, chat_profile_edit);
+    # 80 is notifications_act, a notification acted on (Vexa-ai/vexa#1783).
+    # 81-83 are the workspace join-link verbs (workspace_invite_link_create, _links, _revoke).
+    # 84-86 are the workspace-template verbs (workspace_templates_list, workspace_create, workspace_template_save).
+    # 87-88 are workspace_publish and git_providers (the git provider port, Vexa-ai/vexa#1783).
+    # 89 is ref_resolve, a universal reference resolved for the person (Vexa-ai/vexa#1783).
+    # 90-97 are the home's (home_history, customer_profile, customer_correct, home_item_update),
+    # the budgets' (my_limits, usage_summary) and the people's (people_followups, people_discover).
+    # 98 is chat_profile_delete.
+    # 99-100 are call_show and call_highlight (a page shown to everyone in a call, Vexa-ai/vexa#1783).
+    # 101 is meeting_listen, the listening brief of a live meeting (transcript signals).
+    # meetings' 48th is POST /voice-notes/recorder, the record_voice_note tool (Vexa-ai/vexa#1783).
+    # The seven bot-account rows (ADR-0049) then took meetings from 48 to 55.
+    # 101 is meeting_attach_page (a page made the meeting's page, #1783).
+    # identity's 17-19 are the person's own photo (GET/PUT/DELETE /user/photo, UI 15g).
+    # meetings 56 is a room's planned call as an iCalendar file (GET /meetings/{meeting_id}/ics, rooms F1).
+    # 106-107 are plan_usage (the usage meter, feature `usage`) and model_levels (levels 1-5, feature `levels`), #1783.
+    # identity 20-26: the public profile, company verification and the directory (`public_profiles`, R4).
+    assert a.domains == {"agent": 107, "gateway": 2, "identity": 26, "mcp": 12, "meetings": 56}
     assert {k for k, d in a.owner_of.items() if d == "agent"} == AGENT_ROWS
     # The EDGE declares two routes and they are its own — /health and /auth/me forward nothing.
     assert {k for k, d in a.owner_of.items() if d == "gateway"} == set(UNSCOPED_ROUTES)
@@ -270,7 +360,7 @@ def test_a_domain_this_cut_does_not_ship_is_simply_absent(tmp_path):
     """The bug at the assembly layer: this raised, so the package could not be imported at all.
 
     Independent of which build is running it — the cut is generated here from the real manifests
-    of the four domains, so it asserts 66 rows on the line and in the open-core build alike."""
+    of the four domains, so it asserts 83 rows on the line and in the open-core build alike."""
     a = routes_manifest.load_carried(_OSS_CUT + ("agent",), repo_root=_cut(tmp_path, _OSS_CUT))
     assert (len(a.scopes), len(a.unscoped)) == (FULL_SCOPED - len(AGENT_ROWS), FULL_UNSCOPED)
     assert not [k for k in a.scopes if k[1].startswith("/agent")]

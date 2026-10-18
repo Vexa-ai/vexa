@@ -20,7 +20,7 @@
  * durable store. Cache/GPU/IndexedDB/extensions are never part of it — ~200KB, not the full profile.
  */
 import { execFileSync } from 'child_process';
-import { existsSync, unlinkSync, mkdirSync, copyFileSync, mkdtempSync, rmSync, readdirSync, readlinkSync, statSync, lstatSync, readFileSync } from 'fs';
+import { existsSync, unlinkSync, mkdirSync, copyFileSync, mkdtempSync, rmSync, readdirSync, readlinkSync, statSync, lstatSync, readFileSync, writeFileSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import SESSION_PROFILE_CONTRACT from './session-profile.v1.schema.json';
 
@@ -218,6 +218,50 @@ export function readSessionProfile(dataDir: string): Array<{ path: string; data:
     out.push({ path: f.path, data });
   }
   return out;
+}
+
+/**
+ * Write a session profile received in memory (a restore answered over HTTP — session-profile.v1
+ * `WritebackBody`, decoded) into `dataDir`. The whole set is checked before anything is written, and
+ * one bad entry refuses all of it: every path must be a SESSION_PROFILE path named once (no
+ * traversal, no absolute or backslash names), every file within `maxFileBytes`, at most `maxFiles`
+ * and `maxTotalBytes` together. Directories are created as real directories; an existing symlink,
+ * directory or device in the way refuses the write. Throws SessionSyncError('session-restore');
+ * returns the number of files written.
+ */
+export function writeSessionProfile(dataDir: string, files: ReadonlyArray<{ path: string; data: Buffer }>): number {
+  const refuse = (detail: string): never => { throw new SessionSyncError('session-restore', detail); };
+  if (!Array.isArray(files)) refuse('the restored profile is not a list of files');
+  if (files.length > SESSION_PROFILE.maxFiles) refuse(`the restored profile names ${files.length} files, over ${SESSION_PROFILE.maxFiles}`);
+  const seen = new Set<string>();
+  let total = 0;
+  files.forEach((f, i) => {
+    if (!f || !isSessionProfilePath(f.path)) refuse(`entry ${i} is not a session profile path`);
+    if (seen.has(f.path)) refuse(`entry ${i} names a path twice`);
+    seen.add(f.path);
+    if (!Buffer.isBuffer(f.data)) refuse(`entry ${i} carries no bytes`);
+    if (f.data.length > SESSION_PROFILE.maxFileBytes) refuse(`entry ${i} is over ${SESSION_PROFILE.maxFileBytes} bytes`);
+    total += f.data.length;
+  });
+  if (total > SESSION_PROFILE.maxTotalBytes) refuse(`the restored profile is over ${SESSION_PROFILE.maxTotalBytes} bytes`);
+  mkdirSync(dataDir, { recursive: true });
+  for (const f of files) {
+    const parts = f.path.split('/');
+    let cur = dataDir;
+    for (const part of parts.slice(0, -1)) {
+      cur = join(cur, part);
+      let st;
+      try { st = lstatSync(cur); } catch { st = undefined; }
+      if (!st) mkdirSync(cur);
+      else if (!st.isDirectory() || st.isSymbolicLink()) refuse(`a parent of ${f.path} is not a real directory`);
+    }
+    const abs = join(dataDir, ...parts);
+    let st;
+    try { st = lstatSync(abs); } catch { st = undefined; }
+    if (st && !st.isFile()) refuse(`${f.path} exists and is not a regular file`);
+    writeFileSync(abs, f.data, { mode: 0o600 });
+  }
+  return files.length;
 }
 
 // ── S3 backend ────────────────────────────────────────────────────────────

@@ -1,0 +1,168 @@
+---
+title: "Transcript signals"
+description: "A small model listens to live meetings for what the meeting's agent asked it to, and wakes the agent when what it heard adds up. Set up, switch on, cap, and why it complies."
+---
+
+**Transcript signals** let the agent of a meeting follow the call without reading every line. The
+agent writes a **listening brief** — what to watch for (decisions, action items, blockers, being
+addressed), how sure the model must be, and what the agent already knows. A small, separate **signal
+model** scores each finished transcript line against that brief. When the evidence adds up, the agent
+wakes in the meeting's chat with every line since it last looked.
+
+It is **off** until the company switches it on, and nothing is sent to a model before that.
+
+## How it works
+
+1. **The agent writes the brief.** At the start of a meeting, and whenever the conversation shifts,
+   the meeting's agent calls `meeting_listen`. The brief lives on the meeting page, so the people in
+   the meeting can see what Vexa is listening for. `addressed_to_vexa` is always on.
+2. **The `signals` service notices the meeting.** Each bot's transcript entries are a hint naming the
+   meeting. signals then reads the meeting's verified transcript feed, which only the meetings service
+   writes, and takes **confirmed lines only**.
+3. **It scores each new line.** One model call per line: the line, up to 24 lines before it, and one
+   question per label in the brief. The answer is a score from 0 to 1 per label. Anything that is not
+   exactly one score per label, each a number from 0 to 1, is refused and the line stays unscored.
+4. **It adds the evidence up.** For each batch of lines, signals takes the strongest score for each
+   label that wakes and adds those maxima together. Small talk adds about 0. One clear decision adds
+   about 1, however much filler surrounds it. The running total grows until the agent wakes.
+5. **It wakes the agent** when the running total reaches the brief's `wake_at`, at once when a line
+   is addressed to Vexa (score ≥ 0.5), or after `max_wait_s` when lines are waiting. When the meeting
+   ends, what is left is sent as `end`, for the recap.
+6. **The company's flow decides what a wake does.** signals posts one `meeting.signal` event to flows.
+   The `_global` flow `meeting_signal` queues a turn in the meeting's chat, behind any turn already
+   running, with the lines attached as quoted speech. A company can change or retire that flow.
+7. **Highlights.** Every scored line is also written to the `sig:meeting:{row}` stream, which the
+   terminal reads to highlight lines on the transcript.
+
+```
+bot ─▶ meetings (collector) ──writes──▶ tc:meeting:{row}
+                                            │ read (consumer group "signals")
+agent-api ◀─GET brief + policy── signals ──calls──▶ signal model
+                                   │ ├─writes─▶ sig:meeting:{row} ─▶ gateway ─▶ terminal
+                                   │ └─POST meeting.signal─▶ flows ─▶ the meeting's chat
+credential broker ◀─model key──────┘
+```
+
+### Rooms: chats with two or more people
+
+A chat becomes a **room** when a second person joins. From then on a person's message no longer starts
+an agent turn by itself: it goes to the room's message stream, and signals decides, in three tiers,
+whether the agent should react.
+
+1. **Rules, free and instant.** `@vexa`, the agent's name, a reply to one of the agent's messages, or a
+   question right after an agent message wakes the agent at once, with no model call
+   (`reason: addressed`).
+2. **The agent's own rules.** The room's brief may add rule triggers: `{kind: keyword | person | regex,
+   value}`. A match wakes the agent at once too.
+3. **The cheap model.** Every other message is scored against the room's brief and `known:`, exactly
+   as a meeting line is, and adds to the running score.
+
+The agent's own messages are never buffered and never scored; they are only context for the messages
+that follow them. A room wakes with the same `meeting.signal` event, with `source: {kind: chat, id:
+<session>}` and `session` in place of `meeting_row`.
+
+### The agent owns the sensor
+
+Through the brief, the agent tunes what wakes it: the labels and their questions, `known:`, `wake_at`
+and `max_wait_s`, its own rule triggers, and `model_tier` (`cheapest` or `small`), which picks one of
+the models the company allows. A company that allows several models lists them by tier:
+
+```yaml
+model_signals: {"cheapest": {"adapter": "openai-compatible", "route": "qwen-small", "base_url": "https://llm.internal/v1", "secret_ref": "none"}, "small": {"adapter": "jev", "route": "typesafe/jev-1.13", "secret_ref": "broker:signals/openrouter"}}
+```
+
+What the agent cannot change: being addressed always wakes it, even after the wake cap is reached
+(no model is involved), and the caps and the allowed models are the company's. A regex rule is at most
+200 characters, a pattern with a nested quantifier is refused, and each match runs with a 50 ms
+deadline.
+
+### Many meetings, many replicas
+
+One process handles many meetings at once (one task per live meeting; the work is waiting on the
+model). With more than one replica, each meeting is held by one replica under a 30-second lease. If a
+replica dies, another takes its meetings and resumes from the saved position. No line is scored twice,
+and a wake that was saved but not confirmed is sent again under the same identity, so the agent is not
+woken twice for it.
+
+## Switch it on
+
+1. **Deploy the service.**
+   - Compose: start the `signals` profile (`COMPOSE_PROFILES=signals` or `docker compose --profile
+     signals up -d`).
+   - Helm: `signals.enabled: true`, and `signals.flowsApiUrl` set to flows-api's address. The service
+     needs the credential broker (`credentialBroker.enabled`, on by default).
+2. **Store the model's key in the credential broker**, from inside the broker's container. The key is
+   read from standard input, so it never appears in a process list or a shell history:
+   ```sh
+   docker compose exec -T credential-broker python -m credential_broker.signals_key put openrouter < key.txt
+   ```
+   A company's own endpoint without a key needs no secret (`secret_ref: none`).
+3. **Turn it on in `_global/POLICIES.md`** (the global account, or its agent):
+   ```yaml
+   transcript_signals: on
+   model_signals: {adapter: jev, route: typesafe/jev-1.13, secret_ref: broker:signals/openrouter}
+   signals_wakes_per_meeting: 12
+   signals_cost_per_meeting_usd: 0.50
+   ```
+
+| `model_signals` | Model | Where transcript text goes |
+|---|---|---|
+| `{adapter: jev, route: typesafe/jev-1.13, secret_ref: broker:signals/<name>}` | Typesafe Jev through OpenRouter | OpenRouter and Typesafe |
+| `{adapter: jev, route: "typesafe:jev-latest", secret_ref: broker:signals/<name>}` | Typesafe Jev directly | Typesafe |
+| `{adapter: openai-compatible, route: <model>, base_url: https://<your LiteLLM>/v1, secret_ref: none}` | your own model | nowhere outside your network |
+
+### Caps
+
+Both caps are checked **before every model call**, per meeting:
+
+- `signals_wakes_per_meeting` (default 12, at most 500): after this many wakes signals stops calling
+  the model for that meeting or room; being addressed still wakes the agent. Lines are still kept, and the meeting's end still hands them to the recap.
+- `signals_cost_per_meeting_usd` (default 0.50, at most 20): estimated from the tokens of each request
+  before it is sent, at `SIGNALS_USD_PER_MTOK` (default 2.0, the operator's price estimate). A call
+  that would go over the cap is not made.
+
+### Development installs
+
+With `VEXA_ENV=dev` only, signals uses `SIGNALS_OPENROUTER_API_KEY` from its environment when the
+broker holds no key under the policy's name. With any other `VEXA_ENV`, or none, that variable is
+never read, so a production install cannot be keyed from its environment by accident.
+
+### Try it on a recorded transcript
+
+```sh
+PYTHONPATH=core/signals/src uv run --project core/signals python -m meeting_signals.replay transcript.json --model fake
+SIGNALS_REPLAY_API_KEY=… PYTHONPATH=core/signals/src uv run --project core/signals python -m meeting_signals.replay transcript.json \
+  --model-signals '{"adapter":"jev","route":"typesafe/jev-1.13","secret_ref":"broker:signals/x"}'
+```
+
+It prints each wake's time, reason, line count and score, and a summary. It does not print transcript
+text unless you pass `--show-text`.
+
+## Why it complies
+
+- **Off by default, chosen by the company.** No model is called until an administrator sets
+  `transcript_signals: on` and names a model in `_global/POLICIES.md`. Helm does not deploy the
+  service unless `signals.enabled` is set, and Compose starts it only under its profile.
+- **Data stays where the company chooses.** With a company's own OpenAI-compatible endpoint, no
+  transcript text leaves its network. With Jev, lines go to Typesafe, and also to OpenRouter when
+  routed there. The architecture chart records this edge as data egress of transcript text.
+- **The key is not in the environment.** The model's key is a company secret in the credential
+  broker. signals reads it with its own role key, which opens one route (`service/signals/<name>`
+  only), and keeps it in memory. Every read is audited by name, never by value.
+- **One writer per carrier (P23).** The meetings service is the only writer of the transcript feed;
+  signals only reads it. signals is the only writer of `sig:meeting:{row}` and of its own state. Every
+  state write happens under its lease, so a replica that lost its lease cannot write. agent-api is
+  the only writer of the brief.
+- **The transcript and room messages are untrusted input.** Anyone in a call or a room can say anything. The model is told the
+  transcript is data and never instructions. Its answer must be scores and nothing else. A wake
+  carries the lines as data, and agent-api passes them to the agent as quoted speech. A turn started
+  by a signal may write only the meeting's page and the brief; anything else is a proposal.
+- **Only signals can wake a meeting's chat.** flows accepts `meeting.signal` only on
+  `/events/signal`, with the internal secret and `X-Vexa-Service: signals`.
+- **Visible.** The brief is on the meeting page, so the people in the meeting can see what Vexa is
+  listening for.
+- **Bounded.** Wakes and model cost are capped per meeting, and the caps are checked before each call.
+- **Restricted pods.** The Helm Deployment runs as a non-root user with a read-only root filesystem,
+  with all capabilities dropped, no privilege escalation and the `RuntimeDefault` seccomp profile, and
+  without a fixed uid, so OpenShift `restricted-v2` admits it. With `global.securityContext.deliver:
+  false` the platform injects its own context instead.

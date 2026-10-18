@@ -120,6 +120,29 @@ class SqlAlchemyMeetingRepo:
             )
             return [_row_to_dict(m) for m in (await db.execute(stmt)).scalars().all()]
 
+    async def recent_transcript_languages(self, user_id, meetings: int = 10) -> dict:
+        """``{language: segment count}`` over this person's last ``meetings`` completed meetings —
+        the history tier of transcription-language.v1."""
+        from sqlalchemy import func, select
+
+        from ..sessions.models import Meeting, Transcription
+
+        async with self._session_factory() as db:
+            recent = (
+                select(Meeting.id)
+                .where(Meeting.user_id == user_id, Meeting.status == "completed")
+                .order_by(Meeting.created_at.desc(), Meeting.id.desc())
+                .limit(int(meetings))
+                .subquery()
+            )
+            stmt = (
+                select(Transcription.language, func.count())
+                .where(Transcription.meeting_id.in_(select(recent.c.id)),
+                       Transcription.language.isnot(None))
+                .group_by(Transcription.language)
+            )
+            return {str(lang): int(n) for lang, n in (await db.execute(stmt)).all() if lang}
+
     async def find_active_rows_bound(self, platform, native_meeting_id, workspace_ids) -> list:
         from sqlalchemy import select
 

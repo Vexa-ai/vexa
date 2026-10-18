@@ -75,7 +75,7 @@ def test_the_write_door_changes_what_the_read_door_serves(client):
     uid, _h = _user(client, "writer@vexa.ai")
     assert client.get(f"/internal/users/{uid}/settings", headers=_internal()).json() == {
         "timezone": "", "mail_minutes": True, "mail_join": False,
-        "mail_rsvp": True, "mail_prep": True}
+        "mail_rsvp": True, "mail_prep": True, "presence": True}
 
     r = client.put(f"/internal/users/{uid}/settings", headers=_internal(),
                    json={"mail_minutes": "off", "timezone": "Europe/Lisbon"})

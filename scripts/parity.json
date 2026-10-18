@@ -31,9 +31,47 @@
     "regex-source": "the captured text is a regular expression SOURCE compared as a string. Used where the sites are in different languages and no shared module can exist (ADR-0036 item 10): two engines may still read one source differently, so this is the strongest check available without a mechanism that does not exist — and strictly stronger than the nothing there is today.",
     "(any kind) forbid_elsewhere": "names the literal itself: any non-test source file under `scan` that contains it and is not a declared site fails. A site list is only an inventory if nothing else writes the fact — without this, single-sourcing a mark today just means someone retypes it next month and the manifest reports green over two writers.",
     "prose": "the captured text is a SENTENCE compared after its carrier is removed — blockquote markers, string-concatenation seams and whitespace runs collapse. A Python implicit-concat splits a sentence at whichever word hit the margin and a markdown file hard-wraps it; those are not different sentences. Apostrophes are NOT normalised: U+2019 vs U+0027 is a real difference in text a stranger reads.",
-    "header": "the captured text is an HTTP field name, compared case-insensitively (RFC 9110 section 5.1): `x-vexa-identity` and `X-Vexa-Identity` are one answer, and any other difference is a second"
+    "header": "the captured text is an HTTP field name, compared case-insensitively (RFC 9110 section 5.1): `x-vexa-identity` and `X-Vexa-Identity` are one answer, and any other difference is a second",
+    "flag": "the captured text is a SWITCH: True/on/yes/1 and False/off/no/0 are one answer each, so a Python table's `False` and a policy file's `off` agree; anything else is named as not a switch, never coerced"
   },
   "facts": [
+    {
+      "id": "card-face",
+      "fact": "blocks.v1's card-face profile: how a stored card face is sanitised and resolved for one viewer (field-bound data blocks, locked where the field is not readable, caps)",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/agent/contracts/blocks.v1/card_face.py",
+      "how_to_agree": "edit the contract's card_face.py and copy it VERBATIM over every vendored copy; both FaceCases suites must stay green",
+      "why": "crm-api resolves every card face on the server (desktop ADR D2, violation 3: an agent may not paint a private value onto a face), and the rule is blocks.v1's, so the canonical copy sits beside the schema and crm-api vendors it (ADR-0044).",
+      "sites": [
+        {
+          "path": "core/agent/contracts/blocks.v1/card_face.py"
+        },
+        {
+          "path": "core/crm/src/crm/card_face.py"
+        }
+      ]
+    },
+    {
+      "id": "card-face-cases",
+      "fact": "the case table the Python card_face.py and the terminal's card-face sanitiser are held to",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/agent/contracts/blocks.v1/golden/FaceCases.resolve.json",
+      "how_to_agree": "regenerate the contract's golden from card_face.py and copy it VERBATIM over every other site; both suites must stay green",
+      "why": "The terminal re-sanitises a resolved face in TypeScript and cannot import card_face.py, so the two share a case table (ADR-0044 rule 3).",
+      "sites": [
+        {
+          "path": "core/agent/contracts/blocks.v1/golden/FaceCases.resolve.json"
+        },
+        {
+          "path": "core/crm/tests/fixtures/face-cases.json"
+        },
+        {
+          "path": "clients/terminal/src/minutes/desktop/face-cases.json"
+        }
+      ]
+    },
     {
       "id": "config-preflight",
       "fact": "the config.v1 boot preflight",
@@ -59,7 +97,7 @@
           "path": "core/identity/services/admin-api/src/admin_api/config_preflight.py"
         },
         {
-          "path": "core/meetings/services/mcp/src/vexa_mcp/config_preflight.py"
+          "path": "core/gateway/services/mcp/src/vexa_mcp/config_preflight.py"
         },
         {
           "path": "core/meetings/services/meeting-api/src/meeting_api/config_preflight.py"
@@ -112,7 +150,7 @@
       "kind": "file-bytes",
       "enforced": true,
       "canonical": "core/agent/contracts/credential-broker.v1/assertion.py",
-      "how_to_agree": "edit the contract's assertion.py, re-seal nothing (it is not a schema), then copy it VERBATIM over both vendored copies",
+      "how_to_agree": "edit the contract's assertion.py, re-seal nothing (it is not a schema), then copy it VERBATIM over every vendored copy",
       "why": "Three hand-written copies of this HMAC envelope (agent-api's Connections router, its Git store, the terminal) were the B1 finding on 0.13.2. The Python side is now one file vendored into the two packages that sign or verify, the config-preflight mechanism; the TypeScript twin (clients/terminal/src/app/api/connections/assertion.ts) is held to it by the contract's SignedAssertionVector goldens instead, because a byte comparison across languages means nothing.",
       "sites": [
         {
@@ -123,7 +161,11 @@
         },
         {
           "path": "core/agent/services/credential-broker/src/credential_broker/assertion.py"
-        }
+        },
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/bot_accounts/broker_assertion.py"
+        }, {"path": "core/flows/src/flows_sensors/broker_assertion.py"},
+        {"path": "core/signals/src/meeting_signals/broker_assertion.py"}
       ]
     },
     {
@@ -351,7 +393,7 @@
           "pattern": "^HEADER = \"([^\"]+)\""
         },
         {
-          "path": "core/meetings/services/mcp/src/vexa_mcp/reentry.py",
+          "path": "core/gateway/services/mcp/src/vexa_mcp/reentry.py",
           "pattern": "^INBOUND_HEADER = \"([^\"]+)\""
         }
       ]
@@ -374,7 +416,7 @@
           "pattern": "^MCP_REENTRY_HEADER = \"([^\"]+)\""
         },
         {
-          "path": "core/meetings/services/mcp/src/vexa_mcp/reentry.py",
+          "path": "core/gateway/services/mcp/src/vexa_mcp/reentry.py",
           "pattern": "^OUTBOUND_HEADER = \"([^\"]+)\""
         }
       ]
@@ -385,7 +427,7 @@
       "kind": "file-bytes",
       "enforced": true,
       "canonical": "core/identity/contracts/delegation.v1/delegation.py",
-      "how_to_agree": "edit the contract's delegation.py, then copy it VERBATIM over both vendored copies; a change to the wire also changes delegation.schema.json and its goldens, and re-seals",
+      "how_to_agree": "edit the contract's delegation.py, then copy it VERBATIM over every vendored copy; a change to the wire also changes delegation.schema.json and its goldens, and re-seals",
       "why": "agent-api mints the token and identity verifies it, in two images that may not import each other (P2). A minter and verifier that drift either refuse every worker or accept a token they should not, and nothing at runtime would say which. The copies were byte-identical by hand before this fact; now the gate is the reason they stay so.",
       "sites": [
         {
@@ -419,10 +461,6 @@
         {
           "path": "core/gateway/services/gateway/src/gateway/delegation.py",
           "pattern": "^DELEGATION_TOKEN_PREFIX = \"([^\"]+)\""
-        },
-        {
-          "path": "deploy/dogfood/rig/vexa_control_mcp.py",
-          "pattern": "^DELEGATION_PREFIX = \"([^\"]+)\""
         },
         {
           "path": "core/flows/src/flows_integrations/subject_auth.py",
@@ -511,6 +549,25 @@
         {
           "path": "core/flows/src/flows_integrations/subject_auth.py",
           "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"human_session_required\",[\\s\\S]*?will not change it\\.\",\\s*\\})"
+        }
+      ]
+    },
+    {
+      "id": "flows-shared-refusal",
+      "fact": "the refusal a worker whose turn other people read gets from flows-api (gateway-identity.v1 SHARED_REFUSAL, shared_conversation)",
+      "kind": "prose",
+      "enforced": true,
+      "canonical": "core/gateway/contracts/gateway-identity.v1/identity_token.py \u2014 SHARED_REFUSAL",
+      "how_to_agree": "change the contract's SHARED_REFUSAL (and its vendored copies, fact identity-token) and flows-api's copy in one change",
+      "why": "agent-api, the credential broker and meeting-api answer a shared worker with the vendored identity_token.SHARED_REFUSAL; flows-api resolves its caller through identity and holds a copy. A reworded copy would teach a worker two instructions for one rule.",
+      "sites": [
+        {
+          "path": "core/gateway/contracts/gateway-identity.v1/identity_token.py",
+          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"shared_conversation\",[\\s\\S]*?another way\\.\")"
+        },
+        {
+          "path": "core/flows/src/flows_integrations/subject_auth.py",
+          "pattern": "(\"status\": \"refused\",\\s*\"reason\": \"shared_conversation\",[\\s\\S]*?another way\\.\")"
         }
       ]
     },
@@ -610,7 +667,7 @@
       "kind": "file-bytes",
       "enforced": true,
       "canonical": "core/meetings/contracts/transcript.v1/segment_entry.py",
-      "how_to_agree": "edit the contract's segment_entry.py, then copy it VERBATIM over both vendored copies; a change to the wire also changes the StreamEntry schema, the SignedEntryVector golden and the bot's entryAuth, and re-seals",
+      "how_to_agree": "edit the contract's segment_entry.py, then copy it VERBATIM over every vendored copy; a change to the wire also changes the StreamEntry schema, the SignedEntryVector golden and the bot's entryAuth, and re-seals",
       "why": "meeting-api's collector checks and its tools sign the entry; the compose stack test signs the entries it injects. The test's hand copy was a third spelling of the HMAC (architecture pass 4, S43). One file, compared by bytes; the bot's TypeScript twin is held by the vector.",
       "sites": [
         {
@@ -630,7 +687,7 @@
       "kind": "file-bytes",
       "enforced": true,
       "canonical": "core/meetings/contracts/session-profile.v1/session-profile.schema.json",
-      "how_to_agree": "edit the contract's schema, re-seal (pnpm seal:contracts), then copy it VERBATIM over both vendored copies; both runtimes' tests read the contract's PathVectors goldens",
+      "how_to_agree": "edit the contract's schema, re-seal (pnpm seal:contracts), then copy it VERBATIM over every vendored copy; both runtimes' tests read the contract's PathVectors goldens",
       "why": "An authenticated bot restores only the profile's paths (@vexa/remote-browser, in the bot image) and meeting-api stores only the profile's paths from a write-back (session_profile, in the meeting-api image). Two images and two languages, no shared module, so each reads its own copy of the sealed schema's $defs.SessionProfile, and this fact makes the three files one (architecture pass 6, S62). The two path matchers are held by the contract's PathVectors instead, because a byte comparison across languages means nothing.",
       "sites": [
         {
@@ -825,10 +882,6 @@
           "pattern": "INTERNAL_SECRET_PLACEHOLDERS = \\(([^)]*)\\)"
         },
         {
-          "path": "deploy/dogfood/rig/vexa_control_mcp.py",
-          "pattern": "INTERNAL_SECRET_PLACEHOLDERS = \\(([^)]*)\\)"
-        },
-        {
           "path": "core/runtime/src/runtime_kernel/config.v1.json",
           "pattern": "\"forbidden_values\"\\s*:\\s*\\[([^\\]]*)\\]",
           "flags": "m",
@@ -841,7 +894,7 @@
           "note": "flows-api's fallback when it cannot read the declaration"
         },
         {
-          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "path": "core/gateway/services/mcp/src/vexa_mcp/manifest.py",
           "pattern": "PLACEHOLDER_KEYS = \\{([^}]*)\\}",
           "note": "the MCP's refusal of a published operator key for an auth: admin tool"
         }
@@ -1077,7 +1130,7 @@
         },
         {
           "path": "clients/terminal/src/ui-kit/docLinks.tsx",
-          "pattern": "entitySlug = \\(s: string\\) => (s\\.toLowerCase\\(\\)[^;]*);"
+          "pattern": "\\.normalize\\(\"NFKD\"\\)[^;]*?\\.replace\\(/(\\[\\^a-zA-Z0-9\\]\\+)/g"
         },
         {
           "path": "clients/terminal/src/surfaces/meetingModel.ts",
@@ -1099,13 +1152,8 @@
         {
           "value": "[^a-zA-Z0-9]+",
           "sites": [
+            "clients/terminal/src/ui-kit/docLinks.tsx",
             "core/workspaces/shared/entities.py"
-          ]
-        },
-        {
-          "value": "s.toLowerCase().replace(/[^a-z0-9]+/g, \"-\").replace(/^-+|-+$/g, \"\")",
-          "sites": [
-            "clients/terminal/src/ui-kit/docLinks.tsx"
           ]
         },
         {
@@ -1114,6 +1162,25 @@
             "clients/terminal/src/surfaces/meeting.tsx",
             "clients/terminal/src/surfaces/meetingModel.ts"
           ]
+        }
+      ]
+    },
+    {
+      "id": "entity-slug-translit",
+      "fact": "the transliteration table an entity slug applies to Cyrillic and Greek letters, and its hash fallback for every other script",
+      "kind": "prose",
+      "enforced": true,
+      "canonical": "core/workspaces/shared/entities.py — _TRANSLIT",
+      "how_to_agree": "change _TRANSLIT and the terminal's TRANSLIT in one change, with the vectors in core/agent/tests/test_slugify_unicode.py and clients/terminal/src/ui-kit/__tests__/docLinks.test.ts",
+      "why": "The server names a Cyrillic or Greek entity's file by this table and the terminal's wikilink chip looks the page up by the same table; one letter spelled differently on either side sends the chip to a page that does not exist. The u-<fnv1a32> fallback for scripts with no table is pinned by the same test vectors on both sides (#1783).",
+      "sites": [
+        {
+          "path": "core/workspaces/shared/entities.py",
+          "pattern": "^_TRANSLIT = \\(([^)]*)\\)"
+        },
+        {
+          "path": "clients/terminal/src/ui-kit/docLinks.tsx",
+          "pattern": "^const TRANSLIT = (\"[^\"]*\");"
         }
       ]
     },
@@ -1360,10 +1427,6 @@
           "note": "the mirror of the admin-api predicate; sessions/models.py states it must stay verbatim-equal to the query's ORDER BY or the planner will not substitute the index"
         },
         {
-          "path": "deploy/dogfood/rig/vexa_control_mcp.py",
-          "pattern": "\\.lower\\(\\) in \\(([^)]*)\\)"
-        },
-        {
           "path": "deploy/dogfood/rehearse/doors.py",
           "pattern": "LIVE_STATUSES = \\(([^)]*)\\)"
         },
@@ -1403,12 +1466,6 @@
           "value": "active · awaiting_admission · joining · requested · stopping",
           "sites": [
             "core/meetings/services/meeting-api/src/meeting_api/bot_spawn/service.py"
-          ]
-        },
-        {
-          "value": "active · awaiting_admission · requested",
-          "sites": [
-            "deploy/dogfood/rig/vexa_control_mcp.py"
           ]
         }
       ]
@@ -1606,7 +1663,7 @@
           "pattern": "_TEAMS_SHORT_ID = re\\.compile\\(r\"\\^\\\\d\\{(\\d+,\\d+)\\}\\$\"\\)"
         },
         {
-          "path": "core/meetings/services/mcp/src/vexa_mcp/link_parser.py",
+          "path": "core/gateway/services/mcp/src/vexa_mcp/link_parser.py",
           "pattern": "/meet/\\(\\\\d\\{(\\d+,\\d+)\\}\\)",
           "all": true,
           "note": "the path, the fragment and the launcher forms"
@@ -1727,24 +1784,24 @@
       "fact": "the domains an mcp.tools.v1 manifest may be for, or a tool may require",
       "kind": "set",
       "enforced": true,
-      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — Manifest.domain",
+      "canonical": "core/gateway/contracts/mcp.tools.v1/mcp.tools.schema.json — Manifest.domain",
       "how_to_agree": "membership is closed: a new domain is an mcp.tools.v1 change and an assembler change, in one change",
       "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
       "sites": [
         {
-          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "path": "core/gateway/contracts/mcp.tools.v1/mcp.tools.schema.json",
           "pattern": "\"domain\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
         },
         {
-          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "path": "core/gateway/contracts/mcp.tools.v1/mcp.tools.schema.json",
           "pattern": "\"requires\":\\s*\\{[^}]*?\"enum\":\\s*\\[([^\\]]*)\\]"
         },
         {
-          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "path": "core/gateway/contracts/mcp.tools.v1/mcp.tools.schema.json",
           "pattern": "\"event_v2_owner\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
         },
         {
-          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "path": "core/gateway/services/mcp/src/vexa_mcp/manifest.py",
           "pattern": "^DOMAINS = \\{([^}]*)\\}",
           "flags": "m"
         }
@@ -1755,16 +1812,16 @@
       "fact": "who an mcp.tools.v1 tool's caller may be",
       "kind": "set",
       "enforced": true,
-      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — Tool.identity",
+      "canonical": "core/gateway/contracts/mcp.tools.v1/mcp.tools.schema.json — Tool.identity",
       "how_to_agree": "change the schema and the assembler together",
       "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
       "sites": [
         {
-          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "path": "core/gateway/contracts/mcp.tools.v1/mcp.tools.schema.json",
           "pattern": "\"identity\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
         },
         {
-          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "path": "core/gateway/services/mcp/src/vexa_mcp/manifest.py",
           "pattern": "^IDENTITIES = \\{([^}]*)\\}",
           "flags": "m"
         }
@@ -1775,16 +1832,16 @@
       "fact": "which credential the MCP edge may present to a tool's door",
       "kind": "set",
       "enforced": true,
-      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — Tool.auth",
+      "canonical": "core/gateway/contracts/mcp.tools.v1/mcp.tools.schema.json — Tool.auth",
       "how_to_agree": "change the schema and the assembler together",
       "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
       "sites": [
         {
-          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "path": "core/gateway/contracts/mcp.tools.v1/mcp.tools.schema.json",
           "pattern": "\"auth\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
         },
         {
-          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "path": "core/gateway/services/mcp/src/vexa_mcp/manifest.py",
           "pattern": "^AUTHS = \\{([^}]*)\\}",
           "flags": "m"
         }
@@ -1795,16 +1852,16 @@
       "fact": "the HTTP methods an mcp.tools.v1 route may use",
       "kind": "set",
       "enforced": true,
-      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — Route.method",
+      "canonical": "core/gateway/contracts/mcp.tools.v1/mcp.tools.schema.json — Route.method",
       "how_to_agree": "change the schema and the assembler together",
       "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50).",
       "sites": [
         {
-          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "path": "core/gateway/contracts/mcp.tools.v1/mcp.tools.schema.json",
           "pattern": "\"method\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
         },
         {
-          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "path": "core/gateway/services/mcp/src/vexa_mcp/manifest.py",
           "pattern": "^METHODS = \\{([^}]*)\\}",
           "flags": "m"
         }
@@ -1815,16 +1872,16 @@
       "fact": "the argument names an MCP tool may never take",
       "kind": "set",
       "enforced": true,
-      "canonical": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json — CredentialArgument",
+      "canonical": "core/gateway/contracts/mcp.tools.v1/mcp.tools.schema.json — CredentialArgument",
       "how_to_agree": "change the schema and the assembler together",
       "why": "mcp.tools.v1 is the sealed statement of what a manifest may say, including a private deployment's mounted one; manifest.py is what the MCP refuses at boot. A vocabulary the two spell differently is a manifest the gate passes and the edge refuses, or the reverse (architecture pass 4, N50). This list is what keeps a credential out of a tool's argument list, and so out of every transcript.",
       "sites": [
         {
-          "path": "core/meetings/contracts/mcp.tools.v1/mcp.tools.schema.json",
+          "path": "core/gateway/contracts/mcp.tools.v1/mcp.tools.schema.json",
           "pattern": "\"CredentialArgument\":\\s*\\{\\s*\"enum\":\\s*\\[([^\\]]*)\\]"
         },
         {
-          "path": "core/meetings/services/mcp/src/vexa_mcp/manifest.py",
+          "path": "core/gateway/services/mcp/src/vexa_mcp/manifest.py",
           "pattern": "^CREDENTIAL_ARGUMENTS = \\{([^}]*)\\}",
           "flags": "m"
         }
@@ -2193,6 +2250,294 @@
         },
         {
           "path": "core/runtime/src/runtime_kernel/seccomp-userns.LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "id": "mediapipe-selfie-segmenter-licence",
+      "fact": "the licence of the MediaPipe selfie segmenter model the terminal's background blur serves (Apache-2.0)",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "licenses/mediapipe-selfie-segmenter.LICENSE.txt",
+      "how_to_agree": "copy the verbatim upstream licence beside the model in clients/terminal/vendor/mediapipe/, so every image that serves the model serves its licence",
+      "why": "clients/terminal/vendor/mediapipe/selfie_segmenter.tflite is Google's model, unmodified. licenses/ holds the verbatim upstream text (THIRD_PARTY_LICENSES.md); the terminal image's build context is clients/terminal, so the copy that travels with the bytes must live there (scripts/copy-mediapipe.mjs puts it in public/mediapipe/).",
+      "sites": [
+        {
+          "path": "licenses/mediapipe-selfie-segmenter.LICENSE.txt"
+        },
+        {
+          "path": "clients/terminal/vendor/mediapipe/selfie_segmenter.LICENSE.txt"
+        }
+      ]
+    },
+    {
+      "id": "attachments-mark",
+      "fact": "the attachments mark — the literal a chat message's files ride on, from the composer to the worker and back out of history",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/shared/attachments.py",
+      "how_to_agree": "import it from shared.attachments in Python; the terminal's copy in surfaces/attachments.tsx is the one mirror and this gate keeps it honest",
+      "why": "The terminal writes the mark, agent-api vouches for it, the worker expands it and the history reader strips it. A terminal whose literal drifted would send a mark nothing reads: the agent would get no file and the bubble would show the raw comment.",
+      "sites": [
+        {
+          "path": "core/agent/shared/attachments.py",
+          "pattern": "^MARK_OPEN = \"([^\"]+)\""
+        },
+        {
+          "path": "clients/terminal/src/surfaces/attachments.tsx",
+          "pattern": "ATTACHMENTS_MARK_OPEN = \"([^\"]+)\""
+        }
+      ],
+      "scan": [
+        "core",
+        "clients"
+      ]
+    },
+    {
+      "id": "connection-policy-default-connection-actions",
+      "fact": "the default of the connection policy key connection_actions",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/connection_policy.py — DEFAULTS",
+      "how_to_agree": "change the default in agent-api's DEFAULTS, flows_steps.policies.DEFAULTS, the seeded _global/POLICIES.md and both docs tables in one change",
+      "why": "The connection keys decide what an agent may do with a person's mailbox and calendar. agent-api enforces its own table; the seed is what a new deployment's administrator reads and edits; flows' table is the one list of keys the file may carry; the wizard and the docs tell people what the default is. A default that differs between them is a deployment that does something other than what its file and its docs say.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/connection_policy.py",
+          "pattern": "^    \"connection_actions\": \"([^\"]+)\","
+        },
+        {
+          "path": "core/flows/src/flows_steps/policies.py",
+          "pattern": "^    \"connection_actions\": \"([^\"]+)\","
+        },
+        {
+          "path": "behavior/global/POLICIES.md",
+          "pattern": "^connection_actions: (\\S+)$"
+        },
+        {
+          "path": "behavior/asks/policies-wizard.md",
+          "pattern": "^\\| `connection_actions` \\| `([^`]+)` \\|"
+        },
+        {
+          "path": "docs/docs/connections.mdx",
+          "pattern": "^\\| `connection_actions` \\| `([^`]+)` \\|"
+        }
+      ]
+    },
+    {
+      "id": "connection-policy-default-connection-actions-unattended",
+      "fact": "the default of the connection policy key connection_actions_unattended",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/connection_policy.py — DEFAULTS",
+      "how_to_agree": "change the default in agent-api's DEFAULTS, flows_steps.policies.DEFAULTS, the seeded _global/POLICIES.md and both docs tables in one change",
+      "why": "The connection keys decide what an agent may do with a person's mailbox and calendar. agent-api enforces its own table; the seed is what a new deployment's administrator reads and edits; flows' table is the one list of keys the file may carry; the wizard and the docs tell people what the default is. A default that differs between them is a deployment that does something other than what its file and its docs say.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/connection_policy.py",
+          "pattern": "^    \"connection_actions_unattended\": \"([^\"]+)\","
+        },
+        {
+          "path": "core/flows/src/flows_steps/policies.py",
+          "pattern": "^    \"connection_actions_unattended\": \"([^\"]+)\","
+        },
+        {
+          "path": "behavior/global/POLICIES.md",
+          "pattern": "^connection_actions_unattended: (\\S+)$"
+        },
+        {
+          "path": "behavior/asks/policies-wizard.md",
+          "pattern": "^\\| `connection_actions_unattended` \\| `([^`]+)` \\|"
+        },
+        {
+          "path": "docs/docs/connections.mdx",
+          "pattern": "^\\| `connection_actions_unattended` \\| `([^`]+)` \\|"
+        }
+      ]
+    },
+    {
+      "id": "connection-policy-default-calendar-attendee-domains",
+      "fact": "the default of the connection policy key calendar_attendee_domains",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/connection_policy.py — DEFAULTS",
+      "how_to_agree": "change the default in agent-api's DEFAULTS, flows_steps.policies.DEFAULTS, the seeded _global/POLICIES.md and both docs tables in one change",
+      "why": "The connection keys decide what an agent may do with a person's mailbox and calendar. agent-api enforces its own table; the seed is what a new deployment's administrator reads and edits; flows' table is the one list of keys the file may carry; the wizard and the docs tell people what the default is. A default that differs between them is a deployment that does something other than what its file and its docs say.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/connection_policy.py",
+          "pattern": "^    \"calendar_attendee_domains\": \"([^\"]+)\","
+        },
+        {
+          "path": "core/flows/src/flows_steps/policies.py",
+          "pattern": "^    \"calendar_attendee_domains\": \"([^\"]+)\","
+        },
+        {
+          "path": "behavior/global/POLICIES.md",
+          "pattern": "^calendar_attendee_domains: (\\S+)$"
+        },
+        {
+          "path": "behavior/asks/policies-wizard.md",
+          "pattern": "^\\| `calendar_attendee_domains` \\| `([^`]+)` \\|"
+        },
+        {
+          "path": "docs/docs/connections.mdx",
+          "pattern": "^\\| `calendar_attendee_domains` \\| `([^`]+)` \\|"
+        }
+      ]
+    },
+    {
+      "id": "connection-policy-default-calendar-ids",
+      "fact": "the default of the connection policy key calendar_ids",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/connection_policy.py — DEFAULTS",
+      "how_to_agree": "change the default in agent-api's DEFAULTS, flows_steps.policies.DEFAULTS, the seeded _global/POLICIES.md and both docs tables in one change",
+      "why": "The connection keys decide what an agent may do with a person's mailbox and calendar. agent-api enforces its own table; the seed is what a new deployment's administrator reads and edits; flows' table is the one list of keys the file may carry; the wizard and the docs tell people what the default is. A default that differs between them is a deployment that does something other than what its file and its docs say.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/connection_policy.py",
+          "pattern": "^    \"calendar_ids\": \"([^\"]+)\","
+        },
+        {
+          "path": "core/flows/src/flows_steps/policies.py",
+          "pattern": "^    \"calendar_ids\": \"([^\"]+)\","
+        },
+        {
+          "path": "behavior/global/POLICIES.md",
+          "pattern": "^calendar_ids: (\\S+)$"
+        },
+        {
+          "path": "behavior/asks/policies-wizard.md",
+          "pattern": "^\\| `calendar_ids` \\| `([^`]+)` \\|"
+        },
+        {
+          "path": "docs/docs/connections.mdx",
+          "pattern": "^\\| `calendar_ids` \\| `([^`]+)` \\|"
+        }
+      ]
+    },
+    {
+      "id": "connection-policy-default-draft-recipient-domains",
+      "fact": "the default of the connection policy key draft_recipient_domains",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/connection_policy.py — DEFAULTS",
+      "how_to_agree": "change the default in agent-api's DEFAULTS, flows_steps.policies.DEFAULTS, the seeded _global/POLICIES.md and both docs tables in one change",
+      "why": "The connection keys decide what an agent may do with a person's mailbox and calendar. agent-api enforces its own table; the seed is what a new deployment's administrator reads and edits; flows' table is the one list of keys the file may carry; the wizard and the docs tell people what the default is. A default that differs between them is a deployment that does something other than what its file and its docs say.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/connection_policy.py",
+          "pattern": "^    \"draft_recipient_domains\": \"([^\"]+)\","
+        },
+        {
+          "path": "core/flows/src/flows_steps/policies.py",
+          "pattern": "^    \"draft_recipient_domains\": \"([^\"]+)\","
+        },
+        {
+          "path": "behavior/global/POLICIES.md",
+          "pattern": "^draft_recipient_domains: (\\S+)$"
+        },
+        {
+          "path": "behavior/asks/policies-wizard.md",
+          "pattern": "^\\| `draft_recipient_domains` \\| `([^`]+)` \\|"
+        },
+        {
+          "path": "docs/docs/connections.mdx",
+          "pattern": "^\\| `draft_recipient_domains` \\| `([^`]+)` \\|"
+        }
+      ]
+    },
+    {
+      "id": "connection-policy-default-calendar-notify-attendees",
+      "fact": "the default of the connection policy key calendar_notify_attendees",
+      "kind": "flag",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/connection_policy.py — DEFAULTS",
+      "how_to_agree": "change the default in agent-api's DEFAULTS, flows_steps.policies.DEFAULTS, the seeded _global/POLICIES.md and both docs tables in one change",
+      "why": "The connection keys decide what an agent may do with a person's mailbox and calendar. agent-api enforces its own table; the seed is what a new deployment's administrator reads and edits; flows' table is the one list of keys the file may carry; the wizard and the docs tell people what the default is. A default that differs between them is a deployment that does something other than what its file and its docs say.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/connection_policy.py",
+          "pattern": "^    \"calendar_notify_attendees\": (True|False),"
+        },
+        {
+          "path": "core/flows/src/flows_steps/policies.py",
+          "pattern": "^    \"calendar_notify_attendees\": (True|False),"
+        },
+        {
+          "path": "behavior/global/POLICIES.md",
+          "pattern": "^calendar_notify_attendees: (\\S+)$"
+        },
+        {
+          "path": "behavior/asks/policies-wizard.md",
+          "pattern": "^\\| `calendar_notify_attendees` \\| `([^`]+)` \\|"
+        },
+        {
+          "path": "docs/docs/connections.mdx",
+          "pattern": "^\\| `calendar_notify_attendees` \\| `([^`]+)` \\|"
+        }
+      ]
+    },
+    {
+      "id": "connection-policy-default-draft-attachments",
+      "fact": "the default of the connection policy key draft_attachments",
+      "kind": "flag",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/connection_policy.py — DEFAULTS",
+      "how_to_agree": "change the default in agent-api's DEFAULTS, flows_steps.policies.DEFAULTS, the seeded _global/POLICIES.md and both docs tables in one change",
+      "why": "The connection keys decide what an agent may do with a person's mailbox and calendar. agent-api enforces its own table; the seed is what a new deployment's administrator reads and edits; flows' table is the one list of keys the file may carry; the wizard and the docs tell people what the default is. A default that differs between them is a deployment that does something other than what its file and its docs say.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/connection_policy.py",
+          "pattern": "^    \"draft_attachments\": (True|False),"
+        },
+        {
+          "path": "core/flows/src/flows_steps/policies.py",
+          "pattern": "^    \"draft_attachments\": (True|False),"
+        },
+        {
+          "path": "behavior/global/POLICIES.md",
+          "pattern": "^draft_attachments: (\\S+)$"
+        },
+        {
+          "path": "behavior/asks/policies-wizard.md",
+          "pattern": "^\\| `draft_attachments`, `draft_attachment_max_kb` \\| `([^`]+)`,"
+        },
+        {
+          "path": "docs/docs/connections.mdx",
+          "pattern": "^\\| `draft_attachments` / `draft_attachment_max_kb` \\| `([^`]+)` /"
+        }
+      ]
+    },
+    {
+      "id": "connection-policy-default-draft-attachment-max-kb",
+      "fact": "the default of the connection policy key draft_attachment_max_kb",
+      "kind": "literal",
+      "enforced": true,
+      "canonical": "core/agent/control_plane/connection_policy.py — DEFAULTS",
+      "how_to_agree": "change the default in agent-api's DEFAULTS, flows_steps.policies.DEFAULTS, the seeded _global/POLICIES.md and both docs tables in one change",
+      "why": "The connection keys decide what an agent may do with a person's mailbox and calendar. agent-api enforces its own table; the seed is what a new deployment's administrator reads and edits; flows' table is the one list of keys the file may carry; the wizard and the docs tell people what the default is. A default that differs between them is a deployment that does something other than what its file and its docs say.",
+      "sites": [
+        {
+          "path": "core/agent/control_plane/connection_policy.py",
+          "pattern": "^    \"draft_attachment_max_kb\": \"?(\\d+)\"?,"
+        },
+        {
+          "path": "core/flows/src/flows_steps/policies.py",
+          "pattern": "^    \"draft_attachment_max_kb\": \"?(\\d+)\"?,"
+        },
+        {
+          "path": "behavior/global/POLICIES.md",
+          "pattern": "^draft_attachment_max_kb: (\\S+)$"
+        },
+        {
+          "path": "behavior/asks/policies-wizard.md",
+          "pattern": "^\\| `draft_attachments`, `draft_attachment_max_kb` \\| `[^`]+`, `([^`]+)` \\|"
+        },
+        {
+          "path": "docs/docs/connections.mdx",
+          "pattern": "^\\| `draft_attachments` / `draft_attachment_max_kb` \\| `[^`]+` / `([^`]+)` \\|"
         }
       ]
     }

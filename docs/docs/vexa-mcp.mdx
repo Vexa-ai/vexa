@@ -25,38 +25,69 @@ never reaches into other services directly.
 
 ## Tools
 
-Nine tools, plus four prompts (`vexa.meeting_prep` · `vexa.during_meeting` · `vexa.post_meeting` ·
+The meeting tools, plus four prompts (`vexa.meeting_prep` · `vexa.during_meeting` · `vexa.post_meeting` ·
 `vexa.teams_link_help`).
 
 | Tool | Wraps |
 |---|---|
 | `parse_meeting_link` | pure — URL to platform / `native_meeting_id` / passcode, no gateway hop |
-| `request_meeting_bot` | `POST /bots` (accepts `meeting_url` **or** `native_meeting_id`) |
+| `request_meeting_bot` | `POST /bots` (accepts `meeting_url` **or** `native_meeting_id`; optional `bot_account` joins as a signed-in bot account) |
 | `get_bot_status` | `GET /bots/status` |
 | `update_bot_config` | `PUT /bots/{platform}/{native}/config` |
 | `stop_bot` | `DELETE /bots/{platform}/{native}` |
 | `list_meetings` | `GET /meetings` |
-| `get_meeting_transcript` | `GET /transcripts/{platform}/{native}` |
+| `get_meeting` | `GET /meetings/{meeting_db_id}` — one meeting's status, times and how it ended |
+| `get_meeting_participants` | `GET /meetings/{platform}/{native}/participants` |
+| `delete_meeting` | `DELETE /meetings/{meeting_db_id}` — irreversible; needs `asked_by_a_human=true`, and a worker running without its person is refused |
+| `get_meeting_transcript` | `GET /transcripts/{platform}/{native}` — one page of at most 200 segments, with `next_index` and `complete`; a partial page carries a `note`. Call again with `since_index` set to `next_index` until `complete` is true |
 | `list_recordings` | `GET /recordings` |
 | `get_recording` | `GET /recordings/{recording_id}` |
+| `record_voice_note` | `POST /voice-notes/recorder` — opens the voice-note recorder in the person's open Minutes tab (`ui_action: open_voice_note`); records nothing itself; refused to a worker with nobody present |
+| `search_transcripts` | `GET /transcripts/search` |
+| `annotate_meeting` | `POST /meetings/{platform}/{native}/annotate` (or `/meetings/{meeting_db_id}/annotate`) — sets the title and merges metadata keys |
+| `get_meeting_chat` | `GET /bots/{platform}/{native}/chat` |
+| `speak_in_meeting` | `POST /bots/{platform}/{native}/speak` — said out loud to everyone present; refused without the explicit acknowledgement |
+| `report_issue` | files a ticket to the deployment's ticket sink (`VEXA_TICKET_SINK_URL`); `503` when none is configured |
+| `browser_session_open` | `POST /bot-accounts/sessions` — opens a live browser in which the person signs a bot account in |
+| `bot_accounts_list` | `GET /bot-accounts` |
+| `bot_account_verify` | `POST /bot-accounts/{account_id}/verify` |
+
+A voice note recorded in Minutes is a meeting with `platform: "voice_note"`: `list_meetings`,
+`get_meeting_transcript` and `stop_bot` take it like any meeting. Its audio comes from the person's
+browser, so MCP cannot record one: `record_voice_note` asks the person's open Minutes tab to open the
+recorder, and the person speaks and presses Stop. A client that is not Minutes gets the same answer and
+should tell the person to record from a new chat in Minutes.
 
 `update_bot_config` changes a running bot's transcription language (`language`, `allowed_languages`);
 `request_meeting_bot` takes the same two fields for one meeting. See
 [Transcription language](/how-to/transcription-language).
+
+A meeting that admits only signed-in users needs a **bot account**: a saved, signed-in browser
+profile for Google, Microsoft or Zoom. `browser_session_open` answers with
+`ui_action: "open_browser_session"` and the session's fields; a Vexa client opens the live view from
+them and the person signs in there themselves — no tool takes or types a password. Once saved, the
+account appears in `bot_accounts_list`, and its `id` goes to `request_meeting_bot` as `bot_account`.
 
 ### Tools the deployed domains add
 
 At start-up the server asks each deployed domain for its tool manifest (`mcp.tools.v1`) and serves
 the union beside the tools above — one server, one tool list. With the agent domain deployed that adds
 the workspace tools (reading, and the page verbs `workspace_write`, `workspace_delete`,
-`workspace_move`, `entity_upsert` and `fetch_asset`), the claim book (`propose`, `validate`), membership (`workspace_members`, `workspace_invite`,
-`workspace_membership`), the transcript highlight (`transcript_terms`), the company-layer accept (`mark_global_ready`), Connections (`connection_request`, `connections_status`, `gmail_search`,
+`workspace_move`, `entity_upsert` and `fetch_asset`), repository sync (`workspace_import`,
+`workspace_attach`, `workspace_status`, `workspace_push`, `workspace_pull` — `workspace_status` fetches and reports ahead/behind without changing the workspace; a git token is never a tool argument), the claim book (`propose`, `validate`, `company_context`), the pages panel and the conversation's target (`open_page`, `workspace_target`), membership (`workspace_members`, `workspace_invite`, `workspace_invite_link_create`, `workspace_invite_links`, `workspace_invite_link_revoke`,
+`workspace_membership`, `workspace_member_add`), a chat's people (`chat_participants`,
+`chat_participant_add`, `chat_participant_remove`), the person's notifications (`notifications_list`,
+`notifications_mark_read` — *"what did I miss?"* — `notifications_act` — *"accept the invite from Alice"* — and `notify`, which posts one line to the person's bell), the transcript highlight (`transcript_terms`), the company-layer accept (`mark_global_ready`), Connections (`connection_request`, `connections_status`, `gmail_search`,
 `gmail_read`, `gmail_thread`, `calendar_events`, `mail_inbox`, `mail_read`, `gmail_draft_create`,
-`secret_service_call`, `onboarding_research`), the person's clock (`current_time`, `timezone_set`), the
-models they may pick (`models_list`, read-only — see [Model catalog](/model-catalog)) and `chat_name`; with flows deployed, `whats_waiting`, `report_friction` and the flow tools. Each is a route
-its domain serves, and the tool's arguments and description are that route's own. Four flows tools
-work for the deployment's [admin account](/minutes/admin-account) only: `flows_submit`,
-`flow_lifecycle`, `mail_settings` and `friction_list`.
+`gmail_draft_update`, `calendar_event_create`, `calendar_event_update`, `calendar_event_cancel`,
+`connection_policy_get`, `connection_policy_set`, `secret_service_call`, `onboarding_research`), the person's clock (`current_time`, `timezone_set`), the
+models they may pick (`models_list`, read-only — see [Model catalog](/model-catalog)) and `chat_name`; with
+identity deployed, the person's own settings and where their workspace lives (`settings`,
+`settings_set`, `workspace_regime`, `workspace_regime_set`); with flows deployed, `whats_waiting`,
+`report_friction` and the flow tools. Each is a route its domain serves, and the tool's arguments and
+description are that route's own. Four flows tools work for the deployment's
+[admin account](/minutes/admin-account) only: `flows_submit`, `flow_lifecycle`, `mail_settings` and
+`friction_list`.
 
 ### Agent workers use this same server
 
@@ -149,7 +180,7 @@ path from step 3 on, without steps 6 and 7.
    it reads delegation answers. Identity verifies the signature, audience and expiry, checks the live
    record in Redis, and answers with the person, scopes `bot` and `tx`, the person's workspaces
    narrowed to the ceiling, and the `delegation` block. The `/mcp` row in
-   `core/meetings/services/mcp/routes.v1.json` says `"delegation": true`, so the gateway admits it
+   `core/gateway/services/mcp/routes.v1.json` says `"delegation": true`, so the gateway admits it
    there.
 5. **The gateway forwards to the MCP service** with a signed identity, `X-Vexa-Identity`
    (`gateway-identity.v1`), that carries the same person and delegation.
@@ -182,7 +213,7 @@ path from step 3 on, without steps 6 and 7.
 
 **Contracts and routes.** `delegation.v1` (`core/identity/contracts/delegation.v1/`),
 `gateway-identity.v1` (`core/gateway/contracts/gateway-identity.v1/`), `routes.v1`, `mcp.tools.v1`
-(`core/meetings/contracts/mcp.tools.v1/`), and identity's `POST /internal/validate`.
+(`core/gateway/contracts/mcp.tools.v1/`), and identity's `POST /internal/validate`.
 
 **Configuration.** agent-api: `VEXA_MCP_URL`, `VEXA_MCP_DELEGATION_SECRET`,
 `VEXA_MCP_DELEGATION_TTL_SEC` (`core/agent/control_plane/config.v1.json`). admin-api:
@@ -237,9 +268,9 @@ Deny tests:
 | `core/gateway/services/gateway/tests/test_delegated_mcp.py` | `test_a_delegation_bearer_is_refused_on_rest_routes_called_directly` · `test_a_valid_re_entry_is_refused_on_a_route_the_mcp_does_not_call_back` · `test_a_re_entry_marker_must_be_the_edges_own_signature_for_the_same_delegation` · `test_without_a_signing_key_there_is_no_re_entry` · `test_a_vxd_bearer_is_held_to_the_mcp_door_even_if_identity_answers_without_a_delegation` · `test_a_delegation_bearer_opens_no_identity_read_and_no_socket` · `test_a_worker_is_the_admin_only_for_an_admin_person_in_the_loop_and_only_on_re_entry` |
 | `core/gateway/services/gateway/tests/test_route_policy.py` | `test_an_unscoped_row_cannot_admit_a_delegation` · `test_mcp_reentry_beside_delegation_refuses_to_boot` · `test_mcp_reentry_on_a_catch_all_refuses_to_boot` · `test_the_shipped_manifests_admit_a_worker_on_the_mcp_door_and_the_friction_report_only` · `test_without_the_flag_the_mcp_s_callback_refuses_its_re_entry` |
 | `core/gateway/services/gateway/tests/test_catch_all_paths.py` | `test_the_mcp_tail_is_held_to_the_same_rule` |
-| `core/meetings/services/mcp/tests/test_callback_routes.py` | `test_every_flagged_meetings_and_gateway_row_is_one_a_tool_calls` · `test_every_assembled_agent_tool_lands_on_a_row_that_admits_the_re_entry_and_no_other_row_does` |
-| `core/meetings/services/mcp/tests/test_reentry.py` | `test_a_request_with_no_signed_identity_carries_none` · `test_the_marker_is_held_per_request_and_never_leaks_into_the_next_one` |
-| `core/meetings/services/mcp/tests/test_tool_auth.py` | `test_an_admin_tool_spends_the_deployments_key_for_the_instance_admin_only` · `test_the_admin_check_never_reads_what_the_caller_says_about_itself` |
+| `core/gateway/services/mcp/tests/test_callback_routes.py` | `test_every_flagged_meetings_and_gateway_row_is_one_a_tool_calls` · `test_every_assembled_agent_tool_lands_on_a_row_that_admits_the_re_entry_and_no_other_row_does` |
+| `core/gateway/services/mcp/tests/test_reentry.py` | `test_a_request_with_no_signed_identity_carries_none` · `test_the_marker_is_held_per_request_and_never_leaks_into_the_next_one` |
+| `core/gateway/services/mcp/tests/test_tool_auth.py` | `test_an_admin_tool_spends_the_deployments_key_for_the_admin_account_only` · `test_the_admin_check_never_reads_what_the_caller_says_about_itself` |
 | `core/identity/services/admin-api/tests/test_internal_validate_delegation.py` | `test_a_forged_expired_or_malformed_token_is_401` · `test_a_token_for_an_account_that_no_longer_exists_is_401` · `test_a_deployment_without_the_delegation_key_refuses_every_delegation` · `test_a_caller_that_did_not_declare_it_reads_a_delegation_is_refused_like_an_unknown_token` |
 | `core/identity/services/admin-api/tests/test_internal_validate_revocation.py` | `test_a_token_whose_unit_ended_is_refused` · `test_a_token_whose_live_record_is_gone_is_refused` · `test_an_unreachable_store_refuses_the_delegation_token` · `test_an_unreachable_store_does_not_touch_an_api_key` |
 | `core/agent/tests/test_delegation.py` | `test_wrong_secret_is_refused` · `test_tampered_payload_is_refused` · `test_an_autonomous_dispatch_may_not_carry_an_unbounded_grant` · `test_two_dispatches_never_share_a_token_id` |
@@ -248,12 +279,16 @@ Deny tests:
 | `core/agent/tests/test_delegation_ceiling_verbs.py` | `test_a_workspace_outside_the_ceiling_is_refused_and_nothing_changes` · `test_a_worker_s_target_outside_its_ceiling_is_not_a_default_it_may_write` |
 | `core/agent/tests/test_worker_token_not_readable.py` | `test_the_token_is_in_no_file_another_member_can_read` · `test_a_path_into_claude_is_refused_on_every_file_route` |
 | `core/agent/tests/test_person_in_the_loop.py` | `test_an_empty_regime_is_refused_a_person_verb` · `test_refuse_delegated_refuses_every_regime_with_its_own_reason` |
+| `core/gateway/services/mcp/tests/test_rig_parity_ports.py` | `test_delete_meeting_is_refused_unless_a_human_asked` · `test_delete_meeting_passes_the_unwatched_worker_refusal_through` |
+| `core/meetings/services/meeting-api/tests/test_regime.py` | `test_an_unwatched_worker_is_refused` (`DELETE /meetings/{id}` among the person verbs) |
 
 ## What is not available
 
 - **Tools blocked on API parity** — these wrap REST routes the public API does not expose yet, and
   will be ported when the routes land: `delete_recording` · `get_recording_media_download` ·
   `get_recording_config` / `update_recording_config` · `create_transcript_share_link` ·
-  `update_meeting_data` / `delete_meeting` · `get_meeting_bundle`.
+  `get_meeting_bundle`.
+- **`update_meeting_data` is not a tool.** Its route is public (`PATCH /meetings/{platform}/{native_meeting_id}`,
+  see [Meetings API](/api/meetings)), but the tool is not ported; `annotate_meeting` sets the title and metadata.
 
 The live status row for this feature is maintained on [Roadmap → Status](/roadmap/status).

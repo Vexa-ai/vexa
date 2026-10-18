@@ -21,6 +21,40 @@ interface WhisperSegment {
   end: number;
 }
 
+/** One transcription request still owed an answer. A buffer may have several: when the newest one
+ *  outlives its stall threshold, another is sent beside it, so one slow request never holds up the
+ *  speaker's later audio. Answers are accepted in request order; an older answer arriving after a
+ *  newer one was accepted describes a window that has moved on, and is dropped. */
+interface PendingRequest {
+  seq: number;
+  /** Buffer generation the request went out under (a full reset makes it stale). */
+  generation: number;
+  /** Stretch-absolute sample its window started at; an answer is only valid against the same start. */
+  baseAbs: number;
+  sentAtMs: number;
+  audioSec: number;
+  /** A newer request was accepted or a final went out: this answer, when it comes, is not used. */
+  superseded: boolean;
+  /** Sent again beside a stalled request. A stream has at most one of these owed at a time. */
+  duplicate?: boolean;
+}
+
+/** The STT client's back-pressure, as the lane reads it (structural; the client's shared gate). */
+export interface SttPressureView {
+  /** True while the client is holding requests (overload pause, open breaker, queue). */
+  backingOff(): boolean;
+  /** Wall-clock ms at which the most recent hold ended (0 if none). */
+  lastBackoffEndMs(): number;
+}
+
+/** A stretch of captured audio that will never be transcribed, by capture time. */
+export interface MissingRange {
+  speakerName: string;
+  startMs: number;
+  endMs: number;
+  reason: string;
+}
+
 interface SpeakerBuffer {
   speakerId: string;
   /** The key a transcription request for this buffer is routed back by (the first argument of
@@ -30,6 +64,8 @@ interface SpeakerBuffer {
   routeKey: string;
   /** A detached stretch: receives no more audio, finishes its own final request, then is forgotten. */
   retired: boolean;
+  /** The next request this buffer sends is a stall duplicate (set and cleared around one submit). */
+  markNextDuplicate?: boolean;
   /** Generation this buffer's outstanding request was issued under (stale-response guard). */
   submitGeneration?: number;
   /** Samples trimmed from the front of this stretch so far — maps buffer indices to stretch-absolute
@@ -49,7 +85,33 @@ interface SpeakerBuffer {
   confirmCount: number;
   /** Word-level prefix confirmation: words from previous Whisper submission */
   lastWords: string[];
+  /** At least one request that has not been superseded is still owed an answer. */
   inFlight: boolean;
+  /** Every request still owed an answer, by request number (superseded ones included until they
+   *  answer or fail, so they count against the in-flight bound). */
+  outstanding: Map<number, PendingRequest>;
+  /** Request number of the newest accepted answer; older answers are dropped. */
+  lastAcceptedSeq: number;
+  /** Position in the speaker's timeline: a buffer's confirmed text is published only after every
+   *  earlier stretch of the same speaker has published its own (or was released as a gap). */
+  order: number;
+  /** Publication-order group: stretches in one group publish in timeline order. The speaker id unless
+   *  the caller groups several speaker ids (successive turns of one channel) together. */
+  orderGroup: string;
+  /** A detached stretch whose final window failed: when it is sent again. The audio is kept. */
+  retryAtMs?: number;
+  /** Failed final attempts so far (drives the backoff). */
+  finalFailures: number;
+  /** Detached at (ms): bounds how long later speech waits behind this stretch. */
+  detachedAtMs?: number;
+  /** Later speech no longer waits for this stretch (it took too long); it publishes when it lands. */
+  gapReleased: boolean;
+  /** Capture time the current run of quiet frames began (undefined while speech arrives). */
+  quietSinceMs?: number;
+  /** Speech has arrived since the last pause-final. */
+  voicedSinceFinal?: boolean;
+  /** The most recent window sent to STT carried speech-level audio (short answers are then real). */
+  lastSubmitVoiced?: boolean;
   /** Wall-clock time (ms) when the current unconfirmed window started */
   windowStartMs: number;
   /** Wall-clock time (ms) when the buffer first started (for segment timing) */
@@ -134,6 +196,50 @@ export interface SpeakerStreamManagerConfig {
    *  Slow STT never drops audio below it; past it new frames are dropped and logged loudly with the
    *  seconds lost. Default: 300 */
   maxHeldAudioSec?: number;
+  /** A request unanswered for max(sttStallMinMs, sttStallFactor × its audio seconds) is STALLED:
+   *  the speaker's current window is sent again beside it, so one slow request never blocks the
+   *  audio behind it. Default 10000. */
+  sttStallMinMs?: number;
+  /** See `sttStallMinMs`. Default 2. */
+  sttStallFactor?: number;
+  /** Bound on requests one buffer may have owed at once (stalled ones included). Default 3. */
+  maxInFlightPerSpeaker?: number;
+  /** A final window that fails (after the client's own retries) is KEPT and sent again after
+   *  finalRetryBaseMs, doubling up to finalRetryMaxMs, for as long as the lane runs. Defaults
+   *  5000 / 60000. */
+  finalRetryBaseMs?: number;
+  finalRetryMaxMs?: number;
+  /** How long later speech of a speaker waits, unpublished, behind an earlier stretch still being
+   *  transcribed (ms). Past it the later text publishes and the earlier fills in when it lands.
+   *  Default 120000. */
+  orderHoldMs?: number;
+  /** End-of-utterance final: once a speaker's frames have been quiet (below silenceRmsThreshold) for
+   *  this long after speech, the window so far is sent once as a FINAL and the buffer continues
+   *  from empty — a continuous stream (a voice note's microphone) never waits for agreement or the
+   *  hard cap to publish. 0 disables. Default 0. */
+  pauseFinalMs?: number;
+  /** Pipelined drafts: send the current window every submitInterval even while earlier requests
+   *  are in flight (up to maxInFlightPerSpeaker); the newest valid answer wins. A fresh draft then
+   *  lands about every submitInterval instead of every round trip. Default false. */
+  pipelineDrafts?: boolean;
+  /** Speech gate: a window is sent only when it holds at least this much audio (seconds) clearly above
+   *  the speaker's own noise floor (4× it, and above silenceRmsThreshold). Room noise alone — a fan, a
+   *  hum, a far keyboard — never reaches STT, which otherwise invents text for it. 0 disables.
+   *  Default 0.25. */
+  speechGateSec?: number;
+  /** The STT client's back-pressure. While it is backing off no window is sent again beside a
+   *  stalled one and no pipelined draft goes out, and a request's stall clock starts no earlier than
+   *  the end of the hold — time spent held is not a slow STT. */
+  sttPressure?: SttPressureView;
+}
+
+/** How far transcription is behind capture, for a UI that must tell a quiet speaker from a slow STT. */
+export interface ProgressStats {
+  /** Seconds of captured audio not yet resolved (transcribed, judged silent, skipped or lost). */
+  backlogSec: number;
+  /** Seconds since the last frame above the silence threshold (wall clock); 0 while speech arrives.
+   *  -1 when no voiced frame has been seen. */
+  silentForSec: number;
 }
 
 /** Seconds of audio per outcome, for one manager (one meeting's lane). `captured` is every fed
@@ -161,6 +267,32 @@ export function rms(samples: Float32Array): number {
   return Math.sqrt(sum / samples.length);
 }
 
+/** Window RMS at or above which the audio is speech, not near-silence (short answers are then real). */
+const VOICED_RMS = 0.01;
+
+const wordKey = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, '');
+
+/** Whisper loops on a token ("12 12 12 12") and re-emits its prompt's tail at the start of the next
+ *  window. Collapse a run of 3+ identical words to one, and drop a leading run of 2+ words that
+ *  repeats the end of the text already confirmed for this speaker. */
+export function cleanRepeats(text: string, previous: string): string {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  for (let i = 0; i < words.length;) {
+    let j = i + 1;
+    while (j < words.length && wordKey(words[j]) !== '' && wordKey(words[j]) === wordKey(words[i])) j++;
+    out.push(...(j - i >= 3 ? [words[j - 1]] : words.slice(i, j)));
+    i = j;
+  }
+  const prev = previous.trim().split(/\s+/).filter(Boolean).map(wordKey);
+  for (let k = Math.min(prev.length, out.length); k >= 2; k--) {
+    let same = true;
+    for (let m = 0; m < k && same; m++) same = wordKey(out[m]) === prev[prev.length - k + m];
+    if (same) return out.slice(k).join(' ');
+  }
+  return out.join(' ');
+}
+
 export class SpeakerStreamManager {
   /** Detached stretches one speaker may have finishing at once; past it the live window extends. */
   static readonly MAX_DETACHED_PER_SPEAKER = 4;
@@ -176,6 +308,29 @@ export class SpeakerStreamManager {
   private callbackStampedFrames: boolean;
   private minFinalAudioSec: number;
   private maxHeldAudioSec: number;
+  private sttStallMinMs: number;
+  private sttStallFactor: number;
+  private maxInFlight: number;
+  private finalRetryBaseMs: number;
+  private finalRetryMaxMs: number;
+  private orderHoldMs: number;
+  private pauseFinalMs: number;
+  private pipelineDrafts: boolean;
+  private speechGateSec: number;
+  /** Per speaker: a slowly adapting noise floor (frame RMS), the baseline the speech gate measures against. */
+  private noiseFloor = new Map<string, number>();
+  private sttPressure: SttPressureView | undefined;
+  /** Captured audio that will never be transcribed, by capture time (merged when contiguous). */
+  private missing: MissingRange[] = [];
+  private orderSeq = 0;
+  /** Confirmed segments waiting for an earlier stretch of the same speaker to publish first. */
+  private held: { buffer: SpeakerBuffer; deliver: () => void }[] = [];
+  /** One manager-level tick for detached stretches (stall resends, retries, order holds). */
+  private sweepTimer: ReturnType<typeof setInterval> | undefined;
+  /** Request numbers, manager-wide (they name requests in log lines). */
+  private requestSeq = 0;
+  /** Wall-clock time (ms) of the last voiced frame fed, any speaker. */
+  private lastVoicedAtMs: number | undefined;
   /** Every buffer that can still receive a transcription response, by route key: the live buffers
    *  and the detached stretches still finishing. */
   private routes: Map<string, SpeakerBuffer> = new Map();
@@ -188,7 +343,7 @@ export class SpeakerStreamManager {
   private carryForward: Float32Array[] = [];
 
   /** Called when unconfirmed audio needs transcription. */
-  onSegmentReady: ((speakerId: string, speakerName: string, audioBuffer: Float32Array) => void) | null = null;
+  onSegmentReady: ((speakerId: string, speakerName: string, audioBuffer: Float32Array, requestId: number) => void) | null = null;
 
   /** Called when a segment is confirmed and should be published. */
   onSegmentConfirmed: ((speakerId: string, speakerName: string, transcript: string, bufferStartMs: number, bufferEndMs: number, segmentId: string, language?: string) => void) | null = null;
@@ -210,6 +365,63 @@ export class SpeakerStreamManager {
     this.callbackStampedFrames = config?.callbackStampedFrames ?? false;
     this.minFinalAudioSec = config?.minFinalAudioSec ?? 1;
     this.maxHeldAudioSec = config?.maxHeldAudioSec ?? 300;
+    this.sttStallMinMs = config?.sttStallMinMs ?? 10_000;
+    this.sttStallFactor = config?.sttStallFactor ?? 2;
+    this.maxInFlight = Math.max(1, config?.maxInFlightPerSpeaker ?? 3);
+    this.finalRetryBaseMs = config?.finalRetryBaseMs ?? 5000;
+    this.finalRetryMaxMs = config?.finalRetryMaxMs ?? 60_000;
+    this.orderHoldMs = config?.orderHoldMs ?? 120_000;
+    this.pauseFinalMs = config?.pauseFinalMs ?? 0;
+    this.pipelineDrafts = config?.pipelineDrafts ?? false;
+    this.speechGateSec = config?.speechGateSec ?? 0.25;
+    this.sttPressure = config?.sttPressure;
+  }
+
+  /** Every stretch of captured audio that will never be transcribed (the held-audio bound, a lane
+   *  closed with audio still owed), by capture time — a loss is a marked range, never silent. */
+  missingRanges(): MissingRange[] {
+    return this.missing.map((r) => ({ ...r }));
+  }
+
+  private markMissing(speakerName: string, startMs: number, endMs: number, reason: string): void {
+    if (!(endMs > startMs)) return;
+    const last = this.missing[this.missing.length - 1];
+    if (last && last.speakerName === speakerName && last.reason === reason && startMs - last.endMs <= 50 && startMs >= last.startMs) {
+      last.endMs = Math.max(last.endMs, endMs);
+      return;
+    }
+    this.missing.push({ speakerName, startMs, endMs, reason });
+  }
+
+  /** True while any audio is still owed a transcript: a request in flight, a window waiting for its
+   *  retry, or unconfirmed audio in any buffer or detached stretch. */
+  hasUnfinished(): boolean {
+    for (const b of this.routes.values()) {
+      if (b.inFlight || b.retryAtMs !== undefined || b.pendingFinal || this.unconfirmedSamples(b) > 0) return true;
+    }
+    return false;
+  }
+
+  /** Send every window waiting for a retry now (the final pass at the end of a note or meeting). */
+  retryNow(): void {
+    for (const b of Array.from(this.routes.values())) {
+      if (b.retryAtMs !== undefined && !b.inFlight) {
+        b.retryAtMs = undefined;
+        void this.finalSubmit(b, `final pass, attempt ${b.finalFailures + 1}`);
+      }
+    }
+  }
+
+  /** How far transcription is behind capture (see ProgressStats). */
+  progress(): ProgressStats {
+    const s = this.stats;
+    const resolved = s.transcribed + s.noSpeech + s.short + s.dropped;
+    const backlog = Math.max(0, s.captured - resolved);
+    return {
+      backlogSec: Math.round((backlog / this.sampleRate) * 10) / 10,
+      silentForSec: this.lastVoicedAtMs === undefined ? -1
+        : Math.round(Math.max(0, Date.now() - this.lastVoicedAtMs) / 100) / 10,
+    };
   }
 
   /** Seconds of audio captured / submitted / transcribed / skipped / dropped so far. */
@@ -237,7 +449,7 @@ export class SpeakerStreamManager {
     return true;
   }
 
-  addSpeaker(speakerId: string, speakerName: string): void {
+  addSpeaker(speakerId: string, speakerName: string, orderGroup?: string): void {
     if (this.buffers.has(speakerId)) return;
 
     const now = Date.now();
@@ -259,6 +471,12 @@ export class SpeakerStreamManager {
       confirmCount: 0,
       lastWords: [],
       inFlight: false,
+      outstanding: new Map(),
+      lastAcceptedSeq: 0,
+      order: ++this.orderSeq,
+      orderGroup: orderGroup ?? speakerId,
+      finalFailures: 0,
+      gapReleased: false,
       windowStartMs: now,
       bufferStartMs: now,
       sequenceNumber: 0,
@@ -337,16 +555,25 @@ export class SpeakerStreamManager {
     }
 
     this.stats.captured += audioData.length;
+    const level = rms(audioData);
+    if (level >= this.silenceRmsThreshold) this.lastVoicedAtMs = Date.now();
+    // Noise floor: follows quiet frames at once, rises only slowly (speech never becomes the floor).
+    const floor = this.noiseFloor.get(speakerId);
+    this.noiseFloor.set(speakerId, floor === undefined ? Math.min(level, 0.003) : level < floor ? level : floor + 0.002 * (level - floor));
     // Bounded hold: a request that never answers must not grow the buffer without limit. Past the
     // cap the new frame is dropped — loudly, with the seconds lost (P18).
     if (buffer.inFlight && (this.unconfirmedSamples(buffer) + audioData.length) / this.sampleRate > this.maxHeldAudioSec) {
       this.stats.dropped += audioData.length;
       this.capLossSinceLog += audioData.length;
+      const fromMs = atMs ?? this.bufferedEndMs(buffer);
+      this.markMissing(buffer.speakerName, fromMs, fromMs + (audioData.length / this.sampleRate) * 1000, 'held-audio bound');
       const now = Date.now();
       if (now - this.lastCapLossLogMs > 5000) {
+        const range = this.missing[this.missing.length - 1];
         log(`[SpeakerStreams] [AUDIO-DROPPED] "${buffer.speakerName}": ${(this.capLossSinceLog / this.sampleRate).toFixed(1)}s ` +
             `of new audio dropped — ${this.maxHeldAudioSec}s already held behind a request that has not answered ` +
-            `(total dropped ${(this.stats.dropped / this.sampleRate).toFixed(1)}s)`, 'error');
+            `(missing ${new Date(range.startMs).toISOString()}–${new Date(range.endMs).toISOString()}; ` +
+            `total dropped ${(this.stats.dropped / this.sampleRate).toFixed(1)}s)`, 'error');
         this.lastCapLossLogMs = now;
         this.capLossSinceLog = 0;
       }
@@ -368,6 +595,10 @@ export class SpeakerStreamManager {
     if (atMs !== undefined) buffer.lastFedEndMs = atMs + (audioData.length / this.sampleRate) * 1000;
     buffer.lastAudioTimestamp = Date.now();
     buffer.idleSubmitted = false;
+    if (this.pauseFinalMs > 0) {
+      if (rms(audioData) >= this.silenceRmsThreshold) { buffer.quietSinceMs = undefined; buffer.voicedSinceFinal = true; }
+      else if (buffer.quietSinceMs === undefined) buffer.quietSinceMs = atMs ?? Date.now();
+    }
   }
 
   /**
@@ -385,22 +616,18 @@ export class SpeakerStreamManager {
    *          draft for a rejected result — its text describes audio this
    *          buffer no longer owns.
    */
-  handleTranscriptionResult(speakerId: string, transcript: string, segmentEndSec?: number, segments?: WhisperSegment[], language?: string): boolean {
+  handleTranscriptionResult(speakerId: string, transcript: string, segmentEndSec?: number, segments?: WhisperSegment[], language?: string, requestId?: number): boolean {
     // `speakerId` is the route key `onSegmentReady` handed out (the speaker id for a buffer that was
     // never detached), so a detached stretch's answer reaches that stretch, not the live buffer.
     const buffer = this.routes.get(speakerId) ?? this.buffers.get(speakerId);
     if (!buffer) return false;
 
-    buffer.inFlight = false;
-
     // Discard stale responses: if the buffer was reset (generation bumped)
     // while a Whisper request was in flight, this response is for audio that
     // no longer exists. Accepting it would poison lastTranscript with text
-    // from a previous segment.
-    const submitGen = buffer.submitGeneration;
-    if (submitGen !== undefined && submitGen < buffer.generation) {
-      return false;
-    }
+    // from a previous segment. Likewise an answer older than one already
+    // accepted, or one whose window start has since moved, is dropped.
+    if (this.settleRequest(buffer, requestId, true) === 'stale') { this.finalIfOwed(buffer); return false; }
 
     // The window's language (STT-detected, or the forced code the service echoes back). Stamped
     // now — before any emit path below — so the very confirm this result triggers carries it.
@@ -441,7 +668,7 @@ export class SpeakerStreamManager {
     const trimmed = transcript.trim();
 
     // Hallucination filter — drop known junk before it enters the confirmation pipeline
-    if (isHallucination(trimmed)) {
+    if (this.junk(buffer, trimmed)) {
       log(`[SpeakerStreams] [FILTERED] Hallucination for "${buffer.speakerName}": "${trimmed.substring(0, 60)}"`);
       if (buffer.idleSubmitted) {
         // The FINAL submit hallucinated, but earlier pending text was clean —
@@ -512,12 +739,12 @@ export class SpeakerStreamManager {
             buffer.windowStartMs = timeAtOffset(seg.start);
             const segEndMs = timeAtOffset(seg.end);
             if (!seg.text.trim() || !this.onSegmentConfirmed) continue;
-            if (isHallucination(seg.text.trim())) {
+            if (this.junk(buffer, seg.text.trim())) {
               log(`[SpeakerStreams] [FILTERED] Hallucination segment for "${buffer.speakerName}": "${seg.text.trim().substring(0, 60)}"`);
               continue;
             }
             const segmentId = `${buffer.speakerId}:${buffer.sequenceNumber}`;
-            this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, seg.text.trim(), buffer.windowStartMs, segEndMs, segmentId, buffer.lastLanguage);
+            this.publishConfirmed(buffer, seg.text.trim(), buffer.windowStartMs, segEndMs, segmentId);
             this.clearStaleDraft(buffer, buffer.windowStartMs);
             buffer.sequenceNumber++;
             buffer.lastConfirmedText = seg.text.trim();
@@ -619,12 +846,21 @@ export class SpeakerStreamManager {
     for (const speakerId of Array.from(this.buffers.keys())) {
       this.removeSpeaker(speakerId);
     }
-    // Detached stretches still finishing are abandoned with the manager: count them, loudly.
+    // Detached stretches still unfinished when the lane is disposed (the final pass ran out of time):
+    // each is named by its capture time range so it can be transcribed again from the stored audio.
     for (const b of Array.from(this.routes.values())) {
       const held = this.unconfirmedSamples(b);
-      if (held > 0) this.account(b, 'dropped', held, 'lane disposed before its detached stretch finished');
+      if (held > 0) {
+        const from = new Date(b.windowStartMs).toISOString(), to = new Date(this.audioEndMs(b)).toISOString();
+        log(`[SpeakerStreams] [AUDIO-UNTRANSCRIBED] "${b.speakerName}" ${from}–${to} (${(held / this.sampleRate).toFixed(1)}s) ` +
+            `— STT did not answer before the lane closed (${b.finalFailures} failed attempt(s))`, 'error');
+        this.account(b, 'dropped', held, 'untranscribed when the lane closed');
+      }
     }
     this.routes.clear();
+    const held = this.held; this.held = [];
+    for (const h of held) h.deliver();
+    if (this.sweepTimer) { clearInterval(this.sweepTimer); this.sweepTimer = undefined; }
   }
 
   /**
@@ -641,6 +877,8 @@ export class SpeakerStreamManager {
   async flushSpeaker(speakerId: string, force: boolean = false, trimAtMs?: number): Promise<void> {
     const buffer = this.buffers.get(speakerId);
     if (!buffer) return;
+    // Closing: later turns of this group wait behind it at most orderHoldMs from now.
+    if (force && buffer.detachedAtMs === undefined) { buffer.detachedAtMs = Date.now(); this.ensureSweep(); }
 
     if (trimAtMs !== undefined) this.trimTailAfter(buffer, trimAtMs);
     if (buffer.totalSamples === 0) {
@@ -691,12 +929,17 @@ export class SpeakerStreamManager {
   /** Fault answer for a request (the STT call threw after its retries). A draft keeps its audio —
    *  the next submission carries it again together with what arrived since; a final or deferred
    *  final finishes with what it has and counts the rest as dropped, loudly (P18). */
-  handleTranscriptionFault(routeKey: string, fault?: unknown): void {
+  handleTranscriptionFault(routeKey: string, fault?: unknown, requestId?: number): void {
     const buffer = this.routes.get(routeKey) ?? this.buffers.get(routeKey);
     if (!buffer) return;
-    buffer.inFlight = false;
-    if (buffer.submitGeneration !== undefined && buffer.submitGeneration < buffer.generation) return;
+    if (this.settleRequest(buffer, requestId, false) === 'stale') { this.finalIfOwed(buffer); return; }
     const kind = (fault as { kind?: string } | undefined)?.kind ?? 'error';
+    // Another request for this window is still owed an answer (a stall resend): it carries the same
+    // audio, so this failure costs nothing yet.
+    if (buffer.inFlight) {
+      log(`[SpeakerStreams] [STT-FAULT] ${kind} on one of ${buffer.outstanding.size + 1} requests for "${buffer.speakerName}" — another is still owed`);
+      return;
+    }
     if (buffer.pendingFinal) {
       buffer.pendingFinal = false;
       log(`[SpeakerStreams] [STT-FAULT] ${kind} on the draft before a deferred close for "${buffer.speakerName}" — submitting the final window`);
@@ -704,19 +947,22 @@ export class SpeakerStreamManager {
       return;
     }
     if (buffer.idleSubmitted || buffer.retired) {
-      const held = this.unconfirmedSamples(buffer);
-      let kept = 0;
-      if (buffer.lastTranscript) {
-        this.emitSegment(buffer, buffer.lastTranscript);
-        kept = Math.min(held, Math.max(0, (buffer.lastTranscriptEndSample ?? buffer.totalSamples) - buffer.confirmedSamples));
-        this.account(buffer, 'transcribed', kept);
-      }
-      this.account(buffer, 'dropped', held - kept, `STT ${kind} on the final window`);
-      this.finalizePendingDraft(buffer);
-      this.fullReset(buffer, 'moved');
+      // A final window that failed is KEPT and sent again later — captured audio is never given up
+      // while the lane runs. A live buffer is detached first, so new audio continues beside it.
+      const stretch = buffer.retired ? buffer : this.detach(buffer);
+      stretch.idleSubmitted = false;
+      stretch.finalFailures++;
+      const delay = Math.min(this.finalRetryMaxMs, this.finalRetryBaseMs * 2 ** (stretch.finalFailures - 1));
+      stretch.retryAtMs = Date.now() + delay;
+      log(`[SpeakerStreams] [STT-RETRY] final window for "${stretch.speakerName}" ` +
+          `(${(this.unconfirmedSamples(stretch) / this.sampleRate).toFixed(1)}s) failed (${kind}, attempt ${stretch.finalFailures}) ` +
+          `— kept, sending again in ${(delay / 1000).toFixed(1)}s`);
+      this.ensureSweep();
       return;
     }
-    // Draft: audio stays buffered; the next tick resubmits it (merged with newer audio).
+    // Draft (or a hard-cap window): audio stays buffered; the next tick resubmits it (merged with
+    // newer audio, split into capped windows if it has outgrown one).
+    buffer.capCutSample = undefined;
   }
 
   /** Submit the buffer's owned audio as its FINAL window. A window under `minFinalAudioSec` is not
@@ -747,12 +993,126 @@ export class SpeakerStreamManager {
   /** Move the live buffer's audio into a detached stretch that finishes on its own, and continue the
    *  live buffer from empty under a fresh route key. Nothing is copied or dropped. */
   private detach(buffer: SpeakerBuffer): SpeakerBuffer {
-    const detached: SpeakerBuffer = { ...buffer, retired: true };
+    const detached: SpeakerBuffer = { ...buffer, retired: true, detachedAtMs: Date.now(), gapReleased: false };
     this.routes.set(detached.routeKey, detached);
     this.fullReset(buffer, 'moved');
     buffer.routeKey = `${buffer.speakerId}#${++this.routeSeq}`;
+    buffer.order = ++this.orderSeq;            // the live buffer continues AFTER the detached stretch
     this.routes.set(buffer.routeKey, buffer);
+    this.ensureSweep();
     return detached;
+  }
+
+  /** Split the oldest `cut` buffered samples off as a detached stretch that is sent at once as its
+   *  own final window, and continue the live buffer from the cut. Bounds every request's window while
+   *  the lane is behind, and lets several such windows be transcribed at once. */
+  private splitFront(buffer: SpeakerBuffer, cut: number): SpeakerBuffer {
+    const startAtCut = this.callbackStampedFrames ? this.captureTimeAt(buffer, cut)
+      : buffer.windowStartMs + ((cut - buffer.confirmedSamples) / this.sampleRate) * 1000;
+    const chunks: Float32Array[] = [], starts: number[] = [];
+    let pos = 0;
+    for (let i = 0; i < buffer.chunks.length && pos < cut; i++) {
+      const c = buffer.chunks[i];
+      const take = Math.min(c.length, cut - pos);
+      chunks.push(take === c.length ? c : c.subarray(0, take));
+      starts.push(buffer.chunkStartMs[i]);
+      pos += take;
+    }
+    const front: SpeakerBuffer = {
+      ...buffer, retired: true, routeKey: `${buffer.speakerId}#${++this.routeSeq}`,
+      chunks, chunkStartMs: starts, totalSamples: cut,
+      submittedAbsEnd: Math.min(buffer.submittedAbsEnd, buffer.absBase + cut),
+      outstanding: new Map(), inFlight: false, lastAcceptedSeq: 0, pendingFinal: false, idleSubmitted: false,
+      capCutSample: undefined, lastTranscript: '', lastTranscriptEndSample: undefined, submittedEndSample: undefined,
+      confirmCount: 0, lastWords: [], retryAtMs: undefined, finalFailures: 0, detachedAtMs: Date.now(), gapReleased: false,
+      lastFedEndMs: startAtCut,
+    };
+    this.routes.set(front.routeKey, front);
+    // The live buffer keeps the audio after the cut; its requests in flight described the old window.
+    this.supersedeAll(buffer);
+    buffer.confirmedSamples = cut;
+    this.trimBuffer(buffer);
+    buffer.windowStartMs = startAtCut;
+    buffer.lastTranscript = '';
+    buffer.lastTranscriptEndSample = undefined;
+    buffer.submittedEndSample = undefined;
+    buffer.capCutSample = undefined;
+    buffer.confirmCount = 0;
+    buffer.lastWords = [];
+    buffer.pendingDraftText = '';
+    buffer.order = ++this.orderSeq;
+    this.ensureSweep();
+    void this.finalSubmit(front, 'backlog window');
+    return front;
+  }
+
+  /** Publish a confirmed segment — or hold it while an earlier stretch of the same speaker is still
+   *  being transcribed, so a speaker's words are published in the order they were spoken. */
+  private junk(buffer: SpeakerBuffer, text: string): boolean {
+    return isHallucination(text, { voiced: buffer.lastSubmitVoiced === true });
+  }
+
+  private publishConfirmed(buffer: SpeakerBuffer, raw: string, startMs: number, endMs: number, segmentId: string): void {
+    const text = cleanRepeats(raw, buffer.lastConfirmedText);
+    if (!text) return;
+    const lang = buffer.lastLanguage;
+    const deliver = () => this.onSegmentConfirmed?.(buffer.speakerId, buffer.speakerName, text, startMs, endMs, segmentId, lang);
+    if (this.isBlocked(buffer)) { this.held.push({ buffer, deliver }); return; }
+    deliver();
+  }
+
+  private isBlocked(buffer: SpeakerBuffer): boolean {
+    for (const r of this.routes.values()) {
+      if (r === buffer || r.orderGroup !== buffer.orderGroup || r.order >= buffer.order || r.gapReleased) continue;
+      // An earlier turn's live buffer counts too once it is closing (its final is owed).
+      if (r.inFlight || r.retryAtMs !== undefined || r.pendingFinal || this.unconfirmedSamples(r) > 0) return true;
+    }
+    return false;
+  }
+
+  /** Deliver every held segment no longer waiting on an earlier stretch, in the order it was held. */
+  private flushHeld(): void {
+    if (!this.held.length) return;
+    const keep: { buffer: SpeakerBuffer; deliver: () => void }[] = [];
+    const blockedSpeakers = new Set<string>();
+    // Timeline order within a group: an earlier stretch's held segments go before a later one's.
+    const ordered = this.held.map((h, i) => ({ h, i })).sort((a, b) => (a.h.buffer.order - b.h.buffer.order) || (a.i - b.i)).map((x) => x.h);
+    for (const h of ordered) {
+      // Once one segment of a speaker stays held, every later one of that speaker stays too.
+      if (blockedSpeakers.has(h.buffer.orderGroup) || this.isBlocked(h.buffer)) { blockedSpeakers.add(h.buffer.orderGroup); keep.push(h); }
+      else h.deliver();
+    }
+    this.held = keep;
+  }
+
+  private ensureSweep(): void {
+    if (this.sweepTimer) return;
+    this.sweepTimer = setInterval(() => this.sweep(), Math.max(50, this.submitInterval * 1000));
+    (this.sweepTimer as { unref?: () => void }).unref?.();
+  }
+
+  /** The detached stretches' tick: a stalled request is sent again, a failed window is retried when
+   *  its backoff is up, and later speech stops waiting behind a stretch that has taken too long. */
+  private sweep(): void {
+    const now = Date.now();
+    let released = false;
+    for (const r of Array.from(this.routes.values())) {
+      if (!r.gapReleased && r.detachedAtMs !== undefined && now - r.detachedAtMs > this.orderHoldMs) {
+        r.gapReleased = true;
+        released = true;
+        log(`[SpeakerStreams] [TRANSCRIPT-GAP] "${r.speakerName}" ${new Date(r.windowStartMs).toISOString()} ` +
+            `(${(this.unconfirmedSamples(r) / this.sampleRate).toFixed(1)}s) still transcribing after ${(this.orderHoldMs / 1000).toFixed(0)}s — ` +
+            `later speech publishes ahead of it; it fills in when it lands`);
+      }
+      if (!r.retired) continue;
+      this.finalIfOwed(r);
+      if (r.inFlight) this.resendIfStalled(r);
+      else if (r.retryAtMs !== undefined && now >= r.retryAtMs) {
+        r.retryAtMs = undefined;
+        void this.finalSubmit(r, `retry ${r.finalFailures}`);
+      }
+    }
+    if (released) this.flushHeld();
   }
 
   /** Count `samples` of a buffer's audio into one outcome bucket; a loss is logged loudly. */
@@ -763,6 +1123,8 @@ export class SpeakerStreamManager {
     else if (outcome === 'short') this.stats.short += samples;
     else {
       this.stats.dropped += samples;
+      const endMs = buffer.totalSamples > 0 ? this.audioEndMs(buffer) : buffer.windowStartMs + (samples / this.sampleRate) * 1000;
+      this.markMissing(buffer.speakerName, endMs - (samples / this.sampleRate) * 1000, endMs, reason ?? 'unspecified');
       log(`[SpeakerStreams] [AUDIO-DROPPED] "${buffer.speakerName}": ${(samples / this.sampleRate).toFixed(1)}s lost — ` +
           `${reason ?? 'unspecified'} (total dropped ${(this.stats.dropped / this.sampleRate).toFixed(1)}s)`, 'error');
     }
@@ -797,9 +1159,9 @@ export class SpeakerStreamManager {
     // consumer upserting by id replaces the pending row in place. We bypass emitSegment's
     // dedup-vs-lastConfirmedText guard on purpose — the pending row carries this exact text
     // as completed:false and MUST be replaced by a completed:true row of the same id.
-    if (text !== buffer.lastConfirmedText && this.onSegmentConfirmed && !isHallucination(text)) {
+    if (text !== buffer.lastConfirmedText && this.onSegmentConfirmed && !this.junk(buffer, text)) {
       const endMs = buffer.totalSamples > 0 ? this.audioEndMs(buffer) : startMs;
-      this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, text, startMs, endMs, `${buffer.speakerId}:${buffer.sequenceNumber}`, buffer.lastLanguage);
+      this.publishConfirmed(buffer, text, startMs, endMs, `${buffer.speakerId}:${buffer.sequenceNumber}`);
       buffer.sequenceNumber++;
       buffer.lastConfirmedText = text;
     } else if (this.onSegmentPending) {
@@ -809,13 +1171,148 @@ export class SpeakerStreamManager {
     }
   }
 
+  private syncInFlight(buffer: SpeakerBuffer): void {
+    let live = false;
+    for (const r of buffer.outstanding.values()) if (!r.superseded) { live = true; break; }
+    buffer.inFlight = live;
+  }
+
+  /** A close deferred to an answer (pendingFinal) whose requests all came back stale or failed would
+   *  otherwise wait forever: send the final window now. */
+  private finalIfOwed(buffer: SpeakerBuffer): void {
+    if (!buffer.pendingFinal || buffer.inFlight) return;
+    buffer.pendingFinal = false;
+    buffer.capCutSample = undefined;
+    void this.finalSubmit(buffer, 'deferred close, no current answer');
+  }
+
+  private supersedeAll(buffer: SpeakerBuffer): void {
+    for (const r of buffer.outstanding.values()) r.superseded = true;
+    buffer.inFlight = false;
+  }
+
+  /** Take one answered (or failed) request off the buffer and say whether its answer may be used.
+   *  `requestId` absent is the single-request caller: the newest owed request answered. */
+  private settleRequest(buffer: SpeakerBuffer, requestId: number | undefined, answered: boolean): 'ok' | 'stale' {
+    let id = requestId;
+    if (id === undefined) for (const r of buffer.outstanding.keys()) if (id === undefined || r > id) id = r;
+    const req = id === undefined ? undefined : buffer.outstanding.get(id);
+    if (!req) {
+      if (requestId !== undefined) return 'stale';   // superseded by a reset, then forgotten
+      // Nothing recorded (a caller driving the manager by hand): the generation guard alone.
+      this.syncInFlight(buffer);
+      const submitGen = buffer.submitGeneration;
+      return submitGen !== undefined && submitGen < buffer.generation ? 'stale' : 'ok';
+    }
+    buffer.outstanding.delete(req.seq);
+    const stale = req.superseded || req.generation < buffer.generation || req.seq < buffer.lastAcceptedSeq
+      || req.baseAbs !== buffer.absBase + buffer.confirmedSamples;
+    if (!stale && answered) {
+      buffer.lastAcceptedSeq = req.seq;
+      for (const r of buffer.outstanding.values()) if (r.seq < req.seq) r.superseded = true;
+    }
+    this.syncInFlight(buffer);
+    return stale ? 'stale' : 'ok';
+  }
+
+  /** The newest owed request has outlived max(sttStallMinMs, sttStallFactor × its audio): send the
+   *  buffer's window again beside it (bounded by maxInFlightPerSpeaker). Whichever answer is newest
+   *  and still matches the window is used; the slow one is dropped when it lands. */
+  private resendIfStalled(buffer: SpeakerBuffer): void {
+    if (buffer.outstanding.size >= this.maxInFlight) return;
+    // The client is holding requests (the STT said it is overloaded): a duplicate would only join
+    // the queue and add load the moment it reopens. The held request is not stalled, it is waiting.
+    if (this.sttPressure?.backingOff()) return;
+    // At most ONE duplicate owed per stream: a second one never helps a slow STT, it only loads it.
+    for (const r of buffer.outstanding.values()) if (r.duplicate) return;
+    let newest: PendingRequest | undefined;
+    for (const r of buffer.outstanding.values()) if (!r.superseded && (!newest || r.seq > newest.seq)) newest = r;
+    if (!newest) return;
+    const age = Date.now() - Math.max(newest.sentAtMs, this.sttPressure?.lastBackoffEndMs() ?? 0);
+    const stallMs = Math.max(this.sttStallMinMs, this.sttStallFactor * newest.audioSec * 1000);
+    if (age < stallMs) return;
+    const what = buffer.pendingFinal ? 'its final window' : buffer.idleSubmitted ? 'the final window again'
+      : buffer.capCutSample !== undefined ? 'the capped window again' : 'the current window';
+    log(`[SpeakerStreams] [STT-STALLED] request ${newest.seq} for "${buffer.speakerName}" ` +
+        `(${newest.audioSec.toFixed(1)}s audio) unanswered after ${(age / 1000).toFixed(1)}s — sending ${what} beside it`);
+    // The submit below records its request synchronously, so the mark is consumed by it alone.
+    buffer.markNextDuplicate = true;
+    try {
+      if (buffer.pendingFinal) {
+        buffer.pendingFinal = false;
+        buffer.capCutSample = undefined;
+        this.supersedeAll(buffer);
+        void this.finalSubmit(buffer, 'stalled request');
+        return;
+      }
+      if (buffer.capCutSample !== undefined) { void this.submitBuffer(buffer, buffer.capCutSample); return; }
+      void this.submitBuffer(buffer);
+    } finally {
+      buffer.markNextDuplicate = false;
+    }
+  }
+
+  /** Does this window hold at least speechGateSec of audio clearly above the speaker's noise floor? */
+  private hasSpeech(speakerId: string, pcm: Float32Array): boolean {
+    if (this.speechGateSec <= 0) return true;
+    const floor = this.noiseFloor.get(speakerId) ?? 0;
+    // The bar never rises above 0.02 RMS: anything that loud is sent, so a long steady voice or tone
+    // (no dips for the floor to follow) is never mistaken for room noise.
+    const bar = Math.max(this.silenceRmsThreshold, Math.min(4 * floor, 0.02));
+    const step = 512;
+    let voiced = 0;
+    for (let i = 0; i + step <= pcm.length; i += step) if (rms(pcm.subarray(i, i + step)) >= bar) voiced += step;
+    return voiced / this.sampleRate >= this.speechGateSec;
+  }
+
   private unconfirmedSamples(buffer: SpeakerBuffer): number {
     return buffer.totalSamples - buffer.confirmedSamples;
   }
 
   private async trySubmit(speakerId: string): Promise<void> {
     const buffer = this.buffers.get(speakerId);
-    if (!buffer || buffer.inFlight) return;
+    if (!buffer) return;
+    // End of utterance: quiet for pauseFinalMs after speech → send what was said once, as a final.
+    if (this.pauseFinalMs > 0 && buffer.voicedSinceFinal && buffer.quietSinceMs !== undefined && !buffer.idleSubmitted
+        && (buffer.lastFedEndMs ?? Date.now()) - buffer.quietSinceMs >= this.pauseFinalMs
+        && this.unconfirmedSamples(buffer) >= this.minFinalAudioSec * this.sampleRate) {
+      const detachedNow = [...this.routes.values()].filter((b) => b.retired && b.speakerId === speakerId).length;
+      if (detachedNow < SpeakerStreamManager.MAX_DETACHED_PER_SPEAKER) {
+        buffer.voicedSinceFinal = false;
+        const detached = this.detach(buffer);
+        if (detached.inFlight) detached.pendingFinal = true;
+        else void this.finalSubmit(detached, 'end of utterance');
+        return;
+      }
+    }
+    // Behind: the audio waiting has outgrown one request's window (a request is in flight, or a long
+    // one just answered). Split the oldest window off and send it on its own, so no request carries
+    // more than maxBufferDuration and several windows are transcribed at once.
+    const cap = Math.floor(this.maxBufferDuration * this.sampleRate);
+    // At the cap with nothing in flight the hard-cap path below cuts the window (its tests pin that);
+    // past cap + 4 s, or behind a request in flight, the oldest window is split off here instead.
+    while (this.unconfirmedSamples(buffer) > cap && !buffer.idleSubmitted && !buffer.pendingFinal && buffer.capCutSample === undefined
+        && (buffer.inFlight || this.unconfirmedSamples(buffer) > cap + 4 * this.sampleRate)) {
+      const detachedNow = [...this.routes.values()].filter((b) => b.retired && b.speakerId === speakerId).length;
+      if (detachedNow >= SpeakerStreamManager.MAX_DETACHED_PER_SPEAKER) break;
+      if (buffer.confirmedSamples > 0) this.trimBuffer(buffer);
+      const cut = this.quietCutBetween(buffer, Math.max(Math.floor(cap / 2), cap - 4 * this.sampleRate), cap);
+      log(`[SpeakerStreams] [BACKLOG] "${buffer.speakerName}" ${(this.unconfirmedSamples(buffer) / this.sampleRate).toFixed(1)}s waiting — ` +
+          `sending the oldest ${(cut / this.sampleRate).toFixed(1)}s as its own window`);
+      this.splitFront(buffer, cut);
+    }
+    this.finalIfOwed(buffer);
+    if (buffer.inFlight) {
+      this.resendIfStalled(buffer);
+      // Pipelined drafts: a newer window goes out beside the one in flight when audio has grown.
+      if (this.pipelineDrafts && !this.sttPressure?.backingOff() && !buffer.idleSubmitted && !buffer.pendingFinal && buffer.capCutSample === undefined
+          && buffer.outstanding.size < this.maxInFlight && (buffer.submittedEndSample ?? 0) < buffer.totalSamples
+          && this.unconfirmedSamples(buffer) / this.sampleRate >= this.minAudioDuration
+          && this.unconfirmedSamples(buffer) <= cap) {
+        await this.submitBuffer(buffer);
+      }
+      return;
+    }
 
     const unconfirmedSec = this.unconfirmedSamples(buffer) / this.sampleRate;
     const totalSec = buffer.totalSamples / this.sampleRate;
@@ -855,7 +1352,18 @@ export class SpeakerStreamManager {
           log(`[SpeakerStreams] Hard cap final-submit for "${buffer.speakerName}" (${totalSec.toFixed(1)}s buffered, ` +
               `${(cut / this.sampleRate).toFixed(1)}s finalized at its quietest frame)`);
           if (await this.submitBuffer(buffer, cut)) return;
-          buffer.capCutSample = undefined;    // the capped window is near-silent: fall back
+          buffer.capCutSample = undefined;
+          // The capped window holds no speech: finish just that window as silence and keep everything
+          // after the cut (resetting the whole buffer here dropped the speech that followed it).
+          if (cut > buffer.confirmedSamples && cut < buffer.totalSamples) {
+            this.account(buffer, 'no-speech', cut - buffer.confirmedSamples);
+            const startAtCut = this.callbackStampedFrames ? this.captureTimeAt(buffer, cut)
+              : buffer.windowStartMs + ((cut - buffer.confirmedSamples) / this.sampleRate) * 1000;
+            buffer.confirmedSamples = cut;
+            this.trimBuffer(buffer);
+            buffer.windowStartMs = startAtCut;
+            return;
+          }
         }
         // Nothing confirmed — confirmation never triggered. Force-flush whatever
         // transcript we have to prevent monolith segments (e.g. 120s+ buffer).
@@ -910,13 +1418,24 @@ export class SpeakerStreamManager {
     // it was never implemented. Skip the submission (never set inFlight): the buffer stays, so a
     // later louder window submits normally, and the idle path (trySubmit) still emits any earlier
     // lastTranscript and resets. The phrase-list filter remains the language-agnostic backstop.
-    if (rms(combined) < this.silenceRmsThreshold) {
+    if (rms(combined) < this.silenceRmsThreshold || !this.hasSpeech(buffer.speakerId, combined)) {
       log(`[SpeakerStreams] [SILENT-SKIP] "${buffer.speakerName}" ${(unconfirmed / this.sampleRate).toFixed(1)}s window ` +
           `below RMS ${this.silenceRmsThreshold} — not submitting (no hallucination surface)`);
       return false;
     }
 
     buffer.submittedEndSample = end;
+    buffer.lastSubmitVoiced = rms(combined) >= VOICED_RMS;
+    // A final (turn close, idle, deferred close) or a hard-cap window replaces every earlier request:
+    // their answers describe a window this one finishes.
+    if (buffer.idleSubmitted || endSample !== undefined) this.supersedeAll(buffer);
+    const seq = ++this.requestSeq;
+    buffer.outstanding.set(seq, {
+      seq, generation: buffer.generation, baseAbs: buffer.absBase + buffer.confirmedSamples,
+      sentAtMs: Date.now(), audioSec: unconfirmed / this.sampleRate, superseded: false,
+      duplicate: buffer.markNextDuplicate === true,
+    });
+    buffer.markNextDuplicate = false;
     buffer.inFlight = true;
     buffer.submitGeneration = buffer.generation;
     // Coverage: each sample counts as submitted once, however many sliding-window requests carry it.
@@ -927,9 +1446,10 @@ export class SpeakerStreamManager {
     }
 
     try {
-      this.onSegmentReady(buffer.routeKey, buffer.speakerName, combined);
+      this.onSegmentReady(buffer.routeKey, buffer.speakerName, combined, seq);
     } catch (err: any) {
-      buffer.inFlight = false;
+      buffer.outstanding.delete(seq);
+      this.syncInFlight(buffer);
       // P18: surface the transcription submit failure with its typed kind — do not swallow it.
       log(`[SpeakerStreams] [STT-FAULT] ${err?.kind ?? 'error'} submitting for ` +
           `"${buffer.speakerName}": ${String(err?.message ?? err)}`);
@@ -942,7 +1462,7 @@ export class SpeakerStreamManager {
    */
   private emitSegment(buffer: SpeakerBuffer, text: string): void {
     if (!text || !this.onSegmentConfirmed) return;
-    if (isHallucination(text)) {
+    if (this.junk(buffer, text)) {
       log(`[SpeakerStreams] [FILTERED] Hallucination in emit for "${buffer.speakerName}": "${text.substring(0, 60)}"`);
       return;
     }
@@ -959,7 +1479,7 @@ export class SpeakerStreamManager {
     // whole commit lag (segments then visually overlap their successors).
     const endMs = buffer.totalSamples > 0 ? this.audioEndMs(buffer) : Date.now();
     const segmentId = `${buffer.speakerId}:${buffer.sequenceNumber}`;
-    this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, text, buffer.windowStartMs, endMs, segmentId, buffer.lastLanguage);
+    this.publishConfirmed(buffer, text, buffer.windowStartMs, endMs, segmentId);
     buffer.sequenceNumber++;
     buffer.lastConfirmedText = text;
     // This confirmed segment supersedes the outstanding pending draft. If it went out under a
@@ -1015,6 +1535,9 @@ export class SpeakerStreamManager {
     const retainedStartMs = this.callbackStampedFrames ? this.captureTimeAt(buffer, buffer.confirmedSamples) : 0;
     this.trimBuffer(buffer);
 
+    // Every request still in flight was cut from the old window start: none of their answers can be
+    // used, so they stop counting as in flight (pipelined drafts continue from the new start).
+    this.supersedeAll(buffer);
     // Reset confirmation state for the next segment window
     buffer.lastTranscript = '';
     buffer.lastTranscriptEndSample = undefined;
@@ -1177,6 +1700,21 @@ export class SpeakerStreamManager {
     return cut;
   }
 
+  /** Start index of the quietest chunk starting within [from, to] buffered samples (after the
+   *  confirmed ones) — where a backlog window is cut. `to` when none does. */
+  private quietCutBetween(buffer: SpeakerBuffer, from: number, to: number): number {
+    let pos = 0, cut = to, quietest = Infinity;
+    for (const chunk of buffer.chunks) {
+      if (pos > to) break;
+      if (pos >= from && pos > buffer.confirmedSamples) {
+        const level = rms(chunk);
+        if (level < quietest) { quietest = level; cut = pos; }
+      }
+      pos += chunk.length;
+    }
+    return Math.max(1, Math.min(cut, to));
+  }
+
   /** The hard-cap request answered: publish its text as the confirmed segment for the capped window,
    *  then continue the turn from the cut with the audio fed since. An empty or junk answer falls back
    *  to the last transcript only when that transcript lies within the cut. */
@@ -1184,14 +1722,13 @@ export class SpeakerStreamManager {
     const cut = Math.min(buffer.capCutSample ?? buffer.totalSamples, buffer.totalSamples);
     buffer.capCutSample = undefined;
     let text = (transcript || '').trim();
-    if (!text || isHallucination(text)) {
+    if (!text || this.junk(buffer, text)) {
       const withinCut = buffer.lastTranscriptEndSample !== undefined && buffer.lastTranscriptEndSample <= cut;
       text = withinCut ? buffer.lastTranscript : '';
     }
     const startMs = buffer.windowStartMs;
-    if (text && !isHallucination(text) && text !== buffer.lastConfirmedText && this.onSegmentConfirmed) {
-      this.onSegmentConfirmed(buffer.speakerId, buffer.speakerName, text, startMs, this.captureTimeAt(buffer, cut),
-        `${buffer.speakerId}:${buffer.sequenceNumber}`, buffer.lastLanguage);
+    if (text && !this.junk(buffer, text) && text !== buffer.lastConfirmedText && this.onSegmentConfirmed) {
+      this.publishConfirmed(buffer, text, startMs, this.captureTimeAt(buffer, cut), `${buffer.speakerId}:${buffer.sequenceNumber}`);
       buffer.sequenceNumber++;
       buffer.lastConfirmedText = text;
       this.clearStaleDraft(buffer, startMs);
@@ -1217,7 +1754,12 @@ export class SpeakerStreamManager {
    */
   private fullReset(buffer: SpeakerBuffer, outcome: Outcome, reason?: string): void {
     this.account(buffer, outcome, this.unconfirmedSamples(buffer), reason);
-    if (buffer.retired && this.routes.get(buffer.routeKey) === buffer) this.routes.delete(buffer.routeKey);
+    if (buffer.retired && this.routes.get(buffer.routeKey) === buffer) {
+      this.routes.delete(buffer.routeKey);
+      buffer.retryAtMs = undefined;
+    }
+    // Whatever this buffer held up may publish now (flushHeld re-checks every hold).
+    queueMicrotask(() => this.flushHeld());
     buffer.absBase = 0;
     buffer.submittedAbsEnd = 0;
     buffer.chunks = [];
@@ -1228,6 +1770,9 @@ export class SpeakerStreamManager {
     buffer.confirmCount = 0;
     buffer.lastWords = [];
     buffer.inFlight = false;
+    // A fresh map, never a clear(): a detached stretch shares the old one and still owes its answers.
+    buffer.outstanding = new Map();
+    buffer.lastAcceptedSeq = 0;
     buffer.windowStartMs = Date.now();
     buffer.bufferStartMs = Date.now();
     buffer.lastAudioTimestamp = Date.now();

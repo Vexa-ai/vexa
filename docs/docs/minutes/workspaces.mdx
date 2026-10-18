@@ -8,6 +8,11 @@ has members; the **company** workspace (`_global`) is read by everyone and writt
 deployment's **admin account**. This page covers the admin account, the front page of a workspace, how people join one, links into it,
 attaching an existing repository, and the **Connections** page where you connect your own accounts.
 
+A workspace holds knowledge: pages, files and their history. It holds no chat. Every conversation is
+kept in the session store, apart from all workspaces, your private `_system` included, so sharing a
+workspace never shares a chat and sharing a chat never shares a workspace
+([Shared chats](/minutes/shared-chats)).
+
 ## What you can do
 
 ### Read a workspace's front page
@@ -42,6 +47,56 @@ Every button except History starts a conversation in the chat; none opens a form
   **Sync now**, **Pull**, **Push** and **Detach**; Pull, Push and Detach ask you to confirm. Detaching
   stops syncing and leaves the files as they are.
 - **History** lists commits ten at a time, for the workspace or *This page only*.
+
+### Create and share a workspace from the chat
+
+Say it in one sentence: *"create a workspace called eugenia - dmitry and share it with
+ana@example.com"*. The agent creates it, invites the address and confirms in one line.
+
+- The new workspace is addressed by its name: "eugenia - dmitry" becomes `eugenia-dmitry`
+  (`eugenia-dmitry-2` if you already have one).
+- It starts private. The first invite makes it shared, with you as owner.
+- An invite with no role makes the person a **contributor**. Say "as reader" or "as owner" to choose,
+  or change it afterwards.
+- Name any workspace the way the Files pane shows it ("Eugenia - Dmitry", "biz", "Personal"). If two
+  workspaces answer one name, the agent asks which.
+- If two of your workspaces share a name and one is empty, the agent offers to delete the empty one,
+  and deletes it only after you say yes.
+
+### Forget something
+
+Say *"delete that document and everything from it"* or *"forget this"*. The agent tells you in one
+line what will be removed, and removes it only after you say yes:
+
+- The files leave the workspace and its git history. History is rewritten and old copies are
+  pruned, so no commit still holds them.
+- Text you name, and the document's own identifiers, are replaced with `[removed]` in every
+  version of every page and in the stored transcripts of your chats. The turns themselves stay.
+- They are dropped from your recently-opened list.
+
+The agent then says what was removed and what could not be. Copies already sent by email, or
+downloaded, are out of reach. A repository the workspace syncs with keeps its copy until you agree
+to a force-push. Your private `_system` workspace keeps an audit line: what kind of item, how many
+files and commits, who asked. It never keeps the content.
+
+Files you drop into a chat stay in the chat's drawer (`uploads/`) and are never committed to the
+workspace's history. A page never holds a government id, a passport, card or bank account number,
+or a credential: a write carrying one is refused, and such values are removed before a turn
+commits.
+
+### Choose where new chats write
+
+A chat's header says where it writes ("Writes to Personal", "Writes to Biz"). To have every new chat
+start in one workspace, open that menu in a chat that writes there and pick **Make default for new
+chats**. The menu then reads **Default for new chats**; elsewhere it shows the current default beside
+the entry. Pick it from a chat that writes to Personal to go back to Personal.
+
+- A new chat starts on the default: the workspace is added to the chat and becomes where it writes.
+- Chats that already exist keep where they write.
+- The default is checked again for every new chat. If you can no longer write there (you were
+  removed, the workspace was deleted, or your role is now reader), the new chat writes to Personal
+  and the workspace is not named.
+- The default is kept on the server, per person, so it follows you to every device.
 
 ### The admin account
 
@@ -92,7 +147,27 @@ always keeps at least one owner.
    at once.
 
 An invite link works for **one person, for seven days**, and only for the address it names. Invites made
-by the agent during a chat turn stay valid after the turn ends.
+by the agent during a chat turn stay valid after the turn ends. Once an invite has expired, been used
+or been withdrawn, its link says only that; it no longer shows the workspace, who sent it, or the
+address it was for.
+
+### Share a workspace by link
+
+Ask in the chat: *"make a link to this workspace for up to 5 people"*. The agent calls
+`workspace_invite_link_create` and gives you a link like `https://<your app>/join/<token>`, once.
+
+- Anyone who opens it signs in (Google, Microsoft or an emailed link) and joins as a **contributor**
+  (or a **reader**, if you said so). Someone already in it spends no use.
+- It works for the number of people you set (default 10) until it expires (default 7 days) or you
+  revoke it (*"stop that link"*, `workspace_invite_link_revoke`). `workspace_invite_links` lists your
+  links with how many people used each; a link's address is shown only when it is made.
+- Each time someone joins, you get a notification: *"Bea joined “DNA” via your link"*.
+- People you share a workspace with appear when you type **@** and in people search.
+- To invite people to a meeting, ask the agent to create the calendar event: it adds a Google Meet
+  link, the attendees and `info@` (Vexa), puts the workspace link in the description, and asks Google
+  to send the invitations. The link in the event is how the meeting is filed into that workspace.
+
+A used-up, expired or revoked link says so, and nothing more.
 
 ### Link to a page
 
@@ -112,61 +187,44 @@ Choose **Attach existing repo…** in the chat bar's **+** menu, **Attach a repo
 2. Press **Attach**. Large repositories can take several minutes; the dialog shows progress.
 3. When it is done (*Cloned … into …*), press **Open workspace**.
 
-Access uses your saved GitHub token, or a **deploy key**: under Connections, press **Use this deploy
-key**, then **Add it on GitHub →** and add the public key to the repository *with write access*. Vexa
+Access uses your saved token for the repository's git provider, or a **deploy key**: under Connections,
+press **Use this deploy key**, then **Add it on …** (the provider's deploy-key page) and add the public key to the repository *with write access*. Vexa
 generates the key; you never paste a private key, and the private half never leaves the server.
 
 ### Repositories on GitLab or another self-hosted server
 
-A repository on your company's own git server attaches the same way. Two things differ from GitHub.
+A repository on your company's own git server attaches the same way, once your operator has added
+that server as a **git provider** ([Use a self-hosted GitLab](/minutes/self-hosted-gitlab)).
 
 **The address can be nested.** GitLab keeps projects in groups and subgroups, so paste the full address:
 `https://git.example.com/platform/tools/notes.git` or `git@git.example.com:platform/tools/notes.git`.
-Any depth up to 22 segments (a group, 20 subgroups and the project) is accepted. On `github.com` the
-address is still exactly `owner/repo`.
+Any depth up to 22 segments (a group, 20 subgroups and the project) is accepted. On a GitHub provider
+the address is still exactly `owner/repo`.
 
 **The credential.** Use one of these:
 
 - **A deploy key** (recommended). Paste the `git@…` address, press **Use this deploy key**, and add the
   public key in the project under *Settings → Repository → Deploy keys* with **Grant write
-  permissions**. When your operator registered the host as GitLab, Vexa links you straight to that page.
+  permissions**. For a configured provider, Vexa links you straight to that page.
+- **Your saved token for that provider**, saved once in Connections → Git. Each provider has its own
+  token, and a saved token is only ever sent to its own provider.
 - **An access token typed for this one call.** A GitLab personal, project or group access token with
   `read_repository` (and `write_repository` to push). Type it as `oauth2:<token>`, or as
-  `<username>:<token>` for a server that wants a named account. A bare token works too when your
-  operator registered the host (see below). Your **saved** token is a GitHub credential and is only
-  ever sent to `github.com`, so it is never used here.
+  `<username>:<token>` for a server that wants a named account; a bare token works on a configured
+  provider.
 
-**Publishing a new repository to GitLab.** `POST /api/workspace/publish` with `host` set to a GitLab
-host your operator registered creates the project there — in your own namespace, or in the group named
-by `org`, nested groups included (`"org": "platform/tools"`) — and pushes the workspace. The token needs
-the `api` scope. Any other host is refused with a message naming it; create the repository there yourself
-and publish with its address as `remote_url`. The publish dialog in Minutes creates on GitHub.
+**Publishing a new repository to GitLab.** Ask the chat, or use **Publish to …** in the workspace's
+Repository section: pick the provider and type the group (`platform/tools`, nested groups included).
+The project is created there and the workspace pushed. Details, token scopes and errors:
+[Use a self-hosted GitLab](/minutes/self-hosted-gitlab).
 
-#### For operators: register your git hosts
+### Sync with the repository
 
-Tell agent-api which provider each self-hosted host runs, so a bare token is sent in the form that host
-expects. Unlisted hosts keep GitHub's form, exactly as before.
-
-| Provider | A token is sent as | Use for |
-|---|---|---|
-| `github` | `https://<token>@host/…` | GitHub Enterprise Server |
-| `gitlab` | `https://oauth2:<token>@host/…` | GitLab (self-managed or dedicated); also enables publish-create on that host |
-| `basic:<username>` | `https://<username>:<token>@host/…` | Gitea, Bitbucket Server and other servers that want a named account |
-
-Helm (`values.yaml`):
-
-```yaml
-agentApi:
-  gitProviders: "git.example.com=gitlab,code.example.org=basic:svc-vexa"
-```
-
-With `helm --set`, escape the commas (`--set-string agentApi.gitProviders='git.example.com=gitlab\,code.example.org=basic:svc-vexa'`).
-Docker Compose reads the same setting as `VEXA_GIT_PROVIDERS` from `.env`. A malformed entry
-stops agent-api at boot with a message naming it. The host must be a dotted name agent-api can reach;
-when the server's TLS certificate comes from a company CA, add that CA to the agent-api image's trust
-store, because tokens are only ever sent over `https`. The value is listed with the chart's other
-settings in the [Helm chart README](https://github.com/Vexa-ai/vexa/blob/main/deploy/helm/README.md#configuration-that-matters),
-and with agent-api's other environment variables in [Configuration](/configuration).
+Press **Sync** on a workspace's front page, or ask the chat ("is this ahead of the repository?"). The
+agent first calls `workspace_status`, which fetches from the repository and tells you what is **ahead**
+(only here) and **behind** (only on the remote), with the commits on each side and any uncommitted files. Looking
+changes nothing in the workspace. The agent then asks you before it pulls (`workspace_pull`) or pushes
+(`workspace_push`).
 
 ### Connect your accounts
 
@@ -175,7 +233,7 @@ something, which opens the same page.
 
 | Card | Lets your agents |
 |---|---|
-| **Git repositories** | use a saved GitHub token, or attach a repository |
+| **Git repositories** | save a token for each git provider (GitHub, your GitLab), or attach a repository |
 | **Gmail** | read email and save drafts (Minutes does not send mail) |
 | **Google Calendar** | read calendar events |
 | **Custom secret** | use a secret, optionally against one HTTPS address you name |
@@ -202,13 +260,17 @@ How an operator runs the credential broker behind this page is in [Connections](
 | *That page is in …, a workspace you do not have access to.* · *That link points at a workspace that is no longer here.* | a `/w/` link you cannot open; Minutes never shows your personal workspace instead | ask for access |
 | *Repository access failed. Check the repository URL and credential.* | the clone was refused | check the address, token or deploy key |
 | *That is not a repository. Use https://github.com/owner/repo, …* | the address has an empty segment, `.`/`..`, a GitLab page path (`/-/…`), more than 22 segments, or more than `owner/repo` on `github.com` | paste the project's clone address |
-| *Vexa can create a repository on GitHub, or on a GitLab host this deployment registered …* (`422`) | publish was asked to create a repository on another host | create it there and publish with `remote_url` |
+| *Vexa can create a repository on this deployment's git providers: …* (`422`) | publish was asked to create on a provider that is not configured | use a listed provider, or create it there and publish with `remote_url` |
+| *… rejected the token (HTTP 401)* (`422`, `token_rejected`) | the provider refused the token | save a new token for that provider in Connections → Git |
 | *GitLab on … rejected the token (HTTP 401)* · *GitLab group … was not found, or the token cannot see it* | the token lacks the `api` scope, or the group path is wrong | check the token's scopes and the `org` group path |
 | *Import interrupted. Check the workspace before retrying.* | the import stopped part-way | check what arrived, then retry |
 | *Allow popups for Minutes, then try again.* · *Authorization was not completed.* | Google consent did not finish | allow pop-ups and retry |
 | *Connections unavailable. Please try again.* | the credential service did not answer | try again; an operator checks the broker |
 | *only the admin account may edit _global* (or *write…*, *reset…*, *accept…*) | you are on an everyday account | sign in as the admin account |
 | *the admin account works on the company layer (_global) only…* | the admin account has no desk, workspaces or meetings | sign in with your everyday account |
+| the agent says the workspace has **no git home** (`no_remote`) | nothing is attached or published | attach or publish a repository |
+| the agent says **the repository refused us** (`no_credential`) | no deploy key or token works for it | add the deploy key it shows you, or save a token |
+| the agent says **the repository could not be reached** (`network`) | the fetch failed | try again; it also says when the last good look was |
 
 The private tier is never shared. The company workspace is written only by the admin account. A connection label is at most 80 characters.
 
@@ -220,14 +282,35 @@ The private tier is never shared. The company workspace is written only by the a
    remote status, and for a shared workspace its members and meetings. All go through the gateway to
    agent-api.
 2. **Invite.** The agent calls its `workspace_invite` tool, which reaches
-   `POST /api/workspace/invite`. agent-api checks that you own the workspace, mints an invite
+   `POST /api/workspace/invite`. When the workspace is one of your own private ones, agent-api first
+   makes it shared and records you as its owner (the same step as `share-enable`); your personal
+   workspace is never shared this way. A missing role is `contributor`. agent-api checks that you own the workspace, mints an invite
    restricted to that address and valid once, and builds the link from `VEXA_UI_URL`. For an address
    with no account, it publishes a `workspace.invited` event, and the flows service sends the email.
 3. **Join.** `/join` previews the invite (`GET /api/join/preview`, which grants nothing), you sign in,
    and the terminal accepts it (`POST /api/workspace/invites/accept`). agent-api checks the
    gateway-verified email against the invite and adds you to the roster.
-4. **Links.** `/w/<id>` is resolved by `GET /api/workspaces/{id}` (or `by-slug`), which always answers
-   `readable`, `not-yours` or `gone`.
+4. **Join links.** `workspace_invite_link_create` reaches `POST /api/workspace/invite-link`. agent-api
+   checks you own the workspace (making your own private one shared first, as for an invite) and
+   mints an *open* invite in the same store: a random 32-byte token, of which only its SHA-256 is
+   kept, with `max_uses` and an expiry. `/join/<token>` redirects to `/join?i=<token>`, so it is
+   previewed and accepted exactly like an invite. Each new member counts one use; on each, agent-api
+   records the `workspace_joined_via_link` notification for whoever made the link and publishes
+   `workspace.joined_via_link` to flows, where the company's `workspace_joined` mail kind can pick it
+   up. Chats use the same tokens (`/api/join-links`), once the chat domain declares who may link one.
+5. **Links.** `/w/<id>` is resolved by `GET /api/workspaces/{id}` (or `by-slug`), which always answers
+   `readable`, `not-yours` or `gone`. `not-yours` names nothing: the chip is greyed and untitled, and
+   the chat header never shows that workspace. The header says "Writes to X" only when the server
+   says you can write X; otherwise it shows Personal. A group can be switched on in your active set
+   only while you are a member of it.
+   What the browser keeps (an open workspace, a pending meeting, layout) is stored per signed-in
+   account, so a second account on the same browser starts from its own state.
+   **Default for new chats.** "Make default for new chats" calls `PUT /api/chat/default-target`, which
+   accepts only a workspace you can write (the same check as a chat's own target, `POST
+   /api/chat/target`) and stores it per person. Each new chat reads `GET /api/chat/default-target`,
+   which runs that check again and answers `null` (Personal, nothing named) when it fails. The
+   terminal then mounts the workspace in the new chat and sets its target, through the same two
+   calls a `focus` from the agent uses. No existing chat reads it.
 5. **Attach.** `POST /api/workspace/import` starts an import and returns an operation id; the terminal
    polls `GET /api/workspace/import/{op}/status`. Deploy keys are `GET`/`POST
    /api/workspace/{slug}/deploy-key`; the saved token is `GET`/`POST /api/workspace/git-token` (only a
@@ -236,22 +319,31 @@ The private tier is never shared. The company workspace is written only by the a
      agent-api's `control_plane/repo_ref.py` accept the same shapes, nested GitLab paths included, and
      refuse the same ones; agent-api also refuses a host only it could reach.
    - The credential is resolved in `control_plane/workspace_credentials.py`: the workspace's deploy key
-     for an `ssh` address, else a token typed for this call, else the saved token for `github.com` only.
+     for an `ssh` address, else a token typed for this call, else the person's saved token for the git
+     provider the address is on (one per provider, in the credential broker).
    - A token is written into the clone, pull or push URL in exactly one place,
      `shared/token_destination.py`, and only for an `https` address. The shape of that userinfo comes
      from `shared/git_provider.py`: the token as typed when it names an account (`oauth2:…`,
-     `<user>:…`), else by the operator's provider map, else GitHub's bare form. After a clone the
+     `<user>:…`), else by the configured provider (`oauth2:` for GitLab), else GitHub's bare form. After a clone the
      stored `origin` is reset to the token-free address.
 6. **Publish.** `POST /api/workspace/publish` decides where a new repository would be created before it
-   reads any credential (`creation_host` in `control_plane/workspace_publish.py`): `github.com`, or a
-   host registered as `gitlab`; anything else answers `422`. On GitLab it resolves the group with
+   reads any credential (`resolve_provider` in `control_plane/workspace_publish.py`): a configured git
+   provider, by name (`shared/git_provider.py`); anything else answers `422`. On GitLab it resolves the group with
    `GET /api/v4/namespaces/<group path>` and creates the project with `POST /api/v4/projects`, sending
    the token only in the `PRIVATE-TOKEN` header and refusing redirects, then pushes over the same
    token-scrubbed remote as every other push.
-7. **Connections.** The terminal's `/api/connections/*` routes call the credential broker as the
+7. **Sync.** The agent's `workspace_status` tool reaches `POST /api/workspace/status`. agent-api
+   resolves the workspace as it does for a pull (your own, or a shared one you are a member of), picks
+   the same credential a pull would (the workspace's deploy key, or your saved token over `https`),
+   and fetches the branch into its remote-tracking ref only (`refs/remotes/<home>/<branch>`). The
+   working tree, the index and the local branch are not touched. It answers with the branch, upstream,
+   ahead and behind counts, up to 50 commits on each side (sha, subject, number of files), a summary of
+   uncommitted and untracked paths, and `fetched_at` / `previous_fetch_at`. `workspace_pull` and
+   `workspace_push` stay separate and are the only verbs that change the branch or the repository.
+8. **Connections.** The terminal's `/api/connections/*` routes call the credential broker as the
    signed-in person. Agents use their own `connection_request` route, which can request a setup but
    never read a credential.
-8. **The admin account.** Identity decides it and nothing else does:
+9. **The admin account.** Identity decides it and nothing else does:
    - **Designation.** admin-api reads `VEXA_ADMIN_ACCOUNT`. When a named address signs in for the first
      time, `POST /admin/users` creates its row with `users.data.account = "admin"` and a bot cap of 0,
      in the same transaction. No other code path sets that field, and an existing row is never
@@ -284,7 +376,8 @@ The private tier is never shared. The company workspace is written only by the a
 | Which account is the admin account (`users.data.account`) | admin-api, when it creates the row | the identity database |
 | The company workspace `_global` | the admin account's chats and routes, through agent-api | `_global`'s git repository; every change is a commit by its author |
 | Import status | agent-api | outside every workspace |
-| Git tokens and deploy keys | agent-api's secret store, or the credential broker when configured | sealed at rest |
+| Your default for new chats | agent-api | its session index, per person; re-checked on every read |
+| Git tokens and deploy keys | the credential broker (agent-api's `git` role) | its encrypted store |
 | Connections, consent state, audit | the credential broker | its encrypted store |
 
 ### Routes
@@ -299,6 +392,9 @@ The private tier is never shared. The company workspace is written only by the a
 | `POST /api/workspace/publish` `{ …, host? }`, `POST /api/workspace/push`, `POST /api/workspace/pull` | agent-api, through the gateway; agent-api then calls the git host (and GitLab's `/api/v4` for a create) |
 | `GET /api/connections/list`, `POST /api/connections/…` | the credential broker, as the person |
 | agent tools `workspace_invite`, `workspace_membership` | agent-api `/api/workspace/invite`, membership routes |
+| agent tools `workspace_invite_link_create`, `workspace_invite_links`, `workspace_invite_link_revoke` | agent-api `/api/workspace/invite-link`, `/invite-links`, `/invite-link/revoke` |
+| `/join/<token>` | the terminal redirects to `/join?i=<token>`: the preview and accept rows above. agent-api also serves `GET /api/join-links/preview` and `POST /api/join-links/redeem` inside the deployment; they are not on the gateway's edge |
+| agent tools `workspace_status`, `workspace_pull`, `workspace_push` | agent-api `/api/workspace/status`, `/pull`, `/push` |
 
 ### Configuration
 
@@ -314,13 +410,21 @@ the broker itself is set up as in [Connections](/connections).
 
 ### Architecture
 
+Workspace names: `control_plane/workspace_names.py` lists every workspace a person has (personal,
+private, shared) under the names the Files pane uses, returned as `all` by `GET /api/workspace/shared`
+(the `workspaces` tool). A middleware in agent-api resolves a name to its slug for every workspace
+argument (`slug`, `workspace_id`, `to_slug`, `credential_workspace`, and `DELETE /api/workspace/{slug}`)
+before routing, so access is still checked on the slug. Two matches answer `409` with both.
+Covered by `core/agent/tests/test_new_person_and_sharing.py`.
+
 | Rule | How this design meets it | Gate |
 |---|---|---|
 | **P2** contracts · **P6** one front door | the browser calls only the terminal; the terminal reaches agent-api through the gateway, and the broker through its contract | `gate:isolation`, `gate:exports`, `gate:domain-doors` |
 | **P4** published schemas | the broker's API is the sealed `credential-broker.v1`; the agent tools are in `mcp.tools.v1` | `gate:schema`, `gate:contract-version` |
-| **P15** secrets protected by default | credentials live in the broker or the sealed git secret store, never in a workspace, a log or the browser | ungated: reviewed; the broker's deny tests below |
+| **P15** secrets protected by default | credentials live in the broker, never in a workspace, a log or the browser | ungated: reviewed; the broker's deny tests below |
 | **P18** fail loud | each invite and link refusal is its own sentence; broker failures are typed `broker_fault`s; an interrupted import says so | ungated: reviewed |
-| **P20** authorize every access | roles are checked on every membership and repository route; invites check the verified email | deny tests below |
+| **P20** authorize every access | roles are checked on every membership and repository route; invites check the verified email; switching a group on in your active set checks the roster, and a `not-yours` answer carries no name | deny tests below; `core/agent/tests/test_workspace_non_member_refusals.py` |
+| **P20** authorize every access (sync) | `workspace_status` resolves the workspace exactly as a pull does; a non-member is refused before any fetch | deny test below |
 | **P21** state from evidence | an import is done only when it reports `completed`; a connection request is not a connected account | ungated: reviewed |
 | **P23** one writer per carrier | agent-api writes rosters, invites and import status; the broker writes credentials; admin-api alone decides the admin account, and agent-api, the gateway and the terminal only read its answer | `gate:dataflow`; the admin account: ungated: reviewed |
 | **P14** config is a validated contract | `VEXA_GIT_PROVIDERS` is declared in agent-api's `config.v1.json`, surfaced on Helm and Compose, and parsed at boot by `shared/config.py`, which refuses a malformed entry | `gate:config-contract` |
@@ -329,6 +433,8 @@ the broker itself is set up as in [Connections](/connections).
 | no duplication | the address rule lives in `repo_ref.py` with one twin in the terminal, held to the same cases by both test suites; the token shape lives only in `git_provider.py` | ungated: reviewed |
 | **P6** one front door (the admin account) | agent-api learns the admin account through admin-api's existing internal route; the terminal learns it through `/auth/me`; no service keeps its own list | ungated: reviewed |
 | **P14** validate at boot | a malformed `VEXA_ADMIN_ACCOUNT` (a domain, `*`, more than five addresses) stops admin-api from starting; a named address that already has an everyday account is logged at boot | `admin-api tests/test_admin_account.py` |
+| **P23** one writer per carrier (join links) | agent-api alone writes the invite store, the host's `workspace_joined_via_link` notice and the `workspace.joined_via_link` flows carrier; flows only consumes the carrier | `gate:dataflow`, `gate:schema` |
+| **P4** published schemas (join links) | the carrier is declared in the sealed `flows.v1`, the notice kind in the sealed `ws.v1`, the three tools in `mcp.tools.v1` and `routes.v1` | `gate:schema`, `gate:contract-version` |
 
 ### Security
 
@@ -336,6 +442,23 @@ the broker itself is set up as in [Connections](/connections).
 write. Readers read. Only the owner or an administrator renames a workspace. The private tier cannot be
 shared, and only the admin account writes the company workspace. The admin account has no desk, no
 shared workspaces and no meetings.
+
+**A default for new chats is a pointer, never a grant.** It is stored only after the same writable
+check a chat's target gets, and checked again on every read, so being removed, a deleted workspace or
+a role lowered to reader turns it back into Personal without naming the workspace
+(`core/agent/tests/test_chat_default_target.py`). The company workspace is never an everyday default.
+
+**A join link is a capability with limits.** The token is unguessable (32 random bytes) and stored
+only as its hash, so a copy of the store opens nothing. Only the workspace's owner mints one; it
+grants at most `max_uses` new members, the role it was minted with (never owner), and nothing after
+it expires or is revoked. Redeeming counts uses under a per-workspace lock, so concurrent opens cannot
+exceed the limit. Every join notifies the link's maker, so a link that travelled further than meant
+is visible at once and can be revoked. Deny tests: `core/agent/tests/test_join_links.py` ·
+`test_only_the_owner_mints_a_link`, `test_revoked_and_expired_links_refuse`,
+`test_three_uses_then_a_calm_refusal_and_a_member_reopening_spends_nothing`,
+`test_a_link_is_a_join_url_with_an_unguessable_token_stored_only_as_its_hash`; a delegated run is
+held to its ceiling on all three link routes by `core/agent/tests/test_delegation_ceiling_verbs.py` ·
+`test_a_workspace_outside_the_ceiling_is_refused_and_nothing_changes`.
 
 **Protections.**
 
@@ -349,8 +472,14 @@ shared workspaces and no meetings.
 - A saved token goes only to `https://github.com/`. A token for another host is typed for one call and
   travels only over `https`. Publish sends a token to an API only on `github.com` or a host the operator
   registered as GitLab, and never follows a redirect with it.
-- Deploy keys are generated server-side; the private half is sealed at rest and written to a
-  permission-`0600` file only for the length of one git operation.
+- Deploy keys are generated server-side; the private half is kept in the credential broker and written
+  to a permission-`0600` file only for the length of one git operation.
+- **Looking at the repository changes nothing.** `workspace_status` fetches into the remote-tracking ref
+  only; the working tree, the index and the local branch stay as they were, which a test checks
+  byte for byte. Because it changes nothing a person sees, it is allowed in the background regime
+  (no person watching); a pull and a push still need a person. Any member may look, a viewer
+  included; a pull needs contributor because it rewrites the tree. The agent never runs git: its
+  sandbox cannot write `.git`, so these three verbs are the only way it syncs.
 - Connection routes accept only the deployment's own origin and a closed set of actions. The terminal
   holds the person's broker key; agent workers hold none.
 - Consent pop-ups follow only Google's authorization address or the address the setup declared, and
@@ -375,7 +504,8 @@ shared workspaces and no meetings.
 | `core/agent/tests/test_turn_writeback_keeps_platform_writes.py` · `test_an_invite_minted_mid_turn_is_still_redeemable_after_the_turn` | invites survive the turn |
 | `core/agent/tests/test_workspace_ids.py` · `test_a_mere_member_may_not_rename_a_group`, `test_a_desk_owner_may_not_rename_their_desk_but_an_admin_may` | renaming |
 | `core/agent/tests/test_workspace_id_api.py` · `test_resolve_by_id_reports_access_per_reader`, `test_a_link_written_before_a_rename_still_resolves_after_it` | links |
-| `core/agent/tests/test_deploy_keys.py` · `test_the_private_half_is_sealed_at_rest`, `test_ssh_env_materializes_a_0600_key_only_for_the_length_of_the_op` | deploy keys |
+| `core/agent/tests/test_deploy_keys.py` · `test_the_private_half_is_kept_by_the_broker_and_nowhere_here`, `test_ssh_env_materializes_a_0600_key_only_for_the_length_of_the_op` | deploy keys |
+| `core/agent/tests/test_workspace_status.py` · `test_a_non_member_is_refused_and_nothing_is_fetched`, `test_status_fetches_and_reports_both_sides_without_moving_the_branch_or_the_tree`, `test_a_member_sees_what_is_behind_and_the_workspace_is_unchanged`, `test_an_unreachable_remote_is_a_typed_network_refusal_and_changes_nothing` | the look-only sync verb |
 | `core/agent/tests/test_connection_routes.py` · `test_a_worker_without_a_person_is_refused_before_the_broker`, `test_a_caller_without_the_gateway_signature_never_reaches_the_broker` | the agent's connection route |
 | `core/agent/services/credential-broker/tests/test_connection_setup.py` · `test_reuse_cannot_move_existing_secret_to_another_destination`, `test_invalid_spec_and_foreign_owner_refused`; `test_forwarded_identity.py` · `test_a_signature_for_another_person_is_refused`; `test_contract_conformance.py` · `test_each_route_refuses_roles_it_does_not_grant` | the broker |
 | `clients/terminal/src/app/api/connections/__tests__/routes.test.ts` · "refuses cross origin and caller-chosen identity" | the terminal's connection routes |
@@ -384,7 +514,7 @@ shared workspaces and no meetings.
 | `clients/terminal/src/minutes/__tests__/workspaceDeepLink.test.ts` · "never falls back to the desk — a refusal carries no page at all" | `/w/` links |
 | `core/agent/tests/test_admin_account.py` · `test_an_everyday_account_writes_no_door_of_the_company_layer` (files, flow pages, company pages, reset, acceptance, chat target, membership; the instance admin included), `test_nothing_configured_means_nobody_writes_the_company_layer`, `test_the_admin_account_opens_no_desk_no_workspace_and_no_meeting`, `test_the_workspace_door_resolves_nothing_but_the_company_layer_for_it`, `test_the_admin_account_aims_a_chat_nowhere_else`, `test_the_admin_accounts_mount_table_is_the_company_layer_and_its_system_tier`, `test_the_retired_subject_list_grants_nothing`, `test_identity_unreachable_or_unconfigured_means_nobody` | the admin account, in agent-api |
 | `core/identity/services/admin-api/tests/test_admin_account.py` · `test_unconfigured_means_nobody`, `test_both_halves_are_required`, `test_an_everyday_account_is_never_promoted`, `test_the_named_account_is_created_as_the_admin_account_and_launches_no_bot`, `test_removing_the_address_revokes_the_account`; `test_internal_validate_wire.py` · `test_the_admin_accounts_worker_is_never_the_account_its_person_is` | the admin account, in identity |
-| `core/gateway/services/gateway/tests/test_delegated_mcp.py` · `test_auth_me_says_whether_the_key_is_the_admin_account_and_nothing_else_is`; `core/meetings/services/mcp/tests/test_tool_auth.py` · `test_an_admin_tool_spends_the_deployments_key_for_the_admin_account_only` | flows authoring needs the admin account |
+| `core/gateway/services/gateway/tests/test_delegated_mcp.py` · `test_auth_me_says_whether_the_key_is_the_admin_account_and_nothing_else_is`; `core/gateway/services/mcp/tests/test_tool_auth.py` · `test_an_admin_tool_spends_the_deployments_key_for_the_admin_account_only`; `core/flows/tests/test_user_flows_api.py` · `test_the_admin_accounts_chat_writes_the_instance`, `test_an_everyday_accounts_chat_is_refused_the_instance`, `test_an_everyday_account_is_refused_the_instance`, `test_a_worker_answer_without_its_delegation_is_never_the_admin_account` | instance flows are the admin account's (its own key or its chat) |
 | `clients/terminal/src/minutes/__tests__/globalTarget.test.tsx` · "the admin account's header is the company layer and nothing else", "an everyday account is never offered Company"; `app/api/auth/__tests__/me.test.ts` · "says whether this is the ADMIN ACCOUNT…" | the terminal |
 | `clients/terminal/src/minutes/__tests__/attachRepo.test.tsx` · "rejects credentials pasted into the repository field before sending" | attach |
 | `core/agent/tests/test_git_gitlab_remotes.py` · `test_a_path_that_is_not_a_plain_nested_name_is_refused`, `test_the_deepest_gitlab_path_is_accepted_and_one_deeper_is_not`, `test_a_nested_path_still_passes_the_host_gate`; `clients/terminal/src/surfaces/__tests__/repoRef.test.ts` · "refuses %s, which is not a plain nested name" | nested paths |

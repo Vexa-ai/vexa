@@ -1,0 +1,254 @@
+---
+title: "CRM"
+description: "The optional CRM beside workspaces: one record per person, company, deal and project across the organisation, linked from workspace pages, changed through the agent."
+---
+
+Workspaces hold what a group thinks: notes, strategy, playbooks. The **CRM** holds what the whole
+organisation knows about an entity: its fields, owner, stage, relationships and last contact. A fact
+has one home. A page that talks about a company links its CRM record instead of copying its fields,
+and the record lists the pages that mention it.
+
+The CRM is optional. A deployment without it loses nothing else, and its tools and record page are
+absent.
+
+## What you can do
+
+Ask in the chat. The agent finds, reads, creates and proposes changes to records with the `crm_*`
+tools and confirms in one line:
+
+- *"Who is the owner of Globex, and where did we write about them?"* — the agent reads the record and
+  its **Mentioned in** list.
+- *"Add Jane Roe from Globex, jane@globex.example."* — the agent creates a person record with that
+  email as a match identifier. One email belongs to one record; a second record with it is refused,
+  and the agent offers to merge instead.
+- *"Globex is a customer now."* — the agent **proposes** the change, with the meeting or page it came
+  from as evidence. Nothing changes until a person accepts it.
+- *"Let the sales workspace see Globex."* (administrators) — the agent binds the workspace to the
+  record after one sentence of confirmation.
+
+In a page, link a record as `[Globex](/crm?record=<id>)`, or name it in front matter as
+`entity: <id>`. The agent writes these links for you when it mentions an entity it found.
+
+**The record page** (`/crm?record=<id>`, opened from any such link) shows the record's fields, the
+pages that mention it, its history, and the changes waiting for you, with **Accept** and **Reject**.
+
+## Who sees what
+
+- **The CRM's own policy decides first.** Each person has read and write rights per record type —
+  *all*, *own* or *none* — with the fields they may read and write, plus rights on single records.
+  Someone with no policy of their own gets the organisation's default: they may create records and
+  read and change the ones they own.
+- **A workspace binding adds rights, never removes or widens them.** An administrator binds a
+  workspace to a record. Every member of that workspace may then read it; its contributors and
+  owners may change it. When someone leaves the workspace, the rights go with their membership. A
+  binding never widens a field restriction the policy sets.
+- **A link grants nothing.** Writing a record's id into a page does not give anyone access to it.
+- **Mentioned in shows only your workspaces.** Pages from workspaces you are not a member of are left
+  out entirely; you are not told how many there are. Administrators see all of them.
+- **A record you may not read does not exist for you.** The answer is *not found*, never *forbidden*.
+
+### Agents
+
+An agent acts with its person's CRM rights, narrowed to the workspaces its job may use.
+
+- **It proposes; a person accepts.** An agent's change to a record is a proposal. An administrator
+  may let agents write named fields directly (`agent_direct_fields` in the policy).
+- **It cannot accept its own proposal.** Accepting and rejecting take a person's own credential.
+- **With nobody in the loop** (a routine running on its own), an agent may read and propose, never
+  write, merge, bind or configure.
+- **In a chat other people read,** the agent may use only records bound to a workspace every
+  participant can read. Asked about anything else, it says it cannot use it here and offers to
+  answer in your private chat.
+
+## Your desktop
+
+With the `desktop` feature on (it needs `crm`), your home is a **desktop**: your workspaces, the routines,
+chats and files you placed on it, and your cards when `desktop_cards` is on. It is yours alone; nobody
+else's arrangement changes when you change yours. [The desktop](/how-to/home#the-desktop) describes
+every tile and menu.
+
+Arrange it by dragging a section or a tile, or ask in your own chat:
+
+- *"Put agents first and hide files."* — the agent changes your desktop and says in one line what
+  changed. **Undo** on the desktop puts it back, placed items included.
+- *"Put my pricing notes on the desktop."* — the agent places the file, if it is in a workspace you
+  can read.
+- *"Save this as Monday review"* and later *"Restore Monday review."*
+
+An agent you did not ask in this turn — a routine, an event, a chat other people share — only
+**suggests**: the suggestion waits on your desktop with its reason, **Apply** and **Not now**, for at
+most seven days (fewer where your company set a shorter time).
+
+### How it works
+
+- **crm-api stores it, per person.** `crm_desk` holds what is placed (routines, chats, files and
+  cards), `crm_desk_layouts` holds every arrangement as a numbered version with the placements
+  after it, and `crm_desk_proposals` holds suggestions. Every row carries the organisation the
+  server is bound to, never one a caller names.
+- **Three tools and four terminal routes.** The one MCP assembles `desktop_read`, `desktop_arrange`
+  and `desktop_arrange_propose` from crm-api's manifest; the terminal calls `/crm/desk/read`,
+  `/crm/desk/arrange`, `/crm/desk/proposal` and `/crm/desk/undo` through the gateway with your
+  session's credential. Applying a suggestion and Undo are not tools.
+- **Arrangements are data.** A change is a list of declarative operations — order, move, group,
+  show, hide, collapse, expand, place, remove, filter, save, restore, and section order, top, place and
+  size — checked one by one; one bad operation refuses the whole list. A change made against an
+  older version than the current one is refused (`desk_changed`), so two tabs never overwrite each
+  other silently.
+- **Limits, set by the company.** By default at most 50 placed items, 5 waiting suggestions per
+  person, 20 suggestions per agent session per day, and a suggestion lives 7 days. The administrator
+  narrows them in `_global/POLICIES.md` (`desk_placements_max`, `card_proposals_pending_max`,
+  `card_proposals_per_agent_per_day`, `card_proposal_ttl_days`); a value above the default or one
+  that is not a whole number is applied as the default and named in crm-api's log. crm-api reads the
+  file through agent-api's internal file door (`CRM_AGENT_API_URL`, with the internal secret) at most
+  every 30 seconds; with no agent-api, or when it does not answer, the defaults apply. A desktop
+  already above a narrowed limit keeps its items and can be rearranged, but cannot grow. A `card:`
+  placement is refused with `ref_kind_not_enabled` while `desktop_cards` is off.
+- **Switch.** `VEXA_FEATURES` must name both `crm` and `desktop` (or `all`). Off, the `/desk/*`
+  routes answer `feature_disabled` for `desktop` and the `desktop_*` tools are not listed. On an existing
+  CRM database, `crm-init` creates the missing tables on the next start (the desktop's in schema
+  version 3, card members in 4); rows already there are untouched.
+- **Contract.** `Desk`, `DeskLayout`, `DeskOp`, `DeskProposal` and `ArrangeResult` in
+  `core/crm/contracts/crm.v1`, with the refusals `propose_instead`, `desk_changed`,
+  `proposals_pending_max`, `proposals_daily_max`, `not_readable`, `ref_kind_not_enabled` and
+  `desk_placements_max`.
+
+### Why it complies
+
+- **A person in the loop, decided by the server.** Only you, or your agent in a turn you typed in
+  your own one-person chat, change your desktop directly. crm-api tells the cases apart from the
+  credential identity resolved (the session's regime and whether the chat is shared), not from what
+  an agent says; everything else is refused with `propose_instead`.
+- **Your own desktop only.** The person is always the caller; no argument names another person or
+  organisation.
+- **Placing never shares.** Placing an item never creates, edits or shares anything, and a file can be
+  placed only from a workspace you can read now or your own space. A tile whose file you later lose
+  access to shows as missing.
+- **Reversible and recorded.** Arrangement versions are append-only (a trigger refuses changes), each
+  carries who made it (you, or an agent on your behalf) and the turn's trace id, and every desktop
+  call is in `crm_audit`.
+- **No model calls.** Reading or arranging the desktop costs nothing beyond the turn that asked.
+- **Limits only narrow.** The company's policy file can lower each desktop limit, never raise it past
+  the default, and an unreadable policy leaves the defaults in force rather than lifting them.
+
+## Cards
+
+With `desktop_cards` on as well (it needs `crm` and `desktop`), the desktop and every workspace have
+**cards**: shared, Trello-like cards in the organisation's registry. A card has a title, what it is
+about (a page, a chat, a workspace, a meeting or a record), a stage, what happens next, who it waits
+on, sub-cards, members and a short activity history. Its face is composed from a few blocks: the
+stage stepper, a number, progress, a checklist, the people on it.
+
+- **Make a card** from a chat's or a page's "…" menu, or on the desktop. It goes on your desktop, and
+  on the board of the workspace you put it in, where that workspace's members see it.
+- **Share it** by adding a person. They are asked first (Accept / Decline); it never lands on their
+  desktop by itself, and it never gives them access to what it is about.
+- **Ask your agent** — *"make a card to follow up the pricing call"*. The agent proposes it: it waits on
+  your desktop (or the workspace's board) with the agent's reason, **Add** and **Not now**. An agent
+  never makes, moves or shares a card itself; a stage it suggests waits for a member to accept.
+- **Take it off your desktop** with Undo, like anything else on it; you stay a member.
+
+### How it works
+
+- **A card is a CRM record** of a card type (`Card`; a company may declare more). crm-api owns it, its
+  members (`crm_card_members`) and its history (the record's own revisions). A workspace's board is the
+  cards it references: a workspace binding, so its members read the card and its contributors change
+  it.
+- **The stages are policy.** `lifecycles.card` in `_global/POLICIES.md` (default
+  `To do > Doing > Done | Dropped`). Every write path keeps a card on a declared stage. A card that
+  has not moved for `card_stalled_days` (default 14) shows "Stalled".
+- **"New" is per viewer.** A card you did not make shows "New" until you open it (`crm_card_seen`,
+  your own row; opening is a read with your own key, never an agent's).
+- **Agents propose.** `card_list`, `card_propose` and `card_update_propose` are the agent's only card
+  tools. A proposed card waits as a proposal; a person accepts it with their own credential
+  (`crm_review`): someone who can write the workspace it was proposed into, or the person the agent
+  worked for. Proposals count against `card_proposals_pending_max` and
+  `card_proposals_per_agent_per_day` and expire after `card_proposal_ttl_days`.
+- **Faces bind to fields.** A face block names a field instead of carrying a value; crm-api
+  sanitises the face on every write and resolves it for each viewer, so two members can see the same
+  card with different fields. The vocabulary is blocks.v1's card-face profile.
+- **Routes.** The terminal reaches `/crm/card/list`, `/crm/card/read`, `/crm/card/create`,
+  `/crm/card/update`, `/crm/card/members` and `/crm/card/membership` through the gateway with your
+  own key. Off, the `/card/*` routes answer `feature_disabled` for `desktop_cards`, the `card_*` tools
+  are not listed and the desktop keeps its D1 shape. Contract: `crm.v1` (`CardView`, `CardProposal`).
+
+### Why it complies
+
+- **One shared card, never copies.** Sharing adds a member to the same record; everyone sees the same
+  stage and history.
+- **Least privilege.** Membership grants the card's own fields under the type's policy, never its
+  About target. A face shows a field only to a viewer who may read it (nothing is drawn otherwise), and a
+  sub-card count includes only the sub-cards the viewer can read.
+- **A person in the loop.** No agent creates a card, accepts a proposal, adds a member or moves a stage;
+  crm-api enforces it from the caller's identity, not from what the agent says.
+- **Recorded.** Every card change is an append-only revision with who made it (and, for an accepted
+  proposal, who proposed it); every card call is in `crm_audit`.
+- **No model calls.** Cards and faces are data; reading the desktop costs nothing.
+
+## Turn it on (operators)
+
+The CRM organisation is tied to the install's org in identity. An individual account's own CRM
+(off by default) is described in [Orgs and personal CRMs](/minutes/orgs).
+
+In `deploy/compose/.env`:
+
+```bash
+COMPOSE_PROFILES=crm                 # add to any profiles you already run
+CRM_ORG_ID=acme                      # one organisation per install
+CRM_ORG_NAME="Acme Ltd"
+CRM_DB_PASSWORD=$(openssl rand -hex 24)
+CRM_API_URL=http://crm-api:8300      # wires the MCP tools, the flows pack and the record page
+VEXA_FLOWS_DEFS_EXTRA=flows_defs.crm # backlinks: hand page references to the CRM
+VEXA_CRM_REFERENCES_POLL_S=30        # how often agent-api looks for new workspace commits
+CRM_AGENT_API_URL=http://agent-api:8100  # where crm-api reads _global/POLICIES.md (the default)
+```
+
+Then `docker compose up -d`. On Kubernetes, set `crm.enabled`, `crm.orgId` and `crm.orgName` in the chart's values
+([The CRM on Kubernetes](/deployment-kubernetes#the-crm-optional)). `crm-init` runs once per start: it creates the CRM's own database role,
+its tables and the organisation, then exits; `crm-api` starts after it. To rebuild every backlink from
+git: `docker compose exec agent-api python -m control_plane.crm_references rebuild`.
+
+## How it works
+
+- **One service, one store.** `crm-api` (`core/crm`) owns the `crm_*` tables in the instance's
+  Postgres and is their only runtime writer. It logs in as its own role (`vexa_crm`), which
+  `crm-init` creates with the admin credential: no superuser, grants on the CRM's tables only. Record
+  history, card layouts and the audit are append-only, enforced by triggers.
+- **Every caller is resolved by identity.** `crm-api` asks identity's `/internal/validate` who a
+  credential belongs to — the same resolver the gateway uses — and gets the person, their live
+  workspace memberships (for a worker, narrowed to its job), and whether the turn is one other people
+  read. Identity's own admin is the CRM's admin.
+- **People are entities with accounts attached.** On a person's first CRM call their account is
+  attached to a person record: one whose verified email is among its match identifiers, or a new one.
+  Duplicates merge; the merged id answers the surviving record everywhere.
+- **Backlinks come from git.** agent-api holds the workspace checkouts. When a workspace's head moves
+  it reads every record link in the tree at that commit, and the roster in `policy/members.json`, and
+  publishes `workspace.references.changed` to flows. The `flows_defs.crm` pack hands it to `crm-api`,
+  which replaces that workspace's references. Each fact is the whole set at one commit, so applying
+  it twice changes nothing and an older commit never overwrites a newer one.
+- **MCP first.** The CRM serves its own tool manifest (`core/crm/mcp.tools.v1.json`); the one MCP
+  assembles `crm_describe`, `crm_search`, `crm_read`, `crm_history`, `crm_change`, `crm_review`,
+  `crm_configure` and `crm_bind` from it only where `CRM_API_URL` is set. The terminal's record page
+  goes through the gateway like every other call (`/crm/read`, `/crm/history`, `/crm/review`),
+  with your session's credential.
+- **Contract.** `core/crm/contracts/crm.v1` defines the record a read answers, the references
+  snapshot, change and binding results and the typed refusals (`shared_conversation`,
+  `human_session_required`, `person_confirmation_required`).
+
+## Why it complies
+
+- **Least privilege at rest.** The CRM's database role cannot read accounts, tokens, meetings or
+  sessions, and cannot change policies, record definitions or history. `crm-api` refuses to start as
+  a superuser or on a schema version it does not know.
+- **Access fails closed.** A record you may not read answers *not found*; counts, titles and
+  backlinks from other workspaces never appear. A person restricted to some fields gets no free-text
+  description, history reasons or evidence that could reveal the rest.
+- **No access by reference.** A link or a mention never grants a record; only a policy or an
+  administrator's binding does, and a binding's rights end with the membership they came from.
+- **People decide.** An agent's changes wait for a person, and accepting needs the person's own
+  credential. Every change keeps a revision with its actor, reason and evidence.
+- **Audit with the trace.** Every read and write is recorded in `crm_audit` with the caller's kind
+  (person, agent, unattended agent, shared turn), the session and the request's trace id.
+- **Shared conversations stay shared-safe.** A turn other people read may use only records bound to
+  workspaces every participant can read, matching the rule for workspaces.
+- **No field values in other systems.** The facts the CRM sends to flows carry record ids and
+  revisions, and the facts it receives carry page paths and ids — never account fields.

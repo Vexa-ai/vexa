@@ -213,6 +213,9 @@ def build_production_app():
     _transcription_language_at_boot()  # a refused default language stops the boot, not the first spawn
 
     import redis.asyncio as aioredis
+
+    from .voice_notes import RedisAudioStreamWriter
+    from .calls import Calls
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from . import create_app
@@ -285,10 +288,11 @@ def build_production_app():
     # dials the validated IP (preserving Host + TLS SNI), closing the DNS-rebinding TOCTOU window
     # between submit-time validate_webhook_url and the actual socket connect.
     from .webhooks import RetryQueue, WebhookSink
-    from .webhooks.ssrf import build_pinned_transport
+    from .webhooks.stored_url_policy import pinned_transport_for
 
     async def _webhook_transport(url: str, body: bytes, headers: dict):
-        async with httpx.AsyncClient(timeout=10.0, transport=build_pinned_transport()) as client:
+        # VEXA_WEBHOOK_STORED_URL_POLICY: a URL stored before 0.13 may dial under the 0.12 guard.
+        async with httpx.AsyncClient(timeout=10.0, transport=pinned_transport_for()) as client:
             return await client.post(url, content=body, headers=headers)
 
     webhook_sink = WebhookSink(_webhook_transport, queue=RetryQueue(redis_client))
@@ -355,7 +359,15 @@ def build_production_app():
         from .calendar_sync import read_stamp
         return await read_stamp(redis_client, user_id, calendar_id)
 
+    # Bot accounts (ADR-0049): the credential broker's `bots` role when VEXA_BOT_ACCOUNTS_BROKER_URL +
+    # VEXA_BOT_ACCOUNTS_KEY_FILE are set (an unusable key file refuses the boot), browser sessions in
+    # this Redis, workloads over the same runtime.
+    from .bot_accounts import build_bot_accounts_from_env
+
+    bot_accounts = build_bot_accounts_from_env(runtime_client, redis_client)
+
     app = create_app(
+        bot_accounts=bot_accounts,
         transcript_store=transcript_store,
         redis=segment_bus,
         meeting_repo=meeting_repo,
@@ -380,6 +392,8 @@ def build_production_app():
         internal_secret=os.environ.get("INTERNAL_API_SECRET", ""),
         bot_redis=bot_redis,
         runtime_callback_token=os.environ.get("RUNTIME_API_TOKEN", ""),
+        voice_note_writer=RedisAudioStreamWriter(redis_client),
+        calls=Calls.from_env(),
     )
 
     _attach_background_loops(
@@ -499,6 +513,24 @@ def _attach_background_loops(
     # PEL) → /health degrades + 503. Default headroom over one in-flight batch (count=10 default).
     app.state.pipeline_pending_alarm = int(os.getenv("PIPELINE_PENDING_ALARM", "100"))
 
+    # Browser sessions and verify checks past their expiry: close the record and stop the workload
+    # (bot_accounts.BotAccounts.reap). Started only on a deployment with the bot-account store.
+    bot_accounts = getattr(app.state, "bot_accounts", None)
+    bot_accounts_live = bool(getattr(bot_accounts, "configured", False))
+
+    async def _bot_accounts_reaper_loop() -> None:
+        interval = float(os.getenv("BOT_ACCOUNTS_REAPER_INTERVAL_S", "30"))
+        while True:
+            try:
+                reaped = await bot_accounts.reap()
+                if reaped:
+                    log.info("closed %d expired browser session(s)/check(s)", reaped)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("bot-accounts reaper failed")
+            await asyncio.sleep(interval)
+
     async def _bot_redis_restore_loop() -> None:
         # Redis keeps no ACL user across a restart; a live bot's user is defined again from the index
         # (the password is derived, so the bot's own URL is valid again unchanged).
@@ -516,9 +548,22 @@ def _attach_background_loops(
 
     async def _segment_consumer_loop() -> None:
         # Drain the transcription_segments stream → persist + publish tc:…:mutable.
+        from .collector import legacy_unsigned
+
+        # Upgrade hand-off: a 0.12 bot still in a meeting writes unsigned entries; admit them for the
+        # meetings spawned before 0.13, for a bounded window (collector/legacy_unsigned.py).
+        try:
+            await legacy_unsigned.open_from_db(session_factory)
+        except Exception:
+            log.exception("legacy segment hand-off: could not read in-flight meetings")
         tick_n = 0
         while True:
             try:
+                if tick_n % 60 == 0:
+                    try:
+                        await legacy_unsigned.refresh_from_db(session_factory)
+                    except Exception:
+                        log.exception("legacy segment hand-off: refresh failed")
                 await consume_segments(transcript_store, segment_bus)
                 # #636: every N ticks, reclaim any ORPHANED (crashed-replica) un-acked batch idle
                 # past RECLAIM_MIN_IDLE_MS and drain it through the same ingest→ack path. Bounded to
@@ -573,14 +618,14 @@ def _attach_background_loops(
         import httpx
 
         from .webhooks.retry import drain_retry_queue
-        from .webhooks.ssrf import build_pinned_transport
+        from .webhooks.stored_url_policy import pinned_transport_for
 
         # The injected Transport: POST the signed envelope; return the response (its .status_code
         # drives the retry/permanent decision in retry._deliver_one). WH2: IP-pinned at connect
         # (re-resolve + re-validate + dial the validated IP) so a rebinding flip can't slip an
         # internal target into a retry sweep either.
         async def _transport(url: str, body: bytes, headers: dict):
-            async with httpx.AsyncClient(timeout=10.0, transport=build_pinned_transport()) as client:
+            async with httpx.AsyncClient(timeout=10.0, transport=pinned_transport_for()) as client:
                 return await client.post(url, content=body, headers=headers)
 
         async def _tick():
@@ -903,6 +948,8 @@ def _attach_background_loops(
             asyncio.create_task(_signal_tape_janitor_loop(), name="signal-tape-janitor"),
             *([asyncio.create_task(_bot_redis_restore_loop(), name="bot-redis-restore")]
               if bot_redis is not None else []),
+            *([asyncio.create_task(_bot_accounts_reaper_loop(), name="bot-accounts-reaper")]
+              if bot_accounts_live else []),
             asyncio.create_task(_ensure_fts_index_once(), name="ensure-fts-index"),
         ]
         log.info("meeting-api background loops started: %s", [t.get_name() for t in tasks])

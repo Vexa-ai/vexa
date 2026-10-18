@@ -150,7 +150,8 @@ test("schema 2 names the flows image as the eleventh; schema 1 stays ten", () =>
   assert.equal(plan.changed_images.length, CURRENT_REQUIRED_IMAGES.length);
   assert.deepEqual(plan.build_matrix.find((row) => row.name === "flows"), {
     name: "flows",
-    repository: "v012-flows",
+    repository: "vexa-flows",
+    legacy_repository: "v012-flows",
     context: ".",
     dockerfile: "core/flows/Dockerfile",
     use_registry_cache: true,
@@ -158,7 +159,7 @@ test("schema 2 names the flows image as the eleventh; schema 1 stays ten", () =>
 });
 
 test("schema 3 names the credential broker as the twelfth; schema 2 stays eleven", () => {
-  assert.equal(CURRENT_SCHEMA_VERSION, 3);
+  assert.equal(CURRENT_SCHEMA_VERSION, 4);
   const eleven = validMap();
   eleven.schema_version = 2;
   eleven.images[FLOWS_IMAGE] = { ...eleven.images["vexaai/v012-mcp"], digest: "sha256:" + "f".repeat(64) };
@@ -170,17 +171,37 @@ test("schema 3 names the credential broker as the twelfth; schema 2 stays eleven
   assert.equal(requiredImagesFor(map).length, 12);
   assert.equal(map.images[CREDENTIAL_BROKER_IMAGE].class, "oss_only");
   assert.throws(() => validateCandidateMap({ ...twelve, schema_version: 2 }), /image set mismatch/);
-  assert.throws(() => validateCandidateMap({ ...twelve, schema_version: 4 }), /schema_version must be 1, 2 or 3/);
+  assert.throws(() => validateCandidateMap({ ...twelve, schema_version: 4 }), /image set mismatch/);
+  assert.throws(() => validateCandidateMap({ ...twelve, schema_version: 5 }), /schema_version must be 1, 2, 3 or 4/);
   const plan = candidateBuildPlan(null);
   assert.equal(plan.changed_images.length, 12);
   assert.deepEqual(plan.build_matrix.find((row) => row.name === "credential-broker"), {
     name: "credential-broker",
-    repository: "v012-credential-broker",
+    repository: "vexa-credential-broker",
+    legacy_repository: "v012-credential-broker",
     context: "core/agent/services/credential-broker",
     dockerfile: "core/agent/services/credential-broker/Dockerfile",
     use_registry_cache: true,
   });
   assert.deepEqual(RUNTIME_INPUTS_BY_IMAGE[CREDENTIAL_BROKER_IMAGE], ["core/agent/services/credential-broker"]);
+});
+
+test("schema 4 renames the same twelve to vexaai/vexa-<service>; schema 3 keeps the v012- names", () => {
+  const legacy = requiredImagesFor({ schema_version: 3 });
+  const current = requiredImagesFor({ schema_version: 4 });
+  assert.equal(current.length, 12);
+  assert.deepEqual(current, legacy.map((i) => i.replace("vexaai/v012-", "vexaai/vexa-")));
+  assert.equal(current.some((i) => i.includes("v012-")), false);
+  const twelve = validMap();
+  twelve.schema_version = 4;
+  twelve.images = Object.fromEntries(Object.entries(twelve.images)
+    .map(([k, v]) => [k.replace("vexaai/v012-", "vexaai/vexa-"), v]));
+  for (const i of ["vexaai/vexa-flows", "vexaai/vexa-credential-broker"]) {
+    twelve.images[i] = { ...twelve.images["vexaai/vexa-mcp"], digest: "sha256:" + "e".repeat(64) };
+  }
+  const map = validateCandidateMap(twelve, twelve.release);
+  assert.equal(map.images["vexaai/vexa-gateway"].class, "prod_deployed");
+  assert.deepEqual(RUNTIME_INPUTS_BY_IMAGE["vexaai/vexa-mcp"], RUNTIME_INPUTS_BY_IMAGE["vexaai/v012-mcp"]);
 });
 
 test("refuses a missing image", () => {
@@ -294,10 +315,25 @@ test("the replacement build plan is bounded to Bot and Lite", () => {
   assert.equal(plan.base_candidate_tag, doc.candidate_tag);
 });
 
+test("the delta leg runs the base candidate's stack under the names that candidate was frozen with", () => {
+  // A schema 1-3 base was published as vexaai/v012-<service>; only schema 4 carries vexa- names.
+  const legacyBase = candidateBuildPlanFromChangedImages(validMap(), ["vexaai/vexa-bot", "vexaai/vexa-lite"]);
+  assert.ok(legacyBase.base_service_images.length > 0);
+  for (const image of legacyBase.base_service_images) assert.match(image, /^vexaai\/v012-/);
+  const v4 = { ...validMap(), schema_version: 4 };
+  const renamedBase = candidateBuildPlanFromChangedImages(v4, ["vexaai/vexa-bot", "vexaai/vexa-lite"]);
+  for (const image of renamedBase.base_service_images) assert.match(image, /^vexaai\/vexa-/);
+  assert.deepEqual(candidateBuildPlanFromChangedImages(null, CURRENT_REQUIRED_IMAGES).base_service_images, []);
+  const workflow = readFileSync(new URL("../.github/workflows/release-images.yml", import.meta.url), "utf8");
+  const leg = workflow.match(/\n  validate-bot-delta:[\s\S]*?\n  validate-lite-delta-amd64:/)?.[0] ?? "";
+  assert.match(leg, /BASE_SERVICE_IMAGES/, "the leg pulls the base map's own names");
+  assert.doesNotMatch(leg, /image-names\.mjs service-images/, "not today's names regardless of the base schema");
+});
+
 test("release-images consumes the planner's dynamic matrix instead of a literal fan-out", () => {
   assert.deepEqual(
-    Object.keys(BUILD_MATRIX_BY_IMAGE),
-    CURRENT_REQUIRED_IMAGES.filter((image) => image !== "vexaai/vexa-bot"),
+    Object.keys(BUILD_MATRIX_BY_IMAGE).filter((image) => !image.startsWith("vexaai/v012-")).sort(),
+    CURRENT_REQUIRED_IMAGES.filter((image) => image !== "vexaai/vexa-bot").sort(),
   );
   const workflow = readFileSync(
     new URL("../.github/workflows/release-images.yml", import.meta.url),

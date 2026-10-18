@@ -21,7 +21,7 @@ Every agent turn mounts an ordered set `[_global, *normal, _system]`:
 |---|---|---|---|---|
 | **Global system** | `_global` | **read-only** (fs `:ro`) | yes | Platform-owned self-awareness: a synced **Vexa branch** (code + docs) + behaviour/skills. One copy, central. |
 | **Normal** | `<id>` / `.attached/<subject>/<slug>` | read-write | opt-in (flat, equal rank) | The user's own + shared knowledge workspaces — all the **same rank** (see below). |
-| **Private system** | `_system` | **read-write** | yes | Per-user private store — **who you're helping** (`identity.md`), chats/sessions, settings, routines, membership/attachment records. Never shared. |
+| **Private system** | `_system` | **read-write** | yes | Per-user private store — **who you're helping** (`identity.md`), settings, routines, membership/attachment records. Never shared. **Holds no chat:** conversations are kept in the session store, apart from every workspace ([Shared chats](/minutes/shared-chats)). |
 
 - **There is NO "baseline"/"primary" rank** (2026-07-07 flat model). The normal tier is a **flat,
   equal-rank list** (`active_set`) — every workspace activates/deactivates the same way. The mount
@@ -113,6 +113,105 @@ Code: `runtime_kernel/mounts.py` (`workspace_binds`, `k8s_volume_mounts`),
   cheap preamble line, not a document. **Why:** flat mounting is the *mechanism*; purpose is what keeps a
   multi-workspace mount set from becoming a junk drawer.
 
+## Workspace states — active, inactive, hidden
+
+Every workspace a person has is in one of three states, for that person:
+
+| State | Mounted for the agent | Listed (Files, pickers, `workspaces`) | Reversible |
+|---|---|---|---|
+| **Active** | yes, by default in new chats | yes | — |
+| **Inactive** | only in a chat that names it | yes | — |
+| **Hidden** | never | no — the agent is not told about it unless asked | yes, unhide = active |
+
+Each chat has one **target** (where writes go, or none) and its own **reads** (what is mounted). A
+new chat starts from the person's default profile, else their default target and active workspaces.
+Everything is set in the chat: "write here", "exclude this", "include Example Bank", "no workspaces",
+"hide the old ones", "new chats should write to Example Bank". The chat header shows one read-only
+chip — the profile and its parameters, e.g. **Work · writes to biz · reads 3**, **Incognito**, or
+**Writes to Personal · Reads 2 workspaces** — and the full parameters on hover. There are no toggles
+in the header or the Files pane; the agent announces each change in one line.
+
+**Chat profiles** are named presets of a chat's scope: **work**, **study**, **hobby** (the person
+edits what each writes to and reads), **shared work** (writes to and reads only the workspace bound to
+its `{{workspace}}` variable — "use shared work for Collab Room") and **incognito** (no workspaces,
+nothing written to workspaces, never read by another chat, left out of chat search, deleted once it has
+been idle longer than `incognito_retention_days` in `_global/POLICIES.md`, 7 by default; the purge
+runs the next time the person's chat list is read, and until then the conversation itself is kept
+in the person's private system space). "Start an incognito chat" opens a new chat in it.
+The company seeds more profiles in `_global/PROFILES.md` front matter
+(`profiles: {name: {target, reads}}`, `{{workspace}}` allowed) and a default for new chats with
+`default_chat_profile:` in `_global/POLICIES.md`; a person's own default and edits win. Opening a
+workspace invite link starts the person's next new chat in **shared work** bound to that workspace.
+Two workspaces with one name are always named apart: *biz (yours · biz · empty)*, *biz (shared ·
+biz-864aed)*.
+
+Hiding a **shared** workspace hides it for that member only; membership and everyone else's view are
+unchanged. The **personal** workspace can't be hidden, shared or deleted. **Deleting** a shared
+workspace is for its owner; when other members exist, the first call names them and nothing is
+deleted until the person confirms. Existing workspaces start active; nothing is hidden for anyone
+automatically.
+
+Agent tools: `workspace_list` (states, this chat's target and reads, the defaults),
+`workspace_state_set` (`workspaces` or `"all"`, `excluding`, `state`, `scope`),
+`workspace_defaults_set` (`target`, `active`), `workspace_target` (this chat's target),
+`workspace_remove` (`confirm` for a shared one), `workspace_new` (`slug` to choose one),
+`workspace_pull` (`merge` to reconcile a workspace and its repository when both moved; a conflict
+changes nothing and names the files), `chat_profile_list`, `chat_profile_set` (`workspace`,
+`new_chat`) and `chat_profile_edit`.
+
+### How it works
+
+- **One store per fact.** The person's states live in their attach state
+  (`workspace_attach.py`, `<root>/.attached/<subject>/state.json`): `active_set` for their own,
+  `hidden_shared` for shared ones switched off, `hidden` for both kinds. The older per-workspace
+  "archived" flag reads as hidden. A chat's reads and target live on the chat's session record
+  (`_Sessions.set_reads` / `set_target`); the default target where it always was. agent-api is the
+  only writer of all of them.
+- **Mounts follow the state.** `dispatch.build_mount_set` mounts the chat's reads plus its target when
+  the chat has its own reads, and the person's active set when it does not. A hidden workspace is not
+  mounted by any path — active set, chat reads, or a scaffold naming it — so it is not on the worker's
+  disk.
+- **Which chat.** A worker's call names its chat by the unit its delegation was signed for and cannot
+  name another; the header's toggles pass the chat id.
+- **The header follows the agent.** When a state, target, profile or defaults verb answers, the
+  terminal re-reads `GET /api/workspace/states` and the chip updates. Opening a chat no longer
+  changes the person's states. A person-wide change marks every warm chat of theirs stale, so its
+  next message runs with the new mounts.
+- **Profiles** live in the same attach state (`profiles`, `default_profile`). A new chat's first turn
+  applies the default profile (else the default target) — server-side, so the header and the turn
+  read one record.
+
+### Why it complies
+
+- **One writer** per surface: agent-api for states, reads, target and defaults; the terminal only
+  mirrors them.
+- **MCP first:** every act is a tool; the header line is a view of the same verbs.
+- **The leak rule is unchanged:** a turn other people read is still narrowed by
+  `session_access.narrow_mounts` after the chat's reads are applied, so reads can only narrow it.
+- **Person in the loop:** `workspace_state_set` and `workspace_defaults_set` are person verbs
+  (`routes.v1.json` `verbs`); a worker running without a person is refused. Delete stays a person
+  verb and names the members who would lose a shared workspace before anything is removed.
+
+**Gates.** P2 `gate:isolation`, P4 `gate:schema` and `gate:contract-version` (the new routes and
+tools are rows in the sealed `routes.v1` and `mcp.tools.v1`), P6 `gate:exports` and P23
+`gate:dataflow` are green on the release head. P20 (who may change a state, a default or a
+profile) and P21 (the header reads the server's state, never a draft) are ungated: reviewed, and
+held by the tests below.
+
+**Deny tests.**
+
+| Protection | Tests |
+|---|---|
+| a hidden workspace is on no worker's disk, by any path | `core/agent/tests/test_workspace_states_mounts.py` · `test_a_hidden_own_workspace_is_not_mounted`, `test_a_hidden_shared_workspace_is_not_mounted_for_that_member_only`, `test_a_scaffold_cannot_mount_a_hidden_workspace`, `test_chat_reads_can_mount_an_inactive_one_but_never_a_hidden_one` |
+| a chat's reads only narrow: never a workspace the person is not a member of; "no workspaces" mounts none | `test_workspace_states_mounts.py` · `test_reads_never_widen_to_a_workspace_the_person_is_not_a_member_of`, `test_a_chat_with_no_workspaces_mounts_no_workspace` |
+| a worker without a person changes nothing, and a worker changes only the chat its delegation names | `core/agent/tests/test_workspace_states_routes.py` · `test_an_unwatched_worker_cannot_change_states`, `test_a_worker_changes_its_own_chat_from_the_signed_unit` |
+| the personal workspace is never hidden or deleted; a shared one is deleted only by its owner, after the members are named | `test_workspace_states_routes.py` · `test_personal_cannot_be_hidden_with_a_clear_message`, `test_personal_cannot_be_deleted`, `test_delete_shared_refused_for_a_non_owner`, `test_delete_shared_with_members_names_them_first` |
+| a default target must be writable by the person, and falls back to Personal when it no longer is | `core/agent/tests/test_chat_default_target.py` · `test_a_workspace_the_person_cannot_write_is_refused_and_not_stored`, `test_a_reader_cannot_make_it_their_default`, `test_removed_from_the_workspace_falls_back_to_personal_without_naming_it`, `test_a_role_lowered_to_reader_falls_back_to_personal` |
+| a chat never keeps writing into a workspace its person hid | `test_workspace_states_routes.py` · `test_hiding_the_chats_target_moves_its_writes_back_to_personal` |
+| incognito mounts nothing and is deleted on schedule | `core/agent/tests/test_chat_profiles.py` · `test_incognito_mounts_nothing_and_says_so`, `test_an_idle_incognito_chat_is_deleted_on_schedule_and_others_stay` |
+| "shared work" binds only a workspace the person can read | `test_chat_profiles.py` · `test_the_shared_chat_seam_binds_shared_work_on_one_chat`; `core/agent/tests/test_shared_work_binding.py` |
+| a service being replaced is retried only when nothing was sent | `core/gateway/services/gateway/tests/test_upstream_restart_retry.py` · `test_a_failure_after_the_request_may_have_been_sent_is_not_repeated`, `test_a_connect_failure_that_outlasts_the_window_is_still_502` |
+
 ## Sharing model (`workspace_membership.py`)
 
 The person-facing steps (adding a member, joining from a link, what each refusal means) are on
@@ -148,6 +247,12 @@ row granted before that fills in its email the next time that member opens the l
 **`policy/` is platform-write-only:** an agent turn may never write `policy/`; the worker's turn-commit
 reverts any `policy/` change (`_revert_policy_writes` → `{"type":"policy-reverted"}`). Membership is
 written only by `workspace_membership.policy_commit` (platform git identity).
+
+**A worker stays inside its dispatch's workspaces.** An agent worker dispatched without a person in
+the chat (a routine, an event) carries the exact set of workspaces it may touch. agent-api refuses
+(`403`) any route that names a workspace outside that set, checked where the workspace is resolved,
+and the worker sees only the shared workspaces inside it. See
+[Security & compliance → Agent workers](/security-compliance#agent-workers).
 
 ## Joining a workspace — `/join`, preview, sign in, accept
 
@@ -196,30 +301,22 @@ Save a GitHub PAT **once** and reuse it for every git op across **all** repos, i
 per push/pull/publish/attach. Set it in **API Tokens → GitHub**; the git-op forms then don't prompt.
 
 **Security model:**
-- **Server-side only** — sealed by agent-api's `secret_store` under the workspaces store root in
-  `.secrets/` (a dot-dir the workspace scanners skip, **outside any git tree** so it never lands in a
-  commit), or kept in the [credential broker](/connections#git-credentials-in-the-broker-optional) when
-  `VEXA_GIT_STORE_BROKER_URL` is set. The old plaintext `.secrets/<subject>.ghtoken` is migrated on first read.
+- **Kept in the credential broker** — saved in the [credential broker](/connections#git-credentials)
+  (AES-256-GCM, its own volume and key), never on agent-api's volume and never inside a git tree.
+  agent-api fetches it as the broker's `git` role, only for the person the gateway signed for, and uses
+  it for one operation. Without a configured broker, saving one is refused (`503`,
+  `git_credentials_unavailable`).
 - **Browser-isolated** — never returned to the client; a read yields only a `••••abcd` mask.
-- **Never transits the gateway as a header** and never leaves the one service that uses it (smaller blast
-  radius than routing it through `admin-api`/user.data — and no governed-service change).
+- **Never transits the gateway as a header** and never leaves the services that keep and use it.
 - **Applied then scrubbed** — git ops fall back to it when no per-call token is given; it rides the push
   URL for that op only, is **redacted from every error/log** (P15), and is never written to `.git/config`.
-- **Encrypted at rest (✅)** — sealed by `secret_store` under one server-side key: `VEXA_SECRETS_KEY` when
-  the operator supplies one (so the key can live outside the data volume), otherwise a `0600` key
-  generated under the secrets root on first use — "unset" means *generated*, never *plaintext*. With
-  `VEXA_ENV=production` an unset key is refused instead: saving a credential fails with a sentence
-  naming `VEXA_SECRETS_KEY`.
-  Encrypt-then-MAC (HMAC-SHA256 subkeys + a SHA-256 counter keystream, stdlib only — no new dependency in
-  the control-plane image); a tampered envelope or a wrong key reads as **"no credential"**, never as
-  garbage. A token written by the older plaintext code is migrated (re-sealed, plaintext unlinked) the
-  first time it is read. **Set `VEXA_SECRETS_KEY` in any deployment whose workspace volume is backed up
-  or synced**: without it the generated key sits in the same directory as the ciphertext, so a stolen
-  volume carries both — that default buys protection against a stray file read, not against a volume
-  leak. Still use a **minimally-scoped, revocable fine-grained PAT**: a stored PAT is
-  password-equivalent, and no encryption at rest protects a running server.
+- **Moving from older releases** — a token an older agent-api kept under `<workspaces>/.secrets/`
+  (sealed with `VEXA_SECRETS_KEY`, or plaintext `<subject>.ghtoken`) moves into the broker on first use
+  and the old file is removed after the broker confirms it; the broker's one-shot import moves all of
+  them at once ([Connections → Git credentials](/connections#git-credentials)). Still use a
+  **minimally-scoped, revocable fine-grained PAT**: a stored PAT is password-equivalent.
 
-Code: `git_credentials.py` (`set`/`read`/`masked_github_token`), `secret_store.py` (the sealed store),
+Code: `git_credentials.py` (`set`/`read`/`masked_github_token`), `git_secret_store.py` (the broker client),
 `api.py` (`GET`/`POST /api/workspace/git-token`; push/pull/publish/attach fallback), `tokens.tsx` (the
 card, reachable in minutes mode from the account menu).
 
@@ -231,7 +328,7 @@ has an answer that is not "a box". Each workspace mints its own **ed25519** keyp
 
 - **Scoped to one repository**, unlike a PAT (which is a bearer credential over every repo the account
   can reach) — and revoked by the person, on their own repo, without telling us.
-- **The private half has no read path.** Generated by `ssh-keygen`, sealed in the same encrypted store,
+- **The private half has no read path.** Generated by `ssh-keygen`, kept in the credential broker,
   and materialized into a `0600` file inside a `0700` temp dir for the length of ONE git op. Git ops run
   with `GIT_SSH_COMMAND` through `shared/gitexec.py` (no program the repository names runs), `IdentitiesOnly=yes` (the host's own
   keys can never stand in for a workspace's) and `BatchMode=yes` (a bad key fails loud, never hangs).
@@ -245,8 +342,8 @@ has an answer that is not "a box". Each workspace mints its own **ed25519** keyp
   When git refuses us and we hold nothing, the reply is the public key plus *"say `done` when added"*.
 
 Code: `deploy_keys.py`, `workspace_credentials.py` (which credential, in what order),
-`api.py` (`GET`/`POST /api/workspace/{slug}/deploy-key`), `vexa_control_mcp.py`
-(`workspace_attach` · `workspace_pull` · `workspace_push`).
+`api.py` (`GET`/`POST /api/workspace/{slug}/deploy-key`), `core/agent/mcp.tools.v1.json`
+(`workspace_attach` · `workspace_status` · `workspace_pull` · `workspace_push`).
 
 ## Live collaboration (during a meeting) — all ✅
 
@@ -290,9 +387,9 @@ An agent records what it learned about a person, company, meeting, project or de
   nothing. A page written before this rule, whose sources were split at their commas, is repaired the
   next time the same source is upserted.
 - **The company tier.** `slug="_global"` writes a company-tier page into the organisation's layer.
-  Only an org admin may do that; anyone else gets `403 only an org admin may write company-tier pages
+  Only the admin account may do that; anyone else gets `403 only the admin account may write company-tier pages
   into _global` and writes the page on their own desk instead. The `extend-meeting` and `create`
-  briefs say so, so an agent that is not an admin does not try.
+  briefs say so, so an agent that is not the admin account does not try.
 - **Write-back.** After a turn, a mechanical pre-pass lists names the turn mentioned that have no
   page, and a write-back phase may create them. The assistant's own model name (*Claude Sonnet …*,
   *Claude Opus …*) is never a candidate; a person or company that merely starts with the same word
@@ -323,6 +420,23 @@ A split page heals only for a source that is upserted again; other halves stay u
 
 A shared workspace can load a repository too (`POST /api/workspace/shared/{workspace_id}/attach`,
 contributor or owner). Its `policy/members.json` is carried into the clone and kept untracked there.
+
+**Syncing with GitHub** (`workspace_status`, `workspace_pull`, `workspace_push`). The agent's sandbox
+cannot write a workspace's `.git` and has no git credential, so it syncs only through these platform
+verbs, each a route in `routers/workspaces.py`:
+
+1. `workspace_status` (`POST /api/workspace/status`) resolves the workspace through `_manage_dir`
+   (the caller's own, or a shared one they are a member of), picks the credential a pull would
+   (`workspace_credentials.for_workspace`), and runs `workspace_git_sync.fetch_status`: a fetch of
+   the branch into `refs/remotes/<home>/<branch>` and nothing else. It reports branch, upstream,
+   ahead/behind, the commits on each side (sha, subject, file count; at most 50 listed), uncommitted
+   and untracked paths (read with `GIT_OPTIONAL_LOCKS=0`, so not even the index is rewritten), and
+   `fetched_at` / `previous_fetch_at` (from `FETCH_HEAD`). Refusals carry `detail.refused`:
+   `no_remote` and `detached` (409), `no_credential` (424, with the deploy-key sentence) and
+   `network` (502, with `previous_fetch_at`).
+2. `workspace_pull` fetches and fast-forwards; a divergence is refused. `workspace_push` pushes
+   fast-forward only. Both are `person` verbs; `workspace_status` is not, because it changes nothing a
+   person sees.
 
 **Every path from outside goes through one rule.** `core/workspaces/shared/workspace_paths.py` answers
 whether a name or path stays inside a workspace:
@@ -374,7 +488,7 @@ users (Lite's per-tenant UID), it makes itself non-dumpable instead.
 | Member list | agent-api, `workspace_membership.policy_commit` | `policy/members.json` in the workspace |
 | Invites (hashes only) | agent-api, `workspace_membership` | `<store-root>/.invites/<workspace_id>.json`, outside every workspace |
 | Import status | agent-api, `workspace_import.py` | `.imports/<subject>/` (`imports-status` in the architecture chart) |
-| Saved Git token and deploy keys | agent-api's sealed `secret_store` (`VEXA_SECRETS_KEY`), or the [credential broker](/connections#git-credentials-in-the-broker-optional) | `.secrets/` in the store, or the broker |
+| Saved Git token and deploy keys | the [credential broker](/connections#git-credentials), for agent-api's `git` role | the broker's store |
 
 ### Contracts, routes and configuration
 
@@ -382,7 +496,7 @@ users (Lite's per-tenant UID), it makes itself non-dumpable instead.
 - **Routes:** agent-api's `routers/workspaces.py` (`/api/workspace/*`, `/api/workspaces/*`), published
   through the gateway as `/agent/...` by `core/agent/routes.v1.json`.
 - **Configuration:** agent-api's `core/agent/control_plane/config.v1.json` (`VEXA_WORKSPACES_DIR`,
-  `VEXA_SECRETS_KEY`, `VEXA_GIT_STORE_BROKER_URL`, …), set from compose `.env` or Helm values.
+  `VEXA_GIT_STORE_BROKER_URL`, …), set from compose `.env` or Helm values.
 
 ## Why it complies
 
@@ -426,7 +540,9 @@ Deny tests, all in `core/agent/tests/`:
 | Git runs nothing the repository names | `test_gitexec.py`: `test_a_hook_planted_in_the_repository_does_not_run`, `test_a_credential_helper_the_repository_names_does_not_run`, `test_a_linked_git_dir_is_refused`, `test_a_git_dir_swapped_in_after_the_check_is_never_read` · `test_git_single_path.py`: `test_no_git_subprocess_bypasses_gitexec` |
 | The tools user cannot write the repository | `test_worker_git_writeback.py`: `test_the_grant_never_opens_git_and_closes_what_an_earlier_grant_opened`, `test_a_work_tree_root_is_sticky_and_nothing_else_is`, `test_a_hook_planted_in_git_does_not_run_at_write_back` · `test_tools_user_cannot_swap_git.py`: `test_the_tools_user_cannot_swap_git_and_can_still_do_its_work` (runs in the worker image) |
 | Entity sources stay whole; the company tier is admin-only; the assistant is not a write-back subject | `test_entity_source_list.py`: `test_a_comma_inside_a_source_does_not_split_it`, `test_the_same_source_twice_is_recorded_once`, `test_a_page_split_by_the_old_writer_heals_on_the_next_upsert`, `test_the_frontmatter_is_still_yaml_other_readers_parse` · `test_writeback_not_the_assistant.py`: `test_the_model_answering_is_not_a_writeback_candidate`, `test_a_person_or_company_that_starts_with_the_same_word_is_kept` · `test_global_root.py`: `test_a_non_admin_company_tier_write_is_refused_and_nothing_lands` |
+| Looking at GitHub changes nothing, and only for members | `test_workspace_status.py`: `test_status_fetches_and_reports_both_sides_without_moving_the_branch_or_the_tree`, `test_a_member_sees_what_is_behind_and_the_workspace_is_unchanged`, `test_a_non_member_is_refused_and_nothing_is_fetched` |
 | Git credentials only for the signed person | `test_git_store_identity.py`: `test_the_request_s_signed_person_is_the_actor_and_the_signature_is_forwarded`, `test_without_a_signed_person_nothing_is_sent` · `test_git_broker_store.py`: `test_unavailable_never_falls_back_or_deletes` |
+| agent-api keeps no Git credential at rest | `test_one_credential_store.py`: `test_with_the_broker_agent_api_holds_nothing_at_rest`, `test_saving_a_token_without_the_broker_is_refused_and_writes_nothing`, `test_a_saved_credential_the_broker_cannot_take_is_a_refusal_not_an_anonymous_run`, `test_agent_api_has_no_way_left_to_seal_a_credential` · broker `test_git_legacy_import.py`: `test_everything_moves_is_read_back_and_the_old_store_is_gone` |
 
 ## Deferred / planned (documented, not built)
 - ⬜ **`_global` branch auto-sync** (currently a one-time clone).
@@ -436,11 +552,12 @@ Deny tests, all in `core/agent/tests/`:
 - ⬜ **Full seed-slot de-specialization** — relocate Personal's tree out of the fixed `<root>/<subject>`
   seed slot into a normal store slot, so share/archive/delete work on it like any workspace (removes the
   last residual specialness; the rank is already gone).
-- ✅ **At-rest encryption for the saved GitHub token** — sealed by `secret_store` under one server-side
-  key (`VEXA_SECRETS_KEY`, or a `0600` key generated on first use); the same store holds every
-  workspace's deploy-key private half. Legacy plaintext tokens migrate on first read.
+- ✅ **At-rest encryption for the saved GitHub token and deploy keys** — kept in the credential broker
+  (ADR-0040), the one credential store; agent-api holds none at rest.
 - ⬜ **Routine can send a bot** (`routine.v1` gains a `target: agent|meeting`).
-- ⬜ **Chat migration (M1)** into `_system` (today `_system` holds `identity.md` + a README marker).
+- ✅ **Chats out of the workspaces.** Every conversation is kept in the session store (ADR-0048), not
+  in `_system` or any workspace; `session_migrate --clean --retire` moves old ones out (reversible
+  with `--restore`). Workspaces hold knowledge only; `_system` holds `identity.md` and settings.
 - ✅ done since the last revision: **flat equal-rank model** (no baseline), **cwd follows the active
   set**, **light default seed + onboarding-dashboard README**, **first-view landing resolver**,
   **`_system` light identity**, **eager provision on account creation**, **per-workspace PURPOSE →

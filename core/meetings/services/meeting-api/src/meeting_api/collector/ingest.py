@@ -188,7 +188,12 @@ def _admitted(fields: dict) -> bool:
     callers acknowledge a refused entry like any other — a malformed one must not abort the batch
     and come back on every reclaim."""
     try:
-        return _verify_entry(fields)
+        if _verify_entry(fields):
+            return True
+        # A 0.12 bot still running across the upgrade writes unsigned entries; admitted only for the
+        # meetings it was spawned for and only inside the hand-off window (legacy_unsigned.py).
+        from .legacy_unsigned import WINDOW
+        return WINDOW.admits(fields)
     except Exception:  # noqa: BLE001 — any fault reading an entry is a refusal, never a stalled batch
         return False
 
@@ -323,6 +328,28 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
                 json.dumps({"type": "transcript_retract", "meeting": {"id": meeting_id}, "segment_ids": ids}),
             )
         except Exception as e:  # noqa: BLE001 — best-effort live fan-out
+            _log_publish_failure(meeting_id, e)
+        return 0
+    if msg_type == "transcription_progress":
+        # How far transcription is behind capture (backlog_s), how long the speaker has been quiet
+        # (silence_s), and whether the bot is finishing its final pass. Nothing is persisted: it rides
+        # the row-scoped feed so the terminal can say "catching up" instead of "no words".
+        try:
+            meeting_id = int(data.get("meeting_id"))
+        except (TypeError, ValueError):
+            return 0
+        if await _erased(store, meeting_id):
+            return 0
+
+        def _num(v):
+            return round(float(v), 1) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+        try:
+            await redis.xadd(_transcript_stream(meeting_id), {
+                "type": "progress", "backlog_s": _num(data.get("backlog_s")),
+                "silence_s": _num(data.get("silence_s")), "finishing": bool(data.get("finishing")),
+            })
+        except Exception as e:  # noqa: BLE001 — best-effort, like every live marker
             _log_publish_failure(meeting_id, e)
         return 0
     if msg_type not in ("transcription", "transcript"):

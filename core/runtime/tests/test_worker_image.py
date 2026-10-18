@@ -51,7 +51,7 @@ def _backend(routes) -> tuple[DockerBackend, FakeSession]:
     return b, sess
 
 
-TARGET = "vexaai/v012-agent-worker:dev"
+TARGET = "vexaai/vexa-agent-worker:dev"
 
 
 class PullingSession(FakeSession):
@@ -89,7 +89,7 @@ def test_pulls_when_worker_image_missing():
     assert b.ensure_worker_image(TARGET) == TARGET
     pulls = [p for (m, p) in sess.calls if m == "POST" and p.startswith("/images/create")]
     # exactly one pull, of the WORKER repo+tag (percent-encoded query values)
-    assert pulls == ["/images/create?fromImage=vexaai%2Fv012-agent-worker&tag=dev"]
+    assert pulls == ["/images/create?fromImage=vexaai%2Fvexa-agent-worker&tag=dev"]
     # never creates a tag alias of anything — the impostor-alias regression guard
     assert not any("/tag" in p for (_m, p) in sess.calls)
 

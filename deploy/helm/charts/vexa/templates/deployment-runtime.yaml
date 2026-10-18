@@ -32,7 +32,7 @@ spec:
       containers:
         - name: runtime
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
-          image: "{{ .Values.runtime.image.repository }}:{{ .Values.global.imageTag | default .Values.runtime.image.tag }}"
+          image: "{{ .Values.runtime.image.repository }}:{{ .Values.global.imageTag | default .Values.runtime.image.tag | default (include "vexa.releaseTag" .) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
@@ -77,6 +77,12 @@ spec:
               value: {{ .Values.runtime.speakerStream.minFinalAudioSec | default "" | quote }}
             - name: BOT_STT_TIMEOUT_SEC
               value: {{ .Values.runtime.speakerStream.sttTimeoutSec | default "" | quote }}
+            - name: BOT_TRANSCRIPTION_LATENCY
+              value: {{ .Values.runtime.speakerStream.latencyProfile | default "" | quote }}
+            - name: BOT_STT_CONFIDENCE_FILTER
+              value: {{ .Values.runtime.speakerStream.confidenceFilter | default "" | quote }}
+            - name: BOT_TRANSCRIPT_RECONFIRM_SEC
+              value: {{ .Values.runtime.speakerStream.reconfirmSec | default "" | quote }}
             # The runtime caller credential: every route but /health requires it as a bearer. The
             # runtime refuses to boot without it.
             - name: RUNTIME_API_TOKEN

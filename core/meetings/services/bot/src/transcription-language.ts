@@ -186,7 +186,7 @@ export function detectedCode(language: unknown): string {
 export type SttCall = (pcm: Float32Array, language?: string, prompt?: string) => Promise<TranscriptionResult>;
 
 export interface LanguageAwareTranscribe {
-  (pcm: Float32Array, prompt?: string): Promise<TranscriptionResult>;
+  (pcm: Float32Array, prompt?: string, hint?: { language?: string }): Promise<TranscriptionResult>;
   /** How many calls were re-run pinned because the detection fell outside the list. */
   readonly fallbacks: number;
 }
@@ -201,10 +201,12 @@ export function languageAwareTranscribe(
   log: (line: string) => void = (line) => console.log(line),
 ): LanguageAwareTranscribe {
   let fallbacks = 0;
-  const transcribe = async (pcm: Float32Array, prompt?: string): Promise<TranscriptionResult> => {
+  const transcribe = async (pcm: Float32Array, prompt?: string, hint?: { language?: string }): Promise<TranscriptionResult> => {
     const setting = control.get();
     const pinned = pinnedLanguage(setting);
-    if (pinned || modeOf(setting) === 'auto') return stt(pcm, pinned, prompt);
+    // Auto: the lane's per-speaker pin (detected with agreement) replaces per-window re-detection.
+    if (pinned || modeOf(setting) === 'auto') return stt(pcm, pinned ?? hint?.language, prompt);
+    if (hint?.language && setting.allowedLanguages.includes(hint.language)) return stt(pcm, hint.language, prompt);
     const result = await stt(pcm, undefined, prompt);
     const detected = detectedCode(result.language);
     if (setting.allowedLanguages.includes(detected)) return result;

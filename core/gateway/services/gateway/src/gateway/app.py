@@ -26,6 +26,7 @@ forwards it to the downstream hop; user/system ``log_event``s are emitted on the
 spans (preserved from the carve so gate:tracing stays green).
 """
 from __future__ import annotations
+from urllib.parse import quote
 
 import json
 from contextlib import AsyncExitStack
@@ -33,24 +34,44 @@ from typing import Dict, FrozenSet, List, Literal, Optional, Tuple
 
 import httpx  # the downstream adapter's transport errors are mapped to 502/504 (not leaked as a 500)
 
-from fastapi import FastAPI, Request, Response, WebSocket
+from fastapi import FastAPI, Path, Request, Response, WebSocket
 
 from . import identity_token, routes_manifest
-from .delegation import (McpReentry, delegated_route_response, is_delegated, reported_admin,
+from .agent_admission import AgentAllow, refused_response as _agent_tier_refused
+from .delegation import (McpReentry, delegated_route_response, is_delegated, reentry_unlisted_response,
+                         reported_admin,
                          reported_admin_account)
 from .multiplex import run_multiplex
+from .vnc_relay import run_vnc_relay
 from .paths import (forwarded_param, forwarded_target_error, invalid_path_param_response,
                     path_segment, tail_path)
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
 
-from .obs import TRACE_HEADER, TraceMiddleware, get_trace_id, log_event, set_user_id
+from .obs import (TRACE_HEADER, TraceMiddleware, get_trace_id, log_event, session_of_validation,
+                  set_session, set_user_id)
 from .ports import Authorizer, AuthUnavailable, DownstreamClient, RedisBus
 
 # #495: the honest answer when the auth path itself is unreachable — a retryable 503, never a
 # 401 that blames the caller's (valid) key. Shared by /auth/me and the proxy authorizer. Also
 # emits a TYPED, non-empty auth-infra log line (FM02: the old path swallowed the failure in a
 # silent `except`, erasing the one signal that would have named this incident for what it was).
+#: WHOSE SERVICE FAILED, said in the body (2026-10-13). A deploy restarted admin-api; a Gmail read
+#: answered this 503 and the agent told the person Google was having a problem. The words were ours.
+#: `detail` stays as it was (clients and docs read it); the typed fields say it is Vexa's own sign-in
+#: service, and a tool result renders `reason: message` first (vexa_mcp.tool_errors).
+AUTH_UNAVAILABLE_BODY = {
+    "detail": "Authentication temporarily unavailable, retry",
+    "code": "auth_unavailable",
+    "reason": "vexa_sign_in_unavailable",
+    "source": "vexa",
+    "retry_after": 1,
+    "message": ("Vexa's own sign-in service is briefly unavailable (for example during an update). "
+                "This is not your account and not Google or Microsoft: no provider was asked. "
+                "Retry in a few seconds."),
+}
+
+
 def _auth_unavailable_response(exc: Exception, *, span: str) -> Response:
     log_event(
         "auth_infra_unavailable",
@@ -60,7 +81,7 @@ def _auth_unavailable_response(exc: Exception, *, span: str) -> Response:
         fields={"reason": type(exc).__name__, "detail": str(exc)},
     )
     return Response(
-        content=json.dumps({"detail": "Authentication temporarily unavailable, retry"}),
+        content=json.dumps(AUTH_UNAVAILABLE_BODY),
         status_code=503,
         media_type="application/json",
         headers={"Retry-After": "1"},
@@ -147,12 +168,52 @@ def undeclared_routes(app: FastAPI, table=None, unscoped=None) -> List[Tuple[str
 #: held equal to it by tests/test_meeting_paths.py. A handler types its `platform` with it, so any
 #: other value is refused with the 422 api.v1 declares for these routes, before the caller is
 #: authorized and before anything is forwarded.
-MeetingPlatform = Literal["google_meet", "zoom", "teams", "jitsi", "browser_session"]
+#: A bot account's or sign-in session's id (ADR-0049): 32 lowercase hex, else the 422 before any forward.
+_HEX32 = r"^[a-f0-9]{32}$"
+
+MeetingPlatform = Literal["google_meet", "zoom", "teams", "jitsi", "browser_session", "voice_note", "vexa_call"]
 
 # Default sentinel base URL. The DownstreamClient (real httpx or the fake ASGI transport) resolves
 # it; what matters is the PATH the gateway forwards to (verbatim from the route). v0.12 P2 folded
 # the transcription-collector INTO meeting-api (one modular monolith), so /transcripts + /meetings
 # now forward to the SAME target as /bots — the standalone collector URL is gone.
+# A SERVICE BEING REPLACED IS NOT A FAILED REQUEST (Vexa-ai/vexa#1783, friction 2026-10-14).
+# A deploy recreates a service's container; for those seconds no connection opens and the buffered
+# forward used to answer 502 at once — a person's `workspace_remove` failed twice while agent-api
+# was swapped. A connect that never opened SENT NOTHING, so trying again is safe for every method:
+# retried with backoff for at most this long, then the same 502 as before. A failure after the
+# request may have left (a read or protocol error) is never repeated.
+CONNECT_RETRY_WINDOW_S = 20.0
+_CONNECT_BACKOFF_S = (0.25, 0.5, 1.0, 2.0)
+
+
+async def _retry_sleep(seconds: float) -> None:
+    import asyncio
+    await asyncio.sleep(seconds)
+
+
+#: WHICH HOP FAILED, said in the body (Vexa-ai/vexa#1783, frictions 2026-10-13). A connection test
+#: answered a bare `upstream timeout` and nobody could tell whether Vexa, the credential broker or
+#: the connected service was slow. `detail` stays as it was (clients and docs read it); beside it the
+#: hop, that the service is Vexa's own, and a sentence a tool result renders first.
+def _upstream_fault(url: str, exc: Optional[Exception]) -> Response:
+    try:
+        service = httpx.URL(url).host or "the service"
+    except Exception:  # noqa: BLE001 — naming the hop must never be the thing that fails
+        service = "the service"
+    hop = f"gateway → {service}"
+    if exc is None:
+        body = {"detail": "upstream timeout", "reason": "upstream_timeout", "source": "vexa", "hop": hop,
+                "message": (f"Vexa's {service} did not answer the gateway in time. This is Vexa's own "
+                            "service, not the connected service or your account. Retry in a moment.")}
+        return Response(content=json.dumps(body, ensure_ascii=False), status_code=504, media_type="application/json")
+    body = {"detail": f"upstream unreachable: {type(exc).__name__}", "reason": "upstream_unreachable",
+            "source": "vexa", "hop": hop,
+            "message": (f"Vexa's {service} could not be reached by the gateway. This is Vexa's own "
+                        "service, not the connected service or your account. Retry in a moment.")}
+    return Response(content=json.dumps(body, ensure_ascii=False), status_code=502, media_type="application/json")
+
+
 _DEFAULT_MEETING_API_URL = "http://meeting-api"
 # The AGENT control plane (agent-api): chat · sessions · routines · workspace · models · history.
 # The gateway fronts it under /api/* so the SAME edge resolves the key → user and injects X-User-Id;
@@ -245,10 +306,14 @@ def create_app(
     *,
     meeting_api_url: str = _DEFAULT_MEETING_API_URL,
     agent_api_url: Optional[str] = None,
+    crm_api_url: Optional[str] = None,
     admin_api_url: str = _DEFAULT_ADMIN_API_URL,
     mcp_url: str = _DEFAULT_MCP_URL,
     identity_key=None,
     rate_limiter=None,
+    voice_note_dialer=None,
+    vnc_connect=None,
+    agent_allow: Optional[str] = None,
 ) -> FastAPI:
     """Build the gateway FastAPI app over the injected ports.
 
@@ -261,6 +326,10 @@ def create_app(
                       production builder loads it from ``VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE``,
                       which the boot requires; a harness that injects fakes downstream may leave it
                       ``None`` and forward plain headers.
+    ``agent_allow`` — the people the agent tier is enabled for (`agent_admission.py`); ``None`` reads
+                      ``VEXA_AGENT_ALLOW`` from the environment.
+    ``vnc_connect`` — opens the upstream websocket of a bot-account sign-in session's live view
+                      (``vnc_relay.py``); ``None`` is the ``websockets`` client, a test injects a fake.
     """
     # ── WHICH DOMAINS THIS DEPLOYMENT FRONTS (PRD decisions 40.6 + 40.7) ─────────────────────
     #
@@ -285,7 +354,15 @@ def create_app(
     _agent_present = bool((agent_api_url or "").strip())
     if _agent_present:
         _present.add("agent")
+    # The optional CRM (ADR-0047) on the same terms: named means fronted under /crm/*, unnamed is a
+    # deployment without it and /crm/* is a 404. There is no default — a build never assumes a CRM.
+    _crm_present = bool((crm_api_url or "").strip())
+    if _crm_present:
+        _present.add("crm")
     _assembly = routes_manifest.load(_present)
+    # Which people the agent tier is enabled for: read once, applied in `_authorize` to the agent
+    # domain's rows only, so a meetings, identity or MCP row is unchanged for everyone.
+    _agent_allow = AgentAllow(agent_allow) if agent_allow is not None else AgentAllow.from_env()
     _route_scopes = _assembly.scopes
     _unscoped = _assembly.unscoped
 
@@ -323,6 +400,7 @@ def create_app(
         is_admin = reported_admin(user_data, delegated=delegated)
         admin_account = reported_admin_account(user_data, delegated=delegated)
         set_user_id(user_data["user_id"])
+        set_session(session_of_validation(user_data))
         return {
             "user_id": user_data["user_id"],
             "email": user_data.get("email", ""),
@@ -381,6 +459,8 @@ def create_app(
         # Bind the resolved user to the trace context so every later line carries user_id.
         user_id = user_data["user_id"]
         set_user_id(user_id)
+        # …and the agent session, when the bearer is a worker's delegation token (Vexa-ai/vexa#1783).
+        set_session(session_of_validation(user_data))
 
         # Per-user request rate limit (WS-6) — a valid key could otherwise fire unlimited requests at
         # the control plane (the max_concurrent_bots cap bounds active bots, not request rate). 429 when
@@ -396,14 +476,18 @@ def create_app(
         if (is_delegated(client_key, user_data)
                 and _route_key(request) not in _assembly.delegation
                 and not _admits_mcp_reentry(request, user_data)):
+            # a valid re-entry here means a tool calls a route this edge does not list for tools
+            unlisted = reentry.admits(request, user_data)
             log_event(
-                "request_denied_delegated_route",
+                "request_denied_reentry_unlisted" if unlisted else "request_denied_delegated_route",
                 audience="user",
                 level="warning",
                 span="auth",
                 user_id=user_id,
                 fields={"method": method, "path": request.url.path},
             )
+            if unlisted:
+                return None, reentry_unlisted_response(method, request.url.path)
             return None, delegated_route_response()
 
         # Scope enforcement — DENY BY DEFAULT. Every proxied route declares its scopes in
@@ -437,6 +521,21 @@ def create_app(
                 fields={"method": method, "path": request.url.path, "required": sorted(required)},
             )
             return None, _insufficient_scope_response()
+
+        # THE AGENT TIER, PER PERSON (`VEXA_AGENT_ALLOW`). Asked of every agent-domain row — literal,
+        # streamed or catch-all, a person's key or the MCP's re-entry with a worker's token, which
+        # identity resolved to the person it acts for — after the scope check, before any forward.
+        if (_assembly.owner_of.get(_route_key(request)) == "agent"
+                and not _agent_allow.admits(user_data)):
+            log_event(
+                "request_denied_agent_tier",
+                audience="user",
+                level="warning",
+                span="auth",
+                user_id=user_id,
+                fields={"method": method, "path": request.url.path},
+            )
+            return None, _agent_tier_refused()
 
         # USER-facing event: the request was accepted on behalf of this user.
         log_event(
@@ -484,23 +583,34 @@ def create_app(
         # an unreachable/transport-failed upstream → 502, so a client can tell "backend down" from
         # "gateway broke" (and get a retryable signal). Timeout is a subclass of RequestError → catch it first.
         try:
-            resp = await downstream.request(
-                method,
-                url,
-                headers=headers,
-                params=dict(request.query_params) or None,
-                content=content,
-            )
+            waited, attempt = 0.0, 0
+            while True:
+                try:
+                    resp = await downstream.request(
+                        method,
+                        url,
+                        headers=headers,
+                        params=dict(request.query_params) or None,
+                        content=content,
+                    )
+                    break
+                except httpx.ConnectError:
+                    # NOTHING WAS SENT (see CONNECT_RETRY_WINDOW_S): the upstream is between
+                    # containers. Wait it out, briefly, then answer as before.
+                    pause = _CONNECT_BACKOFF_S[min(attempt, len(_CONNECT_BACKOFF_S) - 1)]
+                    if waited + pause > CONNECT_RETRY_WINDOW_S:
+                        raise
+                    await _retry_sleep(pause)
+                    waited += pause
+                    attempt += 1
         except httpx.InvalidURL:
             # Not a RequestError: without this arm an unparseable hop URL surfaces as a gateway 500
             # even though the fault is in what the CALLER put in the path.
             return invalid_path_param_response()
         except httpx.TimeoutException:
-            return Response(content=json.dumps({"detail": "upstream timeout"}),
-                            status_code=504, media_type="application/json")
+            return _upstream_fault(url, None)
         except httpx.RequestError as e:
-            return Response(content=json.dumps({"detail": f"upstream unreachable: {type(e).__name__}"}),
-                            status_code=502, media_type="application/json")
+            return _upstream_fault(url, e)
 
         # SYSTEM/debug event: the proxy hop completed.
         log_event(
@@ -563,6 +673,13 @@ def create_app(
             if error is not None:
                 return None, error
             target = target.replace("{" + name + "}", segment, 1)
+        # A catch-all row (the sign-in session's live-view files) forwards its tail verbatim under
+        # the catch-all rule (`paths.tail_path`): each segment re-encoded, a dot segment refused.
+        if target.endswith(routes_manifest.CATCH_ALL):
+            tail, error = tail_path(str(request.path_params.get("path", "")), request)
+            if error is not None:
+                return None, error
+            target = target[:-len(routes_manifest.CATCH_ALL)] + tail
         return _meeting(target), None
 
     async def _forward_meeting(request: Request) -> Response:
@@ -596,12 +713,10 @@ def create_app(
             return invalid_path_param_response()
         except httpx.TimeoutException:
             await stack.aclose()
-            return Response(content=json.dumps({"detail": "upstream timeout"}),
-                            status_code=504, media_type="application/json")
+            return _upstream_fault(url, None)
         except httpx.RequestError as e:
             await stack.aclose()
-            return Response(content=json.dumps({"detail": f"upstream unreachable: {type(e).__name__}"}),
-                            status_code=502, media_type="application/json")
+            return _upstream_fault(url, e)
         log_event("downstream_stream_opened", audience="system", level="debug", span="proxy",
                   fields={"method": request.method, "path": url, "downstream_status": upstream.status_code})
 
@@ -617,6 +732,42 @@ def create_app(
                                  media_type=up.get("content-type") or "application/json", headers=relayed)
 
     # ---- CORE routes (each forwards to the matching downstream path, per main's route table) ----
+    # Bot accounts (ADR-0049): saved signed-in browser profiles a meeting bot can join as, and the
+    # short-lived sign-in sessions a person makes one through. meeting-api owns them; a session is
+    # readable only by the person who opened it, which meeting-api decides. Ids are 32 hex.
+    @app.get("/bot-accounts")
+    async def list_bot_accounts(request: Request):
+        return await _forward_meeting(request)
+
+    @app.post("/bot-accounts/sessions", status_code=201)
+    async def open_bot_account_session(request: Request):
+        return await _forward_meeting(request)
+
+    @app.get("/bot-accounts/sessions/{session_id}")
+    async def get_bot_account_session(request: Request,
+                                      session_id: str = Path(pattern=_HEX32)):
+        return await _forward_meeting(request)
+
+    @app.delete("/bot-accounts/sessions/{session_id}")
+    async def close_bot_account_session(request: Request,
+                                        session_id: str = Path(pattern=_HEX32)):
+        return await _forward_meeting(request)
+
+    # The live view's web client (noVNC's files, served by the session's workload): the bytes and
+    # their content-type come back as meeting-api answered them.
+    @app.get("/bot-accounts/sessions/{session_id}/view/{path:path}")
+    async def view_bot_account_session(path: str, request: Request,
+                                       session_id: str = Path(pattern=_HEX32)):
+        return await _forward_meeting(request)
+
+    @app.delete("/bot-accounts/{account_id}")
+    async def delete_bot_account(request: Request, account_id: str = Path(pattern=_HEX32)):
+        return await _forward_meeting(request)
+
+    @app.post("/bot-accounts/{account_id}/verify", status_code=202)
+    async def verify_bot_account(request: Request, account_id: str = Path(pattern=_HEX32)):
+        return await _forward_meeting(request)
+
     @app.get("/bots")
     async def list_bots(request: Request):
         return await _forward_meeting(request)
@@ -743,6 +894,12 @@ def create_app(
     async def export_meeting_bundle_with_parts(meeting_id: int, request: Request):
         return await _forward_meeting_bundle(request)
 
+    # A room's planned call as an iCalendar file, for its creator to send from their own calendar
+    # (rooms, F1). The text/calendar body and its Content-Disposition pass through verbatim.
+    @app.get("/meetings/{meeting_id}/ics")
+    async def planned_meeting_ics(meeting_id: int, request: Request):
+        return await _forward_meeting_bundle(request)
+
     # Edit / delete a PLANNED meeting by ROW id (owner-scoped; meeting-api refuses FSM rows with 409).
     @app.patch("/meetings/{meeting_id}")
     async def patch_planned_meeting(meeting_id: int, request: Request):
@@ -867,6 +1024,68 @@ def create_app(
     async def get_user_webhook(request: Request):
         return await _forward("GET", _admin("/user/webhook"), request)
 
+    # ---- the person's own settings and workspace regime (identity owns both, user.data via
+    # admin-api; Vexa-ai/vexa#1783). The one MCP's `settings*` and `workspace_regime*` tools call
+    # back through these, so the rows admit the MCP's re-entry. ----
+    @app.get("/user/settings")
+    async def get_user_settings(request: Request):
+        return await _forward("GET", _admin("/user/settings"), request)
+
+    @app.put("/user/settings")
+    async def set_user_setting(request: Request):
+        return await _forward("PUT", _admin("/user/settings"), request)
+
+    @app.get("/user/workspace-regime")
+    async def get_user_workspace_regime(request: Request):
+        return await _forward("GET", _admin("/user/workspace-regime"), request)
+
+    @app.put("/user/workspace-regime")
+    async def set_user_workspace_regime(request: Request):
+        return await _forward("PUT", _admin("/user/workspace-regime"), request)
+
+    # ---- the person's own photo (identity keeps it; UI 15g). The person's own key only: these rows
+    # admit neither a delegation nor the MCP's re-entry — an agent may suggest a photo, never set one.
+    @app.get("/user/photo")
+    async def get_user_photo(request: Request):
+        return await _forward("GET", _admin("/user/photo"), request)
+
+    @app.put("/user/photo")
+    async def set_user_photo(request: Request):
+        return await _forward("PUT", _admin("/user/photo"), request)
+
+    @app.delete("/user/photo")
+    async def delete_user_photo(request: Request):
+        return await _forward("DELETE", _admin("/user/photo"), request)
+    # ---- the person's PUBLIC PROFILE, company verification and the directory (R4; identity is the
+    # one writer, admin-api refuses all of it unless `public_profiles` is switched on by name). ----
+    @app.get("/user/profile")
+    async def get_user_profile(request: Request):
+        return await _forward("GET", _admin("/user/profile"), request)
+
+    @app.put("/user/profile")
+    async def set_user_profile(request: Request):
+        return await _forward("PUT", _admin("/user/profile"), request)
+
+    @app.post("/user/profile/withdraw")
+    async def withdraw_user_profile(request: Request):
+        return await _forward("POST", _admin("/user/profile/withdraw"), request)
+
+    @app.post("/user/company-verification")
+    async def start_company_verification(request: Request):
+        return await _forward("POST", _admin("/user/company-verification"), request)
+
+    @app.post("/user/company-verification/check")
+    async def check_company_verification(request: Request):
+        return await _forward("POST", _admin("/user/company-verification/check"), request)
+
+    @app.get("/user/directory/profiles")
+    async def search_directory_profiles(request: Request):
+        return await _forward("GET", _admin("/user/directory/profiles"), request)
+
+    @app.get("/user/directory/profiles/{handle}")
+    async def read_directory_profile(handle: str, request: Request):
+        return await _forward("GET", _admin(f"/user/directory/profiles/{quote(handle, safe='')}"), request)
+
     # #841: the per-user webhook DELIVERY HISTORY — the queryable record of real delivery outcomes
     # (the user-facing completion of #815→#817). Unlike the config above (identity-owned, admin-api),
     # the deliveries live in meeting-api (the dispatcher that records each outcome), so this forwards
@@ -972,12 +1191,10 @@ def create_app(
                 downstream.open_stream(method, url, headers=headers, params=params, content=content))
         except httpx.TimeoutException:
             await stack.aclose()
-            return Response(content=json.dumps({"detail": "upstream timeout"}),
-                            status_code=504, media_type="application/json")
+            return _upstream_fault(url, None)
         except httpx.RequestError as e:
             await stack.aclose()
-            return Response(content=json.dumps({"detail": f"upstream unreachable: {type(e).__name__}"}),
-                            status_code=502, media_type="application/json")
+            return _upstream_fault(url, e)
 
         media_type = upstream.headers.get("content-type") or "application/json"
         if not (200 <= upstream.status_code < 300 and media_type.startswith("text/event-stream")):
@@ -1021,12 +1238,10 @@ def create_app(
             )
         except httpx.TimeoutException:
             await stack.aclose()
-            return Response(content=json.dumps({"detail": "upstream timeout"}),
-                            status_code=504, media_type="application/json")
+            return _upstream_fault(url, None)
         except httpx.RequestError as e:
             await stack.aclose()
-            return Response(content=json.dumps({"detail": f"upstream unreachable: {type(e).__name__}"}),
-                            status_code=502, media_type="application/json")
+            return _upstream_fault(url, e)
 
         log_event(
             "downstream_stream_opened",
@@ -1104,6 +1319,8 @@ def create_app(
 
     if _agent_present:
         _register_forwarded("agent", agent_api_url)
+    if _crm_present:
+        _register_forwarded("crm", crm_api_url)
 
     # ---- the MCP front door (#795): the streamable-HTTP transport, fronted at the edge ----
     # MCP streamable-HTTP is ONE endpoint driven by two methods with opposite lifetimes:
@@ -1172,6 +1389,51 @@ def create_app(
     @app.websocket("/ws")
     async def websocket_multiplex(ws: WebSocket):
         await run_multiplex(ws, authorizer, redis, route_scopes=_route_scopes)
+
+    # ---- a voice note's audio socket (#1783): the meetings row is its upgrade GET ----
+    # A plain GET is told to upgrade (426); the socket is authorized once, at the upgrade, against
+    # the same row, then relayed to meeting-api with the signed identity (voice_relay.py).
+    # The recorder request (the MCP tool record_voice_note): meeting-api answers with the ui_action
+    # the person's Minutes tab opens the recorder on; a worker with nobody present is refused there.
+    @app.post("/voice-notes/recorder")
+    async def voice_note_recorder(request: Request):
+        return await _forward_meeting(request)
+
+    @app.get("/voice-notes/{native_meeting_id}/stream")
+    async def voice_note_stream_without_upgrade(native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)   # meeting-api answers a plain GET with 426
+
+    def _sign_voice_headers(user_data: dict) -> dict:
+        if identity_key is not None:
+            headers = dict(identity_token.signed_headers(identity_key, user_data))
+        else:
+            headers = dict(identity_token.headers_from_claims(
+                identity_token.claims_from_validation(user_data)))
+        headers[TRACE_HEADER] = get_trace_id() or ""
+        return headers
+
+    @app.websocket("/voice-notes/{native_meeting_id}/stream")
+    async def voice_note_stream(ws: WebSocket, native_meeting_id: str):
+        from .voice_relay import run_voice_note_relay
+
+        dialer = voice_note_dialer
+        if dialer is None:
+            from .adapters import WebsocketsDialer
+
+            dialer = WebsocketsDialer()
+        await run_voice_note_relay(
+            ws, native_meeting_id, authorizer=authorizer, route_scopes=_route_scopes,
+            sign_headers=_sign_voice_headers, dialer=dialer, upstream_base=meeting_api_url,
+            rate_limiter=rate_limiter)
+
+    # ---- the sign-in session's live view: a websocket relayed to meeting-api's (vnc_relay.py) ----
+    # Not a manifest row (routes.v1 declares HTTP verbs); held to the scopes of the session's own
+    # GET row, authenticated as /ws is, and stamped with the identity an HTTP forward carries.
+    @app.websocket("/bot-accounts/sessions/{session_id}/vnc")
+    async def bot_account_session_vnc(ws: WebSocket, session_id: str):
+        await run_vnc_relay(ws, session_id, authorizer=authorizer, route_scopes=_route_scopes,
+                            meeting_api_url=meeting_api_url, identity_key=identity_key,
+                            connect=vnc_connect)
 
     # ---- deny by default, at BUILD time ----
     # The route table is now complete, so every route must have declared its scopes. Refusing to

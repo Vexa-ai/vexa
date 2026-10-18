@@ -9,6 +9,7 @@ repository, kept as evidence for the FINOS Incubation commitment to
 | Date | Scanner | Applicability | Result |
 |---|---|---|---|
 | 2026-07-02 | pvtr-github-repo-scanner v0.24.0 · catalog `osps-baseline-2026-02` | ML1 + ML2 | **28 passed · 0 failed · 1 warning** ([full results](2026-07-02-assessment.yaml)) |
+| 2026-10-14 | none: documentation review for v0.13.3, **scanner not re-run** | ML1 + ML2 | what 0.13 changed and what was and was not checked ([review](2026-10-14-v0.13.3-review.md)); the scanner result above is still the latest |
 
 The single warning is `OSPS-AC-04.01` ("GitHub Actions is disabled — manual review required"), a
 scanner false-positive on this repository: Actions are enabled and the

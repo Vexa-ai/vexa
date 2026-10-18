@@ -42,7 +42,7 @@ and keeps Lite off both jammy apt's stale Redis 6.0.16 and source-available Redi
 
 | Artifact | Version | License | Source | Shipped in | In-image path |
 | --- | --- | --- | --- | --- | --- |
-| `seccomp/default.json` (modified) | Docker Engine `29.6.2` | Apache-2.0 | [github.com/moby/profiles](https://github.com/moby/profiles) | `vexaai/v012-runtime`, `vexaai/vexa-lite`; installed on Kubernetes nodes by the chart | `/app/src/runtime_kernel/seccomp-userns.json` (runtime), `/app/runtime/src/runtime_kernel/seccomp-userns.json` (Lite), each with `seccomp-userns.LICENSE.txt` beside it |
+| `seccomp/default.json` (modified) | Docker Engine `29.6.2` | Apache-2.0 | [github.com/moby/profiles](https://github.com/moby/profiles) | `vexaai/vexa-runtime`, `vexaai/vexa-lite`; installed on Kubernetes nodes by the chart | `/app/src/runtime_kernel/seccomp-userns.json` (runtime), `/app/runtime/src/runtime_kernel/seccomp-userns.json` (Lite), each with `seccomp-userns.LICENSE.txt` beside it |
 
 **`seccomp-userns.json`** — the seccomp profile meeting bots run under:
 [`core/runtime/src/runtime_kernel/seccomp-userns.json`](core/runtime/src/runtime_kernel/seccomp-userns.json)
@@ -79,3 +79,21 @@ text: [`licenses/onnx-community-pyannote-segmentation-3.0.LICENSE.txt`](licenses
 > MIT is a Category-A (permissive) license under ADR-0004; baking it requires no exception,
 > only that the copyright + permission notice be preserved — which this file and the baked
 > `/opt/hf-cache/LICENSE.*` satisfy.
+
+| Artifact | Version | License | Source | Shipped in | In-image path |
+| --- | --- | --- | --- | --- | --- |
+| MediaPipe selfie segmenter (`selfie_segmenter.tflite`, float16) | `1` (sha256 `191ac9529ae506ee0beefa6b2c945a172dab9d07d1e802a290a4e4038226658b`) | Apache-2.0 | [storage.googleapis.com/mediapipe-models](https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/selfie_segmenter.tflite) | `vexaai/vexa-terminal`, `vexaai/vexa-lite` | `/app/public/mediapipe/selfie_segmenter.tflite` (terminal), `/app/terminal/public/mediapipe/` (Lite), each with `selfie_segmenter.LICENSE.txt` beside it |
+
+**MediaPipe selfie segmenter** — the terminal's in-call background blur
+(`@livekit/track-processors` over `@mediapipe/tasks-vision`) segments the person from the
+background with this model in the browser. It is vendored at
+[`clients/terminal/vendor/mediapipe/`](clients/terminal/vendor/mediapipe/) and served by the
+terminal itself at `/mediapipe/`, so no call fetches it from Google. Google's model card
+("Model Card MediaPipe Selfie Segmentation", 2021-05-06) licenses it under the Apache License
+2.0; the preserved text is the MediaPipe project's `LICENSE` at tag `v0.10.14` (the
+`@mediapipe/tasks-vision` version in use, which declares `Apache-2.0` and ships no licence file).
+Full text: [`licenses/mediapipe-selfie-segmenter.LICENSE.txt`](licenses/mediapipe-selfie-segmenter.LICENSE.txt).
+
+> Apache-2.0 is a Category-A (permissive) license under ADR-0004; shipping the unmodified model
+> requires no exception, only the licence text and attribution — which this file and the
+> licence copy served beside the model satisfy.

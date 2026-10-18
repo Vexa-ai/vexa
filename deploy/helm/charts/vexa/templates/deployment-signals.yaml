@@ -1,0 +1,96 @@
+{{- if and .Values.signals.enabled (include "vexa.credentialBrokerEnabled" .) }}
+# Transcript signals (docs/docs/transcript-signals.mdx). OFF by default (signals.enabled). Even when
+# deployed it calls no model until `_global/POLICIES.md` says `transcript_signals: on` and names a
+# `model_signals`; the model's key is a company secret in the credential broker (role signals).
+# Several replicas are safe: each live meeting is held by one replica under a lease.
+# OpenShift restricted-v2: no fixed uid is required (the image writes only /tmp), the root
+# filesystem is read-only, every capability is dropped, no privilege escalation, RuntimeDefault
+# seccomp — set global.securityContext.deliver=false to let the SCC inject its own context.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "signals") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+    app.kubernetes.io/component: signals
+spec:
+  replicas: {{ .Values.signals.replicaCount }}
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: signals
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: signals
+      annotations:
+        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+    spec:
+      {{- if eq (include "vexa.securityContextDeliver" .) "true" }}
+      securityContext:
+        {{- toYaml (merge (deepCopy (.Values.global.podSecurityContext | default dict)) (dict "runAsNonRoot" true "seccompProfile" (dict "type" "RuntimeDefault"))) | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      containers:
+        - name: signals
+          {{- if eq (include "vexa.securityContextDeliver" .) "true" }}
+          securityContext:
+            {{- toYaml (merge (dict "readOnlyRootFilesystem" true "allowPrivilegeEscalation" false "capabilities" (dict "drop" (list "ALL"))) (omit (.Values.global.securityContext | default dict) "deliver")) | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.signals.image.repository }}:{{ .Values.global.imageTag | default .Values.signals.image.tag | default (include "vexa.releaseTag" .) }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8310
+          env:
+            {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
+            - name: REDIS_URL
+              value: {{ include "vexa.redisUrl" . | quote }}
+            - name: SIGNALS_AGENT_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+            - name: INTERNAL_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: INTERNAL_API_SECRET
+            {{- if .Values.signals.flowsApiUrl }}
+            # where wakes go (POST /events/signal); unset = no flows here, wakes are dropped
+            - name: VEXA_FLOWS_API_URL
+              value: {{ .Values.signals.flowsApiUrl | quote }}
+            {{- end }}
+            - name: VEXA_SIGNALS_BROKER_URL
+              value: {{ include "vexa.credentialBrokerUrl" . | quote }}
+            - name: VEXA_SIGNALS_BROKER_KEY_FILE
+              value: /run/vexa-connections/signals/key
+          volumeMounts:
+            - name: signals-key
+              mountPath: /run/vexa-connections/signals
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.signals.resources | nindent 12 }}
+      volumes:
+        # the broker's signals role key only — never another role's
+        - name: signals-key
+          secret:
+            secretName: {{ include "vexa.credentialBrokerKeys" . }}
+            defaultMode: 0444
+            items:
+              - { key: signals.key, path: key }
+        - name: tmp
+          emptyDir: {}
+{{- end }}

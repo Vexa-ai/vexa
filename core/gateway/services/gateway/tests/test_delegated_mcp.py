@@ -103,18 +103,24 @@ def test_a_valid_re_entry_is_refused_on_a_route_the_mcp_does_not_call_back():
     route is one an MCP tool calls. A route whose row does not say `"mcp_reentry": true` refuses
     the worker's bearer even with a valid re-entry identity, before any forward."""
     client, downstream = _client()
-    routes = [("DELETE", "/meetings/1"), ("POST", "/meetings/1/share"), ("GET", "/meetings/1"),
+    routes = [("PATCH", "/meetings/1"), ("POST", "/meetings/1/share"),
+              ("DELETE", "/meetings/google_meet/abc-defg-hij"),
               ("POST", "/transcripts/by-id/1/share"), ("GET", "/user/webhook"),
               ("PUT", "/user/webhook"), ("DELETE", "/recordings/1"), ("POST", "/meetings")]
     if AGENT_CARRIED:
         routes += [("GET", "/agent/sessions"), ("POST", "/agent/chat"), ("POST", "/agent/chat/submit"),
-                   ("POST", "/agent/routines"), ("DELETE", "/agent/workspace/tree"),
+                   ("POST", "/agent/routines"), ("PUT", "/agent/workspace/tree"),
                    ("GET", "/agent/workspace/tree/x")]
     for method, path in routes:
         r = client.request(method, path, json={}, headers={"X-API-Key": DELEGATED,
                                                            "X-Vexa-Internal-Mcp-Identity": _reentry()})
         assert r.status_code == 403, (method, path, r.status_code)
-        assert r.json() == {"detail": "a worker's delegation token is accepted on /mcp only"}
+        # SAID FOR WHAT IT IS (friction 2026-10-13 21:46): the MCP is calling, so a tool calls this
+        # route and this edge's manifest does not list it — an edge older than the service that
+        # published the tool. Still refused, before any forward; the words say what to do.
+        detail = r.json()["detail"]
+        assert detail["reason"] == "route_not_listed_for_tools", (method, path, detail)
+        assert "gateway" in detail["message"] and path in detail["message"]
     assert downstream.last is None
 
 
@@ -122,10 +128,16 @@ def test_a_valid_re_entry_is_admitted_on_the_routes_the_mcp_declares_it_calls_ba
     client, downstream = _client()
     routes = [("POST", "/bots"), ("GET", "/bots/status"), ("DELETE", "/bots/google_meet/abc-defg-hij"),
               ("GET", "/transcripts/google_meet/abc-defg-hij"), ("GET", "/transcripts/by-id/1"),
-              ("POST", "/meetings/1/annotate"), ("GET", "/recordings/5")]
+              ("POST", "/meetings/1/annotate"), ("GET", "/recordings/5"),
+              ("GET", "/meetings/1"), ("DELETE", "/meetings/1"),
+              ("GET", "/meetings/google_meet/abc-defg-hij/participants"),
+              ("GET", "/user/settings"), ("PUT", "/user/workspace-regime")]
     if AGENT_CARRIED:
-        routes += [("GET", "/agent/workspace/tree"), ("PUT", "/agent/workspace/file"),
-                   ("GET", "/agent/workspace/import/op-1/status")]
+        routes += [("GET", "/agent/workspace/tree"), ("POST", "/agent/page/open"), ("PUT", "/agent/workspace/file"),
+                   ("GET", "/agent/workspace/import/op-1/status"),
+                   # the tools behind the 2026-10-13 frictions: forget, and reading the person's chats
+                   ("POST", "/agent/workspace/forget"), ("GET", "/agent/chats/search"),
+                   ("GET", "/agent/chats/pchat-abc/turns"), ("GET", "/agent/chat/folders")]
     for method, path in routes:
         r = client.request(method, path, json={}, headers={"X-API-Key": DELEGATED,
                                                            "X-Vexa-Internal-Mcp-Identity": _reentry()})
@@ -272,3 +284,42 @@ def test_a_worker_is_the_admin_account_only_for_that_accounts_person_in_the_loop
     assert me("autonomous", True).json()["admin_account"] is False
     assert me("human", False).json()["admin_account"] is False      # the instance admin's worker
     assert me("human", None).json()["admin_account"] is False
+
+
+def test_a_shared_turn_is_signed_as_shared_and_stated_to_the_service():
+    """ADR-0048: the ceiling of a turn other people read carries `shared`, signed, so the service
+    behind the MCP's re-entry can refuse a person-wide read; re-entry still matches."""
+    shared = {**DELEGATED_USER, "delegation": {"regime": "human", "workspaces": ["ws_1"], "shared": True}}
+    client, downstream = _client(user=shared)
+    r = client.post("/mcp", headers={"Authorization": f"Bearer {DELEGATED}"}, json={})
+    assert r.status_code == 200
+    fwd = downstream.last
+    claims = identity_token.verify(VERIFY_KEY, fwd["headers"][identity_token.HEADER])
+    assert claims["delegation"]["shared"] is True
+    assert fwd["headers"]["x-user-delegation-shared"] == "1"
+    assert identity_token.is_shared(fwd["headers"])
+    r = client.get("/meetings", headers={"X-API-Key": DELEGATED,
+                                         "X-Vexa-Internal-Mcp-Identity": _reentry(shared)})
+    assert r.status_code == 200
+    assert downstream.last["headers"]["x-user-delegation-shared"] == "1"
+
+
+def test_a_granted_routine_is_signed_with_its_grants_and_stated_to_the_service():
+    """Flows phase 0: a routine's autonomous turn carries the verbs its person granted it, signed, so
+    the service behind the MCP's re-entry can let exactly those through; re-entry still matches."""
+    granted = {**DELEGATED_USER, "delegation": {"regime": "autonomous", "workspaces": ["ws_1"],
+                                                "grants": ["bot.request"], "flow": "user:42/x"}}
+    client, downstream = _client(user=granted)
+    r = client.post("/mcp", headers={"Authorization": f"Bearer {DELEGATED}"}, json={})
+    assert r.status_code == 200
+    fwd = downstream.last
+    claims = identity_token.verify(VERIFY_KEY, fwd["headers"][identity_token.HEADER])
+    assert claims["delegation"]["grants"] == ["bot.request"]
+    assert fwd["headers"]["x-user-delegation-grants"] == "bot.request"
+    assert identity_token.granted(fwd["headers"], "bot.request")
+    assert not identity_token.refuses(fwd["headers"], "bot.request")
+    assert identity_token.refuses(fwd["headers"], "bot.stop")
+    r = client.get("/meetings", headers={"X-API-Key": DELEGATED,
+                                         "X-Vexa-Internal-Mcp-Identity": _reentry(granted)})
+    assert r.status_code == 200
+    assert downstream.last["headers"]["x-user-delegation-flow"] == "user:42/x"

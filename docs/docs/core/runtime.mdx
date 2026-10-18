@@ -46,9 +46,12 @@ the implementation behind that port differs:
   workload leads its own process group, and the backend owns that group: an observed exit or a stop
   reaps every descendant, so a self-exiting or stopped bot never strands its child tree (e.g.
   Chromium) on the shared host. Declared limitation — descendants that detach into their own process
-  group (the debug-view x11vnc/websockify) are out of the group signal's reach.
+  group (the debug-view x11vnc/websockify) are out of the group signal's reach. Each workload's log is
+  one file inside the log directory (`PROCESS_LOG_DIR`), named the same safe way whatever the id holds.
 - **Docker** — each workload is its own container via the Docker socket. This is what the open core
-  ships, brought up with **Docker Compose** (`make all`).
+  ships, brought up with **Docker Compose** (`make all`). A workload id with characters Docker refuses
+  in a container name gets a valid name with a hash appended; the id itself rides the container's
+  `runtime.workload_id` label.
 - **Kubernetes** — the same workload model scheduled as a **Pod** across a cluster.
 
 The backend is selected per deployment by `RUNTIME_BACKEND` (default `docker`). Because all three
@@ -68,7 +71,9 @@ deliberate:
   service. The Pod is named `vexa-<workloadId>` in the namespace the runtime reads from the
   downward API (`POD_NAMESPACE`). When that is not a valid DNS-1123 name of at most 63 characters (a
   chat id carries the client's session), it is lowercased, reduced to `[a-z0-9-]`, cut, and suffixed
-  with a hash of the id; the id itself rides the Pod's `runtime.workload_id` annotation. Pod phase drives the backend's exit check (`Pending`/`Running` → still
+  with a 10-character hash of the id, so two ids never share a name. Ids that were already valid keep
+their names. The id itself rides the Pod's `runtime.workload_id` annotation, which a restarted runtime
+reads when it re-adopts its Pods. Pod phase drives the backend's exit check (`Pending`/`Running` → still
   running; `Succeeded` → exit 0; `Failed` → the container's terminated exit code), which the kernel turns
   into the terminal state `stopped` with reason `completed` (exit 0) or `failed` (nonzero).
 
@@ -81,6 +86,36 @@ binds). The in-cluster substrate — ServiceAccount + RBAC to create Pods, the s
 [Vexa Lite](/deployment-lite). Code:
 `core/runtime/src/runtime_kernel/k8s_backend.py` + `mounts.py:k8s_volume_mounts` (Pod spec) vs
 `docker_backend.py` (the reference bind + credential path).</Note>
+
+## How it works
+
+1. **Caller.** agent-api (an agent turn) or meeting-api (a bot) calls the runtime's `runtime.v1`
+   routes with `Authorization: Bearer <RUNTIME_API_TOKEN>`. Every route but `/health` requires it, and
+   no spawned workload holds it.
+2. **Kernel.** The kernel resolves the workload's profile (`agent` or the bot's), applies the owner's
+   quota, records the workload and moves it to `starting`.
+3. **Backend.** The backend `RUNTIME_BACKEND` names starts it: a child process, a container or a Pod,
+   named from the workload id as above, with only the environment and mounts the profile allows.
+   Model credential files go only to agent workers.
+4. **Lifecycle.** The kernel watches the exit code, emits an event on every transition, and reaps a
+   workload that is idle or past its lifetime.
+
+## Why it complies
+
+- **P3 the kernel depends on nothing above it.** `gate:graph-py` fails when `runtime_kernel` imports
+  anything above it.
+- **P4 sealed contract.** `runtime.v1` and `schedule.v1` are sealed; `gate:schema` and
+  `gate:contract-version` enforce it.
+- **P14 config by env.** The runtime's `config.v1.json` is checked against every deploy surface by
+  `gate:config-contract`.
+- **Only named callers.** `core/runtime/tests/test_caller_auth.py`:
+  `test_every_control_route_refuses_a_caller_without_the_credential`,
+  `test_nothing_is_spawned_on_a_refused_create`, `test_production_boot_refuses_without_a_token`.
+- **Isolation.** `core/runtime/tests/test_isolation.py`: `test_a_root_runtime_refuses_a_subject_it_cannot_map`;
+  `test_isolation_root.py`: `test_a_child_that_cannot_be_isolated_is_refused_and_never_started`.
+- **Names.** `core/runtime/tests/test_workload_names.py`:
+  `test_every_submitted_name_is_one_kubernetes_accepts`, `test_adoption_reads_the_id_from_the_annotation`,
+  `test_docker_names_an_id_it_would_refuse_validly_and_distinctly`. All run under `gate:python`.
 
 ## Already in production
 

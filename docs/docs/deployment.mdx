@@ -13,7 +13,7 @@ supported shapes are [Vexa Lite](/deployment-lite) (one container, no Docker soc
 Prerequisites: a Linux host (Ubuntu 24.04) for production, **Docker engine ≥ v26** (agent workers
 mount each granted workspace as an isolated volume subpath — older engines fail worker creation;
 `make all` checks and refuses), `git`, `curl`. A Mac with Docker Desktop works for a local
-evaluation — everything runs in containers either way. Published `vexaai/v012-*` images include
+evaluation — everything runs in containers either way. Published `vexaai/vexa-*` images include
 `linux/arm64` variants alongside `linux/amd64`, so Docker on Apple Silicon pulls arm64 where
 available — but the arm64 images are published **best-effort**: release CI currently validates
 only the amd64 images (no arm64 execution leg yet), so treat Apple Silicon as experimental.
@@ -222,6 +222,57 @@ the admins instead, set `VEXA_ADMIN_EMAILS` before first boot; no code is issued
 `VEXA_SIGNIN_ALLOW` narrows the claim too: only an address on the list may sign in or claim.
 </Warning>
 
+## Calls (optional)
+
+[Calls](/minutes/calls) run on a self-hosted [LiveKit](https://github.com/livekit/livekit) media
+server (Apache-2.0), an unmodified upstream image pinned by digest. It is off by default, behind the
+`calls` profile.
+
+1. In `.env`, set:
+   - `LIVEKIT_URL`, the `wss://` address browsers join;
+   - `LIVEKIT_INTERNAL_URL=ws://livekit:7880`;
+   - `LIVEKIT_API_KEY`;
+   - `LIVEKIT_API_SECRET`, generated with `openssl rand -hex 32`.
+
+   meeting-api and agent-api read these four keys. A call's limits (`CALL_MAX_DURATION_SEC` and the
+   other `CALL_*` keys) are set in the same file; see [Calls](/minutes/calls#configuration).
+2. Start the server with `docker compose --profile calls up -d livekit`, then recreate meeting-api and
+   agent-api so they read the new `.env`: `docker compose up -d meeting-api agent-api`. A
+   `docker compose restart` does not re-read `.env`.
+3. Route `LIVEKIT_URL` to the signalling port through your TLS proxy. Signalling listens on
+   `LIVEKIT_SIGNAL_BIND`:`LIVEKIT_SIGNAL_PORT` (`127.0.0.1:7880` by default); keep it on loopback or a
+   private address, because it is plain `ws://`. In the firewall, open the media UDP range
+   (`LIVEKIT_UDP_PORT_START`–`LIVEKIT_UDP_PORT_END`, 50000–50100 by default) and 7881/tcp. 7881/tcp
+   and 3478/udp are published on every interface of the host.
+4. For networks that allow UDP but block the media range, set `LIVEKIT_TURN_ENABLED=true` and
+   `LIVEKIT_TURN_DOMAIN`. This turns on TURN on 3478/udp; open it in the firewall.
+5. For networks that block UDP, also turn on TURN over TLS:
+   - point a DNS name at this host and set it as `LIVEKIT_TURN_DOMAIN` (for example `turn.example.com`);
+   - get a certificate for that name, and set `LIVEKIT_TURN_CERT_FILE` and `LIVEKIT_TURN_KEY_FILE` to
+     the host paths of its PEM certificate (full chain) and key;
+   - set `LIVEKIT_TURN_TLS_PORT=5349`, or `443` if nothing else on the host holds 443 and the
+     network allows only 443;
+   - open that TCP port in the firewall, and run `docker compose --profile calls up -d livekit`.
+
+   The server reads the certificate at start; renew it in place and recreate the container.
+
+Set `LIVEKIT_NODE_IP`, or set `LIVEKIT_USE_EXTERNAL_IP=true`, so the server advertises an address
+browsers can reach. Network requirements, and what each port is for, are on [Calls](/minutes/calls#network-requirements).
+
+### How it works
+
+meeting-api creates each call's room on the LiveKit server and starts a listener, a meeting bot
+without a browser, that transcribes each person's track. agent-api mints each participant's
+ten-minute room token. The browser connects to the server directly, signalling through your TLS proxy
+and media over the UDP range (or a TURN relay). The full flow is on
+[Calls](/minutes/calls#how-it-works).
+
+### Why it complies
+
+The server is unmodified LiveKit pinned by digest, rooms are created only by meeting-api, and tokens
+are minted only for a chat's participants. On Compose, only LiveKit, meeting-api and agent-api hold
+the API secret. The rules, gates and deny tests are on [Calls](/minutes/calls#why-it-complies).
+
 ## No egress
 
 Everything runs inside your perimeter: gateway + services + redis/postgres/storage on your host, the
@@ -237,6 +288,7 @@ procurement review can hold us to is self-hosted with no egress, not a certified
 ## One-time steps after upgrading
 
 Run these once on an existing install when you move to this release. They are safe to repeat.
+Coming from 0.12, start with [Upgrading from 0.12 to 0.13](/upgrade-from-0-12).
 
 **Upgrade every component to this release together.** Several connections between Vexa's own
 components now carry a signature or credential that an older peer does not send, and the newer side

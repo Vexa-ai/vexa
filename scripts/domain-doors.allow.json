@@ -123,36 +123,12 @@
       "ruling": "PRD decision 46 — the EDGE mints what a client sees. flows holds VEXA_UI_URL because every mailed link needs an origin; the entry closes when the origin is minted at the edge."
     },
     {
-      "path": "core/gateway/services/gateway/src/gateway/adapters.py",
-      "door": "ADMIN_API_URL",
-      "line": 202,
-      "from": "gateway",
-      "to": "identity",
-      "ruling": "PRD decision 40.5 / 46 — the edge assembles routes.v1 and mcp.tools.v1 FROM THE DOMAINS PRESENT. identity exports no manifest yet; the entry closes when core/identity ships a routes.v1.json / mcp.tools.v1.json declaring base_url_env ADMIN_API_URL, the way core/flows/mcp.tools.v1.json already does."
-    },
-    {
-      "path": "core/gateway/services/gateway/src/gateway/adapters.py",
-      "door": "MEETING_API_URL",
-      "line": 203,
-      "from": "gateway",
-      "to": "meetings",
-      "ruling": "PRD decision 40.5 / 46 — the edge assembles routes.v1 and mcp.tools.v1 FROM THE DOMAINS PRESENT. meetings exports no manifest yet; the entry closes when core/meetings ships one declaring base_url_env MEETING_API_URL."
-    },
-    {
-      "path": "core/meetings/services/mcp/src/vexa_mcp/discover.py",
-      "door": "ADMIN_API_URL",
-      "line": 31,
-      "from": "mcp",
-      "to": "identity",
-      "ruling": "PRD decision 40.5 — the MCP service already keys its discovery off DOMAIN_URL_ENV; flows is absent from this list because core/flows/mcp.tools.v1.json declares base_url_env FLOWS_API_URL. The entry closes when identity ships the same manifest."
-    },
-    {
-      "path": "core/meetings/services/mcp/src/vexa_mcp/discover.py",
-      "door": "MEETING_API_URL",
-      "line": 32,
-      "from": "mcp",
-      "to": "meetings",
-      "ruling": "PRD decision 40.5 — the MCP service already keys its discovery off DOMAIN_URL_ENV; flows is absent from this list because core/flows/mcp.tools.v1.json declares base_url_env FLOWS_API_URL. The entry closes when meetings ships the same manifest."
+      "path": "clients/terminal/src/app/api/auth/linkDelivery.ts",
+      "door": "VEXA_FLOWS_API_URL",
+      "line": 51,
+      "from": "terminal",
+      "to": "flows",
+      "ruling": "PRD decision 46 — clients reach ONE edge with a bearer. The terminal's auth routes are to move behind the gateway; the sign-in mail's hop to the one outbound mail path (flows POST /mail/sign-in, internal tier, with the terminal's own mail as fallback) closes with them, when the route is bound in routes.v1 and the client reads only GATEWAY_URL."
     },
     {
       "path": "clients/terminal/src/app/api/admin/overview/route.ts",

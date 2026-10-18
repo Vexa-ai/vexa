@@ -1,6 +1,6 @@
 services:
   authority-fixture:
-    image: vexaai/v012-meeting-api:${IMAGE_TAG:-dev}
+    image: vexaai/vexa-meeting-api:${IMAGE_TAG:-dev}
     entrypoint: ["python", "/fixture/service_authority_fixture.py"]
     environment:
       - AUTHORITY_SECRET=compose-service-authority-fixture-secret

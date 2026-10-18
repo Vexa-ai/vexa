@@ -24,7 +24,8 @@ documented for anyone who wants to produce or read bundles outside Vexa.
 | Your annotations (`annotate_meeting` metadata) and the meeting's free-text notes | Webhook configuration and secrets |
 | The meeting's page from your desk (`kg/entities/meeting/…`, as `notes.md`) | Storage paths, internal URLs |
 | Recordings: audio, and video when there is one (optional) | The workspace's member list and policy (`policy/`), and its git history |
-| The files of the workspace the meeting is bound to (`workspace/…`) | — |
+| The files of the workspace the meeting is bound to (`workspace/…`) | Invite links and meeting passcodes: the value of every token in a link (`?i=`, `?pwd=`, `?token=` …) becomes `[removed]` in pages, notes and annotations |
+| What the meeting was (`meeting.context`): duration, the meeting link without its query, the calendar event id, the workspace id, the transcription language, and when the bot was requested, joined, admitted and left, with its exit reason | — |
 
 ## Export
 
@@ -156,6 +157,10 @@ Every refusal names one code, with a sentence saying what was wrong:
 | `invalid_part` | 422 | A part does not match the format (an unknown field included) |
 | `unsafe_media` | 422 | A recording that is not the container its name says |
 | `duplicate_import` | 409 | You already imported this file |
+
+**Format versions.** Bundles are written in format 1.1, which adds `meeting.context`. A deployment
+that reads format 1.0 only refuses a 1.1 bundle as `invalid_part` (the field is unknown to it), not as
+`unsupported_version`. Import a bundle into a deployment of the same release or later.
 
 Export answers `404` (no such meeting, or not one you can see), `403` (you see it but do not own
 it), `409` (still live), or `502` (a recording could not be read from storage — the export is

@@ -62,6 +62,9 @@ def mount_lifecycle(
     bot_redis: Optional["object"] = None,
     runtime_callback_token: Optional[str] = None,
     open_callbacks: bool = False,
+    voice_note_drop: Optional["object"] = None,
+    bot_account_terminal: "object" = None,
+    meeting_ended: "object" = None,
 ) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
@@ -320,6 +323,15 @@ def mount_lifecycle(
                 log_event("transcript_finalize_failed", audience="system", level="warning",
                           span="lifecycle.callback",
                           fields={"meeting_id": terminal_meeting_id, "error": str(e)})
+        if (terminal_advanced and voice_note_drop is not None
+                and meeting_row.get("platform") == "voice_note"):
+            # A voice note's audio stream has been read by now: it goes with the note (best-effort —
+            # the stream also expires on its own minutes after its last write).
+            try:
+                await voice_note_drop(meeting_row["id"])
+            except Exception as e:  # noqa: BLE001
+                log_event("voice_note_stream_drop_failed", audience="system", level="warning",
+                          span="lifecycle.callback", fields={"error": type(e).__name__})
         if terminal_advanced and bot_redis is not None:
             # The session is over: its bot's Redis user goes with it (best-effort — the grant path
             # also removes any user older than its MeetingToken).
@@ -359,6 +371,42 @@ def mount_lifecycle(
                         span="lifecycle.callback",
                         fields={"meeting_id": meeting_row.get("id"), "error": str(e)},
                     )
+        # A BOT ACCOUNT THAT SIGNED OUT (ADR-0049). A bot that joined as a saved bot account and
+        # ended `auth_session_missing` found that account signed out: the hook marks it so in the
+        # store and answers the `bot_account` block the meeting then shows (get-status,
+        # list_meetings), which names the remedy. Best-effort, like every write on this path.
+        if terminal_advanced and isinstance(meeting_row, dict) and bot_account_terminal is not None:
+            try:
+                patch = await bot_account_terminal(
+                    meeting_row, rec.completion_reason.value if rec.completion_reason else None)
+                if patch:
+                    data = {**(meeting_row.get("data") or {}), **patch}
+                    updated_row = await meeting_repo.update_meeting_status(
+                        session_uid=rec.connection_id,
+                        status=rec.status.value,
+                        completion_reason=(
+                            rec.completion_reason.value if rec.completion_reason else None
+                        ),
+                        failure_stage=rec.failure_stage.value if rec.failure_stage else None,
+                        data=data,
+                    )
+                    meeting_row = updated_row if isinstance(updated_row, dict) else {**meeting_row, "data": data}
+            except Exception as e:  # noqa: BLE001 — callback availability is pre-existing
+                log_event("bot_account_terminal_failed", audience="system", level="warning",
+                          span="lifecycle.callback",
+                          fields={"meeting_id": meeting_row.get("id"), "error": type(e).__name__})
+        # A DELETE THAT WAITED FOR THE END. The person deleted this meeting while its bot was still
+        # running; the hook finishes that deletion now (and does nothing for any other meeting).
+        # LAST of the writes above: each of them merges the row it read, and running after them
+        # keeps a stale copy of the transcript or recordings from being written back. Best-effort:
+        # a failure is logged, and deleting again from the client completes it.
+        if terminal_advanced and isinstance(meeting_row, dict) and meeting_ended is not None:
+            try:
+                await meeting_ended(meeting_row.get("user_id"), meeting_row["id"])
+            except Exception as e:  # noqa: BLE001 — callback availability is pre-existing
+                log_event("meeting_delete_on_end_failed", audience="system", level="warning",
+                          span="lifecycle.callback",
+                          fields={"meeting_id": meeting_row.get("id"), "error": type(e).__name__})
         # Build the TYPED event the transition maps to (meeting.started on active,
         # meeting.completed with the post-meeting envelope on completion, bot.failed on terminal
         # failure) — additive alongside meeting.status_change, never instead of it. Built AFTER the

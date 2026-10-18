@@ -226,6 +226,36 @@ the `workspace.v1` contract shape in [Stage 0](/roadmap/stages).
 
 ---
 
+## How it works
+
+1. **Resolve.** The gateway sends the bearer (an API key, or a worker's `vxd_…` delegation token) to
+   admin-api's `POST /internal/validate`, behind `INTERNAL_API_SECRET`. No secret configured means
+   nothing validates.
+2. **Strip.** Any `x-user-*`, `x-internal-*`, `x-admin-api-key` or `X-Vexa-Identity` header a client
+   sent is removed (`_AUTHORITY_HEADER_PREFIXES` in `core/gateway/services/gateway/src/gateway/app.py`).
+3. **Scope.** The route's declared scopes come from the owning domain's `routes.v1.json`. A route with
+   no declaration is refused (`403`), not forwarded.
+4. **Sign.** The gateway signs the resolved identity with its Ed25519 private key: 60 s by default,
+   300 s at most (`identity_token.py`), sent as `X-Vexa-Identity`.
+5. **Verify.** agent-api, meeting-api and the credential broker hold only the public key. A valid
+   signature (±30 s skew) rebuilds the `x-user-*` headers; an identity header without one is `401`.
+
+## Why it complies
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P20 — default-deny | The library's `OwnerOnlyPolicy` denies all but the owner; undeclared gateway routes are refused. | `gate:access` (`core/identity/tests/test_access.py`); `test_scope_matrix.py`: `test_every_registered_route_declares_its_scopes`, `test_an_undeclared_route_is_denied_at_request_time` |
+| P4 — sealed contracts | `identity.v1` and `gateway-identity.v1` are sealed; the signed token's golden and refusal vectors are pinned. | `gate:schema`, `gate:contract-version`; `test_identity_token.py`: `test_the_golden_vectors_reproduce`, `test_the_refusal_vectors_are_refused_for_their_reason` |
+| No duplication | `identity_token.py` is vendored byte for byte into the gateway, agent-api, meeting-api and the broker. | `gate:fact-parity` (`identity-token`) |
+| Decision record | The edge signs the identity it resolved. | [ADR 0041](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0041-the-edge-signs-the-identity-it-resolved.md) |
+
+Deny tests: `test_proxy.py` `test_identity_headers_injected_and_spoof_stripped`,
+`test_internal_tier_header_is_stripped_from_a_public_request`; `test_identity_token.py`
+`test_a_signature_by_another_key_is_refused`, `test_alg_confusion_is_refused`,
+`test_a_long_lived_token_is_refused_whatever_it_says_about_itself`; admin-api
+`test_internal_validate_fail_closed_when_secret_unset`; agent-api `test_identity_guard.py`
+`test_an_unsigned_identity_is_refused`.
+
 ## Why this much, and not more
 
 Measures are sized to the system: a multi-user product where each person owns meetings and a private

@@ -46,9 +46,22 @@ Activity dots, renaming, drag-to-reorder and deleting are in [Manage your chats]
 
 ### The context bar
 
-Above the conversation: *Chat ›* or *Meeting ›*, the chat's name, a pill saying what kind of chat it is
-(*chat*, *chat · admin*, or *meeting · upcoming*, *live* or *held*), and one chip per workspace in the
-chat. The chips choose where the chat writes; see [Chats](/minutes/chats#choose-where-a-chat-writes).
+Above the conversation: the chat's name (it shortens with "…" rather than being covered), the chat's
+profile chip — where it writes and what it reads; you change it by saying so in the chat — and, while a
+meeting this chat started is happening, one chip: *● Live · the meeting’s name* (or *Joining*, *Waiting to be
+let in*). Click it to open the meeting in the pages panel, with its live transcript and **Stop bot**.
+The meeting also opens there by itself when it starts; close its tab and it stays closed. Once other
+people are in the chat, their names appear beside the title. See
+[Chats](/minutes/chats#choose-where-a-chat-writes).
+
+**How it works.** The profile chip is a view of `GET /api/workspace/states`; the live chip shows
+while the chat's meeting is requested, joining, waiting to be let in, needing help or live, and
+the meeting view opens by itself once per chat and meeting (remembered in that tab). The header
+changes nothing by itself: changes are made in the chat, through the agent's tools.
+
+**Why it complies.** Presentation only, no new route or stored data; P21, the header shows the
+server's state, never a draft. Tests: `clients/terminal/src/minutes/__tests__/chatHeader.test.tsx`,
+`railDeclutter.test.tsx`; `gate:ui-design`.
 
 ### Fold and resize
 

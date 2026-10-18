@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Dict, FrozenSet, Optional, Tuple
 
 from fastapi import Depends, HTTPException, Request
+from starlette.requests import HTTPConnection
 
 from . import identity_token
 
@@ -44,9 +45,29 @@ MANIFEST = Path("meetings") / "routes.v1.json"
 #: to the row whose data it serves: the `/ws` subscribe (`adapters.authorize_subscribe`) opens a
 #: meeting's live transcript, so it takes the transcript read's scopes — the rule the gateway's socket
 #: applies before it asks (`gateway/multiplex.py`).
+#: The browser session's live-view socket (keyed ``GET``, the upgrade a websocket is — see
+#: ``_matched``) is the gateway's own relay, authenticated like ``/ws`` and not a row; it serves the
+#: session the GET row reads, so it takes that row's scopes.
 EDGE_HOPS: Dict[RouteKey, RouteKey] = {
     ("POST", "/ws/authorize-subscribe"): ("GET", "/transcripts/{platform}/{native_meeting_id}"),
+    ("GET", "/bot-accounts/sessions/{session_id}/vnc"): ("GET", "/bot-accounts/sessions/{session_id}"),
 }
+
+#: The ``/ws`` subscribe hop under the 0.12 key contract. The gateway's ``VEXA_WS_SCOPE_MODE``
+#: (``legacy`` by default) lets any valid key subscribe to the meetings it may read, as 0.12 did; the
+#: hop then reaches this service with a key that may hold only ``bot``. The same setting, read here,
+#: lets the hop through the scope check; ownership is still decided by the handler, row by row. Set
+#: both services to ``strict`` together to apply the transcript read's scopes on both sides.
+WS_SUBSCRIBE_HOP: RouteKey = ("POST", "/ws/authorize-subscribe")
+WS_SCOPE_MODE_ENV = "VEXA_WS_SCOPE_MODE"
+
+
+def ws_scope_legacy() -> bool:
+    """True unless ``VEXA_WS_SCOPE_MODE`` is ``strict`` (an unknown value reads as ``legacy``)."""
+    import os
+
+    return (os.environ.get(WS_SCOPE_MODE_ENV) or "legacy").strip().lower() != "strict"
+
 
 #: The answer the edge gives a key without the route's scope (`gateway/app.py`), so a client reads
 #: one refusal whichever side refused it.
@@ -101,16 +122,18 @@ def load(path: Optional[Path] = None) -> Dict[RouteKey, FrozenSet[str]]:
 ROUTE_SCOPES: Dict[RouteKey, FrozenSet[str]] = load()
 
 
-def _matched(request: Request) -> Optional[RouteKey]:
+def _matched(request: HTTPConnection) -> Optional[RouteKey]:
     path = getattr(request.scope.get("route"), "path", None)
-    return (request.method.upper(), path) if path else None
+    # A WebSocket is the upgrade of a GET, and its row is declared as one (routes.v1 has no WS verb).
+    method = "GET" if request.scope.get("type") == "websocket" else request.method.upper()
+    return (method, path) if path else None
 
 
 def _refuse() -> HTTPException:
     return HTTPException(status_code=403, detail=INSUFFICIENT_SCOPE)
 
 
-def scope_gate(request: Request) -> None:
+def scope_gate(request: HTTPConnection) -> None:
     """Refuse a gateway-signed request whose key holds none of the matched route's scopes, and one
     on a route no meetings row reaches. A request without the signed identity is not checked here."""
     if identity_token.HEADER not in request.headers:
@@ -123,6 +146,8 @@ def scope_gate(request: Request) -> None:
         raise _refuse()
     held = {s.strip() for s in (request.headers.get("x-user-scopes") or "").split(",") if s.strip()}
     if not held & required:
+        if key == WS_SUBSCRIBE_HOP and ws_scope_legacy():
+            return
         raise _refuse()
 
 

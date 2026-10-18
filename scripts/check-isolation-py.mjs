@@ -41,7 +41,7 @@ const skippable = (n) => n.startsWith(".") || SKIP.has(n);
 // never read — the domain whose own README states the strictest boundary rule in the tree ("the
 // engine imports stdlib only at module scope") was the one nothing checked.
 const ROOTS = ["core/runtime", "core/gateway", "core/meetings", "core/identity", "core/agent",
-               "core/flows"];
+               "core/flows", "core/signals"];
 
 // ── allowed cross-package edges ───────────────────────────────────────────────────────────────
 // importer-module → set of sibling modules it MAY import (src→src). Each edge carries a reason so

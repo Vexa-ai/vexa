@@ -47,7 +47,8 @@ from pathlib import Path
 from typing import Optional
 
 CONTRACT = "meeting-bundle.v1"
-FORMAT_VERSION = "1.0"
+#: 1.1 adds the optional `meeting.context` and removes join/invite tokens from text parts.
+FORMAT_VERSION = "1.1"
 FORMAT_MAJOR = 1
 
 # ── Caps. Refused, never truncated: a partial import is a meeting with holes nobody can see. ────────
@@ -188,6 +189,30 @@ def _canonical(doc) -> bytes:
 
 
 # ── write ───────────────────────────────────────────────────────────────────────────────────────
+# NO JOIN OR INVITE TOKEN LEAVES IN A BUNDLE (format 1.1). A page, a note or an annotation can hold
+# a workspace invite link or a meeting link with its passcode; a bundle is a file that travels, so
+# the value of every such query parameter is replaced in every text part the writer packs. Found in
+# a real export (2026-10-14): a live workspace invite link in a project page.
+_TOKEN_PARAM = re.compile(
+    r"([?&](?:i|invite|invite_token|token|access_token|pwd|passcode|password|tk|key|sig|signature)=)"
+    r"[^&\s\"'<>()\[\]`]+", re.IGNORECASE)
+REDACTED = "[removed]"
+
+
+def redact_tokens(text: str) -> str:
+    """``text`` with the value of every join/invite token query parameter replaced."""
+    return _TOKEN_PARAM.sub(lambda m: m.group(1) + REDACTED, text)
+
+
+def _redact_bytes(data: bytes) -> bytes:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+    clean = redact_tokens(text)
+    return data if clean == text else clean.encode("utf-8")
+
+
 def write_bundle(
     *,
     meeting: dict,
@@ -210,17 +235,17 @@ def write_bundle(
     parts: list = [
         ("meeting.json", "meeting", _canonical(meeting), zipfile.ZIP_DEFLATED),
         ("transcript.json", "transcript", _canonical(transcript), zipfile.ZIP_DEFLATED),
-        ("annotations.json", "annotations", _canonical(annotations), zipfile.ZIP_DEFLATED),
+        ("annotations.json", "annotations", _redact_bytes(_canonical(annotations)), zipfile.ZIP_DEFLATED),
     ]
     if notes_page is not None:
         _check_notes(notes_page)
-        parts.append(("notes.md", "notes", notes_page, zipfile.ZIP_DEFLATED))
+        parts.append(("notes.md", "notes", _redact_bytes(notes_page), zipfile.ZIP_DEFLATED))
     for blob in media:
         parts.append((blob.path, "media", blob.data, zipfile.ZIP_STORED))
     for path, data in sorted(workspace):
         if not path.startswith("workspace/") or not _ENTRY_PATH.match(path):
             raise ValueError(f"not a workspace path a bundle may hold: {path!r}")
-        parts.append((path, "workspace", data, zipfile.ZIP_DEFLATED))
+        parts.append((path, "workspace", _redact_bytes(data), zipfile.ZIP_DEFLATED))
     manifest = {
         "contract": CONTRACT,
         "format_version": FORMAT_VERSION,

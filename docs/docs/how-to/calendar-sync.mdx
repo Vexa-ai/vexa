@@ -57,7 +57,9 @@ You can connect up to **ten** calendars, each with its own auto-join policy and 
 <Warning>
 The ICS address is a **secret** — anyone holding it can read your calendar. Vexa stores it
 accordingly: it is never shown back in full (reads return a masked form), and the sync fetch runs
-through the same server-side request guard as webhooks. Revoke it anytime from your calendar's
+through the same outbound URL guard as webhooks (see [Security & compliance](/security-compliance)).
+A feed URL that names an internal address or a host only this deployment resolves is refused with
+`422` when you save it. Revoke it anytime from your calendar's
 settings ("Reset" in Google Calendar) — then reconnect with the new address.
 </Warning>
 

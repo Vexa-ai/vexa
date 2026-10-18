@@ -1,71 +1,101 @@
 ---
 title: "Report after every meeting"
-description: "When a call ends, an agent writes notes, decisions, and follow-ups into your workspace."
+description: "When a meeting ends, the built-in post-meeting flow writes one report, mails it, and files it in every attendee's workspace. A routine of your own can add more."
 ---
 
-Once a meeting produces a transcript, an [agent](/core/agents) can read it **through your
-[workspace](/concepts#workspace)** — grounding the write-up in what you already know about the people and
-the deal — and commit a report. Because the transcript is trusted input, the agent both reads and writes;
-git is the undo.
+When a meeting completes, the built-in **`post_meeting`** [flow](/flows/overview) writes its report:
+a summary, decisions and commitments with owners. You configure nothing for it. It needs flows and
+the agent domain deployed, and a model the agent can use.
 
 For a [planned meeting](/how-to/plan-a-meeting) with a bound workspace this closes the loop: the
-transcript lands on the same meeting record the plan started as, and the report lands in the same
-workspace the attendees already share.
-
-## Option A — dispatch a report when the meeting ends
-
-Fire a one-shot [dispatch](/core/agents) the moment a call wraps (e.g. from your own meeting-end hook):
-
-```bash
-curl -X POST "$API_BASE/agent/invocations" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{
-    "runner":"claude-code",
-    "workspaces":[{"id":"u_jane","mode":"rw"}],
-    "trigger":"scheduled",
-    "start":{"entrypoint":{"inline":"Write a report for the meeting that just ended: summary, decisions, action items with owners, and links to the people and companies involved. File it in the workspace."}}
-  }'
-# → 202 {"workload_id":"agent-..."}
-```
-
-The agent reads the latest transcript and existing entities, then commits the report. Retrieve it from the
-workspace:
-
-```bash
-curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/tree"
-curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/file?path=meetings/2026-06-29-acme.md"
-```
-
-## Option B — a standing routine
-
-If you'd rather not wire a hook, run it on a schedule that sweeps recent meetings:
-
-```bash
-curl -X POST "$API_BASE/agent/routines" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{
-    "name":"Meeting reports",
-    "cron":"0 * * * *",
-    "prompt":"For any meeting that ended in the last hour and has no report yet, write one: summary, decisions, action items with owners. File each in the workspace.",
-    "run_now":true
-  }'
-# → 201 {"routine":{...},"job_id":"job_...","ran_now":true}
-```
+transcript lands on the same meeting record the plan started as, and the report lands in the
+workspaces of everyone who was in the room.
 
 ## What you get
 
-The report is **grounded**, not a bare summary — it's anchored in the accumulated context the workspace
-already holds, and each run leaves the workspace more complete (people, companies, decisions linked). See
-[Knowledge agent](/how-to/chat-workspace).
+- **One report per meeting.** One agent turn reads the transcript and writes the report. It is the
+  same text for everyone in the room, and it is kept on the meeting, beside its transcript.
+- **A mail.** The organiser gets the report in the body of a mail, with one link into the terminal
+  already opened on that meeting. Attendees inside your domains get the same report and a button
+  into a chat. Both need the deployment to send mail.
+- **A copy in each workspace.** Every attendee's own workspace, the organiser's included, receives
+  `kg/entities/meeting/<date>-<slug>.md` with the report, and one line in
+  `kg/entities/meeting/index.md`. Each commitment the report names for a person is offered to them
+  as a one-click job in their next empty chat.
+- **A call held in a chat** ([Calls](/minutes/calls)) is different: the report and its commitments
+  become proposals to the call's owner, who accepts, edits or rejects each one. Nothing lands in a
+  workspace before they accept, unless the `post_meeting_auto_accept` policy is on.
+
+Read the copy from the workspace:
+
+```bash
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/tree"
+curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/file?path=kg/entities/meeting/index.md"
+```
+
+## More reports: a routine of your own
+
+For anything the built-in report does not cover, such as a weekly digest of every meeting, make a
+[routine](/flows/routines): a flow of your own with a schedule and the `agent_run` step. Ask your
+agent in a chat ("every Friday at 16:00, summarise this week's meetings into one note"), or call the
+`flows_submit` tool:
+
+```json
+{
+  "name": "weekly-meetings",
+  "trigger": { "kind": "schedule", "cron": "0 16 * * 5" },
+  "steps": ["agent_run"],
+  "params": { "instruction": "Summarise every meeting that ended this week: decisions, and action items with owners. File the note in my workspace." }
+}
+```
+
+The cron is read in UTC. Each run is a turn in the routine's own chat thread, so it sees what earlier
+runs wrote, and you can reply there.
+
+`POST /agent/routines` (`name`, `cron`, `prompt`) is a deprecated adapter onto flows until 0.14.0:
+it answers `Deprecation: true`, writes the same flow, and ignores `run_now`. A deployment without
+flows has no routines (`501 routines_need_flows`).
+
+## How it works
+
+**The built-in report.**
+
+1. **Trigger.** A completed meeting reaches flows as the fact `meeting.completed`. flows matches it to
+   `post_meeting` (version 5) and creates one reaction, which its worker runs step by step.
+2. **`process_meeting`.** One agent turn writes the report. agent-api mounts every workspace of the
+   person read-only for this turn, so it cannot write into one.
+3. **`email_minutes` and `email_attendees`.** The report goes out verbatim, with a link into the
+   terminal (organiser) or a chat button (attendees).
+4. **`propose_call_changes`.** Only for a call held in a chat: the report becomes proposals in that
+   chat, waiting for its owner.
+5. **`drop_to_attendees`.** Plain code, no agent turn: the same report is written into each
+   attendee's workspace through agent-api, which commits it. Writes are idempotent per meeting and
+   person, so a retried step writes nothing twice.
+
+**A routine.** The flow is a `flow_version` row in your scope (`user:<you>`) with `cron` and the
+`agent_run` step. The flows worker fires a due slot as a reaction keyed
+`schedule:<scope>/<name>:<slot>`, so a slot runs at most once. `agent_run` posts the instruction to
+the routine's chat thread; agent-api runs it with trigger `scheduled`, the `autonomous` regime, in
+which tools that need a person are refused. The trusted trigger mounts the workspace `rw`, and the
+turn's changes are committed.
+
+## Why it complies
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| One owner per concern ([ADR-0046](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0046-flows-absorb-routines-flows-own-time-flows-are-scoped.md)) | flows decides when, the agent writes the report, the runtime spawns the turn | ungated: reviewed |
+| P20 — authorize every access | A routine is written in the caller's own scope; nobody names another person's. | `core/flows/tests/test_user_flows_api.py`: `test_a_persons_flow_is_written_in_their_own_scope`, `test_nobody_names_another_persons_scope` |
+| Person in the loop | A worker with nobody in the loop cannot author a flow or arm a routine. | `test_user_flows_api.py`: `test_a_worker_with_nobody_in_the_loop_cannot_author_a_flow`; `core/agent/tests/test_routine_flows.py`: `test_an_unwatched_worker_still_cannot_arm_a_routine` |
+| Nothing of one person reaches another | Every attendee's copy is the same report; only their own link differs. | `core/flows/tests/test_attendee_drop.py`: `test_every_desk_gets_byte_identical_content_apart_from_the_link`, `test_no_copy_is_personalised_to_its_owner` |
+| P18 — fail loud | A refusal from flows reaches the person typed; the old routes are marked deprecated. | `test_routine_flows.py`: `test_a_refusal_from_flows_reaches_the_person_typed`, `test_the_routes_are_deprecated_adapters_onto_flows` |
 
 ## Going live instead
 
-To surface decisions and action items **during** the call rather than after, run the live copilot —
-stream the transcript from `GET /agent/meeting/stream` and ask the agent about it. See
+To surface decisions and action items **during** the call rather than after, stream the transcript
+from `GET /agent/meeting/stream` and ask the agent about it. See
 [Follow a live meeting](/how-to/live-copilot) and the [Agent API](/api/agent).
 
 <Note>
-Routines and dispatches are workspace writes, so they need a **trusted** trigger (`message`/`scheduled`),
-which mounts the workspace `rw`. Untrusted triggers are propose-only — see
-[Governance](/architecture/governance).
+A routine writes to your workspace, so it runs on a **trusted** trigger (`scheduled`), which mounts
+the workspace `rw`. Untrusted triggers are propose-only — see [Governance](/architecture/governance).
 </Note>

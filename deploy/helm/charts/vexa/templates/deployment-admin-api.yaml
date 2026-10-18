@@ -1,4 +1,8 @@
 {{- if .Values.adminApi.enabled }}
+{{- $s3 := include "vexa.s3" . | fromYaml }}
+{{- $photos := and .Values.meetingApi.enabled $s3.existingSecret }}
+{{- $oidc := .Values.terminal.oidc | default dict }}
+{{- $oidcCa := and $oidc.issuer (or ($oidc.caBundle | default dict).configMap ($oidc.caBundle | default dict).secret) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -28,12 +32,15 @@ spec:
       containers:
         - name: admin-api
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
-          image: "{{ .Values.adminApi.image.repository }}:{{ .Values.global.imageTag | default .Values.adminApi.image.tag }}"
+          image: "{{ .Values.adminApi.image.repository }}:{{ .Values.global.imageTag | default .Values.adminApi.image.tag | default (include "vexa.releaseTag" .) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
               containerPort: 8001
           env:
+            # identity answers `public_profiles` from the install's features (by name only)
+            - name: VEXA_FEATURES
+              value: {{ .Values.features | default "" | quote }}
             # diagnostics.captureSignal (default "false"): no captured-signal tape unless turned on.
             - name: VEXA_CAPTURE_SIGNAL_DEFAULT
               value: {{ include "vexa.captureSignalDefault" . | quote }}
@@ -90,9 +97,71 @@ spec:
             # nothing else (adminApi.adminAccount). Empty = nobody writes `_global`.
             - name: VEXA_ADMIN_ACCOUNT
               value: {{ .Values.adminApi.adminAccount | default "" | quote }}
+            {{- if $photos }}
+            # People's photos (UI 15g): the bytes go to storage.s3 — the recordings store and bucket —
+            # under person-photos/<user id>/, with the names meeting-api reads. Without it there are
+            # no photos (initials).
+            - name: S3_ENDPOINT
+              value: {{ $s3.endpoint | quote }}
+            - name: MINIO_BUCKET
+              value: {{ $s3.bucket | quote }}
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3.existingSecret | quote }}
+                  key: {{ $s3.accessKeyIdKey | quote }}
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s3.existingSecret | quote }}
+                  key: {{ $s3.secretAccessKeyKey | quote }}
+            # boto3 reads the addressing style, signing region and CA bundle from this file.
+            - name: AWS_CONFIG_FILE
+              value: /etc/vexa/s3/config
+            {{- end }}
+            {{- if $oidc.issuer }}
+            # A provider photo's address is read only from the sign-in's own ID token, which identity
+            # verifies against the same issuer and client id the terminal signs people in with.
+            - name: VEXA_OIDC_ISSUER
+              value: {{ $oidc.issuer | quote }}
+            - name: VEXA_OIDC_CLIENT_ID
+              value: {{ $oidc.clientId | default "" | quote }}
+            {{- if $oidcCa }}
+            - name: VEXA_OIDC_CA_FILE
+              value: /etc/vexa-oidc/ca/ca.pem
+            {{- end }}
+            {{- end }}
+            {{- if .Values.crm.orgId }}
+            # the default org's CRM organisation (MIGRATION-0008): crm.orgId, as the CRM runs
+            - name: CRM_ORG_ID
+              value: {{ .Values.crm.orgId | quote }}
+            {{- end }}
+            {{- if .Values.crm.enabled }}
+            # account delete erases a person's own CRM (an individual's org of one) through the CRM's door
+            - name: CRM_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "crm-api") }}:8300"
+            {{- end }}
             {{- with .Values.adminApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- if or $photos $oidcCa }}
+          volumeMounts:
+            {{- if $photos }}
+            - name: s3-client
+              mountPath: /etc/vexa/s3
+              readOnly: true
+            {{- if or $s3.caConfigMap $s3.caSecret }}
+            - name: s3-ca
+              mountPath: /etc/vexa/s3-ca
+              readOnly: true
+            {{- end }}
+            {{- end }}
+            {{- if $oidcCa }}
+            - name: oidc-ca
+              mountPath: /etc/vexa-oidc/ca
+              readOnly: true
+            {{- end }}
+          {{- end }}
           startupProbe:
             httpGet:
               path: /health
@@ -116,6 +185,48 @@ spec:
             timeoutSeconds: 5
           resources:
             {{- toYaml .Values.adminApi.resources | nindent 12 }}
+      {{- if or $photos $oidcCa }}
+      volumes:
+        {{- if $photos }}
+        - name: s3-client
+          configMap:
+            name: {{ include "vexa.componentName" (list . "s3-client") }}
+            defaultMode: 0444
+        {{- if $s3.caConfigMap }}
+        - name: s3-ca
+          configMap:
+            name: {{ $s3.caConfigMap | quote }}
+            defaultMode: 0444
+            items:
+              - key: {{ $s3.caKey | quote }}
+                path: ca.crt
+        {{- else if $s3.caSecret }}
+        - name: s3-ca
+          secret:
+            secretName: {{ $s3.caSecret | quote }}
+            defaultMode: 0444
+            items:
+              - key: {{ $s3.caKey | quote }}
+                path: ca.crt
+        {{- end }}
+        {{- end }}
+        {{- if $oidcCa }}
+        # The OIDC provider's CA chain (an internal PKI), for reading its signing keys.
+        {{- with $oidc.caBundle }}
+        - name: oidc-ca
+          {{- if .configMap }}
+          configMap:
+            name: {{ .configMap | quote }}
+          {{- else }}
+          secret:
+            secretName: {{ .secret | quote }}
+          {{- end }}
+            defaultMode: 0444
+            items:
+              - { key: {{ .key | default "ca.crt" | quote }}, path: ca.pem }
+        {{- end }}
+        {{- end }}
+      {{- end }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

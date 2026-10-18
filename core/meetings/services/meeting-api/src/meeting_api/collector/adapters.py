@@ -242,6 +242,10 @@ async def _write_segment_rows(db, rows) -> None:
         await db.execute(stmt, row)
 
 
+
+#: The planned-call keys a room writes on its meeting row (rooms, F1).
+ROOM_PLAN_KEYS = ("room", "agenda", "calendar_event_ref", "end_at", "cancelled_at")
+
 class SqlAlchemyTranscriptStore:
     """``TranscriptStore`` over a SQLAlchemy-async ``session_factory`` (the ``meetings`` /
     ``transcriptions`` tables; recordings/notes live in ``meeting.data`` JSONB — NO separate
@@ -258,6 +262,22 @@ class SqlAlchemyTranscriptStore:
         # Meeting ids whose transcript was deleted. Deletion is one-way, so a positive answer is
         # cached for the life of the process; a negative one never is.
         self._erased: set[int] = set()
+
+    async def get_transcript_gaps(self, meeting_id) -> list:
+        """The stored ``meeting.data.transcript_gaps`` report of an ALREADY-AUTHORIZED row (the caller
+        resolved it through ``get_transcript``/``get_transcript_by_id``). ``[]`` when none."""
+        try:
+            mid = int(meeting_id)
+        except (TypeError, ValueError):
+            return []
+        from sqlalchemy import select  # lazy: not needed for the in-memory fakes
+
+        from .models import Meeting
+
+        async with self._session_factory() as db:
+            data = (await db.execute(select(Meeting.data).where(Meeting.id == mid))).scalars().first()
+        gaps = data.get("transcript_gaps") if isinstance(data, dict) else None
+        return list(gaps) if isinstance(gaps, list) else []
 
     async def transcript_erased(self, meeting_id) -> bool:
         try:
@@ -1249,7 +1269,7 @@ class SqlAlchemyTranscriptStore:
                                      calendar_source=None,
                                      workspace_source=None, attendees=None,
                                      auto_join_last_attempt=None,
-                                     auto_join_error=None) -> dict:
+                                     auto_join_error=None, room_plan=None) -> dict:
         """Insert a PLANNED row (intent status, no bot). Takes the SAME per-user advisory lock as
         ``bot_spawn.create_meeting_guarded`` so planned-create serializes with concurrent spawns
         and calendar sync; the unique partial index remains the DB-level backstop (→ duplicate).
@@ -1287,6 +1307,11 @@ class SqlAlchemyTranscriptStore:
             data["auto_join_last_attempt"] = auto_join_last_attempt
         if auto_join_error:
             data["auto_join_error"] = auto_join_error
+        # A ROOM'S PLANNED CALL (rooms, F1): the room that owns it, its agenda page and the calendar
+        # event that is its time's source of truth — data the owner's flows and the room read.
+        for key, value in (room_plan or {}).items():
+            if key in ROOM_PLAN_KEYS and value:
+                data[key] = value
         status = "scheduled" if scheduled_at else "idle"
 
         async with self._session_factory() as db:
@@ -1609,6 +1634,12 @@ class SqlAlchemyTranscriptStore:
                     data["attendees"] = updates["attendees"]
                 else:
                     data.pop("attendees", None)
+            for key in ROOM_PLAN_KEYS:
+                if key in updates:
+                    if updates[key]:
+                        data[key] = updates[key]
+                    else:
+                        data.pop(key, None)
             if "auto_join" in updates:
                 data["auto_join"] = bool(updates["auto_join"])
             # The USER's own auto-join choice, marked so calendar sync stops deriving the flag
@@ -1699,6 +1730,45 @@ class SqlAlchemyTranscriptStore:
                 "recordings": list(data.get("recordings") or []),
                 "already_deleted": already_deleted,
             }
+
+    async def mark_delete_when_ended(self, user_id, meeting_id) -> "Optional[dict]":
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from .models import Meeting
+        from .ports import DELETE_WHEN_ENDED_FIELD
+
+        async with self._session_factory() as db:
+            meeting = (await db.execute(
+                select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+                .with_for_update()
+            )).scalars().first()
+            if meeting is None:
+                return None
+            if meeting.status in ("completed", "failed"):
+                return {"terminal": True}
+            data = dict(meeting.data) if isinstance(meeting.data, dict) else {}
+            if not data.get(DELETE_WHEN_ENDED_FIELD):
+                data[DELETE_WHEN_ENDED_FIELD] = {
+                    "requested_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
+                meeting.data = data
+                flag_modified(meeting, "data")
+                await db.commit()
+            return {"platform": meeting.platform, "native_meeting_id": meeting.platform_specific_id}
+
+    async def delete_when_ended_requested(self, user_id, meeting_id) -> bool:
+        from sqlalchemy import select
+
+        from .models import Meeting
+        from .ports import DELETE_WHEN_ENDED_FIELD
+
+        async with self._session_factory() as db:
+            data = (await db.execute(
+                select(Meeting.data).where(Meeting.id == meeting_id, Meeting.user_id == user_id)
+            )).scalars().first()
+            return bool(isinstance(data, dict) and data.get(DELETE_WHEN_ENDED_FIELD))
 
     async def finalize_completed_artifact_deletion(self, user_id, meeting_id) -> "Optional[bool]":
         from datetime import datetime, timezone

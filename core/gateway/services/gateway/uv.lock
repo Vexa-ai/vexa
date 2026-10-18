@@ -1529,6 +1529,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "starlette" },
+    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -1539,6 +1540,7 @@ dev = [
 production = [
     { name = "redis" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -1549,6 +1551,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic", specifier = ">=2" },
     { name = "starlette", specifier = ">=0.37" },
+    { name = "websockets", specifier = ">=15,<18" },
 ]
 
 [package.metadata.requires-dev]
@@ -1559,6 +1562,7 @@ dev = [
 production = [
     { name = "redis", specifier = ">=5.2.1,<6" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34,<1" },
+    { name = "websockets", specifier = ">=15,<18" },
 ]
 
 [[package]]

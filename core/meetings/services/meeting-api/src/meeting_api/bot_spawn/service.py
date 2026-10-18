@@ -40,6 +40,7 @@ from ..service_authority import (
 from .auth_session import auth_session_config
 from .invocation import build_invocation, build_workload_spec, mint_meeting_token
 from . import transcription_language as tlang
+from .workload_redis import voice_note_stream
 from .ports import (
     AuthSessionBusy,
     DuplicateMeeting,
@@ -409,6 +410,17 @@ async def _terminalize_as_stopped(
                   span="bots.create", meeting_id=str(meeting_id), fields={"error": str(e)})
 
 
+VOICE_NOTE_PLATFORM = "voice_note"
+CALL_PLATFORM = "vexa_call"
+
+
+def _voice_note_limits() -> tuple[int, int]:
+    """(cap, idle timeout) in seconds — read lazily: the voice_notes module imports this package."""
+    from ..voice_notes import idle_timeout_sec, max_duration_sec
+
+    return max_duration_sec(), idle_timeout_sec()
+
+
 async def request_bot(
     repo: MeetingRepo,
     runtime: RuntimeClient,
@@ -459,6 +471,20 @@ async def request_bot(
     # carry a stale session_end → "Meeting ended" before the first word). Injected (redis-backed in
     # prod, None in tests/offline). NOT called on continue_meeting — that reuse KEEPS the stream.
     transcript_stream_purge: "Optional[Callable[[int], Awaitable[None]]]" = None,
+    # A voice note (#1783): the name its words are attributed to. Read only when the platform is
+    # voice_note.
+    speaker_name: Optional[str] = None,
+    # A call (#1783): the listener's invocation.v1 `call` block and the meeting's `data.call`,
+    # prepared by the calls module (the room already exists). Read only when the platform is
+    # vexa_call.
+    call_invocation: Optional[dict] = None,
+    call_data: Optional[dict] = None,
+    # THE BOT ACCOUNT this bot joins as (bot_accounts, ADR-0049): the account the router resolved
+    # for this person and platform, or None for today's bot (a guest, or the deployment-wide
+    # BOT_AUTHENTICATED session). With one, the bot is authenticated, restores the account's profile
+    # from meeting-api (sessionRestoreUrl) instead of the userdata store, writes it back to the
+    # account, and is serialized per account (`auth_userdata_path` = "bot-account:<id>").
+    bot_account: Optional[dict] = None,
 ) -> dict:
     """Run the spawn flow and return a MeetingResponse-shaped dict.
 
@@ -476,10 +502,23 @@ async def request_bot(
     #    anything else: a refused value raises ``LanguageRefused`` (the router's 422) with no lookup,
     #    row or workload behind it.
     meeting_language = tlang.spawn_tier(language, allowed_languages)
+    # A voice note has no meeting to join and no page to record from: no URL, no recording, no
+    # lobby. Its audio arrives over the voice-note socket instead (voice_notes).
+    is_voice_note = platform == VOICE_NOTE_PLATFORM
+    # A call has no page either: its audio is the LiveKit room's tracks (calls).
+    is_call = platform == CALL_PLATFORM
+    no_page = is_voice_note or is_call
+    if is_call:
+        recording_enabled = False
+        if call_invocation is None or call_data is None:
+            raise ValueError("a vexa_call is spawned with its prepared call block")
+    if is_voice_note:
+        recording_enabled = False
+        voice_note_cap, voice_note_idle = _voice_note_limits()
     # 1. URL.
-    constructed_url = meeting_url or construct_meeting_url(
+    constructed_url = None if no_page else (meeting_url or construct_meeting_url(
         platform, native_meeting_id, teams_base_host=teams_base_host
-    )
+    ))
     # The address the BOT gets, which is not the address we STORE: the passcode rides on the join
     # URL (Teams' own `?p=`) and stays off `data.constructed_meeting_url`, which every
     # MeetingResponse reads back. Both derive from the same constructed URL, so they address the
@@ -520,7 +559,19 @@ async def request_bot(
         user_language = None
         log_event("bot_spawn_user_language_unreadable", audience="system", level="warning",
                   span="bots.create", user_id=user_id, fields={"reason": str(e)})
-    transcription_language = tlang.resolve(meeting_language, user_language, tlang.deployment_tier())
+    history_language = None
+    if meeting_language is None and user_language is None and tlang.history_tier_enabled():
+        # THE PERSON'S OWN HISTORY (VEXA_LANGUAGE_HISTORY_TIER=on), when they set nothing: the languages their recent meetings were
+        # spoken in. Best effort — a history that cannot be read leaves the tiers below.
+        recent = getattr(repo, "recent_transcript_languages", None)
+        if recent is not None:
+            try:
+                history_language = tlang.history_tier(await recent(user_id))
+            except Exception as e:  # noqa: BLE001
+                log_event("bot_spawn_language_history_unreadable", audience="system", level="warning",
+                          span="bots.create", user_id=user_id, fields={"reason": type(e).__name__})
+    transcription_language = tlang.resolve(meeting_language, user_language, tlang.deployment_tier(),
+                                           history_language)
     transcription_provider: Optional[str] = "none" if not transcribe_enabled else None
     if configured.get("url"):
         transcription_service_url = configured["url"]
@@ -578,9 +629,15 @@ async def request_bot(
     #     container, so it may read the session and nothing else; a bot's write-back goes through
     #     meeting-api's session_profile route). auth_session_config also refuses a pair that reuses
     #     either half of a storage root pair (MINIO_* / S3_*), before any row or bot exists.
-    auth_cfg = auth_session_config()
-    authenticated = auth_cfg is not None
-    auth_userdata_path: Optional[str] = auth_cfg.userdata_path if auth_cfg else None
+    # A bot account replaces the deployment's session for THIS spawn: the deployment knob is not
+    # consulted (its store is not where this bot's profile lives). A spawn with no page (a voice
+    # note, a call) signs nothing in either way.
+    bot_account_id: Optional[str] = None if no_page else ((bot_account or {}).get("id") or None)
+    auth_cfg = None if (no_page or bot_account_id is not None) else auth_session_config()
+    authenticated = auth_cfg is not None or bot_account_id is not None
+    auth_userdata_path: Optional[str] = (
+        f"bot-account:{bot_account_id}" if bot_account_id else (auth_cfg.userdata_path if auth_cfg else None)
+    )
     auth_s3: dict[str, Optional[str]] = {}
     if auth_cfg is not None:
         auth_s3 = {
@@ -725,6 +782,12 @@ async def request_bot(
         # the per-identity serialization and the session write-back both match on.
         if authenticated and auth_userdata_path:
             reopen_patch["auth_userdata_path"] = auth_userdata_path
+        elif str((reused_row.get("data") or {}).get("auth_userdata_path") or "").startswith("bot-account:"):
+            # A guest run on a row a bot account last used must not keep holding that account.
+            reopen_patch["auth_userdata_path"] = None
+        # The account this run joins as; None clears a prior run's, so a continued guest run is not
+        # mistaken for an account's bot by the restore, the write-back or the signed-out hook.
+        reopen_patch["bot_account_id"] = bot_account_id
         row = await repo.reopen_meeting(meeting_id=reused_row["id"], data_patch=reopen_patch)
     else:
         meeting_data: dict[str, Any] = {}
@@ -735,6 +798,10 @@ async def request_bot(
         # The setting the bot runs with, and which tier chose it. meeting-api is its one writer:
         # here, and on every accepted live change (lifecycle/reconfigure_router.py).
         meeting_data["transcription_language"] = transcription_language
+        if is_call:
+            meeting_data["call"] = dict(call_data)
+        if is_voice_note:
+            meeting_data["voice_note"] = {"max_duration_sec": voice_note_cap}
         if transcription_provider is not None:
             meeting_data["transcription_provider"] = transcription_provider
         meeting_data["service_authority"] = authority_record
@@ -746,6 +813,8 @@ async def request_bot(
         # The serialization key for authenticated spawns — find_active_by_userdata matches on it.
         if authenticated and auth_userdata_path:
             meeting_data["auth_userdata_path"] = auth_userdata_path
+        if bot_account_id:
+            meeting_data["bot_account_id"] = bot_account_id
         # Per-user webhook config carried on the meeting (delivered by the lifecycle callback).
         # Stripped from any outbound meeting projection (webhooks.delivery._INTERNAL_DATA_KEYS). At
         # the API response edge the treatment splits (collector.projection): `webhook_secret` is
@@ -851,7 +920,8 @@ async def request_bot(
         capture_signal_enabled=capture_signal_enabled,
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",
         authenticated=True if authenticated else None,
-        userdata_s3_path=auth_userdata_path,
+        # A bot account's profile is not in the userdata store: no S3 path or key rides its invocation.
+        userdata_s3_path=auth_userdata_path if bot_account_id is None else None,
         s3_endpoint=auth_s3.get("s3_endpoint"),
         s3_bucket=auth_s3.get("s3_bucket"),
         s3_access_key=auth_s3.get("s3_access_key"),
@@ -860,10 +930,20 @@ async def request_bot(
         # in authenticated mode: an older bot refuses the field, and an anonymous bot has no session.
         session_writeback_url=(f"{meeting_api_url}/internal/browser-session/{connection_id}"
                                if authenticated else None),
+        voice_note=({
+            "audioStream": voice_note_stream(meeting_id),
+            "maxDurationSec": voice_note_cap,
+            "idleTimeoutSec": voice_note_idle,
+            **({"speakerName": speaker_name} if speaker_name else {}),
+        } if is_voice_note else None),
+        call=call_invocation if is_call else None,
+        # session-profile.v1's restore route: where a bot-account bot reads its profile before launch.
+        session_restore_url=(f"{meeting_api_url}/internal/browser-session/{connection_id}"
+                             if bot_account_id else None),
         # Explicit caller windows win; otherwise omit everyoneLeftTimeout so the bot's
         # silence-window module default applies (the lobby window stays forgiving for
         # human-in-the-loop dashboard joins).
-        automatic_leave=automatic_leave or {"waitingRoomTimeout": lobby_budget_ms()},
+        automatic_leave=None if no_page else (automatic_leave or {"waitingRoomTimeout": lobby_budget_ms()}),
     )
 
     # 4b. THE SPAWN FENCE (F2, stage rev 193 row 26313). Re-read this row's user-stop flag from the

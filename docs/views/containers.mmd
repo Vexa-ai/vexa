@@ -4,7 +4,6 @@ flowchart LR
     bot["bot"]
     desktop["desktop"]
     meeting_api["meeting-api"]
-    mcp["mcp"]
     transcription["transcription"]
     segments_table["transcription_segments (table)"]
   end
@@ -16,6 +15,7 @@ flowchart LR
   subgraph gateway_system["gateway"]
     conformance["conformance"]
     gateway["gateway"]
+    mcp["mcp"]
   end
   subgraph identity["identity"]
     admin_api["admin-api"]
@@ -33,10 +33,17 @@ flowchart LR
     redis["redis"]
     postgres["postgres"]
     object_store["object-store"]
+    livekit["livekit"]
   end
   subgraph flows["flows"]
     flows_api["flows-api"]
     flows_worker["flows-worker"]
+  end
+  subgraph crm["crm"]
+    crm_api["crm-api"]
+  end
+  subgraph signals["signals"]
+    signals_service["signals"]
   end
   slim["slim"]
   extension["extension"]
@@ -44,11 +51,19 @@ flowchart LR
   terminal["terminal"]
   dashboard["dashboard (deprecated)"]
   credentials_vault["OpenBao (optional)"]
+  signal_model["signal model"]
   meeting_api -->|"write"| segments_table
   bot -->|"HTTP"| meeting_api
   bot -->|"HTTPS"| transcription
   meeting_api -->|"JDBC"| postgres
   meeting_api -->|"HTTPS"| object_store
+  meeting_api -->|"HTTP"| livekit
+  agent_api -->|"HTTP"| livekit
+  bot -->|"WebSocket"| livekit
+  terminal -->|"WebSocket"| livekit
+  agent_api -->|"HTTPS"| object_store
+  admin_api -->|"HTTPS"| object_store
+  agent_api -->|"JDBC"| postgres
   meeting_api -->|"HTTPS"| runtime
   meeting_api -->|"HTTPS"| admin_api
   meeting_api -->|"HTTPS"| admin_api
@@ -90,3 +105,15 @@ flowchart LR
   mcp -->|"HTTP"| flows_api
   mcp -->|"HTTP"| meeting_api
   mcp -->|"HTTP"| admin_api
+  crm_api -->|"JDBC"| postgres
+  crm_api -->|"HTTP"| admin_api
+  admin_api -->|"HTTP"| crm_api
+  mcp -->|"HTTP"| crm_api
+  flows_worker -->|"HTTP"| crm_api
+  gateway -->|"HTTP"| crm_api
+  crm_api -->|"HTTP"| agent_api
+  signals_service -->|"TCP"| redis
+  signals_service -->|"HTTP"| agent_api
+  signals_service -->|"HTTP"| flows_api
+  signals_service -->|"HTTP"| credentials_broker
+  signals_service -->|"HTTPS"| signal_model

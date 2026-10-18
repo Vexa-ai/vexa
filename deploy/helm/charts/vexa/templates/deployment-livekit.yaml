@@ -1,0 +1,128 @@
+{{- if .Values.livekit.enabled }}
+# Calls (#1783, ADR-0048 decision 6) — the self-hosted LiveKit media server (Apache-2.0), OFF by
+# default. An unmodified upstream image pinned by digest. meeting-api creates every room
+# (room.auto_create is off: joining never creates one) and its hidden listener transcribes each
+# participant's track. Media needs the node's UDP range, hence hostNetwork by default.
+#
+# The server runs as the chart's unprivileged uid with every capability dropped: every port it
+# listens on is above 1024 and it writes nothing to disk, so it needs no capability back. Signalling
+# (7880, which also carries the room service) binds the pod's own address — with hostNetwork, the
+# node's primary address only — unless `livekit.bindAddresses` names others.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "livekit") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.livekit.url }}
+  {{- fail "livekit.url is required when livekit.enabled — the wss:// address browsers join" }}
+  {{- end }}
+  {{- $turnTls := .Values.livekit.turn.tlsPort | int }}
+  {{- if gt $turnTls 0 }}
+  {{- if not (and .Values.livekit.turn.enabled .Values.livekit.turn.domain .Values.livekit.turn.tlsSecretName) }}
+  {{- fail "livekit.turn.tlsPort needs livekit.turn.enabled, livekit.turn.domain (the name browsers dial; its DNS points at the LiveKit node) and livekit.turn.tlsSecretName (a kubernetes.io/tls Secret for that name)" }}
+  {{- end }}
+  {{- if le $turnTls 1024 }}
+  {{- fail "livekit.turn.tlsPort must be above 1024 (the server runs without capabilities): use 5349" }}
+  {{- end }}
+  {{- end }}
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: livekit
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: livekit
+    spec:
+      hostNetwork: {{ .Values.livekit.hostNetwork }}
+      {{- if .Values.livekit.hostNetwork }}
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: livekit
+          image: "{{ .Values.livekit.image }}"
+          imagePullPolicy: IfNotPresent
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: LIVEKIT_API_SECRET
+            - name: LIVEKIT_KEYS
+              value: "{{ .Values.livekit.apiKey }}: $(LIVEKIT_API_SECRET)"
+            - name: LIVEKIT_CONFIG
+              value: |
+                port: {{ .Values.livekit.service.port }}
+                {{- if .Values.livekit.bindAddresses }}
+                bind_addresses: {{ toJson .Values.livekit.bindAddresses }}
+                {{- else }}
+                bind_addresses: ["$(POD_IP)"]
+                {{- end }}
+                log_level: info
+                rtc:
+                  tcp_port: {{ .Values.livekit.tcpPort }}
+                  port_range_start: {{ .Values.livekit.udpPortStart }}
+                  port_range_end: {{ .Values.livekit.udpPortEnd }}
+                  use_external_ip: {{ .Values.livekit.useExternalIp }}
+                  {{- with .Values.livekit.nodeIp }}
+                  node_ip: {{ . | quote }}
+                  {{- end }}
+                turn:
+                  enabled: {{ .Values.livekit.turn.enabled }}
+                  udp_port: {{ .Values.livekit.turn.udpPort }}
+                  domain: {{ .Values.livekit.turn.domain | quote }}
+                  {{- if gt $turnTls 0 }}
+                  tls_port: {{ $turnTls }}
+                  cert_file: /etc/livekit/turn/tls.crt
+                  key_file: /etc/livekit/turn/tls.key
+                  {{- end }}
+                room:
+                  auto_create: false
+          ports:
+            - name: signal
+              containerPort: {{ .Values.livekit.service.port }}
+            - name: rtc-tcp
+              containerPort: {{ .Values.livekit.tcpPort }}
+            {{- if gt $turnTls 0 }}
+            - name: turn-tls
+              containerPort: {{ $turnTls }}
+            {{- end }}
+          {{- if gt $turnTls 0 }}
+          volumeMounts:
+            - name: turn-tls
+              mountPath: /etc/livekit/turn
+              readOnly: true
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: signal
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.livekit.resources | nindent 12 }}
+      {{- if gt $turnTls 0 }}
+      volumes:
+        - name: turn-tls
+          secret:
+            secretName: {{ .Values.livekit.turn.tlsSecretName }}
+            items:
+              - { key: tls.crt, path: tls.crt }
+              - { key: tls.key, path: tls.key }
+      {{- end }}
+{{- end }}

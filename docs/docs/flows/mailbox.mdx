@@ -155,6 +155,39 @@ against a live tenant, and the chart does not carry its keys yet.
 An on-premises Exchange Server does not offer Microsoft Graph. Its alternative to IMAP is Exchange
 Web Services (EWS), which this release does not support.
 
+## A mailbox people read too, and one sender for every mail
+
+The bot's mailbox may be a shared address such as `info@`, read by people as well. The reader is
+built for that:
+
+- **Read-only.** The folder is opened with `EXAMINE` and every message is fetched with
+  `BODY.PEEK[]`, so nothing is marked read, moved, labelled, copied or deleted.
+- **Filtered at the edge.** Only meeting invitations and replies to mail Vexa sent (their
+  `In-Reply-To` or `References` names a Message-ID Vexa sent) become events. Everything else is
+  dropped where it is read: no event, no row, no model. `VEXA_MAIL_INBOUND_FILTER=all` restores
+  the earlier behaviour, where every message was routed, for a mailbox that is Vexa's alone.
+- **Dry run.** The mailbox is a `mailbox` sensor (ADR-0050) owned by the global account: `sensor_test` shows which recent messages would become
+  events and which would be dropped. Senders are shown by domain only.
+
+Every mail Vexa sends goes through one path (`flows_steps/outbound.py`): sign-in links, invites,
+notices, minutes, reports and replies. The sender is operator configuration:
+
+| Key | Example | Meaning |
+|---|---|---|
+| `VEXA_MAIL_SMTP_FROM` | `Vexa <info@vexa.ai>` | The From on every mail, the terminal's sign-in mail included. |
+| `VEXA_MAIL_REPLY_TO` | `info@vexa.ai` | The Reply-To, the mailbox the reader watches. |
+| `VEXA_MAIL_RELAY` | `capture` / `relay` | **The one switch for real delivery.** `capture` sends every mail to `VEXA_MAIL_CAPTURE_SMTP` (`mailpit:1025`) and nothing reaches a real mailbox. `relay` sends through the `VEXA_MAIL_SMTP_*` relay for real. Unset keeps the earlier behaviour. |
+| `VEXA_MAIL_CAPTURE_SMTP` | `mailpit:1025` | The capture double for `capture`. |
+| `VEXA_MAIL_MAX_PER_DAY` | `2000` | The operator's daily ceiling per mail kind. |
+| `VEXA_MAIL_KINDS_DEFAULT` | `shipped` | What a kind does when `_global/POLICIES.md` does not name it: `shipped` (sign-in, sharing and call invites, replies and RSVPs on; everything else off) or `on` (every kind on, as before the catalogue). Docker Compose only in this release. |
+| `VEXA_MAIL_INBOUND_FILTER` | `vexa` | `vexa` keeps only invitations and replies to Vexa's own mail; `all` routes every message, as before. |
+
+With `relay`, an address at a test domain (`.test`, `.invalid`, `.localhost`, `.example`,
+`example.com/org/net`) is never relayed. The attempt is recorded as `suppressed`.
+
+What is sent, and in which words, is decided by the deployment's admin account. See
+[Design your company's mail](/flows/mail-design).
+
 ## How it works
 
 1. A person sends a calendar invite to the bot's address. The mail server delivers it to the
@@ -170,10 +203,20 @@ Web Services (EWS), which this release does not support.
    `VEXA_FLOWS_MAIL_DOMAINS` is quarantined, and nothing else happens.
 5. An accepted invite is admitted as an `invite.received` fact in the flows database, and the
    cursor advances.
-6. `flows-worker` runs `invite_intake`: it makes sure the organizer has an account (admin-api),
-   sends the RSVP and the acknowledgement over SMTP (`flows_steps/emailx.py`), waits for the
-   start, and creates the bot through the gateway's `POST /bots`.
-7. After each poll the mailbox writes its state to a file in its own temp directory
+6. `flows-worker` runs `invite_intake`: it makes sure the organizer has an account (admin-api)
+   and sends the RSVP and the acknowledgement through the outbound path (step 8). The same fact
+   arms the company flow `invite_join`'s keyed schedule for that meeting (its `event_key`): an
+   update moves it and a cancellation removes it. One minute before the start, `invite_join`
+   creates the bot through the gateway's `POST /bots` ([Sensors and keyed
+   schedules](/flows/sensors#invitations-to-the-shared-mailbox)).
+7. Before step 4, the mail sensor (`flows_integrations/mail_sensor.py`) keeps only invitations and
+   replies to Vexa's own Message-IDs (`mail_thread`, `mail_send`). Everything else is dropped
+   without a trace, and the cursor moves past it.
+8. Every outbound mail is a **kind** (`flows_steps/mailkinds.py`). `outbound.send` checks the
+   company's `mail.<kind>` switch and daily cap, renders `_global/mail/<template>.md` (or the baked
+   starter), hands the result to the transport, and writes one `mail_send` row: kind, template
+   version, recipient domain and result. The address is never stored.
+9. After each poll the mailbox writes its state to a file in its own temp directory
    (`flows_integrations/mailbox_status.py`), which the readiness probe reads.
 
 **Who writes what.** The mailbox is the only writer of `mail_cursor`, `mail_seen` and
@@ -198,7 +241,9 @@ Secret.
 | **P14** config is a declared contract; secrets are a class | Eight new keys, each declared with its class and default in both declarations. The passwords stay in `SECRETS`, come from a Secret, and are masked out of every fault. | `gate:config-contract`, `test_config_contract.py`, `test_config_declaration.py` |
 | **P18** fail loud and attributable | Every failure is a typed fault (`kind`, `wire`, host and port), logged on change, surfaced on readiness and recorded as the reaction's reason. A pod that has not yet reached its server is not Ready. | `test_mail_transport.py`, `test_mail_relay.py`, `gate:helm` |
 | **P21** report state from evidence | Readiness turns green only after a poll that reached the server, never on a restored cursor. | `test_the_probe_is_not_ready_before_a_first_poll_or_when_the_loop_goes_silent` |
-| **P23** one writer per carrier | No new table. The status file has one writer and one reader in one container. | `gate:dataflow` |
+| **P11** mechanism, not policy | Which mails are sent, to whom and in which words is the admin account's answer in `_global` (`mail.<kind>`, `mail_caps`, `_global/mail/`). The code ships the mechanism and starter templates. | `test_outbound_mail.py`, `test_mail_admin.py` |
+| **Leak rule** | The reader changes nothing in the mailbox, and stores nothing from mail it drops. The audit holds recipient domains, never addresses. A dry run shows domains only. | `test_the_reader_examines_the_folder_and_peeks_never_marking_or_moving`, `test_a_dropped_message_emits_nothing_and_leaves_no_row_but_the_cursor_moves`, `test_the_audit_never_holds_the_address` |
+| **P23** one writer per carrier | `mail_send` and `mail_test_send` are written only by `outbound`/`mail_admin` in flows. The status file has one writer and one reader in one container. | `gate:dataflow` |
 
 **Security.**
 

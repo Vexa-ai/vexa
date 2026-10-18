@@ -1,17 +1,14 @@
 import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
+import { SERVICES, legacyRepositoryFor, repositoryFor } from "./image-names.mjs";
+
 export const DOCKERHUB_API = "https://hub.docker.com";
+// Both names of every service image while the v0.13.3 dual push lasts (release/image-names.mjs):
+// a collision under either name is a collision.
 export const RELEASE_REPOSITORIES = [
-  "v012-admin-api",
-  "v012-runtime",
-  "v012-agent-worker",
-  "v012-agent-api",
-  "v012-meeting-api",
-  "v012-gateway",
-  "v012-mcp",
-  "v012-terminal",
-  "v012-flows",
+  ...SERVICES.map(repositoryFor),
+  ...SERVICES.map(legacyRepositoryFor),
   "vexa-bot",
   "vexa-lite",
 ];

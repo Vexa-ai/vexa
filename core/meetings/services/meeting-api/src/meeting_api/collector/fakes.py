@@ -35,6 +35,10 @@ def _segment_to_api(seg: dict) -> dict:
     return out
 
 
+
+#: The planned-call keys a room writes on its meeting row (rooms, F1).
+ROOM_PLAN_KEYS = ("room", "agenda", "calendar_event_ref", "end_at", "cancelled_at")
+
 class InMemoryTranscriptStore:
     """A dict-backed ``TranscriptStore``. Owner-scoped by ``user_id`` (the authorization
     boundary). Keyed internally by the synthetic ``meeting_id``.
@@ -88,6 +92,15 @@ class InMemoryTranscriptStore:
             "segments": {s["segment_id"]: s for s in (segments or [])},
         }
         return mid
+
+    async def get_transcript_gaps(self, meeting_id) -> list:
+        """Mirror of the real store: the stored ``transcript_gaps`` report of a row, ``[]`` when none."""
+        try:
+            m = self._meetings.get(int(meeting_id))
+        except (TypeError, ValueError):
+            return []
+        gaps = ((m or {}).get("data") or {}).get("transcript_gaps")
+        return list(gaps) if isinstance(gaps, list) else []
 
     async def transcript_erased(self, meeting_id) -> bool:
         try:
@@ -538,7 +551,7 @@ class InMemoryTranscriptStore:
                                      calendar_source=None,
                                      workspace_source=None, attendees=None,
                                      auto_join_last_attempt=None,
-                                     auto_join_error=None):
+                                     auto_join_error=None, room_plan=None):
         if self._dup_non_terminal(user_id, platform, native_meeting_id):
             return {"error": "duplicate"}
         data: dict = {"auto_join": bool(auto_join)}
@@ -565,6 +578,11 @@ class InMemoryTranscriptStore:
             data["auto_join_last_attempt"] = auto_join_last_attempt
         if auto_join_error:
             data["auto_join_error"] = auto_join_error
+        # A ROOM'S PLANNED CALL (rooms, F1): the room that owns it, its agenda page and the calendar
+        # event that is its time's source of truth — data the owner's flows and the room read.
+        for key, value in (room_plan or {}).items():
+            if key in ROOM_PLAN_KEYS and value:
+                data[key] = value
         mid = self.seed_meeting(
             user_id=user_id, platform=platform, native_meeting_id=native_meeting_id,
             status="scheduled" if scheduled_at else "idle",
@@ -758,6 +776,12 @@ class InMemoryTranscriptStore:
                 data["attendees"] = updates["attendees"]
             else:
                 data.pop("attendees", None)
+        for key in ROOM_PLAN_KEYS:
+            if key in updates:
+                if updates[key]:
+                    data[key] = updates[key]
+                else:
+                    data.pop(key, None)
         if "auto_join" in updates:
             data["auto_join"] = bool(updates["auto_join"])
         if "auto_join_user_set" in updates:
@@ -815,6 +839,27 @@ class InMemoryTranscriptStore:
             "recordings": list(data.get("recordings") or []),
             "already_deleted": already_deleted,
         }
+
+    async def mark_delete_when_ended(self, user_id, meeting_id):
+        from datetime import datetime, timezone
+
+        from .ports import DELETE_WHEN_ENDED_FIELD
+        m = self._meetings.get(meeting_id)
+        if m is None or m["user_id"] != user_id:
+            return None
+        if m["status"] in ("completed", "failed"):
+            return {"terminal": True}
+        data = dict(m.get("data") or {})
+        data.setdefault(DELETE_WHEN_ENDED_FIELD, {
+            "requested_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")})
+        m["data"] = data
+        return {"platform": m["platform"], "native_meeting_id": m["native_meeting_id"]}
+
+    async def delete_when_ended_requested(self, user_id, meeting_id):
+        from .ports import DELETE_WHEN_ENDED_FIELD
+        m = self._meetings.get(meeting_id)
+        return bool(m is not None and m["user_id"] == user_id
+                    and (m.get("data") or {}).get(DELETE_WHEN_ENDED_FIELD))
 
     async def finalize_completed_artifact_deletion(self, user_id, meeting_id):
         from datetime import datetime, timezone

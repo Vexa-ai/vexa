@@ -294,13 +294,20 @@ losing its admins on upgrade.
 {{- $emails -}}
 {{- end -}}
 
+{{/* The default tag of every image this chart deploys: the release the chart belongs to,
+`v<appVersion>` — an immutable tag, never a moving pointer such as `latest`. A component's own
+`image.tag` or `global.imageTag` overrides it. */}}
+{{- define "vexa.releaseTag" -}}
+{{- printf "v%s" .Chart.AppVersion -}}
+{{- end -}}
+
 {{- define "vexa.botImage" -}}
 {{- if .Values.runtime.browserImage -}}
 {{- .Values.runtime.browserImage -}}
 {{- else if .Values.global.imageTag -}}
 {{- printf "vexaai/vexa-bot:%s" .Values.global.imageTag -}}
 {{- else -}}
-vexaai/vexa-bot:v012
+{{- printf "vexaai/vexa-bot:%s" (include "vexa.releaseTag" .) -}}
 {{- end -}}
 {{- end -}}
 
@@ -309,17 +316,17 @@ vexaai/vexa-bot:v012
 {{- if .Values.global.imageTag -}}
 {{- printf "%s:%s" .Values.agentApi.image.repository .Values.global.imageTag -}}
 {{- else -}}
-{{- .Values.runtime.agentImage | default (printf "%s:%s" .Values.agentApi.image.repository .Values.agentApi.image.tag) -}}
+{{- .Values.runtime.agentImage | default (printf "%s:%s" .Values.agentApi.image.repository (.Values.agentApi.image.tag | default (include "vexa.releaseTag" .))) -}}
 {{- end -}}
 {{- end -}}
 
 {{/* The agent-worker image ref (AGENT_WORKER_IMAGE; the dedicated worker build — core/agent/worker/Dockerfile — NOT the agent-api image).
 global.imageTag replaces the TAG only: the repository is runtime.agentWorkerImage's, so an install that
 mirrors the images (Harbor, a GitLab registry) and pins one tag gets its workers from the mirror, like
-every other image. It used to be the literal `vexaai/v012-agent-worker:<tag>`, so a mirrored install
+every other image. It used to be a literal Docker Hub `agent-worker:<tag>` reference, so a mirrored install
 spawned every chat worker from Docker Hub and, offline, none started. */}}
 {{- define "vexa.agentWorkerImage" -}}
-{{- $img := .Values.runtime.agentWorkerImage | default "vexaai/v012-agent-worker:v012" -}}
+{{- $img := .Values.runtime.agentWorkerImage | default (printf "vexaai/vexa-agent-worker:%s" (include "vexa.releaseTag" .)) -}}
 {{- if .Values.global.imageTag -}}
 {{- printf "%s:%s" (regexReplaceAll "(@sha256:[a-f0-9]+|:[^:/]+)$" $img "") .Values.global.imageTag -}}
 {{- else -}}
@@ -330,7 +337,7 @@ spawned every chat worker from Docker Hub and, offline, none started. */}}
 {{/* The flows-tier image ref (flows-api + flows-worker + flows-mailbox + the ensure-db
 initContainer — one image, four entrypoints). Same shape as vexa.botImage: an explicit
 flows.image wins, otherwise global.imageTag pins the standard repo, otherwise the chart's own
-default tag. It used to be a bare `vexaai/v012-flows:dev` value — a MUTABLE tag, and one the
+default tag. It used to be a bare `vexaai/vexa-flows:dev` value — a MUTABLE tag, and one the
 release's build-once promotion could never pin, so the flows tier alone floated while every other
 service moved to the release digest (A12). */}}
 {{- define "vexa.flowsImage" -}}
@@ -346,8 +353,8 @@ moves to its digest (A12). One resolver, six call sites. */}}
 {{- if and (kindIs "string" $img) (ne ($img | toString) "") -}}
 {{- $img -}}
 {{- else -}}
-{{- $repo := "vexaai/v012-flows" -}}
-{{- $tag := "v012" -}}
+{{- $repo := "vexaai/vexa-flows" -}}
+{{- $tag := include "vexa.releaseTag" . -}}
 {{- if .Values.flows.imageRepository -}}{{- $repo = .Values.flows.imageRepository -}}{{- end -}}
 {{- if .Values.flows.imageTag -}}{{- $tag = .Values.flows.imageTag -}}{{- end -}}
 {{- if kindIs "map" $img -}}
@@ -588,7 +595,12 @@ securityContext:
 {{- if and .Values.agentApi.enabled .Values.credentialBroker.enabled -}}true{{- end -}}
 {{- end -}}
 
-{{/* The Secret holding agent.key, human.key, git.key, store.key (and google-client-secret). */}}
+{{/* Bot accounts (ADR-0049): meeting-api keeps saved signed-in browser profiles in the broker. */}}
+{{- define "vexa.botAccountsEnabled" -}}
+{{- if and (include "vexa.credentialBrokerEnabled" .) .Values.credentialBroker.botAccounts -}}true{{- end -}}
+{{- end -}}
+
+{{/* The Secret holding agent.key, human.key, git.key, bots.key, store.key (and google-client-secret). */}}
 {{- define "vexa.credentialBrokerKeys" -}}
 {{- .Values.credentialBroker.existingSecret | default (include "vexa.componentName" (list . "credential-broker-keys")) -}}
 {{- end -}}
@@ -620,4 +632,36 @@ boot on it.
 {{- fail (printf "diagnostics.captureSignal must be \"true\" or \"false\" (got %q)" (toString $raw)) -}}
 {{- end -}}
 {{- $v -}}
+{{- end -}}
+
+{{/*
+The session store (ADR-0048). vexa.agentSessions resolves agentApi.sessions with defaults, nil-safe
+for --reuse-values from a chart without the block; `active` is true only when the store's own scoped
+key is named (the chart creates no bucket). The role's password Secret is generated once and kept.
+*/}}
+{{- define "vexa.agentSessions" -}}
+{{- $a := (.Values.agentApi | default dict).sessions | default dict -}}
+{{- $s3 := $a.s3 | default dict -}}
+{{- $gen := include "vexa.componentName" (list . "agent-sessions-db") -}}
+dbUser: {{ $a.dbUser | default "vexa_agent_sessions" | quote }}
+dbSecret: {{ $a.existingSecret | default $gen | quote }}
+dbSecretGenerated: {{ not $a.existingSecret }}
+bucket: {{ $s3.bucket | default "vexa-sessions" | toString | trim | quote }}
+existingSecret: {{ $s3.existingSecret | default "" | toString | trim | quote }}
+accessKeyIdKey: {{ $s3.accessKeyIdKey | default "AWS_ACCESS_KEY_ID" | quote }}
+secretAccessKeyKey: {{ $s3.secretAccessKeyKey | default "AWS_SECRET_ACCESS_KEY" | quote }}
+active: {{ and .Values.agentApi.enabled (ne ($s3.existingSecret | default "" | toString | trim) "") }}
+{{- end -}}
+
+{{- define "vexa.agentSessions.validate" -}}
+{{- $ss := include "vexa.agentSessions" . | fromYaml -}}
+{{- if $ss.active -}}
+{{- $s3 := include "vexa.s3" . | fromYaml -}}
+{{- if eq $ss.bucket $s3.bucket -}}
+{{- fail (printf "agentApi.sessions.s3.bucket is the recordings bucket (%s). The session store needs its own bucket on storage.s3's endpoint, reached with a key scoped to it (ADR-0048)." $s3.bucket) -}}
+{{- end -}}
+{{- if eq $ss.existingSecret $s3.existingSecret -}}
+{{- fail "agentApi.sessions.s3.existingSecret names the recordings key Secret (storage.s3.existingSecret). The session store needs its own key pair, scoped to its own bucket (ADR-0048)." -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}

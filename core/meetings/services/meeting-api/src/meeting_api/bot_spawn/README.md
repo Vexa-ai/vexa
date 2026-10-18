@@ -56,6 +56,25 @@ Join-retry re-spawns and `continue_meeting` sessions count against the same cap.
 Tests: `../../../tests/test_bot_spawn.py` · `test_continue_meeting.py` · `test_max_bots.py`.
 Join-retry (P3d) lives in the `lifecycle` brick: `lifecycle/retry.py` + `test_join_retry.py`.
 
+### Bot accounts (ADR-0049)
+
+`POST /bots` takes an optional `bot_account`: a bot account id, `"default"` (also when absent) or
+`"none"` (the open api.v1 body, like `continue_meeting`). The router resolves it before any DB write
+through [`bot_accounts`](../bot_accounts/README.md) (`BotAccounts.resolve_for_spawn`): `default` is
+the caller's most recently verified `ok` account for the platform (google_meet→google,
+teams→microsoft, zoom→zoom), else a company account the `VEXA_COMPANY_BOT_USE` policy opens to them,
+else none — today's bot, unchanged, and a store that cannot answer is also none. An explicit id must
+exist, be the caller's or a usable company one (404 / 403), match the platform (422) and be signed in
+(409, naming the remedy `browser_session_open`).
+
+With an account the spawn is authenticated without the deployment knob: `auth_userdata_path` =
+`bot-account:<id>` (so `find_active_by_userdata` → `AuthSessionBusy` serializes one live bot per
+account, and `latest_auth_session` binds the restore and the write-back to it),
+`meeting.data.bot_account_id` = the id, and the invocation carries `sessionRestoreUrl` and
+`sessionWritebackUrl` (both meeting-api's `/internal/browser-session/<session_uid>`) and no userdata
+path or S3 key. Without one, `BOT_AUTHENTICATED` works exactly as before. The auto-join sweep spawns
+without an account.
+
 ### Optional external service authority
 
 `VEXA_SERVICE_AUTHORITY_CONFIG` enables the sealed, policy-free

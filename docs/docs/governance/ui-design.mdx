@@ -238,7 +238,7 @@ the same pull request — the coverage gate fails otherwise.
 ## How it works
 
 1. **Tokens.** `src/app/tokens.css` defines every visual value for the dark theme on `:root` and
-   the light overrides on `:root[data-theme="light"]`; `app/theme.ts` sets the attribute and is the
+   the light overrides on `:root[data-theme="light"]`; `platform/theme.ts` sets the attribute and is the
    only code that reads the theme. `globals.css` imports `tokens.css` and maps it onto Tailwind with
    `@theme inline`. The root layout loads Geist through `geist/font/sans` and `geist/font/mono`,
    which set `--font-geist-sans` and `--font-geist-mono`; `--font-sans` and `--font-mono` read them

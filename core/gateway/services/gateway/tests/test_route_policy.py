@@ -33,6 +33,14 @@ DELEGATED_USER = {"user_id": 42, "scopes": ["bot", "tx"], "max_concurrent": 3,
 PERSON = {"user_id": 7, "scopes": ["bot", "tx"], "max_concurrent": 3}
 REFUSED = {"detail": "a worker's delegation token is accepted on /mcp only"}
 
+
+def _refused_reentry(r) -> bool:
+    """A valid MCP re-entry on a row this edge does not list for tools: refused, and said to be that
+    (an edge older than the tool's service), not a bare worker refusal."""
+    return (r.status_code == 403 and r.headers.get("content-type", "").startswith("application/json")
+            and isinstance(r.json().get("detail"), dict)
+            and r.json()["detail"].get("reason") == "route_not_listed_for_tools")
+
 _REAL_ROOT = routes_manifest._repo_root()
 
 
@@ -204,17 +212,24 @@ def test_the_mcp_reentry_rows_are_exactly_the_declared_ones():
 #: a row in this set — so neither side can move without the other noticing.
 MCP_CALLBACKS = {
     ("GET", "/auth/me"),
+    ("GET", "/bot-accounts"), ("POST", "/bot-accounts/sessions"),
+    ("POST", "/bot-accounts/{account_id}/verify"),
     ("POST", "/bots"), ("GET", "/bots/status"),
     ("DELETE", "/bots/{platform}/{native_meeting_id}"),
     ("GET", "/bots/{platform}/{native_meeting_id}/chat"),
     ("PUT", "/bots/{platform}/{native_meeting_id}/config"),
     ("POST", "/bots/{platform}/{native_meeting_id}/speak"),
     ("GET", "/meetings"),
+    ("GET", "/meetings/{meeting_id}"), ("DELETE", "/meetings/{meeting_id}"),
     ("POST", "/meetings/{meeting_id}/annotate"),
+    ("GET", "/meetings/{platform}/{native_meeting_id}/participants"),
     ("POST", "/meetings/{platform}/{native_meeting_id}/annotate"),
     ("GET", "/recordings"), ("GET", "/recordings/{recording_id}"),
     ("GET", "/transcripts/by-id/{meeting_id}"), ("GET", "/transcripts/search"),
     ("GET", "/transcripts/{platform}/{native_meeting_id}"),
+    ("POST", "/voice-notes/recorder"),
+    ("GET", "/user/settings"), ("PUT", "/user/settings"),
+    ("GET", "/user/workspace-regime"), ("PUT", "/user/workspace-regime"),
 }
 
 
@@ -238,6 +253,8 @@ def test_the_shipped_manifests_admit_a_worker_on_the_mcp_door_and_the_friction_r
 
 def _concrete(path: str) -> str:
     # A `{platform}` segment must name a meeting platform: the edge refuses any other value (422).
+    # A bot-account or sign-in session id must be 32 hex (422 otherwise).
+    path = path.replace("{session_id}", "0" * 32).replace("{account_id}", "f" * 32)
     return path.replace("{path:path}", "x").replace("{platform}", "google_meet").replace(
         "{", "").replace("}", "").replace(
         "meeting_id", "1").replace("recording_id", "1").replace("media_file_id", "1").replace(
@@ -278,8 +295,7 @@ def test_the_mcp_re_entry_is_admitted_exactly_where_a_row_says_so():
     for (method, template) in sorted(ROUTE_SCOPES):
         r = client.request(method, _concrete(template), json={},
                            headers={"X-API-Key": DELEGATED, "X-Vexa-Internal-Mcp-Identity": marker})
-        refused = r.status_code == 403 and r.headers.get("content-type", "").startswith(
-            "application/json") and r.json() == REFUSED
+        refused = _refused_reentry(r)
         assert refused is ((method, template) not in admitted), (method, template, r.status_code)
         checked += 1
         refused_n += refused
@@ -392,7 +408,7 @@ def test_without_the_flag_the_mcp_s_callback_refuses_its_re_entry(tmp_path, monk
     `get_meeting_transcript` hop is refused, re-entry identity and all."""
     client, downstream = _reentry_client(monkeypatch, _tree(tmp_path, meetings=_unflag_reentry))
     r = client.get("/transcripts/google_meet/abc-defg-hij", headers=_reentry_headers())
-    assert (r.status_code, r.json()) == (403, REFUSED)
+    assert _refused_reentry(r), r.text     # the deploy-skew case: a tool's route this edge does not list
     assert downstream.last is None
 
 

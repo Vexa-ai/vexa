@@ -71,7 +71,8 @@ async function main(): Promise<void> {
       ] };
     };
     const sink = captureSink();
-    const pipe = createBotPipeline(baseInv(), sink, { transcribe, config: FAST });
+    // The lane's own draft/confirm ids are pinned here; reconfirmation (on by default) is pinned below.
+    const pipe = createBotPipeline(baseInv(), sink, { transcribe, config: FAST, reconfirmSec: 0 });
     await pipe.start();
     for (let i = 0; i < 12; i++) {
       pipe.feedAudio(0, 'Alice', FRAME, 1000 + i * FRAME_MS);
@@ -191,6 +192,27 @@ async function main(): Promise<void> {
     const waited = await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test' }), undefined, undefined, { BOT_STT_TIMEOUT_SEC: '20' })(pcm);
     (globalThis as any).fetch = realFetch;
     check('BOT_STT_TIMEOUT_SEC: a slow STT answer within the timeout is waited for (one call)', waited.text === 'late' && calls === 1, `calls=${calls} text=${waited.text}`);
+  }
+
+  // ── 4a) BOT_STT_CONFIDENCE_FILTER=strict reaches the client: a window Whisper decoded below -1.0 ──
+  // average log-probability is dropped; unset keeps it (the always-on rule drops only below -1.3).
+  {
+    const realFetch = globalThis.fetch;
+    (globalThis as any).fetch = async () => new Response(JSON.stringify({ text: 'you', language: 'en', duration: 0.1,
+      segments: [{ start: 0, end: 0.1, text: 'you', avg_logprob: -1.2, no_speech_prob: 0, compression_ratio: 0.3 }] }), { status: 200 });
+    const pcm = new Float32Array(10 * 16000).fill(0.05);   // strict applies to windows ≥ 8 s
+    const off = await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test' }), undefined, undefined, {})(pcm);
+    const strict = await createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test' }), undefined, undefined, { BOT_STT_CONFIDENCE_FILTER: 'strict' })(pcm);
+    (globalThis as any).fetch = realFetch;
+    check('BOT_STT_CONFIDENCE_FILTER unset: a -1.2 log-probability segment is kept', off.text === 'you', JSON.stringify(off));
+    check('BOT_STT_CONFIDENCE_FILTER=strict: the same segment is dropped', strict.text === '' && strict.segments.length === 0, JSON.stringify(strict));
+  }
+
+  // ── 4a) the real transcribe carries the client's shared STT gate, so the lane can see back-off ──
+  {
+    const t = createTranscribe(baseInv({ transcriptionServiceUrl: 'http://stt.test' })) as { sttPressure?: { backingOff(): boolean } };
+    check('createTranscribe exposes the client\'s back-pressure to the lane (sttPressure)',
+      typeof t.sttPressure?.backingOff === 'function' && t.sttPressure.backingOff() === false);
   }
 
   // ── 4b) a CUSTOMER-owned endpoint is held to the outbound URL guard; the deployment's own is not ──
@@ -398,7 +420,7 @@ async function main(): Promise<void> {
         segments: [{ start: 0, end: pcm.length / SR, text: 'starved but whole' }] };
     };
     const sink = captureSink();
-    const pipe = createBotPipeline(baseInv({ platform: 'zoom', meetingUrl: 'https://zoom.us/j/123456789' }), sink, { transcribe });
+    const pipe = createBotPipeline(baseInv({ platform: 'zoom', meetingUrl: 'https://zoom.us/j/123456789' }), sink, { transcribe, reconfirmSec: 0 });
     await pipe.start();
     const N = 30, t0 = 1_800_000_000_000;
     // Fed synchronously: the 2 s submit timer cannot fire, so any request here comes from the input-gap guard.
@@ -430,7 +452,7 @@ async function main(): Promise<void> {
         segments: [{ start: 0, end: pcm.length / SR, text: 'one continuous turn' }] };
     };
     const sink = captureSink();
-    const pipe = createBotPipeline(baseInv({ platform: 'zoom', meetingUrl: 'https://zoom.us/j/123456789' }), sink, { transcribe });
+    const pipe = createBotPipeline(baseInv({ platform: 'zoom', meetingUrl: 'https://zoom.us/j/123456789' }), sink, { transcribe, reconfirmSec: 0 });
     await pipe.start();
     const t0 = 1_800_000_000_000;
     let t = t0;
@@ -442,6 +464,30 @@ async function main(): Promise<void> {
       windows.length === 1 && windows[0] === 12, JSON.stringify(windows));
     check('zoom: the turn is published once', sink.published.filter((s) => s.completed).length === 1,
       JSON.stringify(sink.published.map((s) => s.text)));
+  }
+
+  // ── 9b) SHOW FAST, THEN RECONFIRM is on by default: the lane's confirmed window goes out as a draft
+  //       first, then ONE reconfirmed segment (a second request over the same audio) replaces it.
+  {
+    const ZF = 4096, ZF_MS = (ZF / SR) * 1000;
+    const zframe = new Float32Array(ZF).fill(0.05);
+    let n = 0;
+    const transcribe = async (pcm: Float32Array): Promise<TranscriptionResult> => {
+      n++;
+      const text = n === 1 ? 'first version…' : 'the reconfirmed sentence.';
+      return { text, language: 'en', duration: pcm.length / SR, segments: [{ start: 0, end: pcm.length / SR, text }] };
+    };
+    const sink = captureSink();
+    const pipe = createBotPipeline(baseInv({ platform: 'zoom', meetingUrl: 'https://zoom.us/j/123456789' }), sink, { transcribe });
+    await pipe.start();
+    let t = 1_800_000_000_000;
+    for (let k = 0; k < 12; k++) { pipe.feedAudio(4, 'Alice', zframe, t); t += ZF_MS; }
+    await pipe.stop();
+    const first = sink.published.find((s) => s.text === 'first version…');
+    const final = sink.published.filter((s) => s.completed);
+    check('reconfirm (default): the first version is shown as a draft', !!first && first.completed === false, JSON.stringify(sink.published));
+    check('reconfirm (default): the reconfirmed text replaces it under the same id, and is the only confirmed text',
+      final.length === 1 && final[0].text === 'the reconfirmed sentence.' && final[0].segment_id === first?.segment_id, JSON.stringify(final));
     check('per-track turn gap is 2 s for zoom; google_meet keeps the lane default',
       perChannelOnsetGapMs('zoom') === PER_TRACK_ONSET_GAP_MS && PER_TRACK_ONSET_GAP_MS === 2000 && perChannelOnsetGapMs('google_meet') === undefined);
   }

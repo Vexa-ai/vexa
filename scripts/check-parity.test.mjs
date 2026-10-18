@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkParity, asSet, asProse, asHeader, loadManifest } from "./check-parity.mjs";
+import { checkParity, asSet, asProse, asHeader, asFlag, loadManifest } from "./check-parity.mjs";
 import { guardTree } from "./test-tree.mjs";
 
 guardTree();
@@ -363,4 +363,24 @@ test("forbid_elsewhere sweeps Dockerfiles, which carry no extension", () => {
     assert.equal(e.length, 1);
     assert.match(e[0], /deploy\/lite\/Dockerfile\.lite:1/);
   } finally { rmSync(stray, { recursive: true, force: true }); }
+});
+
+test("a FLAG fact compares a switch, not its spelling: False, off and no are one answer", () => {
+  const facts = [{
+    id: "notify", fact: "the notify default", kind: "flag", enforced: true,
+    sites: [
+      { path: "a/x.py", pattern: '^    "notify": (\\w+),' },
+      { path: "POLICIES.md", pattern: "^notify: (\\S+)$" },
+    ],
+  }];
+  const ok = fixture(facts, { "a/x.py": '    "notify": False,\n', "POLICIES.md": "notify: off\n" });
+  const bad = fixture(facts, { "a/x.py": '    "notify": False,\n', "POLICIES.md": "notify: on\n" });
+  const odd = fixture(facts, { "a/x.py": '    "notify": False,\n', "POLICIES.md": "notify: sometimes\n" });
+  try {
+    assert.deepEqual(run(ok).errs, [], "False and off are one switch");
+    assert.match(run(bad).errs.join("\n"), /DISAGREE/);
+    assert.match(run(odd).errs.join("\n"), /not a switch/, "a value that is neither on nor off is named, never coerced");
+  } finally { for (const r of [ok, bad, odd]) rmSync(r, { recursive: true, force: true }); }
+  assert.equal(asFlag("True"), "on");
+  assert.equal(asFlag(" no "), "off");
 });

@@ -1,0 +1,31 @@
+{
+  "secret": "delegation.v1-published-test-vector-key",
+  "now": 1767225600,
+  "subject": "42",
+  "regime": "human",
+  "workspaces": [
+    "team-ws"
+  ],
+  "shared": true,
+  "ttl_sec": 3600,
+  "jti": "vec-shared-0001",
+  "header": {
+    "alg": "HS256",
+    "typ": "vxdlg"
+  },
+  "claims": {
+    "aud": "vexa-mcp",
+    "exp": 1767229200,
+    "iat": 1767225600,
+    "jti": "vec-shared-0001",
+    "scope": {
+      "regime": "human",
+      "shared": true,
+      "workspaces": [
+        "team-ws"
+      ]
+    },
+    "sub": "42"
+  },
+  "token": "vxd_eyJhbGciOiJIUzI1NiIsInR5cCI6InZ4ZGxnIn0.eyJhdWQiOiJ2ZXhhLW1jcCIsImV4cCI6MTc2NzIyOTIwMCwiaWF0IjoxNzY3MjI1NjAwLCJqdGkiOiJ2ZWMtc2hhcmVkLTAwMDEiLCJzY29wZSI6eyJyZWdpbWUiOiJodW1hbiIsInNoYXJlZCI6dHJ1ZSwid29ya3NwYWNlcyI6WyJ0ZWFtLXdzIl19LCJzdWIiOiI0MiJ9.bOOeIPD9X1TPxoqcTWWjjDblL2G6eoA6UVSigC_PNrI"
+}

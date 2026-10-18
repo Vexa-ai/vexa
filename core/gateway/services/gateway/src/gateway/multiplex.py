@@ -35,6 +35,95 @@ WS_REAUTH_INTERVAL_SEC = 15.0
 #: Consecutive failed authorize hops after which per-meeting subscriptions are dropped (fail closed).
 WS_REAUTH_MAX_FAILURES = 2
 
+#: TRANSCRIPT SIGNALS (ADR transcript signals): the signals service is the one writer of the redis
+#: STREAM ``sig:meeting:{row}`` — one entry per scored segment, ``{segment_id, scores, words, model,
+#: brief_version, at}``. A subscription asks for it by name (``streams: ["signals"]``); a subscribe that
+#: names no streams gets the 0.12 channels and nothing new. It is granted by the SAME authorize hop as
+#: the transcript and read for the ROW that hop answered, so whoever may read a meeting's transcript
+#: may read its signals, and nobody else.
+STREAM_NAMES = ("transcript", "signals")
+#: What a subscribe without ``streams`` gets: the 0.12 channels (transcript, status, chat).
+DEFAULT_STREAMS = ("transcript",)
+#: How many annotations a new subscription is sent first (the newest), then it follows live.
+SIGNALS_BACKLOG = 500
+#: How long one blocking read of the signals stream waits before it looks again (ms).
+SIGNALS_BLOCK_MS = 5000
+
+#: How the socket holds a key to the REST routes' scopes (``VEXA_WS_SCOPE_MODE``):
+#:   ``legacy`` (default) — the 0.12 contract: any valid key opens the socket and subscribes to the
+#:                          meetings the authorize hop grants it, whatever its scopes. A key that
+#:                          would be refused under ``strict`` is logged (``ws_scope_legacy_allowed``)
+#:                          so an operator can count who still relies on it before switching.
+#:   ``strict``           — the socket takes the scopes of the REST routes it mirrors (below).
+WS_SCOPE_MODE_ENV = "VEXA_WS_SCOPE_MODE"
+WS_SCOPE_MODES = ("legacy", "strict")
+
+
+def ws_scope_mode(env: "dict | None" = None) -> str:
+    """The configured mode; an unknown value reads as ``legacy`` (the 0.12 behaviour) and is logged."""
+    raw = ((env if env is not None else os.environ).get(WS_SCOPE_MODE_ENV) or "legacy").strip().lower()
+    if raw not in WS_SCOPE_MODES:
+        log_event("ws_scope_mode_unknown", audience="system", level="warning", span="ws",
+                  fields={"value_ignored": True, "using": "legacy"})
+        return "legacy"
+    return raw
+
+
+def _num(value, cast=float):
+    try:
+        return cast(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _scores(value) -> dict:
+    """``{label: 0..1}`` — anything that is not a name and a number is dropped."""
+    if not isinstance(value, dict):
+        return {}
+    out = {}
+    for k, v in value.items():
+        n = _num(v)
+        if isinstance(k, str) and k and n is not None:
+            out[k[:64]] = max(0.0, min(1.0, n))
+    return out
+
+
+def signal_annotation(entry_id: str, fields: dict) -> "dict | None":
+    """One stream entry → the annotation the frame carries, or None when it is not one.
+
+    The carrier holds the annotation either as one JSON ``payload`` (the transcript stream's shape)
+    or as flat fields whose ``scores`` / ``words`` are JSON strings; both read the same. An entry
+    without a segment id annotates nothing and is skipped, so one bad write never stops the stream."""
+    raw = dict(fields or {})
+    for name in ("payload", "data"):
+        if isinstance(raw.get(name), str):
+            try:
+                body = json.loads(raw[name])
+            except (TypeError, ValueError):
+                return None
+            raw = body if isinstance(body, dict) else {}
+            break
+    for name in ("scores", "words"):
+        if isinstance(raw.get(name), str):
+            try:
+                raw[name] = json.loads(raw[name])
+            except (TypeError, ValueError):
+                raw[name] = {}
+    segment = raw.get("segment_id")
+    if not isinstance(segment, (str, int)) or str(segment).strip() == "":
+        return None
+    out = {"id": str(entry_id), "segment_id": str(segment), "scores": _scores(raw.get("scores")),
+           "words": _scores(raw.get("words"))}
+    if isinstance(raw.get("model"), str):
+        out["model"] = raw["model"][:128]
+    version = _num(raw.get("brief_version"), int)
+    if version is not None:
+        out["brief_version"] = version
+    at = _num(raw.get("at"))
+    if at is not None:
+        out["at"] = at
+    return out
+
 
 def _assembled_scopes() -> dict:
     """The full-profile route table (`gateway.app.ROUTE_SCOPES`) — for a caller that names none."""
@@ -57,7 +146,8 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
       ping        → ``pong``;
       otherwise   → an ``error`` frame (invalid_json / unknown_action / invalid_*_payload).
     Each subscription fans in ``tc:meeting:{id}:mutable`` / ``bm:meeting:{id}:status`` /
-    ``va:meeting:{id}:chat`` and forwards every raw payload to the socket (main.py:2204).
+    ``va:meeting:{id}:chat`` and forwards every raw payload to the socket (main.py:2204); one that
+    names ``streams: ["signals"]`` also (or only) follows ``sig:meeting:{id}`` as ``meeting.signals``.
     """
     # --- optional WS guard hook (GUARD_WS_ENABLED, default false) ---
     # HTTP SecurityMiddleware does not intercept /ws (Starlette middleware is HTTP-only).
@@ -128,7 +218,11 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
     held = {str(s) for s in (user_data.get("scopes") or [])}
     status_scopes = frozenset().union(*(table.get(r, frozenset()) for r in STATUS_ROUTES))
     transcript_scopes = frozenset(table.get(TRANSCRIPT_ROUTE, frozenset()))
-    if not held & status_scopes:
+    strict = ws_scope_mode() == "strict"
+    if not held & status_scopes and not strict:
+        log_event("ws_scope_legacy_allowed", audience="system", level="info", span="ws",
+                  user_id=user_id, fields={"path": "/ws", "required": sorted(status_scopes)})
+    elif not held & status_scopes:
         log_event("request_denied_scope", audience="user", level="warning", span="ws",
                   user_id=user_id, fields={"path": "/ws", "required": sorted(status_scopes)})
         try:
@@ -164,24 +258,67 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
             except Exception:
                 pass
 
-    async def subscribe_meeting(platform: str, native_id: str, user_id, meeting_id):
+    # The signals stream each subscription reads, beside its pub/sub fan-in (same key).
+    sig_tasks: Dict[Tuple, asyncio.Task] = {}
+
+    async def signals_in(row: str, platform: str, native_id: str):
+        """Follow ``sig:meeting:{row}`` — the newest SIGNALS_BACKLOG entries first, then live — and
+        send each batch as one ``meeting.signals`` frame. ``row`` is the row the authorize hop
+        granted; nothing the client typed names the stream."""
+        key = f"sig:meeting:{row}"
+        meeting = {"id": str(row), "platform": platform, "native_id": native_id}
+
+        async def send(entries) -> bool:
+            batch = [a for a in (signal_annotation(i, f) for i, f in entries) if a]
+            if not batch:
+                return True
+            try:
+                await ws.send_text(json.dumps({"type": "meeting.signals", "meeting": meeting, "annotations": batch}))
+                return True
+            except Exception:
+                return False
+
+        last = "0-0"
+        try:
+            backlog = list(reversed(await redis.xrevrange(key, count=SIGNALS_BACKLOG) or []))
+            if backlog:
+                last = backlog[-1][0]
+                if not await send(backlog):
+                    return
+            while True:
+                resp = await redis.xread({key: last}, count=200, block=SIGNALS_BLOCK_MS)
+                for _stream, entries in resp or []:
+                    if entries:
+                        last = entries[-1][0]
+                        if not await send(entries):
+                            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — the transcript and the socket stay up without signals
+            log_event("ws_signals_read_failed", audience="system", level="warning", span="ws",
+                      user_id=user_id, fields={"detail": str(e)})
+
+    async def subscribe_meeting(platform: str, native_id: str, user_id, meeting_id, streams=DEFAULT_STREAMS):
         key = (platform, native_id, user_id)
-        if key in subscribed_meetings:
-            return
         subscribed_meetings.add(key)
         streamed_row[key] = str(meeting_id)
-        channels = [
-            f"tc:meeting:{meeting_id}:mutable",
-            f"bm:meeting:{meeting_id}:status",
-            f"va:meeting:{meeting_id}:chat",
-        ]
-        sub_tasks[key] = asyncio.create_task(fan_in(channels))
+        if "transcript" in streams and key not in sub_tasks:
+            channels = [
+                f"tc:meeting:{meeting_id}:mutable",
+                f"bm:meeting:{meeting_id}:status",
+                f"va:meeting:{meeting_id}:chat",
+            ]
+            sub_tasks[key] = asyncio.create_task(fan_in(channels))
+        if "signals" in streams and key not in sig_tasks:
+            if callable(getattr(redis, "xread", None)) and callable(getattr(redis, "xrevrange", None)):
+                sig_tasks[key] = asyncio.create_task(signals_in(str(meeting_id), platform, native_id))
 
     async def unsubscribe_meeting(platform: str, native_id: str, user_id):
         key = (platform, native_id, user_id)
-        task = sub_tasks.pop(key, None)
-        if task:
-            task.cancel()
+        for tasks in (sub_tasks, sig_tasks):
+            task = tasks.pop(key, None)
+            if task:
+                task.cancel()
         subscribed_meetings.discard(key)
         streamed_row.pop(key, None)
 
@@ -201,12 +338,18 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
     # is therefore evaluated per CONNECTION: a member added mid-session picks the channel up on their
     # next connect, which is the same freshness the rest of this socket's identity already has.
     user_channel = f"u:{user_id}:meetings"
+    # AND the person's own notifications (#1783): `u:{user_id}:notifications` carries what happened
+    # to them — added to a chat, mentioned, invited, a call started — published by agent-api, the one
+    # writer, and the `rail` frames that make a shared chat appear without a reload. One channel per
+    # identity, resolved at connect like the meetings channel, so a socket hears only its own person;
+    # every tab they have open holds its own socket, so every tab hears it at once.
+    notify_channel = f"u:{user_id}:notifications"
 
     def member_channels_of(data: dict) -> List[str]:
         return [f"w:{str(w).strip()}:meetings" for w in (data.get("workspaces") or []) if str(w).strip()]
 
     member_channels = member_channels_of(user_data)
-    user_sub_task = asyncio.create_task(fan_in([user_channel, *member_channels]))
+    user_sub_task = asyncio.create_task(fan_in([user_channel, notify_channel, *member_channels]))
 
     # LIVE RE-AUTHORIZATION. Authorization used to happen once, at subscribe; a reader the owner
     # removed mid-meeting kept the transcript flowing until they disconnected. Every
@@ -232,7 +375,7 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
         if channels != state["member_channels"]:
             state["user_sub_task"].cancel()
             state["member_channels"] = channels
-            state["user_sub_task"] = asyncio.create_task(fan_in([user_channel, *channels]))
+            state["user_sub_task"] = asyncio.create_task(fan_in([user_channel, notify_channel, *channels]))
         keys = list(subscribed_meetings)
         if not keys:
             return True
@@ -334,7 +477,22 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
                         "type": "error", "error": "invalid_subscribe_payload",
                         "details": "no valid meeting objects"}))
                     continue
-                if not held & transcript_scopes:
+                # WHICH STREAMS (additive): absent → the 0.12 channels; otherwise a non-empty list of
+                # known names. Signals are only ever read for a row the hop below grants.
+                streams = msg.get("streams", None)
+                if streams is None:
+                    streams = list(DEFAULT_STREAMS)
+                elif (not isinstance(streams, list) or not streams
+                      or any(s not in STREAM_NAMES for s in streams)):
+                    await ws.send_text(json.dumps({
+                        "type": "error", "error": "invalid_subscribe_payload",
+                        "details": f"'streams' must be a non-empty list of {list(STREAM_NAMES)}"}))
+                    continue
+                if not held & transcript_scopes and not strict:
+                    log_event("ws_scope_legacy_allowed", audience="system", level="info", span="ws",
+                              user_id=user_id,
+                              fields={"path": "/ws subscribe", "required": sorted(transcript_scopes)})
+                elif not held & transcript_scopes:
                     log_event("request_denied_scope", audience="user", level="warning", span="ws",
                               user_id=user_id,
                               fields={"path": "/ws subscribe", "required": sorted(transcript_scopes)})
@@ -367,7 +525,7 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
                     plat = item.get("platform"); nid = item.get("native_id")
                     user_id = item.get("user_id"); meeting_id = item.get("meeting_id")
                     if plat and nid and user_id and meeting_id:
-                        await subscribe_meeting(plat, nid, user_id, meeting_id)
+                        await subscribe_meeting(plat, nid, user_id, meeting_id, tuple(streams))
                         subscribed.append({"platform": plat, "native_id": nid})
                 await ws.send_text(json.dumps({"type": "subscribed", "meetings": subscribed}))
 
@@ -414,7 +572,7 @@ async def run_multiplex(ws: WebSocket, authorizer: Authorizer, redis: RedisBus, 
     finally:
         reauth_task.cancel()
         state["user_sub_task"].cancel()  # Track G — tear down the user-scope fan-in on disconnect.
-        for task in sub_tasks.values():
+        for task in [*sub_tasks.values(), *sig_tasks.values()]:
             task.cancel()
 
 

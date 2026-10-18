@@ -39,8 +39,42 @@ to a key from `openssl genpkey -algorithm ed25519`, or every render mints a new 
 also generates `VEXA_MCP_DELEGATION_SECRET`; with `secrets.existingSecretName`, your Secret must carry
 it.
 
+## Network policy
+
+With `networkPolicy.enabled` (default `true`) and `networkPolicy.defaultDeny.enabled` (default `true`),
+the chart adds a namespace-wide default-deny in both directions. **Every Pod in the release's namespace**
+then takes no connection and makes none unless a policy allows it. That includes Pods the chart does
+not own. **Install Vexa in a namespace of its own**, or give the other Pods there their own policies.
+
+What the chart allows its own Pods:
+
+| Pod | Takes connections from | May connect to |
+|---|---|---|
+| gateway, terminal, dashboard | anywhere, on their own port | DNS, the chart's Pods, any address outside `controlPlane.egressExcept` |
+| admin-api, mcp, pgbouncer | the chart's Pods | same as above |
+| flows-api | the chart's Pods and agent workers | same as above |
+| agent-api, meeting-api, runtime | their named callers (see the table above) | same as above |
+| credential-broker | agent-api and the terminal; the chart's Pods when `credentialBroker.networkPolicy.enabled` is `false`. Spawned Pods never | same as above |
+| postgres | admin-api, meeting-api, agent-api (the session store), pgbouncer, the flows tier, the migrations Job | nothing |
+| redis | the chart's Pods and the Pods the runtime spawns | nothing |
+| spawned bots and workers | nothing | their own policies (see the table above) |
+
+The settings, all under `networkPolicy`:
+
+| Key | Default | Use |
+|---|---|---|
+| `defaultDeny.enabled` | `true` | `false` turns the namespace default-deny off; the per-service policies stay |
+| `controlPlane.egressExcept.ipv4` / `.ipv6` | `[169.254.0.0/16]` / `["fe80::/10"]` | ranges the chart's Pods may not reach; empty them if a control-plane Pod authenticates through the cloud metadata server (GKE Workload Identity, EKS Pod Identity); add your private ranges to tighten egress |
+| `controlPlane.extraEgress` | `[]` | extra egress rules for the chart's Pods |
+| `controlPlane.extraIngress` | `[]` | ingress rules added to every chart Pod, for example a metrics scraper in another namespace |
+| `postgres.extraFrom` | `[]` | more callers of the bundled database, as NetworkPolicy peers |
+
+`controlPlane.extraIngress` is rendered only while the default-deny is on. All of these policies need
+a CNI that enforces NetworkPolicy; without one they have no effect.
+
 ## Install
 
+Install into a namespace that holds nothing else (see [Network policy](#network-policy)).
 Create the bucket first (the chart never creates one) and a Secret holding a key pair for it, then
 install with the bucket in `storage.s3`:
 
@@ -95,6 +129,19 @@ GATEWAY_URL=http://<node>:<nodePort> make probe SURFACE=helm   # or drive a Node
 It mints its API key from the release secret's `ADMIN_API_TOKEN` (or pass `VEXA_API_KEY`). The
 same journey runs on the other surfaces: `make probe` (compose, the fast default) and
 `make probe SURFACE=lite`.
+
+### The session store's schema Job
+
+With the session store on, the chart runs `agent-sessions-schema`, a Job that creates the store's
+database role and tables with the admin credential and exits. It is an ordinary release resource, not
+a Helm hook, so `helm install`, `helm install --wait` and Argo CD all create it on the first install;
+agent-api waits for it in its `session-schema` init container. The Job's name ends in a hash of its own
+spec (`vexa-vexa-agent-sessions-schema-<hash>`): an upgrade that changes its image or settings creates
+a new Job and Helm removes the old one; an upgrade that changes neither leaves it as it is.
+
+Upgrading from a chart that ran it as a `pre-upgrade` hook can leave that completed Job,
+`vexa-vexa-agent-sessions-schema`, in place: Helm does not delete a hook the chart no longer declares.
+Delete it when you like (`kubectl -n vexa delete job vexa-vexa-agent-sessions-schema`).
 
 ## Object storage
 
@@ -267,6 +314,32 @@ destroyed`) and delegates only the substrate question — *how do I start, obser
 workload?* — to the backend. On `k8s`, a workload is a bare Pod; the same dispatch, contracts,
 and worker run identically to the Docker backend. See [Execution](/architecture/execution).
 
+### Spawned Pod names
+
+A spawned Pod is named `vexa-<workload id>`. When that is not a valid Kubernetes name (lowercase
+letters, digits and `-`, at most 63 characters), the runtime lowercases it, replaces other characters
+with `-`, cuts it to fit and appends a 10-character hash of the id. Two ids never share a name, and a
+restarted runtime derives the same name again. A chat id carries the client's session, so a chat can
+need this. Ids that were already valid keep their names. The id itself is kept verbatim in the Pod's
+`runtime.workload_id` annotation, and the runtime reads it from there when it re-adopts Pods after a
+restart.
+
+### Codex subscription credentials
+
+A spawned Pod inherits no mounts. To give agent workers a Codex subscription, put its `auth.json` in a
+Secret and name it to the runtime through `runtime.extraEnv`:
+
+```yaml
+runtime:
+  extraEnv:
+    - name: RUNTIME_K8S_SECRET_MOUNTS
+      value: '[{"secret":"codex-auth","mountPath":"/tmp/.codex/auth.json","file":"auth.json"}]'
+```
+
+Workers get `CODEX_HOME=/tmp/.codex`, which the harness and the Codex CLI read. The Secret is mounted
+read-only and only into agent workers, never into bots. A token refresh inside a Pod does not persist,
+so keep the Secret fresh yourself.
+
 ### Scheduling spawned Pods on a tainted / dedicated pool
 
 A spawned bot or agent Pod is created with `kubectl run` — it is **not** a child of the runtime
@@ -369,6 +442,14 @@ image↔profile conformance gate (`image-identity`) asserts each profile command
 an in-image executable against the published images, so a profile that diverges from its image
 fails the release rather than a customer's install.
 </Warning>
+
+### Bot CPU limit and speech segmentation threads
+
+The bot's speech segmenter (onnxruntime) sizes its thread pool from the bot Pod's CPU limit, read from
+the cgroup (`cpu.max`, or `cpu.cfs_quota_us` / `cpu.cfs_period_us`), rounded up and capped at 4. Without a
+limit it uses the node's CPU count, also capped at 4. The bot logs its choice once at start, for example
+`[mixed] onnx threads=2 (cgroup quota 2.0 cpus)`. Before this, it started one thread per node core, and
+on a large node with a small limit transcripts could stall.
 
 ### Namespace LimitRange defaults
 
@@ -645,7 +726,7 @@ adminApi:
 
 `adminAccount` is the deployment's [admin account](/minutes/workspaces#the-admin-account): a fresh
 address, not a person's everyday one. It is the only account that writes the company layer, and it
-has no desk, workspaces or meetings. Leave it empty and nobody writes `_global`.
+has no Personal workspace, shared workspaces or meetings. Leave it empty and nobody writes `_global`.
 
 admin-api reads both and decides every sign-in; the Terminal only asks it. An older install that set
 `VEXA_ADMIN_EMAILS` under `terminal.extraEnv` keeps working: the chart carries it over to admin-api
@@ -692,6 +773,137 @@ models:
 
 Every `env` must start with `VEXA_MODEL_SECRET_`, and `secretName` is required. The chart refuses
 anything else, so a catalog secret never shares a name, or a Secret, with agent-api's own.
+
+## Calls (optional)
+
+[Calls](/minutes/calls) run on a self-hosted LiveKit media server. It is off by default:
+
+```bash
+helm upgrade --install vexa deploy/helm/charts/vexa -n vexa \
+  --set livekit.enabled=true \
+  --set livekit.url=wss://calls.example.com
+```
+
+When calls are enabled, the chart does four things:
+
+- renders the server, an unmodified upstream image pinned by digest, with `room.auto_create` off;
+- creates its in-cluster Service on 7880;
+- generates `LIVEKIT_API_SECRET` in the release Secret, unless you set `secrets.livekitApiSecret` or
+  carry the secret in `secrets.existingSecretName`;
+- gives meeting-api and agent-api the `LIVEKIT_*` env.
+
+**Values.**
+
+| Value | Default |
+|---|---|
+| `livekit.url` | none; required |
+| `livekit.apiKey` | `vexa` |
+| `livekit.udpPortStart`, `livekit.udpPortEnd` | 50000–50100 |
+| `livekit.tcpPort` | 7881 |
+| `livekit.useExternalIp` | `true` |
+| `livekit.nodeIp` | none |
+| `livekit.turn.enabled`, `livekit.turn.domain`, `livekit.turn.udpPort` | TURN off; port 3478 |
+| `livekit.turn.tlsPort`, `livekit.turn.tlsSecretName` | `0` (TURN over TLS off); none |
+| `livekit.hostNetwork` | `true` |
+| `livekit.bindAddresses` | empty: signalling listens on the pod's own IP only |
+| `livekit.resources` | see `values.yaml` |
+| `meetingApi.calls.maxDurationSeconds` | `14400` (`CALL_MAX_DURATION_SEC`) |
+| `meetingApi.calls.emptyGraceSeconds` | `30` (`CALL_EMPTY_GRACE_SEC`) |
+| `meetingApi.calls.firstJoinTimeoutSeconds` | `30` (`CALL_FIRST_JOIN_TIMEOUT_SEC`) |
+| `meetingApi.calls.maxParticipants` | `50` (`CALL_MAX_PARTICIPANTS`) |
+| `meetingApi.calls.transcriptionSwitchable` | `"false"` (`CALL_TRANSCRIPTION_SWITCHABLE`) |
+
+**Network.** Media needs each node's own UDP range, which is why `livekit.hostNetwork` defaults to
+`true`. Route `livekit.url` to the Service's port 7880 through your Ingress as a WebSocket.
+
+The chart runs one LiveKit server (`replicas: 1`), so one node carries every call at a time. The
+chart sets no node selector, so a rescheduled pod can land on another node: open these ports on
+every node it may run on, and keep the DNS names in `livekit.url` and `livekit.turn.domain` pointing
+at the node that runs it. On the node firewall (or your cloud's security group), open to browsers:
+
+| Port | Protocol | When |
+|---|---|---|
+| `livekit.udpPortStart`–`livekit.udpPortEnd` (50000–50100) | UDP | always: media |
+| `livekit.tcpPort` (7881) | TCP | always: ICE over TCP |
+| `livekit.turn.udpPort` (3478) | UDP | with `livekit.turn.enabled` |
+| `livekit.turn.tlsPort` (5349) | TCP | with TURN over TLS |
+
+Block 7880 at the node firewall. With `hostNetwork`, port 7880, which carries both signalling and the
+room service in plain HTTP, listens on the node itself as well as behind the Ingress. The chart binds
+it to the pod's own IP (the node's primary address, not every interface); allow it on that address
+only from your Ingress and the cluster. A NetworkPolicy does not apply to a `hostNetwork` pod.
+
+With `livekit.hostNetwork: false`, the chart exposes no media port at all: only the Service on 7880.
+Browsers then cannot send media unless you expose the UDP range yourself, so keep the default.
+
+**TURN over TLS.** For networks that block UDP, point a DNS name at the LiveKit node, put a
+certificate for it in a `kubernetes.io/tls` Secret, and set:
+
+```bash
+kubectl -n vexa create secret tls livekit-turn --cert=turn.crt --key=turn.key
+helm upgrade --install vexa deploy/helm/charts/vexa -n vexa --reuse-values \
+  --set livekit.turn.enabled=true \
+  --set livekit.turn.domain=turn.example.com \
+  --set livekit.turn.tlsPort=5349 \
+  --set livekit.turn.tlsSecretName=livekit-turn
+```
+
+The chart refuses to render TURN over TLS without the domain and the Secret, or on a port below
+1024. A network that allows only 443 is not covered by the chart; see
+[Calls](/minutes/calls#network-requirements).
+
+**How it runs.** The server runs as uid 10001 with privilege escalation blocked and every
+capability dropped, like the chart's other services. Every port it opens is above 1024, so it needs
+no capability back.
+
+**NetworkPolicy.** With `networkPolicy.enabled` on, bot pods may reach the livekit pod. With
+`hostNetwork`, the server is on its node's address instead, so the listener needs one egress rule
+for that address. Add a `/32` rule for that node's IP, limited to the server's ports, to
+`networkPolicy.workloads.bot.extraEgress`. Do not add the whole node range: that would also open the
+kubelet and every node port to bot pods. Set `livekit.nodeIp` and keep the server on that node so
+the address stays the same.
+
+```yaml
+networkPolicy:
+  workloads:
+    bot:
+      extraEgress:
+        - to:
+            - ipBlock: { cidr: 10.0.0.12/32 }   # the node that runs LiveKit
+          ports:
+            - { port: 7880, protocol: TCP }     # signalling
+            - { port: 7881, protocol: TCP }     # media over TCP
+            - { port: 50000, endPort: 50100, protocol: UDP }   # media
+```
+
+**How it works.** meeting-api creates each call's room on the server and starts the listener, a bot
+pod that transcribes each person's track. agent-api mints each participant's ten-minute room token.
+Browsers reach signalling through your Ingress and send media straight to the node. The full flow is
+on [Calls](/minutes/calls#how-it-works).
+
+**Why it complies.** The server is unmodified LiveKit pinned by digest and runs unprivileged; rooms
+are created only by meeting-api; tokens are minted only for a chat's participants. The rules, gates
+and deny tests are on [Calls](/minutes/calls#why-it-complies).
+
+## The CRM (optional)
+
+Off by default. Turn it on with one organisation per install:
+
+```yaml
+crm:
+  enabled: true
+  orgId: acme
+  orgName: "Acme Ltd"
+  # existingSecret: crm-db   # a Secret with key `password`; required for a `helm template` pipeline
+```
+
+The chart then runs `crm-api`, which logs in to Postgres as its own role (`vexa_crm`); the
+`crm-schema` Job creates that role, the `crm_*` tables and the organisation with the database's admin
+credential, and `crm-api` waits for it. The gateway fronts the record page's read, history and review
+under `/crm/*`, the MCP adds the `crm_*` tools, the flows pack hands workspace references to it, and
+agent-api publishes each workspace's record links every `crm.referencesPollSeconds`. With agent-api
+on, `crm-api` also reads the desktop's limits from `_global/POLICIES.md` through agent-api
+(`CRM_AGENT_API_URL`, admitted by agent-api's NetworkPolicy). See [CRM](/minutes/crm).
 
 ## The deprecated dashboard (optional)
 

@@ -144,29 +144,28 @@ async def mount_workspace(slim: Slim, *, repo: "str | None" = None, ref: "str | 
     return await slim.agent.swap_workspace()
 
 
-# ── cadence & automate (the proactive engine — a routine compiles to a durable schedule.v1 cron job) ──
+# ── cadence & automate (a routine is the person's own flow: a schedule + one agent turn, ADR-0046) ──
 # The cadence backbone behind every proactive behavior (morning digest, post-meeting follow-up, …).
 async def schedule_routine(slim: Slim, name: str, *, cron: str, prompt: str,
                            run_now: bool = False) -> dict:
     """JTBD: "do this on a schedule without me asking."
 
-    Author a durable routine — the control plane compiles `(name, cron, prompt)` into a schedule.v1 cron
-    job whose due-run POSTs a dispatch back to the agent (the runtime owns the durable cron, so it survives
-    restarts). `run_now=True` fires one immediate run so the author sees a result without waiting for cron.
-    Returns `{routine, job_id, ran_now}`."""
+    Author a routine — the person's own flow with a schedule trigger and the `agent_run` step, fired by
+    flows into the routine's own chat. Goes through the deprecated `/api/routines` adapter (removed in
+    0.14.0; flows' own API is the successor). `run_now` has no effect: the routine runs at its first slot.
+    Returns `{routine, job_id: None, ran_now: False, flow}`."""
     return await slim.agent.create_routine(name, cron=cron, prompt=prompt, run_now=run_now)
 
 
 async def list_routines(slim: Slim) -> list:
     """JTBD: "show me what my agent does automatically."
 
-    The user's routines as cards (file + compiled-job state)."""
+    The user's routines as cards, read off their schedule flows."""
     return await slim.agent.list_routines()
 
 
 async def set_routine_enabled(slim: Slim, name: str, enabled: bool) -> dict:
     """JTBD: "pause/resume an automation."
 
-    Flip a routine on/off by name; the control plane updates the routine and reconciles its cron job
-    (disabling cancels the job but keeps the routine for later re-enable)."""
+    Pause or resume a routine by name (its flow is paused or resumed; nothing is deleted)."""
     return await slim.agent.set_routine_enabled(name, enabled=enabled)

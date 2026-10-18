@@ -23,7 +23,7 @@ the internal tier (`X-Internal-Secret` = `INTERNAL_API_SECRET`).
   owner's webhook (`webhook_url`, `webhook_secret`, `webhook_events`) and shared-workspace
   memberships (`workspaces`) when they exist. For a delegation token, `scopes` are exactly
   `["bot", "tx"]`, `is_admin` is always `false`, and two fields appear that an API key never has:
-  `delegation` (`ValidateDelegation`: the dispatch's `regime`, `workspaces` ceiling and `target`)
+  `delegation` (`ValidateDelegation`: the dispatch's `regime`, `workspaces` ceiling and `target`, and the agent `unit` — the session — the token was minted for)
   and `person_is_admin` (whether the person the worker acts for is the instance admin). Its
   `workspaces` are the person's memberships narrowed to that ceiling (delegation.v1
   `ceiling_reads`; `"*"` keeps them all), because the services behind the gateway read them as the

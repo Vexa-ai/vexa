@@ -355,8 +355,7 @@ def build_router(
         request: Request,
         x_user_id: Optional[str] = Header(default=None),
     ):
-        """Recording detail (api/meetings.mdx: GET /recordings/{recording_id}) — the single recording
-        record, scoped to the caller. 404 if the id isn't one of the caller's recordings."""
+        """Get a single recording and its media files. 404 if the id is not one of your recordings."""
         user_id = _resolve_user_id(x_user_id)
         recs = await _readable(user_id, request)
         rec = next((r for r in recs if r.get("id") == recording_id), None)

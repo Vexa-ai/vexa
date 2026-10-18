@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """mcp-validate — drive a RUNNING Vexa MCP endpoint as a real MCP client and report what it is.
 
-This is not a unit test. ``core/meetings/services/mcp/tests/`` already proves the app in-process
+This is not a unit test. ``core/gateway/services/mcp/tests/`` already proves the app in-process
 against a faked gateway. This proves the DEPLOYED surface: the transport as an MCP client actually
 speaks it, through whatever proxy chain fronts it, with a real API key against a real gateway.
 
@@ -39,7 +39,7 @@ from typing import Any
 
 PROTOCOL_VERSION = "2025-06-18"
 
-# The surface core/meetings/services/mcp/README.md declares. Drift here is a finding either way:
+# The surface core/gateway/services/mcp/README.md declares. Drift here is a finding either way:
 # a missing tool is a regression, an extra one is a doc that stopped being true.
 EXPECTED_TOOLS = {
     "parse_meeting_link",

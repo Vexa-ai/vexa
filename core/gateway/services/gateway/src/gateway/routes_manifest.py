@@ -10,9 +10,9 @@ So each domain declares its own routes beside its service, in a `routes.v1.json`
 as the `mcp.tools.v1` manifests and for the same reason: the domain that owns the door behind a
 route is the only one that can say what the route is and what it costs.
 
-    core/meetings/routes.v1.json                   39 rows
+    core/meetings/routes.v1.json                   46 rows
     core/identity/routes.v1.json                   12
-    core/meetings/services/mcp/routes.v1.json      12
+    core/gateway/services/mcp/routes.v1.json      12
     core/agent/routes.v1.json                      40   ← absent in the no-agents profile
     core/gateway/services/gateway/routes.v1.json    2   the edge's OWN /health and /auth/me
 
@@ -111,8 +111,10 @@ def manifest_paths(repo_root: pathlib.Path) -> Dict[str, pathlib.Path]:
         "gateway": repo_root / "core/gateway/services/gateway/routes.v1.json",
         "meetings": repo_root / "core/meetings/routes.v1.json",
         "identity": repo_root / "core/identity/routes.v1.json",
-        "mcp": repo_root / "core/meetings/services/mcp/routes.v1.json",
+        "mcp": repo_root / "core/gateway/services/mcp/routes.v1.json",
         "agent": repo_root / "core/agent/routes.v1.json",
+        # The optional CRM (ADR-0047): present only where CRM_API_URL names its door.
+        "crm": repo_root / "core/crm/routes.v1.json",
     }
 
 

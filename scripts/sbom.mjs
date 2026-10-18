@@ -247,7 +247,20 @@ const VENDORED_SECCOMP = {
   downloadLocation: "https://github.com/moby/profiles/blob/main/seccomp/default.json",
   purl: "pkg:github/moby/profiles",
   supplier: "Organization: The Moby Project",
-  comment: "Modified (one rule added) and vendored as core/runtime/src/runtime_kernel/seccomp-userns.json into vexaai/v012-runtime (/app/src/runtime_kernel/) and vexaai/vexa-lite (/app/runtime/src/runtime_kernel/), licence beside it; the Helm chart installs it on nodes for bot Pods. Notice: repo NOTICE + THIRD_PARTY_LICENSES.md.",
+  comment: "Modified (one rule added) and vendored as core/runtime/src/runtime_kernel/seccomp-userns.json into vexaai/vexa-runtime (/app/src/runtime_kernel/) and vexaai/vexa-lite (/app/runtime/src/runtime_kernel/), licence beside it; the Helm chart installs it on nodes for bot Pods. Notice: repo NOTICE + THIRD_PARTY_LICENSES.md.",
+};
+
+// The segmentation model the terminal's in-call background blur runs (MediaPipe selfie segmenter,
+// float16 v1), vendored at clients/terminal/vendor/mediapipe/ and served same-origin from
+// public/mediapipe/. Unmodified Apache-2.0 bytes inside the terminal and Lite images, not a dependency.
+const VENDORED_SEGMENTER = {
+  eco: "generic", name: "mediapipe selfie_segmenter.tflite (float16)", version: "1",
+  licenseDeclared: "Apache-2.0", licenseConcluded: "Apache-2.0",
+  copyrightText: "Copyright Google LLC",
+  downloadLocation: "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/selfie_segmenter.tflite",
+  purl: "pkg:generic/mediapipe-selfie-segmenter@1?checksum=sha256:191ac9529ae506ee0beefa6b2c945a172dab9d07d1e802a290a4e4038226658b",
+  supplier: "Organization: Google LLC (MediaPipe)",
+  comment: "Vendored as clients/terminal/vendor/mediapipe/selfie_segmenter.tflite into vexaai/vexa-terminal (/app/public/mediapipe/) and vexaai/vexa-lite (/app/terminal/public/mediapipe/), licence beside it. Notice: THIRD_PARTY_LICENSES.md.",
 };
 
 // ── assemble the SPDX 2.3 document ──────────────────────────────────────────────
@@ -302,6 +315,10 @@ const seccompId = spdxId("Package", "github", "moby-profiles-seccomp", "docker-v
 packages.push(pkgObject(VENDORED_SECCOMP, seccompId));
 relationships.push({ spdxElementId: ROOT_ID, relatedSpdxElement: seccompId, relationshipType: "CONTAINS" });
 
+const segmenterId = spdxId("Package", "generic", "mediapipe-selfie-segmenter", "1");
+packages.push(pkgObject(VENDORED_SEGMENTER, segmenterId));
+relationships.push({ spdxElementId: ROOT_ID, relatedSpdxElement: segmenterId, relationshipType: "CONTAINS" });
+
 for (const apt of liteApt) {
   const id = spdxId("Package", apt.eco, apt.name, apt.version);
   packages.push(pkgObject(apt, id));
@@ -323,7 +340,7 @@ const doc = {
   creationInfo: {
     created: CREATED,
     creators: ["Tool: vexa-sbom (scripts/sbom.mjs)", "Organization: Vexa"],
-    comment: `Coverage: npm deps=${npm.length} (declared licences via pnpm), pip deps=${pip.length} (inventory only, licence=NOASSERTION — pip-licenses owed per ADR-0009), Lite final-stage apt packages=${liteApt.length} (source-declared names; version/licence=NOASSERTION pending image enrichment), baked artifacts=3 (pyannote model weights + Valkey engine + the vendored, modified moby seccomp profile, fully specified). Non-dependency baked artifacts sit outside gate:licenses (audited by gate:image-licenses); see THIRD_PARTY_LICENSES.md.`,
+    comment: `Coverage: npm deps=${npm.length} (declared licences via pnpm), pip deps=${pip.length} (inventory only, licence=NOASSERTION — pip-licenses owed per ADR-0009), Lite final-stage apt packages=${liteApt.length} (source-declared names; version/licence=NOASSERTION pending image enrichment), baked artifacts=4 (pyannote model weights + Valkey engine + the vendored, modified moby seccomp profile + the MediaPipe selfie segmenter model, fully specified). Non-dependency baked artifacts sit outside gate:licenses (audited by gate:image-licenses); see THIRD_PARTY_LICENSES.md.`,
   },
   packages,
   relationships,

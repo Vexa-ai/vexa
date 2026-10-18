@@ -33,6 +33,11 @@ _DELETION_SCOPE = "primary_transcript_recording_and_fixture_storage"
 _DELETION_BACKUP_RESIDUALS = "expire_under_deployment_retention_policy"
 
 
+#: ``meeting.data`` key set when a meeting is deleted while its bot still runs; the deletion then
+#: completes at the terminal lifecycle callback.
+DELETE_WHEN_ENDED_FIELD = "delete_when_ended"
+
+
 def deletion_stamp(state: str, *, at: str, prior: "Optional[dict]" = None) -> dict:
     """The ``ArtifactDeletion`` value for ``state`` (``pending`` while the delete runs, ``completed``
     once it is done), at time ``at`` (ISO-8601, Z). A pending stamp keeps the first request time."""
@@ -463,6 +468,17 @@ class TranscriptStore(Protocol):
         ``pending`` tombstone under the row lock so ``continue_meeting`` cannot reopen the row, but
         retains every artifact and path; storage failures therefore remain addressable/retryable.
         """
+        ...
+
+    async def mark_delete_when_ended(self, user_id: int, meeting_id: int) -> Optional[dict]:
+        """OWNER-scoped: record that the person deleted this meeting while its bot was still
+        running, so the deletion completes when the lifecycle ends (``DELETE_WHEN_ENDED_FIELD``).
+        Returns ``None`` for unknown/unowned, ``{"terminal": True}`` if it already ended (delete
+        now), else ``{"platform", "native_meeting_id"}`` so the caller can stop the bot."""
+        ...
+
+    async def delete_when_ended_requested(self, user_id: int, meeting_id: int) -> bool:
+        """Whether ``mark_delete_when_ended`` was recorded for this owner's meeting."""
         ...
 
     async def finalize_completed_artifact_deletion(

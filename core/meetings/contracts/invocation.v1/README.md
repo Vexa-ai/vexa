@@ -22,13 +22,14 @@ that reaches everything meeting-api's does.
 ## The bot's credential: `token`
 `token` is the session's **MeetingToken**: an HS256 token meeting-api mints for each spawn and binds
 to the session (`session_uid` = `connectionId`). Besides the Redis user in `redisUrl`, it is the only
-credential a bot holds, and it has four uses, three of them HTTP doors:
+credential a bot holds, and it has five uses, four of them HTTP doors:
 
 | Use | Where | How |
 |---|---|---|
 | every lifecycle.v1 event | `meetingApiCallbackUrl` | `Authorization: Bearer <token>` |
 | every recording upload | `recordingUploadUrl` | `Authorization: Bearer <token>` |
 | an authenticated bot's session write-back (clean teardown) | `sessionWritebackUrl` | `Authorization: Bearer <token>`, body session-profile.v1 `WritebackBody` |
+| an authenticated bot's session restore from a saved bot account (before launch) | `sessionRestoreUrl` | `GET`, `Authorization: Bearer <token>`, answer session-profile.v1 `WritebackBody` |
 | every transcript entry | the `transcription_segments` stream | `auth` + `sig` beside the payload (transcript.v1 `StreamEntry`); the token itself never enters Redis |
 
 meeting-api refuses the token for any other session. **`internalSecret` is deprecated and must not be
@@ -48,10 +49,21 @@ store (`userdataS3Path`, `s3*`), from which the bot restores the
 meeting-api URL (this session's uid included) the bot PUTs its rotated session to on clean teardown.
 The bot reads the URL from here and builds none: an invocation without it gets no write-back.
 
+A bot that joins as a saved **bot account** (a signed-in profile a person provisioned through a
+browser session) gets `sessionRestoreUrl` instead of, or beside, the store fields: before launch it
+`GET`s that URL with `Authorization: Bearer <token>`, and the answer is a session-profile.v1
+`WritebackBody`. It writes only SESSION_PROFILE paths into its own profile dir; one path outside the
+profile (or a traversal name) refuses the whole answer, and any failure — an HTTP error, a body off
+the contract — is the same fail-loud session-restore failure as a store that cannot be read: the bot
+never joins signed out. meeting-api sends it only beside `authenticated`. Write-back runs when the bot
+is authenticated and either `userdataS3Path` or `sessionRestoreUrl` is set.
+
 **Fields added in v0.13.2 that an older bot refuses.** The schema sets `additionalProperties: false`,
 so a bot older than v0.13.2 refuses at boot an invocation that carries `transcriptionServiceOwner`
 (sent only as `customer`) or `sessionWritebackUrl` (sent only in authenticated mode). Both follow the
-minimum bot version above: upgrade bots and meeting-api together.
+minimum bot version above: upgrade bots and meeting-api together. `sessionRestoreUrl` is the same
+case: a bot that predates it refuses an invocation carrying it, so a deployment sends bot-account
+joins only to bots that know the field.
 
 ## Shape
 `Invocation` (`$defs`): required `platform · meetingUrl · botName · redisUrl`; everything else optional.

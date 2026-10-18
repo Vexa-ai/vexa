@@ -175,6 +175,11 @@ class FakeRedis:
 
     def __init__(self):
         self._subs: dict[str, list[asyncio.Queue]] = {}
+        # redis STREAMS (the signals carrier `sig:meeting:{row}`): key → [(id, fields)], in order
+        self._streams: dict[str, list[tuple[str, dict]]] = {}
+        self._seq = 0
+        self._added = asyncio.Event()
+        self.xread_keys: list[str] = []   # every stream key a reader asked for (deny tests read it)
 
     def pubsub(self) -> FakePubSub:
         return FakePubSub(self)
@@ -182,3 +187,41 @@ class FakeRedis:
     async def publish(self, channel: str, data: str) -> None:
         for q in list(self._subs.get(channel, [])):
             await q.put(data)
+
+    # ── streams, the redis-py asyncio shapes the gateway calls ──
+    async def xadd(self, key: str, fields: dict) -> str:
+        self._seq += 1
+        entry_id = f"{self._seq}-0"
+        self._streams.setdefault(key, []).append((entry_id, dict(fields)))
+        self._added.set()
+        self._added = asyncio.Event()
+        return entry_id
+
+    @staticmethod
+    def _after(a: str, b: str) -> bool:
+        pa, pb = [int(x) for x in a.split("-")], [int(x) for x in (b if b != "$" else "0-0").split("-")]
+        return pa > pb
+
+    async def xrevrange(self, key: str, max: str = "+", min: str = "-", count=None):
+        self.xread_keys.append(key)
+        rows = list(reversed(self._streams.get(key, [])))
+        return rows[:count] if count else rows
+
+    async def xread(self, streams: dict, count=None, block=None):
+        self.xread_keys.extend(streams)
+        deadline = asyncio.get_event_loop().time() + (block or 0) / 1000.0
+        while True:
+            out = []
+            for key, last in streams.items():
+                rows = [r for r in self._streams.get(key, []) if self._after(r[0], last)]
+                if rows:
+                    out.append([key, rows[:count] if count else rows])
+            if out or block is None:
+                return out
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                return []
+            try:
+                await asyncio.wait_for(self._added.wait(), remaining)
+            except (asyncio.TimeoutError, TimeoutError):
+                return []

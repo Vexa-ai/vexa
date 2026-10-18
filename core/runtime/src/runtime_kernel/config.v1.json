@@ -317,6 +317,13 @@
       ]
     },
     {
+      "key": "RUNTIME_K8S_ADOPT_UNLABELLED",
+      "class": "defaulted",
+      "default": "true",
+      "description": "k8s backend: boot re-adoption also takes Pods with runtime.managed=true and NO runtime.instance label, i.e. bots a 0.12 runtime spawned that are still in a meeting across the upgrade (find/stop already treat them as this runtime's). Without it meeting-api sees those live bots as untracked and fails their meetings after the escalation window. false = adopt only this instance's Pods",
+      "targets": []
+    },
+    {
       "key": "RUNTIME_K8S_INSTANCE",
       "class": "defaulted",
       "default": "default",
@@ -413,6 +420,39 @@
       "class": "defaulted",
       "default": "(unset — bot default 90)",
       "description": "per-request transcription timeout in seconds for spawned bots (minimum 20); a remote realtime STT answers a few seconds of audio in 5-30 s; forwarded to spawned bots",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "BOT_TRANSCRIPTION_LATENCY",
+      "class": "defaulted",
+      "default": "(unset — fast drafts + reconfirmation)",
+      "description": "unset = one pipeline, show fast then reconfirm (fast drafts: end-of-utterance finals, single-answer confirm, windows under 10 s, pipelined drafts on per-participant tracks; replaced by reconfirmed segments); standard = the confirm-on-agreement lane; low = the fast tuning even with reconfirmation off; forwarded to spawned bots",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "BOT_TRANSCRIPT_RECONFIRM_SEC",
+      "class": "defaulted",
+      "default": "10",
+      "description": "show fast, then reconfirm: spawned bots show each window at once as a draft and replace a speaker's drafts with one segment transcribed again with context when the speaker pauses or this many seconds accumulate; 0 turns reconfirmation off; forwarded to spawned bots",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
+    },
+    {
+      "key": "BOT_STT_CONFIDENCE_FILTER",
+      "class": "defaulted",
+      "default": "(unset — the always-on low-confidence rule only)",
+      "description": "strict = spawned bots also drop STT segments Whisper decoded with an average log-probability under -1.0 (invented text over noise or music); unset keeps the always-on rule; forwarded to spawned bots",
       "targets": [
         "compose",
         "helm",
@@ -816,5 +856,11 @@
         }
       }
     }
-  }
+  },
+  "surface_only": [
+    {
+      "key": "LIVEKIT_API_SECRET",
+      "reason": "compose blanks it on the runtime (LIVEKIT_API_SECRET= in its environment block) so the whole-.env env_file does not hand the runtime the LiveKit API secret; the runtime reads no LiveKit key"
+    }
+  ]
 }

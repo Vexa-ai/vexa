@@ -1,0 +1,95 @@
+---
+title: "Workspace images and identities"
+description: "Every workspace, person, company and agent has a face: a stored image when there is one, else a monogram and colour that never change."
+---
+
+Every workspace, person, company and agent shows a small image wherever it appears: the sidebar,
+the "Writes to" chip, a page's path line, hover cards, @-mentions, chat bubbles, the call grid when a
+camera is off, and the invite screen.
+
+## What is shown, in order
+
+| Kind | Shown |
+|---|---|
+| Workspace | Its own image → its company's logo → a monogram and colour from its id |
+| Person who uses Vexa | Their photo → a monogram and colour |
+| Person in the CRM who does not use Vexa | Initials, plus their company's logo as a small badge. Never a face. |
+| Company | Its logo → a monogram |
+| Agent or routine | A generated mark: one simple shape on a colour from its id |
+
+A monogram is up to two letters from the name. Its colour is one of twelve hues, chosen from the id,
+so it is the same on every load and every device, and it meets 4.5:1 contrast in dark and light.
+
+## A workspace's image
+
+The image lives **in the workspace**: `.vexa/icon.svg`, `.vexa/icon.png` or `.vexa/icon.webp`, named by
+the README's front matter `icon:`. It moves with the workspace through renames, sharing and clones.
+A README with `domain: example.com` binds the workspace to that company: with no image of its own,
+the workspace shows that company's logo.
+
+**Changing it.** Open the workspace, then **⋯ → Change image…**, or click its image. You can upload
+a file (SVG, PNG or WebP, up to 200 KB), use the company's logo, or reset it.
+
+**The agent does it unasked.** When a workspace is created or shared, or still shows only its
+monogram, the agent gives it an image:
+
+- a company or project workspace gets its logo: the bound company's, or the site's apple-touch-icon,
+  icon links, favicon or `og:image`, fetched by the server and stored in the workspace;
+- any other workspace gets a simple mark the agent designs: one glyph on one colour, legible at 24 px.
+
+In a private workspace the agent sets it and says so in one line. In a shared workspace it is a
+**proposal**: the owner sees it on the workspace page and accepts or declines it in one click. The
+agent never replaces an image a person chose, and in a shared workspace it cannot reset one.
+
+The agent's tools are `workspace_icon_state(slug)` and
+`workspace_icon_set(slug, site | url | use="company_logo" | svg | data_b64 + type | reset)`.
+
+### For operators: the backfill
+
+To see what the agent would propose for workspaces that already exist, run this in agent-api. It
+only lists; it writes nothing.
+
+```bash
+python -m control_plane.backfill_identity --dry-run [--root /workspaces] [--fetch] [--json]
+```
+
+`--fetch` asks each company site for its logo and reports the address found. The policy key
+`external_images: off` in `_global/POLICIES.md` stops every image fetch from the web: the
+company-logo fallback, `use="company_logo"`, a `site` or `url` that a person or the agent names
+(refused with 403; a designed SVG or an upload still works), and the backfill's `--fetch`.
+
+## How it works
+
+1. **Read.** `GET /api/workspaces/{slug}/identity/icon` returns the workspace's own image, else its
+   company's logo through the media proxy (`/api/home/media`, fetched and cached by the server),
+   else 404, and the client draws the monogram. It uses the same access check as reading the
+   workspace's pages, and a browser keeps the image privately for up to a minute.
+   `GET …/identity/state` says where the image comes from (`workspace`, `company` or none) and
+   whether a proposal is waiting.
+2. **Write.** `PUT /api/workspaces/{slug}/identity/icon` checks the bytes, writes `.vexa/icon.*`,
+   updates the README's `icon:` and commits both. An owner or contributor may write it. A reader
+   may not.
+3. **Clean.** A PNG or WebP must match its magic number. An SVG is parsed and rebuilt from a list of
+   allowed drawing elements and attributes. Scripts, event handlers, `foreignObject`, external `href`,
+   `xlink:href` and `url()`, `data:` other than an embedded raster image, and DOCTYPE or entity
+   declarations are all removed or refused. A JPEG, GIF or ICO from a site is kept inside such an SVG.
+4. **Serve.** The image is sent with `Content-Security-Policy: default-src 'none'; style-src
+   'unsafe-inline'; sandbox`, `nosniff` and `Cache-Control: private`.
+5. **Propose.** When a delegated caller (an agent) writes a workspace with two or more members, the
+   bytes wait in `.vexa/icon-proposal.*`. Those files are git-excluded, and nothing in the workspace
+   changes. `POST …/identity/proposal {accept}` is the owner's own act: an agent is refused, and so is
+   anyone who is not the owner. An agent's reset in a shared workspace is refused.
+6. **Find a logo.** `site=` tries the apple-touch-icon, then the page's icon links, then
+   `/favicon.ico`, then `og:image`. Every request goes through the one outbound URL guard.
+
+## Why it complies
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| A browser never asks a third party | The server fetches and stores every logo; the client loads images only from Vexa's own routes | `core/agent/tests/test_workspace_icon.py`, `eval/workspace_identity_eval.py` (no remote address in the workspace) |
+| No SSRF from an image address | Every fetch is `asset_source.fetch_asset`: the outbound guard on every hop, a pinned transport and a size cap | `gate:fact-parity` (`outbound-url-guard`), `test_outbound_url_guard.py` |
+| A stored file runs nothing | SVGs are rebuilt from an allowlist and served sandboxed with `nosniff` | `test_a_malicious_svg_is_scrubbed_of_everything_that_can_run_or_reach_out`, `test_a_person_sets_a_mark_and_every_member_sees_it` |
+| Who reads it is who reads the workspace | The read route calls the page read's own guard | `test_a_non_member_cannot_read_the_icon` |
+| An agent does not change a shared workspace alone | A delegated write is a proposal, and only the owner accepts it, in person | `test_an_agents_change_in_a_shared_workspace_is_a_proposal_the_owner_accepts` |
+| Nobody's face is guessed | A CRM person who is not a user is drawn with initials and a company badge; their avatar key is ignored | `clients/terminal/src/ui-kit/__tests__/identity.test.tsx` |
+| Readable in both themes | All twelve hues meet 4.5:1 in dark and light | `clients/terminal/src/platform/__tests__/identity.test.ts` |

@@ -61,7 +61,7 @@ admitted* from *a worker calling REST directly*. It does so with an identity onl
 | **Value** | the `X-Vexa-Identity` token the gateway signed onto the `/mcp` request being served |
 | **Carrier** | the MCP service (`vexa_mcp/reentry.py`): it holds the inbound `X-Vexa-Identity` for the life of the request and sends it back only on calls to the gateway. It holds no key and verifies nothing |
 | **Verifier** | the gateway, with its own key's public half: signature, then `iat`/`exp` (30 s skew, 300 s lifetime) |
-| **Match rule** | admitted only when the bearer resolves to a delegation now, the signed `sub` equals the bearer's user, and the signed `delegation` equals the one the gateway would sign for the bearer now (`regime`, `workspaces`, `target`) |
+| **Match rule** | admitted only when the bearer resolves to a delegation now, the signed `sub` equals the bearer's user, and the signed `delegation` equals the one the gateway would sign for the bearer now (`regime`, `workspaces`, `target`, `unit`) |
 
 Anything else is not re-entry, and the call answers 403 like any other delegated REST call: no
 header, a forged or expired token, another person's identity, a wider delegation, or the person's own
@@ -81,7 +81,7 @@ what re-entry IS; which routes accept it is the owning domain's declaration, not
 | `limits` | `x-user-limits` |
 | `workspaces` | `x-user-workspaces` (comma-joined) |
 | `webhook_url` · `webhook_secret` · `webhook_events` | `x-user-webhook-*` |
-| `delegation.regime` · `.workspaces` · `.target` | `x-user-regime` · `x-user-delegation-workspaces` · `x-user-delegation-target` |
+| `delegation.regime` · `.workspaces` · `.target` · `.unit` | `x-user-regime` · `x-user-delegation-workspaces` · `x-user-delegation-target` · `x-user-delegation-unit` (the agent session; correlation only — logevent.v1 `session`, the broker's `audit.session`) |
 | `typ` · `iat` · `exp` | — |
 
 `delegation` is present when the bearer was a worker's delegation token (`vxd_`, minted by

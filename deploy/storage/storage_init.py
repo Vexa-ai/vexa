@@ -14,6 +14,11 @@ Runs inside the meeting-api image, which already carries boto3. Safe to re-run.
    the bucket is denied. Every bot carries this pair, so no bot can change the stored session; a
    bot's rotated session reaches the store only through meeting-api (which writes with this
    storage's own pair and accepts only the session profile's files).
+4. The session store (ADR-0048), when VEXA_SESSIONS_S3_ACCESS_KEY / _SECRET_KEY are set -> its own
+   bucket (VEXA_SESSIONS_S3_BUCKET, default vexa-sessions; never the recordings bucket) and, on this
+   storage, its own account with a bucket policy on that bucket alone; then prove it: read, write and
+   delete in its bucket allowed, every read, list, write and delete in the recordings bucket denied.
+   On an operator's own S3 the operator makes the bucket and key; only object I/O is proved.
 
 Exit codes: 0 ready - 1 the stack must not start (message says why).
 """
@@ -250,8 +255,117 @@ def prove_scope(endpoint: str, ak: str, sk: str, bucket: str, prefix: str, root)
     return bad
 
 
-def main() -> int:
+#: What the session store's account may do — in its own bucket, and nowhere else.
+SESSIONS_ACTIONS = ("s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject")
+
+
+def sessions_policy(bucket: str, principal: str) -> dict:
+    return {
+        "Version": "2012-10-17",
+        "Statement": [
+            {"Sid": "VexaSessionsList", "Effect": "Allow", "Principal": {"AWS": [principal]},
+             "Action": ["s3:ListBucket"], "Resource": [f"arn:aws:s3:::{bucket}"]},
+            {"Sid": "VexaSessionsObjects", "Effect": "Allow", "Principal": {"AWS": [principal]},
+             "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+             "Resource": [f"arn:aws:s3:::{bucket}/*"]},
+        ],
+    }
+
+
+def prove_sessions_scope(endpoint: str, ak: str, sk: str, bucket: str, recordings: str, root) -> list[str]:
+    """The sessions key: object I/O in its bucket allowed; the recordings bucket entirely denied.
+    A probe in the recordings bucket is written and removed by root."""
+    c = client(endpoint, ak, sk)
+    nonce = uuid4().hex
+    own = f".vexa-storage-init/{nonce}/session"
+    other = f".vexa-storage-init/{nonce}/not-sessions"
+    root.put_object(Bucket=recordings, Key=other, Body=b"recording")
+    bad: list[str] = []
+
+    def allowed(label, fn):
+        try:
+            fn()
+        except ClientError as e:
+            bad.append(f"{label} was denied ({code_of(e)}) but must be allowed")
+
+    def denied(label, fn):
+        try:
+            fn()
+            bad.append(f"{label} was allowed but must be denied")
+        except ClientError:
+            pass
+
+    allowed("write in the sessions bucket", lambda: c.put_object(Bucket=bucket, Key=own, Body=b"v1"))
+    allowed("read in the sessions bucket", lambda: c.get_object(Bucket=bucket, Key=own)["Body"].read())
+    allowed("delete in the sessions bucket", lambda: c.delete_object(Bucket=bucket, Key=own))
+    denied("list the recordings bucket", lambda: c.list_objects_v2(Bucket=recordings))
+    denied("read in the recordings bucket", lambda: c.get_object(Bucket=recordings, Key=other)["Body"].read())
+    denied("write in the recordings bucket", lambda: c.put_object(Bucket=recordings, Key=other, Body=b"x"))
+    denied("delete in the recordings bucket", lambda: c.delete_object(Bucket=recordings, Key=other))
+    try:
+        if root.get_object(Bucket=recordings, Key=other)["Body"].read() != b"recording":
+            bad.append("an object in the recordings bucket changed during the check")
+    except ClientError:
+        bad.append("an object in the recordings bucket was removed during the check")
+    for b, k in ((recordings, other), (bucket, own)):
+        try:
+            root.delete_object(Bucket=b, Key=k)
+        except ClientError:
+            pass
+    return bad
+
+
+def prepare_sessions(storage_ep: str, recordings: str) -> int:
+    """Step 4 (ADR-0048). 0 ready or not configured, 1 stop."""
+    ak = os.getenv("VEXA_SESSIONS_S3_ACCESS_KEY", "").strip()
+    sk = os.getenv("VEXA_SESSIONS_S3_SECRET_KEY", "").strip()
+    if not (ak and sk):
+        say("session store: no VEXA_SESSIONS_S3_ACCESS_KEY / _SECRET_KEY; agent-api keeps chats in the workspace layout")
+        return 0
+    bucket = os.getenv("VEXA_SESSIONS_S3_BUCKET", "").strip() or "vexa-sessions"
+    if bucket == recordings:
+        say(f"STOP: VEXA_SESSIONS_S3_BUCKET is the recordings bucket '{recordings}'. The session store needs its own bucket.")
+        return 1
+    root_ak, root_sk = os.getenv("MINIO_ACCESS_KEY", ""), os.getenv("MINIO_SECRET_KEY", "")
+    root_access = {v for v in (root_ak, os.getenv("S3_ACCESS_KEY", "")) if v}
+    root_secret = {v for v in (root_sk, os.getenv("S3_SECRET_KEY", "")) if v}
+    if ak in root_access:
+        say("STOP: VEXA_SESSIONS_S3_ACCESS_KEY is a storage root key. The session store needs its own scoped key pair.")
+        return 1
+    if sk in root_secret:
+        say("STOP: VEXA_SESSIONS_S3_SECRET_KEY is a storage root secret. The session store needs its own scoped key pair.")
+        return 1
+    ep = os.getenv("VEXA_SESSIONS_S3_ENDPOINT", "").strip() or endpoint_meeting_api_uses()
+    if "://" not in ep:
+        ep = ("https://" if os.getenv("MINIO_SECURE", "false").lower() == "true" else "http://") + ep
+    if hostport(ep)[0] != hostport(storage_ep)[0] or os.getenv("VEXA_SESSIONS_S3_OPERATOR_KEY", "") == "true":
+        # An operator's own S3 (or a key the operator made): the bucket and its scope are theirs.
+        return 0 if check_readiness(ep, ak, sk, bucket) else 1
+    rc = client(storage_ep, root_ak, root_sk)
+    if not wait_ready(rc, f"storage at {storage_ep}"):
+        return 1
+    say(f"session store bucket '{bucket}' {ensure_bucket(rc, bucket)}")
+    say(f"session store account {ensure_scoped_account(storage_ep, root_ak, root_sk, ak, sk)}")
+    rc.put_bucket_policy(Bucket=bucket, Policy=json.dumps(sessions_policy(bucket, ak)))
+    bad = []
+    for _ in range(10):  # the gateway caches IAM for a short while
+        bad = prove_sessions_scope(storage_ep, ak, sk, bucket, recordings, rc)
+        if not bad:
+            break
+        time.sleep(2)
+    if bad:
+        say("STOP: the session store's account is not limited as required: " + "; ".join(bad))
+        return 1
+    say(f"session store account scoped to s3://{bucket}/ (recordings bucket '{recordings}' denied)")
+    return 0
+
+
+def main(argv: "list[str] | None" = None) -> int:
     storage_ep = os.getenv("STORAGE_ENDPOINT", "http://storage:9000").strip()
+    if "--sessions-only" in (argv or []):
+        # Vexa Lite: step 4 alone, against its bundled storage sidecar (ADR-0048).
+        bucket = os.getenv("MINIO_BUCKET", os.getenv("RECORDING_BUCKET", "vexa"))
+        return prepare_sessions(storage_ep, bucket)
     ep = endpoint_meeting_api_uses()
     access = os.getenv("S3_ACCESS_KEY") or os.getenv("MINIO_ACCESS_KEY", "")
     secret = os.getenv("S3_SECRET_KEY") or os.getenv("MINIO_SECRET_KEY", "")
@@ -261,6 +375,8 @@ def main() -> int:
     if hostport(ep) != hostport(storage_ep):
         say(f"WARNING: recordings go to {ep} (bucket '{bucket}'), not the bundled storage at {storage_ep}. "
             f"Expected if that is your own S3; if this install was upgraded from MinIO, see {UPGRADE_DOC}")
+    if prepare_sessions(storage_ep, bucket) != 0:
+        return 1
 
     bot_ep = os.getenv("BOT_S3_ENDPOINT", "").strip()
     bot_ak, bot_sk = os.getenv("BOT_S3_ACCESS_KEY", "").strip(), os.getenv("BOT_S3_SECRET_KEY", "").strip()
@@ -302,4 +418,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

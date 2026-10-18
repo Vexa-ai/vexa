@@ -37,14 +37,17 @@ _TEXT_ROWS = [(m, p, u) for (m, p, u) in _ROWS
               if "{platform}" in p or "{native_meeting_id}" in p]
 _VALUES = {"platform": "google_meet", "native_meeting_id": "abc-defg-hij", "meeting_id": "12",
            "recording_id": "34", "media_file_id": "56", "calendar_id": "work-1",
-           "grant_id": "a1b2c3d4", "viewer_id": "78"}
+           "grant_id": "a1b2c3d4", "viewer_id": "78",
+           "session_id": "0123456789abcdef0123456789abcdef",
+           "account_id": "fedcba9876543210fedcba9876543210", "path": "app/ui.js"}
 
 
 def _fill(template: str, **override: str) -> str:
     values = {**_VALUES, **override}
     for name in routes_manifest.params_of(template):
         template = template.replace("{" + name + "}", values[name], 1)
-    return template
+    # a catch-all row (the sign-in session's live view) forwards its tail as matched
+    return template.replace(routes_manifest.CATCH_ALL, values["path"])
 
 
 def _app(user=None):

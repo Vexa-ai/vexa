@@ -32,7 +32,7 @@ spec:
       containers:
         - name: mcp
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
-          image: "{{ .Values.mcp.image.repository }}:{{ .Values.global.imageTag | default .Values.mcp.image.tag }}"
+          image: "{{ .Values.mcp.image.repository }}:{{ .Values.global.imageTag | default .Values.mcp.image.tag | default (include "vexa.releaseTag" .) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
@@ -53,6 +53,10 @@ spec:
             - name: AGENT_API_URL
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
             {{- end }}
+            {{- if .Values.crm.enabled }}
+            - name: CRM_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "crm-api") }}:8300"
+            {{- end }}
             {{- if .Values.flows.enabled }}
             - name: FLOWS_API_URL
               value: "http://{{ include "vexa.componentName" (list . "flows-api") }}:18200"
@@ -68,6 +72,15 @@ spec:
               value: {{ .Values.vexaEnv | default "development" | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.mcp.logLevel | default "info" | quote }}
+            - name: VEXA_FEATURES
+              value: {{ .Values.features | default "" | quote }}
+            # Which tools a caller is shown and may call (vexa_mcp/visibility.py); empty = all.
+            - name: VEXA_MCP_TOOLS_ALLOW
+              value: {{ (.Values.mcp.tools).allow | default "" | quote }}
+            - name: VEXA_MCP_TOOLS_DENY
+              value: {{ (.Values.mcp.tools).deny | default "" | quote }}
+            - name: VEXA_MCP_TOOLS_COHORT
+              value: {{ (.Values.mcp.tools).cohort | default "" | quote }}
             {{- with .Values.mcp.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

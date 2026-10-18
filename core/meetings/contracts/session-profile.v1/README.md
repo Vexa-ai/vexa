@@ -45,6 +45,21 @@ writing the store, whose key it holds read-only.
 unknown fields, so a bot older than v0.13.2 refuses an authenticated invocation carrying it. Upgrade
 bots and meeting-api together, as the v0.13.2 MeetingToken already requires.
 
+## The restore
+
+`x-routes`: `GET /internal/browser-session/{session_uid}` on meeting-api, `WritebackBody` out, no
+request body. A meeting bot that joins as a saved bot account (a profile a person signed in through a
+browser session) restores its profile from here instead of from the userdata store.
+
+- **The URL** is the one meeting-api puts in the bot's invocation as `sessionRestoreUrl`
+  (invocation.v1), sent only beside `authenticated`. The bot derives nothing from other URLs.
+- **The credential** is the same MeetingToken, `Authorization: Bearer`, admitted for exactly
+  `{session_uid}`; meeting-api answers only for a session spawned with a bot account.
+- **The answer** is a `WritebackBody`, and the bot applies the same rule meeting-api applies to a
+  write-back: every path a profile path, named once, within the limits. One bad entry refuses the
+  whole answer and nothing is written; any failure is fail-loud (the bot's typed session-restore
+  failure), never a join signed out.
+
 ## Goldens
 
 [`golden/`](golden/) — accepted and refused bodies, the route's answer, and the path vectors both

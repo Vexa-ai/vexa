@@ -5,6 +5,10 @@ metadata:
   name: {{ include "vexa.componentName" (list . "gateway") }}
   labels:
     {{- include "vexa.labels" . | nindent 4 }}
+  {{- with .Values.gateway.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: {{ .Values.gateway.replicaCount }}
   {{- include "vexa.deploymentStrategy" . | nindent 2 }}
@@ -28,7 +32,7 @@ spec:
       containers:
         - name: gateway
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
-          image: "{{ .Values.gateway.image.repository }}:{{ .Values.global.imageTag | default .Values.gateway.image.tag }}"
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.global.imageTag | default .Values.gateway.image.tag | default (include "vexa.releaseTag" .) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
@@ -52,6 +56,15 @@ spec:
             - name: AGENT_API_URL
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
             {{- end }}
+            {{- if .Values.crm.enabled }}
+            # The optional CRM (ADR-0047): the record page's verbs fronted under /crm/*.
+            - name: CRM_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "crm-api") }}:8300"
+            {{- end }}
+            # Who the agent tier is enabled for (empty = everyone a key scope admits). agent-api
+            # reads the same value.
+            - name: VEXA_AGENT_ALLOW
+              value: {{ .Values.gateway.agentAllow | default "" | quote }}
             {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
             - name: REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}

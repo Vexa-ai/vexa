@@ -7,12 +7,31 @@ noindex: true
 > **Optional and operator-supplied. Not a supported deployment path.** No Vexa image, Compose, Helm or
 > Lite install contains the SDK or starts this path. You download the SDK from Zoom under Zoom's own terms, which restrict
 > bot and notetaker use, and you are responsible for that licence. P17 treats it as an optional runtime,
-> not a dependency (ADR-0039 in `docs/adr/`).
+> not a dependency (ADR-0039 in `docs/adr/`), and `gate:vendor-payload` keeps it out of everything
+> Vexa ships.
 
 This is an **experimental, optional path**, not a released Compose or Helm option. Native join, per-participant capture and real transcription have
 been witnessed. The probe counts transcripts in memory: it does **not** save
 transcripts, recordings or meeting records. Production dispatch, OAuth onboarding
 and database/API retrieval are not connected to this path yet.
+
+## What the source tree carries
+
+The source tree holds the seam for this path, not the SDK:
+
+| Piece | Where | What it does |
+|---|---|---|
+| `sdk-join.v1` | `core/meetings/contracts/sdk-join.v1` | sealed wire between the bot and the native process for joining: start (with the JWT and optional OBF or ZAK), leave, ended, stop. Events carry no credentials or meeting identifiers |
+| `sdk-capture.v1` | `core/meetings/contracts/sdk-capture.v1` | sealed wire for capture, separate from joining: start, stop, and per-participant 16-bit PCM frames |
+| `@vexa/join/node` | `core/meetings/modules/join` | the native join port, kept apart from the browser entrypoint of `@vexa/join` |
+| `@vexa/zoom-sdk-capture` | `core/meetings/modules/zoom-sdk-capture` | adapter from native audio to the existing capture sink; it neither joins nor leaves |
+
+The bot reaches the native wrapper only from one disposable subprocess
+(`core/meetings/services/bot/runtime/native-meeting/worker.cjs`) over those two contracts.
+`gate:vendor-payload` fails when the SDK, its headers, a compiled addon or an archive of them is
+tracked; when a package manifest, image recipe, workflow, Makefile or script fetches or builds it;
+when anything a stock install runs (Compose, Helm, Lite, stock dispatch) names it; or when any other
+code loads a native addon.
 
 ## Download and install the SDK
 

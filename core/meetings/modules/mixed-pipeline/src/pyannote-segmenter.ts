@@ -29,8 +29,11 @@ import {
   type Processor,
   type Tensor,
 } from '@huggingface/transformers';
+import { describeOnnxThreads, onnxSessionOptions, resolveOnnxThreads } from './onnx-threads.js';
 
 const SAMPLE_RATE = 16_000;
+/** The chosen ORT thread count is logged once per process, not per segmenter. */
+let loggedOnnxThreads = false;
 const PYANNOTE_MODEL_ID = 'onnx-community/pyannote-segmentation-3.0';
 const WINDOW_SAMPLES = 10 * SAMPLE_RATE;            // 160_000
 const DEFAULT_INFER_INTERVAL_MS = 500;
@@ -166,7 +169,17 @@ export class PyannoteSegmenter {
 
   static async create(cfg: PyannoteSegmenterConfig = {}): Promise<PyannoteSegmenter> {
     const inst = new PyannoteSegmenter(cfg);
-    inst.model = await AutoModel.from_pretrained(PYANNOTE_MODEL_ID, { device: 'cpu' });
+    // Cap onnxruntime's thread pool to the container's CPU allowance — by default it spawns one
+    // thread per HOST core, which starves the bot under a Kubernetes CPU limit.
+    const threads = resolveOnnxThreads();
+    if (!loggedOnnxThreads) {
+      loggedOnnxThreads = true;
+      console.log(describeOnnxThreads(threads));
+    }
+    inst.model = await AutoModel.from_pretrained(PYANNOTE_MODEL_ID, {
+      device: 'cpu',
+      session_options: onnxSessionOptions(threads),
+    });
     inst.processor = await AutoProcessor.from_pretrained(PYANNOTE_MODEL_ID);
     return inst;
   }

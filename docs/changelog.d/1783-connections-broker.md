@@ -1,6 +1,6 @@
 - **Connections run on a standard install (#1783).** The credential broker behind Connections is now
   part of the product: Docker Compose and the Helm chart deploy it beside agent-api, with its own
-  image (`vexaai/v012-credential-broker`), keys generated on first start, and a network boundary
+  image (`vexaai/vexa-credential-broker`), keys generated on first start, and a network boundary
   that admits only agent-api and the terminal. Credentials are encrypted with AES-256-GCM under a
   key kept apart from the broker's volume; an OpenBao you already run can be used instead. Gmail and
   Calendar need a Google OAuth client; custom-service connections work without one. Vexa Lite does

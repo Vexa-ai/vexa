@@ -259,7 +259,7 @@
    "description": "MCP tools + prompts over the public API (stateless FastAPI, /mcp mount)",
    "metadata": [
     {
-     "path": "core/meetings/services/mcp"
+     "path": "core/gateway/services/mcp"
     }
    ],
    "interfaces": [
@@ -466,6 +466,54 @@
    "metadata": [
     {
      "path": "core/agent/contracts/proactive-card.v1",
+     "domain": "agent"
+    }
+   ]
+  },
+  {
+   "unique-id": "blocks.v1",
+   "node-type": "contract",
+   "name": "blocks.v1",
+   "description": "blocks.v1 \u2014 sealed/published contract (agent)",
+   "metadata": [
+    {
+     "path": "core/agent/contracts/blocks.v1",
+     "domain": "agent"
+    }
+   ]
+  },
+  {
+   "unique-id": "desktop.v1",
+   "node-type": "contract",
+   "name": "desktop.v1",
+   "description": "desktop.v1 \u2014 the desktop read model: agent-api's DesktopSections (workspaces, presence, calls, placed agents and files) and the composed Desktop the terminal answers per request; nothing stored",
+   "metadata": [
+    {
+     "path": "core/agent/contracts/desktop.v1",
+     "domain": "agent"
+    }
+   ]
+  },
+  {
+   "unique-id": "home-card.v1",
+   "node-type": "contract",
+   "name": "home-card.v1",
+   "description": "home-card.v1 \u2014 sealed/published contract (agent)",
+   "metadata": [
+    {
+     "path": "core/agent/contracts/home-card.v1",
+     "domain": "agent"
+    }
+   ]
+  },
+  {
+   "unique-id": "home-customer.v1",
+   "node-type": "contract",
+   "name": "home-customer.v1",
+   "description": "home-customer.v1 \u2014 sealed/published contract (agent)",
+   "metadata": [
+    {
+     "path": "core/agent/contracts/home-customer.v1",
      "domain": "agent"
     }
    ]
@@ -816,7 +864,17 @@
     }
    ]
   },
-    {"unique-id": "claude-plugin", "node-type": "webclient", "name": "claude-plugin", "description": "claude-plugin — client (Claude Code plugin: manifest, skills, hosted MCP config; no code)", "metadata": [{"path": "clients/claude-plugin"}]},
+  {
+   "unique-id": "claude-plugin",
+   "node-type": "webclient",
+   "name": "claude-plugin",
+   "description": "claude-plugin \u2014 client (Claude Code plugin: manifest, skills, hosted MCP config; no code)",
+   "metadata": [
+    {
+     "path": "clients/claude-plugin"
+    }
+   ]
+  },
   {
    "unique-id": "terminal",
    "node-type": "webclient",
@@ -1033,6 +1091,17 @@
    ]
   },
   {
+   "unique-id": "terminal-data",
+   "node-type": "module",
+   "name": "terminal/data",
+   "description": "HTTP data access (terminal): the fail-loud API client, secret redaction and the workspace API; imports only platform",
+   "metadata": [
+    {
+     "path": "clients/terminal/src/data"
+    }
+   ]
+  },
+  {
    "unique-id": "terminal-platform",
    "node-type": "module",
    "name": "terminal/platform",
@@ -1191,7 +1260,13 @@
    "unique-id": "object-store",
    "node-type": "service",
    "name": "object-store",
-   "description": "S3-compatible object store for recordings: the versitygw storage sidecar in Lite and Compose (plain files in a local volume); the chart's MinIO or the operator's S3 under Helm"
+   "description": "S3-compatible object store for recordings and people's photos (person-photos/): the versitygw storage sidecar in Lite and Compose (plain files in a local volume); the chart's MinIO or the operator's S3 under Helm"
+  },
+  {
+   "unique-id": "livekit",
+   "node-type": "service",
+   "name": "livekit",
+   "description": "Calls (#1783, ADR-0048 decision 6): the self-hosted LiveKit media server (Apache-2.0, unmodified upstream image pinned by digest), optional: compose profile `calls`, Helm `livekit.enabled`, not in Lite. meeting-api creates every room and its listener; agent-api mints participants' room tokens; browsers publish and subscribe media; the bot joins hidden and subscribe-only"
   },
   {
    "unique-id": "bm-status",
@@ -1299,8 +1374,8 @@
   {
    "unique-id": "identity-db",
    "node-type": "data-asset",
-   "name": "identity (users/api_tokens)",
-   "description": "users + scoped API tokens",
+   "name": "identity (users/api_tokens/orgs)",
+   "description": "users + scoped API tokens + orgs and explicit org memberships (MIGRATION-0008: one org per install; users.org_id is the account's home org)",
    "controls": {
     "ownership": {
      "description": "single writer (P23)",
@@ -1409,6 +1484,17 @@
    "metadata": [
     {
      "path": "core/flows/src/flows_schema"
+    }
+   ]
+  },
+  {
+   "unique-id": "flows-sensors",
+   "node-type": "module",
+   "name": "flows-sensors",
+   "description": "sensors turn the outside world into typed events with no model call (ADR-0050): one interface (SensorKind.tick(sensor, cursor) -> changes + next cursor) and one pool that keeps the needed sensors, ticks them under a lease, admits their changes through flows admission and reports their health; it reads providers only through the credential broker and writes only the sensor table",
+   "metadata": [
+    {
+     "path": "core/flows/src/flows_sensors"
     }
    ]
   },
@@ -1536,7 +1622,7 @@
    "unique-id": "delegation.v1",
    "node-type": "contract",
    "name": "delegation.v1",
-   "description": "delegation.v1 — sealed contract (identity): the per-dispatch vxd_ token agent-api mints for a worker and identity verifies at /internal/validate; one Python minter/verifier vendored byte for byte into both",
+   "description": "delegation.v1 \u2014 sealed contract (identity): the per-dispatch vxd_ token agent-api mints for a worker and identity verifies at /internal/validate; one Python minter/verifier vendored byte for byte into both",
    "metadata": [
     {
      "path": "core/identity/contracts/delegation.v1",
@@ -1734,6 +1820,29 @@
    ]
   },
   {
+   "unique-id": "session-store",
+   "node-type": "data-asset",
+   "name": "sessions: metadata in agent-api's database, transcript versions in object storage",
+   "description": "ADR-0048: a conversation stored apart from workspaces. Session rows, participants and roles, unaddressed messages and the head version live in agent-api's own database (agent_session*, control_plane/session_store.py); each turn's transcript is one immutable object in object storage. agent-api is the only writer: a worker hands the conversation back on its own output stream (session-bundle) and agent-api saves it only while its base is the head",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "agent-api"
+        ],
+        "match": "agent_session",
+        "op": "db-write"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
    "unique-id": "delegation-live",
    "node-type": "data-asset",
    "name": "vexa:delegation:live:{jti} (redis key)",
@@ -1904,7 +2013,7 @@
    "unique-id": "routes.v1",
    "node-type": "contract",
    "name": "routes.v1",
-   "description": "routes.v1 — sealed contract (gateway): each domain's routes.v1.json, the routes it asks the edge to serve and each row's scopes and policy (delegation, mcp_reentry, stream, forward), and the verbs rows behind a forward that the domain's own service reads (person: agent-api's route_policy); the gateway assembles its table from them, and validate.mjs holds every manifest in the repo",
+   "description": "routes.v1 \u2014 sealed contract (gateway): each domain's routes.v1.json, the routes it asks the edge to serve and each row's scopes and policy (delegation, mcp_reentry, stream, forward), and the verbs rows behind a forward that the domain's own service reads (person: agent-api's route_policy); the gateway assembles its table from them, and validate.mjs holds every manifest in the repo",
    "metadata": [
     {
      "path": "core/gateway/contracts/routes.v1",
@@ -1916,11 +2025,11 @@
    "unique-id": "mcp.tools.v1",
    "node-type": "contract",
    "name": "mcp.tools.v1",
-   "description": "mcp.tools.v1 — sealed contract (meetings): each domain's MCP tool manifest, served at /.well-known/mcp-tools.json or mounted by a private deployment; who may call each tool, which credential the edge presents to its door, and its route",
+   "description": "mcp.tools.v1 — sealed contract (gateway): each domain's MCP tool manifest, served at /.well-known/mcp-tools.json or mounted by a private deployment; who may call each tool, which credential the edge presents to its door, and its route",
    "metadata": [
     {
-     "path": "core/meetings/contracts/mcp.tools.v1",
-     "domain": "meetings"
+     "path": "core/gateway/contracts/mcp.tools.v1",
+     "domain": "gateway"
     }
    ]
   },
@@ -1987,6 +2096,183 @@
      "contract": "meeting-bundle.v1"
     }
    ]
+  },
+  {
+   "unique-id": "crm",
+   "node-type": "system",
+   "name": "crm",
+   "description": "ADR-0047: the optional CRM \u2014 the organisation's stable entities beside workspaces; owns the crm_* tables",
+   "metadata": [
+    {
+     "path": "core/crm"
+    }
+   ]
+  },
+  {
+   "unique-id": "crm-api",
+   "node-type": "service",
+   "name": "crm-api",
+   "description": "ADR-0047: the CRM's one door \u2014 people, companies, deals and projects with typed fields, owner, relationships, proposals and review, workspace bindings with derived grants, and backlinks from workspace pages. Every caller is resolved by identity; the record domain behind the crm_* tools",
+   "metadata": [
+    {
+     "path": "core/crm/src/crm"
+    }
+   ],
+   "interfaces": [
+    {
+     "unique-id": "crm-http",
+     "type": "api"
+    }
+   ]
+  },
+  {
+   "unique-id": "crm.v1",
+   "node-type": "contract",
+   "name": "crm.v1",
+   "description": "crm.v1 \u2014 the CRM's wire: the record a read answers, the references snapshot a workspace commit carries, change and binding results, the typed refusals, and the desk (Desk, DeskLayout, DeskOp, DeskProposal, ArrangeResult)",
+   "metadata": [
+    {
+     "path": "core/crm/contracts/crm.v1",
+     "domain": "crm"
+    }
+   ]
+  },
+  {
+   "unique-id": "crm-records",
+   "node-type": "data-asset",
+   "name": "crm_* tables",
+   "description": "ADR-0047: records, revisions, proposals, match identifiers, page references, workspace rosters and bindings, the audit, the desk (crm_desk placements, append-only crm_desk_layouts arrangement versions, crm_desk_proposals) and cards (records of an x-card type; crm_card_members; crm_card_seen, each person's opened marker; a workspace's board is its bindings; a proposed card is a change proposal with no record yet), in the instance's Postgres, reached as the CRM's own role. crm-api is the only runtime writer; the migrations path (crm-init) writes definitions and the organisation",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "crm-api"
+        ],
+        "match": "crm_",
+        "op": "db-write"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "signals",
+   "node-type": "system",
+   "name": "signals",
+   "description": "transcript signals: a small company-chosen model listens to live sources (a meeting's verified transcript first) against the listening brief the meeting's agent wrote, and wakes the agent through the company's flow; owns the sig:* keys",
+   "metadata": [
+    {
+     "path": "core/signals"
+    }
+   ]
+  },
+  {
+   "unique-id": "signals-service",
+   "node-type": "service",
+   "name": "signals",
+   "description": "one asyncio process, one task per live source under a lease: reads confirmed lines from the verified feed, scores each batch with the signal model (jev or openai-compatible) against the brief, writes annotations, posts meeting.signal when the running score, an address to Vexa, max_wait or the end says so; caps on wakes and model cost per source checked before every call; off unless the company policy turns it on",
+   "metadata": [
+    {
+     "path": "core/signals/src/meeting_signals"
+    }
+   ],
+   "interfaces": [
+    {
+     "unique-id": "signals-health",
+     "type": "api"
+    }
+   ]
+  },
+  {
+   "unique-id": "signals.v1",
+   "node-type": "contract",
+   "name": "signals.v1",
+   "description": "signals.v1 — the brief signals reads, the annotation it writes (sig:{kind}:{id}), the wake data it hands to flows and the model_signals policy value",
+   "metadata": [
+    {
+     "path": "core/signals/contracts/signals.v1",
+     "domain": "signals"
+    }
+   ]
+  },
+  {
+   "unique-id": "sig-annotations",
+   "node-type": "data-asset",
+   "name": "sig:meeting:{row} | sig:chat:{session} (streams)",
+   "description": "one scored line per entry (signals.v1 Annotation, `payload` JSON): segment id, score per brief label, model, brief version; read by the gateway for the terminal's highlights. signals is the only writer, fenced by its lease",
+   "controls": {
+    "ownership": {
+     "description": "single writer",
+     "requirements": [
+      {
+       "requirement-url": "vexa/controls/single-writer",
+       "config": {
+        "writers": [
+         "signals-service"
+        ],
+        "match": "sig:(meeting|chat):",
+        "op": "xadd"
+       }
+      }
+     ]
+    }
+   },
+   "metadata": [
+    {
+     "contract": "signals.v1"
+    },
+    {
+     "stage": "derived"
+    }
+   ]
+  },
+  {
+   "unique-id": "signals-state",
+   "node-type": "data-asset",
+   "name": "sig:state|seen|lease|live:*",
+   "description": "signals' own memory per source: the buffer, running score, saved position, caps' counters and a saved-but-unconfirmed wake (sig:state), the segment ids already scored (sig:seen), which instance holds the source (sig:lease) and the sources with recent activity (sig:live*). Written only by signals; every state write is one MULTI under WATCH of the lease",
+   "controls": {
+    "ownership": {
+     "description": "single writer",
+     "requirements": [
+      {
+       "requirement-url": "vexa/controls/single-writer",
+       "config": {
+        "writers": [
+         "signals-service"
+        ],
+        "match": "sig:(state|seen|lease|live)",
+        "op": "kv-write"
+       }
+      }
+     ]
+    }
+   },
+   "metadata": [
+    {
+     "contract": "signals.v1"
+    },
+    {
+     "stage": "state"
+    }
+   ]
+  },
+  {
+   "unique-id": "signal-model",
+   "node-type": "service",
+   "name": "signal model",
+   "description": "the company's signal model: Typesafe Jev (directly or through OpenRouter) or any OpenAI-compatible endpoint (a company's own LiteLLM). Chosen in _global/POLICIES.md model_signals; none by default",
+   "interfaces": [
+    {
+     "unique-id": "signal-model-endpoint",
+     "type": "api"
+    }
+   ]
   }
  ],
  "relationships": [
@@ -2000,6 +2286,10 @@
       "event.v1",
       "invoke.v1",
       "proactive-card.v1",
+      "blocks.v1",
+      "desktop.v1",
+      "home-card.v1",
+      "home-customer.v1",
       "routine.v1",
       "task.v1",
       "tool.v1",
@@ -2024,7 +2314,8 @@
       "delegation-records",
       "delegation-current",
       "unit-delegation",
-      "unit-fault"
+      "unit-fault",
+      "session-store"
      ]
     }
    }
@@ -2041,7 +2332,9 @@
       "logevent.v1",
       "gateway-identity.v1",
       "ws.v1",
-      "routes.v1"
+      "routes.v1",
+      "mcp",
+      "mcp.tools.v1"
      ]
     }
    }
@@ -2071,7 +2364,6 @@
       "bot",
       "desktop",
       "meeting-api",
-      "mcp",
       "buffer",
       "capture-codec",
       "gmeet-capture",
@@ -2111,7 +2403,6 @@
       "zoom-sdk-capture",
       "sdk-capture.v1",
       "acl-bots-index",
-      "mcp.tools.v1",
       "meeting-bundle-file",
       "meeting-bundle-parts"
      ]
@@ -2343,6 +2634,7 @@
       "terminal-app",
       "terminal-canvas",
       "terminal-contributions",
+      "terminal-data",
       "terminal-minutes",
       "terminal-platform",
       "terminal-surfaces",
@@ -2382,7 +2674,7 @@
      }
     }
    },
-   "description": "restore the stored session before launch, with the bots' read-only key pair (BOT_S3_*: Get + List on the userdata prefix and nothing else); the bot never writes the store — its rotated session goes back through meeting-api (bot-session-writeback)",
+   "description": "restore the stored session before launch, with the bots' read-only key pair (BOT_S3_*: Get + List on the userdata prefix and nothing else); the bot never writes the store \u2014 its rotated session goes back through meeting-api (bot-session-writeback)",
    "protocol": "HTTPS",
    "metadata": [
     {
@@ -2403,7 +2695,7 @@
      }
     }
    },
-   "description": "an authenticated bot's rotated browser session, on clean teardown: session-profile.v1's route, PUT /internal/browser-session/{session_uid}, at the URL meeting-api names in the bot's invocation (invocation.v1 sessionWritebackUrl, sent only in authenticated mode; the bot derives none), with Authorization: Bearer <MeetingToken> (the invocation.v1 session token) admitted for exactly that session_uid, and only from the live authenticated bot — the newest session spawned on the deployment's identity, of the token's meeting, live or ended under 600 s; anything else is refused (401/403). Carrier: a session-profile.v1 WritebackBody {files: [{path, data (base64)}]} whose every path is one the contract's SessionProfile names, size-bounded per file and in total; remote-browser and meeting-api each read a verbatim copy of the contract",
+   "description": "an authenticated bot's rotated browser session, on clean teardown: session-profile.v1's route, PUT /internal/browser-session/{session_uid}, at the URL meeting-api names in the bot's invocation (invocation.v1 sessionWritebackUrl, sent only in authenticated mode; the bot derives none), with Authorization: Bearer <MeetingToken> (the invocation.v1 session token) admitted for exactly that session_uid, and only from the live authenticated bot \u2014 the newest session spawned on the deployment's identity, of the token's meeting, live or ended under 600 s; anything else is refused (401/403). Carrier: a session-profile.v1 WritebackBody {files: [{path, data (base64)}]} whose every path is one the contract's SessionProfile names, size-bounded per file and in total; remote-browser and meeting-api each read a verbatim copy of the contract",
    "protocol": "HTTP",
    "metadata": [
     {
@@ -2477,7 +2769,8 @@
      "nodes": [
       "redis",
       "postgres",
-      "object-store"
+      "object-store",
+      "livekit"
      ]
     }
    }
@@ -2662,6 +2955,146 @@
    "metadata": [
     {
      "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "ma-livekit",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "livekit"
+     }
+    }
+   },
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ],
+   "description": "creates a call's room with its transcription notice (Twirp room service)"
+  },
+  {
+   "unique-id": "aa-livekit",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "livekit"
+     }
+    }
+   },
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "read"
+    }
+   ],
+   "description": "reads a room's metadata to bind a call to its session"
+  },
+  {
+   "unique-id": "bot-livekit",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "bot"
+     },
+     "destination": {
+      "node": "livekit"
+     }
+    }
+   },
+   "protocol": "WebSocket",
+   "metadata": [
+    {
+     "access": "read"
+    }
+   ],
+   "description": "the call listener: joins hidden and subscribe-only, and transcribes every audio track each participant publishes, on that participant's channel"
+  },
+  {
+   "unique-id": "terminal-livekit",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "terminal"
+     },
+     "destination": {
+      "node": "livekit"
+     }
+    }
+   },
+   "protocol": "WebSocket",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ],
+   "description": "the terminal's page in a person's browser joins a call itself, not the terminal server (signalling over WebSocket; media over the UDP range)"
+  },
+  {
+   "unique-id": "aa-object-store",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "object-store"
+     }
+    }
+   },
+   "protocol": "HTTPS",
+   "metadata": [
+    {
+     "access": "write",
+     "description": "ADR-0048: session transcript versions (session-store)"
+    }
+   ]
+  },
+  {
+   "unique-id": "admin-object-store",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "admin-api"
+     },
+     "destination": {
+      "node": "object-store"
+     }
+    }
+   },
+   "protocol": "HTTPS",
+   "metadata": [
+    {
+     "access": "write",
+     "description": "people's photos (UI 15g): re-encoded image bytes under person-photos/<user id>/ in the recordings bucket; the person_photos row in identity-db keeps the key; admin-api is the prefix's one writer and deletes it with the person"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-postgres",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "postgres"
+     }
+    }
+   },
+   "protocol": "JDBC",
+   "metadata": [
+    {
+     "access": "write",
+     "description": "ADR-0048: session metadata, participants and heads (session-store)"
     }
    ]
   },
@@ -3480,7 +3913,7 @@
      }
     }
    },
-   "description": "agent-api reads meetings as the caller, X-User-Id (and X-User-Workspaces) over the internal tier (X-Internal-Secret): GET /meetings/{id} (the meeting access lookup behind every meeting-scoped agent route), GET /transcripts/by-id/{id} (a transcript the caller may read), GET /meetings?… (the schedule digest's three bounded queries), POST /meetings/{id}/annotate (the minted meeting's recorder). meeting-api decides access; agent-api holds no meetings data",
+   "description": "agent-api reads meetings as the caller, X-User-Id (and X-User-Workspaces) over the internal tier (X-Internal-Secret): GET /meetings/{id} (the meeting access lookup behind every meeting-scoped agent route), GET /transcripts/by-id/{id} (a transcript the caller may read), GET /meetings?\u2026 (the schedule digest's three bounded queries, also read by the desktop to place a workspace's last and live call), POST /meetings/{id}/annotate (the minted meeting's recorder). meeting-api decides access; agent-api holds no meetings data",
    "protocol": "HTTP",
    "metadata": [
     {
@@ -3502,7 +3935,7 @@
      }
     }
    },
-   "description": "agent-api asks identity about a person over the internal tier (X-Internal-Secret): GET /internal/users/by-email/{email} (falling back to GET /admin/users/email/{email} with X-Admin-API-Key) to resolve a share's invitee; POST/DELETE/GET /internal/users/{id}/memberships[/{ws}] (the membership index mirror); GET /internal/users/{id}/model-config; GET /internal/users/{id}/is-admin (the _global tier's writer); GET /internal/users/{id}/bot-context (admin overview); GET/PUT /internal/users/{id}/settings (the person's clock and timezone)",
+   "description": "agent-api asks identity about a person over the internal tier (X-Internal-Secret): GET /internal/users/by-email/{email} (falling back to GET /admin/users/email/{email} with X-Admin-API-Key) to resolve a share's invitee; POST/DELETE/GET /internal/users/{id}/memberships[/{ws}] (the membership index mirror); GET /internal/users/{id}/model-config; GET /internal/users/{id}/is-admin (the _global tier's writer); GET /internal/users/{id}/bot-context (admin overview); GET/PUT /internal/users/{id}/settings (the person's clock and timezone, and their presence switch), GET /internal/presence?ids=… (many people's presence choice at once, for the desktop and the people strip); GET /internal/users/{id}/photo (a person's photo bytes, asked only after agent-api decided the viewer shares a workspace or chat with them); GET /internal/users/{id}/org (the viewer's org for every workspace access check, cached)",
    "protocol": "HTTP",
    "metadata": [
     {
@@ -4067,7 +4500,7 @@
      }
     }
    },
-   "description": "boot assembly: GET /.well-known/mcp-tools.json + /openapi.json — the flows domain's tools join the one MCP surface; its operator-keyed tools need the MCP to hold the key its admin_auth names",
+   "description": "boot assembly: GET /.well-known/mcp-tools.json + /openapi.json \u2014 the flows domain's tools join the one MCP surface; its operator-keyed tools need the MCP to hold the key its admin_auth names",
    "protocol": "HTTP",
    "metadata": [
     {
@@ -4219,6 +4652,262 @@
      "contract": "meeting-bundle.v1"
     }
    ]
+  },
+  {
+   "unique-id": "crm-composed",
+   "relationship-type": {
+    "composed-of": {
+     "container": "crm",
+     "nodes": [
+      "crm-api",
+      "crm.v1",
+      "crm-records"
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "crm-postgres",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "crm-api"
+     },
+     "destination": {
+      "node": "postgres"
+     }
+    }
+   },
+   "protocol": "JDBC",
+   "metadata": [
+    {
+     "access": "write",
+     "description": "ADR-0047: the crm_* tables (crm-records), as the CRM's own role"
+    }
+   ]
+  },
+  {
+   "unique-id": "crm-admin",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "crm-api"
+     },
+     "destination": {
+      "node": "admin-api",
+      "interface": "admin-api-rest"
+     }
+    }
+   },
+   "description": "POST /internal/validate: who the caller is, their live workspace memberships narrowed to a worker's ceiling, and whether the turn is shared; GET /internal/users/{id}/org (only with personal_crm on): whether the caller is an individual served from their own org of one",
+   "protocol": "HTTP"
+  },
+  {
+   "unique-id": "admin-crm-erase",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "admin-api"
+     },
+     "destination": {
+      "node": "crm-api"
+     }
+    }
+   },
+   "description": "account delete: POST /internal/orgs/p-{id}/erase (internal secret) erases an individual account's personal CRM before identity removes the account (capability personal_crm_erase, CRM_API_URL)",
+   "protocol": "HTTP"
+  },
+  {
+   "unique-id": "mcp-crm-discover",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "mcp"
+     },
+     "destination": {
+      "node": "crm-api",
+      "interface": "crm-http"
+     }
+    }
+   },
+   "description": "boot assembly and tool calls: GET /.well-known/mcp-tools.json + /openapi.json, then the crm_*, desktop_* and card_* tools with the caller's own credential; present only where CRM_API_URL is set",
+   "protocol": "HTTP"
+  },
+  {
+   "unique-id": "flows-crm-references",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "flows-worker"
+     },
+     "destination": {
+      "node": "crm-api",
+      "interface": "crm-http"
+     }
+    }
+   },
+   "description": "the flows_defs.crm pack: POST /internal/references with the internal secret \u2014 one workspace's record references and roster at one commit (workspace.references.changed)",
+   "protocol": "HTTP"
+  },
+  {
+   "unique-id": "gw-crm",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "gateway"
+     },
+     "destination": {
+      "node": "crm-api",
+      "interface": "crm-http"
+     }
+    }
+   },
+   "description": "the edge's /crm/* forward (routes.v1 `forward`): the record page's read, history and review, the desktop's desk/read, desk/arrange, desk/proposal and desk/undo (served while `desktop` is on), and the cards' card/list, card/read, card/create, card/update, card/members and card/membership (served while `desktop_cards` is on), with the caller's own key, present only where CRM_API_URL is set",
+   "protocol": "HTTP"
+  },
+  {
+   "unique-id": "crm-agent-policies",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "crm-api"
+     },
+     "destination": {
+      "node": "agent-api",
+      "interface": "agent-api-rest"
+     }
+    }
+   },
+   "description": "GET /api/workspace/file?path=POLICIES.md&slug=_global over the internal tier (subject crm): the company's desk limits, narrow-only, cached 30 s; optional \u2014 CRM_AGENT_API_URL unset or unreachable means the defaults",
+   "protocol": "HTTP"
+  },
+  {
+   "unique-id": "signals-composed",
+   "relationship-type": {
+    "composed-of": {
+     "container": "signals",
+     "nodes": [
+      "signals-service",
+      "signals.v1",
+      "sig-annotations",
+      "signals-state"
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "signals-redis",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "signals-service"
+     },
+     "destination": {
+      "node": "redis"
+     }
+    }
+   },
+   "protocol": "TCP",
+   "metadata": [
+    {
+     "access": "read",
+     "description": "transcription_segments as hints only (own consumer group `signals`, entries acknowledged at once), the collector's verified tc:meeting:{row} (consumer group `signals`, confirmed lines) and agent-api's room:{session}:msgs (consumer group `signals`, a room's messages); none of them written"
+    },
+    {
+     "access": "write",
+     "description": "its own keys only: sig:meeting:{row} annotations and sig:state|seen|lease|live:*"
+    }
+   ]
+  },
+  {
+   "unique-id": "signals-agent-listen",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "signals-service"
+     },
+     "destination": {
+      "node": "agent-api",
+      "interface": "agent-api-rest"
+     }
+    }
+   },
+   "description": "GET /internal/meetings/{row}/listen?subject=<owner> and GET /internal/chats/{session}/listen?subject=<owner> with the internal secret: the listening brief (the agent's rules and model tier included) and the company's signal policy in one answer, cached 30 s; agent-api reads the source as that subject",
+   "protocol": "HTTP"
+  },
+  {
+   "unique-id": "signals-flows-wake",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "signals-service"
+     },
+     "destination": {
+      "node": "flows-api",
+      "interface": "flows-http"
+     }
+    }
+   },
+   "description": "POST /events/signal (X-Internal-Secret + X-Vexa-Service: signals): one event.v1 meeting.signal per wake, data = the buffer; the company's _global flow decides what a wake does. A publish edge: no flows, no wakes",
+   "protocol": "HTTP"
+  },
+  {
+   "unique-id": "signals-broker-key",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "signals-service"
+     },
+     "destination": {
+      "node": "credentials-broker",
+      "interface": "credential-broker-rest"
+     }
+    }
+   },
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req",
+     "contract": "credential-broker.v1",
+     "description": "role signals: POST /api/internal/signals/model-key — the signal model's key the policy names (service/signals/<name> only), kept in memory"
+    }
+   ]
+  },
+  {
+   "unique-id": "signals-model",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "signals-service"
+     },
+     "destination": {
+      "node": "signal-model",
+      "interface": "signal-model-endpoint"
+     }
+    }
+   },
+   "description": "one call per confirmed line: the line, up to 24 lines before it and the brief's questions; answers a 0..1 score per label, parsed strictly",
+   "protocol": "HTTPS",
+   "metadata": [
+    {
+     "access": "call"
+    }
+   ],
+   "controls": {
+    "data-egress": {
+     "description": "transcript lines leave the deployment only when the company picks an external signal model (Jev through Typesafe or OpenRouter); a company's own OpenAI-compatible endpoint keeps them inside. Off until the company sets model_signals",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/no-egress.requirement.json",
+       "config": {
+        "dataClass": "transcript",
+        "destination": "external-saas",
+        "egressApproved": true
+       }
+      }
+     ]
+    }
+   }
   }
  ],
  "flows": [

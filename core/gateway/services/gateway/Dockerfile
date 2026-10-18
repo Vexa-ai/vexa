@@ -36,9 +36,10 @@ COPY core/gateway/services/gateway/src ./src
 #    miss one whose service moved. A domain that adds a route changes only its own file here.
 COPY core/gateway/services/gateway/routes.v1.json ./core/gateway/services/gateway/routes.v1.json
 COPY core/meetings/routes.v1.json                 ./core/meetings/routes.v1.json
-COPY core/meetings/services/mcp/routes.v1.json    ./core/meetings/services/mcp/routes.v1.json
+COPY core/gateway/services/mcp/routes.v1.json    ./core/gateway/services/mcp/routes.v1.json
 COPY core/identity/routes.v1.json                 ./core/identity/routes.v1.json
 COPY core/agent/routes.v1.json                    ./core/agent/routes.v1.json
+COPY core/crm/routes.v1.json                      ./core/crm/routes.v1.json
 
 # An unprivileged user runs the service: it writes nothing outside /tmp, and reads its mounted keys
 # through the group the deploy surfaces give it (compose's key one-shot, the chart's fsGroup).

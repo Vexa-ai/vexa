@@ -214,6 +214,17 @@ async function main(): Promise<void> {
     }
   }
 
+  // ── progress: a signed stream entry the collector forwards, never a segment ──
+  {
+    const { client, xadds } = fakeClient();
+    const token = 'eyJhbGciOiJIUzI1NiJ9.eyJtZWV0aW5nX2lkIjo1fQ.c2lnbmF0dXJl';
+    const sink = createRedisTranscriptSink({ client, meetingId: 5, token });
+    await sink.progress!({ backlog_s: 31.5, silence_s: 0.2, finishing: true });
+    const p = JSON.parse(xadds[0]?.fields.payload ?? '{}');
+    check('progress: one signed entry on the transcription stream', xadds.length === 1 && xadds[0].key === TRANSCRIPTION_STREAM && !!xadds[0].fields.sig, JSON.stringify(xadds));
+    check('progress: type, meeting and numbers', p.type === 'transcription_progress' && p.meeting_id === 5 && p.backlog_s === 31.5 && p.silence_s === 0.2 && p.finishing === true, JSON.stringify(p));
+  }
+
   if (failed) { console.error(`\n❌ transcript-redis (L3): ${failed} check(s) FAILED.`); process.exit(1); }
   console.log('\n✅ transcript-redis (L3): XADDs the transcription_segments stream + PUBLISHes tc:meeting:{id}:mutable, payload round-trips a schema-valid transcript.v1 segment.');
 }

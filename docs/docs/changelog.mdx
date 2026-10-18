@@ -3,10 +3,11 @@ title: "Changelog & migration"
 description: "Release notes and what changes between major versions."
 ---
 
-{/* docs-reflects: 0.13.2 — the released version these docs describe. CI (gate:docs-version) keeps
-    this equal to Chart.yaml appVersion; the release version-bump updates it. */}
+{/* docs-reflects: 0.13.3 — the version these docs describe. Its one source is the root package.json
+    "version"; `node release/version.mjs set <version>` writes it here, to the banner below, to
+    Chart.yaml appVersion and to .env.example, and gate:docs-version fails if any of them differs. */}
 
-> 📌 **These docs reflect Vexa `v0.13.2-rc.1`** — the current release candidate control-plane. Older self-hosts
+> 📌 **These docs reflect Vexa `v0.13.3`**, the version this tree builds. Older self-hosts
 > should read against their pinned version.
 
 The authoritative, per-release changelog is on **GitHub Releases**:
@@ -22,6 +23,8 @@ that first shipped in a pre-release are listed under it below, so the 0.13.2 not
 
 An install on 0.12.x crosses every change below when it moves to 0.13.2. Each links to the step that
 handles it; [One-time steps after upgrading](/deployment#one-time-steps-after-upgrading) has them all.
+
+The step-by-step operator guide, with backups, symptoms and rollback, is [Upgrading from 0.12 to 0.13](/upgrade-from-0-12).
 
 **Upgrade every component together, between meetings.** Several connections between Vexa's own
 components now carry a signature or credential that an older peer does not send, and the newer side

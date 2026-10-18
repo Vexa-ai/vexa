@@ -353,15 +353,17 @@ test("image-licenses RED: an undeclared base in a service Dockerfile reds, ARG d
 });
 
 test("image-licenses RED: an undeclared image a deploy script runs reds", () => {
-  const r = withEdited("deploy/dogfood/rig/rig.sh", "axllent/mailpit:latest", "somevendor/unaudited:1.2",
+  const f = "deploy/storage/migrate-from-minio.sh";
+  const r = withEdited(f, 'docker rm -f "$tmp" >/dev/null 2>&1',
+    'docker run --rm somevendor/unaudited:1.2 true\ndocker rm -f "$tmp" >/dev/null 2>&1',
     () => runGate("image-licenses"));
-  assert.equal(r.green, false, "the dogfood rig's docker run image was not read");
-  assert.match(r.out, /undeclared pinned image "somevendor\/unaudited:1\.2" in deploy\/dogfood\/rig\/rig\.sh/);
+  assert.equal(r.green, false, "a deploy script's docker run image was not read");
+  assert.match(r.out, /undeclared pinned image "somevendor\/unaudited:1\.2" in deploy\/storage\/migrate-from-minio\.sh/);
 });
 
 test("pinned images: the list carries every surface, and an image built here is first-party", () => {
   const refs = JSON.parse(execFileSync("node", [join(ROOT, "scripts", "pinned-images.mjs"), "--json"], { cwd: ROOT, encoding: "utf8" }));
-  for (const ref of ["nginx:alpine", "python:3.12-slim", "axllent/mailpit:latest", "valkey/valkey"])
+  for (const ref of ["nginx:alpine", "python:3.12-slim", "versity/versitygw", "valkey/valkey"])
     assert(refs.some((r) => r.startsWith(ref)), `${ref} is missing from the pinned list`);
   assert(!refs.some((r) => r.startsWith("mock-bot")), "mock-bot:dev is built by this repository, not pulled");
   assert(!refs.some((r) => r.startsWith("node:20-alpine")), "the gate-ignored dashboard's base was read");

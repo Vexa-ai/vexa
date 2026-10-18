@@ -54,6 +54,24 @@ def delegated_route_response() -> Response:
     )
 
 
+def reentry_unlisted_response(method: str, path: str) -> Response:
+    """The refusal of a VALID re-entry on a row without `"mcp_reentry": true`. Same refusal, before
+    any forward — but the MCP is the caller, so a tool calls this route, and the likeliest reason is
+    an edge whose manifests are older than the service that published the tool (friction
+    2026-10-13 21:46: `workspace_forget` refused while the gateway still carried the previous
+    routes.v1). Said that way, so the agent reports a deployment fault instead of a permission."""
+    return Response(
+        content=json.dumps({"detail": {
+            "reason": "route_not_listed_for_tools",
+            "message": (f"This edge does not list {method} {path} as a route the MCP's tools call, so "
+                        "the call was refused and nothing was done. If a tool just called it, the "
+                        "gateway is older than the service that offers the tool: the gateway needs "
+                        "rebuilding with the current routes.v1 manifests.")}}),
+        status_code=403,
+        media_type="application/json",
+    )
+
+
 class McpReentry:
     """Recognises the MCP's own tool calls on behalf of an `/mcp` request this edge admitted."""
 

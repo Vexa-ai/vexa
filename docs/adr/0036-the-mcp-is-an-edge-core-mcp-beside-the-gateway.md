@@ -9,6 +9,20 @@ MCP-first product decision
 
 > Decision 2 (`core/mcp` as a tree beside the gateway) is superseded by [ADR-0037](0037-the-target-architecture-one-edge-domains-over-identity-and-runtime.md). The rest of this ADR stands.
 
+> **2026-10-12 note (0.13.3, #1783).** The MCP service moved from `core/meetings/services/mcp` to
+> `core/gateway/services/mcp`, and its manifest contract `mcp.tools.v1` from
+> `core/meetings/contracts/` to `core/gateway/contracts/`. No key or rule changed; the schema's
+> `description` now names the new service path, so the contract was re-sealed.
+> Behaviour is unchanged and it is still its own container. Paths below are as of this ADR's date.
+
+> **2026-10-13 note (0.13.3, #1783) — decision 5 is implemented narrower than written.** The
+> regime that shipped is per PERSON, not per workspace: identity keeps one `cloud`/`local` value
+> for the person's own workspace (`workspace_regime` / `workspace_regime_set`, admin-api
+> `GET/PUT /user/workspace-regime`, `app/workspace_regime.py`), and every group workspace stays
+> `cloud`. That is the one mix decision 5 names as its example (a desk on the person's disk, groups
+> in the cloud); a group workspace held `local`, and a `regime` field in `.vexa/workspace.json`,
+> are not built. Decision 5 stands as the target; the person-level value is the first step toward it.
+
 ## Context
 
 Vexa is about to be named after an interface it has never treated as a component. A person points

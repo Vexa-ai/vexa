@@ -105,11 +105,45 @@ A URL the model chose is an outbound destination picked by something that is not
 - re-checks **every redirect hop**, not just the URL it was given;
 - refuses any host that resolves into loopback, link-local (cloud metadata), private or reserved
   address space, and refuses bare single-label names (`redis`, `admin-api`) outright;
+- connects to the address it checked, so a name that changes its answer after the check reaches
+  nothing new;
 - caps the response body and the request at 15 seconds.
 
 The one exemption is the host in your own `VEXA_SEARCH_URL` — you named it, and the search tool
-already talks to it.
+already talks to it. The address rules are the deployment's one outbound URL guard, shared with
+webhooks and calendar feeds; see [Security & compliance](/security-compliance).
 
 Both tools count against the turn's tool-call budget and their results are trimmed to the turn's
 context budget like any other tool result. See [Long agent turns](/agent-tool-calls) for the budgets
 and what happens when one is reached.
+
+## How it works
+
+1. **Configure.** The runtime forwards `VEXA_SEARCH_URL`, `VEXA_SEARCH_DIALECT` and
+   `VEXA_SEARCH_API_KEY` into every spawned worker. Each key is declared in the runtime's and
+   agent-api's `config.v1.json`.
+2. **Attach.** The `openai-agent` harness always attaches `WebFetch`. It attaches `WebSearch` only
+   when `VEXA_SEARCH_URL` is set.
+3. **Search.** `WebSearch` sends the query to your endpoint in its dialect (`searxng` or `brave`)
+   and returns `[{title, url, snippet}]`. An endpoint error or an unknown dialect is a failed tool
+   result that names the key to fix.
+4. **Fetch.** `WebFetch` checks the URL, then sends the GET through a transport that resolves the
+   host again, checks every address and dials a checked one. Each redirect (at most 3) is checked
+   the same way before it is followed.
+5. **Return.** The page comes back as `{url, final_url, status, title, text}`, cut to the body
+   cap, then trimmed by the loop's own per-result budget.
+
+## Why it complies
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P17: every dependency is licence-clean | SearXNG (AGPL-3.0) is a declared, opt-in sidecar the operator pulls; no `vexaai/*` image carries it | `gate:image-licenses`, ADR-0004 |
+| P23 and ADR-0044: no duplicated fact drifts | `WebFetch` uses the same `ssrf.py` as every other outbound fetch, a byte-identical copy of `outbound-url.v1` | `gate:fact-parity` (fact `outbound-url-guard`) |
+| P14: config is a validated contract | The three `VEXA_SEARCH_*` keys are declared where they are read and forwarded | `gate:config-contract` |
+| P18: fail loud | A missing backend, an unknown dialect or a refused URL is a failed tool result with its reason, never an empty success | ungated: reviewed; tests below |
+
+Deny tests: `core/agent/tests/test_llm_web_tools.py` (`test_webfetch_refuses_this_deployments_own_network`,
+`test_webfetch_refuses_a_public_name_that_resolves_into_private_space`,
+`test_a_redirect_into_private_space_is_refused_at_the_hop`) and
+`core/agent/tests/test_webfetch_harness_pinned.py`
+(`test_a_name_that_rebinds_after_the_check_reaches_nothing`).

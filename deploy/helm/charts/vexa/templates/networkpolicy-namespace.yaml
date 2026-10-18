@@ -16,7 +16,8 @@ networkpolicy-workloads.yaml and networkpolicy-credential-broker.yaml add to the
     agent-api, meeting-api, runtime  their own policies (named callers only)
     credential-broker                its own policy (agent-api and the terminal)
     postgres                         from the services that hold its credentials: admin-api,
-                                     meeting-api, pgbouncer, the flows tier, the migrations Job
+                                     meeting-api, agent-api (the session store, ADR-0048),
+                                     pgbouncer, the flows tier, the migrations Job
     redis                            from the chart's Pods and the Pods the runtime spawns
     everything above                 + networkPolicy.controlPlane.extraIngress (a monitoring scraper)
 
@@ -110,7 +111,7 @@ spec:
 {{- end }}
 {{- end }}
 {{- /* internal services the chart's own Pods call */}}
-{{- range $svc := list (dict "c" "admin-api" "on" $.Values.adminApi.enabled "port" 8001) (dict "c" "mcp" "on" $.Values.mcp.enabled "port" 8010) (dict "c" "pgbouncer" "on" $.Values.pgbouncer.enabled "port" 5432) }}
+{{- range $svc := list (dict "c" "admin-api" "on" $.Values.adminApi.enabled "port" 8001) (dict "c" "mcp" "on" $.Values.mcp.enabled "port" 8010) (dict "c" "pgbouncer" "on" $.Values.pgbouncer.enabled "port" 5432) (dict "c" "crm-api" "on" (and $.Values.crm $.Values.crm.enabled) "port" 8300) }}
 {{- if $svc.on }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -182,7 +183,7 @@ spec:
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In
-                values: [admin-api, meeting-api, pgbouncer, migrations]
+                values: [admin-api, meeting-api, agent-api, pgbouncer, migrations{{ if and .Values.crm .Values.crm.enabled }}, crm-api{{ end }}]
         - podSelector:
             matchLabels:
               {{- toYaml $sel | nindent 14 }}

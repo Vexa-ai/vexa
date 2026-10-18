@@ -34,12 +34,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..schema.models import (APIToken, Meeting, MeetingSession, PlatformSetting,
+from ..schema.models import (APIToken, Meeting, MeetingSession, PersonPhoto, PlatformSetting,
                              Transcription, User)
 from ..token_scope import VALID_SCOPES, generate_prefixed_token
+from .. import obs
 from .db import get_db
 from . import events as events_mod
 from . import person_settings as person_settings_mod
+from . import person_doors as person_doors_mod
+from . import person_photo_doors as person_photo_doors_mod
+from . import photo_storage as photo_storage_mod
+from . import profile_doors as profile_doors_mod
+from . import orgs as orgs_mod
 from . import claim_code
 from . import admin_account
 from . import signin_allow
@@ -54,6 +60,7 @@ from .platform_settings import (MODELS_FIELDS, TRANSCRIPTION_FIELDS, apply_confi
 from .internal_tier import check_internal, check_internal_no_dev_bypass
 
 claim_log = logging.getLogger("admin_api.claim")
+logger = logging.getLogger("admin_api")
 
 ADMIN_KEY_HEADER = APIKeyHeader(name="X-Admin-API-Key", auto_error=False)
 USER_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -122,7 +129,53 @@ async def get_current_user_for_update(
     ).scalar_one()
 
 
+#: The most people one `/internal/presence` read answers — a desktop's members, bounded.
+PRESENCE_IDS_MAX = 200
+
+
+#: What a worker with nobody in the loop is told when it tries to change one of its person's settings.
+UNWATCHED_SETTING_REFUSAL = ("a setting changes only while the person is in the chat — ask them, "
+                             "and change it on their next turn")
+
+
+async def get_current_person(request: Request,
+                             api_key: str = Security(USER_KEY_HEADER),
+                             db: AsyncSession = Depends(get_db)) -> User:
+    """The person behind the settings door: their own API key, OR a worker's delegation token acting
+    for them (Vexa-ai/vexa#1783).
+
+    The chat's agent reaches `settings` and `workspace_regime` through the one MCP, which carries the
+    worker's `vxd_…` token back through the gateway. A token-table lookup alone answered every such
+    call `403 Invalid API Key`. The token is verified exactly as `/internal/validate` verifies it
+    (signature, expiry, live record, account still exists). Reads are open to any worker for its
+    person; a CHANGE needs the person in the loop (regime `human`).
+
+    Only the settings and workspace-regime routes use this; the rest of `/user/*` keeps
+    `get_current_user`."""
+    if api_key and validate_mod.delegation_mod.is_delegation_token(api_key):
+        ident = await validate_mod._validate_delegation(api_key, db)
+        regime = (ident.get("delegation") or {}).get("regime")
+        if request.method not in ("GET", "HEAD") and regime != "human":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail=UNWATCHED_SETTING_REFUSAL)
+        user = (await db.execute(select(User).where(User.id == int(ident["user_id"])))).scalars().first()
+        if not user:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: no such user")
+        return user
+    return await get_current_user(api_key, db)
+
+
+async def get_current_person_for_update(
+    user: User = Depends(get_current_person),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    return await get_current_user_for_update(user, db)
+
+
 # --- request/response models ---
+class EmailVerifiedRequest(BaseModel):
+    """The terminal's word that the account's address was proven at sign-in."""
+    via: str = Field(..., max_length=48, description="magic_link, or oidc:<provider>")
+
 class UserCreate(BaseModel):
     email: str
     name: Optional[str] = None
@@ -526,6 +579,9 @@ async def issue_admin_claim_code(db: AsyncSession, *, host: str, now: datetime,
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Vexa Admin API (v0.12)")
+    # logevent.v1 trace (#1783): read/mint X-Trace-Id, bind it, echo it, log received/completed.
+    # The only middleware on this app, so it is outermost and wraps every route.
+    app.add_middleware(obs.TraceMiddleware)
 
     # --- liveness probe (gate:health): process-up, no DB dependency. Readiness (DB reachable)
     # is a separate concern — keeping /health a pure liveness check makes it green without a
@@ -651,6 +707,17 @@ def create_app() -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
         return UserResponse.model_validate(user)
 
+    # TEST USERS (#1783, app.dev tooling): the accounts on the reserved `example.test` domain, for the
+    # terminal's "Test users…" — which exists only where VEXA_DEV_TEST_USERS=1. Declared before
+    # `/admin/users/{user_id}` so the path is not read as an id.
+    @app.get("/admin/users/test-users", response_model=List[UserResponse],
+             dependencies=[Depends(verify_admin_token)])
+    async def list_test_users(db: AsyncSession = Depends(get_db)):
+        rows = (await db.execute(
+            select(User).where(func.lower(User.email).like("%@example.test")).order_by(User.id).limit(200)
+        )).scalars().all()
+        return [UserResponse.model_validate(u) for u in rows]
+
     @app.get("/admin/users/{user_id}", response_model=UserResponse,
              dependencies=[Depends(verify_admin_token)])
     async def get_user_by_id(user_id: int, db: AsyncSession = Depends(get_db)):
@@ -730,7 +797,9 @@ def create_app() -> FastAPI:
 
         It does NOT touch the workspace volume, redis, or the flows lanes: those stores belong to
         other services, and a route that reached into them would be this service writing three
-        surfaces it does not own. `subject_reset` clears them through their own owners.
+        surfaces it does not own. `subject_reset` clears them through their own owners. The one
+        exception is an individual account's personal CRM: identity asks crm-api to erase it through
+        crm-api's own door (`orgs.erase_personal`), then removes the org of one it owns.
         """
         user = (await db.execute(
             select(User).where(User.id == user_id).with_for_update()
@@ -745,9 +814,20 @@ def create_app() -> FastAPI:
             await db.execute(delete(MeetingSession).where(
                 MeetingSession.meeting_id.in_(meeting_ids)))
             await db.execute(delete(Meeting).where(Meeting.id.in_(meeting_ids)))
+        # An individual's org of one and their whole personal CRM go with the account — the CRM's
+        # rows through the CRM's own erase door, FIRST: if it cannot confirm, nothing is deleted.
+        await orgs_mod.erase_personal(db, user)
         await db.execute(delete(APIToken).where(APIToken.user_id == user_id))
+        await db.execute(delete(PersonPhoto).where(PersonPhoto.user_id == user_id))
         await db.delete(user)
         await db.commit()
+        # Their photos' bytes live in the object store (`photo_storage.py`): removed with them.
+        photos = photo_storage_mod.from_env()
+        if photos is not None:
+            try:
+                photos.delete_person(user_id)
+            except Exception:  # noqa: BLE001 — the row is gone; say so loudly, the objects need a sweep
+                logger.error("user %s deleted but their photo objects were not (person-photos/%s/)", user_id, user_id)
         return None
 
     @app.post("/admin/users/{user_id}/tokens", response_model=TokenResponse,
@@ -854,7 +934,12 @@ def create_app() -> FastAPI:
         db.add(user)
         await db.commit()
         await db.refresh(user)
-        return _webhook_view(user.data if isinstance(user.data, dict) else {})
+        # 0.12 answered this with the user record (`UserResponse`), and callers parse it; 0.13 adds
+        # the webhook view at the top level. The record's `data` goes through the same serializer as
+        # every /admin/users read, so no stored credential (webhook secret, model key, transcription
+        # token, calendar feed URL) is in it.
+        record = UserResponse.model_validate(user).model_dump(mode="json")
+        return {**record, **_webhook_view(user.data if isinstance(user.data, dict) else {})}
 
     @app.get("/user/webhook")
     async def get_user_webhook(user: User = Depends(get_current_user)):
@@ -1104,6 +1189,16 @@ def create_app() -> FastAPI:
             **transcription_language_mod.read(prefs),
         }
 
+    # The person's OWN settings and workspace regime, and identity's MCP tool manifest
+    # (Vexa-ai/vexa#1783) — `person_doors.py`.
+    app.include_router(person_doors_mod.build_router(get_current_person, get_current_person_for_update))
+    # A person's photo (UI 15g): their own upload/remove, the sign-in capture, the bytes for agent-api.
+    app.include_router(person_photo_doors_mod.build_router(get_current_person))
+    # PUBLIC PROFILES (R4, `public_profile.py`): the one writer of a person's public profile, the
+    # directory and the internal doors crm-api reads live; all refused unless `public_profiles` is on.
+    app.include_router(profile_doors_mod.build_router(get_current_person, get_current_person_for_update))
+    profile_doors_mod.gate(app)
+
     app.include_router(validate_mod.router)  # POST /internal/validate — the gateway's authz oracle
     app.include_router(signin_links_mod.router)  # POST /internal/signin-links/redeem — a link signs in once
 
@@ -1124,6 +1219,9 @@ def create_app() -> FastAPI:
         if user is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown user")
         return user
+
+    # --- internal tier: the org (MIGRATION-0008) — an account's home org and role, read-only.
+    app.include_router(orgs_mod.build_router(_load_user))
 
     # --- internal tier: instance identity — admin existence + the admin claim.
     #     A fresh install has NO admin unless VEXA_ADMIN_EMAILS names them; the login surface (via
@@ -1152,6 +1250,19 @@ def create_app() -> FastAPI:
     async def instance_status(request: Request, db: AsyncSession = Depends(get_db)):
         check_internal(request)
         return await _instance_state(db)
+
+    @app.get("/admin/instance", include_in_schema=False,
+             dependencies=[Depends(verify_admin_token)])
+    async def instance_status_v012(db: AsyncSession = Depends(get_db)):
+        """UPGRADE COMPATIBILITY for a 0.12 flows engine kept beside this tier. That engine gates
+        every reaction on this read (admin key, fail-closed) and opens only on
+        `global_setup == "completed"`. The answer is the 0.12 document, computed by the 0.12 rule
+        from the `global_setup` row the instance already stores: an upgraded instance keeps exactly
+        the gate it had, a fresh one (no row) reads `missing`. Nothing in 0.13 writes that row."""
+        value = await read_platform_setting("global_setup", db)
+        state = "completed" if str(value.get("state", "")).strip() == "completed" else "missing"
+        return {"admin_exists": (await _instance_state(db))["admin_exists"],
+                "global_setup": state, "company": value.get("company") or None}
 
     @app.post("/internal/bootstrap-admin", include_in_schema=False, response_model=AdminClaimResponse)
     async def bootstrap_admin(payload: AdminClaimRequest, request: Request,
@@ -1430,6 +1541,32 @@ def create_app() -> FastAPI:
         return person_settings_mod.read_person_facts(
             user.data if isinstance(user.data, dict) else {})
 
+    @app.get("/internal/presence", include_in_schema=False)
+    async def get_presence_internal(request: Request, ids: str = "",
+                                    db: AsyncSession = Depends(get_db)):
+        """Each named person's own `presence` choice, for agent-api composing a desktop or the
+        home's people strip: ``{"presence": {"<id>": true | false | null}}``. ``null`` is "never
+        chosen" (shown by default) — agent-api needs that once, to carry an opt-out recorded before
+        this setting existed without overriding a later choice. An unknown id, or one that is not
+        an id, is ABSENT and never defaulted; the caller treats absence as hidden.
+
+        One read answers at most ``PRESENCE_IDS_MAX`` people. NO DEV-MODE BYPASS: it names other
+        people's choices."""
+        check_internal_no_dev_bypass(request)
+        wanted = []
+        for part in (ids or "").split(","):
+            part = part.strip()
+            if part.isdigit() and int(part) not in wanted:
+                wanted.append(int(part))
+        if len(wanted) > PRESENCE_IDS_MAX:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"at most {PRESENCE_IDS_MAX} ids per read")
+        if not wanted:
+            return {"presence": {}}
+        rows = (await db.execute(select(User).where(User.id.in_(wanted)))).scalars().all()
+        return {"presence": {str(u.id): person_settings_mod.presence_choice(
+            u.data if isinstance(u.data, dict) else {}) for u in rows}}
+
     @app.put("/internal/users/{user_id}/settings", include_in_schema=False)
     async def put_user_settings_internal(user_id: str, payload: dict, request: Request,
                                          db: AsyncSession = Depends(get_db)):
@@ -1502,6 +1639,33 @@ def create_app() -> FastAPI:
             db.add(user)
             await db.commit()
         return {"bound": bound}
+
+    @app.put("/internal/users/{user_id}/email-verified", include_in_schema=False)
+    async def put_email_verified(user_id: str, payload: EmailVerifiedRequest, request: Request,
+                                 db: AsyncSession = Depends(get_db)):
+        """RECORD that this account's address was proven at sign-in: the terminal asks after an
+        emailed sign-in link was redeemed (`magic_link`) or an identity provider vouched for the
+        address (`oidc:<provider>`). A direct login without proof of the inbox never calls it. It is
+        what lets a company domain be verified through an admin email on it (`public_profile`).
+        Internal tier without the dev-mode escape: it writes one named person's account."""
+        check_internal_no_dev_bypass(request)
+        from sqlalchemy.orm import attributes
+        from . import public_profile as public_profile_mod
+
+        user = await _load_user(user_id, db, for_update=True)
+        data = user.data if isinstance(user.data, dict) else {}
+        try:
+            new_data = public_profile_mod.record_email_verified(data, str(user.email or ""), via=payload.via)
+        except public_profile_mod.Refused as r:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=r.detail)
+        user.data = new_data
+        try:
+            attributes.flag_modified(user, "data")
+        except Exception:  # noqa: BLE001 — a plain object in the offline tests
+            pass
+        db.add(user)
+        await db.commit()
+        return {"verified": new_data[public_profile_mod.EMAIL_VERIFIED_KEY]["email"]}
 
     @app.post("/admin/users/{user_id}/settings/import", include_in_schema=False,
               dependencies=[Depends(verify_admin_token)])

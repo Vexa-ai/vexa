@@ -22,8 +22,9 @@
 import { createHmac } from 'node:crypto';
 import { createClient } from 'redis';
 import type { TranscriptSegment } from '../contracts.js';
-import type { TranscriptSink } from '../ports.js';
+import type { TranscriptionProgressReport, TranscriptSink } from '../ports.js';
 import { makeLazyConnect } from './redis-lazy-connect.js';
+import { botReconnectStrategy, type BotRedisOptions } from './redis-terminal.js';
 
 /** The redis stream the collector consumes (durable transcript.v1 feed). */
 export const TRANSCRIPTION_STREAM = 'transcription_segments';
@@ -173,7 +174,17 @@ export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): Tra
     }
   }
 
-  return { publish, retract };
+  /** Progress (backlog / silence / finishing) on the same signed stream; the collector forwards it to
+   *  the meeting's feed and persists nothing. */
+  async function progress(p: TranscriptionProgressReport): Promise<void> {
+    const payload = JSON.stringify({
+      type: 'transcription_progress', meeting_id: meetingId, native_meeting_id: nativeMeetingId,
+      backlog_s: p.backlog_s, silence_s: p.silence_s, finishing: p.finishing,
+    });
+    await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload, ...entryAuth(token, payload) });
+  }
+
+  return { publish, retract, progress };
 }
 
 /** A live transcript client that also exposes connect/quit so the composition root can
@@ -186,8 +197,9 @@ export type LiveRedisTranscriptClient = RedisTranscriptClient & {
 /** Wrap node-redis v4 (`createClient`) into the minimal `RedisTranscriptClient`. Lazily
  *  connects on first use so the composition root can construct it before redis is reachable
  *  (the connection error surfaces on the first publish, not at construction). */
-export function redisClientFrom(redisUrl: string): LiveRedisTranscriptClient {
-  const client = createClient({ url: redisUrl });
+export function redisClientFrom(redisUrl: string, opts: BotRedisOptions = {}): LiveRedisTranscriptClient {
+  // Stops reconnecting once the session is over (`redis-terminal.ts`): a revoked credential ends it.
+  const client = createClient({ url: redisUrl, socket: { reconnectStrategy: botReconnectStrategy(opts.session) } });
   // node-redis emits 'error' events; without a listener an unreachable server throws unhandled.
   client.on('error', (err: unknown) => {
     console.error(`[bot] redis (transcript) error: ${(err as Error)?.message ?? String(err)}`);

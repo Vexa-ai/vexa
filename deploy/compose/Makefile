@@ -8,7 +8,7 @@ BROWSER_IMAGE ?= mock-bot:dev
 EMAIL ?= self-host@vexa.ai
 SCOPES ?= bot,tx
 COMPOSE  = docker compose -p $(PROJECT) -f docker-compose.yml
-# Install pulls the published bot (vexaai/vexa-bot:v012 — release-validated since v0.12.1).
+# Install pulls the published bot (vexaai/vexa-bot:$IMAGE_TAG — release-validated).
 # `make bot` builds from source into the LOCAL namespace (vexa/, like vexa/meet-join-env:dev) so a
 # source build can never shadow the published pointer (#569).
 REPO_ROOT := $(abspath ../..)
@@ -57,7 +57,7 @@ dashboard-harness:
 stack-test:
 	./bin/stack-test
 
-## stack-test-bot — + the real bot-spawn proof (COMPOSE_BOT=1; slow, needs vexaai/vexa-bot:v012).
+## stack-test-bot — + the real bot-spawn proof (COMPOSE_BOT=1; slow, needs vexaai/vexa-bot:$IMAGE_TAG).
 stack-test-bot:
 	COMPOSE_BOT=1 ./bin/stack-test
 
@@ -87,17 +87,17 @@ stack-test-v010:
 
 ## up — the INSTALL entrypoint: PULLS the published, release-validated images (#569 — what users
 ## run must be the bytes the release machinery proved; a local build must never shadow a published
-## :v012 pointer). Seeds .env from .env.example if absent and mints every secret the services refuse
+## release tag). Seeds .env from .env.example if absent and mints every secret the services refuse
 ## to boot without (mint-dev-env.sh — never overwrites a value already set), pulls everything (services + the
 ## build-only agent-worker profile + the bot), brings the stack up WITHOUT building, then mints +
-## prints an API key. Building from source is `make dev` (images tagged :dev, never v012 names).
+## prints an API key. Building from source is `make dev` (images tagged :dev, never a release tag).
 up:
 	@$(MAKE) --no-print-directory _preflight
 	@./mint-dev-env.sh .env
 	$(COMPOSE) pull
-	@_tag=$$(grep -E '^IMAGE_TAG=' .env | head -1 | cut -d= -f2- | tr -d '[:space:]'); _tag=$${_tag:-v012}; \
+	@_tag=$$(grep -E '^IMAGE_TAG=' .env | head -1 | cut -d= -f2- | tr -d '[:space:]'); _tag=$${_tag:-$$(grep -E '^IMAGE_TAG=' .env.example | head -1 | cut -d= -f2-)}; \
 	 echo "→ pulling spawn-time images (agent-worker is a build-only compose profile pull skips)"; \
-	 docker pull "vexaai/v012-agent-worker:$$_tag"; \
+	 docker pull "vexaai/vexa-agent-worker:$$_tag"; \
 	 _bi=$$(grep -E '^BROWSER_IMAGE=' .env | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$$//; s/[[:space:]]+$$//'); \
 	 _bi=$$(printf '%s' "$$_bi" | sed "s/\$${IMAGE_TAG}/$$_tag/; s/\$$IMAGE_TAG/$$_tag/"); \
 	 case "$$_bi" in vexaai/*) docker pull "$$_bi";; esac
@@ -108,7 +108,7 @@ up:
 	@$(MAKE) --no-print-directory _access
 
 ## dev — build the whole stack FROM THIS CHECKOUT, tagged :dev (the repo-wide 'dev = locally-built'
-## convention) so a source build can never impersonate a published :v012 image. The running stack's
+## convention) so a source build can never impersonate a published release image. The running stack's
 ## interpolated refs (AGENT_WORKER_IMAGE etc.) follow IMAGE_TAG=dev coherently.
 dev:
 	@$(MAKE) --no-print-directory _preflight
@@ -138,7 +138,7 @@ _storage_note:
 ## carry a RepoDigest (= came from the registry). A locally-built image has NO RepoDigest, so a
 ## shadowed pointer fails here loudly. Run after `make up` to prove the install is artifact-true.
 digest-audit:
-	@_tag=$$(grep -E '^IMAGE_TAG=' .env 2>/dev/null | cut -d= -f2- | tr -d '[:space:]'); _tag=$${_tag:-v012}; \
+	@_tag=$$(grep -E '^IMAGE_TAG=' .env 2>/dev/null | cut -d= -f2- | tr -d '[:space:]'); _tag=$${_tag:-$$(grep -E '^IMAGE_TAG=' .env.example | head -1 | cut -d= -f2-)}; \
 	 fail=0; \
 	 for img in $$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "^vexaai/.*:$$_tag$$"); do \
 	   d=$$(docker image inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "$$img"); \
@@ -167,7 +167,7 @@ _preflight:
 	 esac
 
 ## bot — build the meeting bot FROM SOURCE for development, tagged into the LOCAL vexa/ namespace
-## (BOT_IMAGE, default vexa/vexa-bot:dev) so it can never shadow the published vexaai/vexa-bot:v012
+## (BOT_IMAGE, default vexa/vexa-bot:dev) so it can never shadow the published vexaai/vexa-bot release tag
 ## the install pulls. (vexaai/vexa-bot:dev on Docker Hub is the OLDER 0.10 line — neither pulled nor
 ## overwritten here.) Builds the join-env base first, then the bot. Point BROWSER_IMAGE (.env) at
 ## BOT_IMAGE so the runtime spawns your build.
@@ -270,7 +270,7 @@ migrate-storage:
 	LEGACY_IMAGE="$(LEGACY_MINIO_IMAGE)" LEGACY_ACCESS_KEY="$${LEGACY_MINIO_ACCESS_KEY:-$${LAK:-$$AK}}" \
 	LEGACY_SECRET_KEY="$${LEGACY_MINIO_SECRET_KEY:-$${LSK:-$$SK}}" LEGACY_BUCKET="$${LEGACY_MINIO_BUCKET:-$$BK}" \
 	TARGET_ENDPOINT=http://storage:9000 TARGET_ACCESS_KEY="$$AK" TARGET_SECRET_KEY="$$SK" TARGET_BUCKET="$$BK" \
-	STORAGE_VOLUME=$(PROJECT)_storage-data RUN_IMAGE="vexaai/v012-meeting-api:$$TAG" RUN_PYTHON=python \
+	STORAGE_VOLUME=$(PROJECT)_storage-data RUN_IMAGE="vexaai/vexa-meeting-api:$$TAG" RUN_PYTHON=python \
 	TOOLS_DIR=$(REPO_ROOT)/deploy/storage NAME_PREFIX=$(PROJECT) RETRY_HINT="make -C deploy/compose migrate-storage" \
 	COPY_ARGS="$(COPY_ARGS)" $(REPO_ROOT)/deploy/storage/migrate-from-minio.sh
 

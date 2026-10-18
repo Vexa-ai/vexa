@@ -12,7 +12,7 @@ slim image from `<service>/Dockerfile`:
 | agent-api    | `core/agent/services/agent-api`        | 18100     | `uvicorn control_plane.api`        |
 | gateway      | `core/gateway/services/gateway`        | 18056     | `python -m gateway`                |
 | terminal     | `clients/terminal`                     | 13000     | Next.js custom server              |
-| mcp          | `core/meetings/services/mcp`           | 18010     | the MCP transport                  |
+| mcp          | `core/gateway/services/mcp`           | 18010     | the MCP transport                  |
 | flows-api    | repo root, `core/flows/Dockerfile`     | 18200     | `python -m flows_integrations.flows_api` |
 | flows-mailbox| repo root, `core/flows/Dockerfile`     | —         | `python -m flows_integrations.mailbox` (profile `mailbox`) |
 
@@ -81,10 +81,10 @@ then). admin-api reads it (and `VEXA_SIGNIN_ALLOW`) and decides every sign-in; t
 
 Every service answers `GET /health` and carries a compose healthcheck; `depends_on` waits on
 `condition: service_healthy` so the bring-up is ordered. The `runtime` mounts
-`/var/run/docker.sock` and spawns the bot (`BROWSER_IMAGE=vexaai/vexa-bot:v012`, published — a
+`/var/run/docker.sock` and spawns the bot (`BROWSER_IMAGE=vexaai/vexa-bot:${IMAGE_TAG}`, published — a
 reference, never built here; never point it at the published `vexaai/vexa-bot:dev`, which is the
 old 0.10 line and incompatible with this stack's `lifecycle.v1`) on demand and the per-dispatch
-agent worker (`vexaai/v012-agent-worker:v012`, a `build-only` compose profile); neither is a
+agent worker (`vexaai/vexa-agent-worker:${IMAGE_TAG}`, a `build-only` compose profile); neither is a
 long-running compose service.
 
 Each bot container is created by the runtime, not by compose, so its hardening is set there (the

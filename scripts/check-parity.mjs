@@ -18,7 +18,7 @@
  * decision is worse than no gate: it makes the wrong answer permanent and calls it enforcement.
  *
  * THE MANIFEST (`scripts/parity.json`) is the deliverable. Each fact declares:
- *   kind          file-bytes | literal | set | regex-source | header | prose
+ *   kind          file-bytes | literal | set | regex-source | header | prose | flag
  *   sites[]       {path, pattern} — `pattern` is a JS regex with exactly ONE capture group; it must
  *                 match exactly once in the file. Zero matches or two is a STALE MANIFEST and fails:
  *                 the manifest cannot quietly stop describing the tree.
@@ -78,6 +78,16 @@ export const asSet = (raw) => [...new Set(
  *  other difference (a hyphen, a letter) still does. */
 export const asHeader = (raw) => raw.trim().toLowerCase();
 
+/** The FLAG normaliser. A switch is written `False` in a Python table and `off` in a policy file's
+ *  front matter; those are one answer. Anything that is neither on nor off is returned marked, so
+ *  the site disagrees with every real answer and the failure names it — never coerced to a side. */
+const FLAG_ON = new Set(["true", "on", "yes", "1"]);
+const FLAG_OFF = new Set(["false", "off", "no", "0"]);
+export const asFlag = (raw) => {
+  const v = String(raw).trim().replace(/^["']|["']$/g, "").toLowerCase();
+  return FLAG_ON.has(v) ? "on" : FLAG_OFF.has(v) ? "off" : `${raw.trim()} (not a switch)`;
+};
+
 /** Read one site's value. Returns {value} or {error}. */
 export function readSite(fact, site, root) {
   const abs = join(root, site.path);
@@ -100,7 +110,7 @@ export function readSite(fact, site, root) {
     // averaged into whichever match came first.
     const vals = all.map((x) => x[1]);
     const norm = (v) => fact.kind === "set" ? asSet(v).join(" · ") : fact.kind === "prose" ? asProse(v)
-      : fact.kind === "header" ? asHeader(v) : v;
+      : fact.kind === "header" ? asHeader(v) : fact.kind === "flag" ? asFlag(v) : v;
     const distinctHere = [...new Set(vals.map(norm))];
     if (distinctHere.length > 1)
       return { error: `${site.path}: this file writes the fact ${all.length} times and its own copies disagree — ${distinctHere.map((v) => JSON.stringify(v.slice(0, 80))).join(" vs ")}` };
@@ -112,6 +122,7 @@ export function readSite(fact, site, root) {
   const value = fact.kind === "set" ? asSet(raw).join(" · ")
     : fact.kind === "prose" ? asProse(raw)
     : fact.kind === "header" ? asHeader(raw)
+    : fact.kind === "flag" ? asFlag(raw)
     : raw;
   return { value, line, raw };
 }

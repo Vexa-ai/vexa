@@ -55,6 +55,12 @@ function headersFromClaims(c) {
     if (d.workspaces === "*") out["x-user-delegation-workspaces"] = "*";
     else if (Array.isArray(d.workspaces)) out["x-user-delegation-workspaces"] = d.workspaces.join(",");
     if (d.target) out["x-user-delegation-target"] = String(d.target);
+    if (d.unit) out["x-user-delegation-unit"] = String(d.unit);
+    if (d.shared === true) out["x-user-delegation-shared"] = "1";
+    if (Array.isArray(d.grants) && d.grants.length && d.flow) {
+      out["x-user-delegation-grants"] = d.grants.join(",");
+      out["x-user-delegation-flow"] = String(d.flow);
+    }
   }
   return out;
 }
@@ -69,6 +75,13 @@ function signedDelegation(validation) {
   if (!d || typeof d !== "object" || Array.isArray(d)) return undefined;
   const out = { regime: String(d.regime || ""), workspaces: d.workspaces === "*" ? "*" : (d.workspaces || []).map(String) };
   if (d.target) out.target = String(d.target);
+  if (d.unit) out.unit = String(d.unit);
+  if (d.shared === true) out.shared = true;
+  const GRANTS = ["bot.request", "bot.stop", "flow.retire_self"];
+  if (Array.isArray(d.grants) && String(d.flow || "").trim()) {
+    const kept = [...new Set(d.grants.map(String).filter((g) => GRANTS.includes(g)))].sort();
+    if (kept.length) { out.grants = kept; out.flow = String(d.flow).trim(); }
+  }
   return out;
 }
 function reentryAdmitted(validation, signed) {

@@ -28,10 +28,12 @@ window detected as something else falls back to German instead of producing text
 |---|---|---|
 | **Meeting** | The **Language** control beside the meeting link when you send a bot; `language` / `allowed_languages` on `POST /bots`; the agent's `request_meeting_bot` tool | whoever sends the bot |
 | **Person** | Settings → **Transcription language**; `PUT /user/transcription` | each person, for their own bots |
+| **Your history** | nothing to set: with no person default, the languages your last 10 finished meetings were spoken in (each at least 5% of their lines, 2 or 3 of them) | automatic |
 | **Deployment** | Helm `meetingApi.transcriptionLanguage` / `meetingApi.transcriptionAllowedLanguages`; env `DEFAULT_TRANSCRIPTION_LANGUAGE` / `DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES` | the operator |
 
-The first level that sets anything decides the whole setting: **meeting, then person, then deployment,
-then auto-detect.** A meeting that says `de` is pinned to German even when the person's default is
+The first level that sets anything decides the whole setting: **meeting, then person, then your
+history, then deployment, then auto-detect.** History only restricts detection to the languages you
+already speak (`source: "history"`); a single language, or fewer than 50 lines, sets nothing. A meeting that says `de` is pinned to German even when the person's default is
 "German or English". To force auto-detect over every default for one meeting, send `language: "auto"`.
 
 Every way a bot is started gets the same answer: the API, the terminal, the agent's tool, a calendar
@@ -108,6 +110,12 @@ and in the Helm values table ([`deploy/helm/README.md`](https://github.com/Vexa-
    (`422` if refused). It then reads the person's default out of the bot-context answer it already
    fetches from identity, and the deployment default from its environment. It takes the first level that
    is set.
+   When neither the meeting nor the person sets anything, it counts the languages of the transcript
+   segments of the person's last 10 completed meetings, from meeting-api's own tables. Two or three
+   languages that each hold at least 5% of at least 50 segments become a restricted list with no pinned
+   language (source `history`). This level comes before the deployment default and is not narrowed by
+   it. A history that cannot be read is logged as `bot_spawn_language_history_unreadable` and skipped,
+   and the deployment default applies.
 2. **It is stored and handed to the bot.** meeting-api writes `data.transcription_language` on the
    meeting. It puts `language` and `allowedLanguages` in the bot's invocation (invocation.v1).
 3. **The bot applies it to every transcription call.** One language pins each call. A few languages
@@ -128,6 +136,7 @@ and in the Helm values table ([`deploy/helm/README.md`](https://github.com/Vexa-
 | The meeting's setting (`meetings.data.transcription_language`) | meeting-api: at spawn, and on an accepted live change | the terminal, the API, the agent |
 | The bot's running setting | the bot, from its invocation and each `reconfigure` | its transcription calls |
 | The deployment default | the operator (Helm values or env) | meeting-api |
+| The history level | nobody: computed at spawn from the person's completed meetings' segments, never stored apart from the meeting's setting | meeting-api |
 
 **Contracts and routes.** [`transcription-language.v1`](https://github.com/Vexa-ai/vexa/tree/main/core/meetings/contracts/transcription-language.v1)
 defines the setting, its levels, the stored shape and the live change, with goldens. `invocation.v1`

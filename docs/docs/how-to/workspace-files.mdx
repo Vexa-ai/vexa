@@ -103,8 +103,9 @@ workspace, or any group you can write to), paste the repository URL, choose the 
 
 ```
 workspace_attach(workspace="<group-slug>", repo="git@github.com:aswf/dna.git", ref="main")
-workspace_pull(workspace="<group-slug>")     # bring in what changed upstream (fast-forward only)
-workspace_push(workspace="<group-slug>")     # send our work back (never a force push)
+workspace_status(slug="<group-slug>")   # look first: ahead/behind and the commits on each side; changes nothing
+workspace_pull(slug="<group-slug>")     # bring in what changed upstream (fast-forward only)
+workspace_push(slug="<group-slug>")     # send our work back (never a force push)
 ```
 
 **Over the API** — your own workspace, and a shared one:
@@ -133,8 +134,8 @@ clone, so attaching never locks anybody out and your member list is never pushed
 
 A private repo needs a credential, and Vexa's first answer is not to ask you for one. Every workspace can
 mint its own **ed25519 deploy key**: you add the *public* half to your repository, and nothing of yours
-travels to us. The private half is generated server-side, sealed at rest, and exists on disk only for the
-length of one git operation.
+travels to us. The private half is generated server-side, kept in the credential broker, and exists on disk only for
+the length of one git operation.
 `repo` must be an `https://`, `ssh://` or `git@host:owner/repo` URL pointing at a public or company
 git host. A host inside the deployment is refused: a loopback, private, link-local, reserved or
 multicast address, or an unqualified name with no dot. Local filesystem paths are refused too,
@@ -158,6 +159,34 @@ for a secret — in chat, tell the agent `done` once you have added it and it wi
 key for anything private; the [saved GitHub token](/core/workspaces#reusable-github-token) remains the
 fallback for `https://` remotes, and is entered in the terminal (account menu → **GitHub token**) and
 never in a chat.
+
+## How it works
+
+1. **Gateway.** Every call goes to `/agent/workspace/*`. The gateway forwards it to agent-api's
+   `/api/workspace/*` (`core/agent/control_plane/routers/workspaces.py`) with the signed caller identity.
+2. **Reads.** `tree` and `file` resolve which workspace to read: your own by default, or a `slug` from
+   your active set or a shared workspace you belong to. Any other slug is refused. Paths are checked by
+   one path layer that refuses absolute paths, `..`, links and the reserved `.git` / `.vexa` folders.
+3. **Uploads.** Each file is checked against 25 MB (`413`), named by a content-hash prefix, and written
+   without following links: images to `assets/`, everything else to `uploads/`.
+4. **Swap and attach.** These are `person` verbs in `core/agent/routes.v1.json`: a worker dispatched
+   without a person is refused. The repository URL is checked before any git process starts (`422`).
+   The credential is the workspace's deploy key for SSH, else your saved token for `https://`, else none.
+5. **Deploy key.** Generated once per workspace and returned again on every call. Only the public half
+   is ever returned; the private half is kept in the [credential broker](/connections) (agent-api's `git`
+   role) and written to disk only for one git operation. Without a broker, generating one is refused.
+
+## Why it complies
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P20 — authorize every access | A slug resolves only inside your own slots or a membership; swap and attach refuse anything else. | `test_workspace_slug_containment.py` (`test_swap_refuses_a_slug_that_is_not_one_of_the_callers_slots`, `test_shared_attach_refuses_a_slug_outside_the_groups_store`) |
+| Person in the loop | Verbs that load a repository with saved credentials refuse a worker with nobody behind it. | `test_person_verbs.py` (`test_an_unwatched_worker_is_refused_and_nothing_changes`, `test_every_destructive_or_membership_route_is_flagged`) |
+| P15 — secrets protected | A token in the repository field is refused by name; git errors are scrubbed; the private key has no read path. | `test_repo_ref_and_redaction.py` (`test_a_token_in_the_repository_field_is_refused_by_name`), `test_deploy_keys.py` (`test_ensure_is_idempotent_and_returns_only_the_public_half`, `test_the_private_half_is_kept_by_the_broker_and_nowhere_here`) |
+| Internal hosts | A loopback, private or unqualified host, or a local path outside `VEXA_ALLOW_LOCAL_REPO_ROOT`, is refused before any subprocess. | `test_repo_ref_host.py` (`test_internal_host_is_refused`, `test_the_api_gate_refuses_before_any_subprocess`) |
+| P14 — config is a contract | `VEXA_ALLOW_LOCAL_REPO_ROOT` is declared in agent-api's `config.v1.json`. | `gate:config-contract` |
+
+All tests are in `core/agent/tests/` and run under `gate:python`.
 
 ## Next
 

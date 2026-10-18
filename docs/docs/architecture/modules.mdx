@@ -91,7 +91,7 @@ sha256 per contract; CI fails if a sealed schema drifts. Grouped by owning modul
 | Contract | Owner → Consumers | What it is |
 |---|---|---|
 | `runtime.v1` | runtime kernel ← meeting-api, agent-api | The workload lifecycle contract (mechanism, not policy — P11). |
-| `schedule.v1` | runtime scheduler ← agent-api, routines | HTTP-call job spec: one-shot (`execute_at`) or recurring (`cron`) + retry policy. |
+| `schedule.v1` | runtime scheduler ← agent-api (only the one-time routine migration's list-and-cancel) | HTTP-call job spec: one-shot (`execute_at`) or recurring (`cron`) + retry policy. Routines no longer use it: they are flows ([ADR-0046](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0046-flows-absorb-routines-flows-own-time-flows-are-scoped.md)). |
 
 ### deploy
 

@@ -26,6 +26,12 @@ from .profiles import Runnable
 from .workload_env import forwarded_env
 
 MANAGED_LABEL = "runtime.managed"
+#: Adopt Pods that carry no ``runtime.instance`` label (spawned by a 0.12 runtime). Default on.
+ADOPT_UNLABELLED_ENV = "RUNTIME_K8S_ADOPT_UNLABELLED"
+
+
+def adopt_unlabelled() -> bool:
+    return (os.environ.get(ADOPT_UNLABELLED_ENV) or "true").strip().lower() not in ("0", "false", "no", "off")
 #: Which runtime spawned the Pod (the Helm release); adoption selects on it, so two releases in one
 #: namespace never adopt each other's Pods.
 INSTANCE_LABEL = "runtime.instance"
@@ -508,11 +514,30 @@ class K8sBackend:
         """Discover the workload Pods THIS backend spawned — for boot re-adoption. Label-selected
         only (``runtime.managed=true`` and this runtime's ``runtime.instance``): a name-prefix
         fallback is unsafe in a shared namespace (the chart's own service Pods can share the prefix),
-        and another release's Pods are not ours, so Pods spawned by a runtime that did not label
-        them are not re-adopted. Never raises."""
+        and another release's Pods are not ours. Never raises.
+
+        Pods with NO ``runtime.instance`` label were spawned by a runtime from before the label
+        (0.12): a bot still in its meeting across the upgrade. ``_owns`` already treats such a Pod
+        as this runtime's (find/stop reach it), so adoption takes it too — otherwise meeting-api
+        sees the live bot as untracked and, after its escalation window, fails the meeting under it.
+        ``RUNTIME_K8S_ADOPT_UNLABELLED=false`` leaves them out (two releases sharing a namespace
+        across an upgrade)."""
+        selectors = [f"{MANAGED_LABEL}=true,{INSTANCE_LABEL}={k8s_label_value(self._instance)}"]
+        if adopt_unlabelled():
+            selectors.append(f"{MANAGED_LABEL}=true,!{INSTANCE_LABEL}")
+        out: list[dict] = []
+        seen: set[str] = set()
+        for selector in selectors:
+            for item in self._list_by_selector(selector):
+                if item["name"] not in seen:
+                    seen.add(item["name"])
+                    out.append(item)
+        return out
+
+    def _list_by_selector(self, selector: str) -> list[dict]:
         try:
             r = _kubectl(
-                "get", "pods", "-l", f"{MANAGED_LABEL}=true,{INSTANCE_LABEL}={k8s_label_value(self._instance)}",
+                "get", "pods", "-l", selector,
                 "-o", "json",
                 *self._ns_args(), check=False,
             )

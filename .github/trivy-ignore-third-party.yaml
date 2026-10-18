@@ -572,7 +572,7 @@ vulnerabilities:
     purls:
       - "pkg:golang/stdlib@v1.24.6"
       - "pkg:golang/stdlib@v1.27.1"
-    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it. versity/versitygw v1.8.0 (Lite and Compose object storage; v1.8.0 is the latest release, 2026-09-04). Go's standard library and golang.org/x/net in the versitygw binary, and Alpine's OpenSSL. The gateway is reachable on the stack's own networks and, in Compose, on host loopback only; the next versitygw release is taken when it is published. axllent/mailpit:latest (the dogfood rig's local mail catcher, bound to 127.0.0.1 on the rig host, never part of a deployment). Go's standard library and golang.org/x/net compiled into the upstream binary."
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it. versity/versitygw v1.8.0 (Lite and Compose object storage; v1.8.0 is the latest release, 2026-09-04). Go's standard library and golang.org/x/net in the versitygw binary, and Alpine's OpenSSL. The gateway is reachable on the stack's own networks and, in Compose, on host loopback only; the next versitygw release is taken when it is published."
     expired_at: 2026-12-31
   - id: CVE-2026-78669
     purls:
@@ -580,7 +580,7 @@ vulnerabilities:
       - "pkg:golang/golang.org/x/net@v0.59.0"
       - "pkg:golang/stdlib@v1.24.6"
       - "pkg:golang/stdlib@v1.27.1"
-    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it. versity/versitygw v1.8.0 (Lite and Compose object storage; v1.8.0 is the latest release, 2026-09-04). Go's standard library and golang.org/x/net in the versitygw binary, and Alpine's OpenSSL. The gateway is reachable on the stack's own networks and, in Compose, on host loopback only; the next versitygw release is taken when it is published. axllent/mailpit:latest (the dogfood rig's local mail catcher, bound to 127.0.0.1 on the rig host, never part of a deployment). Go's standard library and golang.org/x/net compiled into the upstream binary."
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it. versity/versitygw v1.8.0 (Lite and Compose object storage; v1.8.0 is the latest release, 2026-09-04). Go's standard library and golang.org/x/net in the versitygw binary, and Alpine's OpenSSL. The gateway is reachable on the stack's own networks and, in Compose, on host loopback only; the next versitygw release is taken when it is published."
     expired_at: 2026-12-31
   - id: CVE-2026-82049
     purls:
@@ -615,7 +615,7 @@ vulnerabilities:
     purls:
       - "pkg:golang/stdlib@v1.24.6"
       - "pkg:golang/stdlib@v1.27.1"
-    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it. versity/versitygw v1.8.0 (Lite and Compose object storage; v1.8.0 is the latest release, 2026-09-04). Go's standard library and golang.org/x/net in the versitygw binary, and Alpine's OpenSSL. The gateway is reachable on the stack's own networks and, in Compose, on host loopback only; the next versitygw release is taken when it is published. axllent/mailpit:latest (the dogfood rig's local mail catcher, bound to 127.0.0.1 on the rig host, never part of a deployment). Go's standard library and golang.org/x/net compiled into the upstream binary."
+    statement: "postgres:17-alpine (Compose and Helm database). The finding is Go's standard library inside gosu, which the official image runs once at start to drop from root before exec'ing postgres; gosu reads no network input. It clears when Docker rebuilds gosu with a newer Go, and the digest pin moves with it. versity/versitygw v1.8.0 (Lite and Compose object storage; v1.8.0 is the latest release, 2026-09-04). Go's standard library and golang.org/x/net in the versitygw binary, and Alpine's OpenSSL. The gateway is reachable on the stack's own networks and, in Compose, on host loopback only; the next versitygw release is taken when it is published."
     expired_at: 2026-12-31
   - id: CVE-2026-97687
     purls:

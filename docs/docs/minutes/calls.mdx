@@ -1,0 +1,342 @@
+---
+title: "Calls"
+description: "Start an audio or video call from a shared chat in Minutes. The call is transcribed per speaker, the chat's agent follows it, and its owner reviews what it changes."
+---
+
+A call is a conversation you start from a chat in Minutes, held on your deployment's own LiveKit
+media server. Everyone in the chat can join. The call is transcribed as people speak, and each
+person's words are attributed to them, because each person sends their own audio track. The chat
+stays beside the call: the agent follows the live transcript and answers when someone mentions it.
+When the call ends, it is kept as a meeting, like any other meeting.
+
+Calls are an optional module. A deployment without the LiveKit server shows no Call button.
+
+## What you can do
+
+### Start or join a call
+
+1. Open a chat that has other people in it. Use **People** beside the chat's name to add them.
+2. Press **Call**. If a call is already running in this chat, the button reads **Join call · N**,
+   where N is the number of people in the call.
+3. The browser asks for the microphone the first time. The call opens as one compact bar at the top of
+   the conversation. The bar stays there while you move between chats.
+
+The bar shows the call's name, how long it has run, who is in it (a ring lights on whoever speaks),
+and a small Vexa mark while the call is transcribed. Its icon buttons, each with a tooltip:
+
+- the microphone (mute and unmute);
+- the camera (its tiles open under the bar while any camera or shared screen is on);
+- screen share;
+- **…**: your microphone, camera and speaker, **Notes and transcript** (the meeting's own view),
+  and **Add people** (mention them in the chat);
+- the red phone icon: leave the call.
+
+A viewer of the chat joins the call to listen. A viewer cannot speak.
+
+### The transcription notice
+
+Before joining, every participant sees one quiet line, *This call is transcribed · everyone in it
+sees this*, and presses **Join**. Until they do, the dock does not connect to the room and the
+microphone stays off; **Cancel** leaves without connecting. In the call, the Vexa mark in the bar
+says the call is transcribed (its tooltip says so in words). Vexa's transcriber is not a person in the
+call and not a bot you manage: it starts with the call and ends with it, and there is no Stop bot for
+a call. The notice comes from the room itself, so every client shows the same thing.
+
+Calls are always transcribed unless the administrator sets `CALL_TRANSCRIPTION_SWITCHABLE=true`.
+When that setting is on, a call in an **incognito** chat (its profile chip) is started untranscribed,
+and so can any call through the API (`POST /bots {"platform":"vexa_call", "transcribe": false}`). An
+untranscribed call starts **no transcriber at all**: nothing joins the room to capture audio, no
+meeting is made, and no transcript or notes exist afterwards; the bar says *not transcribed*. With
+the setting off, starting a call in an incognito chat is refused with a message saying that calls here
+are always transcribed.
+
+### Talk to the agent during the call
+
+The chat is the call's shared conversation. Everyone in the call and the agent are in it. The agent
+reads the live transcript and answers when you mention it (`@vexa`), as in any chat with more than one
+person. It uses only what every participant can read.
+
+### Your private side chat
+
+**…** → **Notes and transcript** opens the call's meeting: its note, the transcript in the sidebar's
+drawer, and your own chat about it, with your agent and your workspaces. Nobody else sees that chat.
+
+To say something to the room in writing, write in the shared chat itself: a shared chat is one
+stream. Nothing crosses from your private chat on its own.
+
+### Background blur
+
+Blur what is behind you with the **Blur** button on your own video tile (it shows when you point at
+the tile, and always on a touch screen), in the call bar's **…**, or before you join. Each press goes
+**off → light → strong → off**. The choice is yours and is kept in this browser: it applies every time
+your camera starts.
+
+It runs in your browser (MediaPipe selfie segmentation through `@livekit/track-processors`), so the
+others receive the blurred picture. Its runtime and model are served by your deployment at
+`/mediapipe/`, never from a third-party CDN. In a browser that cannot run it, or on a device that
+cannot keep up, blur turns itself off with one short notice and your camera carries on unprocessed.
+
+### Show a page to everyone
+
+In a call, open a page of a shared workspace and choose **…** → **Show to everyone in the call**, or
+ask the agent ("show the sponsor plan to everyone", "highlight the budget"). The page opens in every
+participant's panel, and a line under the call bar says *Shown by Dmitry · Sponsor plan*.
+
+- **Following.** Everyone follows the person who showed it: their scroll position, and whatever they
+  select, which is highlighted for everyone and scrolled into view. **Stop following** lets you browse
+  on your own; **Follow** brings you back. A highlight fades after a few seconds unless it is pinned.
+- **Access.** Only a page that every person in the chat can already read is shown. If someone cannot,
+  the show is refused and you are offered to share the workspace with them first (they are added as
+  contributors when you confirm). A private page is never sent.
+- **What is kept.** Nothing but one line in the chat: *Dmitry showed “Sponsor plan” · 14:05*, naming the
+  page. The show itself travels over the call's LiveKit data channel and is not stored.
+
+This is switched by the `call_show` feature (`VEXA_FEATURES`, or `features:` in `_global/POLICIES.md`).
+
+### Review after the call
+
+After the call, the post-meeting run proposes changes:
+
+- the meeting's report, as a page in the owner's Personal workspace;
+- one proposal for each commitment the report names.
+
+**Review · N** appears beside the chat's name while proposals are waiting.
+
+The person who started the call (the meeting's owner) can accept a proposal, edit it before accepting,
+or reject it. Other participants can see the list, but cannot decide anything on it.
+
+Nothing lands in a workspace until the owner accepts it. An accepted page is written to its workspace
+and committed with the owner as its author. The owner's own write rights apply.
+
+An administrator can set the policy `post_meeting_auto_accept: on` in the organisation's
+`POLICIES.md` (`_global`). A workspace can also set it in its own `POLICIES.md`, and the workspace's
+setting wins over the organisation's, whether it is `on` or `off`. With the policy on, each proposed
+change lands at once, in the owner's name and with the owner's rights. The default is `off`.
+
+### When a call ends
+
+A call ends when the last person in it presses Leave: a few seconds later the transcriber leaves and
+the meeting completes. If the last person's connection drops instead, the call waits
+`CALL_EMPTY_GRACE_SEC` (30 seconds by default) for them to come back; joining again within that time
+continues the same call and the same meeting. It also ends if nobody joins within `CALL_FIRST_JOIN_TIMEOUT_SEC` (30 seconds by
+default: a call started and cancelled before anyone joined does not keep its transcriber waiting), or when it reaches `CALL_MAX_DURATION_SEC` (four hours by default).
+
+When the call ends, the meeting completes like any meeting. Its transcript, notes, search, sharing and
+export all work on it. Everyone who joined the call can read its transcript.
+
+Participants read the transcript through a share that Minutes makes when the call starts, and that
+share lasts six hours. If you raise `CALL_MAX_DURATION_SEC` above six hours (`21600`), people who
+join after the sixth hour cannot redeem it, and their join fails.
+
+## How it works
+
+### Flow
+
+1. **Start.** The terminal posts `POST /api/bots {"platform": "vexa_call", "session_id": "s-…"}`.
+   meeting-api:
+   - creates a LiveKit room named `call-…`, with metadata that holds the transcription notice, the
+     owner and the session;
+   - makes the meeting row, with platform `vexa_call` and the room name as its id;
+   - spawns the listener;
+   - writes the meeting row's id into the room's metadata.
+
+   Rooms are never created by joining: the server runs with `room.auto_create: false`.
+2. **Bind.** The terminal mints a transcript share for the meeting
+   (`POST /api/meetings/{id}/share`). It then posts the room, the meeting and the share to agent-api
+   (`POST /api/sessions/{s}/call`). agent-api reads the room's metadata back from the LiveKit server,
+   and binds the call to the session only if the metadata names the caller, this session and this
+   meeting.
+3. **Join.** Each participant asks agent-api for a room token (`POST /api/sessions/{s}/call/token`).
+   agent-api mints the token only for a participant of the session, and only for the session's
+   room. The token is valid for ten minutes, which covers joining and reconnecting. A viewer's token
+   can subscribe but not publish.
+
+   Joining also redeems the call's transcript share as the participant, so they can read the
+   transcript. The browser connects to the LiveKit server with
+   [LiveKit's React components](https://github.com/livekit/components-js). Capture uses the browser's
+   own echo cancellation, noise suppression and gain control. Audio is sent as Opus with DTX and
+   redundancy.
+4. **Capture.** The listener is the meeting bot without a browser. It joins the room hidden and can
+   only subscribe, using `@livekit/rtc-node`. It subscribes to every audio track a participant
+   publishes and reads it as mono 16 kHz audio, on that participant's own channel, named after them. That channel is fed into the same
+   per-speaker lane, speech-to-text service and transcript sinks that a meeting and a voice note use.
+   Digital silence (a muted or quiet track) is not fed, so the lane sees the gaps between speech.
+5. **Follow.** A turn in the shared chat is grounded in the call's live transcript. The access check
+   still applies: a participant who has not joined the call grounds nothing.
+6. **End.** When the last participant leaves (LiveKit reports a client-initiated disconnect), the
+   listener waits three seconds; when the last connection is lost instead, it waits the grace period.
+   Then it leaves, flushes the last words and reports the meeting `completed`. agent-api sees that the room is gone and ends the
+   session's call.
+
+### Routes
+
+| Route | Service | Who may call it |
+|---|---|---|
+| `POST /bots {"platform":"vexa_call"}` | meeting-api | a person with the `bot` scope; the caller becomes the owner |
+| `GET /agent/sessions/{s}/call` | agent-api | any participant of the session |
+| `POST /agent/sessions/{s}/call` | agent-api | an owner or member; only for their own room |
+| `POST /agent/sessions/{s}/call/token` | agent-api | any participant; a viewer's token cannot publish |
+| `POST /agent/sessions/{s}/messages` | agent-api | an owner or member (a line in the shared chat) |
+| `GET /agent/sessions/{s}/proposals` | agent-api | any participant |
+| `POST /agent/sessions/{s}/proposals` | agent-api | the internal tier (the post-meeting run) |
+| `POST /agent/sessions/{s}/proposals/{id}/accept`, `…/reject` | agent-api | the meeting's owner |
+
+Without a LiveKit server, the call routes answer `503 calls_not_deployed`, and `GET …/call` says
+`calls: false`.
+
+### Who writes what
+
+| Data | Single writer | Where |
+|---|---|---|
+| The room and its metadata (the notice, owner, session and meeting) | meeting-api | LiveKit server |
+| The meeting row and its status | meeting-api | Postgres |
+| Transcript segments | the listener, then meeting-api | the transcript stream in Redis, then Postgres |
+| The session's call, and the proposals with their decisions | agent-api | `agent_session_call` and `agent_session_proposal` tables |
+| An accepted page | agent-api, as the owner | the workspace's git, authored by the owner |
+
+### Network requirements
+
+Calls are real-time media. Plan the network before you turn them on:
+
+| Port | Protocol | Who reaches it | Purpose |
+|---|---|---|---|
+| 7880 | TCP (WebSocket) | browsers, through your TLS proxy as `wss://`; meeting-api, agent-api and the listener inside the deployment | signalling and the room service |
+| 50000–50100 (configurable) | UDP | browsers | media |
+| 7881 | TCP | browsers on networks that block UDP | ICE over TCP |
+| 3478 | UDP | browsers on networks that allow UDP but block the media range | the embedded TURN server, when enabled |
+| 5349 (configurable) | TCP (TLS) | browsers on networks that block UDP or allow only TLS | TURN over TLS, when enabled |
+
+- Browsers need a `wss://` address (`LIVEKIT_URL`). Put the server behind the same TLS proxy as the
+  terminal, or give it its own name.
+- The UDP range must be open in the firewall. The server advertises the address browsers should use:
+  `LIVEKIT_USE_EXTERNAL_IP=true` discovers it through STUN, or you can set `LIVEKIT_NODE_IP`.
+- Each person in a call uses up to two ports of the UDP range (one connection to send, one to
+  receive). The default range of 101 ports therefore carries about 50 people at once across all
+  calls. Widen the range for more, and open the wider range in the firewall.
+- Restrictive networks need a relay. Pick by what the network allows:
+  - **UDP allowed, but not the media range:** the embedded TURN server on 3478/udp
+    (`LIVEKIT_TURN_ENABLED=true` and `LIVEKIT_TURN_DOMAIN`).
+  - **No UDP at all:** TURN over TLS. Give the server a DNS name that points at the LiveKit host
+    (`LIVEKIT_TURN_DOMAIN`, for example `turn.example.com`) and a certificate for that name, then set
+    the TLS port (5349 by default; see [Configuration](#configuration) for the keys). Browsers then
+    relay media inside TLS on that port. ICE over TCP on 7881 is the fallback when no relay is set up.
+  - **Only 443 outbound:** TURN over TLS must answer on 443 itself. On Compose, set
+    `LIVEKIT_TURN_TLS_PORT=443` on a host where nothing else holds 443. The Helm chart does not cover
+    this case: its server runs without the right to open ports below 1024. There, run the LiveKit
+    server yourself with TURN on 443, as described in
+    [LiveKit's deployment guide](https://docs.livekit.io/home/self-hosting/deployment/).
+- One server carries many small audio calls. Video needs more bandwidth and CPU, so size the host
+  for the number of video calls you expect at once.
+
+### Configuration
+
+The services' keys:
+
+| Key | Service | Default | Compose (`.env`) | Helm value | Meaning |
+|---|---|---|---|---|---|
+| `LIVEKIT_URL` | meeting-api, agent-api | — | `LIVEKIT_URL` | `livekit.url` | the server's public `wss://` address; unset means no calls |
+| `LIVEKIT_INTERNAL_URL` | meeting-api, agent-api | `LIVEKIT_URL` | `LIVEKIT_INTERNAL_URL` | set by the chart | the server inside the deployment, for example `ws://livekit:7880` |
+| `LIVEKIT_API_KEY` | meeting-api, agent-api | — | `LIVEKIT_API_KEY` | `livekit.apiKey` | the key that signs room tokens |
+| `LIVEKIT_API_SECRET` | meeting-api, agent-api | — | `LIVEKIT_API_SECRET` | generated into the chart's Secret | **secret**, at least 32 characters |
+| `CALL_MAX_DURATION_SEC` | meeting-api | `14400` | `CALL_MAX_DURATION_SEC` | `meetingApi.calls.maxDurationSeconds` | the longest call |
+| `CALL_EMPTY_GRACE_SEC` | meeting-api | `30` | `CALL_EMPTY_GRACE_SEC` | `meetingApi.calls.emptyGraceSeconds` | how long an emptied room waits before the call ends |
+| `CALL_FIRST_JOIN_TIMEOUT_SEC` | meeting-api | `30` | `CALL_FIRST_JOIN_TIMEOUT_SEC` | `meetingApi.calls.firstJoinTimeoutSeconds` | how long a new call waits for its first participant |
+| `CALL_MAX_PARTICIPANTS` | meeting-api | `50` | `CALL_MAX_PARTICIPANTS` | `meetingApi.calls.maxParticipants` | the most people one room admits |
+| `CALL_TRANSCRIPTION_SWITCHABLE` | meeting-api | `false` | `CALL_TRANSCRIPTION_SWITCHABLE` | `meetingApi.calls.transcriptionSwitchable` | whether a call may be started untranscribed through the API |
+
+The LiveKit server's own settings:
+
+| Compose (`.env`) | Helm value | Default | Meaning |
+|---|---|---|---|
+| `LIVEKIT_SIGNAL_BIND`, `LIVEKIT_SIGNAL_PORT` | `livekit.bindAddresses`, `livekit.service.port` | Compose `127.0.0.1:7880`; Helm the pod's IP, port `7880` | where signalling listens; keep it behind your TLS proxy |
+| `LIVEKIT_UDP_PORT_START`, `LIVEKIT_UDP_PORT_END` | `livekit.udpPortStart`, `livekit.udpPortEnd` | `50000`, `50100` | the media range |
+| `LIVEKIT_USE_EXTERNAL_IP`, `LIVEKIT_NODE_IP` | `livekit.useExternalIp`, `livekit.nodeIp` | `false` (Helm `true`), none | the address advertised to browsers |
+| `LIVEKIT_TURN_ENABLED`, `LIVEKIT_TURN_DOMAIN` | `livekit.turn.enabled`, `livekit.turn.domain` | off, none | the embedded TURN server on 3478/udp, and the DNS name browsers dial for it |
+| `LIVEKIT_TURN_TLS_PORT` | `livekit.turn.tlsPort` | off (Helm `0`) | TURN over TLS on this TCP port (5349 recommended; Helm requires a port above 1024) |
+| `LIVEKIT_TURN_CERT_FILE`, `LIVEKIT_TURN_KEY_FILE` | `livekit.turn.tlsSecretName` | none | the certificate and key for `LIVEKIT_TURN_DOMAIN`: host paths of PEM files on Compose, a `kubernetes.io/tls` Secret on Helm |
+
+TURN over TLS needs TURN enabled, a domain and a certificate. Without the certificate the LiveKit
+server does not start, and Helm refuses to render.
+
+Set them:
+
+- **Compose:** the `calls` profile (`docker compose --profile calls up -d livekit`). Put the keys in
+  `deploy/compose/.env` and apply them with `docker compose up -d meeting-api agent-api` and, for the
+  server's own settings, `docker compose --profile calls up -d livekit`. A `restart` does not re-read
+  `.env`. See [Deployment](/deployment#calls-optional).
+- **Helm:** set `livekit.enabled: true` and `livekit.url`, and the values above. The chart generates
+  the secret. See [Kubernetes](/deployment-kubernetes).
+- **Lite:** not supported. Lite runs no LiveKit server, so it has no calls.
+
+## Why it complies
+
+### Architecture
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| **P2** contracts | a call is the sealed `invocation.v1` / `api.v1` / `ws.v1` platform value `vexa_call`; the listener's room is the `invocation.v1` `Call` block | `gate:schema`, `gate:contract-version` |
+| **P3** one owner per domain (ADR-0037) | the meeting is meeting-api's, which creates the room and listener; the session is agent-api's, which decides who joins; neither calls the other to decide | meeting-api `test_call_spawn.py`, agent-api `test_session_calls.py` |
+| **P7** disposable workers | the listener is the ordinary meeting bot without its browser: it boots, joins, emits and dies | bot `call.test.ts` |
+| **P11** we operate media, we do not write it | the media server is unmodified LiveKit (Apache-2.0), pinned by digest | `gate:image-licenses` |
+| **P14** config is a contract | every service key above is declared in `config.v1` and set on Compose and Helm, the two surfaces that carry calls | `gate:config-contract` |
+| **P20** authorize every access | room tokens are minted only for session participants, for one room, for ten minutes; joining never creates a room | the deny tests below |
+| **P22** guaranteed teardown | an emptied room, a room nobody joined, or the cap ends the call; the room expires on the server too | bot `call.test.ts` |
+
+### Security
+
+**Who can do what.**
+
+- Only a participant of the chat gets a token for its call. The token is valid only for that call's
+  room, for ten minutes, and a viewer's token cannot publish.
+- Only the person who started a call can bind it to a chat. Only that person can accept what it
+  proposes.
+- The listener cannot publish anything. It joins as a hidden LiveKit participant; the dock shows it as
+  the Vexa mark and the notice tells everyone that it is there.
+- Nobody's microphone is captured before they have seen the notice and pressed **Join**.
+
+**Protections.**
+
+- The API secret signs every token and is held only by:
+  - the LiveKit server;
+  - meeting-api;
+  - agent-api.
+
+  On Compose, the runtime loads the whole `.env`, so its environment blanks `LIVEKIT_API_SECRET`.
+
+  Browsers receive short-lived tokens only.
+- Room metadata is written only by meeting-api. agent-api trusts a call's owner, session and meeting
+  only as they appear in metadata it reads from the server itself.
+- The listener's token is carried in its invocation. It is never stored on the meeting row and never
+  logged.
+- An accepted change is written with the owner's own rights, under the delegation ceiling, and
+  committed in the owner's name.
+
+**Deny tests.**
+
+| Test | Proves |
+|---|---|
+| `core/agent/tests/test_session_calls.py` · `test_a_call_binds_only_with_matching_room_metadata` | nobody binds another person's room, or a room for another chat |
+| `core/agent/tests/test_session_calls.py` · `test_a_participant_gets_a_short_lived_token_for_this_room_only` | non-participants get nothing; viewers cannot publish; the token names one room and expires in ten minutes |
+| `core/agent/tests/test_session_calls.py` · `test_the_meeting_owner_reviews_proposals_and_an_accepted_page_is_committed_as_them` | only the owner decides, nothing lands before acceptance, the commit is the owner's |
+| `core/meetings/services/meeting-api/tests/test_call_spawn.py` · `test_transcription_cannot_be_turned_off_unless_the_deployment_allows_it` | the notice cannot be switched off by a caller |
+| `core/meetings/services/meeting-api/tests/test_call_livekit_token.py` | the listener is hidden and cannot publish; admin tokens name one room |
+| `clients/terminal/src/minutes/__tests__/callConsent.test.tsx` | no room connection and no microphone before **Join**; the transcriber is listed in the call |
+| `core/meetings/services/meeting-api/tests/test_call_spawn.py` · `test_a_call_over_the_bot_limit_leaves_no_room_behind` | a call refused by the bot limit or the service authority, or whose listener fails to start, leaves no room |
+
+### End to end
+
+`core/meetings/eval/call-e2e/run.sh` starts a throwaway LiveKit server, the branch's meeting-api and
+gateway, and the listener. Two headless participants publish synthetic speech, one after the other,
+and a real speech-to-text service transcribes it.
+
+On 2026-10-12, the results were:
+
+| Speaker | Published | Received by the listener | Transcribed | Text |
+|---|---|---|---|---|
+| Ada | 17.31 s | 17.69 s | 17.69 s | every sentence, in order |
+| Grace | 14.70 s | 13.27 s | 13.27 s | every sentence, in order |
+
+- Each speaker's words were attributed to that speaker.
+- The meeting `completed` 8 seconds after the last person left.
+- Grace's received and transcribed figures are lower than her published figure because digital
+  silence between her sentences is not fed to the lane.

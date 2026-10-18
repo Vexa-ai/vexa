@@ -399,6 +399,120 @@
    "targets": []
   },
   {
+   "key": "VOICE_NOTE_MAX_DURATION_SEC",
+   "class": "defaulted",
+   "default": "1800",
+   "description": "the longest voice note, in seconds of audio: the voice-note socket accepts no audio past it and ends the note (close 4413), and the bot ends a note still running a minute later",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "VOICE_NOTE_IDLE_TIMEOUT_SEC",
+   "class": "defaulted",
+   "default": "120",
+   "description": "how long a voice note's bot waits with neither audio nor Stop before it ends the note (left_alone): the browser went away",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "LIVEKIT_URL",
+   "class": "capability",
+   "capability": "calls",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "the LiveKit server's public address (wss://\u2026) a browser joins a call at; also where meeting-api and the listener reach it unless LIVEKIT_INTERNAL_URL is set"
+  },
+  {
+   "key": "LIVEKIT_API_KEY",
+   "class": "capability",
+   "capability": "calls",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "the LiveKit API key that signs room tokens (the server's `keys:` entry)"
+  },
+  {
+   "key": "LIVEKIT_API_SECRET",
+   "class": "capability",
+   "capability": "calls",
+   "secret": true,
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "forbidden_values": [
+    "vexa-internal-secret",
+    "lite-internal-secret",
+    "changeme",
+    "change-me",
+    "CHANGE-ME",
+    "default",
+    "secret"
+   ],
+   "description": "SECRET \u2014 the LiveKit API secret paired with LIVEKIT_API_KEY, at least 32 characters; signs every room token"
+  },
+  {
+   "key": "LIVEKIT_INTERNAL_URL",
+   "class": "defaulted",
+   "default": "",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "the LiveKit server inside the deployment (ws://livekit:7880): where meeting-api calls the room service and the listener joins; empty \u21d2 LIVEKIT_URL"
+  },
+  {
+   "key": "CALL_MAX_DURATION_SEC",
+   "class": "defaulted",
+   "default": "14400",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "the longest call, in seconds; the listener ends a call still running at it"
+  },
+  {
+   "key": "CALL_EMPTY_GRACE_SEC",
+   "class": "defaulted",
+   "default": "30",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "how long an emptied call room is given for someone to come back before the call ends"
+  },
+  {
+   "key": "CALL_FIRST_JOIN_TIMEOUT_SEC",
+   "class": "defaulted",
+   "default": "30",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "how long a new call waits for its first participant before it ends"
+  },
+  {
+   "key": "CALL_MAX_PARTICIPANTS",
+   "class": "defaulted",
+   "default": "50",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "the most people one call room admits"
+  },
+  {
+   "key": "CALL_TRANSCRIPTION_SWITCHABLE",
+   "class": "defaulted",
+   "default": "false",
+   "targets": [
+    "compose",
+    "helm"
+   ],
+   "description": "whether the person starting a call may turn its transcription off (POST /bots `transcribe: false`); off \u21d2 every call is transcribed and says so"
+  },
+  {
    "key": "SEGMENT_CONSUMER_INTERVAL",
    "class": "defaulted",
    "default": "0.5",
@@ -459,6 +573,41 @@
    "class": "defaulted",
    "default": "5",
    "description": "sweep interval (s) of the webhook retry-queue drain loop",
+   "targets": []
+  },
+  {
+   "key": "VEXA_MEETING_DELETE_LIVE",
+   "class": "defaulted",
+   "default": "refuse",
+   "description": "what DELETE /meetings/... does while the meeting's bot is still in it or finishing. refuse (default) = the 0.12 contract: 409, nothing stopped or scheduled. stop = ask the bot to leave, answer 202 deletion_scheduled, and delete the transcript and recordings when the lifecycle is terminal.",
+   "targets": []
+  },
+  {
+   "key": "VEXA_LANGUAGE_HISTORY_TIER",
+   "class": "defaulted",
+   "default": "off",
+   "description": "on = a person who set no transcription language gets the languages of their recent meetings (two or more above the share threshold) as a restricted setting, ranked above the deployment default. off (default) = the 0.12 behaviour: the deployment default, then auto-detection.",
+   "targets": []
+  },
+  {
+   "key": "VEXA_WS_SCOPE_MODE",
+   "class": "defaulted",
+   "default": "legacy",
+   "description": "the /ws subscribe hop's key-scope rule, read by the gateway and here. legacy (default) = the 0.12 contract: POST /ws/authorize-subscribe admits a gateway-signed key whatever its scopes, and ownership is still checked per meeting. strict = the hop takes the transcript read's scopes (tx). Set the gateway and meeting-api to the same value.",
+   "targets": []
+  },
+  {
+   "key": "VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S",
+   "class": "defaulted",
+   "default": "14400",
+   "description": "upgrade hand-off for meetings a 0.12 bot is still transcribing: for this many seconds after boot (default 14400), the collector admits UNSIGNED transcription_segments entries (the 0.12 bot shape) of meetings that were in flight and spawned before 0.13 (no data.transcription_language). Entries with a signature that does not verify, other meetings, and anything after the window are refused as before. 0 turns it off.",
+   "targets": []
+  },
+  {
+   "key": "VEXA_WEBHOOK_STORED_URL_POLICY",
+   "class": "defaulted",
+   "default": "v012",
+   "description": "which address ranges a stored customer webhook URL may still be delivered to. v012 (default) = the 0.12 delivery rule: shared (100.64/10, less the 100.100.100.200 metadata address), documentation, benchmarking and protocol-assignment ranges stay reachable, as they were on 0.12; loopback, private, link-local/metadata, multicast, reserved and single-label/localhost names stay refused in every form. strict = the outbound-url.v1 guard alone. Saving a URL (admin-api) always uses the outbound-url.v1 guard.",
    "targets": []
   },
   {
@@ -774,9 +923,22 @@
    "secret": true,
    "description": "operator key for the same edge, sent as X-Flows-Operator-Key (flows' POST /events is authenticated). Declared as part of the edge rather than beside it, on the same terms as identity's admin-api and agent-api's control_plane declare theirs: unset alongside an unset URL is the no-flows profile; unset with a URL set is a deployment whose facts are being refused.",
    "targets": ["compose"]
-  }
+  },
+  {"key": "VEXA_BOT_ACCOUNTS_BROKER_URL", "class": "capability", "capability": "bot_accounts", "targets": ["compose", "helm"], "description": "the credential broker's base URL (credential-broker.v1, role `bots`): where meeting-api keeps bot accounts — saved signed-in browser profiles a meeting bot joins as (ADR-0049). Set together with VEXA_BOT_ACCOUNTS_KEY_FILE; either unset, every bot-account route answers 409 \"bot accounts are not configured on this deployment\" and POST /bots spawns guest bots as before"},
+  {"key": "VEXA_BOT_ACCOUNTS_KEY_FILE", "class": "capability", "capability": "bot_accounts", "secret": true, "targets": ["compose", "helm"], "description": "path of the broker's `bots` role key (at least 32 bytes; the connections-keys `bots` key, mounted read-only). meeting-api signs every bot-account request with it (X-Vexa-Assertion). A file that is unreadable, too short or one of the contract's published fixture keys refuses the boot"},
+  {"key": "VEXA_COMPANY_BOT_USE", "class": "defaulted", "default": "admins", "description": "who may send a meeting bot as a COMPANY bot account: `all`, `admins` (the instance admins and the admin account) or `none`; an unknown value reads as `admins`. The company's statement of this rule is `_global/POLICIES.md` `company_bot_use`; this env carries it to meeting-api until meeting-api reads policies. Creating and deleting company accounts is the admin account's alone, whatever this says", "targets": []},
+  {"key": "VEXA_BOT_ACCOUNTS_SESSION_TIMEOUT_S", "class": "defaulted", "default": "900", "description": "how long a browser session (the sign-in workload a person signs a bot account in through) stays open before the reaper closes it and stops its workload", "targets": []},
+  {"key": "VEXA_BOT_ACCOUNTS_CHECK_TIMEOUT_S", "class": "defaulted", "default": "180", "description": "how long a bot-account verify check may run before the reaper closes it and stops its workload", "targets": []},
+  {"key": "VEXA_BOT_ACCOUNTS_WORKLOAD_HOST", "class": "defaulted", "default": "vexa-{workload_id}", "description": "how a browser-session workload is named on the bots network, as a template over {workload_id}: the runtime's container (docker backend, prefix `vexa-`) or Pod name. meeting-api relays the live view to http://<host>:6080 and ws://<host>:6080/websockify", "targets": []},
+  {"key": "BOT_ACCOUNTS_REAPER_INTERVAL_S", "class": "defaulted", "default": "30", "description": "how often (s) meeting-api closes expired browser sessions and verify checks and stops their workloads; runs only when the bot-account store is configured", "targets": []},
+  {"key": "VEXA_FEATURES", "class": "defaulted", "default": "(empty — the release default: every switchable feature off)", "description": "the install's switched-on features (core/agent/control_plane/features.py rules): empty = the release default, every unproven feature off; `all` = every one on (a dev stack); a comma list switches on just those; `all,-name` takes one back. meeting-api answers `browser_bots`: off, every public /bot-accounts… route refuses 403 `feature_disabled` (bot_accounts/feature.py); /internal/… is untouched", "targets": ["compose", "helm", "lite"]}
  ],
  "capabilities": {
+  "calls": {
+   "description": "Vexa calls (#1783): a session can start a call on this deployment's self-hosted LiveKit server, and meeting-api creates its room and spawns its listener",
+   "mode": "all",
+   "when_unconfigured": "POST /bots {\"platform\": \"vexa_call\"} answers 503 calls_not_deployed; every other platform is unaffected"
+  },
   "stt": {
    "description": "spawned bots can transcribe (the STT service bot_spawn threads into the invocation.v1 payload)",
    "mode": "all",
@@ -808,6 +970,11 @@
    "description": "recordings persist to the object store (chunk upload + finalize → meeting.data JSONB)",
    "mode": "all",
    "when_unconfigured": "recording upload/finalize fails at request time with a storage auth error; transcripts are unaffected"
+  },
+  "bot_accounts": {
+   "description": "people sign meeting bots into their own accounts through a live browser session, and bots join meetings as those saved accounts (ADR-0049)",
+   "mode": "all",
+   "when_unconfigured": "every bot-account route answers 409 \"bot accounts are not configured on this deployment\"; POST /bots spawns guest bots (or the deployment-wide BOT_AUTHENTICATED session) exactly as before"
   }
  }
 }

@@ -2,7 +2,8 @@
 
 A bot talks to Redis for three things: it appends its transcript to ``transcription_segments``,
 publishes live updates on ``tc:meeting:<id>:mutable`` and listens for commands on
-``bot_commands:meeting:<id>``. Each spawn defines a Redis user for exactly that — its own meeting's
+``bot_commands:meeting:<id>``; a voice note's bot also reads its audio from
+``voice_note:meeting:<id>:audio``. Each spawn defines a Redis user for exactly that — its own meeting's
 two channels, the one stream, append only — and the invocation carries that user's URL instead of the
 service connection meeting-api uses. No other key, channel or command is in a bot's reach; the user is
 removed when the session reaches a terminal state, and any left behind is removed once it is older
@@ -54,7 +55,15 @@ def acl_rules(meeting_id: int, password: str) -> list[str]:
     mid = int(meeting_id)
     return ["reset", "on", f">{password}", f"~{TRANSCRIPT_STREAM}", "resetchannels",
             f"&tc:meeting:{mid}:mutable", f"&bot_commands:meeting:{mid}", "-@all",
-            *[f"+{c}" for c in BOT_COMMANDS]]
+            *[f"+{c}" for c in BOT_COMMANDS],
+            # A voice note's audio: XREAD on this meeting's own stream, read-only, in a selector of
+            # its own so the root grant (which may XADD the transcript stream) never gains a read.
+            f"(%R~{voice_note_stream(mid)} +xread)"]
+
+
+def voice_note_stream(meeting_id: int) -> str:
+    """The Redis stream a voice note's audio frames ride, written by meeting-api, read by the bot."""
+    return f"voice_note:meeting:{int(meeting_id)}:audio"
 
 
 def bot_url(service_url: str, user: str, password: str) -> str:

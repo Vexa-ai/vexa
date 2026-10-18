@@ -73,6 +73,22 @@ def test_auth_me_unavailable_is_503_not_401():
     assert r.json()["detail"] != "Invalid API key"
 
 
+def test_auth_unavailable_names_vexa_as_the_source_in_a_typed_body():
+    """2026-10-13: a deploy restarted admin-api, a Gmail read answered this 503, and the agent told
+    the person "Gmail is saying your account is temporarily unavailable … a problem on Google's
+    side". The words were ours. The body now says whose service failed, as typed fields a tool
+    result renders first (`reason: message`), and keeps the old `detail` for existing clients."""
+    client, _ = _client(authorizer=UnavailableAuthorizer())
+    for r in (client.get("/bots/status", headers=AUTH), client.get("/auth/me", headers=AUTH)):
+        body = r.json()
+        assert r.status_code == 503
+        assert body["detail"] == "Authentication temporarily unavailable, retry"
+        assert body["code"] == "auth_unavailable" and body["reason"] == "vexa_sign_in_unavailable"
+        assert body["source"] == "vexa" and body["retry_after"] == 1
+        assert body["message"].startswith("Vexa's own sign-in service")
+        assert "not Google or Microsoft" in body["message"] and "retry" in body["message"].lower()
+
+
 def test_insufficient_scope_is_403():
     """A tx-only token on a /bots route → 403 (ROUTE_SCOPES carve)."""
     client, _ = _client(authorizer=FakeAuthorizer(user={"user_id": 7, "scopes": ["tx"], "max_concurrent": 1}))

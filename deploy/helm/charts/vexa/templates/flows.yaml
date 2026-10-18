@@ -47,6 +47,7 @@ metadata:
   labels: {app.kubernetes.io/component: flows-worker}
 spec:
   replicas: {{ .Values.flows.workerReplicas }}
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
   selector:
     matchLabels: {app.kubernetes.io/component: flows-worker}
   template:
@@ -56,6 +57,24 @@ spec:
         app.kubernetes.io/component: flows-worker
     spec:
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
+      {{- /* global scheduling and pull secrets, the same as every other component Deployment:
+      without them the flows tier sits Pending on a cluster whose nodes are all tainted. */}}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- /* the ensure-db bootstrap only has work to do when the flows tables live in a database
       OTHER than the application's own — when flows.databaseName == database.name they already
       live in a database that is guaranteed to exist (F-D5 follow-up: compose already runs this
@@ -157,6 +176,11 @@ spec:
             - secretRef:
                 name: {{ include "vexa.componentName" (list . "flows") }}
           env:
+            {{- /* flows.extraEnv: operator env for the flows tier, like <component>.extraEnv on every
+            other component (e.g. VEXA_MAIL_KINDS_DEFAULT on an upgraded install). */}}
+            {{- with .Values.flows.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
             {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
             {{- /* the bot mailbox's endpoints, TLS policy, CA path and password refs (flows.mail) */}}
             {{- include "vexa.flowsMailEnv" . | nindent 12 }}
@@ -191,6 +215,13 @@ spec:
             {{- if .Values.agentApi.enabled }}
             - name: VEXA_FLOWS_AGENT_API_URL
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+            {{- end }}
+            {{- if .Values.crm.enabled }}
+            # The optional CRM's door for the flows_defs.crm pack (ADR-0047).
+            - name: VEXA_FLOWS_CRM_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "crm-api") }}:8300"
+            - name: VEXA_FLOWS_DEFS_EXTRA
+              value: "flows_defs.crm"
             {{- end }}
             - name: VEXA_FLOWS_ADMIN_API_URL
               value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
@@ -246,6 +277,24 @@ spec:
         app.kubernetes.io/component: flows-mailbox
     spec:
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
+      {{- /* global scheduling and pull secrets, the same as every other component Deployment:
+      without them the flows tier sits Pending on a cluster whose nodes are all tainted. */}}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- /* F192 — the SAME ensure-db initContainer flows-worker carries above: every Deployment
       that opens VEXA_FLOWS_DB_URL must be able to create the database it opens, not rely on
       flows-worker's pod happening to have won the startup race first (k8s makes no promise
@@ -344,6 +393,11 @@ spec:
           # authorization decision (R-B12) — a known user outside the domain would otherwise be
           # quarantined on a lookup that never reached anything.
           env:
+            {{- /* flows.extraEnv: operator env for the flows tier, like <component>.extraEnv on every
+            other component (e.g. VEXA_MAIL_KINDS_DEFAULT on an upgraded install). */}}
+            {{- with .Values.flows.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
             {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
             {{- /* the bot mailbox's endpoints, TLS policy, CA path and password refs (flows.mail) */}}
             {{- include "vexa.flowsMailEnv" . | nindent 12 }}
@@ -370,6 +424,13 @@ spec:
             {{- if .Values.agentApi.enabled }}
             - name: VEXA_FLOWS_AGENT_API_URL
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+            {{- end }}
+            {{- if .Values.crm.enabled }}
+            # The optional CRM's door for the flows_defs.crm pack (ADR-0047).
+            - name: VEXA_FLOWS_CRM_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "crm-api") }}:8300"
+            - name: VEXA_FLOWS_DEFS_EXTRA
+              value: "flows_defs.crm"
             {{- end }}
             - name: VEXA_FLOWS_ADMIN_API_URL
               value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
@@ -416,6 +477,7 @@ metadata:
   labels: {app.kubernetes.io/component: flows-api}
 spec:
   replicas: 1
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
   selector:
     matchLabels: {app.kubernetes.io/component: flows-api}
   template:
@@ -425,6 +487,24 @@ spec:
         app.kubernetes.io/component: flows-api
     spec:
       {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
+      {{- /* global scheduling and pull secrets, the same as every other component Deployment:
+      without them the flows tier sits Pending on a cluster whose nodes are all tainted. */}}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- /* F192 — see the identical block on flows-worker above (reconciled the same way as
       flows-mailbox's — merge of #1505/F192 with #1509/F-D5): every Deployment that opens
       VEXA_FLOWS_DB_URL must be able to create the database it opens itself, not rely on
@@ -514,6 +594,11 @@ spec:
             - secretRef:
                 name: {{ include "vexa.componentName" (list . "flows") }}
           env:
+            {{- /* flows.extraEnv: operator env for the flows tier, like <component>.extraEnv on every
+            other component (e.g. VEXA_MAIL_KINDS_DEFAULT on an upgraded install). */}}
+            {{- with .Values.flows.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
             {{- with include "vexa.flowsApiKeyEnv" . }}{{ . | nindent 12 }}{{ end }}
             {{- /* the bot mailbox's endpoints, TLS policy, CA path and password refs (flows.mail) */}}
             {{- include "vexa.flowsMailEnv" . | nindent 12 }}
@@ -557,6 +642,13 @@ spec:
             {{- if .Values.agentApi.enabled }}
             - name: VEXA_FLOWS_AGENT_API_URL
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+            {{- end }}
+            {{- if .Values.crm.enabled }}
+            # The optional CRM's door for the flows_defs.crm pack (ADR-0047).
+            - name: VEXA_FLOWS_CRM_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "crm-api") }}:8300"
+            - name: VEXA_FLOWS_DEFS_EXTRA
+              value: "flows_defs.crm"
             {{- end }}
             {{- if .Values.terminal.enabled }}
             - name: VEXA_UI_URL

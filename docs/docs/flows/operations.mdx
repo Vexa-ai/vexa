@@ -42,6 +42,11 @@ subject returns every row. Treat both keys as instance-wide credentials, keep th
 containers, and prefer a person's own Vexa credential wherever the caller is a person.
 </Warning>
 
+An agent worker's own token resolves to the person it acts for, together with its regime. A worker
+running with nobody in the loop can read the person's queue, reactions, timeline and flows and file
+friction, but a reaction signal (retry, resume, wake, cancel) answers it
+`403 human_session_required`. See [Security & compliance → Agent workers](/security-compliance#agent-workers).
+
 ## Who the mailbox will act for
 
 The mailbox is reachable by anyone who can send email, so it answers that question before it
@@ -197,6 +202,10 @@ through `friction_dedup`. `flows_timeline` only reads it. The `reaction` row's `
 the admitted fact and is never rewritten to store a count. The table is declared in
 `core/flows/src/flows_schema/models.py` and generated into `core/flows/schema.sql`. Like every flows
 table, it is applied with `CREATE TABLE IF NOT EXISTS`, so an existing deployment gets it at boot.
+A table created before the `admitted` column existed gains it at boot from `flows.migrations`
+(`ADD COLUMN IF NOT EXISTS`, idempotent): rows already there are marked admitted, and the column is
+then left without a database default, as a fresh install creates it. Proven on real Postgres by
+`test_friction_occurrence_migration.py` (an old-shape table, migrated, then a report inserted).
 
 **Contracts and routes.** `POST /friction` and `GET /friction` keep their routes and arguments. The
 new response fields are additive. `core/flows/mcp.tools.v1.json` describes them in the

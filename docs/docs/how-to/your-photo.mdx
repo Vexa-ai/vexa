@@ -1,0 +1,79 @@
+---
+title: "Your photo"
+description: "The picture people who work with you see beside your name: where it comes from, how to change it, and who can see it."
+---
+
+Wherever you appear in Vexa (avatar stacks, hover cards, the People strip, @-mentions, chat
+bubbles, a call with your camera off), the picture shown is, in this order:
+
+1. **A photo you uploaded.** Use **Settings → Your photo → Change photo**, or **Change photo** on
+   your own avatar. Use a PNG, JPEG or WebP; a large picture is made smaller in your browser
+   first.
+2. **Your sign-in provider's photo**, if you sign in with Google, Microsoft or your company's
+   identity provider and it has one.
+3. **Your Gravatar**, only if you have one.
+4. **Your initials** on a colour that stays the same every time.
+
+**Remove photo** removes your upload, and the next one in the list shows. Only you can change your
+photo. Your agent can suggest a picture, but it cannot set one.
+
+People who are not Vexa users, such as contacts in your CRM or guests in your meetings, are never
+shown with a face. They get their initials and their company's logo as a small badge. A face
+appears only when they join Vexa and bring their own.
+
+## How it works
+
+- **Identity keeps the photo.** admin-api is the only service that writes it. For each source
+  (upload, provider, Gravatar) it keeps one image in the install's object store, under
+  `person-photos/<account>/` in the same bucket recordings use. Its own `person_photos` table holds
+  only the object's key, type and checksum, so the database every sign-in check reads carries no
+  images. It accepts only a PNG, JPEG or WebP of at most 200 KB and at most 4096 pixels on each
+  side. It checks the bytes themselves, so the claimed type and the file name don't count. SVG and
+  GIF are refused.
+- **Only the pixels are kept.** Every stored image (upload, provider photo or Gravatar) is decoded
+  and written again from its pixels alone. EXIF (including GPS location), XMP, colour profiles,
+  PNG text and comments are all dropped. A photo is turned upright first, and at most 1024
+  pixels on a side is kept.
+- **Identity fetches the provider photo itself, when you sign in.** For Google and OIDC, the
+  sign-in hands admin-api its own ID token. admin-api verifies the token itself against the
+  provider's published keys. It checks the issuer, that the token was issued to this Vexa
+  deployment, that it has not expired, and that it belongs to the account linked to yours. Only
+  then does it read the `picture` address from the token (for Google, only an `https` address on
+  Google's own picture host) and fetch it through the same outbound guard that webhooks and calendar feeds use. That guard refuses private and internal addresses,
+  including after redirects, and anything that is not a small image. For Microsoft, the sign-in
+  passes on its own access token for that one call (no extra permission). admin-api asks Microsoft
+  Graph whose token it is, and takes the photo only if it belongs to the Microsoft account linked
+  to yours. No token is kept. No service can name a picture address or hand over picture bytes
+  for anyone. At each later sign-in, the photo is fetched again if its address changed or a week
+  has passed, and removed if your provider no longer has one. Sign-in never waits for any of this.
+- **Gravatar is checked only for your own address, and only when you have no better photo.** The
+  request uses `d=404`, so having no Gravatar means no picture rather than a generated one. The
+  answer is kept for a week, including a miss. An operator can switch this off with
+  `VEXA_PERSON_GRAVATAR=false` on admin-api.
+- **Shown only through Vexa.** Browsers fetch `/api/people/{account}/photo` from agent-api with
+  their own sign-in. On every request, agent-api checks that the viewer is you, or shares a
+  workspace or a chat with you (a call happens in a chat). Only then does it ask identity for the
+  bytes. Everyone else gets the same "not found" as a person without a photo. A photo is cached
+  for 30 seconds in agent-api and for 30 seconds, privately, in the viewer's browser. A removed or
+  changed photo therefore disappears for everyone within a minute, and for you at once.
+- **Without an object store** (an install with no S3 configured), no photos are kept and everyone
+  shows initials.
+- **Operators.** admin-api verifies ID tokens with the values the app signs people in with:
+  `GOOGLE_CLIENT_ID` for Google, `VEXA_OIDC_ISSUER` and `VEXA_OIDC_CLIENT_ID` (and
+  `VEXA_OIDC_CA_FILE` for a provider under an internal CA) for OIDC. Compose and the Helm chart set
+  them. A provider whose client id admin-api does not have gives no photo. Upgrade and rollback are in
+  the changelog.
+
+## Why it complies
+
+- **You decide your face.** Your upload overrides everything else. Only you can set it or remove
+  it, with your own sign-in. A worker acting for you is refused, even while you are in the chat.
+- **Visible only to people who work with you.** You share a workspace or a chat with each person who
+  can see your photo. Simply being on the same deployment is not enough.
+- **No face is looked up on the web.** Vexa never searches for a person by name or address. The
+  only outbound requests are made at your own sign-in: one to the provider you signed in with, and
+  one to Gravatar for your own address (if that is switched on). Nothing is fetched for anyone else.
+- **No hidden data in a photo.** What colleagues receive has no location, camera or editing
+  metadata, whatever the original file carried.
+- **Deleted with you.** Deleting an account deletes its photo records and its objects in the
+  store.

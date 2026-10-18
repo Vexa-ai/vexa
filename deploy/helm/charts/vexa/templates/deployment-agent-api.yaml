@@ -1,4 +1,6 @@
 {{- if .Values.agentApi.enabled }}
+{{- $s3 := include "vexa.s3" . | fromYaml }}
+{{- $ss := include "vexa.agentSessions" . | fromYaml }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -36,10 +38,37 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if $ss.active }}
+      # Waits for the agent-sessions-schema Job to have made the store's role and tables (a release
+      # resource, so on a first install it runs beside this Pod). Logs in as the store's own role only.
+      initContainers:
+        - name: session-schema
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.agentApi.image.repository }}:{{ .Values.global.imageTag | default .Values.agentApi.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "control_plane.session_schema", "wait"]
+          env:
+            - name: DB_HOST
+              value: {{ include "vexa.dbHostEffective" . | quote }}
+            - name: DB_PORT
+              value: {{ include "vexa.dbPortEffective" . | quote }}
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_DB
+            - name: VEXA_SESSIONS_DB_USER
+              value: {{ $ss.dbUser | quote }}
+            - name: VEXA_SESSIONS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ss.dbSecret | quote }}
+                  key: password
+      {{- end }}
       containers:
         - name: agent-api
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
-          image: "{{ .Values.agentApi.image.repository }}:{{ .Values.global.imageTag | default .Values.agentApi.image.tag }}"
+          image: "{{ .Values.agentApi.image.repository }}:{{ .Values.global.imageTag | default .Values.agentApi.image.tag | default (include "vexa.releaseTag" .) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
@@ -51,6 +80,22 @@ spec:
               value: "http://{{ include "vexa.componentName" (list . "runtime") }}:{{ .Values.runtime.service.port }}"
             - name: VEXA_AGENT_API_SELF_URL
               value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+            {{- if .Values.flows.enabled }}
+            # Routines are flows (ADR-0046): the /api/routines adapter, the one-time move of old
+            # routines into flows and message_agent all call flows-api with its operator key.
+            - name: VEXA_FLOWS_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "flows-api") }}:18200"
+            {{- if .Values.crm.enabled }}
+            # ADR-0047 d5: each workspace's record links, published per commit.
+            - name: VEXA_CRM_REFERENCES_POLL_S
+              value: {{ .Values.crm.referencesPollSeconds | quote }}
+            {{- end }}
+            - name: VEXA_FLOWS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.flowsApiKeySecretName" . }}
+                  key: VEXA_FLOWS_API_KEY
+            {{- end }}
             - name: VEXA_GATEWAY_URL
               value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
             # Owner-scopes the live SSE feed (GET /api/meeting/stream): agent-api hits GET /meetings/{id}
@@ -116,21 +161,24 @@ spec:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: VEXA_BOT_API_KEY
                   optional: true
-            # The credential store's key, and the profile that decides whether it may be absent
-            # (R-E08). See values.yaml `secrets.secretsKey`.
+            # DEPRECATED, migration only: opens Git credentials an older build kept on the workspaces
+            # volume so they can move into the credential broker. See values.yaml `secrets.secretsKey`.
             - name: VEXA_SECRETS_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: VEXA_SECRETS_KEY
                   optional: true
-            - name: VEXA_ENV
-              value: {{ .Values.vexaEnv | default "development" | quote }}
             - name: VEXA_AGENT_MODEL
               value: {{ .Values.models.agentModel | default "" | quote }}
-            # Self-hosted git hosts → provider (github · gitlab · basic:<user>); see values.yaml.
+            # The git providers besides GitHub (shared/git_provider.py); see values.yaml. A list renders
+            # as JSON; the earlier comma string passes through verbatim.
             - name: VEXA_GIT_PROVIDERS
+              {{- if kindIs "slice" .Values.agentApi.gitProviders }}
+              value: {{ toJson .Values.agentApi.gitProviders | quote }}
+              {{- else }}
               value: {{ .Values.agentApi.gitProviders | default "" | quote }}
+              {{- end }}
             {{- with .Values.models.catalog }}
             # The model catalog (models.v1 Catalog, ADR-0043): the providers and models people pick
             # per chat. Refused whole at boot when anything in it is wrong. It holds no credential:
@@ -214,19 +262,77 @@ spec:
               value: {{ .Values.models.anthropicHaikuModel | default "" | quote }}
             - name: VEXA_LOG_LEVEL
               value: {{ .Values.agentApi.logLevel | default "info" | quote }}
+            - name: VEXA_FEATURES
+              value: {{ .Values.features | default "" | quote }}
+            - name: VEXA_AGENT_ALLOW
+              # one list for the edge and agent-api: the gateway's value
+              value: {{ .Values.gateway.agentAllow | default "" | quote }}
+            # The kill switch for model calls (control_plane/llm_budget.py): every turn refused.
+            - name: VEXA_LLM_KILL_SWITCH
+              value: {{ ternary "1" "" (.Values.agentApi.llmKillSwitch | default false) | quote }}
             {{- if include "vexa.credentialBrokerEnabled" . }}
             # Connections (credential-broker.v1): agent-api signs as the `agent` role, never `human`.
             - name: VEXA_CONNECTIONS_BROKER_URL
               value: {{ include "vexa.credentialBrokerUrl" . | quote }}
             - name: VEXA_CONNECTIONS_AGENT_KEY_FILE
               value: /run/vexa-connections/agent/key
-            {{- if .Values.credentialBroker.gitStore }}
+            # Saved Git tokens and deploy keys: the broker is their one store (role `git`).
             - name: VEXA_GIT_STORE_BROKER_URL
               value: {{ include "vexa.credentialBrokerUrl" . | quote }}
             - name: VEXA_GIT_STORE_KEY_FILE
               value: /run/vexa-connections/git/key
             {{- end }}
+            {{- if $ss.active }}
+            # The session store (ADR-0048): the database as the store's OWN role (the migrations Job
+            # creates it, grants on agent_session* only) and the store's OWN bucket with a key scoped
+            # to it. agent-api holds neither the database admin credential nor the recordings key;
+            # workers hold nothing of it.
+            - name: DB_HOST
+              value: {{ include "vexa.dbHostEffective" . | quote }}
+            - name: DB_PORT
+              value: {{ include "vexa.dbPortEffective" . | quote }}
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}
+                  key: POSTGRES_DB
+            - name: VEXA_SESSIONS_DB_USER
+              value: {{ $ss.dbUser | quote }}
+            - name: VEXA_SESSIONS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ss.dbSecret | quote }}
+                  key: password
+            - name: VEXA_SESSIONS_S3_ENDPOINT
+              value: {{ $s3.endpoint | quote }}
+            - name: VEXA_SESSIONS_S3_BUCKET
+              value: {{ $ss.bucket | quote }}
+            - name: VEXA_SESSIONS_S3_REGION
+              value: {{ $s3.region | default "us-east-1" | quote }}
+            - name: VEXA_SESSIONS_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ss.existingSecret | quote }}
+                  key: {{ $ss.accessKeyIdKey | quote }}
+            - name: VEXA_SESSIONS_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $ss.existingSecret | quote }}
+                  key: {{ $ss.secretAccessKeyKey | quote }}
             {{- end }}
+            # Calls (ADR-0048 decision 6): participants' room tokens, when livekit.enabled.
+            - name: LIVEKIT_URL
+              value: {{ ternary .Values.livekit.url "" .Values.livekit.enabled | quote }}
+            - name: LIVEKIT_INTERNAL_URL
+              value: {{ ternary (printf "ws://%s:%v" (include "vexa.componentName" (list . "livekit")) .Values.livekit.service.port) "" .Values.livekit.enabled | quote }}
+            - name: LIVEKIT_API_KEY
+              value: {{ ternary .Values.livekit.apiKey "" .Values.livekit.enabled | quote }}
+            - name: LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: LIVEKIT_API_SECRET
+                  optional: true
             {{- with .Values.agentApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -276,16 +382,14 @@ spec:
             items:
               - { key: public-key.pem, path: key.pem }
         {{- if include "vexa.credentialBrokerEnabled" . }}
-        # The agent role key (and the git role key when gitStore is on) — never the human key.
+        # The agent and git role keys — never the human key, never the store key.
         - name: connections-keys
           secret:
             secretName: {{ include "vexa.credentialBrokerKeys" . }}
             defaultMode: 0444
             items:
               - { key: agent.key, path: agent/key }
-              {{- if .Values.credentialBroker.gitStore }}
               - { key: git.key, path: git/key }
-              {{- end }}
         {{- end }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:

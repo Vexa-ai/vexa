@@ -79,6 +79,8 @@ most coding agents).
 - [Deployment](https://docs.vexa.ai/deployment.md): compose · [Vexa Lite](https://docs.vexa.ai/deployment-lite.md) · [Kubernetes](https://docs.vexa.ai/deployment-kubernetes.md) ([agent tools on Kubernetes](https://docs.vexa.ai/deployment-helm-agent-tools.md))
 - [Configuration](https://docs.vexa.ai/configuration.md): every env var and capability
 - [Upgrade from MinIO](https://docs.vexa.ai/upgrade-from-minio.md): move recordings from an older Lite or Compose install into the versitygw storage, verified by SHA-256
+- [Upgrading from 0.12 to 0.13](https://docs.vexa.ai/upgrade-from-0-12.md): the required changes, symptoms and rollback for a 0.12.x install moving to 0.13.3 on Compose, Lite or Helm
+- [Image names from v0.13.3](https://docs.vexa.ai/upgrade-image-names.md): the service images are vexaai/vexa-<service> from v0.13.3; what to change on upgrade and in a registry mirror
 - [Troubleshooting](https://docs.vexa.ai/troubleshooting.md)
 
 ## Governance (the law)

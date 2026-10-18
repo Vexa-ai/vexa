@@ -10,6 +10,12 @@
       "request": "WritebackBody",
       "response": "WritebackResult",
       "auth": "Authorization: Bearer <MeetingToken>, the invocation.v1 `token`, admitted for exactly {session_uid}; meeting-api then requires authenticated mode and that the session is the live authenticated bot (the newest session spawned on the deployment's identity, its meeting live or ended under 600 s). Refusals: 401 token, 409 mode off, 503 misconfigured, 403 not the live bot, 413 body over the profile's bound, 422 a body this contract refuses, 502 the store refused"
+    },
+    {
+      "method": "GET",
+      "path": "/internal/browser-session/{session_uid}",
+      "response": "WritebackBody",
+      "auth": "Authorization: Bearer <MeetingToken>, the invocation.v1 `token`, admitted for exactly {session_uid}; the session must be a meeting bot spawned with a saved bot account, whose profile is the answer (the restore an invocation names as `sessionRestoreUrl`). No request body. Refusals: 401 token, 404 the session has no bot account, 502 the profile store refused. The bot writes only SESSION_PROFILE paths from the answer and refuses the whole answer when one path is outside it"
     }
   ],
   "$defs": {

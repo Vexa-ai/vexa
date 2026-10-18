@@ -28,7 +28,7 @@ self-host key is minted):
 |---|---|
 | **gateway** — the public REST API | `8056` |
 | **terminal** — the workbench UI | `3001` |
-| **agent-api** — the agent control plane (reached directly, not via the gateway) | `8100` |
+| **agent-api** — the agent control plane. The port answers health checks; clients call it through the gateway as `/agent/*`, since agent-api accepts a user only from the gateway's signed identity | `8100` |
 
 On first boot Lite mints its own credentials — a `self-host@vexa.ai` user and `bot,tx`-scoped API
 keys — and hands them to the terminal, so `http://localhost:3001` opens signed in. Set
@@ -69,10 +69,14 @@ One supervisord tree runs the services a compose deployment spreads across conta
 |---|---|
 | **gateway** (`:8056`), **terminal** (`:3001`), **agent-api** (`:8100`) | the three published front doors |
 | **meeting-api, admin-api, runtime** | loopback-only (`127.0.0.1`) — reach them with `docker exec` |
+| **mcp** (`:8010`) | the MCP server, loopback-only; the gateway serves it at `/mcp` |
 | **valkey** | in-container Redis-compatible store, loopback-only |
 
 Bots and agent workers are **not** supervisord programs — the runtime spawns them as child
-processes, one per meeting and per agent dispatch. Each bot brings up its own virtual display and
+processes, one per meeting and per agent dispatch. No child runs as root. An agent worker runs as its
+subject's own uid; a meeting bot runs as a uid of its own. Each child gets a fresh private home
+directory, which is removed when it ends. If the runtime cannot isolate a child (for example, a
+subject it cannot map to a uid), it refuses the spawn and starts nothing. Each bot brings up its own virtual display and
 audio daemon as its own user, with a display cookie only it holds, so no bot can see or drive
 another's meeting. There is no shared screen, and so no VNC view. Each bot's browser runs with
 Chromium's sandbox: `make lite` starts the container under `core/runtime/src/runtime_kernel/seccomp-userns.json` (Docker's
@@ -84,6 +88,11 @@ docker logs -f vexa-lite                            # all service logs go to std
 docker exec vexa-lite supervisorctl status          # the service tree
 docker exec vexa-lite ps aux | grep dist/index.js   # live bot processes
 ```
+
+What stays root's alone inside the container: Valkey's data (`/var/lib/redis`), the workload logs
+(`/var/lib/vexa-runtime/logs`, one file per workload), the rendered service config and Valkey's config
+(`/run/vexa`), and the mounted model credential. Valkey's password is in that root-only config file,
+not on its command line. The browser install (`/ms-playwright`) is read-only to every child.
 
 ## Configuration
 
@@ -105,6 +114,11 @@ If `~/.claude/.credentials.json` exists on the host, `make lite` mounts that one
 a root-only directory in the container, so agents run on your Claude subscription without copying
 credentials into `.env`; nothing else from `~/.claude` enters the container. A file mount keeps the
 file it started with: after the Claude CLI on the host refreshes its token, run `make lite` again.
+
+To run agents on a Codex subscription, mount your `auth.json` into the container and set
+`HOST_CODEX_CREDENTIALS` to its path inside the container. `make lite` does not do this for you. The
+runtime copies the file into each worker's private home as `~/.codex/auth.json`, where the harness and
+the Codex CLI read it.
 
 ## Persistence and upgrade
 
@@ -151,14 +165,57 @@ live-view → stop. Lite runs the **real** bot in-process, so a dead meeting URL
 named failure, never a fake green. The container also carries a Docker `HEALTHCHECK` on the
 gateway's `/health` (30s interval, 120s start period).
 
+`make -C deploy/lite test` checks a running Lite from inside. It waits for the three front doors,
+then starts an agent worker and a meeting bot through the runtime and checks each one. No spawned
+process runs as root or can read another process's environment. A dispatch whose subject cannot be
+mapped is refused. The root-only paths above are unreadable to every child, and no service secret
+appears on a command line.
+
+## How it works
+
+1. **Boot.** The entrypoint mints every secret you did not set (the admin token, the internal secret,
+   the runtime caller credential, Valkey's password). It writes Valkey's config and the rendered
+   supervisor config into the root-only `/run/vexa`, then hands off to supervisord.
+2. **Services.** supervisord starts Valkey, admin-api, the runtime, meeting-api, agent-api, the gateway,
+   the MCP server and the terminal. Only the runtime, agent-api and meeting-api hold the runtime caller
+   credential.
+3. **The runtime starts clean.** Its launcher drops every inherited variable the runtime's `config.v1`
+   does not declare, so no service secret reaches the runtime or anything it spawns.
+4. **Spawn.** meeting-api (a bot) or agent-api (an agent turn) calls the runtime with the caller
+   credential. The runtime starts the child as a non-root uid with a fresh private home, or refuses.
+5. **Each bot is alone.** It starts its own virtual display and audio daemon as its own uid.
+6. **Tools.** At boot the MCP server asks each domain for its tool manifest. agent-api serves its
+   manifest at `/.well-known/mcp-tools.json` from the file the image carries.
+
+## Why it complies
+
+- **P14 config by env, validated.** `gate:config-contract` fails when the entrypoint exports a key no
+  service's `config.v1` declares.
+- **P20 and isolation.** The deny tests: in `core/runtime/tests/`,
+  `test_isolation_root.py` (`test_a_workspace_dispatch_runs_as_its_subject_never_root`,
+  `test_concurrent_children_cannot_read_each_other_or_the_runtime`,
+  `test_a_child_that_cannot_be_isolated_is_refused_and_never_started`) and `test_isolation.py`
+  (`test_a_root_runtime_refuses_a_subject_it_cannot_map`); in `deploy/lite/tests/`,
+  `test_runtime_environment.py` (`test_no_instance_secret_survives_into_the_runtime`) and
+  `test_child_isolation.py` (`test_valkeys_password_is_in_a_root_only_file_not_on_its_command_line`,
+  `test_the_browser_install_is_not_writable_by_children`). The three `test_isolation_root.py` tests
+  are skipped unless pytest runs as root on Linux, and no CI job runs them as root, so in CI they
+  are skipped; run them as root on a Linux host to exercise them. The other tests here run under
+  `gate:python`.
+- **Nothing missing from the image.** `deploy/lite/tests/test_image_by_path_reads.py`
+  (`test_every_file_a_service_reads_beside_its_code_is_in_the_image`) finds every file a service reads
+  beside its code and fails when the image does not carry it.
+- **The Makefile and the store.** `gate:lite-makefile` checks the Makefile's recipes;
+  `gate:runtime-parity` checks that the Valkey version Lite pins supports every command the code calls.
+- **P17.** `gate:vendor-payload` keeps the optional native meeting SDK out of the Lite build context.
+
 ## Limits vs compose and Kubernetes
 
 - **Ephemeral Valkey.** In-container with no volume by default.
-- **Agent API is not gateway-fronted.** Clients reach `:8100` directly; gateway-fronting is
-  roadmap.
-- **No MCP service.** The compose stack's `/mcp` surface does not exist in Lite.
 - **Sidecar ports are unpublished.** Postgres and the storage sidecar's S3 port are reachable only
   on the Docker network, not from the host.
+- **No calls.** Lite runs no LiveKit server, so a chat has no Call button
+  ([Calls](/minutes/calls)).
 - **No authenticated bots.** Lite does not package the provisioning flow or a userdata store
   ([Authenticated bots](/authenticated-bots#availability-by-deployment-surface)).
 

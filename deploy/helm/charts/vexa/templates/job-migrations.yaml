@@ -40,15 +40,12 @@ spec:
       containers:
         - name: migrations
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
-          image: "{{ default .Values.meetingApi.image.repository .Values.migrations.image.repository }}:{{ .Values.global.imageTag | default (default .Values.meetingApi.image.tag .Values.migrations.image.tag) }}"
+          # admin-api owns the one schema (identity + meetings) and its convergence; the Job is that
+          # convergence run BEFORE any new admin-api or meeting-api pod starts (F13), so both roll
+          # new-beside-old. Additive and idempotent, so the old pods keep serving on the new schema.
+          image: "{{ default .Values.adminApi.image.repository .Values.migrations.image.repository }}:{{ .Values.global.imageTag | default (default .Values.adminApi.image.tag .Values.migrations.image.tag) | default (include "vexa.releaseTag" .) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
-          command:
-            - /bin/sh
-            - -c
-            - |
-              set -e
-              echo "Running idempotent schema sync..."
-              python -c "import asyncio; from meeting_api.database import init_db; asyncio.run(init_db()); print('Schema sync complete.')"
+          command: ["python", "-m", "admin_api.migrate"]
           env:
             - name: DB_HOST
               value: {{ include "vexa.dbHostEffective" . | quote }}

@@ -78,7 +78,7 @@ export const UNITS = [
   // the MCP service lives under core/meetings today but is an EDGE (decision 40.5: one MCP server,
   // assembled at the gateway from domain-owned manifests, ADR-0037). Listed BEFORE core/meetings so the
   // longest-prefix rule classes it correctly.
-  { unit: "mcp", kind: "edge", root: "core/meetings/services/mcp" },
+  { unit: "mcp", kind: "edge", root: "core/gateway/services/mcp" },
   // ADR-0037 / PRD decision 40.5: once the one MCP server is assembled at the gateway, a worker's
   // VEXA_MCP_URL is an ordinary CLIENT edge to that edge — the same relationship clients/terminal
   // has, not the agent domain reaching a sibling's door. Listed BEFORE core/agent so the
@@ -263,7 +263,7 @@ export const CONTRACTS = {
   agent: { form: "config.v1", path: "core/agent/control_plane/config.v1.json" },
   flows: { form: "flows-table", path: "core/flows/src/flows_config.py" },
   gateway: { form: "config.v1", path: "core/gateway/services/gateway/src/gateway/config.v1.json" },
-  mcp: { form: "config.v1", path: "core/meetings/services/mcp/src/vexa_mcp/config.v1.json" },
+  mcp: { form: "config.v1", path: "core/gateway/services/mcp/src/vexa_mcp/config.v1.json" },
 };
 
 /** key -> class, for one unit's contract. Unreadable/absent contract ⇒ empty (everything undeclared). */

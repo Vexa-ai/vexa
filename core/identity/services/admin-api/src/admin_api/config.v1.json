@@ -2,6 +2,10 @@
  "contract": "config.v1",
  "service": "admin-api",
  "capabilities": {
+  "personal_crm_erase": {
+   "description": "deleting an account also erases that person's own CRM (an individual account's org of one, p-<id>) through crm-api's internal erase door, before identity removes the account.",
+   "when_unconfigured": "no CRM is deployed, so there is no personal CRM to erase; account delete removes identity's rows only, as before."
+  },
   "agent_delegation": {
    "description": "identity resolves a worker's delegation token (vxd_, minted per dispatch by agent-api) through /internal/validate, like an API key: signature, audience, expiry and the account still existing — so the gateway and flows authenticate a worker's tool calls without holding the delegation key themselves.",
    "when_unconfigured": "/internal/validate answers 401 to every vxd_ bearer, so a worker's toolbelt is refused at the edge; API keys are unaffected. This is the no-agents profile, which mints no delegation tokens."
@@ -190,6 +194,20 @@
    "targets": ["compose", "helm", "lite"]
   },
   {
+   "key": "CRM_ORG_ID",
+   "class": "defaulted",
+   "default": "(empty — the default org is not bound to a CRM organisation yet; orgs.crm_org_id stays NULL)",
+   "description": "The CRM organisation the install's default org is tied to (MIGRATION-0008, architecture A1): the same value crm-api runs as (its CRM_ORG_ID, the org_id key of every crm_* row). admin-api's schema convergence stamps it on the default org's orgs.crm_org_id while that is still unset, and never overwrites a set value. Nothing reads it yet; GET /internal/orgs/{id} and GET /internal/users/{id}/org answer it.",
+   "targets": ["compose", "helm"]
+  },
+  {
+   "key": "CRM_API_URL",
+   "class": "capability",
+   "capability": "personal_crm_erase",
+   "description": "crm-api's base URL. When set, DELETE /admin/users/{id} first asks crm-api to erase that person's own CRM (POST /internal/orgs/p-<id>/erase, internal secret) whenever the account has an org of one, and deletes nothing if the CRM cannot confirm the erasure (502), so a retry is safe. Unset: there is no CRM, and nothing to erase. An install running personal_crm must set it.",
+   "targets": ["compose", "helm"]
+  },
+  {
    "key": "VEXA_FLOWS_API_URL",
    "class": "publish-edge",
    "publishes_events": ["onboarding.completed"],
@@ -241,6 +259,109 @@
    "default": "true (the Helm chart sets false)",
    "targets": ["helm"],
    "description": "the deployment's default for whether a bot tapes its raw captured signal (audio, captions, speaker events) to the bucket under signal/ — the last tier of user diagnostics.capture_signal > platform setting diagnostics.capture_signal > this, answered on /internal/users/{id}/bot-context. Unset or empty = true, the compose and Lite behaviour; the Helm chart sets it from diagnostics.captureSignal, default false. Anything but a recognized boolean (true/1/yes/on, false/0/no/off) refuses the boot."
-  }
+  },
+  {
+   "key": "VEXA_PERSON_GRAVATAR",
+   "class": "defaulted",
+   "default": "true",
+   "targets": ["compose"],
+   "description": "whether a person's sign-in checks Gravatar for their own address (SHA-256 of it, d=404) when they have neither an uploaded photo nor a sign-in provider photo (app/person_photo_doors.py). A miss is remembered for 7 days. Set false and no Gravatar request is ever made; a person without a photo then shows a monogram."
+  },
+  {
+   "key": "S3_ENDPOINT",
+   "class": "defaulted",
+   "default": "(unset \u2014 falls back to MINIO_ENDPOINT/MINIO_SECURE)",
+   "targets": ["compose", "helm"],
+   "description": "people's photos (app/photo_storage.py): the S3 endpoint the photo bytes are written to, under person-photos/<user id>/ — the same store meeting-api writes recordings to (helm: storage.s3.endpoint). No endpoint or key = no photos; initials are drawn."
+  },
+  {
+   "key": "S3_ACCESS_KEY",
+   "class": "defaulted",
+   "default": "(unset \u2014 falls back to MINIO_ACCESS_KEY)",
+   "targets": ["compose", "helm"],
+   "description": "people's photos (app/photo_storage.py): access key for that store (helm: storage.s3.existingSecret)"
+  },
+  {
+   "key": "S3_SECRET_KEY",
+   "class": "defaulted",
+   "default": "(unset \u2014 falls back to MINIO_SECRET_KEY)",
+   "secret": true,
+   "targets": ["compose", "helm"],
+   "description": "people's photos (app/photo_storage.py): secret key for that store (helm: storage.s3.existingSecret)"
+  },
+  {
+   "key": "MINIO_ENDPOINT",
+   "class": "defaulted",
+   "default": "(unset)",
+   "targets": ["compose", "lite"],
+   "description": "people's photos (app/photo_storage.py): the bundled store's host:port (or a full URL) when S3_ENDPOINT is unset; https with MINIO_SECURE=true"
+  },
+  {
+   "key": "MINIO_ACCESS_KEY",
+   "class": "defaulted",
+   "default": "(unset)",
+   "targets": ["compose", "lite"],
+   "description": "people's photos (app/photo_storage.py): the bundled store's access key when S3_ACCESS_KEY is unset"
+  },
+  {
+   "key": "MINIO_SECRET_KEY",
+   "class": "defaulted",
+   "default": "(unset)",
+   "secret": true,
+   "targets": ["compose", "lite"],
+   "description": "people's photos (app/photo_storage.py): the bundled store's secret key when S3_SECRET_KEY is unset"
+  },
+  {
+   "key": "MINIO_SECURE",
+   "class": "defaulted",
+   "default": "false",
+   "targets": ["compose", "lite"],
+   "description": "people's photos (app/photo_storage.py): https toward a bare host:port MINIO_ENDPOINT when true"
+  },
+  {
+   "key": "MINIO_BUCKET",
+   "class": "defaulted",
+   "default": "vexa",
+   "targets": ["compose", "helm", "lite"],
+   "description": "people's photos (app/photo_storage.py): the bucket (the recordings bucket; photos keep to their own person-photos/ prefix)"
+  },
+  {
+   "key": "AWS_CONFIG_FILE",
+   "class": "defaulted",
+   "default": "(unset \u2014 boto3 reads ~/.aws/config if present)",
+   "targets": ["helm"],
+   "description": "boto3's shared-config file (read by boto3, not by admin-api code): helm points it at storage.s3's signing region, addressing style and CA bundle for the photo store"
+  },
+  {
+   "key": "GOOGLE_CLIENT_ID",
+   "class": "defaulted",
+   "default": "(unset \u2014 no Google provider photo)",
+   "targets": ["compose"],
+   "description": "people's photos (app/idp_tokens.py): the Google client id the terminal signs people in with; a sign-in's ID token must name it as its audience before its `picture` is used. The same value as the terminal's."
+  },
+  {
+   "key": "VEXA_OIDC_ISSUER",
+   "class": "defaulted",
+   "default": "(unset \u2014 no OIDC provider photo)",
+   "targets": ["compose", "helm"],
+   "description": "people's photos (app/idp_tokens.py): the OIDC issuer the terminal signs people in with (https); identity reads its discovery document for the signing keys and requires the ID token's iss. The same value as the terminal's."
+  },
+  {
+   "key": "VEXA_OIDC_CLIENT_ID",
+   "class": "defaulted",
+   "default": "(unset)",
+   "targets": ["compose", "helm"],
+   "description": "people's photos (app/idp_tokens.py): the OIDC client id; the ID token's audience must be this value. The same value as the terminal's."
+  },
+  {
+   "key": "VEXA_OIDC_CA_FILE",
+   "class": "defaulted",
+   "default": "(unset \u2014 the public roots)",
+   "targets": ["compose", "helm"],
+   "description": "people's photos (app/idp_tokens.py): a PEM bundle with the CA chain of the OIDC provider's TLS (an internal PKI), for reading its discovery document and keys. The same file as the terminal's."
+  },
+  {"key": "VEXA_FEATURES", "class": "defaulted", "default": "(empty — the release default: every switchable feature off)", "targets": ["compose", "helm", "lite"], "description": "the install's switched-on features (core/agent/control_plane/features.py rules). admin-api answers `public_profiles` only, and only when it is NAMED (`all` does not switch an explicit feature on): off, /user/profile*, /user/directory/*, /user/company-verification* and /internal/profiles/* refuse 403 `feature_disabled` (app/public_profile.py)"},
+  {"key": "VEXA_DIRECTORY_READS_PER_MINUTE", "class": "defaulted", "default": "30", "targets": [], "description": "directory reads (search or one profile) one person may make a minute, per admin-api process; past it the door answers 429 (app/profile_doors.py)"},
+  {"key": "VEXA_DNS_RESOLVER", "class": "defaulted", "default": "(empty — the first nameserver in /etc/resolv.conf)", "targets": [], "description": "the DNS server the company-domain verification asks for the domain's TXT records (app/profile_doors.py)"}
  ]
 }

@@ -6,6 +6,8 @@ Three tiers can set it, and the first one that sets EITHER field supplies the wh
                    this tier to auto over any default), and every accepted live change;
   2. user        — the person's default, stored by identity and read out of the bot-context answer
                    this service already fetches on every spawn (``transcription_language``);
+  2b. history    — with no default of their own, the languages the person's recent meetings were
+                   spoken in (``history_tier``), restricted to that list;
   3. deployment  — ``DEFAULT_TRANSCRIPTION_LANGUAGE`` + ``DEFAULT_TRANSCRIPTION_ALLOWED_LANGUAGES``;
 
 and auto underneath. Whole-setting precedence, not field-by-field: a meeting that says ``de`` means
@@ -94,6 +96,69 @@ def spawn_tier(language: Any, allowed_languages: Any) -> Optional[LanguageSettin
     return _setting(lang, allowed)
 
 
+#: Whisper's language names (and the aliases its tokenizer accepts) → code. 0.12 passed ``language``
+#: through untouched, so callers sent names as well as codes; `legacy_spawn_language` reads them.
+_NAMES = {
+    "english": "en", "chinese": "zh", "mandarin": "zh", "german": "de", "spanish": "es",
+    "castilian": "es", "russian": "ru", "korean": "ko", "french": "fr", "japanese": "ja",
+    "portuguese": "pt", "turkish": "tr", "polish": "pl", "catalan": "ca", "valencian": "ca",
+    "dutch": "nl", "flemish": "nl", "arabic": "ar", "swedish": "sv", "italian": "it",
+    "indonesian": "id", "hindi": "hi", "finnish": "fi", "vietnamese": "vi", "hebrew": "he",
+    "ukrainian": "uk", "greek": "el", "malay": "ms", "czech": "cs", "romanian": "ro",
+    "moldavian": "ro", "moldovan": "ro", "danish": "da", "hungarian": "hu", "tamil": "ta",
+    "norwegian": "no", "thai": "th", "urdu": "ur", "croatian": "hr", "bulgarian": "bg",
+    "lithuanian": "lt", "latin": "la", "maori": "mi", "malayalam": "ml", "welsh": "cy",
+    "slovak": "sk", "telugu": "te", "persian": "fa", "latvian": "lv", "bengali": "bn",
+    "serbian": "sr", "azerbaijani": "az", "slovenian": "sl", "kannada": "kn", "estonian": "et",
+    "macedonian": "mk", "breton": "br", "basque": "eu", "icelandic": "is", "armenian": "hy",
+    "nepali": "ne", "mongolian": "mn", "bosnian": "bs", "kazakh": "kk", "albanian": "sq",
+    "swahili": "sw", "galician": "gl", "marathi": "mr", "punjabi": "pa", "panjabi": "pa",
+    "sinhala": "si", "sinhalese": "si", "khmer": "km", "shona": "sn", "yoruba": "yo",
+    "somali": "so", "afrikaans": "af", "occitan": "oc", "georgian": "ka", "belarusian": "be",
+    "tajik": "tg", "sindhi": "sd", "gujarati": "gu", "amharic": "am", "yiddish": "yi", "lao": "lo",
+    "uzbek": "uz", "faroese": "fo", "haitian creole": "ht", "haitian": "ht", "pashto": "ps",
+    "pushto": "ps", "turkmen": "tk", "nynorsk": "nn", "maltese": "mt", "sanskrit": "sa",
+    "luxembourgish": "lb", "letzeburgesch": "lb", "myanmar": "my", "burmese": "my",
+    "tibetan": "bo", "tagalog": "tl", "malagasy": "mg", "assamese": "as", "tatar": "tt",
+    "hawaiian": "haw", "lingala": "ln", "hausa": "ha", "bashkir": "ba", "javanese": "jw",
+    "sundanese": "su", "cantonese": "yue",
+}
+#: Deprecated ISO 639 codes some clients still send.
+_OLD_CODES = {"iw": "he", "in": "id", "ji": "yi", "jv": "jw"}
+
+
+def legacy_spawn_language(language: Any, allowed_languages: Any = None) -> tuple[Any, Optional[str]]:
+    """``POST /bots`` ``language`` as 0.12 callers send it → the value `spawn_tier` reads, and a note
+    when the request's value was changed or ignored (for the log, never a refusal).
+
+    0.12 forwarded ``language`` to the bot untouched, so ``en-US``, ``EN``, ``pt_BR`` and ``English``
+    were all accepted. They are read here as the code they name (``en``, ``en``, ``pt``, ``en``). A
+    value that names no language is treated as unset — the spawn goes ahead on the lower tiers, as it
+    did on 0.12 — instead of a 422 the caller never got before.
+
+    This leniency is for the 0.12 request shape only: a request that also sends
+    ``allowed_languages`` (a 0.13 field) is held to the contract exactly, and so is every other input
+    (the live change, the person's default, the deployment default)."""
+    if allowed_languages is not None or language is None or not isinstance(language, str):
+        return language, None
+    raw = language.strip()
+    if raw in _OLD_CODES:
+        return _OLD_CODES[raw], f"language {raw!r} read as {_OLD_CODES[raw]!r}"
+    if CODE.match(raw) or raw == AUTO:
+        return raw, None
+    low = raw.lower()
+    if low == AUTO:
+        return AUTO, f"language {raw!r} read as 'auto'"
+    primary = low.replace("_", "-").split("-", 1)[0]
+    code = _OLD_CODES.get(primary, primary)
+    if CODE.match(code) and ("-" in low.replace("_", "-") or low == primary):
+        return code, f"language {raw!r} read as {code!r}"
+    name = _NAMES.get(" ".join(low.split()))
+    if name:
+        return name, f"language {raw!r} read as {name!r}"
+    return None, f"language {raw!r} names no language code; ignored (lower tiers apply)"
+
+
 def config_update(body: Any) -> tuple[LanguageSetting, Optional[str]]:
     """A live change's body (``ConfigUpdate``) → the setting it REPLACES the running one with, and
     the task it carries. Omitted or null fields are cleared; at least one of the two is present."""
@@ -130,6 +195,46 @@ def user_tier(bot_context: Mapping[str, Any]) -> Optional[LanguageSetting]:
     return spawn_tier(lang, allowed if allowed else None)
 
 
+#: The history tier: a language counts when it is at least this share of the person's recent
+#: segments, with at least this many segments in all; the tier sets a list of 2 to 3 languages.
+HISTORY_MIN_SHARE = 0.05
+HISTORY_MIN_SEGMENTS = 50
+HISTORY_MAX_LANGUAGES = 3
+
+
+#: Whether a person who set no language gets the languages of their recent meetings (``history_tier``).
+ENV_HISTORY = "VEXA_LANGUAGE_HISTORY_TIER"
+
+
+def history_tier_enabled(env: Optional[Mapping[str, str]] = None) -> bool:
+    """``on`` turns the history tier on; anything else (the default) is the 0.12 behaviour, where a
+    person who set nothing gets the deployment default, then auto-detection."""
+    env = os.environ if env is None else env
+    return (env.get(ENV_HISTORY) or "").strip().lower() in ("on", "true", "1", "yes")
+
+
+def history_tier(counts: Optional[Mapping[str, int]]) -> Optional[LanguageSetting]:
+    """The languages this person's recent meetings were actually spoken in, as a RESTRICTED setting,
+    or None.
+
+    A real call (2026-10-14) in Russian and English came back with 22 segments tagged pt, de, pl,
+    fr, cs and others — short windows detected freely. With no setting of their own, the person's
+    own history says which languages they speak: every language with at least
+    ``HISTORY_MIN_SHARE`` of their recent segments. One language is not a list (a person who has
+    only spoken English yet is not pinned to it), and a thin history is not one either."""
+    if not counts:
+        return None
+    valid = {k: int(v) for k, v in counts.items() if isinstance(k, str) and CODE.match(k) and int(v) > 0}
+    total = sum(valid.values())
+    if total < HISTORY_MIN_SEGMENTS:
+        return None
+    kept = [k for k, n in sorted(valid.items(), key=lambda kv: (-kv[1], kv[0]))
+            if n / total >= HISTORY_MIN_SHARE][:HISTORY_MAX_LANGUAGES]
+    if len(kept) < 2:
+        return None
+    return _setting(None, tuple(kept))
+
+
 def deployment_tier(env: Optional[Mapping[str, str]] = None) -> Optional[LanguageSetting]:
     """The deployment default from the environment, or None. Raises ``LanguageRefused`` on a value
     the contract refuses — ``__main__`` calls this at boot so a bad value stops the service there."""
@@ -152,9 +257,12 @@ def resolve(
     meeting: Optional[LanguageSetting],
     user: Optional[LanguageSetting],
     deployment: Optional[LanguageSetting],
+    history: Optional[LanguageSetting] = None,
 ) -> dict:
-    """The effective setting (``EffectiveSetting``): the first tier that is set, with its source."""
-    for source, tier in (("meeting", meeting), ("user", user), ("deployment", deployment)):
+    """The effective setting (``EffectiveSetting``): the first tier that is set, with its source.
+    The person's own history comes after their explicit default and before the deployment's."""
+    for source, tier in (("meeting", meeting), ("user", user), ("history", history),
+                         ("deployment", deployment)):
         if tier is not None:
             return {**tier.as_dict(), "source": source}
     return {**AUTO_SETTING.as_dict(), "source": "auto"}

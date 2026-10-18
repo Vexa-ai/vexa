@@ -32,6 +32,13 @@ You never have to wait. A message you send during a turn goes straight to the ag
 at the foot of the chat as *queued · … · queued behind the current turn*. Queued messages run in the
 order you sent them. A reload does not lose them: the list is read back from the server.
 
+A queued row shows your own words. **Send now** on a row stops the current answer (the chat says it
+stopped) and runs that message next.
+
+A meeting link, or a bot command such as *send bot* or *stop the bot*, never waits: it is carried out
+at once, beside the running answer, and gets its own one-line reply (*Bot sent to Zoom 92446951537 —
+waiting for admission*). The running answer and your next message are told what happened.
+
 Every queued message is answered, and the answer appears in its own reply under your message, even
 when the agent starts on it while it is still finishing the previous reply. If your chat was already
 idle when the agent started it, the chat attaches to it and shows it the same way.
@@ -42,6 +49,26 @@ when the chat is idle. A message you send while a turn runs queues on the agent 
 If the agent cannot take a message, the row turns red: *blocked — `<source>` · `<kind>` — `<detail>`*,
 with **Retry**. If the network dropped the message before the server saw it, your browser keeps a copy
 and re-sends it when the chat is idle or the page reloads.
+
+### Dictate a message
+
+**Dictate** (or <kbd>Cmd</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>D</kbd>) listens and writes
+what you say into the box as you speak. Nothing is sent until you press Enter. If you press Enter
+while it is still listening, the message is sent and the box empties; listening continues, and only
+what you say after the send appears. Text you type while it listens is kept, and dictation continues
+after it. Stop with the button or <kbd>Esc</kbd>.
+
+**How it works.** The browser sends the microphone's audio in short windows to `POST /api/stt` and
+shows the recognised text plus a live draft. When the shown text leaves the box (sent, or taken over
+by your edit), the composer tells the dictation engine to commit: answers that arrive later for audio
+before that moment are dropped, so sent words never come back. The committed text is kept only as
+context for recognising what follows. One module writes the box's dictated text,
+`clients/terminal/src/ui-kit/composerDictation.ts`.
+
+**Why it complies.** P21, state from evidence: the box shows only text recognised after the last
+send (`clients/terminal/src/ui-kit/__tests__/dictationSend.test.ts`: "empties the composer and keeps
+it empty when the pre-send final answers late", "keeps a person's edit; later speech is appended
+after it, not over it"). Ungated, reviewed. No new route, contract or stored data.
 
 ### Background jobs
 
@@ -63,8 +90,10 @@ still have finished; reopen the page to see.*
 
 ### Suggestions in an empty chat
 
-An empty chat suggests what to do with your email and calendar. What it offers depends on what you
-have connected:
+An empty chat suggests what to do with your email and calendar, and offers a voice note. What it
+offers depends on what you have connected. Each suggestion starts with an icon for what it does: a
+calendar for meeting prep, mail for the email check, a plug for connecting an account, a microphone
+for a voice note.
 
 | Suggestion | When it shows | A click |
 |---|---|---|
@@ -72,8 +101,9 @@ have connected:
 | *Connect your calendar* | no Google Calendar is connected (same) | opens **Connections** on Google Calendar |
 | *Check my email* | Gmail is connected | the agent reads your recent inbox and tells you which messages need a reply from you |
 | *Prepare for `<title>` at 3:00 PM* | Google Calendar is connected and a meeting with a title starts in the next 24 hours | the agent reads the event, then your transcripts and workspaces for what is open with those people, and briefs you |
+| *Record a voice note* | always, after the suggestions above | opens the recorder; see [Voice notes](/minutes/voice-notes) |
 | items your agents proposed | an agent filed a job for you | runs the job; **×** (*Not now*) dismisses it |
-| *My email is …, set up a workspace for me* | your personal workspace has nothing in it | starts setup |
+| *My email is …, set up a workspace for me* | your Personal workspace has nothing in it | starts setup |
 
 The meeting is always named by its calendar title, and the next titled meeting is the one offered.
 A meeting with no title is never offered as "Google Meet call" or similar. With no meeting coming up,
@@ -84,7 +114,7 @@ If your connections can't be read, the chat shows no suggestions rather than one
 To send Vexa to a meeting, paste its link into the message box and ask, for example *Send Vexa to https://meet.google.com/abc-defg-hij*.
 
 Pressing a suggestion acts in the same chat. A used suggestion is not offered again in that chat.
-Opening **Connections** does not use the suggestion up, and when you finish connecting, the suggestion
+Opening **Connections** or the recorder does not use the suggestion up, and when you finish connecting, the suggestion
 changes to *Check my email* or *Prepare for …* without a reload.
 
 ### Links in replies
@@ -93,7 +123,7 @@ Every page a reply names opens on click: wiki links, `.md` paths and workspace p
 that does not exist yet opens its path, where you can [create it](/minutes/pages#extend-or-create-a-page-with-the-agent).
 
 **Meetings** show as a meeting chip, beside the people and companies: a microphone, the meeting's
-title and its date, for example *Campbell · Fri 9 Oct*. The title is the meeting's own, so a
+title and its date, for example *Acme weekly sync · Fri 9 Oct*. The title is the meeting's own, so a
 renamed call shows its new name; a meeting nobody named shows its platform
 (*Zoom · Fri 9 Oct*). Click the chip to open the meeting, as from the Calls list. A reply gets the
 chip when it links the meeting (`/?meeting=<id>`) or its notes page (`kg/entities/meeting/….md`),
@@ -103,13 +133,13 @@ If you cannot open a meeting, its chip shows as plain text, with no title and no
 
 ### Choose where a chat writes
 
-The bar above the chat reads *Chat ›* or *Meeting ›* followed by the chat's name, then one chip per
-workspace in the chat.
+The bar above the chat shows the chat's name, then one read-only chip with its profile and scope,
+for example *Work · writes to biz · reads 3* or *Writes to Personal · Reads 2 workspaces*; hover it
+for the full list. It has no toggles. Say what you want in the chat — "write here", "also read
+Example Bank", "no workspaces", "use my work profile" — and the agent changes it and says what
+changed in one line. See [Workspace states](/core/workspaces#workspace-states-active-inactive-hidden).
 
-- The highlighted chip is the **target**: *Writes in this chat go here. The others are mounted to
-  read.* Click another chip to make it the target.
-- **+** (*Add a workspace to this chat*) mounts another workspace; a chip's remove button takes it out.
-- With no target set, writes go to your own personal workspace.
+- With no target set, writes go to your Personal workspace.
 - **Company** (the `_global` workspace) is never offered to an everyday account, the instance
   admin's included. Signed in as the deployment's **admin account**, the bar shows **Company** alone:
   it is always the target, there is no `+`, and every chat writes there (see
@@ -121,8 +151,12 @@ refused as a target.
 
 ### Name, order and delete chats
 
-A chat is named from your first message until you rename it. Renaming, the activity dot, pinning,
-hiding, reopening history and deleting a chat are covered in [Manage your chats](/how-to/chat-controls). What
+A chat is named from your first message until you rename it. Your chats sit in your own sections:
+**Pinned**, folders you name, **Recent** and **Hidden** (a folded folder at the bottom; hiding a
+chat is moving it there). Drag a chat between them, or use **Move to…** in its menu, or ask the
+agent (*"put the Acme chats in an Acme folder"*). Folders are yours alone, even on a shared chat.
+Folders, renaming, the activity dot, pinning, hiding, reopening history and deleting a chat are
+covered in [Manage your chats](/how-to/chat-controls). What
 happens when a long turn reaches its tool-call limit is in [Long agent turns](/agent-tool-calls).
 
 ## Limits and errors
@@ -201,13 +235,14 @@ person: an agent acting for someone cannot start one.
 | Data | Single writer | Where |
 |---|---|---|
 | Your chat list (rail) and names | agent-api | Redis, per user |
+| The conversation: owner, participants, roles, transcript versions, messages the agent was not asked to answer | agent-api | the instance's Postgres (`agent_session*` tables) and objects under `sessions/` in the install's S3 store ([Shared chats](/minutes/shared-chats#where-a-conversation-lives)) |
 | Rail order | agent-api | Redis, per user |
-| Pins and hides | agent-api | Redis, per user |
+| Folders, pins and hides | agent-api | the session store, per user (Redis marks without the store) |
 | Chat inbox | agent-api (every entry signed) | the chat unit's input stream |
 | Turn output and job events | the agent worker | the chat unit's output stream; agent-api only relays it |
 | Inbox position | the agent worker | the chat unit's cursor |
 | Job records | the agent worker | the chat's working folder |
-| Suggestions filed by agents | agent-api | `.vexa/proposals.json` in your personal workspace |
+| Suggestions filed by agents | agent-api | `.vexa/proposals.json` in your Personal workspace |
 | Connection status | credential broker | the broker's database; the terminal only reads it |
 | The suggestion row and the next-meeting title | nobody: derived in the browser on each render and never stored | — |
 | Open tabs, view, unsent copies | your browser | `localStorage` |
@@ -223,7 +258,10 @@ person: an agent acting for someone cannot start one.
 | `POST /api/chat/name` | `POST /api/chat/name` |
 | `GET`, `PUT /api/chat/order` | `GET`, `PUT /api/chat/order` |
 | `GET`, `POST /api/chat/marks` | `GET`, `POST /api/chat/marks` |
+| `GET`, `POST /api/chat/folders`, `POST /api/chat/folders/update`, `POST /api/chat/folders/delete`, `POST /api/chat/move` | the same paths (also the agent tools `chat_folders_list`, `chat_folder_create`, `chat_folder_update`, `chat_folder_delete`, `chat_move`) |
 | `GET /api/sessions`, `/api/sessions/{id}/history`, `DELETE /api/sessions/{id}` | the same paths |
+| `GET`, `POST /api/sessions/{id}/participants`, `DELETE /api/sessions/{id}/participants/{principal}` | the same paths |
+| `GET /api/sessions/{id}/messages` | the same path |
 | `GET`, `POST /api/proposals`, `POST /api/proposals/resolve` | the same paths |
 | `GET /api/connections/list` | the credential broker's `GET /api/connections` (terminal server only) |
 | `GET /api/connections/upcoming` | the credential broker's `POST /api/connections/{id}/read`, `calendar.events`, fixed 24-hour window (terminal server only) |
@@ -255,7 +293,7 @@ gateway's `/agent/*` forward. The request and event shapes are in [the agent API
 |---|---|---|
 | **P2** contracts · **P6** one front door | the browser calls only the terminal's `/api/*`; the terminal calls only the gateway | `gate:isolation`, `gate:exports`, `gate:domain-doors` |
 | **P18** fail loud | a refused spawn, a provider refusal or a gateway outage ends as a typed fault (`source` + `kind`) shown in the chat; the terminal never passes a bare *Internal Server Error*; a blocked queue says what blocked it; a failed job posts a line; a message the agent took is always watched: a view stays open until every turn that started on it has ended, and an idle chat attaches to a turn that started after what it read, so an answer never goes to a stream nobody reads | `gate:fault-surfacing` (under `gate:node` and `gate:python`); the race tests below |
-| **P20** authorize every access | the user is the signed identity; the target must be a workspace you can write; suggestions are your own personal workspace's; a meeting chip shows a title only for a meeting meeting-api answers to you | deny tests below |
+| **P20** authorize every access | the user is the signed identity; the target must be a workspace you can write; suggestions are your Personal workspace's; a meeting chip shows a title only for a meeting meeting-api answers to you | deny tests below |
 | **P21** state from evidence | the activity line and job rows come from the worker's events, not from the button press. Every suggestion comes from the broker's own connection status (`ready` or not) and the calendar's own event title; nothing is offered while the status is unknown | `proposals.test.ts` (one describe per connection state, "not answered yet"); otherwise ungated: reviewed |
 | **P23** one writer per carrier | agent-api is the inbox's only writer; the worker is the output stream's only writer and agent-api relays it unchanged. The suggestion row is derived, never stored, and re-derives nobody's data: connection status stays the broker's | `gate:dataflow` |
 | **P18** fail loud (suggestions) | an unreadable connections list shows no suggestions at all rather than wrong ones, and logs one line; a failed calendar read is a typed `broker_fault` on the server and costs only the prepare suggestion | `proposals.test.ts` ("connections status unreadable"); `routes.test.ts` ("upcoming fails loud as one generic line…") |
@@ -263,7 +301,7 @@ gateway's `/agent/*` forward. The request and event shapes are in [the agent API
 
 ### Security
 
-**Who can do what.** Only you can post into your chats. The chat's target is a default, never a grant:
+**Who can do what.** Only you can post into a chat of your own. In a [shared chat](/minutes/shared-chats) its owner and members post too; viewers only read. The chat's target is a default, never a grant:
 writes are still checked against your rights in that workspace, and an agent acting for you is held to
 the workspaces of the chat that dispatched it. Only the admin account can target the company workspace,
 and the admin account can target nothing else.
@@ -318,4 +356,5 @@ and the admin account can target nothing else.
 ## Related
 
 - [Chat with your workspace](/how-to/chat-workspace) — the same chat over the API
+- [Shared chats](/minutes/shared-chats) — adding people to a chat
 - [Manage your chats](/how-to/chat-controls) · [Long agent turns](/agent-tool-calls) · [Agent API](/api/agent) · [Errors](/api/errors) · [Agents](/core/agents)

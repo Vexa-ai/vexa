@@ -75,6 +75,15 @@ def test_the_rules_name_the_stream_and_the_meetings_two_channels_only():
         ["xadd", "publish", "subscribe", "unsubscribe", "ping", "quit"])
 
 
+def test_a_bot_may_read_its_own_voice_note_stream_and_nothing_else():
+    # A selector: XREAD is granted on the meeting's own voice-note stream alone, read-only, so the
+    # bot can never read transcription_segments (the root grant) nor another meeting's audio.
+    rules = acl_rules(42, "pw")
+    selectors = [r for r in rules if r.startswith("(")]
+    assert selectors == ["(%R~voice_note:meeting:42:audio +xread)"]
+    assert "+xread" not in rules
+
+
 async def test_grant_defines_the_user_and_hands_back_its_url():
     r = FakeAsyncRedis()
     url = await _users(r).grant("conn-a", 42)

@@ -47,6 +47,7 @@ import type { TelemetrySink } from './ports.js';
 import type { RemoteAudioActivityTap } from './aloneness.js';
 import { createTtsPlayback } from './tts-playback.js';
 import { writeBackSession } from './session-writeback.js';
+import { restoreSession } from './session-restore.js';
 
 /** Float32 PCM → base64 of its little-endian bytes — the EXACT codec wire payload, so a stored
  *  captured-signal.v1 frame round-trips through @vexa/capture-codec (encode→decode→same PCM). */
@@ -568,7 +569,8 @@ export interface BrowserSession {
 
 /**
  * Launch the browser the bot joins through. Authenticated bots restore the persistent profile
- * from S3 first (so they join as a signed-in user); guest bots launch a fresh persistent context.
+ * first — from S3, or from meeting-api's `sessionRestoreUrl` for a saved bot account — so they join
+ * as a signed-in user; guest bots launch a fresh persistent context.
  * Always uses getJoinBrowserArgs() (the join lane's canonical flag set) merged with the
  * remote-browser auth args, so the page the JoinDriver receives is configured identically to
  * what @vexa/join expects.  // L4 (O6/VM): live-validated against a real meeting.
@@ -600,11 +602,19 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   const authDomains = inv.authenticated
     ? authenticatedNavigationDomains(AUTH_PLATFORM[inv.platform] ?? null, inv.meetingUrl)
     : null;
-  if (inv.authenticated && inv.userdataS3Path) {
-    // Fail-loud restore: an unreachable/misconfigured store surfaces as a typed SessionSyncError
-    // naming the session-restore step (the composition root drives it to a clean terminal failed)
-    // — an authenticated bot never silently proceeds to join signed-out on a failed restore.
-    syncBrowserDataFromS3(s3Config, dataDir);
+  if (inv.authenticated && (inv.sessionRestoreUrl || inv.userdataS3Path)) {
+    // Fail-loud restore: an unreachable/misconfigured store, or a refused/off-contract answer from
+    // meeting-api, surfaces as a typed SessionSyncError naming the session-restore step (the
+    // composition root drives it to a clean terminal failed) — an authenticated bot never silently
+    // proceeds to join signed-out on a failed restore. A saved bot account's profile comes over HTTP
+    // (sessionRestoreUrl, session-restore.ts) and is the whole profile: the store is not mixed in.
+    try {
+      if (inv.sessionRestoreUrl) await restoreSession(inv, dataDir);
+      else syncBrowserDataFromS3(s3Config, dataDir);
+    } catch (e) {
+      removeProfileDir(dataDir);
+      throw e;
+    }
     cleanStaleLocks(dataDir);
   }
 
@@ -691,7 +701,7 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
       // session; no URL in the invocation, no write-back. Clean teardown only: a
       // SIGKILL never reaches close(), so a hard-killed meeting keeps the last durable copy.
       // Failures are attributed warnings, one bounded attempt — teardown never hangs on it.
-      if (inv.authenticated && inv.userdataS3Path) {
+      if (inv.authenticated && (inv.userdataS3Path || inv.sessionRestoreUrl)) {
         try {
           const r = await writeBackSession(inv, dataDir);
           console.log(r.skipped

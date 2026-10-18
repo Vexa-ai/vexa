@@ -73,8 +73,21 @@ if admin_published "$old"; then
 else
   echo "kept ADMIN_TOKEN"
 fi
+# The session store's own access key (ADR-0048): storage-init scopes it to the vexa-sessions bucket.
+if ! grep -qE "^VEXA_SESSIONS_S3_ACCESS_KEY=.+" "$env_file"; then
+  v="vexa-sessions-$(openssl rand -hex 12)"
+  if grep -qE "^VEXA_SESSIONS_S3_ACCESS_KEY=" "$env_file"; then
+    sed -i.bak "s|^VEXA_SESSIONS_S3_ACCESS_KEY=.*|VEXA_SESSIONS_S3_ACCESS_KEY=${v}|" "$env_file" && rm -f "$env_file.bak"
+  else
+    echo "VEXA_SESSIONS_S3_ACCESS_KEY=${v}" >> "$env_file"
+  fi
+  echo "minted VEXA_SESSIONS_S3_ACCESS_KEY"
+else
+  echo "kept VEXA_SESSIONS_S3_ACCESS_KEY"
+fi
 for key in INTERNAL_API_SECRET RUNTIME_API_TOKEN DB_PASSWORD REDIS_PASSWORD VEXA_MCP_DELEGATION_SECRET \
-           VEXA_DISPATCH_SIGNING_KEY VEXA_FLOWS_API_KEY VEXA_FLOWS_TIMELINE_KEY NEXTAUTH_SECRET; do
+           VEXA_DISPATCH_SIGNING_KEY VEXA_FLOWS_API_KEY VEXA_FLOWS_TIMELINE_KEY NEXTAUTH_SECRET \
+           VEXA_SESSIONS_DB_PASSWORD VEXA_SESSIONS_S3_SECRET_KEY; do
   if grep -qE "^${key}=\s*$" "$env_file"; then
     v="$(mint)"
     # portable in-place edit (GNU and BSD sed)

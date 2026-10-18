@@ -29,7 +29,15 @@ const HELM = read("deploy/helm/charts/vexa/templates/deployment-terminal.yaml");
 const LITE = read("deploy/lite/entrypoint.sh");
 
 /** The names the mailer reads, e.g. VEXA_MAIL_SMTP_HOST. */
-const mailerSettings = [...new Set([...MAILER.matchAll(/process\.env\.([A-Z][A-Z0-9_]*SMTP[A-Z0-9_]*)/g)].map((m) => m[1]))];
+const mailerReads = [...new Set([...MAILER.matchAll(/process\.env\.([A-Z][A-Z0-9_]*SMTP[A-Z0-9_]*)/g)].map((m) => m[1]))];
+
+/** The capture double behind the relay switch shared with flows (VEXA_MAIL_RELAY=capture). It is a
+ *  compose-only development switch: Helm and Lite have no capture double, so there the switch is
+ *  unset and the relay is the VEXA_MAIL_SMTP_* family. Declared, but on compose alone. */
+const CAPTURE_SWITCH = ["VEXA_MAIL_CAPTURE_SMTP"];
+
+/** The relay settings the mailer reads, e.g. VEXA_MAIL_SMTP_HOST (the capture switch apart). */
+const mailerSettings = mailerReads.filter((n) => !CAPTURE_SWITCH.includes(n));
 
 /** One top-level service block of the compose file, as text (the line-wise read gate:config-contract uses). */
 function service(name) {
@@ -69,4 +77,15 @@ test("compose, .env.example, Helm and Lite each carry every key the mailer reads
     assert.match(LITE, new RegExp(`^export ${name}=`, "m"), `Lite does not export ${name}`);
   }
   assert.doesNotMatch(terminal, /- SMTP_[A-Z_]+=/, "compose still passes an unprefixed SMTP_* key");
+});
+
+test("the capture switch the mailer reads is declared for compose only, and compose passes it", () => {
+  const declared = new Map(DECL.keys.map((k) => [k.key, k]));
+  const terminal = service("terminal");
+  for (const name of CAPTURE_SWITCH.filter((n) => mailerReads.includes(n))) {
+    assert.ok(declared.has(name), `clients/terminal/config.v1.json does not declare ${name}`);
+    assert.deepEqual(declared.get(name).targets, ["compose"], `${name} is a compose-only switch`);
+    assert.match(terminal, new RegExp(`- ${name}=\\$\\{${name}:-[^}]*\\}`), `compose terminal does not pass ${name}`);
+    assert.match(ENV_EXAMPLE, new RegExp(`^#? ?${name}=`, "m"), `.env.example does not name ${name}`);
+  }
 });

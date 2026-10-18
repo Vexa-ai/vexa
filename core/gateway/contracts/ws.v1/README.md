@@ -43,6 +43,20 @@ SDKs, and any client build against.
     — from `bm:meeting:{id}:status` (status under `payload.status`).
   - `ChatMessage` `{type:"chat_message", sender?, text}` — from `va:meeting:{id}:chat`.
 
+  - `Notification` `{type:"notification", notification:{id, kind, actor, object, text, created, read}}`,
+    `NotificationRead` `{type:"notification.read", unread}` and `Rail` `{type:"rail", change, session}`
+    — from `u:{user_id}:notifications`, which the socket fans in at connect for its own person
+    (#1783). agent-api is the one writer; a notification's text names the actor and the object only.
+
+  - `MeetingSignals` `{type:"meeting.signals", meeting:{id,platform,native_id}, annotations:[{id, segment_id, scores, words, model?, brief_version?, at?}]}`
+    — transcript signals, from the redis **stream** `sig:meeting:{id}` (the signals service is its one
+    writer). Only for a subscription that asked: `{action:"subscribe", meetings:[…], streams:["signals"]}`
+    (`streams` is optional and additive; absent means `["transcript"]`, the channels above, so a 0.12
+    client sees nothing new). The newest 500 entries come first, then each new batch live. Signals are
+    read for the meeting ROW the authorize hop granted, so they reach exactly the people who may read
+    that meeting's transcript; live re-authorization and `subscription_revoked` stop them the same way.
+    `scores` is `{label: 0..1}` against the meeting's listening brief; `words` is `{word: 0..1}`.
+
   Data messages are **type-tagged and additive** (the gateway forwards the producer's raw
   payload unchanged), so `type` + the listed required field are the floor; extra fields are allowed.
 

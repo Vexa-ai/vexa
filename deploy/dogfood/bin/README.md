@@ -2,7 +2,7 @@
 
 `mcp-validate` drives a RUNNING Vexa MCP endpoint as a real MCP client.
 
-The MCP service's own tests (`core/meetings/services/mcp/tests/`) prove the app in-process against
+The MCP service's own tests (`core/gateway/services/mcp/tests/`) prove the app in-process against
 a faked gateway. That is the right test, and it cannot answer the question an MCP client asks:
 *does the transport work through the proxy chain, with a real key, against a real gateway?* This
 answers that one.

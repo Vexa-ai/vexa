@@ -54,7 +54,7 @@ def _pods_into(submitted: list):
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
     monkeypatch.setenv("BROWSER_IMAGE", "bot:test")
-    monkeypatch.setenv("AGENT_IMAGE", "vexaai/v012-agent-api:test")
+    monkeypatch.setenv("AGENT_IMAGE", "vexaai/vexa-agent-api:test")
     for prefix in (BOT, WORKER):
         for suffix in ("NODE_SELECTOR", "TOLERATIONS", "PRIORITY_CLASS_NAME", "IMAGE_PULL_SECRETS"):
             monkeypatch.delenv(prefix + suffix, raising=False)

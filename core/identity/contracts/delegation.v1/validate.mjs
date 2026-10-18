@@ -37,9 +37,17 @@ const hmac = (secret, body) => createHmac("sha256", Buffer.from(secret, "utf8"))
 
 function mint(v) {
   const workspaces = v.workspaces === "*" ? "*" : [...new Set(v.workspaces.map(String))].sort();
-  const claims = { sub: v.subject, aud: AUDIENCE, scope: { regime: v.regime, workspaces },
+  const scope = { regime: v.regime, workspaces };
+  if (v.shared === true) scope.shared = true;
+  if (v.audience === "cross_org") scope.audience = "cross_org";
+  if (Array.isArray(v.grants) && v.grants.length) {
+    scope.grants = [...new Set(v.grants.map(String))].sort();
+    scope.flow = String(v.flow || "").trim();
+  }
+  const claims = { sub: v.subject, aud: AUDIENCE, scope,
                    iat: v.now, exp: v.now + v.ttl_sec, jti: v.jti };
   if ((v.target || "").trim()) claims.target = v.target.trim();
+  if ((v.unit || "").trim()) claims.unit = v.unit.trim();
   const body = `${b64u(canon({ alg: "HS256", typ: "vxdlg" }))}.${b64u(canon(claims))}`;
   return `${PREFIX}${body}.${b64u(hmac(v.secret, body))}`;
 }

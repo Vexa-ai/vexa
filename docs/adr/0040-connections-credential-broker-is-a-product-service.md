@@ -59,9 +59,9 @@ rest.
 ## Trade-off
 
 - **The broker is a single point of failure for Connections** (one replica, one volume). Agent-api
-  answers 503 with a typed fault when it is down; nothing else in the product depends on it. The
-  opt-in Git store is the exception: with it switched on, a broker outage refuses Git operations
-  rather than falling back to disk.
+  answers 503 with a typed fault when it is down. Saved Git credentials are the exception: they
+  live here too (amendment below), so a broker outage refuses Git operations that need one rather
+  than running them without it.
 - **The terminal reaches the broker directly**, past the gateway (ADR-0037 decision 1). It is on the
   dated door backlog: it closes when the gateway re-stamps a person's session as the human role (the
   signed-identity work) and the terminal reaches Connections through `GATEWAY_URL` only.
@@ -92,3 +92,48 @@ source is MPL-covered. No npm dependency is added.
 - `gate:domain-doors` counts the broker doors; `gate:fact-parity` holds the vendored signer;
   `gate:contract-conformance` runs the broker's route table against the contract in both directions.
 - The development harness is deleted.
+
+## Amendment — 2026-10-12: the broker is the only credential store ([#1783](https://github.com/Vexa-ai/vexa/issues/1783))
+
+Saved Git tokens and deploy keys were opt-in here, and otherwise kept by agent-api in a store of its
+own on the workspaces volume. That left a second store inside the process decision 1 keeps the
+authority out of. The `git` role is now always wired: compose and the chart point agent-api at the
+broker and mount the git key, agent-api holds no store and no store key, and without a broker a
+save is a typed refusal. Entries an older agent-api kept move on their owner's next Git operation
+(read, written here, read back, then removed), or all at once with the broker's operator-run
+`python -m credential_broker.import_git_legacy`. `VEXA_SECRETS_KEY` is read only for that move.
+`credential-broker.v1` is unchanged: the `git` role's route already carried `get`, `put` and
+`migrate`.
+
+## Amendment — 2026-10-13: a write to a mailbox or calendar always needs a person ([#1783](https://github.com/Vexa-ai/vexa/issues/1783))
+
+The connection policy (`_global/POLICIES.md`, narrowed by the person) is resolved by agent-api and
+forwarded to the broker with each action as `ActionPolicy`; the broker enforces it again. That body
+is the caller's word, not something the broker can verify, so it must not be what opens a write.
+
+1. **A write is refused to a worker without a person in the loop, categorically.** The draft,
+   draft-update and calendar-event routes take the identity without `unwatched_ok`: the gateway's
+   signed regime alone decides, and no forwarded policy changes it. At agent-api the five write
+   verbs (`gmail/draft`, `gmail/draft/update`, `calendar/event/create|update|cancel`) are
+   `person: true` in `routes.v1.json`, so the person gate refuses them before any policy is read.
+2. **`connection_actions_unattended` lists reads only** (`gmail.search`, `gmail.read`,
+   `gmail.thread`, `calendar.events`). A write, or `all`, there makes the file unreadable: every
+   connection action is refused, naming the key, rather than the file quietly meaning less than it
+   says.
+3. **Reads stay policy-governed.** The four read verbs are `person: false`; a background routine
+   reads only what the file lists (none by default), and the broker serves an unwatched read only
+   when the forwarded policy says so. What remains trusted there is agent-api's resolution of the
+   policy, the same trust the Trade-off above already places in its handling of a signature.
+4. **A signed policy was not chosen.** Signing `ActionPolicy` would need a key the broker trusts and
+   agent-api does not hold, i.e. a third signer for one bit; refusing unwatched writes outright is
+   smaller and leaves nothing to verify.
+5. **The person's own setting is the person's.** Saving it (`PUT /api/connections/policy`, broker
+   `POST /api/preferences`) is refused to every delegated caller, watched or not: a worker steered by
+   text it read could otherwise loosen restrictions the person set. Reading it stays open to workers.
+6. **A change to a connection key in `_global/POLICIES.md` needs a person, and is announced.** The
+   file is written by an org admin, and by an admin's agent (the policies wizard). A page write,
+   removal or move that changes a `connection_*`, `calendar_*` or `draft_*` value is refused to a
+   worker without a person in the loop; from anyone else its commit in `_global` carries
+   `connection policy changed: <keys> — by <subject> (the person | an agent, person in the loop)`,
+   and agent-api logs one `connection_policy_changed` line. `_global`'s history is the audit trail
+   an administrator already reads; a separate approval step for an admin's own file was not added.

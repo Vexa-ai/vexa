@@ -1,42 +1,28 @@
 ---
 title: "Brief me every morning"
-description: "An unattended agent that runs on a schedule and commits to your workspace."
+description: "A routine of your own: a schedule and one agent turn, each run landing in the routine's own chat."
 ---
 
-A **routine** is a scheduler entry — a trigger plus a plan. The agent runs with
-no one watching, works your [workspace](/concepts#workspace), and commits; the output is replayable later.
+A **routine** is a flow of your own: a schedule and one agent turn. Each run is a turn in the
+routine's own chat thread, works your [workspace](/concepts#workspace), and has nobody watching.
 
 ## Create the routine
 
-```bash
-curl -X POST "$API_BASE/agent/routines" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{
-    "name":"Morning brief",
-    "cron":"0 8 * * 1-5",
-    "prompt":"Brief me from overnight activity — new meetings, decisions, and follow-ups due today. Write it to brief/today.md.",
-    "run_now":true
-  }'
-# → 201 {"routine":{...},"job_id":"job_...","ran_now":true}
+Ask your agent: *"every weekday at 8, brief me from overnight activity: new meetings, decisions and
+follow-ups due today."* It makes the routine with the `flows_submit` tool. From any MCP client you
+can call the same tool yourself:
+
+```json
+{
+  "name": "morning-brief",
+  "trigger": { "kind": "schedule", "cron": "0 8 * * 1-5" },
+  "steps": ["agent_run"],
+  "params": { "instruction": "Brief me from overnight activity — new meetings, decisions, and follow-ups due today. Write it to brief/today.md." }
+}
 ```
 
-`cron` is a standard five-field expression — `0 8 * * 1-5` is 08:00 every weekday. `run_now:true` also
-fires it once immediately so you can verify the output without waiting.
-
-## Manage it
-
-```bash
-# list
-curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/routines"
-
-# pause / resume
-curl -X PATCH "$API_BASE/agent/routines/Morning%20brief/enabled" \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"enabled":false}'
-
-# delete (by routine id)
-curl -X DELETE "$API_BASE/agent/routines/<routine_id>" -H "X-API-Key: $API_KEY"
-```
+`cron` has five fields and is read in **UTC**: `0 8 * * 1-5` is 08:00 UTC every weekday. Two fires
+are at least 15 minutes apart by default; a faster cron is refused with `quota_min_interval`.
 
 ## Routines that need you: mail, calendar and connections
 
@@ -166,7 +152,7 @@ run is still counted, and the routine is still paused after three refused runs.
 
 1. **In the run.** `core/agent/llm/refusal_guard.py` counts refusals by {tool, reason}. It
    recognises a structured refusal by `reason: human_session_required`, by
-   `status: refused` with a reason, or by the rig's `refused: <reason>`, and never by an ordinary
+   `status: refused` with a reason, or by a bare `refused: <reason>`, and never by an ordinary
    error. The `openai-agent` loop (`llm/openai_agent.py`) appends the stop note on the second
    identical refusal. On the third it answers every outstanding call, emits one `refusal-repeated`
    event and ends the turn with `done.ok: false`.
@@ -236,16 +222,77 @@ threshold is three (`routine_refusals.THRESHOLD`).
 
 ## Read the result
 
-```bash
-curl -H "X-API-Key: $API_KEY" "$API_BASE/agent/workspace/file?path=brief/today.md"
-```
+The routine's thread is in your chat list, marked **routine**. Each run's answer is there, and you
+can reply; the next run sees your reply. A file the run writes is in your workspace as usual.
+
+## Manage it
+
+The **Routines board** lists your routines: the switch pauses and resumes one, delete retires it.
+You can also pause, resume or retire it from its thread, or with `flow_lifecycle`. `flow_runs`
+lists its runs.
+
+### The line at the top of its thread
+
+The routine's thread opens with one line: *Routine · every weekday 23:00 · next Thu 23:00 · ok*.
+It says when the routine runs, the next run as a date on your clock (minutes only when it is under
+an hour away), and how the last run went: *ok*, *failed*, *needs permission*, *limit reached*,
+*paused* or *not run yet*. A one-time routine reads *once, today 16:00* and shows no next run after
+it fired.
+
+Click the line to expand it:
+
+- **When / Does / Results go to** — the schedule in words, the instruction you gave, and where the
+  answer lands (this chat, and a connection it notifies, if any).
+- **May send bots: no — allow?** — what the routine may do with nobody there. *allow?* sends that
+  request in the routine's chat ("Let my routine … send bots to meetings when I'm not here."); the
+  agent records it on the routine, as only you can. Nothing is granted by the click itself.
+- A refused run as one sentence, for example *It couldn't send the bot: nobody was here to approve
+  it.* — its fix is the permission line above it.
+- **Pause** / **Resume** and **Retire** (asks first).
+- **Details** — the operator view: the flow graph, the raw schedule, run counts and limits.
+
+#### How it works
+
+The line and the expanded view are read from the routine's card (`GET /api/routines`): the trigger,
+`lifecycle`, `last_run`, `last_refusal`, `grants` and `next_run`. Times are computed on your
+browser's clock from the stored schedule (kept in UTC). *allow?* posts an ordinary chat turn; the
+agent changes the routine with its tools, and the routine's card shows the new permission.
+
+#### Why it complies
+
+The strip changes nothing by itself except Pause, Resume and Retire, which go through the routine
+routes that act on your own flow only. A permission is recorded on the routine only when you ask
+for it in the chat, and company policy (`routine_unattended_actions`) still caps it on every run.
+Gates: `gate:ui-design` (the strip's styles stay inside the terminal's style budget); the rest is
+ungated, reviewed. Tests: `clients/terminal/src/minutes/__tests__/routineStrip.test.tsx` ("Allow
+asks in the routine's chat — the agent records the permission, nothing is granted here"),
+`clients/terminal/src/ui-kit/flowGraph/__tests__/human.test.ts`. Pause, Resume and Retire reach
+flows, which acts only on the caller's own flows
+(`core/flows/tests/test_subject_bearer.py` · `test_ownership_is_checked_even_when_no_subject_argument_is_sent`,
+`test_a_subject_argument_naming_someone_else_is_refused`).
+
+## How it works
+
+Flows keeps the schedule in its database and fires each slot once. The run is a turn in the
+routine's thread in the `autonomous` regime: it may use only the connections and actions company
+policy allows for unattended runs. If it is refused for the same reason three runs in a row, the
+routine pauses and posts the reason in its chat and on the Routines board. Alerts go to that chat
+unless `params.notify` names a working connection you chose. Full detail:
+[Routines and agent messages](/flows/routines).
+
+## Why it complies
+
+- **Yours alone.** The routine is written in your scope, taken from your own credential; nobody else
+  can read, change or retire it.
+- **Nobody in the loop means less allowed.** An unattended run is refused what policy does not allow
+  for unattended runs, and a repeated refusal stops it rather than retrying forever.
+- **Bounded.** A minimum gap between fires, a daily run cap and a cap on active routines per
+  person. See [What is refused, and why](/flows/routines#what-is-refused-and-why).
 
 ## Variations
 
-Same machinery, different trigger or plan:
+Same agent, different trigger:
 
 - **On an event** — run when something happens (e.g. a new email) instead of on a clock:
   [Triage incoming email](/how-to/email-triage).
 - **After a meeting** — write a report when a call ends: [Report after every meeting](/how-to/post-meeting-report).
-
-Only the trigger changes — same agent, same isolation, same governance.

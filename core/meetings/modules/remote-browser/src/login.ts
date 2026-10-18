@@ -27,6 +27,9 @@ export interface ProvisionLoginOptions {
   timeoutMs?: number;
   /** Hold the browser open after detection so you can eyeball it in VNC. */
   keepOpenMs?: number;
+  /** Launch flags. Default getBrowserSessionArgs() (VNC + CDP debug port). A caller that must expose
+   *  nothing but its VNC bridge passes a set without CDP_DEBUG_ARGS. */
+  args?: string[];
 }
 
 export async function provisionLogin(opts: ProvisionLoginOptions): Promise<LoginStatus> {
@@ -37,7 +40,7 @@ export async function provisionLogin(opts: ProvisionLoginOptions): Promise<Login
   ensureBrowserDataDir(opts.profileDir);
   cleanStaleLocks(opts.profileDir);
 
-  const { context, page } = await launchPersistentBrowser({ dataDir: opts.profileDir, args: getBrowserSessionArgs() });
+  const { context, page } = await launchPersistentBrowser({ dataDir: opts.profileDir, args: opts.args ?? getBrowserSessionArgs() });
   console.log(`[remote-browser] login: opened ${loginUrl} — sign in via VNC (:6080). Waiting up to ${Math.round(timeoutMs / 1000)}s...`);
   try { await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 }); } catch { /* keep polling regardless */ }
 

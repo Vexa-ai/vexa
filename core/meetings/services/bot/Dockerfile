@@ -55,12 +55,13 @@ COPY core ./core
 # NB: `scripts/` and `schemas/` are pnpm-workspace globs that are green-on-empty in this carved tree
 # (no packages) — they aren't present in the open-core repo, so they're intentionally not COPYed here.
 
-# Install the whole workspace. --frozen-lockfile=false: tolerate minor lockfile
-# drift in this carved build (we're proving the image, not gating the lockfile).
+# Install the whole workspace from pnpm-lock.yaml as it is (--frozen-lockfile): the bot carries native
+# modules, and the image runs exactly the versions the lockfile pins. A stale lockfile fails the build;
+# refresh it with `pnpm install` at the repo root and commit it (scripts/image-lockfile.test.mjs).
 # allowBuilds in pnpm-workspace.yaml lets esbuild/onnxruntime-node/sharp/protobufjs
 # run their native postinstall; the playwright postinstall no-ops (SKIP flag above).
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile=false
+    pnpm install --frozen-lockfile
 
 # Build the page-side capture bricks FIRST. These are NOT bot dependencies
 # (gate:isolation — they are a BROWSER bundle, not a Node import), so the

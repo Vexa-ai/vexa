@@ -178,3 +178,17 @@ async def test_consume_segments_drains_a_fakeredis_batch(store, bus):
 @pytest.fixture(autouse=True)
 def _signed_by_this_secret(admin_token):
     """The collector admits only session-signed entries; these tests sign with ``admin_token``."""
+
+
+async def test_ingest_progress_reaches_the_feed_and_persists_nothing(store, bus):
+    # The bot reports how far transcription is behind capture; the collector forwards it on the
+    # row-scoped feed so the terminal can tell "you're silent" from "transcription is behind".
+    n = await ingest(store, bus, {"payload": json.dumps({
+        "type": "transcription_progress", "meeting_id": "1",
+        "backlog_s": 42.5, "silence_s": 0.3, "finishing": False,
+    })})
+    assert n == 0
+    entries = await bus._client.xrange("tc:meeting:1")
+    payloads = [json.loads(f[b"payload"]) for _id, f in entries]
+    assert payloads == [{"type": "progress", "backlog_s": 42.5, "silence_s": 0.3, "finishing": False}]
+    assert (await store.get_transcript(7, "google_meet", "abc-defg-hij"))["segments"] == []

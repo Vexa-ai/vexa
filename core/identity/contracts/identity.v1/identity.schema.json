@@ -87,14 +87,19 @@
       "description": "The request header a caller of POST /internal/validate sends, with the value `1`, to declare that it reads `delegation` and `person_is_admin` and enforces the ceiling. Identity answers a delegation token (`vxd_`) 200 ONLY to a caller that sends it; to any other caller the token is refused exactly like a bearer nobody answers to (401 `Invalid token`), so a resolver that predates delegation fails closed instead of taking a worker for its person. A value other than `1` is no declaration. An API key is answered the same with or without it. Callers that send it: the gateway (from v0.13.2) and flows-api. The header is in the x-vexa-internal- family, which the gateway never forwards from a client. Header names are case-insensitive."
     },
     "ValidateDelegation": {
-      "description": "The ceiling a delegation token's dispatch was granted (delegation.v1 `scope`, plus its `target`), passed on for the services behind the gateway to enforce. It becomes gateway-identity.v1 `delegation`.",
+      "description": "The ceiling a delegation token's dispatch was granted (delegation.v1 `scope`, plus its `target`), passed on for the services behind the gateway to enforce, and the agent `unit` (session) the token was minted for, passed on for correlation. It becomes gateway-identity.v1 `delegation`.",
       "type": "object",
       "additionalProperties": false,
       "required": ["regime", "workspaces"],
       "properties": {
         "regime": { "enum": ["human", "autonomous"] },
         "workspaces": { "oneOf": [ { "const": "*" }, { "type": "array", "items": { "type": "string" } } ] },
-        "target": { "type": "string" }
+        "target": { "type": "string" },
+        "unit": { "type": "string", "description": "the delegation token's signed `unit` claim (delegation.v1): the agent unit — a chat thread or a background job — the worker runs as. Correlation only, never a grant; logged as logevent.v1 `session` and recorded as the credential broker's audit.session. Absent when the token carries none" },
+        "shared": { "const": true, "description": "delegation.v1 `scope.shared`: the turn answers into a conversation other people read. Present only then" },
+        "audience": { "const": "cross_org", "description": "delegation.v1 `scope.audience`: some readers of the shared turn are outside the org; crm-api answers public fields only. Present only then" },
+        "grants": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["bot.request", "bot.stop", "flow.retire_self"] }, "description": "delegation.v1 `scope.grants`: the unattended verbs a routine's person granted it. Present only on that routine's autonomous turn, beside `flow`" },
+        "flow": { "type": "string", "minLength": 1, "description": "delegation.v1 `scope.flow`: the routine the grants belong to (`user:<uid>/<name>`). Present only beside `grants`" }
       }
     },
     "ValidateResponse": {

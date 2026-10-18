@@ -29,7 +29,7 @@ workspace/<path>       optional — files of the meeting's workspace, as a tree
 ```json
 {
   "contract": "meeting-bundle.v1",
-  "format_version": "1.0",
+  "format_version": "1.1",
   "bundle_id": "6f1c2b9e-3d4a-4c5b-8e7f-0a1b2c3d4e5f",
   "exported_at": "2026-10-10T12:00:00Z",
   "source": {"deployment_id": "<32 hex>", "meeting_id": 4242},
@@ -46,8 +46,16 @@ workspace/<path>       optional — files of the meeting's workspace, as a tree
 - Times are ISO-8601 UTC. Transcript `start`/`end` are seconds from `meeting.start_time`.
 - `meeting.media[]` declares each `media/` file (`type` audio|video, `format`, `duration_seconds`).
 - `participants` are display names only.
+- `meeting.context` (optional, format 1.1) says what the meeting was: `duration_seconds`,
+  `meeting_url` (https, no query and no fragment), `calendar_event_id`, `workspace_id`, the
+  transcription `language` the bot ran with, and the `bot` timeline (`requested_at`, `joined_at`,
+  `admitted_at`, `left_at`, `exit_reason`). It is provenance: an importer never reuses an id from it.
+- No join or invite token travels (format 1.1): in `annotations.json`, `notes.md` and every
+  `workspace/` text file the writer replaces the value of a token query parameter (`i`, `invite`,
+  `token`, `pwd`, `passcode`, …) with `[removed]`.
 - Every object is closed (`additionalProperties: false`): a field the schema does not name — a user
-  id, a storage path, a URL — makes the part invalid. That is how "nothing deployment-bound" is held.
+  id, a storage path — makes the part invalid. That is how "nothing deployment-bound" is held, beyond
+  the provenance `context` names.
 
 ## The parts archive
 

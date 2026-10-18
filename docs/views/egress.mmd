@@ -21,11 +21,16 @@ flowchart LR
     redis["redis"]
     postgres["postgres"]
     object_store["object-store"]
+    livekit["livekit"]
     dashboard["dashboard (deprecated)"]
     flows_api["flows-api"]
     flows_worker["flows-worker"]
     credentials_broker["credential-broker"]
     credentials_vault["OpenBao (optional)"]
+    crm_api["crm-api"]
+    signals_service["signals"]
   end
   transcription["transcription"]
   bot ==>|"audio -> tenant-hosted"| transcription
+  signal_model["signal model"]
+  signals_service ==>|"transcript -> external-saas"| signal_model

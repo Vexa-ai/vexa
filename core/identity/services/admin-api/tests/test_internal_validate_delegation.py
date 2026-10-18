@@ -89,6 +89,39 @@ def test_a_human_regime_token_carries_the_soft_ceiling(client):
     assert _validate(client, tok).json()["delegation"] == {"regime": "human", "workspaces": "*"}
 
 
+def test_the_unit_a_token_was_minted_for_is_answered_as_the_session(client):
+    """Vexa-ai/vexa#1783: the signed `unit` claim — the chat or job the worker runs as — is passed on,
+    so the gateway can sign it into the identity it forwards and the broker can audit by it."""
+    tok = delegation.mint_delegation(DLG, subject="42", regime="human", workspaces="*",
+                                     unit="agent-42-chat-main")
+    assert _validate(client, tok).json()["delegation"] == {
+        "regime": "human", "workspaces": "*", "unit": "agent-42-chat-main"}
+
+
+def test_a_shared_turn_token_carries_shared_on_its_ceiling(client):
+    """ADR-0048: a turn other people read is marked on the ceiling the gateway signs, so every
+    service behind it can refuse a person-wide read."""
+    tok = delegation.mint_delegation(DLG, subject="42", regime="human", workspaces=["ws_1"], shared=True)
+    assert _validate(client, tok).json()["delegation"] == {"regime": "human", "workspaces": ["ws_1"],
+                                                           "shared": True}
+    private = delegation.mint_delegation(DLG, subject="42", regime="human", workspaces=["ws_1"])
+    assert "shared" not in _validate(client, private).json()["delegation"]
+
+
+def test_a_cross_org_room_token_carries_its_audience_beside_shared(client):
+    """Rooms (K1): a shared turn some of whose readers are outside the org carries
+    `audience: cross_org`, so crm-api answers it public fields only. Never without `shared`."""
+    tok = delegation.mint_delegation(DLG, subject="42", regime="human", workspaces=["ws_1"], shared=True,
+                                     audience="cross_org")
+    assert _validate(client, tok).json()["delegation"] == {"regime": "human", "workspaces": ["ws_1"],
+                                                           "shared": True, "audience": "cross_org"}
+    with pytest.raises(ValueError):
+        delegation.mint_delegation(DLG, subject="42", regime="human", workspaces=["ws_1"], audience="cross_org")
+    with pytest.raises(ValueError):
+        delegation.mint_delegation(DLG, subject="42", regime="human", workspaces=["ws_1"], shared=True,
+                                   audience="everyone")
+
+
 @pytest.mark.parametrize("token", [
     delegation.mint_delegation("another-key", subject="42"),
     delegation.mint_delegation(DLG, subject="42", ttl_sec=-10),
@@ -185,3 +218,36 @@ def test_a_person_who_is_not_the_admin_is_named_so(monkeypatch):
     body = _validate(TestClient(app), delegation.mint_delegation(DLG, subject="7", regime="human",
                                                                 workspaces="*")).json()
     assert body["person_is_admin"] is False
+
+
+def test_the_validated_delegation_is_logged_under_its_session_and_the_callers_trace(client):
+    """Vexa-ai/vexa#1783: identity's line for a worker's bearer names the session from inside the
+    signature and continues the caller's trace — and never carries the token."""
+    from admin_api import obs
+    sink: list = []
+    obs.capture(sink)
+    try:
+        tok = delegation.mint_delegation(DLG, subject="42", regime="human", workspaces="*",
+                                         unit="agent-42-chat-main")
+        headers = {"X-Internal-Secret": INTERNAL, "X-Trace-Id": "trace-from-the-gateway",
+                   "X-User-Delegation-Unit": "agent-99-chat-forged", **DECLARED}
+        r = client.post("/internal/validate", json={"token": tok}, headers=headers)
+        assert r.status_code == 200, r.text
+    finally:
+        obs.capture(None)
+    line = next(e for e in sink if e["event"] == "delegation_validated")
+    assert line["session"] == "agent-42-chat-main"
+    assert line["trace_id"] == "trace-from-the-gateway"
+    assert all(tok not in str(e) and "forged" not in str(e) for e in sink)
+
+
+def test_a_routine_token_carries_its_grants_and_flow_on_its_ceiling(client):
+    """Flows phase 0: a routine's autonomous turn carries the unattended verbs its person granted it,
+    with the routine's name, so the services behind the gateway can let exactly those through."""
+    tok = delegation.mint_delegation(DLG, subject="42", regime="autonomous", workspaces=["42"],
+                                     grants=["bot.request"], flow="user:42/bot-at-1213")
+    assert _validate(client, tok).json()["delegation"] == {
+        "regime": "autonomous", "workspaces": ["42"], "grants": ["bot.request"],
+        "flow": "user:42/bot-at-1213"}
+    plain = delegation.mint_delegation(DLG, subject="42", regime="autonomous", workspaces=["42"])
+    assert "grants" not in _validate(client, plain).json()["delegation"]

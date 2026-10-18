@@ -85,6 +85,13 @@ DELEGATION_HEADERS = {
     "regime": "x-user-regime",
     "workspaces": "x-user-delegation-workspaces",
     "target": "x-user-delegation-target",
+    # The agent unit (session) the worker runs as — correlation, never a grant (Vexa-ai/vexa#1783).
+    "unit": "x-user-delegation-unit",
+    "shared": "x-user-delegation-shared",
+    # A ROUTINE'S DELEGATED AUTHORITY (delegation.v1 scope.grants + scope.flow, flows phase 0): the
+    # unattended verbs its person granted it, comma-joined, and the routine they belong to.
+    "grants": "x-user-delegation-grants",
+    "flow": "x-user-delegation-flow",
 }
 
 #: The answer a service gives a worker dispatched without a person in the loop when it asks for a
@@ -106,11 +113,68 @@ REFUSAL = {
 }
 
 
+def session_of(headers: Mapping[str, str]) -> str:
+    """The agent session (unit) a request was made in, from the ``x-user-delegation-unit`` header —
+    trustworthy only where the guard rebuilt it from a verified identity, which is the only place a
+    service should call this. ``""`` for a person's own request."""
+    return (headers.get(DELEGATION_HEADERS["unit"]) or "").strip()
+
+
 def is_delegated(headers: Mapping[str, str]) -> bool:
     """Is the caller a worker acting for a person? Any delegation header marks it, an empty
     ``x-user-regime`` included: the identity door writes them only from a signed ``delegation``
     claim, and a person's own credential and the internal tier carry none."""
     return any(name in headers for name in DELEGATION_HEADERS.values())
+
+
+#: The answer a service gives a worker whose turn other people read (``delegation.shared``) when it
+#: asks for something only its person may see: their mail, calendar or other connections, their
+#: meetings, transcripts or recordings (ADR-0048 decision 4). One body everywhere, like REFUSAL.
+SHARED_REFUSAL = {
+    "status": "refused",
+    "reason": "shared_conversation",
+    "instruction": "Other people read this conversation, so its answer may use only what every one "
+                   "of them can read. Say you cannot use it here, and offer to answer in the "
+                   "person's private chat; do not retry it another way.",
+}
+
+
+def is_shared(headers: Mapping[str, str]) -> bool:
+    """A delegated worker whose answer other people read: ``x-user-delegation-shared: 1``, written by
+    the identity door only from a signed ``delegation.shared``. A person-wide read refuses it with
+    :data:`SHARED_REFUSAL`."""
+    return is_delegated(headers) and (headers.get(DELEGATION_HEADERS["shared"]) or "").strip() == "1"
+
+
+def claims_shared(claims: Mapping[str, Any]) -> bool:
+    """The same answer, read off verified claims (a service that holds the claims, not the headers)."""
+    dlg = claims.get("delegation") if isinstance(claims, Mapping) else None
+    return isinstance(dlg, Mapping) and dlg.get("shared") is True
+
+
+#: The verbs a routine may be granted (delegation.v1 ``UNATTENDED_GRANTS``): a header naming anything
+#: else grants nothing.
+UNATTENDED_GRANTS = ("bot.request", "bot.stop", "flow.retire_self")
+
+
+def grants_of(headers: Mapping[str, str]) -> frozenset:
+    """The unattended verbs a delegated routine's identity carries, written by the identity door only
+    from a signed ``delegation.grants`` beside a ``delegation.flow``; empty otherwise."""
+    if not is_delegated(headers) or not (headers.get(DELEGATION_HEADERS["flow"]) or "").strip():
+        return frozenset()
+    raw = headers.get(DELEGATION_HEADERS["grants"]) or ""
+    return frozenset(g.strip() for g in raw.split(",") if g.strip() in UNATTENDED_GRANTS)
+
+
+def granted(headers: Mapping[str, str], action: str) -> bool:
+    """Did this routine's person grant it ``action`` to run with nobody in the loop?"""
+    return action in grants_of(headers)
+
+
+def refuses(headers: Mapping[str, str], action: str = "") -> bool:
+    """Must a verb that needs a person refuse this caller? An unwatched worker, unless the verb is
+    ``action`` and the routine it runs for was granted it. The one test every guarded verb asks."""
+    return is_unwatched(headers) and not (action and granted(headers, action))
 
 
 def is_unwatched(headers: Mapping[str, str]) -> bool:
@@ -308,6 +372,16 @@ def claims_from_validation(user: Mapping[str, Any]) -> dict:
         }
         if dlg.get("target"):
             claims["delegation"]["target"] = str(dlg["target"])
+        if dlg.get("unit"):
+            claims["delegation"]["unit"] = str(dlg["unit"])
+        if dlg.get("shared") is True:
+            claims["delegation"]["shared"] = True
+        grants = dlg.get("grants")
+        if isinstance(grants, list) and str(dlg.get("flow") or "").strip():
+            kept = sorted({str(g) for g in grants if str(g) in UNATTENDED_GRANTS})
+            if kept:
+                claims["delegation"]["grants"] = kept
+                claims["delegation"]["flow"] = str(dlg["flow"]).strip()
     return claims
 
 
@@ -398,6 +472,13 @@ def headers_from_claims(claims: Mapping[str, Any]) -> dict:
             out[DELEGATION_HEADERS["workspaces"]] = _join(ws)
         if dlg.get("target"):
             out[DELEGATION_HEADERS["target"]] = str(dlg["target"])
+        if dlg.get("unit"):
+            out[DELEGATION_HEADERS["unit"]] = str(dlg["unit"])
+        if dlg.get("shared") is True:
+            out[DELEGATION_HEADERS["shared"]] = "1"
+        if dlg.get("grants") and dlg.get("flow"):
+            out[DELEGATION_HEADERS["grants"]] = _join(dlg["grants"])
+            out[DELEGATION_HEADERS["flow"]] = str(dlg["flow"])
     return out
 
 

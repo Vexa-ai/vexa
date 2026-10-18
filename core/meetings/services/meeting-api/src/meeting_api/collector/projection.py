@@ -115,6 +115,17 @@ OWNER_ONLY_KEYS = frozenset({
     "share_removed",
 })
 
+# ── Response-edge omissions · OPT-IN: stored, shipped only to a reader that asks ─────────────────
+# Facts the record keeps that no 0.12 response carried. Dropped from EVERY ``data`` projection for
+# every viewer, so an existing client sees byte-identical responses; a reader that wants one asks
+# for it by name on a route that serves it (``GET /transcripts/…?include_gaps=true`` → top-level
+# ``gaps``). Not a disclosure tier — a size/compatibility one.
+OPT_IN_KEYS = frozenset({
+    # Captured audio the bot never transcribed (prod-cutover R4): the lifecycle receiver persists the
+    # bot's report here; the transcript routes render it on request (``collector.gaps``).
+    "transcript_gaps",
+})
+
 # What a NON-OWNER's response drops explicitly: both tiers. Kept as one name because that is the
 # question most readers of this module are asking ("what does a stranger not get?"), and because the
 # delivery path's internal-key set is pinned against it.
@@ -265,7 +276,7 @@ def project_response_data(
     projected = project_calendar_sources(data)
     out = {
         k: v for k, v in projected.items()
-        if k not in omit and not is_sensitive_key(k)
+        if k not in omit and k not in OPT_IN_KEYS and not is_sensitive_key(k)
     }
     if "recordings" in out and not visible_recordings(data, viewer_is_owner=viewer_is_owner):
         out.pop("recordings")
@@ -311,7 +322,7 @@ def project_list_data(
     sources = project_calendar_sources(data).get("calendar_sources")
     projected = {k: v for k, v in data.items()
                  if k not in LIST_OMIT_KEYS and k != "calendar_sources"
-                 and k not in omit and not is_sensitive_key(k)}
+                 and k not in omit and k not in OPT_IN_KEYS and not is_sensitive_key(k)}
     if isinstance(sources, list):
         projected["calendar_sources"] = sources
     return projected

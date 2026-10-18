@@ -184,8 +184,8 @@ def test_a_person_the_meeting_is_shared_with_sees_it_but_cannot_rename_it():
     assert r.status_code == 404
     assert "title" not in store._meetings[mid]["data"]
 
-    owner = client.post(f"/meetings/{mid}/annotate", headers=H, json={"title": "Campbell"})
+    owner = client.post(f"/meetings/{mid}/annotate", headers=H, json={"title": "Acme"})
     assert owner.status_code == 200, owner.text
-    assert store._meetings[mid]["data"]["title"] == "Campbell"
+    assert store._meetings[mid]["data"]["title"] == "Acme"
     assert [m for m in client.get("/meetings", headers=member).json()["meetings"]
-            if m["id"] == mid][0]["data"]["title"] == "Campbell", "the viewer sees the owner's rename"
+            if m["id"] == mid][0]["data"]["title"] == "Acme", "the viewer sees the owner's rename"

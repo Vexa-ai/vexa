@@ -26,15 +26,17 @@ never sent as null (`response_model_exclude_unset`) — the shape every caller h
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
 from sqlalchemy.future import select
 
 from .. import delegation as delegation_mod
+from .. import obs
 from ..schema.models import APIToken, User
 from . import delegation_revocation as revocation
 from . import admin_account
@@ -79,10 +81,19 @@ class ValidateRequest(BaseModel):
 
 
 class DelegationCeiling(BaseModel):
-    """The dispatch's ceiling, copied from the delegation token's `scope` and `target`."""
+    """The dispatch's ceiling, copied from the delegation token's `scope` and `target`, and its `unit`."""
     regime: Literal["human", "autonomous"]        # as minted (delegation.regime_for_trigger)
     workspaces: Union[Literal["*"], List[str]]    # "*" (human regime) or the isolation set
     target: Optional[str] = None                  # the chat's default workspace; omitted when none
+    unit: Optional[str] = None                    # the agent unit (session) it was minted for
+    # a turn other people read (delegation.v1 scope.shared, ADR-0048); omitted on a private turn
+    shared: Optional[Literal[True]] = None
+    # some readers of that shared turn are outside the org (delegation.v1 scope.audience, rooms)
+    audience: Optional[Literal["cross_org"]] = None
+    # a routine's delegated authority (delegation.v1 scope.grants + scope.flow, flows phase 0):
+    # the unattended verbs its person granted it, and the routine they belong to; omitted when none
+    grants: Optional[List[str]] = None
+    flow: Optional[str] = None
 
 
 class ValidatedIdentity(BaseModel):
@@ -196,6 +207,13 @@ async def _validate_delegation(token: str, db: AsyncSession) -> Dict[str, Any]:
     resp["delegation"] = ceiling
     if claims.get("target"):
         resp["delegation"]["target"] = str(claims["target"])
+    # THE SESSION, from inside the signature (Vexa-ai/vexa#1783): the unit agent-api minted the token
+    # for. Passed on so the gateway signs it into the identity it forwards; never a grant.
+    if isinstance(claims.get("unit"), str) and claims["unit"].strip():
+        resp["delegation"]["unit"] = claims["unit"].strip()
+        obs.set_session(resp["delegation"]["unit"])
+    obs.log_event("delegation_validated", audience="system", user_id=str(uid),
+                  fields={"regime": ceiling["regime"]})
     resp["person_is_admin"] = signin_allow.is_admin(
         user.email, user.data, signin_allow.admin_emails()[0])
     resp["person_admin_account"] = bool(resp["admin_account"])
@@ -213,7 +231,76 @@ def _ceiling(scope: Any) -> Dict[str, Any]:
             workspaces == "*" or (isinstance(workspaces, list)
                                   and all(isinstance(w, str) for w in workspaces))):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: scope")
-    return {"regime": regime, "workspaces": workspaces}
+    out: Dict[str, Any] = {"regime": regime, "workspaces": workspaces}
+    if delegation_mod.is_shared(scope):
+        out["shared"] = True    # carried on, so every service can refuse a person-wide read
+    # WHO READS IT, BEYOND "OTHER PEOPLE" (rooms): carried on only beside `shared`, so crm-api can
+    # answer a cross-org room with public fields only. A value that is not the one word is refused.
+    if "audience" in scope:
+        if not delegation_mod.is_cross_org(scope) or not out.get("shared"):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: scope")
+        out["audience"] = delegation_mod.AUDIENCE_CROSS_ORG
+    # A ROUTINE'S GRANTS, carried on only when well-formed: a list inside the closed vocabulary,
+    # beside the routine that holds them, on an autonomous turn. Anything else names no grant a
+    # service could honour, so the token is refused rather than read generously.
+    grants, flow = scope.get("grants"), scope.get("flow")
+    if grants is not None or flow is not None:
+        try:
+            clean = delegation_mod.clean_grants(grants if isinstance(grants, list) else None)
+        except ValueError:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: scope")
+        if (not clean or not isinstance(grants, list) or clean != grants or regime != "autonomous"
+                or not isinstance(flow, str) or not flow.strip()):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid delegation: scope")
+        out["grants"] = clean
+        out["flow"] = flow.strip()
+    return out
+
+
+#: NOTHING A PERSON DOES WAITS ON THIS ROUTE'S WRITES (2026-10-13 11:25 UTC: every container healthy,
+#: validate at 23–38 s, Postgres sessions waiting on a lock and on IO under a loaded host, and the
+#: gateway answering `503 Authentication temporarily unavailable` mid-chat). It stamped
+#: `last_used_at` and committed on every call, so concurrent calls with one key queued on the row
+#: lock and the synchronous commit. The read is bounded too, so a stuck database fails in seconds
+#: (the gateway then answers its typed 503 at once) rather than holding the request.
+LAST_USED_RESOLUTION = timedelta(seconds=60)
+READ_BOUNDS = ("SET LOCAL statement_timeout = '3s'", "SET LOCAL lock_timeout = '1s'")
+STAMP_BOUNDS = ("SET LOCAL lock_timeout = '100ms'", "SET LOCAL synchronous_commit = off")
+STAMP = text("UPDATE api_tokens SET last_used_at = :now WHERE id = "
+             "(SELECT id FROM api_tokens WHERE id = :id FOR UPDATE SKIP LOCKED)")
+
+
+def _postgres(db) -> bool:
+    try:
+        return db.get_bind().dialect.name == "postgresql"
+    except Exception:  # noqa: BLE001 — a session with no bind (a test fake) is not Postgres
+        return False
+
+
+async def _bound_reads(db) -> None:
+    if _postgres(db):
+        for stmt in READ_BOUNDS:
+            await db.execute(text(stmt))
+
+
+async def _stamp_last_used(db, api_token) -> None:
+    """Stamp the key's last use — at most once per LAST_USED_RESOLUTION, skipping a row another
+    transaction has locked, not waiting for the commit to reach disk, and never failing the answer."""
+    now = datetime.utcnow()
+    if api_token.last_used_at is not None and now - api_token.last_used_at < LAST_USED_RESOLUTION:
+        return
+    try:
+        if _postgres(db):
+            for stmt in STAMP_BOUNDS:
+                await db.execute(text(stmt))
+            await db.execute(STAMP, {"now": now, "id": api_token.id})
+        else:
+            api_token.last_used_at = now
+        await db.commit()
+    except Exception as e:  # noqa: BLE001 — the stamp is advisory; the answer is not
+        await db.rollback()
+        obs.log_event("last_used_not_stamped", audience="system", level="warning",
+                      fields={"reason": type(e).__name__})
 
 
 router = APIRouter()
@@ -228,6 +315,7 @@ async def validate_token(payload: ValidateRequest, request: Request,
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Missing token")
 
+    await _bound_reads(db)
     if delegation_mod.is_delegation_token(token):
         if not accepts_delegation(request):
             # A caller that did not declare it reads `delegation` would take the worker for its
@@ -246,8 +334,7 @@ async def validate_token(payload: ValidateRequest, request: Request,
     if api_token.expires_at is not None and api_token.expires_at < datetime.utcnow():
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Token expired")
 
-    api_token.last_used_at = datetime.utcnow()
-    await db.commit()
+    await _stamp_last_used(db, api_token)
 
     scopes = list(api_token.scopes) if api_token.scopes else ["legacy"]
     is_admin = signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0])

@@ -4,7 +4,6 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   service bot
   service desktop
   service meeting-api
-  service mcp
   module buffer
   module capture-codec
   module gmeet-capture
@@ -44,7 +43,6 @@ system meetings  # capture → transcribe → record; owns the raw transcript
   module zoom-sdk-capture
   contract sdk-capture.v1
   data-asset acl-bots-index [writers: meeting-api]
-  contract mcp.tools.v1
   data-asset meeting-bundle-file [writers: meeting-api]
   data-asset meeting-bundle-parts [writers: agent-api]
 
@@ -53,6 +51,10 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   contract event.v1
   contract invoke.v1
   contract proactive-card.v1
+  contract blocks.v1
+  contract desktop.v1
+  contract home-card.v1
+  contract home-customer.v1
   contract routine.v1
   contract task.v1
   contract tool.v1
@@ -78,6 +80,7 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   data-asset delegation-current [writers: agent-api]
   data-asset unit-delegation [writers: agent-api]
   data-asset unit-fault [writers: agent-api]
+  data-asset session-store [writers: agent-api]
 
 system gateway-system  # the one public edge (api.v1, ws.v1)
   service conformance
@@ -87,6 +90,8 @@ system gateway-system  # the one public edge (api.v1, ws.v1)
   contract gateway-identity.v1
   contract ws.v1
   contract routes.v1
+  service mcp
+  contract mcp.tools.v1
 
 system identity  # access + audit; owns the durable DB
   service admin-api
@@ -117,6 +122,7 @@ system platform  # shared infra backing the services
   service redis
   database postgres
   service object-store
+  service livekit
 
 system flows  # the reaction engine; owns the reaction row and its effect receipts
   module flows-engine
@@ -131,6 +137,17 @@ system flows  # the reaction engine; owns the reaction row and its effect receip
 
 system workspaces-system  # the workspace domain: a person's git repo of durable memory and the contract that addresses it; hosted as a library inside agent, with no runtime of its own (P10)
   contract workspace.v1
+
+system crm  # ADR-0047: the optional CRM — the organisation's stable entities beside workspaces; owns the crm_* tables
+  service crm-api
+  contract crm.v1
+  data-asset crm-records [writers: crm-api]
+
+system signals  # transcript signals: a small company-chosen model listens to live sources (a meeting's verified transcript first) against the listening brief the meeting's agent wrote, and wakes the agent through the company's flow; owns the sig:* keys
+  service signals-service
+  contract signals.v1
+  data-asset sig-annotations [writers: signals-service]
+  data-asset signals-state [writers: signals-service]
 
 edges:
   bot -write-> segments-stream
@@ -157,6 +174,13 @@ edges:
   meeting-api -write-> recording-blob  # S3 PUT stitched master
   meeting-api -write-> postgres
   meeting-api -write-> object-store
+  meeting-api -write-> livekit  # creates a call's room with its transcription notice (Twirp room service)
+  agent-api -read-> livekit  # reads a room's metadata to bind a call to its session
+  bot -read-> livekit  # the call listener: joins hidden and subscribe-only, and transcribes every audio track each participant publishes, on that participant's channel
+  terminal -write-> livekit  # the terminal's page in a person's browser joins a call itself, not the terminal server (signalling over WebSocket; media over the UDP range)
+  agent-api -write-> object-store
+  admin-api -write-> object-store
+  agent-api -write-> postgres
   meeting-api -req-> runtime  # meeting-api drives the kernel with Authorization: Bearer RUNTIME_API_TOKEN (runtime.v1 CallerCredential): POST /workloads to spawn a bot, GET /workloads/{id} to read it and DELETE /workloads/{id} to tear it down; its RuntimeEvents come back signed on rt-ma
   meeting-api -req-> admin-api  # GET /internal/calendar-configs discovers secret-gated calendar connections for sync and disconnect cleanup
   meeting-api -req-> admin-api  # GET /internal/users/{id}/email (X-Internal-Secret) answers {id, email} for a reader of a shared meeting, asked only on the OWNER's access view (GET /meetings/{id}/access) for readers who redeemed before meeting-api kept a roster; meeting-api writes the address into that meeting's own data.share_viewers (one writer) and a failed lookup leaves the reader listed by id (collector/reader_directory.py)
@@ -199,8 +223,8 @@ edges:
   credentials-broker -write-> credentials-store
   agent-worker -req-> gateway  # the worker's toolbelt: /mcp and /agent/friction with its per-dispatch delegation token, which identity resolves as the person it acts for
   mcp -req-> agent-api  # boot assembly: GET /.well-known/mcp-tools.json + /openapi.json — the agent domain's tools join the one MCP surface
-  agent-api -req-> meeting-api  # agent-api reads meetings as the caller, X-User-Id (and X-User-Workspaces) over the internal tier (X-Internal-Secret): GET /meetings/{id} (the meeting access lookup behind every meeting-scoped agent route), GET /transcripts/by-id/{id} (a transcript the caller may read), GET /meetings?… (the schedule digest's three bounded queries), POST /meetings/{id}/annotate (the minted meeting's recorder). meeting-api decides access; agent-api holds no meetings data
-  agent-api -req-> admin-api  # agent-api asks identity about a person over the internal tier (X-Internal-Secret): GET /internal/users/by-email/{email} (falling back to GET /admin/users/email/{email} with X-Admin-API-Key) to resolve a share's invitee; POST/DELETE/GET /internal/users/{id}/memberships[/{ws}] (the membership index mirror); GET /internal/users/{id}/model-config; GET /internal/users/{id}/is-admin (the _global tier's writer); GET /internal/users/{id}/bot-context (admin overview); GET/PUT /internal/users/{id}/settings (the person's clock and timezone)
+  agent-api -req-> meeting-api  # agent-api reads meetings as the caller, X-User-Id (and X-User-Workspaces) over the internal tier (X-Internal-Secret): GET /meetings/{id} (the meeting access lookup behind every meeting-scoped agent route), GET /transcripts/by-id/{id} (a transcript the caller may read), GET /meetings?… (the schedule digest's three bounded queries, also read by the desktop to place a workspace's last and live call), POST /meetings/{id}/annotate (the minted meeting's recorder). meeting-api decides access; agent-api holds no meetings data
+  agent-api -req-> admin-api  # agent-api asks identity about a person over the internal tier (X-Internal-Secret): GET /internal/users/by-email/{email} (falling back to GET /admin/users/email/{email} with X-Admin-API-Key) to resolve a share's invitee; POST/DELETE/GET /internal/users/{id}/memberships[/{ws}] (the membership index mirror); GET /internal/users/{id}/model-config; GET /internal/users/{id}/is-admin (the _global tier's writer); GET /internal/users/{id}/bot-context (admin overview); GET/PUT /internal/users/{id}/settings (the person's clock and timezone, and their presence switch), GET /internal/presence?ids=… (many people's presence choice at once, for the desktop and the people strip); GET /internal/users/{id}/photo (a person's photo bytes, asked only after agent-api decided the viewer shares a workspace or chat with them); GET /internal/users/{id}/org (the viewer's org for every workspace access check, cached)
   agent-worker -req-> flows-api  # the worker's temporal block: GET /timeline?format=preamble with the read-only VEXA_FLOWS_TIMELINE_KEY that dispatch stamps only when the deployment minted one (never the operator key); granted by the workload network fences (compose workers network, the Helm workload egress policy)
   bot -req-> meeting-api  # the bot's calls back: every lifecycle.v1 event to POST /bots/internal/callback/lifecycle and every recording chunk to POST /internal/recordings/upload, each with Authorization: Bearer <MeetingToken> (invocation.v1 token), bound to the bot's own session; meeting-api refuses another session's token with 401. An authenticated bot's session write-back is the third call, on its own edge (bot-session-writeback)
   runtime -req-> agent-api  # a routine's due schedule.v1 job: POST /invocations with the unit.v1 dispatch agent-api compiled and signed (X-Vexa-Dispatch-Signature, HMAC keyed from INTERNAL_API_SECRET); the runtime holds the job opaquely and cannot re-point it at another person or trigger
@@ -236,6 +260,18 @@ edges:
   agent-api -write-> meeting-bundle-parts  # GET /api/meeting/bundle-parts — the owner's bound workspace tree (never its roster or policy) and the meeting's page
   meeting-api -read-> meeting-bundle-parts  # POST /meetings/{meeting_id}/export — the parts placed into the bundle
   agent-api -read-> meeting-bundle-file  # POST /api/meeting/bundle-restore — the bundle's workspace part as a new private workspace of the importer and its notes page on their desk, re-bound to the imported meeting
+  crm-api -write-> postgres
+  crm-api -req-> admin-api  # POST /internal/validate: who the caller is, their live workspace memberships narrowed to a worker's ceiling, and whether the turn is shared; GET /internal/users/{id}/org (only with personal_crm on): whether the caller is an individual served from their own org of one
+  admin-api -req-> crm-api  # account delete: POST /internal/orgs/p-{id}/erase (internal secret) erases an individual account's personal CRM before identity removes the account (capability personal_crm_erase, CRM_API_URL)
+  mcp -req-> crm-api  # boot assembly and tool calls: GET /.well-known/mcp-tools.json + /openapi.json, then the crm_*, desktop_* and card_* tools with the caller's own credential; present only where CRM_API_URL is set
+  flows-worker -req-> crm-api  # the flows_defs.crm pack: POST /internal/references with the internal secret — one workspace's record references and roster at one commit (workspace.references.changed)
+  gateway -req-> crm-api  # the edge's /crm/* forward (routes.v1 `forward`): the record page's read, history and review, the desktop's desk/read, desk/arrange, desk/proposal and desk/undo (served while `desktop` is on), and the cards' card/list, card/read, card/create, card/update, card/members and card/membership (served while `desktop_cards` is on), with the caller's own key, present only where CRM_API_URL is set
+  crm-api -req-> agent-api  # GET /api/workspace/file?path=POLICIES.md&slug=_global over the internal tier (subject crm): the company's desk limits, narrow-only, cached 30 s; optional — CRM_AGENT_API_URL unset or unreachable means the defaults
+  signals-service -read-> redis
+  signals-service -req-> agent-api  # GET /internal/meetings/{row}/listen?subject=<owner> and GET /internal/chats/{session}/listen?subject=<owner> with the internal secret: the listening brief (the agent's rules and model tier included) and the company's signal policy in one answer, cached 30 s; agent-api reads the source as that subject
+  signals-service -req-> flows-api  # POST /events/signal (X-Internal-Secret + X-Vexa-Service: signals): one event.v1 meeting.signal per wake, data = the buffer; the company's _global flow decides what a wake does. A publish edge: no flows, no wakes
+  signals-service -req-> credentials-broker
+  signals-service -call-> signal-model  # one call per confirmed line: the line, up to 24 lines before it and the brief's questions; answers a 0..1 score per label, parsed strictly
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, object-store, transcription deployed-in deploy
   flows-api, flows-worker deployed-in deploy

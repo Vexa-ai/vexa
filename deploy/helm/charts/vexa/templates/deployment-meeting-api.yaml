@@ -34,7 +34,7 @@ spec:
       containers:
         - name: meeting-api
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
-          image: "{{ .Values.meetingApi.image.repository }}:{{ .Values.global.imageTag | default .Values.meetingApi.image.tag }}"
+          image: "{{ .Values.meetingApi.image.repository }}:{{ .Values.global.imageTag | default .Values.meetingApi.image.tag | default (include "vexa.releaseTag" .) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           lifecycle:
             preStop:
@@ -142,6 +142,10 @@ spec:
             # diagnostics.captureSignal (default "false"): no captured-signal tape unless turned on.
             - name: VEXA_CAPTURE_SIGNAL_DEFAULT
               value: {{ include "vexa.captureSignalDefault" . | quote }}
+            - name: VOICE_NOTE_MAX_DURATION_SEC
+              value: {{ .Values.meetingApi.voiceNoteMaxDurationSeconds | default "1800" | quote }}
+            - name: VOICE_NOTE_IDLE_TIMEOUT_SEC
+              value: {{ .Values.meetingApi.voiceNoteIdleTimeoutSeconds | default "120" | quote }}
             # Object storage: storage.s3, the operator's own bucket (vexa.storage.validate refuses to
             # render without it). meeting-api's own names for it: S3_ENDPOINT/S3_*_KEY are the
             # explicit S3 settings; MINIO_BUCKET is the bucket it reads first, and MINIO_ACCESS_KEY/
@@ -184,6 +188,8 @@ spec:
               value: /etc/vexa/s3/config
             - name: LOG_LEVEL
               value: {{ .Values.meetingApi.logLevel | default "info" | quote }}
+            - name: VEXA_FEATURES
+              value: {{ .Values.features | default "" | quote }}
             # Authenticated-bot mode (deployment-scoped) — docs: /authenticated-bots. BOT_S3_* is the
             # bots' read-only pair; the write-back is stored with the MINIO_* pair above.
             - name: BOT_AUTHENTICATED
@@ -194,10 +200,50 @@ spec:
               value: {{ .Values.meetingApi.botS3Endpoint | default "" | quote }}
             - name: BOT_S3_BUCKET
               value: {{ .Values.meetingApi.botS3Bucket | default "" | quote }}
+            {{- with .Values.meetingApi.botS3ExistingSecret }}
+            - name: BOT_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ . | quote }}, key: {{ $.Values.meetingApi.botS3AccessKeyKey | default "BOT_S3_ACCESS_KEY" | quote }}}
+            - name: BOT_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ . | quote }}, key: {{ $.Values.meetingApi.botS3SecretKeyKey | default "BOT_S3_SECRET_KEY" | quote }}}
+            {{- else }}
             - name: BOT_S3_ACCESS_KEY
               value: {{ .Values.meetingApi.botS3AccessKey | default "" | quote }}
             - name: BOT_S3_SECRET_KEY
               value: {{ .Values.meetingApi.botS3SecretKey | default "" | quote }}
+            {{- end }}
+            # Calls (#1783): the LiveKit server when livekit.enabled; empty ⇒ this deployment has no calls.
+            - name: LIVEKIT_URL
+              value: {{ ternary .Values.livekit.url "" .Values.livekit.enabled | quote }}
+            - name: LIVEKIT_INTERNAL_URL
+              value: {{ ternary (printf "ws://%s:%v" (include "vexa.componentName" (list . "livekit")) .Values.livekit.service.port) "" .Values.livekit.enabled | quote }}
+            - name: LIVEKIT_API_KEY
+              value: {{ ternary .Values.livekit.apiKey "" .Values.livekit.enabled | quote }}
+            - name: LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: LIVEKIT_API_SECRET
+                  optional: true
+            - name: CALL_MAX_DURATION_SEC
+              value: {{ .Values.meetingApi.calls.maxDurationSeconds | default "14400" | quote }}
+            - name: CALL_EMPTY_GRACE_SEC
+              value: {{ .Values.meetingApi.calls.emptyGraceSeconds | default "30" | quote }}
+            - name: CALL_FIRST_JOIN_TIMEOUT_SEC
+              value: {{ .Values.meetingApi.calls.firstJoinTimeoutSeconds | default "30" | quote }}
+            - name: CALL_MAX_PARTICIPANTS
+              value: {{ .Values.meetingApi.calls.maxParticipants | default "50" | quote }}
+            - name: CALL_TRANSCRIPTION_SWITCHABLE
+              value: {{ .Values.meetingApi.calls.transcriptionSwitchable | default "false" | quote }}
+            {{- if include "vexa.botAccountsEnabled" . }}
+            # Bot accounts (ADR-0049): saved signed-in browser profiles, kept in the credential
+            # broker. meeting-api signs as its `bots` role (credential-broker.v1).
+            - name: VEXA_BOT_ACCOUNTS_BROKER_URL
+              value: {{ include "vexa.credentialBrokerUrl" . | quote }}
+            - name: VEXA_BOT_ACCOUNTS_KEY_FILE
+              value: /run/vexa-connections/bots/key
+            {{- end }}
             {{- with .Values.meetingApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -230,6 +276,11 @@ spec:
             - name: identity-public-key
               mountPath: /run/vexa-identity/public
               readOnly: true
+            {{- if include "vexa.botAccountsEnabled" . }}
+            - name: connections-keys
+              mountPath: /run/vexa-connections
+              readOnly: true
+            {{- end }}
             {{- if or $s3.caConfigMap $s3.caSecret }}
             - name: s3-ca
               mountPath: /etc/vexa/s3-ca
@@ -249,6 +300,15 @@ spec:
             defaultMode: 0444
             items:
               - { key: public-key.pem, path: key.pem }
+        {{- if include "vexa.botAccountsEnabled" . }}
+        # The bots role key only — never the agent, human or git key.
+        - name: connections-keys
+          secret:
+            secretName: {{ include "vexa.credentialBrokerKeys" . }}
+            defaultMode: 0444
+            items:
+              - { key: bots.key, path: bots/key }
+        {{- end }}
         {{- if $s3.caConfigMap }}
         - name: s3-ca
           configMap:

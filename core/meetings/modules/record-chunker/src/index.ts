@@ -291,11 +291,17 @@ class DynamicAudioMixer {
    *  closing). The recording host uses it to flush the recorder's buffered tail before the page dies. */
   private onEmpty: (() => void) | null;
 
-  constructor(onEmpty?: () => void) {
+  /** Fired when a stream is connected (the live-source count rose). The tap uses it to start the
+   *  recorder on the meeting's FIRST audio when that audio arrives after the initial wait. */
+  onAdded: (() => void) | null = null;
+  private intervalMs: number;
+
+  constructor(onEmpty?: () => void, intervalMs = 2000) {
     this.ctx = new AudioContext();   // default (full) sample rate — NOT the 16 kHz transcription mix
     this.ctx.resume?.();
     this.dest = this.ctx.createMediaStreamDestination();
     this.onEmpty = onEmpty ?? null;
+    this.intervalMs = intervalMs;
   }
 
   get stream(): MediaStream { return this.dest.stream; }
@@ -304,6 +310,7 @@ class DynamicAudioMixer {
   /** Connect newly-seen streams; prune streams whose audio has ended. Idempotent — safe every tick. */
   scan(): void {
     const present = new Map(collectAudioStreams().map((s) => [s.id, s]));
+    const before = this.sources.size;
     for (const [id, s] of present) {
       if (this.sources.has(id)) continue;
       try {
@@ -313,6 +320,7 @@ class DynamicAudioMixer {
         blog(`[record-chunker] mix +stream (${this.sources.size} live)`);
       } catch { /* not connectable yet — retried next tick */ }
     }
+    if (this.sources.size > before && this.onAdded) { try { this.onAdded(); } catch { /* */ } }
     // Prune truly-dead streams (all tracks ended) so a long meeting's track churn doesn't accumulate
     // source nodes. A still-live stream is KEPT even if its element left the DOM (the node holds the
     // stream ref and still pulls audio) — presence is not the liveness signal, the track state is.
@@ -330,7 +338,8 @@ class DynamicAudioMixer {
 
   start(): void {
     this.scan();
-    this.timer = setInterval(() => { try { this.scan(); } catch { /* the rescan must never die */ } }, 2000);
+    if (this.timer) return;
+    this.timer = setInterval(() => { try { this.scan(); } catch { /* the rescan must never die */ } }, this.intervalMs);
   }
 
   stop(): void {
@@ -345,6 +354,8 @@ class DynamicAudioMixer {
 export interface CreateRecordingTapOptions extends RecordingTapOptions {
   /** Provide a ready stream to record (e.g. the mixed-lane tab stream); else all audio elements are combined. */
   stream?: MediaStream;
+  /** Page-audio rescan interval in ms (default 2000). The initial first-stream wait is 5 scans. */
+  scanIntervalMs?: number;
 }
 
 /**
@@ -360,38 +371,63 @@ export interface CreateRecordingTapOptions extends RecordingTapOptions {
 export function createRecordingTap(opts: CreateRecordingTapOptions): RecordingTap {
   let chunker: MediaRecorderChunker | null = null;
   let mixer: DynamicAudioMixer | null = null;
+  let stopped = false;
+  let starting: Promise<void> | null = null;
+  const startChunker = (stream: MediaStream): Promise<void> => {
+    if (starting || stopped) return starting ?? Promise.resolve();
+    const c = new MediaRecorderChunker({
+      stream,
+      timesliceMs: opts.timesliceMs ?? 15000,
+      onChunk: opts.onChunk,
+      onStarted: opts.onStarted,
+    });
+    chunker = c;
+    starting = c.start();
+    return starting;
+  };
   return {
     async start(): Promise<void> {
-      let stream = opts.stream;
-      if (!stream) {
-        // No ready stream ⇒ build a LIVE mix of the page's audio. Wait (bounded) for the first stream —
-        // post-admission the participant / injected <audio> elements appear a beat late — so the
-        // MediaRecorder's onStarted t=0 aligns with real audio; the rescan then follows the churn.
-        // onEmpty → flush the recorder's buffered tail the instant the mix goes silent (meeting close),
-        // so the final partial timeslice (the last few seconds of speech) is a real chunk before the
-        // page navigates away on eviction. `chunker` is assigned just below and set by the time this fires.
-        mixer = new DynamicAudioMixer(() => chunker?.flush());
-        let ready = false;
-        for (let i = 0; i < 5; i++) {
-          mixer.scan();
-          if (mixer.connectedCount > 0) { ready = true; break; }
-          await new Promise((r) => setTimeout(r, 2000));
-        }
-        if (!ready) { blog("[record-chunker] no audio streams — cannot record"); mixer.stop(); mixer = null; return; }
-        mixer.start();
-        stream = mixer.stream;
+      stopped = false;
+      if (opts.stream) { await startChunker(opts.stream); return; }
+      // No ready stream ⇒ build a LIVE mix of the page's audio. Wait (bounded) for the first stream —
+      // post-admission the participant / injected <audio> elements appear a beat late — so the
+      // MediaRecorder's onStarted t=0 aligns with real audio; the rescan then follows the churn.
+      // onEmpty → flush the recorder's buffered tail the instant the mix goes silent (meeting close),
+      // so the final partial timeslice (the last few seconds of speech) is a real chunk before the
+      // page navigates away on eviction.
+      const intervalMs = opts.scanIntervalMs ?? 2000;
+      const m = new DynamicAudioMixer(() => chunker?.flush(), intervalMs);
+      mixer = m;
+      for (let i = 0; i < 5; i++) {
+        m.scan();
+        if (m.connectedCount > 0) break;
+        await new Promise((r) => setTimeout(r, intervalMs));
+        if (stopped) return;
       }
-      chunker = new MediaRecorderChunker({
-        stream,
-        timesliceMs: opts.timesliceMs ?? 15000,
-        onChunk: opts.onChunk,
-        onStarted: opts.onStarted,
-      });
-      await chunker.start();
+      if (m.connectedCount > 0) {
+        m.start();
+        await startChunker(m.stream);
+        return;
+      }
+      // Still no audio after the initial wait. NEVER give up: Zoom mirrors a participant's track into
+      // the page only when their audio first reaches the bot, which can be long after admission
+      // (app.dev meeting 144: 21 s; the old give-up here lost the whole 28-minute recording). Keep
+      // the rescan running and start the recorder on the first stream, without blocking start().
+      blog("[record-chunker] no audio streams yet — recording starts with the first one");
+      m.onAdded = () => {
+        m.onAdded = null;
+        if (stopped || mixer !== m) return;
+        blog("[record-chunker] first audio stream — recording started");
+        void startChunker(m.stream).catch(() => { /* chunker logs its own refusal */ });
+      };
+      m.start();
     },
     async stop(): Promise<void> {
+      stopped = true;
+      if (starting) await starting.catch(() => { /* */ });
       await chunker?.stop();
       chunker = null;
+      starting = null;
       mixer?.stop();
       mixer = null;
     },

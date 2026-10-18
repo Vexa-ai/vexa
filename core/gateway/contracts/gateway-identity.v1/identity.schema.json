@@ -35,12 +35,16 @@
           "description": "\"*\" (everything already the subject's) or the isolation set; becomes x-user-delegation-workspaces",
           "oneOf": [ { "const": "*" }, { "type": "array", "items": { "type": "string" } } ]
         },
-        "target": { "type": "string", "description": "the chat's target workspace, a default and never a grant; becomes x-user-delegation-target" }
+        "target": { "type": "string", "description": "the chat's target workspace, a default and never a grant; becomes x-user-delegation-target" },
+        "unit": { "type": "string", "description": "the agent unit (a chat thread or a background job) the worker runs as — the delegation token's signed `unit` claim (delegation.v1), passed on by identity. The session: services log it as logevent.v1 `session` and the credential broker records it as audit.session; correlation, never a grant; becomes x-user-delegation-unit" },
+        "shared": { "const": true, "description": "the turn answers into a conversation other people read (delegation.v1 scope.shared); becomes x-user-delegation-shared: 1. A service refuses such a worker every person-wide read. Present only then" },
+        "grants": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["bot.request", "bot.stop", "flow.retire_self"] }, "description": "a routine's delegated authority (delegation.v1 scope.grants): the unattended verbs its person granted it, sorted; becomes x-user-delegation-grants (comma-joined). A service that refuses an unwatched caller lets exactly these verbs through. Present only beside flow" },
+        "flow": { "type": "string", "minLength": 1, "description": "the routine the grants belong to (delegation.v1 scope.flow, `user:<uid>/<name>`); becomes x-user-delegation-flow. Present only beside grants" }
       }
     },
     "Headers": {
       "type": "object",
-      "description": "A claims-to-headers vector: the x-user-* headers a service rebuilds from the claims in `claims_golden` (a claims-*.json beside it). Lower-cased names; scopes, workspaces and writable_workspaces comma-joined; webhook_events as JSON; limits as decimal; an absent, empty or null claim gives no header; delegation becomes x-user-regime, x-user-delegation-workspaces (\"*\" or comma-joined) and x-user-delegation-target.",
+      "description": "A claims-to-headers vector: the x-user-* headers a service rebuilds from the claims in `claims_golden` (a claims-*.json beside it). Lower-cased names; scopes, workspaces and writable_workspaces comma-joined; webhook_events as JSON; limits as decimal; an absent, empty or null claim gives no header; delegation becomes x-user-regime, x-user-delegation-workspaces (\"*\" or comma-joined), x-user-delegation-target, x-user-delegation-unit, when shared, x-user-delegation-shared: 1 and, for a granted routine, x-user-delegation-grants (comma-joined) and x-user-delegation-flow.",
       "required": ["claims_golden", "headers"],
       "additionalProperties": false,
       "properties": {
@@ -54,7 +58,7 @@
     },
     "Reentry": {
       "type": "object",
-      "description": "A re-entry match vector, after the signature and lifetime checks have passed. `validation` is identity's /internal/validate answer for the bearer on the re-entering call (identity.v1 ValidateResponse); `signed` is the claims of the X-Vexa-Internal-Mcp-Identity token. `admitted` must equal: validation carries a delegation, AND signed.sub == str(validation.user_id), AND signed.delegation equals the delegation the gateway would sign for validation (regime, workspaces, target).",
+      "description": "A re-entry match vector, after the signature and lifetime checks have passed. `validation` is identity's /internal/validate answer for the bearer on the re-entering call (identity.v1 ValidateResponse); `signed` is the claims of the X-Vexa-Internal-Mcp-Identity token. `admitted` must equal: validation carries a delegation, AND signed.sub == str(validation.user_id), AND signed.delegation equals the delegation the gateway would sign for validation (regime, workspaces, target, unit, shared, grants, flow).",
       "required": ["validation", "signed", "admitted", "what"],
       "additionalProperties": false,
       "properties": {

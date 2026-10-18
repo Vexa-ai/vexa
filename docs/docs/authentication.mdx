@@ -147,7 +147,9 @@ warning at boot whenever sign-in is open.
 ### The emailed link
 
 - The link is valid for 15 minutes by default (`MAGIC_LINK_TTL_SECONDS`, capped at 60 minutes) and
-  signs in **once**, whichever terminal replica redeems it. A second click shows "already used".
+  signs in **once**, whichever terminal replica redeems it and across terminal restarts: admin-api
+  keeps the record of used links in the service Redis until the link expires. A second click shows
+  "already used".
 - An address is at most 254 characters. Requests for a link are budgeted per client address
   (`MAGIC_LINK_RATE_PER_IP`, default 20) and per email address (`MAGIC_LINK_RATE_PER_ADDRESS`,
   default 5) over `MAGIC_LINK_RATE_WINDOW_SECONDS` (default 900). Behind a reverse proxy, set
@@ -162,8 +164,10 @@ warning at boot whenever sign-in is open.
 - Google: the ID token's `email_verified` must be `true`.
 - Microsoft: with `MICROSOFT_TENANT_ID` set to a tenant id, the token's tenant must be that one; with
   a multi-tenant authority, the token must carry `xms_edov: true`.
-- The first OAuth sign-in to an account records the provider's stable subject on it. A later sign-in
-  through the same provider with a different subject is refused, even for the same address.
+- The first OAuth sign-in to an account records the provider's stable subject on it: Google's `sub`,
+  or Microsoft's tenant id and object id. A later sign-in through the same provider with a different
+  subject is refused (`403`), even for the same address. An account made before this rule is bound
+  on its next OAuth sign-in. The emailed link is not bound: holding the mailbox is its proof.
 - After sign-in the browser returns only to a path on this instance or a URL on its exact origin.
 
 ### Your own identity provider (OIDC)

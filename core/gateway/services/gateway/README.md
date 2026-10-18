@@ -22,7 +22,9 @@ talk directly — they meet **here**, over published contracts (`api.v1`, `ws.v1
 | **calls** | `meeting-api` | HTTP proxy `/bots · /meetings · /transcripts · /recordings` | client request + injected `x-user-id`/`x-user-scopes`/`x-user-limits`, signed as `X-Vexa-Identity` with the Ed25519 key in `VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE` (gateway-identity.v1); body + status returned verbatim |
 | **calls** | `meeting-api` | HTTP `POST /ws/authorize-subscribe` | `/ws` subscribe authorization → `{authorized[], errors[]}` — at subscribe, and again every 15 s for each open socket's subscriptions (`subscription_revoked` on a refusal) |
 | **calls** | `admin-api` | HTTP `POST /internal/validate`, every 15 s per open socket | the socket's key RE-RESOLVED: a key that no longer resolves closes the socket (`4401`); a changed membership re-derives its workspace status channels |
+| **calls** | `meeting-api` | WS `/bot-accounts/sessions/{session_id}/vnc` (`src/gateway/vnc_relay.py`) | a bot-account sign-in session's live view (ADR-0049): the client's frames relayed verbatim both ways, opened with the same signed identity headers an HTTP forward stamps |
 | **consumes** | `redis` (producers: meeting-api + collector) | sub `tc:meeting:{id}:mutable` · `bm:meeting:{id}:status` · `va:meeting:{id}:chat` | raw transcript / status / chat payloads, forwarded unchanged to the socket |
+| **consumes** | `redis` stream (producer: signals) | read `sig:meeting:{id}` (only for a subscription that named `streams:["signals"]`, for the row the authorize hop granted) | transcript-signal annotations, sent as `meeting.signals` frames |
 | **produces** | clients (dashboard, SDKs) | WS `/ws` (`ws.v1`) | `subscribed`/`unsubscribed`/`pong`/`error` control + type-tagged live data frames |
 | **produces** | clients | HTTP `/bots`, `/meetings`, `/transcripts`, `/recordings`, `/auth/me`, `/health` (`api.v1`) | the frozen public REST surface |
 | **publishes** | log sink | stdout, one JSON line per log | `logevent.v1` envelopes (auth + proxy spans) carrying the `X-Trace-Id` |
@@ -51,7 +53,10 @@ meeting-api, or to the `"upstream"` it names (`/user/webhook/deliveries` is meet
 (`BUNDLE_TIMEOUT`), every other meetings row through the buffered forward; every `{name}` in that target is filled under the same rule as a forwarded
 row (`paths.forwarded_param`), and `{platform}` must be an api.v1 `Platform`. meeting-api reads the
 same rows to check, on the route a request matched, the scopes this edge checked
-(`meeting_api/route_scopes.py`). `mcp_reentry` is refused on a `{path:path}` catch-all.
+(`meeting_api/route_scopes.py`). `mcp_reentry` is refused on a `{path:path}` catch-all. A meetings
+row may end in one (the sign-in session's live-view files, `/bot-accounts/sessions/{session_id}/view/{path:path}`):
+its tail is forwarded under the catch-all rule (`paths.tail_path`). The live view's websocket is not a
+row — routes.v1 declares HTTP verbs — and is held to the scopes of `GET /bot-accounts/sessions/{session_id}`.
 
 ## The validate hop when admin-api is unavailable
 **How it works.** `AdminApiAuthorizer.resolve` (`src/gateway/adapters.py`) POSTs each credential to
@@ -85,4 +90,5 @@ uv run pytest -q        # L2 unit; uv manages this package's own venv/deps
 - ✅ delivered — REST proxy to meeting-api (verbatim body+status; 502/504 on upstream fault)
 - ✅ delivered — `/ws` multiplex (subscribe/unsubscribe/ping, downstream authorize, redis fan-in over `tc:`/`bm:`/`va:` channels)
 - ✅ delivered — `/auth/me`, `/health`, per-user request rate limit (429), `logevent.v1` tracing
+- ✅ delivered — bot accounts (ADR-0049): the `/bot-accounts` rows forwarded to meeting-api, and the sign-in session's live-view websocket relayed (key resolved as `/ws`; 4401 / 4403 / 4404 refusals)
 - ⬜ planned — add a user scope to `/ws` (auto-subscribe `u:{user_id}:*` on auth) forwarding `meetings.changed` / `workspace.committed` / `routine.status`

@@ -244,6 +244,10 @@ body of a refused dispatch: `{ detail, fault }` with `503` when the agent runtim
 | `agent-api` | `internal`, `unavailable` |
 | `gateway` | `unreachable` |
 
+Chats are kept in the session store, apart from every workspace (ADR-0048; [Shared
+chats](/minutes/shared-chats)). These routes read and change the store; no workspace route returns a
+chat, and `_system` holds identity and settings only.
+
 `POST /api/chat/reset` `{ session? }` → `{ "ok": true }` · `GET /api/sessions` →
 `{ "sessions": [...] }` · `GET /api/sessions/{session}/history` → `{ "turns": [...] }`: a session the
 caller has no thread for is a `404`; a thread whose transcript is missing or empty returns
@@ -275,17 +279,32 @@ write-back); every worker event carries its `turn_id`, so a client can tell them
 
 ## Routines
 
+<Warning>
+Deprecated, and removed in 0.14.0. A routine is a flow of your own: make one with `POST /flows` or
+`flows_submit` ([Routines and agent messages](/flows/routines)). Until 0.14.0 these routes are an
+adapter onto your flows, kept for installs that are upgrading. Every answer carries
+`Deprecation: true` and `Link: </flows>; rel="successor-version"`. On a deployment without flows
+they answer `501` with `routines_need_flows`.
+</Warning>
+
 ```bash POST /api/routines  → 201
 curl -X POST "$API_BASE/agent/routines" -H "Content-Type: application/json" \
   -H "X-API-Key: $VEXA_API_KEY" -d '{
   "name":"Morning brief","cron":"0 8 * * 1-5",
-  "prompt":"Brief me from overnight activity.","run_now":true
-}'   # → {"routine":{...},"job_id":"job_...","ran_now":true}
+  "prompt":"Brief me from overnight activity."
+}'   # → {"routine":{...},"job_id":null,"ran_now":false,"flow":{...}}
 ```
 
-`GET /api/routines` → `{ "routines": [...] }` ·
-`PATCH /api/routines/{name}/enabled` `{ enabled }` → `{ "ok": true, "name", "enabled", "reconcile" }` ·
-`DELETE /api/routines/{routine_id}` → `{ "ok": true, "routine_id": "..." }`.
+`POST` writes a schedule flow with the `agent_run` step in your own scope; `run_now` has no effect
+(the routine first runs at its first slot, in its own thread). A refusal from flows comes back with
+its typed reason (for example `quota_min_interval`).
+
+`GET /api/routines` → `{ "routines": [...] }`: your schedule flows, plus any old routine file that
+could not be converted, with its reason ·
+`PATCH /api/routines/{name}/enabled` `{ enabled }` pauses or resumes the flow ·
+`DELETE /api/routines/{routine_id}` retires it ·
+`POST /api/routines/{name}/confirm` → `410` `routine_files_retired`: routine files are no longer
+confirmed or read.
 
 ## Events
 
@@ -334,7 +353,8 @@ commit, source_commit }` (an omitted `to_slug` is the same workspace) ·
 `POST /api/workspace/asset` `{ url, path?, slug? }` → the stored picture's `path` (the server fetches it) ·
 `GET /api/workspace/git` → `{ branch, changes, commits }` ·
 `GET /api/workspace/git/show?sha=&path=&slug=` → the unified diff of one commit ·
-`POST /api/workspace/upload` (multipart `files`, ≤25 MB each) → `{ "files": [{ name, path }] }` ·
+`POST /api/workspace/upload` (multipart `files`, ≤25 MB each) → `{ "files": [{ name, path, original, size, type }] }` (`name` is stored, `original` the uploaded name) ·
+`GET /api/sessions/{session}/attachment?path=` → the bytes of a file attached to a message: the caller's own, or one posted in that session to its participants; `404` otherwise ·
 `POST /api/workspace/init` → `201` `{ workspace, seeded, already_initialized }` (idempotent) ·
 `GET /api/workspace/attached` → `{ active, parked }` ·
 `POST /api/workspace/swap` `{ repo?, ref?, token? }` → attach an external git repo as the active
@@ -357,7 +377,10 @@ renaming either the workspace or the page leaves them resolving.
 `{ id, name, kind, slug, access, writable }`, from this reader's point of view. `access` is
 `readable` · `not-yours` · `gone`, and neither route 404s or 403s: a workspace you cannot see is an
 **answer**, not an error, and a `gone` record still carries its last known name so a dead link renders
-as its own title.
+as its own title. A `not-yours` answer carries only what you asked with — `{ id: null, slug }` by slug,
+`{ id }` by id — with `name` and `kind` null; members, instance admins and the admin account get the
+full view. Links resolved through `POST /api/links/resolve` likewise name no workspace when it is
+`not-yours`.
 
 `POST /api/workspaces/{workspace_id}/rename` `{ name }` → the same view plus `renamed_from`. A group's
 owner and instance admins only — `403` otherwise, including for a personal workspace's own owner; `404` unknown id,
@@ -460,7 +483,9 @@ only; the current tree is parked, and `policy/` is carried into the new one so a
 the group out · `GET /api/workspace/shared/{workspace_id}/attached` → the attachment view plus `home`
 (`remote`, `url`, `branch`, `ahead`, `behind`) and `credential`, which says what kind of credential
 exists and never its value · `POST /api/workspace/shared/{workspace_id}/active` `{ active }` →
-`{ workspace_id, active }`, a per-user mount preference; membership is unchanged.
+`{ workspace_id, active }`, a per-user mount preference; membership is unchanged. Switching ON
+needs membership in the roster (`403` otherwise); switching OFF is open to anyone, since it only
+edits the caller's own set — it is how a client clears a workspace the caller was removed from.
 
 ## Workspace slots and the active set
 
@@ -603,13 +628,17 @@ the reference for later Git operations; it does not copy the key or grant access
 The agent domain's Connections tools are served by the gateway's one MCP server
 (`core/agent/mcp.tools.v1.json`): `connection_request(provider, label?, new_account?, setup?)`,
 `connections_status()`, the reads `gmail_search` · `gmail_read` · `gmail_thread` ·
-`calendar_events` · `mail_inbox` · `mail_read`, `gmail_draft_create`,
-`secret_service_call` and `onboarding_research`. Each is one `/api/connections/*` or
+`calendar_events` · `mail_inbox` · `mail_read`, the drafts `gmail_draft_create` (a reply in a
+thread, Cc, Bcc, workspace attachments) · `gmail_draft_update`, the calendar changes
+`calendar_event_create` · `calendar_event_update` · `calendar_event_cancel`, the policy
+`connection_policy_get` · `connection_policy_set`, `secret_service_call` and `onboarding_research`. Each is one `/api/connections/*` or
 `/api/onboarding/research` route with a typed body; a meetings-only installation does
 not expose them, and without a credential broker they answer that Connections are not
 configured (`onboarding_research` with `action: status` still reports stored progress, because it
-reads no account). A worker dispatched without a person in the loop is refused every one of
-them except `connections_status`. What onboarding research reads, its receipts and its failure
+reads no account). A worker dispatched without a person in the loop is refused `connection_request`,
+`connection_policy_set`, `secret_service_call` and `onboarding_research`; the mail and calendar
+tools follow the administrator's `connection_actions_unattended` policy, which refuses all of them
+by default ([Connections → the policy](/connections#what-an-agent-may-do-the-policy)). What onboarding research reads, its receipts and its failure
 modes are on [Onboarding research and Extend](/how-to/onboarding-research).
 
 A request returns a connection reference and `awaiting_user` or an existing
@@ -617,3 +646,30 @@ A request returns a connection reference and `awaiting_user` or an existing
 **Continue with Google** and grants read-only consent. Agents must never request
 passwords, tokens or authorization codes in chat. `ready` means authorization was
 stored; it does not establish that email ingestion or Calendar auto-join is active.
+
+
+## How it works
+
+1. **Presence.** The gateway registers the agent routes from `core/agent/routes.v1.json` only when
+   `AGENT_API_URL` is set. Without it (the no-agents profile) every `/agent/*` path is `404`.
+2. **Forward.** Public `/agent/<path>` maps onto agent-api's `/api/<path>`. 54 rows are declared:
+   literal routes (two of them, `/agent/chat` and `/agent/meeting/stream`, streamed as server-sent
+   events) and a `{path:path}` catch-all for each of five methods, all with scopes `bot` + `tx`.
+3. **Identity.** The gateway resolves the key, strips client-sent identity headers and signs the
+   identity it stamps. agent-api believes `X-User-Id` only with a valid signature.
+4. **Workers.** A worker's delegation token is admitted only on the MCP re-entry rows (one per route a
+   tool in `mcp.tools.v1.json` calls) and on `POST /agent/friction`. Any other REST call with it is refused.
+5. **Person verbs.** The 49 `verbs` rows mark agent-api routes that need a person in the loop.
+   `control_plane/route_policy.py` refuses a worker dispatched without one, before the handler runs.
+
+## Why it complies
+
+| Rule | How this design meets it | Enforced by |
+|---|---|---|
+| P4 — sealed contracts | The route table is a `routes.v1` manifest beside the service. | `gate:schema`, `gate:contract-version`; `test_route_manifests.py`: `test_the_no_agents_app_does_not_register_the_agent_routes`, `test_a_request_to_an_absent_domain_is_404_not_401` |
+| P20 — authorize every access | Every route declares scopes; an unsigned identity is refused; `subject` is never read from the body. | `test_scope_matrix.py`: `test_every_registered_route_declares_its_scopes`; `test_identity_guard.py`: `test_an_unsigned_identity_is_refused`, `test_naming_nobody_is_401_and_there_is_no_fallback_subject` |
+| Workers stay in their lane | A delegation token cannot call REST routes directly; an unwatched worker is refused every person verb. | `test_delegated_mcp.py`: `test_a_delegation_bearer_is_refused_on_rest_routes_called_directly`; `test_person_verbs.py`: `test_an_unwatched_worker_is_refused_and_nothing_changes` |
+| P18 — fail loud at boot | A destructive route without a `person` row, or a row naming no served route, stops agent-api from starting. | `test_person_verbs.py`: `test_a_destructive_route_left_unflagged_refuses_the_boot`, `test_a_row_naming_no_served_route_refuses_the_boot` |
+| Decision record | The edge signs the identity it resolved; a worker's delegation is a bearer like any other. | [ADR 0041](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0041-the-edge-signs-the-identity-it-resolved.md) |
+
+Gateway tests are in `core/gateway/services/gateway/tests/`, agent-api tests in `core/agent/tests/`.

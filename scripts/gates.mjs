@@ -9,7 +9,7 @@
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { execSync, execFileSync } from "node:child_process";
+import { execSync, execFileSync, spawnSync } from "node:child_process";
 // execFileSync, not execSync, wherever a command carries a PATH we computed (ROOT is
 // process.cwd(), so every such path is an environment value): an argv array is handed to
 // execve directly, so there is no shell to reinterpret a space, a quote or a `;` in the
@@ -23,6 +23,8 @@ import { checkVendorPayload, NATIVE_DIR } from "./check-vendor-payload.mjs";
 import { checkPythonLicenses, INDEX_FILE as PY_LICENSE_INDEX } from "./check-python-licenses.mjs";
 import { collectPinnedImages, trackedFiles, isDockerfile } from "./pinned-images.mjs";
 import { npmLockInventory } from "./npm-locks.mjs";
+import { checkVersions } from "../release/version.mjs";
+import { MINT_VERSION, judgeMintOutput } from "./check-docs-links.mjs";
 
 const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", "test-results", "playwright-report", "coverage"]);
@@ -135,7 +137,14 @@ function gateDocsVersion() {
     "   Update the `docs-reflects:` marker (+ the visible line) in docs/docs/changelog.mdx to match,",
     "   as part of the release version-bump — the docs must not lag the release.",
   ]);
-  console.log(`  ✓ gate:docs-version — docs reflect v${docsV}, matching Chart.yaml appVersion`);
+  // The version has one source (package.json); every surface that names it must agree (release/version.mjs).
+  const bad = checkVersions(ROOT);
+  if (bad.length) return fail([
+    "gate:docs-version — a surface names a different version than package.json:",
+    ...bad.map((b) => `   ${b.file}: ${b.found} (package.json says ${b.want})`),
+    "   Run `node release/version.mjs set <version>` to write one version everywhere.",
+  ]);
+  console.log(`  ✓ gate:docs-version — docs reflect v${docsV}; package.json, Chart.yaml, .env.example and the docs agree`);
   return true;
 }
 
@@ -841,15 +850,26 @@ function gateHealth() {
 
 // gate:access (P20) — the canAccess default-deny is PROVEN: at least one package ships
 // tests/test_access.py and it passes (deny on the read paths, owner-allow). RED if absent — an
-// unproven access layer is a security gap, not an empty no-op.
+// unproven access layer is a security gap, not an empty no-op. Every `tests/test_access*.py` a
+// package ships is run with it: each area that adds a refusal adds its deny vectors in
+// `tests/test_access_<area>.py` beside its own suite.
+function accessFiles(d) {
+  const t = join(d, "tests");
+  if (!existsSync(t)) return [];
+  return readdirSync(t).filter((n) => /^test_access(_[a-z0-9_]+)?\.py$/.test(n)).sort().map((n) => `tests/${n}`);
+}
 function gateAccess() {
-  const pkgs = pyPackages().filter((d) => existsSync(join(d, "tests", "test_access.py")));
-  if (!pkgs.length) return fail(["gate:access — no tests/test_access.py anywhere (canAccess default-deny is unproven)"]);
+  const all = pyPackages();
+  if (!all.some((d) => existsSync(join(d, "tests", "test_access.py")))) return fail(["gate:access — no tests/test_access.py anywhere (canAccess default-deny is unproven)"]);
+  const pkgs = all.filter((d) => accessFiles(d).length);
+  let files = 0;
   for (const d of pkgs) {
-    try { execSync("uv run pytest -q tests/test_access.py", { cwd: d, stdio: "pipe" }); }
+    const fs = accessFiles(d);
+    files += fs.length;
+    try { execSync(`uv run pytest -q ${fs.join(" ")}`, { cwd: d, stdio: "pipe" }); }
     catch (e) { return fail([`access ${rel(d)}:\n${errText(e).slice(-1500)}`]); }
   }
-  console.log(`  ✓ gate:access — ${pkgs.length} access deny-test(s) green (default-deny, P20)`);
+  console.log(`  ✓ gate:access — ${files} access deny-test file(s) in ${pkgs.length} package(s) green (default-deny, P20)`);
   return true;
 }
 
@@ -1234,9 +1254,9 @@ const CONFIG_ADOPTED = [
     // is to be the product's front door was the one service nothing checked. Deployed on every
     // surface now — compose, the chart's deployment-mcp.yaml and lite's [program:mcp].
     service: "mcp",
-    decl: "core/meetings/services/mcp/src/vexa_mcp/config.v1.json",
-    preflight: "core/meetings/services/mcp/src/vexa_mcp/config_preflight.py",
-    scan: ["core/meetings/services/mcp/src"],
+    decl: "core/gateway/services/mcp/src/vexa_mcp/config.v1.json",
+    preflight: "core/gateway/services/mcp/src/vexa_mcp/config_preflight.py",
+    scan: ["core/gateway/services/mcp/src"],
     compose: "mcp", helm: ["deployment-mcp.yaml"], lite: "mcp",
   },
   {
@@ -1275,6 +1295,15 @@ const CONFIG_ADOPTED = [
     preflight: "core/agent/services/credential-broker/src/credential_broker/config_preflight.py",
     scan: ["core/agent/services/credential-broker/src"],
     compose: "credential-broker", helm: ["deployment-credential-broker.yaml"], lite: null,
+  },
+  {
+    // Transcript signals: adopted the day it entered the tree. lite is null: Lite carries no
+    // credential broker, and the signal model's key lives only there.
+    service: "signals",
+    decl: "core/signals/src/meeting_signals/config.v1.json",
+    preflight: "core/signals/src/meeting_signals/config_preflight.py",
+    scan: ["core/signals/src"],
+    compose: "signals", helm: ["deployment-signals.yaml"], lite: null,
   },
   {
     // THE TERMINAL, ADOPTED BY FAMILY. It is TypeScript, so there is no vendored Python preflight to
@@ -1552,6 +1581,17 @@ function gateDbSchema() {
   for (const k of Object.keys(cur)) if (!(k in old)) errs.push(`ADDED    ${k} = ${cur[k]}`);
   for (const k of Object.keys(old)) if (!(k in cur)) errs.push(`REMOVED  ${k}`);
   for (const k of Object.keys(cur)) if (k in old && cur[k] !== old[k]) errs.push(`CHANGED  ${k}: ${old[k]}  →  ${cur[k]}`);
+  // A column added to a table an existing deployment already holds needs its in-place migration:
+  // `CREATE TABLE IF NOT EXISTS` never adds it there (the flows `friction_occurrence.admitted` case).
+  let gaps = [];
+  try {
+    gaps = JSON.parse(execFileSync("python3", [join(ROOT, "scripts", "schema_digest.py"), "--gaps"],
+      { cwd: ROOT, input: readFileSync(SCHEMA_SEAL, "utf8"), encoding: "utf8" }));
+  } catch (e) { return fail([`gate:db-schema — could not check migrations (schema_digest.py --gaps):\n${errText(e).slice(-600)}`]); }
+  if (gaps.length) return fail([
+    "db-schema — a column added to an existing table has no migration (a fresh install gets it; a deployment never does):",
+    ...gaps.map((e) => "   " + e),
+  ]);
   if (errs.length) return fail([
     "db-schema — the DB schema drifted from schema.seal.json. A deliberate change needs `pnpm seal:schema` + human review (lane:schema):",
     ...errs.map((e) => "   " + e),
@@ -1585,16 +1625,23 @@ function gateDbSchema() {
 // under-count for real. Filename heuristics have counterexamples in this tree; both are checked.
 const _isTestPath = (p) => /(^|\/)tests?\//.test(p) || /(^|\/)test_[^/]*$/.test(p);
 
+// Services whose source does not sit under `services/<name>/` but which hold a Postgres connection
+// of their own: agent-api's control plane opens one DB-API connection for the session store
+// (ADR-0048, `pg8000.dbapi.connect`).
+const DB_SERVICE_ROOTS = [["core/agent/control_plane/", "agent-api"]];
+
 function _dbHoldingServices() {
   let out;
   try {
-    out = execSync("git grep --untracked -l create_async_engine -- 'core/*.py'", { cwd: ROOT }).toString();
+    out = execSync("git grep --untracked -lE 'create_async_engine|pg8000\\.dbapi\\.connect' -- 'core/*.py'", { cwd: ROOT }).toString();
   } catch { return new Set(); }  // grep exit 1 = no matches
   const svcs = new Set();
   for (const path of out.split("\n")) {
     if (!path || _isTestPath(path)) continue;
     const m = path.match(/\/services\/([^/]+)\//);
-    if (m) svcs.add(m[1]);
+    if (m) { svcs.add(m[1]); continue; }
+    const root = DB_SERVICE_ROOTS.find(([prefix]) => path.startsWith(prefix));
+    if (root) svcs.add(root[1]);
   }
   return svcs;
 }
@@ -1728,7 +1775,25 @@ function gateDomainDoors() {
   return true;
 }
 
-const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity, "vendor-payload": gateVendorPayload, "ui-design": gateUiDesign };
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, "docs-links": gateDocsLinks, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity, "vendor-payload": gateVendorPayload, "ui-design": gateUiDesign };
+// gate:docs-links — every docs page compiles and every internal link resolves. `mint broken-links`
+// EXITS 0 when it cannot parse a page ("Unable to parse <page> - … Expected a closing tag for <ext>")
+// and then checks nothing, so its exit code alone proved nothing: a page with a bare `<placeholder>`
+// in prose shipped with an empty body. This gate reads the output and fails on a parse error, on a
+// reported broken link, and on any run that does not end in the tool's own success line.
+function gateDocsLinks() {
+  const cwd = join(ROOT, "docs", "docs");
+  if (!existsSync(join(cwd, "docs.json"))) return fail(["gate:docs-links — docs/docs/docs.json not found"]);
+  try { JSON.parse(readFileSync(join(cwd, "docs.json"), "utf8")); }
+  catch (e) { return fail([`gate:docs-links — docs/docs/docs.json does not parse: ${e.message}`]); }
+  const r = spawnSync("npx", ["-y", `mint@${MINT_VERSION}`, "broken-links"], { cwd, encoding: "utf8", maxBuffer: 64 << 20 });
+  const out = `${r.stdout || ""}\n${r.stderr || ""}`.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+  const errs = judgeMintOutput(r.status, out);
+  if (errs.length) return fail(["gate:docs-links —", ...errs]);
+  console.log("  ✓ gate:docs-links — every docs page compiles and no link is broken");
+  return true;
+}
+
 // gate:fact-parity (P23 — one writer per fact) — the generalisation of the ONE control case in this
 // repository. `config_preflight.py` is vendored byte-identically into seven packages and has never
 // drifted, because check 2 of gate:config-contract fails the build on byte-inequality. Every other

@@ -8,7 +8,7 @@
       "type": "object",
       "required": ["platform", "native_id"],
       "properties": {
-        "platform": { "type": "string", "enum": ["google_meet", "zoom", "teams", "jitsi", "browser_session"] },
+        "platform": { "type": "string", "enum": ["google_meet", "zoom", "teams", "jitsi", "browser_session", "voice_note", "vexa_call"] },
         "native_id": { "type": "string" }
       }
     },
@@ -18,7 +18,11 @@
       "required": ["action", "meetings"],
       "properties": {
         "action": { "const": "subscribe" },
-        "meetings": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/MeetingRef" } }
+        "meetings": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/MeetingRef" } },
+        "streams": {
+          "type": "array", "minItems": 1, "items": { "enum": ["transcript", "signals"] },
+          "description": "optional, additive: which live streams to fan in. Absent = [\"transcript\"] (the 0.12 channels: transcript, meeting.status, chat_message). \"signals\" adds MeetingSignals for the row the authorize hop grants."
+        }
       }
     },
     "UnsubscribeRequest": {
@@ -111,6 +115,109 @@
         "type": { "const": "chat_message" },
         "sender": { "type": ["string", "null"] },
         "text": { "type": "string" }
+      }
+    },
+    "MeetingSignals": {
+      "type": "object",
+      "description": "server → client: transcript signals for one meeting, from the redis stream sig:meeting:{id} (the signals service is its one writer), sent to a subscription that named streams:[\"signals\"] — the newest entries first, then each new batch live. Same access as the transcript: the row the authorize hop granted. Each annotation scores one transcript segment against the meeting's listening brief: scores = {label: 0..1}, words = {word: significance 0..1}.",
+      "required": ["type", "meeting", "annotations"],
+      "properties": {
+        "type": { "const": "meeting.signals" },
+        "meeting": {
+          "type": "object", "required": ["id", "platform", "native_id"],
+          "properties": { "id": { "type": "string" }, "platform": { "type": "string" }, "native_id": { "type": "string" } }
+        },
+        "annotations": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["id", "segment_id", "scores", "words"],
+            "properties": {
+              "id": { "type": "string", "description": "the stream entry id (a reconnect drops what it already has)" },
+              "segment_id": { "type": "string" },
+              "scores": { "type": "object", "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 } },
+              "words": { "type": "object", "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 } },
+              "model": { "type": "string" },
+              "brief_version": { "type": "integer" },
+              "at": { "type": "number" }
+            }
+          }
+        }
+      }
+    },
+    "Notice": {
+      "type": "object",
+      "description": "one stored notification row (#1783): who did what to which object, the text composed from those two names only, never content; `actions` are what it offers now (accept/decline a workspace invite, join/decline a call, open) and `state` what the person did with it (accepted, declined, joined).",
+      "required": ["id", "kind", "actor", "object", "text", "created", "read"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "enum": ["chat_added", "chat_shared", "chat_mentioned", "workspace_invited", "workspace_added", "invite_accepted", "invite_declined", "workspace_joined_via_link", "routine_posted", "call_started", "agent", "meeting_shared", "bot_scheduled", "bot_joined", "access_requested"] },
+        "actor": { "type": "object", "required": ["id"], "properties": { "id": { "type": "string" }, "name": { "type": "string" } } },
+        "object": { "type": "object", "required": ["kind", "id"], "properties": { "kind": { "enum": ["chat", "workspace", "meeting", "record", "invite", "page", "none"] }, "id": { "type": "string" }, "name": { "type": "string" }, "url": { "type": "string" } } },
+        "text": { "type": "string" },
+        "created": { "type": "number" },
+        "read": { "type": "boolean" },
+        "actions": { "type": "array", "items": { "enum": ["accept", "decline", "join", "open"] } },
+        "state": { "enum": ["accepted", "declined", "joined"] }
+      }
+    },
+    "Notification": {
+      "type": "object",
+      "description": "server → client: something that happened to this person (#1783), forwarded from u:{user_id}:notifications — they were added to a chat or one was shared with them, mentioned, invited or added to a workspace, their invite was accepted or declined, a call started or a routine posted a run in a chat they are in, their own agent posted one line with `notify` (kind agent), a meeting was shared with them, or a bot was scheduled for or joined their meeting. The text names the actor and the object only, never content. Also stored: a client reads the unread ones on load (GET /agent/notifications).",
+      "required": ["type", "notification"],
+      "properties": {
+        "type": { "const": "notification" },
+        "notification": { "$ref": "#/$defs/Notice" }
+      }
+    },
+    "NotificationUpdate": {
+      "type": "object",
+      "description": "server → client: the person acted on a notification in some tab (POST /agent/notifications/act) — the row as it now is (read, its `state`, the `actions` it still offers) and the unread count; every tab replaces its copy.",
+      "required": ["type", "notification", "unread"],
+      "properties": {
+        "type": { "const": "notification.update" },
+        "notification": { "$ref": "#/$defs/Notice" },
+        "unread": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "NotificationRead": {
+      "type": "object",
+      "description": "server → client: this person marked notifications read in some tab; every other tab updates its unread count (u:{user_id}:notifications).",
+      "required": ["type", "unread"],
+      "properties": {
+        "type": { "const": "notification.read" },
+        "unread": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "Rail": {
+      "type": "object",
+      "description": "server → client: a chat joined (added) or left (removed) this person's rail (u:{user_id}:notifications). Not stored: it tells the rail to read the chat list again now.",
+      "required": ["type", "change", "session"],
+      "properties": {
+        "type": { "const": "rail" },
+        "change": { "enum": ["added", "removed"] },
+        "session": { "type": "string" }
+      }
+    },
+    "HomeItem": {
+      "type": "object",
+      "description": "server → client: an item on this person's new-chat home moved (u:{user_id}:notifications, #1783) — prepared, live, replied, done… with the chat or page the work lives in. Not stored as a frame: the open home patches that card in place; a terminal state (replied, done) takes it off.",
+      "required": ["type", "item", "state"],
+      "properties": {
+        "type": { "const": "home.item" },
+        "item": { "type": "string" },
+        "state": { "enum": ["acted", "in_progress", "prepared", "live", "ended", "follow_up", "replied", "done"] },
+        "chat": { "type": "string" },
+        "page": { "type": "string" },
+        "at": { "type": "number" }
+      }
+    },
+    "HomeComposed": {
+      "type": "object",
+      "description": "server → client: a new home composition was appended for this person (u:{user_id}:notifications, #1783). The open home reads it again when the pointer is not on it, so nothing reorders under the cursor.",
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "const": "home.composed" },
+        "id": { "type": "string" }
       }
     },
     "Error": {

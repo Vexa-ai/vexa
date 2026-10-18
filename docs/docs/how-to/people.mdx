@@ -1,0 +1,55 @@
+---
+title: "People to follow up and to know"
+description: "Who you owe a reply or a follow-up, and who is worth knowing — on the home and from the agent."
+---
+
+There is no separate people screen. People appear where a chat starts: **on the home**, ranked
+into the same stream as everything else, and **from the agent** when you ask "who should I follow
+up with?" or "who should I know here?". Clicking a person, or typing `@name` in the composer,
+starts the chat with them.
+
+**Follow up** — people you owe something, most overdue first:
+
+- a direct chat where a colleague wrote and you have not answered (after four hours);
+- a meeting that ended in the last two weeks with no follow-up recorded;
+- something your Vexa is waiting on you for that names a person, such as unanswered mail a routine
+  found;
+- a contact going quiet: someone you usually meet every few days or weeks, now past twice their
+  usual gap (and at least two weeks).
+
+Each card names the person, why, and the evidence, with **Continue chat** (the chat you already
+share) or **Draft follow-up**, and the card's own snooze and dismiss (*Done already*).
+
+**Discover** — people worth knowing:
+
+- colleagues you share a workspace with but have never messaged;
+- people in two or more of your meetings who have no person page yet, with **Create page**;
+- an introduction between two of your contacts who each met you about the same subject recently
+  and have never met each other, with **Draft intro**.
+
+Ask the agent and it uses the tools `people_followups` and `people_discover`, which return the same
+items the home shows.
+
+## How it works
+
+- Both lists are computed by agent-api from what it already holds: your direct chats, the
+  meetings in meeting-api (their invitation attendees), your queue (`whats_waiting`), the person
+  pages on your desk (`kg/entities/person/`), and the workspace rosters you are in. No model is
+  called; the ranking is how overdue an item is against that person's own cadence, or how much the
+  two of you already share.
+- On the home they are one candidate source among the others; the home's ranking, snooze and
+  dismiss apply to them unchanged. A direct chat that moved in the last two days is already a home
+  card of its own, so an unanswered one joins as a follow-up only after that.
+- A follow-up, a reply or an introduction is only ever drafted. Sending is your explicit go on the
+  final text, every time.
+
+## Why it complies
+
+- **Your organisation only.** Colleagues are the people in the workspaces you are a member of —
+  never the whole user list, never another organisation's users. A colleague whose roster entry
+  sets `"discoverable": false` is never suggested to others.
+- **Your data only.** External people come from your own meetings and your own queue. Whether an
+  external address belongs to a Vexa user is never looked up.
+- **Names and titles, not content.** Items carry names, meeting titles and counts — never a
+  message, a transcript line or page text.
+- **No send without your go.** Every draft lists its commitments and waits for you.

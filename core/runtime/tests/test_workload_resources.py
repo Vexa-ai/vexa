@@ -245,7 +245,7 @@ def test_k8s_start_submits_the_pod_via_create_stdin(monkeypatch):
 # ── C3 · the two profiles are sized independently from the runtime's env ─────────────────────
 def test_default_registry_sizes_the_two_profiles_independently(monkeypatch):
     monkeypatch.setenv("BROWSER_IMAGE", "bot:test")
-    monkeypatch.setenv("AGENT_IMAGE", "vexaai/v012-agent-api:test")
+    monkeypatch.setenv("AGENT_IMAGE", "vexaai/vexa-agent-api:test")
     monkeypatch.setenv("RUNTIME_BOT_CPU", "1")
     monkeypatch.setenv("RUNTIME_BOT_MEMORY_MB", "2048")
     monkeypatch.setenv("RUNTIME_AGENT_WORKER_CPU", "0.5")
@@ -258,7 +258,7 @@ def test_default_registry_sizes_the_two_profiles_independently(monkeypatch):
 def test_default_registry_emits_no_resources_when_unset(monkeypatch):
     """The chart's unset case: no env ⇒ no profile default ⇒ the optional contract is preserved."""
     monkeypatch.setenv("BROWSER_IMAGE", "bot:test")
-    monkeypatch.setenv("AGENT_IMAGE", "vexaai/v012-agent-api:test")
+    monkeypatch.setenv("AGENT_IMAGE", "vexaai/vexa-agent-api:test")
     for key in ("RUNTIME_BOT_CPU", "RUNTIME_BOT_MEMORY_MB",
                 "RUNTIME_AGENT_WORKER_CPU", "RUNTIME_AGENT_WORKER_MEMORY_MB"):
         monkeypatch.delenv(key, raising=False)
