@@ -6,6 +6,7 @@
  *  calm accent pill, never red: being added to a chat is news, not an alarm.
  *
  *  The live half (toasts, the socket) is `notifications.ts`; this only draws the shared store. */
+import { PersonChip } from "./shell2/PersonChip";
 import { RefChip } from "../ui-kit/RefChip";
 import { splitRefs } from "../ui-kit/universalRefs";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -22,13 +23,26 @@ export function useNotifications() {
   return useSyncExternalStore(subscribeNotifications, getNotifications, getNotifications);
 }
 
+/** A notice's sentence: its ACTOR a live person reference (UI 7mm — a click opens them), every
+ *  reference in it a badge, never raw syntax. */
+export function NoticeText({ n }: { n: Notice }) {
+  const text = readableSentence(n.text);
+  const who = (n.actor?.name ?? "").trim();
+  const badges = (s: string) => splitRefs(s).map((x, i) => x.kind === "text" ? x.text : <RefChip key={i} text={x.text} />);
+  if (who && text.startsWith(who)) {
+    const id = n.actor?.id ?? "";
+    return <><PersonChip person={{ name: who, ...(id.includes("@") ? { email: id } : id ? { subject: id } : {}) }} />{badges(text.slice(who.length))}</>;
+  }
+  return <>{badges(text)}</>;
+}
+
 export function NoticeRow({ n, onOpen, onActed }: { n: Notice; onOpen: (n: Notice) => void; onActed?: () => void }) {
   return (
     <div className="vx-notice-item" data-notice-item={n.id}>
       <button type="button" className="vx-notice-row" data-notice={n.kind} data-unread={n.read ? undefined : ""}
         onClick={() => onOpen(n)}>
         <span aria-hidden className="vx-notice-dot" />
-        <span className="vx-notice-text">{splitRefs(readableSentence(n.text)).map((x, i) => x.kind === "text" ? x.text : <RefChip key={i} text={x.text} />)}</span>
+        <span className="vx-notice-text"><NoticeText n={n} /></span>
         <span className="vx-notice-when">{relTime(n.created * 1000)}</span>
       </button>
       <NoticeActs n={n} onDone={onActed} />

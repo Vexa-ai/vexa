@@ -413,7 +413,7 @@ VALID_PLATFORMS = ("google_meet", "teams", "zoom", "jitsi", "voice_note", "vexa_
 
 
 def with_meeting_refs(result: Any) -> Any:
-    """Each meeting carries its FULL REFERENCE, ``ref: [[meeting:<id>|<title>]]`` (founder 2026-10-18:
+    """Each meeting carries its FULL REFERENCE, ``ref: [[meeting:<id>]]`` (founder 2026-10-18:
     "we need full reference for everything" — many meetings share a title). The agent copies it into
     its reply, where it renders as a badge with the meeting's time; the id is never read out."""
     rows = result.get("meetings") if isinstance(result, dict) else None
@@ -421,9 +421,8 @@ def with_meeting_refs(result: Any) -> Any:
         return result
     for m in rows:
         if isinstance(m, dict) and m.get("id") is not None and "ref" not in m:
-            data = m.get("data") if isinstance(m.get("data"), dict) else {}
-            title = str(data.get("title") or m.get("title") or "").replace("|", " ").replace("]", " ").strip()
-            m["ref"] = f"[[meeting:{m['id']}|{title}]]" if title else f"[[meeting:{m['id']}]]"
+            # ONE FORMAT, NO NAME INSIDE: the badge resolves the title for whoever reads it
+            m["ref"] = f"[[meeting:{m['id']}]]"
     return result
 
 def _validate_platform(tool: str, platform: Optional[str], *,

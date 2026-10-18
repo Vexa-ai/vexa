@@ -67,8 +67,9 @@ def build(**d) -> APIRouter:
                 rows = people_directory.mentionable(wsr.root, owner, _index) if wsr is not None else []
         except Exception:  # noqa: BLE001 — an unreadable directory names nobody
             return []
-        # D35: one row per Person (the picker and the People strip), "2 accounts" when several logins
-        return person_resolution.group_people(rows, persons)
+        # D35: one row per Person (the picker and the People strip), "2 accounts" when several logins;
+        # V4: each named by the Person's own name, never by a raw handle
+        return people_directory.with_person_names(person_resolution.group_people(rows, persons), persons)
 
     def _self_email(owner: str, hint: str = "") -> str:
         if hint:

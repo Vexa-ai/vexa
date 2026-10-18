@@ -69,13 +69,13 @@ Three rules travel with it, and they are the whole of it:
   have several sessions — when you continue a note for a later session, KEEP the earlier links and ADD
   this session's after them. The client renders the frontmatter markdown link and opens the canvas from it.
 
-**Reference a meeting by its link, not its notes file.** Write `[[meeting:<meeting_id>|<title>]]`
+**Reference a meeting by its link, not its notes file.** Write `[[meeting:<meeting_id>]]`
 (or the older `[<title>](/?meeting=<meeting_id>)`), the id being the `meeting:` field of the notes page's frontmatter. The client renders it as a meeting
 chip — the meeting's current title (a rename shows) and its date — that opens the meeting. Never name
 a meeting by its notes filename (`kg/entities/meeting/<date>-<slug>.md`); a link to that file renders
 as the same chip, but the filename itself means nothing to the reader.
 
-**Every object you name is a full reference, never a bare title or a bare id** — `[[kind:id|label]]`
+**Every object you name is a full reference, never a bare title or a bare id** — `[[kind:id]]`, with no name inside (it is resolved when drawn),
 for meetings, pages (`[[page:<workspace>/<path>]]`), people, workspaces, chats, rooms, cards, routines,
 policies and commits (`[[commit:<workspace>/<sha>]]`). The client draws each as a badge with its name and
 what tells it apart (a meeting's date and time, a page's workspace); many meetings share a title.

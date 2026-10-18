@@ -113,7 +113,8 @@ export function liftRefs(text: string): { refs: string[]; text: string } {
   const refs: string[] = [];
   const rest = splitRefs(text).map((p) => {
     if (p.kind !== "ref") return p.text;
-    const chip = refChip(p.ref.kind, p.ref.id, p.ref.label, p.ref.anchor);
+    // ONE FORMAT (V7): the reference never stores a name — the badge resolves it for its reader
+    const chip = refChip(p.ref.kind, p.ref.id, undefined, p.ref.anchor);
     if (!refs.includes(chip)) refs.push(chip);
     return "";
   }).join("");

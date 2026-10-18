@@ -14,7 +14,7 @@ def test_every_meeting_row_carries_its_reference():
         {"id": 204, "ref": "kept"},
     ]})
     refs = [m["ref"] for m in out["meetings"]]
-    assert refs == ["[[meeting:201|Call with Vexa]]", "[[meeting:202|Call   with   Vexa]]", "[[meeting:203]]", "kept"]
+    assert refs == ["[[meeting:201]]", "[[meeting:202]]", "[[meeting:203]]", "kept"]
 
 
 def test_anything_else_passes_through():

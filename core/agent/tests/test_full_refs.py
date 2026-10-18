@@ -89,7 +89,7 @@ def test_a_commit_is_its_message_and_short_hash_and_opens_its_review():
 def test_a_referenced_meeting_grounds_on_exactly_that_meeting():
     access = lambda mid: ROWS.get(int(mid)) if mid.isdigit() and int(mid) in (201, 202) else None  # noqa: E731
     block = _referenced_meetings_block("[[meeting:202]] what was decided?", access, None)
-    assert "[[meeting:202|Call with Vexa]]" in block
+    assert "[[meeting:202]] — Call with Vexa" in block
     assert "2026-10-18T15:26:00Z" in block and "Bruno" in block
     # the other meeting with the same title is not in it
     assert "2026-10-11" not in block and "Ana" not in block and "meeting:201" not in block
@@ -117,10 +117,11 @@ def test_the_agent_is_told_to_write_every_object_as_a_full_reference():
     from worker import engine
 
     rule = engine.kg_links_preamble()
-    for form in ("[[meeting:<row id>|<title>]]", "[[page:<workspace-slug>/<path>]]", "[[person:<email>|<name>]]",
+    for form in ("[[meeting:<row id>]]", "[[page:<workspace-slug>/<path>]]", "[[person:<email>]]",
                  "[[commit:<workspace-slug>/<sha>]]", "[[policy:<workspace-slug>/<path>]]"):
         assert form in rule
     assert "never a bare title" in rule
+    assert "never write `|<title>` into a reference" in rule
 
 
 def test_git_commit_at_reads_one_commit_subject(tmp_path):

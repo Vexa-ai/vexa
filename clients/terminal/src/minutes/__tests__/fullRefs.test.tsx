@@ -166,7 +166,9 @@ describe("copy reference: from a profile, into the chat, as a badge", () => {
   });
 
   it("a person is referenced by address, never by bare name", () => {
-    expect(personRef({ email: "maya@example.com", subject: "u7", name: "Maya Lind" })).toBe("[[person:maya@example.com|Maya Lind]]");
-    expect(personRef({ subject: "u7", name: "Maya" })).toBe("[[person:u7|Maya]]");
+    expect(personRef({ email: "maya@example.com", subject: "u7", name: "Maya Lind" })).toBe("[[person:maya@example.com]]");
+    expect(personRef({ subject: "u7", name: "Maya" })).toBe("[[person:u7]]");
+    // a labelled reference pasted in is stored in the one format, without the name
+    expect(liftRefs("[[meeting:202|Call with Vexa]] hi").refs).toEqual(["[[meeting:202]]"]);
   });
 });

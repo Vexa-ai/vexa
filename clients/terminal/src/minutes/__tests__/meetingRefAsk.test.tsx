@@ -18,7 +18,8 @@ describe("referenceInChat on a meeting", () => {
     referenceInChat("the venue holds 120", { meeting: "142", at: "2026-10-16T10:12:00.000Z", speaker: "Valeriia" }, { label: "Venue & sponsors check-in" });
     const d = asks.at(-1)!;
     expect(d.mode).toBe("draft");
-    expect(String(d.prompt)).toContain("[[meeting:142|Venue & sponsors check-in]]");
+    expect(String(d.prompt)).toContain("[[meeting:142]]");
+    expect(String(d.prompt)).not.toContain("|");   // one format: the name is never stored in the reference
     expect(String(d.prompt)).toContain("> the venue holds 120");
     expect(String(d.prompt)).toMatch(/Valeriia/);
     expect(sessions).toEqual([]);

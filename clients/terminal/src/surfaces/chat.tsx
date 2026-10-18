@@ -1,4 +1,5 @@
 "use client";
+import { PersonRefSlot } from "../ui-kit/PersonRefSlot";
 import { privateApproval, type PrivateApproval } from "./approvalCard";
 import { Identity } from "../ui-kit/Identity";
 import { useRoom } from "./roomState";
@@ -2758,9 +2759,10 @@ function PersonLine({ who, mine, repeat, seq, children }: { who: string; mine: b
   return (
     <div data-turn={repeat ? "repeat" : "line"} className={mine ? "vx-turn vx-turn-mine" : "vx-turn vx-turn-other"} {...press}>
       {mine ? <div data-turn-who="" className="vx-sr">{who}</div>
-        : <Identity kind="person" id={who} name={who} size={24} className="vx-turn-avatar" />}
+        : <PersonRefSlot person={{ name: who }}><Identity kind="person" id={who} name={who} size={24} className="vx-turn-avatar" /></PersonRefSlot>}
       <div className="vx-turn-other-body">
-        {!mine && <div data-turn-who="" className="vx-turn-who">{who}</div>}
+        {/* the author is a live reference: a click opens them, a hover shows who they are (UI 7mm) */}
+        {!mine && <div data-turn-who="" className="vx-turn-who"><PersonRefSlot person={{ name: who }} /></div>}
         <div className={mine ? "vx-bubble vx-bubble-mine" : "vx-bubble vx-bubble-other"}>{children}</div>
       </div>
     </div>

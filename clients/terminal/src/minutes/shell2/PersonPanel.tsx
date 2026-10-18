@@ -39,9 +39,9 @@ const LINK_NAME = { linkedin: "LinkedIn", github: "GitHub", x: "X", website: "We
 /** Find the person a panel address names: by key, then account, address or name. */
 /** A person's full reference: their address, else their account id — never their bare name. */
 export function personRef(p: { email?: string; subject?: string | null; name?: string }): string {
+  // one format, no name inside (resolved when the badge is drawn)
   const id = p.email || p.subject || "";
-  const label = String(p.name ?? "").replace(/[|\]]/g, " ").trim();
-  return id ? `[[person:${id}${label ? `|${label}` : ""}]]` : label;
+  return id ? `[[person:${id}]]` : String(p.name ?? "").trim();
 }
 
 export function findPerson(people: Person[], key: string): Person | null {

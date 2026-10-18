@@ -3,6 +3,7 @@
  *  workspace — calls live now (Join), the next call within a day (Prepare), and the first things
  *  that wait on you. One read model (E1) feeds it and the status cards, so they always agree. Nothing
  *  is shown when nothing is happening. */
+import { useLiveMeetings } from "../../../surfaces/liveMeetings";
 import { Video } from "lucide-react";
 import type { WorkspaceItem } from "../../../platform/desktop";
 import { CALL_START_EVENT, OPEN_MEETING_EVENT } from "../../../platform/events";
@@ -17,7 +18,6 @@ import { openCentre } from "../../shell2/centre";
 import { inboxCount } from "../../shell2/inbox";
 import { NowCards, useWaitingCount } from "../../cards";
 import { useEffect, useState } from "react";
-import { useLiveMeetings } from "../../../surfaces/liveMeetings";
 import { getCall } from "../../../surfaces/callsApi";
 import { OPEN_SESSION_EVENT } from "../../../platform/events";
 import { useActiveCall } from "../../callState";

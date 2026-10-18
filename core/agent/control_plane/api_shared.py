@@ -2152,7 +2152,7 @@ def _referenced_meetings_block(
     parts = ["## Meetings referenced in this message\n",
              "The person named these meetings by reference. Each reference is EXACTLY the meeting"
              " described below — never another meeting with the same title. Answer about that one; in"
-             " your reply write it as `[[meeting:<id>|<title>]]`.\n"]
+             " your reply write it as `[[meeting:<id>]]`.\n"]
     for mid in seen[:REFERENCED_MEETINGS_MAX]:
         row = None
         if meeting_access is not None and mid.isdigit():
@@ -2172,7 +2172,7 @@ def _referenced_meetings_block(
                             f"status {focus.get('status')}" if focus.get("status") else "") if b]
         people = data.get("participants") if isinstance(data.get("participants"), list) else []
         names = [str(p.get("name") if isinstance(p, dict) else p).strip() for p in people][:20]
-        lines = [f"### [[meeting:{mid}|{title}]]", " · ".join(bits)]
+        lines = [f"### [[meeting:{mid}]] — {title}", " · ".join(bits)]
         if any(names):
             lines.append("Participants: " + ", ".join(n for n in names if n))
         if focus.get("workspace_id"):

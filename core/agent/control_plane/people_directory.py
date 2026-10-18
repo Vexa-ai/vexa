@@ -10,6 +10,7 @@ The same answer is the gate on the add: a person added to a chat by id must be i
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -19,12 +20,56 @@ from control_plane import workspace_membership as membership_mod
 AGENTS = ("vexa",)
 
 
+def is_handle(name: str, record: dict) -> bool:
+    """A "name" that is really an id or a mailbox: the account's subject, a bare number, or the local
+    part of its own address (founder 2026-10-18: People showed "2280905", "evgeniagrani",
+    "marvin.hanke"). Such a value is never shown as a person's name."""
+    n = str(name or "").strip()
+    if not n:
+        return True
+    sub = str(record.get("subject") or "").strip()
+    local = str(record.get("email") or "").split("@", 1)[0].strip()
+    return n == sub or n.isdigit() or (bool(local) and n.lower() == local.lower()) or "@" in n
+
+
+def humanize_address(email: str) -> str:
+    """The last resort when nobody has given a name: the address's local part read as words
+    ("marvin.hanke" -> "Marvin Hanke"), never the raw handle. An address-free account gets ""."""
+    local = str(email or "").split("@", 1)[0].strip()
+    words = [w for w in re.split(r"[._+-]+", local) if w and not w.isdigit()]
+    return " ".join(w[:1].upper() + w[1:] for w in words)
+
+
 def _label(record: dict) -> str:
     name = str(record.get("name") or "").strip()
-    if name:
+    if name and not is_handle(name, record):
         return name
-    email = str(record.get("email") or "").strip()
-    return email.split("@", 1)[0] if email else ""
+    return humanize_address(str(record.get("email") or ""))
+
+
+def with_person_names(rows: list[dict], resolver) -> list[dict]:
+    """NAMES COME FROM THE PERSON (V4): the claimed CRM Person's ``display_name``, resolved per viewer
+    through Resolution's profile door (it answers only the person-owned half, under the directory
+    rule the caller already applied). A roster name is kept only when it is a name; an id, a number
+    or a mailbox handle is replaced by the address read as words — never shown raw."""
+    if not rows:
+        return rows
+    profiles: dict = {}
+    if resolver is not None and getattr(resolver, "enabled", False):
+        try:
+            profiles = resolver.profiles(rows) or {}
+        except Exception:  # noqa: BLE001 — no answer: roster names, tidied
+            profiles = {}
+    out = []
+    for row in rows:
+        r = dict(row)
+        named = str(((profiles.get(str(r.get("subject") or "")) or {}).get("display_name")) or "").strip()
+        if named:
+            r["name"] = named
+        elif is_handle(str(r.get("name") or ""), r):
+            r["name"] = humanize_address(str(r.get("email") or ""))
+        out.append(r)
+    return out
 
 
 def mentionable(root: Path, subject: str, index_list: Callable[[str], Iterable]) -> list[dict]:

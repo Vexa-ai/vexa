@@ -293,11 +293,11 @@ export function referenceInChat(selection: string, source: Record<string, unknow
   if (source.path) label = `[[page:${String(source.workspace || "personal")}/${String(source.path).replace(/^\/+/, "")}]]`;
   else {
     // A MEETING IS A TYPED CHIP (founder 2026-10-16), with who said it and when when known
-    const name = String(opts.label || `Meeting ${source.meeting}`).replace(/[|\]]/g, " ").trim();
     const at = typeof source.at === "string" && source.at ? new Date(source.at) : null;
     const when = at && !Number.isNaN(at.getTime()) ? at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
     const who = [source.speaker ? String(source.speaker) : "", when].filter(Boolean).join(", ");
-    label = `[[meeting:${source.meeting}|${name}]]${who ? `\n${who}` : ""}`;
+    // the name is resolved when the badge is drawn — never stored in the reference (V7)
+    label = `[[meeting:${source.meeting}]]${who ? `\n${who}` : ""}`;
   }
   window.dispatchEvent(new CustomEvent(ASK_CHAT_EVENT, { detail: {
     mode: "draft", reference: source, prompt: `${label}\n\n${quote}\n\n${opts.ask ? "Question: " : ""}`,
