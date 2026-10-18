@@ -18,12 +18,16 @@ same-origin server runtime (SSE relay, no CORS).
 | calls | agent-api | `GET/POST /api/routines`, `PATCH /api/routines/{name}/enabled`, `DELETE /api/routines/{id}` | list / create / enable·disable / delete a `routine.v1` cron job |
 | produces | agent-api | `POST /api/events` (→ `${AGENT_API}/events`) | an `event.v1` Event → a `unit.v1` Invocation → Dispatcher |
 | calls | meeting-api (via gateway) | `GET /meetings` + `WS /ws` (`u:{user}:meetings`) | the user's meetings (live + past); live status deltas over the socket (no poll) |
-| calls | agent-api | `GET /api/meeting/stream?meeting_id=&session_uid=` (SSE, `EventSource`) | live transcript + copilot output wire |
+| calls | agent-api | `GET /api/meeting/stream?meeting_id=&session_uid=` (SSE, `EventSource`) | the live transcript wire (raw segments + `retract`); nothing else rides it |
 | calls | meeting-api (via gateway) | `POST /bots`, `DELETE /bots/{platform}/{native}`, `PUT /meetings/{platform}/{native}/intent` | launch / stop a self-hosted meeting bot; schedule·cancel its scheduling intent |
 | calls | agent-api | `GET /api/workspace/{tree,file,git}?subject=` (git polled 5s) | workspace tree, file content, the agent's real git state |
 | consumes | browser | dockview workbench + surfaces registry (`src/surfaces/index.tsx`) | LEFT lists, CENTER tab-kinds, RIGHT context-kinds, `/`-skill commands |
 
 All upstreams resolve to `AGENT_API_URL` (default `http://127.0.0.1:18100`).
+
+`server.mjs` refuses to start without a `NEXTAUTH_SECRET` of at least 32 bytes that is not published
+in this repository — for `npm run dev`, put one in `.env.local` (`openssl rand -hex 32`). See
+[`src/app/api/auth/README.md`](src/app/api/auth/README.md).
 
 ## Contracts
 

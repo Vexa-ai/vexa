@@ -1,6 +1,6 @@
 "use client";
 import { createContext, createElement, useContext, useMemo, useSyncExternalStore, type ReactNode } from "react";
-import { useService } from "../platform";
+import { useService, ASK_CHAT_EVENT } from "../platform";
 import { LayoutServiceId, type LayoutService } from "../workbench/layout";
 import type { HarnessActions } from "./types";
 
@@ -55,37 +55,32 @@ function postMeetingTurn(prompt: string, session: string): void {
   });
 }
 
-export const ASK_CHAT_EVENT = "vexa:terminal:ask-chat";
+// MINUTES cold-start: the reader arrived through a meeting door — greet from the meeting, not
+// from a blank slate, and ask the one thing that shapes the workspace: their role.
+// ── DELETED 2026-09-02 (F36): presetInFlight / setPresetInFlight / presetOwnsOpening ─────────
+//
+//  A `?ask=` preset and the cached phase greeting were two writers of one first turn, and the
+//  greeting always won — it was instant, the preset had to fetch `_global/asks/<name>.md` first. So
+//  a preset claimed the opening synchronously and the seed listener stood down when it saw the flag.
+//
+//  There is no second writer any more: the greeting is deleted, and a chat with no preset simply
+//  opens empty. A flag with no reader is a flag that goes stale in silence, so it goes with the
+//  listener that read it rather than staying as a call every arrival still has to remember to make.
 
-// Clicking an entity link in chat (a [[wikilink]] or a kg/entities/*.md path) dispatches this; the
-// workbench resolves it to a file and opens the doc (revealing the center if in chat-only mode).
-export const OPEN_ENTITY_EVENT = "vexa:terminal:open-entity";
-
-// ASCII sentinel prefixed to the onboarding grounding (robust against bundler/linter normalization). The
-// agent ignores the bracketed tag; the chat uses it to recognize an onboarding turn (filter a pure
-// kickoff, compact the grounding off a real reply, keep it out of the session title).
-export const ONBOARDING_KICKOFF_MARK = "[onboarding-kickoff]";
-
-// Onboarding uses a CACHED first turn (no slow LLM round-trip): the gate seeds this canned agent greeting
-// instantly, then arms the chat so the user's FIRST reply carries the discovery-loop grounding.
-export const ONBOARDING_SEED_EVENT = "vexa:terminal:onboarding-seed";
-export const ONBOARDING_GREETING = "👋 I'm your knowledge agent. This is **your workspace** — I'll help you build a living memory of the people, companies, and meetings in your world, and keep it useful during and between calls. To get started, **what's your name?** (or paste your **LinkedIn URL**, or name + company, and I'll take it from there.)";
-// Separates the (hidden) grounding from the user's actual reply, so the reply renders alone on reload.
-export const ONBOARDING_REPLY_SEP = "\n\n[reply]\n";
-export const ONBOARDING_GROUNDING = ONBOARDING_KICKOFF_MARK + [
-  "Read these workspace files before answering (use the Read tool): onboarding.md, CLAUDE.md",
-  "",
-  "I'm a new user replying to onboarding. Follow the discovery-loop playbook in onboarding.md.",
-  "Record my NAME in `_system/identity.md` first (the light, always-available identity reference) —",
-  "that's the one fact you must not leave blank; keep asking until you have it.",
-  "If I gave a LinkedIn URL, use it as a SEARCH ANCHOR (search me from it; do NOT try to fetch the",
-  "login-walled page). Research my public footprint autonomously and DEEPLY with web search (never",
-  "bounce back a fact you can find online) and scaffold my entities from scratch. SAVE ME as the single",
-  "person node with `self: true` in this workspace (store my LinkedIn URL on it) — my full profile lives",
-  "there, the light reference in _system links to it. Keep `README.md` current as the workspace dashboard.",
-  "Only ask me about the genuine gaps you can't resolve yourself — saying why each matters. Run at least",
-  "two discovery cycles. My details:",
-].join("\n");
+export const MINUTES_ONBOARDING_GREETING = "👋 I kept the minutes of your meeting — they're in this workspace, with the full transcript. Ask me anything about it. To make this space yours: **what's your role at your organisation?** One line is enough — it decides what I pay attention to for you.";
+// Pre-meeting variant: the person arrived from the CONFIRM email — nothing has happened yet, so
+// the conversation is a BRIEFING, and the role question rides inside it.
+export const MINUTES_PREP_GREETING = "👋 I'm booked for your meeting. Brief me so it lands well: **what do you want out of it?** Anything I should read, anyone who matters, decisions you expect — one or two lines is plenty. (And what's your role? It decides what I pay attention to for you.)";
+// ── DELETED 2026-09-02 (F36): MINUTES_HOME_GREETING, ONBOARDING_GREETING, onboardingGreeting() ──
+//
+//  The home greeting opened every chat that was not about a meeting — "I'm your agent here … paste a
+//  meeting link … tell me who you are and what you're accountable for". The founder met it in a chat
+//  he had never created and said plainly that he did not like the text. It was a DEFAULT: nothing in
+//  anyone's state produced it, it simply filled a blank page.
+//
+//  The two lines below survive because a MEETING produces them — the room is about something, and
+//  what it says is true of that thing. Everything that greeted a chat about nothing is gone, and so
+//  is the chooser that picked between them, because the seed that called it is gone too.
 
 function makeActions(layout?: LayoutService): HarnessActions {
   return {

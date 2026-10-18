@@ -414,7 +414,7 @@ function Timeline({ items, empty = "No events", loading = false }: { items?: { i
   );
 }
 
-function Transcript({ segments, liveCaption, empty = "Waiting for transcript", loading = false }: { segments?: TranscriptSegment[]; liveCaption?: string; empty?: string } & Loadable) {
+function Transcript({ segments, liveCaption, empty = "Nothing said yet", loading = false }: { segments?: TranscriptSegment[]; liveCaption?: string; empty?: string } & Loadable) {
   const safeSegments = normalizeTranscriptSegments(segments);
   const caption = toText(liveCaption);
   if (loading) return <Panel><Skeleton lines={6} /></Panel>;

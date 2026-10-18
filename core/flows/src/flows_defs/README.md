@@ -14,7 +14,14 @@ anything when the **agent domain is not deployed** (PRD decisions 40.6/40.7).
 | | Flows | With no agent domain |
 |---|---|---|
 | `production.py` | `invite_intake` · `post_meeting` · `live_meeting` | they still run — the invite is accepted, the bot joins, the meeting is recorded, and the agent-reaching steps answer `agent:not_present` |
-| `production_agent.py` | `meeting_prep` · `email_chat` · `desk_setup` · `desk_claim` | **not registered at all** — a conversation with an agent and two cards on a desk have nothing to degrade to |
+| `production_agent.py` | `meeting_prep` · `email_chat` · `desk_setup` · `desk_claim` · `workspace_invite` | **not registered at all** — a conversation with an agent, two cards on a desk and a fact only agent-api publishes have nothing to degrade to |
+
+The split is by **whether the flow still does anything**, and `workspace_invite`
+(Vexa-ai/vexa#1632) is the one that shows the property is not "does the step touch agent-api".
+Its step reaches no domain at all — it renders a template and sends one notification — so it
+declares no `needs=` and would run perfectly well in a deployment with no agents. It belongs on
+the right-hand row anyway, on `desk_setup`'s ground: the PRODUCING domain is the agent domain, so
+where there is no agent-api the fact is never published and the flow would exist to do nothing.
 
 `production.build()` calls `production_agent.build()` last, and only when
 `flows_steps.common.domain_present("agent")` — the same predicate the engine consults for every

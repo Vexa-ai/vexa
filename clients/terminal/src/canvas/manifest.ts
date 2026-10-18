@@ -12,7 +12,7 @@ const { segments, liveCaption } = useTranscript({ by?: "time" | "speaker", windo
 
 const meeting = useMeeting()
 // { meeting: { id, nativeId?, title, status?, startedAt?, participants?, docs? }, transcript, entities, cards, diagnostics, metrics, sections }
-// diagnostics: { liveConnected?, ended?, reconnects?, lastEventAt?, lastTranscriptAt?, issues?: { kind, message, status?, at?, model?, stage? }[] }
+// diagnostics: { liveConnected?, ended?, reconnects?, lastEventAt?, lastTranscriptAt?, issues?: { kind, message, status?, at? }[] }
 
 const speakers = useSpeakers()
 // { name: string; segments: number; talkMs: number; talkPct: number }[]
@@ -22,11 +22,6 @@ const entities = useEntities({ kind?: "person" | "company" | "product" | "number
 
 const signals = useSignals()
 // EntityItem[] with kind: "signal", derived from meeting cards.
-
-const notes = useMeetingNotes()
-// MeetingNote[]: { id, ts?, speaker?, text, tags } — attributed FIRST-PERSON notes: the speaker's own
-// words shortened into clean paragraphs, folded as turns complete, with explicit entity tags inline. Processed
-// notes and local fallback transcript lines are already merged into this one body.
 
 const docs = useMeetingDocs()
 // { brief: { path, present, title? }, report: { path, present, title? } }
@@ -101,7 +96,7 @@ Hot reload never swaps blindly. New \`views/meeting.tsx\` source must pass valid
 ## Rules
 
 - Default-export one React component. It receives no props.
-- You may use \`React\`, \`ui\`, \`useMeeting\`, \`useTranscript\`, \`useSpeakers\`, \`useEntities\`, \`useSignals\`, \`useMeetingDocs\`, \`useMeetingNotes\`, \`useActions\`, \`actions\`, \`useState\`, \`useMemo\`, and \`useEffect\`.
+- You may use \`React\`, \`ui\`, \`useMeeting\`, \`useTranscript\`, \`useSpeakers\`, \`useEntities\`, \`useSignals\`, \`useMeetingDocs\`, \`useActions\`, \`actions\`, \`useState\`, \`useMemo\`, and \`useEffect\`.
 - Imports are unnecessary. If present, imports may only reference React or the harness modules.
 - No \`fetch\`, \`XMLHttpRequest\`, \`WebSocket\`, \`eval\`, \`Function\`, dynamic \`import()\`, \`document\`, \`window\`, \`globalThis\`, \`localStorage\`, or \`dangerouslySetInnerHTML\`.
 - No arbitrary DOM styling. The kit is theme-locked to terminal CSS variables.

@@ -13,6 +13,10 @@ vi.mock("next/headers", () => ({
 
 import { POST as login } from "../login/route";
 
+/** admin-api's admission answer (Vexa-ai/vexa#1783) — these cases are about what the route does once
+ *  an address IS admitted; the refusals are in signinAllowList.test.ts. */
+const admitted = () => new Response(JSON.stringify({ admitted: true, why: "allow-list" }), { status: 200 });
+
 function makeReq(body: unknown): import("next/server").NextRequest {
   return { json: async () => body } as unknown as import("next/server").NextRequest;
 }
@@ -21,11 +25,16 @@ beforeEach(() => {
   setCookies = [];
   process.env.VEXA_ADMIN_API_URL = "http://admin.test";
   process.env.VEXA_ADMIN_API_KEY = "admin-secret";
+  process.env.VEXA_INTERNAL_API_SECRET = "internal-secret";
+  // The route is DEVELOPMENT-ONLY (see the production test at the bottom); vitest runs with
+  // NODE_ENV=test, so the dev behaviour has to be asked for explicitly.
+  vi.stubEnv("NODE_ENV", "development");
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("/api/auth/login — direct email login against a mocked admin-api", () => {
@@ -35,6 +44,7 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         calls.push(`${init?.method || "GET"} ${url}`);
+        if (url.includes("/internal/signin-admission")) return admitted();
         if (url.includes("/admin/users/email/")) {
           return new Response(JSON.stringify({ id: 42, email: "test-a@b.com", name: "A" }), { status: 200 });
         }
@@ -58,16 +68,26 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
     const tok = setCookies.find((c) => c.name === "vexa-token");
     const info = setCookies.find((c) => c.name === "vexa-user-info");
     expect(tok?.value).toBe("minted-tok");
-    expect(JSON.parse(info!.value)).toEqual({ email: "test-a@b.com", name: "A" });
+    // `id` is part of the info cookie and is LOAD-BEARING: the minutes seams
+    // (api/minutes/ensure-meeting, api/minutes/person-state) read the user id straight out of it.
+    expect(JSON.parse(info!.value)).toEqual({ id: 42, email: "test-a@b.com", name: "A" });
     expect((tok?.opts as { httpOnly?: boolean })?.httpOnly).toBe(true);
   });
 
-  it("rejects a non-test email (debug-only path) without calling admin-api", async () => {
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
+  it("accepts ANY address in development — the old `includes(\"test\")` filter is gone", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/internal/signin-admission")) return admitted();
+        if (url.includes("/admin/users/email/")) {
+          return new Response(JSON.stringify({ id: 9, email: "real@company.com" }), { status: 200 });
+        }
+        if (url.includes("/tokens")) return new Response(JSON.stringify({ token: "tok-9" }), { status: 200 });
+        return new Response("nope", { status: 500 });
+      }),
+    );
     const res = await login(makeReq({ email: "real@company.com" }));
-    expect(res.status).toBe(403);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
   });
 
   it("creates the user when admin-api returns 404, then mints a token", async () => {
@@ -76,6 +96,7 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         calls.push(`${init?.method || "GET"} ${url}`);
+        if (url.includes("/internal/signin-admission")) return admitted();
         if (url.includes("/admin/users/email/")) return new Response("not found", { status: 404 });
         if (init?.method === "POST" && url.endsWith("/admin/users")) {
           return new Response(JSON.stringify({ id: 7, email: "test-new@b.com" }), { status: 201 });
@@ -96,6 +117,14 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
     expect(provision!.startsWith("POST")).toBe(true);
   });
 
+  it("rejects an address longer than 254 characters without calling admin-api", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const res = await login(makeReq({ email: `${"a".repeat(243)}@example.com` }));
+    expect(res.status).toBe(400);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("rejects a malformed email without calling admin-api", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
@@ -103,4 +132,26 @@ describe("/api/auth/login — direct email login against a mocked admin-api", ()
     expect(res.status).toBe(400);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+});
+
+describe("/api/auth/login — DEAD in production", () => {
+  /** The bypass this route used to be: any address containing "test" got a real session on a
+   *  production deploy, and in minutes mode ANY address did. Production sign-in is now the emailed
+   *  magic link (request-link → redeem) or OAuth; this route may not mint a session outside
+   *  development, and must refuse before it reads the body or touches admin-api. */
+  for (const env of ["production", "test"]) {
+    it(`refuses every address under NODE_ENV=${env}, body unread`, async () => {
+      vi.stubEnv("NODE_ENV", env);
+      vi.stubEnv("NEXT_PUBLIC_TERMINAL_MODE", "minutes"); // the old minutes-mode "any address" hole
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+
+      for (const email of ["test-a@b.com", "anyone@anywhere.com"]) {
+        const res = await login(makeReq({ email }));
+        expect(res.status).toBe(403);
+      }
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(setCookies).toHaveLength(0);
+    });
+  }
 });

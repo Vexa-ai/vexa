@@ -158,9 +158,23 @@ INTERNAL_SECRET_PLACEHOLDERS = ("vexa-internal-secret", "lite-internal-secret", 
                                 "change-me", "CHANGE-ME", "default", "secret")
 #: ONE REFUSAL LIST, NOT ONE PER CREDENTIAL. The note above is about a secret with three names
 #: having three refusal lists that drift; a second list for a second key is the same defect one
-#: step removed. `require_admin_key` reads this, so a placeholder learned here is refused
-#: everywhere in this brick at once.
+#: step removed. A placeholder learned here is refused everywhere in this brick at once:
+#: `require_admin_key` reads ADMIN_KEY_PLACEHOLDERS below, which carries every member of this list.
 PLACEHOLDER_SECRETS = INTERNAL_SECRET_PLACEHOLDERS
+#: The admin key's refusal list: the list above (fact placeholder-secrets holds it to the base) plus
+#: every default and example this repository has shipped for the admin key itself — compose's
+#: `dev-admin-token`, the chart's `CHANGE_ME`, the CI, harness and test values, the old docs'
+#: placeholders. admin-api, meeting-api and the config.v1 declaration of VEXA_FLOWS_ADMIN_KEY refuse
+#: the same list (fact admin-token-placeholders).
+ADMIN_KEY_PLACEHOLDERS = ("vexa-internal-secret", "lite-internal-secret", "changeme", "change-me",
+                          "CHANGE-ME", "default", "secret", "dev-admin-token", "CHANGE_ME",
+                          "ci-admin-token", "gate-admin-token", "test-admin-token", "test-admin-token-t3",
+                          "vexa-admin-token", "vexa-admin-token-2024", "token", "strong-random-token",
+                          "your-secret", "your-secret-token", "your-secret-admin-token",
+                          "your-secure-admin-token", "your-admin-token", "your-admin-api-token",
+                          "your_admin_api_token", "your_admin_api_key", "your_admin_api_key_here",
+                          "YOUR_ADMIN_KEY", "YOUR_ADMIN_API_KEY", "YOUR_ADMIN_TOKEN_FROM_DOTENV",
+                          "admin-secret", "admin-key", "test-admin-key")
 
 
 def require_admin_key() -> str:
@@ -183,7 +197,7 @@ def require_admin_key() -> str:
             "VEXA_FLOWS_ADMIN_KEY is unset — refusing to call admin-api rather than trying a "
             "placeholder. It mints accounts and full-scope tokens; give it a real value the same "
             f"way {INTERNAL_SECRET_ENV} gets one, from a mode-600 file the start script exports.")
-    if key in PLACEHOLDER_SECRETS:
+    if key in ADMIN_KEY_PLACEHOLDERS:
         raise RuntimeError(f"VEXA_FLOWS_ADMIN_KEY is the placeholder {key!r} — refusing to use it. "
                            "That literal is published in this repository, so it authenticates "
                            "nobody and everybody.")
@@ -192,6 +206,30 @@ def require_admin_key() -> str:
 
 def _admin_headers() -> dict:
     return {"X-Admin-API-Key": require_admin_key()}
+
+
+def internal_secret() -> str:
+    """The internal-tier secret AS THE ENVIRONMENT CARRIES IT, under whichever name set it — "" when
+    nothing did, and never a refusal.
+
+    THE REFUSAL IS `require_internal_secret`'s and stays there. This is the READ, for the one kind
+    of caller that has to resolve the name without refusing on it: a module that must be IMPORTABLE
+    outside a deployment (`flows_integrations.flows_api`, Vexa-ai/vexa#1629 — the release's identity
+    probe imports it inside the image with no environment at all). A second copy of the name
+    resolution in that module would drift the day the legacy spelling is removed, so there is one
+    and this is it.
+    """
+    key = (os.environ.get(INTERNAL_SECRET_ENV) or "").strip()
+    if key:
+        return key
+    for legacy in INTERNAL_SECRET_ENV_DEPRECATED:
+        key = (os.environ.get(legacy) or "").strip()
+        if key:
+            print(f"WARNING: {legacy} is DEPRECATED — rename it to {INTERNAL_SECRET_ENV}, the "
+                  f"one name the whole internal tier uses. Honoured this release, removed next.",
+                  file=sys.stderr)
+            return key
+    return ""
 
 
 def require_internal_secret() -> str:
@@ -214,15 +252,7 @@ def require_internal_secret() -> str:
     that missed `vexa-internal-secret` was a refusal list written from imagination rather than from
     the compose file it was defending against.
     """
-    key = (os.environ.get(INTERNAL_SECRET_ENV) or "").strip()
-    if not key:
-        for legacy in INTERNAL_SECRET_ENV_DEPRECATED:
-            key = (os.environ.get(legacy) or "").strip()
-            if key:
-                print(f"WARNING: {legacy} is DEPRECATED — rename it to {INTERNAL_SECRET_ENV}, the "
-                      f"one name the whole internal tier uses. Honoured this release, removed next.",
-                      file=sys.stderr)
-                break
+    key = internal_secret()
     if not key:
         raise RuntimeError(
             f"{INTERNAL_SECRET_ENV} is unset — flows refuses to start rather than run with no "
@@ -396,6 +426,23 @@ def ensure_platform_user(email: str) -> str:
     return str(u["id"])
 
 
+def address_for_uid(uid: str) -> str:
+    """This platform user's own email address, or "" if the id does not resolve. NEVER creates.
+
+    The reverse of `platform_user_id`: `ensure_user` mints a uid FROM an organiser's address, on
+    the assumption that every meeting starts as a calendar invite naming one. An AD HOC meeting
+    (`POST /bots`, or the MCP tool, with no calendar invite) has no organiser at all —
+    meeting-api's `meeting.completed` publishes only `{admitted_by, completion_reason, meeting_id,
+    native, platform, uid}` (`meeting_api.events.meeting_completed_refs`), because the person who
+    dispatched the bot IS `uid`, by definition, and nothing else names them. A step that needs an
+    address to mail to — every send in this file, and `mint_scaffold`'s `who` refuses anything
+    without an "@" — resolves that address here rather than assuming `refs["organizer"]` exists.
+    """
+    code, u = http("GET", f"{_door('VEXA_FLOWS_ADMIN_API_URL')}/admin/users/{_q(str(uid), safe='')}",
+                   _admin_headers())
+    return str(u["email"]) if code == 200 and isinstance(u, dict) and u.get("email") else ""
+
+
 _KEY_CACHE: dict = {}
 
 
@@ -448,7 +495,7 @@ def ws_file(uid: str, path: str, slug: Optional[str] = None) -> Optional[str]:
     # forges a second query parameter on an internal service (R-B14).
     q = f"&slug={_q(slug, safe='')}" if slug else ""
     code, body = http("GET", f"{agent_door()}/api/workspace/file?path={_q(path, safe='')}{q}",
-                      {"X-User-Id": uid})
+                      {"X-User-Id": uid, "X-Internal-Secret": require_internal_secret()})
     return body.get("content") if code == 200 and isinstance(body, dict) else None
 
 

@@ -17,10 +17,21 @@ import { createServer } from "node:http";
 import nextEnv from "@next/env";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
+import { authSecretStartupError } from "./src/app/api/auth/authSecret.mjs";
+import { stampClientAddress, trustedProxies } from "./src/app/api/auth/clientAddress.mjs";
+import { isImageOptimizerPath, refuseImageOptimizer } from "./src/app/api/imageOptimizer.mjs";
 
 const dev = process.env.NODE_ENV !== "production";
 const { loadEnvConfig } = nextEnv;
 loadEnvConfig(process.cwd(), dev);
+
+// The signing secret is checked before anything else starts: an unset, short, or published
+// NEXTAUTH_SECRET signs nothing anybody should trust, so the terminal does not run with one.
+const secretError = authSecretStartupError(process.env);
+if (secretError) {
+  console.error(`[terminal] refusing to start: ${secretError}`);
+  process.exit(1);
+}
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const hostname = process.env.HOST || "0.0.0.0";
@@ -69,7 +80,14 @@ const handle = app.getRequestHandler();
 
 await app.prepare();
 
+// The client address routes may trust (rate limits): the TCP peer, or the address a proxy appended
+// to X-Forwarded-For when the peer is loopback or a TERMINAL_TRUSTED_PROXIES address or range.
+const TRUSTED_PROXIES = trustedProxies(process.env);
+
 const server = createServer((req, res) => {
+  stampClientAddress(req, TRUSTED_PROXIES);
+  // The optimizer is off; answered here so Next never sets up its cache for it (src/app/api/imageOptimizer.mjs).
+  if (isImageOptimizerPath(req.url)) return refuseImageOptimizer(res);
   Promise.resolve(handle(req, res)).catch((err) => {
     logError("request handler failed", err);
     sendProxyError(res);

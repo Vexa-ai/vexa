@@ -220,7 +220,7 @@ def test_an_unresolvable_subject_fails_closed():
 
 _ENV = {"VEXA_FLOWS_API_KEY": "test-flows-key",
         "INTERNAL_API_SECRET": "test-internal-secret",
-        "VEXA_FLOWS_DB_URL": "postgresql+psycopg://queue-notices:unreachable@127.0.0.1:1/flows"}
+        "VEXA_FLOWS_DB_URL": "postgresql+pg8000://queue-notices:unreachable@127.0.0.1:1/flows"}
 
 
 @pytest.fixture(scope="module")

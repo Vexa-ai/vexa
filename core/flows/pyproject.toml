@@ -1,26 +1,35 @@
 [project]
 name = "vexa-flows"
 version = "0.12.0"
-description = "The reaction engine: a fact arrives, a flow reacts to it, and every step is a row somebody can look at. The engine itself is stdlib-pure (gate:isolation-py holds it there); the dependencies below belong to the EDGES the suite exercises in-process, never to `src/flows/`."
+description = "The reaction engine — durable product workflows as two Postgres tables and one leased worker loop. A fact enters as a sealed envelope, becomes exactly one reaction row, and every touch of the outside world leaves an effect_receipt."
 requires-python = ">=3.11"
+# The ENGINE (src/flows/) imports stdlib only — that is its isolation law, checked by
+# scripts/check-isolation.js. These are what the steps, the flow definitions and the HTTP
+# integrations need, and exactly what core/flows/Dockerfile installs (`uv sync --frozen --no-dev`
+# from uv.lock).
+# pg8000 is not optional and not lazy: `postgres_db` (flows/db.py) builds its engine on a
+# `postgresql+pg8000://` URL, and SQLAlchemy imports the DBAPI right there — so a tree without it
+# cannot even IMPORT flows_api, which is how gate:health found the same gap for the driver before
+# it. pg8000 is BSD-3-Clause and pure Python; the LGPL drivers (psycopg, psycopg2) stay out of the
+# image. Under-declaring a dependency the image installs is the same defect as declaring one nothing
+# uses; both make the manifest a guess. httpx was the latter and is gone — flows reaches services
+# over `urllib` (flows_steps/common).
 dependencies = [
-    "pytest>=8",
-    # The suite still opens NO SOCKET. These are here because the offline tests exercise the two
-    # edges in-process: `TestClient` mounts `flows_integrations.flows_api` (FastAPI + pydantic) on
-    # the ASGI app directly, and `test_schema_drift.py` regenerates `schema.sql` from the
-    # SQLAlchemy models that are its SSOT — without them it SKIPS, which makes the drift gate
-    # silently absent rather than green. `httpx` is `fastapi.testclient`'s transport. `uvicorn` is
-    # deliberately NOT here: nothing imports it outside `flows_api`'s `__main__`.
-    "fastapi>=0.115",
-    "pydantic>=2",
-    "sqlalchemy>=2",
-    # IMPORTED, never connected. `postgres_db` is lazy about the CONNECTION but `create_engine`
-    # resolves the DBAPI eagerly, so composing `flows_api` at all needs the driver present — which
-    # is the property `tests/test_health.py` is about: the app builds against an unreachable DSN
-    # with no database running anywhere. Same spelling as the image's own `pip install`.
-    "psycopg[binary]>=3",
-    "httpx>=0.27",
+    "fastapi>=0.110,<1",
+    "uvicorn[standard]>=0.29,<1",
+    "pydantic>=2,<3",
+    "sqlalchemy>=2,<3",
+    "pg8000>=1.31.5,<2",
 ]
+
+[dependency-groups]
+# The offline suite: the whole failure matrix runs on stdlib sqlite with a FakeClock and fake
+# steps, zero domains attached (README). Postgres is the production dialect, never a test one —
+# so this group adds pytest and nothing else.
+# `httpx2` is what starlette's TestClient imports on the version this lean dependency set
+# resolves to — tests/test_health.py drives the app through it. TEST-ONLY: the Dockerfile
+# installs the runtime deps above and never this group, so the shipped image is unchanged.
+dev = ["pytest>=8,<10", "httpx2"]
 
 [tool.uv]
 package = false

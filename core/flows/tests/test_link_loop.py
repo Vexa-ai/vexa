@@ -14,7 +14,6 @@ import importlib
 import os
 from urllib.parse import parse_qs, urlparse
 
-import agent_half
 import flows_defs.production as production
 import flows_steps.common as common
 import flows_steps.mailtext as mailtext
@@ -22,6 +21,23 @@ import flows_steps.notify as notify_mod
 import flows_config
 import pytest
 from flows import Done, Reaction, Registry, StepCtx, StepError
+
+
+@pytest.fixture(autouse=True)
+def _person_settings_are_declared(monkeypatch):
+    """THIS TEST PROCESS HAS AN IDENTITY DOMAIN, the way `conftest` gives it an admin key — and for
+    the same reason, one door along.
+
+    `person_settings` used to answer the DEFAULTS on any failure, so every test in this file that
+    reached `setting()` without saying so got them from a swallowed exception: there is no identity
+    service here, `require_internal_secret` refuses, and the broad `except` turned that into "this
+    person prefers the defaults". 0.12.27 makes an unreachable identity RETRYABLE instead
+    (`SettingsUnavailable`), so a test standing on that swallow now fails — correctly. The suite
+    declares what a deployment declares. Tests that are ABOUT a preference still set their own;
+    this is the baseline underneath them."""
+    common.forget_person_settings()
+    monkeypatch.setattr(common, "person_settings", lambda uid: dict(common._SETTING_DEFAULTS))
+
 
 
 class FakeChannel:
@@ -106,26 +122,6 @@ def scaffolds(monkeypatch):
     fake = FakeScaffolds()
     monkeypatch.setattr(production, "mint_scaffold", fake)
     return fake
-
-
-@pytest.fixture(autouse=True)
-def _person_settings_are_declared(monkeypatch):
-    """THIS TEST PROCESS HAS AN IDENTITY DOMAIN, the way `conftest._admin_key_present` gives it an
-    admin key — and for the same reason, one door along.
-
-    `person_settings` used to answer the DEFAULTS on any failure, so every test in this file that
-    reached `setting()` without saying so got them from a swallowed exception: there is no identity
-    service here, `require_internal_secret` refuses, and the broad `except` turned that into "this
-    person prefers the defaults". That is a test standing on the very behaviour R-P7 removed — an
-    unconfigured read and an unreachable one answering the same thing as a real preference.
-
-    Now the read raises, so the suite declares what a deployment declares. The tests that are ABOUT
-    a preference still set their own (`monkeypatch.setattr(production, "setting", …)`); this is the
-    baseline underneath them.
-    """
-    common.forget_person_settings()
-    monkeypatch.setattr(common, "person_settings",
-                        lambda uid: dict(common._SETTING_DEFAULTS))
 
 
 @pytest.fixture(autouse=True)
@@ -229,7 +225,6 @@ def test_email_minutes_still_obeys_the_person_switch(monkeypatch):
     assert ch.sent == []
 
 
-@agent_half.required
 def test_prepare_meeting_sends_five_plain_lines_and_the_prep_link(monkeypatch, scaffolds):
     reg, ch = _rig()
     monkeypatch.setattr(production, "setting",
@@ -251,7 +246,6 @@ def test_prepare_meeting_sends_five_plain_lines_and_the_prep_link(monkeypatch, s
     assert len(notify_mod.compose(msg["body"], msg["link"]).strip().splitlines()) <= 5
 
 
-@agent_half.required
 def test_prepare_meeting_obeys_mail_prep(monkeypatch):
     reg, ch = _rig()
     monkeypatch.setattr(production, "setting",
@@ -262,7 +256,6 @@ def test_prepare_meeting_obeys_mail_prep(monkeypatch):
     assert ch.sent == []
 
 
-@agent_half.required
 def test_prepare_meeting_resolves_the_row_id_from_the_url(monkeypatch, scaffolds):
     """No meeting_id in refs — the step asks the platform which row this url is, because the
     terminal deeplink names a ROW, and an invite carries only the meeting url."""
@@ -292,15 +285,7 @@ def test_the_prep_fact_is_emitted_inside_invite_intake():
     # DECISION 29: three touches and no others — RSVP accept, the ack mail, the prepare mail.
     assert "spawn_onboardings" not in steps
     assert ("onboard_person", 1) not in reg.flows and ("onboard_group", 1) not in reg.flows
-    # THE CONSUMER OF THE FACT is `meeting_prep`, and it lives in the optional
-    # `flows_defs/production_agent.py` — so the emit above is asserted in every tree and the
-    # subscription only where the module is. A deployment with no agent half emits `meeting.upcoming`
-    # and nothing reacts to it, which is `admit()`'s documented zero-flow case and not a defect: the
-    # prepare touch IS an agent conversation, and there is nothing for it to degrade to.
-    if agent_half.PRESENT:
-        assert reg.get("meeting_prep", 1).on.name == "meeting.upcoming"
-    else:
-        assert not [n for (n, _v) in reg.flows if n in agent_half.FLOWS]
+    assert reg.get("meeting_prep", 1).on.name == "meeting.upcoming"
     emitted = []
     ctx = _ctx({"ics_uid": "u-1", "organizer": "a@b.test"},
                {"ensure_user": {"uid": "7"}})
@@ -488,6 +473,7 @@ def _mint_rig(monkeypatch, status, body):
         calls.append({"method": method, "url": url, "headers": headers, "body": payload})
         return status, body
 
+    monkeypatch.delenv("INTERNAL_API_SECRET", raising=False)
     monkeypatch.setenv("VEXA_INTERNAL_SECRET", "internal-tier-secret-for-tests")
     monkeypatch.setattr(common, "http", fake_http)
     return calls

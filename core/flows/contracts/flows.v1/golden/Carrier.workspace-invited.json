@@ -1,0 +1,19 @@
+{
+  "event": "workspace.invited",
+  "owner": "agent",
+  "published_by": "private",
+  "cardinality": "once_per_occurrence",
+  "refs": [
+    "uid",
+    "email",
+    "workspace",
+    "workspace_name",
+    "role",
+    "role_sentence",
+    "inviter",
+    "link",
+    "expires_at"
+  ],
+  "source_event_id": "invite-<workspace>-<invite_id> — keyed to the INVITE, not to the person and not to the pair: a redelivery dedupes at the flows intake, so one invite can never mail twice, while a second invite to the same address (a re-invite after an expiry, or a different role) is a second occurrence and mails again, which is what a person pressing the button a second time means",
+  "description": "Somebody added a member to a workspace and that member is not on this instance; triggers `workspace_invite`, whose one step mails them the link. Vexa-ai/vexa#1632, founder on the front page's own control: \"this add member should just ask chat to do that with mcp, asking their emails etc.\" — membership is a conversation, so the agent asks for the address and the role, confirms in one sentence, mints the invite the existing route mints, and hands this fact over. PUBLISHED ONLY FOR AN EXTERNAL ADDRESS: an invitee who already has an account here is given the link in the chat that invited them and NO fact is published at all, so the consumer never has to ask whether the recipient is one of ours and must never grow that question — the account lookup happens once, at the producer, where it already had to happen. WHY THE MAIL LEG LIVES IN FLOWS AND NOT IN AGENT-API: `flows_steps/notify` is where this deployment's outbound channel is chosen (SMTP or Microsoft Graph, one env key) and `mailtext` is where the words live as a file an admin edits rather than a string in a service; a sender in agent-api would be a second channel to configure and a second copy of the wording to keep in step. THIS IS THE CASE THE GOLDEN PINS — a `once_per_occurrence` carrier with NINE refs, correctly carrying no `stamp`: there is no durable per-subject record behind it and none is wanted, because a second invite to the same address is a second fact and not a duplicate. NOT PUBLISHED FROM THIS TREE (`published_by: private`), on the same terms as `desk.unscaffolded` and `claim.proposed`: the route that mints the invite lives in the agent-api control plane, which a cut without the agent domain does not carry. The consumer half is real and stays — `workspace_invite`, in the optional `flows_defs/production_agent.py`, registers only where the agent domain is deployed, and a deployment that mounts that domain receives the fact and mails it. `uid` is the INVITER's subject, not the invitee's, because the invitee has none here and the mail template's `{{company}}` and `{{visibility}}` are read from `_global` through a uid this instance knows."
+}

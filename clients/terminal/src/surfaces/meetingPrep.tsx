@@ -10,7 +10,7 @@
  *  Once the row leaves the intent statuses the row click routes to the live meeting tab instead. */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { registerTab, type TabProps } from "../contributions";
-import { useService } from "../platform";
+import { useService, ASK_CHAT_EVENT } from "../platform";
 import { LayoutServiceId } from "../workbench/layout";
 import { Icon } from "../ui-kit";
 import { MdxDoc } from "../ui-kit/MdxDoc";
@@ -26,7 +26,6 @@ import { createSharedWorkspace, listSharedMemberships, listWorkspaceTree, mintIn
 import { findBriefNote, isExampleNote } from "./briefNote";
 import { manageTabDescriptor } from "./workspaceManage";
 import { defaultBotName } from "./defaultBotName";
-import { ASK_CHAT_EVENT } from "../canvas/actions";
 
 const field = {
   fontSize: 12.5, padding: "6px 8px", background: "var(--panel)", border: "1px solid var(--line)",

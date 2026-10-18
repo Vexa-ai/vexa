@@ -14,7 +14,10 @@ const SCAN_DIRS = ["surfaces", "canvas", "workbench", "ui-kit", "app"];
 // Non-color or deliberate exceptions:
 //  - routines.tsx switch knob: a white knob is correct on both themes' green track.
 //  - AuthGate/App boxShadow rgba + icon assets are shadows/artwork, not palette colors.
-const HEX_ALLOWLIST = new Set(["surfaces/routines.tsx"]);
+//  - auth/redeem serves a STANDALONE HTML document (a refused sign-in link, rendered by a route
+//    handler outside the React tree). It has no access to globals.css, so it cannot reference the
+//    tokens; a self-contained page is the point — it must render even when the app shell does not.
+const HEX_ALLOWLIST = new Set(["surfaces/routines.tsx", "app/api/auth/redeem/route.ts"]);
 const HEX_RE = /(?:color|background|border(?:Color|Bottom|Top|Left|Right)?)\s*:\s*[^,;}]*#[0-9a-fA-F]{3,8}\b/;
 
 function* sourceFiles(dir: string): Generator<string> {

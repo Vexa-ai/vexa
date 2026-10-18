@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from . import policies
 from .common import ws_file
 
 # The fixed half. Not admin-editable, deliberately. The same sentence is in the MCP instructions
@@ -55,14 +56,30 @@ WORKSPACE_WORD = "desk"
 # WHO CAN SEE WHAT, in the founder's own words. It goes into the mails a person reads before they
 # have decided whether to keep anything here, because that is the only moment at which telling them
 # is a choice they still have. Not a disclaimer and not a legal line: three facts.
+#
+# ⚠ THIS CONSTANT IS NOW THE DEFAULT COMPOSITION, NOT THE SENTENCE ITSELF. What `render` fills
+# `{{visibility}}` with is DERIVED from `_global/POLICIES.md` — the three clauses come from
+# `agent_reads_desk`, the two retention rules and `data_statement`, and at the defaults they compose
+# to exactly these words. `test_policies.py` pins that equality, which is a stronger check than the
+# one it replaces: a rule change that would make this sentence untrue now changes the sentence
+# instead of leaving it standing. The literal stays here, spelled as it is, because
+# `scripts/parity.json`'s `visibility-sentence` fact anchors one of its four sites on this
+# assignment — the ledger is untouched by the derivation.
 VISIBILITY_SENTENCE = ("Vexa runs on this organisation's own servers; what you and your colleagues "
                        "keep in your workspaces is visible to the company's agents; recordings and "
                        "transcripts stay here.")
 
-# The company half's fallback. If this string ever reaches a recipient it is a BUG in the gate --
-# no mail should send at all while the company layer is missing -- so it is written to be
-# recognisable in an inbox rather than to read smoothly.
-COMPANY_UNSET = "this company (setup incomplete)"
+# The company half's fallback, for an instance whose `_global/README.md` names no company. That is
+# an ordinary state now, not a bug: nothing waits for the company layer to be written (founder
+# ruling 2026-10-08: "let it be empty with no data - it's fine"), so mail goes out without it and
+# this phrase is what a recipient reads in its place.
+COMPANY_UNSET = "this organisation"
+
+# The marker every seeded `_global` placeholder carries until somebody writes the file
+# (`core/agent/shared/marks.py` `UNWRITTEN_MARK`, spelled again here because flows' image carries no
+# `core/agent`; `gate:fact-parity` holds this copy to that one, fact `unwritten-marker`). The
+# seeded README's heading is the word "Company"; a mail must never introduce us as working there.
+UNWRITTEN_MARKER = "vexa:unwritten"
 
 _H1 = re.compile(r"^#\s+(.+?)\s*$")
 
@@ -70,6 +87,17 @@ _H1 = re.compile(r"^#\s+(.+?)\s*$")
 # and every one of them is his to rewrite by editing the matching file in `_global/mail/`. They say
 # the substance plainly and do not embellish it.
 DEFAULTS: dict[str, str] = {
+    # The prepare note. Goes to the ORGANISER and to people who are already users -- never to a
+    # stranger. A 50-person meeting must not produce 50 mails to people who have never heard of us,
+    # and a mail before the meeting has nothing yet to justify itself with.
+    # It is a TEMPLATE: substitutions only, no agent turn, and it must NOT claim a workspace was
+    # started for anyone -- nothing is built for a person who has not clicked.
+    "prepare": (
+        "subject: Prepare: {{title}}\n"
+        "---\n"
+        "{{title}} — {{when}}.\n"
+        "Want to walk in ready? Open the chat and I will pull together what we already know."
+    ),
     # The ATTENDEE follow-up head -- for most people in a large meeting this is the first time they
     # hear from Vexa at all, so it is the whole introduction: whose Vexa this is, what it does,
     # which meeting, who had it in the room, where the report now lives, and who can see it.
@@ -99,6 +127,47 @@ DEFAULTS: dict[str, str] = {
         "Vexa runs on this organisation's own servers; what you and your colleagues keep in your "
         "workspaces is visible to the company's agents; recordings and transcripts stay here.\n"
     ),
+    # The MINUTES head -- the same meeting, to someone who already knows what Vexa is. No
+    # introduction: repeating it to a returning person is the tell of a machine that does not know
+    # who it is talking to.
+    "minutes-head": (
+        "subject: Minutes: {{title}}\n"
+        "---\n"
+        "{{title}} — {{when}}. This is now on your {{workspace}}.\n"
+        "\n"
+        "{{visibility}}\n"
+    ),
+    # THE MEMBERSHIP INVITE (Vexa-ai/vexa#1632). Sent by `production_agent.mail_workspace_invite`
+    # to an address that is EXTERNAL to this instance -- somebody with an account here is handed
+    # the link in the chat instead -- so this is the SECOND stranger-facing template, and for a
+    # person invited before they have ever met us it is the whole introduction, exactly as
+    # `attendee-head` is for an attendee. That is why it carries {{company}} and {{service}}.
+    #
+    # {{visibility}} IS HERE ON PURPOSE and is the one line beyond "who invited you, to what, as
+    # what". Accepting a membership is the moment a person starts keeping things on a desk, and
+    # this mail is the last one they read before deciding to -- which is the founder's own test
+    # for where that sentence belongs (`behavior/mail/README.md`, "the only moment at which telling
+    # them is still a choice they can act on"). It is a TOKEN, not a literal, so it stays derived
+    # from this deployment's rules and adds no fourth copy of the sentence to keep in step.
+    #
+    # NO URL, and no token that could become one: `notify.compose` appends the link as its own
+    # last paragraph, and a link a template could write is a link anyone who can edit a file can
+    # point anywhere. `{{workspace_name}}` is the DISPLAY name; `{{workspace}}` is not used here
+    # and would not mean the slug if it were -- `render` fills it with WORKSPACE_WORD above.
+    #
+    # BYTE-FOR-BYTE `behavior/mail/workspace-invite.md`, on the same terms as `attendee-head`:
+    # `test_the_baked_defaults_match_the_files_in_behavior_mail` reads both, for every template.
+    "workspace-invite": (
+        "subject: {{inviter}} invited you to {{workspace_name}}\n"
+        "---\n"
+        "I am Vexa, the meeting assistant at {{company}}. {{service}}\n"
+        "\n"
+        "{{inviter}} invited you to {{workspace_name}} as a {{role}}. {{role_sentence}}\n"
+        "\n"
+        "{{visibility}}\n"
+        "\n"
+        "The link below is yours alone — it signs you in, so please do not forward it.\n"
+    ),
 }
 
 
@@ -116,10 +185,13 @@ def mailbox_address() -> str:
 def company_name(uid: str) -> str:
     """WHO THIS VEXA BELONGS TO, read from the company layer the admin wrote.
 
-    The first heading of `_global/README.md`, which the setup verb refuses to accept without.
-    Read per send rather than cached: an admin who corrects the company name expects the next mail
-    to carry the correction, and mail volume is nowhere near a rate at which this read matters."""
+    The first heading of `_global/README.md`, or `COMPANY_UNSET` when there is none — an empty
+    `_global`, or the seed's unwritten placeholder. Read per send rather than cached: an admin who
+    corrects the company name expects the next mail to carry the correction, and mail volume is
+    nowhere near a rate at which this read matters."""
     readme = ws_file(uid, "README.md", "_global") or ""
+    if UNWRITTEN_MARKER in readme:
+        return COMPANY_UNSET
     for line in readme.splitlines():
         if not line.strip():
             continue
@@ -159,8 +231,13 @@ def render(name: str, uid: str, values: Optional[dict] = None) -> tuple[str, str
     if raw is None:
         raise KeyError(f"no mail template named {name!r} (baked or in _global/mail/)")
     subject, body = _split(raw)
+    # `{{visibility}}` is DERIVED from this deployment's rules, not a constant — see
+    # `policies.visibility_sentence`. Read per send for the same reason the template is: an admin
+    # who changes a rule expects the next mail to say the new thing. A `_global` that cannot be
+    # read resolves to the defaults, which compose to `VISIBILITY_SENTENCE` above.
     fill = {"company": company_name(uid), "service": SERVICE_SENTENCE,
-            "visibility": VISIBILITY_SENTENCE, "workspace": WORKSPACE_WORD,
+            "visibility": policies.visibility_sentence(policies.read(uid)),
+            "workspace": WORKSPACE_WORD,
             "mailbox": mailbox_address(), **(values or {})}
     for key, val in fill.items():
         token = re.compile(r"\{\{\s*" + re.escape(key) + r"\s*\}\}")

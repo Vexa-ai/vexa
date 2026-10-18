@@ -48,7 +48,7 @@ async function renderOpenSwitcher(overrideActive?: Awaited<ReturnType<typeof api
   vi.mocked(api.readAttachedWorkspaces).mockResolvedValue(view);
   vi.mocked(api.readActiveSet).mockResolvedValue(overrideActive ?? activeSet);
   vi.mocked(api.swapWorkspace).mockResolvedValue(undefined as never);
-  vi.mocked(api.activateWorkspace).mockResolvedValue({ subject: "u1", slug: "seed", changed: true, cloned: false, nested: false });
+  vi.mocked(api.activateWorkspace).mockResolvedValue({ subject: "u1", slug: "seed", changed: true, cloned: false });
   vi.mocked(api.deactivateWorkspace).mockResolvedValue({ subject: "u1", slug: "seed", changed: true });
   vi.mocked(api.createWorkspace).mockResolvedValue({ subject: "u1", slug: "workspace-1", changed: true, added: true });
   const onSwapped = vi.fn();
@@ -221,7 +221,7 @@ describe("WorkspaceSwitcher — active set uses CHECKBOXES, not radio-style dots
     sessionStorage.setItem("ws.attach.open", "1");
     vi.mocked(api.readAttachedWorkspaces).mockResolvedValue({ ...view, baseline_hidden: true } as unknown as Awaited<ReturnType<typeof api.readAttachedWorkspaces>>);
     vi.mocked(api.readActiveSet).mockResolvedValue({ subject: "u1", active: [] } as unknown as Awaited<ReturnType<typeof api.readActiveSet>>);
-    vi.mocked(api.activateWorkspace).mockResolvedValue({ subject: "u1", slug: "leo", changed: true, cloned: false, nested: false });
+    vi.mocked(api.activateWorkspace).mockResolvedValue({ subject: "u1", slug: "leo", changed: true, cloned: false });
     render(withServices(<WorkspaceSwitcher onSwapped={vi.fn()} />));
     await screen.findByText("leo");
     const cb = rowCheckbox("leo");

@@ -8,3 +8,5 @@ never sends one (P20 scope). Path routing: meetings · transcripts · bots → t
 everything else (chat · sessions · routines · workspace · models) → the gateway's `/api/*`.
 
 One front door for the client (P6): surfaces fetch `/api/*`, never agent-api directly.
+
+`imageOptimizer.mjs` — read by `server.mjs`: the image optimizer is off, so `/_next/image` is answered with a 404 before Next sets up a cache it cannot write.

@@ -49,7 +49,7 @@ _PRIOR_ENV = {k: os.environ.get(k) for k in
 
 os.environ.setdefault("VEXA_FLOWS_API_KEY", "test-flows-key")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret")
-os.environ["VEXA_FLOWS_DB_URL"] = "postgresql+psycopg://health-gate:unreachable@127.0.0.1:1/flows"
+os.environ["VEXA_FLOWS_DB_URL"] = "postgresql+pg8000://health-gate:unreachable@127.0.0.1:1/flows"
 try:
     from flows_integrations import flows_api  # noqa: E402
 finally:
@@ -63,7 +63,7 @@ finally:
 #: without a test saying so — an assembly that quietly lost one still looks assembled. Written out
 #: rather than counted: a count is satisfied by a swap, and the set is the thing that matters.
 TOOLS = {"flows_list", "reactions_list", "reaction_signal", "timeline", "whats_waiting",
-        "report_friction", "friction_so_far"}
+        "report_friction", "friction_so_far", "flows_submit", "flow_lifecycle"}
 
 
 def _route(path: str, method: str = ""):

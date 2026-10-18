@@ -5,7 +5,7 @@ export interface Participant { name: string; role: string; initials: string }
 /** A calendar-invited human (data.attendees, prep-v3 slice b) — email is the identity key. */
 export interface Attendee { email: string; name?: string; partstat?: string }
 export interface ProposedAction { id: string; label: string; detail: string }
-export interface TranscriptLine { t: string; speaker: string; text: string }
+export interface TranscriptLine { offsetSeconds?: number; tsMs?: number; endMs?: number; t: string; speaker: string; text: string }
 export interface MeetingMock {
   id: string;
   session_uid?: string;       // set on a LIVE-backend meeting → the tab subscribes to the real Stream
@@ -33,6 +33,7 @@ export interface MeetingMock {
   transcript: TranscriptLine[];
   insights: { t: string; text: string }[];  // copilot notes, revealed alongside the transcript
   docs?: { workspace: string; path: string; title?: string; kind?: string }[];  // connected workspace docs (data.docs)
+  artifacts_deleted?: boolean;  // its owner deleted the transcript + recordings (data.artifact_deletion)
 }
 
 // ── meeting lifecycle phase (design-spec meeting-lifecycle-v2) ──────────────────────

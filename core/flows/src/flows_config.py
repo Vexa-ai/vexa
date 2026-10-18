@@ -142,12 +142,14 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     # at boot. Decision 18(c) holds either way: the `sops -d` vault path is gone from `emailx.creds`
     # regardless of class. VEXA_FLOWS_DB_URL went the OTHER way and is `required-explicit` — flows
     # without a database is not a deployment — so the `own_database` capability is gone.
-    # WHERE THESE CLASSES BITE, precisely: flows-api’s runtime entrypoint calls this module’s own
-    # `preflight`, which enforces DOOR_KEYS only , and nothing under core/flows/src imports the vendored
-    # `config_preflight`. But the SHARED validator’s semantics are asserted by flows’ own contract
-    # tests (tests/test_config_contract.py drives `cp.preflight` directly), so `required-explicit`
-    # here is NOT merely documentary: it is the difference between the no-agents profile reading
-    # as capabilities-off and reading as a service that cannot boot.
+    # WHERE THESE CLASSES BITE, precisely: flows-api’s runtime entrypoint calls BOTH validators —
+    # this module’s own `preflight`, which enforces DOOR_KEYS, and the vendored `config_preflight`,
+    # which enforces the whole `config.v1.json` declaration (F-D20 b). It did not always: this
+    # comment used to end *“and nothing under core/flows/src imports the vendored
+    # config_preflight”*, which was true, and meant flows-api’s own boot refusal was a hand-written
+    # placeholder list three literals shorter than the declared one — so the service booted on
+    # `vexa-internal-secret`. `required-explicit` here was never merely documentary; it is now not
+    # documentary anywhere.
     "VEXA_MAIL_ADDR": (
         "capability", None,
         "the address this deployment's mailbox answers as, and the identity every allow-list is "
@@ -161,11 +163,52 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "below): the deploy surface feeds it from a secret store, the service never reads one. "
         "Required WITHIN the capability, not at boot: `mailbox` is `all` mode, so a set address "
         "with no password is misconfigured rather than optional."),
-    "VEXA_MAIL_SMTP_HOST": ("capability", None, "unset = Gmail SMTP over SSL; set = a plain host (the mail double)."),
+    # THE DEPLOYMENT'S MAIL RELAY is one family of keys for every sender: the terminal mails its
+    # sign-in links through the same VEXA_MAIL_SMTP_* (clients/terminal/config.v1.json), so a relay
+    # an operator configures once has to work for both — TLS and AUTH included, not only plain.
+    "VEXA_MAIL_SMTP_HOST": ("capability", None, "unset = Gmail SMTP over SSL; set = the deployment's relay (plain, or TLS with _SECURE; AUTH with _USER + _PASSWORD) — the mail double in a rig."),
     "VEXA_MAIL_SMTP_PORT": ("defaulted", "25", "the port for a set VEXA_MAIL_SMTP_HOST."),
+    "VEXA_MAIL_SMTP_SECURE": ("defaulted", "0", "1 = implicit TLS to a set relay (a provider's :465)."),
+    "VEXA_MAIL_SMTP_TLS_INSECURE": ("defaulted", "0", "1 = skip the relay's certificate check under _SECURE; development only."),
+    "VEXA_MAIL_SMTP_USER": ("defaulted", "", "AUTH LOGIN user for a set relay; used only with VEXA_MAIL_SMTP_PASSWORD."),
+    "VEXA_MAIL_SMTP_PASSWORD": ("defaulted", "", "AUTH LOGIN password for a set relay, a P14 SECRET; used only with VEXA_MAIL_SMTP_USER."),
     "VEXA_MAILPIT_URL": ("defaulted", "http://127.0.0.1:8025", "mailpit's HTTP base, when the inbox is mailpit."),
     "VEXA_MAILPIT_LOOKBACK_S": ("defaulted", "300", "re-scan window behind the mailpit watermark."),
-    "VEXA_NOTIFY_CHANNEL": ("defaulted", "smtp", "where a notification goes; `smtp` is the only real one."),
+    "VEXA_NOTIFY_CHANNEL": ("defaulted", "smtp",
+                            "where a notification goes: `smtp` or `graph` (Microsoft 365 with "
+                            "SMTP AUTH off). Anything else is refused loudly."),
+    # ── Microsoft 365 / Graph mailbox ───────────────────────────────────────
+    #
+    # FOUR KEYS, ONE CAPABILITY, AND NONE OF THEM CAN BE `required-explicit` — which is a fact
+    # about the contract, not a preference. `required-explicit` refuses the BOOT when a key is
+    # unset, so declaring the client secret that way would stop every deployment that is not on
+    # Microsoft from starting. config.v1 has no way to say "required only when another key
+    # selects this path": the class is a property of the key, evaluated against the environment,
+    # and there is no conditional in the schema (`deploy/contracts/config.v1/README.md`).
+    #
+    # `capability` with mode=all is the closest true statement and it is not a weaker one: all
+    # four set = `configured`, none set = `not_configured` (this deployment is not on Microsoft),
+    # SOME set = `misconfigured`, surfaced by name on /health. The refusal for the selected path
+    # then happens where it can name the keys — `graph_client.GraphClient.__init__`, at the
+    # moment the mailbox is constructed, exactly as `emailx.creds` refuses a half-configured
+    # SMTP pair.
+    "VEXA_GRAPH_TENANT_ID": ("capability", None,
+                             "the Microsoft Entra tenant the mailbox lives in."),
+    "VEXA_GRAPH_CLIENT_ID": ("capability", None,
+                             "the app registration's application (client) id."),
+    "VEXA_GRAPH_CLIENT_SECRET": (
+        "capability", None,
+        "the app registration's client secret, and a P14 SECRET. Application permissions "
+        "Mail.ReadWrite + Mail.Send with admin consent, and an Exchange ApplicationAccessPolicy "
+        "scoping the app to the ONE mailbox — without that policy this credential reads every "
+        "mailbox in the tenant."),
+    "VEXA_GRAPH_MAILBOX": ("capability", None,
+                           "the mailbox address Graph polls and sends as (`vexa@customer.tld`)."),
+    "VEXA_GRAPH_BASE": ("defaulted", "https://graph.microsoft.com/v1.0",
+                        "the Graph endpoint — an in-code dial for a national cloud."),
+    "VEXA_GRAPH_LOGIN": ("defaulted", "https://login.microsoftonline.com",
+                         "the token endpoint — the same dial, same reason."),
+    "VEXA_GRAPH_PAGE_SIZE": ("defaulted", "25", "`$top` on the inbox listing."),
 
     # ── WHO THE MAILBOX WILL ACT FOR (R-B12) ────────────────────────────────
     "VEXA_FLOWS_MAIL_DOMAINS": (
@@ -211,7 +254,6 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "pack and starts without it reacts to none of that pack's events, silently, for as long "
         "as nobody looks."),
     "VEXA_JITSI_HOSTS": ("capability", None, "extra Jitsi hosts a meeting link may live on, beyond meet.jit.si."),
-    "VEXA_FLOWS_INSTANCE_GATE": ("capability", None, "forces the instance gate open or shut, for the rig."),
     "VEXA_FLOWS_USER_KEY_TTL_S": (
         "defaulted", "900",
         "how long a minted gateway token lives AND how long this process reuses it. One 20-person "
@@ -229,12 +271,13 @@ DECLARED: dict[str, tuple[str, object, str]] = {
 SECRETS = frozenset({
     "INTERNAL_API_SECRET", "VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SECRET",
     "VEXA_FLOWS_ADMIN_KEY", "VEXA_FLOWS_API_KEY", "VEXA_FLOWS_TIMELINE_KEY",
-    "VEXA_MAIL_APP_PASSWORD",
+    "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_PASSWORD",
 })
 
 #: The mail capability's keys, in one place so a half-declared control is visible as one.
 MAIL_KEYS = ("VEXA_MAIL_ADDR", "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_HOST",
-             "VEXA_MAIL_SMTP_PORT")
+             "VEXA_MAIL_SMTP_PORT", "VEXA_MAIL_SMTP_SECURE", "VEXA_MAIL_SMTP_TLS_INSECURE",
+             "VEXA_MAIL_SMTP_USER", "VEXA_MAIL_SMTP_PASSWORD")
 
 
 def _decl(name: str) -> tuple[str, object, str]:

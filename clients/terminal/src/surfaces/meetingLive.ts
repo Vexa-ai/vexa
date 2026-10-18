@@ -1,8 +1,9 @@
 "use client";
 /** meetingLive — one shared SSE subscription per live meeting, read by the transcript pane + the
- *  meeting tab. The backend `/api/meeting/stream` merges the transcript Stream + the copilot's output
- *  Stream (cards · the agent working) into one feed; we accumulate it into an observable store so
- *  several components render the same live state without each opening its own connection.
+ *  meeting tab. The backend `/api/meeting/stream` carries the meeting's transcript Stream and
+ *  nothing else (PRD decision 34: the product runs no model calls of its own beside the agent —
+ *  the cleaned/copilot lane is gone); we accumulate it into an observable store so several
+ *  components render the same live state without each opening its own connection.
  *
  *  Lifecycle: the connection is owned by an EFFECT (not opened during render) and refcounted across
  *  subscribers — so it opens exactly when a real `session_uid` is known, survives a load-order race
@@ -12,17 +13,12 @@ import { useEffect } from "react";
 import { useSyncExternalStore } from "react";
 
 export interface LiveSegment { speaker: string; text: string; t?: number; tsMs?: number; id?: string; completed?: boolean }
-export interface LiveCard { kind: string; title: string; body?: string }
-export interface LiveNote { id: string; speaker?: string; chapter?: string; text: string; t?: number; tsMs?: number; pass?: number; frozen?: boolean }
-export interface LiveModelError { stage?: string; model?: string; message: string; t?: number }
-export interface LiveStreamIssue { kind: "stream" | "model" | "parse"; message: string; status?: number; at: number; model?: string; stage?: string }
+/** A feed fault worth telling the reader about: the stream dropped, or an event would not parse.
+ *  `model` is deliberately NOT a kind — the product produces no model events any more. */
+export interface LiveStreamIssue { kind: "stream" | "parse"; message: string; status?: number; at: number }
 export interface LiveState {
   transcript: LiveSegment[];
-  notes: LiveNote[];
-  cards: LiveCard[];
-  errors: LiveModelError[];
   issues: LiveStreamIssue[];
-  note: string;            // the agent's latest message-delta (what the copilot is thinking)
   ended: boolean;
   connected: boolean;
   reconnects: number;
@@ -32,7 +28,7 @@ export interface LiveState {
 
 interface Entry { state: LiveState; subs: Set<() => void>; es?: EventSource; refs: number; retry?: number; watchdog?: number; startEpochMs?: number; lastEventId?: string }
 const stores = new Map<string, Entry>();
-const EMPTY: LiveState = { transcript: [], notes: [], cards: [], errors: [], issues: [], note: "", ended: false, connected: false, reconnects: 0 };
+const EMPTY: LiveState = { transcript: [], issues: [], ended: false, connected: false, reconnects: 0 };
 const RECONNECT_MS = 2500;
 // Active staleness watchdog. An EventSource can go SILENTLY half-open — the socket stays "open" but
 // no bytes flow, so `onerror` never fires and the existing reconnect path never triggers. We poll
@@ -63,7 +59,7 @@ function connect(e: Entry, meetingId: string, sessionUid: string): void {
   // recompute (mutating the arrays in place leaves their identity stable and the memo would go stale).
   const emit = () => {
     const s = e.state;
-    e.state = { ...s, transcript: [...s.transcript], notes: [...s.notes], cards: [...s.cards], errors: [...s.errors], issues: [...s.issues] };
+    e.state = { ...s, transcript: [...s.transcript], issues: [...s.issues] };
     e.subs.forEach((f) => f());
   };
   const addIssue = (issue: Omit<LiveStreamIssue, "at">) => {
@@ -120,7 +116,7 @@ function connect(e: Entry, meetingId: string, sessionUid: string): void {
   e.es = es;
   es.onopen = () => { e.state.connected = true; e.state.lastEventAt = Date.now(); armWatchdog(); emit(); };
   es.onmessage = (m) => {
-    let ev: { type?: string; speaker?: string; text?: string; t?: number; tsMs?: number; id?: string; completed?: boolean; card?: LiveCard; note?: LiveNote; error?: LiveModelError | string; message?: string; status?: number; segment_ids?: string[] };
+    let ev: { type?: string; speaker?: string; text?: string; t?: number; tsMs?: number; id?: string; completed?: boolean; message?: string; status?: number; segment_ids?: string[] };
     try { ev = JSON.parse(m.data); } catch {
       addIssue({ kind: "parse", message: "Could not parse meeting stream event" });
       emit();
@@ -140,26 +136,6 @@ function connect(e: Entry, meetingId: string, sessionUid: string): void {
       if (i >= 0) s.transcript[i] = seg; else s.transcript.push(seg);
       s.lastTranscriptAt = s.lastEventAt;
     }
-    else if (ev.type === "card" && ev.card) s.cards.push(ev.card);
-    else if (ev.type === "model-error") {
-      const raw = ev.error;
-      const err: LiveModelError = typeof raw === "string"
-        ? { message: raw }
-        : { stage: raw?.stage, model: raw?.model, message: raw?.message || "Model inference failed", t: ev.t };
-      s.errors.push(err);
-      if (s.errors.length > 20) s.errors.splice(0, s.errors.length - 20);
-      addIssue({ kind: "model", model: err.model, stage: err.stage, message: err.message });
-      s.cards.push({
-        kind: "warning",
-        title: "Model inference error",
-        body: [err.model, err.stage, err.message].filter(Boolean).join(" · "),
-      });
-    }
-    else if (ev.type === "note" && ev.note?.id && ev.note.text) {
-      const next: LiveNote = { id: ev.note.id, speaker: ev.note.speaker, chapter: ev.note.chapter, text: ev.note.text, t: ev.note.t, tsMs: absMs(ev.note.t), pass: ev.note.pass, frozen: ev.note.frozen };
-      const i = s.notes.findIndex((x) => x.id === next.id);
-      if (i >= 0) s.notes[i] = next; else s.notes.push(next);
-    }
     else if (ev.type === "retract" && Array.isArray(ev.segment_ids) && ev.segment_ids.length) {
       // The producer withdrew superseded/over-extended pending drafts (the mixed lane's full-replace
       // tail). Our egress is append-only + we upsert by id, so a retract is the ONLY way a draft leaves
@@ -168,10 +144,11 @@ function connect(e: Entry, meetingId: string, sessionUid: string): void {
       const kept = s.transcript.filter((x) => !x.id || !drop.has(x.id));
       if (kept.length !== s.transcript.length) s.transcript = kept; else return; // nothing here → don't churn
     }
-    else if (ev.type === "message-delta" && ev.text) s.note = ev.text;
     else if (ev.type === "stream-error") addIssue({ kind: "stream", message: ev.message || "Meeting stream error", status: ev.status });
     else if (ev.type === "meeting-end") { s.ended = true; clearWatchdog(e); es.close(); e.es = undefined; }
-    else return; // ping / tool-call / etc. — ignore for now
+    // card / note / model-error / message-delta were the copilot's half of this feed and no
+    // longer exist; anything unrecognised (pings, retired event names) is ignored.
+    else return;
     emit();
   };
   es.onerror = () => {

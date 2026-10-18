@@ -94,8 +94,6 @@ export default function TranscriptDebug() {
         <span>last event</span><span>{ageLabel(live.lastEventAt)}</span>
         <span>last transcript</span><span>{ageLabel(live.lastTranscriptAt)}</span>
         <span>segments</span><span>{live.transcript.length}</span>
-        <span>processed notes</span><span>{live.notes.length}</span>
-        <span>cards</span><span>{live.cards.length}</span>
         <span>issues</span><span style={{ color: live.issues.length ? "var(--danger)" : "var(--t3)" }}>{live.issues.length}</span>
         <span>react renders</span><span>{renders.current}</span>
         <span>last seg change @</span><span>{lastChangeAt.current == null ? "never" : `${lastChangeAt.current}ms`}</span>
@@ -138,7 +136,6 @@ export default function TranscriptDebug() {
           </div>
         ))}
       </div>
-      {live.note && <div style={{ marginTop: 14, color: "var(--warn)" }}>note: {live.note}</div>}
     </div>
   );
 }

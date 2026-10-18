@@ -12,6 +12,7 @@
  *  The connect surface TEACHES where the secret iCal URL lives (the step users bounce off),
  *  including the two field-tested traps (public-vs-secret address, Workspace-admin lock), and
  *  answers immediately on connect — sync-now runs and reports what it found. */
+import { minutesOnly } from "../app/mode";
 import { useEffect, useState, type CSSProperties } from "react";
 import { defaultBotName } from "./defaultBotName";
 import { useService } from "../platform";
@@ -205,6 +206,18 @@ function DropBotInline() {
 }
 
 export function MeetingsOnboarding({ variant }: { variant: "full" | "slim" }) {
+  // MINUTES: meetings arrive by INVITATION — there is no calendar to connect, no bot to drop, and
+  // showing those cards would contradict the product's first promise. One quiet empty state instead.
+  if (minutesOnly()) {
+    return (
+      <div style={{ padding: "14px 4px", fontSize: 13, color: "var(--t2)", lineHeight: 1.6, maxWidth: 520 }}>
+        <div style={{ fontSize: 15, fontWeight: 650, color: "var(--t1)", marginBottom: 6 }}>Nothing here yet</div>
+        Your meetings arrive by invitation: add the assistant&rsquo;s address to any calendar event,
+        the way you invite a colleague. After the meeting, everyone on your domain gets their minutes
+        by email — and this list fills in by itself.
+      </div>
+    );
+  }
   const [connected, reprobe] = useCalendarConnected();
   const [modal, setModal] = useState(false);
   const layout = useService(LayoutServiceId);

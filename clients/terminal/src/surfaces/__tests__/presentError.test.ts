@@ -4,7 +4,7 @@
  *  `ApiError` per failure class, each pinned to the user-truth headline it must show.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ApiError, presentError } from "../apiClient";
+import { ApiError, presentError, SESSION_ENDED_HEADLINE } from "../apiClient";
 
 beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -39,8 +39,14 @@ describe("presentError — ApiError → user truth (fixture range)", () => {
   it("upstream-timeout 504 → same backend-unreachable truth", () => {
     expect(presentError(FIX.upstreamTimeout).headline).toBe("The Vexa server can't reach a backend service right now.");
   });
-  it("auth 401 → key rejected, sign in again", () => {
-    expect(presentError(FIX.auth).headline).toBe("Your API key was rejected — sign in again.");
+  it("auth 401 → the SESSION ended, not 'a key was rejected'", () => {
+    // Changed 2026-09-01. A 401 in this app means the login token behind the cookie is no longer
+    // accepted — the person is signed out, and "your API key" is vocabulary from the token-settings
+    // screen that means nothing to somebody who signed in with an emailed link. The login gate
+    // normally replaces the surface entirely before this is read; this is the backstop copy, and it
+    // has to say the same thing the gate's card says.
+    expect(presentError(FIX.auth).headline).toBe(SESSION_ENDED_HEADLINE);
+    expect(presentError(FIX.auth).headline).toBe("Your session ended — sign in again.");
   });
   it("scope 403 → no access", () => {
     expect(presentError(FIX.scope).headline).toBe("Your key doesn't have access to this.");

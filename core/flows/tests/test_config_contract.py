@@ -135,5 +135,8 @@ def test_the_published_placeholders_are_refused_by_name_never_by_value(placehold
 def test_the_placeholder_list_is_the_same_list_the_use_sites_refuse():
     from flows_steps import common
     for k in _decl()["keys"]:
-        if k["key"] in ("INTERNAL_API_SECRET", "VEXA_FLOWS_ADMIN_KEY", "VEXA_FLOWS_API_KEY"):
+        if k["key"] in ("INTERNAL_API_SECRET", "VEXA_FLOWS_API_KEY"):
             assert set(k["forbidden_values"]) == set(common.PLACEHOLDER_SECRETS), k["key"]
+        if k["key"] == "VEXA_FLOWS_ADMIN_KEY":
+            assert set(k["forbidden_values"]) == set(common.ADMIN_KEY_PLACEHOLDERS), k["key"]
+            assert set(common.PLACEHOLDER_SECRETS) <= set(common.ADMIN_KEY_PLACEHOLDERS)

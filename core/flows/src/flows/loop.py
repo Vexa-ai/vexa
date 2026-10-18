@@ -14,30 +14,6 @@ LEASE_S = 90.0
 BACKOFF_S = (5.0, 30.0, 120.0, 600.0)
 MAX_ATTEMPTS = 6
 
-# Was the engine parked by the instance gate on the previous tick? Module-level on purpose: what
-# an operator needs in the log is the TRANSITION, not the state. `tick` runs about once a second,
-# so a line per tick is a line nobody reads, while a line per change is the timeline of the outage.
-_GATE_UP = False
-
-
-def _log_gate(db: DB, up: bool) -> None:
-    """Print the gate's edges, once each. The count is read only when parking BEGINS — it is the
-    number an operator actually asks for ("how much is queued behind this?") and it must not cost
-    a query per tick to answer."""
-    global _GATE_UP
-    if up == _GATE_UP:
-        return
-    _GATE_UP = up
-    if up:
-        rows = db.execute(
-            "SELECT COUNT(*) FROM reaction WHERE status IN ('admitted','retrying')")
-        n = rows[0][0] if rows else 0
-        print(f"[loop] PARKED by the instance gate — {n} reaction(s) keep their place in the "
-              f"queue; nothing is claimed, nothing is failed, no attempt is burned", flush=True)
-    else:
-        print("[loop] instance gate open — resuming", flush=True)
-
-
 def _row_to_reaction(row: tuple):
     (rid, sid, et, refs, flow, ver, step, status, attempt,
      nra, bdl, lease, reason, scratch) = row
@@ -74,43 +50,31 @@ def effect_key(r: Reaction, target: str = "") -> str:
     return f"{r.reaction_id}:{r.step}" + (f":{target}" if target else "")
 
 
-def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, gate=None, present=None) -> bool:
+def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, present=None) -> bool:
     """One unit of work. Returns False when nothing was due (caller sleeps poll_ms).
     ``emit`` (optional) lets steps publish facts: (event_type, source_id, refs) -> int.
 
-    ``gate`` (optional) is a ZERO-ARG PREDICATE answering "may work run at all?". False parks the
-    entire engine — PARK, never drop.
-
-    It is asked BEFORE `claim`, and that position is the whole design. Nothing is leased while the
-    gate is up, so there is no lease to expire, no half-run step, and no row for the reconciler to
-    reclaim; a fact keeps its `admitted`/`retrying` status, its `next_run_at`, its `attempt` and
-    its `reason` exactly as it had them. When the gate opens, everything that arrived during the
-    outage runs in the order it arrived, having lost nothing.
-
-    Deliberately NOT done here: pushing `next_run_at` out on the parked rows. It reads like the
-    tidier expression of "come back later", and it silently REORDERS the queue — a fact admitted
-    one second before the gate opens is due immediately, while a fact admitted an hour earlier was
-    pushed a minute into the future and now runs second. Leaving the rows untouched is both
-    cheaper and the only version that preserves arrival order. Same reasoning for `attempt`: a
-    parked reaction that retried itself into `failed` would be a dropped fact, just slower.
-
     ``present`` (optional) is a PREDICATE ON A DOMAIN NAME — "is this domain deployed?" — asked of
-    every domain a step declared through `@reg.step(needs=…)` BEFORE the body runs. A step whose
-    domain is absent answers `NotPresent`: terminal, no retry, and a `reason` on the reaction
-    saying which domain was missing (PRD decision 40.7). Asked before the body, so the absent
-    door is never knocked on — a step that reached it and caught the connection error would be
-    reporting an outage, which is a different fact with a different remedy.
+    every domain a step declared through `@reg.step(needs=…)` BEFORE the body runs. Asked before
+    the body, so the absent door is never knocked on — a step that reached it and caught the
+    connection error would be reporting an outage, which is a different fact with a different
+    remedy.
 
-    ``gate`` and ``present`` both default to None — no gate, everything present — so every existing
-    caller (the fixtures, the storm, the offline suite) is unchanged, and `flows/` still imports
-    nothing from `flows_integrations/` or `flows_steps/`: the engine core does not learn what an
-    instance is or which domains a deployment has, the worker injects both.
+    WHAT THE ABSENCE DOES IS THE STEP'S OWN DECLARATION (`@reg.step(absent=…)`, F-D20), because
+    one rule cannot be right for every step: `abort` (the default) answers `NotPresent` and ends
+    the reaction, which is correct for an agent turn and catastrophic for the eight steps standing
+    behind an acknowledgement mail; `skip` records the skip and advances; `degrade` runs the body
+    and tells it. PRD decision 40.7 asks for a product that keeps working with a domain removed,
+    and only the first of the three was ever implemented.
+
+    ``present`` defaults to None — everything present — so every existing caller (the fixtures, the
+    storm, the offline suite) is unchanged, and `flows/` still imports nothing from
+    `flows_integrations/` or `flows_steps/`: the engine core does not learn which domains a
+    deployment has, the worker injects it.
+
+    There used to be a ``gate`` predicate here that parked the whole engine while the instance's
+    company layer was unwritten. It went with that gate (founder ruling 2026-10-08).
     """
-    if gate is not None:
-        if not gate():
-            _log_gate(db, True)
-            return False       # "nothing to do, sleep" — the caller's idle path is already right
-        _log_gate(db, False)
     r = claim(db, clock)
     if r is None:
         return False
@@ -138,12 +102,26 @@ def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, gate=None, pres
         _fail(db, r, clock, f"unknown step {r.step!r} in {r.flow}@{r.flow_version} — renamed by deploy?")
         return True
     absent = sorted(d for d in registry.needs(r.step) if present is not None and not present(d))
+    # WHAT THE ABSENCE DOES IS THE STEP'S OWN DECLARATION (F-D20). It used to be one rule for
+    # every step — terminal — and that rule silently deleted the rest of the no-agents product:
+    # `invite_intake@3` ended at its third step of nine, so no bot was ever dispatched and no
+    # meeting was ever recorded on a deployment with no agent domain, while the reaction read
+    # `done` and nothing was paged. Absence DEGRADES what depends on the absent domain; it does
+    # not abort what does not. See `Registry.step`'s three policies.
     if absent:
         # BEFORE the effect key is reserved and before the body is entered: there is no effect to
         # record an attempt at, and the step must not get the chance to reach the missing door.
-        out = NotPresent(absent[0], detail=f"this deployment does not run {'/'.join(absent)}")
-        _not_present(db, r, clock, effect_key(r), out)
-        return True
+        aborting = [d for d in absent if registry.absent_policy(r.step, d) == "abort"]
+        if aborting:
+            out = NotPresent(aborting[0],
+                             detail=f"this deployment does not run {'/'.join(aborting)}")
+            _not_present(db, r, clock, effect_key(r), out)
+            return True
+        skipping = [d for d in absent if registry.absent_policy(r.step, d) == "skip"]
+        if skipping:
+            _skipped(db, r, flow, clock, effect_key(r), skipping)
+            return True
+        # everything left is `degrade`: the body runs, and is told through `ctx.absent` below.
     key = effect_key(r)
 
     prior_receipt = receipts.get(db, key)
@@ -155,7 +133,8 @@ def tick(db: DB, registry: Registry, clock: Clock, *, emit=None, gate=None, pres
     receipts.reserve(db, key, r.reaction_id, r.step, clock)          # commit point A
     ctx = StepCtx(reaction=r, effect_key=key,
                   prior=receipts.prior(db, r.reaction_id), clock_now=clock.now(),
-                  scratch=getattr(r, "_scratch", {}) or {}, emit=emit)
+                  scratch=getattr(r, "_scratch", {}) or {}, emit=emit,
+                  absent=frozenset(absent))
     ctx.flow = flow                       # the governing version's definition incl. params
     def _save_scratch() -> None:
         db.execute("UPDATE reaction SET scratch = :s WHERE reaction_id = :rid",
@@ -228,13 +207,48 @@ def _not_present(db: DB, r: Reaction, clock: Clock, key: str, out: NotPresent) -
     agent turn is about the result of that turn.
 
     A confirmed receipt is written for the same reason every other terminal outcome writes one —
-    a redelivery of the same fact must not re-run this and must not answer differently."""
+    a redelivery of the same fact must not re-run this and must not answer differently.
+
+    THIS IS NOW THE `abort` POLICY, not the only policy (F-D20). "The remaining steps are not run"
+    is true of a step that has nothing to degrade to — an agent turn, a bot dispatch — and was
+    false of everything else: see `_skipped` for the branch that keeps the flow moving."""
     receipts.reserve(db, key, r.reaction_id, r.step, clock)
     receipts.confirm(db, key, out.receipt(), None, clock)
     db.execute(
         """UPDATE reaction SET status = 'done', reason = :why, attempt = 0,
                   lease_until = NULL, updated_at = :now WHERE reaction_id = :rid""",
         {"why": out.reason, "now": clock.now(), "rid": r.reaction_id})
+
+
+def _skipped(db: DB, r: Reaction, flow, clock: Clock, key: str, domains: list) -> None:
+    """DEGRADE AND CONTINUE — the step is passed over, the reaction is not (F-D20).
+
+    Two surfaces are written, because they answer two different questions and neither substitutes
+    for the other:
+
+    * the step's own RECEIPT, confirmed, carrying `skipped: "<domain>:not_present"`. That is what
+      `flows_timeline` reads, so the skip shows up wherever a person looks — and, exactly as for
+      every other terminal outcome, a redelivery of the same fact must not re-run this step and
+      must not answer differently.
+    * the reaction's SCRATCH, under `skipped[<step>]`. That is what a LATER STEP IN THE SAME
+      REACTION reads: `email_minutes` has to know that `process_meeting` never wrote a report, and
+      an absent key in `ctx.prior` cannot tell it whether the step was skipped or simply has not
+      run yet.
+
+    The reaction's own `reason` is deliberately NOT set: `_advance` clears it on every hop, and a
+    reason that survives one step but not the next is worse than no reason at all. The reason for
+    this step lives on this step's receipt, where it stays true.
+    """
+    reason = ", ".join(f"{d}:not_present" for d in domains)
+    receipts.reserve(db, key, r.reaction_id, r.step, clock)
+    receipts.confirm(db, key, {"outcome": "skipped", "domain": domains[0], "skipped": reason,
+                               "detail": f"this deployment does not run {'/'.join(domains)}"},
+                     None, clock)
+    scratch = dict(getattr(r, "_scratch", {}) or {})
+    scratch["skipped"] = {**(scratch.get("skipped") or {}), r.step: reason}
+    db.execute("UPDATE reaction SET scratch = :s WHERE reaction_id = :rid",
+               {"s": dumps(scratch), "rid": r.reaction_id})
+    _advance(db, r, flow, clock)
 
 
 def _advance(db: DB, r: Reaction, flow, clock: Clock) -> None:

@@ -5,20 +5,9 @@ export interface TranscriptSegment {
   speaker?: string;
   text: string;
   ts?: number | string;       // meeting-relative time (seconds) — back-compat
+  endMs?: number;
   tsMs?: number;              // ABSOLUTE wall-clock time of the line, epoch ms (UTC). Renderer formats in local TZ.
   completed?: boolean;        // false = live pending (in-progress ASR); true/undefined = finalized
-}
-
-export interface ProcessedTranscriptNote {
-  id: string;
-  speaker?: string;
-  chapter?: string;
-  text: string;
-  ts?: number | string;       // meeting-relative time (seconds) — back-compat
-  tsMs?: number;              // ABSOLUTE wall-clock time of the line, epoch ms (UTC). Renderer formats in local TZ.
-  completed?: boolean;        // false = live pending (in-progress ASR); true/undefined = finalized
-  pass?: number;
-  frozen?: boolean;
 }
 
 export type EntityKind = "person" | "company" | "product" | "number" | "signal";
@@ -59,13 +48,13 @@ export interface MeetingDocLink {
   title?: string;
 }
 
+/** A fault in the meeting FEED. There is no "model" kind: the product runs no model calls of its
+ *  own beside the agent (PRD decision 34), so there is no inference to fail here. */
 export interface MeetingDiagnosticIssue {
-  kind: "stream" | "model" | "parse";
+  kind: "stream" | "parse";
   message: string;
   status?: number;
   at?: number;
-  model?: string;
-  stage?: string;
 }
 
 export interface MeetingState {
@@ -78,11 +67,11 @@ export interface MeetingState {
     startedAt?: string;
     participants?: string[];
     docs?: { path: string; title?: string; kind?: string; present?: boolean }[];
+    deleted?: boolean;          // its owner deleted the transcript + recordings; nothing is shown
   };
   transcript: {
     segments: TranscriptSegment[];
     liveCaption?: string;
-    notes?: ProcessedTranscriptNote[];
   };
   entities: {
     people: any[];

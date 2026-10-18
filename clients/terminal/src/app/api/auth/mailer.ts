@@ -1,0 +1,223 @@
+/** The smallest SMTP client that can post one plain-text message — the terminal's mail door.
+ *
+ *  Dependency-free ON PURPOSE. The image is built with `npm ci` from a committed lockfile; adding
+ *  nodemailer for ~100 lines of protocol would put a new package (and lockfile churn) on the
+ *  release build's critical path for one email. This speaks the subset of RFC 5321 (and RFC 3207)
+ *  a sign-in mail needs: EHLO → STARTTLS when offered → optional AUTH LOGIN → MAIL FROM → RCPT TO →
+ *  DATA → QUIT.
+ *
+ *  Transport shapes, mirroring `flows_steps/emailx.py` (the pattern already in this stack):
+ *    • implicit TLS — VEXA_MAIL_SMTP_SECURE=1, e.g. a provider's :465 endpoint.
+ *    • STARTTLS     — a relay that offers it after EHLO (a provider's :587) is upgraded before anything
+ *                     else is said, with the certificate verified, and greeted again.
+ *    • plain TCP    — a relay that offers neither, e.g. the dev mail double (Mailpit) on :1025.
+ *  CREDENTIALS NEVER CROSS AN UNENCRYPTED CONNECTION: with a user and password set, a relay that ends
+ *  up in plain TCP is refused before AUTH, and nothing is sent.
+ *
+ *  Env — the deployment's mail family, VEXA_MAIL_SMTP_*, which flows sends through too and which is
+ *  declared in ../../../../config.v1.json (held on compose, Helm and Lite by gate:config-contract):
+ *    VEXA_MAIL_SMTP_HOST      unset = the local dev door, localhost:1025
+ *    VEXA_MAIL_SMTP_PORT      default 25 for a set host (1025 for the dev door)
+ *    VEXA_MAIL_SMTP_FROM      default "Vexa <no-reply@vexa.ai>"
+ *    VEXA_MAIL_SMTP_USER / VEXA_MAIL_SMTP_PASSWORD   AUTH LOGIN, only when both are present, and
+ *                                   only over implicit TLS or STARTTLS
+ *    VEXA_MAIL_SMTP_SECURE=1        implicit TLS
+ *    VEXA_MAIL_SMTP_TLS_INSECURE=1  skip certificate verification (implicit TLS and STARTTLS) — dev only
+ *  These keys are the only source: the defaults above are the declared ones.
+ */
+import net from "node:net";
+import tls from "node:tls";
+
+export interface MailerConfig {
+  host: string;
+  port: number;
+  from: string;
+  user?: string;
+  pass?: string;
+  secure: boolean;
+  insecureTls: boolean;
+}
+
+export function mailerConfig(): MailerConfig {
+  const truthy = (v: string | undefined) => v === "1" || v === "true";
+  const host = process.env.VEXA_MAIL_SMTP_HOST || undefined;
+  const port = parseInt(process.env.VEXA_MAIL_SMTP_PORT || "", 10);
+  return {
+    host: host || "localhost",
+    port: Number.isFinite(port) && port > 0 ? port : host ? 25 : 1025,
+    from: process.env.VEXA_MAIL_SMTP_FROM || "Vexa <no-reply@vexa.ai>",
+    user: process.env.VEXA_MAIL_SMTP_USER || undefined,
+    pass: process.env.VEXA_MAIL_SMTP_PASSWORD || undefined,
+    secure: truthy(process.env.VEXA_MAIL_SMTP_SECURE),
+    insecureTls: truthy(process.env.VEXA_MAIL_SMTP_TLS_INSECURE),
+  };
+}
+
+type Reply = { code: number; text: string };
+
+/** Line-buffers the socket into complete SMTP replies, and turns a dead socket into a REJECTED
+ *  read rather than a hung one (a request handler waiting forever on a closed connection is the
+ *  failure mode that makes hand-rolled protocol clients dangerous). A reply is zero or more
+ *  "NNN-continuation" lines terminated by one "NNN final" line (space, not hyphen, after the code). */
+class Wire {
+  private buf = "";
+  private lines: string[] = [];
+  private queue: Reply[] = [];
+  private waiters: Array<{ res: (r: Reply) => void; rej: (e: Error) => void }> = [];
+  private error: Error | null = null;
+
+  push(chunk: string): void {
+    this.buf += chunk;
+    let i: number;
+    while ((i = this.buf.indexOf("\n")) >= 0) {
+      const line = this.buf.slice(0, i).replace(/\r$/, "");
+      this.buf = this.buf.slice(i + 1);
+      this.lines.push(line);
+      if (/^\d{3}(?: |$)/.test(line)) {
+        const reply: Reply = { code: parseInt(line.slice(0, 3), 10), text: this.lines.join(" | ") };
+        this.lines = [];
+        const w = this.waiters.shift();
+        if (w) w.res(reply);
+        else this.queue.push(reply);
+      }
+    }
+  }
+
+  fail(err: Error): void {
+    if (this.error) return;
+    this.error = err;
+    for (const w of this.waiters.splice(0)) w.rej(err);
+  }
+
+  next(): Promise<Reply> {
+    const queued = this.queue.shift();
+    if (queued) return Promise.resolve(queued);
+    if (this.error) return Promise.reject(this.error);
+    return new Promise<Reply>((res, rej) => this.waiters.push({ res, rej }));
+  }
+}
+
+/** RFC 5322 message, WITHOUT a trailing CRLF (the caller's line-writer supplies it, then "."). */
+function buildMessage(from: string, to: string, subject: string, text: string, domain: string): string {
+  const messageId = `<${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}@${domain}>`;
+  const headers = [
+    `From: ${from}`,
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    `Date: ${new Date().toUTCString()}`,
+    `Message-ID: ${messageId}`,
+    "MIME-Version: 1.0",
+    'Content-Type: text/plain; charset="utf-8"',
+    "Content-Transfer-Encoding: 8bit",
+  ].join("\r\n");
+  // Dot-stuffing: a body line of "." alone would otherwise terminate DATA.
+  const body = text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((l) => (l.startsWith(".") ? `.${l}` : l))
+    .join("\r\n");
+  return `${headers}\r\n\r\n${body}`;
+}
+
+/** The bare address inside "Name <addr>" — what MAIL FROM / RCPT TO take. */
+function bareAddress(addr: string): string {
+  const m = /<([^>]+)>/.exec(addr);
+  return (m ? m[1] : addr).trim();
+}
+
+/** Send one plain-text message. THROWS on any protocol or connection failure — the caller decides
+ *  whether that is fatal (for /api/auth/request-link it is not, and is never leaked to the client). */
+export async function sendMail(opts: { to: string; subject: string; text: string }, timeoutMs = 15000): Promise<void> {
+  const cfg = mailerConfig();
+  let wire = new Wire();
+  let encrypted = cfg.secure;
+
+  let socket: net.Socket = cfg.secure
+    ? tls.connect({ host: cfg.host, port: cfg.port, servername: cfg.host, rejectUnauthorized: !cfg.insecureTls })
+    : net.connect({ host: cfg.host, port: cfg.port });
+  const attach = (s: net.Socket, w: Wire) => {
+    s.setEncoding("utf8");
+    s.setTimeout(timeoutMs);
+    s.on("data", (d: string | Buffer) => w.push(typeof d === "string" ? d : d.toString("utf8")));
+    s.on("error", (e) => w.fail(e as Error));
+    s.on("timeout", () => {
+      w.fail(new Error(`SMTP timeout after ${timeoutMs}ms (${cfg.host}:${cfg.port})`));
+      s.destroy();
+    });
+    s.on("close", () => w.fail(new Error(`SMTP connection closed (${cfg.host}:${cfg.port})`)));
+  };
+  attach(socket, wire);
+  const ready = (s: net.Socket, event: "connect" | "secureConnect") =>
+    new Promise<void>((res, rej) => {
+      const onError = (e: Error) => rej(e);
+      s.once("error", onError);
+      s.once(event, () => {
+        s.off("error", onError);
+        res();
+      });
+    });
+
+  const expect = async (ok: number[], step: string): Promise<Reply> => {
+    const r = await wire.next();
+    if (!ok.includes(r.code)) throw new Error(`SMTP ${step}: ${r.code} ${r.text}`);
+    return r;
+  };
+  const say = (line: string) =>
+    new Promise<void>((res, rej) => socket.write(`${line}\r\n`, (e) => (e ? rej(e) : res())));
+
+  try {
+    await ready(socket, cfg.secure ? "secureConnect" : "connect");
+
+    await expect([220], "greeting");
+    const heloDomain = bareAddress(cfg.from).split("@")[1] || "localhost";
+    await say(`EHLO ${heloDomain}`);
+    const ehlo = await expect([250], "EHLO");
+
+    // STARTTLS (RFC 3207): the relay offered it, so the rest of the session is encrypted, with the
+    // relay's certificate verified exactly as for implicit TLS. The relay forgets what was said before
+    // the upgrade, so it is greeted again.
+    if (!encrypted && /(^|\| )250[- ]STARTTLS\b/i.test(ehlo.text)) {
+      await say("STARTTLS");
+      await expect([220], "STARTTLS");
+      const plain = socket;
+      for (const event of ["data", "error", "timeout", "close"]) plain.removeAllListeners(event);
+      plain.setTimeout(0);
+      socket = tls.connect({ socket: plain, servername: cfg.host, rejectUnauthorized: !cfg.insecureTls });
+      wire = new Wire();
+      attach(socket, wire);
+      await ready(socket, "secureConnect");
+      encrypted = true;
+      await say(`EHLO ${heloDomain}`);
+      await expect([250], "EHLO after STARTTLS");
+    }
+
+    if (cfg.user && cfg.pass) {
+      if (!encrypted) {
+        throw new Error(`SMTP: refusing to send credentials to ${cfg.host}:${cfg.port} over an unencrypted ` +
+          "connection — the relay offers no STARTTLS (set VEXA_MAIL_SMTP_SECURE=1 for an implicit-TLS endpoint)");
+      }
+      await say("AUTH LOGIN");
+      await expect([334], "AUTH LOGIN");
+      await say(Buffer.from(cfg.user, "utf8").toString("base64"));
+      await expect([334], "AUTH username");
+      await say(Buffer.from(cfg.pass, "utf8").toString("base64"));
+      await expect([235], "AUTH password");
+    }
+
+    const from = bareAddress(cfg.from);
+    await say(`MAIL FROM:<${from}>`);
+    await expect([250], "MAIL FROM");
+    await say(`RCPT TO:<${bareAddress(opts.to)}>`);
+    await expect([250, 251], "RCPT TO");
+    await say("DATA");
+    await expect([354], "DATA");
+    await say(buildMessage(cfg.from, opts.to, opts.subject, opts.text, heloDomain));
+    await say(".");
+    await expect([250], "message body");
+    await say("QUIT");
+  } finally {
+    // A clean QUIT closes the socket; that must not surface as a "connection closed" failure.
+    socket.removeAllListeners("close");
+    socket.destroy();
+  }
+}

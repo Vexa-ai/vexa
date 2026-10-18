@@ -2,6 +2,11 @@
 (the same shape as meeting-api/agent-api/admin-api), OpenAPI docs at /docs.
 
   GET  /flows                       every version (image + DB) + the step vocabulary
+  GET  /flows/pages                 ONE PAGE PER RUNTIME-AUTHORED VERSION, as markdown — what the
+                                    admin reads back after writing a flow from the governance chat
+                                    (`bodies=0` for the poll shape, `only=a@1,b@2` to narrow).
+                                    It renders; agent-api's `flow_pages_watch` is what writes them
+                                    into `_global/flows/`, because this service has no `_global`
   POST /flows                       submit {name, on_event, steps:[names], params?, activate?}
                                     — validated against the deployed vocabulary AT SUBMISSION;
                                     auto-versioned; live in the worker within ~10 s
@@ -66,18 +71,10 @@ once per process; a caller sending both is answered on the new one.
 NEVER accepts code — steps are reviewed Python in the image; this API composes them (the n8n line
 we do not cross).
 
-THE INSTANCE GATE cuts across this surface in three different ways, and the difference is the
-point (see `flows_integrations/instance_gate.py`):
-
-  * the two INTAKES (`POST /events`, `POST /events/batch`) still ADMIT while the gate is up — a
-    fact that happened, happened, and dropping it at the door would lose it forever. The loop
-    parks the reaction; the RESPONSE says so, because a fact that looks accepted and produces
-    nothing is indistinguishable from a broken product.
-  * the two OPERATOR VERBS (`POST /flows`, `POST /flows/{name}/{v}/{action}`) REFUSE with 409:
-    they configure the machine, and configuring it before it knows who it works for is precisely
-    what the gate exists to prevent.
-  * READING (`GET /flows`, `GET /reactions`) stays open. An admin must be able to see the machine
-    they are about to configure."""
+There is NO instance gate on this surface (founder ruling 2026-10-08: "let's remove global setup
+at all so that there is no need to setup global at all - let it be empty with no data - it's
+fine"). The intakes no longer park facts and the operator verbs no longer refuse while `_global` is
+unwritten; the company layer is optional."""
 from __future__ import annotations
 
 import hmac
@@ -86,6 +83,7 @@ import logging
 import os
 import secrets
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -96,15 +94,17 @@ from pydantic import BaseModel, Field  # noqa: E402
 
 from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
 import flows_config  # noqa: E402
+import flows_pages  # noqa: E402 — the page renderer `GET /flows/pages` serves (Vexa-ai/vexa#1639)
 from flows_defs import production  # noqa: E402
-from flows_integrations import instance_gate  # noqa: E402
-from flows_steps.common import db_url, require_internal_secret, setting  # noqa: E402
-from flows_integrations.subject_auth import (Caller, IdentityUnavailable,  # noqa: E402
-                                              SubjectUnknown, resolve)
+from flows_steps.common import (db_url, internal_secret,  # noqa: E402
+                                require_internal_secret, setting)
+from flows_integrations.subject_auth import (REFUSAL, Caller,  # noqa: E402
+                                              IdentityUnavailable, SubjectUnknown, resolve)
 # ALIASED, and it is not style. The route below is also called `list_reactions`, and `def` rebinds
 # the module global — so the route was calling ITSELF, and every authenticated `GET /reactions`
 # answered 500 (`TypeError: list_reactions() got multiple values for argument 'status'`). The 401
 # in front of it hid that for as long as the route was operator-only. One name, one thing.
+import config_preflight                                            # noqa: E402
 from flows_timeline import (REACTION_FOUND, REACTION_MISSING,  # noqa: E402
                             build_timeline, fetch_meetings, friction_for_subject,
                             reaction_concerns, render_preamble, render_text)
@@ -150,21 +150,49 @@ def _require_api_key() -> str:
     A weak default is worse than no default: it makes an unconfigured deployment look configured
     and it fails no test. So there is no default. A deployment that has not set the variable
     stops here, loudly, rather than serving on a known string.
+
+    THE REFUSAL IS THE SHARED VALIDATOR'S NOW (F-D20 b), not this function's. What stood here was
+    a hand-written pair of `RuntimeError`s carrying their own placeholder list —
+    `("changeme", "change-me", "default", "secret")` — while `config.v1.json`, five directories
+    away and enforced against every deploy surface by `gate:config-contract`, declared this same
+    key `required-explicit` with SEVEN `forbidden_values`. The three the local list was missing
+    (`vexa-internal-secret`, `lite-internal-secret`, `CHANGE-ME`) are precisely the literals a
+    stock deploy supplies, so flows-api booted, green, on a secret published in this repository —
+    F95's own lesson, in the one service that had not learned it: *"one secret with three names
+    has three refusal lists and they drift"*.
+
+    `flows_config.py` even said so out loud — *"nothing under core/flows/src imports the vendored
+    `config_preflight`"* — with the declaration held up by contract tests that drove the validator
+    while the running service never did. It does now, and the declaration is the only list.
+
+    It validates the WHOLE declaration, not this key alone, and that is deliberate: `preflight`
+    names every missing required-explicit key in ONE message rather than a peel-the-onion restart
+    loop, so it is called FIRST, before anything else this module reads. `VEXA_FLOWS_ADMIN_KEY` is
+    the only key whose absence newly stops the boot, and it was already refused at its first use
+    (`flows_steps.common.require_admin_key`), already exported by every start script, and already
+    asserted by `tests/test_config_contract.py`. flows-api declares no probes, so this does no I/O.
     """
-    key = (os.environ.get("VEXA_FLOWS_API_KEY") or "").strip()
-    if not key:
-        raise RuntimeError(
-            "VEXA_FLOWS_API_KEY is unset — flows-api refuses to start rather than serve on a "
-            "default. Mint one into a mode-600 file on the deployment host and export it "
-            "from the lane's start script; never put the value in the repo.")
-    if key in _forbidden_values("VEXA_FLOWS_API_KEY"):
-        raise RuntimeError(
-            f"VEXA_FLOWS_API_KEY is the placeholder {key!r} — refusing to start. That literal is "
-            "published in this repository, so it is not a secret: anyone can present it.")
-    return key
+    config_preflight.preflight()
+    return (os.environ.get("VEXA_FLOWS_API_KEY") or "").strip()
 
 
-API_KEY = _require_api_key()
+def _configured(key: str, value: Optional[str] = None) -> str:
+    """A credential AS THE ENVIRONMENT CARRIES IT — never a refusal, and "" for a literal the
+    declaration forbids.
+
+    THE READ, not the refusal. `_require_api_key`, `_timeline_key` and `require_internal_secret`
+    are the refusals, they are unchanged, and they still run — in `boot()`, which is a different
+    moment (see the block below). What this gives the module is a value to hold between import and
+    boot, and it is FAIL-CLOSED on a placeholder because `_same_key` refuses an empty expected key:
+    a module that has been imported but not booted then authenticates nobody at all, rather than
+    authenticating anybody who can read a literal published in this repository.
+
+    The forbidden list is the declaration's, read through `_forbidden_values` — never a second copy
+    (F-D20 b: a second copy is how the first one drifted).
+    """
+    raw = os.environ.get(key) if value is None else value
+    raw = (raw or "").strip()
+    return "" if raw in _forbidden_values(key) else raw
 
 
 def _timeline_key() -> str:
@@ -192,15 +220,42 @@ def _timeline_key() -> str:
     return key
 
 
-TIMELINE_KEY = _timeline_key()
-# The internal-tier identity, refused the same way and for the same reason. Read at import so an
-# unconfigured deployment stops HERE rather than at the first post-meeting run.
-flows_config.preflight()          # no door, no boot — see flows_config's DOORS block
-INTERNAL_SECRET = require_internal_secret()
+# ── IMPORT READS THE ENVIRONMENT. BOOT REFUSES ON IT. (Vexa-ai/vexa#1629) ─────────────────────
+# They used to be the same moment. `a90e442a3` routed `_require_api_key` through the shared
+# `config.v1` validator — right, and unchanged below — and MODULE SCOPE called it, so
+# `import flows_integrations.flows_api` raised `ConfigError` in any process with no
+# `VEXA_FLOWS_DB_URL`. The release's identity probe is such a process:
+#
+#   python -c "import flows_worker, flows_integrations.mailbox, flows_integrations.flows_api, os;
+#              assert os.path.exists('/app/mcp.tools.v1.json')"
+#
+# and so is `make flow-pages`, and so is every tool that imports this module to READ it. None of
+# them is a deployment and none of them has a DSN. A module that refuses to be imported refuses to
+# be read — which is a different refusal from the one that was wanted, and it stood between a
+# built candidate and a validated one.
+#
+# `flows_steps.common.require_admin_key` had already written the rule down, four lines above the
+# secret this file was reading at import: *"A FUNCTION, not a constant, on purpose: a constant read
+# at import forces the refusal into module-import time … and the failure is attributed to whoever
+# imported first rather than to the call that needed the key."*
+#
+# So: the refusals are the same functions with the same messages in the same order, and they run in
+# `boot()` — the ASGI lifespan runs it before the first request is served, `main()` runs it before
+# the port is bound. Refusing to BOOT stays; refusing to IMPORT goes.
+API_KEY = _configured("VEXA_FLOWS_API_KEY")
+TIMELINE_KEY = _configured("VEXA_FLOWS_TIMELINE_KEY")
+# The internal-tier identity, read under whichever name set it (`common.internal_secret`) and
+# refused, like the two above, at boot.
+INTERNAL_SECRET = _configured("INTERNAL_API_SECRET", internal_secret())
 
 logger = logging.getLogger(__name__)
 
-db = db_from_url(db_url())
+#: The engine's database — composed here when the deployment named one, `None` when it did not.
+#: `postgres_db` is already lazy (no connection until the first query, deliberately, so this module
+#: could be imported against a Postgres that is not up yet), so composing at import costs nothing
+#: and keeps ONE adapter object: `production.build` below closes over this value, so `boot()` must
+#: not quietly swap it for a second one. `None` is never served from — `boot()` refuses first.
+db = db_from_url(db_url()) if flows_config.get("VEXA_FLOWS_DB_URL") else None
 clock = SystemClock()
 vocab = Registry()
 production.build(vocab, db)
@@ -208,8 +263,56 @@ production.build(vocab, db)
 import json as _json
 import pathlib as _pathlib
 
+
+def boot() -> dict:
+    """EVERY REFUSAL THIS PROCESS MAKES BEFORE IT SERVES — four questions, none of them the import's.
+
+    * `contract_preflight()` — the whole `config.v1` declaration against this environment: ONE
+      message naming every missing required-explicit key, plus a refusal for any key still holding
+      a placeholder literal that is published in this repository (E6/ADR-0026, F-D20 b).
+    * `_require_api_key()` and `_timeline_key()` — the two credentials this surface compares
+      against, re-read here so a booted module holds the validated value rather than the lenient
+      one `_configured` left it with.
+    * `flows_config.preflight()` — flows' own rule, which is NOT in the declaration: a deployment
+      that cannot NAME a door does not run, because there are no host-port defaults.
+    * `require_internal_secret()` and the DSN — the internal-tier identity, and the database.
+
+    IDEMPOTENT, and it has to be: `main()` runs it before binding the port and uvicorn runs the
+    lifespan after, so an ordinary boot calls it twice. The validator is pure, flows declares no
+    probes so it does no I/O, and the declaration is `lru_cache`d — the second call is a dict
+    comparison.
+    """
+    global API_KEY, TIMELINE_KEY, INTERNAL_SECRET, db
+    contract_preflight()
+    API_KEY = _require_api_key()
+    TIMELINE_KEY = _timeline_key()
+    flows_config.preflight()          # no door, no boot — see flows_config's DOORS block
+    INTERNAL_SECRET = require_internal_secret()
+    if db is None:
+        # Only reachable when the DSN arrived between import and boot — `contract_preflight()`
+        # above refuses when it is still absent. Safe to compose here and nowhere else: the steps
+        # `production.build` closed over run in the WORKER's process, never in this one (this
+        # surface admits facts and steers reactions; it never ticks).
+        db = db_from_url(db_url())
+    return {"service": "flows-api", "steps": len(vocab.steps), "flows": len(vocab.flows)}
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """The refusal at the one moment EVERY way of running this app passes through.
+
+    `main()` is not that moment. Compose, helm and the rig all run `python -m
+    flows_integrations.flows_api`, but `uvicorn flows_integrations.flows_api:app` does not, and
+    neither does a test entering `TestClient(app)` as a context manager — and a surface that serves
+    without booting is precisely what moving the check off module scope could otherwise have cost.
+    """
+    boot()
+    yield
+
+
 app = FastAPI(title="flows-api", version="0.1.0",
-              description="Submit and manage Vexa workflows as data — no code over the wire.")
+              description="Submit and manage Vexa workflows as data — no code over the wire.",
+              lifespan=_lifespan)
 
 
 def _same_key(presented: str, expected: str) -> bool:
@@ -275,14 +378,57 @@ def _bearer(authorization: str, x_api_key: str) -> str:
     return token.strip() if scheme.lower() == "bearer" else ""
 
 
+#: WHAT A WORKER WITH NOBODY IN THE LOOP MAY DO HERE — every route a person's own credential reaches,
+#: classified ONCE. `PERSON_ONLY` acts as the person beyond their own reading (steering a reaction
+#: retries, resumes, wakes or cancels what the person scheduled: a bot sent into a meeting, a mail
+#: sent, a join called off). `OPEN` reads the person's own rows, or files a friction report into
+#: Vexa's own sink — the record `REFUSAL` tells a refused worker to leave. A worker whose regime is
+#: not `human` is refused a `PERSON_ONLY` route with `REFUSAL`; a person, a worker in the `human`
+#: regime and the operator are not. A route that reaches `subject_or_operator` and is missing here
+#: is `PERSON_ONLY` — and `tests/test_subject_bearer.py` fails until it is classified. Operator-only
+#: routes (`auth`) take no person's credential and are not listed.
+PERSON_ONLY, OPEN = "person-only", "open"
+DELEGATED_REACH = {
+    ("GET", "/flows"): OPEN,
+    ("GET", "/flows/pages"): OPEN,
+    ("GET", "/reactions"): OPEN,
+    ("POST", "/reactions/{reaction_id}/{verb}"): PERSON_ONLY,
+    ("GET", "/timeline"): OPEN,
+    ("POST", "/friction"): OPEN,
+    ("GET", "/friction"): OPEN,
+    ("GET", "/queue/waiting"): OPEN,
+    ("GET", "/queue/notices"): OPEN,
+}
+
+
+def _reach(request: Optional[Request]) -> str:
+    """The class of the route this request matched; `PERSON_ONLY` when it cannot be told."""
+    route = request.scope.get("route") if request is not None else None
+    path = getattr(route, "path", None)
+    if not path:
+        return PERSON_ONLY
+    return DELEGATED_REACH.get((request.method.upper(), path), PERSON_ONLY)
+
+
+def _refuse_unwatched(request: Optional[Request], caller: Caller) -> Caller:
+    """403 `REFUSAL` for a worker with nobody in the loop on a `PERSON_ONLY` route; else the caller."""
+    if caller.is_unwatched and _reach(request) != OPEN:
+        raise HTTPException(status_code=403, detail=REFUSAL)
+    return caller
+
+
 def subject_or_operator(x_flows_operator_key: str = Header(default=""),
                         x_flows_admin_key: str = Header(default=""),
                         authorization: str = Header(default=""),
-                        x_api_key: str = Header(default="")) -> Caller:
+                        x_api_key: str = Header(default=""),
+                        request: Request = None) -> Caller:  # noqa: RUF013 — FastAPI injects it
     """WHO IS CALLING — the operator, or one person. The dependency of every subject-scoped route.
 
     The operator key is checked first and short-circuits: it is a local constant-time comparison,
     it is what every existing caller sends, and it must keep working while identity is down.
+
+    A worker acting for a person resolves to that person, carrying its delegation; on a route
+    `DELEGATED_REACH` does not open to it, one with nobody in the loop is refused here.
     """
     presented = _operator_key(x_flows_operator_key, x_flows_admin_key)
     if _same_key(presented, API_KEY):
@@ -302,7 +448,7 @@ def subject_or_operator(x_flows_operator_key: str = Header(default=""),
             "this route needs your Vexa credential (Authorization: Bearer …, or X-API-Key), "
             f"or the operator key in {OPERATOR_HEADER}"))
     try:
-        return resolve(token, secret=INTERNAL_SECRET)
+        caller = resolve(token, secret=INTERNAL_SECRET)
     except SubjectUnknown:
         raise HTTPException(status_code=401, detail="that credential does not identify anyone")
     except IdentityUnavailable as e:
@@ -316,12 +462,14 @@ def subject_or_operator(x_flows_operator_key: str = Header(default=""),
         logger.warning("identity could not answer who a caller is: %s", e)
         raise HTTPException(status_code=503, detail=(
             "identity could not answer who you are — this is our side, not your key"))
+    return _refuse_unwatched(request, caller)
 
 
 def timeline_reader(x_flows_operator_key: str = Header(default=""),
                     x_flows_admin_key: str = Header(default=""),
                     authorization: str = Header(default=""),
-                    x_api_key: str = Header(default="")) -> Caller:
+                    x_api_key: str = Header(default=""),
+                    request: Request = None) -> Caller:  # noqa: RUF013 — FastAPI injects it
     """`GET /timeline` alone: the narrow read-only key opens it, as well as the two tiers above.
 
     THE NARROW KEY IS ITS OWN KIND, not an operator (P20/E1). It used to return
@@ -334,7 +482,8 @@ def timeline_reader(x_flows_operator_key: str = Header(default=""),
     if TIMELINE_KEY and _same_key(_operator_key(x_flows_operator_key, x_flows_admin_key),
                                   TIMELINE_KEY):
         return Caller(kind="timeline")
-    return subject_or_operator(x_flows_operator_key, x_flows_admin_key, authorization, x_api_key)
+    return subject_or_operator(x_flows_operator_key, x_flows_admin_key, authorization, x_api_key,
+                               request)
 
 
 def scoped_subject(caller: Caller, requested: str, *, stamped: str = "") -> str:
@@ -410,41 +559,27 @@ def health():
             "flows": len(vocab.flows), "steps": len(vocab.steps)}
 
 
-def _refuse_if_gated(verb: str) -> None:
-    """409 while the company layer is missing — for the verbs that CHANGE the machine.
-
-    409 rather than 403 on purpose: this is not "you may not", it is "not in this state, yet".
-    The detail names the verb as well as the gate, because the operator who meets it is usually
-    holding a script that made three calls and needs to know WHICH one stopped.
-    """
-    if instance_gate.company_layer_ready():
-        return
-    raise HTTPException(status_code=409, detail=(
-        f"{verb} is refused: the company layer is not set up. {instance_gate.SETUP_SENTENCE}"))
-
-
-def _with_gate(payload: dict) -> dict:
-    """Tell an intake caller their fact was PARKED, not acted on.
-
-    Silence here is the defect. Admission returns 202 either way — the reaction row exists, the
-    dedup key is burned, everything the caller can observe says it worked — and then nothing
-    happens for as long as setup takes. One field and one sentence turn an invisible delay into a
-    stated one. The key is absent entirely when the gate is down: a caller should never have to
-    parse `"gate": "completed"` to learn that things are normal.
-    """
-    if instance_gate.company_layer_ready():
-        return payload
-    return {**payload, "gate": "missing",
-            "note": ("Admitted and PARKED — no step runs until the instance admin commits the "
-                     f"company layer. Nothing is lost. {instance_gate.SETUP_SENTENCE}")}
-
-
 class FlowSubmission(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     on_event: str = Field(min_length=1, max_length=120)
     steps: list[str] = Field(min_length=1)
     params: dict = Field(default_factory=dict)
     activate: bool = True
+
+
+def _db_flows() -> list:
+    """Every runtime-authored version, oldest first — the `flow_version` table as dicts.
+
+    ONE READER, because `GET /flows` and `GET /flows/pages` answer two questions about the same
+    rows and a second SELECT is a second column list to keep in step. `created_at` is here for the
+    page: a flow somebody wrote from the governance chat says on its own page who activated it and
+    when, and neither fact is anywhere else."""
+    rows = db.execute("SELECT name, version, on_event, steps, params, status, created_by, "
+                      "created_at FROM flow_version ORDER BY name, version")
+    return [{"name": n, "version": v, "on": e, "steps": json.loads(st),
+             "params": json.loads(p or "{}"), "status": status,
+             "created_by": by, "created_at": str(at or ""), "source": "api"}
+            for n, v, e, st, p, status, by, at in rows]
 
 
 @app.get("/flows")
@@ -464,15 +599,10 @@ def list_flows(caller: Caller = Depends(subject_or_operator)):
     Takes the operator key or a person's own credential; it describes the machine, not a person, so
     the answer is the same either way.
     """
+    db_flows = _db_flows()
     code_flows = [{"name": f.name, "version": f.version, "on": f.on.name,
                    "steps": list(f.steps), "source": "image", "status": "active"}
                   for f in vocab.flows.values()]
-    rows = db.execute("SELECT name, version, on_event, steps, params, status, created_by "
-                      "FROM flow_version ORDER BY name, version")
-    db_flows = [{"name": n, "version": v, "on": e, "steps": json.loads(st),
-                 "params": json.loads(p or "{}"), "status": status,
-                 "created_by": by, "source": "api"}
-                for n, v, e, st, p, status, by in rows]
     # RUNTIME VERSIONS THAT SHADOW THE IMAGE'S with fewer steps — the F57 class. Surfaced on the
     # listing rather than only in a startup log, because the log is read when somebody already
     # suspects something and this is the defect where nobody does.
@@ -485,7 +615,18 @@ def list_flows(caller: Caller = Depends(subject_or_operator)):
 
 @app.post("/flows", status_code=201, dependencies=[Depends(auth)])
 def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api")):
-    _refuse_if_gated("flows_submit")
+    """Author a new version of a flow: an event to react to, and the ordered steps to run.
+
+    `steps` may only name steps this deployment already carries — `GET /flows` lists the whole
+    vocabulary under `steps_vocabulary`, and an unknown name is refused with the list rather
+    than accepted and discovered at run time. The API never accepts code: a flow is data.
+
+    Versions are minted, never overwritten. Submitting a name that already exists files the
+    NEXT version beside it, and reactions already in flight keep the version they were admitted
+    on. `activate` (default true) makes it live within about ten seconds; false files it as a
+    draft for `POST /flows/{name}/{version}/activate` later.
+
+    Operator-gated: this door reads the deployment's own operator key, never the caller's."""
     missing = [s for s in sub.steps if s not in vocab.steps]
     if missing:
         raise HTTPException(status_code=400,
@@ -502,6 +643,43 @@ def submit_flow(sub: FlowSubmission, x_actor: str = Header(default="api")):
                 "p": json.dumps(sub.params), "st": status, "by": x_actor, "t": clock.now()})
     return {"name": sub.name, "version": version, "status": status,
             "live_within_s": 10 if status == "active" else None}
+
+
+@app.get("/flows/pages")
+def flow_pages(bodies: int = 1, only: str = "",
+               caller: Caller = Depends(subject_or_operator)):
+    """THE PAGE OF EVERY FLOW SOMEBODY WROTE — one per runtime-authored VERSION, as markdown.
+
+    Founder, 2026-09-06: *"we want to be able to write flows for the global chat as we like."*
+    `flows_submit` files a flow as data and the worker runs it about ten seconds later; this is
+    where the admin reads what they just made. Same page shape as the image's flows carry in
+    `_global/flows/` (#1615/#1626) — trigger, the steps in order with what each reads, does and
+    leaves behind, what it mails, the rules it honours and the Python at the foot — plus the three
+    facts only a runtime version has: who activated it, whether it is still the version new facts
+    react on, and which version replaced it when it is not.
+
+    THIS ROUTE RENDERS; IT DOES NOT WRITE. The page has to land in `_global/flows/`, and this
+    service has no `_global`: compose gives flows-api no volumes at all, while agent-api holds the
+    writable organisation tier (`control_plane/api._global_store`) and already seeds files into it.
+    So the writer is agent-api's `flow_pages_watch`, which polls this and reconciles the directory
+    — and the reason it is a poll rather than a call from here is that a page is a promise the
+    product keeps continuously: a hook fires once, and when its one write cannot land (a read-only
+    mirror, agent-api restarting) the flow is live with no page and nothing retries.
+
+    `bodies=0` answers the same list without the markdown — the poll shape, so the hot loop carries
+    an etag per page instead of every step's source. `only=a@1,b@2` narrows to named pages, which is
+    what the writer asks for once it knows which ones changed.
+
+    Takes the operator key or a person's own credential, exactly like `GET /flows`: it describes the
+    machine, not a person."""
+    wanted = {s.strip() for s in (only or "").split(",") if s.strip()}
+    pages = flows_pages.runtime_pages(vocab, _db_flows())
+    if wanted:
+        pages = [p for p in pages
+                 if p["file"] in wanted or f"{p['flow']}@{p['version']}" in wanted]
+    if not bodies:
+        pages = [{k: v for k, v in p.items() if k != "body"} for p in pages]
+    return {"dir": flows_pages.PAGES_DIR[-1], "pages": pages}
 
 
 class EventSubmission(BaseModel):
@@ -553,8 +731,8 @@ def admit_event(ev: EventSubmission, x_actor: str = Header(default="")):
     refs = {**ev.refs, "admitted_by": actor}
     n = admit(db, vocab, clock, source_event_id=ev.source_event_id,
               event_type=ev.event_type, subject_refs=refs)
-    return _with_gate({"event_type": ev.event_type, "source_event_id": ev.source_event_id,
-                       "admitted_by": actor, "reactions_created": n, "duplicate": n == 0})
+    return {"event_type": ev.event_type, "source_event_id": ev.source_event_id,
+            "admitted_by": actor, "reactions_created": n, "duplicate": n == 0}
 
 
 class SeedRow(BaseModel):
@@ -628,14 +806,22 @@ def admit_batch(batch: SeedBatch, x_actor: str = Header(default="")):
     log = {"admitted_by": actor, "submitted": len(batch.meetings),
            "admitted": admitted, "duplicates": dupes,
            "failed": sum(1 for r in out if "error" in r)}
-    return _with_gate({**log, "meetings": out})
+    return {**log, "meetings": out}
 
 
 @app.post("/flows/{name}/{version}/{action}", dependencies=[Depends(auth)])
 def set_flow_status(name: str, version: int, action: str):
+    """Activate or retire ONE version of a flow, addressed by its name and version number.
+
+    `action` is `activate` or `retire` and nothing else. Activating makes that version the one
+    new facts react on, within about ten seconds; retiring stops it being chosen without
+    deleting it or disturbing reactions already running on it — a retired version can be
+    activated again, so this is reversible and is the safe way to take a flow out of service.
+
+    Use `GET /flows` to see which versions exist and which one is active. Operator-gated: this
+    door reads the deployment's own operator key, never the caller's."""
     if action not in ("activate", "retire"):
         raise HTTPException(status_code=404, detail="activate | retire")
-    _refuse_if_gated(f"flows_{action}")
     st = "active" if action == "activate" else "retired"
     rows = db.execute("UPDATE flow_version SET status=:s WHERE name=:n AND version=:v RETURNING name",
                       {"s": st, "n": name, "v": version})
@@ -734,9 +920,7 @@ def timeline(subject: str = "", since: str = "", until: str = "", limit: int = 2
     back, 30 forward) because half of what decision 31 asks for is in the future. `limit` keeps the
     events NEAREST NOW, not the oldest rows the engine still holds.
 
-    Read-only: it admits nothing, signals nothing and writes nothing. It therefore stays open while
-    the instance gate is up, exactly like `GET /flows` and `GET /reactions` — an admin must be able
-    to see what the machine has done.
+    Read-only: it admits nothing, signals nothing and writes nothing.
 
     `meetings=false` drops the gateway hop and answers from this database alone — the offline shape,
     used by the proof and by any caller that cannot reach the gateway.
@@ -1123,6 +1307,36 @@ def friction_so_far(since: str = "", limit: int = 40,
     return {"subject": subj, "count": len(rows), "reports": rows}
 
 
+@app.post("/friction/{friction_id}/fix", status_code=201, dependencies=[Depends(auth)])
+def friction_fixed(friction_id: str, fix_ref: str = ""):
+    """Close one report against the change that addressed it (#1510's C3 — PRD decision 33 §4,
+    ported onto the flows carrier). OPERATOR ONLY: a fixing agent closes reports filed by ANY
+    subject, which only the operator may do — the same authority `friction_dump`'s whole-instance
+    read already requires, and the same rule the pre-cutover Redis store enforced.
+
+    `fix_ref` is required and unvalidated on purpose — a commit sha, a PR url, a branch, or one
+    sentence naming the change. A record marked fixed with nothing to point at is indistinguishable
+    from one somebody wanted off the list. The id is NOT verified against an existing
+    `friction.reported` row before admission: `admit()` is fire-and-forget everywhere else on this
+    surface (the agent-domain desk carriers do not check either, per their own census entries), and a fix for an id nobody
+    ever filed costs nothing beyond an inert reaction row — recurrence, unlike the old store, is not
+    resurrected here (see the carrier's own census entry)."""
+    fid = friction_id.strip()
+    ref = fix_ref.strip()[:300]
+    if not fid:
+        raise HTTPException(status_code=404, detail="no such friction record")
+    if not ref:
+        raise HTTPException(status_code=400, detail=(
+            "fix_ref is required — a commit, a PR, or a sentence naming the change. A record "
+            "marked fixed with nothing to point at is indistinguishable from one somebody wanted "
+            "off the list."))
+    vocab.refresh_from_db(db)          # the friction_fix flow may have been (re)submitted since boot
+    assert production.FRICTION_FIXED.name == "friction.fixed"
+    admit(db, vocab, clock, source_event_id=f"friction-fix-{fid}",
+         event_type="friction.fixed", subject_refs={"friction_id": fid, "fix_ref": ref})
+    return {"id": fid, "status": "fixed", "fix_ref": ref}
+
+
 def bind_host() -> str:
     """Which interface to listen on — loopback unless the deployment says otherwise.
 
@@ -1161,7 +1375,10 @@ def contract_preflight() -> dict:
 
 def main() -> int:  # pragma: no cover — process entrypoint
     import uvicorn
-    contract_preflight()
+    # BEFORE THE PORT IS BOUND. `uvicorn.run` runs the lifespan, which runs this again, so a
+    # misconfigured deployment would refuse either way — but refusing here means it never listens
+    # at all, which is what "no door, no boot" has always meant on this service.
+    boot()
     port = int(os.environ.get("VEXA_FLOWS_API_PORT", "18200"))
     host = bind_host()
     print(f"flows-api up on {host}:{port} · vocabulary of {len(vocab.steps)} steps", flush=True)

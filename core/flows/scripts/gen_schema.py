@@ -21,7 +21,7 @@ def dump(sql, *a, **kw):
                       .replace("CREATE INDEX", "CREATE INDEX IF NOT EXISTS") + ";")
 
 
-engine = create_mock_engine("postgresql+psycopg://", dump)
+engine = create_mock_engine("postgresql+pg8000://", dump)
 Base.metadata.create_all(engine, checkfirst=False)
 
 header = ("-- GENERATED from src/flows_schema/models.py (the SSOT) by core/flows/scripts/gen_schema.py.\n"

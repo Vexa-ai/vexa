@@ -12,7 +12,6 @@ exception, never a silent skip, and the absent door never knocked on.**
 """
 from __future__ import annotations
 
-import agent_half
 import flows_config
 import pytest
 from flows import Done, FakeClock, NotPresent, Registry, StepCtx, admit, status, tick
@@ -20,6 +19,23 @@ from sqlite_double import SqliteDB
 from flows_steps import common
 
 import flows_defs.production as production
+
+
+@pytest.fixture(autouse=True)
+def _person_settings_are_declared(monkeypatch):
+    """THIS TEST PROCESS HAS AN IDENTITY DOMAIN, the way `conftest` gives it an admin key — and for
+    the same reason, one door along.
+
+    `person_settings` used to answer the DEFAULTS on any failure, so every test in this file that
+    reached `setting()` without saying so got them from a swallowed exception: there is no identity
+    service here, `require_internal_secret` refuses, and the broad `except` turned that into "this
+    person prefers the defaults". 0.12.27 makes an unreachable identity RETRYABLE instead
+    (`SettingsUnavailable`), so a test standing on that swallow now fails — correctly. The suite
+    declares what a deployment declares. Tests that are ABOUT a preference still set their own;
+    this is the baseline underneath them."""
+    common.forget_person_settings()
+    monkeypatch.setattr(common, "person_settings", lambda uid: dict(common._SETTING_DEFAULTS))
+
 
 
 class _StubDB:
@@ -143,22 +159,16 @@ def test_the_rename_carries_the_declaration_with_the_function():
 #: Every production step whose body reaches the agent domain — `ag.*`, `mint_scaffold`, `ws_file`
 #: or `scaffolded`. Written out rather than derived, because the point of the list is to be READ in
 #: review; `test_no_production_step_reaches_the_agent_domain_undeclared` is the net underneath it.
-#:
-#: `production.py`'s own half — registered in every tree.
-AGENT_STEPS_CORE = {
+AGENT_STEPS = {
     "ack_by_email", "open_person", "drive_person", "open_group", "drive_group",
     "process_meeting", "email_minutes", "email_attendees", "drop_to_attendees",
+    "prepare_meeting", "feedback_turn",
+    # The two desk cards (PRD decision 42.2). They RE-READ the desk before asking — the fact is
+    # old the moment it is published — and the desk is agent state. A deployment without the agent
+    # domain has no card to show and, because agent-api is what publishes the events these two
+    # react to, no reaction either: absent twice over, which is the correct absence.
+    "await_scaffold", "await_claim",
 }
-#: `production_agent.py`'s half — registered only where that OPTIONAL module is in the tree, and
-#: `agent_half` is the same `find_spec` signal `production._register_agent_flows` reads. The two
-#: desk cards (PRD decision 42.2) RE-READ the desk before asking — the fact is old the moment it is
-#: published — and the desk is agent state. A deployment without the agent domain has no card to
-#: show and, because agent-api is what publishes the events these two react to, no reaction either:
-#: absent twice over, which is the correct absence.
-AGENT_STEPS_AGENT_HALF = {"prepare_meeting", "feedback_turn", "await_scaffold", "await_claim"}
-assert AGENT_STEPS_AGENT_HALF == set(agent_half.STEPS)      # one list, two readers
-#: The set this tree must register. Composed, never loosened: `==` still holds on both trees.
-AGENT_STEPS = AGENT_STEPS_CORE | agent_half.only_if_present(AGENT_STEPS_AGENT_HALF)
 
 
 def _production_registry() -> Registry:
@@ -189,14 +199,26 @@ def test_no_production_step_reaches_the_agent_domain_undeclared():
 
 def test_every_production_reaction_reaches_a_terminal_state_with_agents_absent(monkeypatch):
     """THE CONTRACT (PRD decision 40.7). Every flow the production definitions register, admitted
-    with the agent domain absent, must END — and the agent-dispatching steps must end `done` with
-    a `not_present` reason rather than `failed` after N retries against a door that is not there.
+    with the agent domain absent, must END — never `failed` after N retries against a door that is
+    not there, and never parked.
 
     The proof that nothing was knocked on is `calls`: the agent-domain HTTP helpers are replaced
     with functions that record and raise, so a step that reached one both fails the test and says
-    which step it was."""
+    which step it was.
+
+    THIS TEST USED TO ALSO ASSERT `reason == "agent:not_present"` FOR A FLOW WHOSE FIRST STEP
+    NEEDS THE AGENT, and that assertion was the defect written down as a contract (F-D20): it
+    passed precisely because `post_meeting` ended at step one and the three steps behind it never
+    ran. Ending is the invariant; ending AT THE FIRST STEP is not. What each step does about an
+    absent domain is now its own declaration, and `tests/test_no_agents_degrade.py` holds the
+    per-step contract — including that `post_meeting` still mails the person.
+
+    `production.notify` is intercepted for the same reason: `email_minutes` now RUNS on this
+    profile, and a test that leaves it holding the real SMTP notifier opens a socket."""
     reg = _production_registry()
     calls: list[str] = []
+    monkeypatch.setattr(production, "notify",
+                        lambda *a, **k: "<no-mail-in-this-test@test>")
 
     def _forbidden(*a, **k):
         calls.append(str(a[:2]))
@@ -241,7 +263,6 @@ def test_every_production_reaction_reaches_a_terminal_state_with_agents_absent(m
         assert st["status"] in terminal, f"{name}@{version} parked in {st['status']}: {st['reason']}"
         if flow.steps[0] in AGENT_STEPS:
             assert st["status"] == "done", f"{name} FAILED instead of degrading: {st['reason']}"
-            assert (st["reason"] or "").startswith("agent:not_present"), st["reason"]
     assert calls == []
 
 

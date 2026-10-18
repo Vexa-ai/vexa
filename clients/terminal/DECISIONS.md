@@ -66,6 +66,14 @@ matter here — `schema`, `contract-version`, `isolation`, `graph`, `python`, `n
 up the README dirs I introduce, then push with `git push --no-verify` (the bypass the hook itself
 documents) to sync the branch to bbb. The full stack-aware gate run happens on bbb.
 
+> **SUPERSEDED, 2026-09-06 ([Vexa-ai/vexa#1625](https://github.com/Vexa-ai/vexa/issues/1625)).** Both
+> halves of this decision are now false. The hook has not run the full `pnpm gates` for some time —
+> it runs a fast static subset and leaves the heavy classes to CI — and it no longer documents a
+> bypass, because an environment gap (`uv` installed where the hook's `PATH` could not see it) and a
+> real gate break were producing the identical instruction, and that instruction skips both. It now
+> resolves user-scoped tool installs and, when one is genuinely absent, says how to install it.
+> Record kept for history; do not follow it.
+
 ## D6 — onboarding + workspace UX hardening
 A pass to make the first-run + workspace experience real (no mocks, no dead UI):
 

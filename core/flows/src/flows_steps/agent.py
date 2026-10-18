@@ -11,15 +11,23 @@ from flows import Done, StepCtx, StepError, Wait
 from .common import agent_door, http, require_internal_secret, scaffolded, swallowed, ws_file
 
 
+def as_person(uid) -> dict:
+    """The headers flows sends agent-api to act FOR a person: their id, carried by the internal
+    tier. agent-api believes an asserted X-User-Id only from the gateway's signature or from a
+    service presenting `X-Internal-Secret` (gateway-identity.v1) — flows is the second kind."""
+    return {"X-User-Id": str(uid), "X-Internal-Secret": require_internal_secret()}
+
+
 def history(uid: str, session: str) -> list:
     code, hist = http("GET", f"{agent_door()}/api/sessions/{urllib.parse.quote(session)}/history",
-                      {"X-User-Id": uid})
+                      as_person(uid))
     if isinstance(hist, dict):
         hist = hist.get("turns", [])          # the endpoint wraps: {"turns": [...]}
     return hist if isinstance(hist, list) else []
 
 
-def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None) -> int:
+def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None,
+                  flow: str = "", step: str = "") -> int:
     """Fire an agent turn; returns the history length BEFORE it (the collect baseline).
     /api/chat is an SSE STREAM that stays open for the whole turn — a client timeout while
     the stream runs is SUCCESS, not failure (the double-dispatch bug of 2026-08-23 evening).
@@ -40,13 +48,13 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
                              so the far side never has to guess a person from an email local part.
       ``read_max``        -> ``room_read_max``: the flow's cap, clamped to a server ceiling.
 
-    THE INTERNAL-TIER HEADER IS PART OF THE ROOM, NOT AN EXTRA. agent-api refuses a room to any
-    caller that cannot present ``X-Internal-Secret``, so it goes on the same post. Its value comes
-    from the environment (``INTERNAL_API_SECRET``, a mode-600 file the lane's start script
-    exports) and never from this repository; both entrypoints refuse to start without it, so by
-    the time a turn is dispatched it exists.
+    THE INTERNAL-TIER HEADER RIDES EVERY POST (``as_person``). agent-api believes the X-User-Id
+    only beside it, and refuses a room to any caller that cannot present it. Its value comes from
+    the environment (``INTERNAL_API_SECRET``, a mode-600 file the lane's start script exports) and
+    never from this repository; both entrypoints refuse to start without it, so by the time a turn
+    is dispatched it exists.
 
-    Omitted entirely when there is no room, so every other dispatch in this file sends exactly the
+    The room fields are omitted entirely when there is no room, so every other dispatch in this file sends exactly the
     body it has always sent.
 
     WHAT IS AND IS NOT "THE TURN IS RUNNING" (P21b). This used to be `except Exception: pass`, with
@@ -58,12 +66,26 @@ def dispatch_turn(uid: str, session: str, prompt: str, room: dict | None = None)
     `collect_reply` waited for a reply that was never coming, for as long as its caller allowed.
     A dispatch that did not happen, reported as one that did, is the exact shape P21 names.
 
-    So: the status is checked, and only a TIMEOUT is treated as success."""
+    So: the status is checked, and only a TIMEOUT is treated as success.
+
+    ``flow`` / ``step`` SAY WHO COMPOSED THIS TURN (Vexa-ai/vexa#1605). Nobody typed it, and on
+    2026-09-06 the founder opened a held meeting's chat and read the whole `process-meeting` kick
+    back as his own grey bubble — because the post carried nothing that said a machine wrote it.
+    They travel as HEADERS, not body fields, and that is deliberate: `ChatBody` is `extra="forbid"`,
+    so a field this side invents 422s the whole dispatch against an agent-api that predates it,
+    while an unread header costs the turn its label and nothing else. agent-api composes the mark
+    (`shared/marks.flow_mark`) — the marks are its vocabulary, and a caller able to compose one
+    could compose any of them.
+
+    Omitted when the caller names neither, so every dispatch that does not identify itself sends
+    exactly the body and headers it has always sent."""
     base = len(history(uid, session))
     body = {"prompt": prompt, "session": session}
-    headers = {"X-User-Id": uid}
+    headers = as_person(uid)
+    if flow and step:
+        headers["X-Vexa-Flow"] = str(flow)
+        headers["X-Vexa-Flow-Step"] = str(step)
     if room and room.get("meeting_id"):
-        headers["X-Internal-Secret"] = require_internal_secret()
         body["room_meeting_id"] = str(room["meeting_id"])
         if room.get("read"):
             body["room_participants"] = [str(x) for x in room["read"]]
@@ -145,10 +167,67 @@ def workspace_init(uid: str) -> dict:
     call 404'd" the same observable event: the next step then wrote into, or read out of, a
     directory that is not a git repo, and the failure surfaced somewhere with no information
     about its cause."""
-    code, body = http("POST", f"{agent_door()}/api/workspace/init", {"X-User-Id": uid}, {})
+    code, body = http("POST", f"{agent_door()}/api/workspace/init", as_person(uid), {})
     if not _ok(code):
         raise StepError(f"workspace init for {uid}: HTTP {code} — {str(body)[:200]}")
     return body if isinstance(body, dict) else {}
+
+
+def mint_meeting_note(uid: str, meeting_id, path: str = "") -> str:
+    """THIS MEETING'S PAGE ON THIS PERSON'S DESK, minted if it is not there — the path, or `""`.
+
+    Vexa-ai/vexa#1601: *"the meeting doc exists from the moment the meeting exists for this
+    person"*. A chat that sends a bot gets its page inside the turn, from agent-api itself; a
+    meeting that arrives from the mailbox has no chat, so the flow asks for the same act here at the
+    moment the row is created — and agent-api records the path on that row, which is what
+    `_note_path` reads back instead of composing a second spelling.
+
+    IDEMPOTENT on the far side: a page already there comes back untouched, never refreshed.
+
+    DEGRADES, NEVER RAISES. A page that could not be minted costs the reader a document that
+    appears when the meeting ends, exactly as it does today — it is not worth failing a prepare
+    mail over, and every caller here is a step whose real work is the mail."""
+    body = {"meeting_id": str(meeting_id)}
+    if str(path or "").strip():
+        body["path"] = str(path).strip()
+    try:
+        code, out = http("POST", f"{agent_door()}/api/meeting/note", as_person(uid), body)
+    except Exception as e:  # noqa: BLE001 — see the docstring
+        swallowed("flows_steps.agent.mint_meeting_note", "the meeting's page was not minted", e,
+                  uid=uid, meeting=str(meeting_id))
+        return ""
+    if not _ok(code) or not isinstance(out, dict):
+        swallowed("flows_steps.agent.mint_meeting_note", "the meeting's page was not minted", None,
+                  uid=uid, meeting=str(meeting_id), http=code)
+        return ""
+    return str(out.get("path") or "")
+
+
+def propose(uid: str, *, source: str, act: str, source_label: str = "", by: str = "") -> dict:
+    """APPEND ONE JOB to this person's short list — the empty chat's proposals (Vexa-ai/vexa#1614).
+
+    Founder, 2026-09-06: the empty chat shows *"a short list that is updated by other agents when
+    they see something as JTBD, can have up to 10 items"*. This is the door a flow writes one
+    through. `source` + `act` are together the identity, so a re-run of the same step over the same
+    meeting updates the row it already wrote instead of adding a second — the far side owns that,
+    and the cap, and the ordering.
+
+    DEGRADES, NEVER RAISES, exactly like `mint_meeting_note` and for the same reason: every caller
+    is a step whose real work is something else, and a chip that did not appear is not worth losing
+    a meeting's record over. The swallow is logged, so it is not silent."""
+    body = {"source": str(source), "act": str(act),
+            "source_label": str(source_label or ""), "by": str(by or "")}
+    try:
+        code, out = http("POST", f"{agent_door()}/api/proposals", as_person(uid), body)
+    except Exception as e:  # noqa: BLE001 — see the docstring
+        swallowed("flows_steps.agent.propose", "the proposal was not filed", e,
+                  uid=uid, source=str(source))
+        return {}
+    if not _ok(code) or not isinstance(out, dict):
+        swallowed("flows_steps.agent.propose", "the proposal was not filed", None,
+                  uid=uid, source=str(source), http=code)
+        return {}
+    return out
 
 
 def head_sha(uid: str) -> str:
@@ -160,7 +239,7 @@ def head_sha(uid: str) -> str:
     failed read compares equal to a failed read and the detector stays silent rather than
     failing a meeting on its own blind spot."""
     try:
-        code, body = http("GET", f"{agent_door()}/api/workspace/git", {"X-User-Id": uid}, None)
+        code, body = http("GET", f"{agent_door()}/api/workspace/git", as_person(uid), None)
     except Exception as e:  # noqa: BLE001 — a probe never costs the caller its step
         swallowed("flows_steps.agent.head_sha", "desk history unreadable", e, uid=uid)
         return ""
@@ -177,7 +256,7 @@ def head_sha(uid: str) -> str:
 def head_subjects(uid: str, limit: int = 3) -> list:
     """The newest commit subjects on a desk — for naming, in a failure, exactly what landed."""
     try:
-        code, body = http("GET", f"{agent_door()}/api/workspace/git", {"X-User-Id": uid}, None)
+        code, body = http("GET", f"{agent_door()}/api/workspace/git", as_person(uid), None)
     except Exception as e:  # noqa: BLE001 — a probe never costs the caller its step
         swallowed("flows_steps.agent.head_subjects", "desk history unreadable", e, uid=uid)
         return []
@@ -189,6 +268,35 @@ def head_subjects(uid: str, limit: int = 3) -> list:
     for c in (body.get("commits") or [])[:limit]:
         if isinstance(c, dict):
             out.append(f"{str(c.get('sha') or '')[:9]} {c.get('subject') or c.get('message') or ''}")
+    return out
+
+
+def reset_desk(uid: str, sha: str, reason: str = "") -> dict:
+    """PUT ONE SUBJECT'S DESK BACK to a sha this flow witnessed itself, and say whether it landed.
+
+    The other half of `head_sha`. That one takes the BEFORE witness; this one undoes whatever moved
+    HEAD past it. It exists because the decision-22 detector in `process_meeting` was loud, correct
+    and un-actionable: on 2026-09-06 it fired twice, and both times the recovery was a person
+    resetting a repository by hand and re-firing the reaction, while a grounded report sat unsent.
+
+    ONLY BACKWARD, and only the caller's own desk — agent-api refuses a sha that is not an ancestor
+    of HEAD and takes no workspace name at all, so the worst this can do is remove commits made after
+    the witness. It is gated on `X-Internal-Secret`, the same edge the meeting room opens on.
+
+    DEGRADES, NEVER RAISES, and the shape says which happened: `{"reset": bool, "detail": str, ...}`.
+    A caller that cannot reset must say so in its refusal rather than die with a second failure on
+    top of the first — the person reading it needs the ORIGINAL reason and the command to run."""
+    body = {"sha": str(sha or "")}
+    if reason:
+        body["reason"] = str(reason)[:200]
+    try:
+        code, out = http("POST", f"{agent_door()}/api/workspace/git/reset",
+                         as_person(uid), body)
+    except Exception as e:  # noqa: BLE001 — see the docstring
+        swallowed("flows_steps.agent.reset_desk", "the desk could not be reset", e, uid=uid, sha=sha)
+        return {"reset": False, "detail": f"agent-api unreachable: {e}"}
+    if not _ok(code) or not isinstance(out, dict):
+        return {"reset": False, "detail": f"agent-api answered {code} — {str(out)[:200]}"}
     return out
 
 
@@ -206,7 +314,7 @@ def workspace_write(uid: str, path: str, content: str) -> None:
 
     A non-2xx RAISES: a write that silently did not land leaves the workspace disagreeing with a
     mail that has already gone out, and nobody would ever learn that from a return value."""
-    code, body = http("PUT", f"{agent_door()}/api/workspace/file", {"X-User-Id": uid},
+    code, body = http("PUT", f"{agent_door()}/api/workspace/file", as_person(uid),
                       {"path": path, "content": content})
     if not _ok(code):
         raise StepError(f"workspace write {path!r} for {uid}: HTTP {code} — {str(body)[:200]}")

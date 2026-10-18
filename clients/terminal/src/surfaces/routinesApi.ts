@@ -6,7 +6,12 @@
  *  surface catches it and shows the error, so a failure is never hidden as "no routines". */
 import { getJson } from "./apiClient";
 
-export interface Routine { id: string; name: string; cron: string; plan_summary?: string; enabled: boolean }
+export interface Routine {
+  id: string; name: string; cron: string; plan_summary?: string; enabled: boolean;
+  /** Written where no person stood behind it (an agent's write on the workspace, or a run with nobody
+   *  watching): not armed until the person confirms it. */
+  pending_confirmation?: boolean;
+}
 
 export async function listRoutines(): Promise<Routine[]> {
   const data = await getJson<{ routines?: Routine[] }>(`/api/routines`);
@@ -15,6 +20,11 @@ export async function listRoutines(): Promise<Routine[]> {
 
 export async function deleteRoutine(id: string): Promise<void> {
   await getJson(`/api/routines/${id}`, { method: "DELETE" });
+}
+
+/** The person stands behind this routine as its file reads now — arms one shown as pending. */
+export async function confirmRoutine(name: string): Promise<void> {
+  await getJson(`/api/routines/${encodeURIComponent(name)}/confirm`, { method: "POST" });
 }
 
 export async function setRoutineEnabled(name: string, enabled: boolean): Promise<void> {

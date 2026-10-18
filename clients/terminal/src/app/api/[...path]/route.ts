@@ -47,6 +47,8 @@ async function forward(req: NextRequest, params: Promise<{ path: string[] }>): P
   }
   const { url, headers } = await upstreamFor(joined, req.nextUrl.search);
 
+  const range = req.headers?.get("range");
+  if (range && joined.startsWith("recordings/")) (headers as Record<string, string>)["Range"] = range;
   const init: RequestInit = { method: req.method, headers: { ...headers }, cache: "no-store" };
   if (req.method !== "GET" && req.method !== "DELETE") {
     const body = await req.text();
@@ -75,6 +77,15 @@ async function forward(req: NextRequest, params: Promise<{ path: string[] }>): P
     // which would land in the catch below and turn a successful DELETE into a 502.
     if (upstream.status === 204 || upstream.status === 205 || upstream.status === 304) {
       return new Response(null, { status: upstream.status, headers: { "Cache-Control": "no-cache" } });
+    }
+
+    if (/^recordings\/[^/]+\/media\/[^/]+\/raw$/.test(joined)) {
+      const mediaHeaders = new Headers({ "Cache-Control": "private, no-store" });
+      for (const name of ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"]) {
+        const value = upstream.headers.get(name);
+        if (value) mediaHeaders.set(name, value);
+      }
+      return new Response(upstream.body, { status: upstream.status, headers: mediaHeaders });
     }
 
     return new Response(await upstream.text(), {

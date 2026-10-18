@@ -9,7 +9,7 @@ import type { MeetingMock, TranscriptLine } from "./meetingModel";
 import { onGatewayWSConnected, onMeetingStatus } from "./gatewayWS";
 
 /** A row from meeting-api GET /meetings (live AND past). */
-interface MeetingRowDTO {
+export interface MeetingRowDTO {
   id: number | string;
   platform: string;
   native_meeting_id: string | null;   // null on a link-less PLANNED meeting (platform 'unknown')
@@ -31,7 +31,20 @@ interface MeetingRowDTO {
     auto_join_error?: string;
     constructed_meeting_url?: string;
     attendees?: { email: string; name?: string; partstat?: string }[];
+    // stamped by meeting-api when the owner deletes the meeting's transcript and recordings; the
+    // row itself is kept as history. Its shape is api.v1's `ArtifactDeletion`
+    // (core/gateway/contracts/api.v1), and `artifactsDeleted` below is its one reader here.
+    artifact_deletion?: { state: "pending" | "completed"; [extra: string]: unknown } | null;
   } | null;
+}
+
+/** Has the owner deleted (or is deleting) this meeting's transcript and recordings? The api.v1
+ *  `MeetingResponse.data.artifact_deletion` stamp, in either of its states, says so; its tests read
+ *  the contract's own goldens, so a reshape of that field fails here rather than silently showing a
+ *  deleted meeting as one with a transcript. */
+export function artifactsDeleted(d: Pick<MeetingRowDTO, "data">): boolean {
+  const stamp = d.data?.artifact_deletion;
+  return !!stamp && typeof stamp === "object";
 }
 
 /** `stopped` is not a DB enum value — it's derived from a terminal `completed` row that the user stopped
@@ -44,72 +57,27 @@ function displayStatus(d: MeetingRowDTO): string {
 /** A transcript segment from meeting-api GET /transcripts/{platform}/{native}. */
 interface SegmentDTO {
   start?: number | null;
+  end?: number | null;
+  absolute_start_time?: string | null;
+  absolute_end_time?: string | null;
   speaker?: string | null;
   text?: string | null;
 }
 
-/** A persisted processed note from the durable store (`data.processed.views[].doc.notes[]`,
- *  written by meeting-api's db-writer from the copilot's proc stream). SAME producer and shape as
- *  the live SSE `note` event payload — {id, speaker, chapter, text, t?, pass, frozen}. */
-export interface ProcessedNoteDTO {
-  id: string;
-  speaker?: string;
-  chapter?: string;
-  text: string;
-  t?: number;
-  tsMs?: number;   // absent in the durable store (live-only anchor); optional so the merged union renders
-  pass?: number;
-  frozen?: boolean;
-}
-
-/** The copilot view id inside data.processed.views[] (mirrors meeting-api's PROC_VIEW_ID). */
-const COPILOT_NOTES_VIEW_ID = "copilot-notes";
-
-interface ProcessedViewDTO { id?: string; doc?: { notes?: unknown[] } | null }
 interface TranscriptResponseDTO {
   segments?: SegmentDTO[];
-  data?: { processed?: { views?: ProcessedViewDTO[] } | null } | null;
 }
 
-/** Both durable halves of a meeting's transcript response: the raw segments (mapped for the
- *  transcript pane) and the copilot's persisted processed notes. */
+/** The durable half of a meeting's transcript response: the raw recorded segments, mapped for the
+ *  transcript pane. There is no second, "processed" body — PRD decision 34 removed the in-product
+ *  inference pipeline that produced it, so `data.processed` has no producer and is not read. */
 export interface DurableTranscript {
   lines: TranscriptLine[];
-  notes: ProcessedNoteDTO[];
 }
 
-/** Pull the copilot-notes view's notes out of a transcript response body. Exported for tests. */
-export function processedNotesOf(body: TranscriptResponseDTO | null | undefined): ProcessedNoteDTO[] {
-  const views = body?.data?.processed?.views;
-  if (!Array.isArray(views)) return [];
-  const view = views.find((v) => v?.id === COPILOT_NOTES_VIEW_ID);
-  const raw = view?.doc?.notes;
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((n): n is Record<string, unknown> => !!n && typeof n === "object")
-    .map((n) => ({
-      id: String(n.id ?? "").trim(),
-      speaker: typeof n.speaker === "string" ? n.speaker : undefined,
-      chapter: typeof n.chapter === "string" ? n.chapter : undefined,
-      text: typeof n.text === "string" ? n.text : "",
-      t: typeof n.t === "number" && Number.isFinite(n.t) ? n.t : undefined,
-      pass: typeof n.pass === "number" ? n.pass : undefined,
-      frozen: typeof n.frozen === "boolean" ? n.frozen : undefined,
-    }))
-    .filter((n) => n.id && n.text.trim());
-}
-
-/** Merge live note deltas OVER a durable seed by note id (the backend's own merge rule — a live
- *  re-emit of a persisted note updates it in place, never duplicates). Seed order is preserved;
- *  notes only seen live append in arrival order. Exported for tests. */
-export function mergeNotesById<T extends { id: string }>(seed: T[], live: T[]): T[] {
-  if (!seed.length) return live;
-  if (!live.length) return seed;
-  const seedIds = new Set(seed.map((n) => n.id));
-  const liveById = new Map(live.map((n) => [n.id, n]));
-  const out: T[] = seed.map((n) => liveById.get(n.id) ?? n);
-  for (const n of live) if (!seedIds.has(n.id)) out.push(n);
-  return out;
+function transcriptEpochMs(seconds?: number | null, iso?: string | null): number | undefined {
+  if (iso && Number.isFinite(Date.parse(iso))) return Date.parse(iso);
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 1e9 ? seconds * 1000 : undefined;
 }
 
 function formatTranscriptTime(start?: number | null): string {
@@ -191,6 +159,7 @@ function toMock(d: MeetingRowDTO): MeetingMock {
     platform: d.platform === "google_meet" ? "Google Meet" : d.platform,
     has_recording: !!(d.data?.recordings?.length),
     docs: d.data?.docs ?? [],
+    artifacts_deleted: artifactsDeleted(d),
     participants: [],
     mentioned: [],
     actions: [],
@@ -201,7 +170,31 @@ function toMock(d: MeetingRowDTO): MeetingMock {
 
 /** ONE snapshot fetch of the real meetings list (gateway → meeting-api). Seeds / re-seeds the store; the
  *  live deltas thereafter arrive over the WebSocket. Called once on mount and on each (re)connect. */
-async function snapshot() {
+/** Coalesce snapshot bursts. `snapshot()` is fired on mount, on every WS (re)connect, and by every
+ *  status frame naming a row the store does not hold — so anything that repeats upstream becomes a
+ *  request storm here. It did: a gateway close-loop on 2026-09-02 turned one idle browser into 519
+ *  `GET /api/meetings` calls in three minutes, and a store notification on every connectedness
+ *  flip, which flickered the rail under the founder while he was using it.
+ *
+ *  The backoff bug that drove that loop is fixed in `gatewayWS.ts`, but this is the layer that
+ *  AMPLIFIED it, and it should not amplify the next one either. One in-flight snapshot at a time;
+ *  a call arriving while one is running sets a trailing flag and re-runs once when it lands, so a
+ *  burst of N collapses to at most 2 requests and never loses the final state. */
+let snapInFlight = false;
+let snapPending = false;
+
+async function snapshot(): Promise<void> {
+  if (snapInFlight) { snapPending = true; return; }
+  snapInFlight = true;
+  try {
+    await snapshotOnce();
+  } finally {
+    snapInFlight = false;
+    if (snapPending) { snapPending = false; void snapshot(); }
+  }
+}
+
+async function snapshotOnce() {
   const revision = ++storeRevision;
   try {
     const r = await fetch("/api/meetings", { cache: "no-store" });
@@ -214,7 +207,7 @@ async function snapshot() {
     const seen = new Set<string>();
     const next = (list || []).map(toMock).filter((m) => !seen.has(m.id) && (seen.add(m.id), true));
     const key = (m: MeetingMock[]) => m.map((x) =>
-      `${x.id}|${x.live_status}|${x.has_recording}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}`,
+      `${x.id}|${x.live_status}|${x.has_recording}|${x.artifacts_deleted ? "deleted" : ""}|${x.title_custom ?? ""}|${x.scheduled_at ?? ""}|${x.workspace_id ?? ""}|${x.auto_join ?? ""}|${x.auto_join_error ?? ""}|${x.native_id ?? ""}|${(x.attendees ?? []).map((a) => a.email).join("+")}`,
     ).join(",");
     const wasLoaded = loaded;
     loaded = true;
@@ -277,18 +270,17 @@ function ensureStarted() {
   });
 }
 
-const EMPTY_DURABLE: DurableTranscript = { lines: [], notes: [] };
+const EMPTY_DURABLE: DurableTranscript = { lines: [] };
 
 /** Fetch a meeting's DURABLE transcript over REST (gateway → meeting-api): the recorded segments
- *  for the transcript pane PLUS the copilot's persisted processed notes (data.processed.views —
- *  the copilot-notes view). For a past meeting this is THE source; for a live one it seeds
+ *  for the transcript pane. For a past meeting this is THE source; for a live one it seeds
  *  whatever was persisted before the client connected. Returns empties on error.
  *
  *  P0 (wrong-row hydration fix): fetch by the meetings-domain ROW id via
  *  `GET /api/transcripts/by-id/{meetingId}` (owner-scoped downstream). The native path
  *  (`/transcripts/{platform}/{native}`) resolves to the NEWEST row for that native, so a user with
- *  several rows on the same link always read the latest — the notes of an OLDER row vanished. Fetching
- *  by the exact row id returns THAT row's segments + processed notes, never a sibling's (and never
+ *  several rows on the same link always read the latest — an OLDER row's segments vanished. Fetching
+ *  by the exact row id returns THAT row's segments, never a sibling's (and never
  *  another tenant's). `meetingId` is the row id the mock now carries as `id`. */
 export async function fetchDurableTranscript(meetingId: string): Promise<DurableTranscript> {
   try {
@@ -298,15 +290,20 @@ export async function fetchDurableTranscript(meetingId: string): Promise<Durable
     const list = body.segments || [];
     const lines = list
       .filter((s) => (s.text ?? "").trim())
-      .map((s) => ({ t: formatTranscriptTime(s.start), speaker: s.speaker || "Speaker", text: s.text ?? "" }));
-    return { lines, notes: processedNotesOf(body) };
+      .map((s) => ({
+        t: formatTranscriptTime(s.start),
+        tsMs: transcriptEpochMs(s.start, s.absolute_start_time),
+        endMs: transcriptEpochMs(s.end, s.absolute_end_time),
+        offsetSeconds: typeof s.start === "number" && s.start < 1e9 ? s.start : undefined,
+        speaker: s.speaker || "Speaker", text: s.text ?? "",
+      }));
+    return { lines };
   } catch {
     return EMPTY_DURABLE;
   }
 }
 
-/** Fetch a PAST meeting's recorded transcript lines (segments only), by the ROW id. Kept for callers
- *  that don't need the processed notes. */
+/** Fetch a PAST meeting's recorded transcript lines by the ROW id. */
 export async function fetchTranscript(meetingId: string): Promise<TranscriptLine[]> {
   return (await fetchDurableTranscript(meetingId)).lines;
 }
@@ -324,6 +321,36 @@ export function liveMeetingsNow(): MeetingMock[] {
 /** Force a one-shot snapshot re-fetch — call after a dropdown action (schedule/cancel/send/stop) so the
  *  list reflects the new status immediately, even before the echoing WS frame lands. */
 export function refreshMeetings(): void {
+  void snapshot();
+}
+
+/** BIND-TIME REPAIR — the id that arrives before the row does.
+ *
+ *  A meeting row created MID-SESSION (the chat sends a bot; meeting-api makes row 132) does not
+ *  enter this store until something re-snapshots. `applyFrame` re-snapshots on a `meeting.status`
+ *  frame naming an unknown row, but that frame either does not fire on creation or races the
+ *  subscription — so whatever binds the new id first (a chat's `meeting`, a `meeting:` artifact, a
+ *  `?meeting=` deeplink, a chip) is holding an id this list cannot resolve, and the canvas called
+ *  that "Meeting not found" for a meeting the gateway was serving 200.
+ *
+ *  So BINDING an unknown id ASKS, once. Throttled per id, because every one of those call sites
+ *  fires from a render path: the amplification lesson `snapshot()` already carries (2026-09-02, one
+ *  idle browser turned into 519 `GET /api/meetings` in three minutes) counts double for something a
+ *  re-render can trigger. A row that is PRESENT costs nothing and clears its own throttle, so an id
+ *  that goes away and comes back is asked for again rather than remembered as hopeless. */
+const REBIND_ASK_MS = 10_000;
+const askedFor = new Map<string, number>();
+export function ensureMeetingKnown(id: string | null | undefined): void {
+  const key = (id ?? "").trim();
+  if (!key || typeof window === "undefined") return;
+  // Match the way every consumer addresses a meeting: the ROW id, or the native code a deeplink or
+  // a chip carries. Either one being present means there is nothing to ask for.
+  if (meetings.some((m) => m.id === key || m.native_id === key)) { askedFor.delete(key); return; }
+  const now = Date.now();
+  const last = askedFor.get(key);
+  if (last !== undefined && now - last < REBIND_ASK_MS) return;
+  for (const [k, at] of askedFor) if (now - at >= REBIND_ASK_MS) askedFor.delete(k);
+  askedFor.set(key, now);
   void snapshot();
 }
 

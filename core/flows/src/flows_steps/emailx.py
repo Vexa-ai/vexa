@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import email.utils
 import smtplib
+import ssl
 import time
 from email.message import EmailMessage
 from email.mime.multipart import MIMEMultipart
@@ -56,17 +57,61 @@ def _needs_login() -> bool:
     return not flows_config.get("VEXA_MAIL_SMTP_HOST")
 
 
+def _tls_context() -> ssl.SSLContext:
+    """The certificate check every encrypted relay connection makes — implicit TLS and STARTTLS
+    alike. VEXA_MAIL_SMTP_TLS_INSECURE turns off only the check, never the encryption."""
+    ctx = ssl.create_default_context()
+    if flows_config.get_bool("VEXA_MAIL_SMTP_TLS_INSECURE"):
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
 def _smtp():
     """Where mail actually goes.
 
     Hardcoding smtp.gmail.com meant the mail double this rig runs was never reachable: the invite
     path could not be rehearsed, only fired at real recipients. When VEXA_MAIL_SMTP_HOST is set we
     honour it; with nothing set, behaviour is exactly as before.
+
+    A SET HOST IS THE DEPLOYMENT'S RELAY, the one the terminal's sign-in mail uses too (the
+    VEXA_MAIL_SMTP_* family is one setting for every sender), so it is spoken to the same way:
+    implicit TLS when VEXA_MAIL_SMTP_SECURE is on; otherwise STARTTLS whenever the relay offers it
+    (RFC 3207, certificate verified); AUTH LOGIN when VEXA_MAIL_SMTP_USER and VEXA_MAIL_SMTP_PASSWORD
+    are both set — the relay connection comes back already authenticated.
+
+    CREDENTIALS NEVER CROSS AN UNENCRYPTED CONNECTION: with a user and password set, a relay that
+    offers neither implicit TLS nor STARTTLS is refused before AUTH, and the connection is closed.
     """
     if _needs_login():
         return smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20), True
-    return smtplib.SMTP(flows_config.get("VEXA_MAIL_SMTP_HOST"),
-                        flows_config.get_int("VEXA_MAIL_SMTP_PORT"), timeout=20), False
+    host, port = flows_config.get("VEXA_MAIL_SMTP_HOST"), flows_config.get_int("VEXA_MAIL_SMTP_PORT")
+    user = flows_config.get("VEXA_MAIL_SMTP_USER")
+    password = flows_config.get("VEXA_MAIL_SMTP_PASSWORD")
+    if flows_config.get_bool("VEXA_MAIL_SMTP_SECURE"):
+        conn = smtplib.SMTP_SSL(host, port, timeout=20, context=_tls_context())
+        encrypted = True
+    else:
+        conn = smtplib.SMTP(host, port, timeout=20)
+        encrypted = False
+    try:
+        if not encrypted:
+            conn.ehlo()
+            if conn.has_extn("starttls"):
+                conn.starttls(context=_tls_context())
+                conn.ehlo()
+                encrypted = True
+        if user and password:
+            if not encrypted:
+                raise RuntimeError(
+                    f"refusing to send SMTP credentials to {host}:{port} over an unencrypted "
+                    "connection — the relay offers no STARTTLS (set VEXA_MAIL_SMTP_SECURE=1 for an "
+                    "implicit-TLS endpoint)")
+            conn.login(user, password)
+    except BaseException:
+        conn.close()
+        raise
+    return conn, False
 
 
 def send(to: str, subject: str, body: str, *, in_reply_to: str | None = None) -> str:
@@ -120,22 +165,48 @@ def header_safe(value) -> str:
     return " ".join(str(value if value is not None else "").split())
 
 
+def build_rsvp_ics(self_addr: str, organizer_email: str, *, ics_uid: str,
+                   start_epoch: float, title: str) -> str:
+    """The iMIP REPLY body — ONE definition, whichever wire carries it.
+
+    Split out of `send_rsvp_accept` when a second wire arrived (Microsoft Graph). The escaping is
+    the reason it must not be written twice: every value here came off the invite we are
+    answering, and a `SUMMARY` containing a CRLF does not corrupt the file, it CLOSES the
+    property and opens whichever one the attacker names next — inside a REPLY we sign with our
+    own mailbox, into the organizer's calendar (R-B15)."""
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    dtstart = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(start_epoch))
+    return "\r\n".join([
+        "BEGIN:VCALENDAR", "PRODID:-//Vexa//flows//EN", "VERSION:2.0", "METHOD:REPLY",
+        "BEGIN:VEVENT", f"UID:{ics_escape(ics_uid)}", "SEQUENCE:0", f"DTSTAMP:{stamp}",
+        f"DTSTART:{dtstart}",
+        f"ORGANIZER:mailto:{ics_escape(organizer_email)}",
+        f"ATTENDEE;PARTSTAT=ACCEPTED;CN=Vexa:mailto:{ics_escape(self_addr)}",
+        f"SUMMARY:{ics_escape(title)}", "END:VEVENT", "END:VCALENDAR", ""])
+
+
 def send_rsvp_accept(organizer_email: str, *, ics_uid: str, start_epoch: float, title: str) -> str:
     """iMIP REPLY from minimal fields — Google flips this mailbox to 'Yes' in the guest list.
 
     Every value that came from the invite goes through `ics_escape` (and the Subject through
     `header_safe`): the title, the UID and the organizer address are all attacker-adjacent, and
-    this is a message we sign with our own mailbox (R-B15)."""
+    this is a message we sign with our own mailbox (R-B15).
+
+    A Microsoft 365 deployment with SMTP AUTH switched off sends the IDENTICAL calendar bytes as
+    a Graph attachment. Which wire that is, is the deployment's answer to `VEXA_NOTIFY_CHANNEL`
+    and nothing this function decides; the SMTP path below is untouched, down to the header order.
+    """
+    from .notify import channel
+    if getattr(channel(), "name", "smtp") == "graph":
+        from flows_integrations.graph_client import client
+        gc = client()
+        ics = build_rsvp_ics(gc.address(), organizer_email, ics_uid=ics_uid,
+                             start_epoch=start_epoch, title=title)
+        return gc.send_calendar_reply(organizer_email, header_safe(f"Accepted: {title}"),
+                                      "Vexa will attend and take the minutes.", ics)
     addr, pw = creds(login=_needs_login())
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    dtstart = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(start_epoch))
-    ics = "\r\n".join([
-        "BEGIN:VCALENDAR", "PRODID:-//Vexa//flows//EN", "VERSION:2.0", "METHOD:REPLY",
-        "BEGIN:VEVENT", f"UID:{ics_escape(ics_uid)}", "SEQUENCE:0", f"DTSTAMP:{stamp}",
-        f"DTSTART:{dtstart}",
-        f"ORGANIZER:mailto:{ics_escape(organizer_email)}",
-        f"ATTENDEE;PARTSTAT=ACCEPTED;CN=Vexa:mailto:{ics_escape(addr)}",
-        f"SUMMARY:{ics_escape(title)}", "END:VEVENT", "END:VCALENDAR", ""])
+    ics = build_rsvp_ics(addr, organizer_email, ics_uid=ics_uid, start_epoch=start_epoch,
+                         title=title)
     msg = MIMEMultipart("mixed")
     msg["From"], msg["To"] = f"Vexa <{addr}>", organizer_email
     msg["Subject"] = header_safe(f"Accepted: {title}")
