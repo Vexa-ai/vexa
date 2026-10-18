@@ -572,3 +572,45 @@ def test_a_signal_turn_is_handed_the_situation(tmp_path):
     assert "# THE SITUATION" in inline and "## The call" in inline
     assert "Google Meet" in inline and "Install sync" in inline
     assert "## What you may do here" in inline and "this meeting's note" in inline
+
+
+# -- (6) live latency (app.dev 2026-10-18, meeting 162) -------------------------------------------
+# The self-hosted signal model's `base_url` and `thinking` were dropped from the policy agent-api
+# hands signals, so every scoring call went to OpenRouter and answered 401: nothing was ever scored.
+# And the meeting chat's signal worker idled out after 120 s, so a call's later wakes started cold.
+
+_SELF_HOSTED = ('model_signals: {adapter: openai-compatible, route: qwen3.8-27b, secret_ref: none, '
+                'base_url: "http://192.168.1.6:8001/v1/", thinking: off}\n')
+
+
+def test_the_signal_policy_carries_the_self_hosted_model_whole():
+    m = meeting_listen.policy("---\ntranscript_signals: on\n" + _SELF_HOSTED + "---\n")["model_signals"]
+    assert m == {"adapter": "openai-compatible", "route": "qwen3.8-27b", "secret_ref": "none",
+                 "base_url": "http://192.168.1.6:8001/v1", "thinking": "off"}
+
+
+def test_the_signal_policy_takes_what_signals_takes_and_nothing_else():
+    jev = meeting_listen.policy("---\nmodel_signals: {adapter: jev, route: jev-1.13, secret_ref: none, "
+                                "base_url: 'http://x.test/v1', thinking: on}\n---\n")["model_signals"]
+    assert "base_url" not in jev and "thinking" not in jev       # openai-compatible only
+    odd = meeting_listen.policy("---\nmodel_signals: {adapter: openai-compatible, route: q, "
+                                "base_url: 'file:///etc/passwd', thinking: maybe}\n---\n")["model_signals"]
+    assert "base_url" not in odd and "thinking" not in odd
+
+
+def test_the_signal_policy_carries_models_by_tier():
+    raw = ("---\nmodel_signals:\n  cheapest: {adapter: openai-compatible, route: qwen3.8-27b, secret_ref: none, "
+           "base_url: 'http://192.168.1.6:8001/v1', thinking: off}\n"
+           "  small: {adapter: jev, route: jev-1.13, secret_ref: broker:signals/openrouter}\n---\n")
+    m = meeting_listen.policy(raw)["model_signals"]
+    assert set(m) == {"cheapest", "small"}
+    assert m["cheapest"]["base_url"] == "http://192.168.1.6:8001/v1" and m["small"]["adapter"] == "jev"
+    assert meeting_listen.policy("---\nmodel_signals: {cheapest: {adapter: gpt-9}}\n---\n")["model_signals"] is None
+
+
+def test_a_signal_turn_keeps_the_chat_idle_window_so_the_next_wake_is_warm(tmp_path):
+    client, d, rt, _desk = _world(tmp_path)
+    r = client.post("/events", json=_signal_event(), headers=_internal())
+    assert r.status_code == 202, r.text
+    _uid, _profile, env = rt.spawned[-1]
+    assert env["VEXA_IDLE_TIMEOUT_SEC"] == str(d.settings.chat_idle_timeout_sec)

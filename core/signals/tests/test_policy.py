@@ -65,3 +65,15 @@ def test_thinking_off_is_accepted_for_the_openai_compatible_adapter():
 def test_thinking_is_off_or_on_and_only_for_openai_compatible(bad):
     with pytest.raises(ValueError, match="thinking"):
         parse_model(bad)
+
+
+def test_the_self_hosted_model_as_agent_api_answers_it_is_the_one_called():
+    """Live app.dev 2026-10-18 (meeting 162): agent-api dropped `base_url`/`thinking`, so the qwen
+    route was called at OpenRouter and every call answered 401. agent-api now answers the map whole
+    (`meeting_listen.policy`, its test pins this same dict); signals must call THAT endpoint."""
+    answered = {"transcript_signals": "on", "signals_wakes_per_meeting": 200,
+                "model_signals": {"adapter": "openai-compatible", "route": "qwen3.8-27b", "secret_ref": "none",
+                                  "base_url": "http://192.168.1.6:8001/v1", "thinking": "off"}}
+    p, problems = resolve(answered)
+    assert p.active and not problems
+    assert p.model["base_url"] == "http://192.168.1.6:8001/v1" and p.model["thinking"] == "off"

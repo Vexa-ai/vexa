@@ -1236,6 +1236,12 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
         # meeting signal's: the worker names its conversation after this, and without it falls back
         # to `main` — the person's own chat.
         env["VEXA_CHAT_SESSION"] = chat_session(invocation)
+        if invocation["trigger"] == "signal":
+            # A LIVE CALL'S WAKES LAND ON A WARM WORKER (live app.dev 2026-10-18, meeting 162): the
+            # engine's 120 s default let the meeting chat's `-signal` worker exit between two wakes
+            # five minutes apart, and the second wake paid a container start again (wake → turn
+            # started 3.6 s cold, 0.04 s warm). A signal sibling keeps the chat's own window.
+            env["VEXA_IDLE_TIMEOUT_SEC"] = str(settings.chat_idle_timeout_sec)
     # Chat GROUNDED in a live meeting (cookbook #1): the meeting-scoped tool needs the native id +
     # platform to target meetings' published /transcripts.
     #

@@ -22,7 +22,8 @@ see what Vexa listens for and the brief is versioned with the page. agent-api is
       version: 4
 
 POLICY KEYS (`_global/POLICIES.md`, read live): `transcript_signals` (off|on, default off),
-`model_signals` ({adapter: jev|openai-compatible, route, secret_ref}, default none),
+`model_signals` ({adapter: jev|openai-compatible, route, secret_ref, base_url?, thinking?}, or those
+by tier `{cheapest: …, small: …}`; default none),
 `signals_wakes_per_meeting` (12), `signals_cost_per_meeting_usd` (0.50), `signals_default_brief`
 (a brief, default the built-in `DEFAULT_BRIEF`).
 """
@@ -76,6 +77,33 @@ POLICY_DEFAULTS = {
     "signals_default_brief": None,
 }
 ADAPTERS = ("jev", "openai-compatible")
+#: The tiers a company may allow signal models by (signals.v1 `ModelSignalsTiers`).
+MODEL_TIERS = ("cheapest", "small")
+_HTTP_URL = re.compile(r"^https?://[^\s]+$")
+
+
+def _signal_model(m) -> Optional[dict]:
+    """One `model_signals` map as signals takes it, or None. EVERY KEY SIGNALS READS RIDES THROUGH
+    (live app.dev 2026-10-18, meeting 162): `base_url` and `thinking` were dropped here, so the
+    self-hosted model the company named was called at OpenRouter's address, every call answered
+    401, and no line was ever scored — a name said mid-sentence ("…слышат ли нас Векса…") woke
+    nobody until a later sentence happened to START with it, 12 s on. signals validates the map
+    again (`meeting_signals.policy.parse_model`); this keeps only what it would accept."""
+    if not isinstance(m, dict) or str(m.get("adapter") or "").strip() not in ADAPTERS:
+        return None
+    adapter = str(m["adapter"]).strip()
+    out = {"adapter": adapter, "route": str(m.get("route") or "").strip(),
+           "secret_ref": str(m.get("secret_ref") or "").strip()}
+    if adapter == "openai-compatible":
+        base = str(m.get("base_url") or "").strip()
+        if base and _HTTP_URL.match(base):
+            out["base_url"] = base.rstrip("/")
+        thinking = str(m.get("thinking") if m.get("thinking") is not None else "").strip().lower()
+        # YAML reads a bare `off`/`on` as a boolean
+        thinking = {"false": "off", "true": "on"}.get(thinking, thinking)
+        if thinking in ("off", "on"):
+            out["thinking"] = thinking
+    return out
 
 
 class BriefError(ValueError):
@@ -121,10 +149,12 @@ def policy(raw_policies: Optional[str], subject: Optional[str] = None) -> dict:
         if str(subject) in _features.account_answers(raw_policies).get("transcript_signals", frozenset()):
             out["transcript_signals"] = "on"
     m = attrs.get("model_signals")
-    if isinstance(m, dict) and str(m.get("adapter") or "").strip() in ADAPTERS:
-        out["model_signals"] = {"adapter": str(m["adapter"]).strip(),
-                                "route": str(m.get("route") or "").strip(),
-                                "secret_ref": str(m.get("secret_ref") or "").strip()}
+    if isinstance(m, dict) and m and set(m) <= set(MODEL_TIERS):
+        tiers = {t: _signal_model(m[t]) for t in MODEL_TIERS if t in m}
+        tiers = {t: v for t, v in tiers.items() if v is not None}
+        out["model_signals"] = tiers or None
+    else:
+        out["model_signals"] = _signal_model(m)
     try:
         n = int(str(attrs.get("signals_wakes_per_meeting", "")).strip())
         if 0 <= n <= 1000:

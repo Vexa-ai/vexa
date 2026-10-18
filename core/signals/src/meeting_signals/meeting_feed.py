@@ -56,8 +56,15 @@ def feed(row: str) -> str:
 #: "Вексе" (the vocative the ASR writes), "Вэкса" — counts like the Latin one; the other case forms
 #: ("у Вексы", "Вексой") are mentions, not an address, and stay with the model.
 _NAME = r"(?:vexa\b(?!['’]s)|в[еэ]кс[аеэ]?(?!\w))"
-_LEAD = r"(?:hey|hi|ok|okay|so|and|but|please|well|привет|эй|ну|ок|окей|слушай|скажи|пожалуйста)"
+_LEAD = r"(?:hey|hi|hello|ok|okay|so|and|but|please|well|привет|эй|ну|ок|окей|слушай|скажи|пожалуйста)"
+#: THE NAME CLIPPED BY THE ASR (live app.dev, 2026-10-18 census of 125 meeting feeds): "Hello, Vex."
+#: came through 27 times and "Hey Vexon" once, and none woke the agent — the rule tier knew only
+#: "Vexa". A clipped form counts only right after a greeting or as the segment's first word, never
+#: after any comma: "vex" is also an English verb, and "the Vexer channel" is a mention.
+_GREETING = r"(?:hey|hi|hello|ok|okay|привет|эй)"
+_CLIPPED = r"vex(?:o|on)?\b(?!['’]s)"
 _ADDRESS = re.compile(rf"(?:^|[.!?;:,]\s*|(?<!\w){_LEAD}\s+){_NAME}"
+                      rf"|(?:^\s*|(?<!\w){_GREETING}[\s,]+){_CLIPPED}"
                       r"|@vexa\b|\bto\s+vexa\b", re.IGNORECASE)
 
 

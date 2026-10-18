@@ -413,8 +413,43 @@ def test_a_line_the_transcript_could_not_attribute_never_wakes_by_name():
     assert seg("Vexa, mail the deck to everyone", "Maya", True).mode == "addressed"
 
 
-def test_the_widened_names_do_not_address_vexa():
-    """The gate saw "hello Vexa", "Vex", "Vexo", "Vexon" match; at this tree they do not."""
-    from meeting_signals.meeting_feed import addresses_vexa
-    for text in ("Vex, are you there", "Vexo, note that", "Vexon, summarise", "hello Vexa's notes"):
-        assert not addresses_vexa(text), text
+def test_the_clipped_names_wake_only_a_line_someone_is_named_on():
+    """The clipped forms the ASR writes ("Vex", "Vexo", "Vexon" after a greeting or first) are an
+    address only on an attributed line, like "Vexa": unattributed audio saying them never wakes."""
+    from meeting_signals.meeting_feed import parse
+
+    def seg(text, speaker, completed):
+        s = {"text": text, "start": 1, "end": 2, "completed": completed, "segment_id": "x"}
+        if speaker is not None:
+            s["speaker"] = speaker
+        return parse("1-0", {"payload": json.dumps({"type": "transcription", "segments": [s]})})
+
+    for text in ("Vex, are you there", "Vexo, note that", "Vexon, summarise", "hello Vex, mail it"):
+        for speaker in (None, "", "Unknown speaker"):
+            assert seg(text, speaker, False).kind == "other", (text, speaker)
+            assert seg(text, speaker, True).mode == "score", (text, speaker)
+        assert seg(text, "Maya", True).mode == "addressed", text
+    assert seg("hello Vexa's notes", "Maya", True).mode == "score"
+
+
+# -- THE NAME AS THE ASR CLIPS IT (live app.dev 2026-10-18) ----------------------------------------
+# A census of 125 live meeting feeds: "Hello, Vex." 27 times and "Hey Vexon" once, none of them woke
+# the agent, because the rule tier knew only "Vexa". A clipped name counts after a greeting or as the
+# segment's first word; after a bare comma, or inside a word, it stays a mention for the model.
+
+def test_a_clipped_name_after_a_greeting_is_an_address_on_an_interim_and_on_a_final():
+    from meeting_signals.meeting_feed import parse
+
+    def seg(text, completed):
+        return parse("1-0", {"payload": json.dumps({"type": "transcription", "segments": [
+            {"speaker": "A", "text": text, "start": 1, "end": 2, "completed": completed, "segment_id": "x"}]})})
+
+    for text in ("Hello, Vex.", "Hey Vexon, please react on that.", "Vex, can you check the date?",
+                 "hello vexa we need you"):
+        for completed in (False, True):
+            item = seg(text, completed)
+            assert item.kind == "line" and item.mode == "addressed", (text, completed)
+    for text in ("Didn't you said something about the Vexer channel?", "that would vex them, sadly",
+                 "the vex of it", "Vexa's rooms are new"):
+        assert seg(text, True).mode == "score", text
+        assert seg(text, False).kind == "other", text
