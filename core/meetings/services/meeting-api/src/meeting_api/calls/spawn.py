@@ -64,6 +64,9 @@ class InMemoryCallRooms:
         self.rooms.pop(room, None)
         self.deleted.append(room)
 
+    async def list_participants(self, room: str) -> list[dict]:
+        return list((self.rooms.get(room) or {}).get("participants") or [])
+
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
     raw = (os.getenv(name) or "").strip()
@@ -128,6 +131,55 @@ async def record_meeting(calls: Calls, prepared: PreparedCall, meeting_id: int) 
     session only when the row it is told matches this one."""
     await calls.rooms.update_metadata(prepared.native_meeting_id,
                                       {**prepared.notice, "meeting_id": int(meeting_id)})
+
+
+def _hidden(p: dict) -> bool:
+    return bool((p.get("permission") or {}).get("hidden"))
+
+
+async def end_call_room(calls: Calls, meeting_row: dict) -> None:
+    """THE CALL'S MEETING HAS ENDED — its listener is gone (live app.dev 2026-10-18).
+
+    Without this the room outlived its meeting by the room's departure timeout (and forever once
+    somebody rejoined it): agent-api read the room as the session's live call, so starting the call
+    again in the same chat only took a token for that room — no new meeting, no listener, nothing
+    transcribed, and the panel stayed on the ended meeting ("Ended · Bot left").
+
+    The room's metadata is marked ``ended`` first (agent-api then treats the call as over and the next
+    start makes a fresh meeting), then the room is deleted if no PERSON is in it. A person still in
+    it (the transcriber was stopped mid-call) keeps their connection. Best effort, never raises."""
+    if not isinstance(meeting_row, dict) or meeting_row.get("platform") != PLATFORM:
+        return
+    room = str(meeting_row.get("native_meeting_id") or meeting_row.get("platform_specific_id") or "")
+    if not room:
+        return
+    data = meeting_row.get("data") if isinstance(meeting_row.get("data"), dict) else {}
+    call = data.get("call") if isinstance(data.get("call"), dict) else {}
+    notice = {
+        "vexa_call": 1,
+        "transcribed": bool(call.get("transcribed", True)),
+        "transcription_switchable": bool(call.get("transcription_switchable", False)),
+        "owner": str(meeting_row.get("user_id") or ""),
+        "session_id": call.get("session_id"),
+        "meeting_id": meeting_row.get("id"),
+        "ended": True,
+    }
+    try:
+        await calls.rooms.update_metadata(room, notice)
+    except Exception:
+        pass
+    people = None
+    lister = getattr(calls.rooms, "list_participants", None)
+    if lister is not None:
+        try:
+            people = [p for p in (await lister(room)) if isinstance(p, dict) and not _hidden(p)]
+        except Exception:
+            people = None          # unknown: never disconnect someone on a failed read
+    if people == []:
+        try:
+            await calls.rooms.delete_room(room)
+        except Exception:
+            pass
 
 
 async def discard_call(calls: Calls, prepared: PreparedCall) -> None:

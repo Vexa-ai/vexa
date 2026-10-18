@@ -31,6 +31,7 @@ from fastapi import APIRouter, HTTPException, Path, Query, Request
 
 from control_plane import identity_token, session_sync
 from shared import chat_label as chat_label_mod
+from shared.marks import quiet_reply
 
 logger = logging.getLogger("agent_api.chat_read")
 
@@ -76,7 +77,11 @@ def _turns_of(files: dict) -> list[dict]:
         out.append({"role": "user", "text": _user(rec["user_text"]), "at": rec.get("ts")})
         if str(rec.get("reply") or "").strip():
             replies = True
-            out.append({"role": "agent", "text": str(rec["reply"]), "at": rec.get("ts")})
+            # A SIGNAL TURN THAT CHOSE SILENCE recorded `QUIET_REPLY` as its reply: machinery, never
+            # a line anyone (a person or another agent) reads.
+            said = quiet_reply(str(rec["reply"]))
+            if said:
+                out.append({"role": "agent", "text": said, "at": rec.get("ts")})
     if replies or not files:
         return out
     try:

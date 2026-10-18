@@ -170,6 +170,15 @@ def parse_metadata(raw) -> dict:
     return meta if isinstance(meta, dict) else {}
 
 
+def room_ended(room: Optional[dict]) -> bool:
+    """Has this call's meeting ended? meeting-api marks the room's metadata ``ended`` the moment the
+    call's meeting is terminal (its listener is gone) and removes the room when nobody is in it. A
+    room still standing with that mark is a call that is over: starting the call again must make a
+    fresh meeting, never rejoin this one (live app.dev 2026-10-18: "transcription does not start the
+    second time")."""
+    return bool(((room or {}).get("metadata") or {}).get("ended"))
+
+
 def http_share_redeemer(meeting_api_url: str, internal_secret: str):
     """Redeem a call's transcript share AS the participant joining it: meeting-api
     ``POST /transcripts/share/accept`` over the internal tier, naming the participant. Returns a

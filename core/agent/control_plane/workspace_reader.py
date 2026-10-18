@@ -217,7 +217,7 @@ def _real_subdirs(ws: Path, parts: "tuple[str, ...]") -> Iterator[str]:
 # Everything from a marked prompt until the next thing a person actually said is bookkeeping the
 # founder was never meant to read back as his own conversation.
 from shared import attachments as attachments_mod  # noqa: E402
-from shared.marks import PHASE_MARK, act_label, is_signal_turn, quiet_reply, read_message_mark  # noqa: E402 — re-export under this module's long-standing name
+from shared.marks import PHASE_MARK, QUIET_REPLY, act_label, is_signal_turn, quiet_reply, read_message_mark  # noqa: E402 — re-export under this module's long-standing name
 
 # …and the salvage for a turn dispatched BEFORE any of those marks existed (Vexa-ai/vexa#1605):
 # a flow's composed kick names its own kind in its first bracket, which is the only thing a
@@ -386,7 +386,9 @@ def parse_history(raw: str, records: list) -> list[dict]:
         open_turn, cur_agent = cur_agent, None
         if in_phase:
             return  # the phase's reply — nobody was ever shown it, and nobody asked for it
-        if in_signal:
+        # The marker is machinery wherever it appears: a signal turn's reply loses it (and may end
+        # silently), and any other reply that carries it loses it too — it never renders.
+        if in_signal or QUIET_REPLY.lower() in open_turn["text"].lower():
             open_turn["text"] = quiet_reply(open_turn["text"])
         # An agent turn with neither prose nor a single operation is not a turn: it is the
         # residue of a beat that produced nothing, and it rendered as an empty grey card.

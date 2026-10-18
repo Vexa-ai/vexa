@@ -40,4 +40,22 @@ describe("a signal-woken reply in the meeting's chat", () => {
     expect(r.container.textContent).not.toContain("vexa-flow");
     expect(r.container.querySelectorAll('[data-turn="user"]')).toHaveLength(1);
   });
+
+  // LIVE app.dev 2026-10-18: the server's history (before the fix) missed a wake whose mark sat after
+  // the thread preamble, so the quiet reply came back as text with no trigger — and "From the call"
+  // drew a literal "[vexa-quiet]". The marker never renders, whatever the server sent.
+  it("never draws the quiet marker: a silent wake leaves no message, and a reply that spoke loses it", async () => {
+    globalThis.fetch = vi.fn(async (u: string) => ({ ok: true, status: 200, json: async () => (
+      String(u).includes("/history") ? { turns: [
+        { role: "user", text: "This chat's thread id is `s-1`.\n## How you speak\n…\n[vexa-flow:meeting-signal:signal] Signals since your last look (score 0.00): …", user_text: "From the meeting" },
+        { role: "agent", text: "[vexa-quiet]", ops: [] },
+        { role: "user", text: "anything else?", user_text: "anything else?" },
+        { role: "agent", text: "The proxy ships Friday. [VEXA-QUIET]", ops: [] },
+      ] } : { turns: [], sessions: [] }) })) as unknown as typeof fetch;
+    const r = render(<ServicesProvider container={container()}><Chat params={{ session: "signal-wake-quiet" }} /></ServicesProvider>);
+    await screen.findByText("The proxy ships Friday.");
+    expect(r.container.textContent?.toLowerCase()).not.toContain("vexa-quiet");
+    expect(r.container.querySelectorAll("[data-from-meeting]")).toHaveLength(0);
+    expect(r.container.querySelectorAll('[data-turn="agent"]')).toHaveLength(1);
+  });
 });

@@ -253,3 +253,16 @@ def test_a_room_turn_reads_its_own_room_and_never_another(env):
     r = client.get(f"/api/chats/{other}/turns", headers=turn)
     assert r.status_code == 403 and r.json()["detail"]["reason"] == "shared_conversation", r.text
     assert "Salary" not in r.text
+
+
+def test_a_quiet_signal_reply_is_never_read_back_as_a_line():
+    # LIVE app.dev 2026-10-18: the turn record of a signal wake that chose silence holds
+    # `reply: "[vexa-quiet]"`. The marker is machinery: an agent reading the chat never sees it.
+    from control_plane.routers.chat_read import _turns_of
+    from shared.marks import QUIET_REPLY
+
+    lines = (json.dumps({"key": "k0", "user_text": "From the meeting", "reply": QUIET_REPLY}) + "\n"
+             + json.dumps({"key": "k1", "user_text": "and the plan?", "reply": f"The plan stands. {QUIET_REPLY}"}) + "\n")
+    turns = _turns_of({REC: lines.encode()})
+    assert QUIET_REPLY not in json.dumps(turns)
+    assert [t["text"] for t in turns if t["role"] == "agent"] == ["The plan stands."]

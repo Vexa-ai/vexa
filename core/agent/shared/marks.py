@@ -197,10 +197,20 @@ ROOM_SIGNAL_FLOW = "room-signal"
 
 
 def is_signal_turn(text: str) -> bool:
-    """Was this turn started by a meeting or room signal? Read off the mark the control plane wrote."""
-    t = str(text or "").lstrip()
-    return (t.startswith(flow_mark(SIGNAL_FLOW, SIGNAL_STEP))
-            or t.startswith(flow_mark(ROOM_SIGNAL_FLOW, SIGNAL_STEP)))
+    """Was this turn started by a meeting or room signal? Read off the mark the control plane wrote.
+
+    THE MARK OPENS A LINE, NOT NECESSARILY THE PROMPT (live app.dev 2026-10-18): the worker composes
+    a chat turn as the thread preamble and the instruction block FIRST, and the wake's own text —
+    mark included — after them, ~21 KB in. A `startswith` test therefore never matched a stored
+    signal turn, so its `QUIET_REPLY` was never stripped and "[vexa-quiet]" rendered under
+    "From the call". The terminal already found the mark anywhere (`signalWake.ts`); this reads it
+    at the start of any line, which is where `flow_mark` is always written."""
+    t = str(text or "")
+    for flow in (SIGNAL_FLOW, ROOM_SIGNAL_FLOW):
+        mark = flow_mark(flow, SIGNAL_STEP)
+        if t.lstrip().startswith(mark) or f"\n{mark}" in t:
+            return True
+    return False
 
 
 #: What a signal turn answers when it has nothing to say (friction 6, 2026-10-16): a turn the meeting

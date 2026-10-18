@@ -70,6 +70,7 @@ from workspaces.shared import links as links_mod
 from control_plane import display_name as display_mod
 from control_plane import features as features_mod
 from control_plane import front_page
+from control_plane import livekit_rooms
 from control_plane import meeting_mint
 from control_plane import meeting_note
 from control_plane import global_layer
@@ -721,6 +722,10 @@ def build(**d) -> APIRouter:
                 try:
                     room = livekit.room(call["room"])
                 except Exception:  # noqa: BLE001 — a call server that does not answer shows no live call
+                    room = None
+                if room is not None and livekit_rooms.room_ended(room):
+                    # ITS MEETING ENDED (meeting-api marked the room): over, whoever lingers in it
+                    store.end_call(call["session_id"], call["room"])
                     room = None
                 # A CALL IS LIVE ONLY WITH A PERSON IN IT (founder 2026-10-16: "· 0 people · Join"):
                 # the hidden listener is nobody. Empty past its grace, the call is ended here.

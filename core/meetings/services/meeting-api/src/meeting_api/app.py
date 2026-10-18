@@ -318,6 +318,15 @@ def create_app(
         if _deferred_delete and user_id is not None:
             await _deferred_delete[0](int(user_id), int(meeting_id))
 
+    # A call's meeting ended: its room is marked ended (and removed when nobody is in it), so the
+    # session's next start makes a fresh meeting (calls/spawn.py end_call_room). None without calls.
+    _call_ended = None
+    if calls is not None:
+        from .calls.spawn import end_call_room
+
+        async def _call_ended(meeting_row):
+            await end_call_room(calls, meeting_row)
+
     # --- lifecycle: bot lifecycle callbacks + FSM (lifecycle.v1), PERSISTED to the meeting row ---
     sink = LifecycleSink(store=meeting_store if meeting_store is not None else MeetingStore())
     app.state.lifecycle_sink = sink
@@ -349,6 +358,7 @@ def create_app(
         voice_note_drop=_drop_voice_note_stream,
         bot_account_terminal=bot_accounts.on_terminal,
         meeting_ended=_meeting_ended,
+        call_ended=_call_ended,
     )
 
     # --- bot_spawn: POST /bots (invocation.v1 + runtime.v1) ---

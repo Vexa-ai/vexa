@@ -55,6 +55,7 @@ from control_plane import identity_token, pair_rooms, people_directory, policy_d
 from control_plane import private_taint, room_ring, room_switches, session_sync
 from control_plane import workspace_membership as m
 from control_plane.bodies import CHAT_SESSION_PATTERN
+from control_plane.livekit_rooms import room_ended
 from control_plane.ceiling import is_delegated, refusal, refused, require_in_ceiling
 
 logger = logging.getLogger("agent_api.person_call")
@@ -290,9 +291,11 @@ def build(**d) -> APIRouter:
         if call is None:
             return None
         try:
-            if livekit is not None and livekit.room(call["room"]) is None:
-                s.end_call(session_id, call["room"])
-                return None
+            if livekit is not None:
+                room = livekit.room(call["room"])
+                if room is None or room_ended(room):   # gone, or its meeting ended (calls.py's rule)
+                    s.end_call(session_id, call["room"])
+                    return None
         except Exception:  # noqa: BLE001 — the call server unreachable: trust the record
             pass
         return call

@@ -36,6 +36,7 @@ from control_plane import workspace_membership as membership_mod
 from control_plane.bodies import CHAT_SESSION_PATTERN
 from control_plane.ceiling import names_in_ceiling, refuse_delegated, require_in_ceiling
 from control_plane.session_store import SessionDenied
+from control_plane.livekit_rooms import room_ended
 from control_plane.workspace_membership import MembershipError
 from shared.gitexec import run_git
 from workspaces.shared import workspace_paths as wpaths
@@ -160,7 +161,10 @@ def build(**d) -> APIRouter:
             if call is None:
                 return None
             room = _room(call["room"])
-            if room is not None:
+            # A ROOM WHOSE MEETING ENDED IS NOT THE LIVE CALL (live app.dev 2026-10-18): the room
+            # outlives its meeting by its departure timeout, and rejoining it got a person a room with
+            # no listener — the second start in the same chat transcribed nothing.
+            if room is not None and not room_ended(room):
                 return call, room
             s.end_call(session_id, call["room"])
 

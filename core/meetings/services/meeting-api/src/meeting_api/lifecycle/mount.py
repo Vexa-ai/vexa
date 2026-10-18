@@ -65,6 +65,7 @@ def mount_lifecycle(
     voice_note_drop: Optional["object"] = None,
     bot_account_terminal: "object" = None,
     meeting_ended: "object" = None,
+    call_ended: "object" = None,
 ) -> None:
     """Register the lifecycle.v1 callback route on the unified app (the lifecycle receiver's
     ``/bots/internal/callback/lifecycle`` handler, sharing the app's TraceMiddleware).
@@ -331,6 +332,16 @@ def mount_lifecycle(
                 await voice_note_drop(meeting_row["id"])
             except Exception as e:  # noqa: BLE001
                 log_event("voice_note_stream_drop_failed", audience="system", level="warning",
+                          span="lifecycle.callback", fields={"error": type(e).__name__})
+        if (terminal_advanced and call_ended is not None
+                and meeting_row.get("platform") == "vexa_call"):
+            # A CALL'S MEETING ENDED: its room is marked ended (and removed if empty), so the next
+            # start in the same chat makes a fresh meeting instead of rejoining a room with no
+            # listener (calls/spawn.py end_call_room). Best-effort.
+            try:
+                await call_ended(meeting_row)
+            except Exception as e:  # noqa: BLE001
+                log_event("call_room_end_failed", audience="system", level="warning",
                           span="lifecycle.callback", fields={"error": type(e).__name__})
         if terminal_advanced and bot_redis is not None:
             # The session is over: its bot's Redis user goes with it (best-effort — the grant path

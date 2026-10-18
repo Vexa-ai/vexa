@@ -182,6 +182,29 @@ def test_a_closed_room_ends_the_call(env):
     assert client.post(f"/api/sessions/{sid}/call/token", headers=H("alice")).status_code == 404
 
 
+def test_stop_then_start_again_in_the_same_chat_starts_a_fresh_transcribed_call(env):
+    # LIVE BUG app.dev 2026-10-18 (founder: "if I stop and start the call again here, transcription does
+    # not start the second time"). The listener left and the meeting completed, but the room was still
+    # standing (its departure timeout, then the person's own rejoin kept it up): GET /call answered it
+    # as live, so the terminal skipped the start and took a token for a room with no listener. meeting-api
+    # now marks the room `ended` when its meeting is terminal; a room so marked is not the live call.
+    client, store, sid, _r, _root = env
+    assert _start(client, sid, room="call-first1", meeting_id=161).status_code == 200
+    _Rooms.rooms["call-first1"]["metadata"]["ended"] = True          # the meeting completed: left_alone
+    got = client.get(f"/api/sessions/{sid}/call", headers=H("bob")).json()
+    assert got["call"] is None, "an ended call's room must never be rejoined"
+    assert store.active_call(sid) is None
+    assert store.call(sid, "call-first1")["ended"] is not None, "the past call stays on record, ended"
+    assert client.post(f"/api/sessions/{sid}/call/token", headers=H("bob")).status_code == 404
+    # …so the terminal starts again: a fresh meeting and room, bound to the same chat, live
+    assert _start(client, sid, room="call-second", meeting_id=162).status_code == 200
+    live = client.get(f"/api/sessions/{sid}/call", headers=H("bob")).json()["call"]
+    assert live["room"] == "call-second" and live["meeting_id"] == 162 and live["transcribed"] is True
+    tok = client.post(f"/api/sessions/{sid}/call/token", headers=H("bob")).json()
+    assert _claims(tok["token"])["video"]["room"] == "call-second"
+    assert [c["meeting_id"] for c in store.calls_of(sid)] == [161, 162]
+
+
 def test_share_to_the_room_posts_a_line_without_a_turn(env):
     client, _store, sid, _r, _root = env
     ok = client.post(f"/api/sessions/{sid}/messages", headers=H("bob"), json={"text": "From my notes: ship Friday"})

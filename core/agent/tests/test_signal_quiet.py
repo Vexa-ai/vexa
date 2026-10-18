@@ -63,18 +63,48 @@ def test_a_signal_turn_that_speaks_is_shown():
     assert agent["text"] == "Noted the decision."
 
 
-def test_a_person_turn_is_unchanged_whatever_the_agent_said():
-    raw = _history({"type": "user", "message": {"content": "anything new?"}}, _say(_text(marks.QUIET_REPLY)),
+def test_a_person_turn_shows_what_the_agent_said_but_never_the_marker():
+    # 2026-10-18: internal markers never render — not even on a turn a person started.
+    raw = _history({"type": "user", "message": {"content": "anything new?"}}, _say(_text("Nothing yet. " + marks.QUIET_REPLY)),
                    {"type": "user", "message": {"content": "and now?"}}, _say(_text("Yes: the proxy.")))
     agents = [t for t in parse_history(raw, []) if t["role"] == "agent"]
-    assert [a["text"] for a in agents] == [marks.QUIET_REPLY, "Yes: the proxy."]
+    assert [a["text"] for a in agents] == ["Nothing yet.", "Yes: the proxy."]
 
 
 def test_the_quiet_window_closes_on_the_next_person_turn():
     raw = _history({"type": "user", "message": {"content": _wake_prompt()}}, _say(_text(marks.QUIET_REPLY)),
-                   {"type": "user", "message": {"content": "hello?"}}, _say(_text(marks.QUIET_REPLY)))
+                   {"type": "user", "message": {"content": "hello?"}}, _say(_text("Hello.")))
     agents = [t for t in parse_history(raw, []) if t["role"] == "agent"]
-    assert [a["text"] for a in agents] == [marks.QUIET_REPLY]
+    assert [a["text"] for a in agents] == ["Hello."]
+    users = [t for t in parse_history(raw, []) if t["role"] == "user"]
+    assert users[0].get("trigger") == "signal" and "trigger" not in users[1]
+
+
+def _composed_like_the_worker(wake: str) -> str:
+    """The worker composes a chat turn as the thread preamble and the instruction block FIRST and the
+    wake (mark included) after them — the shape of the live app.dev turn of 2026-10-18 (mark ~21 KB in)."""
+    return ("This chat's thread id is `s-0123456789abcdef0123456789abcdef`. A routine you create here runs "
+            "in this chat.\n\n## How you speak\nRead, search and open whatever you need SILENTLY.\n"
+            + ("Instruction block line.\n" * 400) + "\n" + wake)
+
+
+def test_a_signal_wake_behind_the_preamble_is_still_a_signal_turn_and_its_quiet_reply_never_shows():
+    # LIVE BUG app.dev 2026-10-18: "From the call" over a literal "[vexa-quiet]". `is_signal_turn`
+    # tested `startswith`, so a composed prompt (preamble first) was never a signal turn.
+    prompt = _composed_like_the_worker(_wake_prompt())
+    assert not prompt.startswith(marks.flow_mark(marks.SIGNAL_FLOW, marks.SIGNAL_STEP))
+    assert marks.is_signal_turn(prompt)
+    raw = _history({"type": "user", "message": {"content": prompt}}, _say(_text(marks.QUIET_REPLY)))
+    turns = parse_history(raw, [])
+    assert [t for t in turns if t["role"] == "agent"] == []
+    assert [t.get("trigger") for t in turns if t["role"] == "user"] == ["signal"]
+    # the wake prompt itself (which TELLS the agent about the marker) stays the user turn's raw text,
+    # hidden by the terminal off `trigger`; nothing the agent said carries it
+    assert marks.QUIET_REPLY not in json.dumps([t for t in turns if t["role"] != "user"])
+
+
+def test_a_person_who_merely_mentions_the_mark_mid_sentence_did_not_start_a_signal_turn():
+    assert not marks.is_signal_turn("what does " + marks.flow_mark(marks.SIGNAL_FLOW, marks.SIGNAL_STEP) + "mean?")
 
 
 def test_a_quiet_room_signal_turn_posts_nothing_to_the_room(world):  # noqa: F811

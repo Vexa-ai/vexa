@@ -26,11 +26,28 @@ export function isSignalWake(t: { role: string; raw?: string; text?: string; tri
   return !!m && /signal/.test(`${m[1]}:${m[2]}`);
 }
 
-/** The history with every wake prompt dropped and the reply it produced marked `fromMeeting`. */
-export function foldSignalWakes<T extends { role: string; raw?: string; text?: string; trigger?: string }>(turns: T[]): (T & { fromMeeting?: boolean; wokeBy?: WakeSource })[] {
+/** THE QUIET MARKER (`core/agent/shared/marks.py` QUIET_REPLY) is machinery: a signal turn that
+ *  chose silence answers with it. It never renders (live app.dev 2026-10-18: "From the call" over a
+ *  literal "[vexa-quiet]" — the server's history missed the wake, so the reply came back unstripped). */
+const QUIET_MARK = /\[vexa-quiet\]/i;
+export function withoutQuietMarker(text: string): string {
+  return QUIET_MARK.test(text) ? text.replace(/\[vexa-quiet\]/gi, "").trim() : text;
+}
+
+/** The history with every wake prompt dropped and the reply it produced marked `fromMeeting`.
+ *  An agent turn loses the quiet marker; one left with no words and no steps is dropped. */
+export function foldSignalWakes<T extends { role: string; raw?: string; text?: string; trigger?: string; ops?: unknown[] }>(turns: T[]): (T & { fromMeeting?: boolean; wokeBy?: WakeSource })[] {
   const out: (T & { fromMeeting?: boolean; wokeBy?: WakeSource })[] = [];
   let woke: WakeSource | null = null;
-  for (const t of turns) {
+  for (const t0 of turns) {
+    let t = t0;
+    if (t.role !== "user" && typeof t.text === "string") {
+      const text = withoutQuietMarker(t.text);
+      if (text !== t.text) {
+        if (!text && !(t.ops?.length)) { if (woke) woke = null; continue; }
+        t = { ...t, text, ...(typeof t.raw === "string" ? { raw: withoutQuietMarker(t.raw) } : {}) };
+      }
+    }
     if (isSignalWake(t)) { woke = sourceOf(t); continue; }
     // the reply is whatever answered it — the history says "agent" (some records say "assistant")
     if (t.role !== "user" && woke) { out.push({ ...t, fromMeeting: true, wokeBy: woke }); woke = null; continue; }
