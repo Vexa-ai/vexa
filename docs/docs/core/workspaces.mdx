@@ -479,10 +479,12 @@ an S3-compatible bucket is the **single durable truth** and every pod copy is a 
    locally and the turn reports the write as not saved. agent-api refuses a push whose commits touch
    `policy/`, `.vexa/`, `.claude/` or `.git` in any letter case (403 `reserved_path`), and holds it to
    the private-write rule: when the session read the person's private data and someone else reads the
-   workspace (its roster at the base the push builds on), every file version a pushed commit writes is
-   checked as a page write, and a held one refuses the whole push (409 `private_sources_to_shared`,
-   with the held paths and their confirmation codes). Commits the harness made by itself are checked
-   the same way as the worker's own.
+   workspace, every file version a pushed commit writes is checked as a page write, and a held one
+   refuses the whole push (409 `private_sources_to_shared`, with the held paths and their confirmation
+   codes). Who else reads it comes from the membership store that decides access, never from the
+   `policy/members.json` copy in the tree. When that store does not answer, such a push is refused
+   (503 `policy_unreadable`) and nothing lands. Commits the harness made by itself are checked the same
+   way as the worker's own.
 
 The guard needs no conditional PUT: the per-workspace lock, a monotonically increasing fencing token
 stamped into every generation, and one key per (generation, token) with "alone at its generation" as

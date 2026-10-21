@@ -224,6 +224,12 @@ git: `docker compose exec agent-api python -m control_plane.crm_references rebui
 - **People are entities with accounts attached.** On a person's first CRM call their account is
   attached to a person record: one whose verified email is among its match identifiers, or a new one.
   Duplicates merge; the merged id answers the surviving record everywhere.
+- **A profile is claimed through the match identifier only.** A signed-in person claims the person
+  record that holds `email:<their verified address>` among its match identifiers. The record's
+  `Email` field never makes a claim, because anyone who may write the record can type into it, and a
+  record the claimant merged another record into with a CRM merge is not theirs to claim. To make a
+  record the org created claimable by the person it describes, give it the `email:` identifier when
+  it is created (`crm_change`'s `match`).
 - **Backlinks come from git.** agent-api holds the workspace checkouts. When a workspace's head moves
   it reads every record link in the tree at that commit, and the roster in `policy/members.json`, and
   publishes `workspace.references.changed` to flows. The `flows_defs.crm` pack hands it to `crm-api`,
