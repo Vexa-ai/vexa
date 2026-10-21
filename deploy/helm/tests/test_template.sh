@@ -1788,4 +1788,10 @@ tb "backend s3 without a bucket refuses to render" '! helm template vexa "$CHART
 tb "backend s3 refuses the recordings key" '! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${WS[@]}" --set agentApi.workspaces.s3.existingSecret=s3-fixture-credentials >/dev/null 2>&1'
 tb "the migration Job mounts the old claim read-only" 'helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${WS[@]}" --set agentApi.workspaces.s3.migrate.enabled=true --show-only templates/job-workspaces-s3-migrate.yaml | grep -B2 -A2 "claimName: vexa-vexa-agent-workspaces" | grep -q "readOnly: true"'
 
+# F1b: the terminal's page policy admits the LiveKit server a browser joins, from the same value agent-api hands it.
+TLK="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set livekit.enabled=true --set livekit.url=wss://calls.example.test --show-only templates/deployment-terminal.yaml)"
+TNO="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-terminal.yaml)"
+tb "livekit.enabled hands the terminal LIVEKIT_URL for its page policy" 'grep -A1 "name: LIVEKIT_URL" <<< "$TLK" | grep -q "\"wss://calls.example.test\""'
+tb "calls off: the terminal's LIVEKIT_URL is empty" 'grep -A1 "name: LIVEKIT_URL" <<< "$TNO" | grep -q "value: \"\""'
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

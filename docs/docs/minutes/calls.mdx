@@ -207,7 +207,8 @@ Calls are real-time media. Plan the network before you turn them on:
 | 5349 (configurable) | TCP (TLS) | browsers on networks that block UDP or allow only TLS | TURN over TLS, when enabled |
 
 - Browsers need a `wss://` address (`LIVEKIT_URL`). Put the server behind the same TLS proxy as the
-  terminal, or give it its own name.
+  terminal, or give it its own name. The terminal's Content-Security-Policy names that address, so a browser
+  can reach no other LiveKit server.
 - The UDP range must be open in the firewall. The server advertises the address browsers should use:
   `LIVEKIT_USE_EXTERNAL_IP=true` discovers it through STUN, or you can set `LIVEKIT_NODE_IP`.
 - Each person in a call uses up to two ports of the UDP range (one connection to send, one to
@@ -234,7 +235,7 @@ The services' keys:
 
 | Key | Service | Default | Compose (`.env`) | Helm value | Meaning |
 |---|---|---|---|---|---|
-| `LIVEKIT_URL` | meeting-api, agent-api | — | `LIVEKIT_URL` | `livekit.url` | the server's public `wss://` address; unset means no calls |
+| `LIVEKIT_URL` | meeting-api, agent-api, terminal | — | `LIVEKIT_URL` | `livekit.url` | the server's public `wss://` address; unset means no calls. The terminal's pages admit connections to this address only |
 | `LIVEKIT_INTERNAL_URL` | meeting-api, agent-api | `LIVEKIT_URL` | `LIVEKIT_INTERNAL_URL` | set by the chart | the server inside the deployment, for example `ws://livekit:7880` |
 | `LIVEKIT_API_KEY` | meeting-api, agent-api | — | `LIVEKIT_API_KEY` | `livekit.apiKey` | the key that signs room tokens |
 | `LIVEKIT_API_SECRET` | meeting-api, agent-api | — | `LIVEKIT_API_SECRET` | generated into the chart's Secret | **secret**, at least 32 characters |

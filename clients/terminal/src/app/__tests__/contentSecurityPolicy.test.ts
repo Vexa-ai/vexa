@@ -23,6 +23,58 @@ describe("the terminal pages' policy", () => {
     expect(d["frame-src"]).toEqual(["'self'"]);
   });
 
+  it("names a source for everything the pages load, and defaults to this origin", () => {
+    const d = directives(contentSecurityPolicy("abc", {}));
+    expect(d["default-src"]).toEqual(["'self'"]);
+    expect(d["connect-src"]).toEqual(["'self'"]);
+    expect(d["img-src"]).toEqual(["'self'", "data:", "blob:"]);
+    expect(d["style-src"]).toEqual(["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]);
+    expect(d["font-src"]).toEqual(["'self'", "https://fonts.gstatic.com"]);
+    expect(d["media-src"]).toEqual(["'self'"]);
+    expect(d["worker-src"]).toEqual(["'self'", "blob:"]);
+    expect(d["form-action"]).toEqual(["'self'"]);
+    expect(d["frame-ancestors"]).toEqual(["'self'"]);
+  });
+
+  it("reaches a third party only for a feature this deployment turned on", () => {
+    const d = directives(contentSecurityPolicy("abc", { livekitUrl: "wss://calls.example.test", gaMeasurementId: "G-TEST" }));
+    expect(d["connect-src"]).toEqual(expect.arrayContaining(["'self'", "wss://calls.example.test", "https://calls.example.test",
+      "https://www.google-analytics.com", "https://region1.google-analytics.com"]));
+    expect(d["img-src"]).toEqual(expect.arrayContaining(["https://www.google-analytics.com"]));
+    const local = directives(contentSecurityPolicy("abc", { livekitUrl: "ws://localhost:7880" }));
+    expect(local["connect-src"]).toEqual(["'self'", "ws://localhost:7880", "http://localhost:7880"]);
+  });
+
+  it("a LiveKit address that is not a plain origin adds nothing", () => {
+    for (const bad of ["wss://*.example.test", "javascript:alert(1)", "wss://a.test; script-src *", "not a url", "  "]) {
+      expect(directives(contentSecurityPolicy("abc", { livekitUrl: bad }))["connect-src"]).toEqual(["'self'"]);
+    }
+  });
+
+  it("no directive carries a wildcard or a bare scheme that admits any host", () => {
+    for (const sources of [{}, { livekitUrl: "wss://calls.example.test", gaMeasurementId: "G-TEST" }]) {
+      for (const [name, values] of Object.entries(directives(contentSecurityPolicy("abc", sources)))) {
+        for (const v of values) {
+          expect(v, `${name} ${v}`).not.toContain("*");
+          expect(["http:", "https:", "ws:", "wss:"], `${name} ${v}`).not.toContain(v);
+        }
+      }
+    }
+  });
+
+  it("reads LiveKit and GA from the environment the stack already sets", () => {
+    const before = { ...process.env };
+    try {
+      process.env.LIVEKIT_URL = "wss://calls.example.test";
+      process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID = "G-TEST";
+      const d = directives(contentSecurityPolicy("abc"));
+      expect(d["connect-src"]).toContain("wss://calls.example.test");
+      expect(d["connect-src"]).toContain("https://www.google-analytics.com");
+    } finally {
+      process.env = before;
+    }
+  });
+
   it("a nonce is fresh on every response", () => {
     const a = newNonce(), b = newNonce();
     expect(a).not.toBe(b);

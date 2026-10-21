@@ -93,6 +93,10 @@ spec:
             # profile switch opens it for an instance administrator (ADR-0049). Empty = no switch.
             - name: VEXA_ADMIN_ACCOUNT
               value: {{ .Values.adminApi.adminAccount | default "" | quote }}
+            # The LiveKit address a browser joins (the value agent-api hands it, when livekit.enabled): the
+            # pages' Content-Security-Policy admits connections to it.
+            - name: LIVEKIT_URL
+              value: {{ ternary .Values.livekit.url "" .Values.livekit.enabled | quote }}
             {{- if .Values.terminal.publicUrl }}
             # External origin (set when ingress/LB fronts the terminal) — cookie security + OAuth callbacks.
             - name: NEXTAUTH_URL

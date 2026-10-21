@@ -1682,6 +1682,9 @@ services:
       # The admin account's address, the same value admin-api reads: the Company profile switch
       # (ADR-0049) opens it for an instance administrator. Empty = no switch is offered.
       - VEXA_ADMIN_ACCOUNT=${VEXA_ADMIN_ACCOUNT:-}
+      # The LiveKit address a browser joins, the same value meeting-api and agent-api read: the pages'
+      # Content-Security-Policy admits connections to it. Empty = no calls, and no such source.
+      - LIVEKIT_URL=${LIVEKIT_URL:-}
       # OAuth login providers (NextAuth). Each provider self-gates on its creds: set BOTH the id and
       # secret to expose that sign-in button on the login page; leave empty to hide it (the dev
       # type-any-email login still works). Register the redirect URI in the provider console:

@@ -1,6 +1,8 @@
 /** Every terminal page is served with a per-response nonce and the Content-Security-Policy built
  *  from it (app/contentSecurityPolicy.ts). Next reads the nonce from the request's policy header and
  *  stamps its own scripts with it; the root layout reads `x-nonce` for the scripts it writes.
+ *  The policy's foreign sources come from this process's environment on every request (LIVEKIT_URL
+ *  at run time; NEXT_PUBLIC_GA_MEASUREMENT_ID as built), so they follow the deployment's own config.
  *  API routes, static assets and the /b/ proxy are not pages and are left alone. */
 import { NextResponse, type NextRequest } from "next/server";
 import { NONCE_HEADER, contentSecurityPolicy, newNonce } from "./app/contentSecurityPolicy";

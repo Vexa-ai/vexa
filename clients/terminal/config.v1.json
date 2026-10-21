@@ -212,6 +212,13 @@
       "targets": ["compose", "helm"]
     },
     {
+      "key": "LIVEKIT_URL",
+      "class": "defaulted",
+      "default": "(unset \u2014 no calls)",
+      "description": "The LiveKit address a browser joins (wss://\u2026), the same value meeting-api and agent-api read. The terminal names its origin in the pages' Content-Security-Policy connect-src (src/app/contentSecurityPolicy.ts); unset, the policy admits no LiveKit server.",
+      "targets": ["compose", "helm"]
+    },
+    {
       "key": "VEXA_TERMINAL_SESSION_SECRET",
       "class": "defaulted",
       "default": "(unset — sign-in mints an ordinary login key, and every decision that needs a session is refused)",
