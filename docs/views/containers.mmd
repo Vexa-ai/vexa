@@ -52,6 +52,8 @@ flowchart LR
   dashboard["dashboard (deprecated)"]
   credentials_vault["OpenBao (optional)"]
   signal_model["signal model"]
+  model_provider["model provider"]
+  customer_webhook["customer webhook"]
   meeting_api -->|"write"| segments_table
   bot -->|"HTTP"| meeting_api
   bot -->|"HTTPS"| transcription
@@ -69,7 +71,7 @@ flowchart LR
   meeting_api -->|"HTTPS"| admin_api
   meeting_api -->|"HTTPS"| admin_api
   meeting_api -->|"HTTPS"| service_authority
-  meeting_api -->|"HTTP(S)"| system_webhook
+  meeting_api -->|"HTTPS"| system_webhook
   agent_api -->|"HTTPS"| runtime
   mcp -->|"HTTPS"| gateway
   gateway -->|"HTTPS"| meeting_api
@@ -118,3 +120,6 @@ flowchart LR
   crm_api -->|"HTTP"| flows_api
   signals_service -->|"HTTP"| credentials_broker
   signals_service -->|"HTTPS"| signal_model
+  agent_worker -->|"HTTPS"| model_provider
+  agent_api -->|"HTTPS"| model_provider
+  meeting_api -->|"HTTPS"| customer_webhook

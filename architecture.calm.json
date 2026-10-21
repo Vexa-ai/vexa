@@ -1,5 +1,5 @@
 {
- "$schema": "https://calm.finos.org/release/1.0/meta/calm.json",
+ "$schema": "https://calm.finos.org/release/1.2/meta/calm.json",
  "metadata": [
   {
    "vexa": {
@@ -890,8 +890,11 @@
      "description": "A reader must not re-derive a producer's data. The terminal renders raw|processed; it must NOT contain a transcript-shaping transform (e.g. clustering).",
      "requirements": [
       {
-       "requirement-url": "vexa/controls/render-only",
+       "requirement-url": "calm/controls/render-only.requirement.json",
        "config": {
+        "control-id": "vexa-p23-render-only",
+        "name": "Render-only consumer",
+        "description": "This consumer renders a producer's data and never re-derives it; gate:dataflow fails on a forbidden transform in its source.",
         "forbidden-symbols": [
          "buildMeetingNotes"
         ]
@@ -911,8 +914,11 @@
      "description": "single writer",
      "requirements": [
       {
-       "requirement-url": "vexa/controls/single-writer",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "bot"
         ],
@@ -942,8 +948,11 @@
      "description": "shared \u2014 review (P23 prefers one writer)",
      "requirements": [
       {
-       "requirement-url": "vexa/controls/single-writer",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "bot",
          "meeting-api"
@@ -974,8 +983,11 @@
      "description": "single writer",
      "requirements": [
       {
-       "requirement-url": "vexa/controls/single-writer",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "meeting-api"
         ],
@@ -1005,8 +1017,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-worker"
         ],
@@ -1036,8 +1051,11 @@
      "description": "single writer",
      "requirements": [
       {
-       "requirement-url": "vexa/controls/single-writer",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "meeting-api"
         ],
@@ -1166,8 +1184,11 @@
      "description": "two writers by design: bot=chunks, meeting-api=master",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "bot",
          "meeting-api"
@@ -1193,8 +1214,11 @@
      "description": "two writers by design: remote-browser=provisioning upload, meeting-api=the authenticated bot's session write-back (session_profile); no bot holds a credential that writes it",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "remote-browser",
          "meeting-api"
@@ -1278,8 +1302,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "meeting-api"
         ],
@@ -1301,8 +1328,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "meeting-api"
         ],
@@ -1324,8 +1354,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "meeting-api"
         ],
@@ -1347,8 +1380,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ],
@@ -1375,8 +1411,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "meeting-api"
         ],
@@ -1403,8 +1442,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "admin-api"
         ]
@@ -1617,8 +1659,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "credentials-broker"
         ]
@@ -1685,8 +1730,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ]
@@ -1706,8 +1754,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ]
@@ -1727,8 +1778,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ]
@@ -1748,8 +1802,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ],
@@ -1771,8 +1828,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "admin-api"
         ]
@@ -1803,8 +1863,11 @@
      "description": "shared writer (P23: one per user, see description)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api",
          "meeting-api"
@@ -1825,8 +1888,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ]
@@ -1846,8 +1912,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ],
@@ -1874,8 +1943,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ],
@@ -1897,8 +1969,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ],
@@ -1925,8 +2000,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ],
@@ -1948,8 +2026,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ],
@@ -1971,8 +2052,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ],
@@ -1999,8 +2083,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ],
@@ -2022,8 +2109,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "meeting-api"
         ]
@@ -2043,8 +2133,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ]
@@ -2100,8 +2193,11 @@
      "description": "single writer: meeting-api's exporter",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "meeting-api"
         ]
@@ -2126,8 +2222,11 @@
      "description": "single writer: agent-api",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "agent-api"
         ]
@@ -2192,8 +2291,11 @@
      "description": "single writer (P23)",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "crm-api"
         ],
@@ -2255,8 +2357,11 @@
      "description": "single writer",
      "requirements": [
       {
-       "requirement-url": "vexa/controls/single-writer",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "signals-service"
         ],
@@ -2286,8 +2391,11 @@
      "description": "single writer",
      "requirements": [
       {
-       "requirement-url": "vexa/controls/single-writer",
+       "requirement-url": "calm/controls/single-writer.requirement.json",
        "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "The producers allowed to write this carrier; gate:dataflow holds the code to this set.",
         "writers": [
          "signals-service"
         ],
@@ -2315,6 +2423,30 @@
    "interfaces": [
     {
      "unique-id": "signal-model-endpoint",
+     "type": "api"
+    }
+   ]
+  },
+  {
+   "unique-id": "model-provider",
+   "node-type": "service",
+   "name": "model provider",
+   "description": "the LLM endpoint an agent turn calls: the deployment's configured gateway, api.anthropic.com, openrouter.ai, or a subject's custom endpoint. A custom endpoint must be on VEXA_MODEL_BASE_URL_ALLOW and always carries the subject's own credential (core/agent/control_plane/model_endpoint.py); a company's own OpenAI-compatible gateway keeps the turn inside",
+   "interfaces": [
+    {
+     "unique-id": "model-provider-endpoint",
+     "type": "api"
+    }
+   ]
+  },
+  {
+   "unique-id": "customer-webhook",
+   "node-type": "service",
+   "name": "customer webhook",
+   "description": "a subscriber URL a customer registers for webhook.v1 deliveries (meeting.*, bot.failed, recording.ready, transcription.ready). Every delivery passes the outbound URL guard (core/meetings/services/meeting-api/src/meeting_api/webhooks/ssrf.py): the host is resolved, every address is checked against the refused ranges, and the connection is pinned to the checked address",
+   "interfaces": [
+    {
+     "unique-id": "customer-webhook-endpoint",
      "type": "api"
     }
    ]
@@ -2858,8 +2990,11 @@
      "description": "STT is first-party and self-hostable; default destination is tenant-hosted, so audio need not leave the tenant",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/no-egress.requirement.json",
+       "requirement-url": "calm/controls/no-egress.requirement.json",
        "config": {
+        "control-id": "vexa-no-egress",
+        "name": "Tenant data egress",
+        "description": "The posture of tenant data on this edge: where it goes and whether leaving the tenant is approved.",
         "dataClass": "audio",
         "destination": "tenant-hosted",
         "egressApproved": true
@@ -3236,8 +3371,8 @@
      }
     }
    },
-   "description": "optional signed terminal webhook.v1 delivery to a boot-frozen operator destination; customer webhook SSRF policy remains separate",
-   "protocol": "HTTP(S)"
+   "description": "optional signed terminal webhook.v1 delivery to a boot-frozen operator destination over HTTPS (plain HTTP only to a private target the operator opts into); customer webhook SSRF policy remains separate",
+   "protocol": "HTTPS"
   },
   {
    "unique-id": "aa-watch",
@@ -4978,9 +5113,129 @@
      "description": "transcript lines leave the deployment only when the company picks an external signal model (Jev through Typesafe or OpenRouter); a company's own OpenAI-compatible endpoint keeps them inside. Off until the company sets model_signals",
      "requirements": [
       {
-       "requirement-url": "https://vexa.ai/calm/controls/no-egress.requirement.json",
+       "requirement-url": "calm/controls/no-egress.requirement.json",
        "config": {
+        "control-id": "vexa-no-egress",
+        "name": "Tenant data egress",
+        "description": "The posture of tenant data on this edge: where it goes and whether leaving the tenant is approved.",
         "dataClass": "transcript",
+        "destination": "external-saas",
+        "egressApproved": true
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "aw-model-provider",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-worker"
+     },
+     "destination": {
+      "node": "model-provider",
+      "interface": "model-provider-endpoint"
+     }
+    }
+   },
+   "description": "an agent turn: the prompt with its meeting grounding (transcript excerpts) and the workspace context the turn reads",
+   "protocol": "HTTPS",
+   "metadata": [
+    {
+     "access": "call"
+    }
+   ],
+   "controls": {
+    "data-egress": {
+     "description": "transcript excerpts leave the deployment whenever the configured model is an external provider; a company's own gateway keeps them inside. A subject may only point a turn at an allow-listed host (VEXA_MODEL_BASE_URL_ALLOW), with its own credential",
+     "requirements": [
+      {
+       "requirement-url": "calm/controls/no-egress.requirement.json",
+       "config": {
+        "control-id": "vexa-no-egress",
+        "name": "Tenant data egress",
+        "description": "The posture of tenant data on this edge: where it goes and whether leaving the tenant is approved.",
+        "dataClass": "transcript",
+        "destination": "external-saas",
+        "egressApproved": true
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "aa-model-provider",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "model-provider",
+      "interface": "model-provider-endpoint"
+     }
+    }
+   },
+   "description": "the one model call a home composition may make (core/agent/control_plane/home_model.py): the cheapest catalog model orders the cards it is handed, at most once per composition",
+   "protocol": "HTTPS",
+   "metadata": [
+    {
+     "access": "call"
+    }
+   ],
+   "controls": {
+    "data-egress": {
+     "description": "the cards' titles and summaries, derived from the person's meetings, leave the deployment when the cheapest catalog model is an external provider; with no eligible model the home is ranked without a call",
+     "requirements": [
+      {
+       "requirement-url": "calm/controls/no-egress.requirement.json",
+       "config": {
+        "control-id": "vexa-no-egress",
+        "name": "Tenant data egress",
+        "description": "The posture of tenant data on this edge: where it goes and whether leaving the tenant is approved.",
+        "dataClass": "transcript",
+        "destination": "external-saas",
+        "egressApproved": true
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "ma-customer-webhook",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "customer-webhook",
+      "interface": "customer-webhook-endpoint"
+     }
+    }
+   },
+   "description": "signed webhook.v1 delivery of meeting lifecycle, recording and transcription-ready events to the customer's registered URL",
+   "protocol": "HTTPS",
+   "metadata": [
+    {
+     "access": "call"
+    }
+   ],
+   "controls": {
+    "data-egress": {
+     "description": "meeting metadata (ids, status, timestamps) leaves for a URL the customer chose; the outbound URL guard refuses private, loopback, link-local and metadata addresses and pins the connection to the checked address",
+     "requirements": [
+      {
+       "requirement-url": "calm/controls/no-egress.requirement.json",
+       "config": {
+        "control-id": "vexa-no-egress",
+        "name": "Tenant data egress",
+        "description": "The posture of tenant data on this edge: where it goes and whether leaving the tenant is approved.",
+        "dataClass": "metadata",
         "destination": "external-saas",
         "egressApproved": true
        }

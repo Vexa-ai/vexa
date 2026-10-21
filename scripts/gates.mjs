@@ -5,7 +5,7 @@
  * Usage: node scripts/gates.mjs [readme|isolation|isolation-py|exports|graph|graph-py|schema|
  *                                contract-version|config-contract|python|stack|node|health|access|
  *                                tracing|replay|telemetry|eval|licenses|compose|execution-env|
- *                                lite-makefile|domain-doors|fact-parity|vendor-payload|ui-design|all]
+ *                                lite-makefile|domain-doors|fact-parity|vendor-payload|ui-design|calm|all]
  */
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -25,6 +25,7 @@ import { collectPinnedImages, trackedFiles, isDockerfile } from "./pinned-images
 import { npmLockInventory } from "./npm-locks.mjs";
 import { checkVersions } from "../release/version.mjs";
 import { MINT_VERSION, judgeMintOutput } from "./check-docs-links.mjs";
+import { checkCalmControls, runCalmCli, CALM_CLI_VERSION } from "./check-calm.mjs";
 
 const ROOT = process.cwd();
 const SKIP = new Set(["node_modules", "dist", ".turbo", "__pycache__", "test-results", "playwright-report", "coverage"]);
@@ -1797,7 +1798,23 @@ function gateDomainDoors() {
   return true;
 }
 
-const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, "docs-links": gateDocsLinks, dataflow: gateDataflow, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity, "vendor-payload": gateVendorPayload, "ui-design": gateUiDesign };
+// gate:calm (P23) — architecture.calm.json is valid FINOS CALM 1.2, conforms to the meeting-intelligence
+// pattern, and every control it names resolves to a requirement schema in this repository. The
+// resolution check runs first and offline, so an unresolvable control fails without reaching
+// calm-cli (which skips a requirement its loader cannot find); then the pinned calm-cli validates
+// the model and every control config against its schema, and the model against the pattern.
+// The rules and their reasons live in scripts/check-calm.mjs.
+function gateCalm() {
+  const res = checkCalmControls(ROOT);
+  if (res.errs.length) return fail([`calm — controls that do not resolve (a control nobody can check):`, ...res.errs.map((e) => "   " + e)]);
+  const cli = runCalmCli(ROOT);
+  if (cli.errs.length) return fail([`calm — calm-cli ${CALM_CLI_VERSION} validate:`, ...cli.errs.map((e) => "   " + e)]);
+  const warn = [...new Set(cli.warnings.map((w) => w.replace(/^[a-z]+: /, "")))];
+  console.log(`  ✓ gate:calm — CALM 1.2 · calm-cli ${CALM_CLI_VERSION} · ${res.requirements} control requirement(s) resolve to ${res.schemas.length} in-repo schema(s) and validate · pattern conforms · 0 errors, ${warn.length} warning(s)${warn.length ? ` (${warn.join("; ")})` : ""}`);
+  return true;
+}
+
+const GATES = { readme: gateReadme, "lite-makefile": gateLiteMakefile, "docs-version": gateDocsVersion, "docs-links": gateDocsLinks, dataflow: gateDataflow, calm: gateCalm, isolation: gateIsolation, "isolation-py": gateIsolationPy, exports: gateExports, graph: gateGraph, "graph-py": gateGraphPy, schema: gateSchema, "contract-version": gateContractVersion, "config-contract": gateConfigContract, "db-schema": gateDbSchema, "db-budget": gateDbBudget, python: gatePython, stack: gateStack, node: gateNode, health: gateHealth, access: gateAccess, tracing: gateTracing, replay: gateReplay, telemetry: gateTelemetry, eval: gateEval, licenses: gateLicenses, "image-licenses": gateImageLicenses, "runtime-parity": gateRuntimeParity, compose: gateCompose, "execution-env": gateExecutionEnv, "test-isolation": gateTestIsolation, "arch-report": gateArchReport, parity: gateParity, "compose-stress": gateComposeStress, "compose-chaos": gateComposeChaos, "eval-baseline": gateEvalBaseline, "contract-conformance": gateContractConformance, "domain-doors": gateDomainDoors, "fact-parity": gateFactParity, "vendor-payload": gateVendorPayload, "ui-design": gateUiDesign };
 // gate:docs-links — every docs page compiles and every internal link resolves. `mint broken-links`
 // EXITS 0 when it cannot parse a page ("Unable to parse <page> - … Expected a closing tag for <ext>")
 // and then checks nothing, so its exit code alone proved nothing: a page with a bare `<placeholder>`

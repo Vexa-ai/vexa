@@ -186,7 +186,7 @@ edges:
   meeting-api -req-> admin-api  # GET /internal/users/{id}/email (X-Internal-Secret) answers {id, email} for a reader of a shared meeting, asked only on the OWNER's access view (GET /meetings/{id}/access) for readers who redeemed before meeting-api kept a roster; meeting-api writes the address into that meeting's own data.share_viewers (one writer) and a failed lookup leaves the reader listed by id (collector/reader_directory.py)
   meeting-api -req-> admin-api  # GET /internal/users/{id}/memberships (X-Internal-Secret), read once per calendar sync run: a new occurrence of a calendar series inherits the series' workspace only while its owner still holds contributor or owner there (R1801-3); an unanswered lookup is 'may write nowhere' and the occurrence is created private (calendar_sync/runner.py, collector/reader_directory.py)
   meeting-api -req-> service-authority  # optional signed service-authority.v1 admit/continue decision; unset is explicit OSS allow-all, configured failure is closed
-  meeting-api -req-> system-webhook  # optional signed terminal webhook.v1 delivery to a boot-frozen operator destination; customer webhook SSRF policy remains separate
+  meeting-api -req-> system-webhook  # optional signed terminal webhook.v1 delivery to a boot-frozen operator destination over HTTPS (plain HTTP only to a private target the operator opts into); customer webhook SSRF policy remains separate
   agent-api -read-> segments-stream  # the transcription watcher's group agent_copilot: XREADGROUP + XACK each raw entry as a hint only, naming which verified per-meeting feed (tc-stream) to read; it acts on nothing it reads here
   agent-api -req-> runtime  # agent-api drives the kernel with Authorization: Bearer RUNTIME_API_TOKEN (runtime.v1 CallerCredential): POST /workloads, GET /workloads and GET /workloads/{id} to spawn and track agent-worker workloads, and POST /schedule, GET /schedule and DELETE /schedule/{job_id} for routine jobs (schedule.v1)
   agent-api -read-> out-stream  # SSE relay (/api/chat, /api/meeting/stream)
@@ -274,6 +274,9 @@ edges:
   crm-api -req-> flows-api  # the crm outbox (python -m crm.outbox --watch, the crm-outbox process of the crm image): POST /events with flows' operator key (X-Flows-Operator-Key), one crm.record.changed per revision with its event.v2 envelope sealed under VEXA_FACT_SEAL_SECRET; marked delivered only on a 202. A publish edge: no flows, rows stay pending
   signals-service -req-> credentials-broker
   signals-service -call-> signal-model  # one call per confirmed line: the line, up to 24 lines before it and the brief's questions; answers a 0..1 score per label, parsed strictly
+  agent-worker -call-> model-provider  # an agent turn: the prompt with its meeting grounding (transcript excerpts) and the workspace context the turn reads
+  agent-api -call-> model-provider  # the one model call a home composition may make (core/agent/control_plane/home_model.py): the cheapest catalog model orders the cards it is handed, at most once per composition
+  meeting-api -call-> customer-webhook  # signed webhook.v1 delivery of meeting lifecycle, recording and transcription-ready events to the customer's registered URL
   bot, agent-worker deployed-in runtime
   gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, object-store, transcription deployed-in deploy
   flows-api, flows-worker deployed-in deploy

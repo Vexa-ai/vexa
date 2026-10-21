@@ -1,5 +1,5 @@
 {
-  "$schema": "https://calm.finos.org/release/1.0/meta/calm.json",
+  "$schema": "https://calm.finos.org/release/1.2/meta/calm.json",
   "$id": "https://vexa.ai/calm/patterns/meeting-intelligence.pattern.json",
   "title": "Vexa Meeting-Intelligence Pattern",
   "description": "A self-hostable meeting-intelligence runtime: a single authenticated edge, a capture worker, a collector, a copilot, a render-only client, and a declared external-STT egress boundary.",

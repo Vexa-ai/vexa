@@ -22,6 +22,7 @@ import { writeFileSync, readFileSync, rmSync, mkdirSync, mkdtempSync, existsSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { guardTree, sandboxTree } from "./test-tree.mjs";
+import { checkCalmControls, judgeCalmOutput } from "./check-calm.mjs";
 
 guardTree();
 const ROOT = sandboxTree();
@@ -688,4 +689,45 @@ test("dataflow RED: a carrier whose op the gate cannot grep for is refused, not 
     () => runGate("dataflow"));
   assert.equal(green, false, out);
   assert.match(out, /carrier unit-fault: op 'frobnicate' is not one gate:dataflow can see/);
+});
+
+// ── gate:calm — every control the chart names resolves ─────────────────────────────────────────────
+// The resolution half runs offline and before calm-cli, so these rows need no network: a red here is
+// the gate refusing the chart before the CLI (which skips a requirement it cannot load) is reached.
+
+test("calm vacuity: every control requirement in the committed chart resolves to an in-repo schema", () => {
+  const res = checkCalmControls(ROOT);
+  assert.deepEqual(res.errs, []);
+  assert.ok(res.requirements > 0 && res.schemas.length > 0, "the chart names no controls — the rows below prove nothing");
+});
+
+test("calm RED: a chart naming a control whose requirement schema does not exist fails the gate", () => {
+  const { green, out } = withChart(
+    (s) => s.replace('"requirement-url": "calm/controls/render-only.requirement.json"', '"requirement-url": "calm/controls/missing.requirement.json"'),
+    () => runGate("calm"));
+  assert.equal(green, false, out);
+  assert.match(out, /\/nodes\/terminal\/controls\/render-only\/requirements\/0: requirement-url 'calm\/controls\/missing\.requirement\.json' does not exist/);
+});
+
+test("calm RED: a requirement-url that is a remote URL is refused, not trusted to serve", () => {
+  const root = mkdtempSync(join(tmpdir(), "calm-url-"));
+  try {
+    mkdirSync(join(root, "calm", "controls"), { recursive: true });
+    writeFileSync(join(root, "calm", "controls", "x.requirement.json"), JSON.stringify({ $schema: "https://json-schema.org/draft/2020-12/schema", type: "object" }));
+    const node = (url) => ({ "unique-id": "n", "node-type": "service", name: "n", description: "n",
+      controls: { c: { description: "c", requirements: [{ "requirement-url": url, config: {} }] } } });
+    const write = (url) => writeFileSync(join(root, "architecture.calm.json"),
+      JSON.stringify({ $schema: "https://calm.finos.org/release/1.2/meta/calm.json", nodes: [node(url)] }));
+    write("https://vexa.ai/calm/controls/x.requirement.json");
+    assert.match(checkCalmControls(root).errs.join("\n"), /\/nodes\/n\/controls\/c\/requirements\/0: requirement-url 'https:\/\/vexa\.ai\/.*' is a URL/);
+    write("calm/controls/x.requirement.json");
+    assert.match(checkCalmControls(root).errs.join("\n"), /has no \$id/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("calm: a control-requirement output fails at any severity; other warnings do not", () => {
+  const report = (o) => JSON.stringify({ jsonSchemaValidationOutputs: o, spectralSchemaValidationOutputs: [], hasErrors: false, hasWarnings: true });
+  assert.equal(judgeCalmOutput("model", 0, report([{ severity: "warning", code: "control-requirement-validation", path: "/nodes/a", message: "skipped" }])).errs.length, 1);
+  assert.equal(judgeCalmOutput("model", 0, report([{ severity: "warning", code: "architecture-nodes-must-be-referenced", path: "/nodes/a", message: "x" }])).errs.length, 0);
+  assert.equal(judgeCalmOutput("model", 1, "not json").errs.length, 1);
 });

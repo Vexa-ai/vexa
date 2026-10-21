@@ -119,9 +119,11 @@ const outside = new Set(egressEdges.map((c) => c.dst));
 for (const n of nodes.filter((n) => boxTypes.has(n["node-type"]) && !outside.has(n["unique-id"])))
   eg += `    ${mmId(n["unique-id"])}[${q(n.name)}]\n`;
 eg += "  end\n";
+const drawn = new Set();
 for (const c of egressEdges) {
   const cfg = c.controls["data-egress"].requirements?.[0]?.config ?? {};
-  eg += `  ${mmId(c.dst)}[${q(byId.get(c.dst)?.name ?? c.dst)}]\n`;
+  if (!drawn.has(c.dst)) eg += `  ${mmId(c.dst)}[${q(byId.get(c.dst)?.name ?? c.dst)}]\n`;
+  drawn.add(c.dst);
   eg += `  ${mmId(c.src)} ==>|${q(`${cfg.dataClass ?? "data"} -> ${cfg.destination ?? "?"}`)}| ${mmId(c.dst)}\n`;
 }
 

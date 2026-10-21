@@ -34,3 +34,8 @@ flowchart LR
   bot ==>|"audio -> tenant-hosted"| transcription
   signal_model["signal model"]
   signals_service ==>|"transcript -> external-saas"| signal_model
+  model_provider["model provider"]
+  agent_worker ==>|"transcript -> external-saas"| model_provider
+  agent_api ==>|"transcript -> external-saas"| model_provider
+  customer_webhook["customer webhook"]
+  meeting_api ==>|"metadata -> external-saas"| customer_webhook
