@@ -1785,6 +1785,41 @@ tb "the session-schema Job is a release resource (no helm.sh/hook), so helm inst
 tb "its name is stable when nothing changed" '[ "$n1" = "$n1b" ]'
 tb "its name changes with the image, so an upgrade never patches an immutable Job" '[ "$n1" != "$n2" ] && [[ "$n1" == vexa-vexa-agent-sessions-schema-* ]]'
 
+# ── THE CRM'S SCHEMA JOB RUNS ON A FIRST INSTALL (10-K / PROD-READINESS S2) ─────────────────────────
+# Same trap as the session store: a `pre-upgrade`-only hook is never created by `helm install`, so
+# crm-api waited in its crm-schema-ready initContainer forever. A release resource named by its spec.
+crm_job() { helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" "$@" --show-only templates/crm.yaml; }
+c1="$(crm_job)"; c1b="$(crm_job)"; c2="$(crm_job --set crm.image.tag=other-tag)"
+cjob() { awk '/^kind: Job$/{k=1} k&&/^  name:/{print $2; exit}' <<< "$1"; }
+cn1="$(cjob "$c1")"; cn1b="$(cjob "$c1b")"; cn2="$(cjob "$c2")"
+tb "the crm-schema Job is a release resource (no hook on it), so helm install creates it" '[[ "$cn1" == vexa-vexa-crm-schema-* ]] && ! grep -q "helm.sh/hook" <<< "$(doc Job "$cn1" "$c1")"'
+tb "its name is stable when nothing changed, and changes with the image" '[ "$cn1" = "$cn1b" ] && [ "$cn1" != "$cn2" ]'
+
+# ── EVERY RELEASE IMAGE FALLS BACK TO v<appVersion> (10-J / PROD-READINESS S3) ──────────────────────
+# agent-api's session-schema initContainer, the session-schema Job, the workspaces S3 migration Job
+# and every crm container read `global.imageTag | default <component>.image.tag` with both empty, so
+# a default upgrade rendered `repo:` — InvalidImageName — and agent-api never started.
+REL_TAG="v$(awk -F'"' '/^appVersion:/ {print $2}' "$CHART/Chart.yaml")"
+img_all="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" \
+  --set agentApi.sessions.s3.existingSecret=sessions-s3 --set flows.enabled=true 2>&1)"
+tb "no rendered image ends in a bare ':' (an empty tag)" '! grep -nE "image: \"?[^\" ]+:\"?$" <<< "$img_all"'
+tb "agent-api, its session-schema Job and the crm containers pull the chart's release tag" \
+  '[ "$(grep -cE "image: \"vexaai/vexa-agent-api:${REL_TAG//./\\.}\"$" <<< "$img_all")" -ge 3 ] && [ "$(grep -cE "image: \"vexaai/vexa-crm:${REL_TAG//./\\.}\"$" <<< "$img_all")" -ge 3 ]'
+
+# ── 0.12 COMPATIBILITY SWITCHES SHIP CLOSED (10-A, 10-B, 10-F) ──────────────────────────────────────
+compat_def="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml")"
+gw_c="$(doc Deployment vexa-vexa-gateway "$compat_def")"; ma_c="$(doc Deployment vexa-vexa-meeting-api "$compat_def")"
+tb "default: /ws takes the REST scopes on the gateway and meeting-api (strict)" \
+  '[ "$(envval VEXA_WS_SCOPE_MODE "$gw_c")" = "\"strict\"" ] && [ "$(envval VEXA_WS_SCOPE_MODE "$ma_c")" = "\"strict\"" ]'
+tb "default: stored webhook URLs get the outbound-url.v1 guard (strict)" '[ "$(envval VEXA_WEBHOOK_STORED_URL_POLICY "$ma_c")" = "\"strict\"" ]'
+compat_open="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set compat.wsScopeMode=legacy --set compat.webhookStoredUrlPolicy=v012)"
+tb "the opt-ins reach both services" \
+  '[ "$(envval VEXA_WS_SCOPE_MODE "$(doc Deployment vexa-vexa-gateway "$compat_open")")" = "\"legacy\"" ] && [ "$(envval VEXA_WEBHOOK_STORED_URL_POLICY "$(doc Deployment vexa-vexa-meeting-api "$compat_open")")" = "\"v012\"" ]'
+sx_def="$(doc Deployment vexa-vexa-meeting-api "$compat_def")"
+sx_set="$(doc Deployment vexa-vexa-meeting-api "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set credentialBroker.botSigninExtraHosts='adfs.bank.example\,*.okta.bank.example')")"
+tb "the sign-in browser's extra hosts are empty by default and reach meeting-api when set" \
+  '[ "$(envval VEXA_BOT_SIGNIN_EXTRA_HOSTS "$sx_def")" = "\"\"" ] && [ "$(envval VEXA_BOT_SIGNIN_EXTRA_HOSTS "$sx_set")" = "\"adfs.bank.example,*.okta.bank.example\"" ]'
+
 # ── Production-shape options (prod-shape-0133): a hosted install runs this chart unpatched ──
 echo "=== production-shape options ==="
 PS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \

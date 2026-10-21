@@ -8,13 +8,16 @@ URL is SAVED, so every URL saved on 0.13 passed it; a URL saved on 0.12 may not 
 delivered to it. Under the 0.13 guard alone every delivery to such a URL is recorded ``blocked`` and
 the customer is not told.
 
-* ``v012`` (default) — those newly refused public-use ranges stay reachable for delivery, exactly as
-  on 0.12. Everything 0.12 refused stays refused, and so does everything the 0.13 guard refuses for
-  reaching this host or its cloud: loopback, link-local, cloud metadata (including 100.100.100.200),
+* ``strict`` (default) — the 0.13 guard alone.
+* ``v012`` — an operator's explicit opt-in, for an upgrade whose customers' stored URLs resolve
+  into those ranges: they stay reachable for delivery, exactly as on 0.12. A residual: it re-admits
+  shared address space (100.64/10 — carrier NAT, Tailscale, some pod networks) for every
+  per-client delivery, not only URLs stored under 0.12. Everything 0.12 refused stays refused,
+  and so does everything the 0.13 guard refuses for reaching this host or its cloud: loopback,
+  link-local, cloud metadata (including 100.100.100.200),
   unspecified, multicast and reserved addresses in ANY form (IPv4-mapped, NAT64, 6to4, …), plus
   ``localhost``, metadata and single-label host names. The connection is still pinned to the checked
   address and re-checked at connect. Each such delivery logs ``webhook_stored_url_v012``.
-* ``strict`` — the 0.13 guard alone.
 
 Only per-client deliveries ask this; saving a URL, system webhooks and every other outbound fetch
 are unchanged. Mechanically it is an operator allowance (``ssrf.OperatorAllowance``) built here from a
@@ -31,7 +34,7 @@ from . import ssrf
 
 POLICY_ENV = "VEXA_WEBHOOK_STORED_URL_POLICY"
 POLICIES = ("v012", "strict")
-DEFAULT_POLICY = "v012"
+DEFAULT_POLICY = "strict"
 
 log = logging.getLogger(__name__)
 

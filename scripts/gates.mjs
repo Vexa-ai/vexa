@@ -100,10 +100,15 @@ const contractVersionDirs = () => walkDirs().filter(
   (d) => /(^|\/)contracts\/[^/]+\.v\d+$/.test(rel(d).replace(/\\/g, "/")) &&
          readdirSync(d).some((f) => f.endsWith(".schema.json"))
 );
-// the seal hash of a contract = sha256 over its (name-sorted) *.schema.json bytes
+// the seal hash of a contract = sha256 over its (name-sorted) *.schema.json bytes AND its rule
+// sources: the top-level *.py beside the schema is the contract's canonical executable rule, vendored
+// verbatim into every consumer (outbound-url.v1/ssrf.py, meeting-bundle.v1/bundle_codec.py, …). A
+// semantic change there — a new allowance, a widened range — is a contract change exactly like a
+// schema edit, so it moves the seal and routes through lane:contract.
+const sealedContractFile = (f) => f.endsWith(".schema.json") || f.endsWith(".py");
 function schemaHash(d) {
   const h = createHash("sha256");
-  for (const f of readdirSync(d).filter((f) => f.endsWith(".schema.json")).sort())
+  for (const f of readdirSync(d).filter(sealedContractFile).sort())
     h.update(f + "\0").update(readFileSync(join(d, f)));
   return h.digest("hex");
 }
@@ -284,7 +289,7 @@ function gateSchema() {
 }
 
 // gate:contract-version (P4) — a published `.vN` is FROZEN once sealed. `contracts.seal.json` pins
-// each sealed contract's schema by hash; this gate fails if a sealed schema changed. The fix routes
+// each sealed contract's schema and rule source by hash; this gate fails if either changed. The fix routes
 // through a human: a BREAKING change adds the next version dir (X.v2, leaving X.v1 intact); a
 // BACK-COMPATIBLE change re-seals (`pnpm seal:contracts`) — a one-line seal diff that rides a
 // `lane:contract` review. Unsealed contracts (still in development) are reported, not failed.

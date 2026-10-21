@@ -156,6 +156,48 @@ def test_opening_a_session_spawns_a_signin_workload(rig):
     assert env["token"] not in raw and json.loads(raw)["token_hash"]
 
 
+# ── VEXA_BOT_SIGNIN_EXTRA_HOSTS: an operator's company IdP (a bank's ADFS) ─────────────────────────
+_RESOLVES = {"adfs.bank.example": ["203.0.114.10"], "adfs-internal.bank.example": ["10.1.2.3"],
+             "metadata.bank.example": ["169.254.169.254"], "mixed.bank.example": ["203.0.114.11", "127.0.0.1"]}
+
+
+def _extra_rig(raw):
+    rig = Rig()
+    rig.ba.settings = Settings(callback_base=BASE,
+                               signin_extra_hosts=Settings.from_env({"VEXA_BOT_SIGNIN_EXTRA_HOSTS": raw}).signin_extra_hosts)
+    rig.ba.resolver = lambda h: _RESOLVES.get(h, [])
+    return rig
+
+
+def test_no_extra_hosts_by_default(rig):
+    assert Settings.from_env({}).signin_extra_hosts == ()
+    assert rig.open().status_code == 201
+    assert "extra_hosts" not in rig.last_env()
+
+
+def test_an_extra_public_host_and_a_suffix_reach_the_signin_browser(rig):
+    r = _extra_rig("ADFS.bank.example, *.okta.bank.example")
+    assert r.open().status_code == 201, r.client
+    assert r.last_env()["extra_hosts"] == ["adfs.bank.example", "*.okta.bank.example"]
+
+
+@pytest.mark.parametrize("host", ["adfs-internal.bank.example", "metadata.bank.example", "mixed.bank.example",
+                                  "unresolved.bank.example"])
+def test_an_extra_host_that_resolves_internal_or_not_at_all_is_left_out(rig, host):
+    r = _extra_rig(f"adfs.bank.example,{host}")
+    assert r.open().status_code == 201
+    assert r.last_env()["extra_hosts"] == ["adfs.bank.example"]
+
+
+@pytest.mark.parametrize("entry", ["10.0.0.5", "192.168.1.1", "169.254.169.254", "127.0.0.1", "[::1]", "::1",
+                                   "intranet", "localhost", "a.localhost", "*.localhost", "*.com",
+                                   "metadata.google.internal", "1.2.3", "http://adfs.bank.example"])
+def test_an_extra_entry_that_names_no_public_host_refuses_the_boot(entry):
+    from meeting_api.bot_accounts.service import parse_signin_extra_hosts
+    with pytest.raises(ValueError, match="VEXA_BOT_SIGNIN_EXTRA_HOSTS"):
+        parse_signin_extra_hosts(f"adfs.bank.example,{entry}")
+
+
 @pytest.mark.parametrize("body", [{"platform": "skype"}, {"platform": "google", "owner": "them"},
                                   {"platform": "google", "display_name": ""},
                                   {"platform": "google", "account_id": "nope"}])

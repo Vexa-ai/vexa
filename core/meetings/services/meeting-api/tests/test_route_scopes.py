@@ -155,17 +155,26 @@ def test_the_edge_s_subscribe_hop_refuses_a_key_that_may_not_read_transcripts(cl
 
 @pytest.mark.parametrize("scopes", [["browser"], ["bot"], ["bot", "browser"]])
 def test_legacy_mode_lets_the_subscribe_hop_through_for_any_signed_key(client, scopes, monkeypatch):
-    """`VEXA_WS_SCOPE_MODE=legacy` (the default): the 0.12 `/ws` contract — the hop is not held to the
-    transcript read's scopes; the handler's ownership check still decides each meeting."""
-    monkeypatch.delenv("VEXA_WS_SCOPE_MODE", raising=False)
+    """`VEXA_WS_SCOPE_MODE=legacy` (an explicit opt-in): the 0.12 `/ws` contract — the hop is not held
+    to the transcript read's scopes; the handler's ownership check still decides each meeting."""
+    monkeypatch.setenv("VEXA_WS_SCOPE_MODE", "legacy")
     r = client.post("/ws/authorize-subscribe", headers=_signed(scopes),
                     json={"meetings": [{"platform": "google_meet", "native_meeting_id": "abc-defg-hij"}]})
     assert not _scope_refused(r), r.text
 
 
 def test_legacy_mode_is_only_the_subscribe_hop(client, monkeypatch):
-    monkeypatch.delenv("VEXA_WS_SCOPE_MODE", raising=False)
+    monkeypatch.setenv("VEXA_WS_SCOPE_MODE", "legacy")
     assert _scope_refused(client.get("/meetings", headers=_signed(["bot"])))
+
+
+@pytest.mark.parametrize("scopes", [["browser"], ["bot"], ["bot", "browser"]])
+def test_unset_mode_holds_the_subscribe_hop_to_the_transcript_scopes(client, scopes, monkeypatch):
+    """10-A: with nothing configured the hop is strict — a key without `tx` is refused."""
+    monkeypatch.delenv("VEXA_WS_SCOPE_MODE", raising=False)
+    r = client.post("/ws/authorize-subscribe", headers=_signed(scopes),
+                    json={"meetings": [{"platform": "google_meet", "native_meeting_id": "abc-defg-hij"}]})
+    assert _scope_refused(r), r.text
 
 
 def test_the_edge_s_subscribe_hop_takes_a_transcript_key(client):

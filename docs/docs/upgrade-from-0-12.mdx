@@ -319,13 +319,32 @@ is refused.
 | `PUT /user/webhook` adds the webhook config (`webhook_url`, `webhook_secret_set`, masked `webhook_secret`, `webhook_events`) to the account record it returned in 0.12. The record's `data` never carries a stored credential. | New top-level fields | Nothing; read either. See [Webhooks](/webhooks). |
 | `/admin/users*` reads show stored credentials as `api_key_set`, `token_set` and `ics_url_set` with a masked tail. | Credential values missing | Store credentials where you write them; reads never return them. |
 | agent-api accepts a user only from the gateway's signed identity. `VEXA_AGENT_DEFAULT_SUBJECT` and `VEXA_REQUIRE_GATEWAY_IDENTITY` are gone. | `401` on direct calls to agent-api | Call it through the gateway (`/agent/*` with an API key). |
-| The live WebSocket `/ws` can apply the REST key scopes: `VEXA_WS_SCOPE_MODE=strict` on the gateway and on meeting-api (set both). The default, `legacy`, keeps the 0.12 contract (any valid key opens the socket and subscribes to the meetings it owns) and logs `ws_scope_legacy_allowed` for each key `strict` would refuse. | Under `strict`: a key that cannot read meeting status is closed with `4403`; a key without the `tx` scope gets `insufficient_scope` on transcript subscribe | Before switching to `strict`, count `ws_scope_legacy_allowed` in the gateway log and give those callers keys with the scopes the matching REST routes need. See [Authentication → Scopes](/authentication#scopes). |
+| The live WebSocket `/ws` applies the REST key scopes (`VEXA_WS_SCOPE_MODE=strict`, the default, on the gateway and meeting-api). On 0.12 any valid key opened the socket and subscribed to the meetings it owned, so a `bot`-only key streamed transcripts. | A key that cannot read meeting status is closed with `4403`; a key without the `tx` scope gets `insufficient_scope` on transcript subscribe | Give those callers keys with the scopes the matching REST routes need. See [Authentication → Scopes](/authentication#scopes). To keep the 0.12 contract for a while, see [Compatibility switches](#compatibility-switches). |
 | A webhook URL, calendar feed or personal transcription endpoint that points at a private or internal address is refused when saved. | `422` | Use a public address. |
-| A webhook URL saved before the upgrade keeps the delivery 0.12 gave it: `VEXA_WEBHOOK_STORED_URL_POLICY=v012` (default) on meeting-api still delivers to shared (100.64/10), documentation and benchmarking addresses, which 0.13 refuses on save. Loopback, private, link-local and metadata addresses stay refused in every form. `strict` applies the 0.13 guard to stored URLs too. | Under `strict`: deliveries to such a URL are recorded `blocked` | Under `strict`, re-save the webhook with a public address. |
+| A webhook is delivered under the 0.13 guard, whenever its URL was saved (`VEXA_WEBHOOK_STORED_URL_POLICY=strict`, the default, on meeting-api). 0.12 also delivered to shared (100.64/10), documentation and benchmarking addresses. | Deliveries to a URL saved on 0.12 that resolves into those ranges are recorded `blocked` | Re-save the webhook with a public address. To keep the 0.12 delivery for a while, see [Compatibility switches](#compatibility-switches). |
 | Deleting a meeting whose bot is still in it can stop the bot and delete at the end (`202 deletion_scheduled`): `VEXA_MEETING_DELETE_LIVE=stop` on meeting-api. The default, `refuse`, keeps the 0.12 answer. | Default: `409` until the meeting ends, as on 0.12 | Set `stop` to let a delete end the meeting. |
 | A person who set no language can get the languages of their recent meetings: `VEXA_LANGUAGE_HISTORY_TIER=on` on meeting-api, ranked above `DEFAULT_TRANSCRIPTION_*`. Off by default, as 0.12 had no such tier. | None by default | Turn it on to cut wrong-language windows for multilingual people. |
 | `POST /bots` reads a 0.12 `language` value as the code it names: `en-US`, `EN`, `pt_BR` and `English` become `en`, `en`, `pt` and `en`; a value that names no language is ignored (the person's or deployment's default applies). A request that also sends `allowed_languages`, and `PUT /bots/{platform}/{id}/config`, take codes only. | None | Send lower-case codes (`de`, `en`). |
 | A personal model endpoint (Settings → Models) must be on `VEXA_MODEL_BASE_URL_ALLOW`. Unset, it admits the deployment's own gateway, `api.anthropic.com` and `openrouter.ai`. On the claude-code harness it also needs its own API key. | The endpoint is not used; turns run on the deployment's model and the Test button says why | Add the host to `VEXA_MODEL_BASE_URL_ALLOW` on agent-api, and set the key in Settings. |
+
+### Compatibility switches
+
+Three settings re-open a 0.12 behaviour for an upgrade that still needs it. The first two ship
+closed; turning one on is a residual risk for as long as it stays on, so count the log line it
+writes, move those callers, and turn it off again.
+
+| Setting (services) | Closed (default) | Open — what it re-admits | Log line while open |
+|---|---|---|---|
+| `VEXA_WS_SCOPE_MODE` (gateway and meeting-api; set both) | `strict`: `/ws` takes the REST routes' scopes | `legacy`: any valid key, a `bot`-only one included, streams its owner's transcripts and signals | `ws_scope_legacy_allowed` |
+| `VEXA_WEBHOOK_STORED_URL_POLICY` (meeting-api) | `strict`: the outbound-url.v1 guard | `v012`: every per-client webhook may also reach 100.64/10 (carrier NAT, Tailscale, some pod networks) and the documentation and benchmarking ranges. Loopback, private, link-local and metadata stay refused | `webhook_stored_url_v012` |
+| `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S` (meeting-api) | `0` | default `14400`: for that many seconds after each meeting-api start, unsigned transcript entries are admitted for meetings a 0.12 bot was already transcribing (see [Upgrade every component together](#upgrade-every-component-together)) | `segment_entry_legacy_admitted` |
+
+The third stays open by default because closing it drops the live transcript of every meeting a
+0.12 bot is still in when the services are upgraded. It admits only meetings spawned before 0.13,
+so on a fresh install it admits nothing; set it to `0` once no 0.12 bot is running.
+
+On Compose and Lite set them in the environment (`deploy/compose/.env`, `docker run -e`); on Helm,
+`compat.wsScopeMode` and `compat.webhookStoredUrlPolicy`.
 
 ### Redis password and per-workload users
 
@@ -635,7 +654,7 @@ If the database itself is damaged, restore the dump you took before the upgrade.
 
 | Rule | How this upgrade meets it | Enforced by |
 |---|---|---|
-| An upgrade is invisible to an existing caller | `POST /bots` reads 0.12 `language` values; `/ws` keeps the 0.12 key contract until `VEXA_WS_SCOPE_MODE=strict`; `PUT /user/webhook` keeps the 0.12 record; stored webhook URLs keep their 0.12 delivery under `VEXA_WEBHOOK_STORED_URL_POLICY=v012` | `core/meetings/services/meeting-api/tests/test_transcription_language.py`, `core/gateway/services/gateway/tests/test_multiplex.py`, `core/identity/services/admin-api/tests/test_user_webhook_response.py`, `core/meetings/services/meeting-api/tests/test_webhook_stored_url_policy.py` |
+| An upgrade is invisible to an existing caller | `POST /bots` reads 0.12 `language` values; `/ws` keeps the 0.12 key contract under the opt-in `VEXA_WS_SCOPE_MODE=legacy`; `PUT /user/webhook` keeps the 0.12 record; stored webhook URLs keep their 0.12 delivery under the opt-in `VEXA_WEBHOOK_STORED_URL_POLICY=v012` | `core/meetings/services/meeting-api/tests/test_transcription_language.py`, `core/gateway/services/gateway/tests/test_multiplex.py`, `core/identity/services/admin-api/tests/test_user_webhook_response.py`, `core/meetings/services/meeting-api/tests/test_webhook_stored_url_policy.py` |
 | No meeting in flight loses its transcript to an upgrade | unsigned 0.12 entries admitted for pre-0.13 in-flight meetings inside a bounded window; 0.12 bot Pods re-adopted | `core/meetings/services/meeting-api/tests/test_segment_legacy_handoff.py`, `core/runtime/tests/test_readopt.py` |
 | One mechanism per concern ([ADR-0046](https://github.com/Vexa-ai/vexa/blob/main/docs/adr/0046-flows-absorb-routines-flows-own-time-flows-are-scoped.md)) | routine files are converted once, retired with a copy outside every mount, and never read again | `core/agent/tests/test_routines_once.py` |
 | Unproven features are not on by default | the release default of `VEXA_FEATURES` is empty: every switch off, data kept | `core/agent/tests/test_features.py`; `gate:config-contract` |

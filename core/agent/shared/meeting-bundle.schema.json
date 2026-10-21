@@ -187,7 +187,8 @@
             "hash_mismatch",
             "invalid_part",
             "unsafe_media",
-            "duplicate_import"
+            "duplicate_import",
+            "busy"
           ]
         },
         "detail": {"type": "string", "minLength": 1}

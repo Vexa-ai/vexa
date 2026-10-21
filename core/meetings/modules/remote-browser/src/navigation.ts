@@ -80,9 +80,28 @@ export function withSiteIsolation(args: readonly string[]): string[] {
   return out;
 }
 
+/** An operator's extra sign-in host (`VEXA_BOT_SIGNIN_EXTRA_HOSTS`): an exact DNS name, or `*.suffix`
+ *  for the suffix's subdomains (never the suffix itself). Null for an entry that may not widen the
+ *  list: an IP literal, a single label, `localhost` or `*.localhost`, a one-label suffix (`*.com`). */
+export function extraHostEntry(raw: string): string | null {
+  const e = raw.trim().toLowerCase().replace(/\.$/, '');
+  const name = e.startsWith('*.') ? e.slice(2) : e;
+  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(name)) return null;
+  if (/^[0-9.]+$/.test(name) || /\.[0-9]+$/.test(name)) return null;   // an IPv4 literal or a numeric TLD
+  if (name === 'localhost' || name.endsWith('.localhost')) return null;
+  return e;
+}
+
+/** Whether `host` is one of the operator's extra entries (exact, or a subdomain of a `*.suffix`). */
+export function extraHostAllowed(host: string, extra: readonly string[]): boolean {
+  const h = host.toLowerCase().replace(/\.$/, '');
+  return extra.some((e) => (e.startsWith('*.') ? h.endsWith(e.slice(1)) && h.length > e.length - 1 : h === e));
+}
+
 /** Whether a URL is off the list (and so must not be navigated to). */
-export function offList(url: URL, domains: readonly string[]): boolean {
+export function offList(url: URL, domains: readonly string[], extra: readonly string[] = []): boolean {
   if (HOSTLESS_SCHEMES.has(url.protocol)) return false;
+  if (url.protocol === 'https:' && extraHostAllowed(url.hostname, extra)) return false;
   return !hostAllowed(url.hostname, domains);
 }
 
@@ -94,9 +113,10 @@ export async function restrictNavigation(
   context: BrowserContext,
   domains: readonly string[],
   log: (line: string) => void = (line) => console.warn(line),
+  extra: readonly string[] = [],
 ): Promise<void> {
   const hostOf = (url: string): string => { try { return new URL(url).hostname; } catch { return ''; } };
-  await context.route((url) => offList(url, domains), async (route: Route) => {
+  await context.route((url) => offList(url, domains, extra), async (route: Route) => {
     const request = route.request();
     if (!request.isNavigationRequest()) return route.continue();
     log(`[remote-browser] refused a navigation off the authenticated session's hosts: ${hostOf(request.url())}`);
@@ -105,7 +125,7 @@ export async function restrictNavigation(
   const guard = (page: Page) => page.on('framenavigated', (frame: Frame) => {
     let url: URL;
     try { url = new URL(frame.url()); } catch { return; }
-    if (!offList(url, domains)) return;
+    if (!offList(url, domains, extra)) return;
     log(`[remote-browser] a redirect carried a frame off the authenticated session's hosts: ${url.hostname}; blanked`);
     frame.goto('about:blank').catch(() => { /* the frame may be gone */ });
   });

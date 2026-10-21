@@ -21,12 +21,23 @@ export function track(event: string, params: Record<string, unknown> = {}): void
   window.gtag!("event", event, params);
 }
 
+/** A page URL as analytics may see it: origin and path only. The query string and fragment never
+ *  leave — `/join?i=…` carries an invite that signs its holder in, and other pages carry tokens too. */
+export function scrubbedLocation(href: string): string {
+  try {
+    const u = new URL(href);
+    return u.origin === "null" ? u.href.split(/[?#]/)[0] : `${u.origin}${u.pathname}`;
+  } catch {
+    return href.split(/[?#]/)[0];
+  }
+}
+
 /** Record a SPA page view — the App Router does NOT fire gtag's automatic page_view on soft (client)
  *  navigations, so <Analytics> calls this on route change. */
 export function gaPageview(path: string): void {
   track("page_view", {
-    page_path: path,
-    page_location: typeof location !== "undefined" ? location.href : path,
+    page_path: path.split(/[?#]/)[0],
+    page_location: scrubbedLocation(typeof location !== "undefined" ? location.href : path),
   });
 }
 

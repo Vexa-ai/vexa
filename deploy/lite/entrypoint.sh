@@ -156,6 +156,14 @@ export VEXA_SYSTEM_WEBHOOK_SECRET="${VEXA_SYSTEM_WEBHOOK_SECRET:-}"
 export VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP="${VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP:-false}"
 export VEXA_SYSTEM_WEBHOOK_TIMEOUT_S="${VEXA_SYSTEM_WEBHOOK_TIMEOUT_S:-10}"
 
+# 0.12 compatibility switches, closed by default (docs: upgrade-from-0-12 → compatibility switches).
+# -e VEXA_WS_SCOPE_MODE=legacy / -e VEXA_WEBHOOK_STORED_URL_POLICY=v012 are explicit opt-ins.
+export VEXA_WS_SCOPE_MODE="${VEXA_WS_SCOPE_MODE:-strict}"
+export VEXA_WEBHOOK_STORED_URL_POLICY="${VEXA_WEBHOOK_STORED_URL_POLICY:-strict}"
+
+# A company IdP the bot-account sign-in browser may also reach (comma-separated, exact or *.suffix).
+export VEXA_BOT_SIGNIN_EXTRA_HOSTS="${VEXA_BOT_SIGNIN_EXTRA_HOSTS:-}"
+
 export MINIO_ENDPOINT="${MINIO_ENDPOINT:-}"
 export MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-}"
 export MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-}"

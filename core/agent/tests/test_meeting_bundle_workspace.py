@@ -223,3 +223,25 @@ def test_the_restore_needs_a_person_in_the_loop():
     """A write into the person's workspaces: an unwatched delegated worker is refused before it runs."""
     rows = route_policy.load()
     assert any(r == ("POST", "/api/meeting/bundle-restore") for r in rows), rows
+
+
+# ── bounded intake: the restore is spooled and admitted a few at a time ─────────────────────────
+def test_a_restore_past_the_concurrency_limit_is_429_busy_and_writes_nothing(source, tmp_path, monkeypatch):
+    monkeypatch.setattr(codec, "MAX_CONCURRENT_INTAKES", 0)  # every slot already taken
+    root = tmp_path / "busy"
+    (root / IMPORTER).mkdir(parents=True)
+    rows = {str(NEW_ID): {"id": NEW_ID, "native_meeting_id": "abc-defg-hij", "user_id": int(IMPORTER),
+                          "data": {"metadata": {"imported_bundle_id": BUNDLE_ID}}}}
+    client = _app(root, lambda u, m, w=None: {**rows[str(m)], "shared": False} if str(m) in rows else None, [])
+    r = client.post(f"/api/meeting/bundle-restore?meeting_id={NEW_ID}", content=_bundle(_parts(source).content),
+                    headers={**_h(IMPORTER), "Content-Type": "application/zip"})
+    assert r.status_code == 429, r.text
+    assert r.json()["detail"]["code"] == "busy" and r.headers.get("retry-after") == "30"
+    assert attached_workspaces(root, IMPORTER).get("slots") in ({}, None)
+
+
+def test_a_restore_upload_past_the_cap_is_413(source, target, monkeypatch):
+    monkeypatch.setattr(codec, "MAX_BUNDLE_BYTES", 1024)
+    _imported(target)
+    r = _restore(target, b"\x00" * 4096)
+    assert r.status_code == 413 and r.json()["detail"]["code"] == "too_large"

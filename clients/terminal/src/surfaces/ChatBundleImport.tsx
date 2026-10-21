@@ -37,6 +37,7 @@ const REASON: Record<string, string> = {
   hash_mismatch: "the file does not match its signature — it was changed or damaged after export",
   unsupported_version: "it was made in a bundle version this deployment does not read",
   too_large: "it is too big to import",
+  busy: "the server is busy importing other files — try again shortly",
   not_a_bundle: "it is not a meeting bundle",
   manifest_mismatch: "its contents do not match its manifest",
   unsafe_path: "it holds a file path a bundle may not carry",

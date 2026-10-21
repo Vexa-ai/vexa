@@ -50,22 +50,24 @@ SIGNALS_BACKLOG = 500
 SIGNALS_BLOCK_MS = 5000
 
 #: How the socket holds a key to the REST routes' scopes (``VEXA_WS_SCOPE_MODE``):
-#:   ``legacy`` (default) — the 0.12 contract: any valid key opens the socket and subscribes to the
-#:                          meetings the authorize hop grants it, whatever its scopes. A key that
-#:                          would be refused under ``strict`` is logged (``ws_scope_legacy_allowed``)
-#:                          so an operator can count who still relies on it before switching.
-#:   ``strict``           — the socket takes the scopes of the REST routes it mirrors (below).
+#:   ``strict`` (default) — the socket takes the scopes of the REST routes it mirrors (below), so a
+#:                          ``bot``-only key cannot stream what REST refuses it.
+#:   ``legacy``           — an explicit operator opt-in to the 0.12 contract: any valid key opens
+#:                          the socket and subscribes to the meetings the authorize hop grants it,
+#:                          whatever its scopes. A key that ``strict`` would refuse is logged
+#:                          (``ws_scope_legacy_allowed``) so the operator can count who still relies
+#:                          on it and switch back. A residual: it widens a key to its owner's streams.
 WS_SCOPE_MODE_ENV = "VEXA_WS_SCOPE_MODE"
 WS_SCOPE_MODES = ("legacy", "strict")
 
 
 def ws_scope_mode(env: "dict | None" = None) -> str:
-    """The configured mode; an unknown value reads as ``legacy`` (the 0.12 behaviour) and is logged."""
-    raw = ((env if env is not None else os.environ).get(WS_SCOPE_MODE_ENV) or "legacy").strip().lower()
+    """The configured mode; unset or an unknown value reads as ``strict`` (an unknown one is logged)."""
+    raw = ((env if env is not None else os.environ).get(WS_SCOPE_MODE_ENV) or "strict").strip().lower()
     if raw not in WS_SCOPE_MODES:
         log_event("ws_scope_mode_unknown", audience="system", level="warning", span="ws",
-                  fields={"value_ignored": True, "using": "legacy"})
-        return "legacy"
+                  fields={"value_ignored": True, "using": "strict"})
+        return "strict"
     return raw
 
 

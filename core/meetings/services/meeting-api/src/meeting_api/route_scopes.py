@@ -53,20 +53,21 @@ EDGE_HOPS: Dict[RouteKey, RouteKey] = {
     ("GET", "/bot-accounts/sessions/{session_id}/vnc"): ("GET", "/bot-accounts/sessions/{session_id}"),
 }
 
-#: The ``/ws`` subscribe hop under the 0.12 key contract. The gateway's ``VEXA_WS_SCOPE_MODE``
-#: (``legacy`` by default) lets any valid key subscribe to the meetings it may read, as 0.12 did; the
-#: hop then reaches this service with a key that may hold only ``bot``. The same setting, read here,
-#: lets the hop through the scope check; ownership is still decided by the handler, row by row. Set
-#: both services to ``strict`` together to apply the transcript read's scopes on both sides.
+#: The ``/ws`` subscribe hop. Under ``VEXA_WS_SCOPE_MODE=strict`` (the default) it takes the
+#: transcript read's scopes, as the gateway does. ``legacy`` is an operator's explicit opt-in to the
+#: 0.12 key contract: the gateway lets any valid key subscribe to the meetings it may read, the hop
+#: reaches this service with a key that may hold only ``bot``, and the same setting read here lets
+#: it through the scope check; ownership is still decided by the handler, row by row. Set both
+#: services to the same value.
 WS_SUBSCRIBE_HOP: RouteKey = ("POST", "/ws/authorize-subscribe")
 WS_SCOPE_MODE_ENV = "VEXA_WS_SCOPE_MODE"
 
 
 def ws_scope_legacy() -> bool:
-    """True unless ``VEXA_WS_SCOPE_MODE`` is ``strict`` (an unknown value reads as ``legacy``)."""
+    """True only when ``VEXA_WS_SCOPE_MODE`` is exactly ``legacy`` (unset or unknown reads as ``strict``)."""
     import os
 
-    return (os.environ.get(WS_SCOPE_MODE_ENV) or "legacy").strip().lower() != "strict"
+    return (os.environ.get(WS_SCOPE_MODE_ENV) or "strict").strip().lower() == "legacy"
 
 
 #: The answer the edge gives a key without the route's scope (`gateway/app.py`), so a client reads

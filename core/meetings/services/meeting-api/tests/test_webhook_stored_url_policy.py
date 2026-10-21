@@ -1,9 +1,9 @@
-"""VEXA_WEBHOOK_STORED_URL_POLICY — a webhook URL stored on 0.12 keeps the delivery 0.12 gave it.
+"""VEXA_WEBHOOK_STORED_URL_POLICY — the default is the 0.13 guard; ``v012`` is an operator's opt-in.
 
 0.12.28 delivered to shared-address-space (100.64/10), documentation and benchmarking addresses;
-0.13's guard refuses them. With the default ``v012`` a stored URL in those ranges is still delivered,
-and nothing 0.12 refused, nothing that reaches this host or its cloud in any written form, becomes
-reachable. ``strict`` is the 0.13 guard alone.
+0.13's guard refuses them. The default, ``strict``, is the 0.13 guard alone. Under the explicit
+opt-in ``v012`` a stored URL in those ranges is still delivered, and nothing 0.12 refused, nothing
+that reaches this host or its cloud in any written form, becomes reachable.
 """
 from __future__ import annotations
 
@@ -23,6 +23,11 @@ def _default_policy(monkeypatch):
     monkeypatch.delenv(sup.POLICY_ENV, raising=False)
 
 
+@pytest.fixture
+def v012(monkeypatch):
+    monkeypatch.setenv(sup.POLICY_ENV, "v012")
+
+
 async def _deliver(receiver, url, resolver=_PUBLIC, scope="per-client"):
     sink = WebhookSink(transport=receiver, resolver=resolver)
     env = build_envelope("meeting.completed", {"meeting": {"id": 1}})
@@ -40,23 +45,31 @@ _V012_DELIVERED = [
 
 
 @pytest.mark.parametrize("url", _V012_DELIVERED)
-async def test_a_stored_url_0_12_delivered_to_is_delivered_by_default(receiver, url):
+async def test_a_stored_url_0_12_delivered_to_is_delivered_under_the_v012_opt_in(receiver, v012, url):
     result = await _deliver(receiver, url)
     assert result.status != "blocked", result
     assert len(receiver.received) == 1
 
 
+@pytest.mark.parametrize("mode", ["strict", None])
 @pytest.mark.parametrize("url", _V012_DELIVERED)
-async def test_strict_blocks_them(receiver, monkeypatch, url):
-    monkeypatch.setenv(sup.POLICY_ENV, "strict")
+async def test_strict_and_the_default_block_them(receiver, monkeypatch, url, mode):
+    """10-B: with nothing configured, CGNAT and TEST-NET stay refused (the wc3r guard)."""
+    if mode:
+        monkeypatch.setenv(sup.POLICY_ENV, mode)
     result = await _deliver(receiver, url)
     assert result.status == "blocked"
     assert receiver.received == []
 
 
-async def test_a_name_resolving_into_a_0_12_range_is_delivered_by_default(receiver):
+async def test_a_name_resolving_into_a_0_12_range_is_delivered_under_v012(receiver, v012):
     result = await _deliver(receiver, "https://tailnet-hook.example.com/x", resolver=lambda h: ["100.80.1.2"])
     assert result.status != "blocked"
+
+
+async def test_a_name_resolving_into_cgnat_is_blocked_by_default(receiver):
+    result = await _deliver(receiver, "https://tailnet-hook.example.com/x", resolver=lambda h: ["100.80.1.2"])
+    assert result.status == "blocked"
 
 
 _STILL_REFUSED = [
@@ -71,32 +84,32 @@ _STILL_REFUSED = [
 
 
 @pytest.mark.parametrize("url", _STILL_REFUSED)
-async def test_nothing_internal_becomes_reachable_under_v012(receiver, url):
+async def test_nothing_internal_becomes_reachable_under_v012(receiver, v012, url):
     result = await _deliver(receiver, url)
     assert result.status == "blocked", url
     assert receiver.received == []
 
 
-async def test_a_name_resolving_to_metadata_or_loopback_stays_refused(receiver):
+async def test_a_name_resolving_to_metadata_or_loopback_stays_refused(receiver, v012):
     for resolved in (["100.100.100.200"], ["127.0.0.1"], ["100.64.0.1", "10.0.0.1"]):
         result = await _deliver(receiver, "https://hooks.example.com/x", resolver=lambda h, r=resolved: r)
         assert result.status == "blocked", resolved
 
 
-async def test_system_webhooks_never_use_the_stored_url_policy(receiver):
+async def test_system_webhooks_never_use_the_stored_url_policy(receiver, v012):
     result = await _deliver(receiver, "http://100.64.1.5/hook", scope="system")
     assert result.status == "blocked"
 
 
-def test_unknown_policy_reads_as_v012():
-    assert sup.policy({sup.POLICY_ENV: "STRICT"}) == "strict"
-    assert sup.policy({sup.POLICY_ENV: "nope"}) == "v012"
-    assert sup.policy({}) == "v012"
+def test_unset_or_unknown_policy_reads_as_strict():
+    assert sup.policy({sup.POLICY_ENV: "V012"}) == "v012"
+    assert sup.policy({sup.POLICY_ENV: "nope"}) == "strict"
+    assert sup.policy({}) == "strict"
 
 
 @pytest.mark.parametrize("resolved,dials", [("100.64.0.9", True), ("127.0.0.1", False),
                                             ("100.100.100.200", False), ("::ffff:169.254.169.254", False)])
-async def test_the_connection_is_still_pinned_and_rechecked(resolved, dials):
+async def test_the_connection_is_still_pinned_and_rechecked(v012, resolved, dials):
     dialled = []
 
     class _Recorder(httpx.AsyncBaseTransport):

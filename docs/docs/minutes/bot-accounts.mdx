@@ -86,6 +86,12 @@ joining as it.
 `GATEWAY_URL` on the terminal server. Bot accounts need the credential broker's `bots` key on
 meeting-api; see [Connections](/connections).
 
+The sign-in browser reaches only the platform's own sign-in hosts. If your account signs in through a
+company identity provider (ADFS, Okta), name its host in `VEXA_BOT_SIGNIN_EXTRA_HOSTS` on meeting-api
+(Helm `credentialBroker.botSigninExtraHosts`): comma-separated exact hosts or `*.suffix`, https only.
+IP addresses, single labels and `localhost` are refused at start, and a host that resolves to an
+internal address is left out.
+
 ## Why it complies
 
 ### Architecture

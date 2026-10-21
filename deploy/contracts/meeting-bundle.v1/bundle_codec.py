@@ -1,5 +1,5 @@
-"""meeting-bundle.v1 — write and read the portable meeting file. PURE: bytes in, bytes or a parsed
-bundle out; no store, no storage, no HTTP. Standard library plus ``jsonschema``.
+"""meeting-bundle.v1 — write and read the portable meeting file. PURE: bytes (or a spooled file)
+in, bytes or a parsed bundle out; no store, no storage, no HTTP. Standard library plus ``jsonschema``.
 
 THE CANONICAL COPY lives in the contract, ``deploy/contracts/meeting-bundle.v1/bundle_codec.py``,
 beside its schema. It is vendored VERBATIM, with the schema beside it, into each service that reads
@@ -30,6 +30,13 @@ carrying one contract ``Refusal`` code):
 * a length or SHA-256 that differs from the manifest (``hash_mismatch``);
 * a part that does not conform to the schema (``invalid_part``);
 * a media part whose bytes are not the container its extension names (``unsafe_media``).
+
+THE INTAKE both importers share is here too, so an upload is bounded the same way on each side:
+``spool`` lands the request body in a temporary file (memory only up to ``SPOOL_IN_MEMORY_BYTES``,
+then disk) and refuses it the moment it passes its cap (``too_large``); ``IntakeSlots`` admits at
+most ``MAX_CONCURRENT_INTAKES`` archives per process and refuses the next one (``busy``) instead of
+queueing it. ``read_bundle`` hash-checks each media entry as a stream and keeps none of it: a
+``MediaBlob`` read from an archive loads its bytes only when the importer stores it, one at a time.
 """
 from __future__ import annotations
 
@@ -37,6 +44,8 @@ import io
 import json
 import re
 import stat
+import tempfile
+import threading
 import zipfile
 import zlib
 from dataclasses import dataclass, field
@@ -44,7 +53,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
-from typing import Optional
+from typing import AsyncIterator, BinaryIO, Callable, Optional, Union
 
 CONTRACT = "meeting-bundle.v1"
 #: 1.1 adds the optional `meeting.context` and removes join/invite tokens from text parts.
@@ -60,6 +69,8 @@ MAX_WORKSPACE_FILE_BYTES = 16 * 1024 * 1024
 MAX_NOTES_PAGE_BYTES = 1024 * 1024             # notes.md, the meeting's page (UTF-8 markdown)
 MAX_PARTS_BYTES = 256 * 1024 * 1024            # the parts archive as handed to an export
 MAX_INFLATION_RATIO = 200                      # deflated entries over 1 MiB
+MAX_CONCURRENT_INTAKES = 2                     # archives one process reads at once
+SPOOL_IN_MEMORY_BYTES = 1024 * 1024            # an upload past this lands on disk
 _RATIO_FLOOR = 1024 * 1024
 
 MEDIA_CONTENT_TYPES = {
@@ -108,15 +119,31 @@ class BundleRefused(Exception):
 
 @dataclass
 class MediaBlob:
+    """One recording. Written: ``data`` holds its bytes. Read from an archive: ``data`` is None,
+    ``size`` is its verified length, and ``load()`` inflates it — again hash-checked — only when the
+    importer stores it."""
     path: str
     type: str
     format: str
     duration_seconds: Optional[float]
-    data: bytes
+    data: Optional[bytes] = None
+    size: int = 0
+    loader: Optional[Callable[[], bytes]] = field(default=None, repr=False, compare=False)
 
     @property
     def content_type(self) -> str:
         return MEDIA_CONTENT_TYPES[(self.type, self.format)]
+
+    @property
+    def length(self) -> int:
+        return len(self.data) if self.data is not None else self.size
+
+    def load(self) -> bytes:
+        if self.data is not None:
+            return self.data
+        if self.loader is None:
+            raise ValueError(f"{self.path!r} carries neither bytes nor a loader")
+        return self.loader()
 
 
 @dataclass
@@ -304,20 +331,22 @@ def write_parts(workspace: "list[tuple[str, bytes]]", notes_page: Optional[bytes
     return _zip(entries)
 
 
-def read_parts(raw: bytes) -> "tuple[list, Optional[bytes]]":
-    """``(workspace [(path, bytes)], notes_page bytes | None)`` from a parts archive, under the same
-    entry rules and caps as a bundle, or :class:`BundleRefused`."""
-    if len(raw) > MAX_PARTS_BYTES:
-        raise BundleRefused("too_large", f"the parts archive is {len(raw)} bytes (max {MAX_PARTS_BYTES})")
+def read_parts(raw: "Union[bytes, BinaryIO]") -> "tuple[list, Optional[bytes]]":
+    """``(workspace [(path, bytes)], notes_page bytes | None)`` from a parts archive (bytes, or a
+    seekable file such as ``spool`` returns), under the same entry rules and caps as a bundle, or
+    :class:`BundleRefused`."""
+    size = _source_size(raw)
+    if size > MAX_PARTS_BYTES:
+        raise BundleRefused("too_large", f"the parts archive is {size} bytes (max {MAX_PARTS_BYTES})")
     zf, infos = _open_checked(raw)
     workspace, notes = [], None
     for info in infos:
         name = info.filename
         if name == "notes.md":
-            notes = _read_bounded(zf, info, MAX_NOTES_PAGE_BYTES)
+            notes = _inflate(zf, info, MAX_NOTES_PAGE_BYTES)
             _check_notes(notes)
         elif name.startswith("workspace/"):
-            workspace.append((name, _read_bounded(zf, info, MAX_WORKSPACE_FILE_BYTES)))
+            workspace.append((name, _inflate(zf, info, MAX_WORKSPACE_FILE_BYTES)))
         else:
             raise BundleRefused("manifest_mismatch", f"{name!r} is not a part an export takes")
     return sorted(workspace), notes
@@ -355,24 +384,46 @@ def _cap_for(name: str) -> int:
     return MAX_TOTAL_UNCOMPRESSED
 
 
-def _read_bounded(zf: zipfile.ZipFile, info: zipfile.ZipInfo, cap: int) -> bytes:
+def _read_bounded(zf: zipfile.ZipFile, info: zipfile.ZipInfo, cap: int, *, keep: bool = True) -> "tuple":
     """Inflate one entry, never past ``cap`` — the declared size was already checked, and this
-    holds even when the header lies about it."""
+    holds even when the header lies about it. Answers ``(bytes | None, length, sha256 hex, head)``:
+    with ``keep=False`` the entry is hashed as a stream and only its first 16 bytes are held."""
     out = bytearray()
+    digest = sha256()
+    length = 0
+    head = b""
     try:
         with zf.open(info) as fh:
             while True:
                 chunk = fh.read(1024 * 1024)
                 if not chunk:
                     break
-                out += chunk
-                if len(out) > cap:
+                length += len(chunk)
+                if length > cap:
                     raise BundleRefused("too_large", f"{info.filename!r} inflates past its {cap}-byte cap")
+                digest.update(chunk)
+                if len(head) < 16:
+                    head = (head + chunk)[:16]
+                if keep:
+                    out += chunk
     except BundleRefused:
         raise
     except (zipfile.BadZipFile, zlib.error, EOFError, OSError) as e:
         raise BundleRefused("not_a_bundle", f"{info.filename!r} cannot be read: {e}")
-    return bytes(out)
+    return (bytes(out) if keep else None), length, digest.hexdigest(), head
+
+
+def _inflate(zf: zipfile.ZipFile, info: zipfile.ZipInfo, cap: int) -> bytes:
+    return _read_bounded(zf, info, cap)[0]
+
+
+def _source_size(source: "Union[bytes, BinaryIO]") -> int:
+    if isinstance(source, (bytes, bytearray, memoryview)):
+        return len(source)
+    here = source.tell()
+    end = source.seek(0, io.SEEK_END)
+    source.seek(here)
+    return end
 
 
 def _media_magic_ok(fmt: str, data: bytes) -> bool:
@@ -392,10 +443,10 @@ def _load_json(name: str, data: bytes):
         raise BundleRefused("invalid_part", f"{name} is not UTF-8 JSON: {e}")
 
 
-def _open_checked(raw: bytes) -> "tuple[zipfile.ZipFile, list]":
+def _open_checked(raw: "Union[bytes, BinaryIO]") -> "tuple[zipfile.ZipFile, list]":
     """The archive and its entries, every entry having passed the header rules and the caps."""
     try:
-        zf = zipfile.ZipFile(io.BytesIO(raw))
+        zf = zipfile.ZipFile(io.BytesIO(raw) if isinstance(raw, (bytes, bytearray, memoryview)) else raw)
         infos = zf.infolist()
     except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, ValueError) as e:
         raise BundleRefused("not_a_bundle", f"not a zip archive: {e}")
@@ -423,17 +474,20 @@ def _open_checked(raw: bytes) -> "tuple[zipfile.ZipFile, list]":
     return zf, infos
 
 
-def read_bundle(raw: bytes) -> ParsedBundle:
-    """Validate an archive end to end and return its parts, or raise :class:`BundleRefused`."""
-    if len(raw) > MAX_BUNDLE_BYTES:
-        raise BundleRefused("too_large", f"the bundle is {len(raw)} bytes (max {MAX_BUNDLE_BYTES})")
+def read_bundle(raw: "Union[bytes, BinaryIO]") -> ParsedBundle:
+    """Validate an archive (bytes, or a seekable file such as ``spool`` returns) end to end and
+    return its parts, or raise :class:`BundleRefused`. Media is verified as a stream and not held:
+    each ``MediaBlob.load()`` reads it again from ``raw``, so ``raw`` stays open while it is stored."""
+    size = _source_size(raw)
+    if size > MAX_BUNDLE_BYTES:
+        raise BundleRefused("too_large", f"the bundle is {size} bytes (max {MAX_BUNDLE_BYTES})")
     zf, infos = _open_checked(raw)
     seen = {i.filename for i in infos}
     if "manifest.json" not in seen:
         raise BundleRefused("not_a_bundle", "the archive has no manifest.json")
 
     by_name = {i.filename: i for i in infos}
-    manifest = _load_json("manifest.json", _read_bounded(zf, by_name["manifest.json"], MAX_JSON_PART_BYTES))
+    manifest = _load_json("manifest.json", _inflate(zf, by_name["manifest.json"], MAX_JSON_PART_BYTES))
     if not isinstance(manifest, dict) or manifest.get("contract") != CONTRACT:
         raise BundleRefused("unsupported_version",
                             f"manifest.json does not declare contract {CONTRACT!r} "
@@ -468,11 +522,14 @@ def read_bundle(raw: bytes) -> ParsedBundle:
             raise BundleRefused("manifest_mismatch", f"a bundle must carry {required}")
 
     blobs: dict = {}
+    heads: dict = {}
     for path, f in listed.items():
-        data = _read_bounded(zf, by_name[path], _cap_for(path))
-        if len(data) != f["bytes"] or sha256(data).hexdigest() != f["sha256"]:
+        data, length, digest, head = _read_bounded(zf, by_name[path], _cap_for(path),
+                                                   keep=not path.startswith("media/"))
+        if length != f["bytes"] or digest != f["sha256"]:
             raise BundleRefused("hash_mismatch", f"{path!r} does not match its manifest length/SHA-256")
         blobs[path] = data
+        heads[path] = head
 
     meeting = _load_json("meeting.json", blobs["meeting.json"])
     transcript = _load_json("transcript.json", blobs["transcript.json"])
@@ -495,10 +552,11 @@ def read_bundle(raw: bytes) -> ParsedBundle:
             raise BundleRefused("manifest_mismatch", f"{path!r} is not declared in meeting.json media")
         if not path.endswith("." + part["format"]):
             raise BundleRefused("unsafe_media", f"{path!r} does not carry its declared format {part['format']!r}")
-        if not _media_magic_ok(part["format"], blobs[path]):
+        if not _media_magic_ok(part["format"], heads[path]):
             raise BundleRefused("unsafe_media", f"{path!r} is not a {part['format']} container")
         media.append(MediaBlob(path=path, type=part["type"], format=part["format"],
-                               duration_seconds=part.get("duration_seconds"), data=blobs[path]))
+                               duration_seconds=part.get("duration_seconds"), size=listed[path]["bytes"],
+                               loader=_media_loader(zf, by_name[path], listed[path])))
     undelivered = sorted(set(declared_media) - set(listed))
     if undelivered:
         raise BundleRefused("manifest_mismatch", f"meeting.json declares media the bundle lacks: {undelivered}")
@@ -508,3 +566,56 @@ def read_bundle(raw: bytes) -> ParsedBundle:
     return ParsedBundle(manifest=manifest, meeting=meeting, transcript=transcript,
                         annotations=annotations, media=media, workspace=workspace,
                         notes_page=notes_page)
+
+
+def _media_loader(zf: zipfile.ZipFile, info: zipfile.ZipInfo, listed: dict) -> Callable[[], bytes]:
+    def load() -> bytes:
+        data, length, digest, _head = _read_bounded(zf, info, _cap_for(info.filename))
+        if length != listed["bytes"] or digest != listed["sha256"]:
+            raise BundleRefused("hash_mismatch", f"{info.filename!r} changed after it was verified")
+        return data
+    return load
+
+
+# ── intake: how an importer takes an upload ─────────────────────────────────────────────────────
+async def spool(chunks: AsyncIterator[bytes], cap: int, declared: Optional[str] = None) -> BinaryIO:
+    """The upload as a seekable temporary file — in memory up to ``SPOOL_IN_MEMORY_BYTES``, on disk
+    past it — refused (``too_large``) on the declared length first, then on the bytes actually
+    received, so a client that lies about Content-Length is cut off too. The caller closes it."""
+    if declared and declared.isdigit() and int(declared) > cap:
+        raise BundleRefused("too_large", f"the upload is {declared} bytes (max {cap})")
+    out = tempfile.SpooledTemporaryFile(max_size=SPOOL_IN_MEMORY_BYTES)
+    received = 0
+    try:
+        async for chunk in chunks:
+            received += len(chunk)
+            if received > cap:
+                raise BundleRefused("too_large", f"the upload exceeds {cap} bytes")
+            out.write(chunk)
+    except BaseException:
+        out.close()
+        raise
+    out.seek(0)
+    return out
+
+
+class IntakeSlots:
+    """At most ``limit`` archives read at once in this process. A caller past the limit is refused
+    (``busy``) at once rather than queued: a queue of half-received uploads is the same memory and
+    disk the limit exists to bound."""
+
+    def __init__(self, limit: Optional[int] = None):
+        self.limit = MAX_CONCURRENT_INTAKES if limit is None else limit
+        self._held = 0
+        self._lock = threading.Lock()
+
+    def __enter__(self) -> "IntakeSlots":
+        with self._lock:
+            if self._held >= self.limit:
+                raise BundleRefused("busy", f"this server is already reading {self.limit} archives; retry shortly")
+            self._held += 1
+        return self
+
+    def __exit__(self, *exc) -> None:
+        with self._lock:
+            self._held -= 1

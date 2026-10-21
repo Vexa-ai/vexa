@@ -731,3 +731,30 @@ test("calm: a control-requirement output fails at any severity; other warnings d
   assert.equal(judgeCalmOutput("model", 0, report([{ severity: "warning", code: "architecture-nodes-must-be-referenced", path: "/nodes/a", message: "x" }])).errs.length, 0);
   assert.equal(judgeCalmOutput("model", 1, "not json").errs.length, 1);
 });
+
+// ── gate:contract-version — the seal covers a contract's RULE SOURCE, not only its schema ───────
+// outbound-url.v1 gained an `OperatorAllowance` in ssrf.py while its schema stayed byte-identical, so
+// the seal (then a hash of *.schema.json alone) never moved and no lane:contract review fired. The
+// canonical *.py beside a schema is the contract's executable rule; widening it must red the gate
+// exactly like a schema edit. Measured on the tip before the fix: the same plant was green.
+const SSRF_RULE = "deploy/contracts/outbound-url.v1/ssrf.py";
+
+test("contract-version vacuity: the committed seals match the tree", () => {
+  const r = runGate("contract-version");
+  assert.equal(r.green, true, `the clean tree must be green or the fixture below proves nothing:\n${r.out}`);
+});
+
+test("contract-version RED: a semantic edit to a contract's rule source (ssrf.py) moves the seal", () => {
+  const r = withEdited(SSRF_RULE, "def is_never_allowed_ip(addr: Union[str, IPAddress]) -> bool:\n",
+    "def is_never_allowed_ip(addr: Union[str, IPAddress]) -> bool:\n    return False\n",
+    () => runGate("contract-version"));
+  assert.equal(r.green, false, `a widened SSRF rule passed the contract seal:\n${r.out}`);
+  assert.match(r.out, /sealed contract changed: deploy\/contracts\/outbound-url\.v1/,
+    `the failure must name the contract whose rule changed:\n${r.out}`);
+});
+
+test("contract-version GREEN: a contract README edit is not a contract change", () => {
+  const r = withEdited("deploy/contracts/outbound-url.v1/README.md", /$/, "\n<!-- prose -->\n",
+    () => runGate("contract-version"));
+  assert.equal(r.green, true, `prose beside the contract must not move the seal:\n${r.out}`);
+});

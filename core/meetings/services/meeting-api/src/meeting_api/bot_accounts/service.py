@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from ..obs import log_event
+from ..webhooks import ssrf
 from . import sessions as S
 from .broker import (
     NOT_CONFIGURED,
@@ -44,6 +45,31 @@ SESSION_ID = ACCOUNT_ID
 USERDATA_KEY_PREFIX = "bot-account:"
 SIGNED_OUT_REMEDY = "browser_session_open"
 AUTH_SESSION_MISSING = "auth_session_missing"
+
+
+#: An operator's extra sign-in hosts — a company identity provider the platform hands the sign-in to
+#: (a bank's ADFS for its Teams account). Comma-separated exact host names or ``*.suffix``; empty by
+#: default. The sign-in browser may navigate to these over https beside the platform's own hosts.
+SIGNIN_EXTRA_HOSTS_ENV = "VEXA_BOT_SIGNIN_EXTRA_HOSTS"
+_HOST_NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
+
+
+def parse_signin_extra_hosts(raw: Optional[str]) -> tuple:
+    """``VEXA_BOT_SIGNIN_EXTRA_HOSTS`` as a tuple of entries, or ``ValueError`` naming the first entry
+    that may not widen the sign-in browser: an IP literal, a single label, ``localhost``, a metadata
+    name, or a suffix of one label (``*.com``)."""
+    entries = []
+    for part in (raw or "").split(","):
+        entry = part.strip().lower().rstrip(".")
+        if not entry:
+            continue
+        name = entry[2:] if entry.startswith("*.") else entry
+        if (ssrf.literal_address(name) is not None or ssrf.is_blocked_hostname(name)
+                or not _HOST_NAME.match(name) or name.rsplit(".", 1)[-1].isdigit()):
+            raise ValueError(f"{SIGNIN_EXTRA_HOSTS_ENV}: {part.strip()!r} is not a host name a sign-in "
+                             "browser may reach (an IP literal, a single label, localhost or a metadata name)")
+        entries.append(entry)
+    return tuple(entries)
 
 
 def userdata_key(account_id: str) -> str:
@@ -70,6 +96,8 @@ class Settings:
     check_timeout_s: int = 180
     #: How the workload's host is named on the bots network: the runtime's container/Pod name.
     host_template: str = "vexa-{workload_id}"
+    #: ``VEXA_BOT_SIGNIN_EXTRA_HOSTS``, parsed (``parse_signin_extra_hosts``).
+    signin_extra_hosts: tuple = ()
 
     @classmethod
     def from_env(cls, env: Optional[dict] = None) -> "Settings":
@@ -87,6 +115,7 @@ class Settings:
             session_timeout_s=_int("VEXA_BOT_ACCOUNTS_SESSION_TIMEOUT_S", 900),
             check_timeout_s=_int("VEXA_BOT_ACCOUNTS_CHECK_TIMEOUT_S", 180),
             host_template=(env.get("VEXA_BOT_ACCOUNTS_WORKLOAD_HOST") or "vexa-{workload_id}"),
+            signin_extra_hosts=parse_signin_extra_hosts(env.get(SIGNIN_EXTRA_HOSTS_ENV)),
         )
 
 
@@ -98,6 +127,8 @@ class BotAccounts:
     admin: AdminOracle = field(default_factory=FakeAdminOracle)
     upstream: VncUpstream = field(default_factory=FakeVncUpstream)
     settings: Settings = field(default_factory=Settings)
+    #: How an extra sign-in host is resolved before a session may reach it (``ssrf.resolve_host``).
+    resolver: Optional[Callable[[str], list]] = None
     clock: Callable[[], float] = time.time
     policy: Callable[[], str] = company_bot_use
 
@@ -235,6 +266,9 @@ class BotAccounts:
             "save_url": f"{self.settings.callback_base}/internal/bot-accounts/sessions/{session_id}/profile",
             "timeout_ms": timeout * 1000,
         }
+        extra_hosts = self._signin_extra_hosts()
+        if extra_hosts:
+            env_payload["extra_hosts"] = extra_hosts
         try:
             await self._spawn(workload_id, env_payload, lifetime_s=ttl)
         except BotAccountRefused as e:
@@ -251,6 +285,23 @@ class BotAccounts:
             "ws_path": f"/bot-accounts/sessions/{session_id}/vnc",
             "vnc_password": vnc_password, "expires_at": record["expires_at"],
         }
+
+    def _signin_extra_hosts(self) -> list:
+        """The operator's extra sign-in hosts this session may reach. An exact host is resolved now and
+        left out (logged) when it does not resolve or any address it resolves to is internal; a
+        ``*.suffix`` cannot be resolved ahead and is passed as configured."""
+        resolve = self.resolver or ssrf.resolve_host
+        out = []
+        for entry in self.settings.signin_extra_hosts:
+            if not entry.startswith("*."):
+                addrs = resolve(entry)
+                if not addrs or any(ssrf.is_blocked_ip(a) for a in addrs):
+                    log_event("browser_session_extra_host_refused", audience="system", level="warning",
+                              span="bot_accounts",
+                              fields={"host": entry, "why": "internal address" if addrs else "does not resolve"})
+                    continue
+            out.append(entry)
+        return out
 
     async def owned_session(self, user_id: int, session_id: str, *, refresh: bool = True) -> dict:
         """The caller's session record, refreshed; ``BotAccountRefused(404)`` for anybody else's."""

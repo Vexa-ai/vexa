@@ -401,3 +401,89 @@ def test_no_invite_or_join_token_leaves_in_a_bundle():
     assert b"join?i=[removed]" in raw and b"uname=a" in raw
     assert read_bundle(archive).manifest["format_version"] == "1.1"
     assert redact_tokens("see ?page=2") == "see ?page=2"
+
+
+# ── bounded intake: spooled, streamed, and admitted a few at a time ──────────────────────────────
+def _bundle_with_media(size: int) -> bytes:
+    from meeting_api.bundle import MediaBlob, write_bundle
+
+    media = [MediaBlob(path="media/recording-1-audio.wav", type="audio", format="wav",
+                       duration_seconds=1.0, data=G.WAV_AUDIO + b"\x00" * (size - len(G.WAV_AUDIO)))]
+    with zipfile.ZipFile(io.BytesIO((G.GOLDEN / "bundles" / "transcript-only.zip").read_bytes())) as zf:
+        meeting = json.loads(zf.read("meeting.json"))
+        transcript = json.loads(zf.read("transcript.json"))
+    meeting["media"] = [{"path": media[0].path, "type": "audio", "format": "wav", "duration_seconds": 1.0}]
+    return write_bundle(meeting=meeting, transcript=transcript, annotations={"metadata": {}, "notes": None},
+                        media=media, bundle_id="00000000-0000-4000-8000-0000000000aa",
+                        exported_at="2026-10-01T10:00:00Z", deployment_id="d" * 32, source_meeting_id=1)
+
+
+def test_reading_a_spooled_bundle_holds_neither_the_upload_nor_its_media(tmp_path):
+    """The archive is read from a file and each recording is hash-checked as a stream: reading a
+    bundle with 24 MiB of media peaks far below the media's size. The media loads on demand."""
+    import tracemalloc
+
+    from meeting_api.bundle import read_bundle
+
+    path = tmp_path / "big.zip"
+    path.write_bytes(_bundle_with_media(24 * 1024 * 1024))
+    with path.open("rb") as fh:
+        tracemalloc.start()
+        try:
+            parsed = read_bundle(fh)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert peak < 8 * 1024 * 1024, f"reading the bundle peaked at {peak} bytes"
+        (blob,) = parsed.media
+        assert blob.data is None and blob.length == 24 * 1024 * 1024
+        assert blob.load()[:4] == b"RIFF"
+
+
+def test_a_large_import_lands_its_media_through_the_spool(b):
+    archive = _bundle_with_media(3 * 1024 * 1024)
+    r = _import(b, archive)
+    assert r.status_code == 201, r.text
+    assert [len(v) for v in b.storage.blobs.values()] == [3 * 1024 * 1024]
+    assert r.json()["media"][0]["bytes"] == 3 * 1024 * 1024
+
+
+def test_an_upload_past_the_cap_is_cut_off_even_when_its_length_is_not_declared():
+    import asyncio
+
+    from meeting_api.bundle.codec import BundleRefused, spool
+
+    async def body():
+        for _ in range(8):
+            yield b"\x00" * 1024
+
+    with pytest.raises(BundleRefused) as e:
+        asyncio.run(spool(body(), 4096))
+    assert e.value.code == "too_large"
+
+
+def test_intake_slots_admit_a_bounded_number_and_refuse_the_next_as_busy():
+    from meeting_api.bundle.codec import BundleRefused, IntakeSlots
+
+    slots = IntakeSlots(2)
+    with slots, slots:
+        with pytest.raises(BundleRefused) as e:
+            with slots:
+                pass
+        assert e.value.code == "busy"
+    with slots:  # released: admitted again
+        pass
+
+
+def test_an_import_past_the_concurrency_limit_is_429_busy_and_writes_nothing(monkeypatch):
+    from meeting_api.bundle import codec
+
+    monkeypatch.setattr(codec, "MAX_CONCURRENT_INTAKES", 0)  # every slot already taken
+    d = _deployment(SECRET_B)
+    for route in ("/meetings/import", "/meetings/1/export"):
+        r = d.client.post(route, content=(G.GOLDEN / "bundles" / "transcript-only.zip").read_bytes(),
+                          headers={**_h(IMPORTER), "content-type": "application/zip"})
+        assert r.status_code == 429, r.text
+        assert r.json()["detail"]["code"] == "busy"
+        assert r.headers.get("retry-after") == "30"
+    assert d.store._meetings == {} and d.storage.blobs == {}

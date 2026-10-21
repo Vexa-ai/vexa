@@ -236,7 +236,7 @@ class WebhookSink:
 
         # 2. SSRF guard — reject private/internal targets before any HTTP.
         #    A per-client URL stored before 0.13 that only the 0.12 guard admits is delivered when
-        #    VEXA_WEBHOOK_STORED_URL_POLICY=v012 (the default) — see stored_url_policy.py.
+        #    an operator set VEXA_WEBHOOK_STORED_URL_POLICY=v012 (default strict) — see stored_url_policy.py.
         try:
             validate_webhook_url(url, resolver=self._resolver)
         except SSRFError as e:

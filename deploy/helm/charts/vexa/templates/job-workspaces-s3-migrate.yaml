@@ -33,7 +33,7 @@ spec:
       containers:
         - name: migrate
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
-          image: "{{ .Values.agentApi.image.repository }}:{{ .Values.global.imageTag | default .Values.agentApi.image.tag }}"
+          image: "{{ .Values.agentApi.image.repository }}:{{ .Values.global.imageTag | default .Values.agentApi.image.tag | default (include "vexa.releaseTag" .) }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           command: ["python", "-m", "workspaces.store.migrate", "--source", "/source"]
           env:

@@ -32,11 +32,13 @@ from control_plane.workspace_attach import create_workspace, workspace_slot_dir
 from shared import meeting_bundle_codec as codec
 from workspaces.shared import entities as entities_mod
 
-_STATUS = {"too_large": 413, "duplicate_import": 409}
+_STATUS = {"too_large": 413, "duplicate_import": 409, "busy": 429}
 
 
 def build(**d) -> APIRouter:
     router = APIRouter()
+    # At most codec.MAX_CONCURRENT_INTAKES restores read at once in this process; the next is 429.
+    slots = d.get('bundle_slots') or codec.IntakeSlots()
     _meeting_note_recorder = d['_meeting_note_recorder']
     _meeting_owner_lookup = d['_meeting_owner_lookup']
     subject_of = d['subject_of']
@@ -86,21 +88,21 @@ def build(**d) -> APIRouter:
     async def bundle_restore(request: Request, meeting_id: str = Query(...)):
         row = _owned_row(request, meeting_id)
         subject = subject_of(request)
-        declared = request.headers.get("content-length")
-        if declared and declared.isdigit() and int(declared) > codec.MAX_BUNDLE_BYTES:
-            raise HTTPException(status_code=413, detail={"code": "too_large", "detail": "the bundle is too large"})
-        body = bytearray()
-        async for chunk in request.stream():
-            body += chunk
-            if len(body) > codec.MAX_BUNDLE_BYTES:
-                raise HTTPException(status_code=413, detail={"code": "too_large", "detail": "the bundle is too large"})
         try:
-            parsed = codec.read_bundle(bytes(body))
-            out = bundle_mod.restore(
-                wsr.root, subject, row, parsed, record_note=_meeting_note_recorder,
-                create_workspace=create_workspace, slot_dir=workspace_slot_dir, commit=_commit)
+            with slots:
+                # Spooled to a temporary file, never held whole; the restore uses only the workspace
+                # and notes parts, and read_bundle verifies media as a stream without keeping it.
+                raw = await codec.spool(request.stream(), codec.MAX_BUNDLE_BYTES,
+                                        request.headers.get("content-length"))
+                with raw:
+                    parsed = codec.read_bundle(raw)
+                    out = bundle_mod.restore(
+                        wsr.root, subject, row, parsed, record_note=_meeting_note_recorder,
+                        create_workspace=create_workspace, slot_dir=workspace_slot_dir, commit=_commit)
         except codec.BundleRefused as e:
-            raise HTTPException(status_code=_STATUS.get(e.code, 422), detail=e.body())
+            status = _STATUS.get(e.code, 422)
+            raise HTTPException(status_code=status, detail=e.body(),
+                                headers={"Retry-After": "30"} if status == 429 else None)
         except bundle_mod.RestoreRefused as e:
             raise HTTPException(status_code=e.status, detail={"code": e.code, "detail": e.detail})
         return JSONResponse(status_code=201, content=out)

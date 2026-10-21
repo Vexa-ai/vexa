@@ -142,6 +142,14 @@ async function main(): Promise<void> {
   refuses('a short VNC password', JSON.stringify(signinCfg({ vnc_password: 'abc' })), 'vnc_password');
   refuses('a save_url that is not http(s)', JSON.stringify(signinCfg({ save_url: 'file:///etc/passwd' })), 'save_url');
   refuses('a zero timeout', JSON.stringify(signinCfg({ timeout_ms: 0 })), 'timeout_ms');
+  refuses('extra_hosts that is not a list of names', JSON.stringify(signinCfg({ extra_hosts: 'adfs.bank.example' })), 'extra_hosts');
+  const withExtra = parseBrowserSession(JSON.stringify(signinCfg({ extra_hosts: ['adfs.bank.example'] })));
+  check('extra_hosts passes through', JSON.stringify(withExtra.extra_hosts) === '["adfs.bank.example"]');
+  {
+    const h = harness();
+    await runBrowserSession({ VEXA_BROWSER_SESSION: JSON.stringify(signinCfg({ extra_hosts: ['adfs.bank.example'] })), DISPLAY: ':99' }, h.deps);
+    check('the extra sign-in hosts reach provisionLogin', JSON.stringify(h.provisioned[0]?.extraHosts) === '["adfs.bank.example"]');
+  }
   const ok = parseBrowserSession(JSON.stringify(signinCfg()));
   check('a complete signin config parses', ok.mode === 'signin' && ok.vnc_password === PW && ok.save_url?.startsWith('http://') === true);
   check('platform mapping google→google, microsoft→teams, zoom→zoom',

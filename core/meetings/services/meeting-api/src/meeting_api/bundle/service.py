@@ -23,7 +23,7 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
-from typing import Callable, Optional
+from typing import BinaryIO, Callable, Optional
 
 from .codec import (
     BundleRefused,
@@ -295,7 +295,7 @@ def preview(parsed: ParsedBundle, duplicate_of: Optional[int]) -> dict:
                                             "start_time", "end_time", "participants")},
         "segments": len(segs),
         "speakers": sorted({s["speaker"] for s in segs if s.get("speaker")}),
-        "media": [{"path": m.path, "type": m.type, "format": m.format, "bytes": len(m.data),
+        "media": [{"path": m.path, "type": m.type, "format": m.format, "bytes": m.length,
                    "duration_seconds": m.duration_seconds} for m in parsed.media],
         "annotations": {"metadata_keys": sorted(parsed.annotations["metadata"].keys()),
                         "notes": bool(parsed.annotations.get("notes"))},
@@ -321,9 +321,11 @@ def _occurrence(meeting: dict, manifest: dict, segments: list) -> "tuple[datetim
 
 async def import_bundle(
     store, recording_repo, storage, *,
-    user_id: int, raw: bytes, dry_run: bool, log_event: Callable,
+    user_id: int, raw: "bytes | BinaryIO", dry_run: bool, log_event: Callable,
 ) -> dict:
-    """Validate ``raw`` and, unless ``dry_run``, land it as a new meeting the caller owns.
+    """Validate ``raw`` (bytes, or the spooled upload — kept open until this returns, since each
+    recording is read from it as it is stored) and, unless ``dry_run``, land it as a new meeting the
+    caller owns.
 
     Raises :class:`BundleRefused` for every refusal (the route maps codes to statuses)."""
     from ..collector.transcript_import import normalize_segments, session_uid_for
@@ -363,7 +365,7 @@ async def import_bundle(
         for blob in parsed.media:
             rec_id = new_recording_numeric_id()
             key = f"recordings/{user_id}/{rec_id}/{session_uid}/{blob.type}/master.{blob.format}"
-            await storage.upload(key, blob.data, content_type=blob.content_type)
+            await storage.upload(key, blob.load(), content_type=blob.content_type)
             written_keys.append(key)
             await recording_repo.mutate_recordings(
                 mid, _append_recording(rec_id=rec_id, meeting_id=mid, user_id=user_id,
@@ -425,7 +427,7 @@ def _append_recording(*, rec_id, meeting_id, user_id, session_uid, blob: MediaBl
         "format": blob.format,
         "storage_path": key,
         "storage_backend": os.environ.get("STORAGE_BACKEND", "minio"),
-        "file_size_bytes": len(blob.data),
+        "file_size_bytes": blob.length,
         "chunk_count": 0,
         "assembled_chunk_count": 0,
         "duration_seconds": blob.duration_seconds,

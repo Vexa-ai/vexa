@@ -909,7 +909,8 @@ crm:
 
 The chart then runs `crm-api`, which logs in to Postgres as its own role (`vexa_crm`); the
 `crm-schema` Job creates that role, the `crm_*` tables and the organisation with the database's admin
-credential, and `crm-api` waits for it. The gateway fronts the record page's read, history and review
+credential, and `crm-api` waits for it. The Job is a release resource, not a hook, so it runs on
+`helm install` as well as on an upgrade that changes it. The gateway fronts the record page's read, history and review
 under `/crm/*`, the MCP adds the `crm_*` tools, the flows pack hands workspace references to it, and
 agent-api publishes each workspace's record links every `crm.referencesPollSeconds`. With agent-api
 on, `crm-api` also reads the desktop's limits from `_global/POLICIES.md` through agent-api

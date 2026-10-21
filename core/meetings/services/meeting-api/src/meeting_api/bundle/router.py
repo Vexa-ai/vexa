@@ -11,6 +11,10 @@
 
 Every refusal answers ``{"detail": {"code", "detail"}}`` with one contract code, so a client tells a
 bad hash from a duplicate from a too-big archive without parsing prose.
+
+An upload is spooled to a temporary file (``codec.spool``), never held whole in memory, and at most
+``codec.MAX_CONCURRENT_INTAKES`` archives are read at once in this process: the next one is refused
+``429 busy`` with ``Retry-After``, not queued.
 """
 from __future__ import annotations
 
@@ -19,12 +23,19 @@ from typing import Callable, Optional
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 
-from .codec import MAX_BUNDLE_BYTES, MAX_PARTS_BYTES, BundleRefused, read_parts
+from .codec import MAX_BUNDLE_BYTES, MAX_PARTS_BYTES, BundleRefused, IntakeSlots, read_parts, spool
 from .service import ExportError, export_meeting, import_bundle
 
 # The status each refusal answers with: the archive's SIZE is 413, a meeting that already exists is
-# 409, every other refusal is about the archive's content (422).
-_STATUS = {"too_large": 413, "duplicate_import": 409}
+# 409, a server already reading its limit of archives is 429, every other refusal is about the
+# archive's content (422).
+_STATUS = {"too_large": 413, "duplicate_import": 409, "busy": 429}
+
+
+def _refusal(refused: BundleRefused) -> HTTPException:
+    status = _STATUS.get(refused.code, 422)
+    return HTTPException(status_code=status, detail=refused.body(),
+                         headers={"Retry-After": "30"} if status == 429 else None)
 
 
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
@@ -36,26 +47,13 @@ def _resolve_user_id(x_user_id: Optional[str]) -> int:
         raise HTTPException(status_code=401, detail="Invalid user identity")
 
 
-async def _read_capped(request: Request, cap: Optional[int] = None) -> bytes:
-    """The request body, refused the moment it passes the cap — the declared length first, then
-    the bytes actually received, so a client that lies about Content-Length is cut off too."""
-    cap = MAX_BUNDLE_BYTES if cap is None else cap
-    declared = request.headers.get("content-length")
-    if declared and declared.isdigit() and int(declared) > cap:
-        raise BundleRefused("too_large", f"the upload is {declared} bytes (max {cap})")
-    body = bytearray()
-    async for chunk in request.stream():
-        body += chunk
-        if len(body) > cap:
-            raise BundleRefused("too_large", f"the upload exceeds {cap} bytes")
-    return bytes(body)
-
-
 def build_router(
     store, recording_repo, storage, *,
     finalize: Callable, log_event: Callable, secret: Optional[str] = None,
+    slots: Optional[IntakeSlots] = None,
 ) -> APIRouter:
     router = APIRouter()
+    slots = slots or IntakeSlots()
 
     # Registered before any `/meetings/{meeting_id}` POST could exist; a literal `import` segment is
     # never an integer row id, so neither route can answer for the other.
@@ -67,14 +65,16 @@ def build_router(
     ):
         user_id = _resolve_user_id(x_user_id)
         try:
-            raw = await _read_capped(request)
-            result = await import_bundle(store, recording_repo, storage, user_id=user_id, raw=raw,
-                                         dry_run=dry_run, log_event=log_event)
+            with slots:
+                raw = await spool(request.stream(), MAX_BUNDLE_BYTES, request.headers.get("content-length"))
+                with raw:
+                    result = await import_bundle(store, recording_repo, storage, user_id=user_id, raw=raw,
+                                                 dry_run=dry_run, log_event=log_event)
         except BundleRefused as refused:
             log_event("meeting_bundle_refused", audience="user", level="warning",
                       span="meetings.bundle.import", user_id=user_id,
                       fields={"code": refused.code, "detail": refused.detail, "dry_run": dry_run})
-            raise HTTPException(status_code=_STATUS.get(refused.code, 422), detail=refused.body())
+            raise _refusal(refused)
         return JSONResponse(status_code=200 if dry_run else 201, content=result)
 
     async def _export(meeting_id: int, media: bool, x_user_id, x_user_workspaces, parts=None):
@@ -123,12 +123,15 @@ def build_router(
     ):
         user_id = _resolve_user_id(x_user_id)
         try:
-            parts = read_parts(await _read_capped(request, MAX_PARTS_BYTES))
+            with slots:
+                raw = await spool(request.stream(), MAX_PARTS_BYTES, request.headers.get("content-length"))
+                with raw:
+                    parts = read_parts(raw)
         except BundleRefused as refused:
             log_event("meeting_bundle_refused", audience="user", level="warning",
                       span="meetings.bundle.export", user_id=user_id, meeting_id=str(meeting_id),
                       fields={"code": refused.code, "detail": refused.detail, "parts": True})
-            raise HTTPException(status_code=_STATUS.get(refused.code, 422), detail=refused.body())
+            raise _refusal(refused)
         return await _export(meeting_id, media, x_user_id, x_user_workspaces, parts=parts)
 
     return router

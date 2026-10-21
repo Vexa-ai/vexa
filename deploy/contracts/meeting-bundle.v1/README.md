@@ -87,6 +87,7 @@ An importer refuses — before writing anything — a bundle that breaks any rul
 | every part conforms to its schema shape (metadata ≤ 16 KiB serialized) | `invalid_part` |
 | each media file starts with its container's signature (EBML for webm/mkv, `RIFF…WAVE`, `ftyp` for mp4) | `unsafe_media` |
 | (Vexa) the importer has not already imported this `bundle_id` | `duplicate_import` |
+| (Vexa) the importer is not already reading its limit of archives at once (two per process) — answered `429`; retry later | `busy` |
 
 Never join an entry name onto a filesystem path, and store recordings with a content type chosen
 from the declared format, not from the file. Render all text as text.

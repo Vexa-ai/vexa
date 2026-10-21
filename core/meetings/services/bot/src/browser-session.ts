@@ -55,6 +55,8 @@ export interface BrowserSessionConfig {
   /** signin */
   vnc_password?: string;
   save_url?: string;
+  /** signin: the operator's extra sign-in hosts (a company IdP), already checked by meeting-api. */
+  extra_hosts?: string[];
   /** verify */
   restore_url?: string;
   result_url?: string;
@@ -108,6 +110,13 @@ export function parseBrowserSession(raw: string | undefined): BrowserSessionConf
     if (!isHttpUrl(d.save_url)) bad('save_url is required in signin mode (an http(s) URL)');
     cfg.vnc_password = d.vnc_password;
     cfg.save_url = d.save_url;
+    if (d.extra_hosts !== undefined) {
+      if (!Array.isArray(d.extra_hosts) || d.extra_hosts.length > 32
+        || !d.extra_hosts.every((h: unknown) => typeof h === 'string' && h.length > 0 && h.length <= 253 && !CONTROL.test(h))) {
+        bad('extra_hosts must be a list of at most 32 host names');
+      }
+      cfg.extra_hosts = d.extra_hosts;
+    }
   } else {
     if (!isHttpUrl(d.restore_url)) bad('restore_url is required in verify mode (an http(s) URL)');
     if (!isHttpUrl(d.result_url)) bad('result_url is required in verify mode (an http(s) URL)');
@@ -217,6 +226,7 @@ async function runSignin(cfg: BrowserSessionConfig, deps: BrowserSessionDeps): P
       profileDir,
       timeoutMs: cfg.timeout_ms,
       args: signinBrowserArgs(),
+      extraHosts: cfg.extra_hosts ?? [],
     });
     if (!status.loggedIn) {
       deps.log('[browser-session] sign-in not confirmed before the timeout; nothing saved');

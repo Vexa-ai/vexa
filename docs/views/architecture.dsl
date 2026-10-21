@@ -208,6 +208,7 @@ edges:
   terminal -req-> gateway  # live WS via gateway
   terminal -req-> admin-api  # the terminal's server, with the internal secret: sign-in admission, the admin claim, the claim-code check, instance state, the one-use redeem of an emailed sign-in link and the binding of an OAuth sign-in to its provider subject (signin.v1), plus /internal/validate and the settings it edits for the admin
   terminal -req-> agent-api  # the terminal's server, with the internal secret: POST /internal/scaffolds (a sign-in's arrival) and GET /internal/has-history
+  terminal -req-> flows-api  # the terminal's server, with the internal secret: POST /mail/sign-in hands an emailed sign-in link to the flows mailer (VEXA_FLOWS_API_URL); on any failure the terminal sends it over its own SMTP
   dashboard -req-> gateway  # dashboard → gateway REST (hosted-compat aliases; the hosted-proven wiring)
   dashboard -req-> gateway  # dashboard → gateway /ws (live transcript view)
   slim -req-> gateway  # Python client; REST via gateway

@@ -2,7 +2,8 @@
 
 0.12.28's `/ws` checked no key scope: a key minted with only `bot` (the account page's default)
 opened the socket and streamed the live transcript of the meetings its owner may read. Under
-`VEXA_WS_SCOPE_MODE=legacy` (the default on both services) 0.13 keeps that contract.
+`VEXA_WS_SCOPE_MODE=legacy` (an explicit opt-in on both services; the default is `strict`) 0.13
+keeps that contract.
 
 This drives the SHIPPED pieces together, offline:
   the gateway's `/ws` loop (`gateway.run_multiplex`)
@@ -83,7 +84,7 @@ async def _subscribe(scopes, meeting):
 @pytest.fixture(autouse=True)
 def _env(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", "conformance-internal")
-    monkeypatch.delenv("VEXA_WS_SCOPE_MODE", raising=False)
+    monkeypatch.setenv("VEXA_WS_SCOPE_MODE", "legacy")
 
 
 async def test_a_0_12_bot_only_key_subscribes_to_its_own_meeting():
@@ -99,8 +100,13 @@ async def test_legacy_mode_still_refuses_a_meeting_the_key_may_not_read():
     assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent), ws.sent
 
 
-async def test_strict_on_both_sides_refuses_the_bot_only_key(monkeypatch):
-    monkeypatch.setenv("VEXA_WS_SCOPE_MODE", "strict")
+@pytest.mark.parametrize("mode", ["strict", None])
+async def test_strict_on_both_sides_refuses_the_bot_only_key(monkeypatch, mode):
+    """Strict — set, or the default with nothing set — refuses the `bot`-only key end to end."""
+    if mode is None:
+        monkeypatch.delenv("VEXA_WS_SCOPE_MODE", raising=False)
+    else:
+        monkeypatch.setenv("VEXA_WS_SCOPE_MODE", mode)
     ws = await _subscribe(["bot"], MINE)
     assert any(f.get("error") == "insufficient_scope" for f in ws.sent), ws.sent
     assert not any(f.get("type") == "subscribed" and f.get("meetings") for f in ws.sent)

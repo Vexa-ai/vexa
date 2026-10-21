@@ -3755,6 +3755,27 @@
    ]
   },
   {
+   "unique-id": "term-flows-internal",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "terminal"
+     },
+     "destination": {
+      "node": "flows-api",
+      "interface": "flows-http"
+     }
+    }
+   },
+   "description": "the terminal's server, with the internal secret: POST /mail/sign-in hands an emailed sign-in link to the flows mailer (VEXA_FLOWS_API_URL); on any failure the terminal sends it over its own SMTP",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req"
+    }
+   ]
+  },
+  {
    "unique-id": "dash-gw-rest",
    "description": "dashboard \u2192 gateway REST (hosted-compat aliases; the hosted-proven wiring)",
    "relationship-type": {

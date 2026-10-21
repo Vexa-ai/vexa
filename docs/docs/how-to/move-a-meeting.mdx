@@ -66,7 +66,7 @@ it. A card in the conversation shows how it goes:
 | **Importing a call from** *file* with a progress bar | the file is going up; dropping the same file again meanwhile does not send it twice |
 | **Imported the call** and its title, as a link | the call is yours: the link opens its transcript, and it is in your **Calls** list |
 | **You already imported this call**, with a link | this file was imported before; nothing is imported again — the link opens the call it already is |
-| **Not imported:** and the reason, with its code | the deployment refused the file, e.g. *the file does not match its signature* (`hash_mismatch`), *made in a bundle version this deployment does not read* (`unsupported_version`), *too big* (`too_large`), *you are not allowed to import meetings here* (`403`) |
+| **Not imported:** and the reason, with its code | the deployment refused the file, e.g. *the file does not match its signature* (`hash_mismatch`), *made in a bundle version this deployment does not read* (`unsupported_version`), *too big* (`too_large`), *the server is busy importing other files, try again shortly* (`429 busy`), *you are not allowed to import meetings here* (`403`) |
 
 Drop several files at once and each bundle imports while every other file attaches to your message
 as usual. A zip that is not a meeting bundle is an ordinary attachment.
