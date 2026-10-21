@@ -9,6 +9,7 @@ import {
   zoomPreviewVideoSelector,
   zoomPermissionDismissSelector,
 } from "./selectors";
+import { gotoWithRetry } from "../shared/navigate";
 
 // NOTE vs the monolith: the audio-join flow (prepareZoomWebMeeting) and the
 // per-speaker capture pipeline are RECORDING/HOST concerns and stay outside
@@ -113,7 +114,7 @@ export async function joinZoomMeeting(
   // and body contains "This meeting link is invalid". Poll until the pre-join page appears.
   const startTime = Date.now();
   while (true) {
-    await page.goto(webClientUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await gotoWithRetry(page, webClientUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2000);
 
     const title = await page.title();

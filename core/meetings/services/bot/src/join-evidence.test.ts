@@ -144,6 +144,13 @@ const CASES: Case[] = [
     expect: 'navigation_failure',
   },
   {
+    name: 'a first navigation that exhausted its transient retries → navigation_failure',
+    outcome: 'error',
+    signals: { reachedLobby: false,
+               detail: 'page.goto failed after 3 attempts: page.goto: net::ERR_CONNECTION_CLOSED at https://meet.google.com/abc-defg-hij' },
+    expect: 'navigation_failure',
+  },
+  {
     name: 'the Teams sign-in redirect → navigation_failure',
     outcome: 'error',
     signals: { reachedLobby: false, totalMs: 6_400,
