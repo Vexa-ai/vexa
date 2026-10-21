@@ -22,3 +22,8 @@ path and the fake records each hop (method, path, headers, params, body).
   the repo's flows manifest) gives every tool a title and explicit readOnly/destructive/
   idempotent/openWorld hints, names ≤ 64 chars, no shipped tool on the cautious fallback; the
   classification; manifest annotations win over the registry; malformed ones refuse validation.
+- **`test_usage.py`** — the usage hook: initialize → tools/call yields one event with the
+  session's client name and the gateway's `x-user-id`; non-tool methods, missing user id and
+  oversized bodies yield none; refusals record `ok=false`; the SSE GET passes through untouched;
+  the sink signs each batch as `verifyInternalWebhook` checks, batches at 50, drops on overflow,
+  and never raises.

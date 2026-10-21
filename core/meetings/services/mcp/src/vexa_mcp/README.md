@@ -14,6 +14,8 @@ The MCP service logic, injectable. Public surface is `__init__.py`: **`create_ap
   same `FastApiMCP` mount; prompts reference only ported tools.
 - **`annotations.py`** — MCP tool annotations (#1646): the per-tool `title` + hint registry,
   merged with an assembled tool's manifest annotations and applied to `mcp.tools` before mount.
+- **`usage.py`** — the usage hook: ASGI observer of `POST /mcp` that logs every `tools/call`
+  and, with `MCP_USAGE_URL` + `MCP_USAGE_SECRET`, ships signed batched events to a collector.
 - **`__main__.py`** — `python -m vexa_mcp`, the production entrypoint (compose CMD): serves
   `create_app()` with `GATEWAY_URL`/`HOST`/`PORT` from env.
 

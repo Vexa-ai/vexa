@@ -867,6 +867,10 @@ services:
       - VEXA_TICKET_SINK_FORMAT=${VEXA_TICKET_SINK_FORMAT:-}
       - VEXA_TICKET_SINK_LABELS=${VEXA_TICKET_SINK_LABELS:-}
       - VEXA_TICKET_FINGERPRINT_SALT=${VEXA_TICKET_FINGERPRINT_SALT:-}
+      # Usage sink (off unless BOTH are set): signed, batched per-tool-call events — see
+      # core/meetings/services/mcp/README.md § Usage hook. The secret comes from a secret store.
+      - MCP_USAGE_URL=${MCP_USAGE_URL:-}
+      - MCP_USAGE_SECRET=${MCP_USAGE_SECRET:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8010/health').status==200 else 1)"]
       interval: 10s

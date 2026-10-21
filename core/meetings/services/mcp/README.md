@@ -16,6 +16,7 @@ redis, never reaches into meeting-api or admin-api directly.
 |---|---|---|---|
 | serves | MCP clients | `POST/GET /mcp` (streamable HTTP) | tool calls + prompt gets; auth = `Authorization: Bearer <VEXA_API_KEY>` (back-compat: raw `Authorization` or `X-API-Key`) |
 | calls | ticket sink (`VEXA_TICKET_SINK_URL`) | `POST <sink>` | `report_issue` tickets: the agent's words + a server timestamp + a dedupe fingerprint + a **salted fingerprint of the caller's key** (never the key). Unset → `report_issue` returns 503 and nothing else is affected. |
+| calls | usage sink (`MCP_USAGE_URL`) | `POST <sink>` (signed, batched) | one event per `tools/call`: `user_id` (gateway-injected `x-user-id`), tool, ok, client name, user agent. Off unless `MCP_USAGE_URL` **and** `MCP_USAGE_SECRET` are set — see [Usage hook](#usage-hook). |
 | calls | gateway (`GATEWAY_URL`) | `POST /bots` · `GET /bots/status` · `PUT/DELETE /bots/{platform}/{native}` · `GET /meetings` · `GET /transcripts/{platform}/{native}` · `GET /recordings[/{id}]` | each tool forwards verbatim with the caller's `X-API-Key` |
 
 ## The manifest contract — `mcp.tools.v1`
@@ -100,6 +101,47 @@ a reaction for good and `retry`/`resume` re-run a flow's side effects.
   cautious hints (not read-only, destructive, open-world) and logged; the contract test
   [`tests/test_tool_annotations.py`](tests/test_tool_annotations.py) fails the suite if any tool
   this repo ships reaches that fallback, and asserts names ≤ 64 characters.
+
+## Usage hook
+
+### Why
+The edge is the only component that sees a tool call as a tool call; the gateway sees an opaque
+`POST /mcp`. A hosted deployment needs per-user, per-tool, per-client counts.
+
+### What
+For every JSON-RPC `tools/call` POSTed to `/mcp` (single or batch): one log line
+`mcp_tool_call user_id=… tool=… ok=… client=…`, always; and, when the sink is on and the request
+carries `x-user-id`, one event:
+
+```json
+{"user_id": "42", "tool": "get_meeting_transcript", "ok": true, "client_name": "claude-ai",
+ "user_agent": "…", "auth": "unknown", "at": "2026-10-21T10:00:00+00:00"}
+```
+
+- `user_id` — the gateway-injected `x-user-id` (the gateway strips client-supplied authority
+  headers first). Absent → no event. A caller that reaches this service without the gateway can
+  set it, so the counts are only as trustworthy as the network path.
+- `ok` — HTTP status < 400 **and** no JSON-RPC `error` / `result.isError: true` for that call's
+  id when the answer is JSON (it is, for POSTs on this transport); an SSE answer is judged on
+  status alone.
+- `client_name` — `clientInfo.name` from the session's `initialize`, remembered per
+  `mcp-session-id` (LRU, 10k sessions); falls back to the User-Agent.
+- `auth` — always `unknown`: the gateway does not say which credential type authenticated.
+
+| Env | Meaning |
+|---|---|
+| `MCP_USAGE_URL` | Collector URL, e.g. `http://vexa-platform-webapp:3000/api/internal/mcp/usage`. |
+| `MCP_USAGE_SECRET` | Shared secret. Both unset → off; one set → misconfigured, off. |
+
+### How
+[`src/vexa_mcp/usage.py`](src/vexa_mcp/usage.py): a pure-ASGI middleware observes `POST /mcp`
+only (bodies ≤ 1 MB; the SSE `GET`, `DELETE` and every other route pass through untouched), tees
+the request body and copies a JSON response body as they stream. Events go to a bounded queue
+(10k; overflow dropped and counted in the log) drained by a daemon thread every 5 s or at 50
+events, POSTed as `{"events": [...]}` with a 3 s timeout, fire-and-forget. Signed like
+meeting-api's webhooks (and verified by the webapp's `verifyInternalWebhook`):
+`Authorization: Bearer <secret>`, `X-Webhook-Timestamp: <unix s>`,
+`X-Webhook-Signature: sha256=<hex HMAC-SHA256(secret, "<ts>." + body)>`.
 
 ## Tools (10)
 
