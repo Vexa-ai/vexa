@@ -22,7 +22,7 @@ redis, never reaches into meeting-api or admin-api directly.
 
 A domain that owns a door publishes its tools at `/.well-known/mcp-tools.json`; this service unions
 what the deployed domains declare and refuses the combinations that cannot be right
-(`src/vexa_mcp/manifest.py` is the contract — there is no separate schema file, so that validator
+(`src/vexa_mcp/manifest.py` is the contract; tool entries may also carry `title` + `annotations`, see [Tool annotations](#tool-annotations-1646) — there is no separate schema file, so that validator
 and this section are the two places it is written).
 
 Each tool answers two different questions, and conflating them is what issue #1468 was:
@@ -50,6 +50,56 @@ declare is refused rather than dropped.
 previous shape — including one supplied through `VEXA_MCP_MANIFEST_DIR` — refuses the boot, naming
 the tool and the field. That is deliberate: a default is a guess applied silently to every tool, and
 the guess was wrong for the four it was applied to.
+
+## Tool annotations (#1646)
+
+### Why
+Clients read MCP tool annotations to decide what runs without a confirmation and what always
+prompts; the MCP directories (Anthropic, OpenAI, Docker) require them on every tool, and OpenAI's
+requires `readOnlyHint`, `destructiveHint` and `openWorldHint` to be explicit — the spec defaults
+(`destructive: true`, `openWorld: true`) are wrong for most of this surface.
+
+### What
+Every tool in `tools/list` carries a top-level `title` and `annotations: {title, readOnlyHint,
+destructiveHint, idempotentHint, openWorldHint}`, all set explicitly. `openWorldHint` is true only
+where the effect leaves Vexa (a bot in a third-party meeting, speech, an external ticket).
+
+| Tool | Title | readOnly | destructive | idempotent | openWorld |
+|---|---|---|---|---|---|
+| `parse_meeting_link` | Parse meeting link | ✓ | – | ✓ | – |
+| `get_bot_status` | Get bot status | ✓ | – | ✓ | – |
+| `list_meetings` | List meetings | ✓ | – | ✓ | – |
+| `get_meeting_transcript` | Get meeting transcript | ✓ | – | ✓ | – |
+| `search_transcripts` | Search transcripts | ✓ | – | ✓ | – |
+| `get_meeting_chat` | Read meeting chat | ✓ | – | ✓ | – |
+| `list_recordings` | List recordings | ✓ | – | ✓ | – |
+| `get_recording` | Get recording | ✓ | – | ✓ | – |
+| `whats_waiting` · `timeline` · `flows_list` · `reactions_list` · `friction_so_far` (flows) | What's waiting · Timeline · List flows · List reactions · List my friction reports | ✓ | – | ✓ | – |
+| `request_meeting_bot` | Send bot to meeting | – | – | – | ✓ |
+| `annotate_meeting` | Annotate meeting | – | – | ✓ | – |
+| `update_bot_config` | Update bot configuration | – | – | ✓ | – |
+| `report_issue` | Report issue to Vexa | – | – | – | ✓ |
+| `report_friction` (flows) | Report friction | – | – | – | – |
+| `stop_bot` | Remove bot from meeting | – | ✓ | ✓ | ✓ |
+| `speak_in_meeting` | Speak in meeting | – | ✓ | – | ✓ |
+| `reaction_signal` (flows) | Steer a reaction | – | ✓ | – | – |
+
+Judgement calls: `annotate_meeting` can delete a metadata key, but only one the caller names
+(`null`), so it is classed additive. `reaction_signal` is destructive because its `cancel` verb ends
+a reaction for good and `retry`/`resume` re-run a flow's side effects.
+
+### How
+- Built-in tools: [`src/vexa_mcp/annotations.py`](src/vexa_mcp/annotations.py) `REGISTRY`.
+- Assembled tools: the manifest entry's optional `title` + `annotations` (boolean hints only;
+  malformed → boot refused) win hint by hint; the registry is the fallback.
+  [`core/flows/mcp.tools.v1.json`](../../../flows/mcp.tools.v1.json) declares its own.
+- `annotations.apply()` sets both on the `mcp.types.Tool` objects `FastApiMCP` derived
+  (`mcp.tools`), before `mount_http()`. fastapi-mcp 0.4.0's `list_tools` handler returns that list
+  as-is, so no handler override is needed — re-check this on any fastapi-mcp bump.
+- A tool neither source describes (e.g. an older mounted private manifest) is served with the
+  cautious hints (not read-only, destructive, open-world) and logged; the contract test
+  [`tests/test_tool_annotations.py`](tests/test_tool_annotations.py) fails the suite if any tool
+  this repo ships reaches that fallback, and asserts names ≤ 64 characters.
 
 ## Tools (10)
 

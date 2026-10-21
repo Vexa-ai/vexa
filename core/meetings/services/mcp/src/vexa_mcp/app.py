@@ -33,6 +33,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi_mcp import FastApiMCP
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
+from . import annotations as annotations_mod
 from . import bind as bind_mod
 from . import discover as discover_mod
 from . import notices as notices_mod
@@ -1371,6 +1372,16 @@ def create_app(
         schema = getattr(_tool, "inputSchema", None)
         if isinstance(schema, dict) and schema.get("type") == "object":
             schema.setdefault("additionalProperties", False)
+
+    # TOOL ANNOTATIONS (#1646) — `title` + readOnly/destructive/idempotent/openWorld hints on every
+    # tool, so a client knows which calls to confirm. Set on the same `types.Tool` objects
+    # `FastApiMCP`'s `list_tools` handler returns (it serves `mcp.tools` as-is), BEFORE the mount.
+    # An assembled tool's own manifest is the authority; `annotations.REGISTRY` the fallback.
+    _manifest_entries = {
+        t.name: {"title": t.title, "annotations": t.annotations or {}}
+        for t in (app.state.assembly.tools if app.state.assembly is not None else [])
+    }
+    app.state.unannotated_tools = annotations_mod.apply(mcp.tools, _manifest_entries)
 
     mcp.mount_http()
     # fastapi-mcp 0.4 buffers the ASGI response; a sessioned GET is an open SSE

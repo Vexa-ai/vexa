@@ -12,6 +12,8 @@ The MCP service logic, injectable. Public surface is `__init__.py`: **`create_ap
   `native_meeting_id` / passcode, behind the `parse_meeting_link` tool.
 - **`prompts.py`** — the MCP prompt catalog (`vexa.meeting_prep` et al.), registered on the
   same `FastApiMCP` mount; prompts reference only ported tools.
+- **`annotations.py`** — MCP tool annotations (#1646): the per-tool `title` + hint registry,
+  merged with an assembled tool's manifest annotations and applied to `mcp.tools` before mount.
 - **`__main__.py`** — `python -m vexa_mcp`, the production entrypoint (compose CMD): serves
   `create_app()` with `GATEWAY_URL`/`HOST`/`PORT` from env.
 
