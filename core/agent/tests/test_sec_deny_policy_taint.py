@@ -12,11 +12,15 @@ import json
 import tempfile
 from pathlib import Path
 
+import fakeredis
 import pytest
 
 from control_plane import workspace_membership as m
+from workspaces.shared import gitexec
 
 from tests.test_r1_rooms import _h, world  # noqa: F401  (fixture: `team` owned by alice, bob contributor)
+from tests.test_workspace_store_service import (  # noqa: F401  (fixture: an s3 store; `team` read by bob)
+    AUTHOR, _worker_commit, headers, record, stack)
 
 
 def _bob_as_watched_agent():
@@ -283,3 +287,90 @@ def test_a_rules_proposal_that_lowers_a_floor_is_refused(rules):
         policy_proposals.normalize("rules", rules)
     assert policy_lines.lowered_floors(lines={"guest_access": "allowed"}) == ["guest_access"]
     assert policy_lines.lowered_floors(lines={"nudge_body": "template_only"}) == []
+
+
+# ── M2: a workspace push is held to the private-write rule on the server; M3: reserved push paths ─
+
+CHAT_UNIT = "agent-17-chat-c1"
+
+
+@pytest.fixture
+def marked(monkeypatch):
+    """A taint store on fakeredis; ``marked(unit)`` records that the unit's session read 17's mail."""
+    from control_plane import private_taint
+    from shared import taint as taint_mod
+
+    store = taint_mod.TaintStore(fakeredis.FakeRedis(decode_responses=True))
+    taint_mod.configure(store)
+    private_taint.reset()
+    yield lambda unit: store.mark(unit, ["mail"])
+    taint_mod.configure(None)
+    private_taint.reset()
+
+
+def _fetch(stack, slug: str, unit: str = CHAT_UNIT) -> bytes:
+    return stack.client.get("/api/workspace-store/fetch", params={"path": f"{stack.cache}/{slug}"},
+                            headers=headers(unit=unit)).content
+
+
+def _push(stack, slug: str, base: str, data: bytes, unit: str = CHAT_UNIT):
+    return stack.client.post("/api/workspace-store/push", params={"path": f"{stack.cache}/{slug}", "base": base},
+                             content=data, headers=headers(unit=unit))
+
+
+def test_a_marked_sessions_push_into_a_workspace_others_read_is_held(stack, tmp_path, marked):
+    """M2: the worker's hold sees only the uncommitted change; a harness that commits by itself
+    reaches the store with the private text in a commit. The store route holds it."""
+    record(stack, [{"path": f"{stack.cache}/team", "write": True}], unit=CHAT_UNIT)
+    marked(CHAT_UNIT)
+    base, _, data = _worker_commit(tmp_path, _fetch(stack, "team"),
+                                   {"notes/bank.md": "Invoice 4471-2210 from Dana Whitfield"})
+    r = _push(stack, "team", base, data)
+    assert r.status_code == 409, r.text[:300]
+    body = r.json()["detail"]
+    assert body["refused"] == "private_sources_to_shared" and body["paths"] == ["notes/bank.md"]
+    assert body["readers"] == ["bob@example.com"] and body["sources"] == ["mail"]
+    assert stack.run.store.latest("team").gen == 1, "nothing landed"
+    assert gitexec.run_git(str(stack.cache / "team"), "rev-parse", "HEAD", check=True).stdout.strip() == base
+
+
+def test_a_push_that_adds_then_removes_the_private_text_is_still_held(stack, tmp_path, marked):
+    """History is read by the others too: every commit in the range is a write, not only the tip."""
+    record(stack, [{"path": f"{stack.cache}/team", "write": True}], unit=CHAT_UNIT)
+    marked(CHAT_UNIT)
+    base, _, _ = _worker_commit(tmp_path, _fetch(stack, "team"), {"notes/bank.md": "Dana Whitfield owes 900 EUR"})
+    w = tmp_path / "worker"
+    gitexec.run_git(str(w), "rm", "-q", "notes/bank.md", check=True)
+    gitexec.run_git(str(w), *AUTHOR, "commit", "-q", "-m", "tidy", check=True)
+    out = tmp_path / "two.bundle"
+    gitexec.run_git(str(w), "bundle", "create", "-q", str(out), "refs/heads/main", f"^{base}", check=True)
+    r = _push(stack, "team", base, out.read_bytes())
+    assert r.status_code == 409 and r.json()["detail"]["paths"] == ["notes/bank.md"], r.text[:300]
+    assert stack.run.store.latest("team").gen == 1
+
+
+def test_an_unmarked_session_or_the_persons_own_desk_pushes_as_before(stack, tmp_path, marked):
+    record(stack, [{"path": f"{stack.cache}/team", "write": True}], unit="agent-17-chat-clean")
+    base, new, data = _worker_commit(tmp_path, _fetch(stack, "team", unit="agent-17-chat-clean"),
+                                     {"notes/plan.md": "Ship on Friday"})
+    r = _push(stack, "team", base, data, unit="agent-17-chat-clean")
+    assert r.status_code == 200 and r.json()["head"] == new, r.text[:300]
+    record(stack, [{"path": f"{stack.cache}/17", "write": True}], unit=CHAT_UNIT)
+    marked(CHAT_UNIT)
+    desk = tmp_path / "desk"
+    desk.mkdir()
+    base, new, data = _worker_commit(desk, _fetch(stack, "17"), {"notes/bank.md": "Dana Whitfield owes 900 EUR"})
+    r = _push(stack, "17", base, data)
+    assert r.status_code == 200 and r.json()["head"] == new, "nobody else reads the person's desk"
+
+
+@pytest.mark.parametrize("rel", [".claude/settings.json", ".Claude/settings.json", "Policy/members.json",
+                                 ".VEXA/state.json", "policy/réglage.json"])
+def test_a_push_touching_a_reserved_path_in_any_case_is_refused(stack, tmp_path, rel):
+    """M3 residual: the push prefixes are compared casefolded, include ``.claude/``, and read a
+    non-ASCII path as itself (git quotes it in a line-separated listing)."""
+    record(stack, [{"path": f"{stack.cache}/17", "write": True}])
+    base, _, data = _worker_commit(tmp_path, _fetch(stack, "17", unit="agent-u-1"), {rel: "{}"})
+    r = _push(stack, "17", base, data, unit="agent-u-1")
+    assert r.status_code == 403 and r.json()["detail"]["refused"] == "reserved_path", r.text[:300]
+    assert stack.run.store.latest("17").gen == 1

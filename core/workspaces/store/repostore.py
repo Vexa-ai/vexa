@@ -39,7 +39,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
 
 from workspaces.shared import gitexec
 from workspaces.shared import workspace_paths as wpaths
@@ -53,8 +53,10 @@ MARKER = ".git/vexa-store.json"
 #: Present only in an evicted tree's ``.git``: one ``lstat`` tells the access hook to hydrate.
 STUB_FLAG = ".git/vexa-store-stub"
 GEN_DIGITS = 12
-#: Paths a pushed commit range may not touch: platform-owned (S1) or git's own.
-RESERVED_PUSH_PREFIXES = ("policy/", ".vexa/", ".git/", ".gitmodules")
+#: Paths a pushed commit range may not touch: platform-owned (S1), the agent's runtime plumbing
+#: (``.claude``, never history) or git's own. Compared casefolded: on a case-insensitive filesystem
+#: ``Policy/members.json`` is the roster file.
+RESERVED_PUSH_PREFIXES = ("policy/", ".vexa/", ".claude/", ".git/", ".gitmodules")
 _NO_REPO = {"lost+found", ".wsstore"}
 
 
@@ -64,7 +66,8 @@ class StaleBase(RuntimeError):
 
 
 class ReservedPath(PermissionError):
-    """A pushed commit range touches a platform-owned path (``policy/``, ``.vexa/``, ``.git``)."""
+    """A pushed commit range touches a platform-owned path (``policy/``, ``.vexa/``, ``.claude/``,
+    ``.git``), in any case."""
 
 
 class NotFastForward(RuntimeError):
@@ -497,9 +500,11 @@ class RepoStore:
         exclude = [have] if have and all(_is_ancestor(repo, have, t) for t in [refs.get(head, "")]) else []
         return _bundle(repo, sorted(refs) + (["HEAD"] if head else []), exclude=exclude)
 
-    def accept_push(self, rel: str, data: bytes, *, base: str, held: Held) -> Generation:
+    def accept_push(self, rel: str, data: bytes, *, base: str, held: Held,
+                    admit: Optional[Callable[[Path, str, str], None]] = None) -> Generation:
         """Land a worker's commits on ``rel``: fast-forward from ``base`` only, no reserved path
-        touched by any commit in the range, durable before returning."""
+        touched by any commit in the range, ``admit(repo, base, new)`` — the caller's own rule over
+        the range — raising nothing, durable before returning."""
         repo = self.path(rel)
         refs, head = local_refs(repo)
         if not head or refs.get(head) != base:
@@ -517,11 +522,15 @@ class RepoStore:
                 return self.latest(rel) or self.publish(rel, held=held)
             if not _is_ancestor(repo, base, new):
                 raise NotFastForward(rel)
-            touched = _git(repo, "log", "--format=", "--name-only", "--no-renames", f"{base}..{new}").stdout
-            bad = sorted({p for p in touched.splitlines() if p.strip() and
-                          any(p == r.rstrip("/") or p.startswith(r) for r in RESERVED_PUSH_PREFIXES)})
+            touched = _git(repo, "log", "-m", "--format=", "--name-only", "-z", "--no-renames",
+                           f"{base}..{new}").stdout
+            bad = sorted({p for p in touched.split("\0") if p.strip() and
+                          any(p.casefold() == r.rstrip("/") or p.casefold().startswith(r)
+                              for r in RESERVED_PUSH_PREFIXES)})
             if bad:
                 raise ReservedPath(f"{rel}: a pushed commit touches platform-owned paths: {', '.join(bad[:5])}")
+            if admit is not None:
+                admit(repo, base, new)
             with self.paused():
                 _git(repo, "merge", "-q", "--ff-only", new)
             try:

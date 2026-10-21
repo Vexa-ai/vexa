@@ -357,7 +357,8 @@ def test_the_qwen_lane_dials_are_declared():
 #      PREFIX,REGION,PATH_STYLE,CA_BUNDLE,ACCESS_KEY,SECRET_KEY}, VEXA_WORKSPACE_LOCK_TTL_MS.
 # 150: +2 VEXA_WORKSPACE_CACHE_MAX_BYTES, VEXA_WORKSPACE_CACHE_MIN_IDLE_S (WS-S3 lazy cache, LRU eviction).
 # 153: the integration line's 141 + WS-S3's 12 (int-next).
-EXPECTED_DECLARED_KEYS = 153
+# 154: +1 VEXA_POLICY_LEGACY_READ (the policy store's adoption of pre-0.13.4 records, declared).
+EXPECTED_DECLARED_KEYS = 154
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

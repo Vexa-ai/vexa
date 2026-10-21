@@ -5,13 +5,19 @@ as ``/agent/workspace-store/*`` for a worker's own delegation token (``routes.v1
 ``delegation``). On the volume backend both answer 404 ``volume_backend``: the worker's workspaces
 are bind mounts and there is nothing to fetch. On the s3 backend a worker fetches and pushes only
 the mounts its own dispatch recorded (``workspace_store_service.record_unit_mounts``), pushes only
-writable ones, fast-forward only, never touching ``policy/``, ``.vexa/`` or ``.git``; a push answers
-200 only once the new generation is durable in the bucket.
+writable ones, fast-forward only, never touching ``policy/``, ``.vexa/``, ``.claude/`` or ``.git``
+in any case; a push answers 200 only once the new generation is durable in the bucket.
+
+A PUSH IS HELD TO THE PRIVATE-WRITE RULE HERE (D6, SC4). Every file each pushed commit writes passes
+``private_taint.check_push`` — the page route's hold, on the roster at the store's base — before it
+lands: a session that read the person's private data cannot carry it into a workspace others read by
+committing it itself. A held push answers 409 ``private_sources_to_shared`` and nothing lands.
 """
 from __future__ import annotations
 
 import os
 
+from control_plane import private_taint
 from control_plane import workspace_store_service as svc
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
@@ -97,14 +103,24 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=400, detail={"refused": "bad_bundle",
                                                         "message": "The push carries no bundle, or one too large."})
         store = run.store
+        unit = (request.headers.get(svc.UNIT_HEADER) or "").strip()
+        subject = (request.headers.get("x-user-id") or "").strip()
+
+        def admit(repo, old: str, new: str) -> None:
+            withheld = private_taint.check_push(subject=subject, unit=unit, workspace=os.path.basename(rel),
+                                                repo=repo, base=old, new=new)
+            if withheld is not None:
+                raise HTTPException(status_code=409, detail=withheld)
 
         def land():
             with store.locks.hold(rel) as held:
                 store.ensure_fresh(rel)
-                return store.accept_push(rel, data, base=base.strip(), held=held)
+                return store.accept_push(rel, data, base=base.strip(), held=held, admit=admit)
 
         try:
             gen = await anyio.to_thread.run_sync(land)
+        except HTTPException:
+            raise
         except Exception as exc:  # noqa: BLE001 — every store fault is typed
             raise classify(exc) from exc
         return {"gen": gen.gen, "head": gen.refs.get(gen.head, ""), "durable": True}

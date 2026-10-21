@@ -178,6 +178,11 @@ def other_readers(ws_dir: Path, subject: str) -> list[str]:
     (by email when the roster has one). Empty for the person's own desk."""
     from workspaces.shared import workspace_paths as wpaths  # noqa: PLC0415
     raw = wpaths.read_text_inside(Path(ws_dir), "policy/members.json", allow=("policy",))
+    return readers_in(raw, subject)
+
+
+def readers_in(raw: Optional[str], subject: str) -> list[str]:
+    """Every member of the roster text ``raw`` but ``subject`` (by email when it has one)."""
     try:
         rows = json.loads(raw) if raw else []
     except ValueError:
@@ -340,6 +345,55 @@ def check_write(*, subject: str, unit: str, workspace: str, path: str, ws_dir: P
     return check_egress(subject=subject, unit=unit, surface="page", target=f"{workspace}/{path}",
                         readers=other_readers(ws_dir, subject), workspace=workspace,
                         name=workspace_name, path=path, content=content, before=before, text=text)
+
+
+def check_push(*, subject: str, unit: str, workspace: str, repo: Path, base: str,
+               new: str) -> Optional[dict]:
+    """A worker's PUSH into the workspace store (the s3 backend): every version of every file a
+    pushed commit writes is a page write, held by ``check_egress`` exactly as the page route holds
+    it. The roster is the one at ``base`` — the store's, before the turn; a push cannot change it
+    (``policy/`` is reserved). This is the hold for the writes the worker's commit seam never sees:
+    a harness that commits by itself leaves that seam an empty change, and its commits arrive here.
+
+    ``None`` when the push may land; otherwise the refusal body (409) of the first held write, with
+    every held path and its code."""
+    from workspaces.shared.gitexec import run_git  # noqa: PLC0415
+
+    def blob(rev: str, rel: str) -> str:
+        r = run_git(repo, "cat-file", "blob", f"{rev}:{rel}", text=False)
+        return r.stdout.decode("utf-8", "replace") if r.returncode == 0 else ""
+
+    shown = run_git(repo, "show", f"{base}:policy/members.json")
+    readers = readers_in(shown.stdout if shown.returncode == 0 else None, subject)
+    if not readers or (str(unit or "").strip() and not sources(unit)):
+        return None
+    first: Optional[dict] = None
+    held: dict[str, str] = {}
+    seen: set = set()
+    for line in run_git(repo, "rev-list", "--reverse", "--parents", f"{base}..{new}",
+                        check=True).stdout.splitlines():
+        commit, *parents = line.split()
+        for parent in parents or [_EMPTY_TREE]:
+            names = run_git(repo, "diff-tree", "-r", "-z", "--no-renames", "--name-only", parent,
+                            commit, check=True).stdout
+            for rel in (p for p in names.split("\0") if p):
+                content, before = blob(commit, rel), blob(parent, rel) if parents else ""
+                if (rel, content, before) in seen:
+                    continue
+                seen.add((rel, content, before))
+                body = check_egress(subject=subject, unit=unit, surface="page",
+                                    target=f"{workspace}/{rel}", readers=readers, workspace=workspace,
+                                    path=rel, content=content, delegated=True, before=before)
+                if body is not None:
+                    first = first or body
+                    held.setdefault(rel, body["confirm_code"])
+    if first is None:
+        return None
+    return {**first, "paths": sorted(held), "confirm_codes": [held[p] for p in sorted(held)]}
+
+
+#: git's empty tree: what a commit with no parent is compared against.
+_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
 _SURFACE_WORDS = {

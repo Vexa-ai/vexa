@@ -17,6 +17,9 @@ from workspaces.store import boot as store_boot
 from workspaces.store.objects import MemoryObjects
 
 AUTHOR = ("-c", "user.name=t", "-c", "user.email=t@example.com")
+#: ``team``: 17's workspace that bob reads too.
+TEAM_ROSTER = ('[{"subject": "17", "role": "owner"},'
+               ' {"subject": "bob", "email": "bob@example.com", "role": "viewer"}]')
 
 
 def make_repo(path: Path, files: dict) -> str:
@@ -39,6 +42,7 @@ def stack(tmp_path, monkeypatch):
     make_repo(seed / "17", {"README.md": "desk"})
     make_repo(seed / "deal", {"README.md": "shared"})
     make_repo(seed / "other", {"README.md": "someone else"})
+    make_repo(seed / "team", {"README.md": "team", "policy/members.json": TEAM_ROSTER})
     from workspaces.store.migrate import migrate
     from workspaces.store.lock import WorkspaceLocks
 
@@ -176,3 +180,4 @@ def test_the_worker_url_comes_from_the_gateway_edge(stack):
     assert svc.health()["guard"] == "redis-lock+fencing+generation-election"
     svc._running = None
     assert svc.worker_url(stack.settings) == "" and svc.health() is None
+
