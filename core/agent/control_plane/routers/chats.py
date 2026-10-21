@@ -713,12 +713,17 @@ def build(**d) -> APIRouter:
         In a chat only the speaker reads, the speaker's own access decides. In a turn other people
         read — a shared chat, a room, a routine's run there — a meeting folds only when each of them
         passes the same access decision too, or when it is this chat's own call; otherwise nothing
-        of it is folded and the turn is told so (``withheld``)."""
+        of it is folded and the turn is told so (``withheld``; ``refused`` names which). The focus
+        meeting and every meeting the message references (`[[meeting:N]]`) take this one decision."""
 
         def __init__(self, subject: str, plan) -> None:
             self.subject = subject
             self.plan = plan if plan is not None and plan.scope is not None else None
             self.withheld = False
+            self.refused: set[str] = set()
+
+        def refused_for_readers(self, meeting_id: str) -> bool:
+            return str(meeting_id) in self.refused
 
         def _own_call(self, meeting_id: str) -> bool:
             try:
@@ -740,6 +745,7 @@ def build(**d) -> APIRouter:
                     readable = False
                 if not readable:
                     self.withheld = True
+                    self.refused.add(str(meeting_id))
                     return None
             return row
 
@@ -1796,6 +1802,7 @@ def build(**d) -> APIRouter:
             workspace_mounts=lambda: (active_workspaces(wsr.root, subject)
                                       + shared_active_mounts(wsr.root, subject, mindex.list(subject))),
             meeting_access=_fold.access,
+            meeting_withheld=_fold.refused_for_readers,
         )
         if _fold.withheld:
             prompt = MEETING_WITHHELD_LINE + prompt

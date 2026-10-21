@@ -2124,9 +2124,18 @@ REFERENCED_MEETINGS_MAX = 3
 REFERENCED_MEETING_SEGMENTS = 200
 
 
+#: Stands in for a referenced meeting the turn's other readers may not read. Part of the shared
+#: transcript, so it names nothing of the meeting — not its reference, title or people.
+REFERENCED_MEETING_WITHHELD = ("### A meeting this message references\nNot readable by everyone in this"
+                               " conversation, so nothing of it is in this turn. Do not open it with the"
+                               " meeting tools here; say you can't use it in this conversation and offer"
+                               " to answer in the speaker's private chat.\n")
+
+
 def _referenced_meetings_block(
     text: str, meeting_access: "Callable[[str], dict | None] | None", redis_url: "str | None", *,
     skip: "set[str] | None" = None,
+    withheld: "Callable[[str], bool] | None" = None,
 ) -> str:
     """THE MEETINGS A MESSAGE NAMES BY REFERENCE, resolved to exactly those meetings for this viewer.
 
@@ -2136,7 +2145,9 @@ def _referenced_meetings_block(
     time, platform, status, participants) and gets its transcript, so it never goes looking for a
     meeting by its title. Each one passes the meeting's one access decision first; a meeting this
     viewer may not read is named as unavailable and nothing of it is folded. ``skip`` is the focus
-    meeting, which the focus fold already carries."""
+    meeting, which the focus fold already carries. ``withheld(id)`` says the access decision refused
+    the meeting because another reader of this turn may not read it: it stands in unnamed
+    (`REFERENCED_MEETING_WITHHELD`)."""
     from workspaces.shared import links as links_mod  # noqa: PLC0415
 
     try:
@@ -2160,6 +2171,9 @@ def _referenced_meetings_block(
                 row = meeting_access(mid)
             except Exception:  # noqa: BLE001 — an access check that cannot answer refuses
                 row = None
+        if row is None and withheld is not None and withheld(mid):
+            parts.append(REFERENCED_MEETING_WITHHELD)
+            continue
         if not isinstance(row, dict) or transcript_erased(row):
             parts.append(f"### [[meeting:{mid}]]\nNot available to this person (not theirs, deleted, or"
                          " unreachable). Say you cannot open it; do not guess which meeting it was.\n")
@@ -2192,10 +2206,12 @@ def _context_grounding(
     schedule_rows: "Callable[[], list[dict]]",
     workspace_mounts: "Callable[[], list]",
     meeting_access: "Callable[[str], dict | None] | None" = None,
+    meeting_withheld: "Callable[[str], bool] | None" = None,
 ) -> "tuple[dict, list[str], str]":
     """The focus grounding (`_focus_grounding`) plus the meetings the message names by reference
     (`_referenced_meetings_block`), folded in front — the prompt still ENDS with the person's words,
-    which the sentinel cut relies on."""
+    which the sentinel cut relies on. Both folds take the one ``meeting_access`` decision;
+    ``meeting_withheld`` names the meetings it refused for the turn's other readers."""
     ctx, tools, prompt = _focus_grounding(body, session, redis_url, schedule_rows=schedule_rows,
                                           workspace_mounts=workspace_mounts, meeting_access=meeting_access)
     context = body.context
@@ -2204,7 +2220,8 @@ def _context_grounding(
     if isinstance(focus, dict) and focus.get("kind") == "meeting":
         level = _meeting_focus_level(focus)
         skip = {str(level.get(k)) for k in ("meeting_id", "native_id", "ref") if level.get(k)}
-    block = _referenced_meetings_block(body.prompt, meeting_access, redis_url, skip=skip)
+    block = _referenced_meetings_block(body.prompt, meeting_access, redis_url, skip=skip,
+                                       withheld=meeting_withheld)
     return (ctx, tools, block + prompt) if block else (ctx, tools, prompt)
 
 
