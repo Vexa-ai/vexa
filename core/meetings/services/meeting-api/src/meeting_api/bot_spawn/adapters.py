@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from ..lifecycle.machine import dominant_completion_reason
+from ..lifecycle.outcome import stamp_outcome
 from ..sessions import new_session
 from .ports import (
     DuplicateMeeting,
@@ -351,14 +352,22 @@ class SqlAlchemyMeetingRepo:
                         select(_func.count()).select_from(Transcription).where(Transcription.meeting_id == m.id)
                     )
                 ).scalar() or 0
-            m.data = merged
-            flag_modified(m, "data")
             # Naive UTC into the naive time columns (tz-aware → asyncpg DataError, per set_bot_container).
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             if status == "active" and m.start_time is None:
                 m.start_time = now
             if status in ("completed", "failed") and m.end_time is None:
                 m.end_time = now
+            # OUTCOME CLASS at the terminal write (lifecycle/outcome.py). Here, not in the FSM sink:
+            # only this row holds the segment count (just above), the end time, and the merged
+            # status_transition trail the rules read (first `active`, last pre-terminal stage, stop).
+            # Recomputed on every terminal write, so the post-finalization re-write refines it.
+            stamp_outcome(
+                merged, status=status, platform=m.platform, start_time=m.start_time,
+                end_time=m.end_time, created_at=m.created_at,
+            )
+            m.data = merged
+            flag_modified(m, "data")
             await db.commit()
             # Refresh BEFORE _row_to_dict: `updated_at` has a server-side onupdate, so it is expired
             # post-commit; reading it in _row_to_dict would trigger implicit async IO (MissingGreenlet).
@@ -951,11 +960,16 @@ class SqlAlchemyMeetingRepo:
             merged["completion_reason"] = dominant_completion_reason(
                 completion_reason, stop_requested=bool(merged.get("stop_requested"))
             )
-            m.data = merged
-            flag_modified(m, "data")
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             if m.end_time is None:
                 m.end_time = now
+            # The FSM-bypass terminal writes the same grading as the lifecycle path.
+            stamp_outcome(
+                merged, status="failed", platform=m.platform, start_time=m.start_time,
+                end_time=m.end_time, created_at=m.created_at,
+            )
+            m.data = merged
+            flag_modified(m, "data")
             await db.commit()
             await db.refresh(m)
             return _row_to_dict(m)

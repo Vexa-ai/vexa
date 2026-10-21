@@ -18,7 +18,7 @@ import { ErrorState } from "@/components/ui/error-state";
 import { useMeetingsStore } from "@/stores/meetings-store";
 import { useJoinModalStore } from "@/stores/join-modal-store";
 import type { Platform, MeetingStatus, Meeting } from "@/types/vexa";
-import { getDetailedStatus } from "@/types/vexa";
+import { getDetailedStatus, isFailureOutcome } from "@/types/vexa";
 import { DocsLink } from "@/components/docs/docs-link";
 import { getWebappUrl } from "@/lib/docs/webapp-url";
 import { Input } from "@/components/ui/input";
@@ -44,7 +44,10 @@ function PlatformIcon({ platform }: { platform: string }) {
   return <Image src="/icons/icons8-zoom-96.png" alt="Zoom" width={20} height={20} className="rounded" />;
 }
 
-function StatusDot({ status }: { status: string }) {
+function StatusDot({ status, failure }: { status: string; failure: boolean }) {
+  // A finished run is red only when it failed through our fault (outcome "ours"); a host who did
+  // not admit the bot, or a user stop, is not an error.
+  const finishedNotOurs = status === "failed" && !failure;
   return (
     <span
       className={cn(
@@ -54,7 +57,8 @@ function StatusDot({ status }: { status: string }) {
         status === "joining" && "bg-blue-400",
         status === "awaiting_admission" && "bg-amber-400",
         status === "stopping" && "bg-amber-400",
-        status === "failed" && "bg-red-400",
+        status === "failed" && failure && "bg-red-400",
+        finishedNotOurs && "bg-amber-400",
         status === "requested" && "bg-blue-400"
       )}
     />
@@ -380,6 +384,7 @@ export default function MeetingsClient({ initialPage }: MeetingsClientProps) {
 function MeetingRow({ meeting }: { meeting: Meeting }) {
   const router = useRouter();
   const statusConfig = getDetailedStatus(meeting.status, meeting.data);
+  const failure = isFailureOutcome(meeting.status, meeting.data);
   const displayTitle = meeting.data?.name || meeting.data?.title || meeting.platform_specific_id;
   const participants = meeting.data?.participants || [];
 
@@ -401,14 +406,14 @@ function MeetingRow({ meeting }: { meeting: Meeting }) {
         </td>
         <td className="px-5 py-3">
           <span className="inline-flex items-center gap-1.5">
-            <StatusDot status={meeting.status} />
+            <StatusDot status={meeting.status} failure={failure} />
             <span
               className={cn(
                 "text-xs",
                 (meeting.status === "completed") && "text-emerald-400",
                 (meeting.status === "active" || meeting.status === "joining") && "text-emerald-400",
                 (meeting.status === "awaiting_admission" || meeting.status === "stopping") && "text-amber-400",
-                meeting.status === "failed" && "text-red-400"
+                meeting.status === "failed" && (failure ? "text-red-400" : "text-amber-400")
               )}
             >
               {statusConfig.label}

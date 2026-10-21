@@ -109,7 +109,9 @@ export function MeetingCard({ meeting }: MeetingCardProps) {
     }
     
     // Completion reason details
-    if (meeting.data?.completion_reason) {
+    // The graded outcome (statusConfig above) already says how the run ended; the raw bot
+    // completion_reason would contradict it (e.g. "Join Failure" for a host who never admitted).
+    if (meeting.data?.completion_reason && !meeting.data?.outcome_class) {
       const reason = meeting.data.completion_reason;
       if (reason !== "stopped" && reason !== "meeting_ended") {
         const formattedReason = reason

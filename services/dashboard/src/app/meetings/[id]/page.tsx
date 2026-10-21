@@ -1878,6 +1878,7 @@ export default function MeetingDetailPage() {
           {currentMeeting.status === "failed" && transcripts.length === 0 && (
             <BotFailedIndicator
               status={currentMeeting.status}
+              data={currentMeeting.data}
               errorMessage={(() => {
                 // v0.10.5: bots emit a structured `error_details` payload
                 // (stringified Python repr, single-quoted) on join failures.

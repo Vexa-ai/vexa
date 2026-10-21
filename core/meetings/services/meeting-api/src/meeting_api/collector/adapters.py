@@ -627,6 +627,9 @@ class SqlAlchemyTranscriptStore:
                     # (hoisted the same way as `_meeting_projection_from_row` in app.py).
                     "completion_reason": (m.data or {}).get("completion_reason") if isinstance(m.data, dict) else None,
                     "failure_stage": (m.data or {}).get("failure_stage") if isinstance(m.data, dict) else None,
+                    # How the run ended for the customer (lifecycle/outcome.py): only `ours` is a failure.
+                    "outcome_class": (m.data or {}).get("outcome_class") if isinstance(m.data, dict) else None,
+                    "outcome_reason": (m.data or {}).get("outcome_reason") if isinstance(m.data, dict) else None,
                     "shared": not is_owner,   # surfaced via a share/membership, not owned by the caller
                     "created_at": _iso_utc(m.created_at),
                     "updated_at": _iso_utc(m.updated_at),

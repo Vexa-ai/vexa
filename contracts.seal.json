@@ -8,7 +8,7 @@
   "core/agent/contracts/tool.v1": "a6a19a0539f26adeb2ecfccea6071f6eda99b2185e506eed6f474256810f224e",
   "core/agent/contracts/unit.v1": "52d2706bf37471ae4c14b4e7d351410763b09e25875c1d75e6fa76a453dff12f",
   "core/flows/contracts/flows.v1": "0c7da386737bf0b82859231c0c3d7bc63caa8fb4578ff73d0e290aa9493879b5",
-  "core/gateway/contracts/api.v1": "ce390a6f87f1c92a63d3958fb1317e5ce02124e6a5e4a6f4ccbd73a52f230f39",
+  "core/gateway/contracts/api.v1": "0e16715d36ef0ca4efd9e2c58d4c619d637e41df1033c2ed3d5ea3467c045603",
   "core/gateway/contracts/gateway-identity.v1": "ec1bcfb54fe4466f45203603c8fdfdfc671445f6fe32ebbaa6dc2fa685a0ff9d",
   "core/gateway/contracts/logevent.v1": "7ab25cc7d935e03ea1aec29a0d717576bcfa1a37d7c412400227c98e1df3ed59",
   "core/gateway/contracts/routes.v1": "d11748b1a13bed0fad8c9ab2aaff00bffb8d8f0cfd8771cf53c8c10cf41053f5",

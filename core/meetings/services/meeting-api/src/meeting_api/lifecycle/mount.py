@@ -112,6 +112,8 @@ def mount_lifecycle(
             "status": row.get("status"),
             "completion_reason": data.get("completion_reason"),
             "failure_stage": data.get("failure_stage"),
+            "outcome_class": data.get("outcome_class"),
+            "outcome_reason": data.get("outcome_reason"),
             "service_provenance": data.get("service_provenance"),
             "start_time": _iso(row.get("start_time")),
             "end_time": _iso(row.get("end_time")),

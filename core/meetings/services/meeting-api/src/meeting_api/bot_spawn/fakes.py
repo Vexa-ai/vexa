@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..lifecycle.machine import dominant_completion_reason
+from ..lifecycle.outcome import stamp_outcome
 from .ports import (
     DuplicateMeeting,
     MaxBotsExceeded,
@@ -280,6 +281,11 @@ class InMemoryMeetingRepo:
         row["data"]["completion_reason"] = dominant_completion_reason(
             completion_reason, stop_requested=bool(row["data"].get("stop_requested"))
         )
+        stamp_outcome(
+            row["data"], status="failed", platform=row.get("platform"),
+            start_time=row.get("start_time"), end_time=row.get("end_time"),
+            created_at=row.get("created_at"),
+        )
         return dict(row)
 
     async def get_status_by_session(self, *, session_uid) -> Optional[str]:
@@ -333,6 +339,12 @@ class InMemoryMeetingRepo:
             row["data"]["failure_stage"] = failure_stage
         for k, v in (data or {}).items():
             row["data"][k] = v
+        # Mirrors the SQL adapter's terminal outcome stamp (segments from data.segments_captured).
+        stamp_outcome(
+            row["data"], status=status, platform=row.get("platform"),
+            start_time=row.get("start_time"), end_time=row.get("end_time"),
+            created_at=row.get("created_at"),
+        )
         return dict(row)
 
     async def count_active_bots(self, *, user_id, exclude_meeting_id=None) -> int:

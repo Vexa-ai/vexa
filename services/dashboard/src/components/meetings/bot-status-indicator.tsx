@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Loader2, Check, Clock, DoorOpen, Radio, XCircle, AlertTriangle, RefreshCw, StopCircle } from "lucide-react";
+import { Loader2, Check, Clock, DoorOpen, Radio, XCircle, AlertTriangle, RefreshCw, StopCircle, Info } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn, parseUTCTimestamp } from "@/lib/utils";
 import { vexaAPI } from "@/lib/api";
 import { toast } from "sonner";
-import type { MeetingStatus, Platform } from "@/types/vexa";
+import type { MeetingData, MeetingStatus, Platform } from "@/types/vexa";
+import { getOutcomeInfo } from "@/types/vexa";
 import { DocsLink } from "@/components/docs/docs-link";
 
 // Timeout in seconds before showing a warning
@@ -337,14 +338,43 @@ export function BotFailedIndicator({
   status,
   errorMessage,
   errorCode,
+  data,
   onRetry
 }: {
   status: MeetingStatus;
   errorMessage?: string;
   errorCode?: string;
+  /** Meeting data; when it carries a graded outcome that is not "ours", the run is shown as a
+   * neutral ending ("Not admitted by host"), not as an error. */
+  data?: MeetingData;
   onRetry?: () => void;
 }) {
   if (status !== "failed") return null;
+
+  const outcome = getOutcomeInfo(data);
+  if (outcome && !outcome.isFailure) {
+    return (
+      <Card className="border-border bg-muted/30">
+        <CardContent className="pt-8 pb-8">
+          <div className="flex flex-col items-center text-center">
+            <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center mb-4">
+              <Info className="h-8 w-8 text-muted-foreground" />
+            </div>
+            <h2 className={`text-xl font-semibold mb-2 ${outcome.color}`}>{outcome.label}</h2>
+            <p className="text-sm text-muted-foreground max-w-sm mb-4">{outcome.description}</p>
+            {onRetry && (
+              <button
+                onClick={onRetry}
+                className="text-sm font-medium text-primary hover:underline"
+              >
+                Try again with a new bot
+              </button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   // Determine error display
   const getErrorTitle = () => {
