@@ -33,5 +33,6 @@ def test_the_outbox_keys_are_declared_publish_edges_and_secret_where_they_are_cr
     keys = {k['key']: k for k in cp.load_declaration()['keys']}
     assert keys['FLOWS_API_URL']['class'] == 'publish-edge'
     assert keys['FLOWS_API_URL']['publishes_events'] == ['crm.record.changed']
-    assert keys['FLOWS_API_KEY']['secret'] is True
+    assert keys['FLOWS_PUBLISH_KEY']['secret'] is True
+    assert 'FLOWS_API_KEY' not in keys, 'the outbox never holds flows\' operator key'
     assert keys['VEXA_FACT_SEAL_SECRET']['secret'] is True

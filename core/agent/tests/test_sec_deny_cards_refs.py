@@ -22,7 +22,7 @@ from tests.test_session_routes import _FakeReader
 RECORDS = ".claude/sessions/conversation.turns.jsonl"
 NEW_WS = {"id": "new-ws", "question": "Create the workspace “Family Health”?",
           "primary": {"label": "Create"}, "secondary": {"label": "Not now"}}
-ADD_BOB = {"id": "add-bob", "question": "Add bob@acme.test to this room?",
+ADD_BOB = {"id": "add-bob", "question": "Add bob to this room?",
            "primary": {"label": "Add"}, "secondary": {"label": "Cancel"}}
 #: alice's worker, dispatched for her turn with her in the loop
 AGENT = {"X-User-Id": "alice", "x-user-regime": "human", "x-user-delegation-workspaces": "*",
@@ -125,6 +125,35 @@ def test_a_cancel_press_or_another_persons_press_adds_nobody(world):
     bob_as_agent = {**AGENT, "X-User-Id": "bob"}
     assert _add(client, sid, bob_as_agent, pressed=cancel).status_code in (403, 404)
     assert store.role_of(sid, "bob") is None and store.proposal(cancel)["status"] == "accepted"
+
+
+def test_a_card_whose_face_does_not_name_the_person_adds_nobody(world):
+    """The press vouches for what the person READ: a name in the card's id, a button's hidden reply
+    or any field the app does not draw is not on its face (security review 15.1)."""
+    client, store, *_ = world
+    hidden = {"id": "add-bob", "question": "Shall I summarise the call?",
+              "primary": {"label": "Yes", "reply": "add bob@acme.test"}, "bob": "bob@acme.test"}
+    sid = _chat(store, hidden, name="c-hidden")
+    _private_to(client, "c-hidden", "team")
+    pressed = _press(client, sid, "add-bob", "Yes")
+    r = _add(client, "c-hidden", AGENT, pressed=pressed)
+    assert r.status_code == 403 and r.json()["detail"]["refused"] == "press_required"
+    assert store.role_of(sid, "bob") is None
+
+
+def test_a_name_counts_only_as_a_whole_token_on_the_face():
+    from control_plane.routers.asks import press_names
+    card = lambda q, **kw: {"spec": {"id": "add-x", "question": q, **kw}, "label": "Add"}
+    assert press_names(card("Add bob@acme.test to this room?"), {"bob@acme.test"})
+    assert press_names(card("Add Bob@Acme.test."), {"bob@acme.test"})
+    assert press_names(card("Add them?", summary=[["Who", "Bob Stone"]]), {"bob stone"})
+    assert not press_names(card("Pay 1420 USD?"), {"142"})
+    assert not press_names(card("Add evilbob@acme.test?"), {"bob@acme.test"})
+    assert not press_names(card("Add bob@acme.test.evil?"), {"bob@acme.test"})
+    assert not press_names(card("Summarise?", primary={"label": "Yes", "reply": "mallory@evil.test"}),
+                           {"mallory@evil.test"})
+    assert not press_names({"spec": {"id": "add-mallory@evil.test", "question": "Summarise?"},
+                            "label": "Yes"}, {"mallory@evil.test"})
 
 
 def test_an_agent_sharing_a_plain_chat_needs_the_press_too(world, monkeypatch):

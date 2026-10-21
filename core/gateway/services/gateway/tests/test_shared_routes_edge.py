@@ -116,3 +116,16 @@ def test_the_mcp_front_door_admits_a_shared_delegation():
     client, downstream = _client(SHARED)
     r = client.post("/mcp", headers={"Authorization": f"Bearer {DELEGATED}"}, json={})
     assert r.status_code == 200
+
+
+def test_n1_a_shared_delegation_reaches_a_transcript_by_id_carrying_its_shared_ceiling():
+    """The edge forwards `GET /transcripts/by-id/{id}` to a shared turn (it is `shared: allow`), and
+    the identity it signs says shared with the turn's ceiling — what meeting-api's door rebuilds and
+    `shared_meeting_readable` refuses a private meeting on (meeting-api
+    `test_shared_transcript_read.py::test_n1_*`)."""
+    client, downstream = _client(SHARED)
+    r = _call(client, SHARED, "GET", "/transcripts/by-id/{meeting_id}")
+    assert r.status_code == 200 and downstream.last is not None
+    sent = {k.lower(): v for k, v in dict(downstream.last.get("headers") or {}).items()}
+    claims = identity_token.verify(SIGNING_KEY.public_key(), sent[identity_token.HEADER])
+    assert claims["delegation"]["shared"] is True and claims["delegation"]["workspaces"] == ["ws_1"]

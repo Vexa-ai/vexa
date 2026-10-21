@@ -62,7 +62,11 @@ admits a fact. Three populations:
 verdict in the topmost `Authentication-Results` header and needs a DMARC pass for the `From:`
 domain, or a DKIM or SPF pass aligned with it when the domain publishes no DMARC policy. A failing
 mail is quarantined as `unauthenticated_mail`. A mail server that writes no
-`Authentication-Results` (the dev stack's mailpit) therefore admits no user mail. The turn an
+`Authentication-Results` (the dev stack's mailpit) therefore admits no user mail. On any server
+other than the Gmail preset, `VEXA_FLOWS_MAIL_AUTHSERV_ID` names whose verdict counts. That id is
+public, so it protects only when the server both writes its own `Authentication-Results` on every
+message it accepts and removes any arriving header that already carries its id; otherwise a sender
+can forge a verdict under it. The turn an
 admitted mail starts writes only its reply file and proposes everything else. See
 [Security → Untrusted triggers](/security-compliance#untrusted-triggers-routines-mail-and-room-calls).
 

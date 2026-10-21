@@ -91,3 +91,41 @@ def test_someone_outside_the_workspace_does_not_find_it_by_its_link():
     c2 = _client(None)
     r = c2.get(f"/transcripts/{PLAT}/{NID}", headers={"x-user-id": str(OTHER), "x-user-workspaces": "ws_1"})
     assert r.status_code == 404, r.text
+
+
+# ── N1 across the layers: the gateway's signed shared delegation, through meeting-api's door ─────
+# The gateway forwards `GET /transcripts/by-id/{id}` to a shared delegation (routes.v1 `shared:
+# allow`; core/gateway `test_shared_routes_edge.py` asserts the forward and the token it carries).
+# Here that exact token — minted by `signed_headers` from the gateway's validation answer (the
+# identity_token copies are held byte-identical) — passes meeting-api's real door and its refusal.
+
+def _through_the_door(workspace):
+    from meeting_api import identity_token as it
+    key = it.generate_signing_key()
+    store = InMemoryTranscriptStore()
+    store.seed_meeting(user_id=OWNER, platform=PLAT, native_meeting_id=NID, meeting_id=100,
+                       status="completed", data=({"workspace_id": workspace} if workspace else {}),
+                       segments=[{"segment_id": "s1", "start": 0.0, "end": 2.0, "text": "private plans",
+                                  "speaker": "A", "language": "en"}])
+    app = FastAPI(dependencies=[Depends(refuse_shared)])
+    app.include_router(build_router(store, _NullRedis()))
+    app.add_middleware(it.IdentityGuard, verify_key=key.public_key(), service="meeting-api")
+    # the gateway's validation answer for a shared chat's worker (core/gateway test_shared_routes_edge SHARED)
+    shared = {"user_id": OWNER, "scopes": ["bot", "tx"], "max_concurrent": 3, "email": "ada@example.com",
+              "workspaces": ["ws_1"],
+              "delegation": {"regime": "human", "workspaces": ["ws_1"], "shared": True}}
+    forged = {"x-user-delegation-shared": "", "x-user-delegation-workspaces": "*"}
+    return TestClient(app), {**forged, **it.signed_headers(key, shared)}
+
+
+def test_n1_a_shared_turns_token_reads_no_private_meeting_through_the_door():
+    client, headers = _through_the_door(None)
+    r = client.get("/transcripts/by-id/100", headers=headers)
+    assert r.status_code == 403 and r.json()["detail"] == SHARED_REFUSAL, r.text
+    assert "private plans" not in r.text
+
+
+def test_n1_the_same_token_reads_a_meeting_bound_inside_its_ceiling():
+    client, headers = _through_the_door("ws_1")
+    r = client.get("/transcripts/by-id/100", headers=headers)
+    assert r.status_code == 200 and r.json()["segments"][0]["text"] == "private plans", r.text

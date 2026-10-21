@@ -359,34 +359,38 @@ def check_push(*, subject: str, unit: str, workspace: str, repo: Path, base: str
     every held path and its code."""
     from workspaces.shared.gitexec import run_git  # noqa: PLC0415
 
-    def blob(rev: str, rel: str) -> str:
-        r = run_git(repo, "cat-file", "blob", f"{rev}:{rel}", text=False)
-        return r.stdout.decode("utf-8", "replace") if r.returncode == 0 else ""
-
     shown = run_git(repo, "show", f"{base}:policy/members.json")
     readers = readers_in(shown.stdout if shown.returncode == 0 else None, subject)
     if not readers or (str(unit or "").strip() and not sources(unit)):
         return None
-    first: Optional[dict] = None
-    held: dict[str, str] = {}
-    seen: set = set()
+    # every (commit, parent, path) a push writes: one diff-tree per commit and parent ...
+    writes: list[tuple[str, Optional[str], str]] = []
     for line in run_git(repo, "rev-list", "--reverse", "--parents", f"{base}..{new}",
                         check=True).stdout.splitlines():
         commit, *parents = line.split()
-        for parent in parents or [_EMPTY_TREE]:
-            names = run_git(repo, "diff-tree", "-r", "-z", "--no-renames", "--name-only", parent,
-                            commit, check=True).stdout
-            for rel in (p for p in names.split("\0") if p):
-                content, before = blob(commit, rel), blob(parent, rel) if parents else ""
-                if (rel, content, before) in seen:
-                    continue
-                seen.add((rel, content, before))
-                body = check_egress(subject=subject, unit=unit, surface="page",
-                                    target=f"{workspace}/{rel}", readers=readers, workspace=workspace,
-                                    path=rel, content=content, delegated=True, before=before)
-                if body is not None:
-                    first = first or body
-                    held.setdefault(rel, body["confirm_code"])
+        for parent in parents or [None]:
+            names = run_git(repo, "diff-tree", "-r", "-z", "--no-renames", "--name-only",
+                            parent or _EMPTY_TREE, commit, check=True).stdout
+            writes += [(commit, parent, rel) for rel in names.split("\0") if rel]
+    # ... and every version read by ONE git process, however many files the push carries (the
+    # workspace lock is held while this runs)
+    blobs = _blobs(repo, {(rev, rel) for commit, parent, rel in writes
+                          for rev in ((commit, parent) if parent else (commit,))})
+    first: Optional[dict] = None
+    held: dict[str, str] = {}
+    seen: set = set()
+    for commit, parent, rel in writes:
+        content = blobs.get((commit, rel), "")
+        before = blobs.get((parent, rel), "") if parent else ""
+        if (rel, content, before) in seen:
+            continue
+        seen.add((rel, content, before))
+        body = check_egress(subject=subject, unit=unit, surface="page",
+                            target=f"{workspace}/{rel}", readers=readers, workspace=workspace,
+                            path=rel, content=content, delegated=True, before=before)
+        if body is not None:
+            first = first or body
+            held.setdefault(rel, body["confirm_code"])
     if first is None:
         return None
     return {**first, "paths": sorted(held), "confirm_codes": [held[p] for p in sorted(held)]}
@@ -394,6 +398,37 @@ def check_push(*, subject: str, unit: str, workspace: str, repo: Path, base: str
 
 #: git's empty tree: what a commit with no parent is compared against.
 _EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _blobs(repo: Path, wanted: set) -> dict:
+    """``{(rev, path): text}`` for each version in ``wanted`` that exists, read through one
+    ``git cat-file --batch``. A path with a newline cannot ride its line-based input, so it is read
+    on its own; a missing version (a deleted file) is absent."""
+    from workspaces.shared.gitexec import run_git  # noqa: PLC0415
+
+    out: dict = {}
+    batch = sorted(w for w in wanted if "\n" not in w[1])
+    for rev, rel in sorted(set(wanted) - set(batch)):
+        r = run_git(repo, "cat-file", "blob", f"{rev}:{rel}", text=False)
+        if r.returncode == 0:
+            out[(rev, rel)] = r.stdout.decode("utf-8", "replace")
+    if not batch:
+        return out
+    raw = run_git(repo, "cat-file", "--batch", text=False,
+                  input="".join(f"{rev}:{rel}\n" for rev, rel in batch).encode("utf-8"),
+                  check=True).stdout
+    at = 0
+    for key in batch:
+        end = raw.index(b"\n", at)
+        line = raw[at:end]
+        at = end + 1
+        if line.endswith((b" missing", b" ambiguous")):
+            continue                          # the line echoes the request; no content follows
+        _sha, kind, size = line.split(b" ")
+        if kind == b"blob":
+            out[key] = raw[at:at + int(size)].decode("utf-8", "replace")
+        at += int(size) + 1                   # a tree or a submodule commit at that path: no text
+    return out
 
 
 _SURFACE_WORDS = {

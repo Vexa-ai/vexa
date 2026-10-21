@@ -110,6 +110,9 @@ class MeetingOffer(Body):
 class Account(Body):
     subject: str = Field(min_length=1)
     email: str = ''
+    #: the producer vouches that a sign-in proved ``email`` for this account; otherwise the address
+    #: finds no Person (I10) and is only the account's fallback primary
+    email_verified: bool = False
 class Accounts(Body):
     accounts: list[Account] = Field(min_length=1, max_length=500)
 class PersonMe(Body):

@@ -107,8 +107,10 @@ class Persons:
             s.match_ids.c.org_id == org, s.match_ids.c.identifier == identifier)).scalar_one_or_none()
 
     def resolve(self, c, org, subject, email=''):
-        """The Person an account answers to: by its verified address first (I10), then by an
-        ``account:`` link, then by the record the account is attached to. None when there is none."""
+        """The Person an account answers to: by ``email`` first (I10), then by an ``account:`` link,
+        then by the record the account is attached to. None when there is none. ``email`` is an
+        address a sign-in PROVED (``Caller.proven_email``) or ""; an account that once signed in with
+        a proven one is already attached or linked, so its subject alone finds it."""
         email = str(email or '').strip().lower()
         if email:
             held = self._held(c, org, EMAIL + email)
@@ -295,16 +297,16 @@ class Persons:
         in full), the primary, and the merge card waiting for them, if any."""
         caller = self._person(caller)
         with self.engine.begin() as c:
-            row = self.resolve(c, org, caller.subject, caller.email)
+            row = self.resolve(c, org, caller.subject, caller.proven_email)
             if row is None:
                 return {'person': None, 'accounts': 1, 'addresses': [caller.email] if caller.email else [],
                         'primary': caller.email or None, 'merge': None}
-            card = self.offer(c, org, row, {caller.subject: caller.email})
+            card = self.offer(c, org, row, {caller.subject: caller.proven_email})
             accounts = self.linked(c, org, row)
             if caller.subject not in accounts:
                 accounts.append(caller.subject)
             mine = self.addresses(c, org, row['id'])
-            primary = self.primary(c, org, row, caller.email)
+            primary = self.primary(c, org, row, caller.proven_email)
             pending = self._waiting_for(c, org, caller.subject)
             card = pending[-1] if pending else None
             return {'person': row['id'], 'accounts': len(accounts),
@@ -337,8 +339,8 @@ class Persons:
             confirmed[caller.subject] = _now()
             patch['confirmed'] = confirmed
             addresses = dict(patch.get('addresses') or {})
-            if caller.email:
-                addresses[caller.subject] = caller.email
+            if caller.proven_email:
+                addresses[caller.subject] = caller.proven_email
             patch['addresses'] = addresses
             done = all(a in confirmed for a in patch.get('accounts') or [])
             status = OFFERED
@@ -346,7 +348,7 @@ class Persons:
                 status = CONFIRMED
                 if not patch.get('primary'):
                     options = self._options(c, org, {**card, 'patch': patch})
-                    patch['primary'] = caller.email or (options[0] if options else None)
+                    patch['primary'] = caller.proven_email or (options[0] if options else None)
                 self._apply(c, org, card, patch, caller.subject)
             c.execute(update(s.change_proposals).where(s.change_proposals.c.org_id == org,
                                                        s.change_proposals.c.id == card['id'])
@@ -379,7 +381,7 @@ class Persons:
         """Change the primary address later, on the person's last confirmed card."""
         caller = self._person(caller)
         with self.engine.begin() as c:
-            row = self.resolve(c, org, caller.subject, caller.email)
+            row = self.resolve(c, org, caller.subject, caller.proven_email)
             cards = self._cards(c, org, row['id'], (CONFIRMED,)) if row else []
             if not cards or caller.subject not in ((cards[-1]['patch'] or {}).get('accounts') or []):
                 raise PersonError('Confirm your accounts first; the primary address is chosen on the merge card')
@@ -401,7 +403,7 @@ class Persons:
             raise PersonError('An address is name@domain')
         answer = {'status': 'offered', 'instruction': 'Sign in with that address and confirm the card there.'}
         with self.engine.begin() as c:
-            mine = self.resolve(c, org, caller.subject, caller.email)
+            mine = self.resolve(c, org, caller.subject, caller.proven_email)
             other = self.resolve(c, org, '', address)
             if mine is None or other is None or other['id'] == mine['id']:
                 return answer
@@ -412,7 +414,7 @@ class Persons:
             for card in self._cards(c, org, mine['id'], (OFFERED,)):
                 if set(accounts) <= set((card['patch'] or {}).get('accounts') or []):
                     return answer
-            card = self._insert(c, org, mine, accounts, {caller.subject: caller.email},
+            card = self._insert(c, org, mine, accounts, {caller.subject: caller.proven_email},
                                 records=[mine['id'], other['id']], author=caller.subject)
             patch = dict(card['patch'])
             patch['confirmed'] = {caller.subject: _now()}
@@ -477,9 +479,9 @@ class Persons:
 
     # ── for the platform (agent-api through /internal/persons, crm's own card membership) ────
     def group(self, org, accounts):
-        """``accounts``: ``[{subject, email}]``. For each, the Person it resolves to and every account
-        linked to that Person (accounts given together that resolve to one Person count once), and
-        the primary address. Accounts with no Person answer as a Person of one."""
+        """``accounts``: ``[{subject, email, email_verified}]``. For each, the Person it resolves to
+        and every account linked to that Person (accounts given together that resolve to one Person
+        count once), and the primary address. Accounts with no Person answer as a Person of one."""
         out = {}
         with self.engine.connect() as c:
             for a in list(accounts or [])[:MAX_ACCOUNTS]:
@@ -487,7 +489,9 @@ class Persons:
                 email = str((a or {}).get('email') or '').strip().lower()
                 if not subject:
                     continue
-                row = self.resolve(c, org, subject, email)
+                # an address finds a Person only when the producer vouches a sign-in proved it;
+                # otherwise the account alone does, and the address is only its fallback primary
+                row = self.resolve(c, org, subject, email if (a or {}).get('email_verified') is True else '')
                 if row is None:
                     out[subject] = {'person': None, 'accounts': [subject], 'confirmed': [subject],
                                     'primary': email or None, 'merged': False}

@@ -61,6 +61,10 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "capability", None,
         "a read-only key that opens the timeline projection and nothing else. Unset = only the "
         "operator key opens it."),
+    "VEXA_FLOWS_CRM_PUBLISH_KEY": (
+        "capability", None,
+        "the crm outbox's publish key: `POST /events` for the CRM's own facts (`crm.record.changed`) "
+        "and nothing else. Unset = only the operator key admits facts."),
     "VEXA_FACT_SEAL_SECRET": (
         "capability", None,
         "the secret event.v2 fact envelopes are sealed under (D8): `POST /events` verifies a "
@@ -367,6 +371,7 @@ DECLARED: dict[str, tuple[str, object, str]] = {
 SECRETS = frozenset({
     "INTERNAL_API_SECRET", "VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SECRET",
     "VEXA_FLOWS_ADMIN_KEY", "VEXA_FLOWS_API_KEY", "VEXA_FLOWS_TIMELINE_KEY", "VEXA_FACT_SEAL_SECRET",
+    "VEXA_FLOWS_CRM_PUBLISH_KEY",
     "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_PASSWORD",
 })
 

@@ -155,6 +155,25 @@
       ]
     },
     {
+      "key": "VEXA_FLOWS_CRM_PUBLISH_KEY",
+      "class": "capability",
+      "description": "The crm outbox's publish key: with it in `X-Flows-Publisher-Key`, `POST /events` admits the CRM's own facts (`crm.record.changed`, its `carriers.json` owner) with envelopes sealed as producer `crm`, and every other fact type and every other route refuses it. The outbox holds this and never the operator key, which submits, pauses and retires every company's flows. Unset, only the operator key admits facts and the crm outbox's deliveries are refused 401 (the rows stay pending).",
+      "capability": "crm_publish_key",
+      "secret": true,
+      "targets": [
+        "compose"
+      ],
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ]
+    },
+    {
       "key": "VEXA_FLOWS_ADMIN_API_URL",
       "class": "required-explicit",
       "description": "identity's admin tier. NO HOST-PORT DEFAULT: `http://localhost:18057` is not 'unconfigured', it is A DIFFERENT DEPLOYMENT'S admin-api on any host running two stacks — found live 2026-09-03. A deployment default may name the SERVICE and lives in the deploy surface, never in code.",
@@ -824,6 +843,10 @@
     "sensors": {
       "description": "Sensors may read a person's connections through the credential broker (ADR-0050).",
       "when_unconfigured": "A sensor that needs a connection cannot be tested or enabled; its test says the broker is not configured. Flows, triggers and keyed schedules work without it."
+    },
+    "crm_publish_key": {
+      "description": "A publish-only credential for the crm outbox: `POST /events`, the CRM's own facts only.",
+      "when_unconfigured": "Only the operator key admits facts; the crm outbox's deliveries are refused and its rows stay pending."
     }
   },
   "surface_only": [

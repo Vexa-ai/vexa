@@ -64,6 +64,11 @@ class Caller:
     extra: dict = field(default_factory=dict, hash=False, compare=False)
 
     @property
+    def proven_email(self) -> str:
+        """``email`` when a sign-in proved it, else "": the only address that finds a Person (I10)."""
+        return self.email if self.email_verified else ""
+
+    @property
     def unwatched(self) -> bool:
         """A worker with nobody in the loop: it may read and propose, never write or review."""
         return self.delegated and self.regime != "human"

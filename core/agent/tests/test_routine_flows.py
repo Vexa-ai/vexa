@@ -237,3 +237,32 @@ def test_a_routine_card_carries_what_its_graph_draws(world, flows):
     assert card["steps"] == ["agent_run"]
     assert card["policy"]["key"] == "connection_actions_unattended"
     assert "gmail.search" in card["policy"]["refused"] + card["policy"]["allowed"]
+
+
+def _session() -> dict:
+    """The person's signed-in browser session (D13: `credential_class: session`)."""
+    return {identity_token.HEADER: identity_token.sign(
+        KEY, {"sub": "7", "email": "ada@example.com", "credential_class": "session"})}
+
+
+def test_only_the_persons_session_turns_a_routine_on(world, flows):
+    """Arming is the person's press (D13, D24): an API key — any scopes — and any delegated turn
+    are refused before flows is called; switching off stays open; the session arms it."""
+    client, _, _ = world
+    assert client.post("/api/routines", headers=_as(),
+                       json={"name": "Morning brief", "cron": "0 8 * * *",
+                             "prompt": "brief me"}).status_code == 201
+    assert flows.rows[-1]["status"] == "draft", "a key files a draft"
+    for regime in (None, "human", "autonomous"):
+        r = client.patch("/api/routines/Morning-brief/enabled", headers=_as(regime),
+                         json={"enabled": True})
+        assert r.status_code == 403, r.text
+        if regime is None:
+            assert r.json()["detail"]["reason"] == "person_approval_required"
+        assert flows.rows[-1]["status"] == "draft", "flows is never asked to resume it"
+    assert client.patch("/api/routines/Morning-brief/enabled", headers=_as(),
+                        json={"enabled": False}).status_code == 200
+    r = client.patch("/api/routines/Morning-brief/enabled", headers=_session(),
+                     json={"enabled": True})
+    assert r.status_code == 200 and r.json()["enabled"] is True
+    assert flows.rows[-1]["status"] == "active"

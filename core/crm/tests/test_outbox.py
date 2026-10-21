@@ -18,8 +18,9 @@ def test_failed_delivery_retries_same_id_without_record_values():
     assert deliver(engine,'http://flows','secret',transport=transport)['delivered']==1
     assert calls[0].content == calls[1].content
     assert b'fields' not in calls[0].content
-    assert calls[0].headers['X-Flows-Operator-Key']=='secret'
-    assert 'X-Flows-Admin-Key' not in calls[0].headers
+    # the CRM's publish key, never flows' operator key (security review 19.1)
+    assert calls[0].headers['X-Flows-Publisher-Key']=='secret'
+    assert 'X-Flows-Operator-Key' not in calls[0].headers and 'X-Flows-Admin-Key' not in calls[0].headers
     assert deliver(engine,'http://flows','secret',transport=transport)['delivered']==0
     with engine.connect() as c:assert c.scalar(select(s.outbox.c.delivered))
 
@@ -139,3 +140,25 @@ def test_deny_the_delivery_process_refuses_to_start_without_its_seal_secret(monk
     with pytest.raises(SystemExit) as stop:
         runpy.run_module('crm.outbox', run_name='__main__')
     assert 'VEXA_FACT_SEAL_SECRET' in str(stop.value.code)
+
+
+# ── the outbox's own boot check (security review 19.2) ──────────────────────────────────────────
+OUTBOX_ENV = {'CRM_DATABASE_URL': 'sqlite://', 'VEXA_FACT_SEAL_SECRET': 's' * 64,
+              'FLOWS_API_URL': 'http://flows-api:8200', 'FLOWS_PUBLISH_KEY': 'p' * 64}
+
+
+def test_the_outbox_boots_on_its_own_keys_without_crm_apis():
+    from crm.outbox import preflight
+    preflight(dict(OUTBOX_ENV))
+    preflight({k: v for k, v in OUTBOX_ENV.items() if k not in ('FLOWS_API_URL', 'FLOWS_PUBLISH_KEY')})
+
+
+@pytest.mark.parametrize('change', [
+    {'FLOWS_PUBLISH_KEY': ''}, {'FLOWS_PUBLISH_KEY': 'changeme'}, {'VEXA_FACT_SEAL_SECRET': ''},
+    {'CRM_DATABASE_URL': ''}])
+def test_deny_the_outbox_refuses_to_start_on_a_missing_or_placeholder_key(change):
+    from crm.outbox import preflight
+    with pytest.raises(SystemExit) as stop:
+        preflight({**OUTBOX_ENV, **change})
+    key = next(iter(change))
+    assert key in str(stop.value.code) and 'changeme' not in str(stop.value.code)

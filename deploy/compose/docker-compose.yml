@@ -288,9 +288,9 @@ services:
 
   # The CRM's outbox: hands each revision's fact (crm.record.changed, sealed per event.v2) to flows'
   # POST /events, and marks it delivered only on a 202 — a stopped or unreachable flows leaves the
-  # rows pending, never lost. It logs in as the CRM's role and holds the flows key and the seal
-  # secret; crm-api holds neither. VEXA_FACT_SEAL_SECRET must equal flows-api's (`make up` mints
-  # one); without it the outbox refuses to start, by design.
+  # rows pending, never lost. It logs in as the CRM's role and holds the CRM's publish key on flows
+  # (never flows' operator key) and the seal secret; crm-api holds neither. Both must equal
+  # flows-api's (`make up` mints them); without them the outbox refuses to start, by design.
   crm-outbox:
     profiles: ["crm"]
     build:
@@ -301,7 +301,7 @@ services:
     environment:
       - CRM_DATABASE_URL=postgresql+pg8000://${CRM_DB_USER:-vexa_crm}:${CRM_DB_PASSWORD:-}@postgres:5432/${DB_NAME:-vexa}
       - FLOWS_API_URL=${VEXA_FLOWS_API_URL:-http://flows-api:8200}
-      - FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
+      - FLOWS_PUBLISH_KEY=${VEXA_FLOWS_CRM_PUBLISH_KEY:-}
       - VEXA_FACT_SEAL_SECRET=${VEXA_FACT_SEAL_SECRET:-}
     depends_on:
       crm-init:
@@ -1107,6 +1107,8 @@ services:
       - VEXA_FLOWS_TIMELINE_KEY=${VEXA_FLOWS_TIMELINE_KEY:-}
       # event.v2 (D8): the secret fact envelopes are sealed under — its own credential; unset = no envelope verifies.
       - VEXA_FACT_SEAL_SECRET=${VEXA_FACT_SEAL_SECRET:-}
+      # the crm outbox's publish key (security review 19.1): POST /events for the CRM's own facts, nothing else.
+      - VEXA_FLOWS_CRM_PUBLISH_KEY=${VEXA_FLOWS_CRM_PUBLISH_KEY:-}
       # S6 nudges (D15): off unless VEXA_FLOWS_NUDGES=1 and the flows_defs.nudges pack is loaded
       - VEXA_FLOWS_NUDGES=${VEXA_FLOWS_NUDGES:-}
       - VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN=${VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN:-5}

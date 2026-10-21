@@ -98,7 +98,7 @@ def build(**d) -> APIRouter:
                 or not s.spend(body.pressed, str(subject))):
             raise HTTPException(status_code=403, detail={
                 "refused": "press_required",
-                "instruction": "Adding a person needs the person's press: offer a ```ask card naming who "
+                "instruction": "Adding a person needs the person's press: offer a ```ask card whose question names who "
                                "to add, and call this with `pressed` set to the #<pending> of their "
                                "pressed answer. A typed line, another card, or a press already used "
                                "adds no one."})

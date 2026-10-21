@@ -4,7 +4,10 @@
  *  The policy's foreign sources come from this process's environment on every request (LIVEKIT_URL
  *  at run time; NEXT_PUBLIC_GA_MEASUREMENT_ID as built), so they follow the deployment's own config.
  *  The Meeting Canvas frame (`/canvas-frame`) gets its own policy, which sandboxes the document.
- *  API routes, static assets and the /b/ proxy are not pages and are left alone. */
+ *  Left alone, by exact path and never by extension (a page URL may end in .json or .svg, as a
+ *  document link does): API routes, the /b/ proxy, Next's build assets and image optimiser, and the
+ *  real files this app serves at the root — `public/` and the app's metadata files, named one by
+ *  one. */
 import { NextResponse, type NextRequest } from "next/server";
 import { NONCE_HEADER, canvasFrameContentSecurityPolicy, contentSecurityPolicy, newNonce } from "./app/contentSecurityPolicy";
 import { CANVAS_FRAME_PATH } from "./canvas/frame/protocol";
@@ -23,10 +26,13 @@ export function middleware(request: NextRequest) {
   return response;
 }
 
+// Next reads `config` statically, so the matcher is a literal. The files it names are every file in
+// `public/` and the app directory's root metadata files (`app/icon.svg`); middleware.test.ts holds
+// the list to the tree.
 export const config = {
   matcher: [
     {
-      source: "/((?!api/|_next/static|_next/image|b/|favicon.ico|icon.svg|.*\\.(?:png|jpg|jpeg|gif|svg|webp|ico|woff2?|txt|xml|json)$).*)",
+      source: "/((?!api/|b/|_next/static/|_next/image$|(?:README\\.md|vexa-logo\\.svg|icon\\.svg)$).*)",
       missing: [{ type: "header", key: "next-router-prefetch" }],
     },
   ],

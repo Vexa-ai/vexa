@@ -226,7 +226,8 @@ class Profiles:
 
     def _human_claim(self, c, org, subject, email):
         """The claim any account of this human already holds: this account's own, or the claim on the
-        Person this account resolves to (a second login of a claimed human)."""
+        Person this account resolves to (a second login of a claimed human). ``email`` is a proven
+        address or "" (``persons.resolve``)."""
         mine = self._claimed_by(c, org, subject)
         if mine:
             return mine
@@ -325,7 +326,7 @@ class Profiles:
         with self.engine.begin() as c:
             row = self._claimed_by(c, org, caller.subject)
             if row is None:
-                held = self._human_claim(c, org, caller.subject, caller.email)
+                held = self._human_claim(c, org, caller.subject, caller.proven_email)
                 if held:
                     return {'claimed': True, 'via_merge': True, 'record_id': held['record_id'],
                             'fields': dict(held['fields'] or {}), 'public_fields': list(held['public_fields'] or []),
@@ -398,16 +399,18 @@ class Profiles:
 
     # ── for the platform ─────────────────────────────────────────────────────────────────────
     def directory(self, org, accounts):
-        """``accounts``: ``[{subject, email}]`` — the people agent-api's directory rule already let the
-        viewer see. Each one's profile fields (their claimed record's, also for a second login), or
-        None. Profile fields only: no org field is read."""
+        """``accounts``: ``[{subject, email, email_verified}]`` — the people agent-api's directory rule
+        already let the viewer see. Each one's profile fields (their claimed record's, also for a
+        second login), or None. Profile fields only: no org field is read. The address finds the
+        Person only when ``email_verified`` vouches for it (``persons.resolve``)."""
         out = {}
         with self.engine.connect() as c:
             for a in list(accounts or [])[:500]:
                 subject = str((a or {}).get('subject') or '').strip()
                 if not subject:
                     continue
-                row = self._human_claim(c, org, subject, str((a or {}).get('email') or ''))
+                email = str((a or {}).get('email') or '') if (a or {}).get('email_verified') is True else ''
+                row = self._human_claim(c, org, subject, email)
                 out[subject] = dict(row['fields'] or {}) if row else None
         return out
 

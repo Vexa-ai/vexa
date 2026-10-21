@@ -5063,7 +5063,7 @@
      }
     }
    },
-   "description": "the crm outbox (python -m crm.outbox --watch, the crm-outbox process of the crm image): POST /events with flows' operator key (X-Flows-Operator-Key), one crm.record.changed per revision with its event.v2 envelope sealed under VEXA_FACT_SEAL_SECRET; marked delivered only on a 202. A publish edge: no flows, rows stay pending",
+   "description": "the crm outbox (python -m crm.outbox --watch, the crm-outbox process of the crm image): POST /events with the CRM's publish key (X-Flows-Publisher-Key, VEXA_FLOWS_CRM_PUBLISH_KEY: the CRM's own facts, no other flows route), one crm.record.changed per revision with its event.v2 envelope sealed under VEXA_FACT_SEAL_SECRET; marked delivered only on a 202. A publish edge: no flows, rows stay pending",
    "protocol": "HTTP"
   },
   {

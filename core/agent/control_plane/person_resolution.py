@@ -3,7 +3,10 @@
 There is no persons table here or anywhere. The human is the CRM's Person record; an account is a
 login that resolves to it by its verified address (ADR-0047 d3 match identifiers). agent-api asks the
 CRM through its existing front door, ``POST /internal/persons`` on crm-api (internal secret), with the
-accounts it is about to show or grant to, each with the verified address its roster entry carries.
+accounts it is about to show or grant to, each with the address its roster entry carries. A roster
+address is what someone was invited or listed under, never one a sign-in proved, so it is sent without
+``email_verified`` and the CRM finds each Person by the account itself: the link its own sign-in with a
+proven address wrote.
 
 What it is used for, and the one rule each use keeps:
 

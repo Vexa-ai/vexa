@@ -448,3 +448,15 @@ def test_a_caller_cannot_send_a_cpu_limit():
             "workloadId": "w", "profile": "meeting-bot", "env": {},
             "resources": {"cpu": 1, "cpuLimit": 2},
         })
+
+
+@pytest.mark.parametrize("key", ["RUNTIME_BOT_CPU", "RUNTIME_AGENT_WORKER_CPU"])
+def test_a_sub_millicore_cpu_is_fatal_at_boot(monkeypatch, key):
+    """Kubernetes CPU is whole millicores: 0.0004 would be declared "0m", a Pod asking for no CPU."""
+    monkeypatch.setenv("BROWSER_IMAGE", "bot:test")
+    monkeypatch.setenv("AGENT_IMAGE", "a:test")
+    monkeypatch.setenv(key, "0.0004")
+    with pytest.raises(ValueError, match=key):
+        default_registry()
+    monkeypatch.setenv(key, "0.001")
+    default_registry()

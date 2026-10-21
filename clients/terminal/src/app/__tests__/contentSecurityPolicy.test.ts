@@ -1,5 +1,9 @@
 // @vitest-environment node
 /** The terminal pages carry a Content-Security-Policy with a per-response nonce. */
+import { readdirSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { canvasFrameContentSecurityPolicy, contentSecurityPolicy, newNonce } from "../contentSecurityPolicy";
@@ -124,5 +128,38 @@ describe("the Meeting Canvas frame's policy (S03T-1)", () => {
     expect(frame.headers.get("Content-Security-Policy")).toMatch(/connect-src 'none'/);
     const page = middleware(new NextRequest("https://terminal.example.test/"));
     expect(page.headers.get("Content-Security-Policy")).not.toMatch(/sandbox/);
+  });
+});
+
+describe("which requests the policy middleware runs on (Next's own matcher)", () => {
+  // the matcher exactly as Next compiles and applies it at build and run time
+  const require = createRequire(import.meta.url);
+  const { getMiddlewareMatchers } = require("next/dist/build/analysis/get-page-static-info");
+  const { getMiddlewareRouteMatcher } = require("next/dist/shared/lib/router/utils/middleware-route-matcher");
+  const matches = getMiddlewareRouteMatcher(getMiddlewareMatchers(config.matcher, {}));
+  const runs = (path: string) => matches(path, { headers: {} } as never, {});
+  const root = fileURLToPath(new URL("../../..", import.meta.url));
+
+  it("covers every page, whatever its URL ends in", () => {
+    for (const page of ["/", "/w/ws/notes", "/w/ws/notes.json", "/w/ws/data.txt", "/r/doc/x.svg",
+      "/meetings/1.png", "/w/ws/a.xml", "/w/ws/font.woff2", "/w/ws/README.md", "/p/icon.svg"]) {
+      expect(runs(page), page).toBe(true);
+    }
+  });
+
+  it("leaves the API, the /b/ proxy, Next's assets and the real root files alone", () => {
+    for (const path of ["/api/tokens", "/b/123/vnc.html", "/_next/static/chunks/a.js", "/_next/image"]) {
+      expect(runs(path), path).toBe(false);
+    }
+  });
+
+  it("names every real root file: everything in public/ and the app's root metadata files", () => {
+    const files = [
+      ...readdirSync(join(root, "public")),
+      ...readdirSync(join(root, "src/app")).filter((f) =>
+        /^(?:icon|apple-icon|favicon|opengraph-image|twitter-image|robots|sitemap|manifest)\b.*\.\w+$/.test(f)),
+    ];
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of files) expect(runs(`/${f}`), f).toBe(false);
   });
 });

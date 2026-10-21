@@ -51,12 +51,13 @@
       "publishes_events": ["crm.record.changed"]
     },
     {
-      "key": "FLOWS_API_KEY",
+      "key": "FLOWS_PUBLISH_KEY",
       "class": "publish-edge",
       "secret": true,
-      "description": "flows' operator key (the value flows reads as VEXA_FLOWS_API_KEY), sent by the outbox as `X-Flows-Operator-Key` on `POST /events`. Unset, the outbox delivers nothing and the rows stay pending",
+      "description": "the CRM's publish key on flows (the value flows-api reads as VEXA_FLOWS_CRM_PUBLISH_KEY), sent by the outbox as `X-Flows-Publisher-Key` on `POST /events`: it admits the CRM's own facts and opens no other flows route. Never flows' operator key. With FLOWS_API_URL set, the outbox refuses to start while this is unset or a placeholder",
       "targets": ["compose", "helm"],
-      "publishes_events": ["crm.record.changed"]
+      "publishes_events": ["crm.record.changed"],
+      "forbidden_values": ["vexa-internal-secret", "lite-internal-secret", "changeme", "change-me", "CHANGE-ME", "default", "secret"]
     },
     {
       "key": "VEXA_FACT_SEAL_SECRET",

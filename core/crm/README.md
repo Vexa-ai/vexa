@@ -212,8 +212,9 @@ access comparison for each organization; passing one fixture proves that fixture
 
 Enable the optional `flows_defs.crm` pack with `VEXA_FLOWS_DEFS_EXTRA` on both
 Flows API and worker. `python -m crm.outbox --watch` (compose `crm-outbox`; the chart's `crm-outbox`
-Deployment when flows is on) uses the runtime credential, `FLOWS_API_URL` and `FLOWS_API_KEY` (flows'
-operator key, sent as `X-Flows-Operator-Key`) to deliver `crm.record.changed` to `/events`. Every key
+Deployment when flows is on) uses the runtime credential, `FLOWS_API_URL` and `FLOWS_PUBLISH_KEY` (the
+CRM's publish key, flows' `VEXA_FLOWS_CRM_PUBLISH_KEY`, sent as `X-Flows-Publisher-Key`; it admits the
+CRM's own facts and opens no other flows route) to deliver `crm.record.changed` to `/events`. Every key
 the CRM's processes read is declared in `src/crm/config.v1.json`.
 The stable event ID makes redelivery idempotent. Failed or unhandled events remain
 pending. Only org, record, revision and actor references leave CRM; no account

@@ -349,6 +349,28 @@ def test_a_push_that_adds_then_removes_the_private_text_is_still_held(stack, tmp
     assert stack.run.store.latest("team").gen == 1
 
 
+def test_a_push_of_many_files_reads_their_versions_in_one_git_process(stack, tmp_path, marked, monkeypatch):
+    """Security review 16.1: the hold runs under the workspace lock, so its git processes grow with
+    the commits pushed, never with the files in them."""
+    from workspaces.shared import gitexec as gx
+    record(stack, [{"path": f"{stack.cache}/team", "write": True}], unit=CHAT_UNIT)
+    marked(CHAT_UNIT)
+    files = {f"notes/n{i}.md": f"line {i}" for i in range(40)}
+    files["notes/bank.md"] = "Invoice 4471-2210 from Dana Whitfield"
+    base, _, data = _worker_commit(tmp_path, _fetch(stack, "team"), files)
+    reads = []
+    real = gx.run_git
+
+    def counting(cwd, *args, **kw):
+        if args and args[0] == "cat-file":
+            reads.append(args)
+        return real(cwd, *args, **kw)
+    monkeypatch.setattr(gx, "run_git", counting)
+    r = _push(stack, "team", base, data)
+    assert r.status_code == 409 and "notes/bank.md" in r.json()["detail"]["paths"], r.text[:300]
+    assert len(reads) == 1 and reads[0][:2] == ("cat-file", "--batch"), reads[:3]
+
+
 def test_an_unmarked_session_or_the_persons_own_desk_pushes_as_before(stack, tmp_path, marked):
     record(stack, [{"path": f"{stack.cache}/team", "write": True}], unit="agent-17-chat-clean")
     base, new, data = _worker_commit(tmp_path, _fetch(stack, "team", unit="agent-17-chat-clean"),

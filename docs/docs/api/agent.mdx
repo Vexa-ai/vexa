@@ -296,12 +296,15 @@ curl -X POST "$API_BASE/agent/routines" -H "Content-Type: application/json" \
 ```
 
 `POST` writes a schedule flow with the `agent_run` step in your own scope; `run_now` has no effect
-(the routine first runs at its first slot, in its own thread). A refusal from flows comes back with
-its typed reason (for example `quota_min_interval`).
+(the routine first runs at its first slot, in its own thread). Made with an API key or by an agent,
+it is filed as a draft that you turn on from the app. A refusal from flows comes back with its typed
+reason (for example `quota_min_interval`).
 
 `GET /api/routines` → `{ "routines": [...] }`: your schedule flows, plus any old routine file that
 could not be converted, with its reason ·
-`PATCH /api/routines/{name}/enabled` `{ enabled }` pauses or resumes the flow ·
+`PATCH /api/routines/{name}/enabled` `{ enabled }` pauses or resumes the flow. Resuming
+(`{"enabled": true}`) takes your signed-in session; an API key or an agent gets `403`
+`person_approval_required` ·
 `DELETE /api/routines/{routine_id}` retires it ·
 `POST /api/routines/{name}/confirm` → `410` `routine_files_retired`: routine files are no longer
 confirmed or read.

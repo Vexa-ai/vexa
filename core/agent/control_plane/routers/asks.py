@@ -187,10 +187,39 @@ def _label_of(item) -> str:
     return str(item or "").strip()[:LABEL_MAX]
 
 
+def _shown(v, cap: int = 300) -> str:
+    return v.strip()[:cap] if isinstance(v, str) else ""
+
+
+def rendered_face(spec: dict) -> str:
+    """The card's text exactly as the person's app draws it (the terminal's ``parseInlineCard``, with
+    its caps): the question, the summary lines, the chip and button labels and the answer field's
+    placeholder — one line each. The ``id``, a button's ``reply`` and any other field are never on
+    screen, so they are not on the face."""
+    lines = [_shown(spec.get("question"))]
+    for x in (spec.get("summary") or [])[:8] if isinstance(spec.get("summary"), list) else []:
+        if isinstance(x, list):
+            lines += [_shown(x[0] if len(x) > 0 else "", 60), _shown(x[1] if len(x) > 1 else "", 200)]
+        else:
+            lines.append(_shown(x))
+    chips = spec.get("chips") if isinstance(spec.get("chips"), list) else []
+    lines += [_label_of(c) for c in chips[:6]]
+    lines += [_label_of(spec.get("primary")), _label_of(spec.get("secondary"))]
+    if isinstance(spec.get("free"), str):
+        lines.append(_shown(spec["free"], 80))
+    return "\n".join(x for x in lines if x)
+
+
 def press_names(card: dict, names) -> bool:
-    """Does the card the person pressed name one of ``names`` (an address, an account id, a name)?"""
-    face = json.dumps(card["spec"], ensure_ascii=False).casefold()
-    return any(n and len(n) >= 3 and n.casefold() in face for n in names)
+    """Does the card the person pressed name one of ``names`` (an address, an account id, a name)
+    ON ITS FACE — what the person read before pressing — as a whole token? A name inside a longer
+    word or address (``142`` in ``1420``, ``bob@x.test`` in ``evilbob@x.test``) is not that name."""
+    face = unicodedata.normalize("NFKC", rendered_face(card["spec"])).casefold()
+    for n in names:
+        n = unicodedata.normalize("NFKC", n or "").strip().casefold()
+        if len(n) >= 3 and re.search(r"(?<![\w@.+-])" + re.escape(n) + r"(?![\w@+-]|\.\w)", face):
+            return True
+    return False
 
 
 def pressed_choice(card: dict) -> str:

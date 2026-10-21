@@ -914,11 +914,13 @@ under `/crm/*`, the MCP adds the `crm_*` tools, the flows pack hands workspace r
 agent-api publishes each workspace's record links every `crm.referencesPollSeconds`. With agent-api
 on, `crm-api` also reads the desktop's limits from `_global/POLICIES.md` through agent-api
 (`CRM_AGENT_API_URL`, admitted by agent-api's NetworkPolicy). With `flows.enabled` too, the chart also
-runs `crm-outbox`, which hands each record change to `flows-api` with flows' operator key and seals
-card facts with `VEXA_FACT_SEAL_SECRET`. The chart generates that secret in its Secret
-(`secrets.factSealSecret`, kept across upgrades), and `flows-api` verifies with the same key. With
-`secrets.existingSecretName`, your Secret must carry `VEXA_FACT_SEAL_SECRET`: without it the outbox
-does not start and flows-api refuses sealed facts. See [CRM](/minutes/crm).
+runs `crm-outbox`, which hands each record change to `flows-api` and seals card facts with
+`VEXA_FACT_SEAL_SECRET`. It posts with the CRM's publish key, `VEXA_FLOWS_CRM_PUBLISH_KEY`, which
+admits the CRM's own facts and opens no other flows route; the outbox never holds flows' operator
+key. The chart generates both secrets in its Secret (`secrets.factSealSecret`,
+`secrets.crmPublishKey`, kept across upgrades), and `flows-api` reads the same keys. With
+`secrets.existingSecretName`, your Secret must carry both: without them the outbox does not start
+and flows-api refuses sealed facts. See [CRM](/minutes/crm).
 
 ## The deprecated dashboard (optional)
 

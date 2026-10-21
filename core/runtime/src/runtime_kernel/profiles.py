@@ -228,9 +228,16 @@ def _numeric_env(key: str, cast):
         raise ValueError(f"{key} must be numeric, got {raw!r}") from exc
 
 
+#: The smallest CPU a Pod can declare: Kubernetes quantities are whole millicores.
+MIN_CPU = 0.001
+
+
 def _profile_resources(profile: str) -> Optional[Resources]:
     cpu_key, mem_key = _RESOURCE_ENV[profile]
     cpu = _numeric_env(cpu_key, float)
+    if cpu is not None and 0 < cpu < MIN_CPU:
+        # it would be declared as "0m": a Pod that asks for no CPU, not the small one asked for
+        raise ValueError(f"{cpu_key} must be 0 (unset) or at least {MIN_CPU} (1m), got {cpu!r}")
     memory_mb = _numeric_env(mem_key, int)
     limit_key = _CPU_LIMIT_ENV.get(profile)
     cpu_limit = _numeric_env(limit_key, float) if limit_key else None

@@ -74,10 +74,12 @@ def test_two_accounts_resolve_to_one_person_by_verified_address(store):
 
 
 def test_the_picker_groups_by_address_even_before_the_second_account_signed_in(store):
-    """agent-api hands over each account's verified address; no CRM sign-in is needed to group."""
+    """A producer that vouches an account's address was proven (``email_verified``) groups it with no
+    CRM sign-in; an address nobody vouches for groups nothing (``test_person_reads_proven``)."""
     val = founder_record(store)
     store.ensure_account(ORG, A)
-    grouped = store.persons.group(ORG, [{'subject': '21', 'email': WORK}, {'subject': '22', 'email': HOME}])
+    grouped = store.persons.group(ORG, [{'subject': '21', 'email': WORK, 'email_verified': True},
+                                        {'subject': '22', 'email': HOME, 'email_verified': True}])
     assert grouped['22']['person'] == val and sorted(grouped['22']['accounts']) == ['21', '22']
 
 

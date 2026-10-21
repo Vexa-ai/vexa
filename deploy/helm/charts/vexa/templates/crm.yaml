@@ -171,8 +171,8 @@ spec:
 {{- if .Values.flows.enabled }}
 # The CRM's outbox: hands each revision's fact (crm.record.changed, its envelope sealed per event.v2)
 # to flows-api's POST /events and marks it delivered only on a 202, so an unreachable flows leaves
-# the rows pending. It logs in as the CRM's role, holds flows' operator key and the fact seal, and
-# nothing else — crm-api holds neither. It refuses to start without the seal; flows-api verifies
+# the rows pending. It logs in as the CRM's role, holds the CRM's publish key on flows (never flows'
+# operator key) and the fact seal, and nothing else — crm-api holds neither. It refuses to start without the seal; flows-api verifies
 # under the same Secret key. One replica: rows are claimed FOR UPDATE SKIP LOCKED, so a second
 # would be safe, and would only add load.
 apiVersion: apps/v1
@@ -218,11 +218,11 @@ spec:
             {{- include "vexa.crmDbEnv" . | nindent 12 }}
             - name: FLOWS_API_URL
               value: "http://{{ include "vexa.componentName" (list . "flows-api") }}:18200"
-            - name: FLOWS_API_KEY
+            - name: FLOWS_PUBLISH_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "vexa.flowsApiKeySecretName" . | quote }}
-                  key: VEXA_FLOWS_API_KEY
+                  name: {{ include "vexa.adminTokenSecretName" . | quote }}
+                  key: VEXA_FLOWS_CRM_PUBLISH_KEY
             - name: VEXA_FACT_SEAL_SECRET
               valueFrom:
                 secretKeyRef:

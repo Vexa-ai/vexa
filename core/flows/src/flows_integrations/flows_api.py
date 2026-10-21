@@ -42,9 +42,10 @@ operator (issue #1468):
     hand the edge the operator key, and the operator key is not a person — it reads every reaction
     in the instance and cancels any of them.
   * THE OPERATOR ROUTES (`POST /flows`, `POST /events`, `POST /events/batch`,
-    `POST /flows/{name}/{version}/{action}`) take the operator key and nothing else. They
-    configure the machine or admit facts on the instance's behalf; there is no per-person version
-    of either.
+    `POST /flows/{name}/{version}/{action}`) take the operator key. They configure the machine or
+    admit facts on the instance's behalf; there is no per-person version of either. `POST /events`
+    also takes a PRODUCER'S PUBLISH KEY (`PUBLISHERS`, `X-Flows-Publisher-Key`): that producer's
+    own facts and sealed envelopes, and no other route.
 
 THE OPERATOR TIER IS MEDIATED TOO (P20/E1, 2026-09-05). The operator key is a credential, not a
 person: `Caller(kind="admin")` carries no uid, no email and no owner, so a subject-scoped route it
@@ -226,6 +227,30 @@ def _timeline_key() -> str:
     return key
 
 
+#: THE PUBLISH KEYS: a producer's credential for `POST /events` and nothing else, one per producer,
+#: each admitting only the facts that producer owns (`flows.v1/carriers.json`, held equal by
+#: `tests/test_publish_key.py`) and only that producer's sealed envelopes. A producer that holds one
+#: never holds the operator key, which submits, pauses and retires every company's flows.
+PUBLISHERS = {
+    "crm": ("VEXA_FLOWS_CRM_PUBLISH_KEY", frozenset({"crm.record.changed"})),
+}
+PUBLISHER_HEADER = "X-Flows-Publisher-Key"
+
+
+def _publish_keys() -> dict:
+    """``{producer: key}`` for every publish key this deployment minted. A placeholder is refused,
+    exactly as the timeline key's is: a published literal is not a narrow credential."""
+    keys = {}
+    for producer, (env, _events) in PUBLISHERS.items():
+        key = (os.environ.get(env) or "").strip()
+        if key and key in _forbidden_values(env):
+            raise RuntimeError(f"{env} is the placeholder {key!r} — refusing to start. Unset it, or "
+                               "mint a real value; a published literal is not a narrow credential.")
+        if key:
+            keys[producer] = key
+    return keys
+
+
 # ── IMPORT READS THE ENVIRONMENT. BOOT REFUSES ON IT. (Vexa-ai/vexa#1629) ─────────────────────
 # They used to be the same moment. `a90e442a3` routed `_require_api_key` through the shared
 # `config.v1` validator — right, and unchanged below — and MODULE SCOPE called it, so
@@ -250,6 +275,7 @@ def _timeline_key() -> str:
 # the port is bound. Refusing to BOOT stays; refusing to IMPORT goes.
 API_KEY = _configured("VEXA_FLOWS_API_KEY")
 TIMELINE_KEY = _configured("VEXA_FLOWS_TIMELINE_KEY")
+PUBLISH_KEYS = {p: k for p, (env, _e) in PUBLISHERS.items() if (k := _configured(env))}
 # The internal-tier identity, read under whichever name set it (`common.internal_secret`) and
 # refused, like the two above, at boot.
 INTERNAL_SECRET = _configured("INTERNAL_API_SECRET", internal_secret())
@@ -276,8 +302,8 @@ def boot() -> dict:
     * `contract_preflight()` — the whole `config.v1` declaration against this environment: ONE
       message naming every missing required-explicit key, plus a refusal for any key still holding
       a placeholder literal that is published in this repository (E6/ADR-0026, F-D20 b).
-    * `_require_api_key()` and `_timeline_key()` — the two credentials this surface compares
-      against, re-read here so a booted module holds the validated value rather than the lenient
+    * `_require_api_key()`, `_timeline_key()` and `_publish_keys()` — the credentials this surface
+      compares against, re-read here so a booted module holds the validated value rather than the lenient
       one `_configured` left it with.
     * `flows_config.preflight()` — flows' own rule, which is NOT in the declaration: a deployment
       that cannot NAME a door does not run, because there are no host-port defaults.
@@ -288,10 +314,11 @@ def boot() -> dict:
     probes so it does no I/O, and the declaration is `lru_cache`d — the second call is a dict
     comparison.
     """
-    global API_KEY, TIMELINE_KEY, INTERNAL_SECRET, db
+    global API_KEY, TIMELINE_KEY, PUBLISH_KEYS, INTERNAL_SECRET, db
     contract_preflight()
     API_KEY = _require_api_key()
     TIMELINE_KEY = _timeline_key()
+    PUBLISH_KEYS = _publish_keys()
     flows_config.preflight()          # no door, no boot — see flows_config's DOORS block
     INTERNAL_SECRET = require_internal_secret()
     if db is None:
@@ -368,6 +395,20 @@ def auth(x_flows_operator_key: str = Header(default=""),
          x_flows_admin_key: str = Header(default="")) -> None:
     if not _same_key(_operator_key(x_flows_operator_key, x_flows_admin_key), API_KEY):
         raise HTTPException(status_code=401, detail=f"{OPERATOR_HEADER} required")
+
+
+def publisher(x_flows_operator_key: str = Header(default=""),
+              x_flows_admin_key: str = Header(default=""),
+              x_flows_publisher_key: str = Header(default="")) -> str:
+    """`POST /events`'s caller: "" for the operator, else the producer whose publish key was
+    presented (`PUBLISHERS`). Anything else is a 401."""
+    if _same_key(_operator_key(x_flows_operator_key, x_flows_admin_key), API_KEY):
+        return ""
+    presented = (x_flows_publisher_key or "").strip()
+    for producer, key in PUBLISH_KEYS.items():
+        if presented and _same_key(presented, key):
+            return producer
+    raise HTTPException(status_code=401, detail=f"{OPERATOR_HEADER} or {PUBLISHER_HEADER} required")
 
 
 def _bearer(authorization: str, x_api_key: str) -> str:
@@ -1241,8 +1282,9 @@ def _actor(x_actor: str) -> str:
     return a[:120] if a else "service-key"
 
 
-@app.post("/events", status_code=202, dependencies=[Depends(auth)])
-def admit_event(ev: EventSubmission, x_actor: str = Header(default="")):
+@app.post("/events", status_code=202)
+def admit_event(ev: EventSubmission, x_actor: str = Header(default=""),
+                producer: str = Depends(publisher)):
     """THE FACT INTAKE for producers that are not the mailbox.
 
     mailbox.py admits exactly two event types, both read off an IMAP inbox: invite.received and
@@ -1256,6 +1298,11 @@ def admit_event(ev: EventSubmission, x_actor: str = Header(default="")):
     accepted into silence looks exactly like a fact that worked, and this is the endpoint where
     that mistake would be made. It never accepts code, and it never names a step: what the fact
     causes is the registry's business (the n8n line we do not cross)."""
+    if producer and ev.event_type not in PUBLISHERS[producer][1]:
+        # A PUBLISH KEY ADMITS ITS PRODUCER'S OWN FACTS (carriers.json `owner`), nothing else.
+        raise HTTPException(status_code=403, detail={
+            "refused": "not_this_producers_fact", "producer": producer,
+            "publishes": sorted(PUBLISHERS[producer][1])})
     vocab.refresh_from_db(db)          # a DB-submitted flow may be the only reactor
     if ev.event_type in ("meeting.signal", "room.signal"):
         # ONE PRODUCER (transcript signals): a meeting signal comes from the signals service, over
@@ -1269,7 +1316,8 @@ def admit_event(ev: EventSubmission, x_actor: str = Header(default="")):
     if ev.event_type == "schedule.due":
         raise HTTPException(status_code=400, detail={
             "refused": "reserved_event", "note": "schedule.due is fired by the flows worker"})
-    actor = _actor(x_actor)
+    # a producer's key names who admitted the fact; only the operator's intake records X-Actor
+    actor = f"producer:{producer}" if producer else _actor(x_actor)
     # A CALLER CANNOT CLAIM AN AUDIENCE (D8): `_audience`/`_owner`/`_visibility`/`_lifecycle` come
     # off the caller's refs first, and are set (by `admit`, from `sealed`) only from an envelope
     # whose seal verifies over THIS fact — its type, its id and its refs exactly as posted — and has
@@ -1277,7 +1325,8 @@ def admit_event(ev: EventSubmission, x_actor: str = Header(default="")):
     refs = {**strip_sealed(ev.refs), "admitted_by": actor}
     sealed = None
     if ev.envelope is not None:
-        sealed = fact_envelope.verify(ev.envelope, fact_envelope.secret_from_env(), ENVELOPE_PRODUCERS,
+        sealed = fact_envelope.verify(ev.envelope, fact_envelope.secret_from_env(),
+                                      frozenset({producer}) if producer else ENVELOPE_PRODUCERS,
                                       fact_envelope.fact(ev.event_type, ev.source_event_id, ev.refs))
         if sealed is None:
             raise HTTPException(status_code=403, detail={"refused": "envelope_unverified"})

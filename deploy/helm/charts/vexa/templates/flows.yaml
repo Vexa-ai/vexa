@@ -668,6 +668,14 @@ spec:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: VEXA_FACT_SEAL_SECRET
                   optional: true
+            {{- /* The crm outbox's publish key (security review 19.1): POST /events for the CRM's own
+            facts, no other route. Optional: without it only the operator key admits facts. */}}
+            - name: VEXA_FLOWS_CRM_PUBLISH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_FLOWS_CRM_PUBLISH_KEY
+                  optional: true
           {{- /* PROBES. `/health` is liveness-grade only — it answers ok with Postgres
           unreachable (E4 in the 0.12.27 review) — so readiness here means "the process is
           listening and serving", not "the tier is well". That is still strictly more than the

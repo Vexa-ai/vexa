@@ -16,7 +16,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from control_plane import identity_token
-from control_plane.ceiling import refuse_delegated
+from control_plane.ceiling import require_session_credential
 from control_plane import routine_flows
 from control_plane.api_shared import logger
 from control_plane import routine_needs
@@ -148,11 +148,15 @@ def build(**d) -> APIRouter:
                             response: Response):
         _adapter(response)
         if body.enabled:
-            # TURNING A ROUTINE ON IS THE PERSON'S ACT, from their own session (D24, H8): no agent
-            # turn arms one, its own proposals included. Switching one off stays open to it.
-            refuse_delegated(request, reason="person_approval_required",
-                             instruction="Turning a routine on is your person's act. Tell them it is "
-                                         "waiting on their Routines board; do not retry it another way.")
+            # TURNING A ROUTINE ON IS THE PERSON'S PRESS, from their signed-in session (D13, D24,
+            # H8): no agent turn arms one, its own drafts included, and no API key either, whatever
+            # its scopes. flows checks nothing here: this adapter calls it with the operator key.
+            # Switching one off stays open to both (a narrowing).
+            require_session_credential(request, reason="person_approval_required",
+                                       instruction="Turning a routine on is your person's own press, "
+                                                   "from their signed-in session. Tell them it is "
+                                                   "waiting on their Routines board; do not retry "
+                                                   "it another way.")
         subject = subject_of(request)
         flow = _flow_routine(subject, routine_flows.flow_name(name))
         if flow is None:

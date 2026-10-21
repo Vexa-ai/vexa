@@ -126,6 +126,11 @@ secrets:
                                     # value. Empty → kept from this release's Secret, else generated; with
                                     # existingSecretName, carry VEXA_FACT_SEAL_SECRET (without it flows-api
                                     # refuses every sealed fact and the crm outbox does not start).
+  crmPublishKey: ""                 # the crm outbox's publish key on flows (VEXA_FLOWS_CRM_PUBLISH_KEY, 32+
+                                    # bytes): POST /events for the CRM's own facts, no other flows route.
+                                    # Empty → kept from this release's Secret, else generated; with
+                                    # existingSecretName, carry VEXA_FLOWS_CRM_PUBLISH_KEY (without it the
+                                    # crm outbox does not start).
   redisPassword: ""                 # the chart redis's default-user password (REDIS_PASSWORD, 32+ URL-safe
                                     # chars): the services connect with it, bots and workers never see it.
                                     # Empty → kept from this release's Secret, else generated; with

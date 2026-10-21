@@ -176,7 +176,7 @@
       "key": "RUNTIME_BOT_CPU",
       "class": "defaulted",
       "default": "(unset — the meeting-bot class declares no cpu, preserving runtime.v1's optional resources)",
-      "description": "k8s backend: CPU cores every SPAWNED meeting-bot Pod declares. runtime.v1 carries one value per dimension, so it sets BOTH the container's request and its limit (Guaranteed QoS) — the declaration a namespace ResourceQuota admits on (#1005) — unless RUNTIME_BOT_CPU_LIMIT sets a higher limit. Unset/empty ⇒ no cpu declared (the pre-#1005 unbounded spawn); a non-numeric value is fatal at boot",
+      "description": "k8s backend: CPU cores every SPAWNED meeting-bot Pod declares. runtime.v1 carries one value per dimension, so it sets BOTH the container's request and its limit (Guaranteed QoS) — the declaration a namespace ResourceQuota admits on (#1005) — unless RUNTIME_BOT_CPU_LIMIT sets a higher limit. Unset/empty ⇒ no cpu declared (the pre-#1005 unbounded spawn); a non-numeric value, or one between 0 and 0.001 (it would be declared 0m), is fatal at boot",
       "targets": [
         "helm"
       ]
@@ -203,7 +203,7 @@
       "key": "RUNTIME_AGENT_WORKER_CPU",
       "class": "defaulted",
       "default": "(unset — the agent-worker class declares no cpu, preserving runtime.v1's optional resources)",
-      "description": "k8s backend: CPU cores every SPAWNED agent-worker Pod declares, as BOTH request and limit. Sized INDEPENDENTLY of the meeting bot — a code harness is not a browser — so an operator can right-size each class alone (#1005). Unset/empty ⇒ no cpu declared; a non-numeric value is fatal at boot",
+      "description": "k8s backend: CPU cores every SPAWNED agent-worker Pod declares, as BOTH request and limit. Sized INDEPENDENTLY of the meeting bot — a code harness is not a browser — so an operator can right-size each class alone (#1005). Unset/empty ⇒ no cpu declared; a non-numeric value, or one between 0 and 0.001 (it would be declared 0m), is fatal at boot",
       "targets": [
         "helm"
       ]

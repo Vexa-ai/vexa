@@ -7,7 +7,8 @@ producer key, bound to the fact it rides on (event type, event id and refs) and 
 `fact_envelope.SEAL_TTL_S`; it is posted as `{event_type, source_event_id, refs, envelope}`. flows
 admits it to the subject's flows and to every person in the envelope's audience, and refuses it 403
 if the seal does not verify. The seal secret is `VEXA_FACT_SEAL_SECRET` — the same value flows-api
-reads — and the delivery process refuses to start without it. A row without an `envelope` is
+reads — and the delivery process refuses to start without it. It posts with the CRM's publish key
+(`FLOWS_PUBLISH_KEY`, `X-Flows-Publisher-Key`), which admits the CRM's own facts and nothing else. A row without an `envelope` is
 posted unsealed and reaches its subject only. Neither ever carries a title, a summary or any other field value: refs are
 references (M5) and the envelope's keys are enumerated by `fact_envelope`."""
 import os
@@ -47,7 +48,7 @@ def deliver(engine, endpoint, token, *, limit=100, record_id=None, transport=Non
                     return {'delivered': delivered, 'pending': True, 'reason': 'Envelope could not be sealed'}
                 try:
                     response = client.post(endpoint.rstrip('/') + '/events',
-                        headers={'X-Flows-Operator-Key': token, 'X-Actor': 'crm-outbox'}, json=body)
+                        headers={'X-Flows-Publisher-Key': token}, json=body)
                 except httpx.HTTPError:
                     return {'delivered': delivered, 'pending': True, 'reason': 'Flows unavailable'}
                 if response.status_code != 202:
@@ -57,6 +58,28 @@ def deliver(engine, endpoint, token, *, limit=100, record_id=None, transport=Non
                 delivered += 1
     return {'delivered': delivered, 'pending': len(rows) == limit}
 
+def preflight(env=None):
+    """The outbox's own boot check, against crm's config.v1 declaration: its login, the fact seal and,
+    where flows is named, the publish key — each set and none a published placeholder. crm-api's
+    keys (the org, identity's door, the internal secret) are not the outbox's, so crm-api's
+    preflight is not this one. Raises SystemExit naming every key, never a value."""
+    from .config_preflight import load_declaration
+    env = os.environ if env is None else env
+    need = ['CRM_DATABASE_URL', fact_envelope.SEAL_SECRET_ENV]
+    if (env.get('FLOWS_API_URL') or '').strip():
+        need.append('FLOWS_PUBLISH_KEY')
+    missing = [k for k in need if not (env.get(k) or '').strip()]
+    if missing:
+        raise SystemExit(f"crm outbox refuses to start — not set: {', '.join(missing)}. The outbox seals "
+                         f"every card fact it delivers ({fact_envelope.SEAL_SECRET_ENV}, the value "
+                         "flows-api verifies under) and posts it with the CRM's publish key")
+    forbidden = {e['key']: set(e.get('forbidden_values') or ()) for e in load_declaration().get('keys') or []}
+    held = [k for k in need if (env.get(k) or '').strip() in forbidden.get(k, set())]
+    if held:
+        raise SystemExit(f"crm outbox refuses to start — {', '.join(held)} hold(s) a published "
+                         "placeholder; mint a real value (`openssl rand -hex 32`)")
+
+
 if __name__ == '__main__':
     import argparse
     import json
@@ -64,13 +87,11 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--watch',action='store_true')
     args=parser.parse_args()
-    if not fact_envelope.secret_from_env():
-        raise SystemExit(f'{fact_envelope.SEAL_SECRET_ENV} is required: the outbox seals every card fact '
-                         'it delivers, and flows-api must verify under the same value')
+    preflight()
     engine=create_engine(os.environ['CRM_DATABASE_URL'],pool_pre_ping=True,pool_size=1,max_overflow=0)
     while True:
         try:
-            result=deliver(engine,os.environ.get('FLOWS_API_URL',''),os.environ.get('FLOWS_API_KEY',''))
+            result=deliver(engine,os.environ.get('FLOWS_API_URL',''),os.environ.get('FLOWS_PUBLISH_KEY',''))
         except Exception:
             # Driver exception strings can contain credentials or SQL values.
             result={'delivered':0,'pending':True,'reason':'Delivery failed; retry pending'}

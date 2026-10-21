@@ -73,7 +73,7 @@ def test_an_agent_turn_cannot_turn_a_routine_on(routines_world, flows):
 def test_the_person_turns_the_proposal_on(routines_world, flows):
     client, _sched, _root = routines_world
     flows.submit("7", "brief", "0 9 * * *", "x", activate=False)
-    r = client.patch("/api/routines/brief/enabled", headers=_as(), json={"enabled": True})
+    r = client.patch("/api/routines/brief/enabled", headers=_session(), json={"enabled": True})
     assert r.status_code == 200 and [x["status"] for x in flows.rows] == ["active"]
 
 
