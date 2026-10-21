@@ -5,6 +5,7 @@ Serves ``create_app()`` (gateway base from env ``GATEWAY_URL``); HOST/PORT from 
 """
 from __future__ import annotations
 
+import logging
 import os
 
 
@@ -12,6 +13,13 @@ def main() -> None:
     import uvicorn
 
     from .app import create_app
+
+    # uvicorn configures only its own loggers; without a root handler at LOG_LEVEL the service's
+    # own INFO lines (the per-call `mcp_tool_call` usage line among them) never reach stdout.
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "info").upper(),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
 
     uvicorn.run(
         create_app(),
