@@ -208,6 +208,7 @@ class _ProbeServer:
         self.routes = routes
         self.default_status = default_status
         self.paths: list = []
+        self.headers: list = []
         self._server = None
         self._thread = None
 
@@ -220,6 +221,7 @@ class _ProbeServer:
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):  # noqa: N802 — BaseHTTPRequestHandler's interface
                 outer.paths.append(self.path)
+                outer.headers.append(dict(self.headers))
                 self.send_response(outer.routes.get(self.path, outer.default_status))
                 self.end_headers()
 
@@ -303,6 +305,19 @@ def test_probe_accepts_a_full_path_url_without_double_pathing():
         requested = list(srv.paths)
     assert result["ok"] is True, f"full-path URL must not double-path: requested {requested}"
     assert requested == [_STT_PATH], f"expected exactly one un-doubled request, got {requested}"
+
+
+def test_audio_probe_carries_a_fresh_idempotency_key():
+    """#1344: the hosted transcription API answers 400 to a transcription request without an
+    `Idempotency-Key` of 1..255 characters — before it prices the audio, so a probe without one
+    can never see the 402 it exists to catch. Each probe is its own request: a fresh key each time."""
+    with _ProbeServer(routes={_STT_PATH: 200}) as srv:
+        env = {"TRANSCRIPTION_SERVICE_URL": srv.base, "TRANSCRIPTION_SERVICE_TOKEN": "tok"}
+        cp._http_probe(_stt_probe_spec()["http"], env, timeout=5)
+        cp._http_probe(_stt_probe_spec()["http"], env, timeout=5)
+        keys = [h.get("Idempotency-Key") for h in srv.headers]
+    assert all(k and 1 <= len(k) <= 255 for k in keys), f"probe must send a valid key, got {keys}"
+    assert keys[0] != keys[1], f"two probes must not share a key, got {keys}"
 
 
 # ── C3 (#511): a spawn against a SET-but-BROKEN backend refuses with the probe's reason ─────────

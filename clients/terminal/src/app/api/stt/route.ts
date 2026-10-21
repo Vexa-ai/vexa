@@ -8,6 +8,7 @@
  *  meeting pipeline). Returns `{ text, words }` — word timestamps drive the client's
  *  LocalAgreement confirm/trim. The bearer token stays server-side.
  */
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { resolveApiKey } from "../proxyAuth";
 import { sttEndpoint } from "./endpoint";
@@ -44,7 +45,9 @@ export async function POST(req: Request): Promise<NextResponse> {
   form.append("timestamp_granularities", "word");
   if (prompt) form.append("prompt", prompt.slice(0, 800));
 
-  const headers: Record<string, string> = {};
+  // One clip = one request, never retried here: each forward carries its own Idempotency-Key
+  // (the hosted transcription API requires 1..255 characters; a UUID is 36).
+  const headers: Record<string, string> = { "Idempotency-Key": randomUUID() };
   const token = process.env.TRANSCRIPTION_SERVICE_TOKEN;
   if (token) headers.Authorization = `Bearer ${token}`;
 

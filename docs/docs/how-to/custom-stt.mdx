@@ -25,6 +25,11 @@ Vexa appends `/v1/audio/transcriptions` to `TRANSCRIPTION_SERVICE_URL` and sends
 | `language` | no | Present when the bot request pins a language. |
 | `response_format` | no | Backends may return plain JSON or verbose JSON. |
 
+Every request also carries an `Idempotency-Key` header: a UUID, fresh for each audio window and
+re-sent unchanged when the bot retries that same window after a timeout, 429, or 5xx. Vexa's hosted
+transcription service requires it (a request without one is refused with HTTP 400). A self-hosted
+backend may ignore it, or use it to recognise a retry instead of transcribing the window twice.
+
 The minimum response Vexa needs is:
 
 ```json
@@ -118,6 +123,7 @@ Test the endpoint from the Vexa host before sending a bot:
 ```bash
 curl -sS "$TRANSCRIPTION_SERVICE_URL/v1/audio/transcriptions" \
   -H "Authorization: Bearer $TRANSCRIPTION_SERVICE_TOKEN" \
+  -H "Idempotency-Key: $(uuidgen)" \
   -F file=@sample.wav \
   -F model="${TRANSCRIPTION_MODEL:-whisper-1}"
 ```

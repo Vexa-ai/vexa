@@ -213,3 +213,38 @@ def test_transcription_probe_hits_the_transcriptions_path_once():
         assert seen == [("https://api.openai.com/v1/audio/transcriptions", "sk-good")], (
             f"{configured} → {seen}"
         )
+
+
+def test_transcription_probe_carries_a_fresh_idempotency_key():
+    """#1344: the hosted transcription API answers 400 without an `Idempotency-Key` of 1..255
+    characters — before it prices the audio — so the Test button's real request must carry one,
+    fresh per click, exactly as the boot preflight does."""
+    import http.server
+    import threading
+
+    keys = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 — BaseHTTPRequestHandler's interface
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            keys.append(self.headers.get("Idempotency-Key"))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"text": "ok"}')
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        endpoint = f"http://127.0.0.1:{server.server_address[1]}/v1/audio/transcriptions"
+        assert ct._transcribe_probe(endpoint, "tok")[0] == 200
+        assert ct._transcribe_probe(endpoint, "tok")[0] == 200
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    assert all(k and 1 <= len(k) <= 255 for k in keys), f"probe must send a valid key, got {keys}"
+    assert keys[0] != keys[1], f"two Test clicks must not share a key, got {keys}"
