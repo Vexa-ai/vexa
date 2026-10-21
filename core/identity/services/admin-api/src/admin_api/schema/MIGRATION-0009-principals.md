@@ -1,8 +1,8 @@
 # MIGRATION-0009: the workspace principal (`principals`)
 
 **Status:** in the SSOT model (`schema/models.py` `Principal`). `ensure_schema` creates it in-band
-as a new, empty table. Nothing anybody sees changes until agent-api asks for a principal
-(`VEXA_ROOM_WS_PRINCIPAL`, off by default in 0.13.4).
+as a new, empty table. A row is made the first time agent-api asks for a workspace's principal,
+on that workspace room's first turn (`VEXA_ROOM_WS_PRINCIPAL`, on by default).
 
 ## What it adds
 

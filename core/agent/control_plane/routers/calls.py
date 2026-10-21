@@ -31,7 +31,7 @@ from typing import Annotated, Literal, Optional
 from fastapi import APIRouter, HTTPException, Path, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from control_plane import session_access, session_sync, system_mounts
+from control_plane import identity_token, room_echo, session_access, session_sync, system_mounts
 from control_plane import workspace_membership as membership_mod
 from control_plane.bodies import CHAT_SESSION_PATTERN
 from control_plane.ceiling import refuse_delegated, require_in_ceiling
@@ -278,7 +278,8 @@ def build(**d) -> APIRouter:
             if str(subject) in set(_store().call_shared_with(row["id"], call["room"])):
                 email = request.headers.get("x-user-email", "")
                 shared = bool(redeem_share(str(subject), email, call["share_token"]))
-        name = (request.headers.get("x-user-email", "") or "").split("@", 1)[0] or str(subject)
+        name = ("Vexa" if identity_token.is_workspace_principal(request.headers)
+                else (request.headers.get("x-user-email", "") or "").split("@", 1)[0] or str(subject))
         token = lk.participant_token(room=call["room"], identity=str(subject), name=name,
                                      can_publish=role in ("owner", "member"))
         return {"session_id": row["id"], "url": lk.url, "token": token, "role": role,
@@ -313,6 +314,21 @@ def build(**d) -> APIRouter:
         if send is None or not send(room, payload, topic=SHOW_TOPIC):
             raise HTTPException(status_code=502, detail="the call server did not take the message")
 
+    def _presenter(request: Request, session: str) -> tuple[str, dict]:
+        """Who shows in ``session``, and its row. A ROOM'S OWN AGENT runs as its workspace's principal
+        (D2), an account that is in no session: it presents in the one room its unit answers in, and
+        in no other. Everyone else must be able to write the session."""
+        if identity_token.is_workspace_principal(request.headers):
+            unit = identity_token.session_of(request.headers)
+            row = _store().get(session) if room_echo.session_of(unit) == session else None
+            if row is None or _store().room(row["id"]) is None:
+                raise HTTPException(status_code=404, detail="session not found")
+            return str(subject_of(request)), row
+        subject, row = _row(request, session)
+        if not _store().can_write(row["id"], subject):
+            raise HTTPException(status_code=403, detail="session_read_only")
+        return subject, row
+
     @router.post("/api/sessions/{session}/call/show")
     def call_show(session: SessionPath, body: ShowBody, request: Request):
         """Show a page to everyone in this session's call: it opens in every participant's panel and
@@ -320,9 +336,7 @@ def build(**d) -> APIRouter:
         page in a workspace someone is not in is refused with who is missing, never sent."""
         # a delegated dispatch names its workspaces: anything outside them is refused before all else
         require_in_ceiling(request, body.workspace.strip())
-        subject, row = _row(request, session)
-        if not _store().can_write(row["id"], subject):
-            raise HTTPException(status_code=403, detail="session_read_only")
+        subject, row = _presenter(request, session)
         live = _live_call(row["id"])
         # THE PRESENTER KEEPS CONTROL (JTBD-1): only they replace or stop what is shown; anyone else
         # closes their own panel. Without an in-app call the show is the ROOM's: every member's app
@@ -377,7 +391,8 @@ def build(**d) -> APIRouter:
         room_show.show(row["id"], by=str(subject), workspace=ws, path=body.path, title=title)
         # THE ONE TRACE: a line in the chat (the meeting's history), linking the page.
         import time as _t  # noqa: PLC0415
-        name = (request.headers.get("x-user-email", "") or "").split("@", 1)[0] or str(subject)
+        name = ("Vexa" if identity_token.is_workspace_principal(request.headers)
+                else (request.headers.get("x-user-email", "") or "").split("@", 1)[0] or str(subject))
         verb = "showed" if live is not None else "is showing"
         try:
             _store().add_note(row["id"], str(subject),
@@ -390,9 +405,7 @@ def build(**d) -> APIRouter:
     def call_highlight(session: SessionPath, body: HighlightBody, request: Request):
         """Highlight a heading or quote on the page being shown, for everyone, and scroll it into
         view. Transient: the next highlight replaces it."""
-        subject, row = _row(request, session)
-        if not _store().can_write(row["id"], subject):
-            raise HTTPException(status_code=403, detail="session_read_only")
+        subject, row = _presenter(request, session)
         live = _live_call(row["id"])
         if live is None:
             raise HTTPException(status_code=404, detail="no call in this session")

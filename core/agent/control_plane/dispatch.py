@@ -1173,8 +1173,10 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
                 # A ROUTINE'S DELEGATED AUTHORITY (flows phase 0): the unattended verbs its person
                 # granted it when they made it, on that routine's own autonomous turn only. Flows
                 # sends them over the internal tier, capped by `_global/POLICIES.md`; never on a
-                # watched turn, a shared one or an event agent's (least privilege).
+                # watched turn, a shared one (a room's, whose token is no person's) or an event
+                # agent's (least privilege).
                 **(_grant_kwargs(routine_grants) if (regime == "autonomous" and shared_scope is None
+                                                     and room_principal is None
                                                      and not least_privilege) else {}),
             )
         except ValueError:
@@ -1685,7 +1687,9 @@ class Dispatcher:
             _archive_cli_transcripts(self._settings, str(identity["subject"]))
         self._record_delegation(uid, env)
         # WHAT THIS UNIT MAY FETCH AND PUSH on the s3 workspace backend: its own mounts, nothing else.
-        _ws_store.record_unit_mounts(self._redis(), uid, str(identity["subject"]), env)
+        # Keyed to the subject the worker's token names — the store routes compare it with
+        # `x-user-id` — which for a room's turn is the workspace's own principal, not the owner.
+        _ws_store.record_unit_mounts(self._redis(), uid, self._token_subject(env, identity["subject"]), env)
         if invocation.get("trigger") == "signal" or units.is_mail_unit(uid):
             # THE ONE PAGE THIS SIGNAL'S TURN MAY WRITE, recorded against its unit before anything
             # is delivered (`signal_scope`): no page, no write — every write is then a proposal.
@@ -1795,6 +1799,18 @@ class Dispatcher:
         return acked
 
     # ── the worker's delegation token ends with its unit (delegation_revocation) ─────
+
+    def _token_subject(self, env: dict[str, str], subject) -> str:
+        """The `sub` of the token this dispatch minted (what every service reads as `x-user-id`);
+        the dispatch's own subject when it minted none."""
+        token = env.get("VEXA_MCP_DELEGATION_TOKEN")
+        if token:
+            try:
+                return str(delegation.verify_delegation(
+                    self._settings.mcp_delegation_secret.get_secret_value(), token)["sub"])
+            except Exception:  # noqa: BLE001 — an unreadable token grants the store nothing new
+                pass
+        return str(subject)
 
     def _record_delegation(self, uid: str, env: dict[str, str]) -> None:
         """Record the token this dispatch minted against its unit, so the reaper revokes it when the

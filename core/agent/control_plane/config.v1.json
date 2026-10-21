@@ -473,9 +473,11 @@
       "key": "VEXA_ADMIN_API_URL",
       "class": "defaulted",
       "default": "(unset — in-memory membership index)",
-      "description": "Lane M: identity admin-api base URL for the users.data.memberships[] index mirror; empty = in-memory index (policy/members.json in the workspace git repo stays authoritative)",
+      "description": "identity admin-api base URL over the internal tier (with INTERNAL_API_SECRET): the workspace registry (roster, visibility, connections, invites, closed rooms' members — agent-api adopts every file-store and in-tree policy into it at start while VEXA_POLICY_LEGACY_READ is on), the users.data.memberships[] index, orgs, presence, the admin check and the workspace principal a room's turn runs as. Empty = the file policy store under the workspaces root and an in-memory index, and a room's turn gets no toolbelt while VEXA_ROOM_WS_PRINCIPAL is on",
       "targets": [
-        "compose"
+        "compose",
+        "helm",
+        "lite"
       ]
     },
     {
@@ -654,9 +656,13 @@
     {
       "key": "VEXA_ROOM_WS_PRINCIPAL",
       "class": "defaulted",
-      "default": "false",
-      "description": "D2 (0.13.4): mint a room turn's delegation token for the workspace's own numeric principal (identity's `principals`, asked over POST /internal/principals/workspace; token `principal_kind: workspace`, the speaker as `on_behalf_of`) instead of the owner's account. identity answers the owner as `bills_to`; identity unreachable means no toolbelt for the turn. Off by default: with it off a room token is the owner's, narrowed by its ceiling, `shared` and the D3 shared-route table",
-      "targets": []
+      "default": "true",
+      "description": "D2 (0.13.4): mint a room turn's delegation token for the workspace's own numeric principal (identity's `principals`, asked over POST /internal/principals/workspace via VEXA_ADMIN_API_URL; token `principal_kind: workspace`, the speaker as `on_behalf_of`) instead of the owner's account. identity answers the owner as `bills_to`; identity unreachable or unconfigured means no toolbelt for the turn (fail closed). false: a room token is the owner's, narrowed by its ceiling, `shared` and the D3 shared-route table",
+      "targets": [
+        "compose",
+        "helm",
+        "lite"
+      ]
     },
     {
       "key": "VEXA_ROOM_RING_DERIVED_DAYS",

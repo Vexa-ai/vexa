@@ -322,7 +322,19 @@ class _Registry:
     """A PolicyStore with the identity registry's semantics (rows keyed by workspace, root ignored)."""
 
     def __init__(self):
-        self.ws, self.inv, self.down = {}, {}, False
+        self.ws, self.inv, self.rooms, self.down = {}, {}, {}, False
+
+    def room_get(self, root, rid):
+        self._up()
+        return list(self.rooms[rid]) if rid in self.rooms else None
+
+    def room_put(self, root, rid, rows):
+        self._up()
+        self.rooms[rid] = list(rows)
+
+    def room_drop(self, root, rid):
+        self._up()
+        return self.rooms.pop(rid, None) is not None
 
     def _up(self):
         if self.down:
@@ -385,6 +397,41 @@ def test_boot_moves_trees_interim_files_and_invites_into_the_registry(tmp_path, 
     assert m.is_member(tmp_path, "b", "bob") == "contributor"
     assert rp.visibility(tmp_path, "a") == "open"
     assert {r["workspace_id"] for r in m.list_memberships(tmp_path, "bob")} == {"a", "b"}
+
+
+def test_boot_moves_a_room_of_twos_hidden_workspace_as_hidden(tmp_path, registry):
+    """A pair workspace (FD4) on the interim file store keeps its kind in the registry: it stays out
+    of every listing, never surfacing as an ordinary shared workspace after the store switch."""
+    _ws(tmp_path, "pair-ab")
+    pair = [{"subject": "alice", "role": "owner", "added_by": "alice", "added_at": "t"},
+            {"subject": "bob", "role": "owner", "added_by": "alice", "added_at": "t"}]
+    m.FilePolicyStore().put(tmp_path, "pair-ab", "members", pair)
+    m.FilePolicyStore().put(tmp_path, "pair-ab", "kind", {"kind": "pair", "people": ["alice", "bob"]})
+    assert m.migrate_policy_store(tmp_path) == ["pair-ab"]
+    assert registry.ws["pair-ab"]["kind"]["kind"] == "pair"
+    assert m.is_pair(tmp_path, "pair-ab")
+    assert m.is_member(tmp_path, "pair-ab", "bob") == "owner"
+    assert m.list_memberships(tmp_path, "bob") == []
+
+
+def test_a_closed_rooms_interim_rows_are_adopted_before_the_projection(tmp_path, registry):
+    """A closed room's members decided on the file store (``.rooms/<id>.json``) are what the registry
+    adopts — not the participant projection, which still lists someone the owner removed."""
+    from control_plane import room_membership as rm
+
+    rows = [{"subject": "alice", "role": "owner", "kind": "human", "added_by": "alice", "added_at": "t"},
+            {"subject": "carol", "role": "member", "kind": "human", "added_by": "alice", "added_at": "t"}]
+    m.FilePolicyStore().room_put(tmp_path, "s-room1", rows)
+
+    class _Projection:
+        def participants(self, sid):
+            return [{"principal": p, "role": "member", "kind": "human"} for p in ("alice", "bob", "carol")]
+
+    got = rm.explicit_rows(_Projection(), tmp_path, "s-room1")
+    assert {r["subject"] for r in got} == {"alice", "carol"}
+    assert registry.rooms["s-room1"] == rows
+    rm.forget(tmp_path, "s-room1")                  # an opened room: no rows anywhere to re-adopt
+    assert "s-room1" not in registry.rooms and m.FilePolicyStore().room_get(tmp_path, "s-room1") is None
 
 
 def test_registry_writes_and_finds_invites(tmp_path, registry):

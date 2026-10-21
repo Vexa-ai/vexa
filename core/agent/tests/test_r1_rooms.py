@@ -128,7 +128,7 @@ def test_a_rooms_level_and_write_target_are_the_rooms_not_the_speakers(world):
 
 # ── (b) the workspace principal ──────────────────────────────────────────────────────────────────
 
-def test_a_room_turn_runs_as_the_workspace_agent_on_one_worker(world):
+def test_a_room_turn_runs_as_the_workspace_agent_on_one_worker(world, fake_workspace_principals):
     client, store, calls, spawned, root, _d = world
     sid = _room(client)
     client.post("/api/chat/submit", json={"session": sid, "prompt": "@vexa what changed?"}, headers=_h("bob"))
@@ -139,7 +139,11 @@ def test_a_room_turn_runs_as_the_workspace_agent_on_one_worker(world):
     assert env["VEXA_PRINCIPAL"] == "ws:team" and env["VEXA_ON_BEHALF_OF"] == "bob"
     assert env["VEXA_OWNER"] == "alice"                               # the workspace owner's pool
     claims = _claims(env)
-    assert claims["sub"] == "alice" and claims["unit"] == uid
+    # the token runs as the workspace's own principal (identity's id), the owner as its payer (D2)
+    assert claims["sub"] == str(fake_workspace_principals["team"]["id"]) and claims["unit"] == uid
+    assert fake_workspace_principals["team"]["bills_to"] == "alice"
+    assert claims["principal_kind"] == "workspace" and claims["principal_workspace"] == "team"
+    assert claims["on_behalf_of"] == "bob"
     assert claims["scope"]["shared"] is True and claims["scope"]["workspaces"] == ["team"]
     assert "audience" not in claims["scope"]
 

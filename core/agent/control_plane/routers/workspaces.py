@@ -1533,8 +1533,19 @@ def build(**d) -> APIRouter:
 
         It lives in the workspaces router because the book is a file in a personal workspace and everything this
         needs — the subject, the reader, the workspace path — is already closed over here; the state
-        machine itself is `control_plane.claims`, which is the concern."""
-        subject = subject_of(request)
+        machine itself is `control_plane.claims`, which is the concern.
+
+        A ROOM'S OWN AGENT (a workspace principal, D2) has no book and no desk of its own. What it
+        proposes (a room's signal turn may only propose, D27) waits in the book of the person who
+        answers for the room — its payer, `x-user-bills-to`, which identity signs: the workspace
+        owner, or in a room of two the person who started the turn. Nothing is ever written under the
+        principal's own id; a principal with no payer named proposes nothing."""
+        if identity_token.is_workspace_principal(request.headers):
+            subject = (request.headers.get(identity_token.DELEGATION_HEADERS["bills_to"]) or "").strip()
+            if not subject:
+                raise HTTPException(status_code=403, detail=identity_token.SHARED_REFUSAL)
+        else:
+            subject = subject_of(request)
         batch = [b if isinstance(b, str) else b.model_dump() for b in body.claims]
         if not batch:
             raise HTTPException(status_code=400, detail="claims must be a non-empty list")

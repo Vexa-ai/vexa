@@ -842,7 +842,24 @@ def room_store_put(root: Path, room_id: str, rows: list) -> None:
 
 
 def room_store_drop(root: Path, room_id: str) -> bool:
-    return bool(_call(_STORE.room_drop, Path(root), room_id))
+    dropped = bool(_call(_STORE.room_drop, Path(root), room_id))
+    if _STORE is not _FILE_STORE:                       # and the interim file, so nothing re-adopts it
+        dropped = bool(_FILE_STORE.room_drop(Path(root), room_id)) or dropped
+    return dropped
+
+
+def legacy_room_rows(root: Path, room_id: str) -> Optional[list]:
+    """A closed room's rows in the INTERIM file store (``.rooms/<id>.json``) when the registry is the
+    backend — what a room decided before its deployment had identity, adopted before the participant
+    projection is ever guessed from. None when there is no such file or it cannot be read."""
+    if _STORE is _FILE_STORE:
+        return None
+    try:
+        rows = _FILE_STORE.room_get(Path(root), room_id)
+    except MembershipError as exc:
+        log.warning("room store: interim rows of %s not adopted: %s", room_id, exc)
+        return None
+    return [r for r in rows if isinstance(r, dict) and r.get("subject")] if rows is not None else None
 
 
 def is_pair(root: Path, workspace_id: str) -> bool:
@@ -895,7 +912,8 @@ def _legacy_sources(root: Path, workspace_id: str) -> dict:
     the tree's ``policy/invites.json``). ``{name: value}``; unparseable files are skipped, said."""
     found: dict = {}
     if _STORE is not _FILE_STORE and _FILE_STORE.has(root, workspace_id):
-        for name in _ADOPTED_NAMES:
+        # the interim store also knows a room of two's hidden workspace (``kind``, never in the tree)
+        for name in _ADOPTED_NAMES + ("kind",):
             try:
                 v = _FILE_STORE.get(root, workspace_id, name)
             except MembershipError:
@@ -957,7 +975,7 @@ def _adopt(root: Path, workspace_id: str) -> bool:
         found = _legacy_sources(root, workspace_id)
         if not found:
             return False
-        for name in ("members", "visibility", "connections", "invites"):
+        for name in ("members", "visibility", "connections", "kind", "invites"):
             if name in found:
                 store_put(root, workspace_id, name, found[name])
         log.info("policy store: adopted %s for %s", sorted(found), workspace_id)

@@ -160,9 +160,10 @@ class Settings(BaseSettings):
     mcp_delegation_ttl_sec: Optional[int] = Field(default=None, ge=60)
     # D2 (0.13.4): a room's turn runs as the workspace's own numeric principal (identity's
     # `principals`; token `principal_kind=workspace`, `on_behalf_of=speaker`; identity answers the
-    # owner as `bills_to`) instead of as the workspace owner's account. Off by default until identity, crm, flows and meetings accept the kind everywhere;
-    # with it off a room token is the owner's, narrowed by its ceiling, `shared` and D3.
-    room_ws_principal: bool = False
+    # owner as `bills_to`) instead of as the workspace owner's account. Needs `admin_api_url`: with no
+    # identity to answer the id, a room's turn gets no toolbelt (fail closed). Off: a room token is
+    # the owner's, narrowed by its ceiling, `shared` and D3.
+    room_ws_principal: bool = True
 
     # ── secrets (never logged, committed, or in goldens) — P14 / P15 ─────────
     # Brokered, scoped identity the worker presents (ADR-0003): a port, not a raw key here.

@@ -440,9 +440,11 @@ the runtime mounts one folder per workspace and never the folder above them.
    (`503 policy_unreadable`): it never reads as "no members" or "open". An unreadable visibility is closed; an unreadable rule set
    refuses every policy decision.
 7. **Migration.** When agent-api starts, it copies every workspace's existing records into the
-   registry, once: its `.policy/` files if it has them, else its `policy/members.json`,
-   `visibility.json` and `connections.json`, and its invites from `.invites/` (or an old
-   `policy/invites.json`). A workspace not yet copied is copied on its first read. After that the
+   registry, once: its `.policy/` files if it has them (a room of two's hidden workspace stays
+   hidden), else its `policy/members.json`, `visibility.json` and `connections.json`, and its
+   invites from `.invites/` (or an old `policy/invites.json`). This is also what happens the first
+   time a Helm or lite install starts agent-api with identity wired (`VEXA_ADMIN_API_URL`): the
+   file store it ran on before is copied in. A workspace not yet copied is copied on its first read. After that the
    registry alone answers. Set `VEXA_POLICY_LEGACY_READ=0` on agent-api
    to stop reading old in-workspace files altogether once every instance has started on 0.13.4.
    Un-sharing or deleting a workspace removes its rows (and any old files).

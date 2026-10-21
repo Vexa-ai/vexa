@@ -32,8 +32,8 @@ Every module in this folder, by concern. `routers/` holds the routes, one module
   caller, with `SHARED_REFUSAL`, on every route not declared `allow`. `assert_shared_declared` makes
   the boot (and `tests/test_shared_routes.py`) fail on a served route with no declaration.
 - `workspace_principal.py` — D2: asks identity (`POST /internal/principals/workspace`) for the
-  workspace's numeric principal a room's turn runs as when `VEXA_ROOM_WS_PRINCIPAL` is on; cached,
-  fails closed.
+  workspace's numeric principal a room's turn runs as (`VEXA_ROOM_WS_PRINCIPAL`, on by default;
+  needs `VEXA_ADMIN_API_URL`); cached, fails closed — no id, no toolbelt.
 - `version.py` — what is serving, one unauthenticated fact.
 - `admin_panel.py` — read-only infrastructure and meeting-pipeline introspection for the hidden admin
   panel.

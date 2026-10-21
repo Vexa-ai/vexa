@@ -83,8 +83,9 @@ to Redis at all; the unit keeps its boot token, unrefreshed, until it expires.
 
 ### A room's turn as its workspace (D2)
 
-A room's turn can run as its workspace's own principal instead of the workspace owner's account.
-This needs `VEXA_ROOM_WS_PRINCIPAL` on in agent-api; it is off by default in 0.13.4.
+A room's turn runs as its workspace's own principal, not as the workspace owner's account. This is
+`VEXA_ROOM_WS_PRINCIPAL` in agent-api, on by default. agent-api asks identity for the principal over
+`VEXA_ADMIN_API_URL`, which compose, Helm and lite all set.
 
 1. **The principal.** identity keeps one numeric principal of kind `workspace` per workspace
    (admin-api `principals`, MIGRATION-0009). Its id is a dedicated account row

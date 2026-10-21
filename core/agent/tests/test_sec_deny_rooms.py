@@ -36,6 +36,10 @@ def _room_token_headers(client, root, spawned, speaker="bob"):
     hdr = {"X-User-Id": claims["sub"], "x-user-regime": "human", "x-user-delegation-shared": "1",
            "x-user-delegation-workspaces": ",".join(claims["scope"]["workspaces"]),
            "x-user-delegation-unit": claims.get("unit", "")}
+    if claims.get("principal_kind"):
+        hdr.update({"x-user-principal-kind": claims["principal_kind"],
+                    "x-user-principal-workspace": claims.get("principal_workspace", ""),
+                    "x-user-delegation-on-behalf-of": claims.get("on_behalf_of", "")})
     return sid, env, claims, hdr
 
 
@@ -65,15 +69,13 @@ def test_room_turn_cannot_read_owner_connections(world):
     assert r.status_code == 403 and r.json()["detail"]["reason"] == SHARED
 
 
-@pytest.mark.xfail(strict=True, reason="C1/D2: with VEXA_ROOM_WS_PRINCIPAL off (the 0.13.4 default) a "
-                                       "room turn's token subject is still the workspace OWNER's account; "
-                                       "test_room_turn_token_is_the_workspace_principal_when_switched_on "
-                                       "covers the switched-on path (security-validation-2026-10-17)")
 def test_room_turn_token_is_not_a_member_account(world):
+    """C1/D2: a room turn's token names no member's account (security-validation-2026-10-17)."""
     client, store, calls, spawned, root, _d = world
     _sid, env, claims, _hdr = _room_token_headers(client, root, spawned)
     members = {"alice", "bob"}
     assert claims["sub"] not in members, f"room token runs as member account {claims['sub']!r}"
+    assert claims["principal_kind"] == "workspace"
 
 
 def test_room_turn_toolbelt_offers_no_person_wide_tool(world, tmp_path, monkeypatch):

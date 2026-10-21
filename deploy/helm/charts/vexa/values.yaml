@@ -717,6 +717,9 @@ agentApi:
   # chat, routine, sensor — before dispatch. The spend caps are _global/POLICIES.md keys
   # (llm_budget_org_daily_usd, …), not values here.
   llmKillSwitch: false
+  # A room's turn runs as its workspace's own principal (VEXA_ROOM_WS_PRINCIPAL, D2): its token names
+  # an account that owns nothing of a person's. Needs adminApi.enabled (identity answers the id).
+  roomWsPrincipal: true
   enabled: true
   replicaCount: 1               # shares a workspace store with spawned workers; keep single for RWO PVC
   image:

@@ -165,6 +165,19 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            # IDENTITY over the internal tier (the secret above): the workspace registry (roster,
+            # visibility, connections, invites, closed rooms' members), the membership index, orgs,
+            # presence, the admin check, and the numeric principal a room's turn runs as. On first
+            # start agent-api adopts every workspace's file-store and in-tree policy into the registry
+            # (migrate_policy_store, while VEXA_POLICY_LEGACY_READ is on).
+            {{- if .Values.adminApi.enabled }}
+            - name: VEXA_ADMIN_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+            {{- end }}
+            # A ROOM'S TURN RUNS AS ITS WORKSPACE'S OWN PRINCIPAL (D2), never as the owner's account.
+            # Needs VEXA_ADMIN_API_URL; without identity a room's turn gets no toolbelt (fail closed).
+            - name: VEXA_ROOM_WS_PRINCIPAL
+              value: {{ .Values.agentApi.roomWsPrincipal | default false | quote }}
             # The runtime caller credential agent-api presents on every runtime.v1 / schedule.v1 call.
             - name: RUNTIME_API_TOKEN
               valueFrom:

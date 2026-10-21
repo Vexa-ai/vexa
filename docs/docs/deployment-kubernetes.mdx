@@ -598,6 +598,16 @@ auto-join sweep cannot resolve the per-user cap. The meeting-api then **fails cl
 spawn** rather than spawn uncapped; set `AUTO_JOIN_ALLOW_UNCAPPED=1` only if you deliberately want
 uncapped auto-join spawns on a self-host.
 
+The chart sets the same admin-api address as `VEXA_ADMIN_API_URL` on the **agent-api**
+deployment (while `adminApi.enabled`). Through it agent-api keeps who is in each workspace and
+closed room in identity's registry, and asks identity for the principal a room's turn runs as
+(`agentApi.roomWsPrincipal`, on by default). **Upgrading an install that ran without it:** on its
+first start agent-api copies the roster, visibility, connections and invites it kept in files under
+the workspaces volume (`.policy/`, `.invites/`, `.rooms/`, or a workspace's own `policy/*.json`) into
+the registry, and a workspace it missed is copied on its first read. Keep
+`VEXA_POLICY_LEGACY_READ` unset (on) until agent-api has started once on this release. Members and
+owners keep their access; nothing needs to be run by hand.
+
 ## Exposing the cluster — ingress and TLS
 
 The chart ships an optional Ingress, **off by default**. Enabling it fronts the Terminal, which

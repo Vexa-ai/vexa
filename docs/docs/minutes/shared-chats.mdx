@@ -331,9 +331,19 @@ A room's turn can run as its workspace's own principal instead of the workspace 
   `x-user-delegation-on-behalf-of` and `x-user-bills-to`.
 - **Every service** reads a workspace principal as shared, even if the flag is missing.
 
-This is off by default in 0.13.4 (`VEXA_ROOM_WS_PRINCIPAL=false`). With it off, a room's token is
-the owner's account, narrowed by the room's ceiling, `shared` and the table above. With it on and
-identity unreachable, the room's turn gets no toolbelt. It never falls back to the owner.
+This is on by default (`VEXA_ROOM_WS_PRINCIPAL=true`). With identity unreachable, the room's turn
+gets no toolbelt. It never falls back to the owner. Set it to `false` and a room's token is the
+owner's account again, narrowed by the room's ceiling, `shared` and the table above.
+
+What the principal can do, and where it lands:
+
+- It reads and writes its workspace W, and reads the open workspaces W connects to. It reaches no
+  other workspace of the owner's.
+- It shows a page on its own room's call (`call_show`, `call_highlight`), and on no other room.
+- What it proposes (`propose`) waits in the book of the person who answers for the room: the owner,
+  or in a room of two the person who started the turn. Nothing is kept under the principal's id.
+- A routine that runs in a room runs without its grants. Its turn is shared, and a shared turn is
+  never handed a person's unattended verbs.
 
 ### Private sources and shared writes
 
@@ -495,8 +505,8 @@ workspaces, narrowed to what everyone in the chat can read.
   `shared: allow`. This is default-deny, enforced at the gateway, and checked again in agent-api,
   identity, flows-api and meeting-api. A new route is refused to shared tokens until it is declared,
   and CI fails until it is (D3).
-- With `VEXA_ROOM_WS_PRINCIPAL` on, a room's turn has no person's account to reach for. It runs as
-  the workspace's own numeric principal, and the owner only pays (D2).
+- A room's turn has no person's account to reach for. It runs as the workspace's own numeric
+  principal, and the owner only pays (D2).
 
 **Deny tests.**
 

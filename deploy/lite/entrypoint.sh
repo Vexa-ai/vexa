@@ -84,6 +84,9 @@ export TERMINAL_TRUSTED_PROXIES="${TERMINAL_TRUSTED_PROXIES:-}"
 # (agent-api validates both and stamps them into every worker; see deploy/compose/.env.example).
 export VEXA_AGENT_AUTO_CONTINUE_CHAT="${VEXA_AGENT_AUTO_CONTINUE_CHAT:-1}"
 export VEXA_AGENT_MAX_CHAT_CONTINUATIONS="${VEXA_AGENT_MAX_CHAT_CONTINUATIONS:-4}"
+# A room's turn runs as its workspace's own principal (D2), asked of admin-api on localhost; false
+# runs it as the owner's account, narrowed by its ceiling and the shared-route table.
+export VEXA_ROOM_WS_PRINCIPAL="${VEXA_ROOM_WS_PRINCIPAL:-true}"
 # The admin tier, on the same terms as the internal tier below and for a LARGER blast radius:
 # this token mints an API key for ANY user and HS256-signs every per-spawn MeetingToken. It
 # defaulted to the published literal `changeme`, so every lite stack nobody configured shared one

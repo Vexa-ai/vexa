@@ -131,8 +131,8 @@ answers each access check:
 - **Closed room**: explicit `room:<session id>` rows in the identity registry's `memberships` table,
   written through admin-api's `/internal/registry/rooms/{id}/members` doors. Without identity, the file
   backend keeps `<root>/.rooms/<id>.json`, outside every workspace mount.
-- **Migration**: a closed room with no registry rows yet adopts its participant rows once, while
-  `VEXA_POLICY_LEGACY_READ` is on.
+- **Migration**: a closed room with no registry rows yet adopts, once, the rows the file backend kept
+  for it (`.rooms/<id>.json`), else its participant rows, while `VEXA_POLICY_LEGACY_READ` is on.
 - **Fail closed**: a roster or row set that cannot be read means no membership.
 
 Closing an open room writes rows for the people who were following it. Opening a closed room drops its rows.

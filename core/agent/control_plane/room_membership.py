@@ -67,15 +67,18 @@ def _legacy_read() -> bool:
 
 
 def explicit_rows(store, root: Path, session_id: str) -> list[dict]:
-    """A CLOSED room's member rows from the registry. A room with none yet adopts its participant
-    rows once (legacy read on). Raises ``MembershipError`` 503 when the store cannot answer."""
+    """A CLOSED room's member rows from the registry. A room with none yet adopts, once (legacy read
+    on), the rows the interim file store kept for it, else its participant rows. Raises
+    ``MembershipError`` 503 when the store cannot answer."""
     rows = m.room_store_get(root, session_id)
     if rows is not None:
         return [r for r in rows if isinstance(r, dict) and r.get("subject")]
     if not _legacy_read():
         return []
-    adopted = [{"subject": p["principal"], "role": p["role"], "kind": p.get("kind") or "human",
-                "added_by": "migration", "added_at": _now_iso()} for p in store.participants(session_id)]
+    adopted = m.legacy_room_rows(root, session_id)
+    if adopted is None:
+        adopted = [{"subject": p["principal"], "role": p["role"], "kind": p.get("kind") or "human",
+                    "added_by": "migration", "added_at": _now_iso()} for p in store.participants(session_id)]
     if adopted:
         m.room_store_put(root, session_id, adopted)
         log.info("room membership: adopted %d participant rows for %s", len(adopted), session_id)

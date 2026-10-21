@@ -602,9 +602,11 @@ services:
       # host expects: `gitlab.example.com=gitlab,git.example.org=basic:svc-user`. Unlisted hosts keep
       # GitHub's bare-token form. A malformed value stops agent-api at boot.
       - VEXA_GIT_PROVIDERS=${VEXA_GIT_PROVIDERS:-}
-      # Lane M: the users.data.memberships[] index mirror over the admin-api internal edge
-      # (policy/members.json in the workspace git repo stays authoritative; this is the listing cache).
+      # IDENTITY over the internal tier: the workspace registry (who is in a workspace or a closed
+      # room), the membership index, orgs, presence, and the principal a room's turn runs as.
       - VEXA_ADMIN_API_URL=http://admin-api:8001
+      # A room's turn runs as its workspace's own principal (D2); false runs it as the owner's account.
+      - VEXA_ROOM_WS_PRINCIPAL=${VEXA_ROOM_WS_PRINCIPAL:-true}
       # NO PLACEHOLDER FALLBACK. F95 removed the published `vexa-internal-secret` default from
       # every service that REFUSES it at boot; this line kept it, so an unconfigured stack still
       # PRESENTED the published literal as internal-tier authority. Unset is unset (A19). The KEY

@@ -91,6 +91,22 @@ def test_no_grant_on_a_watched_turn_or_an_event_agent(tmp_path, monkeypatch):
     assert "grants" not in _token_scope(tmp_path, monkeypatch)
 
 
+def test_a_routine_in_a_room_keeps_its_toolbelt_and_carries_no_grant(tmp_path, monkeypatch):
+    """A routine that runs in a room is the room's turn: shared, as the workspace's own principal
+    (D2), which the minter never pairs with a grant. It runs with its toolbelt and without grants."""
+    from control_plane.room_principal import RoomPrincipal
+    monkeypatch.setenv("VEXA_MCP_DELEGATION_SECRET", DLG)
+    monkeypatch.setenv("VEXA_MCP_URL", "http://mcp.test/mcp")
+    (tmp_path / "team").mkdir()
+    room = RoomPrincipal(workspace="team", owner="7", session="s-1", on_behalf_of="7")
+    env = build_unit_env(load_settings(workspaces_dir=str(tmp_path)), INV, unit_id="u", token="t",
+                         room_principal=room, routine_grants=("user:7/bot-at-1213", ["bot.request"]))
+    assert env.get("VEXA_MCP_DELEGATION_TOKEN"), "the room's routine turn lost its toolbelt"
+    claims = delegation.verify_delegation(DLG, env["VEXA_MCP_DELEGATION_TOKEN"])
+    assert claims["principal_kind"] == "workspace" and claims["sub"] != "7"
+    assert "grants" not in claims["scope"] and claims["scope"]["shared"] is True
+
+
 # ── how a routine's turn ended, for flows ─────────────────────────────────────────────────────────
 from control_plane import api_shared  # noqa: E402
 

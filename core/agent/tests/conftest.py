@@ -142,6 +142,36 @@ def _tool_calling_check_passes(request, monkeypatch):
 def pytest_configure(config):
     config.addinivalue_line("markers", "real_tool_check: run the openai-agent harness's real "
                                        "tool-calling check instead of the conftest's passing stub")
+    config.addinivalue_line("markers", "real_principal_resolver: ask identity for a workspace's "
+                                       "principal through the real resolver instead of the conftest's")
+
+
+#: The first id the fake identity gives a workspace principal: far from any person id a test names.
+FAKE_PRINCIPAL_BASE = 9_000_000
+
+
+@pytest.fixture(autouse=True)
+def fake_workspace_principals(request, monkeypatch):
+    """IDENTITY'S ``principals`` table, in memory: a room's turn runs as its workspace's own principal
+    (``VEXA_ROOM_WS_PRINCIPAL``, on by default), and agent-api asks identity for that id
+    (``workspace_principal.resolve``). The suite has no identity, so this answers as identity does —
+    one stable numeric id per workspace, the first payer it was asked with as ``bills_to`` — and
+    returns the table (``{workspace: {"id", "bills_to"}}``) for a test that needs the id. The tests
+    of the resolver itself opt out with ``@pytest.mark.real_principal_resolver``."""
+    table: dict = {}
+    if request.node.get_closest_marker("real_principal_resolver"):
+        return table
+    from control_plane import workspace_principal
+
+    def resolve(settings, workspace, bills_to, *, post=None):
+        ws = str(workspace or "").strip()
+        if not ws or not str(bills_to or "").strip():
+            return None
+        row = table.setdefault(ws, {"id": FAKE_PRINCIPAL_BASE + len(table) + 1, "bills_to": str(bills_to)})
+        return row["id"]
+
+    monkeypatch.setattr(workspace_principal, "resolve", resolve)
+    return table
 
 
 @pytest.fixture

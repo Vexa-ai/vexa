@@ -68,6 +68,15 @@ fi
 # http://meeting-api:8080 (unresolvable in-cluster) → fail-closed 403 for the meeting's own owner.
 # Only agent-api carries the VEXA_-prefixed spelling, so assert exactly 1.
 need 1 'name: VEXA_MEETING_API_URL' "agent-api meeting-api URL (owner-scope)"
+# agent-api reaches identity: the workspace registry, and the principal a room's turn runs as. Without
+# it a room's turn has no toolbelt and membership lives in files on the workspace volume.
+agent_api_block="$(awk '/deployment-agent-api.yaml/{f=1} f&&/^---/{exit} f{print}' <<< "$RENDER")"
+if grep -q 'value: "http://vexa-vexa-admin-api:8001"' <<< "$agent_api_block" \
+   && grep -A1 'name: VEXA_ROOM_WS_PRINCIPAL' <<< "$agent_api_block" | grep -q 'value: "true"'; then
+  echo "  OK: agent-api reaches admin-api and runs a room's turn as its workspace principal"
+else
+  echo "  FAIL: agent-api lacks VEXA_ADMIN_API_URL or VEXA_ROOM_WS_PRINCIPAL=true"; fail=1
+fi
 # #656: meeting-api MUST get ADMIN_API_URL or calendar sync no-ops and auto-join spawns uncapped.
 # It rides the gateway env too; assert >=2 (gateway + meeting-api).
 need 2 'name: ADMIN_API_URL'   "ADMIN_API_URL set on gateway AND meeting-api"

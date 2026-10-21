@@ -62,7 +62,7 @@ workspace's agent, not as any person.
   `x-user-principal-workspace`, `x-user-delegation-on-behalf-of` and `x-user-bills-to`
   (gateway-identity.v1).
 - agent-api asks identity for the principal (`POST /internal/principals/workspace`) and mints it
-  only while `VEXA_ROOM_WS_PRINCIPAL` is on. That switch is off by default in 0.13.4
+  for every room's turn while `VEXA_ROOM_WS_PRINCIPAL` is on, which is the default
   (`control_plane/dispatch.py`).
 - The change is additive, so delegation.v1 is re-sealed in a `lane:contract` review rather than
   opening a v2.
