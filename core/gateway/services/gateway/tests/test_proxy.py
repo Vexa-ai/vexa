@@ -7,6 +7,8 @@ Proves, in isolation from the conformance contract layer, the load-bearing carve
   * verbatim body + status passthrough on success,
   * identity headers injected downstream; client-supplied identity headers stripped.
 """
+import json
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -294,12 +296,24 @@ def test_native_share_alias_forwards_to_meetings_share_mint():
 
 
 def test_native_chat_read_forwards_to_meeting_api():
-    """#579 C3: GET /bots/{platform}/{native}/chat forwards to meeting-api's honest chat-read."""
+    """#579 C3: GET /bots/{platform}/{native}/chat forwards to meeting-api's chat read."""
     client, downstream = _client()
     r = client.get("/bots/google_meet/abc-defg-hij/chat", headers=AUTH)
     assert r.status_code == 200
     assert downstream.last["method"] == "GET"
     assert downstream.last["url"].endswith("/bots/google_meet/abc-defg-hij/chat")
+
+
+def test_native_chat_send_forwards_to_meeting_api_with_its_body():
+    """#1089: POST /bots/{platform}/{native}/chat reaches meeting-api's chat_send publisher with the
+    caller's body intact — the edge adds no chat logic of its own."""
+    client, downstream = _client()
+    r = client.post("/bots/google_meet/abc-defg-hij/chat", headers=AUTH, json={"text": "hello room"})
+    assert r.status_code == 200
+    assert downstream.last["method"] == "POST"
+    assert downstream.last["url"].endswith("/bots/google_meet/abc-defg-hij/chat")
+    assert "meeting-api" in downstream.last["url"]
+    assert json.loads(downstream.last["content"]) == {"text": "hello room"}
 
 
 def test_native_participants_read_forwards_to_meeting_api():

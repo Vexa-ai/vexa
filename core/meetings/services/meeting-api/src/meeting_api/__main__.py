@@ -233,8 +233,8 @@ def build_production_app():
         recording_repo=recording_repo,
         storage=storage,
         token_secret=token_secret,
-        # The user-stop route (DELETE /bots) publishes the bot's `leave` command on redis pub/sub.
-        # redis.asyncio's client satisfies the CommandPublisher port directly (async publish()).
+        # The user-stop (DELETE /bots) and chat-send (POST …/chat) routes publish acts.v1 commands on
+        # redis pub/sub. redis.asyncio's client satisfies the CommandPublisher port directly.
         command_publisher=redis_client,
         webhook_sink=webhook_sink,
         system_webhook_sink=system_webhook_sink,

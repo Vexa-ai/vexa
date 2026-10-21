@@ -81,8 +81,8 @@ that gap with the **reverse** check (contract ⊆ impl) plus a **golden-shape** 
   `running`) fails — not just a removed path.
 
 **`KNOWN_GAPS.json` is the audited exception path.** It records, with a reason + issue link for each
-row, the sealed routes the 0.12 core genuinely cannot serve yet (`known_gaps`: e.g. `POST .../chat`
-send, `POST /meetings/{id}/transcribe`, the bot-command avatar/screen/speak routes) and the prefixes
+row, the sealed routes the 0.12 core genuinely cannot serve yet (`known_gaps`: e.g.
+`POST /meetings/{id}/transcribe`, the bot-command avatar/screen/speak routes) and the prefixes
 owned by *other* services (`owned_elsewhere`: `/admin` → admin-api, `/api` → agent-api, `/mcp` → the
 mcp service, …). The gate prints every entry loudly (`SEALED-BUT-WAIVED` / `OWNED-ELSEWHERE`) on each
 run. Adding a row is a **deliberate, diff-visible change in this sealed dir** — and because the file is

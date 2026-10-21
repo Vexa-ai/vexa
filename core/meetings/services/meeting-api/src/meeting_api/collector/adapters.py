@@ -314,6 +314,39 @@ def _segment_to_api(seg: dict) -> dict:
     return out
 
 
+def _transcription_row(meeting_id, seg: dict, created) -> Optional[dict]:
+    """One flushed segment → the bound parameters of its ``transcriptions`` UPSERT, or ``None`` for
+    a segment that cannot be keyed (no ``segment_id``) or timed. ``source`` is carried so a chat line
+    is still a chat line once it is durable."""
+    sid = seg.get("segment_id")
+    if not sid:
+        return None  # 0.12 ingest guarantees segment_id; a legacy stray is skipped, not guessed
+    try:
+        start = float(seg.get("start", seg.get("start_time", 0.0)) or 0.0)
+        end = float(seg.get("end", seg.get("end_time", start)) or start)
+    except (TypeError, ValueError):
+        return None
+    if end < start:
+        start, end = end, start
+    return {
+        "mid": int(meeting_id), "start": start, "end": end,
+        "text": seg.get("text") or "", "speaker": seg.get("speaker"),
+        "lang": seg.get("language"), "uid": seg.get("session_uid"),
+        "segid": str(sid), "source": seg.get("source"), "created": created,
+    }
+
+
+def _persisted_segment(row) -> dict:
+    """A ``transcriptions`` row → the stored-segment dict ``_segment_to_api`` maps. A durable row is
+    confirmed by construction (only completed segments are flushed)."""
+    return {
+        "start": row.start_time, "end": row.end_time, "text": row.text,
+        "language": row.language, "speaker": row.speaker,
+        "segment_id": row.segment_id, "completed": True,
+        "source": getattr(row, "source", None),
+    }
+
+
 class SqlAlchemyTranscriptStore:
     """``TranscriptStore`` over a SQLAlchemy-async ``session_factory`` (the ``meetings`` /
     ``transcriptions`` tables; recordings/notes live in ``meeting.data`` JSONB — NO separate
@@ -384,11 +417,7 @@ class SqlAlchemyTranscriptStore:
         seg_by_id: dict = {}
         order: list = []
         for r in seg_rows:
-            s = _segment_to_api({
-                "start": r.start_time, "end": r.end_time, "text": r.text,
-                "language": r.language, "speaker": r.speaker,
-                "segment_id": r.segment_id, "completed": True,
-            })
+            s = _segment_to_api(_persisted_segment(r))
             sid = s.get("segment_id") or f"pg-{len(order)}"
             if sid not in seg_by_id:
                 order.append(sid)
@@ -955,36 +984,21 @@ class SqlAlchemyTranscriptStore:
 
         from sqlalchemy import text as sql_text  # lazy: not needed for the in-memory fakes
 
-        rows = []
-        for seg in segments:
-            sid = seg.get("segment_id")
-            if not sid:
-                continue  # 0.12 ingest guarantees segment_id; a legacy stray is skipped, not guessed
-            try:
-                start = float(seg.get("start", seg.get("start_time", 0.0)) or 0.0)
-                end = float(seg.get("end", seg.get("end_time", start)) or start)
-            except (TypeError, ValueError):
-                continue
-            if end < start:
-                start, end = end, start
-            rows.append({
-                "mid": int(meeting_id), "start": start, "end": end,
-                "text": seg.get("text") or "", "speaker": seg.get("speaker"),
-                "lang": seg.get("language"), "uid": seg.get("session_uid"),
-                "segid": str(sid), "created": _dt.utcnow(),
-            })
+        now = _dt.utcnow()
+        rows = [r for r in (_transcription_row(meeting_id, seg, now) for seg in segments) if r]
         if not rows:
             return
         async with self._session_factory() as db:
             for row in rows:
                 await db.execute(
                     sql_text("""
-                        INSERT INTO transcriptions (meeting_id, start_time, end_time, text, speaker, language, session_uid, segment_id, created_at)
-                        VALUES (:mid, :start, :end, :text, :speaker, :lang, :uid, :segid, :created)
+                        INSERT INTO transcriptions (meeting_id, start_time, end_time, text, speaker, language, session_uid, segment_id, source, created_at)
+                        VALUES (:mid, :start, :end, :text, :speaker, :lang, :uid, :segid, :source, :created)
                         ON CONFLICT (meeting_id, segment_id) WHERE segment_id IS NOT NULL
                         DO UPDATE SET text = EXCLUDED.text, speaker = EXCLUDED.speaker,
                                       start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
-                                      language = EXCLUDED.language, created_at = EXCLUDED.created_at
+                                      language = EXCLUDED.language, source = EXCLUDED.source,
+                                      created_at = EXCLUDED.created_at
                     """),
                     row,
                 )

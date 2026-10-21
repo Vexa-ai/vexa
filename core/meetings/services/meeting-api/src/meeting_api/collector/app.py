@@ -38,6 +38,7 @@ import json
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
+from .chat import chat_messages
 from .meeting_link import parse_meeting_url
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
@@ -814,13 +815,11 @@ def build_router(
             })
         return JSONResponse(content=body)
 
-    # --- GET /bots/{platform}/{native_meeting_id}/chat (#579 C3, sealed api.v1 ChatMessagesResponse).
-    # Thin HONEST restore: the route + owner boundary are real (unowned/unknown native → 404), but
-    # 0.12 does not PERSIST in-meeting chat server-side (chat frames flow live over the va:…:chat WS
-    # channel and are not stored), so the captured-message list is always empty until a chat-capture
-    # backend lands. The response conforms to the sealed shape; the empty list is the truthful state,
-    # not a fabricated one. The POST (send) half is a SIGNED GAP — see the PR (no bot-command backend
-    # in the 0.12 core). ---
+    # --- GET /bots/{platform}/{native_meeting_id}/chat → sealed api.v1 ChatMessagesResponse.
+    # Captured chat is persisted as transcript segments with `source:'chat'` (the bot publishes each
+    # line as a point-in-time segment), so this is a slice of the caller's newest OWNED row's
+    # transcript — live hash and durable rows alike — shaped as ChatMessage, oldest first. Owner
+    # boundary: unknown/unowned native → 404. A row whose artifacts were erased has no chat left. ---
     @router.get("/bots/{platform}/{native_meeting_id}/chat")
     async def read_meeting_chat(
         platform: str,
@@ -834,7 +833,13 @@ def build_router(
                 status_code=404,
                 detail=f"Meeting not found for platform {platform} and ID {native_meeting_id}",
             )
-        return JSONResponse(content={"messages": []})
+        doc = await store.get_transcript_by_id(user_id, meeting_id)
+        messages = chat_messages((doc or {}).get("segments") or [])
+        log_event(
+            "chat_served", audience="user", span="bots.chat.read",
+            user_id=user_id, meeting_id=str(meeting_id), fields={"messages": len(messages)},
+        )
+        return JSONResponse(content={"messages": messages})
 
     # --- GET /meetings/{platform}/{native_meeting_id}/participants → who was in this meeting, as far as
     # the 0.12 core actually KNOWS. Owner-scoped (404 on someone else's meeting — never an empty roster,
