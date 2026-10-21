@@ -21,6 +21,10 @@
   published database password, dispatch signing key or terminal secret; each is minted (and the last
   two kept across restarts) or refused.
 
+- `test_zero_login_warning.py` — offline: `bin/zero-login-warning` prints its banner when zero-login is
+  on and the terminal binds beyond loopback (the shipped config, a LAN address, `::`), and nothing when
+  zero-login is off or the bind is loopback; the entrypoint runs it on the rendered config.
+
 - `test_env_file_hygiene.py`, `test_image_by_path_reads.py`, `test_runtime_environment.py`,
   `test_workspace_store.py` — offline: `.env.example` is a valid `--env-file`; the image ships every
   file its services read by path; what each program's environment holds; agent-api's workspace dir

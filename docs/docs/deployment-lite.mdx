@@ -38,6 +38,7 @@ That is **zero-login** (`VEXA_TERMINAL_ZERO_LOGIN=true`, Lite's default): every 
 reach port 3001 acts as that self-host user. Set `VEXA_TERMINAL_ZERO_LOGIN=false` when the port is
 reachable by anybody but you; the terminal then answers a visitor with no session as anonymous and
 asks them to sign in. Compose and Kubernetes deployments have no zero-login.
+While zero-login is on and the terminal listens beyond loopback, Lite prints a warning banner to the container log at every start; `make -C deploy/lite up` publishes 3001 on every interface, so either set `VEXA_TERMINAL_ZERO_LOGIN=false` or publish it as `-p 127.0.0.1:3001:3001`.
 
 The terminal then asks for the **admin claim code** before anyone can become the instance's
 administrator. admin-api writes it to the container log at boot, and it works once:

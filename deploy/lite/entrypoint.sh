@@ -361,6 +361,11 @@ case "$*" in
             || exit 1 ;;
 esac
 unset runtime_api_token
+# Zero-login with a terminal that listens beyond loopback: a banner on stderr (the container log) that
+# says who can then act as the instance's user and how to close it. Never stops the container.
+case "$*" in
+    *supervisord*) python3 /usr/local/bin/zero-login-warning /run/vexa/supervisord.conf ;;
+esac
 # Valkey's password reaches it in a root-only config file, never on its command line: every process
 # in the container can read any process's command line.
 ( umask 077; printf 'requirepass "%s"\n' "$(printf '%s' "$REDIS_PASSWORD" | sed 's/[\\"]/\\&/g')" > /run/vexa/valkey.conf )
