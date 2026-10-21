@@ -17,9 +17,10 @@
  *    the token endpoint returned, which openid-client has already verified against the issuer's keys,
  *    our client id and this sign-in's nonce. Its `iss` must also be the configured issuer, it must
  *    carry a `sub`, and the address is read from the configured claim (`VEXA_OIDC_EMAIL_CLAIM`,
- *    default `email`). The issuer is the operator's own directory, so its word on the address is
- *    taken, as with a pinned Microsoft tenant; with `VEXA_OIDC_REQUIRE_EMAIL_VERIFIED=1` the token
- *    must also say `email_verified: true`.
+ *    default `email`). The token must also say `email_verified: true`, unless the operator turned
+ *    that off (`VEXA_OIDC_REQUIRE_EMAIL_VERIFIED=0`, for a directory such as ADFS that issues no such
+ *    claim); the address is then taken on the issuer's word, and only a token that does say
+ *    `email_verified: true` records the address as verified.
  *
  *  The stable subject (`google:<sub>`, `microsoft:<tid>:<oid>`, `oidc:<sha256(iss, sub)>`) is
  *  returned with the email, and the

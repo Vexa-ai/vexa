@@ -38,7 +38,9 @@ ADMIN = Caller(subject='1', email='admin@acme.test', is_admin=True)
 
 
 def person(uid, *workspaces, email='', **kw):
-    return Caller(subject=uid, email=email or f'u{uid}@acme.test', workspaces=tuple(workspaces), **kw)
+    """A signed-in person whose address a sign-in proved (identity.v1 ``email_verified``)."""
+    return Caller(subject=uid, email=email or f'u{uid}@acme.test', email_verified=True,
+                  workspaces=tuple(workspaces), **kw)
 
 
 def company(store, name='Globex'):

@@ -36,6 +36,13 @@ the internal tier (`X-Internal-Secret` = `INTERNAL_API_SECRET`).
   not `is_admin`: the instance admin is a person, and a person's chats only read `_global`. The admin
   account's `max_concurrent` is always `0` — it launches no bot. A resolver reads a missing field as
   `false`, so an older identity fails closed.
+- **`email_verified`** — was `email` proven by a sign-in: an emailed link the person redeemed, or an
+  identity provider that vouched for the address (Google's `email_verified`, a pinned Microsoft
+  tenant, a generic OIDC token that says `email_verified: true`)? Identity keeps the proof with the
+  address it proves (admin-api `public_profile.record_email_verified`), so an account made with an API
+  call, or one whose address changed since, is `false`. Always stated; a resolver that finds it
+  missing reads `false`. For a delegation token it is the person's. Anything keyed by the address
+  alone asks for `true` — crm-api claims a Person only for a verified address.
 - **`credential_class`** (D13, 0.13.4) — always stated, positive evidence: `session` for the
   terminal's signed-in browser (admin-api `api_tokens.kind = 'session'`, minted only by
   `POST /internal/sessions`, which needs the internal secret AND `X-Terminal-Session-Secret`),

@@ -7,7 +7,9 @@ record: it resolves to the claimed Person and joins it through the merge card (`
 
 - It happens on its own at sign-in when exactly ONE record matches the verified address (a match
   identifier, or a Person whose ``Email`` is that address). With several, ``/person/profile`` answers
-  them as a claim card and the person picks. With no verified address there is no claim.
+  them as a claim card and the person picks. With no verified address there is no claim: the address
+  counts only when identity says a sign-in proved it (``Caller.email_verified``), so an address an
+  API call or an identity provider merely asserted claims nothing.
 - A claim moves nothing from the org to the person. The org's fields (contact history, notes, deal
   links, cadence) stay on the record under its CRM policy and field classes (S1-C); the person gets an
   empty profile of their own.
@@ -256,7 +258,7 @@ class Profiles:
         """On sign-in: claim the one record matching the verified address, if exactly one does, it is
         unclaimed, this account did not unclaim it, and no account of this human holds a claim."""
         caller = as_caller(caller)
-        if caller.delegated or caller.internal or not caller.subject or not caller.email:
+        if caller.delegated or caller.internal or not caller.subject or not caller.email or not caller.email_verified:
             return None
         if self._human_claim(c, org, caller.subject, caller.email):
             return None
@@ -272,8 +274,10 @@ class Profiles:
     def claim(self, org, caller, record_id=None):
         """The person's own claim (the claim card): the one match, or the one they pick among several."""
         caller = self.persons._person(caller)
-        if not caller.email:
-            raise PersonError('A claim needs a verified address')
+        if not caller.email or not caller.email_verified:
+            e = PersonError('A claim needs an address a sign-in verified')
+            e.status = 403
+            raise e
         with self.engine.begin() as c:
             held = self._human_claim(c, org, caller.subject, caller.email)
             if held:
@@ -326,7 +330,7 @@ class Profiles:
                     return {'claimed': True, 'via_merge': True, 'record_id': held['record_id'],
                             'fields': dict(held['fields'] or {}), 'public_fields': list(held['public_fields'] or []),
                             'published': bool(held['published']), 'handle': None, 'candidates': []}
-                found = self.candidates(c, org, caller.email)
+                found = self.candidates(c, org, caller.email) if caller.email_verified else []
                 return {'claimed': False, 'record_id': None, 'fields': {}, 'public_fields': [], 'published': False,
                         'handle': None, 'candidates': [self._candidate(r) for r in found] if len(found) > 1 else []}
             return {'claimed': True, 'record_id': row['record_id'], 'fields': dict(row['fields'] or {}),

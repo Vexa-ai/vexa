@@ -218,12 +218,13 @@ pending. Only org, record, revision and actor references leave CRM; no account
 fields are copied into Flows. The initial pack records a workflow receipt. It
 neither sends messages nor starts an autonomous agent with implicit CRM rights.
 
-Since event.v2 (PRD 0.13.4 D8) a revision's event also carries a fact envelope
-(who it reaches: owner, visibility, audience, and a card's lifecycle fields kind,
-state, next_actor, next_check_at, handoff). The outbox seals it with the `crm`
-producer key derived from `VEXA_FACT_SEAL_SECRET` (falling back to
-`INTERNAL_API_SECRET`); flows-api must resolve the same secret or it refuses the
-fact 403 and the row stays pending. No title, summary or other field value is in
+A revision's event also carries a fact envelope (event.v2, PRD 0.13.4 D8: who
+it reaches — owner, visibility, audience, and a card's lifecycle fields kind,
+state, next_actor, next_check_at, handoff). The outbox seals it at delivery with
+the `crm` producer key derived from `VEXA_FACT_SEAL_SECRET`, bound to the event
+type, event ID and refs it is posted with, and good for five minutes. The secret
+is its own credential: the outbox refuses to start without it, and flows-api must
+hold the same value or it refuses the fact 403 and the row stays pending. No title, summary or other field value is in
 the envelope (`crm/fact_envelope.py`, vendored from `core/flows/contracts/event.v2`).
 
 Native meetings retain their transcripts. Agent proposals cite the meeting ID

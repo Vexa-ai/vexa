@@ -64,9 +64,11 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     "VEXA_FACT_SEAL_SECRET": (
         "capability", None,
         "the secret event.v2 fact envelopes are sealed under (D8): `POST /events` verifies a "
-        "producer's envelope with HMAC-SHA256 keyed per producer from it. Read through "
-        "`fact_envelope.SEAL_SECRET_ENV`. Unset = INTERNAL_API_SECRET, which every producer on the "
-        "internal tier already holds; set it to give the seal its own rotation."),
+        "producer's envelope with HMAC-SHA256 keyed per producer from it, bound to the fact it rides "
+        "on. Read through `fact_envelope.SEAL_SECRET_ENV`. Its own credential, never the internal "
+        "tier's: unset = no envelope verifies, so every sealed fact is refused 403 and only facts "
+        "without an envelope admit (to their subject). Set it to the value every sealing producer "
+        "(crm's outbox) holds."),
 
     # ── service endpoints: THE DOORS ────────────────────────────────────────
     #

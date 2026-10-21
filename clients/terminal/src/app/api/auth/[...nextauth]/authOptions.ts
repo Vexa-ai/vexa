@@ -150,7 +150,7 @@ export const authOptions: AuthOptions = {
       // THE ADDRESS IS ONLY USABLE WHEN THE PROVIDER VERIFIED IT (../providerIdentity.ts): accounts
       // here are keyed by email, so Google must say `email_verified`, Microsoft must be this
       // instance's pinned tenant or carry `xms_edov`, and the generic OIDC token must come from the
-      // configured issuer (plus `email_verified` when the operator requires it). Decided before
+      // configured issuer and say `email_verified` (unless the operator turned that off). Decided before
       // admin-api is asked anything. The address is taken from the verified identity, never from
       // NextAuth's `user`.
       const identity = verifiedProviderIdentity(provider, {

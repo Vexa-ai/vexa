@@ -37,7 +37,8 @@ def store():
 
 
 def acct(uid, email, *workspaces, **kw):
-    return Caller(subject=uid, email=email, workspaces=tuple(workspaces), **kw)
+    """A signed-in account whose address a sign-in proved (identity.v1 ``email_verified``)."""
+    return Caller(subject=uid, email=email, email_verified=True, workspaces=tuple(workspaces), **kw)
 
 
 A = acct('21', WORK)            # her work login
@@ -245,8 +246,9 @@ def _client(store, users):
 
 def test_the_front_door_person_routes_and_internal_grouping(store):
     founder_record(store)
-    client = _client(store, {'a': {'user_id': '21', 'email': WORK}, 'b': {'user_id': '22', 'email': HOME},
-                             'vxd_w': {'user_id': '21', 'email': WORK, 'delegation': {'regime': 'human', 'workspaces': []}}})
+    client = _client(store, {'a': {'user_id': '21', 'email': WORK, 'email_verified': True},
+                             'b': {'user_id': '22', 'email': HOME, 'email_verified': True},
+                             'vxd_w': {'user_id': '21', 'email': WORK, 'email_verified': True, 'delegation': {'regime': 'human', 'workspaces': []}}})
     me_a = client.post('/person/me', json={}, headers={'X-API-Key': 'a'})
     assert me_a.status_code == 200, me_a.text
     me_b = client.post('/person/me', json={}, headers={'X-API-Key': 'b'}).json()

@@ -17,5 +17,6 @@
     "ws_team_1"
   ],
   "admin_account": false,
+  "email_verified": false,
   "credential_class": "key"
 }

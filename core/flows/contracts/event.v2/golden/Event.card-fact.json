@@ -25,6 +25,7 @@
       "next_check_at": "2026-10-18T09:00:00+00:00",
       "handoff": "offered"
     },
-    "sig": "b4ea69116ba6d1f41111e14bf8b8040d18ab96d71fef33b3db1231c63ed83a34"
+    "exp": 1792310700,
+    "sig": "7f9a868bc1542de292cc3b65cc4dccb08aaee2d2315aa80bb38a924ddf8e9b24"
   }
 }

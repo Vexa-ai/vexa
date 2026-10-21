@@ -1531,7 +1531,7 @@
    "unique-id": "event.v2",
    "node-type": "contract",
    "name": "event.v2",
-   "description": "event.v2 \u2014 the sealed fact envelope (PRD 0.13.4 D8, S5): the producer computes a fact's audience (next actor, requester, owner, members, workspace principals) and lifecycle fields only, HMAC-sealed with VEXA_FACT_SEAL_SECRET (else INTERNAL_API_SECRET); flows verifies it and admits a flow when its owner is the subject or in the audience",
+   "description": "event.v2 \u2014 the sealed fact envelope (PRD 0.13.4 D8, S5): the producer computes a fact's audience (next actor, requester, owner, members, workspace principals) and lifecycle fields only, HMAC-sealed with VEXA_FACT_SEAL_SECRET (no fallback) over the envelope, its expiry and the fact it rides on (event type, event id, refs); flows verifies it and admits a flow when its owner is the subject or in the audience",
    "metadata": [
     {
      "path": "core/flows/contracts/event.v2",

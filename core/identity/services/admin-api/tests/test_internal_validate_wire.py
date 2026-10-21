@@ -24,7 +24,7 @@ DLG = "delegation-secret-for-tests"
 KEY = "vxa_bot_test-key"
 
 BASE_FIELDS = {"user_id", "scopes", "max_concurrent", "email", "is_admin", "admin_account",
-               "credential_class"}
+               "email_verified", "credential_class"}
 
 
 class _Result:
@@ -104,7 +104,7 @@ def test_an_api_key_answers_the_base_fields_and_nothing_that_does_not_apply(monk
     assert r.status_code == 200, r.text
     assert r.json() == {"user_id": 42, "scopes": ["bot"], "max_concurrent": 2,
                         "email": "ada@example.com", "is_admin": False, "admin_account": False,
-                        "credential_class": "key"}
+                        "email_verified": False, "credential_class": "key"}
     assert session.commits == 1, "every hit bumps last_used_at"
 
 

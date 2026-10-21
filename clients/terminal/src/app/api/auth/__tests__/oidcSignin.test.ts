@@ -43,6 +43,8 @@ const BASE_ENV = {
   VEXA_OIDC_CLIENT_ID: "vexa-terminal",
   VEXA_OIDC_CLIENT_SECRET: "client-secret-value",
 };
+/** An ADFS operator: its tokens carry no `email_verified`, so it turns the check off explicitly. */
+const ADFS_ENV = { ...BASE_ENV, VEXA_OIDC_REQUIRE_EMAIL_VERIFIED: "0" };
 
 function idToken(claims: Record<string, unknown>): string {
   const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -84,7 +86,7 @@ describe("the configuration", () => {
     const cfg = oidcConfig(BASE_ENV);
     expect(cfg).toMatchObject({
       enabled: true, issuer: ISSUER, clientId: "vexa-terminal", scopes: "openid email profile",
-      displayName: "Single sign-on", emailClaim: "email", nameClaim: "name", requireEmailVerified: false, ca: null,
+      displayName: "Single sign-on", emailClaim: "email", nameClaim: "name", requireEmailVerified: true, ca: null,
       wellKnown: `${ISSUER}/.well-known/openid-configuration`,
     });
     expect(oidcConfig({ ...BASE_ENV, VEXA_OIDC_ISSUER: "https://adfs.example.test/adfs/" }))
@@ -100,6 +102,7 @@ describe("the configuration", () => {
     ["scopes without openid", { VEXA_OIDC_SCOPES: "email profile" }, /openid/],
     ["a malformed claim name", { VEXA_OIDC_EMAIL_CLAIM: "e mail" }, /claim/],
     ["an unreadable CA file", { VEXA_OIDC_CA_FILE: "/nonexistent/ca.pem" }, /cannot be read/],
+    ["an email-verified setting that is neither on nor off", { VEXA_OIDC_REQUIRE_EMAIL_VERIFIED: "maybe" }, /REQUIRE_EMAIL_VERIFIED/],
   ])("refuses %s", (_label, override, why) => {
     const cfg = oidcConfig({ ...BASE_ENV, ...override });
     expect(cfg.enabled).toBe(false);
@@ -196,31 +199,31 @@ describe("the provider", () => {
 
 describe("the identity", () => {
   it("takes the address and name from the ID token alone (ADFS: userinfo answers only sub)", () => {
-    const r = verifiedProviderIdentity("oidc", { account: { id_token: idToken(adfsClaims()) } }, BASE_ENV);
+    const r = verifiedProviderIdentity("oidc", { account: { id_token: idToken(adfsClaims()) } }, ADFS_ENV);
     expect(r).toEqual({ ok: true, email: "ana.lopez@corp.example", subject: oidcSubject(ISSUER, adfsClaims().sub) });
     expect(oidcSubject(ISSUER, "x")).toMatch(/^oidc:[0-9a-f]{64}$/);
     expect(oidcDisplayName({ given_name: "Ana", family_name: "Lopez" })).toBe("Ana Lopez");
   });
 
   it("the subject is stable per issuer and differs across issuers; a trailing slash is the same issuer", () => {
-    const a = verifiedProviderIdentity("oidc", { account: { id_token: idToken(adfsClaims({ iss: `${ISSUER}/` })) } }, BASE_ENV);
-    const b = verifiedProviderIdentity("oidc", { account: { id_token: idToken(adfsClaims()) } }, BASE_ENV);
+    const a = verifiedProviderIdentity("oidc", { account: { id_token: idToken(adfsClaims({ iss: `${ISSUER}/` })) } }, ADFS_ENV);
+    const b = verifiedProviderIdentity("oidc", { account: { id_token: idToken(adfsClaims()) } }, ADFS_ENV);
     expect(a).toEqual(b);
     expect(oidcSubject(ISSUER, "s")).not.toBe(oidcSubject("https://other.example.test", "s"));
   });
 
   it("reads the configured email claim (e.g. upn)", () => {
-    const env = { ...BASE_ENV, VEXA_OIDC_EMAIL_CLAIM: "upn" };
+    const env = { ...ADFS_ENV, VEXA_OIDC_EMAIL_CLAIM: "upn" };
     const claims = adfsClaims({ email: undefined, upn: "ana.lopez@corp.example" });
     expect(verifiedProviderIdentity("oidc", { account: { id_token: idToken(claims) } }, env)).toMatchObject({ ok: true, email: "ana.lopez@corp.example" });
   });
 
   it.each([
-    ["a token from another issuer", adfsClaims({ iss: "https://evil.example.test/realms/corp" }), BASE_ENV, /another issuer/],
-    ["a token with no issuer", adfsClaims({ iss: undefined }), BASE_ENV, /another issuer/],
-    ["a token with no subject", adfsClaims({ sub: undefined }), BASE_ENV, /no subject/],
-    ["a token with no email", adfsClaims({ email: undefined }), BASE_ENV, /no email/],
-    ["a malformed email", adfsClaims({ email: "not-an-address" }), BASE_ENV, /no email/],
+    ["a token from another issuer", adfsClaims({ iss: "https://evil.example.test/realms/corp" }), ADFS_ENV, /another issuer/],
+    ["a token with no issuer", adfsClaims({ iss: undefined }), ADFS_ENV, /another issuer/],
+    ["a token with no subject", adfsClaims({ sub: undefined }), ADFS_ENV, /no subject/],
+    ["a token with no email", adfsClaims({ email: undefined }), ADFS_ENV, /no email/],
+    ["a malformed email", adfsClaims({ email: "not-an-address" }), ADFS_ENV, /no email/],
     ["an unverified email when verification is required", adfsClaims({ email_verified: false }),
       { ...BASE_ENV, VEXA_OIDC_REQUIRE_EMAIL_VERIFIED: "1" }, /not verified/],
     ["a token without email_verified when verification is required", adfsClaims(),
@@ -234,6 +237,20 @@ describe("the identity", () => {
   it("refuses when the provider is not configured, or no ID token came back", () => {
     expect(verifiedProviderIdentity("oidc", { account: { id_token: idToken(adfsClaims()) } }, {}).ok).toBe(false);
     expect(verifiedProviderIdentity("oidc", { account: {} }, BASE_ENV).ok).toBe(false);
+  });
+
+  it("requires email_verified by default: a token that does not say it, or says false, is refused", () => {
+    for (const claims of [adfsClaims(), adfsClaims({ email_verified: false }), adfsClaims({ email_verified: "false" })]) {
+      const r = verifiedProviderIdentity("oidc", { account: { id_token: idToken(claims) } }, BASE_ENV);
+      expect(r).toEqual({ ok: false, why: "the OIDC provider has not verified this email address" });
+    }
+  });
+
+  it.each(["0", "false", "no", "off", "OFF"])("VEXA_OIDC_REQUIRE_EMAIL_VERIFIED=%s turns the check off explicitly", (off) => {
+    const env = { ...BASE_ENV, VEXA_OIDC_REQUIRE_EMAIL_VERIFIED: off };
+    expect(oidcConfig(env)).toMatchObject({ enabled: true, requireEmailVerified: false });
+    const r = verifiedProviderIdentity("oidc", { account: { id_token: idToken(adfsClaims()) } }, env);
+    expect(r).toEqual({ ok: true, email: "ana.lopez@corp.example", subject: oidcSubject(ISSUER, adfsClaims().sub) });
   });
 
   it("accepts email_verified=true when verification is required", () => {
@@ -250,12 +267,12 @@ describe("the sign-in callback", () => {
   };
 
   it("admits through admission with the token's address and the oidc subject", async () => {
-    stubEnv(BASE_ENV);
+    stubEnv(ADFS_ENV);
     expect(await signIn(adfsClaims())).toBe(true);
     expect(findOrCreateUserToken).toHaveBeenCalledWith("ana.lopez@corp.example", { subject: oidcSubject(ISSUER, adfsClaims().sub) });
     // R4: a token that does not say email_verified is not recorded as a verified address
-    expect(verifiedProviderIdentity("oidc", { account: { id_token: idToken(adfsClaims()) } }, BASE_ENV)).not.toHaveProperty("emailVerified");
-    expect(verifiedProviderIdentity("oidc", { account: { id_token: idToken(adfsClaims({ email_verified: true })) } }, BASE_ENV)).toMatchObject({ ok: true, emailVerified: true });
+    expect(verifiedProviderIdentity("oidc", { account: { id_token: idToken(adfsClaims()) } }, ADFS_ENV)).not.toHaveProperty("emailVerified");
+    expect(verifiedProviderIdentity("oidc", { account: { id_token: idToken(adfsClaims({ email_verified: true })) } }, ADFS_ENV)).toMatchObject({ ok: true, emailVerified: true });
 
   });
 
@@ -265,8 +282,17 @@ describe("the sign-in callback", () => {
     expect(findOrCreateUserToken).not.toHaveBeenCalled();
   });
 
-  it("an address the allow-list does not admit is refused (and so is another identity for a bound account)", async () => {
+  it("by default refuses a token that does not say email_verified, before asking admin-api", async () => {
     stubEnv(BASE_ENV);
+    expect(await signIn(adfsClaims())).toBe(`/?error=${SIGNIN_ERROR_UNVERIFIED}`);
+    expect(findOrCreateUserToken).not.toHaveBeenCalled();
+    expect(await signIn(adfsClaims({ email_verified: true }))).toBe(true);
+    expect(findOrCreateUserToken).toHaveBeenCalledWith("ana.lopez@corp.example",
+      { subject: oidcSubject(ISSUER, adfsClaims().sub), emailVerifiedVia: "oidc:oidc" });
+  });
+
+  it("an address the allow-list does not admit is refused (and so is another identity for a bound account)", async () => {
+    stubEnv(ADFS_ENV);
     findOrCreateUserToken.mockResolvedValue({ ok: false, refused: "not-allowed", error: "not allowed" });
     expect(await signIn(adfsClaims())).toBe(`/?error=${SIGNIN_ERROR_NOT_ALLOWED}`);
   });

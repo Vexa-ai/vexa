@@ -9,5 +9,6 @@
   "email": "jane@example.com",
   "is_admin": false,
   "admin_account": false,
+  "email_verified": true,
   "credential_class": "session"
 }

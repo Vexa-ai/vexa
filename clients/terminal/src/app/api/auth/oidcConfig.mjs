@@ -30,7 +30,8 @@ const CLAIM_NAME = /^[A-Za-z0-9_.:/-]{1,128}$/;
 const PEM_CERT = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g;
 
 const str = (v) => (typeof v === "string" ? v.trim() : "");
-const truthy = (v) => ["1", "true", "yes", "on"].includes(str(v).toLowerCase());
+const YES = ["1", "true", "yes", "on"];
+const NO = ["0", "false", "no", "off"];
 
 /** Which sign-in methods this instance offers, as a Set. Unknown entries make it invalid (see
  *  `signinMethodsProblem`); here they are simply dropped. */
@@ -114,6 +115,14 @@ export function oidcConfig(env = process.env, readFile = readFileSync) {
     if (!CLAIM_NAME.test(v)) return fail(`${key} is not a claim name`);
   }
 
+  // An account here is keyed by its address, so by default the token must say the provider verified
+  // it. An operator whose directory issues no such claim (ADFS) turns the check off explicitly.
+  const verifiedSetting = str(env.VEXA_OIDC_REQUIRE_EMAIL_VERIFIED).toLowerCase();
+  if (verifiedSetting && !YES.includes(verifiedSetting) && !NO.includes(verifiedSetting)) {
+    return fail("VEXA_OIDC_REQUIRE_EMAIL_VERIFIED must be 1 or 0");
+  }
+  const requireEmailVerified = !NO.includes(verifiedSetting);
+
   let ca = null;
   const caFile = str(env.VEXA_OIDC_CA_FILE);
   if (caFile) {
@@ -142,7 +151,7 @@ export function oidcConfig(env = process.env, readFile = readFileSync) {
     displayName: str(env.VEXA_OIDC_DISPLAY_NAME) || DEFAULT_DISPLAY_NAME,
     emailClaim,
     nameClaim,
-    requireEmailVerified: truthy(env.VEXA_OIDC_REQUIRE_EMAIL_VERIFIED),
+    requireEmailVerified,
     ca,
   });
 }

@@ -10,7 +10,8 @@ sentence. Before that, the callback takes the address only from a provider that 
 (`../providerIdentity.ts`): Google's `email_verified === true`; for Microsoft, the ID token's `tid`
 must be the tenant `MICROSOFT_TENANT_ID` pins, or — on a multi-tenant authority such as `common` — the
 token must carry `xms_edov: true`; for the generic OIDC provider (`oidc`), the verified ID token must
-come from `VEXA_OIDC_ISSUER` and carry `sub` and an address in `VEXA_OIDC_EMAIL_CLAIM`. Otherwise the
+come from `VEXA_OIDC_ISSUER`, carry `sub` and an address in `VEXA_OIDC_EMAIL_CLAIM`, and say
+`email_verified: true` unless the operator set `VEXA_OIDC_REQUIRE_EMAIL_VERIFIED=0`. Otherwise the
 browser lands on `/?error=SigninUnverified`.
 
 The account is then bound to the provider subject (`google:<sub>`, `microsoft:<tid>:<oid>`,

@@ -414,8 +414,9 @@ def test_every_card_fact_seals_including_a_finished_one(cards, store):
     decide(cards, V, card['id'], 'answer', answer='yes')
     decide(cards, D, card['id'], 'use')
     for ev in _outbox(store, card['id']):
-        sealed = fact_envelope.seal(ev['envelope'], 'test-secret')
-        assert fact_envelope.verify(sealed, 'test-secret', ('crm',)) is not None
+        the_fact = fact_envelope.fact(ev['event_type'], ev['source_event_id'], ev['subject_refs'])
+        sealed = fact_envelope.seal(ev['envelope'], 'test-secret', the_fact)
+        assert fact_envelope.verify(sealed, 'test-secret', ('crm',), the_fact) is not None
     assert 'next_actor' not in _outbox(store, card['id'])[-1]['envelope']['lifecycle']
 
 

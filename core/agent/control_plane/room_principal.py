@@ -13,8 +13,10 @@ HOW IT RUNS (agent-api's half of C1)
   `shared` — so every service refuses the person-wide reads (mail, calendar, connections, meetings)
   — and it carries `audience` (`org` or `cross_org`) so crm-api projects a cross-org room's reads to
   the records' public fields (K1).
-* WHO PAYS: the token's subject is W's OWNER — the workspace pool (Trillion-Frame: a room's turns
-  debit the workspace owner's pool), and the account identity validates. The speaker is recorded as
+* WHO PAYS: `RoomPrincipal.payer` (founder I20) — W's OWNER (Trillion-Frame: a room's turns debit
+  the workspace owner's pool), except in a room of two, where whoever started the turn pays. The
+  dispatcher admits the turn against the payer's spend cap and meters its usage to the payer. The
+  token's subject is W's owner, the account identity validates. The speaker is recorded as
   `on_behalf_of` for attribution and for the write-or-propose rule.
 
 THE GRANT IS RE-READ EVERY TURN, AND A CHANGED GRANT IS A NEW WORKER (D27, H2, 2026-10-17).

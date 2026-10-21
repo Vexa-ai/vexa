@@ -20,7 +20,8 @@ from crm.store import Store
 ORG = 'acme'
 ADMIN = Caller(subject='1', email='admin@acme.test', is_admin=True)
 WORK, HOME = 'val@work.test', 'val.home@mail.test'
-A, B = Caller(subject='21', email=WORK), Caller(subject='22', email=HOME)
+# signed-in people whose addresses a sign-in proved (identity.v1 email_verified)
+A, B = Caller(subject='21', email=WORK, email_verified=True), Caller(subject='22', email=HOME, email_verified=True)
 ORG_SECRET = 'NOTE-ONLY-THE-ORG-KNOWS-7731'
 
 
@@ -71,7 +72,7 @@ def test_one_to_one_a_second_login_joins_through_the_merge_card_not_a_second_cla
     with pytest.raises(PersonError):
         store.profiles.claim(ORG, A, other)            # A already has one
     # the record itself takes one claimant: nobody else claims Val's record
-    intruder = Caller(subject='40', email='someone@else.test')
+    intruder = Caller(subject='40', email='someone@else.test', email_verified=True)
     with pytest.raises(PersonNotFound):
         store.profiles.claim(ORG, intruder, val)       # not a record matching their address
     with store.engine.connect() as c:
@@ -171,8 +172,8 @@ def test_merge_ends_the_merged_records_claim(store):
 
 def test_the_front_door_profile_routes(store):
     org_record(store)
-    users = {'a': {'user_id': '21', 'email': WORK},
-             'vxd_w': {'user_id': '21', 'email': WORK, 'delegation': {'regime': 'human', 'workspaces': []}}}
+    users = {'a': {'user_id': '21', 'email': WORK, 'email_verified': True},
+             'vxd_w': {'user_id': '21', 'email': WORK, 'email_verified': True, 'delegation': {'regime': 'human', 'workspaces': []}}}
     def resolve(request):
         tok = json.loads(request.content)['token']
         return httpx.Response(200, json=users[tok]) if tok in users else httpx.Response(401)

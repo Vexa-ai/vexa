@@ -1272,11 +1272,13 @@ def admit_event(ev: EventSubmission, x_actor: str = Header(default="")):
     actor = _actor(x_actor)
     # A CALLER CANNOT CLAIM AN AUDIENCE (D8): `_audience`/`_owner`/`_visibility`/`_lifecycle` come
     # off the caller's refs first, and are set (by `admit`, from `sealed`) only from an envelope
-    # whose seal verifies. One that does not verify is refused, never admitted as if unsigned (P18).
+    # whose seal verifies over THIS fact — its type, its id and its refs exactly as posted — and has
+    # not expired. One that does not verify is refused, never admitted as if unsigned (P18).
     refs = {**strip_sealed(ev.refs), "admitted_by": actor}
     sealed = None
     if ev.envelope is not None:
-        sealed = fact_envelope.verify(ev.envelope, fact_envelope.secret_from_env(), ENVELOPE_PRODUCERS)
+        sealed = fact_envelope.verify(ev.envelope, fact_envelope.secret_from_env(), ENVELOPE_PRODUCERS,
+                                      fact_envelope.fact(ev.event_type, ev.source_event_id, ev.refs))
         if sealed is None:
             raise HTTPException(status_code=403, detail={"refused": "envelope_unverified"})
     if ev.event_type == "thread.message":

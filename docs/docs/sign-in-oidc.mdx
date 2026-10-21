@@ -66,7 +66,7 @@ Settings for the Terminal with ADFS:
 | Resource | the Web API identifier from step 3 (the client id) |
 | Email claim | `email` (default). If your rule issues the UPN instead, `upn`. |
 | Name claim | `name` (default) |
-| Require `email_verified` | off (ADFS does not issue it) |
+| Require `email_verified` | **off** — set `VEXA_OIDC_REQUIRE_EMAIL_VERIFIED=0` (ADFS does not issue it; see [below](#turning-off-the-verified-address-check)) |
 
 ### Keycloak
 
@@ -78,8 +78,8 @@ Settings for the Terminal with ADFS:
 6. Send the Vexa operator the issuer URL (`https://<keycloak host>/realms/<realm>`), the client id,
    the secret and, for an internal PKI, the CA chain.
 
-Keycloak includes `email`, `email_verified` and `name` in the ID token by default. If people can set
-their own address in your realm, turn on **Require `email_verified`** below.
+Keycloak includes `email`, `email_verified` and `name` in the ID token by default, so the default
+(**Require `email_verified`** on) works unchanged.
 
 ## Configure the Terminal
 
@@ -112,7 +112,7 @@ terminal:
     displayName: Corporate login               # the button reads "Continue with Corporate login"
     emailClaim: ""                             # empty = email
     nameClaim: ""                              # empty = name
-    requireEmailVerified: ""                   # "1" to require email_verified: true
+    requireEmailVerified: "0"                  # ADFS issues no email_verified; leave empty for Keycloak
     caBundle:
       configMap: corp-ca                       # or secret: <name>; not both
       key: ca.crt
@@ -138,6 +138,7 @@ VEXA_OIDC_CLIENT_SECRET=<client secret>
 VEXA_OIDC_SCOPES=openid email profile allatclaims
 VEXA_OIDC_RESOURCE=<client id>
 VEXA_OIDC_DISPLAY_NAME=Corporate login
+VEXA_OIDC_REQUIRE_EMAIL_VERIFIED=0
 VEXA_SIGNIN_METHODS=oidc
 VEXA_OIDC_CA_FILE=/etc/vexa-oidc/ca.pem
 ```
@@ -164,7 +165,7 @@ services:
 | `VEXA_OIDC_CA_FILE` (`caBundle`) | Node's public roots | A PEM bundle, **added** to the public roots for the requests to the IdP. |
 | `VEXA_OIDC_EMAIL_CLAIM` (`emailClaim`) | `email` | The ID-token claim that holds the address. |
 | `VEXA_OIDC_NAME_CLAIM` (`nameClaim`) | `name` | The ID-token claim for the display name; falls back to `given_name family_name`, then to the address. |
-| `VEXA_OIDC_REQUIRE_EMAIL_VERIFIED` (`requireEmailVerified`) | off | `1`: refuse unless the ID token says `email_verified: true`. |
+| `VEXA_OIDC_REQUIRE_EMAIL_VERIFIED` (`requireEmailVerified`) | `1` (on) | Refuse unless the ID token says `email_verified: true`. `0` turns it off — read [the risk](#turning-off-the-verified-address-check) first. Any other value refuses the start. |
 | `VEXA_SIGNIN_METHODS` (`terminal.signinMethods`) | every configured door | A comma-separated subset of `google`, `microsoft`, `oidc`, `email`. |
 
 The same keys are listed in [Configuration → Secrets & identity](/configuration#secrets--identity) and in the Helm
@@ -172,6 +173,22 @@ values table ([`deploy/helm/README.md`](https://github.com/Vexa-ai/vexa/blob/mai
 
 **The redirect URI is fixed:** `<terminal URL>/api/auth/callback/oidc`. The provider id `oidc` does
 not change with the display name.
+
+### Turning off the verified-address check
+
+By default the ID token must say `email_verified: true`, and a token that does not is refused with
+"the provider did not verify the address". ADFS issues no such claim, so an ADFS operator sets
+`VEXA_OIDC_REQUIRE_EMAIL_VERIFIED=0` (Helm `requireEmailVerified: "0"`).
+
+With the check off, the Terminal takes the address on the issuer's word. **Anyone who can put an
+address of their choosing into their account at that provider can then sign in to the Vexa account
+of that address** (the first sign-in binds it; see [Limits](#limits)). Turn it off only for a
+directory whose addresses its administrators assign — never for a provider where people register or
+edit their own address.
+
+An address taken without `email_verified: true` is not recorded as verified, so such an account
+claims no CRM Person on its own (a profile is claimed only for an address identity verified). Signing
+in once through the emailed link verifies it.
 
 ## Showing only some doors
 
@@ -204,12 +221,12 @@ link as a fallback. A door left out is closed on the server, not only hidden:
 | Situation | What happens |
 |---|---|
 | The address is not admitted (not an existing user, not an admin, not on the allow-list) | Back on the sign-in card with one sentence: they cannot sign in here. Nothing is created. |
-| The ID token has no address in the configured claim, or comes from another issuer | Back on the card: the provider did not verify the address. The Terminal log names the reason (`[terminal-auth] oidc sign-in refused: …`). |
+| The ID token has no address in the configured claim, comes from another issuer, or does not say `email_verified: true` while the check is on | Back on the card: the provider did not verify the address. The Terminal log names the reason (`[terminal-auth] oidc sign-in refused: …`). |
 | The account is bound to another identity at this issuer | Refused with the same sentence as "not admitted". |
 | The Terminal cannot reach the IdP, or does not trust its certificate (missing or wrong CA chain) | The button returns to the card with `?error=OAuthSignin` before the browser ever leaves; the Terminal log carries the TLS or network error. Check egress and `VEXA_OIDC_CA_FILE`. |
 | The redirect URI is not registered exactly | The IdP shows its own error page (ADFS: MSIS9224 or similar) and never returns. |
 | admin-api is unreachable | New sign-ins are refused; existing sessions keep working. |
-| The issuer is set but the client id, secret or CA file is missing or unreadable, or `VEXA_SIGNIN_METHODS` names an unknown door | The Terminal does not start. Its log says `refusing to start:` and names the key. |
+| The issuer is set but the client id, secret or CA file is missing or unreadable, `VEXA_OIDC_REQUIRE_EMAIL_VERIFIED` is neither on nor off, or `VEXA_SIGNIN_METHODS` names an unknown door | The Terminal does not start. Its log says `refusing to start:` and names the key. |
 
 ## How it works
 
@@ -227,7 +244,7 @@ link as a fallback. A door left out is closed on the server, not only hidden:
    ID token: signature against the IdP's keys, `iss`, `aud` (the client id), expiry, and the nonce.
 5. **Identity.** `providerIdentity.ts` takes the verified ID token's claims: `iss` must equal the
    configured issuer, `sub` must be present, the address is read from the configured claim (and
-   `email_verified` checked when required). The binding subject is
+   `email_verified: true` required unless turned off). The binding subject is
    `oidc:<sha256 of issuer and sub>`.
 6. **Admission and account.** `findOrCreateUserToken` asks admin-api whether the address may sign in
    (`POST /internal/signin-admission`, `signin.v1`), finds or creates the user, and binds the subject
@@ -287,7 +304,7 @@ the IdP; NextAuth's `/api/auth/signin/oidc` and `/api/auth/callback/oidc` in the
 | Browser → Terminal (sign-in card, `/api/auth/signin/oidc`) | Only providers that are configured and allowed by `VEXA_SIGNIN_METHODS` are registered; any other provider id completes nothing. The PKCE verifier, `state` and `nonce` are kept in short-lived httpOnly cookies. | "refuses an unknown provider outright"; "VEXA_SIGNIN_METHODS=oidc removes configured Google and Microsoft providers"; "is registered from discovery, with PKCE, state and nonce, the profile read from the ID token" |
 | Browser → IdP | The IdP's own authentication and access-control policy. The request carries the fixed redirect URI the IdP has registered. | the IdP's (outside Vexa) |
 | Terminal → IdP (discovery, signing keys, token exchange) | HTTPS only (`https://` issuer required at boot), certificates checked against the public roots plus only the operator's CA bundle; the code is exchanged with the client secret and the PKCE verifier. | the `refuses %s` configuration cases ("an http issuer", "an unreadable CA file"); "adds a custom CA to the public roots rather than replacing them" |
-| IdP → browser → Terminal (`/api/auth/callback/oidc`) | `state`, PKCE and `nonce` checked; the ID token's signature, `iss`, `aud` and expiry verified before any claim is read; then `iss` compared again with configuration, `sub` and an address required, `email_verified` when configured. | "refuses a token from another issuer before asking admin-api"; the `refuses %s` identity cases; "refuses an oidc callback when the provider is not configured" |
+| IdP → browser → Terminal (`/api/auth/callback/oidc`) | `state`, PKCE and `nonce` checked; the ID token's signature, `iss`, `aud` and expiry verified before any claim is read; then `iss` compared again with configuration, `sub` and an address required, `email_verified` unless turned off. | "refuses a token from another issuer before asking admin-api"; the `refuses %s` identity cases; "refuses an oidc callback when the provider is not configured" |
 | Terminal → admin-api (`signin.v1`) | Internal secret (`X-Internal-Secret`) on admin-api's internal routes; admission refuses unless admin-api says yes; a second subject for a bound account is refused and nothing changes. | "an address the allow-list does not admit is refused (and so is another identity for a bound account)"; `test_a_generic_oidc_subject_binds_and_another_is_refused`; `test_the_door_refuses_another_oidc_identity_and_changes_nothing`; `test_only_the_subjects_the_terminal_makes_are_accepted` |
 | Terminal → browser (session) | The same httpOnly `vexa-token` / `vexa-user-info` cookies as every other door; a closed emailed-link door answers `404`. | "request-link and redeem answer 404, and the instance says email_link: false" |
 

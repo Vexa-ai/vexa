@@ -4,7 +4,9 @@
 no person outside the audience." The producer (crm) computes the audience and seals it into an
 event.v2 envelope; flows verifies the seal and admits a person's flow when the person is the
 subject (`refs.uid`) or in the audience. A caller cannot claim an audience: `_audience` in refs is
-stripped, and an envelope that does not verify is a 403, never an unsigned admission.
+stripped, and an envelope that does not verify is a 403, never an unsigned admission. The seal is
+bound to the fact it rides on and expires, so a sealed audience cannot be lifted onto another
+subject, record or event, nor replayed later; and it is keyed by its own secret only.
 
 OFFLINE: sqlite double, FakeClock, flows-api in process. Synthetic ids only.
 """
@@ -54,6 +56,16 @@ ENVELOPE = {"v": 2, "producer": "crm", "object": "card", "owner": D, "visibility
                           "next_check_at": "2026-10-18T09:00:00+00:00", "handoff": "accepted"}}
 
 
+def _seal(env=ENVELOPE, secret=SEAL, *, source_event_id, refs=REFS, event_type=EVENT, now=None):
+    """The envelope sealed over the fact `{event_type, source_event_id, refs}` it is posted with."""
+    return fe.seal(env, secret, fe.fact(event_type, source_event_id, refs), now=now)
+
+
+def _body(source_event_id, refs=REFS, **seal):
+    return {"event_type": EVENT, "source_event_id": source_event_id, "refs": refs,
+            "envelope": _seal(source_event_id=source_event_id, refs=refs, **seal)}
+
+
 # ── admission, in process ─────────────────────────────────────────────────────────────────────
 def _people_rig():
     db, reg, clock, _ = rig()
@@ -69,7 +81,8 @@ def _admitted(db) -> set:
 
 def test_a_sealed_audience_admits_the_waiting_person_and_nobody_outside_it():
     db, reg, clock = _people_rig()
-    sealed = fe.verify(fe.seal(ENVELOPE, SEAL), SEAL, {"crm"})
+    the_fact = fe.fact(EVENT, "e19", REFS)
+    sealed = fe.verify(fe.seal(ENVELOPE, SEAL, the_fact), SEAL, {"crm"}, the_fact)
     assert admit(db, reg, clock, source_event_id="e19", event_type=EVENT, subject_refs=dict(REFS),
                  sealed=sealed) == 1
     assert _admitted(db) == {f"user:{D}/card-watch"}
@@ -130,8 +143,7 @@ def _people_admitted() -> set:
 
 
 def test_deny_19_a_card_v_decides_reaches_the_waiting_person_and_no_outsider(api):
-    body = {"event_type": EVENT, "source_event_id": "d8-19-sealed", "refs": REFS,
-            "envelope": fe.seal(ENVELOPE, SEAL)}
+    body = _body("d8-19-sealed")
     r = api.post("/events", json=body, headers=KEY)
     assert r.status_code == 202, r.text[:300]
     assert _people_admitted() == {f"user:{D}/card-watch"}
@@ -153,8 +165,8 @@ def test_deny_19_a_caller_claimed_audience_reaches_no_outsider(api):
     lambda e: {**e, "sig": "f" * 64},
 ], ids=["audience", "producer", "content-field", "sig"])
 def test_deny_19_a_tampered_envelope_is_refused_403_and_admits_nobody(api, tamper):
-    body = {"event_type": EVENT, "source_event_id": "d8-19-tampered", "refs": REFS,
-            "envelope": tamper(fe.seal(ENVELOPE, SEAL))}
+    body = _body("d8-19-tampered")
+    body["envelope"] = tamper(body["envelope"])
     r = api.post("/events", json=body, headers=KEY)
     assert r.status_code == 403, r.text[:300]
     assert r.json()["detail"] == {"refused": "envelope_unverified"}
@@ -162,16 +174,41 @@ def test_deny_19_a_tampered_envelope_is_refused_403_and_admits_nobody(api, tampe
 
 
 def test_an_envelope_sealed_under_another_secret_is_refused(api, monkeypatch):
-    body = {"event_type": EVENT, "source_event_id": "d8-other-secret", "refs": REFS,
-            "envelope": fe.seal(ENVELOPE, "not-the-deployment-secret")}
+    body = _body("d8-other-secret", secret="not-the-deployment-secret")
     assert api.post("/events", json=body, headers=KEY).status_code == 403
     assert _people_admitted() == set()
 
 
-def test_with_no_seal_env_the_internal_secret_verifies(api, monkeypatch):
+def test_deny_with_no_seal_env_the_internal_secret_verifies_nothing(api, monkeypatch):
+    """The seal secret is its own credential: a fact sealed under the internal-tier secret is
+    refused when the seal secret is unset, and so is everything else."""
     monkeypatch.delenv("VEXA_FACT_SEAL_SECRET", raising=False)
     monkeypatch.setenv("INTERNAL_API_SECRET", "test-internal-secret")
-    body = {"event_type": EVENT, "source_event_id": "d8-fallback", "refs": REFS,
-            "envelope": fe.seal(ENVELOPE, "test-internal-secret")}
-    assert api.post("/events", json=body, headers=KEY).status_code == 202
-    assert _people_admitted() == {f"user:{D}/card-watch"}
+    for i, secret in enumerate(("test-internal-secret", SEAL)):
+        r = api.post("/events", json=_body(f"d8-no-seal-env-{i}", secret=secret), headers=KEY)
+        assert r.status_code == 403, r.text[:300]
+    assert _people_admitted() == set()
+
+
+@pytest.mark.parametrize("lift", [
+    lambda b: {**b, "refs": {**b["refs"], "uid": X}},
+    lambda b: {**b, "refs": {**b["refs"], "record_id": "card-8"}},
+    lambda b: {**b, "refs": {**b["refs"], "revision": 5}},
+    lambda b: {**b, "refs": {**b["refs"], "org_id": "org-other"}},
+    lambda b: {**b, "source_event_id": b["source_event_id"] + "-again"},
+], ids=["subject", "object-id", "revision", "org", "source-event-id"])
+def test_deny_a_sealed_audience_lifted_onto_another_fact_is_refused(api, lift):
+    """A valid seal for one card fact, reposted over a different subject, record, revision, org or
+    event id, reaches nobody: the seal covers the fact it rides on."""
+    r = api.post("/events", json=lift(_body("d8-lift")), headers=KEY)
+    assert r.status_code == 403, r.text[:300]
+    assert r.json()["detail"] == {"refused": "envelope_unverified"}
+    assert _people_admitted() == set()
+
+
+def test_deny_an_expired_seal_is_refused(api):
+    import time
+    stale = _body("d8-expired", now=time.time() - fe.SEAL_TTL_S - 1)
+    r = api.post("/events", json=stale, headers=KEY)
+    assert r.status_code == 403, r.text[:300]
+    assert _people_admitted() == set()

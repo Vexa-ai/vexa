@@ -922,7 +922,7 @@ terminal:
     displayName: ""           # the button reads "Continue with <displayName>"; empty = "Single sign-on"
     emailClaim: ""            # empty = "email" (ADFS without an email rule: "upn")
     nameClaim: ""             # empty = "name"
-    requireEmailVerified: ""  # "1" = refuse unless the ID token says email_verified: true
+    requireEmailVerified: ""  # empty or "1" = refuse unless the ID token says email_verified: true; "0" = off (ADFS)
     # The CA chain the provider's TLS certificate is issued under, when it is an internal PKI. Name a
     # ConfigMap OR a Secret holding the PEM bundle under `key`; it is added to the public roots.
     caBundle:

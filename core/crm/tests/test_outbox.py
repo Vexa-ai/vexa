@@ -1,3 +1,4 @@
+import pytest
 import httpx
 from sqlalchemy import create_engine, select
 from crm import schema as s
@@ -58,8 +59,28 @@ def test_a_card_fact_is_posted_with_its_envelope_sealed_by_the_crm_key():
     body = json.loads(calls[0].content)
     assert set(body) == {'event_type', 'source_event_id', 'refs', 'envelope'}
     assert body['refs'] == REFS
-    assert fact_envelope.verify(body['envelope'], 'seal', {'crm'}) == ENVELOPE
-    assert fact_envelope.verify(body['envelope'], 'other', {'crm'}) is None
+    the_fact = fact_envelope.fact('crm.record.changed', 'e1', REFS)
+    verified = fact_envelope.verify(body['envelope'], 'seal', {'crm'}, the_fact)
+    assert {k: v for k, v in verified.items() if k != 'exp'} == ENVELOPE
+    assert fact_envelope.verify(body['envelope'], 'other', {'crm'}, the_fact) is None
+
+
+def test_deny_the_posted_seal_covers_the_posted_fact_and_expires():
+    """The envelope the outbox posts verifies only over the event type, event id and refs it is posted
+    with, and only until its expiry: it cannot be lifted onto another subject or record, or replayed."""
+    engine = _outbox({'event_type': 'crm.record.changed', 'source_event_id': 'e1', 'subject_refs': REFS,
+                      'envelope': ENVELOPE})
+    calls, transport = _capture()
+    deliver(engine, 'http://flows', 'k', transport=transport, seal_secret='seal')
+    body = json.loads(calls[0].content)
+    env = body['envelope']
+    for other in ({**REFS, 'uid': '17'}, {**REFS, 'record_id': 'r2'}, {**REFS, 'revision': 4}):
+        assert fact_envelope.verify(env, 'seal', {'crm'},
+                                    fact_envelope.fact('crm.record.changed', 'e1', other)) is None
+    assert fact_envelope.verify(env, 'seal', {'crm'}, fact_envelope.fact('crm.record.changed', 'e2', REFS)) is None
+    assert fact_envelope.verify(env, 'seal', {'crm'}, fact_envelope.fact('crm.other', 'e1', REFS)) is None
+    assert fact_envelope.verify(env, 'seal', {'crm'}, fact_envelope.fact('crm.record.changed', 'e1', REFS),
+                                now=env['exp']) is None
 
 
 def test_an_old_row_without_an_envelope_is_posted_unchanged():
@@ -87,9 +108,33 @@ def test_no_title_or_summary_is_ever_in_the_posted_body():
     assert b'title' not in calls[0].content and b'summary' not in calls[0].content
 
 
-def test_the_seal_secret_falls_back_to_the_internal_secret(monkeypatch):
+def test_deny_the_seal_secret_never_falls_back_to_the_internal_secret(monkeypatch):
     monkeypatch.delenv('VEXA_FACT_SEAL_SECRET', raising=False)
     monkeypatch.setenv('INTERNAL_API_SECRET', 'internal')
-    assert fact_envelope.secret_from_env() == 'internal'
+    assert fact_envelope.secret_from_env() == ''
     monkeypatch.setenv('VEXA_FACT_SEAL_SECRET', 'own')
     assert fact_envelope.secret_from_env() == 'own'
+
+
+def test_deny_with_no_seal_secret_a_card_fact_stays_pending_and_is_never_posted(monkeypatch):
+    monkeypatch.delenv('VEXA_FACT_SEAL_SECRET', raising=False)
+    monkeypatch.setenv('INTERNAL_API_SECRET', 'internal')
+    engine = _outbox({'event_type': 'crm.record.changed', 'source_event_id': 'e1', 'subject_refs': REFS,
+                      'envelope': ENVELOPE})
+    calls, transport = _capture()
+    out = deliver(engine, 'http://flows', 'k', transport=transport)
+    assert out == {'delivered': 0, 'pending': True, 'reason': 'Envelope could not be sealed'}
+    assert calls == []
+
+
+def test_deny_the_delivery_process_refuses_to_start_without_its_seal_secret(monkeypatch):
+    import runpy
+    import sys
+    monkeypatch.delenv('VEXA_FACT_SEAL_SECRET', raising=False)
+    monkeypatch.setenv('INTERNAL_API_SECRET', 'internal')
+    monkeypatch.setenv('CRM_DATABASE_URL', 'sqlite://')
+    monkeypatch.setattr(sys, 'argv', ['crm.outbox'])
+    sys.modules.pop('crm.outbox', None)
+    with pytest.raises(SystemExit) as stop:
+        runpy.run_module('crm.outbox', run_name='__main__')
+    assert 'VEXA_FACT_SEAL_SECRET' in str(stop.value.code)

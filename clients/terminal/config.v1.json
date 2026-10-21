@@ -193,8 +193,8 @@
     {
       "key": "VEXA_OIDC_REQUIRE_EMAIL_VERIFIED",
       "class": "defaulted",
-      "default": "0",
-      "description": "1 = refuse a sign-in unless the ID token says email_verified: true. Off by default because the issuer is the operator's own directory (ADFS emits no such claim); turn it on for a provider where people set their own address.",
+      "default": "1",
+      "description": "1 (default) = refuse a sign-in unless the ID token says email_verified: true. 0 = take the address on the issuer's word, for a directory that issues no such claim (ADFS); anyone who can set their own address at that provider can then sign in as that address. An address taken that way is not recorded as verified, so it claims no CRM Person. Any other value refuses the start.",
       "targets": ["compose", "helm"]
     },
     {

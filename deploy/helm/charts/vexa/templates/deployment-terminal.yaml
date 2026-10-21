@@ -163,7 +163,7 @@ spec:
             - name: VEXA_OIDC_NAME_CLAIM
               value: {{ .nameClaim | default "" | quote }}
             - name: VEXA_OIDC_REQUIRE_EMAIL_VERIFIED
-              value: {{ .requireEmailVerified | default "" | toString | quote }}
+              value: {{ if kindIs "bool" .requireEmailVerified }}{{ ternary "1" "0" .requireEmailVerified | quote }}{{ else if kindIs "invalid" .requireEmailVerified }}""{{ else }}{{ toString .requireEmailVerified | quote }}{{ end }}
             {{- if or .caBundle.configMap .caBundle.secret }}
             - name: VEXA_OIDC_CA_FILE
               value: /etc/vexa-oidc/ca/ca.pem

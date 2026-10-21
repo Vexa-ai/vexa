@@ -1078,7 +1078,7 @@ services:
       - VEXA_FLOWS_ADMIN_KEY=${VEXA_FLOWS_ADMIN_KEY:-${ADMIN_TOKEN:-}}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
       - VEXA_FLOWS_TIMELINE_KEY=${VEXA_FLOWS_TIMELINE_KEY:-}
-      # event.v2 (D8): the secret fact envelopes are sealed under; unset = INTERNAL_API_SECRET.
+      # event.v2 (D8): the secret fact envelopes are sealed under — its own credential; unset = no envelope verifies.
       - VEXA_FACT_SEAL_SECRET=${VEXA_FACT_SEAL_SECRET:-}
       # S6 nudges (D15): off unless VEXA_FLOWS_NUDGES=1 and the flows_defs.nudges pack is loaded
       - VEXA_FLOWS_NUDGES=${VEXA_FLOWS_NUDGES:-}

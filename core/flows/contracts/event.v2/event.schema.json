@@ -22,10 +22,10 @@
       }
     },
     "Envelope": {
-      "description": "The sealed fact envelope. `sig` = hex HMAC-SHA256 over the canonical JSON (sorted keys, compact separators, UTF-8) of the envelope without `sig`, keyed by HMAC-SHA256(secret, \"vexa-fact-envelope:\" + producer).",
+      "description": "The sealed fact envelope. `sig` = hex HMAC-SHA256 over the canonical JSON (sorted keys, compact separators, UTF-8) of `{\"envelope\": <the envelope without sig>, \"fact\": {\"event_type\", \"source_event_id\", \"refs\"}}` — the seal covers the fact it rides on — keyed by HMAC-SHA256(secret, \"vexa-fact-envelope:\" + producer).",
       "type": "object",
       "additionalProperties": false,
-      "required": ["v", "producer", "object", "owner", "visibility", "audience", "sig"],
+      "required": ["v", "producer", "object", "owner", "visibility", "audience", "exp", "sig"],
       "properties": {
         "v": { "const": 2 },
         "producer": { "$ref": "#/$defs/ShortString", "description": "The producing domain; flows admits `crm`, `meetings`, `agent`." },
@@ -39,6 +39,7 @@
           "description": "Person ids the fact reaches, and `ws:<slug>` for a workspace principal (which never matches a person)."
         },
         "lifecycle": { "$ref": "#/$defs/Lifecycle" },
+        "exp": { "type": "integer", "description": "Unix seconds after which the seal is refused; the seal sets it 300 s ahead and verify refuses one further ahead than that (60 s skew)." },
         "sig": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },

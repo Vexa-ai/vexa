@@ -5,6 +5,8 @@ resolver the gateway and flows already ask — and the CRM is one more caller of
 carries everything the CRM's two gates need:
 
 - ``user_id`` and ``email`` — the person (decision 3 attaches their account to a person entity);
+- ``email_verified`` — whether a sign-in proved the person holds ``email``. Only a proven address
+  matches, attaches or claims a Person record (``store.ensure_account``, ``person_profiles``);
 - ``is_admin`` / ``person_is_admin`` — an instance administrator is a CRM administrator;
 - ``workspaces`` — the person's live memberships, already narrowed to a worker's ceiling. This is
   the membership half of a derived grant, and in a turn other people read it is the participants'
@@ -32,6 +34,9 @@ TIMEOUT_S = 5.0
 class Caller:
     subject: str
     email: str = ""
+    #: identity.v1 ``email_verified``: a sign-in proved the person holds ``email``. False when identity
+    #: did not say so (an API-made account, a changed address, an older identity, a bare subject).
+    email_verified: bool = False
     is_admin: bool = False
     #: Live memberships narrowed to the ceiling. Empty for a caller identity gave none.
     workspaces: tuple = ()
@@ -111,7 +116,8 @@ def from_validate(token: str, body: dict, *, trace: str = "") -> Caller:
     # D13: positive evidence only — a delegation is a delegation whatever the body says.
     credential_class = "delegation" if delegated else (
         str(body.get("credential_class") or "") if body.get("credential_class") in ("session", "key") else "")
-    return Caller(subject=str(uid), email=str(body.get("email") or "").strip().lower(), is_admin=admin,
+    return Caller(subject=str(uid), email=str(body.get("email") or "").strip().lower(),
+                  email_verified=body.get("email_verified") is True, is_admin=admin,
                   workspaces=workspaces, writable=writable, delegated=delegated,
                   regime=str(dlg.get("regime") or "").strip().lower(), shared=shared,
                   cross_org=shared and dlg.get("audience") == "cross_org",

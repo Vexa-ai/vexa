@@ -1586,13 +1586,19 @@ class Dispatcher:
         ``context.session`` (the chat conversation thread) is an agent-api routing hint, not part of the
         published unit.v1 wire contract — it is stripped before the schema check so the envelope stays
         conformant, while ``dispatch_id`` / ``build_unit_env`` still read it off the in-memory dispatch."""
+        # WHO PAYS FOR THIS TURN: the person it runs as — except a room's turn, which bills the
+        # room's payer (founder I20, `RoomPrincipal.payer`). The spend cap admits, and the meter
+        # counts, this one person.
+        payer = str((invocation.get("identity") or {}).get("subject") or "")
         if room_principal is not None:
-            # A ROOM'S TURN RUNS AS ITS WORKSPACE'S AGENT (C1): the workspace owner's account pays
-            # and is the token's subject; the speaker reads the conversation and is the turn's
-            # `on_behalf_of`; the unit is the room's one worker (`-signal` for a sensor's wake).
+            # A ROOM'S TURN RUNS AS ITS WORKSPACE'S AGENT (C1): the workspace owner's account is the
+            # token's subject; the speaker reads the conversation and is the turn's `on_behalf_of`;
+            # the payer is the owner, or in a room of two whoever started the turn; the unit is the
+            # room's one worker (`-signal` for a sensor's wake).
             speaker = str((invocation.get("identity") or {}).get("subject") or "")
             if not room_principal.on_behalf_of:
                 room_principal.on_behalf_of = speaker
+            payer = room_principal.payer
             # a sensor's wake and a scheduled turn (the recap, a routine) each have their own
             # sibling: a worker's regime is fixed when it is spawned (ADR-0046 decision 12)
             unit = room_principal.unit + {"signal": units.SIGNAL_UNIT_SUFFIX,
@@ -1615,7 +1621,7 @@ class Dispatcher:
         # so this one check covers them all. A refused turn mints nothing, delivers nothing, spawns
         # nothing; the caller answers the typed refusal.
         if getattr(self, "_llm_budget", None) is not None:
-            self._llm_budget.admit(str(invocation["identity"]["subject"]))
+            self._llm_budget.admit(payer)
         self.dispatched.append(invocation)
         identity = invocation["identity"]
         uid = dispatch_id(invocation)
@@ -1776,7 +1782,7 @@ class Dispatcher:
         if delivery is not None:
             self._watch_delivery(uid, env, tail=delivery)
         if meter is not None:
-            meter.watch(uid, str(identity["subject"]), from_id=meter_from)
+            meter.watch(uid, payer, from_id=meter_from)
         logger.info(
             "dispatch SPAWN workload=%s trigger=%s subject=%s launcher=%s warm_delivery=%s room=%s "
             "scaffold_mounts=%s",

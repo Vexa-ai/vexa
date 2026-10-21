@@ -40,6 +40,7 @@ from .. import obs
 from ..schema.models import APIToken, User
 from . import delegation_revocation as revocation
 from . import admin_account
+from . import public_profile
 from . import signin_allow
 from .db import get_db
 from .internal_tier import check_internal
@@ -140,6 +141,12 @@ class ValidatedIdentity(BaseModel):
     # API key (legacy rows included), `delegation` for a worker's `vxd_` token. A decision that must
     # be a person's own act asks for `session`; a resolver that finds it missing reads "not one".
     credential_class: Literal["session", "key", "delegation"]
+    # THE ADDRESS WAS PROVEN (R4): `email` is the address a sign-in proved the person holds — an
+    # emailed link they redeemed, or a provider that vouched for it (`public_profile.email_verified`,
+    # kept with the address it proves). Always stated, positive evidence: an account made with an
+    # API call, or one whose address changed since, is `false`. Anything keyed by the address alone
+    # (a CRM Person claim) asks for `true`; a resolver that finds it missing reads `false`.
+    email_verified: bool = False
 
 
 def identity_of(user: User, *, scopes: List[str], is_admin: bool) -> Dict[str, Any]:
@@ -154,6 +161,7 @@ def identity_of(user: User, *, scopes: List[str], is_admin: bool) -> Dict[str, A
         "email": user.email,
         "is_admin": is_admin,
         "admin_account": is_account,
+        "email_verified": public_profile.email_is_verified(data_blob, str(user.email or "")),
     }
     if data_blob.get("webhook_url"):
         resp["webhook_url"] = data_blob["webhook_url"]

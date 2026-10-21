@@ -409,12 +409,20 @@ class UsageMeter:
         self._budget, self._r, self._topic = budget, redis_client, output_topic
         self._lock = threading.Lock()
         self._watch: dict = {}
+        self._settle: list = []
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
 
     def watch(self, unit_id: str, subject: str, from_id: str = "0-0") -> None:
+        """Count this unit's next turn to ``subject``, from ``from_id`` (the stream's tail before the
+        turn was delivered). A unit whose turns bill different people (a room of two) is handed to
+        the new payer here; what the stream holds up to ``from_id`` belongs to the earlier turns and
+        is still counted to the person who was paying for them."""
         with self._lock:
             w = self._watch.get(unit_id)
+            if w is not None and w["subject"] != subject and from_id and from_id != "0-0":
+                self._settle.append({"uid": unit_id, "cursor": w["cursor"], "until": from_id,
+                                     "subject": w["subject"]})
             if w is None or w["subject"] != subject:
                 self._watch[unit_id] = {"cursor": from_id or "0-0", "expect": 1, "since": time.time(),
                                         "subject": subject}
@@ -426,46 +434,64 @@ class UsageMeter:
         with self._lock:
             return sorted(self._watch)
 
+    def _count(self, uid: str, subject: str, entries) -> tuple[float, str, int]:
+        """Record every usage the entries carry to ``subject``: ``(spent, last id, turns completed)``."""
+        total, cursor, done = 0.0, "", 0
+        for eid, fields in entries:
+            cursor = eid
+            try:
+                ev = json.loads((fields or {}).get("event") or "{}")
+            except ValueError:
+                continue
+            t = ev.get("type")
+            # A turn's usage rides its `done` (`usage`); the write-back phase, whose `done` is
+            # dropped, hands it on as an `llm-usage` event (`worker.engine.writeback_events`).
+            usage = ev if t == USAGE_EVENT else (
+                ev.get("usage") if t == "done" and isinstance(ev.get("usage"), dict) else None)
+            if usage is not None:
+                try:
+                    first = self._r.set(f"{PREFIX}:seen:{uid}:{eid}", "1", nx=True, ex=SEEN_TTL_S)
+                except Exception:  # noqa: BLE001
+                    first = True
+                if first:
+                    try:
+                        from shared import usage as usage_mod  # noqa: PLC0415
+                        total += self._budget.record(subject, usage, kind=usage_mod.kind_of_unit(uid))
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("usage meter: spend not recorded (%s)", type(exc).__name__)
+            elif t == "turn-complete":
+                done += 1
+        return total, cursor, done
+
     def poll_once(self) -> float:
         total = 0.0
         with self._lock:
+            settle, self._settle = self._settle, []
             units = {u: dict(w) for u, w in self._watch.items()}
+        # the earlier payer's turns on a unit that changed hands, bounded by where the new one began
+        for s in settle:
+            try:
+                entries = self._r.xrange(self._topic(s["uid"]), min=f"({s['cursor']}",
+                                         max=s["until"]) or []
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("usage meter: unit stream unreadable (%s)", type(exc).__name__)
+                with self._lock:
+                    self._settle.append(s)      # read again on the next pass
+                continue
+            total += self._count(s["uid"], s["subject"], entries)[0]
         for uid, w in units.items():
             try:
                 entries = self._r.xrange(self._topic(uid), min=f"({w['cursor']}", count=500) or []
             except Exception as exc:  # noqa: BLE001
                 logger.warning("usage meter: unit stream unreadable (%s)", type(exc).__name__)
                 continue
-            cursor, done = w["cursor"], 0
-            for eid, fields in entries:
-                cursor = eid
-                try:
-                    ev = json.loads((fields or {}).get("event") or "{}")
-                except ValueError:
-                    continue
-                t = ev.get("type")
-                # A turn's usage rides its `done` (`usage`); the write-back phase, whose `done` is
-                # dropped, hands it on as an `llm-usage` event (`worker.engine.writeback_events`).
-                usage = ev if t == USAGE_EVENT else (
-                    ev.get("usage") if t == "done" and isinstance(ev.get("usage"), dict) else None)
-                if usage is not None:
-                    try:
-                        first = self._r.set(f"{PREFIX}:seen:{uid}:{eid}", "1", nx=True, ex=SEEN_TTL_S)
-                    except Exception:  # noqa: BLE001
-                        first = True
-                    if first:
-                        try:
-                            from shared import usage as usage_mod  # noqa: PLC0415
-                            total += self._budget.record(w["subject"], usage,
-                                                         kind=usage_mod.kind_of_unit(uid))
-                        except Exception as exc:  # noqa: BLE001
-                            logger.error("usage meter: spend not recorded (%s)", type(exc).__name__)
-                elif t == "turn-complete":
-                    done += 1
+            spent, last, done = self._count(uid, w["subject"], entries)
+            total += spent
+            cursor = last or w["cursor"]
             with self._lock:
                 cur = self._watch.get(uid)
-                if cur is None:
-                    continue
+                if cur is None or cur["subject"] != w["subject"]:
+                    continue        # handed to another payer meanwhile: its own cursor stands
                 cur["cursor"] = cursor
                 cur["expect"] -= done
                 if cur["expect"] <= 0 or time.time() - cur["since"] > WATCH_TTL_S:

@@ -2,12 +2,13 @@
 enumerated lifecycle coordination fields of a card fact (kind, state, next_actor, next_check_at,
 handoff — PRD 0.13.4 D8/C8).
 
-A row whose event carries an `envelope` (event.v2) is SEALED here with the `crm` producer key and
-posted as `{event_type, source_event_id, refs, envelope}`; flows admits it to the subject's flows and
-to every person in the envelope's audience, and refuses it 403 if the seal does not verify. The seal
-secret is `VEXA_FACT_SEAL_SECRET`, else `INTERNAL_API_SECRET` (`fact_envelope.secret_from_env`), and
-must resolve to the same value flows-api reads. A row without an `envelope` (written before D8) is
-posted exactly as before. Neither ever carries a title, a summary or any other field value: refs are
+A row whose event carries an `envelope` (event.v2) is SEALED here, at delivery, with the `crm`
+producer key, bound to the fact it rides on (event type, event id and refs) and good for
+`fact_envelope.SEAL_TTL_S`; it is posted as `{event_type, source_event_id, refs, envelope}`. flows
+admits it to the subject's flows and to every person in the envelope's audience, and refuses it 403
+if the seal does not verify. The seal secret is `VEXA_FACT_SEAL_SECRET` — the same value flows-api
+reads — and the delivery process refuses to start without it. A row without an `envelope` is
+posted unsealed and reaches its subject only. Neither ever carries a title, a summary or any other field value: refs are
 references (M5) and the envelope's keys are enumerated by `fact_envelope`."""
 import os
 import httpx
@@ -21,7 +22,8 @@ def _body(event, secret):
     body = {'event_type': event['event_type'], 'source_event_id': event['source_event_id'],
             'refs': event['subject_refs']}
     if event.get('envelope') is not None:
-        body['envelope'] = fact_envelope.seal(event['envelope'], secret)
+        body['envelope'] = fact_envelope.seal(event['envelope'], secret, fact_envelope.fact(
+            body['event_type'], body['source_event_id'], body['refs']))
     return body
 
 
@@ -62,6 +64,9 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--watch',action='store_true')
     args=parser.parse_args()
+    if not fact_envelope.secret_from_env():
+        raise SystemExit(f'{fact_envelope.SEAL_SECRET_ENV} is required: the outbox seals every card fact '
+                         'it delivers, and flows-api must verify under the same value')
     engine=create_engine(os.environ['CRM_DATABASE_URL'],pool_pre_ping=True,pool_size=1,max_overflow=0)
     while True:
         try:

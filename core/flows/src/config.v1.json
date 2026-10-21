@@ -147,7 +147,7 @@
     {
       "key": "VEXA_FACT_SEAL_SECRET",
       "class": "capability",
-      "description": "The secret event.v2 fact envelopes are sealed under (PRD 0.13.4 D8). `POST /events` verifies a producer's envelope with HMAC-SHA256 under a per-producer key derived from it (`fact_envelope.producer_key`); an envelope that does not verify is refused 403 `envelope_unverified`. UNSET: INTERNAL_API_SECRET is used, which every producer on the internal tier already holds; set it (to the same value on every producer, e.g. crm's outbox) to give the seal its own rotation.",
+      "description": "The secret event.v2 fact envelopes are sealed under (PRD 0.13.4 D8). `POST /events` verifies a producer's envelope with HMAC-SHA256 under a per-producer key derived from it (`fact_envelope.producer_key`), over the envelope, its expiry and the fact it rides on (event type, event id, refs); an envelope that does not verify is refused 403 `envelope_unverified`. It is its own credential with no fallback: UNSET, no envelope verifies. Set it to the same value on every sealing producer (crm's outbox, which refuses to start without it).",
       "capability": "fact_seal_key",
       "secret": true,
       "targets": [
@@ -756,8 +756,8 @@
       "when_unconfigured": "The timeline stays readable, by the operator key only."
     },
     "fact_seal_key": {
-      "description": "A seal secret for event.v2 fact envelopes distinct from the internal-tier secret (D8).",
-      "when_unconfigured": "Envelopes are sealed and verified under INTERNAL_API_SECRET. Facts still admit by subject ∪ audience; only the key's rotation is shared with the internal tier."
+      "description": "The seal secret for event.v2 fact envelopes (D8) — the sealed audience: a fact reaches the people its producer names, not only its subject.",
+      "when_unconfigured": "No envelope verifies: a sealed fact is refused 403 `envelope_unverified`, and a fact without an envelope admits to its subject only. Audiences (D8) are off."
     },
     "crm_domain": {
       "description": "This deployment carries the optional CRM (ADR-0047): the flows_defs.crm pack hands workspace references to it.",

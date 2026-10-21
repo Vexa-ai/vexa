@@ -872,17 +872,20 @@ class Store:
         verified email among the match identifiers first (I10), else by the record it is attached to,
         else by creating the person. A Person that already has another account attached gets this one
         LINKED (``persons.link``: an ``account:`` identifier, and the merge card the person confirms),
-        never a second record. Returns the person's record id, or None where the organisation has no
+        never a second record. Only an address identity says a sign-in proved (``email_verified``)
+        matches a record or becomes one's ``Email`` and match identifier; an unproven one only names
+        the person created. Returns the person's record id, or None where the organisation has no
         Person type yet."""
         caller=as_caller(actor)
         if caller.internal or not caller.subject:
             return None
+        email=caller.email if caller.email_verified else ''
         with self.engine.begin() as c:
-            if caller.email:
-                matched=self.persons.resolve(c,org,'',caller.email)
+            if email:
+                matched=self.persons.resolve(c,org,'',email)
                 if matched is not None:
                     if matched['account_id']==caller.subject:
-                        self.persons.offer(c,org,matched,{caller.subject:caller.email})
+                        self.persons.offer(c,org,matched,{caller.subject:email})
                         return matched['id']
                     attached_elsewhere=c.execute(select(s.records.c.id).where(s.records.c.org_id==org,
                         s.records.c.account_id==caller.subject)).scalar_one_or_none()
@@ -892,7 +895,7 @@ class Store:
                             .values(account_id=caller.subject,revision=after['revision']))
                         self._revision(c,org,caller.subject,before,after,'Account attached on sign-in (verified email)',[])
                         return matched['id']
-                    self.persons.link(c,org,matched,caller.subject,caller.email)
+                    self.persons.link(c,org,matched,caller.subject,email)
                     return matched['id']
             found=self.persons.resolve(c,org,caller.subject)
             if found is not None:return found['id']
@@ -906,13 +909,13 @@ class Store:
                 if found:return found
             record_id=str(uuid5(NAMESPACE_URL,json.dumps(['crm-account',org,caller.subject])))
             fields={'Name':caller.email or caller.subject}
-            if caller.email:fields['Email']=caller.email
+            if email:fields['Email']=email
             row=dict(org_id=org,id=record_id,object_type='Person',owner_id=caller.subject,revision=1,fields=fields,
                      narrative='',quarantined=False,deleted=False,account_id=caller.subject,merged_into=None)
             c.execute(s.records.insert().values(**row))
-            if caller.email and c.execute(select(s.match_ids.c.record_id).where(s.match_ids.c.org_id==org,
-                    s.match_ids.c.identifier=='email:'+caller.email)).scalar_one_or_none() is None:
-                c.execute(s.match_ids.insert().values(org_id=org,identifier='email:'+caller.email,record_id=record_id))
+            if email and c.execute(select(s.match_ids.c.record_id).where(s.match_ids.c.org_id==org,
+                    s.match_ids.c.identifier=='email:'+email)).scalar_one_or_none() is None:
+                c.execute(s.match_ids.insert().values(org_id=org,identifier='email:'+email,record_id=record_id))
             self._revision(c,org,caller.subject,None,row,'Person created on sign-in',[])
             return record_id
 
