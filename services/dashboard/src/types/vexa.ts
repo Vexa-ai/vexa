@@ -39,6 +39,8 @@ export interface StatusTransition {
   finalized_by?: string;
 }
 
+export type OutcomeClass = "ours" | "host_or_platform" | "user" | "normal" | "unknown" | "pending";
+
 export interface MeetingData {
   name?: string;
   title?: string;
@@ -52,6 +54,10 @@ export interface MeetingData {
   failure_reason?: string;
   // Completion details
   completion_reason?: string;
+  // How the run ended, graded by meeting-api at the terminal transition.
+  // Only "ours" is a failure of the service; see getOutcomeInfo.
+  outcome_class?: OutcomeClass;
+  outcome_reason?: string;
   // Status history
   status_transition?: StatusTransition[];
   calendar_uid?: string;
@@ -335,8 +341,94 @@ export interface DetailedStatusInfo {
   description?: string;
 }
 
+const OUTCOME_TONE: Record<"ok" | "neutral" | "host" | "error", { color: string; bgColor: string }> = {
+  ok: { color: "text-green-600 dark:text-green-400", bgColor: "bg-green-100 dark:bg-green-950/50" },
+  neutral: { color: "text-gray-600 dark:text-gray-400", bgColor: "bg-gray-100 dark:bg-gray-800/50" },
+  host: { color: "text-amber-600 dark:text-amber-400", bgColor: "bg-amber-100 dark:bg-amber-950/50" },
+  error: { color: "text-red-600 dark:text-red-400", bgColor: "bg-red-100 dark:bg-red-950/50" },
+};
+
+function hostOutcome(reason: string): [string, string] {
+  if (reason === "rejected_by_host") return ["Host rejected the bot", "The host declined the bot's request to join"];
+  if (reason === "evicted_by_host") return ["Removed by host", "The host removed the bot from the meeting"];
+  if (reason === "tenant_requires_sign_in") return ["Your organisation requires sign-in", "This meeting only admits signed-in members of the organisation"];
+  if (reason === "host_requires_signed_in_users") return ["Host requires sign-in", "The host only admits signed-in users"];
+  if (reason === "platform_blocks_bots" || reason === "platform_captcha") return ["Blocked by the platform", "The meeting platform did not let the bot join"];
+  if (reason === "host_never_started") return ["Host never started the meeting", "The meeting was never started by its host"];
+  if (reason === "meeting_ended_before_admission") return ["Meeting ended", "The meeting ended before the bot was admitted"];
+  if (reason.startsWith("unsupported_url")) return ["Link not supported", "This kind of meeting link is not supported"];
+  return ["Not admitted by host", "Nobody admitted the bot from the waiting room"];
+}
+
+function userOutcome(reason: string): [string, string] {
+  if (reason === "malformed_request" || reason === "malformed_url" || reason === "not_a_meeting_url") return ["Invalid meeting link", "The request did not contain a valid meeting link"];
+  if (reason === "dead_or_expired_link") return ["Link expired", "The meeting link is no longer valid"];
+  if (reason === "missing_passcode") return ["Passcode required", "The meeting needs a passcode that was not provided"];
+  if (reason === "deleted_by_user") return ["Deleted", "The meeting's artifacts were deleted"];
+  if (reason === "needs_help_unanswered") return ["Needed your help", "The bot asked for help joining and nobody answered"];
+  return ["Stopped", "Stopped by the user"];
+}
+
+function normalOutcome(reason: string): [string, string] {
+  if (reason === "delivered_stopped") return ["Stopped", "Transcription completed; stopped by the user"];
+  if (reason === "max_bot_time" || reason === "delivered_max_bot_time_exceeded") return ["Time limit reached", "The bot left at the configured time limit"];
+  if (reason === "no_speech_heard") return ["No speech heard", "The bot was in the meeting but heard no one speak"];
+  if (reason === "delivered_no_transcription_requested") return ["Completed", "The bot attended without transcription"];
+  if (reason.startsWith("delivered_")) return ["Meeting ended", "Transcription completed"];
+  return ["Meeting ended", "Everyone left the meeting"];
+}
+
+/**
+ * The customer-facing label for how a run ended, from meeting-api's `outcome_class` /
+ * `outcome_reason`. Only "ours" is rendered as an error; a host who did not admit the bot,
+ * a user stop, or a normal end is not a failure. Returns null when the row carries no outcome
+ * (older rows, in-flight states), so callers fall back to the status-based label.
+ */
+export function getOutcomeInfo(data?: MeetingData): (DetailedStatusInfo & { isFailure: boolean }) | null {
+  const cls = data?.outcome_class;
+  if (!cls || cls === "pending") return null;
+  const reason = data?.outcome_reason || "";
+  let label: string;
+  let description: string;
+  let tone: keyof typeof OUTCOME_TONE;
+  switch (cls) {
+    case "ours":
+      [label, description, tone] = ["Bot error", "Something went wrong on our side", "error"];
+      break;
+    case "host_or_platform":
+      [label, description] = hostOutcome(reason);
+      tone = "host";
+      break;
+    case "user":
+      [label, description] = userOutcome(reason);
+      tone = "neutral";
+      break;
+    case "normal":
+      [label, description] = normalOutcome(reason);
+      tone = "ok";
+      break;
+    default:
+      [label, description, tone] = ["Ended", "The bot run ended", "neutral"];
+  }
+  return { label, description, ...OUTCOME_TONE[tone], isFailure: cls === "ours" };
+}
+
+/** True when a terminal meeting should be shown as an error: outcome "ours", or no outcome and status failed. */
+export function isFailureOutcome(status: MeetingStatus, data?: MeetingData): boolean {
+  const o = getOutcomeInfo(data);
+  return o ? o.isFailure : status === "failed";
+}
+
 export function getDetailedStatus(status: MeetingStatus, data?: MeetingData): DetailedStatusInfo {
   const baseConfig = MEETING_STATUS_CONFIG[status];
+
+  // The graded outcome wins over the raw status for a finished run.
+  if (status === "completed" || status === "failed") {
+    const outcome = getOutcomeInfo(data);
+    if (outcome) {
+      return { label: outcome.label, description: outcome.description, color: outcome.color, bgColor: outcome.bgColor };
+    }
+  }
 
   // Fallback config in case status is invalid or config is missing
   const fallbackConfig: DetailedStatusInfo = {

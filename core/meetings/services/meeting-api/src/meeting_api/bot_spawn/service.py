@@ -340,6 +340,8 @@ def _meeting_response(row: dict, *, sessions: Optional[list] = None) -> dict:
         "end_time": row.get("end_time"),
         "completion_reason": data.get("completion_reason"),
         "failure_stage": data.get("failure_stage"),
+        "outcome_class": data.get("outcome_class"),
+        "outcome_reason": data.get("outcome_reason"),
         "data": data,
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),

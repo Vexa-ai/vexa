@@ -40,6 +40,30 @@ The same two fields ride the signed `meeting.completed` and `bot.failed`
 [webhooks](/webhooks) under `data.meeting`, so you can route on the reason without polling.
 `GET /meetings/{id}` carries them too.
 
+## `outcome_class`: how the run ended, graded
+
+`completion_reason` is the bot's own account. **`outcome_class`** is the verdict: meeting-api
+grades every run once, when it ends, from the reason, the stage, the transcript and the run's
+history. It is a top-level field next to `completion_reason`, with a finer
+**`outcome_reason`** slug beside it, and it rides the same webhooks.
+
+| `outcome_class` | Meaning | Examples of `outcome_reason` |
+|---|---|---|
+| `ours` | A Vexa fault. **The only class that is a failure.** | `join_automation`, `page_or_browser`, `bot_start_failed`, `died_in_meeting`, `empty_transcript` |
+| `host_or_platform` | The host or the platform kept the bot out. | `not_admitted`, `rejected_by_host`, `evicted_by_host`, `tenant_requires_sign_in`, `unsupported_url_zoom_webinar` |
+| `user` | Your request or your action ended it. | `stopped`, `stopped_before_admission`, `malformed_request`, `dead_or_expired_link`, `missing_passcode` |
+| `normal` | The meeting ran and ended. | `delivered_stopped`, `everyone_left`, `max_bot_time`, `no_speech_heard` |
+| `unknown` | The recorded evidence is not enough to grade the run. | `completed_no_evidence:…` |
+
+A `failed` meeting with `outcome_class: host_or_platform` and `outcome_reason: not_admitted` was
+not admitted by the host, whatever `completion_reason` says. In-flight meetings carry no
+`outcome_class`; meetings that ended before the field existed may not either.
+
+```bash
+curl -H "X-API-Key: $API_KEY" "$API_BASE/bots" \
+  | jq '.meetings[] | {id, status, outcome_class, outcome_reason}'
+```
+
 ## The ten reasons
 
 **Whose side** is the column that matters. Two of the ten point at Vexa; the rest are your own
