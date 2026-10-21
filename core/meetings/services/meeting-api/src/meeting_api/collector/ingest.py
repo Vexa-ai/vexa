@@ -394,11 +394,15 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         # PREFER the native id the producer STAMPED on the segment (P23: one writer, no re-derivation —
         # and no DB lookup that can miss, which left tc:meeting:{native} empty and the copilot starved).
         # Fall back to the store mapping only for older bots that don't stamp it.
+        # The bot stamps the native id but not the platform, so the platform comes from the store's
+        # (cached, immutable-per-row) mapping whenever the producer did not stamp it.
         native_id = data.get("native_meeting_id")
         platform_native = data.get("platform")
-        if not native_id:
+        if not native_id or not platform_native:
             pair = await _resolve_native(store, meeting_id)
-            native_id, platform_native = pair if pair else (None, None)
+            if pair:
+                native_id = native_id or pair[0]
+                platform_native = platform_native or pair[1]
         # FAULT-ISOLATED (P18): the segments are already persisted (durable). A transient redis blip on
         # the live publish must NOT propagate out of ingest() — that would abort the batch BEFORE
         # consume_segments acks it. Surface it and return the persisted count.

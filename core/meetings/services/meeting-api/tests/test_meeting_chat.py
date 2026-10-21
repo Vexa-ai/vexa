@@ -381,6 +381,24 @@ async def test_ingesting_a_chat_segment_publishes_a_ws_chat_message_frame():
     WS_CHAT.validate(frames[0])
 
 
+async def test_the_chat_frame_names_the_platform_when_the_bot_stamps_only_the_native_id():
+    # The bot's real payload (adapters/transcript-redis.ts) carries meeting_id + native_meeting_id and
+    # no platform; the frame's meeting block must still name it (seen null on the w0134 rig).
+    store = InMemoryTranscriptStore()
+    mid = store.seed_meeting(user_id=USER, platform="jitsi", native_meeting_id=NATIVE)
+    bus = FakeRedisBus(fakeredis.aioredis.FakeRedis())
+    msg = {"payload": json.dumps({
+        "type": "transcription", "meeting_id": str(mid), "native_meeting_id": NATIVE,
+        "segments": [_chat_segment(1, "Alice", "hi bot")],
+    })}
+
+    await ingest(store, bus, msg)
+
+    frames = [json.loads(raw) for ch, raw in bus.published if ch == f"va:meeting:{mid}:chat"]
+    assert [f["meeting"] for f in frames] == [{"id": mid, "native_id": NATIVE, "platform": "jitsi"}]
+    WS_CHAT.validate(frames[0])
+
+
 async def test_ingesting_speech_publishes_no_chat_frame():
     store = InMemoryTranscriptStore()
     mid = store.seed_meeting(user_id=USER, platform=PLAT, native_meeting_id=NATIVE)
