@@ -121,6 +121,10 @@ def _h(who: str, **extra) -> dict:
     return {"X-User-Id": who, "X-User-Email": MAIL.get(who, ""), **extra}
 
 
+#: The person's own app: a signed-in session (D13), the only credential that changes members.
+APP = {"x-user-credential-class": "session"}
+
+
 def _worker(who: str, *, regime: str = "human", workspaces: str = "acme") -> dict:
     """A worker acting for ``who``: the delegation headers the identity door stamps."""
     return _h(who, **{DELEGATION_HEADERS["regime"]: regime,
@@ -269,7 +273,7 @@ def test_the_owner_adds_a_mentioned_person_by_id(env):
     client, _store, root, *_ = env
     m.grant_membership(root, "other", ALICE, "owner", added_by=DAVE, index=env[3], email=MAIL[ALICE])
     r = client.post("/api/workspace/members/add",
-                    json={"workspace": "other", "person": JOE, "role": "write"}, headers=_h(ALICE))
+                    json={"workspace": "other", "person": JOE, "role": "write"}, headers=_h(ALICE, **APP))
     assert r.status_code == 200, r.text
     assert r.json()["added"] is True and m.is_member(root, "other", JOE) == "contributor"
 
@@ -277,7 +281,7 @@ def test_the_owner_adds_a_mentioned_person_by_id(env):
 def test_a_workspace_is_named_by_its_name_or_slug(env):
     client, _store, root, *_ = env
     r = client.post("/api/workspace/members/add",
-                    json={"workspace": "Acme", "person": JOE, "role": "write"}, headers=_h(ALICE))
+                    json={"workspace": "Acme", "person": JOE, "role": "write"}, headers=_h(ALICE, **APP))
     assert r.status_code == 200, r.text
     assert m.is_member(root, "acme", JOE) == "contributor"
     assert "can now read and write acme" in r.json()["said"]
@@ -286,10 +290,10 @@ def test_a_workspace_is_named_by_its_name_or_slug(env):
 def test_a_non_owner_cannot_add_to_a_workspace(env):
     client, _store, root, *_ = env
     r = client.post("/api/workspace/members/add",
-                    json={"workspace": "acme", "person": ALICE, "role": "write"}, headers=_h(JOE))
+                    json={"workspace": "acme", "person": ALICE, "role": "write"}, headers=_h(JOE, **APP))
     assert r.status_code == 403
     r = client.post("/api/workspace/members/add",
-                    json={"workspace": "other", "person": JOE, "role": "read"}, headers=_h(ALICE))
+                    json={"workspace": "other", "person": JOE, "role": "read"}, headers=_h(ALICE, **APP))
     assert r.status_code == 404           # not one of alice's workspaces: not even named back
     assert m.is_member(root, "other", JOE) is None
 
@@ -299,7 +303,7 @@ def test_an_id_outside_the_owners_people_or_an_unknown_address_adds_nobody(env):
     for person in (DAVE, "nobody@acme.test"):
         r = client.post("/api/workspace/members/add",
                         json={"workspace": "acme", "person": person, "role": "read"},
-                        headers=_h(ALICE))
+                        headers=_h(ALICE, **APP))
         assert r.status_code == 404, r.text
     assert m.is_member(root, "acme", DAVE) is None
 
@@ -329,8 +333,13 @@ def test_one_sentence_makes_both_shares_with_the_mentioned_account(env):
     assert f"account id `{JOE}`" in prompt and DAVE not in prompt   # dave is not alice's to mention
     # the fake agent: read the id off the mention block, call the two tools
     w = _worker(ALICE, workspaces="acme")
+    # who is in a workspace changes only by the person's own session (H3, D13): the agent proposes
     a = client.post("/api/workspace/members/add",
                     json={"workspace": "acme", "person": JOE, "role": "write"}, headers=w)
+    assert a.status_code == 403 and a.json()["detail"]["reason"] == "members_need_the_person", a.text
+    assert m.is_member(root, "acme", JOE) == "viewer"
+    a = client.post("/api/workspace/members/add",
+                    json={"workspace": "acme", "person": JOE, "role": "write"}, headers=_h(ALICE, **APP))
     # the chat share is a card naming Joe (what in the history is sensitive, in one line); the
     # person's press is what the agent acts on — the typed sentence alone adds no one
     assert client.post("/api/sessions/pchat/participants", json={"subject": JOE},

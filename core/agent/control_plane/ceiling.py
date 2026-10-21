@@ -126,6 +126,13 @@ def delegation_allows(request: "Request", slug: Optional[str]) -> bool:
     return delegation.ceiling_allows(ceiling, slug, subject=request.headers.get(SUBJECT_HEADER) or "")
 
 
+def names_in_ceiling(request: "Request", slug: Optional[str]) -> bool:
+    """Does the caller's dispatch NAME workspace ``slug`` in its ceiling? A caller with no ceiling,
+    or with ``*``, names nothing: the answer for an account that is in no roster (a workspace
+    principal), whose whole reach is the list it was dispatched with."""
+    return _shared_allows(_ceiling(request), slug)
+
+
 #: The workspaces every subject reads, so a read is never held to a ceiling over them: the company
 #: layer, mounted read-only into every worker (`_read_target` holds only a WRITE there to it).
 READ_BY_EVERYONE = delegation.READ_BY_EVERYONE

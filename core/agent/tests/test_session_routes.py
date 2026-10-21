@@ -5,6 +5,8 @@ L2: a real FastAPI app over a sqlite session store and fakes; no redis, no runti
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -40,11 +42,22 @@ class _FakeReader:
         yield {"type": "turn-complete"}
 
 
+def co_members(root, *subjects):
+    """The people these chats add share a workspace (the add rule: a person by id or address is
+    one the adder shares a workspace with)."""
+    p = root / "people" / "policy"
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "members.json").write_text(json.dumps(
+        [{"subject": s, "role": "owner" if i == 0 else "contributor"}
+         for i, s in enumerate(subjects or ("alice", "bob", "vic", "carol"))]))
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-model-credential")
     root = tmp_path / "ws"
     root.mkdir()
+    co_members(root)
     store = SessionStore.open(f"sqlite:///{tmp_path / 's.db'}", MemBlobs())
     settings = load_settings(workspaces_dir=str(root), redis_url="",
                              global_system_workspace_path=str(root / "_global"))

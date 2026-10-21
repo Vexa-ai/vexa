@@ -28,8 +28,10 @@ mounts and the new token, and the old one idles out. A guest joining, a call par
 outside, a member removed or a connection closed never reaches a warm worker minted before it.
 
 CALL PARTICIPANTS COUNT IN THE AUDIENCE (D27). Anyone on the room's live call can hear the answer and
-speak into the turn, so each must be placed as a member of W (by account, address or roster name);
-one who cannot be placed — or a call whose participants cannot be read — makes it `cross_org`.
+speak into the turn, so each must be placed as a member of W — by account id or address, never by
+a name: a meeting display name is whatever its holder typed, so one that only carries a name
+(`NAME_ONLY`) is placed nowhere. One who cannot be placed — or a call whose participants cannot be
+read — makes it `cross_org`.
 
 THE PRINCIPAL KIND (D2, 0.13.4). identity now keeps a numeric principal of kind `workspace` per
 workspace (admin-api `principals`; delegation.v1 `principal_kind`/`principal_workspace`/`on_behalf_of`;
@@ -237,13 +239,18 @@ class RoomPrincipal:
                 "writable": self.writable, "grant": self.grant_hash}
 
 
+#: The prefix a call participant known only by its display name carries: never placed as a member.
+NAME_ONLY = "name:"
+
+
 def _placeable(rows: list) -> set:
-    """Every spelling a W member answers to: account id, address, roster name (case-folded)."""
+    """Every identity a W member is placed by: account id and address (case-folded) — never a roster
+    name, which a meeting guest can type as their own display name."""
     out = set()
     for r in rows or []:
         if not isinstance(r, dict):
             continue
-        for k in ("subject", "email", "name", "display_name"):
+        for k in ("subject", "email"):
             v = " ".join(str(r.get(k) or "").split()).casefold()
             if v:
                 out.add(v)
@@ -268,7 +275,7 @@ def audience_of(root, workspace: str, members: list, *, cross_org_flag: bool = F
                 roster = []
         known = _placeable(roster)
         for who in participants:
-            if " ".join(str(who or "").split()).casefold() not in known:
+            if str(who or "").startswith(NAME_ONLY) or " ".join(str(who or "").split()).casefold() not in known:
                 return AUDIENCE_CROSS_ORG
     check = is_member or (lambda ws, who: membership.is_member(Path(root), ws, who) is not None)
     for who in members or []:
@@ -281,8 +288,10 @@ def audience_of(root, workspace: str, members: list, *, cross_org_flag: bool = F
 
 
 def call_participants_of(row: Optional[dict]) -> Optional[list]:
-    """Who is on a call, from its meetings row (``data.participants``, names or ``{name}``), the
-    bot's own name left out. ``None`` when the row cannot be read — an unknown call."""
+    """Who is on a call, from its meetings row (``data.participants``, names or ``{name, email}``),
+    the bot's own name left out: an entry that carries an address is that address; one that carries
+    only a display name is ``NAME_ONLY + name``, which nothing places. ``None`` when the row cannot
+    be read — an unknown call."""
     if not isinstance(row, dict):
         return None
     data = row.get("data") if isinstance(row.get("data"), dict) else {}
@@ -292,9 +301,12 @@ def call_participants_of(row: Optional[dict]) -> Optional[list]:
     bot = " ".join(str(data.get("bot_name") or "").split()).casefold()
     out = []
     for x in raw:
-        name = str((x.get("name") or x.get("email") or "") if isinstance(x, dict) else x or "").strip()
-        if name and " ".join(name.split()).casefold() != bot:
-            out.append(name)
+        name = str((x.get("name") or "") if isinstance(x, dict) else x or "").strip()
+        email = str((x.get("email") or "") if isinstance(x, dict) else "").strip()
+        if email:
+            out.append(email)
+        elif name and " ".join(name.split()).casefold() != bot:
+            out.append(NAME_ONLY + name)
     return out
 
 

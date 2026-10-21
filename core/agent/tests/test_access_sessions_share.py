@@ -23,7 +23,7 @@ from control_plane.workspace_reader import WorkspaceReader
 from shared.config import load_settings
 from tests._session_fakes import MemBlobs
 
-SUBJECTS = {"bob@acme.test": "bob", "carol@acme.test": "carol"}
+SUBJECTS = {"bob@acme.test": "bob", "carol@acme.test": "carol", "mallory@else.test": "mallory"}
 SECRET_TOOL_INPUT = "label:private-desk-query"
 SECRET_TOOL_RESULT = "PRIVATE-MAIL-BODY-7731"
 PROMPT = "[composed context: PRIVATE-PREAMBLE]\nsummarise my inbox"
@@ -82,6 +82,12 @@ def env(tmp_path, monkeypatch):
     app = create_app(dispatcher, stream_reader=_FakeReader(), reader=WorkspaceReader(str(root)),
                      sessions=_Sessions(), session_store=store,
                      email_subject_lookup=lambda a: SUBJECTS.get(str(a).lower()))
+    # alice, bob and carol share a workspace (the people alice may add); mallory has an account
+    # here and shares nothing with her
+    (root / "team" / "policy").mkdir(parents=True)
+    (root / "team" / "policy" / "members.json").write_text(json.dumps(
+        [{"subject": "alice", "role": "owner"}, {"subject": "bob", "role": "contributor"},
+         {"subject": "carol", "role": "contributor"}]))
     private = store.create("alice", name="pchat-1")
     store.save_bundle(private["id"], 0, _private_bundle())
     yield TestClient(app), store, private["id"]
@@ -223,3 +229,17 @@ def test_visible_text_never_carries_operations_or_composed_prompts():
     assert session_fork.visible_text({"role": "user", "text": PROMPT}) is None
     assert session_fork.visible_text({"role": "agent", "text": "", "ops": [{"name": "x"}]}) is None
     assert session_fork.visible_text({"role": "agent", "text": "hi", "ops": [{"name": "x"}]}) == ("agent", "hi")
+
+
+def test_an_address_outside_the_owners_people_is_answered_like_no_account(env):
+    """Add-by-email holds the co-member rule an id is held to: an account the owner shares no
+    workspace with is added nowhere, and the answer is the very one an unknown address gets."""
+    client, store, private = env
+    outsider = client.post("/api/sessions/pchat-1/participants", json={"email": "mallory@else.test"},
+                           headers=_h("alice"))
+    unknown = client.post("/api/sessions/pchat-1/participants", json={"email": "nobody@else.test"},
+                          headers=_h("alice"))
+    assert outsider.status_code == unknown.status_code == 200
+    assert outsider.json() == unknown.json()
+    assert store.role_of(private, "mallory") is None
+    assert client.get("/api/sessions/pchat-1/history", headers=_h("mallory")).status_code == 404

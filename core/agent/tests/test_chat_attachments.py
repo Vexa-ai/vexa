@@ -188,7 +188,7 @@ def test_openai_agent_sends_the_picture_when_the_endpoint_takes_images(tmp_path,
 # ── the route: participation, not membership ─────────────────────────────────────────────────
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    from tests.test_session_routes import SUBJECTS, _FakeIdentity, _FakeReader, _FakeRuntime
+    from tests.test_session_routes import SUBJECTS, _FakeIdentity, _FakeReader, _FakeRuntime, co_members
     from control_plane.api import _Sessions, create_app
     from control_plane.dispatch import Dispatcher
     from control_plane.session_store import SessionStore
@@ -198,6 +198,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-model-credential")
     root = tmp_path / "ws"
     root.mkdir()
+    co_members(root)
     from tests._session_fakes import MemBlobs
     store = SessionStore.open(f"sqlite:///{tmp_path / 's.db'}", MemBlobs())
     settings = load_settings(workspaces_dir=str(root), redis_url="",

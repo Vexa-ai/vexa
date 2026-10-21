@@ -221,3 +221,20 @@ def test_a_row_naming_no_served_route_refuses_the_boot(monkeypatch):
     with pytest.raises(route_policy.PolicyError) as e:
         route_policy.assert_served(list(ROUTES.values()))
     assert "/api/workspace/no-such-verb" in str(e.value)
+
+
+MEMBER_DOORS = [("POST", "/api/workspace/members/add"), ("POST", "/api/workspace/membership"),
+                ("POST", "/api/workspace/members/{member_subject}/role"),
+                ("DELETE", "/api/workspace/members/{member_subject}")]
+
+
+@pytest.mark.parametrize("key", MEMBER_DOORS, ids=[f"{m} {p}" for m, p in MEMBER_DOORS])
+def test_a_watched_agent_never_changes_who_is_in_a_workspace(world, key):
+    """Adding, removing or re-roling a member is the person's own session's act (H3, D13): a chat
+    agent with its person watching — the regime an injected mail reaches — is refused too, and
+    nothing changes on disk."""
+    client, owned, root = world
+    before = _disk(root)
+    r = _acting(client, key, owned, _as([owned], regime="human"))
+    assert r.status_code == 403 and r.json()["detail"]["reason"] == "members_need_the_person", r.text
+    assert _disk(root) == before

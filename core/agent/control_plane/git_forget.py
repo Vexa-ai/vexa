@@ -273,10 +273,7 @@ def forget(ws: Path, *, paths: list[str], pattern: Optional[str], identifiers: b
     for p in paths:
         rel = p.strip().strip("/")
         try:
-            if wpaths.unlink_inside(ws, rel):
-                out.files_removed.add(rel)
-            elif wpaths.list_files_inside(ws, rel) or (ws / rel).is_dir():
-                wpaths.remove_tree(ws / rel)
+            if wpaths.remove_inside(ws, rel):
                 out.files_removed.add(rel)
         except (wpaths.PathRefused, OSError):
             continue

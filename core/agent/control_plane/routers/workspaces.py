@@ -71,6 +71,7 @@ from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from typing import Annotated, Optional
 from pydantic import BaseModel, Field
 import hashlib
+from collections import OrderedDict
 import time
 import json
 import stat as stat_mod
@@ -583,7 +584,11 @@ def build(**d) -> APIRouter:
         if held is not None:
             raise HTTPException(status_code=409, detail=held)
 
-    _summary_cache: dict = {}
+    #: A page's generated story, kept for this process: keyed by WHO asked, the resolved workspace
+    #: directory, the path and the page's own content, so it is only ever answered for the same page
+    #: as the same reader saw it — never across desks (every desk's slug is "") or readers. Bounded.
+    _summary_cache: "OrderedDict[tuple, str]" = OrderedDict()
+    _SUMMARY_CACHE_MAX = 512
     _summary_last: dict = {}
 
     @router.post("/api/entities/summary")
@@ -596,7 +601,8 @@ def build(**d) -> APIRouter:
         subject = subject_of(request)
         rel = body.path.strip()
         try:
-            content = wsr.read_at(_read_target(request, body.slug), rel)
+            place = _read_target(request, body.slug)
+            content = wsr.read_at(place, rel)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid path")
         if content is None:
@@ -605,8 +611,9 @@ def build(**d) -> APIRouter:
         have = es.read_summary(content)
         if have:
             return {"summary": have, "generated": False}
-        key = (str(body.slug or ""), rel)
+        key = (str(subject), str(place), rel, hashlib.sha256(content.encode("utf-8", "replace")).hexdigest())
         if key in _summary_cache:
+            _summary_cache.move_to_end(key)
             return {"summary": _summary_cache[key], "generated": True}
         now = time.time()
         if now - _summary_last.get(subject, 0.0) < es.MIN_GAP_S:
@@ -616,6 +623,8 @@ def build(**d) -> APIRouter:
         if not story:
             return {"summary": "", "generated": False}
         _summary_cache[key] = story
+        while len(_summary_cache) > _SUMMARY_CACHE_MAX:
+            _summary_cache.popitem(last=False)
         try:
             ws_file_write(request, WorkspaceWriteBody(path=rel, slug=body.slug, content=es.with_summary(content, story)))
         except HTTPException:

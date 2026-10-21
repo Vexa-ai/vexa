@@ -172,7 +172,8 @@ def test_merge_ends_the_merged_records_claim(store):
 
 def test_the_front_door_profile_routes(store):
     org_record(store)
-    users = {'a': {'user_id': '21', 'email': WORK, 'email_verified': True},
+    users = {'a': {'user_id': '21', 'email': WORK, 'email_verified': True, 'credential_class': 'session'},
+             'k': {'user_id': '21', 'email': WORK, 'email_verified': True, 'credential_class': 'key'},
              'vxd_w': {'user_id': '21', 'email': WORK, 'email_verified': True, 'delegation': {'regime': 'human', 'workspaces': []}}}
     def resolve(request):
         tok = json.loads(request.content)['token']
@@ -183,6 +184,8 @@ def test_the_front_door_profile_routes(store):
     assert r.status_code == 200 and r.json()['claimed'] is True          # claimed on the first request
     assert client.post('/person/profile', json={'action': 'edit', 'fields': {'display_name': 'Val'}},
                        headers={'Authorization': 'Bearer vxd_w'}).status_code == 403
+    assert client.post('/person/profile', json={'action': 'edit', 'fields': {'display_name': 'Val'}},
+                       headers={'X-API-Key': 'k'}).status_code == 403            # an API key is not the person
     assert client.post('/person/profile', json={'action': 'edit', 'fields': {'display_name': 'Val'}},
                        headers={'X-API-Key': 'a'}).status_code == 200
     h = client.post('/person/profile', json={'action': 'publish', 'public': True, 'public_fields': ['display_name']},

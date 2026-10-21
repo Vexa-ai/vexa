@@ -733,6 +733,41 @@ def clear_tree_inside(root, *, keep=()) -> None:
         notify_removed(_joined(root, [name]))
 
 
+def remove_inside(root, rel: str, *, allow=()) -> bool:
+    """Remove ``root/<rel>`` — a file, a link (the link itself) or a whole folder — reached without
+    following a link on the way: every directory above the leaf is opened ``O_NOFOLLOW`` from its
+    parent's descriptor, and a folder is removed by ``shutil.rmtree`` relative to its parent's
+    descriptor, which never descends into a link inside it. A link or missing directory on the way,
+    or a missing leaf, is a no-op. True when something was removed. This is the removal a
+    CALLER-supplied path takes (``remove_tree`` is for a path the platform owns)."""
+    import shutil
+    try:
+        parts = relative_parts(rel, allow=allow)
+    except PathRefused:
+        return False
+    *dirs, name = parts
+    try:
+        dir_fd = dir_fd_inside(root, dirs)
+    except (PathRefused, OSError):
+        return False
+    try:
+        try:
+            st = os.lstat(name, dir_fd=dir_fd)
+        except OSError:
+            return False
+        try:
+            if stat.S_ISDIR(st.st_mode):
+                shutil.rmtree(name, dir_fd=dir_fd)
+            else:
+                os.unlink(name, dir_fd=dir_fd)
+        except OSError:
+            return False
+    finally:
+        os.close(dir_fd)
+    notify_removed(_joined(root, parts))
+    return True
+
+
 def remove_tree(path, *, ignore_errors: bool = False) -> None:
     """Remove whatever is at ``path`` without following a link: a link (or a plain file) is unlinked
     itself, and a directory is removed by ``shutil.rmtree`` relative to its parent's descriptor —

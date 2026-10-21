@@ -30,6 +30,22 @@ def test_a_room_turn_shows_a_page_on_its_own_room(world):
     assert any(t.startswith("Vexa is showing “Integration plan”") for t in lines), lines
 
 
+def test_deny_a_room_turn_with_no_named_ceiling_shows_nothing(world):
+    """A workspace principal is in no roster: its reach is the workspace its dispatch names, so a
+    token with no ceiling, or with `*`, shows nothing."""
+    client, store, calls, spawned, root, _d = world
+    (root / "team" / "plan.md").write_text("# Plan\n")
+    sid, _env, _claims, hdr = _room_token_headers(client, root, spawned)
+    for ceiling in (None, "*"):
+        h = {k: v for k, v in hdr.items() if k != "x-user-delegation-workspaces"}
+        if ceiling is not None:
+            h["x-user-delegation-workspaces"] = ceiling
+        r = client.post(f"/api/sessions/{sid}/call/show", headers=h,
+                        json={"workspace": "team", "path": "plan.md"})
+        assert r.status_code == 403, (ceiling, r.status_code, r.text)
+    assert client.get(f"/api/sessions/{sid}/messages", headers=_h("bob")).json()["showing"] is None
+
+
 def test_deny_a_room_turn_shows_nothing_in_another_room(world):
     client, store, calls, spawned, root, _d = world
     (root / "team" / "plan.md").write_text("# Plan\n")

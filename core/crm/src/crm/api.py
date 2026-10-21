@@ -697,7 +697,7 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
         return audited('person.me', caller, '', lambda: store.persons.me(caller.org, caller))
 
     @app.post('/person/merge', include_in_schema=False)
-    def person_merge(body: PersonMerge, caller=Depends(person)):
+    def person_merge(body: PersonMerge, caller=Depends(session_person)):
         """The person's own act on their merge card: confirm (with the primary address), decline, change
         the primary later, or offer another address of theirs. A person's own credential only."""
         p = store.persons
@@ -712,7 +712,7 @@ def create_app(store: Store, identity, org_id: str, internal_secret: str = '', l
         return audited('person.merge.' + body.action, caller, body.card, call)
 
     @app.post('/person/profile', include_in_schema=False)
-    def person_profile(body: PersonProfile, caller=Depends(person)):
+    def person_profile(body: PersonProfile, caller=Depends(session_person)):
         """The person's own profile: read, edit (theirs only), claim, unclaim, the public page. A
         person's own credential only; a worker is refused."""
         p = store.profiles

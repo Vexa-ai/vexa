@@ -52,3 +52,35 @@ def test_the_route_returns_the_stored_story_and_backfills_once(tmp_path, monkeyp
     assert es.read_summary((desk / "kg" / "entities" / "person" / "joe.md").read_text()).startswith("Founder")
     again = c.post("/api/entities/summary", json={"path": "kg/entities/person/joe.md"}, headers=h).json()
     assert again["generated"] is False and len(calls) == 1          # stored: never regenerated
+
+
+def test_a_story_is_never_answered_for_another_desks_page(tmp_path, monkeypatch):
+    """The process keeps a generated story only for the same reader and the same page: B's page at
+    the same path on B's desk (every desk's slug is "") gets B's own story, never A's."""
+    from fastapi.testclient import TestClient
+    from control_plane.api import create_app
+    from control_plane.dispatch import Dispatcher
+    from control_plane.workspace_reader import WorkspaceReader
+    from shared.config import load_settings
+
+    class _R:
+        def spawn(self, *a): return "x"
+        def await_done(self, *a, **k): return "completed"
+
+    class _I:
+        def mint(self, *a): return "tok"
+    rel = "kg/entities/person/joe.md"
+    for who, body in (("u_ann", PAGE), ("u_ben", "---\ntype: person\ntitle: Joe\n---\n# Joe\n")):
+        d = tmp_path / who
+        (d / "kg" / "entities" / "person").mkdir(parents=True)
+        (d / rel).write_text(body)
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=d, check=True)
+    import control_plane.entity_summary as mod
+    monkeypatch.setattr(mod, "generate", lambda md, complete: ("Ann's private story about Joe." if "Tinkerers" in md
+                                                                else "Joe, as Ben knows him."))
+    c = TestClient(create_app(Dispatcher(load_settings(workspaces_dir=str(tmp_path)), _R(), _I()),
+                              reader=WorkspaceReader(str(tmp_path))))
+    a = c.post("/api/entities/summary", json={"path": rel}, headers={"X-User-Id": "u_ann"}).json()
+    assert a["summary"].startswith("Ann's private story")
+    b = c.post("/api/entities/summary", json={"path": rel}, headers={"X-User-Id": "u_ben"}).json()
+    assert "Ann" not in b["summary"] and b["summary"] == "Joe, as Ben knows him."

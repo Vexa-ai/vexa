@@ -186,7 +186,27 @@ def test_a_live_call_nobody_can_read_is_cross_org(world):
                       call_lookup=lambda mid: None).audience == "cross_org"       # unreadable
     row = {"id": 77, "data": {"participants": [{"name": "alice"}, "Vexa"], "bot_name": "Vexa"}}
     assert rp.resolve(held, root, sid, speaker="bob",
+                      call_lookup=lambda mid: row).audience == "cross_org"        # a name places nobody
+    row = {"id": 77, "data": {"participants": ["Vexa"], "bot_name": "Vexa"}}
+    assert rp.resolve(held, root, sid, speaker="bob",
                       call_lookup=lambda mid: row).audience == "org"              # bot left out
+
+
+def test_a_call_guest_named_like_a_member_is_not_placed():
+    """A meeting display name is whatever its holder typed: a guest who calls themself "Alice" (or
+    types Alice's address as their name) is placed nowhere. An entry that carries an address is
+    placed by it."""
+    roster = [{"subject": "7", "email": "alice@acme.test", "name": "Alice", "role": "owner"}]
+    member = lambda ws, who: True  # noqa: E731 — the chat's people are not the question here
+    row = {"data": {"participants": [{"name": "Alice"}, {"name": "A.", "email": "alice@acme.test"},
+                                     "alice@acme.test", "Vexa"], "bot_name": "Vexa"}}
+    people = rp.call_participants_of(row)
+    assert people == ["name:Alice", "alice@acme.test", "name:alice@acme.test"]
+    for who in (["Alice"], ["name:Alice"], ["name:alice@acme.test"]):
+        assert rp.audience_of("/nowhere", "team", [], is_member=member, participants=who,
+                              roster=roster) == "cross_org", who
+    assert rp.audience_of("/nowhere", "team", [], is_member=member, participants=["alice@acme.test", "7"],
+                          roster=roster) == "org"
 
 
 def test_the_grant_hash_rides_the_unit_and_the_echo_still_finds_the_room():

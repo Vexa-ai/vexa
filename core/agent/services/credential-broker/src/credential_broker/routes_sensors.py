@@ -6,8 +6,12 @@ Google token if it must, reads `events.list` incrementally (`syncToken`) and ans
 events and the next cursor — never a credential. Read-only by construction: the only provider call
 behind this route is a GET of the person's primary calendar. Only the `sensors` role reaches it, it
 carries no X-Vexa-Identity (a sensor runs with nobody in the loop), and its assertion's actor must be
-the person it names, so a key can only read the person each request is signed for and every read is
-audited under that person as `calendar.changes`.
+the person it names, so every read is audited under that person as `calendar.changes`.
+
+WHAT THAT BINDING IS, AND IS NOT: the actor and the owner are both written by the holder of the
+sensors key (flows), so the check keeps one request to one person, never the key to anyone. Whoever
+holds the sensors key reads the primary calendar of EVERY person with a ready calendar connection,
+whether or not that person turned a calendar sensor on; the broker keeps no per-person sensor grant.
 """
 from __future__ import annotations
 

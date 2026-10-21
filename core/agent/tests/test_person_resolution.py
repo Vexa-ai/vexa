@@ -141,7 +141,7 @@ def test_sharing_a_chat_with_the_person_adds_every_linked_account(env):
 def test_adding_the_person_to_a_workspace_adds_every_linked_account(env):
     client, _store, root, *_ = env
     r = client.post("/api/workspace/members/add",
-                    json={"workspace": "acme", "person": JOE, "role": "write"}, headers=_h(ALICE))
+                    json={"workspace": "acme", "person": JOE, "role": "write"}, headers={**_h(ALICE), "x-user-credential-class": "session"})
     assert r.status_code == 200, r.text
     assert m.is_member(root, "acme", JOE) == "contributor"
     assert m.is_member(root, "acme", JOE_HOME) == "contributor"
@@ -158,7 +158,7 @@ def test_a_wrong_address_gets_nothing_before_the_person_confirms(tmp_path, monke
                          headers=_h(ALICE)).json()["session_id"]
     assert {p["principal"] for p in store.participants(target)} == {ALICE, JOE}
     client.post("/api/workspace/members/add", json={"workspace": "acme", "person": JOE, "role": "write"},
-                headers=_h(ALICE))
+                headers={**_h(ALICE), "x-user-credential-class": "session"})
     assert m.is_member(root, "acme", JOE) == "contributor" and m.is_member(root, "acme", JOE_HOME) is None
     store.close()
 
@@ -182,7 +182,7 @@ def test_no_crm_or_a_crm_that_cannot_answer_groups_nothing_and_grants_nobody_ext
                          headers=_h(ALICE)).json()["session_id"]
     assert {p["principal"] for p in store.participants(target)} == {ALICE, JOE}
     client.post("/api/workspace/members/add", json={"workspace": "acme", "person": JOE, "role": "write"},
-                headers=_h(ALICE))
+                headers={**_h(ALICE), "x-user-credential-class": "session"})
     assert m.is_member(root, "acme", JOE_HOME) is None
     store.close()
 

@@ -74,8 +74,9 @@ PRIVATE_VEXA_TOOLS = {
     "chat_read": "chat", "chats_search": "chat", "ref_resolve": "refs",
 }
 #: Paths never held: runtime plumbing and the attachment drawer, which never commit anyway, and
-#: `policy/`, which the policy guard owns.
-_SKIP_PREFIXES = (".claude/", "uploads/", "policy/", ".vexa/")
+#: `policy/`, which the policy guard owns. `.vexa/` IS held: the turn's commit takes it like any
+#: page, so a marked turn's write there is a write every member reads.
+_SKIP_PREFIXES = (".claude/", "uploads/", "policy/")
 
 
 def private_source(tool: str) -> Optional[str]:
@@ -242,9 +243,9 @@ class Guard:
     def _carries(self, mount: Path, rel: str) -> bool:
         """Does the turn's change to ``rel`` add something a private read gave the agent? A
         deletion adds nothing."""
-        if not wpaths.is_file_inside(mount, rel):
+        if not wpaths.is_file_inside(mount, rel, allow=_VEXA):
             return False
-        data = wpaths.read_bytes_inside(mount, rel) or b""
+        data = wpaths.read_bytes_inside(mount, rel, allow=_VEXA) or b""
         before = run_git(mount, "show", f"HEAD:{rel}").stdout if _in_head(mount, rel) else ""
         return bool(self._fp.carried(data.decode("utf-8", "replace"), before or ""))
 
@@ -299,7 +300,8 @@ class Guard:
             return None
         files: dict[str, Optional[str]] = {}
         for rel in paths:
-            data = wpaths.read_bytes_inside(mount, rel) if wpaths.is_file_inside(mount, rel) else None
+            data = (wpaths.read_bytes_inside(mount, rel, allow=_VEXA)
+                    if wpaths.is_file_inside(mount, rel, allow=_VEXA) else None)
             files[rel] = base64.b64encode(data).decode() if data is not None else None
         code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(6))
         ref = None
@@ -311,7 +313,7 @@ class Guard:
             if _in_head(mount, rel):
                 _git(mount, "checkout", "HEAD", "--", rel)
             else:
-                wpaths.unlink_inside(mount, rel)
+                wpaths.unlink_inside(mount, rel, allow=_VEXA)
         out = {"code": code if ref else "", "workspace": mount.name, "paths": paths,
                "readers": readers, "sources": found}
         if ref:

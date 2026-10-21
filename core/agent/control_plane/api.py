@@ -642,8 +642,14 @@ def create_app(
         # The _global org tier is readable by EVERY subject — it is mounted ro into every worker,
         # so the read API mirrors that; writes still go only through the admin's worker mount.
         if target == system_mounts.GLOBAL_SLUG:
-            if write:  # read by everyone; WRITTEN only inside a delegated dispatch's ceiling
+            if write:
+                # read by everyone; WRITTEN by the admin account alone (founder ruling 2026-10-11),
+                # and a dispatch of it only inside its ceiling. Every write door resolves here, so
+                # no route can reach `_global` for a write without this answer. Fails closed: no
+                # settings, no identity answer — nobody writes it.
                 require_in_ceiling(request, target)
+                if settings is None or not global_layer.is_admin_account(settings, str(subject)):
+                    raise HTTPException(status_code=403, detail="only the admin account may write into _global")
             g = _global_root()
             if g.exists():
                 return g

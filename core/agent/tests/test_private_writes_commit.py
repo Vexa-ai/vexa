@@ -195,3 +195,41 @@ def test_the_person_confirms_and_agent_api_writes_it_once(tmp_path, _privacy_sto
     assert (shared / "kg/entities/project/meetup.md").read_text() == "invoice unpaid"
     assert _log(shared) == 2
     assert private_taint.release_confirmed_files(OWNER, f"confirm {code}", tmp_path) == []   # once
+
+
+def test_a_marked_turns_write_under_dot_vexa_is_held_too(tmp_path):
+    """`.vexa/` is committed with the turn like any page, so it is held like any page: mail content
+    written there in a workspace others read never lands in its history."""
+    desk, shared, guard = _setup(tmp_path)
+    h = _Harness("mcp__vexa__gmail_search", [(shared / ".vexa" / "notes.md", "invoice unpaid")])
+    events = list(run_harness_turn(desk, "go", h, extra_mounts=[shared], private_guard=guard,
+                                   author=AUTHOR))
+    held = [e for e in events if e["type"] == "write-withheld"]
+    assert held and held[0]["paths"] == [".vexa/notes.md"], events
+    assert _log(shared) == 1
+    assert not (shared / ".vexa" / "notes.md").exists()
+    assert list(guard.handed[held[0]["code"]]["files"]) == [".vexa/notes.md"]
+
+
+class _Marks:
+    """The persisted mark store (shared/taint.py) as a worker that never saw the read finds it."""
+
+    def __init__(self, sources):
+        self.sources = set(sources)
+
+    def read(self, unit):
+        return set(self.sources)
+
+    def mark(self, unit, sources, *, worker=False):
+        self.sources |= set(sources)
+
+
+def test_a_session_resumed_in_a_new_worker_is_still_held(tmp_path):
+    """The mark lives in the store, not in the process: a fresh guard (a new worker, a resumed chat)
+    that observed no private read itself still holds the shared write."""
+    desk, shared, _guard = _setup(tmp_path)
+    fresh = Guard(OWNER, unit="agent-7-chat-pchat-1", store=_Marks({"mail"}),
+                  handback=lambda code, payload: f"ref-{code}")
+    events = _turn(fresh, desk, shared, None, text="from the mail")
+    assert any(e["type"] == "write-withheld" for e in events)
+    assert _log(shared) == 1

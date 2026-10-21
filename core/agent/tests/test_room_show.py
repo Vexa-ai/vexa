@@ -56,3 +56,21 @@ def test_only_a_page_every_member_can_read_and_never_by_a_viewer(env):  # noqa: 
     assert client.post(f"/api/sessions/{sid}/call/show", headers=H("eve"), json={"workspace": "all-in", "path": "p.md"}).status_code == 404
     assert client.post(f"/api/sessions/{sid}/call/show", headers=H("bob"), json={"workspace": "all-in", "path": "../x.md"}).status_code in (400, 404, 422)
     assert client.get(f"/api/sessions/{sid}/messages", headers=H("alice")).json()["showing"] is None
+
+
+def test_a_show_never_reaches_outside_the_callers_workspaces(env):  # noqa: F811
+    """`.`/`..` are no workspace (422), a workspace the caller is not in is refused (403) — alone in
+    a chat of their own, where nobody else's membership is asked — and `personal` is their desk."""
+    client, store, _sid, _r, root = env
+    _members(root, "bobs-own", "bob", "alice")
+    (root / "bobs-own" / "plan.md").write_text("# Secret plan\n")
+    solo = store.create("eve", name="solo")["id"]
+    for ws, path in ((".", "bobs-own/plan.md"), ("..", "ws/bobs-own/plan.md"), ("../..", "etc/hosts")):
+        r = client.post(f"/api/sessions/{solo}/call/show", headers=H("eve"), json={"workspace": ws, "path": path})
+        assert r.status_code == 422, (ws, r.status_code, r.text)
+    r = client.post(f"/api/sessions/{solo}/call/show", headers=H("eve"), json={"workspace": "bobs-own", "path": "plan.md"})
+    assert r.status_code == 403 and "Secret" not in r.text
+    (root / "eve").mkdir(exist_ok=True)
+    (root / "eve" / "mine.md").write_text("# Eve's own\n")
+    r = client.post(f"/api/sessions/{solo}/call/show", headers=H("eve"), json={"workspace": "personal", "path": "mine.md"})
+    assert r.status_code == 200 and r.json()["shown"]["title"] == "Eve's own", r.text

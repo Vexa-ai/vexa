@@ -243,15 +243,17 @@ def build(**d) -> APIRouter:
         if body.email:
             resolved = lookup(body.email.strip().lower()) if lookup is not None else None
             principal = str(resolved) if resolved else ""
-        if not principal or principal == subject:
-            return _view(row, subject)            # an unknown address is answered like a known one
         ws = room.get("workspace") or ""
+        if (not principal and not (body.email and ws)) or principal == subject:
+            return _view(row, subject)            # an unknown id is answered like a known one
         if ws and wsr is not None:
             from control_plane import workspace_membership  # noqa: PLC0415
             try:
-                member = workspace_membership.is_member(wsr.root, ws, principal) is not None
+                member = bool(principal) and workspace_membership.is_member(wsr.root, ws, principal) is not None
             except Exception:  # noqa: BLE001
                 member = False
+            # AN ADDRESS WITH NO ACCOUNT IS ANSWERED LIKE AN ACCOUNT OUTSIDE THE WORKSPACE: neither
+            # is in it, and the same refusal says nothing about whether the address signs in here.
             if not member:
                 title = ws
                 try:
@@ -263,6 +265,8 @@ def build(**d) -> APIRouter:
                     "refused": "not_a_workspace_member", "workspace": ws, "title": title,
                     "said": (f"They are not in {title}. Invite them to {title} (workspace_invite) on the "
                              "same card, then add them here.")})
+        if not principal:
+            return _view(row, subject)
         # WHO IS IN A ROOM IS THE ROOM-MEMBERSHIP AUTHORITY'S (0.13.4 D36): a closed room's rows are
         # written to the registry first (the maker's own seeded), the participant row is the projection
         from control_plane import pair_rooms, room_membership  # noqa: PLC0415
@@ -341,10 +345,11 @@ def build(**d) -> APIRouter:
                 carried = session_fork.excerpt(turns, picks)
             except session_fork.ExcerptError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from None
-        if kind == "human" and body.subject and not any(
-                p["subject"] == body.subject for p in _mentionable(subject)):
-            # A PERSON BY ID is someone the owner shares a workspace with (the @-mention set), and
-            # the answer for anyone else is the one an unknown address gets: nothing is created.
+        if kind == "human" and principal and not any(
+                p["subject"] == principal for p in _mentionable(subject)):
+            # A PERSON, BY ID OR BY ADDRESS, is someone the owner shares a workspace with (the
+            # @-mention set; an address resolves to its account first), and the answer for anyone
+            # else is the one an unknown address gets: nothing is created.
             return _view(row, subject)
         if not principal:
             # no account with that address: nothing is created, and the answer is the one a known

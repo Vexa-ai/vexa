@@ -248,8 +248,9 @@ def _client(store, users):
 
 def test_the_front_door_person_routes_and_internal_grouping(store):
     founder_record(store)
-    client = _client(store, {'a': {'user_id': '21', 'email': WORK, 'email_verified': True},
-                             'b': {'user_id': '22', 'email': HOME, 'email_verified': True},
+    client = _client(store, {'a': {'user_id': '21', 'email': WORK, 'email_verified': True, 'credential_class': 'session'},
+                             'b': {'user_id': '22', 'email': HOME, 'email_verified': True, 'credential_class': 'session'},
+                             'k': {'user_id': '22', 'email': HOME, 'email_verified': True, 'credential_class': 'key'},
                              'vxd_w': {'user_id': '21', 'email': WORK, 'email_verified': True, 'delegation': {'regime': 'human', 'workspaces': []}}})
     me_a = client.post('/person/me', json={}, headers={'X-API-Key': 'a'})
     assert me_a.status_code == 200, me_a.text
@@ -258,6 +259,9 @@ def test_the_front_door_person_routes_and_internal_grouping(store):
     card = me_b['merge']['id']
     assert client.post('/person/merge', json={'action': 'confirm', 'card': card},
                        headers={'Authorization': 'Bearer vxd_w'}).status_code == 403
+    # an API key — a leaked bot key included — never confirms a merge: the person's session does
+    assert client.post('/person/merge', json={'action': 'confirm', 'card': card},
+                       headers={'X-API-Key': 'k'}).status_code == 403
     assert client.post('/person/merge', json={'action': 'confirm', 'card': card},
                        headers={'X-API-Key': 'a'}).json()['status'] == 'confirmed'
     assert client.post('/person/merge', json={'action': 'confirm', 'card': card},

@@ -182,7 +182,7 @@ def test_the_admin_account_writes_the_company_layer(stack):
     assert c.post("/api/chat/target", headers=_h(ADMIN_ACCOUNT),
                   json={"session": "c1", "workspace": "_global"}).status_code == 200
     # …and the company layer's membership answer stays the explanatory one
-    r = c.post("/api/workspace/membership", headers=_h(ADMIN_ACCOUNT), json={
+    r = c.post("/api/workspace/membership", headers={**_h(ADMIN_ACCOUNT), "x-user-credential-class": "session"}, json={
         "slug": "_global", "email": "x@example.test", "role": "reader"})
     assert r.status_code == 409 and "POLICIES.md" in r.json()["detail"]
 

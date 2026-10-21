@@ -62,3 +62,19 @@ def test_an_untracked_attachment_is_removed_from_disk(tmp_path):
     out = G.forget(ws, paths=["uploads/second-docx"], pattern=None, identifiers=False)
     assert not (ws / "uploads" / "second-docx").exists()
     assert "uploads/second-docx" in out.files_removed
+
+
+def test_a_link_in_the_workspace_never_carries_the_forget_outside_it(tmp_path):
+    """A path through a link the tools planted (`lnk -> ../<victim>`) removes nothing behind the
+    link: the victim's folder survives, and a real folder inside the workspace is still removed."""
+    ws, _blob = _repo(tmp_path)
+    victim = tmp_path / "victim"
+    (victim / "notes").mkdir(parents=True)
+    (victim / "notes" / "deal.md").write_text("# theirs\n")
+    (ws / "lnk").symlink_to(Path("..") / "victim")
+    (ws / "drafts").mkdir()
+    (ws / "drafts" / "a.md").write_text("draft\n")
+    out = G.forget(ws, paths=["lnk/notes", "drafts"], pattern=None, identifiers=False)
+    assert (victim / "notes" / "deal.md").read_text() == "# theirs\n"
+    assert "lnk/notes" not in out.files_removed
+    assert not (ws / "drafts").exists()

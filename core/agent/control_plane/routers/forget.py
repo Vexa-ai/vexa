@@ -54,6 +54,11 @@ def build(**d) -> APIRouter:
     workspace_registry = d["workspace_registry"]
     workspace_touches = d["workspace_touches"]
     wsr = d["wsr"]
+    settings = d.get("settings")
+
+    def _is_admin_account(subject: str) -> bool:
+        from control_plane import global_layer  # noqa: PLC0415
+        return settings is not None and bool(global_layer.is_admin_account(settings, str(subject)))
 
     def _paths(raw: list[str]) -> list[str]:
         out = []
@@ -154,6 +159,10 @@ def build(**d) -> APIRouter:
         slug = (body.slug or "").strip() or None
         if slug in DESK_ALIASES:
             slug = None
+        if slug == system_mounts.SYSTEM_SLUG and not _is_admin_account(subject):
+            # the private system store keeps the forget audit itself: a forget never rewrites it
+            raise HTTPException(status_code=403, detail="_system keeps the record of what was forgotten; "
+                                "it is not a forget target")
         ws = _read_target(request, slug, write=True)
         if slug and slug != subject:
             try:
@@ -167,7 +176,7 @@ def build(**d) -> APIRouter:
         if not paths and not red.active:
             raise HTTPException(status_code=400, detail="name what to forget: paths, text or identifiers")
         name = slug or "your personal workspace"
-        on_disk = [p for p in paths if (ws / p).exists()]
+        on_disk = [p for p in paths if wpaths.stat_inside(ws, p) is not None]
         hist_names, hist_commits = _in_history(ws, paths)
         home = home_remote(ws) if (ws / ".git").is_dir() else None
         # A NAMED FILE ALREADY ABSENT is reported, never an error: removed earlier (its copies may still

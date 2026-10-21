@@ -207,3 +207,23 @@ def test_a_file_that_is_nowhere_is_reported_gone_not_an_error(world):
     r = c.post("/api/workspace/forget", headers=H, json={"paths": [ghost], "confirm": True})
     assert r.status_code == 200, r.text
     assert r.json()["removed"]["workspace"]["already_gone"] == [ghost]
+
+
+def test_a_person_never_forgets_the_company_layer_or_the_forget_record(world):
+    """`_global` is written by the admin account alone; a person's forget there is refused before
+    anything is removed or rewritten. `_system` keeps the audit of forgets and is no target."""
+    c, desk, _, _ = world
+    glob = desk.parent / "_global"
+    glob.mkdir(exist_ok=True)
+    _git(glob, "init", "-q", "-b", "main")
+    (glob / "POLICIES.md").write_text("# Policies\n")
+    _git(glob, "-c", "user.name=a", "-c", "user.email=a@example.test", "add", "-A")
+    _git(glob, "-c", "user.name=a", "-c", "user.email=a@example.test", "commit", "-q", "-m", "policies")
+    head = _git(glob, "rev-parse", "HEAD")
+    r = c.post("/api/workspace/forget", headers=H,
+               json={"slug": "_global", "paths": ["POLICIES.md"], "confirm": True})
+    assert r.status_code == 403, r.text
+    assert (glob / "POLICIES.md").read_text() == "# Policies\n" and _git(glob, "rev-parse", "HEAD") == head
+    r = c.post("/api/workspace/forget", headers=H,
+               json={"slug": "_system", "paths": ["audit/forget.jsonl"], "confirm": True})
+    assert r.status_code == 403, r.text

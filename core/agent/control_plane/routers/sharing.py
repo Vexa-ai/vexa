@@ -40,6 +40,11 @@ from control_plane import policy_proposals as _pp
 from control_plane.ceiling import refuse_delegated, require_session_credential
 from pydantic import BaseModel as _BaseModel
 
+#: The words every member-changing door refuses an agent with.
+MEMBERS_NEED_A_SESSION = ("Changing who is in a workspace, or their role, is the person's signed act. Propose "
+                          "it as a card (who, which workspace, which role) and stop; nothing changes until "
+                          "the person does it in the app.")
+
 
 class PolicyProposeBody(_BaseModel):
     """An agent (or a person) proposing one policy change: the exact change and why."""
@@ -617,10 +622,18 @@ def build(**d) -> APIRouter:
             return {"members": rows}
         except MembershipError as exc:
             raise _member_error(exc)
+    def _members_need_the_person(request: Request) -> None:
+        """WHO IS IN A WORKSPACE CHANGES ONLY BY THE PERSON'S OWN SESSION (H3, D13): adding, removing
+        or re-roling a member is refused to every delegation token (a watched chat agent included)
+        and to an API key without the browser scope, exactly as minting an invite is."""
+        require_session_credential(request, reason="members_need_the_person",
+                                   instruction=MEMBERS_NEED_A_SESSION)
+
     @router.delete("/api/workspace/members/{member_subject}")
     def ws_member_remove(member_subject: str, request: Request, workspace_id: str):
         """Remove a member (owner only)."""
         require_in_ceiling(request, workspace_id)
+        _members_need_the_person(request)
         subject = subject_of(request)
         try:
             membership_mod.require_role(wsr.root, workspace_id, subject, "owner")
@@ -633,6 +646,7 @@ def build(**d) -> APIRouter:
                        body: RoleSetBody = Body(...)):
         """Flip a member's role (owner only) — read <-> read/write permissions."""
         require_in_ceiling(request, workspace_id)
+        _members_need_the_person(request)
         subject = subject_of(request)
         try:
             membership_mod.require_role(wsr.root, workspace_id, subject, "owner")
@@ -769,6 +783,7 @@ def build(**d) -> APIRouter:
         first. The last-owner refusal reaches the person as itself (409) — it is about the workspace,
         not about them, and a generic failure would leave somebody trying it again."""
         require_in_ceiling(request, body.slug)
+        _members_need_the_person(request)
         subject = subject_of(request)
         try:
             membership_acts.assert_may_manage(
@@ -818,6 +833,7 @@ def build(**d) -> APIRouter:
         subject = subject_of(request)
         slug = _workspace_named(subject, body.workspace)
         require_in_ceiling(request, slug)
+        _members_need_the_person(request)
         try:
             membership_acts.assert_may_manage(
                 wsr.root, slug, subject,

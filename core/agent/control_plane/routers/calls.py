@@ -34,7 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from control_plane import identity_token, room_echo, session_access, session_sync, system_mounts
 from control_plane import workspace_membership as membership_mod
 from control_plane.bodies import CHAT_SESSION_PATTERN
-from control_plane.ceiling import refuse_delegated, require_in_ceiling
+from control_plane.ceiling import names_in_ceiling, refuse_delegated, require_in_ceiling
 from control_plane.session_store import SessionDenied
 from control_plane.workspace_membership import MembershipError
 from shared.gitexec import run_git
@@ -355,7 +355,20 @@ def build(**d) -> APIRouter:
         humans = [str(h) for h in _store().humans(row["id"])]
         root = wsr.root
         ws = body.workspace.strip()
-        if ws in ("personal", "_global", "") or not wpaths.is_workspace_name(ws):
+        # THE PLACE IS ONE OF THREE, by name: the caller's own desk, the company layer, or a shared
+        # workspace the caller is a member of. Anything else (`.`, `..`, a path) is refused before a
+        # roster or a file is read, so the answer never says what exists outside the caller's reach.
+        own = ws in ("personal", "desk", "_global")
+        if not own and not wpaths.is_workspace_name(ws, tier=False):
+            raise HTTPException(status_code=422, detail="workspace is personal, _global or a workspace name")
+        # A ROOM'S OWN AGENT (a workspace principal, D2) is in no roster: what it may show is exactly
+        # the workspace its dispatch names. Everyone else must be a member.
+        if identity_token.is_workspace_principal(request.headers):
+            if not own and not names_in_ceiling(request, ws):
+                raise HTTPException(status_code=403, detail="not a member of that workspace")
+        elif not own and membership_mod.is_member(root, ws, str(subject)) is None:
+            raise HTTPException(status_code=403, detail="not a member of that workspace")
+        if own:
             missing = [h for h in humans if h != str(subject)]
         else:
             missing = [h for h in humans if membership_mod.is_member(root, ws, h) is None]
@@ -372,8 +385,11 @@ def build(**d) -> APIRouter:
                 "missing": [{"subject": h, "name": names.get(h, h)} for h in missing],
                 "message": "Not everyone in the call can open this page. Share its workspace with them first.",
             })
-        # a shared workspace lives at <root>/<id>; the page is read without following a link
-        text = wpaths.read_text_inside(FsPath(root) / ws, body.path, max_bytes=2_000_000)
+        # the desk and the company layer resolve through the workspace door; a shared workspace
+        # lives at <root>/<id>; the page is read without following a link
+        base = (_read_target(request, None if ws in ("personal", "desk") else ws) if own
+                else FsPath(root) / ws)
+        text = wpaths.read_text_inside(base, body.path, max_bytes=2_000_000)
         if text is None:
             raise HTTPException(status_code=404, detail="no such page in that workspace")
         title = body.path.rsplit("/", 1)[-1].removesuffix(".md")

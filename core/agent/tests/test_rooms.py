@@ -42,7 +42,7 @@ TEAM = ("alice", "bob", "carol")
 @pytest.fixture(autouse=True)
 def team(monkeypatch):
     monkeypatch.setattr(workspace_membership, "is_member",
-                        lambda root, ws, who: "contributor" if ws == "team" and who in TEAM else None)
+                        lambda root, ws, who: "contributor" if ws in ("team", "people") and who in TEAM else None)
 
 
 @pytest.fixture(autouse=True)
