@@ -576,6 +576,9 @@ def build(**d) -> APIRouter:
         if isinstance(content, (bytes, bytearray)):
             import base64 as _b64  # noqa: PLC0415
             content = {"base64": _b64.b64encode(bytes(content)).decode()}
+        unit = identity_token.session_of(request.headers)
+        if str(unit or "").strip() and not private_taint.sources(unit):
+            return
         try:
             readers = private_taint.other_readers(wsr.root, Path(target), str(subject))
         except MembershipError as exc:
@@ -583,7 +586,7 @@ def build(**d) -> APIRouter:
                 "refused": POLICY_UNREADABLE,
                 "message": "Who reads this workspace could not be checked, so nothing was written."}) from exc
         held = private_taint.check_egress(
-            subject=str(subject), unit=identity_token.session_of(request.headers), surface=surface,
+            subject=str(subject), unit=unit, surface=surface,
             target=f"{ws}/{rel}", readers=readers,
             workspace=ws, name=ws_name, path=rel, content=content, delegated=True,
             before=before, text=text)
