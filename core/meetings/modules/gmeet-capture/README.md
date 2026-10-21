@@ -15,7 +15,9 @@ model + wire codec is [`@vexa/capture-codec`](../capture-codec/) (the SSOT).
 
 ## Surface
 `createGmeetCaptureV1` (the producer) · `createGmeetCapture` · `createGmeetSpeakers` ·
-`createPcmCaptureNode` · `GmeetChannelBinder` · `pickBoundName`. Front door: [`src/index.ts`](src/index.ts).
+`createPcmCaptureNode` · `GmeetChannelBinder` · `pickBoundName` · the in-call chat:
+`createGmeetChat` (reader — opens the panel, emits other participants' new lines) ·
+`sendGmeetChatMessage` (composer sender) · `openGmeetChatPanel`. Front door: [`src/index.ts`](src/index.ts).
 
 ## Verify
 `pnpm --filter @vexa/gmeet-capture test` — `gmeet-capture.test.ts` pins the **pure cores** (no DOM):
