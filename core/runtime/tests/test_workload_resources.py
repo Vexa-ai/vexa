@@ -9,15 +9,21 @@ Three seams, all provable OFFLINE (no cluster):
     ``resources.limits`` alongside every field the spawn already generated (image, command, env,
     labels, volumes/volumeMounts, tolerations, nodeSelector);
   * C3 — the two profiles are sized INDEPENDENTLY from the runtime's own env, and an unset profile
-    preserves the optional contract (no resources emitted — today's behaviour).
+    preserves the optional contract (no resources emitted — today's behaviour);
+  * C4 — the meeting bot's CPU limit can sit above its CPU request (``RUNTIME_BOT_CPU_LIMIT``), so a
+    bot bursts onto a node's idle cores while the scheduler still packs on the request. Unset, the
+    limit equals the request and the Pod is byte-identical; a limit the request does not fit under
+    is fatal at boot.
 
 runtime.v1 carries ONE cpu and ONE memoryMb per workload; the Kubernetes mapping sets BOTH the
 request and the limit from that single value (Guaranteed QoS). The sealed v1 contract does not model
-separate request/limit semantics and this change does not invent them.
+separate request/limit semantics and this change does not invent them: the bot's CPU limit is
+deployment config on the profile, and a caller cannot send one.
 """
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -25,7 +31,7 @@ import runtime_kernel.k8s_backend as k8s_backend
 from runtime_kernel import Runtime
 from runtime_kernel.k8s_backend import K8sBackend, build_pod, resource_requirements
 from runtime_kernel.models import Resources, WorkloadSpec
-from runtime_kernel.profiles import Profile, Runnable, default_registry
+from runtime_kernel.profiles import Profile, ProfileResources, Runnable, default_registry
 
 
 # ── C1 · resource intent crosses the Backend port ────────────────────────────────────────────
@@ -288,3 +294,157 @@ def test_malformed_profile_sizing_is_fatal_at_boot(monkeypatch):
     monkeypatch.setenv("RUNTIME_BOT_CPU", "one-and-a-half")
     with pytest.raises(ValueError, match="RUNTIME_BOT_CPU"):
         default_registry()
+
+
+# ── C4 · the meeting bot's CPU limit can sit above its request ───────────────────────────────
+_SIZING_ENV = ("RUNTIME_BOT_CPU", "RUNTIME_BOT_CPU_LIMIT", "RUNTIME_BOT_MEMORY_MB",
+               "RUNTIME_AGENT_WORKER_CPU", "RUNTIME_AGENT_WORKER_MEMORY_MB")
+
+
+def _sized_registry(monkeypatch, **env):
+    """default_registry() with exactly ``env`` set among the sizing knobs, the rest unset."""
+    monkeypatch.setenv("BROWSER_IMAGE", "bot:test")
+    monkeypatch.setenv("AGENT_IMAGE", "vexaai/v012-agent-api:test")
+    for key in (*_SIZING_ENV, k8s_backend.TOLERATIONS_ENV, k8s_backend.NODE_SELECTOR_ENV):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    return default_registry()
+
+
+def _spawned_pod(monkeypatch, registry, spec: WorkloadSpec) -> dict:
+    """The Pod manifest the k8s backend submits for ``spec``: env → profile → kernel → backend,
+    end to end, with only kubectl faked."""
+    calls: list[dict] = []
+
+    def fake_kubectl(*args, check=True, stdin=None):
+        calls.append({"args": list(args), "stdin": stdin})
+
+        class _R:
+            returncode = 0
+            # `create` answers with the Pod's uid: the env Secret is owned by the Pod it feeds.
+            stdout = json.dumps({"metadata": {"uid": "pod-uid"}}) if args[:1] == ("create",) else ""
+            stderr = ""
+
+        return _R()
+
+    monkeypatch.setattr(k8s_backend, "_kubectl", fake_kubectl)
+    _runtime(K8sBackend(namespace="ns"), registry).create(spec)
+    assert calls[0]["args"][:3] == ["create", "-f", "-"]
+    return json.loads(calls[0]["stdin"])
+
+
+_TODAY_BOT_RESOURCES = {
+    "requests": {"cpu": "1000m", "memory": "2560Mi"},
+    "limits": {"cpu": "1000m", "memory": "2560Mi"},
+}
+
+
+@pytest.mark.parametrize("limit_env", [
+    {}, {"RUNTIME_BOT_CPU_LIMIT": ""}, {"RUNTIME_BOT_CPU_LIMIT": "1"},
+])
+def test_unset_bot_cpu_limit_spawns_the_same_pod_as_today(monkeypatch, limit_env):
+    """Unset, empty, or equal to the request: the limit equals the request, and the submitted Pod
+    is byte-identical to the one a plain one-value ``Resources`` produces."""
+    reg = _sized_registry(monkeypatch, RUNTIME_BOT_CPU="1", RUNTIME_BOT_MEMORY_MB="2560",
+                          **limit_env)
+    spec = WorkloadSpec(workloadId="mtg-c4", profile="meeting-bot", env={"A": "b"})
+    pod = _spawned_pod(monkeypatch, reg, spec)
+    assert pod["spec"]["containers"][0]["resources"] == _TODAY_BOT_RESOURCES
+    # Today's Pod: the same spawn with the limit knob absent from the runtime's env altogether.
+    today = _spawned_pod(
+        monkeypatch, _sized_registry(monkeypatch, RUNTIME_BOT_CPU="1", RUNTIME_BOT_MEMORY_MB="2560"),
+        spec,
+    )
+    # The env Secret's name carries a per-spawn nonce; everything else must match byte for byte.
+    def same(manifest: dict) -> str:
+        return re.sub(r'-env-[0-9a-f]+"', '-env-<nonce>"', json.dumps(manifest))
+    assert same(pod) == same(today)
+    if not limit_env.get("RUNTIME_BOT_CPU_LIMIT"):
+        assert type(reg.get("meeting-bot").resources) is Resources
+
+
+def test_bot_cpu_limit_above_the_request_gives_burstable_sizing(monkeypatch):
+    """Request 1, limit 2: the scheduler reserves one core, the bot may burn two. Memory keeps
+    request = limit, so the only thing that makes the Pod Burstable is the CPU limit."""
+    reg = _sized_registry(monkeypatch, RUNTIME_BOT_CPU="1", RUNTIME_BOT_CPU_LIMIT="2",
+                          RUNTIME_BOT_MEMORY_MB="2560",
+                          RUNTIME_AGENT_WORKER_CPU="0.5", RUNTIME_AGENT_WORKER_MEMORY_MB="1024")
+    assert reg.get("meeting-bot").resources == ProfileResources(
+        cpu=1.0, memoryMb=2560, cpuLimit=2.0,
+    )
+    spec = WorkloadSpec(workloadId="mtg-c4b", profile="meeting-bot", env={})
+    resources = _spawned_pod(monkeypatch, reg, spec)["spec"]["containers"][0]["resources"]
+    assert resources == {
+        "requests": {"cpu": "1000m", "memory": "2560Mi"},
+        "limits": {"cpu": "2000m", "memory": "2560Mi"},
+    }
+    assert resources["requests"]["memory"] == resources["limits"]["memory"]
+    # The agent worker has no limit knob: still one value per dimension.
+    assert resource_requirements(reg.get("agent").resources) == {
+        "requests": {"cpu": "500m", "memory": "1024Mi"},
+        "limits": {"cpu": "500m", "memory": "1024Mi"},
+    }
+
+
+def test_fractional_bot_cpu_limit_maps_to_millicores(monkeypatch):
+    reg = _sized_registry(monkeypatch, RUNTIME_BOT_CPU="0.75", RUNTIME_BOT_CPU_LIMIT="1.5")
+    assert resource_requirements(reg.get("meeting-bot").resources) == {
+        "requests": {"cpu": "750m"}, "limits": {"cpu": "1500m"},
+    }
+
+
+def test_explicit_spec_resources_ignore_the_profile_cpu_limit(monkeypatch):
+    """A caller's own runtime.v1 resources win whole, and they carry one value per dimension."""
+    reg = _sized_registry(monkeypatch, RUNTIME_BOT_CPU="1", RUNTIME_BOT_CPU_LIMIT="2",
+                          RUNTIME_BOT_MEMORY_MB="2560")
+    pod = _spawned_pod(monkeypatch, reg, WorkloadSpec(
+        workloadId="mtg-c4c", profile="meeting-bot", env={},
+        resources=Resources(cpu=1.5, memoryMb=3072),
+    ))
+    assert pod["spec"]["containers"][0]["resources"] == {
+        "requests": {"cpu": "1500m", "memory": "3072Mi"},
+        "limits": {"cpu": "1500m", "memory": "3072Mi"},
+    }
+
+
+@pytest.mark.parametrize("env, needle", [
+    ({"RUNTIME_BOT_CPU": "2", "RUNTIME_BOT_CPU_LIMIT": "1"}, "must be at least RUNTIME_BOT_CPU"),
+    ({"RUNTIME_BOT_CPU": "1", "RUNTIME_BOT_CPU_LIMIT": "0.5"}, "must be at least RUNTIME_BOT_CPU"),
+    ({"RUNTIME_BOT_CPU_LIMIT": "2"}, "needs a positive RUNTIME_BOT_CPU"),
+    ({"RUNTIME_BOT_CPU": "0", "RUNTIME_BOT_CPU_LIMIT": "2"}, "needs a positive RUNTIME_BOT_CPU"),
+    ({"RUNTIME_BOT_MEMORY_MB": "2560", "RUNTIME_BOT_CPU_LIMIT": "2"},
+     "needs a positive RUNTIME_BOT_CPU"),
+    ({"RUNTIME_BOT_CPU": "1", "RUNTIME_BOT_CPU_LIMIT": "0"}, "must be a positive number"),
+    ({"RUNTIME_BOT_CPU": "1", "RUNTIME_BOT_CPU_LIMIT": "-2"}, "must be a positive number"),
+    ({"RUNTIME_BOT_CPU": "1", "RUNTIME_BOT_CPU_LIMIT": "inf"}, "must be a positive number"),
+    ({"RUNTIME_BOT_CPU": "1", "RUNTIME_BOT_CPU_LIMIT": "nan"}, "must be a positive number"),
+    ({"RUNTIME_BOT_CPU": "1", "RUNTIME_BOT_CPU_LIMIT": "two"}, "must be numeric"),
+])
+def test_invalid_bot_cpu_limit_is_fatal_at_boot(monkeypatch, env, needle):
+    """Kubernetes rejects a Pod whose request exceeds its limit, and requests the whole limit when
+    no request is declared — so every such value fails at registry construction, naming the key,
+    instead of at every spawn or as a silent density loss."""
+    with pytest.raises(ValueError, match="RUNTIME_BOT_CPU_LIMIT") as exc:
+        _sized_registry(monkeypatch, **env)
+    assert needle in str(exc.value)
+
+
+@pytest.mark.parametrize("bad", [
+    {"cpu": 2, "cpuLimit": 1},
+    {"cpuLimit": 2},
+    {"cpu": 0, "cpuLimit": 2},
+    {"cpu": 1, "cpuLimit": 0},
+])
+def test_profile_resources_refuse_a_limit_below_or_without_a_request(bad):
+    with pytest.raises(ValueError):
+        ProfileResources(**bad)
+
+
+def test_a_caller_cannot_send_a_cpu_limit():
+    """runtime.v1 is sealed: the limit is deployment config, so the wire shape still forbids it."""
+    with pytest.raises(ValueError):
+        WorkloadSpec.model_validate({
+            "workloadId": "w", "profile": "meeting-bot", "env": {},
+            "resources": {"cpu": 1, "cpuLimit": 2},
+        })

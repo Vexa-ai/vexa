@@ -22,7 +22,7 @@ from . import pod_scheduling
 from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import k8s_volume_mounts
-from .profiles import Runnable
+from .profiles import ProfileResources, Runnable
 from .workload_env import forwarded_env
 
 MANAGED_LABEL = "runtime.managed"
@@ -212,12 +212,14 @@ def pod_overrides(env: dict[str, str], *, container_name: str,
 
 
 def resource_requirements(resources: Optional[Resources]) -> Optional[dict]:
-    """Map runtime.v1 ``Resources`` to a container's ``resources`` block.
+    """Map the effective ``Resources`` to a container's ``resources`` block.
 
     v1 carries ONE value per dimension, so cpu/memory set BOTH the request and the limit — the
     minimum non-breaking contract for a namespace whose ResourceQuota requires each container to
     declare both, and Guaranteed QoS for the workload. The sealed contract does not model separate
-    request/limit semantics and this mapping does not invent them.
+    request/limit semantics and this mapping does not invent them. The one exception is deployment
+    config, not contract: a profile's ``ProfileResources.cpuLimit`` (``RUNTIME_BOT_CPU_LIMIT`` for
+    the meeting bot) raises the CPU limit above the CPU request, which makes the Pod Burstable.
 
     ``0`` is schema-legal but meaningless as a Kubernetes quantity (a zero request is not "unset" to
     a quota), so it is treated as unset. All-unset ⇒ None: no ``resources`` key is emitted at all
@@ -229,8 +231,9 @@ def resource_requirements(resources: Optional[Resources]) -> Optional[dict]:
     if resources.cpu:
         # millicores: the canonical k8s CPU quantity, and exact for the fractional values v1 allows
         # (0.5 → "500m") where a bare float would serialize as an unstable "0.5".
-        quantity = f"{round(resources.cpu * 1000)}m"
-        requests["cpu"] = limits["cpu"] = quantity
+        requests["cpu"] = f"{round(resources.cpu * 1000)}m"
+        cpu_limit = resources.cpuLimit if isinstance(resources, ProfileResources) else None
+        limits["cpu"] = f"{round((cpu_limit or resources.cpu) * 1000)}m"
     if resources.memoryMb:
         quantity = f"{resources.memoryMb}Mi"
         requests["memory"] = limits["memory"] = quantity

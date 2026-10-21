@@ -125,7 +125,8 @@ runtime:
 
 | Value | Renders as | Notes |
 |---|---|---|
-| `cpu` | container `requests.cpu` **and** `limits.cpu`, in millicores (`0.5` → `500m`) | one value per dimension is runtime.v1's shape; there is no separate request/limit knob |
+| `cpu` | container `requests.cpu` **and** `limits.cpu`, in millicores (`0.5` → `500m`) | one value per dimension is runtime.v1's shape |
+| `meetingBot.cpuLimit` | the bot container's `limits.cpu` only (`2` → `2000m`) | optional; at least `meetingBot.cpu`, which must be set. `""` (the default) ⇒ the limit equals `cpu` |
 | `memoryMb` | container `requests.memory` **and** `limits.memory`, in MiB (`2048` → `2048Mi`) | a **hard ceiling** — a workload exceeding it is OOM-killed |
 | either, set to `""` | nothing rendered for that class | preserves the optional contract: an unsized Pod, exactly as before |
 
@@ -133,7 +134,15 @@ Request equals limit, so both classes get **Guaranteed** QoS. The shipped defaul
 and sized to fit a small dev cluster — raise `meetingBot.memoryMb` for real meetings rather than
 discovering the ceiling as a mid-meeting OOM kill. A caller may also override per workload by
 sending `resources` in its `runtime.v1` `WorkloadSpec`; the chart values are the default that
-applies when it does not.
+applies when it does not, and a caller's `resources` always set request = limit.
+
+`meetingBot.cpuLimit` above `cpu` lets a bot burst onto a node's idle cores when the browser needs
+more than its reservation. Scheduling, preemption and the cluster autoscaler still count only the
+request, so bots pack exactly as before. The bot Pod becomes **Burstable**. With memory request =
+limit it never uses more memory than it requested, so kubelet node-pressure eviction ranks it as
+before; the kernel OOM killer does not — a Burstable container's `oom_score_adj` is
+`1000 − 1000 × memory request ÷ node memory` rather than Guaranteed's `−997`, so if a node runs out
+of memory before the kubelet evicts anything, a bot is no longer the last process killed.
 
 Enforcement is **Kubernetes-only**. The docker and process backends accept the same resource intent
 and do not act on it — they have no admission controller to satisfy, and no parity is claimed.

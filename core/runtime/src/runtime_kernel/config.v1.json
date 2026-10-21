@@ -176,7 +176,16 @@
       "key": "RUNTIME_BOT_CPU",
       "class": "defaulted",
       "default": "(unset — the meeting-bot class declares no cpu, preserving runtime.v1's optional resources)",
-      "description": "k8s backend: CPU cores every SPAWNED meeting-bot Pod declares. runtime.v1 carries one value per dimension, so it sets BOTH the container's request and its limit (Guaranteed QoS) — the declaration a namespace ResourceQuota admits on (#1005). Unset/empty ⇒ no cpu declared (the pre-#1005 unbounded spawn); a non-numeric value is fatal at boot",
+      "description": "k8s backend: CPU cores every SPAWNED meeting-bot Pod declares. runtime.v1 carries one value per dimension, so it sets BOTH the container's request and its limit (Guaranteed QoS) — the declaration a namespace ResourceQuota admits on (#1005) — unless RUNTIME_BOT_CPU_LIMIT sets a higher limit. Unset/empty ⇒ no cpu declared (the pre-#1005 unbounded spawn); a non-numeric value is fatal at boot",
+      "targets": [
+        "helm"
+      ]
+    },
+    {
+      "key": "RUNTIME_BOT_CPU_LIMIT",
+      "class": "defaulted",
+      "default": "(unset — the meeting-bot CPU limit equals RUNTIME_BOT_CPU)",
+      "description": "k8s backend: CPU limit (cores) of every SPAWNED meeting-bot Pod, above its RUNTIME_BOT_CPU request, so a bot bursts onto a node's idle cores while the scheduler still packs on the request. The Pod's QoS becomes Burstable. Must be a positive number no lower than RUNTIME_BOT_CPU, which must be set; anything else is fatal at boot",
       "targets": [
         "helm"
       ]

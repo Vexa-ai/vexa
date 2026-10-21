@@ -15,10 +15,13 @@ the spec's env is layered on top of). Tests inject their own ProfileRegistry, so
 a real image."""
 from __future__ import annotations
 
+import math
 import os
 import shlex
 from dataclasses import dataclass, field, replace
 from typing import Mapping, Optional
+
+from pydantic import Field, model_validator
 
 from . import pod_scheduling
 from .models import Resources
@@ -104,6 +107,27 @@ class Runnable:
     run_as_non_root: bool = False
 
 
+class ProfileResources(Resources):
+    """A profile's deployment sizing: runtime.v1 ``Resources`` plus a CPU limit above the CPU
+    request. Kernel config, never contract — a ``WorkloadSpec`` parses ``resources`` as plain
+    ``Resources``, which forbids this field, so only the deployment can set it.
+
+    The request stays the reservation the scheduler packs on; the limit lets the workload burst
+    onto a node's idle cores. It needs a positive CPU request: a Kubernetes container that declares
+    a CPU limit and no request is given a request equal to the limit."""
+
+    cpuLimit: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _limit_covers_request(self) -> "ProfileResources":
+        if self.cpuLimit is not None and not (self.cpu and self.cpu <= self.cpuLimit):
+            raise ValueError(
+                f"cpuLimit {self.cpuLimit} needs a positive cpu request no greater than it, "
+                f"got {self.cpu}"
+            )
+        return self
+
+
 @dataclass(frozen=True)
 class Profile:
     """An opaque workload kind: how to run it (Runnable) plus deployment defaults."""
@@ -183,6 +207,13 @@ _RESOURCE_ENV = {
     "agent": ("RUNTIME_AGENT_WORKER_CPU", "RUNTIME_AGENT_WORKER_MEMORY_MB"),
 }
 
+# A CPU limit above the class's CPU request. Unset ⇒ the limit equals the request. Only the meeting
+# bot has one: a live browser's CPU demand comes in bursts above its average, so it reserves its
+# average and bursts onto the node's idle cores.
+_CPU_LIMIT_ENV = {
+    "meeting-bot": "RUNTIME_BOT_CPU_LIMIT",
+}
+
 
 def _numeric_env(key: str, cast):
     """One resource knob from env. Unset/empty ⇒ None (unsized). A non-numeric value is FATAL:
@@ -201,6 +232,18 @@ def _profile_resources(profile: str) -> Optional[Resources]:
     cpu_key, mem_key = _RESOURCE_ENV[profile]
     cpu = _numeric_env(cpu_key, float)
     memory_mb = _numeric_env(mem_key, int)
+    limit_key = _CPU_LIMIT_ENV.get(profile)
+    cpu_limit = _numeric_env(limit_key, float) if limit_key else None
+    if cpu_limit is not None:
+        # Fatal at boot, never at spawn: Kubernetes rejects a Pod whose CPU request exceeds its
+        # limit, and silently requests the whole limit when no request is declared.
+        if not math.isfinite(cpu_limit) or cpu_limit <= 0:
+            raise ValueError(f"{limit_key} must be a positive number of cores, got {cpu_limit!r}")
+        if not cpu or cpu <= 0:
+            raise ValueError(f"{limit_key} needs a positive {cpu_key} request, got {cpu!r}")
+        if cpu_limit < cpu:
+            raise ValueError(f"{limit_key} ({cpu_limit}) must be at least {cpu_key} ({cpu})")
+        return ProfileResources(cpu=cpu, memoryMb=memory_mb, cpuLimit=cpu_limit)
     if cpu is None and memory_mb is None:
         return None
     return Resources(cpu=cpu, memoryMb=memory_mb)
