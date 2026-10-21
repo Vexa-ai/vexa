@@ -13,6 +13,7 @@ import {
 } from "./selectors";
 import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 import { AdmissionError } from "../shared/admission";
+import { gotoWithRetry } from "../shared/navigate";
 import { resolveBotUiLocale } from "../browser-args";
 
 /** Thrown when authenticated mode detects a signed-out browser profile. Extends AdmissionError so
@@ -317,7 +318,7 @@ export async function joinGoogleMeeting(
   botConfig: BotConfig
 ): Promise<void> {
   const navUrl = withPinnedMeetLocale(meetingUrl, resolveBotUiLocale());
-  await page.goto(navUrl, { waitUntil: "domcontentloaded" });
+  await gotoWithRetry(page, navUrl, { waitUntil: "domcontentloaded" });
   await page.bringToFront();
 
   // Take screenshot after navigation

@@ -8,6 +8,7 @@ import {
   jitsiJoinButtonSelector,
   jitsiGuestEntryTexts,
 } from "./selectors";
+import { gotoWithRetry } from "../shared/navigate";
 
 // NOTE vs the other platforms: Jitsi Meet is SELF-HOSTABLE — meet.jit.si is just
 // the canonical public deployment. The join layer therefore never rewrites the
@@ -143,7 +144,7 @@ export async function joinJitsiMeeting(
 
   const navUrl = buildJitsiMeetingUrl(meetingUrl, { botName });
   log(`[Jitsi] Navigating to: ${navUrl}`);
-  await page.goto(navUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await gotoWithRetry(page, navUrl, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(2000);
 
   // Notify the host: joining
