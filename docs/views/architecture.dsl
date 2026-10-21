@@ -270,6 +270,7 @@ edges:
   signals-service -read-> redis
   signals-service -req-> agent-api  # GET /internal/meetings/{row}/listen?subject=<owner> and GET /internal/chats/{session}/listen?subject=<owner> with the internal secret: the listening brief (the agent's rules and model tier included) and the company's signal policy in one answer, cached 30 s; agent-api reads the source as that subject
   signals-service -req-> flows-api  # POST /events/signal (X-Internal-Secret + X-Vexa-Service: signals): one event.v1 meeting.signal per wake, data = the buffer; the company's _global flow decides what a wake does. A publish edge: no flows, no wakes
+  crm-api -req-> flows-api  # the crm outbox (python -m crm.outbox --watch, the crm-outbox process of the crm image): POST /events with flows' operator key (X-Flows-Operator-Key), one crm.record.changed per revision with its event.v2 envelope sealed under VEXA_FACT_SEAL_SECRET; marked delivered only on a 202. A publish edge: no flows, rows stay pending
   signals-service -req-> credentials-broker
   signals-service -call-> signal-model  # one call per confirmed line: the line, up to 24 lines before it and the brief's questions; answers a 0..1 score per label, parsed strictly
   bot, agent-worker deployed-in runtime

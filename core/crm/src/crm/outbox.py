@@ -47,7 +47,7 @@ def deliver(engine, endpoint, token, *, limit=100, record_id=None, transport=Non
                     return {'delivered': delivered, 'pending': True, 'reason': 'Envelope could not be sealed'}
                 try:
                     response = client.post(endpoint.rstrip('/') + '/events',
-                        headers={'X-Flows-Admin-Key': token, 'X-Actor': 'crm-outbox'}, json=body)
+                        headers={'X-Flows-Operator-Key': token, 'X-Actor': 'crm-outbox'}, json=body)
                 except httpx.HTTPError:
                     return {'delivered': delivered, 'pending': True, 'reason': 'Flows unavailable'}
                 if response.status_code != 202:

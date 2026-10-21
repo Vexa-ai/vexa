@@ -211,8 +211,10 @@ access comparison for each organization; passing one fixture proves that fixture
 ## Flows and workspaces
 
 Enable the optional `flows_defs.crm` pack with `VEXA_FLOWS_DEFS_EXTRA` on both
-Flows API and worker. `python -m crm.outbox --watch` uses the runtime credential,
-`FLOWS_API_URL` and `FLOWS_API_KEY` to deliver `crm.record.changed` to `/events`.
+Flows API and worker. `python -m crm.outbox --watch` (compose `crm-outbox`; the chart's `crm-outbox`
+Deployment when flows is on) uses the runtime credential, `FLOWS_API_URL` and `FLOWS_API_KEY` (flows'
+operator key, sent as `X-Flows-Operator-Key`) to deliver `crm.record.changed` to `/events`. Every key
+the CRM's processes read is declared in `src/crm/config.v1.json`.
 The stable event ID makes redelivery idempotent. Failed or unhandled events remain
 pending. Only org, record, revision and actor references leave CRM; no account
 fields are copied into Flows. The initial pack records a workflow receipt. It
@@ -238,8 +240,8 @@ Back up the CRM database with PostgreSQL tools and verify restoration into an
 isolated database before cutover. Revisions support reconstruction and audited
 restoration by submitting the old values as a **new** change; there is no history
 rewrite endpoint. No-CRM deployments retain existing workspace and meeting paths.
-The development proof covers a Minutes Compose deployment; Helm/Lite distribution,
-arbitrary source-org parity and production migration are separate acceptance work.
+Compose (profile `crm`) and Helm (`crm.enabled`) run crm-init, crm-api and the outbox; Lite carries
+no CRM. Arbitrary source-org parity and production migration are separate acceptance work.
 
 ## Configurable cards
 

@@ -4875,6 +4875,22 @@
    "protocol": "HTTP"
   },
   {
+   "unique-id": "crm-outbox-flows-events",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "crm-api"
+     },
+     "destination": {
+      "node": "flows-api",
+      "interface": "flows-http"
+     }
+    }
+   },
+   "description": "the crm outbox (python -m crm.outbox --watch, the crm-outbox process of the crm image): POST /events with flows' operator key (X-Flows-Operator-Key), one crm.record.changed per revision with its event.v2 envelope sealed under VEXA_FACT_SEAL_SECRET; marked delivered only on a 202. A publish edge: no flows, rows stay pending",
+   "protocol": "HTTP"
+  },
+  {
    "unique-id": "signals-broker-key",
    "relationship-type": {
     "connects": {

@@ -18,7 +18,8 @@ def test_failed_delivery_retries_same_id_without_record_values():
     assert deliver(engine,'http://flows','secret',transport=transport)['delivered']==1
     assert calls[0].content == calls[1].content
     assert b'fields' not in calls[0].content
-    assert calls[0].headers['X-Flows-Admin-Key']=='secret'
+    assert calls[0].headers['X-Flows-Operator-Key']=='secret'
+    assert 'X-Flows-Admin-Key' not in calls[0].headers
     assert deliver(engine,'http://flows','secret',transport=transport)['delivered']==0
     with engine.connect() as c:assert c.scalar(select(s.outbox.c.delivered))
 

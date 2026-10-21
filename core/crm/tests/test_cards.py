@@ -394,6 +394,11 @@ def test_card_face_resolves_the_shared_case_table(case):
 
 # ── stalled is policy; "new" clears when the viewer opens the card ───────────────────────────
 def test_stalled_follows_the_global_policy_and_defaults_to_fourteen_days(store, clock):
+    # The store stamps a revision's `created_at` with the wall clock, and `stalled` is measured from
+    # it against the injected clock — so the injected clock starts at the wall clock, or the test
+    # passes only while the fixture's fixed date is more than 14 days behind today (it went red
+    # 2026-10-16 09:00 UTC, the day after it was written).
+    clock.at = datetime.now(timezone.utc)
     default = Cards(store, clock=clock)
     card = make(default)
     clock.at += timedelta(days=13)

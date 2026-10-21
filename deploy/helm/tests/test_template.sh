@@ -1713,6 +1713,27 @@ if grep -q 'values: \[admin-api, meeting-api, agent-api, pgbouncer, migrations, 
    && grep -q 'name: vexa-vexa-crm-api-ingress' <<< "$crm_np"; then
   echo "  OK: with the CRM on, crm-api reaches Postgres and the chart's pods reach crm-api"
 else echo "  FAIL: the network policy does not admit the CRM"; fail=1; fi
+# The CRM's outbox (car 19): with flows on it is a Deployment of its own that logs in as the CRM's
+# role and holds flows' door, flows' operator key and the fact seal; crm-api holds none of them, and
+# flows-api reads the seal from the same Secret key. With flows off there is no outbox.
+crm_fl="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set flows.enabled=true)"
+outbox="$(doc Deployment vexa-vexa-crm-outbox "$crm_fl")"
+crmapi="$(doc Deployment vexa-vexa-crm-api "$crm_fl")"
+flowsapi="$(doc Deployment vexa-vexa-flows-api "$crm_fl")"
+tb "crm outbox runs crm.outbox --watch as the CRM's role" 'grep -q "crm.outbox\", \"--watch\"" <<< "$outbox" && grep -q "postgresql+pg8000://vexa_crm:" <<< "$outbox" && ! grep -q "key: POSTGRES_PASSWORD" <<< "$outbox"'
+tb "crm outbox: FLOWS_API_URL names the flows-api Service" 'grep -A1 "name: FLOWS_API_URL$" <<< "$outbox" | grep -q "http://vexa-vexa-flows-api:18200"'
+tb "crm outbox: FLOWS_API_KEY is flows' operator key from the flows Secret" 'grep -A4 "name: FLOWS_API_KEY$" <<< "$outbox" | grep -q "name: \"vexa-vexa-flows\"" && grep -A4 "name: FLOWS_API_KEY$" <<< "$outbox" | grep -q "key: VEXA_FLOWS_API_KEY"'
+tb "crm outbox: the fact seal is required from the shared Secret" 'grep -A5 "name: VEXA_FACT_SEAL_SECRET$" <<< "$outbox" | grep -q "name: \"vexa-vexa-secrets\"" && ! grep -A5 "name: VEXA_FACT_SEAL_SECRET$" <<< "$outbox" | grep -q "optional: true"'
+tb "crm outbox holds no internal secret and crm-api no flows key or seal" '! grep -q "INTERNAL_API_SECRET" <<< "$outbox" && ! grep -qE "name: (FLOWS_API_KEY|VEXA_FACT_SEAL_SECRET)$" <<< "$crmapi"'
+tb "flows-api verifies under the same seal (optional ref)" 'grep -A5 "name: VEXA_FACT_SEAL_SECRET$" <<< "$flowsapi" | grep -q "key: VEXA_FACT_SEAL_SECRET" && grep -A5 "name: VEXA_FACT_SEAL_SECRET$" <<< "$flowsapi" | grep -q "optional: true"'
+tb "the chart's Secret generates VEXA_FACT_SEAL_SECRET" 'grep -qE "^  VEXA_FACT_SEAL_SECRET: \"[A-Za-z0-9]{64}\"$" <<< "$crm_fl"'
+short_seal="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set secrets.factSealSecret=short 2>&1 || true)"
+tb "secrets.factSealSecret shorter than 32 bytes is refused" 'grep -q "secrets.factSealSecret must be 32+ bytes" <<< "$short_seal"'
+crm_pre="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set flows.enabled=true --set secrets.existingSecretName=shared-secrets)"
+tb "pre-created Secrets: the outbox and flows-api read the seal from secrets.existingSecretName" '[ "$(grep -A4 "name: VEXA_FACT_SEAL_SECRET$" <<< "$crm_pre" | grep -c "name: \"\?shared-secrets\"\?$")" -eq 2 ] && ! grep -q "^  VEXA_FACT_SEAL_SECRET:" <<< "$crm_pre"'
+tb "with flows off there is no crm outbox" '! grep -q "vexa-vexa-crm-outbox" <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}")"'
+crm_np_fl="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set flows.enabled=true --set networkPolicy.enabled=true --show-only templates/networkpolicy-namespace.yaml)"
+tb "with the CRM and flows on, the crm outbox reaches Postgres" 'grep -q "values: \[admin-api, meeting-api, agent-api, pgbouncer, migrations, crm-api, crm-outbox\]" <<< "$crm_np_fl"'
 
 # ── THE SESSION STORE'S SCHEMA JOB RUNS ON A FIRST INSTALL ──────────────────────────────────────────
 # Helm takes every manifest carrying a helm.sh/hook annotation out of the release and runs it only on

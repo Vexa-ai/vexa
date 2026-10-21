@@ -17,7 +17,8 @@ networkpolicy-workloads.yaml and networkpolicy-credential-broker.yaml add to the
     credential-broker                its own policy (agent-api and the terminal)
     postgres                         from the services that hold its credentials: admin-api,
                                      meeting-api, agent-api (the session store, ADR-0048),
-                                     pgbouncer, the flows tier, the migrations Job
+                                     pgbouncer, the flows tier, the migrations Job, and with the CRM
+                                     on crm-api and its outbox
     redis                            from the chart's Pods and the Pods the runtime spawns
     everything above                 + networkPolicy.controlPlane.extraIngress (a monitoring scraper)
 
@@ -183,7 +184,7 @@ spec:
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In
-                values: [admin-api, meeting-api, agent-api, pgbouncer, migrations{{ if and .Values.crm .Values.crm.enabled }}, crm-api{{ end }}]
+                values: [admin-api, meeting-api, agent-api, pgbouncer, migrations{{ if and .Values.crm .Values.crm.enabled }}, crm-api{{ if .Values.flows.enabled }}, crm-outbox{{ end }}{{ end }}]
         - podSelector:
             matchLabels:
               {{- toYaml $sel | nindent 14 }}

@@ -115,5 +115,6 @@ flowchart LR
   signals_service -->|"TCP"| redis
   signals_service -->|"HTTP"| agent_api
   signals_service -->|"HTTP"| flows_api
+  crm_api -->|"HTTP"| flows_api
   signals_service -->|"HTTP"| credentials_broker
   signals_service -->|"HTTPS"| signal_model

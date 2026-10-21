@@ -24,3 +24,8 @@ commitment, approval (also invitation, policy_change), question (also ask) — a
 `nonce`, `content_hash`; nonces in `crm_card_nonces`), `seen` is the terminal's render-in-view, and
 `inbox`/`counts` are the one predicate every surface counts with. `store.Store.begin` writes the pending
 audit row inside the operation's transaction (H9), and `store._envelope` computes a fact's audience (D8).
+
+`config.v1.json` declares every environment key the CRM's processes read — crm-api, the outbox and
+`migrate` — and `config_preflight.py` is the config.v1 contract's validator, vendored verbatim (gated
+byte-for-byte). `python -m crm` runs it before serving: a missing required key or a published
+placeholder refuses the boot with one message naming every key.

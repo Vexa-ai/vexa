@@ -145,7 +145,11 @@ def _publisher_bodies():
     DERIVED, not listed: a publisher is a service whose `config.v1.json` declares a `publish-edge`
     key, and its body is the dict literal in that service's source carrying an `event_type` key.
     A new publisher is therefore covered the moment it declares its edge, which is the same moment
-    the rest of this file starts checking its carriers."""
+    the rest of this file starts checking its carriers.
+
+    A publisher with an OUTBOX stores the fact first and posts it later: the row it stores (the
+    `event=` value of an insert's `.values(...)`) is its own storage shape, not the wire, and its
+    delivery builds the body this test reads — so that row is not a body, and the delivery's dict is."""
     for decl in DECLARATIONS:
         keys = json.loads(decl.read_text()).get("keys") or []
         if not any(k.get("class") == "publish-edge" for k in keys):
@@ -157,8 +161,11 @@ def _publisher_bodies():
                 tree = ast.parse(f.read_text(encoding="utf-8", errors="ignore"))
             except SyntaxError:                       # noqa: PERF203 - vendored oddities
                 continue
+            stored = {id(kw.value) for call in ast.walk(tree) if isinstance(call, ast.Call)
+                      and isinstance(call.func, ast.Attribute) and call.func.attr == "values"
+                      for kw in call.keywords if kw.arg == "event"}
             for node in ast.walk(tree):
-                if not isinstance(node, ast.Dict):
+                if not isinstance(node, ast.Dict) or id(node) in stored:
                     continue
                 names = {k.value for k in node.keys
                          if isinstance(k, ast.Constant) and isinstance(k.value, str)}

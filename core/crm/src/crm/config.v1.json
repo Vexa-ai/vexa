@@ -1,0 +1,141 @@
+{
+  "contract": "config.v1",
+  "service": "crm-api",
+  "keys": [
+    {
+      "key": "CRM_DATABASE_URL",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "crm-api's own Postgres login (`postgresql+pg8000://<CRM_DB_USER>:<CRM_DB_PASSWORD>@host/db`), the role `python -m crm.migrate init` made: never a superuser, grants on the crm_* tables only. crm-api refuses any other driver, a superuser and any other schema version (`migrate.check`). The outbox (`python -m crm.outbox --watch`) and `crm.migrate check|migrate` log in with it too",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "CRM_ORG_ID",
+      "class": "required-explicit",
+      "description": "the one organisation this install's CRM serves (ADR-0047), never chosen by a caller. `crm.migrate init` creates it with its entity types; with `personal_crm` on, an individual is served from their org of one instead",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "ADMIN_API_URL",
+      "class": "required-explicit",
+      "description": "identity's internal door: every caller is resolved by `/internal/validate`, and with `personal_crm` on each person's home org by `GET /internal/users/{id}/org`. No host-port default: a deployment default names the service and lives in the deploy surface",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "INTERNAL_API_SECRET",
+      "class": "required-explicit",
+      "secret": true,
+      "description": "the internal tier's secret: presented to identity on every caller resolution and to agent-api on the desk-limits read, and the credential crm-api's own /internal routes require. A published placeholder is refused outright (F95)",
+      "targets": ["compose", "helm"],
+      "forbidden_values": ["vexa-internal-secret", "lite-internal-secret", "changeme", "change-me", "CHANGE-ME", "default", "secret"]
+    },
+    {
+      "key": "VEXA_FEATURES",
+      "class": "defaulted",
+      "default": "(empty — the release default: the CRM and every other unproven feature off)",
+      "description": "the unproven features this deployment switches on, by agent-api's `install_defaults` rules: `crm` (or `all`) serves the CRM, `personal_crm` must be named explicitly (`all` does not switch it on). Switched off, every CRM route answers the typed `refused` body",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "CRM_AGENT_API_URL",
+      "class": "defaulted",
+      "default": "(unset — the desk's default limits)",
+      "description": "agent-api's door, where crm-api reads `_global/POLICIES.md` for the desk's limits with the internal secret (narrow-only, cached 30 s). Unset or unreachable, the defaults apply",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "FLOWS_API_URL",
+      "class": "publish-edge",
+      "description": "flows' address — the domain the outbox (`python -m crm.outbox --watch`) HANDS each revision's fact to (`POST /events`, one fact per revision, stable event id so redelivery dedupes). A publish, not a dependency: unset is the no-flows profile, the outbox answers `Flows is not configured` and the rows stay pending; crm-api never reads it",
+      "targets": ["compose", "helm"],
+      "publishes_events": ["crm.record.changed"]
+    },
+    {
+      "key": "FLOWS_API_KEY",
+      "class": "publish-edge",
+      "secret": true,
+      "description": "flows' operator key (the value flows reads as VEXA_FLOWS_API_KEY), sent by the outbox as `X-Flows-Operator-Key` on `POST /events`. Unset, the outbox delivers nothing and the rows stay pending",
+      "targets": ["compose", "helm"],
+      "publishes_events": ["crm.record.changed"]
+    },
+    {
+      "key": "VEXA_FACT_SEAL_SECRET",
+      "class": "capability",
+      "capability": "fact_seal_key",
+      "secret": true,
+      "description": "the secret event.v2 fact envelopes are sealed under (PRD 0.13.4 D8): the outbox seals each card fact with the `crm` producer key derived from it (`fact_envelope.producer_key`), bound to the event type, event id and refs it is posted with. It must equal flows-api's value, or flows refuses the fact 403 and the row stays pending. Its own credential, never the internal tier's: the outbox refuses to start without it",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "DB_HOST",
+      "class": "defaulted",
+      "default": "localhost",
+      "description": "`crm.migrate init` only: the database host it connects to with the admin credential to create the CRM's role and tables",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "DB_PORT",
+      "class": "defaulted",
+      "default": "5432",
+      "description": "`crm.migrate init` only: the database port",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "DB_NAME",
+      "class": "defaulted",
+      "default": "vexa",
+      "description": "`crm.migrate init` only: the database the crm_* tables live in, and the one the CRM's role is granted CONNECT on (the chart also composes CRM_DATABASE_URL from it)",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "DB_USER",
+      "class": "defaulted",
+      "default": "postgres",
+      "description": "`crm.migrate init` only: the admin role that creates the CRM's role. crm-api and the outbox never hold it",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "DB_PASSWORD",
+      "class": "defaulted",
+      "default": "(empty)",
+      "secret": true,
+      "description": "`crm.migrate init` only: the admin role's password. crm-api and the outbox never hold it",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "CRM_DB_USER",
+      "class": "defaulted",
+      "default": "vexa_crm",
+      "description": "`crm.migrate init` only: the name of the CRM's own login role it creates (or re-asserts)",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "CRM_DB_PASSWORD",
+      "class": "defaulted",
+      "default": "(empty)",
+      "secret": true,
+      "description": "`crm.migrate init`: the password it sets on the CRM's role. The chart also composes CRM_DATABASE_URL from it",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "CRM_ORG_NAME",
+      "class": "defaulted",
+      "default": "(CRM_ORG_ID)",
+      "description": "`crm.migrate init` only: the display name of the organisation it creates",
+      "targets": ["compose", "helm"]
+    },
+    {
+      "key": "CRM_WAIT_SEC",
+      "class": "defaulted",
+      "default": "600",
+      "description": "`crm.migrate check` only: how long it waits, as the CRM's role, for the schema to exist before giving up",
+      "targets": []
+    }
+  ],
+  "capabilities": {
+    "fact_seal_key": {
+      "description": "The seal secret for event.v2 fact envelopes (D8): the crm outbox seals each card fact's audience so it reaches the people the card names, not only its subject.",
+      "when_unconfigured": "The outbox refuses to start (`VEXA_FACT_SEAL_SECRET is required`), so no fact leaves the CRM and the outbox rows stay pending. crm-api itself serves as before."
+    }
+  }
+}

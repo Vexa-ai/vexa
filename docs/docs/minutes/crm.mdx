@@ -204,7 +204,10 @@ CRM_AGENT_API_URL=http://agent-api:8100  # where crm-api reads _global/POLICIES.
 
 Then `docker compose up -d`. On Kubernetes, set `crm.enabled`, `crm.orgId` and `crm.orgName` in the chart's values
 ([The CRM on Kubernetes](/deployment-kubernetes#the-crm-optional)). `crm-init` runs once per start: it creates the CRM's own database role,
-its tables and the organisation, then exits; `crm-api` starts after it. To rebuild every backlink from
+its tables and the organisation, then exits; `crm-api` starts after it. `crm-outbox` starts after it
+too and hands each record change to flows (`VEXA_FLOWS_API_URL`, `VEXA_FLOWS_API_KEY`). It seals card
+facts with `VEXA_FACT_SEAL_SECRET`, which must equal flows-api's (`make up` mints one), and does not
+start without it. On Kubernetes the chart runs it when flows is on too. To rebuild every backlink from
 git: `docker compose exec agent-api python -m control_plane.crm_references rebuild`.
 
 ## How it works

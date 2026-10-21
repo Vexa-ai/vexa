@@ -1280,6 +1280,20 @@ const CONFIG_ADOPTED = [
     compose: "flows-api", helm: [], lite: null,
   },
   {
+    // The optional CRM (ADR-0047). ONE DECLARATION, THREE PROCESSES of one image: `crm-init` (the
+    // migrations path, admin DB_*), `crm-api` (the service) and `crm-outbox` (delivers each
+    // revision's fact to flows). Unlike flows' lanes they carry DIFFERENT environments — the admin
+    // credential lives in crm-init alone, the flows key and the seal secret in the outbox alone — so
+    // all three compose lanes are named and read as one surface: a declared key must reach one of
+    // them, and every key any of them sets must be declared. Helm is the one template carrying all
+    // three. lite is null: Lite carries no CRM.
+    service: "crm-api",
+    decl: "core/crm/src/crm/config.v1.json",
+    preflight: "core/crm/src/crm/config_preflight.py",
+    scan: ["core/crm/src"],
+    compose: ["crm-init", "crm-api", "crm-outbox"], helm: ["crm.yaml"], lite: null,
+  },
+  {
     service: "gateway",
     decl: "core/gateway/services/gateway/src/gateway/config.v1.json",
     preflight: "core/gateway/services/gateway/src/gateway/config_preflight.py",
@@ -1466,8 +1480,16 @@ function gateConfigContract() {
     const declared = new Set((decl.keys || []).map((k) => k.key));
     const surfaceOnly = new Set((decl.surface_only || []).map((k) => k.key));
     keyCount += declared.size; capCount += Object.keys(decl.capabilities || {}).length;
-    const compose = composeServiceEnv(svc.compose);
-    if (!compose) { errs.push(`${svc.service}: compose service '${svc.compose}' not found`); continue; }
+    // A service whose processes are separate compose lanes names them all (an array); their
+    // environments are read as one surface.
+    const lanes = [].concat(svc.compose);
+    const laneEnvs = lanes.map((l) => [l, composeServiceEnv(l)]);
+    const missingLane = laneEnvs.find(([, env]) => !env);
+    if (missingLane) { errs.push(`${svc.service}: compose service '${missingLane[0]}' not found`); continue; }
+    const compose = {
+      keys: new Set(laneEnvs.flatMap(([, env]) => [...env.keys])),
+      envFile: laneEnvs.some(([, env]) => env.envFile),
+    };
     const helm = helmEnvKeys(svc.helm);
     // A service that is not on a surface yet declares no keys for it (`targets: []`); an
     // absent program name means that surface simply contributes nothing to check 4.
@@ -1476,7 +1498,7 @@ function gateConfigContract() {
     for (const k of decl.keys || []) {
       const targets = k.targets ?? ["compose", "helm", "lite"];
       if (targets.includes("compose") && !compose.keys.has(k.key) && !(compose.envFile && envExample.has(k.key)))
-        errs.push(`${svc.service}: ${k.key} declared for compose but absent from the '${svc.compose}' environment block${compose.envFile ? " and .env.example" : ""}`);
+        errs.push(`${svc.service}: ${k.key} declared for compose but absent from the '${lanes.join("'/'")}' environment block${compose.envFile ? " and .env.example" : ""}`);
       if (targets.includes("helm") && !helm.has(k.key))
         errs.push(`${svc.service}: ${k.key} declared for helm but absent from ${svc.helm.join("/")}`);
       if (targets.includes("lite") && !lite.has(k.key) && !entrypointExports.has(k.key))

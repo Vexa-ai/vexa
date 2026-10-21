@@ -1,4 +1,5 @@
-{{- define "vexa.crmEnv" -}}
+{{- /* The CRM's own login (its role, never the admin credential): crm-api and the outbox. */ -}}
+{{- define "vexa.crmDbEnv" -}}
 {{- $secret := .Values.crm.existingSecret | default (include "vexa.componentName" (list . "crm-db")) -}}
 - name: CRM_DB_PASSWORD
   valueFrom: {secretKeyRef: {name: {{ $secret | quote }}, key: password}}
@@ -6,6 +7,9 @@
   valueFrom: {secretKeyRef: {name: {{ include "vexa.postgresCredentialsSecretName" . | quote }}, key: POSTGRES_DB}}
 - name: CRM_DATABASE_URL
   value: "postgresql+pg8000://{{ .Values.crm.dbUser }}:$(CRM_DB_PASSWORD)@{{ include "vexa.dbHostEffective" . }}:{{ include "vexa.dbPortEffective" . }}/$(DB_NAME)"
+{{- end -}}
+{{- define "vexa.crmEnv" -}}
+{{ include "vexa.crmDbEnv" . }}
 - name: CRM_ORG_ID
   value: {{ .Values.crm.orgId | quote }}
 - name: ADMIN_API_URL
@@ -164,6 +168,70 @@ spec:
           resources:
             {{- toYaml .Values.crm.resources | nindent 12 }}
 ---
+{{- if .Values.flows.enabled }}
+# The CRM's outbox: hands each revision's fact (crm.record.changed, its envelope sealed per event.v2)
+# to flows-api's POST /events and marks it delivered only on a 202, so an unreachable flows leaves
+# the rows pending. It logs in as the CRM's role, holds flows' operator key and the fact seal, and
+# nothing else — crm-api holds neither. It refuses to start without the seal; flows-api verifies
+# under the same Secret key. One replica: rows are claimed FOR UPDATE SKIP LOCKED, so a second
+# would be safe, and would only add load.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "crm-outbox") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: crm-outbox
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: crm-outbox
+      annotations:
+        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+    spec:
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: crm-schema-ready
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "crm.migrate", "check"]
+          env:
+            {{- include "vexa.crmDbEnv" . | nindent 12 }}
+      containers:
+        - name: crm-outbox
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "crm.outbox", "--watch"]
+          env:
+            {{- include "vexa.crmDbEnv" . | nindent 12 }}
+            - name: FLOWS_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "flows-api") }}:18200"
+            - name: FLOWS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.flowsApiKeySecretName" . | quote }}
+                  key: VEXA_FLOWS_API_KEY
+            - name: VEXA_FACT_SEAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . | quote }}
+                  key: VEXA_FACT_SEAL_SECRET
+          resources:
+            {{- toYaml .Values.crm.resources | nindent 12 }}
+---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:

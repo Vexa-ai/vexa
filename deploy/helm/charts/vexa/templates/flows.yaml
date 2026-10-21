@@ -659,6 +659,15 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: ADMIN_API_TOKEN
+            {{- /* event.v2 (D8): POST /events verifies a sealed fact's envelope under this secret —
+            the value the crm outbox seals with. Optional: a pre-created Secret without the key
+            leaves flows-api serving, refusing sealed facts (403) and admitting unsealed ones. */}}
+            - name: VEXA_FACT_SEAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_FACT_SEAL_SECRET
+                  optional: true
           {{- /* PROBES. `/health` is liveness-grade only — it answers ok with Postgres
           unreachable (E4 in the 0.12.27 review) — so readiness here means "the process is
           listening and serving", not "the tier is well". That is still strictly more than the
