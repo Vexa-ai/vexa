@@ -142,10 +142,13 @@ spec:
             # container to declare CPU/memory requests AND limits rejects an unsized Pod at admission,
             # so both shipped workload classes carry their own — sized independently, since a Chromium
             # meeting bot and a code-harness agent worker are nothing alike. One value per dimension
-            # (runtime.v1's shape) sets BOTH the request and the limit. Empty ⇒ that class emits no
+            # (runtime.v1's shape) sets BOTH the request and the limit; the bot's optional cpuLimit
+            # raises its CPU limit above that request. Empty ⇒ that class emits no
             # resources, preserving the optional contract and the pre-#1005 unbounded spawn.
             - name: RUNTIME_BOT_CPU
               value: {{ .Values.runtime.workloadResources.meetingBot.cpu | default "" | quote }}
+            - name: RUNTIME_BOT_CPU_LIMIT
+              value: {{ .Values.runtime.workloadResources.meetingBot.cpuLimit | default "" | quote }}
             - name: RUNTIME_BOT_MEMORY_MB
               value: {{ .Values.runtime.workloadResources.meetingBot.memoryMb | default "" | quote }}
             - name: RUNTIME_AGENT_WORKER_CPU
