@@ -1,6 +1,9 @@
 {
   "schemaVersion": 1,
   "effectiveAfterPullRequest": 1008,
+  "maintainers": [
+    "DmitriyG228"
+  ],
   "verifiers": [
     "DmitriyG228"
   ],
@@ -9,6 +12,26 @@
       "path": "independent",
       "declared": "2026-08-14",
       "source": "maintainer standing declaration; reaffirmed 2026-10-02"
+    },
+    "rene-schwabe": {
+      "path": "independent",
+      "declared": "2026-08-30",
+      "source": "PR #1149"
+    },
+    "rennf93": {
+      "path": "independent",
+      "declared": "2026-08-29",
+      "source": "PR #1156"
+    },
+    "PrBart": {
+      "path": "independent",
+      "declared": "2026-08-29",
+      "source": "PR #1259"
+    },
+    "Cantfirmed": {
+      "path": "independent",
+      "declared": "2026-08-29",
+      "source": "PR #1337"
     }
   }
 }

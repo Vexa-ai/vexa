@@ -88,8 +88,10 @@ A prepared issue is a worked delivery spec — read it end to end before touchin
 
 ## How you work the checkout
 
-- **Contribution rights are a human decision; automate the mechanics.** Before the first commit,
-  read [`CONTRIBUTOR_RIGHTS.md`](CONTRIBUTOR_RIGHTS.md) and ask the human to choose independent,
+- **Contribution rights are a human decision, made once; automate the mechanics.** Before the
+  first commit, read [`CONTRIBUTOR_RIGHTS.md`](CONTRIBUTOR_RIGHTS.md). Maintainers, org members
+  and contributors already on file never tick the box: do not ask them to. Ask only when the
+  `contribution-rights` check asks for a selection, and then ask the human to choose independent,
   employer/client-controlled, or unsure. Never choose or tick the PR declaration for them. After
   the human explicitly chooses the independent or corporate path, inspect repository-local
   `user.name` and `user.email`, surface any mismatch, and create every commit with
