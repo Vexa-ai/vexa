@@ -41,7 +41,10 @@ const BLOCKED_HOSTNAMES = new Set([
   "mcp",
 ]);
 
-const blockedAddresses = new BlockList();
+// The same lists and the same carried-address rules as the outbound URL guard the services share
+// (core/agent/shared/ssrf.py): an IPv6 address is judged by every IPv4 address a socket dialled at
+// it would reach, and then by its own range.
+const blockedV4 = new BlockList();
 for (const [network, prefix] of [
   ["0.0.0.0", 8], // "this" network
   ["10.0.0.0", 8], // private
@@ -50,45 +53,90 @@ for (const [network, prefix] of [
   ["169.254.0.0", 16], // link-local, including cloud metadata
   ["172.16.0.0", 12], // private
   ["192.0.0.0", 24], // IETF protocol assignments
+  ["192.0.2.0", 24], // documentation
+  ["192.88.99.0", 24], // 6to4 relay anycast
   ["192.168.0.0", 16], // private
   ["198.18.0.0", 15], // benchmarking
+  ["198.51.100.0", 24], // documentation
+  ["203.0.113.0", 24], // documentation
   ["224.0.0.0", 4], // multicast
   ["240.0.0.0", 4], // reserved, including broadcast
 ] as const) {
-  blockedAddresses.addSubnet(network, prefix, "ipv4");
+  blockedV4.addSubnet(network, prefix, "ipv4");
 }
+const blockedV6 = new BlockList();
 for (const [network, prefix] of [
   ["::", 128], // unspecified
   ["::1", 128], // loopback
-  ["64:ff9b::", 96], // NAT64
+  ["64:ff9b:1::", 48], // local-use IPv4/IPv6 translation
+  ["100::", 64], // discard-only
+  ["2001::", 23], // IETF protocol assignments, including Teredo 2001::/32
+  ["2001:db8::", 32], // documentation
+  ["3fff::", 20], // documentation
+  ["5f00::", 16], // segment routing SIDs
   ["fc00::", 7], // unique local
   ["fe80::", 10], // link-local
+  ["fec0::", 10], // site-local
   ["ff00::", 8], // multicast
 ] as const) {
-  blockedAddresses.addSubnet(network, prefix, "ipv6");
+  blockedV6.addSubnet(network, prefix, "ipv6");
+}
+const ISATAP_IDS = ["0000:5efe", "0100:5efe", "0200:5efe", "0300:5efe"];
+
+/** An IPv6 address as its eight 16-bit groups. */
+function ipv6Groups(address: string): number[] | null {
+  let text = address.toLowerCase().split("%")[0];
+  const dotted = /(\d{1,3}(?:\.\d{1,3}){3})$/.exec(text);
+  if (dotted) {
+    if (isIP(dotted[1]) !== 4) return null;
+    const [a, b, c, d] = dotted[1].split(".").map(Number);
+    text = text.slice(0, -dotted[1].length) + ((a << 8) | b).toString(16) + ":" + ((c << 8) | d).toString(16);
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const fill = halves.length === 2 ? 8 - head.length - tail.length : 0;
+  const groups = [...head, ...Array(Math.max(fill, 0)).fill("0"), ...tail];
+  if (groups.length !== 8 || groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
+  return groups.map((g) => parseInt(g, 16));
 }
 
-/** IPv4 address embedded in an IPv4-mapped or IPv4-compatible IPv6 address. */
-function embeddedIpv4(address: string): string | null {
-  const lower = address.toLowerCase();
-  const match = /^::(?:ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/.exec(lower);
-  if (match) return match[1];
-  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(lower);
-  if (hex) {
-    const high = parseInt(hex[1], 16);
-    const low = parseInt(hex[2], 16);
-    return [high >> 8, high & 0xff, low >> 8, low & 0xff].join(".");
+/** Two 16-bit groups as a dotted IPv4 address. */
+function v4(high: number, low: number): string {
+  return [high >> 8, high & 0xff, low >> 8, low & 0xff].join(".");
+}
+
+const hex4 = (g: number) => g.toString(16).padStart(4, "0");
+
+/** Every IPv4 address an IPv6 address carries: what a socket dialled at it would reach. */
+function carriedIpv4(g: number[]): string[] {
+  const out: string[] = [];
+  const low = v4(g[6], g[7]);
+  const zero = (from: number, to: number) => g.slice(from, to).every((x) => x === 0);
+  if (zero(0, 5) && g[5] === 0xffff) out.push(low); // mapped ::ffff:a.b.c.d
+  else if (zero(0, 4) && g[4] === 0xffff && g[5] === 0) out.push(low); // translated ::ffff:0:a.b.c.d
+  else if (zero(0, 6) && (g[6] !== 0 || g[7] > 1)) out.push(low); // compatible ::a.b.c.d
+  if (g[0] === 0x64 && g[1] === 0xff9b && zero(2, 6)) out.push(low); // NAT64 64:ff9b::/96
+  if (g[0] === 0x2002) out.push(v4(g[1], g[2])); // 6to4
+  if (g[0] === 0x2001 && g[1] === 0) {
+    out.push(v4(g[2], g[3])); // Teredo server
+    out.push(v4(g[6] ^ 0xffff, g[7] ^ 0xffff)); // Teredo client
   }
-  return null;
+  if (ISATAP_IDS.includes(`${hex4(g[4])}:${hex4(g[5])}`)) out.push(low);
+  return out;
 }
 
 export function isBlockedAddress(address: string): boolean {
   const family = isIP(address);
-  if (family === 4) return blockedAddresses.check(address, "ipv4");
+  if (family === 4) return blockedV4.check(address, "ipv4");
   if (family === 6) {
-    const v4 = embeddedIpv4(address);
-    if (v4 !== null) return isIP(v4) !== 4 || blockedAddresses.check(v4, "ipv4");
-    return blockedAddresses.check(address, "ipv6");
+    const groups = ipv6Groups(address);
+    if (groups === null) return true;
+    const carried = carriedIpv4(groups);
+    if (carried.some((a) => blockedV4.check(a, "ipv4"))) return true;
+    if (blockedV6.check(address, "ipv6")) return true;
+    return groups[0] >> 8 === 0 && carried.length === 0; // the rest of ::/8 is reserved
   }
   return true; // not an IP address at all
 }

@@ -878,6 +878,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 detail=f"Invalid scope(s): {invalid}. Valid: {sorted(VALID_SCOPES)}")
         token_name = body.name if body.name is not None else name
+        from . import sessions as sessions_mod  # noqa: PLC0415
+        if (token_name or "").strip().lower() == sessions_mod.DEFAULT_NAME and sessions_mod.login_name_reserved():
+            # the sign-in's own name: with sessions on, the sign-in mints a session, never a key
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail=f"the key name {sessions_mod.DEFAULT_NAME!r} is reserved for sign-in")
         token_expires_in = body.expires_in if body.expires_in is not None else expires_in
         token_value = generate_prefixed_token(scope_list[0])
         expires_at = None

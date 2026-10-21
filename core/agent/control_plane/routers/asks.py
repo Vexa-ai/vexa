@@ -41,6 +41,8 @@ _FENCE = re.compile(r"```ask[ \t]*\r?\n(.*?)```", re.S)
 _ID = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
 _SESSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 LABEL_MAX = 80
+#: An answer line as the turn reads it: `[answer <card id> #<pending item>] …`.
+_ANSWER_MARK = re.compile(r"\[answer\s+([A-Za-z0-9._:-]{1,80})\s+#([^\]\s]{1,128})\]")
 TEXT_MAX = 4000
 
 
@@ -99,6 +101,31 @@ def offered(spec: dict) -> set[str]:
     return out
 
 
+def bind_answer_marks(store, subject: str, session_id: Optional[str], text: str) -> str:
+    """``text`` with every `[answer <id> #<pending>]` mark that the server cannot vouch for reduced to
+    its unbound form `[answer <id>]`, which the agent treats as typed (confirm first).
+
+    A mark is vouched for only when the pending item exists, is an answered card of THIS chat, was
+    answered by THIS speaker, and is the card the mark names. The text of a message is anyone's to
+    type; the pending item is the server's record of a press."""
+    if not text or "[answer" not in text:
+        return text
+
+    def one(m: "re.Match[str]") -> str:
+        ask_id, pending = m.group(1), m.group(2)
+        try:
+            p = store.proposal(pending) if store is not None else None
+            item = json.loads(p["body"]) if p else {}
+        except Exception:  # noqa: BLE001 — an unreadable record vouches for nothing
+            p, item = None, {}
+        ok = (p is not None and p.get("kind") == "ask" and p.get("status") == "accepted"
+              and str(p.get("owner")) == str(subject) and item.get("ask_id") == ask_id
+              and session_id is not None and str(p.get("session_id")) == str(session_id))
+        return m.group(0) if ok else f"[answer {ask_id}]"
+
+    return _ANSWER_MARK.sub(one, text)
+
+
 def build(**d) -> APIRouter:
     router = APIRouter()
     store = d.get("session_store")
@@ -126,6 +153,10 @@ def build(**d) -> APIRouter:
         row = s.get(ref) or s.by_name(subject, ref)
         if row is None or not s.can_read(row["id"], subject):
             raise HTTPException(status_code=404, detail="chat not found")
+        if not s.can_write(row["id"], subject):
+            # a card is addressed to the chat's people who may act in it, never to a viewer
+            raise HTTPException(status_code=403, detail={
+                "refused": "not_addressed_to_you", "note": "only a member of this chat answers its cards"})
         return row
 
     def _card(row: dict, ask_id: str) -> dict:
@@ -190,6 +221,9 @@ def build(**d) -> APIRouter:
         row = s.get(p["session_id"])
         if row is None or not s.can_read(row["id"], subject):
             raise HTTPException(status_code=404, detail="chat not found")
+        if not s.can_write(row["id"], subject):
+            raise HTTPException(status_code=403, detail={
+                "refused": "not_addressed_to_you", "note": "only a member of this chat answers its cards"})
         spec = _card(row, item["ask_id"])
         now_hash = canonical_hash(spec)
         if not (hmac.compare_digest(body.content_hash, item.get("content_hash", ""))

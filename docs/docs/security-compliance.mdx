@@ -293,7 +293,9 @@ instructions. These turns read, and they **propose**; a person decides.
    `From:` domain, or, when the domain publishes no DMARC policy, a DKIM or SPF pass aligned with
    it. Only the topmost `Authentication-Results` header counts, because the receiving server adds
    its own on top. Set `VEXA_FLOWS_MAIL_AUTHSERV_ID` (for example `mx.google.com`) to accept only
-   your own server's verdict. A mail that fails is quarantined like a stranger's (`unauthenticated_mail`).
+   your own server's verdict. For any IMAP server other than the Gmail preset it is required, and
+   the mailbox does not start without it: a server that writes no verdict would leave the sender's
+   own on top. A mail that fails is quarantined like a stranger's (`unauthenticated_mail`).
 3. **A turn an email started proposes only.** It runs on its own worker with every workspace
    mounted read-only. It may write one file, the thread's reply `mail_outbox/<session>.md`, which
    flows mails back. Anything else it wants to change, it proposes.

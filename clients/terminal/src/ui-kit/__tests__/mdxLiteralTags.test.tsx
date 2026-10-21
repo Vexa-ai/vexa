@@ -63,3 +63,29 @@ describe("a literal <a> in a page", () => {
     expect(prose.querySelector('a[href^="//"]')).toBeNull();
   });
 });
+
+describe("the page vocabulary is enforced on the rendered tree, not only on the text", () => {
+  // A backslash before a backtick is a literal backtick in MDX, not the start of inline code, so
+  // a text pass that skips "inline code" must not decide what reaches the tree.
+  it("an element outside the vocabulary never renders, however it is quoted", async () => {
+    inDoc('Intro \\`<iframe srcDoc="<b>inner</b>" />\\` after.\n');
+    await waitFor(() => expect(document.body.textContent).toContain("after"));
+    expect(document.querySelector("iframe")).toBeNull();
+  });
+
+  it("document-level elements never render either", async () => {
+    inDoc('A \\`<base href="https://remote.example/" />\\` and \\`<meta httpEquiv="refresh" content="0" />\\` b.\n');
+    await waitFor(() => expect(document.body.textContent).toContain("b."));
+    expect(document.querySelector("base")).toBeNull();
+    expect(document.querySelector("meta")).toBeNull();
+  });
+
+  it("a plain prose element keeps only presentation attributes", async () => {
+    inDoc('X \\`<div srcDoc="inner" data-kind="note" title="t">kept</div>\\` y.\n');
+    const prose = await rendered();
+    const div = await waitFor(() => { const d = prose.querySelector('div[data-kind="note"]'); expect(d).toBeTruthy(); return d!; });
+    expect(div.hasAttribute("srcdoc")).toBe(false);
+    expect(div.getAttribute("title")).toBe("t");
+    expect(div.textContent).toBe("kept");
+  });
+});

@@ -1468,6 +1468,7 @@ flows:
     address: bot@corp.example
     existingSecret: mail-creds
     imap: {host: mail.corp.example, tls: starttls, user: 'CORP\vexa-bot', folder: Invites}
+    authservId: mail.corp.example
     smtp: {host: smtp.corp.example, port: "587", tls: starttls, user: 'CORP\vexa-bot'}
     ca: {configMapName: corp-ca, key: ca-bundle.pem}
 YAML
@@ -1476,6 +1477,7 @@ MB="$(awk '/^---/{p=0} /name: vexa-vexa-flows-mailbox$/{p=1} p' <<< "$MAIL_R")"
 mail_ok=1
 for kv in 'VEXA_MAIL_IMAP_HOST|value: "mail.corp.example"' 'VEXA_MAIL_IMAP_TLS|value: "starttls"' \
           'VEXA_MAIL_IMAP_USER|value: "CORP\\vexa-bot"' 'VEXA_MAIL_IMAP_FOLDER|value: "Invites"' \
+          'VEXA_FLOWS_MAIL_AUTHSERV_ID|value: "mail.corp.example"' \
           'VEXA_MAIL_SMTP_HOST|value: "smtp.corp.example"' 'VEXA_MAIL_SMTP_TLS|value: "starttls"' \
           'VEXA_MAIL_IMAP_CA_FILE|value: "/etc/vexa/mail-ca/ca.pem"' \
           'VEXA_MAIL_SMTP_CA_FILE|value: "/etc/vexa/mail-ca/ca.pem"'; do

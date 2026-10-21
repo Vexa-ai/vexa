@@ -138,8 +138,10 @@ def relative_parts(path: str, *, allow=()) -> list[str]:
         raise PathRefused(REFUSAL, kind="traversal")
     if not parts:
         raise PathRefused(REFUSAL, kind="empty")
+    # Case-folded: on a case-insensitive filesystem (APFS, NTFS) `Policy/` and `.GIT/` ARE the
+    # reserved directories, so a spelling must not open what the name closes.
     reserved = {d for d in RESERVED_DIRS if d not in set(allow or ())}
-    if any(p in reserved for p in parts):
+    if any(p.casefold() in reserved for p in parts):
         raise PathRefused(REFUSAL, kind="reserved")
     return parts
 

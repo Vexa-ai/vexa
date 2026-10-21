@@ -480,3 +480,40 @@ def test_gits_own_ownership_rule_still_applies(repo, monkeypatch):
     assert run_git(repo, "status").returncode == 0
     monkeypatch.setattr(gitexec, "_safe_directories", ["*"])
     assert run_git(repo, "status").returncode == 0
+
+
+def test_a_redirect_from_a_remote_is_not_followed(tmp_path):
+    """A remote's URL is checked for where it points; a 302 to somewhere else is never fetched."""
+    import http.server
+    import threading
+
+    hits = {"target": 0}
+
+    class Target(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits["target"] += 1
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    target = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Target)
+
+    class Redirect(Target):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{target.server_port}{self.path}")
+            self.end_headers()
+
+    origin = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+    for srv in (target, origin):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        r = run_git(tmp_path, "clone", f"http://127.0.0.1:{origin.server_port}/owner/repo.git",
+                    str(tmp_path / "out"), env={"GIT_ALLOW_PROTOCOL": "http"}, timeout=30)
+        assert r.returncode != 0
+        assert hits["target"] == 0
+    finally:
+        origin.shutdown()
+        target.shutdown()

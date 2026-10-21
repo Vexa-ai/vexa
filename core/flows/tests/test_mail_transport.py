@@ -208,6 +208,7 @@ def exchange_env(monkeypatch, pki):
     monkeypatch.setenv("VEXA_MAIL_IMAP_HOST", "127.0.0.1")
     monkeypatch.setenv("VEXA_MAIL_IMAP_USER", USER)
     monkeypatch.setenv("VEXA_MAIL_IMAP_CA_FILE", str(pki / "ca.pem"))
+    monkeypatch.setenv("VEXA_FLOWS_MAIL_AUTHSERV_ID", "mail.acme.test")
     return monkeypatch
 
 
@@ -236,6 +237,24 @@ def test_the_port_follows_the_tls_mode_and_a_bad_mode_is_refused_by_name(monkeyp
     with pytest.raises(mt.MailTransportError, match="VEXA_MAIL_IMAP_TLS='ssl3'") as ei:
         ImapInbox()
     assert ei.value.kind == "config"
+
+
+def test_a_server_other_than_gmail_is_refused_until_its_authserv_id_is_named(exchange_env):
+    """Off the Gmail preset the topmost `Authentication-Results` may be the sender's own: a server
+    that writes no verdict leaves the forged one on top. The mailbox does not start on a guess."""
+    exchange_env.delenv("VEXA_FLOWS_MAIL_AUTHSERV_ID")
+    with pytest.raises(mt.MailTransportError, match="VEXA_FLOWS_MAIL_AUTHSERV_ID") as ei:
+        ImapInbox()
+    assert ei.value.kind == "config"
+    exchange_env.setenv("VEXA_FLOWS_MAIL_AUTHSERV_ID", "mail.acme.test")
+    assert ImapInbox().host == "127.0.0.1"
+
+
+def test_the_gmail_preset_needs_no_authserv_id(monkeypatch):
+    for k in ("VEXA_MAIL_IMAP_HOST", "VEXA_FLOWS_MAIL_AUTHSERV_ID", "VEXA_MAIL_IMAP_TLS",
+              "VEXA_MAIL_IMAP_PORT"):
+        monkeypatch.delenv(k, raising=False)
+    assert mt.imap_settings()["host"] == mt.GMAIL_IMAP_HOST
 
 
 # ── an on-premises Exchange over IMAP ────────────────────────────────────────────────────────────

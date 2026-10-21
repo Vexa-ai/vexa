@@ -200,7 +200,7 @@ def test_an_unplaceable_organizers_invite_records_the_facts_and_creates_nothing(
     pre-meeting fan-out that decision cut. The facts stay, so a known user can have the event
     re-admitted through the operator's `POST /events` without going back to the mailbox."""
     db, reg, clock, known, provision, minted = rig()
-    out = handle(db, reg, clock, SELF, msg(STRANGER, ics=ICS.format(org="boss@evil.test")),
+    out = handle(db, reg, clock, SELF, msg("boss@evil.test", ics=ICS.format(org="boss@evil.test")),
                  known, lambda u: False, provision)
     assert out == ("invite_quarantine", 0)
     assert minted == [] and reactions(db) == []
@@ -225,6 +225,50 @@ def test_an_invite_from_a_known_user_outside_the_domain_is_admitted():
                                                ics=ICS.format(org="partner@other.test")),
                      known, lambda u: False, provision)
     assert (kind, n) == ("invite", 1)
+
+
+# ── 3b · an invite acts for its organizer, so the organizer must be its authenticated sender ──
+CANCEL = ("BEGIN:VCALENDAR\nMETHOD:CANCEL\nBEGIN:VEVENT\nUID:u-42\nDTSTART:20300302T140000Z\n"
+          "ORGANIZER:mailto:{org}\nSUMMARY:Pilot sync\nLOCATION:https://meet.google.com/abc-defg-hij\n"
+          "END:VEVENT\nEND:VCALENDAR\n")
+
+
+def test_an_invite_whose_sender_is_not_its_organizer_is_held():
+    db, reg, clock, known, provision, minted = rig({INSIDER: "5", "owner@acme.test": "6"})
+    out = handle(db, reg, clock, SELF, msg(INSIDER, ics=ICS.format(org="owner@acme.test")),
+                 known, lambda u: False, provision)
+    assert out == ("quarantine", 0)
+    assert reactions(db) == [] and minted == []
+    (_e, _f, kind, _reason, _facts), = rows(db)
+    assert kind == mail_policy.UNAUTHENTICATED_MAIL
+
+
+def test_an_invite_its_domain_did_not_vouch_for_is_held():
+    db, reg, clock, known, provision, _ = rig({INSIDER: "5"})
+    unverified = SimpleNamespace(frm=INSIDER, body="", subject="hi", headers={},
+                                 ics=ICS.format(org=INSIDER), message_id="<u@x.test>",
+                                 ext_id="ext-1", cursor="c1")
+    assert handle(db, reg, clock, SELF, unverified, known, lambda u: False, provision) == ("quarantine", 0)
+    assert reactions(db) == []
+    failing = authed(INSIDER, {"Authentication-Results": "mx.test; dmarc=fail header.from=acme.test"})
+    assert route(db, SELF, INSIDER, failing, ICS.format(org=INSIDER), known, lambda u: False)[0] == "quarantine"
+
+
+def test_a_cancellation_is_honoured_only_from_its_authenticated_organizer():
+    db, _reg, _clock, known, _p, _m = rig({INSIDER: "5", "owner@acme.test": "6"})
+    other = route(db, SELF, INSIDER, authed(INSIDER), CANCEL.format(org="owner@acme.test"), known, lambda u: False)
+    assert other is not None and other[0] == "quarantine"
+    unverified = route(db, SELF, "owner@acme.test", {}, CANCEL.format(org="owner@acme.test"), known, lambda u: False)
+    assert unverified is not None and unverified[0] == "quarantine"
+    own = route(db, SELF, "owner@acme.test", authed("owner@acme.test"), CANCEL.format(org="owner@acme.test"),
+                known, lambda u: False)
+    assert own is not None and own[0] == "invite_cancel"
+
+
+def test_a_display_name_on_the_sender_still_matches_its_organizer():
+    db, _reg, _clock, known, _p, _m = rig({INSIDER: "5"})
+    frm = f"Colleague <{INSIDER.upper()}>"
+    assert route(db, SELF, frm, authed(INSIDER), ICS.format(org=INSIDER), known, lambda u: False)[0] == "invite"
 
 
 # ── 4 · the ceilings ─────────────────────────────────────────────────────────────────────────

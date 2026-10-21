@@ -24,8 +24,9 @@ tokens` has no parameter that reaches `kind`, so it never produces one.
 this door existed onto a session (hotfix 2026-10-18): its cookie still holds the old `terminal-login`
 KEY, so every decision that needs a session (a card press, D13) was refused with no way out short of
 signing in again. Only that exact legacy shape upgrades — a `key` row named `terminal-login` with
-scopes `bot,tx,browser` and no expiry, which only the sign-in ever minted (the terminal's self-serve
-`/api/tokens` refuses that name). A session, a delegation, an expiring key, any other key → 409. The
+scopes `bot,tx,browser`, no expiry, minted before `UPGRADE_CUTOFF` — and while sessions are on, no
+door mints a key under that name. Every session, minted or upgraded, ends after
+`SESSION_LIFETIME_SECONDS`, the lifetime of the cookie that carries it. A session, a delegation, an expiring key, any other key → 409. The
 old key is retired in the same commit: it expires after a short grace (requests already in flight
 with it still land) and, now expiring, can never be upgraded again — one key, at most one session.
 """
@@ -60,6 +61,12 @@ DEFAULT_NAME = "terminal-login"
 #: How long a retired login key keeps working after its upgrade — requests the browser already sent
 #: with it must still land; the cookie it receives carries the session from then on.
 UPGRADE_GRACE_SECONDS = 600
+#: How long a session lives: the same 30 days as the browser cookie that carries it. A session that
+#: outlives its cookie serves nobody at a keyboard, and one with no end at all is a standing key.
+SESSION_LIFETIME_SECONDS = 60 * 60 * 24 * 30
+#: The upgrade exists for browsers that signed in BEFORE sessions did. A login key minted after this
+#: instant was never such a browser's, so it does not upgrade, whatever its name.
+UPGRADE_CUTOFF = datetime(2026, 10, 19, 0, 0, 0)
 
 
 class SessionMintRequest(BaseModel):
@@ -76,10 +83,17 @@ class SessionUpgradeRequest(BaseModel):
 
 def is_legacy_login_key(api_token: APIToken) -> bool:
     """The exact row the sign-in minted before sessions existed — nothing else upgrades."""
+    created = getattr(api_token, "created_at", None)
     return (getattr(api_token, "kind", None) in (None, KIND_KEY)
             and api_token.name == DEFAULT_NAME
             and sorted(api_token.scopes or []) == sorted(SESSION_SCOPES)
-            and api_token.expires_at is None)
+            and api_token.expires_at is None
+            and created is not None and created < UPGRADE_CUTOFF)
+
+
+def login_name_reserved() -> bool:
+    """With sessions on, the sign-in never mints a key, so no key may carry its name."""
+    return bool(os.environ.get(SESSION_SECRET_ENV, ""))
 
 
 def check_session_secret(request: Request) -> None:
@@ -113,9 +127,8 @@ def build_router() -> APIRouter:
             # A workspace principal (D2) never signs in: nobody is at its keyboard.
             raise HTTPException(status.HTTP_403_FORBIDDEN,
                                 detail="a workspace principal holds no session")
-        expires_at = None
-        if body.expires_in:
-            expires_at = datetime.utcnow() + timedelta(seconds=body.expires_in)
+        lifetime = min(body.expires_in, SESSION_LIFETIME_SECONDS) if body.expires_in else SESSION_LIFETIME_SECONDS
+        expires_at = datetime.utcnow() + timedelta(seconds=lifetime)
         tok = APIToken(token=generate_prefixed_token(SESSION_PREFIX_SCOPE), user_id=user.id,
                        scopes=list(SESSION_SCOPES), name=body.name or DEFAULT_NAME,
                        created_at=datetime.utcnow(), expires_at=expires_at, kind=KIND_SESSION)
@@ -146,8 +159,8 @@ def build_router() -> APIRouter:
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="a workspace principal holds no session")
         old.expires_at = now + timedelta(seconds=UPGRADE_GRACE_SECONDS)
         tok = APIToken(token=generate_prefixed_token(SESSION_PREFIX_SCOPE), user_id=user.id,
-                       scopes=list(SESSION_SCOPES), name=DEFAULT_NAME,
-                       created_at=now, kind=KIND_SESSION)
+                       scopes=list(SESSION_SCOPES), name=DEFAULT_NAME, created_at=now,
+                       expires_at=now + timedelta(seconds=SESSION_LIFETIME_SECONDS), kind=KIND_SESSION)
         db.add(tok)
         await db.commit()
         await db.refresh(tok)

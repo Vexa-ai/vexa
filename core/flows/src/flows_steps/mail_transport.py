@@ -162,6 +162,9 @@ def _classify(exc: BaseException, wire: str, host: str, port, *, phase: str) -> 
 
 # ── IMAP ──────────────────────────────────────────────────────────────────────────────────────────
 
+GMAIL_IMAP_HOST = "imap.gmail.com"
+
+
 def imap_settings() -> dict:
     """The IMAP endpoint this deployment reads. Refuses a mode it does not know, by name."""
     host = flows_config.get("VEXA_MAIL_IMAP_HOST")
@@ -176,6 +179,14 @@ def imap_settings() -> dict:
     except ValueError:
         raise MailTransportError("config", "imap", host, raw_port,
                                  "VEXA_MAIL_IMAP_PORT is not a number") from None
+    # The sender's verdict is the TOPMOST `Authentication-Results`, which is ours only when our
+    # receiving server writes one. Gmail always does; another server (an on-prem Exchange, a plain
+    # Postfix) may write none, and then the topmost is whatever the sender put in the message. So
+    # off the Gmail preset the verdict counts only under the authserv-id the operator names.
+    if host != GMAIL_IMAP_HOST and not (flows_config.get("VEXA_FLOWS_MAIL_AUTHSERV_ID") or "").strip():
+        raise MailTransportError("config", "imap", host, raw_port or "?",
+                                 "VEXA_FLOWS_MAIL_AUTHSERV_ID is unset — name the authserv-id this "
+                                 "server writes in Authentication-Results")
     return {"host": host, "port": port, "tls": mode,
             "user": flows_config.get("VEXA_MAIL_IMAP_USER"),
             "folder": flows_config.get("VEXA_MAIL_IMAP_FOLDER"),

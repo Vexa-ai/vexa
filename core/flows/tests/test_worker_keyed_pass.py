@@ -20,6 +20,7 @@ import pytest
 from flows import FakeClock, Registry
 from flows_defs import production
 from flows_integrations.mailbox import handle
+from mail_auth_fixture import authed
 from sqlite_double import SqliteDB
 
 import flows_worker.__main__ as worker
@@ -32,7 +33,7 @@ LIMITS = {"loop_limit": 3, "max_hops": 8, "runs_per_day": 100, "messages_per_day
 
 
 class _Msg:
-    frm, headers, ics, message_id, ext_id = "org@vexa.test", {}, ICS, "m1", "m1"
+    frm, headers, ics, message_id, ext_id = "org@vexa.test", authed("org@vexa.test"), ICS, "m1", "m1"
 
 
 def _armed_rig():

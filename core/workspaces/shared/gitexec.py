@@ -225,6 +225,9 @@ def _pinned_config(home: str) -> list[str]:
     return [
         f"core.hooksPath={os.path.join(home, 'hooks')}",
         "core.fsmonitor=false",
+        # A remote's URL was checked for where it points; a redirect would send the fetch somewhere
+        # that check never saw (a public host answering 302 to an internal address).
+        "http.followRedirects=false",
         "core.pager=cat",
         "core.editor=:",
         "sequence.editor=:",

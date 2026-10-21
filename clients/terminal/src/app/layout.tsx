@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { headers } from "next/headers";
 import { Analytics } from "./AnalyticsScript";
+import { NONCE_HEADER } from "./contentSecurityPolicy";
 // Geist Sans and Geist Mono (SIL OFL 1.1, served unmodified as web fonts; logged as a Category B
 // exception in license-exceptions.json). Each sets a CSS variable that tokens.css reads.
 import { GeistSans } from "geist/font/sans";
@@ -20,16 +22,18 @@ export const viewport: Viewport = {
   interactiveWidget: "resizes-content",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // the response's script nonce (middleware.ts); reading it renders every page per request
+  const nonce = (await headers()).get(NONCE_HEADER) ?? undefined;
   return (
     <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <head>
         {/* apply the saved theme before first paint so day mode doesn't flash dark on reload */}
-        <script dangerouslySetInnerHTML={{ __html: `try{if(localStorage.getItem('vexa.terminal.theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}` }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: `try{if(localStorage.getItem('vexa.terminal.theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}` }} />
       </head>
       <body>
         {children}
-        <Analytics />
+        <Analytics nonce={nonce} />
       </body>
     </html>
   );

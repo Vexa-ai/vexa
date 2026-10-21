@@ -1183,6 +1183,10 @@ flows:
       tls: ""                         # tls | starttls | none
       user: ""
       folder: ""
+    # The authserv-id your receiving server writes in Authentication-Results (e.g. mail.corp.example).
+    # Required whenever imap.host is not the Gmail preset: such a server may write no verdict, which
+    # would leave the sender's own on top, so the mailbox refuses to start without it.
+    authservId: ""
     # SMTP — how the bot sends RSVPs, acknowledgements and minutes. Empty host = the deployment's
     # relay in terminal.mail (one relay for every sender); both empty = Gmail with appPassword.
     # tls: auto (implicit with secure "1", else STARTTLS whenever offered) | tls | starttls

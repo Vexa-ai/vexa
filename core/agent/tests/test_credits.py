@@ -200,6 +200,7 @@ def test_the_meter_shows_windows_and_extra_usage_turns_a_full_window_back_on(tmp
     assert refused.status_code == 402 and refused.json()["reason"] == "usage_window"
     assert "5-hour limit" in refused.json()["detail"]
     spawned = len(runtime.spawned)
+    monkeypatch.setattr(Dispatcher, "is_admin", lambda self, s: s == "alice")
     on = client.post("/api/usage", headers=h, json={"extra": True, "topup_credits": 10})
     assert on.status_code == 200 and on.json()["extra"] is True and on.json()["topup_credits"] == 10
     assert client.post("/api/chat/submit", headers=h, json={"prompt": "hi"}).status_code == 200
@@ -223,3 +224,18 @@ def test_a_markup_below_cost_is_refused_and_the_default_applies_through_the_ledg
     seed = (C.__file__.rsplit("/core/", 1)[0] + "/behavior/global/POLICIES.md")
     text = open(seed).read()
     assert "credit_markup: 1.3" in text and "below 1.0" in text and "refused" in text
+
+
+def test_extra_usage_is_not_switched_on_by_the_person_it_bills(tmp_path, monkeypatch):
+    client, runtime, budget, r = _stack(tmp_path, monkeypatch, "usage")
+    monkeypatch.setattr(Dispatcher, "is_admin", lambda self, s: False)
+    h = {"X-User-Id": "bob"}
+    for body in ({"extra": True}, {"extra": False, "topup_credits": 50}, {"extra": True, "topup_credits": 0}):
+        got = client.post("/api/usage", headers=h, json=body)
+        assert got.status_code == 403 and got.json()["detail"]["refused"] == "extra_usage_not_self_serve"
+    s = client.get("/api/usage", headers=h).json()
+    assert s["extra"] is False and s["topup_credits"] == 0
+    budget.record("bob", {"cost": 1.0})
+    assert client.post("/api/chat/submit", headers=h, json={"prompt": "hi"}).status_code == 402
+    off = client.post("/api/usage", headers=h, json={"extra": False})
+    assert off.status_code == 200 and off.json()["extra"] is False

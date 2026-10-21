@@ -273,8 +273,10 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "capability", None,
         "the authserv-id this mailbox's own receiving server writes in `Authentication-Results` "
         "(e.g. `mx.google.com`). Set, only a verdict naming it counts; unset, the topmost one counts "
-        "(the receiving server prepends its own). A mail whose `From:` the domain did not vouch "
-        "for (no DMARC pass, no aligned DKIM or SPF pass) is treated as a stranger's (D25)."),
+        "(the receiving server prepends its own). REQUIRED for an IMAP server other than the Gmail "
+        "preset: such a server may write no verdict, leaving the sender's own on top, so the mailbox "
+        "refuses to start without it. A mail whose `From:` the domain did not vouch for (no DMARC "
+        "pass, no aligned DKIM or SPF pass) is treated as a stranger's (D25)."),
     "VEXA_FLOWS_MAIL_QUARANTINE_REPLY": (
         "capability", None,
         "`1` answers a quarantined stranger ONCE with a fixed one-line template — no model, no "

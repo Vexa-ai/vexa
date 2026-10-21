@@ -138,6 +138,7 @@ async def test_a_routine_is_a_flow_that_lists_and_toggles(ctx, flows):
     assert out["job_id"] is None and out["flow"]["scope"] == "user:u_jane"
     assert ctx.scheduler.jobs == [], "nothing is armed on the runtime scheduler"
     cards = await cb.list_routines(ctx.slim)
-    assert any(c.get("name") == "digest" and c["enabled"] for c in cards)
+    # filed with an API key, so it is a draft until the person turns it on from their session (D13)
+    assert any(c.get("name") == "digest" and not c["enabled"] for c in cards)
     out = await cb.set_routine_enabled(ctx.slim, "digest", False)
     assert out["enabled"] is False and flows.rows[-1]["status"] == "retired"

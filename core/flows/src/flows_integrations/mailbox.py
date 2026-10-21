@@ -358,6 +358,12 @@ def workspace_invite(ics: str) -> dict:
     return {}
 
 
+def _addr(frm: str) -> str:
+    """The bare, lower-cased address of a `From:` value (`Name <a@b>` or `a@b`)."""
+    from email.utils import parseaddr
+    return (parseaddr(frm or "")[1] or "").strip().lower()
+
+
 def _unauthenticated(frm: str, why: str) -> tuple[str, dict]:
     """A mail whose `From:` its domain did not vouch for: quarantined like a stranger's (D25)."""
     return ("quarantine", {"kind": mail_policy.UNAUTHENTICATED_MAIL,
@@ -396,15 +402,7 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
         return None
     allowed = mail_policy.allow_domains(self_addr) if allowed is None else allowed
     if ics and "BEGIN:VEVENT" in ics:
-        if "METHOD:CANCEL" in ics:
-            # A CANCELLED MEETING (ADR-0050): the bot armed for it is called off. Only an organizer
-            # we would act for may cancel, the same test an invite meets.
-            ev = parse_ics(ics, self_addr)
-            if ev and ev["organizer"] and (known_uid(ev["organizer"]) is not None or
-                                           mail_policy.in_allow_list(ev["organizer"], self_addr, allowed)):
-                return ("invite_cancel", ev)
-            return None
-        if "METHOD:REPLY" in ics:
+        if "METHOD:REPLY" in ics and "METHOD:CANCEL" not in ics:
             return None               # calendar machinery (our own RSVP echoes!) — never a
                                       # conversation, never a provisioning trigger (storm catch:
                                       # we nearly onboarded calendar-notification@google.com)
@@ -412,9 +410,23 @@ def route(db, self_addr: str, frm: str, headers: dict, ics: str | None,
         if not (ev and ev["organizer"]):
             return None
         org = ev["organizer"]
-        if known_uid(org) is not None or mail_policy.in_allow_list(org, self_addr, allowed):
-            return ("invite", ev)
-        return ("invite_quarantine", ev)
+        # AN INVITE ACTS FOR ITS ORGANIZER, SO THE ORGANIZER MUST BE WHO SENT IT (D25, H6). The
+        # `ORGANIZER:` line is text inside the attachment; what the receiving MTA vouches for is the
+        # `From:` domain. So the same verdict every mail branch meets applies here, and the
+        # authenticated `From:` must be the organizer — otherwise the meeting facts are recorded
+        # and nothing is sent, joined or called off.
+        if _addr(frm) != org:
+            return ("quarantine", {"kind": mail_policy.UNAUTHENTICATED_MAIL,
+                                   "reason": f"{frm} sent an invite whose organizer is {org}"})
+        authed, auth_why = mail_policy.sender_authenticated(frm, headers)
+        if not authed:
+            return _unauthenticated(frm, auth_why)
+        acts_for = known_uid(org) is not None or mail_policy.in_allow_list(org, self_addr, allowed)
+        if "METHOD:CANCEL" in ics:
+            # A CANCELLED MEETING (ADR-0050): the bot armed for it is called off. Only an organizer
+            # we would act for may cancel, the same test an invite meets.
+            return ("invite_cancel", ev) if acts_for else None
+        return ("invite", ev) if acts_for else ("invite_quarantine", ev)
     auto = (headers.get("Auto-Submitted", "no").lower() != "no"
             or headers.get("Precedence", "").lower() in ("bulk", "list", "junk")
             or any(t in frm for t in ("no-reply", "noreply", "mailer-daemon", "postmaster", "bounce")))

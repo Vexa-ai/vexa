@@ -10,6 +10,7 @@ import json
 from flows import FakeClock, Registry, keyed, tick
 from flows_defs import production
 from flows_integrations.mailbox import handle, route
+from mail_auth_fixture import authed
 from sqlite_double import SqliteDB
 
 START = calendar.timegm((2030, 8, 23, 15, 30, 0))
@@ -24,7 +25,7 @@ def _ics(method="REQUEST", start="20300823T153000Z", seq=0):
 
 class _Msg:
     def __init__(self, ics, mid):
-        self.frm, self.headers, self.ics, self.message_id, self.ext_id = "org@vexa.test", {}, ics, mid, mid
+        self.frm, self.headers, self.ics, self.message_id, self.ext_id = "org@vexa.test", authed("org@vexa.test"), ics, mid, mid
 
 
 def _send(db, reg, clock, ics, mid):
@@ -76,7 +77,7 @@ def test_it_fires_once_into_invite_join_with_the_invites_refs():
 
 
 def test_a_cancel_from_an_organizer_we_would_not_act_for_is_ignored():
-    assert route(None, "info@vexa.test", "x@evil.test", {}, _ics(method="CANCEL").replace(
+    assert route(None, "info@vexa.test", "x@evil.test", authed("x@evil.test"), _ics(method="CANCEL").replace(
         "org@vexa.test", "x@evil.test"), lambda e: None, lambda u: False, allowed={"vexa.test"}) is None
 
 

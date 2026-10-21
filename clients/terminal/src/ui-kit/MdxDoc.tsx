@@ -182,13 +182,43 @@ function remarkForbidExecutable() {
 // prose looks come from the stylesheet.
 const LITERAL_TO_COMPONENT: Record<string, string> = { img: "DocImg", a: "DocA" };
 type JsxNode = { type?: string; name?: string | null; attributes?: { type?: string; name?: string }[]; children?: unknown[] };
+// THE TREE IS THE BOUNDARY, NOT THE STRING PASSES. `sanitizeDocHtml` and `escapeUnknownTags` work on
+// text and are cosmetic: they keep a page from SHOWING raw HTML, but whatever reaches the MDX tree
+// is what React renders. So every JSX element in the tree must be one this renderer knows — a
+// registered component or a plain prose element — and carries only attributes that are data. An
+// element outside that set throws, and the throw routes the page into the plain-Markdown fallback,
+// which never renders HTML at all.
+const PROSE_ELEMENTS = new Set([
+  "br", "blockquote", "code", "details", "div", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "kbd",
+  "li", "ol", "p", "pre", "span", "strong", "sub", "summary", "sup", "table", "tbody", "td", "th", "thead", "tr", "ul",
+]);
+/** Attributes a prose element may keep: presentation and accessibility data, never a URL or a document. */
+const PROSE_ATTR = /^(class|className|id|title|alt|width|height|align|colspan|colSpan|rowspan|rowSpan|open|start|reversed|type|lang|dir|scope|abbr|aria-[\w-]+|data-[\w-]+)$/;
+/** Never on any element, registered component or not. */
+const FORBIDDEN_ATTR = /^(on.*|style|srcdoc|formaction|action|http-equiv|dangerouslysetinnerhtml|ref|is|xmlns(:.*)?|xlink:.*)$/i;
+let allowedComponents: Set<string> | null = null;
+function isAllowedElement(name: string): boolean {
+  if (PROSE_ELEMENTS.has(name)) return true;
+  allowedComponents ??= new Set([...Object.keys(MDX_COMPONENTS), ...KNOWN_COMPONENTS].filter((n) => /^[A-Z]/.test(n)));
+  return allowedComponents.has(name);
+}
+function attrAllowed(element: string, a: { type?: string; name?: string; value?: unknown }): boolean {
+  if (a?.type !== "mdxJsxAttribute") return true;      // expression attributes are refused upstream
+  const name = String(a.name ?? "");
+  if (FORBIDDEN_ATTR.test(name)) return false;
+  if (typeof a.value === "string" && /^\s*(javascript|vbscript|data):/i.test(a.value)) return false;
+  // a registered component reads its props as data and draws them itself (DocImg/DocA check their URL)
+  if (/^[A-Z]/.test(element)) return true;
+  return PROSE_ATTR.test(name);
+}
 function routeLiteralTags(node: JsxNode): void {
   if (node.type === "mdxJsxFlowElement" || node.type === "mdxJsxTextElement") {
     if (node.name && LITERAL_TO_COMPONENT[node.name]) node.name = LITERAL_TO_COMPONENT[node.name];
-    // no inline style (a CSS url() is a remote request), no `on…` handler, no script URL — on ANY tag
-    if (node.attributes) node.attributes = node.attributes.filter((a) => !(a?.type === "mdxJsxAttribute" && (
-      /^(style|on.*)$/i.test(String(a.name ?? "")) ||
-      (typeof (a as { value?: unknown }).value === "string" && /^\s*(javascript|vbscript|data):/i.test(String((a as { value?: unknown }).value))))));
+    if (node.name && !isAllowedElement(node.name)) throw new Error(`<${node.name}> is not an element workspace docs may use`);
+    // no inline style (a CSS url() is a remote request), no `on…` handler, no script URL, no
+    // document or URL on a plain element — on ANY tag
+    const element = node.name ?? "";
+    if (node.attributes) node.attributes = node.attributes.filter((a) => attrAllowed(element, a as { type?: string; name?: string; value?: unknown }));
   }
   for (const child of (node.children ?? []) as JsxNode[]) routeLiteralTags(child);
 }
@@ -317,7 +347,7 @@ export function entityNamesInProse(seg: string, names: string[], linked: Set<str
 export function transformDocRefs(src: string, names: string[] = []): string {
   const linked = new Set<string>([...src.matchAll(/\[\[([^\]|]+)/g)].map((m) => m[1].trim().toLowerCase()));
   // split out fenced code blocks and inline code; odd indices are one or the other
-  return src.split(/(```[\s\S]*?```|`[^`]*`)/g).map((seg, i) => {
+  return src.split(/(```[\s\S]*?```|(?<!\\)`[^`]*`)/g).map((seg, i) => {
     if (i % 2 === 0) {
       const prose = escapeUnknownTags(degradeUnknownComponents(seg))
         .replace(/\[\[([^\]]+)\]\]/g, (_m, t: string) => `<Wikilink title=${JSON.stringify(t)} />`);

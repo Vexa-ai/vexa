@@ -5,6 +5,8 @@ AND `X-Terminal-Session-Secret` (= `VEXA_TERMINAL_SESSION_SECRET`). `/internal/v
 `credential_class` for every bearer: `session`, `key` (legacy included) or `delegation`. The admin
 mint door never produces a session. No database: a fake session that knows users and token rows.
 """
+from datetime import datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -176,9 +178,9 @@ def test_the_body_cannot_name_a_kind_or_scopes(world):
 # --- the admin door never produces a session ----------------------------------------------------
 
 @pytest.mark.parametrize("query,body", [
-    ("scopes=bot,tx,browser&name=terminal-login", None),
+    ("scopes=bot,tx,browser&name=laptop", None),
     ("scopes=browser&kind=session", None),
-    ("scope=browser", {"scopes": ["bot", "tx", "browser"], "name": "terminal-login"}),
+    ("scope=browser", {"scopes": ["bot", "tx", "browser"], "name": "laptop"}),
 ])
 def test_the_admin_mint_door_only_ever_makes_a_key(world, query, body):
     client, session = world
@@ -241,7 +243,8 @@ def test_credential_class_of_is_positive_evidence():
 
 def _seed(session, token, **kw):
     row = APIToken(token=token, user_id=kw.pop("user_id", 42), scopes=kw.pop("scopes", ["bot", "tx", "browser"]),
-                   name=kw.pop("name", "terminal-login"), kind=kw.pop("kind", "key"), **kw)
+                   name=kw.pop("name", "terminal-login"), kind=kw.pop("kind", "key"),
+                   created_at=kw.pop("created_at", datetime(2026, 10, 1)), **kw)
     row.id = 900 + len(session.tokens)
     session.tokens[token] = row
     return row
@@ -309,3 +312,55 @@ def test_a_delegation_token_is_never_upgraded(world):
     client, session = world
     r = _upgrade(client, "vxd_" + "x" * 40)
     assert r.status_code == 404 and not session.tokens
+
+
+# --- a session has an end, and only a pre-session browser upgrades ------------------------------
+
+def _days_left(row):
+    return (row.expires_at - datetime.utcnow()) / timedelta(days=1)
+
+
+def test_a_minted_session_ends_with_its_cookie(world):
+    client, session = world
+    row = session.tokens[_mint(client).json()["token"]]
+    assert row.expires_at is not None and 29.9 < _days_left(row) <= 30
+
+
+def test_a_session_cannot_be_asked_to_outlive_its_cookie(world):
+    client, session = world
+    row = session.tokens[_mint(client, {"user_id": 42, "expires_in": 10 ** 9}).json()["token"]]
+    assert _days_left(row) <= 30
+
+
+def test_an_upgraded_session_ends_with_its_cookie(world):
+    client, session = world
+    old = _seed(session, "vxa_bot_legacy-login-key")
+    new = session.tokens[_upgrade(client, old.token).json()["token"]]
+    assert new.expires_at is not None and 29.9 < _days_left(new) <= 30
+
+
+@pytest.mark.parametrize("created_at", [datetime(2026, 10, 19, 0, 0, 1), datetime(2027, 1, 1), None])
+def test_a_login_key_minted_after_sessions_began_does_not_upgrade(world, created_at):
+    client, session = world
+    tok = _seed(session, "vxa_bot_late-login-key", created_at=created_at)
+    before = len(session.tokens)
+    assert _upgrade(client, tok.token).status_code == 409
+    assert len(session.tokens) == before and tok.expires_at is None
+
+
+@pytest.mark.parametrize("query,body", [
+    ("?name=terminal-login&scopes=bot,tx,browser", {}),
+    ("?scopes=bot,tx,browser", {"name": "Terminal-Login"}),
+])
+def test_the_admin_door_mints_no_key_under_the_sign_in_name(world, query, body):
+    client, session = world
+    r = client.post(f"/admin/users/42/tokens{query}", json=body, headers={"X-Admin-API-Key": ADMIN})
+    assert r.status_code == 422 and not session.tokens
+
+
+def test_the_sign_in_name_is_free_where_sessions_are_off(world, monkeypatch):
+    client, session = world
+    monkeypatch.delenv("VEXA_TERMINAL_SESSION_SECRET")
+    r = client.post("/admin/users/42/tokens?name=terminal-login&scopes=bot,tx,browser", json={},
+                    headers={"X-Admin-API-Key": ADMIN})
+    assert r.status_code == 201, r.text

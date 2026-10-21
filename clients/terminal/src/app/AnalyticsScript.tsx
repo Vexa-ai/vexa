@@ -15,7 +15,7 @@ import { gaPageview } from "../platform/analytics";
 
 const GA_ID = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
 
-export function Analytics() {
+export function Analytics({ nonce }: { nonce?: string } = {}) {
   const pathname = usePathname();
   const firstRun = useRef(true);
 
@@ -34,8 +34,8 @@ export function Analytics() {
   if (pathname?.startsWith("/design")) return null;
   return (
     <>
-      <Script src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`} strategy="afterInteractive" />
-      <Script id="ga-init" strategy="afterInteractive">
+      <Script src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`} strategy="afterInteractive" nonce={nonce} />
+      <Script id="ga-init" strategy="afterInteractive" nonce={nonce}>
         {`window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}window.gtag=gtag;gtag('js',new Date());gtag('config','${GA_ID}');`}
       </Script>
     </>

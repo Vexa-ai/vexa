@@ -58,9 +58,10 @@ function sanitizeProse(s: string): string {
     .replace(TAG, (tag) => tag.replace(ON_ATTR, "").replace(BAD_URL, '$1="#"'));
 }
 
-/** Raw HTML in a page loses every executable part; fenced code and inline code are left as written. */
+/** Raw HTML in a page loses every executable part; fenced code and inline code are left as written.
+ *  An escaped backtick (`\``) is a literal character, not the start of inline code. */
 export function sanitizeDocHtml(md: string): string {
-  return mapProse(md, (prose) => prose.split(/(`[^`\n]*`)/g).map((seg, i) => (i % 2 ? seg : sanitizeProse(seg))).join(""));
+  return mapProse(md, (prose) => prose.split(/((?<!\\)`[^`\n]*`)/g).map((seg, i) => (i % 2 ? seg : sanitizeProse(seg))).join(""));
 }
 
 // ── page-grammar blocks → components ─────────────────────────────────────────────────────────
@@ -155,7 +156,7 @@ function tokenize(src: string): Tok[] {
     const prose = buf.join("\n") + "\n";
     buf = [];
     // inline code is literal too: only the stretches outside backticks are scanned for tags
-    prose.split(/(`[^`\n]*`)/g).forEach((seg, i) => {
+    prose.split(/((?<!\\)`[^`\n]*`)/g).forEach((seg, i) => {
       if (i % 2) { pushText(seg); return; }
       let last = 0;
       for (const m of seg.matchAll(COMPONENT_TAG)) {

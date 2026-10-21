@@ -4,8 +4,10 @@ Behind the ``usage`` feature (off by default: both routes answer 403 ``feature_d
 
     GET  /api/usage    the caller's 5-hour and weekly windows as a percentage of the plan's allowance,
                        when each resets, and extra usage (``credits.state``)
-    POST /api/usage    {"extra": true|false, "topup_credits"?: n} — turn extra usage on or off for
-                       yourself. A top-up amount is RECORDED ONLY: no payment is taken here.
+    POST /api/usage    {"extra": true|false, "topup_credits"?: n} — turning extra usage OFF is
+                       anyone's, for themselves. Turning it ON, or recording a top-up, is the
+                       instance admin's only: no payment is taken here, so a self-serve switch
+                       would be unmetered use for whoever pressed it.
 
 Numbers only: no prompt, model output or other person's usage is ever answered.
 """
@@ -47,9 +49,14 @@ def build(**d) -> APIRouter:
 
     @router.post("/api/usage")
     def usage_extra(body: ExtraBody, request: Request):
-        """Turn extra usage on or off for yourself (a top-up amount is recorded, never charged here)."""
+        """Turn extra usage off for yourself; turning it on (or recording a top-up) is the admin's."""
         budget, r = _ledger()
         payer = str(subject_of(request))
+        if (body.extra or body.topup_credits is not None) and not (
+                dispatcher is not None and dispatcher.is_admin(payer)):
+            raise HTTPException(status_code=403, detail={
+                "refused": "extra_usage_not_self_serve",
+                "note": "extra usage is turned on with a payment, not from here"})
         credits.set_extra(r, payer, body.extra, topup_credits=body.topup_credits)
         return credits.state(r, payer, budget.policy_front())
 

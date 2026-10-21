@@ -48,6 +48,17 @@ def test_contributor_cannot_write_policy_files(world, rel):
     assert after == before
 
 
+def test_contributor_cannot_write_the_roster_under_another_spelling(world):
+    """M3: on a case-insensitive filesystem `Policy/members.json` is the roster file."""
+    client, store, calls, spawned, root, _d = world
+    content = POLICY_FILES["policy/members.json"](m.read_members(root, "team"))
+    for rel in ("Policy/members.json", "POLICY/members.json"):
+        r = client.put("/api/workspace/file", headers=_h("bob"),
+                       json={"path": rel, "content": content, "slug": "team"})
+        assert r.status_code in (400, 403), f"{rel}: {r.status_code} {r.text[:200]}"
+    assert m.is_member(root, "team", "bob") == "contributor"
+
+
 # Was xfail (C3/test 5); passes since s1a-policy (PRD 0.13.4 D5/D26).
 def test_contributors_watched_agent_cannot_write_policy_files(world):
     client, store, calls, spawned, root, _d = world

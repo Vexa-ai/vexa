@@ -1303,6 +1303,16 @@ def build(**d) -> APIRouter:
         subject = subject_of(request)  # server-derived (P20); body.subject is ignored
         # A MEETING STARTED FROM A CHAT IS THAT CHAT (founder, 2026-10-13): `meet-<row>` lands there.
         session = sess.chat_for(subject, body.session or units.DEFAULT_CHAT_SESSION)
+        if body.prompt and "[answer" in body.prompt:
+            # A CARD ANSWER IS A RECORD, NOT A STRING (D13, 7g): a `#<pending>` mark the server cannot
+            # match to this speaker's own press on this chat's card reaches the turn as typed.
+            from control_plane.routers.asks import bind_answer_marks  # noqa: PLC0415
+            try:
+                _arow = session_store.get(session) or session_store.by_name(subject, session) if session_store else None
+            except Exception:  # noqa: BLE001 — no chat row: nothing to vouch against
+                _arow = None
+            body = body.model_copy(update={"prompt": bind_answer_marks(
+                session_store, str(subject), _arow["id"] if _arow else None, body.prompt)})
         # A ROUTINE'S RUN (ADR-0046 decision 12): the internal tier posting a scheduled turn into
         # the routine's own thread. It runs `autonomous`, on the thread's sibling unit.
         flow_turn = _flow_turn(request, session)

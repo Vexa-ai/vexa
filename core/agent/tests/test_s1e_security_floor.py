@@ -43,9 +43,17 @@ def test_an_agent_turns_routine_is_filed_paused(routines_world, flows):
     assert card["enabled"] is False and "turn it on" in card.get("paused_reason", "")
 
 
+def _session() -> dict:
+    """The person's signed-in browser session (D13: `credential_class: session`)."""
+    from control_plane import identity_token
+    from tests.test_routine_flows import KEY
+    return {identity_token.HEADER: identity_token.sign(
+        KEY, {"sub": "7", "email": "ada@example.com", "credential_class": "session"})}
+
+
 def test_the_persons_own_routine_is_live_at_once(routines_world, flows):
     client, _sched, _root = routines_world
-    r = client.post("/api/routines", headers=_as(),
+    r = client.post("/api/routines", headers=_session(),
                     json={"name": "Morning brief", "cron": "0 8 * * *", "prompt": "brief me"})
     assert r.status_code == 201 and [x["status"] for x in flows.rows] == ["active"]
 
@@ -216,3 +224,14 @@ def test_every_signal_unit_is_held_to_one_page(unit):
     class _Req:
         headers = {signal_scope.UNIT_HEADER: unit}
     assert signal_scope.signal_unit(_Req()) == unit
+
+
+def test_a_routine_an_api_key_files_is_a_draft_until_the_person_turns_it_on(routines_world, flows):
+    """D13: creating a routine does not arm it unless the creator is the person's signed-in session."""
+    client, _sched, _root = routines_world
+    r = client.post("/api/routines", headers=_as(), json={"name": "keyed", "cron": "0 9 * * *", "prompt": "x"})
+    assert r.status_code == 201, r.text
+    assert [x["status"] for x in flows.rows if x["name"] == "keyed"] == ["draft"]
+    s = client.post("/api/routines", headers=_session(), json={"name": "pressed", "cron": "0 9 * * *", "prompt": "x"})
+    assert s.status_code == 201, s.text
+    assert [x["status"] for x in flows.rows if x["name"] == "pressed"] == ["active"]

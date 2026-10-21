@@ -143,6 +143,15 @@ def test_policy_paths_are_reserved_for_callers():
     assert not wpaths.is_platform_policy_path("notes/policy.md")
 
 
+def test_a_reserved_directory_spelt_in_another_case_is_reserved_too():
+    """On APFS or NTFS `Policy/` and `.GIT/` are the same directories as `policy/` and `.git/`."""
+    for rel in ("Policy/members.json", "POLICY/visibility.json", ".GIT/config", ".Git/hooks/pre-commit",
+                ".VEXA/workspace.json", "x/.Claude/settings.json"):
+        with pytest.raises(wpaths.PathRefused):
+            wpaths.relative_parts(rel)
+    assert wpaths.relative_parts("notes/Policy.md") == ["notes", "Policy.md"]
+
+
 # ── invites: role ≤ the sender's, owner only by the owner act, caps ──────────────────────────────
 
 @pytest.fixture

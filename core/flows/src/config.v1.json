@@ -531,7 +531,7 @@
     {
       "key": "VEXA_FLOWS_MAIL_AUTHSERV_ID",
       "class": "capability",
-      "description": "The authserv-id this mailbox's own receiving server writes in Authentication-Results (e.g. mx.google.com). Set, only a verdict naming it counts; unset, the topmost one counts. A From: its domain did not vouch for (no DMARC pass, no aligned DKIM or SPF pass) is treated as a stranger's (D25).",
+      "description": "The authserv-id this mailbox's own receiving server writes in Authentication-Results (e.g. mx.google.com). Set, only a verdict naming it counts; unset, the topmost one counts. Required for an IMAP server other than the Gmail preset (the mailbox refuses to start without it), because such a server may write no verdict and leave the sender's own on top. A From: its domain did not vouch for (no DMARC pass, no aligned DKIM or SPF pass) is treated as a stranger's (D25).",
       "capability": "mail_intake_policy",
       "targets": []
     },

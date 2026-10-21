@@ -85,7 +85,7 @@ the organizer is known.
 | key | default | what it does |
 |---|---|---|
 | `VEXA_FLOWS_MAIL_DOMAINS` | the mailbox's own domain | who may be provisioned and answered |
-| `VEXA_FLOWS_MAIL_AUTHSERV_ID` | unset (the topmost verdict counts) | the receiving server whose `Authentication-Results` verdict counts, e.g. `mx.google.com` |
+| `VEXA_FLOWS_MAIL_AUTHSERV_ID` | unset (the topmost verdict counts) | the receiving server whose `Authentication-Results` verdict counts, e.g. `mx.google.com`. Required for any IMAP server other than the Gmail preset: without it the mailbox does not start (helm `flows.mail.authservId`) |
 | `VEXA_FLOWS_MAIL_QUARANTINE_REPLY` | off | `1` answers a quarantined sender once with a fixed line — no model, no account |
 | `VEXA_FLOWS_MAIL_RATE_PER_SENDER` | `12` | mail-triggered agent turns one sender may cause per window |
 | `VEXA_FLOWS_MAIL_RATE_GLOBAL` | `120` | mail-triggered agent turns the deployment may run per window |

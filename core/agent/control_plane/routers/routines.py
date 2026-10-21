@@ -94,8 +94,10 @@ def build(**d) -> APIRouter:
         _adapter(response)
         subject = subject_of(request)
         # AN AGENT'S ROUTINE IS A PROPOSAL (D24): a worker acting for the person files it paused,
-        # and the person turns it on from their Routines board.
-        proposed = identity_token.is_delegated(request.headers)
+        # and the person turns it on from their Routines board. So is one an API key files (D13):
+        # only a signed-in session arms a routine as it creates it.
+        from control_plane import policy_decide  # noqa: PLC0415
+        proposed = policy_decide.credential_of(request.headers) != policy_decide.SESSION
         try:
             made = routine_flows.FlowsClient().submit(subject, body.name, body.cron, body.prompt,
                                                       activate=not proposed)
