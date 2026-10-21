@@ -345,7 +345,8 @@ def build_router(
         })
 
     # --- GET /meetings/{meeting_id} → the single meeting (api.v1; the meeting-detail page fetches it).
-    # Constrained by id IN SQL under the same access union, so a non-owner still cannot read another's
+    # Constrained by id IN SQL under the same access union as GET /meetings (owner · share viewer ·
+    # member of the bound workspace, from the gateway's x-user-workspaces), so a non-owner still cannot read another's
     # meeting — but one row is read instead of the caller's entire history (#803). Full `data` is
     # retained: this IS the detail view. ---
     @router.get("/meetings/{meeting_id}")
@@ -353,11 +354,15 @@ def build_router(
         request: Request,
         meeting_id: int,
         x_user_id: Optional[str] = Header(default=None),
+        x_user_workspaces: Optional[str] = Header(default=None),
     ):
         from .projection import project_response_data
 
         user_id = _resolve_user_id(x_user_id)
-        meetings = await store.list_meetings(user_id, meeting_id=meeting_id)
+        member_workspaces = {w.strip() for w in (x_user_workspaces or "").split(",") if w.strip()}
+        meetings = await store.list_meetings(
+            user_id, meeting_id=meeting_id, member_workspaces=member_workspaces,
+        )
         meeting = next((m for m in meetings if m.get("id") == meeting_id), None)
         if meeting is None:
             return JSONResponse(status_code=404, content={"detail": "Meeting not found"})
