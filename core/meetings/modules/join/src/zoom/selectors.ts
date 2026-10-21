@@ -41,6 +41,30 @@ export const zoomMeetingAppSelector = '.meeting-app';
 export const zoomInvalidMeetingText = 'This meeting link is invalid';
 export const zoomInvalidMeetingTitle = 'Error - Zoom';
 
+// ---- Self-refreshing hold page (instead of the pre-join) ----
+// Served at the /wc/<id>/join?wpk=… URL while the meeting cannot be entered yet, on Zoom's marketing
+// chrome (OneTrust banner) with title "<topic> - Zoom". Live DOM, 2026-10-21, while the host account
+// was in a different meeting:
+//   <div id="prompt" align="center">
+//     <h4>The host has another meeting in progress</h4>
+//     <p class="sign-link">If you are the host, please <a href="/signin">sign in</a> to start meeting</p>
+//     <p class="msg-reload">The page will refresh in 5 seconds, or <a id="refresh">reload the page</a> now.</p>
+//   </div>
+// The page reloads itself every ~5 s and becomes the pre-join once the host's other meeting ends.
+// Matched by structure (the reload control inside #prompt), so a localised headline still matches.
+export const zoomSelfRefreshingHoldSelector = '#prompt #refresh, #prompt .msg-reload';
+export const zoomHoldHeadlineSelector = '#prompt h4, #prompt h3, #prompt h2';
+
+// ---- Sign-in required (host admits authenticated users only) ----
+// Case-insensitive substrings of the page text; the name field never renders on this page.
+export const zoomAuthRequiredTexts = [
+  'sign in to join this meeting',
+  'sign in to join',
+  'authentication is required',
+  'only authenticated users can join',
+  'this meeting requires authentication',
+];
+
 // ---- Waiting room indicators ----
 // Zoom waiting room: specific text strings appear in DOM (no unique CSS class)
 export const zoomWaitingRoomTexts = [

@@ -10,6 +10,7 @@ import {
   zoomPermissionDismissSelector,
 } from "./selectors";
 import { checkUiLocale } from '../shared/ui-locale';
+import { readZoomPreJoinSnapshot, classifyZoomPreJoin, describeZoomPreJoin } from './prejoin-state';
 
 // NOTE vs the monolith: the audio-join flow (prepareZoomWebMeeting) and the
 // per-speaker capture pipeline are RECORDING/HOST concerns and stay outside
@@ -90,6 +91,11 @@ export function buildZoomWebClientUrl(meetingUrl: string): string {
 
 const HOST_NOT_STARTED_RETRY_INTERVAL_MS = 15000;
 const HOST_NOT_STARTED_MAX_WAIT_MS = 10 * 60 * 1000; // 10 minutes
+const ZOOM_PREJOIN_POLL_MS = 500;
+
+/** Reason codes that lead a typed pre-join failure's message (they ride into the run's last_error). */
+export const ZOOM_PREJOIN_HELD = 'zoom_prejoin_held';
+export const ZOOM_NAME_INPUT_MISSING = 'name_input_missing';
 
 export async function joinZoomMeeting(
   page: Page,
@@ -110,52 +116,77 @@ export async function joinZoomMeeting(
   const webClientUrl = buildZoomWebClientUrl(rawUrl);
   log(`[Zoom Web] Navigating to web client: ${webClientUrl}`);
 
-  // Retry loop: if host hasn't started the meeting yet, page title = "Error - Zoom"
-  // and body contains "This meeting link is invalid". Poll until the pre-join page appears.
+  // White-label / enterprise URLs (LFX, AWS Chime, Bloomberg-style portals) often render an extra
+  // page in front of Zoom's pre-join: T&C consent, guest-name confirm, captcha, magic-link auth. The
+  // bot can't automate those, but a human can VNC in and click through, so a non-canonical URL
+  // (buildZoomWebClientUrl returned it as-is) gets 5 min to reach the name field. Canonical zoom.us
+  // URLs keep 30 s — there is no portal layer to navigate.
+  const isWhiteLabel = rawUrl === webClientUrl && !rawUrl.includes('/wc/');
+  const nameInputTimeoutMs = isWhiteLabel ? 5 * 60 * 1000 : 30_000;
+  if (!authenticated && isWhiteLabel) {
+    log(`[Zoom Web] White-label URL — waiting up to 5 min for pre-join name input ` +
+        `(human can VNC in to click through any portal page).`);
+  }
+
+  // Read the page until it settles on the pre-join. Zoom replaces the first page client-side with
+  // `…/join?wpk=…`, and what lives there may reload itself, so the page is read again on every poll
+  // (prejoin-state.ts) — never once before the redirect.
   const startTime = Date.now();
+  await page.goto(webClientUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  let navigatedAt = Date.now();
+  let nameDeadline = navigatedAt + nameInputTimeoutMs;
+  let lastHeadline: string | null = null;
   while (true) {
-    await page.goto(webClientUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(ZOOM_PREJOIN_POLL_MS);
+    const snapshot = await readZoomPreJoinSnapshot(page);
+    const state = classifyZoomPreJoin(snapshot);
 
-    const title = await page.title();
-    const isError = title === 'Error - Zoom' || title === 'error - Zoom';
+    if (state.kind === 'name_field') break;
 
-    // Auth-required gate: meetings with "Only authenticated users can join"
-    // enabled show a sign-in page where #input-for-name never renders, and
-    // the bot would otherwise wait the full name-input timeout (5 min) for
-    // a field that never appears. Detect early and fail fast with a
-    // structured reason so the host receives auth_required, not a
-    // generic timeout.
-    const authRequired = await page.evaluate(() => {
-      const body = (document.body?.innerText || '').toLowerCase();
-      const signInIndicators = [
-        'sign in to join this meeting',
-        'sign in to join',
-        'authentication is required',
-        'only authenticated users can join',
-        'this meeting requires authentication',
-      ];
-      return signInIndicators.some(s => body.includes(s));
-    }).catch(() => false);
-    if (authRequired && !authenticated) {
-      log('[Zoom Web] Sign-in page detected — meeting requires authenticated users');
-      // PERMANENT: the host restricted entry to signed-in users and this bot has no session — a
-      // re-spawn joins just as signed-out. Same sealed outcome the authenticated-mode dead-profile
-      // path uses; the retry classifier already treats it as no-retry.
-      throw new AdmissionError('auth_session_missing', '[Zoom Web] auth_required: meeting host has restricted entry to authenticated Zoom users; bot cannot join without a Zoom account session');
-    }
-    if (authRequired && authenticated) {
+    if (state.kind === 'auth_required') {
+      if (!authenticated) {
+        log('[Zoom Web] Sign-in page detected — meeting requires authenticated users');
+        // PERMANENT: the host restricted entry to signed-in users and this bot has no session — a
+        // re-spawn joins just as signed-out. Same sealed outcome the authenticated-mode dead-profile
+        // path uses; the retry classifier already treats it as no-retry.
+        throw new AdmissionError('auth_session_missing', '[Zoom Web] auth_required: meeting host has restricted entry to authenticated Zoom users; bot cannot join without a Zoom account session');
+      }
       log('[Zoom Web] Authenticated mode: sign-in text present, proceeding (the persistent context should already carry a Zoom session)');
+      break;
     }
 
-    if (!isError) break; // Pre-join page loaded
-
-    const elapsed = Date.now() - startTime;
-    if (elapsed >= HOST_NOT_STARTED_MAX_WAIT_MS) {
-      throw new Error('[Zoom Web] Host did not start the meeting within the wait timeout');
+    if (state.kind === 'host_not_started') {
+      if (Date.now() - startTime >= HOST_NOT_STARTED_MAX_WAIT_MS) {
+        throw new Error('[Zoom Web] Host did not start the meeting within the wait timeout');
+      }
+      log(`[Zoom Web] Host not started yet (title="${snapshot?.title}"). Retrying in ${HOST_NOT_STARTED_RETRY_INTERVAL_MS / 1000}s...`);
+      await page.waitForTimeout(HOST_NOT_STARTED_RETRY_INTERVAL_MS);
+      await page.goto(webClientUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      navigatedAt = Date.now();
+      nameDeadline = navigatedAt + nameInputTimeoutMs;
+      continue;
     }
-    log(`[Zoom Web] Host not started yet (title="${title}"). Retrying in ${HOST_NOT_STARTED_RETRY_INTERVAL_MS / 1000}s...`);
-    await page.waitForTimeout(HOST_NOT_STARTED_RETRY_INTERVAL_MS);
+
+    if (state.kind === 'hold') {
+      // The page reloads itself; waiting is the whole job. The name clock starts over once it leaves.
+      if (state.headline !== lastHeadline) {
+        log(`[Zoom Web] Zoom is holding the join on a self-refreshing page ("${state.headline}") — waiting for it to open (up to ${HOST_NOT_STARTED_MAX_WAIT_MS / 60000} min)`);
+        lastHeadline = state.headline;
+      }
+      if (Date.now() - startTime >= HOST_NOT_STARTED_MAX_WAIT_MS) {
+        // Host-side: the host's account stayed in another meeting for the whole wait. Same outcome as
+        // a waiting room nobody answered (transient, a legitimate retry later).
+        throw new AdmissionError('lobby_timeout', `[Zoom Web] ${ZOOM_PREJOIN_HELD}: Zoom held the join for ${HOST_NOT_STARTED_MAX_WAIT_MS / 60000} min on "${state.headline}"; ${describeZoomPreJoin(snapshot)}`);
+      }
+      nameDeadline = Date.now() + nameInputTimeoutMs;
+      continue;
+    }
+
+    // pending: a redirect or a render is still in flight.
+    if (authenticated && Date.now() - navigatedAt >= 2000) break; // signed-in pre-join may have no name field
+    if (Date.now() >= nameDeadline) {
+      throw new AdmissionError('join_failure', `[Zoom Web] ${ZOOM_NAME_INPUT_MISSING}: no pre-join name field ${Math.round(nameInputTimeoutMs / 1000)}s after the page loaded; ${describeZoomPreJoin(snapshot)}`);
+    }
   }
 
   // Notify the host: joining
@@ -216,31 +247,13 @@ export async function joinZoomMeeting(
     }
   }
 
-  // Wait for the pre-join name input to appear.
-  //
-  // v0.10.5 — White-label / enterprise URLs (LFX, AWS Chime, Bloomberg-style
-  // portals) often render an extra page in front of Zoom's pre-join: T&C
-  // consent, guest-name confirm, captcha, magic-link auth. The bot can't
-  // automate those reliably, but a human can VNC in and click through. We
-  // extend the wait when the URL is non-canonical (rawUrl === webClientUrl
-  // means buildZoomWebClientUrl returned the URL as-is, which it only does
-  // for white-label hosts) so the user has time to assist. Canonical zoom.us
-  // URLs keep the tight 30s timeout — there's no portal layer to navigate.
   if (authenticated) {
     // Signed-in pre-join uses the account identity — there may be no guest name field,
     // so don't block on it; just let the signed-in pre-join settle.
     log('[Zoom Web] Authenticated mode — signed-in pre-join; not waiting on a guest name field');
     await page.waitForTimeout(3000);
   } else {
-    const isWhiteLabel = rawUrl === webClientUrl && !rawUrl.includes('/wc/');
-    const nameInputTimeoutMs = isWhiteLabel ? 5 * 60 * 1000 : 30_000;
-    if (isWhiteLabel) {
-      log(`[Zoom Web] White-label URL — waiting up to 5 min for pre-join name input ` +
-          `(human can VNC in to click through any portal page).`);
-    } else {
-      log('[Zoom Web] Waiting for pre-join name input...');
-    }
-    await page.waitForSelector(zoomNameInputSelector, { timeout: nameInputTimeoutMs });
+    log('[Zoom Web] Pre-join name input present');
   }
 
   // Some meetings show a passcode-entry pre-join page that includes a
