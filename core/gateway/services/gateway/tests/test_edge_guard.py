@@ -637,7 +637,7 @@ class FakeWS:
     ``reset_ws_guard`` singleton. No inbound frames - a denied connect never reaches the
     frame loop, and a clean IP test asserts it passes the guard (then hits the auth layer,
     which closes 4401 on a missing key). ``scope["path"]`` matches the real ``/ws`` route
-    (``app.py``'s ``@app.websocket("/ws")``): fastapi-guard 8.0.0 scans the handshake through
+    (``create_app``'s ``@app.websocket("/ws")``): fastapi-guard 8.0.0 scans the handshake through
     guard-core's own ``SuspiciousActivityCheck``, and even with ``enable_penetration_detection``
     off, it still resolves ``url_path`` via Starlette's ``get_route_path(scope)`` for
     ``exclude_paths`` matching before that check ever runs - ``get_route_path`` reads
@@ -1219,3 +1219,109 @@ class TestBannedButWhitelisted:
         await run_multiplex(ws, auth, redis)
         assert ws.accepted is False
         assert ws.close_code == 1008
+
+
+# ── No credential reaches a log line on a guard block ──────────────────────────
+
+
+_SECRET_HEADERS = {
+    "X-API-Key": "sekrit-header-api-key",
+    "Authorization": "Bearer sekrit-header-bearer",
+    "Cookie": "session=sekrit-header-cookie",
+    "X-Internal-Secret": "sekrit-header-internal",
+    "X-Vexa-Identity": "sekrit-header-identity",
+}
+_SECRET_QUERY = (
+    "api_key=sekrit-query-api-key&token=sekrit-query-token&key=sekrit-query-key"
+    "&access_token=sekrit-query-access-token&apikey=sekrit-query-apikey"
+)
+_SECRET_VALUES = [v.split()[-1].split("=")[-1] for v in _SECRET_HEADERS.values()] + [
+    pair.split("=", 1)[1] for pair in _SECRET_QUERY.split("&")
+]
+
+
+def _all_log_output(caplog, capfd) -> str:
+    """Everything the server side wrote: log records (minus the test's own httpx client, which
+    logs the URL it requested) and the raw stdout/stderr ``log_event`` and handlers print to."""
+    out, err = capfd.readouterr()
+    records = [
+        record.getMessage()
+        for record in caplog.records
+        if not record.name.startswith(("httpx", "httpcore"))
+    ]
+    return "\n".join([*records, out, err])
+
+
+class TestGuardLogsCarryNoSecrets:
+    """A guard block is logged twice: guard-core's own WARNING line (headers and the full URL with
+    its query) and the gateway's ``http_request_blocked`` / ``ws_connect_rejected`` event. Neither
+    may carry a credential the client sent, whether in a header or the query string. The config
+    is the production one, built from env by ``build_guard_config``."""
+
+    @pytest.fixture(autouse=True)
+    def _blocking_env(self, monkeypatch) -> None:
+        monkeypatch.setenv("GUARD_ENABLED", "true")
+        monkeypatch.setenv("GUARD_ENABLE_REDIS", "false")
+        monkeypatch.setenv("GUARD_TRUSTED_PROXIES", "127.0.0.1")
+
+    @pytest.mark.asyncio
+    async def test_http_blacklist_block_logs_no_credential(
+        self, monkeypatch, caplog, capfd
+    ) -> None:
+        monkeypatch.setenv("GUARD_RATE_LIMIT_RPM", "1000")
+        monkeypatch.setenv("GUARD_IP_BLACKLIST", "10.0.7.1")
+        caplog.set_level("DEBUG")
+        app = _make_app(build_guard_config())
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            resp = await ac.get(
+                f"/?{_SECRET_QUERY}",
+                headers={**_SECRET_HEADERS, "X-Forwarded-For": "10.0.7.1"},
+            )
+        assert resp.status_code == 403
+        logged = _all_log_output(caplog, capfd)
+        assert "10.0.7.1" in logged  # the block was logged at all
+        assert "http_request_blocked" in logged
+        for secret in _SECRET_VALUES:
+            assert secret not in logged, secret
+
+    @pytest.mark.asyncio
+    async def test_http_rate_limit_block_logs_no_credential(
+        self, monkeypatch, caplog, capfd
+    ) -> None:
+        monkeypatch.setenv("GUARD_RATE_LIMIT_RPM", "1")
+        caplog.set_level("DEBUG")
+        app = _make_app(build_guard_config())
+        headers = {**_SECRET_HEADERS, "X-Forwarded-For": "10.0.7.2"}
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            statuses = [
+                (await ac.get(f"/?{_SECRET_QUERY}", headers=headers)).status_code
+                for _ in range(3)
+            ]
+        assert 429 in statuses
+        logged = _all_log_output(caplog, capfd)
+        assert "10.0.7.2" in logged
+        for secret in _SECRET_VALUES:
+            assert secret not in logged, secret
+
+    def test_ws_block_logs_no_credential(self, monkeypatch, caplog, capfd) -> None:
+        monkeypatch.setenv("GUARD_WS_ENABLED", "true")
+        monkeypatch.setenv("GUARD_IP_BLACKLIST", "10.0.7.3")
+        caplog.set_level("DEBUG")
+        app = create_app()
+        apply_guard(app)
+        client = TestClient(app, client=("127.0.0.1", 12345))
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect(
+                f"/ws?{_SECRET_QUERY}",
+                headers={**_SECRET_HEADERS, "X-Forwarded-For": "10.0.7.3"},
+            ):
+                pass  # pragma: no cover - the upgrade is refused
+        assert exc_info.value.code == 1008
+        logged = _all_log_output(caplog, capfd)
+        assert "ws_connect_rejected" in logged
+        for secret in _SECRET_VALUES:
+            assert secret not in logged, secret

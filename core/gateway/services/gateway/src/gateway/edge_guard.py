@@ -5,7 +5,7 @@ existing per-user rate limiter (``ratelimit.py``): per-IP rate limiting, auto-IP
 and optional IP/geo/cloud blocking (all env-driven, default off). This module owns
 the ONE ``SecurityConfig`` and installs the ONE ``SecurityMiddleware`` both the HTTP
 and the ``/ws`` path share: fastapi-guard's own ``guard_websocket`` (called directly
-from ``run_multiplex`` in ``app.py``, not through this module) resolves that same
+from ``run_multiplex`` in ``multiplex.py``, not through this module) resolves that same
 config at ``/ws`` connect time via its ``_find_security_config`` lookup on the
 registered middleware. No Vexa-authored guard orchestration remains for either
 path; this module's job ends at building the config and installing the middleware.
@@ -44,12 +44,13 @@ import os
 from typing import TYPE_CHECKING
 
 # fastapi-guard 7.8.0: guard_websocket (the /ws connect check, called from run_multiplex in
-# app.py, not from this module) is the last piece of the WS path that now lives entirely in
+# multiplex.py, not from this module) is the last piece of the WS path that now lives entirely in
 # the library. This module only needs the two symbols that build + install the HTTP
 # middleware; SecurityConfig / SecurityMiddleware are re-exported at guard's top level.
 from guard import SecurityConfig, SecurityMiddleware
 
 from .config_preflight import ConfigError
+from .log_scrub import CREDENTIAL_PARAMS
 from .obs import log_event
 from .ratelimit import env_truthy
 
@@ -82,6 +83,14 @@ _GUARD_EXCLUDE_PATHS = [
     "/health",
 ]
 
+# Names guard-core masks in its own log lines, on top of its defaults (authorization,
+# proxy-authorization, cookie, x-api-key; access_token, refresh_token, api_key, apikey, token,
+# password, secret, client_secret, signature). The query names are the gateway's own credential
+# set (log_scrub.CREDENTIAL_PARAMS), which adds ``key``; the headers are the two secrets the
+# gateway's own hops carry.
+_GUARD_LOG_SENSITIVE_PARAMS = frozenset(CREDENTIAL_PARAMS)
+_GUARD_LOG_SENSITIVE_HEADERS = frozenset({"x-internal-secret", "x-vexa-identity"})
+
 
 def _guard_csv(env: str) -> list[str]:
     """Parse a comma-separated env var into a stripped, non-empty list."""
@@ -89,7 +98,7 @@ def _guard_csv(env: str) -> list[str]:
 
 
 # guard_core.models.CloudProvider = Literal["AWS", "GCP", "Azure", "DigitalOcean", "Linode",
-# "Vultr"] (guard-core 4.0.1, pinned here; guard_core.models.VALID_CLOUD_PROVIDERS is the same
+# "Vultr"] (guard-core 4.4.0, locked here; guard_core.models.VALID_CLOUD_PROVIDERS is the same
 # six names as a frozenset - both verified in this venv). Mirrored here (not imported) so a
 # library-side rename doesn't quietly change what Vexa accepts out from under this error
 # message.
@@ -248,7 +257,7 @@ def _env_int(env: str, default: int) -> int:
 
 def _on_http_block(request: object, payload: dict) -> None:
     """``SecurityConfig.on_block`` callback for the HTTP path - the sibling of the WS side's
-    ``ws_connect_rejected`` (``run_multiplex`` in ``app.py``), which has no HTTP equivalent
+    ``ws_connect_rejected`` (``run_multiplex`` in ``multiplex.py``), which has no HTTP equivalent
     today: a 429/403 from guard's ``SecurityMiddleware`` otherwise reaches only guard-core's
     own ``logging.getLogger("guard_core")``, never Vexa's ``logevent.v1`` stream.
 
@@ -392,14 +401,15 @@ def build_guard_config() -> SecurityConfig:
         # in-memory per-process window (one WARNING per process) instead of skipping the
         # check. guard-core < 3.15.0 always fell back regardless of this flag; 3.15.0 makes
         # the limiter honor it, and the default (False) under fail_secure=False would skip
-        # the rate limit entirely for every request until Redis is back. The open pin
-        # (>=8.0) resolves to 4.0.1 on a fresh lock, so the flag is set explicitly to
-        # keep one behavior on both sides of that boundary. Ban checks are unaffected:
+        # the rate limit entirely for every request until Redis is back. The pin
+        # (guard-core>=4.4) is past that boundary, so the flag is load-bearing. Ban checks are unaffected:
         # is_ip_banned already fails open (not banned) under fail_secure=False.
         redis_fail_open=True,
         lazy_init=True,
         exclude_paths=_GUARD_EXCLUDE_PATHS,
         on_block=_on_http_block,
+        log_sensitive_params=_GUARD_LOG_SENSITIVE_PARAMS,
+        log_sensitive_headers=_GUARD_LOG_SENSITIVE_HEADERS,
     )
 
 
@@ -411,7 +421,7 @@ def apply_guard(app: FastAPI, config: SecurityConfig | None = None) -> None:
 
     Refuses to boot with :class:`ConfigError` when ``GUARD_WS_ENABLED=true`` but
     ``GUARD_ENABLED=false``: fastapi-guard's ``guard_websocket`` (the ``/ws`` connect
-    check ``run_multiplex`` calls, see ``app.py``) resolves its ``SecurityConfig`` by
+    check ``run_multiplex`` calls, see ``multiplex.py``) resolves its ``SecurityConfig`` by
     looking up the ``SecurityMiddleware`` THIS function registers, so turning the HTTP
     guard off leaves the WS guard with no config to read. The env kill switch now turns
     both off together; WS-only guarding is no longer a valid configuration.
