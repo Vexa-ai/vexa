@@ -466,6 +466,19 @@ def test_an_unmarked_push_lands_without_a_roster_read(stack, tmp_path, marked):
     assert r.status_code == 200 and r.json()["head"] == new, r.text[:300]
 
 
+def test_a_page_write_is_held_on_the_registry_roster_when_the_tree_mirror_is_gone(world):
+    """M2-b at the page route: the mirror is deleted from ``team``'s tree; alice and bob still read
+    it, so a write whose mark cannot be checked is held."""
+    from tests.test_int_s1_seams import _principal
+    client, store, calls, spawned, root, _d = world
+    (root / "team" / "policy" / "members.json").unlink()
+    r = client.put("/api/workspace/file", headers=_principal(unit=""),
+                   json={"slug": "team", "path": "held.md", "content": "x"})
+    assert r.status_code == 409 and r.json()["detail"]["refused"] == "private_sources_to_shared", r.text[:300]
+    assert sorted(r.json()["detail"]["readers"]) == ["alice", "bob"]
+    assert not (root / "team" / "held.md").exists()
+
+
 def test_the_page_routes_audience_is_the_registry_roster_not_the_mirror(tmp_path):
     """M2-b at the shared reader: a workspace with no mirror still has its registry's readers, a
     stale mirror changes nobody's audience, and a tree outside the store's top level has none."""

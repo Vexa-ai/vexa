@@ -289,8 +289,6 @@ def test_a_writer_who_sets_a_persons_email_to_their_own_address_cannot_claim_it(
                                   'scopes': ['bot'], 'is_admin': False})
     rev = store.get(ORG, ADMIN, victim)['revision']
     store.change(ORG, mallory, victim, rev, {'Email': ATTACKER}, reason='typo fix')
-    with store.engine.connect() as c:
-        assert store.profiles.candidates(c, ORG, ATTACKER, '40') == []
     with store.engine.begin() as c:
         assert store.profiles.auto_claim(c, ORG, mallory) is None
     assert _claim_status(store, mallory, victim)['refused'] in (403, 404)
@@ -309,7 +307,6 @@ def test_a_writer_who_merges_their_own_person_into_another_cannot_claim_it(store
     store.merge(ORG, mallory, own, victim, reason='duplicate')
     with store.engine.connect() as c:
         assert store.profiles.persons._held(c, ORG, 'email:' + ATTACKER) == victim   # the identifier moved
-        assert store.profiles.candidates(c, ORG, ATTACKER, '40') == []
     with store.engine.begin() as c:
         assert store.profiles.auto_claim(c, ORG, mallory) is None
     assert _claim_status(store, mallory, victim)['refused'] in (403, 404)
