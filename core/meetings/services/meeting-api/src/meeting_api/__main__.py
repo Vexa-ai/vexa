@@ -911,17 +911,25 @@ def _attach_background_loops(
         Single-flighted like the other sweeps (not because a concurrent build corrupts anything —
         ``CREATE INDEX CONCURRENTLY IF NOT EXISTS`` is itself safe under a race — but so
         ``replicaCount>1`` does not have every replica open its own AUTOCOMMIT connection and hold
-        it for the full build). ``hasattr`` guards a fake/Lite transcript_store the same way
-        ``upsert_segments``/``create_planned_meeting`` are guarded above — this branch's only real
-        store is ``SqlAlchemyTranscriptStore``, but eval/test doubles that construct this function
-        with something else must not crash on a method they were never given.
+        it for the full build). The guard holds its lock outside any transaction
+        (``PgAdvisoryLock``), so the build never waits on its own guard. ``hasattr`` guards a
+        fake/Lite transcript_store the same way ``upsert_segments``/``create_planned_meeting`` are
+        guarded above — this branch's only real store is ``SqlAlchemyTranscriptStore``, but eval/test
+        doubles that construct this function with something else must not crash on a method they
+        were never given.
         """
         if not hasattr(transcript_store, "ensure_fts_index"):
             return
 
         async def _tick():
             result = await transcript_store.ensure_fts_index()
-            log.info("transcript FTS index: %s", result)
+            if isinstance(result, dict) and result.get("status") == "failed":
+                log.error(
+                    "transcript FTS index NOT built (%s); search uses a sequential scan until the "
+                    "next boot retries it. By hand: %s", result.get("reason"), result.get("by_hand"),
+                )
+            else:
+                log.info("transcript FTS index: %s", result)
 
         try:
             await _guarded("ensure-fts-index", _tick)

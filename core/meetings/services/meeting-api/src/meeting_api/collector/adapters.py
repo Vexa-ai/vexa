@@ -1393,6 +1393,8 @@ class SqlAlchemyTranscriptStore:
     # the same string: an index on to_tsvector('english', text) is invisible to a query that says
     # to_tsvector('simple', text), and the failure is silent — correct answers, seq scan, no error.
     FTS_CONFIG = "english"
+    # Bound on each lock wait of the concurrent FTS index build (ensure_fts_index).
+    FTS_INDEX_LOCK_TIMEOUT_MS = 5000
 
     async def search_transcripts(self, user_id, query, *, limit=20, offset=0,
                                  platform=None, native_meeting_id=None,
@@ -1470,10 +1472,17 @@ class SqlAlchemyTranscriptStore:
         whose absence makes every list request fail.
 
         Handles the one real trap: a failed CONCURRENTLY build leaves an INVALID index behind that
-        Postgres silently never uses. We detect it via ``pg_index.indisvalid``, drop it, and let
-        the next call rebuild.
+        Postgres silently never uses. We detect it via ``pg_index.indisvalid``, drop it, and rebuild.
+
+        Every wait is bounded by ``FTS_INDEX_LOCK_TIMEOUT_MS``: the build first waits for each
+        transaction already open, and a long-open one fails the build in seconds instead of holding
+        SHARE UPDATE EXCLUSIVE on ``transcriptions`` (which queues every DDL on the table) for as
+        long as it stays open. A failed build tries to drop its own INVALID leftover (the drop waits
+        on the same transactions, so it may fail too) and returns ``{"status": "failed"}``; the
+        next boot drops whatever is left and builds again.
         """
         from sqlalchemy import text as sql_text
+        from sqlalchemy.exc import DBAPIError
 
         name = "ix_transcription_text_fts"
         # AUTOCOMMIT: CREATE/DROP INDEX CONCURRENTLY cannot run in a transaction block.
@@ -1482,21 +1491,36 @@ class SqlAlchemyTranscriptStore:
         if engine is None:
             return {"status": "skipped", "reason": "no engine handle"}
 
+        valid_sql = sql_text(
+            "SELECT i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid "
+            "WHERE c.relname = :n")
+        drop_sql = sql_text(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
+        create_sql = (f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON transcriptions "
+                      f"USING gin (to_tsvector('{self.FTS_CONFIG}', text))")
         async with engine.connect() as conn:
             conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
-            state = (await conn.execute(sql_text(
-                "SELECT i.indisvalid FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid "
-                "WHERE c.relname = :n"), {"n": name})).scalar()
+            state = (await conn.execute(valid_sql, {"n": name})).scalar()
             if state is True:
                 return {"status": "present", "index": name}
-            if state is False:
-                # A previous CONCURRENTLY build failed. The leftover is INVALID and unusable —
-                # Postgres will not error on it, it will simply never use it. Drop and rebuild.
-                await conn.execute(sql_text(f"DROP INDEX CONCURRENTLY IF EXISTS {name}"))
-            await conn.execute(sql_text(
-                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON transcriptions "
-                f"USING gin (to_tsvector('{self.FTS_CONFIG}', text))"))
-            return {"status": "created", "index": name}
+            await conn.execute(sql_text(f"SET lock_timeout = '{int(self.FTS_INDEX_LOCK_TIMEOUT_MS)}ms'"))
+            try:
+                if state is False:
+                    # A previous CONCURRENTLY build failed. The leftover is INVALID and unusable —
+                    # Postgres will not error on it, it will simply never use it. Drop and rebuild.
+                    await conn.execute(drop_sql)
+                await conn.execute(sql_text(create_sql))
+                return {"status": "created", "index": name}
+            except DBAPIError as e:
+                reason = str(getattr(e, "orig", e)).strip().splitlines()[0]
+                try:
+                    if (await conn.execute(valid_sql, {"n": name})).scalar() is False:
+                        await conn.execute(drop_sql)
+                except DBAPIError:
+                    pass
+                return {"status": "failed", "index": name, "reason": reason,
+                        "by_hand": f"DROP INDEX CONCURRENTLY IF EXISTS {name}; {create_sql}"}
+            finally:
+                await conn.execute(sql_text("RESET lock_timeout"))
 
     async def annotate_meeting(self, user_id, meeting_id, *, title=None,
                                metadata=None, notes=None) -> "Optional[dict]":

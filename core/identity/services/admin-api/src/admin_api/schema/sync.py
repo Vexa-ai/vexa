@@ -258,13 +258,15 @@ def _unique_index_failure_message(failures: list[tuple[str, str, str]]) -> str:
 
 # MIGRATION-0004-backfill-token-scopes — grandfather pre-scope (0.10-era) API tokens.
 #
-# 0.10's api_tokens had no `scopes` column; keys were unscoped = allow-all. 0.12 adds
-# `scopes ARRAY(Text) NOT NULL server_default '{}'`, so the additive `ADD COLUMN` above fills
-# every pre-existing row with an empty array — which the gateway/validate path reads as
-# no-access and 403s on every core route. This one-shot, idempotent backfill converges those
-# empty/NULL rows to the full valid-scope set, mirroring 0.10's allow-all behavior. It only
-# touches empties, so newly-minted (already-scoped) tokens are never widened, and re-running
-# ensure_schema is a no-op once there are no empty rows left.
+# 0.10's api_tokens had no `scopes` column; keys were unscoped = allow-all. The `scopes ARRAY(Text)
+# NOT NULL server_default '{}'` column, added by the additive `ADD COLUMN`, fills every pre-existing
+# row with an empty array, which the read path (`get_current_user`, `/internal/validate`) treats as
+# no access. Those rows, and only those, are converged to the full valid-scope set, in the same
+# transaction that adds the column, mirroring 0.10's allow-all.
+#
+# A row whose `scopes` column already exists is never rewritten. An empty array there is a key with
+# no access, and it keeps none: the read path denies `{}` and NULL alike, so rewriting it would grant
+# access the key never had.
 #
 # See MIGRATION-0004-backfill-token-scopes.md. Kept in step with app.main.VALID_SCOPES.
 # Bound as a Python list (not a '{...}' literal): asyncpg maps a list → text[], and rejects the
@@ -273,17 +275,23 @@ def _unique_index_failure_message(failures: list[tuple[str, str, str]]) -> str:
 _FULL_TOKEN_SCOPES = ["bot", "tx", "browser"]
 
 
-def _backfill_token_scopes(conn: Connection):
+def _tokens_predate_scopes(conn: Connection) -> bool:
+    """True when ``api_tokens`` exists without a ``scopes`` column: this pass adds it."""
     inspector = inspect(conn)
     if "api_tokens" not in set(inspector.get_table_names()):
+        return False
+    return "scopes" not in {c["name"] for c in inspector.get_columns("api_tokens")}
+
+
+def _backfill_token_scopes(conn: Connection, predate_scopes: bool):
+    if not predate_scopes:
         return
     result = conn.execute(text(
-        "UPDATE api_tokens SET scopes = :full "
-        "WHERE scopes = '{}'::text[] OR scopes IS NULL"
+        "UPDATE api_tokens SET scopes = :full WHERE scopes = '{}'::text[]"
     ), {"full": _FULL_TOKEN_SCOPES})
     if result.rowcount:
-        logger.info("schema-sync backfill token scopes (MIGRATION-0004): %d row(s) grandfathered "
-                    "to %s", result.rowcount, _FULL_TOKEN_SCOPES)
+        logger.info("schema-sync backfill token scopes (MIGRATION-0004): %d pre-scope row(s) "
+                    "grandfathered to %s", result.rowcount, _FULL_TOKEN_SCOPES)
 
 
 # MIGRATION-0005 — the meetings-list EVENT-time ordering (#1222).
@@ -369,9 +377,10 @@ def _bound_locks(conn: Connection):
 def _ensure_schema_sync(conn: Connection, base, deferred: list | None = None):
     _bound_locks(conn)
     _sync_functions(conn)                              # MIGRATION-0005 fn (indexes reference it)
+    predate_scopes = _tokens_predate_scopes(conn)
     base.metadata.create_all(conn, checkfirst=True)   # missing tables, FK order
     _sync_columns(conn, base)                          # additive columns
-    _backfill_token_scopes(conn)                       # MIGRATION-0004 data backfill
+    _backfill_token_scopes(conn, predate_scopes)       # MIGRATION-0004 data backfill
     _ensure_default_org(conn)                          # MIGRATION-0008 the default org row
     _sync_indexes(conn, base, deferred)                # additive indexes (non-unique: deferred)
 

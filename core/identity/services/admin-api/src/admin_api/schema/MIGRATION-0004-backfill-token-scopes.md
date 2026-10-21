@@ -2,10 +2,9 @@
 
 **Status:** applied **automatically** by `ensure_schema` (`schema/sync.py::_backfill_token_scopes`),
 after the additive column sync and before the index sync. Unlike MIGRATION-0001..0003 (out-of-band,
-human-run ops steps), this one **runs on every admin-api boot** because the failure it prevents is a
-silent, deploy-time-invisible revocation of every pre-existing customer token — it must converge at
-cutover with no operator action. Idempotent: it only touches empty/NULL rows, so it no-ops once there
-are none. Closes #578.
+human-run ops steps), this one runs in the convergence that **adds** `api_tokens.scopes` to a 0.10-era table, because the
+failure it prevents is a silent, deploy-time-invisible revocation of every pre-existing customer token —
+it must converge at cutover with no operator action. Once the column exists it never runs again. Closes #578.
 
 ## The bug it fixes
 
@@ -30,19 +29,22 @@ a populated table.
 
 ## The change
 
+In the same transaction as the `ADD COLUMN`, and only when this convergence is the one adding it:
+
 ```sql
-UPDATE api_tokens SET scopes = '{bot,tx,browser}'
-WHERE scopes = '{}'::text[] OR scopes IS NULL;
+UPDATE api_tokens SET scopes = '{bot,tx,browser}' WHERE scopes = '{}'::text[];
 ```
 
 Full valid-scope set = mirrors 0.10's unscoped allow-all behavior, and makes the DB self-describing (the
-`/internal/validate` path stays simple — no read-time remapping of empty/`legacy`). The `WHERE` predicate
-touches only empties, so:
+`/internal/validate` path stays simple — no read-time remapping of empty/`legacy`). Every row it touches
+existed before the column did, so:
 
+- a row stored with `scopes = '{}'` after the column exists is a key with **no access** (the read path
+  denies it) and is **never rewritten** — not on a restart, not on an upgrade;
 - already-scoped rows (a token deliberately minted `{tx}`) are **never widened**;
-- re-running `ensure_schema` is a no-op once no empty rows remain (idempotent).
+- re-running `ensure_schema` is a no-op (the column exists).
 
-`scopes` is `NOT NULL`, so `IS NULL` never matches in practice — it is kept only as a defensive predicate.
+`scopes` is `NOT NULL`, so a NULL row cannot exist.
 
 ### Scope-prefix refinement — deliberately NOT taken
 
@@ -54,16 +56,18 @@ mirror of 0.10 behavior.
 
 ### Widening caveat
 
-If any deployment intentionally minted unscoped tokens as a **deny-all**, this backfill would widen them
-to allow-all. None are known in the 0.10 line, where unscoped == allow-all. Any deployment that used
-empty-scope as deny-all must re-scope those rows explicitly before upgrading.
+Only rows from a table that had no `scopes` column are widened: on 0.10 those keys were unscoped, which
+was allow-all. A key stored with empty scopes on 0.12 or later had no access and keeps none.
 
 ## Validation
 
-`tests/test_stack_postgres.py::test_backfill_grandfathers_empty_token_scopes` (testcontainers-postgres):
-seeds a `scopes='{}'` token and a `scopes={tx}` token, re-runs `ensure_schema_sync`, asserts the empty
-row converges to `{bot,tx,browser}` while the scoped row is untouched, and that a further run is a no-op.
-Red before the backfill (empty row stays `{}`), green after.
+- `tests/test_stack_postgres.py::test_backfill_grandfathers_pre_scope_tokens`: an `api_tokens` table
+  without `scopes` converges to `{bot,tx,browser}` on every row; a further run changes nothing.
+- `tests/test_stack_postgres.py::test_an_empty_scope_token_is_never_widened`: a `{}` row and a `{tx}` row
+  are unchanged by two convergences.
+- `tests/test_token_scope_backfill_pg.py`: a `{}` key gets 403 from `get_current_user` and `["legacy"]`
+  from `/internal/validate` before and after a convergence; a NULL row is refused by the column; a
+  pre-scope key gets 200 and the full set.
 
 ## Rollback
 
