@@ -7,6 +7,9 @@ const RIGHTS = ["independent", "corporate", "uncertain"];
 const DECISION_MARKER = "<!-- vexa-contribution-rights-decision:v1 -->";
 const RECEIPT_PATTERN = /^VCR-[0-9]{4}-[0-9]{4,}$/;
 const SEARCHABLE_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+// Repository owners, organization members and collaborators hold the commit bit; their rights are
+// settled by that relationship, not by a per-PR checkbox.
+const EXEMPT_ASSOCIATIONS = ["OWNER", "MEMBER", "COLLABORATOR"];
 
 // The rights marker may sit on the checkbox line itself, or -- as the repository's own pull-request
 // template writes it -- on a continuation line of the same list item. Locate the marker, then walk
@@ -94,6 +97,18 @@ export function registeredStanding(login, config) {
   return null; // A malformed entry grants nothing.
 }
 
+// Maintainers are exempt: an author whose GitHub author_association is OWNER, MEMBER or
+// COLLABORATOR, or whose login is in the config's `maintainers` list. The association comes from
+// GitHub itself (event payload or pulls API), never from the PR body. Commit co-authors have no
+// association on hand, so only the `maintainers` list exempts them.
+export function maintainerStanding(login, association, config) {
+  if (!login) return null;
+  const listed = (config.maintainers || []).some((name) => name.toLowerCase() === login.toLowerCase());
+  const role = String(association || "").toUpperCase();
+  if (!listed && !EXEMPT_ASSOCIATIONS.includes(role)) return null;
+  return { login, path: "maintainer", via: listed ? "maintainers" : "association", association: role };
+}
+
 // The independent declaration an earlier MERGED pull request carried: exactly one box, the
 // independent one, with no unresolved rights review. A corporate receipt is bound to the PR and head
 // it names, so it never carries forward; a continuing authorization belongs in the registry.
@@ -121,11 +136,24 @@ export function editedOnlyByAuthor(pullRequest, login) {
 }
 
 function describeStanding(standing) {
+  if (standing.path === "maintainer") {
+    const why = standing.via === "maintainers" ? "is listed in .github/contribution-rights.json maintainers" : `is a repository ${standing.association.toLowerCase()}`;
+    return `@${standing.login} ${why}, so no rights declaration is needed.`;
+  }
   if (standing.via === "registry") {
     const receipt = standing.path === "corporate" ? ` with receipt ${standing.receipt}` : "";
     return `@${standing.login} is registered in .github/contribution-rights.json as ${standing.path}${receipt} (declared ${standing.declared || "date not recorded"}; source: ${standing.source || "not recorded"}).`;
   }
   return `@${standing.login} declared the ${standing.path} path on merged PR #${standing.pr.number} (${standing.pr.url}).`;
+}
+
+// What a first-time independent declaration becomes: this merged PR carries it forward (the gate
+// finds it), and scripts/contribution-rights-backfill.mjs copies it into the registry.
+function registrationNote(pr) {
+  const login = pr.user?.login;
+  if (!login) return "";
+  const entry = JSON.stringify({ path: "independent", declared: new Date().toISOString().slice(0, 10), source: `PR #${pr.number}` });
+  return `\n\nOnce this PR merges, @${login} is not asked again: later PRs pass without a selection. Registry entry: \`"${login}": ${entry}\``;
 }
 
 function declarationVerdict(selection, state, pr) {
@@ -148,7 +176,7 @@ function declarationVerdict(selection, state, pr) {
     return {
       ok: true,
       title: "Independent contribution path is complete",
-      summary: "The contributor selected the independent path. The separately required DCO check validates per-commit sign-offs.",
+      summary: "The contributor selected the independent path. The separately required DCO check validates per-commit sign-offs." + registrationNote(pr),
     };
   }
 
@@ -209,7 +237,7 @@ export function evaluatePullRequest(pr, comments, config, evidence = {}) {
 
   const state = decisionState(comments, config, pr);
   const author = pr.user?.login;
-  const standing = registeredStanding(author, config) || evidence.authorStanding || null;
+  const standing = maintainerStanding(author, pr.author_association, config) || registeredStanding(author, config) || evidence.authorStanding || null;
   const selection = selected[0];
 
   // An explicit selection decides this PR unless it repeats a corporate standing already on file;
@@ -267,12 +295,13 @@ function standingVerdict(standing, state, evidence, author) {
 
   return {
     ok: true,
-    title: standing.path === "corporate" ? "Corporate authorization on file" : "Independent contributor on file",
+    title: standing.path === "maintainer" ? "Maintainer: no declaration needed"
+      : standing.path === "corporate" ? "Corporate authorization on file" : "Independent contributor on file",
     summary: `${describeStanding(standing)} No per-PR selection is needed. The separately required DCO check validates per-commit sign-offs.`,
   };
 }
 
-async function requestJson(url, token, options = {}) {
+export async function requestJson(url, token, options = {}) {
   const response = await fetch(url, {
     ...options,
     headers: {
@@ -300,7 +329,7 @@ async function pullRequestsForEvent(event, apiBase, token) {
   return [];
 }
 
-async function commentsForPullRequest(repo, number, apiBase, token) {
+export async function commentsForPullRequest(repo, number, apiBase, token) {
   const comments = [];
   for (let page = 1; page <= 20; page += 1) {
     const batch = await requestJson(`${apiBase}/repos/${repo}/issues/${number}/comments?per_page=100&page=${page}`, token);
@@ -334,7 +363,7 @@ const EDIT_HISTORY_QUERY = `query($owner: String!, $name: String!, $number: Int!
   }
 }`;
 
-async function bodyEditedOnlyByAuthor(repo, number, login, apiBase, token) {
+export async function bodyEditedOnlyByAuthor(repo, number, login, apiBase, token) {
   const [owner, name] = repo.split("/");
   const result = await requestJson(`${apiBase}/graphql`, token, {
     method: "POST",
@@ -359,13 +388,15 @@ async function earlierDeclaration(repo, login, currentNumber, config, apiBase, t
 }
 
 async function standingOf(repo, login, currentNumber, config, apiBase, token) {
-  return registeredStanding(login, config) || earlierDeclaration(repo, login, currentNumber, config, apiBase, token);
+  return maintainerStanding(login, null, config) || registeredStanding(login, config) || earlierDeclaration(repo, login, currentNumber, config, apiBase, token);
 }
 
 export async function gatherEvidence(repo, pr, config, apiBase, token) {
   const author = pr.user?.login;
   try {
-    const authorStanding = author ? await standingOf(repo, author, pr.number, config, apiBase, token) : null;
+    const authorStanding = author
+      ? maintainerStanding(author, pr.author_association, config) || await standingOf(repo, author, pr.number, config, apiBase, token)
+      : null;
     if (!authorStanding) return { authorStanding: null, coAuthors: [] };
     const coAuthors = [];
     for (const login of await commitAuthorLogins(repo, pr, apiBase, token)) {
