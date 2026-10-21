@@ -8,9 +8,10 @@
  * (openGmeetChatPanel) on start and re-checks on every poll, because Meet
  * closes it on some layout changes.
  *
- * LANGUAGE-INDEPENDENT. Meet localises every label to the viewer's UI language
- * (the bot's is BOT_UI_LOCALE), so no lookup depends on an English string. Each
- * lookup walks layers in this order, and getState() / the send log say which hit:
+ * LANGUAGE-INDEPENDENT. Meet localises every label to the viewer's UI language.
+ * The bot's browser is pinned to English, but a signed-in account's own language
+ * can still win, so no lookup depends on an English string. Each lookup walks
+ * layers in this order, and getState() / the send log say which hit:
  *   1. stable attributes — `data-message-id`, `jsname`, `data-panel-id`, `aria-live`;
  *   2. structure — the composer is the text field of the panel that holds the
  *      message list; the send button is the button of the composer's own row;

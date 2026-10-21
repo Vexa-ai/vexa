@@ -22,6 +22,7 @@ import {
   redactUrl,
 } from "./auth-redirect";
 import { TeamsPreJoinBlockedError, teamsDisplayNameDisallowedChars } from "./prejoin-blocked";
+import { checkUiLocale } from "../shared/ui-locale";
 
 // NOTE vs the monolith: the WebRTC remote-audio hook and the voice-agent
 // virtual-camera flow are RECORDING/HOST concerns and stay outside this brick.
@@ -230,6 +231,7 @@ export async function joinMicrosoftTeams(
   // stop here — every step below hunts for pre-join controls that a sign-in page does not have,
   // and each one of them "succeeds" quietly by continuing.
   if (isMicrosoftLoginUrl(page.url())) throw authRedirectError(page.url());
+  await checkUiLocale(page, "teams", "pre-join");
   const requestedHost = meetingOriginHost(meetingUrl);
 
   log("Step 2: Looking for 'Continue on this browser' button...");

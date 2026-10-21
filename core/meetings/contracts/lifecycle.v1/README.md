@@ -53,7 +53,8 @@ expiry — two different owners, two different fixes, one number.
   "reason":      "awaiting_admission_timeout",
                                         // WHAT: awaiting_admission_rejected · awaiting_admission_timeout ·
                                         //   auth_session_missing · never_reached_lobby ·
-                                        //   navigation_failure · stopped_while_joining · unknown
+                                        //   navigation_failure · ui_locale_mismatch ·
+                                        //   stopped_while_joining · unknown
                                         //   (the first three are the SEALED enum's own words: one
                                         //    word per fact, so the axes layer instead of competing)
   "attribution": "host_action",         // WHO:  system_fault · user_action · host_action ·

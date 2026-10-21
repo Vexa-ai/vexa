@@ -9,6 +9,7 @@ import {
   zoomPreviewVideoSelector,
   zoomPermissionDismissSelector,
 } from "./selectors";
+import { checkUiLocale } from '../shared/ui-locale';
 
 // NOTE vs the monolith: the audio-join flow (prepareZoomWebMeeting) and the
 // per-speaker capture pipeline are RECORDING/HOST concerns and stay outside
@@ -159,6 +160,7 @@ export async function joinZoomMeeting(
 
   // Notify the host: joining
   await callJoiningCallback(botConfig);
+  await checkUiLocale(page, "zoom", "pre-join");
 
   // Dismiss the OneTrust cookie-consent banner if present.
   //

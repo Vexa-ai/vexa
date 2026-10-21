@@ -28,9 +28,10 @@ export interface LaunchPersistentOptions {
   args: string[];
   /** Headed by default (Xvfb under VNC); pass true only for headless contexts. */
   headless?: boolean;
-  /** Pinned UI locale (#856) — sets navigator.language / Accept-Language on the
-   *  context. Defaults to BOT_UI_LOCALE (env), else en-US. Keeps the page-level
-   *  locale byte-identical to the --lang launch flag the caller passes in args. */
+  /** UI locale of the context — navigator.language / Accept-Language. Defaults to
+   *  en-US: the meeting bots' browser is pinned to English (@vexa/join's
+   *  shared/ui-locale.ts), byte-identical to the --lang launch flag the caller
+   *  passes in args. */
   locale?: string;
 }
 
@@ -43,7 +44,7 @@ export async function launchPersistentBrowser(
   opts: LaunchPersistentOptions,
 ): Promise<{ context: BrowserContext; page: Page; sandboxed: boolean }> {
   const dataDir = opts.dataDir ?? BROWSER_DATA_DIR;
-  const locale = opts.locale ?? ((process.env.BOT_UI_LOCALE || '').trim() || 'en-US');
+  const locale = opts.locale ?? 'en-US';
   const callerOff = opts.args.includes('--no-sandbox');
   const { result: context, sandboxed } = await launchWithSandbox(opts.args, (sandbox) =>
     chromium.launchPersistentContext(dataDir, {

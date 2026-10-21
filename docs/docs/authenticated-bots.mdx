@@ -44,6 +44,16 @@ installed).
 Use a **dedicated account** for the bot (a Workspace user like `notetaker@your-org.com`), never a
 personal one.
 
+**Set the bot account's language to English** before you provision it. Every bot's browser runs
+in English (`en-US`), and the bot reads the meeting's lobby, waiting room and rejection screens in
+English. A signed-in account's own language preference can override the browser's: in Google
+(Google Account → Personal info → Language), Microsoft (account → Language & region, and Teams'
+own language setting) and Zoom (Profile → Language). On Google Meet the bot also opens the meeting
+with `hl=en`, which wins over the account; Teams and Zoom have no such override. If a meeting page
+still renders in another language, the bot logs `ui_locale_mismatch`, and a join that then fails
+ends `failed` with `join_evidence.reason: ui_locale_mismatch` instead of a timeout or a rejection it
+could not read.
+
 ## 2. Configure the deployment to spawn signed-in
 
 Authenticated mode is a **deployment property**: set it once on `meeting-api` and every stock

@@ -5,7 +5,11 @@
   list. `POST …/chat` with `{"text": "…"}` hands the line to your bot and answers
   `200 {"status": "queued", …}` on Google Meet and Jitsi; it used to answer `405`. Each captured line
   also arrives over `/ws` as a `chat_message` frame. See [Meetings](/api/meetings).
-  The chat reader and sender do not depend on the language of Meet's interface: they find the chat
-  panel, the message list, the message box and the send button by Meet's structure and attributes,
-  not by English labels. `BOT_UI_LOCALE` (Compose and Lite) now reaches spawned bots, so a deployment
-  can run its bots' browser in, for example, `nl-NL` or `de-DE`; see [Configuration](/configuration).
+  The chat reader and sender find the chat panel, the message list, the message box and the send
+  button by Meet's structure and attributes, not by English labels.
+- **The meeting bots' browser runs in English on every platform.** Chrome `--lang`, `Accept-Language`,
+  the page locale and, on Google Meet, `hl=en` are pinned to `en-US`; there is no setting for it. After
+  the meeting page loads the bot checks the language the page rendered in. A page in another language
+  (a signed-in bot account set to another language) is logged as `ui_locale_mismatch`, and a join that
+  then fails ends with `join_evidence.reason: ui_locale_mismatch` rather than a timeout or rejection
+  the bot could not read. Set bot accounts to English; see [Authenticated bots](/authenticated-bots).

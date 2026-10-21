@@ -8,6 +8,7 @@ import {
   jitsiJoinButtonSelector,
   jitsiGuestEntryTexts,
 } from "./selectors";
+import { checkUiLocale } from "../shared/ui-locale";
 
 // NOTE vs the other platforms: Jitsi Meet is SELF-HOSTABLE — meet.jit.si is just
 // the canonical public deployment. The join layer therefore never rewrites the
@@ -148,6 +149,7 @@ export async function joinJitsiMeeting(
 
   // Notify the host: joining
   await callJoiningCallback(botConfig);
+  await checkUiLocale(page, "jitsi", "pre-join");
 
   // Prejoin screen may be disabled per-deployment (config.prejoinConfig.enabled=false)
   // — in that case the app enters the conference (or the lobby) directly and the

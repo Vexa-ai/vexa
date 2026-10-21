@@ -157,6 +157,14 @@ _CLASSIFY_CASES = [
         JoinFailureReason.NAVIGATION_FAILURE,
     ),
     (
+        "a join that failed on a non-English page is ui_locale_mismatch, whatever the lobby said",
+        dict(completion_reason="join_failure", stage="awaiting_admission", reached_lobby=True,
+             time_in_lobby_ms=4_000, lobby_budget_ms=BUDGET_MS,
+             detail="ui_locale_mismatch: the google_meet page rendered in 'de' (via html-lang), not the "
+                    "pinned en-US, so the join layer could not read the lobby or a rejection"),
+        JoinFailureReason.UI_LOCALE_MISMATCH,
+    ),
+    (
         "reaped IN the lobby with no timings at all: the stage is still evidence",
         dict(completion_reason="join_failure", stage="awaiting_admission"),
         JoinFailureReason.AWAITING_ADMISSION_TIMEOUT,
@@ -203,6 +211,7 @@ _ATTRIBUTION_CASES = [
     (JoinFailureReason.AUTH_SESSION_MISSING, JoinFailureAttribution.SYSTEM_FAULT),
     (JoinFailureReason.NEVER_REACHED_LOBBY, JoinFailureAttribution.SYSTEM_FAULT),
     (JoinFailureReason.NAVIGATION_FAILURE, JoinFailureAttribution.SYSTEM_FAULT),
+    (JoinFailureReason.UI_LOCALE_MISMATCH, JoinFailureAttribution.SYSTEM_FAULT),
     (JoinFailureReason.STOPPED_WHILE_JOINING, JoinFailureAttribution.USER_ACTION),
     (JoinFailureReason.UNKNOWN, JoinFailureAttribution.UNKNOWN),
 ]
@@ -600,6 +609,20 @@ _FIXTURES = [
         {"status": "failed", "exit_code": 1, "completion_reason": "join_failure",
          "reason": "page.goto: net::ERR_NAME_NOT_RESOLVED at https://meet.google.com/abc"},
         ("navigation_failure", "system_fault"),
+    ),
+    (
+        "meet-page-not-in-english",
+        ["joining", "awaiting_admission"],
+        {"status": "failed", "exit_code": 1, "completion_reason": "join_failure",
+         "reason": "ui_locale_mismatch: the google_meet page rendered in 'de' (via html-lang), not the "
+                   "pinned en-US, so the join layer could not read the lobby or a rejection; its reading "
+                   "was: the join ended without admission (awaiting_admission)",
+         "join_evidence": {
+             "reason": "ui_locale_mismatch", "attribution": "system_fault", "source": "bot",
+             "stage": "awaiting_admission",
+             "detail": "ui_locale_mismatch: the google_meet page rendered in 'de' (via html-lang)",
+             "timings": {"time_to_lobby_ms": 9_000, "time_in_lobby_ms": 30_000, "total_ms": 39_000}}},
+        ("ui_locale_mismatch", "system_fault"),
     ),
     (
         "user-stopped-in-the-lobby",

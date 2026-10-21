@@ -13,7 +13,7 @@ import {
 } from "./selectors";
 import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 import { AdmissionError } from "../shared/admission";
-import { resolveBotUiLocale } from "../browser-args";
+import { PINNED_UI_LOCALE, checkUiLocale } from "../shared/ui-locale";
 
 /** Thrown when authenticated mode detects a signed-out browser profile. Extends AdmissionError so
  *  the JoinDriver's single `instanceof` catch maps the typed `auth_session_missing` outcome to a
@@ -291,8 +291,8 @@ export async function waitForLobbyCta(
 }
 
 /**
- * Append `?hl=<lang>` to the Meet URL so the lobby renders in the pinned UI
- * language (#856). This is the lever that matters specifically on the
+ * Append `?hl=<lang>` to the Meet URL so the lobby renders in the pinned English
+ * UI (#856). This is the lever that matters specifically on the
  * BOT_AUTHENTICATED path: a signed-in Google account's own language preference
  * otherwise wins over the browser's --lang/context locale. `hl` takes the bare
  * language subtag (en-US → en). An existing `hl` on the caller's URL is
@@ -316,7 +316,7 @@ export async function joinGoogleMeeting(
   botName: string,
   botConfig: BotConfig
 ): Promise<void> {
-  const navUrl = withPinnedMeetLocale(meetingUrl, resolveBotUiLocale());
+  const navUrl = withPinnedMeetLocale(meetingUrl, PINNED_UI_LOCALE);
   await page.goto(navUrl, { waitUntil: "domcontentloaded" });
   await page.bringToFront();
 
@@ -332,10 +332,10 @@ export async function joinGoogleMeeting(
   // Brief wait for page elements to settle (networkidle already ensures page loaded)
   await page.waitForTimeout(1000);
 
-  // Record the resolved UI locale on the SUCCESS path too (#856): the locale used
-  // to be invisible until a failure. observedPageContext reads navigator.language
-  // and <html lang> — with the pin in place these should read en-US / en.
+  // The lobby must render in the pinned English; a page that does not (a signed-in
+  // account's own language) is reported as ui_locale_mismatch (shared/ui-locale.ts).
   log(`Lobby locale (#856): ${await observedPageContext(page)}`);
+  await checkUiLocale(page, "google_meet", "lobby");
 
   // --- Humanized input layer (defeats Google Meet input-authenticity detection) ---
   const uiMode = resolveUiInteractionMode(botConfig);

@@ -99,6 +99,9 @@ class JoinFailureReason(str, Enum):
     * :attr:`NAVIGATION_FAILURE` — the bot never got as far as the meeting page: a navigation error,
       a redirect off the meeting origin (the Teams sign-in redirect), a closed target, an
       unsupported platform. Owner: infra / URL construction.
+    * :attr:`UI_LOCALE_MISMATCH` — the meeting page rendered in a language other than the bot's
+      pinned English (a signed-in bot account's own language setting), so the join layer could not
+      read the lobby or a rejection. Owner: us — the bot account must be set to English.
     * :attr:`STOPPED_WHILE_JOINING` — the USER ended the run while the bot was still knocking (the
       orchestrator's withdraw branch; the sealed ``lifecycle.v1`` reason is ``stopped``, and this
       value is deliberately NOT the sealed ``api.v1`` ``stopped_before_admission``). It lands with status
@@ -113,6 +116,7 @@ class JoinFailureReason(str, Enum):
     AUTH_SESSION_MISSING = "auth_session_missing"
     NEVER_REACHED_LOBBY = "never_reached_lobby"
     NAVIGATION_FAILURE = "navigation_failure"
+    UI_LOCALE_MISMATCH = "ui_locale_mismatch"
     STOPPED_WHILE_JOINING = "stopped_while_joining"
     UNKNOWN = "unknown"
 
@@ -196,6 +200,7 @@ _ATTRIBUTION_BY_REASON: Dict[JoinFailureReason, JoinFailureAttribution] = {
     JoinFailureReason.AUTH_SESSION_MISSING: JoinFailureAttribution.SYSTEM_FAULT,
     JoinFailureReason.NEVER_REACHED_LOBBY: JoinFailureAttribution.SYSTEM_FAULT,
     JoinFailureReason.NAVIGATION_FAILURE: JoinFailureAttribution.SYSTEM_FAULT,
+    JoinFailureReason.UI_LOCALE_MISMATCH: JoinFailureAttribution.SYSTEM_FAULT,
     # The user ended it. Not a failure; excluded from the gate metric's denominator.
     JoinFailureReason.STOPPED_WHILE_JOINING: JoinFailureAttribution.USER_ACTION,
     JoinFailureReason.UNKNOWN: JoinFailureAttribution.UNKNOWN,
@@ -248,6 +253,9 @@ _NAVIGATION_MARKERS = (
     # meeting. It never got as far as the page, which is what this reason means.
     "control_plane_unreachable",
 )
+
+#: The reason code the bot's join layer stamps on a join that ended on a non-English page.
+_UI_LOCALE_MISMATCH_MARKER = "ui_locale_mismatch"
 
 #: Meeting statuses that mean the bot had NOT yet reported reaching the waiting room. Mirrors the
 #: pre-active set in ``reconcile.py``; duplicated as strings here so this module stays importable
@@ -321,6 +329,8 @@ def classify_join_failure(
         detail_text = _clean_detail(detail)
         if _looks_like_navigation_failure(detail_text):
             return JoinFailureReason.NAVIGATION_FAILURE
+        if detail_text and _UI_LOCALE_MISMATCH_MARKER in detail_text.lower():
+            return JoinFailureReason.UI_LOCALE_MISMATCH
 
         in_lobby = bool(reached_lobby) or stage == "awaiting_admission"
         if in_lobby:
