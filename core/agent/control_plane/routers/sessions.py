@@ -46,6 +46,10 @@ class ParticipantBody(BaseModel):
                     "yes. Nobody but the owner chooses; anyone else adding a person starts a new empty "
                     "chat")
     title: Optional[str] = Field(default=None, max_length=200, description="the shared chat's title")
+    pressed: Optional[str] = Field(
+        default=None, max_length=128, pattern=r"^[^\s\]]{1,128}$",
+        description="the `#<pending>` of the person's pressed answer to the card that offered this add "
+                    "(`[answer <card> #<pending>] …`). An agent adds a person only on that press")
 
 
 def build(**d) -> APIRouter:
@@ -72,6 +76,32 @@ def build(**d) -> APIRouter:
         if wsr is None:
             return []
         return people_directory.mentionable(wsr.root, subject, _index_list)
+
+    def _press_for(request: Request, row: dict, subject: str, body, principal: str, *, fresh: bool) -> None:
+        """AN AGENT ADDS A PERSON ONLY ON THE PERSON'S PRESS (D13, 7g). A delegated caller names the
+        press (``pressed``); it must be the speaker's own answered card in THIS chat, naming the person
+        added, pressed on its primary button — or its secondary when the add starts a fresh chat or
+        room (``fresh``) — and it is spent here, so one press is one add. The person's own app adds
+        without one: the press is theirs to make."""
+        if not is_delegated(request):
+            return
+        from control_plane.routers import asks  # noqa: PLC0415
+        s = _store()
+        card = asks.pressed_card(s, body.pressed or "", subject=str(subject), session_id=row["id"])
+        names = {principal, (body.email or "").strip().lower(), body.subject or ""}
+        for p in _mentionable(subject) if card is not None else []:
+            if p.get("subject") == principal:
+                names |= {str(p.get("name") or ""), str(p.get("email") or "")}
+        choice = asks.pressed_choice(card) if card is not None else ""
+        if (card is None or not asks.press_names(card, names)
+                or not (choice == "primary" or (choice == "secondary" and fresh))
+                or not s.spend(body.pressed, str(subject))):
+            raise HTTPException(status_code=403, detail={
+                "refused": "press_required",
+                "instruction": "Adding a person needs the person's press: offer a ```ask card naming who "
+                               "to add, and call this with `pressed` set to the #<pending> of their "
+                               "pressed answer. A typed line, another card, or a press already used "
+                               "adds no one."})
 
     def _mentionable_view(subject: str) -> list[dict]:
         """THE PICKER'S ANSWER (security review M1, deny test 16, 0.13.4 S4): an undiscoverable member
@@ -240,6 +270,8 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=409, detail={
                 "refused": "room_of_two", "said": "A room of two has exactly two people. Start a room in a "
                                                   "workspace to talk with more."})
+        _press_for(request, row, subject, body, principal,
+                   fresh=bool(room.get("_new")) and body.history == "none")
         if room.get("_new"):
             if body.history == "none":
                 fresh = s.create(subject, name=None, title=row.get("title") or "Room")
@@ -320,6 +352,7 @@ def build(**d) -> APIRouter:
             return _view(row, subject)
         if principal == subject:
             raise HTTPException(status_code=403, detail="owner_role_fixed")
+        _press_for(request, row, subject, body, principal, fresh=fork)
         target = row
         if fork:
             target = session_fork.fork(s, row, subject, title=(body.title or "").strip(),

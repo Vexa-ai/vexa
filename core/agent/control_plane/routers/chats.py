@@ -62,6 +62,13 @@ from shared.runtime_fault import RuntimeFault
 #: Vexa-ai/vexa#1597).
 _MEET_SESSION_PREFIX = "meet-"
 
+#: Told to a turn other people read when the meeting it is about stays out of it (`_MeetingFold`).
+#: Part of the shared transcript, so it never names the meeting.
+MEETING_WITHHELD_LINE = ("[The meeting this message is about is not readable by everyone in this "
+                         "conversation, so its transcript is not in this turn. If the question needs "
+                         "it, say you can't use it here and offer to answer in the speaker's private "
+                         "chat.]\n")
+
 
 class ChatNameBody(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -700,6 +707,41 @@ def build(**d) -> APIRouter:
                                      focused, subject, session)
             yield item
 
+    class _MeetingFold:
+        """THE MEETING A TURN FOLDS IS ONE EVERY READER OF THE TURN MAY READ (ADR-0048 decision 4).
+        In a chat only the speaker reads, the speaker's own access decides. In a turn other people
+        read — a shared chat, a room, a routine's run there — a meeting folds only when each of them
+        passes the same access decision too, or when it is this chat's own call; otherwise nothing
+        of it is folded and the turn is told so (``withheld``)."""
+
+        def __init__(self, subject: str, plan) -> None:
+            self.subject = subject
+            self.plan = plan if plan is not None and plan.scope is not None else None
+            self.withheld = False
+
+        def _own_call(self, meeting_id: str) -> bool:
+            try:
+                call = session_store.active_call(self.plan.row["id"]) if session_store is not None else None
+            except Exception:  # noqa: BLE001 — a store that cannot answer names no call of this chat
+                return False
+            return bool(call) and str(call.get("meeting_id")) == str(meeting_id)
+
+        def access(self, meeting_id: str) -> "dict | None":
+            row = _meeting_access(self.subject, meeting_id)
+            if row is None or self.plan is None or self._own_call(meeting_id):
+                return row
+            for other in self.plan.humans:
+                if other == self.subject:
+                    continue
+                try:
+                    readable = _meeting_access(other, meeting_id) is not None
+                except Exception:  # noqa: BLE001 — an access check that cannot answer refuses
+                    readable = False
+                if not readable:
+                    self.withheld = True
+                    return None
+            return row
+
     def _with_call_focus(body: ChatBody, subject: str, session: str) -> ChatBody:
         """The body with the session's live call — or the meeting this chat started (a bot it sent,
         founder 2026-10-13) — as its meeting focus, when it names no focus of its own."""
@@ -1303,10 +1345,11 @@ def build(**d) -> APIRouter:
         subject = subject_of(request)  # server-derived (P20); body.subject is ignored
         # A MEETING STARTED FROM A CHAT IS THAT CHAT (founder, 2026-10-13): `meet-<row>` lands there.
         session = sess.chat_for(subject, body.session or units.DEFAULT_CHAT_SESSION)
-        if body.prompt and "[answer" in body.prompt:
+        from control_plane.routers.asks import bind_answer_marks, carries_answer_mark  # noqa: PLC0415
+        if body.prompt and carries_answer_mark(body.prompt):
             # A CARD ANSWER IS A RECORD, NOT A STRING (D13, 7g): a `#<pending>` mark the server cannot
-            # match to this speaker's own press on this chat's card reaches the turn as typed.
-            from control_plane.routers.asks import bind_answer_marks  # noqa: PLC0415
+            # match to this speaker's own press on this chat's card reaches the turn as typed — in
+            # whatever case, spacing or width it was typed.
             try:
                 _arow = session_store.get(session) or session_store.by_name(subject, session) if session_store else None
             except Exception:  # noqa: BLE001 — no chat row: nothing to vouch against
@@ -1559,13 +1602,16 @@ def build(**d) -> APIRouter:
         # transcript. When the client names no meeting, the session's live call is the focus; the
         # access check below still decides, so a participant who has not joined grounds nothing.
         body = _with_call_focus(body, subject, session)
+        _fold = _MeetingFold(subject, _plan)
         ctx, tools, prompt = _context_grounding(
             body, session, redis_url,
             schedule_rows=lambda: _schedule_source(subject),
             workspace_mounts=lambda: (active_workspaces(wsr.root, subject)
                                       + shared_active_mounts(wsr.root, subject, mindex.list(subject))),
-            meeting_access=lambda meeting_id: _meeting_access(subject, meeting_id),
+            meeting_access=_fold.access,
         )
+        if _fold.withheld:
+            prompt = MEETING_WITHHELD_LINE + prompt
         # THE CHAT'S MOUNT GENERATION rides the dispatch (Vexa-ai/vexa#1603). An agent-api routing
         # hint, exactly like `context.session` beside it: `dispatch_id` reads it off the in-memory
         # dispatch and `_without_chat_session` strips it before the sealed unit.v1 check. It is what

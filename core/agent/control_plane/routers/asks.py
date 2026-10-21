@@ -18,6 +18,11 @@ the person all read the same. Now:
   It is decided ONCE: a replay is a 409. The answer is returned as the message the person's chat
   sends (``[answer <id> #<pending id>] …``), so the agent can see it was a bound press.
 
+The turn reads a mark the way a reader would — any case, spacing or width — and every one the
+server cannot vouch for reaches it in its typed form (``bind_answer_marks``). The act a card asks for
+is done only on the press itself, never on its text: ``pressed_card`` reads the record behind a
+``#<pending>``, and the session store spends it once (``SessionStore.spend``).
+
 The nonce is stored only as its sha256; the item is the session store's proposal row, so its one
 writer is agent-api and its decision is single-use by the store's own ``already_decided`` rule.
 """
@@ -27,6 +32,7 @@ import hashlib
 import hmac
 import json
 import re
+import unicodedata
 import secrets
 from typing import Optional
 
@@ -41,8 +47,9 @@ _FENCE = re.compile(r"```ask[ \t]*\r?\n(.*?)```", re.S)
 _ID = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
 _SESSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 LABEL_MAX = 80
-#: An answer line as the turn reads it: `[answer <card id> #<pending item>] …`.
-_ANSWER_MARK = re.compile(r"\[answer\s+([A-Za-z0-9._:-]{1,80})\s+#([^\]\s]{1,128})\]")
+#: An answer line as the turn reads it: `[answer <card id> #<pending item>] …`, matched on the
+#: folded text (`_folded`) in any case and spacing, so every spelling a reader takes for a mark is one.
+_ANSWER_MARK = re.compile(r"\[\s*answer\s+([A-Za-z0-9._:-]{1,80})\s*#\s*([^\]\s]{1,128})\s*\]", re.I)
 TEXT_MAX = 4000
 
 
@@ -101,29 +108,100 @@ def offered(spec: dict) -> set[str]:
     return out
 
 
+def _folded(text: str) -> "tuple[str, list[int]]":
+    """``text`` as a reader takes it — each character NFKC-folded (fullwidth brackets and signs are
+    their ASCII selves), invisible format characters dropped — with, for every folded character, the
+    index of the character of ``text`` it came from."""
+    chars: list[str] = []
+    where: list[int] = []
+    for i, ch in enumerate(text):
+        if unicodedata.category(ch) == "Cf":
+            continue
+        for f in unicodedata.normalize("NFKC", ch):
+            chars.append(f)
+            where.append(i)
+    return "".join(chars), where
+
+
+def carries_answer_mark(text: str) -> bool:
+    """Does ``text`` hold anything a reader takes for a card answer with its `#<pending>` part?"""
+    return bool(text) and _ANSWER_MARK.search(_folded(text)[0]) is not None
+
+
+def _vouched(store, subject: str, session_id: Optional[str], ask_id: str, pending: str) -> bool:
+    try:
+        p = store.proposal(pending) if store is not None else None
+        item = json.loads(p["body"]) if p else {}
+    except Exception:  # noqa: BLE001 — an unreadable record vouches for nothing
+        p, item = None, {}
+    return (p is not None and p.get("kind") == "ask" and p.get("status") == "accepted"
+            and str(p.get("owner")) == str(subject) and item.get("ask_id") == ask_id
+            and session_id is not None and str(p.get("session_id")) == str(session_id))
+
+
 def bind_answer_marks(store, subject: str, session_id: Optional[str], text: str) -> str:
     """``text`` with every `[answer <id> #<pending>]` mark that the server cannot vouch for reduced to
     its unbound form `[answer <id>]`, which the agent treats as typed (confirm first).
 
     A mark is vouched for only when the pending item exists, is an answered card of THIS chat, was
-    answered by THIS speaker, and is the card the mark names. The text of a message is anyone's to
-    type; the pending item is the server's record of a press."""
-    if not text or "[answer" not in text:
+    answered by THIS speaker, and is the card the mark names; a vouched mark reaches the turn in the
+    one form the server writes. The text of a message is anyone's to type; the pending item is the
+    server's record of a press."""
+    if not text:
         return text
-
-    def one(m: "re.Match[str]") -> str:
+    folded, where = _folded(text)
+    out, end = [], len(text)
+    for m in reversed(list(_ANSWER_MARK.finditer(folded))):
         ask_id, pending = m.group(1), m.group(2)
-        try:
-            p = store.proposal(pending) if store is not None else None
-            item = json.loads(p["body"]) if p else {}
-        except Exception:  # noqa: BLE001 — an unreadable record vouches for nothing
-            p, item = None, {}
-        ok = (p is not None and p.get("kind") == "ask" and p.get("status") == "accepted"
-              and str(p.get("owner")) == str(subject) and item.get("ask_id") == ask_id
-              and session_id is not None and str(p.get("session_id")) == str(session_id))
-        return m.group(0) if ok else f"[answer {ask_id}]"
+        lo, hi = where[m.start()], where[m.end() - 1] + 1
+        mark = (f"[answer {ask_id} #{pending}]" if _vouched(store, subject, session_id, ask_id, pending)
+                else f"[answer {ask_id}]")
+        out.append(text[hi:end])
+        out.append(mark)
+        end = lo
+    out.append(text[:end])
+    return "".join(reversed(out))
 
-    return _ANSWER_MARK.sub(one, text)
+
+def pressed_card(store, pending_id: str, *, subject: str, session_id: str) -> Optional[dict]:
+    """The card behind a press, when ``pending_id`` is THIS speaker's answered, unspent card of THIS
+    chat and the card the transcript holds is still the one they answered: ``{"spec", "label"}``,
+    ``label`` the offered choice they pressed ("" for an answer in their own words). Else None."""
+    try:
+        p = store.proposal(pending_id) if store is not None and pending_id else None
+        item = json.loads(p["body"]) if p else {}
+        if not (p is not None and p.get("kind") == "ask" and p.get("status") == "accepted"
+                and str(p.get("owner")) == str(subject) and str(p.get("session_id")) == str(session_id)):
+            return None
+        spec = find_ask(_turns_of(store.load_bundle(session_id).get("files") or {}), item.get("ask_id") or "")
+    except Exception:  # noqa: BLE001 — a record or transcript that cannot be read vouches for nothing
+        return None
+    if spec is None or not hmac.compare_digest(canonical_hash(spec), str(item.get("content_hash") or "")):
+        return None
+    return {"spec": spec, "label": str(item.get("label") or "")}
+
+
+def _label_of(item) -> str:
+    if isinstance(item, dict):
+        return str(item.get("label") or "").strip()[:LABEL_MAX]
+    return str(item or "").strip()[:LABEL_MAX]
+
+
+def press_names(card: dict, names) -> bool:
+    """Does the card the person pressed name one of ``names`` (an address, an account id, a name)?"""
+    face = json.dumps(card["spec"], ensure_ascii=False).casefold()
+    return any(n and len(n) >= 3 and n.casefold() in face for n in names)
+
+
+def pressed_choice(card: dict) -> str:
+    """Which of the card's buttons the press was: ``primary``, ``secondary``, or "" (a chip, or an
+    answer in the person's own words)."""
+    label = card["label"]
+    if label and label == _label_of(card["spec"].get("primary")):
+        return "primary"
+    if label and label == _label_of(card["spec"].get("secondary")):
+        return "secondary"
+    return ""
 
 
 def build(**d) -> APIRouter:
@@ -192,7 +270,7 @@ def build(**d) -> APIRouter:
         spec = _card(row, body.ask_id)
         digest = canonical_hash(spec)
         items = _items(row, subject, body.ask_id)
-        done = next((p for p in items if p["status"] == "accepted" and p["_body"].get("content_hash") == digest), None)
+        done = next((p for p in items if p["status"] in ("accepted", "spent") and p["_body"].get("content_hash") == digest), None)
         if done is not None:
             return {"pending_id": done["id"], "status": "answered", "spec": spec, "content_hash": digest,
                     "answer": done["_body"].get("answer")}
@@ -241,7 +319,8 @@ def build(**d) -> APIRouter:
         said = (body.reply.reply or label) if body.reply else ""
         answer = " — ".join(x for x in (said, text) if x)
         try:
-            s.decide(pending_id, subject, accept=True, body=json.dumps({**item, "answer": answer}))
+            s.decide(pending_id, subject, accept=True,
+                     body=json.dumps({**item, "answer": answer, "label": label}))
         except Exception as exc:  # noqa: BLE001 — a second decision races here: the store refuses it
             raise HTTPException(status_code=409, detail="already_answered") from exc
         return {"status": "answered", "pending_id": pending_id,

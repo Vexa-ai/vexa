@@ -2098,6 +2098,20 @@
             "description": "the OWNER's choice when a private chat becomes shared: `all` (the default) shares this chat in place, history included; `from:<turn>` starts a new shared chat carrying the visible text from that turn (its index in the history) on; `none` starts a new empty one. Before sharing a chat with history, say in one line what in it is sensitive (figures, mail, internal documents) and proceed on the owner's yes. Nobody but the owner chooses; anyone else adding a person starts a new empty chat",
             "title": "History"
           },
+          "pressed": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "pattern": "^[^\\s\\]]{1,128}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the `#<pending>` of the person's pressed answer to the card that offered this add (`[answer <card> #<pending>] \u2026`). An agent adds a person only on that press",
+            "title": "Pressed"
+          },
           "role": {
             "default": "member",
             "enum": [

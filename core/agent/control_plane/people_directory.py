@@ -96,12 +96,14 @@ def mention_block(people: list[dict], mentioned: Iterable[str], *, in_chat: Iter
     if not rows:
         return ""
     return ("## People this message mentions\n\n" + "\n".join(rows) + "\n"
-            "If the message asks you to share this chat or a workspace with them, do it with "
-            "`chat_participant_add` (subject = the account id; skip it for anyone already in this chat) "
-            "or `workspace_member_add` (person = the account id), then say in one line what you did. "
-            "\"Share this chat\" shares it with its history: before the add, say in one line what in "
-            "this chat's history is sensitive (figures, mail, internal documents) and proceed on the "
-            "owner's yes; `history: none` starts a new chat with them instead, `from:<turn>` one with "
+            "If the message asks you to share this chat with them, offer a ```ask card that names "
+            "them (primary \"Add <name>\") and, on its press, call `chat_participant_add` (subject = "
+            "the account id, pressed = the `#<pending>` of the pressed answer; skip it for anyone "
+            "already in this chat); to share a workspace, `workspace_member_add` (person = the account "
+            "id). Then say in one line what you did. "
+            "\"Share this chat\" shares it with its history: on the card, say in one line what in "
+            "this chat's history is sensitive (figures, mail, internal documents); the owner's yes is "
+            "their press. `history: none` starts a new chat with them instead, `from:<turn>` one with "
             "what was said from that turn on. "
             "Grant a workspace only when the message asks for it. Never look a person up by name.\n\n")
 

@@ -1121,7 +1121,8 @@ class SessionStore:
     #: applies it on approval. Nothing changes before that.
     #: ``ask`` (PRD 0.13.4 S5, 7g): an inline card's PENDING ITEM — the person who answers it is its
     #: owner; the body binds the card id, the content hash of the card the agent wrote and the sha256
-    #: of a server nonce (``routers/asks.py``). Decided once, by the person's press.
+    #: of a server nonce (``routers/asks.py``). Decided once, by the person's press; ``spent`` once the
+    #: act it authorises has been done (``spend``).
     PROPOSAL_KINDS = ("page", "entity", "commitment", "note", "policy", "ask")
     PROPOSAL_BODY_MAX = 200_000
     _PROP_COLS = ("id, session_id, meeting_id, owner, kind, workspace, path, title, body, status, "
@@ -1195,6 +1196,14 @@ class SessionStore:
                     "body = COALESCE(?, body) WHERE id = ? AND status = 'open'",
                     ("accepted" if accept else "rejected", actor, time.time(), body, proposal_id))
         return self.proposal(proposal_id)
+
+    def spend(self, proposal_id: str, actor: str) -> bool:
+        """An accepted proposal acted on, once: True for the one caller that moves it from accepted to
+        ``spent``, False for every other (not the owner's, not accepted, already spent)."""
+        with self._tx():
+            cur = self._x("UPDATE agent_session_proposal SET status = 'spent' "
+                          "WHERE id = ? AND owner = ? AND status = 'accepted'", (proposal_id, actor))
+            return getattr(cur, "rowcount", 0) == 1
 
     # ── transcripts (ADR-0048 decisions 2 and 3) ─────────────────────────────────────────────
     def head(self, session_id: str) -> int:

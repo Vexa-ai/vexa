@@ -76,7 +76,9 @@ point, or start a new chat with her?* Your answer decides:
 
 The agent also has `chat_participants`, `chat_participant_add` and `chat_participant_remove`. Every
 add and remove needs you present (a scheduled run cannot do it) and follows the same rules as the
-message box. Sharing a chat never gives anyone a workspace.
+message box. The agent adds a person only on your press of the card that names them, and one press
+adds once: a typed "yes", or a line that looks like a pressed answer, adds no one. Sharing a chat
+never gives anyone a workspace.
 
 ### Share a routine's chat
 
@@ -120,7 +122,9 @@ it and choose **Share and send**.
   shows their question and the answer.
 - The agent in a shared chat may read the transcript of a meeting that was sent into a workspace
   every person in the chat reads, and may send a bot into a meeting bound to such a workspace. A
-  meeting kept private stays out.
+  meeting kept private stays out: when you ask about a meeting that someone else in the chat may not
+  read, its transcript is not brought into the turn, and the agent says so. The chat's own call is
+  the chat's.
 
 ### What the agent may use in a shared chat
 

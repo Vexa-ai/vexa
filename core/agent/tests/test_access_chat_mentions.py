@@ -317,7 +317,8 @@ def test_a_background_worker_is_refused_the_workspace_add(env):
 def test_one_sentence_makes_both_shares_with_the_mentioned_account(env):
     """The person types "share acme with @joe and share this chat with him" with Joe picked from
     the composer. The turn tells the agent Joe's account id; a fake agent that does what the prompt
-    says calls the two tools as a worker with the person in the loop; both shares land on Joe."""
+    says calls the two tools as a worker with the person in the loop — the chat share on the person's
+    press of the card naming Joe; both shares land on Joe."""
     client, store, root, _idx, seen = env
     store.create(ALICE, name="pchat")
     sentence = "share acme with @joe and share this chat with him"
@@ -330,11 +331,24 @@ def test_one_sentence_makes_both_shares_with_the_mentioned_account(env):
     w = _worker(ALICE, workspaces="acme")
     a = client.post("/api/workspace/members/add",
                     json={"workspace": "acme", "person": JOE, "role": "write"}, headers=w)
-    # the agent has said in one line what in the history is sensitive; the person said yes
-    b = client.post("/api/sessions/pchat/participants", json={"subject": JOE}, headers=w)
+    # the chat share is a card naming Joe (what in the history is sensitive, in one line); the
+    # person's press is what the agent acts on — the typed sentence alone adds no one
+    assert client.post("/api/sessions/pchat/participants", json={"subject": JOE},
+                       headers=w).status_code == 403
+    chat = store.by_name(ALICE, "pchat")["id"]
+    card = {"id": "share-joe", "question": f"Share this chat, history included, with {MAIL[JOE]}?",
+            "primary": {"label": "Share"}, "secondary": {"label": "Not now"}}
+    store.save_bundle(chat, store.head(chat), {".claude/sessions/conversation.turns.jsonl": json.dumps(
+        {"user_text": sentence, "ts": 1.0, "reply": "```ask\n" + json.dumps(card) + "\n```\n"}).encode()})
+    app = _h(ALICE, **{"x-user-credential-class": "session"})          # the press is the person's, in the app
+    item = client.post("/api/asks/open", json={"session": chat, "ask_id": "share-joe"}, headers=app).json()
+    pressed = client.post(f"/api/asks/{item['pending_id']}/answer", headers=app, json={
+        "nonce": item["nonce"], "content_hash": item["content_hash"], "reply": {"label": "Share"}})
+    assert pressed.status_code == 200, pressed.text
+    b = client.post("/api/sessions/pchat/participants", json={"subject": JOE, "pressed": item["pending_id"]},
+                    headers=w)
     assert a.status_code == 200 and b.status_code == 200, (a.text, b.text)
     assert m.is_member(root, "acme", JOE) == "contributor"
-    chat = store.by_name(ALICE, "pchat")["id"]
     assert b.json()["session_id"] == chat                         # shared in place, history and all
     assert [p["principal"] for p in store.participants(chat)] == [ALICE, JOE]
 
