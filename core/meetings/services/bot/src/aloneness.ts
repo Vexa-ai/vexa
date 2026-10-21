@@ -23,6 +23,11 @@ export const REMOTE_AUDIO_ENERGY_FLOOR = 0;
  *  treated as UNKNOWN and aloneness behaves exactly as it did before the deaf guard existed — a
  *  page whose rescan loop died must not be able to hold a bot open on a stale "streams connected". */
 export const DEFAULT_STREAM_PRESENCE_STALENESS_MS = 30_000;
+/** How long a capture-liveness heartbeat stays proof that the capture chain is running. Every
+ *  capture producer reports liveness about once a second from its audio callback, whatever the
+ *  frame's energy (#1673), so ten seconds without one means the callback has stopped — a dead
+ *  AudioContext, a dropped processor, a broken page bridge — not a quiet room. */
+export const DEFAULT_CAPTURE_LIVENESS_STALENESS_MS = 10_000;
 /** How often a persisting capture-fault re-states itself in the log (it is a live incident, not a
  *  one-shot event: a bot that has been deaf for 40 minutes should say so more than once). */
 export const CAPTURE_FAULT_LOG_INTERVAL_MS = 60_000;
@@ -50,11 +55,19 @@ export const MAX_CAPTURE_FAULT_MAX_MS = 15 * 60 * 1000;
 export interface RemoteAudioActivitySnapshot {
   available: boolean;
   lastRemoteAudioAt?: number;
-  /** Last DELIVERED remote frame, whatever its energy — the capture chain's liveness, as opposed to
-   *  `lastRemoteAudioAt` which is presence. A zero-energy frame moves this and not that. */
+  /** Last DELIVERED remote frame, whatever its energy. Producers gate silence before a frame
+   *  crosses (a silent frame is not worth transcribing), so in a quiet room this stops moving while
+   *  capture is perfectly healthy — it is evidence of liveness when present, never of deafness when
+   *  absent. `lastCaptureAliveAt` is the signal that does not depend on anyone speaking. */
   lastRemoteFrameAt?: number;
-  /** Delivered remote frames since capture became ready (0 with a live stream => deaf, not silent). */
+  /** Delivered remote frames since capture became ready. */
   framesDelivered?: number;
+  /** Last capture-liveness heartbeat: the producer's audio callback ran, whatever the energy of what
+   *  it processed (#1673). This — not frame arrival — is what separates a silent room from a deaf
+   *  capture. `undefined` means the producer never reported one since capture became ready. */
+  lastCaptureAliveAt?: number;
+  /** Samples the producer reports having processed, silent ones included (diagnostic). */
+  samplesProcessed?: number;
   /** Remote streams the page reported as CURRENTLY connected and carrying data. `undefined` means
    *  the lane never reports presence (gmeet captures per channel and has no mix): unknown, not zero. */
   streamsConnected?: number;
@@ -75,6 +88,11 @@ export interface RemoteAudioActivityTap extends RemoteAudioActivitySource {
   ready(): void;
   /** Record one REMOTE frame's RMS energy. Local bot speech never enters this seam. */
   observeRemoteEnergy(energy: number): void;
+  /** Producer heartbeat: the capture callback is running and has processed `processedSamples`
+   *  samples so far, silent ones included (#1673). OPTIONAL for the same reason as
+   *  `observeStreamPresence`: a tap that does not implement it keeps compiling, and without
+   *  heartbeats the guard falls back to frame arrival. */
+  observeCaptureLiveness?(processedSamples: number): void;
   /** Capture stopped or failed; aloneness must fail closed until it is ready again. */
   unavailable(): void;
   /** Page-side report: how many remote streams are connected to the mix RIGHT NOW and carrying
@@ -112,13 +130,15 @@ export function createRemoteAudioActivityTap(options: {
     ready(): void {
       // Frame bookkeeping restarts with capture; the page's stream reports do NOT — they are a fact
       // about the ROOM, not about our capture chain, and survive a capture restart.
-      state = { ...state, available: true, lastRemoteAudioAt: now(), lastRemoteFrameAt: undefined, framesDelivered: 0 };
+      state = {
+        ...state, available: true, lastRemoteAudioAt: now(),
+        lastRemoteFrameAt: undefined, framesDelivered: 0, lastCaptureAliveAt: undefined, samplesProcessed: undefined,
+      };
     },
     observeRemoteEnergy(energy: number): void {
       if (!state.available || !Number.isFinite(energy)) return;
-      // ARRIVAL is capture liveness — recorded for every delivered frame, including a digitally
-      // silent one. That is the whole deaf/silent distinction (#1192): a capture chain that has
-      // broken delivers nothing at all, while a quiet room still delivers frames.
+      // A delivered frame proves the capture chain ran; the converse does not hold, because the
+      // producer gated silence out before the frame crossed. The heartbeat carries the converse.
       state = { ...state, lastRemoteFrameAt: now(), framesDelivered: (state.framesDelivered ?? 0) + 1 };
       // Digital silence (or a nonsense reading) is not presence; every other delivered frame is.
       if (energy <= 0 || energy < energyFloor) return;
@@ -134,6 +154,10 @@ export function createRemoteAudioActivityTap(options: {
         streamsObservedAt: state.streamsObservedAt,
         streamsPresentAt: state.streamsPresentAt,
       };
+    },
+    observeCaptureLiveness(processedSamples: number): void {
+      if (!state.available || !Number.isFinite(processedSamples) || processedSamples < 0) return;
+      state = { ...state, lastCaptureAliveAt: now(), samplesProcessed: processedSamples };
     },
     observeStreamPresence(count: number): void {
       if (!Number.isFinite(count) || count < 0) return;
@@ -183,7 +207,7 @@ export const silenceAlonenessAdapter: AlonenessAdapter = {
  *   |------------------|------------------|-----------------|----------------------|----------------|
  *   | no               | —                | —               | not hearing yet      | fail closed    |
  *   | yes              | 0                | none            | empty room (#866)    | -> `left_alone` |
- *   | yes              | >=1              | yes             | someone there        | silence window |
+ *   | yes              | >=1              | yes             | capture alive        | silence window |
  *   | yes              | >=1              | none for a window| deaf bot (#1192)    | HOLD + report  |
  *   | yes              | unknown (gmeet)  | —               | no presence oracle   | silence window |
  *
@@ -194,15 +218,24 @@ export const silenceAlonenessAdapter: AlonenessAdapter = {
  * leave. Composed with the silence adapter (the shipped default) that reads correctly; alone in an
  * `adapters` list it would abstain from everything, which is not a configuration worth having.
  *
+ * "Frames arriving" means the CAPTURE CALLBACK IS RUNNING, not that someone is audible. Producers
+ * gate silence before a frame crosses (silence is not worth transcribing), so a quiet room delivers
+ * no PCM frames at all — reading that as row 4 turned every empty Teams room, whose server mix stays
+ * advertised after the last human leaves, into a capture-fault (#1673). Each producer therefore
+ * reports a heartbeat from its audio callback whatever the energy, and that heartbeat is the
+ * liveness this guard reads; a delivered frame still counts too, since it can only come from a
+ * running callback. Energy stays the silence adapter's business alone.
+ *
  * It abstains whenever the presence signal cannot carry the decision:
  *   - the lane never reports presence (gmeet captures per channel — unknown => today's behaviour);
  *   - the last report is staler than `stalenessMs` (a dead page must not hold a bot open);
  *   - no stream has been reported present recently (the room really did empty — row 2);
- *   - frames are still arriving inside the window (capture is alive; silence is the room's, and a
- *     zero-energy frame keeps counting as silence exactly as before).
+ *   - capture is alive: a heartbeat inside `livenessStalenessMs`, or a delivered frame inside the
+ *     window (the silence is the room's — the silence adapter decides, exactly as before).
  */
-export function createDeafCaptureGuardAdapter(options: { stalenessMs?: number } = {}): AlonenessAdapter {
+export function createDeafCaptureGuardAdapter(options: { stalenessMs?: number; livenessStalenessMs?: number } = {}): AlonenessAdapter {
   const stalenessMs = options.stalenessMs ?? DEFAULT_STREAM_PRESENCE_STALENESS_MS;
+  const livenessStalenessMs = options.livenessStalenessMs ?? DEFAULT_CAPTURE_LIVENESS_STALENESS_MS;
   return {
     name: 'deaf-capture-guard',
     evaluate(snapshot, now, windowMs): AlonenessVerdict {
@@ -211,6 +244,9 @@ export function createDeafCaptureGuardAdapter(options: { stalenessMs?: number } 
       if (now - snapshot.streamsObservedAt > stalenessMs) return 'alone';        // presence stale
       if (snapshot.streamsPresentAt === undefined) return 'alone';               // never any stream (row 2)
       if (now - snapshot.streamsPresentAt > stalenessMs) return 'alone';         // streams are gone (row 2)
+      if (snapshot.lastCaptureAliveAt !== undefined && now - snapshot.lastCaptureAliveAt < livenessStalenessMs) {
+        return 'alone';                                                          // capture callback is running
+      }
       if (snapshot.lastRemoteFrameAt !== undefined && now - snapshot.lastRemoteFrameAt < windowMs) {
         return 'alone';                                                          // capture is delivering
       }
@@ -336,9 +372,10 @@ export function createSilenceAlonenessSource(options: {
           if (heldForMs < captureFaultMaxMs) {
             if (captureFaultLoggedAt === null || at - captureFaultLoggedAt >= CAPTURE_FAULT_LOG_INTERVAL_MS) {
               captureFaultLoggedAt = at;
-              log(`aloneness: capture-fault suspected (streams=${snapshot.streamsConnected}, no frames for window)`
+              log(`aloneness: capture-fault suspected (streams=${snapshot.streamsConnected}, capture not running)`
                 + ` — holding left_alone (frames_delivered=${snapshot.framesDelivered ?? 0},`
-                + ` last_frame_at=${snapshot.lastRemoteFrameAt ?? 'never'}, window_ms=${options.windowMs},`
+                + ` last_frame_at=${snapshot.lastRemoteFrameAt ?? 'never'},`
+                + ` last_alive_at=${snapshot.lastCaptureAliveAt ?? 'never'}, window_ms=${options.windowMs},`
                 + ` deaf_for_ms=${heldForMs}, max_hold_ms=${captureFaultMaxMs})`);
             }
             if (!captureFaultRepairAttempted && options.onCaptureFault) {
@@ -354,7 +391,8 @@ export function createSilenceAlonenessSource(options: {
           log(`aloneness: capture-fault hold EXPIRED — leaving anyway (deaf_for_ms=${heldForMs},`
             + ` max_hold_ms=${captureFaultMaxMs}, streams=${snapshot.streamsConnected},`
             + ` frames_delivered=${snapshot.framesDelivered ?? 0},`
-            + ` last_frame_at=${snapshot.lastRemoteFrameAt ?? 'never'}, window_ms=${options.windowMs})`);
+            + ` last_frame_at=${snapshot.lastRemoteFrameAt ?? 'never'},`
+            + ` last_alive_at=${snapshot.lastCaptureAliveAt ?? 'never'}, window_ms=${options.windowMs})`);
           captureFaultSince = null;
           captureFaultLoggedAt = null;
         }

@@ -788,6 +788,15 @@ export async function startCaptureBridge(
   await page.exposeFunction('__vexaStreamPresence', (count: number): void => activity?.observeStreamPresence?.(count)).catch((e: Error) => {
     if (!String(e.message).includes('already registered')) throw e;
   });
+  // #1673: capture LIVENESS, apart from the silence gate. Every producer drops silent frames before
+  // they cross (silence is not worth transcribing), so frame arrival cannot tell a quiet room from a
+  // dead capture chain. Each producer's audio callback reports this heartbeat (~1/s, the running
+  // processed-sample count) whatever the energy; aloneness reads it as "capture alive".
+  await page.exposeFunction('__vexaCaptureLiveness', (processedSamples: number): void => {
+    activity?.observeCaptureLiveness?.(processedSamples);
+  }).catch((e: Error) => {
+    if (!String(e.message).includes('already registered')) throw e;
+  });
   // jitsi chat → the embedder's sink (a transcript.v1 `chat` segment at the composition root).
   await page.exposeFunction('__vexaChatMessage', (sender: string, text: string): void => {
     try { onChat?.(sender, text); } catch (e) { console.error(`[bot] chat sink rejected: ${String(e)}`); }
@@ -932,6 +941,13 @@ export async function startCaptureBridge(
                 lastGapReportMs = frameEndMs;
               }
               lastFrameEndMs = frameEndMs;
+              // Liveness before the gate (#1673): this callback ran, whatever it heard. One shared
+              // ~1/s heartbeat for the lane — any running track proves the capture chain is alive.
+              w.__vexaTrackSamples = (w.__vexaTrackSamples || 0) + input.length;
+              if (w.__vexaTrackAliveAt === undefined || frameEndMs - w.__vexaTrackAliveAt >= 1000) {
+                w.__vexaTrackAliveAt = frameEndMs;
+                try { w.__vexaCaptureLiveness?.(w.__vexaTrackSamples); } catch { /* never breaks capture */ }
+              }
               let maxVal = 0;
               for (let i = 0; i < input.length; i++) { const a = Math.abs(input[i]); if (a > maxVal) maxVal = a; }
               if (maxVal <= SILENCE) return;                   // gate silence (as the mix path did)
@@ -1119,7 +1135,10 @@ export async function startCaptureBridge(
             // speaker-hint binder align frames to hints; without it ~3/4 of hints missed → misattribution.
             w.__vexaPerSpeakerAudioData(0, Array.from(pcm), tsMs);
           };
-          Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, meterAndForward))
+          // Liveness rides beside the PCM (#1673): the brick gates silent frames out of
+          // meterAndForward, and reports that its callback ran through onLiveness regardless.
+          const onLiveness = (processedSamples: number): void => { w.__vexaCaptureLiveness?.(processedSamples); };
+          Promise.resolve(w.VexaBrowserUtils.createMixedAudioCapture(w.__vexaMixDest.stream, meterAndForward, { onLiveness }))
             .then((cap: any) => {
               w.__vexaMixedCapture = cap;
               // THE CLOCK STARTS WHEN CAPTURE STARTS, NOT WHEN AUDIO ARRIVES.
@@ -1280,6 +1299,7 @@ export async function startCaptureBridge(
         ?? w.VexaBrowserUtils.createGmeetSpeakers?.({ log: (m: string) => w.logBot?.('[PerSpeaker] ' + m) });
       w.__vexaGmeetCapture = w.VexaBrowserUtils.createGmeetCapture({
         log: (m: string) => w.logBot?.('[PerSpeaker] ' + m),
+        onLiveness: (processedSamples: number) => { w.__vexaCaptureLiveness?.(processedSamples); },
         onAudio: (index: number, pcm: Float32Array) => {
           w.__vexaGmeetSpeakers?.reportTrackAudio?.(index);
           // Bind the glow name at capture time (the v1 producer's inversion): exactly-one-lit ⇒ name.
@@ -1336,6 +1356,8 @@ export async function startCaptureBridge(
           }
           w.__vexaTrackCaps = null;
         }
+        w.__vexaTrackSamples = undefined;
+        w.__vexaTrackAliveAt = undefined;
       } catch { /* best-effort */ }
       try { w.__vexaTrackCtx?.close?.(); w.__vexaTrackCtx = null; } catch { /* best-effort */ }
       try { if (w.__vexaMixedCapture && typeof w.__vexaMixedCapture.stop === 'function') w.__vexaMixedCapture.stop(); } catch { /* best-effort */ }

@@ -460,6 +460,110 @@ function fixture(windowMs = 1_000, extra: {
   check('a zero bound means the guard cannot hold at all', fired === 1);
 }
 
+// ── #1673 capture liveness is reported apart from the silence gate ───────────────────────────────
+// Every producer drops silent frames before they cross, so an empty Teams room — whose server mix
+// stays advertised after the last human leaves — delivers NO frames while capture runs fine. The
+// producers now heartbeat from the audio callback whatever the energy; these timelines pin what the
+// guard does with that. Window 1s, bound 60s: a verdict near the window is the silence rule, one
+// near the bound is the expired hold, and the two cannot be confused.
+
+// (o) Heartbeats flowing, no energy, presence = one phantom stream (the field timeline): the bot
+// leaves after max_time_left_alone, NOT after the capture-fault bound.
+{
+  const f = fixture(1_000, { captureFaultMaxMs: 60_000 });
+  let fired = 0;
+  let samples = 0;
+  f.activity.ready();
+  f.activity.observeStreamPresence(1);
+  f.source.onAlone(() => fired++);
+  for (let i = 0; i < 4; i++) {
+    f.clock.advance(250);
+    samples += 4_000;
+    f.activity.observeCaptureLiveness?.(samples);   // the callback ran over silence
+    f.activity.observeStreamPresence(1);
+    f.scheduler.tick();
+  }
+  check('silent-but-alive capture + bot-only room leaves at max_time_left_alone', fired === 1,
+    `fired=${fired} logs=${JSON.stringify(f.logs)}`);
+  check('…via the silence verdict, never a capture-fault', !f.logs.some((m) => m.includes('capture-fault')),
+    JSON.stringify(f.logs));
+  check('the tap records liveness without counting it as presence',
+    f.activity.snapshot().samplesProcessed === 16_000 && f.activity.snapshot().lastRemoteAudioAt === 0
+    && f.activity.snapshot().framesDelivered === 0, JSON.stringify(f.activity.snapshot()));
+}
+
+// (p) Negative control: presence says a stream is live and NO heartbeat ever arrives — the capture
+// callback is not running. That is the genuine #1192 deaf bot, and #1676's bounded hold still applies.
+{
+  const f = fixture(1_000, { captureFaultMaxMs: 3_000 });
+  let fired = 0;
+  f.activity.ready();
+  f.activity.observeStreamPresence(1);
+  f.source.onAlone(() => fired++);
+  for (let i = 0; i < 3; i++) { f.clock.advance(1_000); f.activity.observeStreamPresence(1); f.scheduler.tick(); }
+  check('no heartbeats at all: capture-fault holds past the window', fired === 0);
+  check('…and says so', f.logs.some((m) => m.includes('capture-fault suspected') && m.includes('last_alive_at=never')),
+    JSON.stringify(f.logs));
+  f.clock.advance(1_000); f.activity.observeStreamPresence(1); f.scheduler.tick();
+  check('…bounded exactly as #1676: the hold expires and the bot leaves', fired === 1
+    && f.logs.some((m) => m.includes('capture-fault hold EXPIRED')));
+}
+
+// (q) Heartbeats that STOP: capture ran, then its callback died. Liveness goes stale after its own
+// short staleness, and the guard holds — a heartbeat is not a permanent pass.
+{
+  const f = fixture(1_000, {
+    adapters: [silenceAlonenessAdapter, createDeafCaptureGuardAdapter({ stalenessMs: 60_000, livenessStalenessMs: 2_000 })],
+    captureFaultMaxMs: 60_000,
+  });
+  let fired = 0;
+  f.activity.ready();
+  f.activity.observeStreamPresence(1);
+  f.activity.observeCaptureLiveness?.(4_000);
+  f.source.onAlone(() => fired++);
+  f.clock.advance(2_500); f.activity.observeStreamPresence(1); f.scheduler.tick();
+  check('a stale heartbeat is no proof of liveness: the deaf hold engages', fired === 0
+    && f.logs.some((m) => m.includes('capture-fault suspected')), JSON.stringify(f.logs));
+}
+
+// (r) Energy arrives: someone is speaking, so the bot stays — heartbeats never shorten a window.
+{
+  const f = fixture(1_000, { captureFaultMaxMs: 60_000 });
+  let fired = 0;
+  let samples = 0;
+  f.activity.ready();
+  f.activity.observeStreamPresence(1);
+  f.source.onAlone(() => fired++);
+  for (let i = 0; i < 12; i++) {
+    f.clock.advance(250);
+    samples += 4_000;
+    f.activity.observeCaptureLiveness?.(samples);
+    if (i % 3 === 0) f.activity.observeRemoteEnergy(loudEnergy);   // speech every 750 ms
+    f.activity.observeStreamPresence(1);
+    f.scheduler.tick();
+  }
+  check('energy keeps the bot in the meeting while heartbeats flow', fired === 0);
+  f.clock.advance(1_000);
+  f.activity.observeCaptureLiveness?.(samples + 16_000);
+  f.activity.observeStreamPresence(1);
+  f.scheduler.tick();
+  check('…and a full window of silence after the last speech then leaves', fired === 1);
+}
+
+// (s) A capture restart re-arms liveness: the new capture must prove itself with its own heartbeat.
+{
+  const tap = createRemoteAudioActivityTap({ now: () => 50 });
+  tap.observeCaptureLiveness?.(100);
+  check('liveness before ready() is ignored (capture not attached)', tap.snapshot().lastCaptureAliveAt === undefined);
+  tap.ready();
+  tap.observeCaptureLiveness?.(100);
+  check('liveness after ready() is recorded', tap.snapshot().lastCaptureAliveAt === 50 && tap.snapshot().samplesProcessed === 100);
+  tap.ready();
+  check("ready() (a restart) clears the previous capture's liveness", tap.snapshot().lastCaptureAliveAt === undefined);
+  tap.observeCaptureLiveness?.(Number.NaN);
+  check('a nonsense heartbeat is rejected', tap.snapshot().lastCaptureAliveAt === undefined);
+}
+
 // The bound's own arithmetic: three windows, clamped at both ends, env override wins.
 {
   check('the default bound is three silence windows', defaultCaptureFaultMaxMs(120_000) === 360_000);

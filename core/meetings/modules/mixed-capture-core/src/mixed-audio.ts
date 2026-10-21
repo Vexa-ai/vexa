@@ -31,6 +31,14 @@ export interface MixedAudioOptions {
   silenceThreshold?: number;
   /** Re-play the stream to the speakers (un-mute the captured tab). Default true. */
   replay?: boolean;
+  /** Capture LIVENESS, reported apart from the silence gate: called whenever the audio callback
+   *  runs, whatever the frame's energy, at most once per `livenessIntervalMs` of processed audio
+   *  (and on the very first callback). `processedSamples` is the running count of every sample the
+   *  callback has seen. The gate decides what is worth transcribing; this says the capture chain is
+   *  running — a silent room and a dead capture both produce no PCM, and only this tells them apart. */
+  onLiveness?: (processedSamples: number, tsMs: number) => void;
+  /** Spacing of `onLiveness` reports, in milliseconds of processed audio. Default 1000. */
+  livenessIntervalMs?: number;
   log?: (msg: string) => void;
 }
 
@@ -42,6 +50,7 @@ export async function createMixedAudioCapture(
   const SR = opts.sampleRate ?? 16000;
   const SILENCE = opts.silenceThreshold ?? 0.005;
   const log = opts.log ?? (() => { /* silent */ });
+  const livenessEverySamples = Math.max(1, Math.round(((opts.livenessIntervalMs ?? 1000) / 1000) * SR));
 
   // ── CAPTURE — 16 kHz context + ScriptProcessor (no worklet module → no CSP) ────
   const ctx = new AudioContext({ sampleRate: SR });
@@ -55,10 +64,15 @@ export async function createMixedAudioCapture(
   // the same page clock the active-speaker hints carry, so the binder can align them.
   const startMs = Date.now();
   let processedSamples = 0;
+  let livenessReportedAt: number | undefined;   // processedSamples at the last liveness report
   proc.onaudioprocess = (e: AudioProcessingEvent) => {
     const input = e.inputBuffer.getChannelData(0);
     const tsMs = startMs + (processedSamples / SR) * 1000;   // wall-clock of this frame's first sample
     processedSamples += input.length;
+    if (opts.onLiveness && (livenessReportedAt === undefined || processedSamples - livenessReportedAt >= livenessEverySamples)) {
+      livenessReportedAt = processedSamples;
+      try { opts.onLiveness(processedSamples, tsMs); } catch { /* a liveness consumer must never break capture */ }
+    }
     let maxVal = 0;
     for (let i = 0; i < input.length; i++) { const a = Math.abs(input[i]); if (a > maxVal) maxVal = a; }
     if (maxVal > SILENCE) onPcm(new Float32Array(input), tsMs);   // copy — the buffer is reused
