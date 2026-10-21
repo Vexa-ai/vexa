@@ -15,22 +15,40 @@ deploys the same control plane as the Compose stack, with the runtime pointed at
 | gateway · admin-api · meeting-api · agent-api · runtime | Deployments (RollingUpdate, `maxUnavailable: 0`) |
 | terminal (web workbench) | Deployment + ingress |
 | postgres | StatefulSet (or point values at your managed DB) |
-| redis (Valkey) · minio | Deployments (+ minio init Job) |
+| redis (Valkey) | Deployment |
+| object storage | **not deployed** — recordings go to your own S3 bucket ([`storage.s3`](#object-storage), required) |
 | DB migrations | Job |
 | pgbouncer | optional connection pooling |
 | dashboard (deprecated 0.10 UI) | optional Deployment + Service, **off by default** |
 | RBAC for the k8s spawn backend | Role/RoleBinding scoped to Pod create/watch/delete |
 
-Hardened defaults throughout: containers run non-root with all capabilities dropped,
-PodDisruptionBudgets on the control plane, and rolling updates that never take the last
-replica down.
+The chart sets no pod security context by default and the service images run as root; set
+`global.podSecurityContext` / `global.securityContext` to run as a non-root UID.
+Containers have all capabilities dropped, with PodDisruptionBudgets on the control plane and
+rolling updates that never take the last replica down.
 
 ## Install
 
+Create the bucket first (the chart never creates one) and a Secret holding a key pair for it, then
+install with the bucket in `storage.s3`:
+
 ```bash
 git clone https://github.com/Vexa-ai/vexa.git && cd vexa
-helm install vexa deploy/helm/charts/vexa -f deploy/helm/charts/vexa/values.yaml
+kubectl create namespace vexa
+kubectl -n vexa create secret generic vexa-s3 \
+  --from-literal=AWS_ACCESS_KEY_ID='<access key id>' \
+  --from-literal=AWS_SECRET_ACCESS_KEY='<secret access key>'
+helm install vexa deploy/helm/charts/vexa -n vexa \
+  --set secrets.internalApiSecret="$(openssl rand -hex 32)" \
+  --set secrets.adminApiToken="$(openssl rand -hex 32)" \
+  --set secrets.dispatchSigningKey="$(openssl rand -hex 32)" \
+  --set secrets.nextauthSecret="$(openssl rand -hex 32)" \
+  --set storage.s3.endpoint=https://s3.eu-central-1.amazonaws.com \
+  --set storage.s3.bucket=<your bucket> \
+  --set storage.s3.existingSecret=vexa-s3
 ```
+
+Keep these four secret values: every later `helm upgrade` must pass the same ones (or use `--reuse-values`).
 
 `values-staging.yaml` and `values-test.yaml` show environment overlays. Chart tests
 (`helm lint` + template tests) live under `deploy/helm/tests/`.
@@ -54,6 +72,95 @@ GATEWAY_URL=http://<node>:<nodePort> make probe SURFACE=helm   # or drive a Node
 It mints its API key from the release secret's `ADMIN_API_TOKEN` (or pass `VEXA_API_KEY`). The
 same journey runs on the other surfaces: `make probe` (compose, the fast default) and
 `make probe SURFACE=lite`.
+
+## Object storage
+
+meeting-api stores recordings in **your** bucket, on AWS S3 or any S3-compatible service. The chart
+runs no object store of its own and has no fallback to storage inside a pod: until `storage.s3` names
+an endpoint, a bucket and a Secret, `helm install`, `helm upgrade` and `helm template` refuse to
+render and name the missing values.
+
+Use an `https://` endpoint for any store outside the cluster.
+The bucket must not allow anonymous (public) read or list access.
+
+```yaml
+storage:
+  s3:
+    endpoint: https://s3.eu-central-1.amazonaws.com   # a full URL, https:// or http://
+    bucket: my-vexa-recordings                        # must already exist
+    region: eu-central-1                              # default us-east-1
+    existingSecret: vexa-s3                           # in the release namespace
+```
+
+| Value | Default | Meaning |
+|---|---|---|
+| `storage.s3.endpoint` | required | The S3 endpoint, as a full URL. |
+| `storage.s3.bucket` | required | An existing bucket. meeting-api writes recordings under `recordings/`, and bots' captured-signal tapes, when bots upload them, under `signal/`. |
+| `storage.s3.existingSecret` | required | A Secret holding the access key pair. Credentials are never chart values. |
+| `storage.s3.accessKeyIdKey` · `secretAccessKeyKey` | `AWS_ACCESS_KEY_ID` · `AWS_SECRET_ACCESS_KEY` | The key names inside that Secret. |
+| `storage.s3.region` | `us-east-1` | The signing region. |
+| `storage.s3.forcePathStyle` | `true` | `true` sends path-style requests (`https://host/bucket/key`); `false` sends virtual-hosted ones (`https://bucket.host/key`), which need DNS for `bucket.host`. |
+| `storage.s3.caBundle.configMapName` or `.secretName`, and `.key` | unset, `ca.crt` | A private CA for an `https://` endpoint: a ConfigMap or a Secret in the namespace, not both. It replaces the default trust store for S3 calls. On OpenShift, a ConfigMap labelled `config.openshift.io/inject-trusted-cabundle=true` receives the cluster's trusted bundle under the key `ca-bundle.crt`. |
+
+The key pair needs to list the bucket and to read, write and delete objects in it. meeting-api's
+`/health` reports `object_storage` as configured once the Secret's two keys are set; it does not
+check that they work. Credentials the store rejects surface when a recording is written or played
+back: the API answers `500` (not `404`), and meeting-api's log names the S3 error, such as
+`SignatureDoesNotMatch`.
+
+Set these values here, not through `meetingApi.extraEnv`: the chart refuses to render when
+`extraEnv` sets one of the chart's storage variables or an AWS override of the mounted client config (see
+[Configuration](/configuration#object-storage-on-kubernetes)).
+
+### Upgrading from the built-in MinIO
+
+Earlier versions of this chart ran MinIO beside the stack by default (`minio.enabled: true`). The
+chart no longer includes it: MinIO's images can no longer be pulled, so those installs cannot start
+again as they were. A values file that still sets `minio.enabled: true` is refused with a link to
+these steps.
+
+1. **Create the bucket and the Secret** in your S3, as in [Install](#install).
+2. **Copy the objects while the old release still runs**, with any S3 tool. With the AWS CLI through
+   a port-forward:
+
+   ```bash
+   kubectl -n vexa port-forward svc/vexa-vexa-minio 9000:9000 &
+   AWS_ACCESS_KEY_ID=vexa-access-key AWS_SECRET_ACCESS_KEY=vexa-secret-key \
+     aws --endpoint-url http://127.0.0.1:9000 s3 sync s3://vexa ./vexa-objects
+   AWS_ACCESS_KEY_ID='<access key id>' AWS_SECRET_ACCESS_KEY='<secret access key>' \
+     aws --endpoint-url https://s3.eu-central-1.amazonaws.com s3 sync ./vexa-objects s3://<your bucket>
+   ```
+
+   The old credentials and bucket are your `minio.accessKey`, `minio.secretKey` and `minio.bucket`
+   (`vexa-access-key`, `vexa-secret-key` and `vexa` unless you changed them); Service and PVC names
+   carry your release name (`<release>-vexa-minio`). Keep every key as it is — recordings are found
+   by key, and the new bucket's name does not matter. `s3 sync` copies only what changed, so run both
+   commands again just before the upgrade to pick up recordings made in between.
+   Run the final `s3 sync` commands and `helm upgrade` while nothing is recording (no bot in a meeting).
+   Chunks written after the final sync stay only on the retained MinIO volume.
+3. **Upgrade** with `storage.s3` set and `minio` removed from your values:
+
+   ```bash
+   helm upgrade vexa deploy/helm/charts/vexa -n vexa -f my-values.yaml
+   ```
+
+   `--reuse-values` keeps the previous chart's defaults, including `minio.enabled: true`; with it,
+   also pass `--set minio.enabled=false`. If you pointed meeting-api at your own S3 through
+   `meetingApi.extraEnv`, move those settings into `storage.s3`. Anything else aimed at the old
+   MinIO Service, such as `meetingApi.botS3Endpoint` for [authenticated bots](/authenticated-bots),
+   needs a new endpoint.
+4. **Play back an old recording**, then clean up. The upgrade deletes the MinIO StatefulSet and its
+   Service, but not the data: the PVC `data-vexa-vexa-minio-0` was created by the StatefulSet, not by
+   Helm, so Helm does not delete it. It stays bound, with the old objects on it, mounted by nothing.
+   The completed bucket Job `vexa-vexa-minio-init` stays too: it was a Helm hook, and Helm does not
+   delete a hook the chart no longer declares. Delete both when you no longer need them
+   (`kubectl -n vexa delete job vexa-vexa-minio-init`, `kubectl -n vexa delete pvc
+   data-vexa-vexa-minio-0`); with most storage classes, deleting the PVC also deletes the volume.
+   Remove the local recording copies with `rm -rf ./vexa-objects`.
+
+`helm rollback` to the MinIO-era revision recreates the StatefulSet, which attaches the retained PVC
+again and serves the objects on it — provided the MinIO images that revision names can still be
+pulled. Recordings made after the upgrade are in your bucket, not on that volume.
 
 ## The runtime on Kubernetes
 

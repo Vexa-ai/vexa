@@ -7,7 +7,7 @@
 # agent-api (:8100) — over an internal redis + a shared Xvfb/PulseAudio
 # stack. The runtime uses the PROCESS backend (RUNTIME_BACKEND=process): bots and agent
 # workers run as CHILD PROCESSES, not docker-socket-spawned containers — so lite needs NO
-# docker socket. PostgreSQL + MinIO are external (the `make lite` sidecars).
+# docker socket. PostgreSQL + object storage (versitygw) are external (the `make lite` sidecars).
 #
 # Self-contained: built on the official Playwright image (the bot pins playwright 1.56.0) and
 # installs its own browser/X11/audio stack — it does NOT depend on the bot's published

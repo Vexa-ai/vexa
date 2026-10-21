@@ -14,7 +14,7 @@ ALWAYS-ON (the routine `gate:compose` subset):
                       publishes tc:meeting:{id}:mutable → a /ws client (through the gateway) receives
                       the live frame.
   5  recording      — upload a chunk via the bot's /internal/recordings/upload path → the object
-     → minio          lands in minio; finalize → a master is assembled in minio.
+     → storage        lands in object storage; finalize → a master is assembled there.
   6c continue_meeting — a second session under the same meeting reuses the meeting row + preserves
                       the prior transcript.
   6d max-bots       — a user at max_concurrent_bots gets 429 on the N+1; a freed slot allows the next.
@@ -233,9 +233,9 @@ def test_04_transcript_dataflow(stack):
     print(f"\n[4/transcript] XADD→consumer stored (hash) + published tc:meeting:{meeting_id}:mutable → /ws frame received")
 
 
-# ── 5. recording → minio ─────────────────────────────────────────────────────────────────────────
+# ── 5. recording → object storage ────────────────────────────────────────────────────────────────
 
-def test_05_recording_to_minio(stack):
+def test_05_recording_to_storage(stack):
     user_id = STATE["user_id"]
     platform, native_id = "google_meet", f"rec-{uuid.uuid4().hex[:8]}"
     meeting_id, session_uid = _insert_meeting(stack, user_id, platform, native_id)
@@ -260,17 +260,17 @@ def test_05_recording_to_minio(stack):
     storage_path = receipt["storage_path"]
     assert storage_path.startswith(f"recordings/{user_id}/{recording_id}/{session_uid}/audio/")
 
-    # The chunk OBJECT landed in minio (poll — the put is synchronous but be robust).
+    # The chunk OBJECT landed in object storage (poll — the put is synchronous but be robust).
     deadline = time.time() + 20
     chunk_keys = []
     while time.time() < deadline:
-        chunk_keys = stack.minio_ls(f"recordings/{user_id}/{recording_id}/")
+        chunk_keys = stack.object_keys(f"recordings/{user_id}/{recording_id}/")
         if any(k.endswith("000000.wav") for k in chunk_keys):
             break
         time.sleep(2)
-    assert any(k.endswith("000000.wav") for k in chunk_keys), f"chunk object not in minio: {chunk_keys}"
+    assert any(k.endswith("000000.wav") for k in chunk_keys), f"chunk object not in storage: {chunk_keys}"
 
-    # Finalize → a master is assembled + uploaded to minio.
+    # Finalize → a master is assembled + uploaded to object storage.
     code, master = http(
         "GET", f"{stack.meeting_api}/recordings/{recording_id}/master?type=audio",
         headers={"x-user-id": str(user_id)},
@@ -278,11 +278,11 @@ def test_05_recording_to_minio(stack):
     assert code == 200, f"finalize master → {code} {master}"
     master_key = master["storage_path"]
     assert master_key.endswith("master.wav"), f"unexpected master key: {master_key}"
-    master_keys = stack.minio_ls(f"recordings/{user_id}/{recording_id}/")
-    assert any(k.endswith("master.wav") for k in master_keys), f"master not in minio: {master_keys}"
-    STATE["minio_chunk_key"] = next(k for k in chunk_keys if k.endswith("000000.wav"))
-    STATE["minio_master_key"] = next(k for k in master_keys if k.endswith("master.wav"))
-    print(f"\n[5/recording] chunk → minio:{STATE['minio_chunk_key']} ; master → minio:{STATE['minio_master_key']}")
+    master_keys = stack.object_keys(f"recordings/{user_id}/{recording_id}/")
+    assert any(k.endswith("master.wav") for k in master_keys), f"master not in storage: {master_keys}"
+    STATE["storage_chunk_key"] = next(k for k in chunk_keys if k.endswith("000000.wav"))
+    STATE["storage_master_key"] = next(k for k in master_keys if k.endswith("master.wav"))
+    print(f"\n[5/recording] chunk → storage:{STATE['storage_chunk_key']} ; master → storage:{STATE['storage_master_key']}")
 
 
 # ── 6c. continue_meeting ─────────────────────────────────────────────────────────────────────────

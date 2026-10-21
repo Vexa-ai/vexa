@@ -21,8 +21,10 @@ spec:
         {{- include "vexa.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: redis
     spec:
-      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5).
-      # See deployment-minio.yaml header for the full rationale.
+      # v0.10.5 Pack I.s — stateful-pod anti-affinity (#272 iter-5); the rationale
+      # is on statefulset-postgres.yaml. `minio` stays in the list although the
+      # chart no longer runs MinIO: dropping it would change this pod template
+      # and restart Redis on upgrade, for no scheduling effect.
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:

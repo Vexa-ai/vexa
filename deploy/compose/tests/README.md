@@ -16,7 +16,7 @@ Everything polls with bounded timeouts — never sleep-and-hope. Absent docker �
 | 1  | `/health` 200 on gateway·meeting-api·runtime·admin-api | yes |
 | 2  | admin-api mints a scoped token; gateway accepts it (200), rejects missing/invalid (401) + out-of-scope (403); a proxied call reaches meeting-api | yes |
 | 4  | XADD golden segments → the collector consumer stores them (live segment hash) + publishes `tc:meeting:{id}:mutable` → a `/ws` client (through the gateway) receives the live frame | yes |
-| 5  | upload a chunk via the bot's `/internal/recordings/upload` → the object lands in minio; finalize → a master is assembled in minio | yes |
+| 5  | upload a chunk via the bot's `/internal/recordings/upload` → the object lands in object storage (listed through meeting-api's own S3 client); finalize → a master is assembled there | yes |
 | 6c | `continue_meeting` reuses the meeting row + accumulates a session; the prior transcript survives | yes |
 | 6d | a user at `max_concurrent_bots` gets `429` on the N+1; a freed slot admits the next | yes |
 | 6b | the join-retry re-spawn wiring is present in the live image; the **backoff proof leans on the offline P3 `test_join_retry.py`** (forcing a real transient join-failure on a live bot is slow/flaky) | yes (wiring) |

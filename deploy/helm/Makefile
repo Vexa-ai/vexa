@@ -36,6 +36,18 @@ k3s-import:
 	  docker save "$$img:dev" | sudo k3s ctr images import - ; \
 	done
 
+## s3-fixture — start the TEST-ONLY S3 that values-test.yaml points storage.s3 at (the chart runs no
+## object store): a random-credential Secret, then tests/s3-fixture.yaml, then wait for its bucket
+s3-fixture:
+	sudo KUBECONFIG=$(KUBECONFIG) kubectl get namespace $(NAMESPACE) >/dev/null 2>&1 || \
+	  sudo KUBECONFIG=$(KUBECONFIG) kubectl create namespace $(NAMESPACE)
+	sudo KUBECONFIG=$(KUBECONFIG) kubectl -n $(NAMESPACE) get secret s3-fixture-credentials >/dev/null 2>&1 || \
+	  sudo KUBECONFIG=$(KUBECONFIG) kubectl -n $(NAMESPACE) create secret generic s3-fixture-credentials \
+	    --from-literal=AWS_ACCESS_KEY_ID="$$(openssl rand -hex 10)" \
+	    --from-literal=AWS_SECRET_ACCESS_KEY="$$(openssl rand -hex 20)"
+	sudo KUBECONFIG=$(KUBECONFIG) kubectl -n $(NAMESPACE) apply -f tests/s3-fixture.yaml
+	sudo KUBECONFIG=$(KUBECONFIG) kubectl -n $(NAMESPACE) wait --for=condition=complete job/s3-fixture-bucket --timeout=180s
+
 ## install — helm upgrade --install onto the cluster (KUBECONFIG)
 install:
 	sudo KUBECONFIG=$(KUBECONFIG) helm upgrade --install $(RELEASE) $(CHART) \
@@ -45,12 +57,12 @@ install:
 status:
 	sudo KUBECONFIG=$(KUBECONFIG) kubectl -n $(NAMESPACE) get pods,svc
 
-## smoke — full local proof: build → import → install → wait → /health → (teardown via `make down`)
-smoke: build k3s-import install status
+## smoke — full local proof: build → import → S3 fixture → install → wait → /health → (teardown via `make down`)
+smoke: build k3s-import s3-fixture install status
 
 ## down — uninstall the release + namespace
 down:
 	-sudo KUBECONFIG=$(KUBECONFIG) helm uninstall $(RELEASE) -n $(NAMESPACE)
 	-sudo KUBECONFIG=$(KUBECONFIG) kubectl delete namespace $(NAMESPACE) --wait=false
 
-.PHONY: lint template test build k3s-import install status smoke down
+.PHONY: lint template test build k3s-import s3-fixture install status smoke down

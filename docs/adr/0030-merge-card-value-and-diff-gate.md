@@ -66,3 +66,62 @@ evidence, not on whether the author shows up.
 
 `docs/docs/governance/delivery.mdx`: new rows for *Merge bar — value + diff accepted* (**have**,
 CI) and *Contributor onboarding* (**have**, templates + CI).
+
+## Amendment 2026-10-08 — architecture and security passes
+
+**Decision.** The card gains two rows that gate **every** PR, docs and CI included: **Architecture**
+and **Security**. Each clears only when a PR comment from an account with write or admin on the
+repo (the maintainer check the Diff row already uses) carries a marker for the PR's current head
+sha:
+
+```
+<!-- vexa-pass:architecture sha=<full head sha> verdict=pass -->
+<!-- vexa-pass:security sha=<full head sha> verdict=pass -->
+```
+
+- **Markers lead the comment.** A marker counts only in the comment's leading lines: from the
+  first line, each starting at column 0 with `<!--` and closing `-->` on the same line, with blank
+  lines allowed between them. GitHub always hides those lines, and nothing above them can open
+  code. Nothing after the first other line counts, so the card never has to read Markdown. A
+  comment that leads with its marker may quote other markers below it. A maintainer's marker for
+  the head that stands only lower in a comment fails the row, if it is the newest marker for the
+  head, and the row says it must be the first line of the comment: placement can take a pass
+  away, never grant one.
+- `verdict=waived` clears a row only when the same marker carries `waived-by=<login>`, naming an
+  account with write or admin on the repo. The card shows the waiver as recorded by the commenter
+  and names that account.
+- A marker for any other sha does not count. The row names the sha the pass on record was for and
+  asks for a re-run. Among maintainer markers for the head, the newest wins. The card reads the
+  newest 1,000 comments; on a longer thread an older pass does not count and must be re-posted.
+- **The head is the commit the check is posted for.** A `pull_request` or `pull_request_review`
+  run judges its event's head and fails without judging if the PR has moved on. A `merge_group`
+  run judges the PR's head as queued; a push takes the PR out of the queue.
+- **Security findings stay private.** The marker and its comment carry only the verdict, an
+  optional `findings=<n>` count and the sha. Findings follow `SECURITY.md` (coordinated disclosure)
+  and never appear on the PR.
+- **How a pass takes effect.** A comment does not trigger `merge-card`. When a repo-associated
+  account posts, edits or deletes a comment carrying a marker, `merge-card-pass.yml` re-runs the
+  PR's newest `merge-card` run on the head, and its `merge-card-comment` run so the sticky card
+  agrees. It finds the run by PR as well as head sha (each card run is named after its PR, since
+  two PRs can share a head), takes the sticky card's `pull_request_target` run, never re-runs a run
+  awaiting approval, re-reads the PR head just before each re-run and skips it if the head moved
+  or cannot be read, and decides nothing itself. A pass names one sha, so after a move it must be
+  re-posted for the new head. The run name is read from the copy of the workflow that ran, so on a
+  base branch without this change the pick falls back to the run's `pull_requests` list.
+  - *Alternative considered:* the comment-triggered workflow publishes a `merge-card` check run on
+    the head itself, as `contribution-rights.yml` does for its own check from an `issue_comment`
+    run. Not taken: the `merge-card` check would then have two writers. With a re-run,
+    `merge-card.yml` stays its only writer (P23).
+  - *Costs of the re-run:* it needs an existing run for the PR on the head (none: push or re-run
+    by hand); it waits out a run in flight, so it can hold a runner for up to about 25 minutes;
+    and GitHub re-runs a run only within 30 days of it.
+
+**Why.** Founder ruling 2026-10-08: the architecture and security checks are obligatory at PR
+level. Until now they were review practice (D-S, TAKE step 3), so a PR could merge without either.
+
+**Consequences.**
+
+- Every push resets both rows: a pass is evidence about one tree, not about a branch.
+- The card's script runs from `main` for PRs into every base branch, so release-line PRs render the
+  rows. Whether a red card blocks the merge is the base branch's protection: today only `main`
+  requires `merge-card`.

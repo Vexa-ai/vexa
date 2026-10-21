@@ -1,0 +1,128 @@
+{
+  "version": "v0.12.28",
+  "candidate": "v0.12.28-rc.5",
+  "generated_from": "v0.12.27...d90708c10 (main; the release PR adds only release records)",
+  "witnessed_by": "Dmitry Grankin",
+  "witnessed_at": "2026-10-07",
+  "deployment": "compose + lite on bbb from v0.12.28-rc.3 (agent station); the bot additionally live on the bbb station Zoom/Meet runs and in vexa.ai production, image vexaai/vexa-bot@sha256:e2398bfac7fa8671c209e996bc6451598b58438c851956ec050a0300f5a5354b (linux/amd64 config sha256:995b4aed3254eb8ac05fd4d3837086c1371cfd9a39d4d34f64afead87c5ce37d)",
+  "witness_deployment": {
+    "url": "none kept — the station stacks were torn down after the rows passed; the founder walked the bot live on the bbb Zoom/Meet station and it runs in vexa.ai production",
+    "provisioned_by": "agent on bbb, 2026-10-08 21:3x–22:0xZ, from the v0.12.28-rc.3 images (rc.5 differs only in Lite; Lite rows re-run on rc.5: L-FRESH PASS and L-UPGRADE PASS (VERIFIED, same sha256) on Lite 9eebb534, 2026-10-09, fills.log section \"rc.5 Lite re-run\") (work unit DmitriyG228/biz#512)",
+    "prevalidated": [
+      "L-FRESH PASS: fresh Lite from rc.3 — versitygw storage, 3 front doors, concurrent-bots.sh N=2 (both bots joining, separate profiles, 45 s), recording round trip byte-identical",
+      "C-FRESH PASS: fresh Compose from rc.3 on an unedited .env.example — make up minted the three secrets; digest-audit clean; stack-test-bot 25 passed / 18 skipped (opt-in); spawned bot image ID 995b4aed",
+      "L-UPGRADE PASS: v0.12.27 Lite with a recording → rc.3; recording 500 before copy (as the guide says); make migrate-storage VERIFIED; served with the same sha256; old volume unchanged",
+      "C-UPGRADE PASS: v0.12.27 Compose with a recording → rc.3 following the guide; VERIFIED; same sha256; old bucket objects unchanged; make down kept volumes",
+      "STT PASS: LOCAL_STT=1 whisper wiring + stt-smoke (STT path only, not a bot transcript)",
+      "release-validate run 37914860589 on the final packet v0.12.28-rc.5 at 15205d994 (earlier: run 37851440059 on rc.3 at 2b3b00f94, also all green): identity enforced and all nine legs green (resolve, image-identity, validate-bot-spawn, validate-compose, validate-lite, validate-arm64, validate-mock-fsm, validate-helm-k3s, validate-v010-compat); the first dispatch (37849939093) died at resolve on Docker Hub pull rate limits",
+      "evidence: ~/dev/biz/drafts/2026-10-08-v0.12.28-station/fills.log (DmitriyG228/biz private)"
+    ]
+  },
+  "values": [
+    {
+      "pr": "1649",
+      "title": "release: v0.12.27 witness receipt (draft — founder signs)",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "repo-only record: releases/v0.12.27/witness.json; read by scripts/release-witness-gate.mjs, whose tests (scripts/release-witness-gate.test.mjs) run in the container-free gate suite"
+    },
+    {
+      "pr": "1651",
+      "title": "release-witness-gate: a receipt may name the candidate it walked, not only the published tag",
+      "visibility": "ci-governance",
+      "witnessed": "by-proxy",
+      "evidence": "scripts/release-witness-gate.mjs + scripts/release-witness-gate.test.mjs (the candidate-name rule this receipt itself uses: version v0.12.28, candidate v0.12.28-rc.3)"
+    },
+    {
+      "pr": "1654",
+      "title": "release: pin the v0.12.27 stable-promotion map identity",
+      "visibility": "ci-governance",
+      "witnessed": "by-proxy",
+      "evidence": ".github/workflows/release-validate.yml promote table (v0.12.27 arm) and release/candidate-image-map.test.mjs; the v0.12.28 arm added beside it in this release PR"
+    },
+    {
+      "pr": "1656",
+      "title": "promote: an ABSENT negative-control tag is unchanged, not an error",
+      "visibility": "ci-governance",
+      "witnessed": "by-proxy",
+      "evidence": "scripts/registry-candidate-validate.test.mjs (added by the PR: an absent negative-control tag is treated as unchanged); runs in release-validate resolve as \"Registry validator controls\""
+    },
+    {
+      "pr": "1661",
+      "title": "carve: prune the claude-plugin CALM node — clients/claude-plugin stays out of the carve",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "repo-only: CALM model + seals (architecture.calm.json / architecture.seal.json) checked by the gate suite; no image input changed"
+    },
+    {
+      "pr": "1674",
+      "title": "README: three doors under the title block (connect · API key · founder); credit line matches pricing",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "repo-only: README.md; gate:readme in the container-free gate suite; no image input changed"
+    },
+    {
+      "pr": "1760",
+      "title": "storage: MinIO removed — versitygw for Lite and Compose, your own S3 for Helm (#1759)",
+      "visibility": "user-visible",
+      "pass": "a fresh Lite and a fresh Compose come up from the v0.12.28-rc.3 images (rc.5 differs only in Lite; Lite rows re-run on rc.5: L-FRESH PASS and L-UPGRADE PASS (VERIFIED, same sha256) on Lite 9eebb534, 2026-10-09, fills.log section \"rc.5 Lite re-run\") with versitygw storage; a v0.12.27 Lite and Compose holding a recording upgrade, `make migrate-storage` ends VERIFIED, and the recording is served with the same sha256",
+      "witnessed": "by-proxy",
+      "evidence": "bbb station on the exact rc.3 digests, rows L-FRESH, C-FRESH, L-UPGRADE, C-UPGRADE all PASS: ~/dev/biz/drafts/2026-10-08-v0.12.28-station/fills.log (DmitriyG228/biz private); validate-lite + validate-compose green in release-validate run 37914860589 on rc.5 (and run 37851440059 on rc.3)",
+      "note": "converted from user-visible to by-proxy: the self-host install and upgrade were run by an agent on bbb, not walked by a human. If you would rather walk it, set witnessed:true and write what you saw."
+    },
+    {
+      "pr": "1765",
+      "title": "main stays green: the rights verdict lives on the evaluated PR, rights declared once per contributor",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": ".github/workflows/contribution-rights.yml (CI leg) and scripts/contribution-rights-gate.test.mjs; CI-only, no image input changed"
+    },
+    {
+      "pr": "1767",
+      "title": "release: prepare v0.12.28 installation repair",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "version stamps cross-checked by release-images preflight (package.json = Chart.yaml appVersion = 0.12.28, passed in run 37847760812) and gate:docs-version"
+    },
+    {
+      "pr": "1778",
+      "title": "fix(transcript): preserve capture time and withdraw stale drafts",
+      "visibility": "user-visible",
+      "pass": "per-track capture time comes from one monotonic clock and a superseded live draft is withdrawn",
+      "witnessed": "by-proxy",
+      "evidence": "tests added by the PR: core/meetings/modules/gmeet-pipeline/src/confirm-loop.golden.test.ts, core/meetings/services/bot/src/pipeline.test.ts (exact-ID retraction), core/meetings/services/bot/src/zoom-speaker-wiring.test.ts (one-hour eight-track fixture, no cumulative drift) — re-run inside the bot image as row A7 of ~/dev/biz/drafts/2026-10-07-zoom-starved-1781-staging-fills.md; live: the founder-hosted Zoom (2026-10-07 21:31Z) and Meet (2026-10-08 18:39Z, 22 segments, 0 /ws errors) runs on the rc.3 bot digest",
+      "note": "converted from user-visible to by-proxy: the draft withdrawal was not singled out by a human on a live call."
+    },
+    {
+      "pr": "1781",
+      "title": "fix(zoom): keep a starved page's speech and timeline in the per-track transcript (#1774)",
+      "visibility": "user-visible",
+      "pass": "on a live Zoom call the bot on this exact image keeps the speech: words arrive live over /ws and the transcript reads right with one speaker",
+      "witnessed": true,
+      "observation": "2026-10-07 21:31-21:40Z, founder-hosted Zoom on the bbb station, single speaker, bot image config 995b4aed (= vexaai/vexa-bot@sha256:e2398bfa, the rc.3 bot): candidate kept 88.8% of the uncapped reference words vs 75.7% for the previous bot; founder in chat ~21:38Z: \"looks good to me when one speaker\". Record: ~/dev/biz/drafts/2026-10-07-zoom-starved-1781-staging-fills.md. Starved-page behaviour proven offline on the production tape of meeting 31849 (recall 91.5% vs 21.8%). In production on the same digest since 2026-10-08T20:41Z (estate entry 48). Founder-hosted Zoom test in production 2026-10-08 21:16-21:19Z (meeting 32021) on the same digest at 1 CPU: transcript kept.",
+      "platform": "zoom"
+    },
+    {
+      "pr": "1791",
+      "title": "chore(dashboard): bring the hosted dashboard source to main, to be retired",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "source only: adds services/dashboard (and services/.gateignore); no release image copies services/, so none of the eleven images changed — `candidate-image-map.mjs check-source-inputs` green at the merge of 6ee2a3abb into the release branch, packet map sha256 d100543d… unchanged"
+    },
+    {
+      "pr": "1792",
+      "title": "release: v0.12.28 — bind the rc.3 packet, fold the changelog, witness receipt",
+      "visibility": "backend",
+      "witnessed": "by-proxy",
+      "evidence": "release/candidate-image-map.test.mjs (v0.12.28 packet pin) and `candidate-image-map.mjs check-source-inputs` green at the PR head; records only, no image input changed"
+    },
+    {
+      "pr": "1793",
+      "title": "[DEV] merge-card: require architecture and security passes on every PR",
+      "visibility": "ci-governance",
+      "witnessed": "by-proxy",
+      "evidence": "scripts/merge-card-gate.test.mjs and scripts/gates.test.mjs (changed by the PR); it changes scripts/, a Lite input, so Lite was rebuilt at d90708c10 (run 37909519615) and the packet moved to v0.12.28-rc.5; the CI gate itself runs on every PR"
+    }
+  ],
+  "signed_off": true
+}

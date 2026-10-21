@@ -260,23 +260,29 @@
    "key": "S3_ENDPOINT",
    "class": "defaulted",
    "default": "(unset — falls back to MINIO_ENDPOINT/MINIO_SECURE)",
-   "description": "explicit S3 endpoint override for a non-MinIO store",
-   "targets": []
+   "description": "explicit S3 endpoint override for a non-MinIO store; helm sets it from storage.s3.endpoint",
+   "targets": [
+    "helm"
+   ]
   },
   {
    "key": "S3_ACCESS_KEY",
    "class": "defaulted",
    "default": "(unset — falls back to MINIO_ACCESS_KEY)",
-   "description": "explicit S3 access-key override",
-   "targets": []
+   "description": "explicit S3 access-key override; helm reads it from the storage.s3.existingSecret Secret",
+   "targets": [
+    "helm"
+   ]
   },
   {
    "key": "S3_SECRET_KEY",
    "class": "defaulted",
    "default": "(unset — falls back to MINIO_SECRET_KEY)",
    "secret": true,
-   "description": "explicit S3 secret-key override",
-   "targets": []
+   "description": "explicit S3 secret-key override; helm reads it from the storage.s3.existingSecret Secret",
+   "targets": [
+    "helm"
+   ]
   },
   {
    "key": "RECORDING_BUCKET",
@@ -289,8 +295,19 @@
    "key": "STORAGE_BACKEND",
    "class": "defaulted",
    "default": "minio",
-   "description": "storage-backend label stamped into the recording's meeting.data JSONB",
-   "targets": []
+   "description": "storage-backend label stamped into the recording's meeting.data JSONB; helm sets s3",
+   "targets": [
+    "helm"
+   ]
+  },
+  {
+   "key": "AWS_CONFIG_FILE",
+   "class": "defaulted",
+   "default": "(unset — boto3 reads ~/.aws/config if present)",
+   "description": "boto3's shared-config file, read by the recordings S3 client (not by meeting-api code); helm points it at a mounted file carrying storage.s3's signing region, addressing style and CA bundle",
+   "targets": [
+    "helm"
+   ]
   },
   {
    "key": "MEETING_TOKEN_TTL_SECONDS",

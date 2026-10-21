@@ -1,15 +1,18 @@
 ---
 title: "Contributor rights"
-description: "Vexa's low-friction DCO path for individuals and head-bound authorization path for employer-owned contributions."
+description: "Vexa's declare-once DCO path for individuals and head-bound authorization path for employer-owned contributions."
 ---
 
-Vexa uses one conscious rights choice at pull-request intake and automates the remaining mechanics.
-The canonical policy and operational commands live in
+Vexa asks each contributor for one conscious rights choice, on their first pull request, and
+automates the remaining mechanics. Later pull requests need no selection once the contributor has
+selected Independent themselves on a merged pull request; the gate finds it automatically. The
+registry in `.github/contribution-rights.json` holds only the maintainer's standing and corporate
+authorizations that cover future work. The canonical policy and operational commands live in
 [`CONTRIBUTOR_RIGHTS.md`](https://github.com/Vexa-ai/vexa/blob/main/CONTRIBUTOR_RIGHTS.md).
 
 | Path | Contributor action | Merge evidence |
 |---|---|---|
-| Independent | Select the declaration and sign each commit with `git commit --signoff` | Declaration plus the required DCO check; no individual CLA |
+| Independent | Select the declaration once and sign each commit with `git commit --signoff` | Declaration, once, plus the required DCO check; no individual CLA |
 | Employer/client-controlled | Select the corporate path and provide a legal/IP contact privately | Individual DCO plus a private authorization receipt bound to the current PR head |
 | Unsure | Select unsure as early as possible | Rights review resolves the path before merge |
 
@@ -17,12 +20,20 @@ Technical review may continue during rights review. A later push invalidates a c
 verification, and only a designated verifier can bind a private receipt to the new head. Executed
 agreements, signatures, addresses, and employment information never belong in public PR comments.
 
+The verdict is the `contribution-rights` check on the pull request's head (or the merge queue's
+head), and it always says why. The job that computes it never fails on a verdict: comments and DCO
+results run it on the default branch's newest commit, so a failing job would mark `main` red for
+another pull request's state. A failed GitHub read is published as a failing verdict on the head it
+was evaluating.
+
 ## Agent-assisted flow
 
-Agents automate Git, not legal judgment. They ask the human to choose the path, check the
+Agents automate Git, not legal judgment. They ask the human to choose the path once, check the
 repository-local Git identity, use `--signoff` after authorization, identify failing commits by
-SHA, and prepare safe remediation. They never select the declaration, sign for another person, or
-rewrite/push history without explicit approval.
+SHA, and prepare safe remediation. They may carry forward a path the human already declared, but
+never make the first choice, sign for another person, or rewrite/push history without explicit
+approval. Every commit an agent makes on the maintainer's own work carries the maintainer's
+`Signed-off-by`, under the maintainer's standing declaration.
 
 For the latest unsigned commit:
 

@@ -252,3 +252,37 @@ const seg = (text: string, end: number) => ({ start: 0, end, text });
 }
 
 console.log(`\n${checks} checks passed`);
+
+// Retained audio stays on the capture timeline regardless of STT response delay.
+{
+  const mgr = new SpeakerStreamManager({ confirmThreshold: 2 });
+  const sid = 'clock-full';
+  const start = 1700000000000;
+  mgr.addSpeaker(sid, 'Clock');
+  mgr.feedAudio(sid, new Float32Array(16000 * 6).fill(0.1), start);
+  mgr.handleTranscriptionResult(sid, 'the first sentence', 2);
+  mgr.handleTranscriptionResult(sid, 'the first sentence', 2);
+  const retained = mgr.getBufferStartMs(sid);
+  mgr.removeAll();
+  ok(retained === start + 2000, `retained window advances by confirmed audio, not STT completion: ${retained}`);
+}
+
+// Independent channels and several confirmation windows retain their input bases.
+{
+  const mgr = new SpeakerStreamManager({ confirmThreshold: 2 });
+  const starts = [1700000000000, 1700000001500];
+  for (const [i, start] of starts.entries()) {
+    const sid = `clock-channel-${i}`;
+    mgr.addSpeaker(sid, 'Clock');
+    mgr.feedAudio(sid, new Float32Array(16000 * 8).fill(0.1), start);
+    for (const [n, text] of ['first useful sentence', 'second useful sentence'].entries()) {
+      mgr.handleTranscriptionResult(sid, text, 2);
+      mgr.handleTranscriptionResult(sid, text, 2);
+      ok(mgr.getBufferStartMs(sid) === start + (n + 1) * 2000, 'each confirmation stays on its channel capture timeline');
+    }
+    mgr.handleTranscriptionResult(sid, 'fallback final sentence');
+    mgr.handleTranscriptionResult(sid, 'fallback final sentence');
+    ok(mgr.getBufferStartMs(sid) === start + 8000, 'fallback advances by actual remaining audio');
+  }
+  mgr.removeAll();
+}
