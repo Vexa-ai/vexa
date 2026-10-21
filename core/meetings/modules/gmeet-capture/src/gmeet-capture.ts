@@ -23,6 +23,12 @@ export interface GmeetCaptureOptions {
   targetSampleRate?: number;   // default 16000
   bufferSize?: number;         // default 4096
   silenceThreshold?: number;   // default 0.005 — skip near-silent chunks
+  /** Capture LIVENESS, reported apart from the silence gate: called whenever ANY stream's worklet
+   *  delivers a block, whatever its energy, at most once per `livenessIntervalMs` of wall time.
+   *  `processedSamples` is the running count of samples seen across every stream. The gate decides
+   *  what is worth transcribing; this says the capture chain is running. */
+  onLiveness?: (processedSamples: number) => void;
+  livenessIntervalMs?: number; // default 1000
   rescanMs?: number;           // default 15000 — discover late joiners
   findRetries?: number;        // default 10
   findDelayMs?: number;        // default 2000
@@ -42,12 +48,23 @@ export function createGmeetCapture(opts: GmeetCaptureOptions): GmeetCapture {
   const RESCAN = opts.rescanMs ?? 15000;
   const FIND_RETRIES = opts.findRetries ?? 10;
   const FIND_DELAY = opts.findDelayMs ?? 2000;
+  const LIVENESS_MS = opts.livenessIntervalMs ?? 1000;
 
   let running = false;
   let rescanTimer: ReturnType<typeof setInterval> | null = null;
   const connectedStreamIds = new Set<string>();
   const contexts: AudioContext[] = [];
   let nextIndex = 0;
+  let processedSamples = 0;
+  let livenessReportedAt: number | undefined;
+  function reportLiveness(samples: number): void {
+    processedSamples += samples;
+    if (!opts.onLiveness) return;
+    const at = Date.now();
+    if (livenessReportedAt !== undefined && at - livenessReportedAt < LIVENESS_MS) return;
+    livenessReportedAt = at;
+    try { opts.onLiveness(processedSamples); } catch { /* a liveness consumer must never break capture */ }
+  }
 
   function findMediaElements(): HTMLMediaElement[] {
     return Array.from(document.querySelectorAll('audio, video')).filter((el: any) =>
@@ -76,6 +93,7 @@ export function createGmeetCapture(opts: GmeetCaptureOptions): GmeetCapture {
       createPcmCaptureNode(ctx, (data) => {
         if (!running) return;
         seen++;
+        reportLiveness(data.length);
         let maxVal = 0;
         for (let i = 0; i < data.length; i++) { const a = Math.abs(data[i]); if (a > maxVal) maxVal = a; }
         if (maxVal > SILENCE) { emitted++; if (emitted === 1 || emitted % 100 === 0) log(`stream ${index} AUDIO seen=${seen} emitted=${emitted} max=${maxVal.toFixed(3)}`); opts.onAudio(index, data); } // worklet already yields a fresh copy

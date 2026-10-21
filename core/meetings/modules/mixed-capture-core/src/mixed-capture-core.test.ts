@@ -75,6 +75,32 @@ const fire = (samples: Float32Array) => {
   check('stop() closes the capture context', closed.length === before + 1);
 }
 
+// ── liveness is reported apart from the silence gate (#1673) ────────────────────
+// A silent room and a dead capture both produce no PCM; only the liveness report tells them apart.
+{
+  const pcms: Float32Array[] = [];
+  const beats: number[] = [];
+  const cap = await createMixedAudioCapture(new FakeMediaStream() as any, (pcm) => pcms.push(pcm),
+    { sampleRate: 16000, silenceThreshold: 0.005, replay: false, onLiveness: (n) => beats.push(n) });
+  fire(new Float32Array(4096));            // digital silence
+  check('a silent buffer emits a liveness report', beats.length === 1 && beats[0] === 4096);
+  check('…and no PCM (the gate still keeps silence away from STT)', pcms.length === 0);
+  for (let i = 0; i < 7; i++) fire(new Float32Array(4096));   // 8 x 4096 = 2.048 s of audio in all
+  check('liveness is rate-limited to ~1/s of processed audio, not one per callback',
+    beats.length === 2 && beats[1] === 5 * 4096);
+  fire(new Float32Array(4096).fill(0.5));
+  check('an audible buffer still crosses as PCM alongside liveness', pcms.length === 1);
+  cap.stop();
+}
+{
+  const pcms: Float32Array[] = [];
+  const cap = await createMixedAudioCapture(new FakeMediaStream() as any, (pcm) => pcms.push(pcm),
+    { replay: false, onLiveness: () => { throw new Error('consumer bug'); } });
+  fire(new Float32Array(8).fill(0.5));
+  check('a throwing liveness consumer cannot break PCM delivery', pcms.length === 1);
+  cap.stop();
+}
+
 // ── installRemoteAudioHook contract: no RTCPeerConnection → no-op false ─────────
 {
   g.window = {};

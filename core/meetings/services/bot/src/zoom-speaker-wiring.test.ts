@@ -138,8 +138,11 @@ const telemetry = {
   captureObservation: (o: { source: string; observation: Record<string, unknown> }) => observations.push(o),
 } as unknown as TelemetrySink;
 const presence: number[] = [];
+const liveness: number[] = [];
+let energies = 0;
 const activity = {
-  observeRemoteEnergy: () => {},
+  observeRemoteEnergy: () => { energies++; },
+  observeCaptureLiveness: (n: number) => liveness.push(n),
   ready: () => { /* not driven */ },
   unavailable: () => { /* not driven */ },
   observeStreamPresence: (n: number) => presence.push(n),
@@ -208,6 +211,30 @@ setSpeaker('Eve');  tick(1);    // one flicker poll
 setSpeaker('Dave'); tick(1);    // back before confirm
 check('boundary: a single-poll flicker (Eve) never crosses', !spoken.slice(before).some((s) => s.name === 'Eve'),
   JSON.stringify(spoken.slice(before)));
+
+// #1673 — LIVENESS apart from the silence gate, on the per-track lane. A silent track's callback
+// still runs; it must say so (one shared ~1/s heartbeat) while its silent PCM stays on the page.
+{
+  let fed = 0;
+  const savedFeed = pipeline.feedAudio;
+  pipeline.feedAudio = () => { fed++; };
+  const silentCaps = (g.__vexaTrackCaps as Map<string, any>);
+  const silentPcm = new Float32Array(4096);
+  const energiesBefore = energies;
+  for (const at of [100, 356, 612]) {                          // three callbacks inside one second
+    elapsedMs = at;
+    for (const cap of silentCaps.values()) cap.proc.onaudioprocess({ inputBuffer: { getChannelData: () => silentPcm } });
+  }
+  check('per-track: silent callbacks emit a liveness heartbeat (RED before #1673: never called)',
+    liveness.length === 1 && liveness[0] === 4096, JSON.stringify(liveness));
+  elapsedMs = 1_200;
+  for (const cap of silentCaps.values()) cap.proc.onaudioprocess({ inputBuffer: { getChannelData: () => silentPcm } });
+  check('per-track: the heartbeat is one shared ~1/s report carrying the lane\'s processed-sample count',
+    liveness.length === 2 && liveness[1] === 4096 * 7, JSON.stringify(liveness));
+  check('per-track: no silent PCM crossed (the gate still keeps silence away from STT and from presence)',
+    fed === 0 && energies === energiesBefore, `fed=${fed} energies=${energies - energiesBefore}`);
+  pipeline.feedAudio = savedFeed;
+}
 
 // A processor missed callbacks for 30 minutes; the next frame must describe NOW,
 // not 256 ms after the track was attached. Exercise both tracks at the real seam.
