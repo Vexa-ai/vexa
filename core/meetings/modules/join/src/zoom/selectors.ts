@@ -36,6 +36,15 @@ export const zoomLeaveButtonSelector = 'button[aria-label="Leave"]';
 // The meeting app container
 export const zoomMeetingAppSelector = '.meeting-app';
 
+// ---- In-meeting "More" menu: incoming video ----
+// The footer's More button opens a grid of `.more-button__item-box` buttons. One of them toggles
+// between aria-label "Stop Incoming Video" and "Start Incoming Video" (live DOM, 2026-10-22). The
+// More button's own aria-label carries a trailing space ("More meeting control "), hence the prefix
+// match. All three run in the page through document.querySelector, so they are plain CSS.
+export const zoomMoreMeetingControlSelector = 'button[aria-label^="More meeting control"]';
+export const zoomStopIncomingVideoSelector = '[aria-label="Stop Incoming Video"]';
+export const zoomStartIncomingVideoSelector = '[aria-label="Start Incoming Video"]';
+
 // ---- Host-not-started / invalid meeting ----
 // When host hasn't started: title="Error - Zoom", text="This meeting link is invalid (3,001)"
 export const zoomInvalidMeetingText = 'This meeting link is invalid';

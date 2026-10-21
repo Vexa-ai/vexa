@@ -19,6 +19,8 @@ import { joinZoomMeeting, buildZoomWebClientUrl } from "./zoom/join";
 import { waitForZoomMeetingAdmission, checkForZoomAdmissionSilent } from "./zoom/admission";
 import { leaveZoomMeeting, dismissZoomPopups } from "./zoom/leave";
 import { startZoomRemovalMonitor } from "./zoom/removal";
+import { stopZoomIncomingVideo, incomingVideoStep, ZOOM_INCOMING_VIDEO_SELECTORS } from "./zoom/incoming-video";
+export type { IncomingVideoOutcome, IncomingVideoStep, IncomingVideoSelectors, StopIncomingVideoOptions } from "./zoom/incoming-video";
 import { joinJitsiMeeting, buildJitsiMeetingUrl } from "./jitsi/join";
 import { waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent } from "./jitsi/admission";
 import { leaveJitsiMeeting } from "./jitsi/leave";
@@ -205,4 +207,5 @@ export {
   TeamsPreJoinBlockedError, TEAMS_PREJOIN_BLOCKED, teamsDisplayNameDisallowedChars,
 } from "./msteams/prejoin-blocked";
 export { joinZoomMeeting, buildZoomWebClientUrl, waitForZoomMeetingAdmission, checkForZoomAdmissionSilent, leaveZoomMeeting, dismissZoomPopups, startZoomRemovalMonitor };
+export { stopZoomIncomingVideo, incomingVideoStep, ZOOM_INCOMING_VIDEO_SELECTORS };
 export { joinJitsiMeeting, buildJitsiMeetingUrl, waitForJitsiMeetingAdmission, checkForJitsiAdmissionSilent, leaveJitsiMeeting, startJitsiRemovalMonitor };

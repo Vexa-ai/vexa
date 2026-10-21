@@ -11,6 +11,7 @@ import {
   AdmissionError,
   leaveGoogleMeet, leaveMicrosoftTeams, leaveZoomMeeting, leaveJitsiMeeting,
   startGoogleRemovalMonitor, startTeamsRemovalMonitor, startZoomRemovalMonitor, startJitsiRemovalMonitor,
+  stopZoomIncomingVideo,
   type JoinState, type Platform as JoinPlatform, type AdmissionOutcome,
 } from '@vexa/join';
 import type { BotStatus } from './contracts.js';
@@ -38,6 +39,16 @@ export function admissionOutcomeToJoinOutcome(outcome: AdmissionOutcome): JoinOu
     case 'join_failure':         return 'error';
     default:                     return 'error';
   }
+}
+
+/**
+ * Whether the bot turns participants' video off once it is in the call. The bot needs the call's
+ * audio and the active-speaker tile, never the pictures, and on Zoom web every camera that is on
+ * costs a software video decode taken from the same CPU limit as the audio capture. Zoom only,
+ * where the web client offers "Stop Incoming Video"; `videoReceiveEnabled: true` keeps video on.
+ */
+export function wantsIncomingVideoOff(inv: Pick<Invocation, 'platform' | 'videoReceiveEnabled'>): boolean {
+  return inv.platform === 'zoom' && inv.videoReceiveEnabled !== true;
 }
 
 /** @vexa/join JoinState → lifecycle.v1 BotStatus (null = not a bot-status transition). */
@@ -153,7 +164,16 @@ export function createBrowserJoinDriver(
         signals({ detail: String(e) });   // park them for the orchestrator's catch, then re-raise
         throw e;
       }
-      if (r.admitted) { await report('active'); return { outcome: 'admitted' }; }
+      if (r.admitted) {
+        await report('active');
+        // Runs alongside the call: the menu control appears a few seconds after admission.
+        if (wantsIncomingVideoOff(inv)) {
+          void stopZoomIncomingVideo(page)
+            .then((o) => console.log(`[bot] zoom incoming video: ${o}`))
+            .catch(() => { /* never breaks the call */ });
+        }
+        return { outcome: 'admitted' };
+      }
       const outcome: JoinOutcome = (r.state === 'blocked' || r.state === 'needs_human_help') ? 'blocked' : 'rejected';
       const detail = `join ended in state '${r.state}' without admission`;
       return { outcome, reason: detail, signals: signals({ detail }) };
