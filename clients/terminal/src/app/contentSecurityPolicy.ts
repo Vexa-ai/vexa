@@ -7,10 +7,10 @@
  *    loaded them ('strict-dynamic', which covers Next's chunks, next/script and gtag). An inline
  *    script that came in with page content has no nonce, so it does not run, and that holds inside
  *    an `srcdoc` frame too, because such a frame inherits this policy.
- *  - 'unsafe-eval' stays, for two runtimes that turn text into code in the browser: the MDX
- *    renderer (`@mdx-js/mdx` `evaluate`, ui-kit/MdxDoc.tsx) and the canvas runtime, which compiles
- *    a view's source and runs it with `new Function` (canvas/runtime.tsx). It also lets the call
- *    blur's WebAssembly compile. Dropping it needs both runtimes off eval, not one.
+ *  - 'unsafe-eval' stays, for the MDX renderer (`@mdx-js/mdx` `evaluate`, ui-kit/MdxDoc.tsx), which
+ *    turns a page's text into code in the browser, and for the call blur's WebAssembly compile. A
+ *    Meeting Canvas view is NOT compiled on these pages: it runs in `/canvas-frame` under its own
+ *    policy (`canvasFrameContentSecurityPolicy` below), in an opaque-origin sandbox.
  *  - Styles allow 'unsafe-inline': React renders `style` attributes, and the appearance tokens,
  *    mermaid's diagrams and LiveKit write `<style>` elements at run time. A nonce cannot cover
  *    attributes, and naming one would switch 'unsafe-inline' off for the elements. The one foreign
@@ -83,6 +83,36 @@ export function contentSecurityPolicy(nonce: string, sources: PolicySources = po
     "frame-src 'self'",
     "form-action 'self'",
     "frame-ancestors 'self'",
+  ].join("; ");
+}
+
+/** THE MEETING CANVAS FRAME'S POLICY (`/canvas-frame`, canvas/frame/protocol.ts). The document runs
+ *  workspace-written view code, so:
+ *  - `sandbox allow-scripts` — the response itself is sandboxed, embedded or opened directly: an
+ *    opaque origin, so no cookie, storage or DOM of the terminal's, no popup, form, top navigation
+ *    or download. Never `allow-same-origin`.
+ *  - `connect-src 'none'` and nothing to load but this response's own scripts and styles: the view
+ *    reaches no server at all — not the terminal's API, not anybody's. Its one channel is
+ *    `postMessage` to the page that frames it.
+ *  - 'unsafe-eval' because compiling the view is this document's job (`new Function`).
+ *  - `frame-ancestors 'self'`: only the terminal's own pages may frame it. */
+export function canvasFrameContentSecurityPolicy(nonce: string): string {
+  return [
+    "default-src 'none'",
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval'`,
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self'",
+    "img-src data:",
+    "connect-src 'none'",
+    "media-src 'none'",
+    "object-src 'none'",
+    "frame-src 'none'",
+    "worker-src 'none'",
+    "manifest-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'self'",
+    "sandbox allow-scripts",
   ].join("; ");
 }
 

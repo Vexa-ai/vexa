@@ -3,7 +3,13 @@
 Harnessed Meeting Canvas runtime for terminal-side generated React views.
 
 Public surface:
-- `runtime.tsx` renders validated `views/meeting.tsx` source.
+- `runtime.tsx` shows a `views/meeting.tsx` view WITHOUT running it on the terminal page: it mounts
+  `/canvas-frame` (`app/canvas-frame/page.tsx`) in an iframe sandboxed to `allow-scripts`, posts the
+  source and the meeting in, and runs only the actions the frame posts back (`frame/protocol.ts`).
+  The frame document has its own policy (`canvasFrameContentSecurityPolicy`): an opaque origin that
+  connects nowhere. `frame/compile.ts` is the one module that turns a view's text into code, and the
+  frame (`frame/CanvasFrame.tsx`) is the only thing that imports it. `validator.ts` is the author's
+  feedback, not the boundary.
 - `kit.tsx` exports the theme-locked `ui` component vocabulary.
 - `useMeeting.ts` and `actions.ts` expose the live meeting feed and sanctioned side effects.
 

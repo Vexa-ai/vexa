@@ -5,11 +5,15 @@ gateway, agent-api, meeting-api, flows, the terminal's server). Both checks read
 every call, so a test or an operator sees the value in force now, not the one at import.
 
   * `check_internal` FAILS CLOSED: no secret configured → 503, a wrong or missing header → 403. With
-    `DEV_MODE=true` and no secret it lets the call through — a local-development convenience for
-    doors whose answer the caller could get anyway (`/internal/validate`, the membership index).
-  * `check_internal_no_dev_bypass` has no dev-mode escape. It guards a door that reads or writes ONE
-    NAMED PERSON'S data by an id the caller supplies, or that answers whether an address has an
-    account: there the bypass would be a cross-user read (or write) with no credential at all.
+    `DEV_MODE=true` and no secret it lets the call through — a local-development convenience kept
+    for doors that answer about the INSTANCE and name nobody (`/internal/validate`,
+    `/internal/instance`, the claim-code check).
+  * `check_internal_no_dev_bypass` has no dev-mode escape. It guards every door that changes who
+    holds what — the admin role (bootstrap, release), a membership, a platform setting — and every
+    door that reads ONE NAMED PERSON'S data by an id the caller supplies (their memberships, model
+    configuration, bot context, address, admin bit), or that answers whether an address has an
+    account. There the bypass would be an ownership change, or a cross-user read, with no
+    credential at all.
 """
 from __future__ import annotations
 

@@ -106,6 +106,15 @@ def restarted_line(kind: str, target: str) -> str:
     return f"{_verbs(kind)[0]} {target} stopped when the agent restarted — ask again and I'll redo it."
 
 
+#: HOW MANY JOBS MAY BE OPEN WHEN THE MODEL ASKS FOR ANOTHER. A person's press (Create, Extend) is
+#: never refused (Vexa-ai/vexa#1610); the model's own `spawn_job` is, past this many running or
+#: waiting, because each job is a full harness turn on its own budget, and one injected instruction
+#: ("research each of these fifty names as its own job") would otherwise fan out unbounded spend
+#: billed to the owner. Depth is bounded separately: a job is never offered `spawn_job`
+#: (`llm/jobs.offered`).
+MODEL_OPEN_JOBS_MAX = 4
+
+
 class _Job(NamedTuple):
     """One act, from the press to the line it posts. ``brief`` is kept because it is the ONLY thing
     that separates a person asking for something else on the same page from the same press twice."""
@@ -247,6 +256,12 @@ class JobRunner:
             self._threads.append(th)
         th.start()
         return ev
+
+    def open_jobs(self) -> int:
+        """How many jobs are running or waiting right now — the number the model's own
+        `spawn_job` is capped on (``MODEL_OPEN_JOBS_MAX``)."""
+        with self._lock:
+            return len(self._running) + sum(len(q) for q in self._waiting.values())
 
     def busy(self) -> bool:
         """Is any job still running OR waiting to? The serve loop asks before it lets an idle read

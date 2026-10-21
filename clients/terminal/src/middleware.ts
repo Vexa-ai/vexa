@@ -3,13 +3,18 @@
  *  stamps its own scripts with it; the root layout reads `x-nonce` for the scripts it writes.
  *  The policy's foreign sources come from this process's environment on every request (LIVEKIT_URL
  *  at run time; NEXT_PUBLIC_GA_MEASUREMENT_ID as built), so they follow the deployment's own config.
+ *  The Meeting Canvas frame (`/canvas-frame`) gets its own policy, which sandboxes the document.
  *  API routes, static assets and the /b/ proxy are not pages and are left alone. */
 import { NextResponse, type NextRequest } from "next/server";
-import { NONCE_HEADER, contentSecurityPolicy, newNonce } from "./app/contentSecurityPolicy";
+import { NONCE_HEADER, canvasFrameContentSecurityPolicy, contentSecurityPolicy, newNonce } from "./app/contentSecurityPolicy";
+import { CANVAS_FRAME_PATH } from "./canvas/frame/protocol";
 
 export function middleware(request: NextRequest) {
   const nonce = newNonce();
-  const csp = contentSecurityPolicy(nonce);
+  // The Meeting Canvas frame runs workspace-written code: its own, sandboxing policy.
+  const csp = request.nextUrl.pathname === CANVAS_FRAME_PATH
+    ? canvasFrameContentSecurityPolicy(nonce)
+    : contentSecurityPolicy(nonce);
   const headers = new Headers(request.headers);
   headers.set(NONCE_HEADER, nonce);
   headers.set("Content-Security-Policy", csp);

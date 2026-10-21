@@ -153,6 +153,12 @@ export function CanvasActionsProvider({ children }: { children: ReactNode }) {
   return createElement(ActionsContext.Provider, { value: actions }, children);
 }
 
+/** Actions handed in whole — the isolated canvas frame provides its message bridge here, so the
+ *  kit's buttons and the view's `actions.*` reach the host page's real actions. */
+export function HarnessActionsProvider({ value, children }: { value: HarnessActions; children: ReactNode }) {
+  return createElement(ActionsContext.Provider, { value }, children);
+}
+
 export function useActions(): HarnessActions {
   const actions = useContext(ActionsContext);
   return actions ?? makeActions();

@@ -20,10 +20,15 @@ THE RESOLUTION ORDER, and it is the same shape `mailtext.render` and `prompt_for
 
     flow param  ->  `_global/POLICIES.md`  ->  env  ->  the default in this file
 
-FAIL SOFT, ALWAYS. Every read is wrapped: an unreachable agent door, a malformed file, a value this
-module does not recognise — none of them may fail a send. What cannot be understood falls back to
-the default and is named in `problems`, because a policy file that is silently ignored is worse than
-one that is not there.
+ABSENT IS THE DEFAULTS; UNREADABLE IS CLOSED. A file that is not there (404), or an agent domain
+this deployment does not run, means nobody answered — the defaults, which change nothing. A file
+that IS there but could not be read (agent-api restarting, a timeout, an error status), or a
+`profile:` this module does not know, means an admin answered and we could not hear what: then
+every rule that widens who is mailed, joined or read takes its CLOSED value (`CLOSED`) and the
+failure is logged at warning. A `profile: bank` deployment must not mail the people it excluded
+because a door blinked. No read ever raises: a send is never failed by a policy read, it is
+narrowed. A value this module does not recognise falls back to the default and is named in
+`problems`, because a policy file that is silently ignored is worse than one that is not there.
 
 THE DISCLOSURE IS DERIVED, NEVER WRITTEN. `visibility_sentence` composes the sentence every attendee
 reads out of the rules above it. There is deliberately no front-matter key for that sentence: a
@@ -39,7 +44,7 @@ import re
 from typing import Optional
 
 from . import mailkinds
-from .common import ws_file
+from .common import AgentDomainAbsent, swallowed, ws_get
 
 logger = logging.getLogger(__name__)
 
@@ -264,6 +269,53 @@ PROFILES: dict[str, dict] = {
 }
 
 
+#: THE CLOSED VALUE OF EVERY RULE THAT WIDENS WHO IS MAILED, JOINED OR READ — what applies when an
+#: admin's file exists but cannot be read, or names a profile this module does not know. Each is the
+#: answer under which the engine does LESS: no mail to externals or attendees, no prep or minutes
+#: mail, no join on an invite or into a mixed meeting, no desk read, no page written, no open web,
+#: no agent message across people. Mail kinds are `off`. Keys not listed keep their default: they
+#: either narrow already or are read and enforced loudly by their own owner (agent-api, crm-api).
+CLOSED: dict = {
+    "agent_reads_desk": False,
+    "report_to_participants": False,
+    "external_participants": False,
+    "bot_joins_on_invite": False,
+    "bot_joins_mixed_meetings": False,
+    "agent_writes_pages": False,
+    "open_web": False,
+    "prep_and_invite_mail": False,
+    "minutes_mail": False,
+    "agent_messages_own": False,
+    "agent_messages_shared": False,
+    "agent_messages_from_routines": False,
+    **{k: "off" for k in mailkinds.policy_defaults()},
+}
+
+
+class PolicyUnreadable(RuntimeError):
+    """`_global/POLICIES.md` exists, or may exist, and could not be read."""
+
+
+def ws_file(uid: str, path: str, slug: Optional[str] = None) -> Optional[str]:
+    """The policy file's text; None when it is not there (404); `PolicyUnreadable` for any other
+    answer. The seam `read` fetches through — the one place absent and unreadable part ways."""
+    code, body = ws_get(uid, path, slug)
+    if code == 200 and isinstance(body, dict):
+        return str(body.get("content") or "")
+    if code == 404:
+        return None
+    raise PolicyUnreadable(f"agent-api answered {code} for {GLOBAL_SLUG}/{path}")
+
+
+def closed(problem: str) -> dict:
+    """The rules with every widening rule at its CLOSED value, `problem` named in `problems`."""
+    out = resolve(None)
+    out.update(CLOSED)
+    out["problems"] = [problem]
+    out["_explicit"] = frozenset(CLOSED)      # a closed mail kind reads `off`, not "unanswered"
+    return out
+
+
 # ── reading the file ─────────────────────────────────────────────────────────────────────────────
 
 def front_matter(raw: str) -> dict:
@@ -375,12 +427,15 @@ def resolve(raw: Optional[str]) -> dict:
     attrs = front_matter(raw or "")
     problems: list[str] = []
     name = (attrs.get("profile") or "default").strip().lower() or "default"
-    if name not in PROFILES:
+    unknown_profile = name not in PROFILES
+    if unknown_profile:
         problems.append(f"profile: {name!r} is not one of {', '.join(sorted(PROFILES))} — "
-                        f"using the defaults")
+                        f"every widening rule is closed until it names one")
         name = "default"
     out: dict = {"profile": name}
-    preset = PROFILES[name]
+    # An admin who asked for a profile we cannot apply asked for SOMETHING narrower than nothing;
+    # the closed values stand in for it, and a row the file answers explicitly still wins.
+    preset = {**PROFILES[name], **(CLOSED if unknown_profile else {})}
     for key, default in DEFAULTS.items():
         base = preset.get(key, default)
         raw_value = attrs.get(key, "")
@@ -407,7 +462,8 @@ def resolve(raw: Optional[str]) -> dict:
             out[key] = raw_value
     out["problems"] = problems
     #: the keys the page actually answered — `mailkinds.switch` tells "written off" from "unanswered"
-    out["_explicit"] = frozenset(k for k, v in attrs.items() if str(v).strip())
+    out["_explicit"] = (frozenset(k for k, v in attrs.items() if str(v).strip())
+                        | (frozenset(CLOSED) if unknown_profile else frozenset()))
     return out
 
 
@@ -416,18 +472,19 @@ def read(uid: str) -> dict:
 
     Not cached, on purpose and for the reason `mailtext.render` is not: an admin who changes a rule
     expects the next mail to carry the change, and policy reads are nowhere near a rate at which one
-    HTTP call matters. Never raises — an agent domain that is not deployed (`AgentDomainAbsent`), an
-    unreachable door, a file that is not there: all of them are "no answers on file", which resolves
-    to the defaults and changes nothing."""
-    raw = None
-    if str(uid or "").strip():
-        try:
-            raw = ws_file(str(uid), POLICIES_FILE, GLOBAL_SLUG)
-        except Exception:  # noqa: BLE001 — a policy file we cannot fetch is not a reason to fail
-            logger.debug("policies: could not read %s from %s — using the defaults",
-                         POLICIES_FILE, GLOBAL_SLUG)
-            raw = None
-    out = resolve(raw)
+    HTTP call matters. Never raises. An agent domain that is not deployed (`AgentDomainAbsent`) or
+    a door that answered 404 is "no answers on file": the defaults. A file that could not be read is
+    the CLOSED rules (module docstring), logged at warning. With no `uid` the company layer is read
+    as `COMPANY_READER` — `_global` is every subject's to read, so nobody is needed to read it."""
+    reader = str(uid or "").strip() or COMPANY_READER
+    try:
+        out = resolve(ws_file(reader, POLICIES_FILE, GLOBAL_SLUG))
+    except AgentDomainAbsent:
+        out = resolve(None)             # no agent domain here: nobody can have answered
+    except Exception as exc:  # noqa: BLE001 — a send is narrowed by this, never failed
+        swallowed("policies.read", "policy-file-unreadable", exc, file=f"{GLOBAL_SLUG}/{POLICIES_FILE}")
+        out = closed(f"{GLOBAL_SLUG}/{POLICIES_FILE} could not be read "
+                     f"({type(exc).__name__}) — every widening rule is closed")
     for problem in out.get("problems") or ():
         logger.warning("policies: %s", problem)
     return out
@@ -464,8 +521,8 @@ COMPANY_READER = "flows"
 
 def read_company() -> dict:
     """The rules as the COMPANY holds them, for a decision taken before any person is known — the
-    inbound mailbox's allow-list and its invite switch. Same file, same fail-soft defaults as
-    `read`; only the reader differs."""
+    inbound mailbox's allow-list and its invite switch. Same file, same absent-is-defaults and
+    unreadable-is-closed rule as `read`; only the reader differs."""
     return read(COMPANY_READER)
 
 

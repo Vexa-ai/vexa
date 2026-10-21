@@ -813,7 +813,7 @@ def create_app(
     def _require_shared_write(subject: str, slug: Optional[str]) -> None:
         """A no-op for the caller's OWN workspaces; for a SHARED one, refuse anyone below contributor.
         (``_manage_dir`` resolves a workspace a viewer may READ — that is the right gate for status and
-        purpose, and the wrong one for anything that rewrites the tree.)"""
+        for reading the purpose, and the wrong one for anything that rewrites the tree or the purpose.)"""
         target = (slug or "").strip()
         if not target or target == subject:
             return

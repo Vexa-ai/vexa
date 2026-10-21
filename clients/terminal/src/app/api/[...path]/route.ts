@@ -6,8 +6,8 @@
  *      where meeting-api is fronted.
  *    • everything else (chat · sessions · routines · workspace · models · …) → the gateway's /agent/*
  *      prefix, where agent-api is fronted.
- *  BOTH carry the per-user X-API-Key (cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY). The gateway
- *  resolves it → user and injects X-User-Id downstream, so agent-api derives `subject` from identity
+ *  BOTH carry the per-user X-API-Key (the cookie token; nothing for an anonymous request unless
+ *  zero-login is on). The gateway resolves it → user and injects X-User-Id downstream, so agent-api derives `subject` from identity
  *  (the client never sends one — P20 scope). The terminal never reaches agent-api directly.
  *
  *  Carries through: the path after /api/, the query string, the request body, and the upstream
@@ -38,7 +38,8 @@ const RASTER_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gi
 // MEETINGS_DOMAIN (the meetings-vs-agent split) lives in ../proxyMode — shared with the meetings-only gate.
 
 /** Resolve the upstream URL + headers for a captured /api/<path...> request. Every call carries the
- *  per-user X-API-Key (cookie token → VEXA_API_KEY → VEXA_BOT_API_KEY) to the single gateway edge. */
+ *  per-user X-API-Key (the cookie token; nothing for an anonymous request unless zero-login is on)
+ *  to the single gateway edge. */
 async function upstreamFor(path: string, search: string): Promise<{ url: string; headers: HeadersInit }> {
   const base = MEETINGS_DOMAIN.test(path) ? `${GATEWAY_URL}/${path}` : `${GATEWAY_URL}/agent/${path}`;
   return { url: `${base}${search}`, headers: { "X-API-Key": await resolveApiKey() } };

@@ -1261,6 +1261,10 @@ flows:
 # issues no writes, and a test refuses to ship a panel that does.
 adoptionPanel:
   enabled: false
+  # REQUIRED when enabled: the Secret (keys `username`, `password`) of the SELECT-only
+  # `vexa_reporting` role Grafana logs in as — dashboards/reporting-role.sql creates the role.
+  # Never the application's owner credentials; the chart refuses to render with them.
+  readerSecret: ""
   # The labels the Grafana sidecar watches. Change them only if your sidecar is configured with
   # non-default label keys; the VALUE is always "1", which is what the sidecar matches on.
   dashboardLabel: grafana_dashboard

@@ -7,20 +7,22 @@
 #
 # The chart emits a companion ConfigMap (<release>-vexa-adoption-panel-env) carrying the four
 # NON-SECRET values resolved from the release — host, port, and the two database names — so the
-# operator wires Grafana up with an envFrom and one secretKeyRef:
+# operator wires Grafana up with an envFrom and the READER Secret (`adoptionPanel.readerSecret`):
 #
 #   envFrom:
 #     - configMapRef: { name: <release>-vexa-adoption-panel-env }
 #   env:
 #     - name: VEXA_DB_USER
-#       valueFrom: { secretKeyRef: { name: postgres-credentials, key: POSTGRES_USER } }
+#       valueFrom: { secretKeyRef: { name: <adoptionPanel.readerSecret>, key: username } }
 #     - name: VEXA_DB_PASSWORD
-#       valueFrom: { secretKeyRef: { name: postgres-credentials, key: POSTGRES_PASSWORD } }
+#       valueFrom: { secretKeyRef: { name: <adoptionPanel.readerSecret>, key: password } }
 #
-# GRANT THE ROLE SELECT AND NOTHING ELSE. The dashboard issues no writes, and a reporting
-# datasource holding write rights is a finding in any bank's review. `readOnly: true` below is
-# Grafana's own UI lock — it stops an editor changing the connection, it is NOT a database
-# grant, and it must not be mistaken for one.
+# THE ROLE IS `vexa_reporting`, NEVER THE APPLICATION'S OWNER ROLE. A Grafana Editor runs any SQL
+# the datasource's role may (Explore, a new panel), so the role is the boundary. The chart ships
+# its definition — SELECT on the exact columns the panel reads and nothing else — in the
+# <release>-vexa-adoption-datasource ConfigMap as `reporting-role.sql`; the database owner runs it
+# once. `readOnly: true` below is Grafana's own UI lock — it stops an editor changing the
+# connection, it is NOT a database grant, and it must not be mistaken for one.
 apiVersion: 1
 
 datasources:

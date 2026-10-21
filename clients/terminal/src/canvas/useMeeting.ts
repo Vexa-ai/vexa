@@ -469,6 +469,14 @@ export function MeetingSourceProvider({ meetingId, children }: { meetingId?: str
   return createElement(MeetingSourceContext.Provider, { value }, children);
 }
 
+/** A meeting state handed in whole — the isolated canvas frame's source: the host page reads the
+ *  live meeting and posts it in (`frame/protocol.ts`), and the view's hooks derive from it exactly
+ *  as they derive from the live source. */
+export function MeetingStateProvider({ state, children }: { state: MeetingState; children: ReactNode }) {
+  const value = useMemo<MeetingSourceContextValue>(() => ({ state }), [state]);
+  return createElement(MeetingSourceContext.Provider, { value }, children);
+}
+
 export function useMeetingSource(): MeetingSourceContextValue | null {
   return useContext(MeetingSourceContext);
 }

@@ -31,7 +31,7 @@ def _client(sess):
     app = FastAPI()
     app.include_router(build(**{k: deps[k] for k in [
         '_global_root', '_meeting_note_recorder', '_meeting_owner_lookup', '_read_target',
-        '_resolve_room', '_scaffold_is_for', '_scaffold_view', '_schedule_source', 'dispatcher',
+        '_resolve_room', '_scaffold_recipient_is', '_scaffold_view', '_schedule_source', 'dispatcher',
         'invocations_url', 'mindex', 'redis_url', 'scaffolds', 'scheduler', 'sess', 'settings',
         'stream_reader', 'subject_of', 'workspace_registry', 'wsr']}))
     return TestClient(app)
@@ -144,7 +144,7 @@ def test_a_failing_meeting_lookup_denies():
     app = FastAPI()
     app.include_router(build(**{k: deps[k] for k in [
         '_global_root', '_meeting_note_recorder', '_meeting_owner_lookup', '_read_target',
-        '_resolve_room', '_scaffold_is_for', '_scaffold_view', '_schedule_source', 'dispatcher',
+        '_resolve_room', '_scaffold_recipient_is', '_scaffold_view', '_schedule_source', 'dispatcher',
         'invocations_url', 'mindex', 'redis_url', 'scaffolds', 'scheduler', 'sess', 'settings',
         'stream_reader', 'subject_of', 'workspace_registry', 'wsr']}))
     client = TestClient(app)

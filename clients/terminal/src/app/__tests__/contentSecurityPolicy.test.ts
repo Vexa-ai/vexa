@@ -2,7 +2,7 @@
 /** The terminal pages carry a Content-Security-Policy with a per-response nonce. */
 import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
-import { contentSecurityPolicy, newNonce } from "../contentSecurityPolicy";
+import { canvasFrameContentSecurityPolicy, contentSecurityPolicy, newNonce } from "../contentSecurityPolicy";
 import { middleware, config } from "../../middleware";
 
 const directives = (csp: string) =>
@@ -96,5 +96,33 @@ describe("the terminal pages' policy", () => {
     expect(re.test("/api/tokens")).toBe(false);
     expect(re.test("/_next/static/chunks/a.js")).toBe(false);
     expect(re.test("/b/123/vnc.html")).toBe(false);
+  });
+});
+
+
+describe("the Meeting Canvas frame's policy (S03T-1)", () => {
+  it("sandboxes the document to scripts alone: an opaque origin, never allow-same-origin", () => {
+    const d = directives(canvasFrameContentSecurityPolicy("abc"));
+    expect(d["sandbox"]).toEqual(["allow-scripts"]);
+    expect(canvasFrameContentSecurityPolicy("abc")).not.toMatch(/allow-same-origin/);
+  });
+
+  it("connects nowhere and loads nothing but its own scripts and styles", () => {
+    const d = directives(canvasFrameContentSecurityPolicy("abc"));
+    expect(d["default-src"]).toEqual(["'none'"]);
+    expect(d["connect-src"]).toEqual(["'none'"]);
+    expect(d["img-src"]).toEqual(["data:"]);
+    expect(d["form-action"]).toEqual(["'none'"]);
+    expect(d["frame-src"]).toEqual(["'none'"]);
+    expect(d["frame-ancestors"]).toEqual(["'self'"]);
+    expect(d["script-src"]).toContain("'nonce-abc'");
+  });
+
+  it("is the policy the middleware serves /canvas-frame with, and only that path", () => {
+    const frame = middleware(new NextRequest("https://terminal.example.test/canvas-frame"));
+    expect(frame.headers.get("Content-Security-Policy")).toMatch(/sandbox allow-scripts/);
+    expect(frame.headers.get("Content-Security-Policy")).toMatch(/connect-src 'none'/);
+    const page = middleware(new NextRequest("https://terminal.example.test/"));
+    expect(page.headers.get("Content-Security-Policy")).not.toMatch(/sandbox/);
   });
 });

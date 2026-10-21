@@ -12,8 +12,9 @@
 // (src/app/api/socketUpgrade.mjs).
 //
 // The key injected on `/ws` is the SAME per-user key the REST proxy forwards
-// (src/app/api/proxyAuth.ts): the logged-in user's APIToken from the `vexa-token`
-// cookie, falling back to VEXA_API_KEY / VEXA_BOT_API_KEY. This MUST match the REST
+// (src/app/api/proxyAuth.ts): the signed-in person's token from the `vexa-token` cookie, and
+// for a request without one nothing (the upgrade is refused) unless zero-login is on — one rule,
+// src/app/api/auth/deploymentKey.mjs. This MUST match the REST
 // side — the gateway auto-subscribes the socket to `u:{user_id}:meetings` from this
 // key, so a mismatched key would deliver another user's live meeting.status frames
 // (or none), freezing the client's meeting list at its last REST snapshot.

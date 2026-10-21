@@ -2835,7 +2835,13 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     def _spawn_from_tool(kind: str, target: str, brief: str) -> "tuple[bool, str]":
         """`spawn_job`'s answer to the model — and since Vexa-ai/vexa#1610 it is always an ACCEPTED
         one: an act on a busy target queues behind it, an identical brief joins it. The model is
-        told which of the three happened so it can say so; none of them is a failure."""
+        told which of the three happened so it can say so; none of them is a failure.
+
+        The one refusal is the model's, not the person's: past ``MODEL_OPEN_JOBS_MAX`` open jobs the
+        model is told to do the work in its turn instead."""
+        if _jobs.open_jobs() >= worker_jobs.MODEL_OPEN_JOBS_MAX:   # type: ignore[union-attr]
+            return False, (f"{worker_jobs.MODEL_OPEN_JOBS_MAX} background jobs are already open — "
+                           f"do this in the turn, or tell the person it waits for one to land")
         ev = _jobs.spawn(kind, target, brief)          # type: ignore[union-attr]
         t = ev.get("type")
         if t == "job-collapsed":

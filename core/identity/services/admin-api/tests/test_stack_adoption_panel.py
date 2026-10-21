@@ -323,3 +323,71 @@ def test_no_panel_can_write():
         sql = panel["targets"][0]["rawSql"]
         body = "\n".join(l for l in sql.splitlines() if not l.strip().startswith("--"))
         assert not forbidden.search(body), f"{panel['title']}: writes"
+
+
+# ── the reporting role the panel logs in as ───────────────────────────────────────────────────
+#
+# A Grafana Editor runs any SQL the datasource's role may, so the role is the boundary
+# (`dashboards/reporting-role.sql`). Proven here on the real dialect: every panel answers as that
+# role, and it can read nothing the panel does not (people's model keys in `users.data`, a step's
+# scratch) and write nothing.
+
+ROLE_SQL = DASH / "reporting-role.sql"
+
+
+def _role_blocks() -> dict:
+    """The statements under each `\\if :{?name}` block of the shipped file, by name."""
+    blocks, cur = {}, None
+    for line in ROLE_SQL.read_text().splitlines():
+        s = line.strip()
+        m = re.match(r"\\if :\{\?(\w+)\}", s)
+        if m:
+            cur = m.group(1)
+            blocks[cur] = []
+        elif s == "\\endif":
+            cur = None
+        elif cur and s and not s.startswith("--"):
+            blocks[cur].append(s)
+    return {k: [x.strip() for x in " ".join(v).split(";") if x.strip()] for k, v in blocks.items()}
+
+
+@pytest.fixture()
+def reporting(engine, pg_url):
+    from sqlalchemy.engine import make_url
+    blocks = _role_blocks()
+    assert set(blocks) == {"password", "app", "flows"}
+    with engine.begin() as c:
+        db = c.execute(text("SELECT current_database()")).scalar()
+        c.execute(text("DROP ROLE IF EXISTS vexa_reporting"))
+        for stmt in blocks["password"] + blocks["app"] + blocks["flows"]:
+            c.execute(text(stmt.replace(":'password'", "'reporting-test-pw'")
+                           .replace(':"DBNAME"', f'"{db}"')))
+    url = make_url(pg_url).set(username="vexa_reporting", password="reporting-test-pw")
+    eng = create_engine(url)
+    yield eng
+    eng.dispose()
+    with engine.begin() as c:
+        c.execute(text(f'REVOKE ALL ON DATABASE "{db}" FROM vexa_reporting'))
+        c.execute(text("DROP OWNED BY vexa_reporting"))
+        c.execute(text("DROP ROLE vexa_reporting"))
+
+
+def test_every_panel_answers_as_the_reporting_role(reporting):
+    for f in sorted(SQL_DIR.glob("*.sql")):
+        with reporting.connect() as c:
+            c.execute(text(render(f.stem))).fetchall()
+
+
+@pytest.mark.parametrize("stmt", [
+    "SELECT data FROM users",
+    "SELECT * FROM users",
+    "SELECT scratch FROM reaction",
+    "SELECT token FROM api_tokens",
+    "UPDATE meetings SET status = 'failed'",
+    "DELETE FROM reaction",
+    "CREATE TABLE t (i int)",
+])
+def test_the_reporting_role_reads_nothing_else_and_writes_nothing(reporting, stmt):
+    from sqlalchemy.exc import ProgrammingError
+    with reporting.connect() as c, pytest.raises(ProgrammingError):
+        c.execute(text(stmt))

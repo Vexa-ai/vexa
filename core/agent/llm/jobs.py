@@ -6,8 +6,9 @@ only the other half: the thing a harness's `spawn_job` tool calls, and the answe
 
 TWO LINES OF POLICY, AND BOTH ARE THE HARNESS'S OWN RULES:
 
-* **A tool nothing can serve is not attached.** ``configured()`` is what `openai_agent`'s
+* **A tool nothing can serve is not attached.** ``offered()`` is what `openai_agent`'s
   `_CONDITIONAL` table asks before it offers `spawn_job` — the same discipline `WebSearch` follows.
+  It is false inside a job too: a job does not start jobs.
   Advertising a tool with no backend teaches the model that backgrounding does not work, and that
   lesson outlives the turn.
 * **A refusal is a normal tool result.** A duplicate job, a spawner that raised — the model is told,
@@ -47,8 +48,15 @@ def set_spawner(fn: Optional[Spawner]) -> None:
 
 
 def configured() -> bool:
-    """Can this process actually run a job? Read by the harness before attaching the tool."""
+    """Can this process actually run a job?"""
     return _spawner is not None
+
+
+def offered() -> bool:
+    """Is `spawn_job` offered to the turn on THIS thread? Read by the harness before attaching the
+    tool. Only where a spawner exists, and never inside a job: a job does not start jobs, so one
+    instruction cannot fan out into a tree of background turns billed to the owner."""
+    return configured() and not in_job()
 
 
 # ── am I a job? ──────────────────────────────────────────────────────────────────────────────────
@@ -108,6 +116,8 @@ def spawn(kind: str, target: str, brief: str) -> "tuple[bool, str]":
     if fn is None:
         return False, ("background jobs are not available here — do the work in this turn, or say "
                        "plainly that it is too long to do now")
+    if in_job():
+        return False, "a background job cannot start another job — do this work here, in this job"
     if not (brief or "").strip():
         return False, "spawn_job needs a `brief`: the job does not see this conversation"
     try:

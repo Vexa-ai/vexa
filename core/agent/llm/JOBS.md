@@ -377,6 +377,10 @@ The `spawn_job` TOOL — the agent choosing to background its own long act — i
   a spawner into at boot. The answer is decided at tool-call time, in the same process, so the model
   reads back which of the three happened — started, queued behind the job on that target, or joined
   to an identical one — and can say so. None of them is a failure any more (Vexa-ai/vexa#1610).
+  Two bounds hold on the model's own call and never on a person's press: a job is not offered
+  `spawn_job` at all (`jobs.offered()` is false on a job thread), and past
+  `worker/jobs.MODEL_OPEN_JOBS_MAX` running-or-waiting jobs the call is refused in words, so one
+  injected instruction cannot fan out into unbounded background turns.
 - **`claude-code`** drives a CLI subprocess whose tool list is the CLI's own; a Python builtin is
   unreachable from it. **The native subagent (`Task`) was considered and rejected**: it runs to
   completion INSIDE the turn, so the turn does not return early, there is no job id on our event

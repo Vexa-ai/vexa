@@ -1317,7 +1317,7 @@ def create_app() -> FastAPI:
         from sqlalchemy import text as sa_text
         from sqlalchemy.orm import attributes
 
-        check_internal(request)
+        check_internal_no_dev_bypass(request)
         user = await _load_user(
             str(payload.user_id),
             db,
@@ -1426,7 +1426,7 @@ def create_app() -> FastAPI:
     @app.get("/internal/users/by-email/{email}", include_in_schema=False)
     async def internal_user_id_by_email(email: str, request: Request,
                                         db: AsyncSession = Depends(get_db)):
-        check_internal(request)
+        check_internal_no_dev_bypass(request)
         # Case-folded (R-B08) — the mount path reads this one, so an exact match here silently
         # drops a mixed-case signup out of every meeting room they are actually in.
         user = (await db.execute(
@@ -1457,7 +1457,7 @@ def create_app() -> FastAPI:
         organisation tier read-write. It exists because the admin is CLAIMED at first sign-in — long
         after any deployment env was written — so an env allow-list could never have been the
         definition of who may rewrite how every agent in the company behaves."""
-        check_internal(request)
+        check_internal_no_dev_bypass(request)
         user = await _load_user(user_id, db)
         # `admin_account` is the question agent-api actually asks before it lets anybody write
         # `_global`: is this the deployment's dedicated admin account (app/admin_account.py)? It is
@@ -1477,7 +1477,7 @@ def create_app() -> FastAPI:
         one-off UPDATE in somebody's shell is not. Internal-tier only, and it deliberately does NOT
         delete the user or anything they own — role, and only role."""
         from sqlalchemy.orm import attributes
-        check_internal(request)
+        check_internal_no_dev_bypass(request)
         user = await _load_user(str(payload.get("user_id", "")), db, for_update=True)
         data = dict(user.data or {})
         had = data.pop("is_admin", None) is True
@@ -1503,7 +1503,7 @@ def create_app() -> FastAPI:
     #     validate. The git file is the source of truth (Q6): this index is a rebuildable listing cache.
     @app.get("/internal/users/{user_id}/memberships", include_in_schema=False)
     async def list_memberships(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-        check_internal(request)
+        check_internal_no_dev_bypass(request)
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
         return {"memberships": data.get("memberships", [])}
@@ -1512,7 +1512,7 @@ def create_app() -> FastAPI:
     async def upsert_membership(user_id: str, payload: dict, request: Request,
                                 db: AsyncSession = Depends(get_db)):
         """Upsert {workspace_id, role, added_at} into the user's memberships[] (idempotent per ws)."""
-        check_internal(request)
+        check_internal_no_dev_bypass(request)
         from sqlalchemy.orm import attributes
         user = await _load_user(user_id, db, for_update=True)
         ws_id = payload.get("workspace_id")
@@ -1533,7 +1533,7 @@ def create_app() -> FastAPI:
     @app.delete("/internal/users/{user_id}/memberships/{workspace_id}", include_in_schema=False)
     async def remove_membership(user_id: str, workspace_id: str, request: Request,
                                 db: AsyncSession = Depends(get_db)):
-        check_internal(request)
+        check_internal_no_dev_bypass(request)
         from sqlalchemy.orm import attributes
         user = await _load_user(user_id, db, for_update=True)
         data = dict(user.data or {})
@@ -1550,7 +1550,7 @@ def create_app() -> FastAPI:
     #     secret URL crosses ONLY this internal hop (never a user-facing response). ---
     @app.get("/internal/calendar-configs", include_in_schema=False)
     async def list_calendar_configs(request: Request, db: AsyncSession = Depends(get_db)):
-        check_internal(request)
+        check_internal_no_dev_bypass(request)
         from sqlalchemy import or_
         from .calendars import internal_connections
         rows = (await db.execute(select(User).where(or_(
@@ -1758,7 +1758,7 @@ def create_app() -> FastAPI:
     #     Same shape /internal/validate returns for those fields, keyed by user id. ---
     @app.get("/internal/users/{user_id}/bot-context", include_in_schema=False)
     async def get_bot_context(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-        check_internal(request)
+        check_internal_no_dev_bypass(request)
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
         resp: dict = {
@@ -1826,7 +1826,7 @@ def create_app() -> FastAPI:
     #     cross ONLY this internal hop, straight into the worker's brokered env.
     @app.get("/internal/users/{user_id}/model-config", include_in_schema=False)
     async def get_model_config(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-        check_internal(request)
+        check_internal_no_dev_bypass(request)
         user = await _load_user(user_id, db)
         data = user.data if isinstance(user.data, dict) else {}
         return {"models": _effective_models(

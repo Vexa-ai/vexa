@@ -338,7 +338,7 @@ def build(**d) -> APIRouter:
     _meeting_owner_lookup = d['_meeting_owner_lookup']
     _read_target = d['_read_target']
     _resolve_room = d['_resolve_room']
-    _scaffold_is_for = d['_scaffold_is_for']
+    _scaffold_recipient_is = d['_scaffold_recipient_is']
     _scaffold_view = d['_scaffold_view']
     _schedule_source = d['_schedule_source']
     dispatcher = d['dispatcher']
@@ -1487,6 +1487,10 @@ def build(**d) -> APIRouter:
         # the panel and the agent disagreed about the same click. A scaffold that is not
         # this subject's is IGNORED rather than refused: a forwarded or stale id must not be
         # able to widen anybody's mounts, and must not break their turn either.
+        #
+        # THIS SUBJECT'S means THE RECIPIENT (`_scaffold_recipient_is`), never the instance admin:
+        # an admin may READ a scaffold for support (`GET /api/scaffolds/{id}`), but a turn redeems
+        # it, and the redeemer is who the transcript share is later handed to (R-A08).
         scaffold_view = None
         # The intent preset's own frontmatter, kept for the row's NAME (Vexa-ai/vexa#1602) — the
         # loop below reads it to substitute the ask, and `label:` is the same record's answer to
@@ -1494,7 +1498,7 @@ def build(**d) -> APIRouter:
         preset_fm = None
         if body.scaffold_id:
             rec = scaffolds.get(body.scaffold_id)
-            if rec is not None and _scaffold_is_for(rec, request, subject):
+            if rec is not None and _scaffold_recipient_is(rec, request, subject):
                 rec = scaffolds.redeem(body.scaffold_id, subject) or rec
                 try:
                     scaffold_view = _scaffold_view(rec, subject)

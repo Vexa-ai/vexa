@@ -663,10 +663,15 @@ class WorkspaceReader:
         """Every workspace dir a thread's continuity (pointer + transcript) may live in, in preference
         order: the PRIVATE SYSTEM tier (``<root>/.system/<subject>`` — where the worker anchored chats
         before the session store; with the store on nothing new lands there), the subject's own
-        workspace (the legacy location), then any caller-supplied mount dirs —
-        the turn's cwd FOLLOWS the active set under the flat model, so chats recorded before the
-        _system anchoring landed sit under whichever workspace was mounted first (e.g. a shared one).
-        Non-existent and out-of-root candidates are silently dropped."""
+        workspace (the legacy location), then any caller-supplied mount dirs that are THE SUBJECT'S
+        OWN trees (a parked slot, an archived run) — the turn's cwd followed the active set under the
+        flat model, so chats recorded before the _system anchoring landed sit under whichever
+        workspace was mounted first.
+
+        A SHARED tree is never a continuity root. A pointer (``.claude/sessions/<session>.session``)
+        does not name its subject, and a session name ("main") is the same for every member, so a
+        pointer in a tree several people mount is nobody's in particular: reading it hands one
+        member another member's chat. Non-existent, out-of-root and shared candidates are dropped."""
         candidates: list[Path] = [self._root / ".system" / subject, self._ws(subject)]
         for e in extra_roots or []:
             candidates.append(Path(e))
@@ -678,35 +683,43 @@ class WorkspaceReader:
             except ValueError:
                 continue
             k = str(c)
-            if k in seen or not c.exists():
+            if k in seen or not c.exists() or not self._own_tree(subject, c):
                 continue
             seen.add(k)
             out.append(c)
         return out
 
+    def _own_tree(self, subject: str, path: Path) -> bool:
+        """Is ``path`` (already resolved under the store) one of ``subject``'s own trees — their seed
+        slot ``<root>/<subject>``, their system tier ``.system/<subject>``, a parked slot
+        ``.attached/<subject>/…``, or an archived run of either (``<archive>/<run>/[.system/]<subject>``)?
+        Anything else — a shared workspace at ``<root>/<id>``, another person's tree, the
+        organisation tier — is not."""
+        from control_plane.session_migrate import ARCHIVE  # noqa: PLC0415 — deferred: load order
+        try:
+            parts = path.relative_to(self._root.resolve()).parts
+        except ValueError:
+            return False
+        if not parts:
+            return False
+        if parts[0] == subject:
+            return True
+        if parts[0] in (".system", ".attached"):
+            return len(parts) > 1 and parts[1] == subject
+        if parts[0] == ARCHIVE and len(parts) > 2:
+            rest = parts[2:]
+            return rest[0] == subject or (rest[0] == ".system" and len(rest) > 1 and rest[1] == subject)
+        return False
+
     def _swept_roots(self, subject: str, session: str) -> Iterator[Path]:
         """Where the last-resort sweep may look for ``session``'s pointer: the subject's own parked
-        slots (``<root>/.attached/<subject>/<slug>``), then each workspace at ``<root>/<id>`` that
-        holds such a pointer and whose ``policy/members.json`` names the subject. Folders reached
-        through a link are skipped."""
+        slots (``<root>/.attached/<subject>/<slug>``) and nothing else. A shared workspace is not
+        swept, whatever its member list says — see ``_continuity_roots``. Folders reached through a
+        link are skipped."""
         if not _PLAIN_ID.fullmatch(subject):
             return
         for slug in _real_subdirs(self._root, (".attached", subject)):
             yield self._root / ".attached" / subject / slug
-        from control_plane import workspace_membership as membership  # deferred: module-load order
-
-        for ws_id in _real_subdirs(self._root, ()):
-            if ws_id.startswith(".") or ws_id == subject:
-                continue
-            ws = self._root / ws_id
-            if not self._session_id(ws, session):
-                continue
-            try:
-                if membership.is_member(self._root, ws_id, subject) is None:
-                    continue
-            except Exception:  # noqa: BLE001 — an unreadable member list is not a membership
-                continue
-            yield ws
 
     def pointer_names(self, subject: str) -> "Optional[set[str]]":
         """Every file name in a ``.claude/sessions`` folder ``locate_session`` could read a pointer
@@ -753,9 +766,8 @@ class WorkspaceReader:
                 return sid, roots
         # LAST RESORT — threads recorded BEFORE continuity anchoring sit under whatever workspace
         # was the turn's cwd at the time, which may no longer be mounted (deactivated, or switched
-        # off). Only workspaces this subject may read are swept: its own parked slots and the
-        # workspaces whose authoritative member list names it — a session name ("main") is the
-        # same for every subject, so a pointer elsewhere is somebody else's thread.
+        # off). Only the subject's own parked slots are swept: a session name ("main") is the same
+        # for every subject, so a pointer in any tree somebody else also writes is not theirs.
         for ws in self._swept_roots(subject, session):
             sid = self._session_id(ws, session)
             if sid:

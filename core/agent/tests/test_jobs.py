@@ -510,6 +510,63 @@ def test_the_tool_is_not_attached_when_nothing_can_run_a_job():
     llm_jobs.set_spawner(None)
 
 
+def test_a_job_is_never_offered_spawn_job_and_cannot_start_one():
+    """Depth is one. A job turn runs on a thread marked as a job; `spawn_job` is not attached there,
+    and a call that reaches the seam anyway is refused before the spawner is asked."""
+    from llm import jobs as llm_jobs
+    from llm.openai_agent import _attached
+
+    asked: list = []
+    llm_jobs.set_spawner(lambda k, t, b: (asked.append(t), (True, "started"))[1])
+    try:
+        assert _attached("spawn_job") is True
+        llm_jobs.mark_job_thread(True)
+        assert _attached("spawn_job") is False
+        ok, text = llm_jobs.spawn("research", "Acme", "Find out who they are.")
+        assert ok is False and "cannot start another job" in text
+        assert asked == []
+    finally:
+        llm_jobs.mark_job_thread(False)
+        llm_jobs.set_spawner(None)
+
+
+def test_the_models_spawn_job_is_capped_on_open_jobs(tmp_path):
+    """Breadth is bounded: one injected instruction asking for fifty jobs gets
+    `MODEL_OPEN_JOBS_MAX` of them, and every call past that is refused in words."""
+    from llm import jobs as llm_jobs
+    from llm.openai_agent import _Sandbox, run_builtin
+    from worker.jobs import MODEL_OPEN_JOBS_MAX
+
+    gate = threading.Event()
+
+    def jobturn(_brief):
+        gate.wait(5)
+        yield {"type": "done", "reply": "ok", "sessionId": "s", "ok": True}
+
+    s = FakeStream(inbox=[])
+    t = threading.Thread(target=serve, kwargs=dict(
+        stream=s, out_topic="o", in_topic="i", turn=_chat_turn, job=jobturn,
+        jobs_dir=tmp_path / "jobs", start={}, idle_ms=10))
+    t.start()
+    t.join(5)
+    box = _Sandbox([tmp_path])
+    try:
+        results = [run_builtin("spawn_job", {"kind": "research", "target": f"name-{i}",
+                                             "brief": f"Research name-{i}."}, box) for i in range(50)]
+        accepted = [r for r in results if r[0]]
+        refused = [r for r in results if not r[0]]
+        assert len(accepted) == MODEL_OPEN_JOBS_MAX
+        assert len(refused) == 50 - MODEL_OPEN_JOBS_MAX
+        assert all("background jobs are already open" in text for _, text in refused)
+    finally:
+        gate.set()
+        for _ in range(500):
+            if sum(e["type"] == "job-done" for e in s.events()) >= MODEL_OPEN_JOBS_MAX:
+                break
+            threading.Event().wait(0.01)
+        llm_jobs.set_spawner(None)
+
+
 # ── the relay keeps the view open for the job ────────────────────────────────────────────────────
 
 def test_the_stream_view_stays_open_until_the_job_it_watched_start_is_done():

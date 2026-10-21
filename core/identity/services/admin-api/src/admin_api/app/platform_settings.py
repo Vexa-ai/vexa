@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..schema.models import PlatformSetting
 from . import signin_allow
 from .db import get_db
-from .internal_tier import check_internal
+from .internal_tier import check_internal_no_dev_bypass
 
 # ── model + transcription config (per-user prefs and the platform-wide defaults) ──
 # One vocabulary everywhere: a MODELS config is {mode, model, base_url, api_key}
@@ -194,7 +194,7 @@ router = APIRouter()
 @router.get("/internal/settings/{key}", include_in_schema=False,
             response_model=PlatformSettingResponse, response_model_exclude_unset=True)
 async def get_platform_setting(key: str, request: Request, db: AsyncSession = Depends(get_db)):
-    check_internal(request)
+    check_internal_no_dev_bypass(request)
     kind = _kind(key)
     body: Dict[str, Any] = {"key": key, "value": await read_platform_setting(key, db)}
     if kind.env_half is not None:
@@ -207,7 +207,7 @@ async def get_platform_setting(key: str, request: Request, db: AsyncSession = De
 async def put_platform_setting(key: str, payload: dict, request: Request,
                                db: AsyncSession = Depends(get_db)):
     """Partial update, same field rules + clear semantics as the user-tier writers."""
-    check_internal(request)
+    check_internal_no_dev_bypass(request)
     kind = _kind(key)
     update = {f: payload.get(f) for f in kind.fields if f in payload}
     # A WRITE THAT RECOGNISED NOTHING IS AN ERROR, not a no-op with a 200 on it.

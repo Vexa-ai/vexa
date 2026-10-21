@@ -1,6 +1,7 @@
 // @vitest-environment node
-/** The relayed browser sockets (server.mjs) are taken only from this terminal's own pages, and a voice
- *  note's audio socket only with the person's session cookie — never on a deployment key. */
+/** The relayed browser sockets (server.mjs) are taken only from this terminal's own pages, and only
+ *  with the person's session cookie — a voice note never on a deployment key, `/ws` only when the
+ *  deployment switched zero-login on. */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -49,9 +50,19 @@ describe("the key of a relayed socket", () => {
     expect(upstreamKey(r, VOICE, ENV, COOKIE)).toBe("user-token");
   });
 
-  it("keeps the deployment-key fallback for /ws", () => {
-    expect(upgradeRefusal(req({}), "/ws", ENV, COOKIE)).toBeNull();
-    expect(upstreamKey(req({}), "/ws", ENV, COOKIE)).toBe("deployment-key");
+  it("refuses an anonymous /ws upgrade: a deployment key set is not a session", () => {
+    expect(upgradeRefusal(req({}), "/ws", ENV, COOKIE)).toEqual({ status: 401, reason: "Unauthorized" });
+    expect(upstreamKey(req({}), "/ws", ENV, COOKIE)).toBe("");
+    expect(upstreamKey(req({}), "/ws", { VEXA_BOT_API_KEY: "bot-key" }, COOKIE)).toBe("");
+    expect(upstreamKey(req({}), "/ws", { ...ENV, VEXA_TERMINAL_ZERO_LOGIN: "1" }, COOKIE)).toBe("");
+  });
+
+  it("acts as the deployment key on /ws only when zero-login is switched on", () => {
+    const zero = { ...ENV, VEXA_TERMINAL_ZERO_LOGIN: "true" };
+    expect(upgradeRefusal(req({}), "/ws", zero, COOKIE)).toBeNull();
+    expect(upstreamKey(req({}), "/ws", zero, COOKIE)).toBe("deployment-key");
+    // …and never for a voice note
+    expect(upstreamKey(req({}), VOICE, zero, COOKIE)).toBe("");
   });
 
   it("answers a refusal on the raw socket and closes it", () => {

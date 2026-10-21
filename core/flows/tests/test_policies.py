@@ -6,8 +6,9 @@ Four claims, in the order they would fail:
       with exactly those values. A key in one and not the other is either a rule nobody can answer
       or a control that silently does nothing — the failure `production.py`'s own docstrings call
       out for inert params.
-  P2  Resolution order: flow param, then the file, then env, then the baked default. An absent,
-      empty or unreadable file changes nothing.
+  P2  Resolution order: flow param, then the file, then env, then the baked default. An absent or
+      empty file changes nothing; a file that exists and cannot be read, or names a profile nobody
+      knows, CLOSES every rule that widens who is mailed, joined or read (S03-1).
   P3  The disclosure is DERIVED. At the defaults it composes, byte for byte, to the sentence the
       founder wrote (decision 21) and `mailtext.VISIBILITY_SENTENCE` still carries — and it CHANGES
       when a rule that makes it untrue changes, which is the whole reason it is not a constant.
@@ -26,7 +27,7 @@ import pytest
 
 from flows import Registry
 from flows_defs import production
-from flows_steps import mailtext, policies
+from flows_steps import mailkinds, mailtext, policies
 
 # <repo>/core/flows/src/flows_steps/policies.py -> parents[4] is the repo root, the same anchor
 # `test_attendee_mail_shape`'s drift gate uses for `behavior/mail`.
@@ -122,10 +123,20 @@ def test_an_explicit_row_wins_over_the_profile():
     assert out["external_participants"] is False
 
 
-def test_an_unknown_profile_falls_back_and_says_so():
+def test_an_unknown_profile_closes_every_widening_rule_and_says_so():
+    """`profile: bnak` is an admin asking for something narrower than nothing; a typo must not
+    leave the deployment at the permissive defaults."""
     out = policies.resolve("---\nprofile: casino\n---\n")
     assert out["profile"] == "default"
     assert any("casino" in p for p in out["problems"])
+    for key, value in policies.CLOSED.items():
+        assert out[key] == value, key
+    assert mailkinds.switch(out, "minutes") == "off"
+
+
+def test_an_explicit_row_still_wins_over_an_unknown_profile():
+    out = policies.resolve("---\nprofile: casino\nopen_web: on\n---\n")
+    assert out["open_web"] is True and out["external_participants"] is False
 
 
 def test_a_value_this_module_cannot_read_falls_back_and_says_so():
@@ -145,17 +156,45 @@ def test_retention_reads_days_and_forever():
     assert out["recording_retention_days"] == policies.FOREVER
 
 
-def test_read_never_raises_when_global_cannot_be_reached(monkeypatch):
+def test_a_file_that_cannot_be_read_closes_every_widening_rule(monkeypatch, caplog):
+    """S03-1: agent-api restarting, a timeout, an error status — the file may say `profile: bank`
+    and nobody heard it. The rules close (no mail to externals, no prep or minutes mail, no join),
+    the read still never raises, and the degradation is logged at warning."""
     def boom(*_a, **_k):
-        raise RuntimeError("the agent domain is not deployed here")
+        raise policies.PolicyUnreadable("agent-api answered 503")
     monkeypatch.setattr(policies, "ws_file", boom)
+    with caplog.at_level("WARNING"):
+        out = policies.read("57")
+    for key, value in policies.CLOSED.items():
+        assert out[key] == value, key
+    assert out["report_to_participants"] is False and out["external_participants"] is False
+    assert mailkinds.switch(out, "minutes") == "off"
+    assert any("could not be read" in r.getMessage() and r.levelname == "WARNING" for r in caplog.records)
+
+
+@pytest.mark.policy_door
+def test_the_door_answering_an_error_status_is_unreadable_not_absent(monkeypatch):
+    monkeypatch.setattr(policies, "ws_get", lambda *_a, **_k: (503, {"detail": "restarting"}))
+    assert policies.read("57")["external_participants"] is False
+    monkeypatch.setattr(policies, "ws_get", lambda *_a, **_k: (404, {"detail": "not found"}))
+    assert policies.read("57")["external_participants"] is True
+
+
+def test_no_agent_domain_is_nobody_answering_the_defaults(monkeypatch):
+    def absent(*_a, **_k):
+        raise policies.AgentDomainAbsent("no agent domain here")
+    monkeypatch.setattr(policies, "ws_file", absent)
     assert policies.read("57")["report_to_participants"] is True
 
 
-def test_read_with_no_uid_asks_nobody(monkeypatch):
+def test_read_with_no_uid_reads_the_company_layer(monkeypatch):
+    """A ref with no uid is not a licence for the defaults: `_global` is every subject's to read,
+    so it is read as the company reader."""
+    seen = []
     monkeypatch.setattr(policies, "ws_file",
-                        lambda *_a, **_k: pytest.fail("read the store with no subject"))
-    assert policies.read("")["open_web"] is True
+                        lambda uid, *_a, **_k: (seen.append(uid), "---\nprofile: bank\n---\n")[1])
+    assert policies.read("")["external_participants"] is False
+    assert seen == [policies.COMPANY_READER]
 
 
 def test_read_takes_the_file_the_admin_wrote(monkeypatch):

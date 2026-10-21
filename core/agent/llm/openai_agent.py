@@ -698,7 +698,9 @@ BUILTIN_SPECS: dict[str, dict] = {
                                  "anything that will take more than a few tool calls — writing or "
                                  "extending a page, a research sweep — then answer the person now. "
                                  "The job does NOT see this conversation, so `brief` must carry the "
-                                 "whole instruction. One job per `target`; a second is refused.",
+                                 "whole instruction. One job per `target` at a time — a second "
+                                 "on the same target queues behind it — and only a few may be "
+                                 "open at once; beyond that the call is refused.",
                   "parameters": {"type": "object", "properties": {
                       "kind": {"type": "string", "description": "what kind of act: create, extend, "
                                                                 "research, …"},
@@ -713,7 +715,7 @@ BUILTIN_SPECS: dict[str, dict] = {
 #: simply not attached and the turn's tool list says so — advertising a `WebSearch` with no backend
 #: behind it teaches the model that searching does not work, and that lesson outlives the turn.
 _CONDITIONAL: dict[str, Callable[[], bool]] = {"WebSearch": web_tools.search_configured,
-                                               "spawn_job": jobs.configured}
+                                               "spawn_job": jobs.offered}
 
 
 def _attached(name: str) -> bool:

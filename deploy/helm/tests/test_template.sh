@@ -538,10 +538,12 @@ else
 fi
 
 PANEL="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
-  --set adoptionPanel.enabled=true --show-only templates/adoption-panel.yaml)"
+  --set adoptionPanel.enabled=true --set adoptionPanel.readerSecret=vexa-reporting \
+  --show-only templates/adoption-panel.yaml)"
 for want in "vexa-vexa-adoption-dashboard" "vexa-vexa-adoption-datasource" \
             "vexa-vexa-adoption-panel-env" "grafana_dashboard" "grafana_datasource" \
-            "vexa-adoption-panel" "vexa-app-db" "vexa-flows-db"; do
+            "vexa-adoption-panel" "vexa-app-db" "vexa-flows-db" "reporting-role.sql" \
+            "GRANT SELECT (created_at, event_type, subject_refs) ON public.reaction"; do
   if grep -q "$want" <<< "$PANEL"; then
     echo "  OK: adoptionPanel renders $want"
   else
@@ -567,12 +569,29 @@ else
   echo "  OK: adoptionPanel renders no literal credential (password stays an \${ENV} placeholder)"
 fi
 
+# GRAFANA NEVER LOGS IN AS THE OWNER ROLE. A Grafana Editor runs any SQL the datasource's role may,
+# so the panel needs the SELECT-only reader's Secret named, and refuses the owner credentials.
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+     --set adoptionPanel.enabled=true --show-only templates/adoption-panel.yaml >/dev/null 2>&1; then
+  echo "  FAIL: adoptionPanel renders with no reader Secret named"; fail=1
+else
+  echo "  OK: adoptionPanel refuses to render without adoptionPanel.readerSecret"
+fi
+OWNER_SECRET="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
+  | grep -B1 "key: POSTGRES_PASSWORD" | grep -m1 "name:" | sed -E 's/.*name: *"?([^" ]+)"?.*/\1/')"
+if helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set adoptionPanel.enabled=true \
+     --set "adoptionPanel.readerSecret=$OWNER_SECRET" --show-only templates/adoption-panel.yaml >/dev/null 2>&1; then
+  echo "  FAIL: adoptionPanel renders wired to the owner credentials ($OWNER_SECRET)"; fail=1
+else
+  echo "  OK: adoptionPanel refuses the owner credentials as its reader ($OWNER_SECRET)"
+fi
+
 # The datasource follows PgBouncer when PgBouncer is on, like every other consumer in this
 # chart. A reporting datasource opening its own direct connections past the pooler is how a
 # dashboard becomes an incident.
 POOLED="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" \
-  --set adoptionPanel.enabled=true --set pgbouncer.enabled=true \
-  --show-only templates/adoption-panel.yaml)"
+  --set adoptionPanel.enabled=true --set adoptionPanel.readerSecret=vexa-reporting \
+  --set pgbouncer.enabled=true --show-only templates/adoption-panel.yaml)"
 if grep -A1 "VEXA_DB_HOST" <<< "$POOLED" | grep -q "pgbouncer"; then
   echo "  OK: adoptionPanel datasource host follows pgbouncer when it is enabled"
 else

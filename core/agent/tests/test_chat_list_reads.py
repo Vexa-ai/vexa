@@ -121,15 +121,16 @@ def test_nameless_chats_with_no_thread_are_not_swept_for_one_by_one(w, monkeypat
     # twenty records a scope write made before anybody said anything: nameless, no thread anywhere
     for i in range(20):
         w.sess.upsert("alice", f"pchat-empty{i:02d}")
-    # and two nameless chats that DO have a thread: one in alice's own folder, one recorded under a
-    # shared workspace before continuity anchoring (only the root-wide sweep finds it)
+    # and two nameless chats with a pointer: one in alice's own folder, one in a SHARED workspace.
+    # A pointer in a shared tree names no subject, so it is nobody's thread in particular and is
+    # never read as alice's (S02C-3): the chat with no thread of its own is not listed.
     w.sess.upsert("alice", "pchat-mine")
     w.sess.upsert("alice", "pchat-swept")
     _pointer(w.root / "alice", "pchat-mine", "what is on today")
     _pointer(w.root / "team", "pchat-swept", "draft the memo")
     sweeps = _count(monkeypatch, WorkspaceReader, "_swept_roots")
     listed = {r["session"] for r in _rows(w)}
-    assert {"pchat-mine", "pchat-swept"} <= listed
+    assert "pchat-mine" in listed and "pchat-swept" not in listed
     assert not any(s.startswith("pchat-empty") for s in listed)
     # the old listing swept every workspace folder once per nameless chat with no pointer in the
     # caller's own folders: 21 sweeps here. Now only a chat whose pointer exists somewhere is read.

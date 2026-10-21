@@ -670,3 +670,23 @@ def test_a_hand_link_needs_no_internal_secret(client, stack):
     link it was handed."""
     stack["rows"]["97"] = {"id": 97, "user_id": "u_priya", "data": {"title": "Show B dailies"}}
     assert _hand(client, preset="minutes-review", meeting="97").status_code == 201
+
+
+def test_an_admins_chat_turn_never_redeems_somebody_elses_scaffold(client, stack, monkeypatch):
+    """R-A08 through the chat door: an instance admin may READ a scaffold for support, but a turn
+    naming another person's scaffold must not run it, must not stamp the admin as its redeemer, and
+    so must not hand the admin the transcript share one route down."""
+    from control_plane import global_layer
+    monkeypatch.setattr(global_layer, "is_admin", lambda settings, subject: str(subject) == "u_admin")
+    sid = _mint(client).json()["id"]
+    admin = _as("admin@acme.test", "u_admin")
+    assert client.get(f"/api/scaffolds/{sid}", headers=admin).status_code == 200   # support read stays
+    r = client.post("/api/chat", headers=admin,
+                    json={"prompt": "hello", "session": "s-admin", "scaffold_id": sid})
+    assert r.status_code == 200
+    inv = client.app.state.dispatcher.dispatched[-1]
+    assert "[scaffold]" not in inv["start"]["entrypoint"]["inline"]
+    rec = client.get(f"/api/scaffolds/{sid}", headers={"X-Internal-Secret": INTERNAL,
+                                                       **_as("ops@acme.test", "u_ops")}).json()
+    assert not rec.get("redeemed_by")
+    assert client.post(f"/api/scaffolds/{sid}/share", headers=admin).status_code == 404

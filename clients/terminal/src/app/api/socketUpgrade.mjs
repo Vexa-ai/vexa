@@ -4,11 +4,13 @@
 // So an upgrade is taken only from this terminal's own pages:
 //   • an `Origin` header, when present, must be this host (same-origin) or the configured public
 //     origin (NEXTAUTH_URL, else TERMINAL_URL) — a browser always sends one on a WebSocket;
-//   • a voice note's audio socket needs the session cookie: it never falls back to a deployment key.
-//     `/ws` keeps the REST proxy's fallback (src/app/api/proxyAuth.ts) for single-key deployments.
+//   • a voice note's audio socket needs the session cookie: it never acts as a deployment key.
+//   • `/ws` needs the session cookie too, unless the deployment switched zero-login on — the same
+//     rule the REST proxy reads (auth/deploymentKey.mjs).
 
 // The one cookie reader the REST side agrees with (last value of a repeated name wins).
 import { readCookie } from "./auth/cookieHeader.mjs";
+import { anonymousKey } from "./auth/deploymentKey.mjs";
 export { readCookie };
 
 function originOf(url) {
@@ -47,19 +49,17 @@ function isVoiceNoteSocket(upstreamPath) {
 /** Why an upgrade to `upstreamPath` is refused (an HTTP status and a reason), or null to take it. */
 export function upgradeRefusal(req, upstreamPath, env, cookieName) {
   if (!originAllowed(req.headers || {}, env)) return { status: 403, reason: "Forbidden" };
-  if (isVoiceNoteSocket(upstreamPath) && !readCookie(req.headers?.cookie, cookieName)) {
-    return { status: 401, reason: "Unauthorized" };
-  }
+  if (!upstreamKey(req, upstreamPath, env, cookieName)) return { status: 401, reason: "Unauthorized" };
   return null;
 }
 
-/** The key sent upstream for an upgrade: the session cookie's token; `/ws` alone falls back to the
- *  deployment keys, as the REST proxy does (cookie → VEXA_API_KEY → VEXA_BOT_API_KEY → ""). */
+/** The key sent upstream for an upgrade: the session cookie's token; with no cookie, `/ws` alone may
+ *  act as the anonymous key (empty unless zero-login is on), and a voice note never does. */
 export function upstreamKey(req, upstreamPath, env, cookieName) {
   const token = readCookie(req.headers?.cookie, cookieName);
   if (token) return token;
   if (isVoiceNoteSocket(upstreamPath)) return "";
-  return env.VEXA_API_KEY || env.VEXA_BOT_API_KEY || "";
+  return anonymousKey(env);
 }
 
 /** Answer a refused upgrade on the raw socket and close it. */

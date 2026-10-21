@@ -2,9 +2,9 @@
  *  gateway call. Not a route file — route files export only handlers and route config.
  *
  *  The desk is the person's own state, so it travels with the signed-in person's key (the session
- *  cookie) and never with a deployment key: the catch-all's `resolveApiKey` falls back to
- *  `VEXA_API_KEY`, which would read or arrange a desk nobody signed in for. Same rule as the CRM
- *  record page's proxy (`../crm/route.ts`). */
+ *  cookie) and never with a deployment key: under zero-login the catch-all's `resolveApiKey`
+ *  answers an anonymous request with `VEXA_API_KEY`, which would read or arrange a desk nobody
+ *  signed in for. Same rule as the CRM record page's proxy (`../crm/route.ts`). */
 import { cookies } from "next/headers";
 import { AUTH_COOKIE } from "../auth/adminApi";
 

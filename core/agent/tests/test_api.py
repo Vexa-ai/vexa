@@ -641,29 +641,34 @@ def test_session_history_parses_turns(tmp_path):
 
 def test_session_history_found_in_active_mount_dir(tmp_path):
     """THE 'chats list but don't load' bug: with Personal off, the worker cwd follows the active set,
-    so a thread's continuity (pointer + transcript) lands under a SHARED workspace dir — which the
-    subject-keyed reader never searched. extra_roots (the caller's mount dirs) must find it."""
+    so a thread's continuity (pointer + transcript) lands under whichever of the subject's OWN slots
+    was mounted — which the subject-keyed reader never searched. extra_roots (the caller's mount
+    dirs) must find it there. A SHARED dir among them is never read (S03T/S02C-3): a pointer in it
+    names no subject, so it may be another member's thread."""
     from control_plane.workspace_reader import WorkspaceReader
 
-    shared = tmp_path / "aswf-dna-52bd7a93"
-    (shared / ".claude" / "sessions").mkdir(parents=True)
-    (shared / ".claude" / "sessions" / "chat-x.session").write_text("sid-9\n")
-    _write_transcript(shared, "sid-9", [
-        {"type": "user", "message": {"role": "user", "content": "what is dna"}},
-        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "A VFX app."}]}},
-    ])
+    slot = tmp_path / ".attached" / "28" / "aswf-dna-52bd7a93"
+    for d in (slot, tmp_path / "shared-ws"):
+        (d / ".claude" / "sessions").mkdir(parents=True)
+        (d / ".claude" / "sessions" / "chat-x.session").write_text("sid-9\n")
+        _write_transcript(d, "sid-9", [
+            {"type": "user", "message": {"role": "user", "content": "what is dna"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "A VFX app."}]}},
+        ])
     reader = WorkspaceReader(str(tmp_path))
-    # the mount dir as an explicit candidate loads the thread (no sweep needed)
-    turns = reader.history("28", "chat-x", extra_roots=[str(shared)])
+    # the subject's own mount dir as an explicit candidate loads the thread (no sweep needed)
+    turns = reader.history("28", "chat-x", extra_roots=[str(slot)])
     assert [t["role"] for t in turns] == ["user", "agent"]
     # out-of-root candidates are dropped, never raised on
-    assert reader.history("28", "chat-x", extra_roots=["/etc", str(shared)]) == turns
+    assert reader.history("28", "chat-x", extra_roots=["/etc", str(slot)]) == turns
+    # a shared mount is not a continuity root
+    assert reader.history("29", "chat-x", extra_roots=[str(tmp_path / "shared-ws")]) == []
 
 
 def test_session_history_sweeps_unmounted_strands(tmp_path):
-    """A thread recorded under a workspace that is NO LONGER mounted (deactivated shared ws) must
-    still load: the reader's last-resort sweep finds the pointer without any extra_roots — in a
-    workspace the subject is a member of, or in its own parked slot."""
+    """A thread recorded under the subject's own parked slot that is NO LONGER mounted must still
+    load: the reader's last-resort sweep finds the pointer without any extra_roots. A shared
+    workspace the subject belongs to is NOT swept: its pointers name nobody in particular."""
     import json
 
     from control_plane.workspace_reader import WorkspaceReader
@@ -683,7 +688,7 @@ def test_session_history_sweeps_unmounted_strands(tmp_path):
         {"type": "user", "message": {"role": "user", "content": "parked"}},
     ])
     reader = WorkspaceReader(str(tmp_path))
-    assert reader.history("28", "chat-z") == [{"role": "user", "text": "stranded"}]
+    assert reader.history("28", "chat-z") == []
     assert reader.history("28", "chat-p") == [{"role": "user", "text": "parked"}]
 
 

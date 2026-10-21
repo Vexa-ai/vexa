@@ -2234,8 +2234,12 @@ def build(**d) -> APIRouter:
     @router.post("/api/workspace/purpose")
     def ws_purpose_set(request: Request, body: WorkspacePurposeBody = Body(default=WorkspacePurposeBody())):
         """Set (or clear) a workspace's PURPOSE — stored in the workspace + committed so it travels when
-        shared and feeds the mount preamble. Returns the normalized purpose actually stored."""
+        shared and feeds the mount preamble. Returns the normalized purpose actually stored.
+
+        The purpose enters EVERY member's agent preamble, so on a shared workspace setting it is a
+        write that speaks to other people's agents: a viewer may read it and may not set it."""
         ws = _manage_dir(request, body.slug)
+        _require_shared_write(subject_of(request), body.slug)
         _hold_private(request, subject_of(request), body.slug, ".vexa/purpose", ws, surface="purpose",
                       content=body.purpose)
         return {"purpose": write_purpose(ws, body.purpose)}

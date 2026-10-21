@@ -278,3 +278,20 @@ def test_history_follows_no_pointer_and_no_link_out_of_the_workspace(store):
     reader = WorkspaceReader(str(store))
     assert reader.history("u_jane", "p1") == []
     assert reader.history("u_jane", "p2") == []
+
+
+@pytest.mark.parametrize("session", ["main", "chat-g"])
+def test_a_shared_workspace_never_answers_for_another_members_thread(store, session):
+    """A pointer in a shared tree does not name its subject, and a session name ("main") is the same
+    for every member. Mallory, a member of Jane's group, left a thread in it; Jane — who has no
+    thread of that name of her own — must not be handed it, neither through the turn's mounts
+    (``extra_roots``) nor through the last-resort sweep of the workspaces she belongs to."""
+    grp = store / "grp"
+    (grp / "policy" / "members.json").write_text(json.dumps(
+        [{"subject": "u_jane", "role": "owner"}, {"subject": "u_mallory", "role": "contributor"}]))
+    _thread(grp, session, f"sid-mallory-group-{session}", "MALLORY IN THE GROUP")
+    reader = WorkspaceReader(str(store))
+    assert reader.locate_session("u_jane", session) is None
+    assert reader.history("u_jane", session) == []
+    assert reader.locate_session("u_jane", session, extra_roots=[grp]) is None
+    assert reader.history("u_jane", session, extra_roots=[grp]) == []

@@ -220,6 +220,10 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}"
 # Dashboard + terminal (both Next.js UIs)
 export VEXA_PUBLIC_API_URL="${VEXA_PUBLIC_API_URL:-http://localhost:8056}"
 export VEXA_API_KEY="${VEXA_API_KEY:-}"
+# ZERO-LOGIN: the terminal answers a visitor with no session as the self-host key, so
+# http://localhost:3001 opens signed in. Anyone who can reach port 3001 is then that person — set
+# VEXA_TERMINAL_ZERO_LOGIN=false when the port is reachable by anybody but you, and sign in instead.
+export VEXA_TERMINAL_ZERO_LOGIN="${VEXA_TERMINAL_ZERO_LOGIN:-true}"
 export TERMINAL_PUBLIC_URL="${TERMINAL_PUBLIC_URL:-http://localhost:3001}"
 # The terminal's signing secret — it signs sign-in cookies and (through a derived key) every emailed
 # sign-in link, so it has NO published default, and the terminal refuses to start on one shorter
