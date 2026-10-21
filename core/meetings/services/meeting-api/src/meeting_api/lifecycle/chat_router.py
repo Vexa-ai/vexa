@@ -23,6 +23,9 @@ Refusals, in the order they are checked:
   * ``409`` — there is a row, but its bot is not in the meeting (still booting or waiting in the
     lobby, or already asked to stop), or no bot was listening when the act went out: nothing on the
     other end could type the line.
+  * ``429`` — the meeting already took ``CHAT_POSTS_PER_WINDOW`` posts in the current
+    ``CHAT_WINDOW_SEC``-second window (:class:`ChatRateLimit`, counted per meeting across every
+    caller and every replica); ``Retry-After`` says when the window turns. Nothing was sent.
   * ``503`` — the command bus (redis) is unreachable; nothing was sent, retry.
 
 ``200`` means a listening bot RECEIVED the act (``status: "queued"``), not that the line appeared in
@@ -31,7 +34,9 @@ the meeting: the bot does not acknowledge a ``chat_send``.
 from __future__ import annotations
 
 import json
-from typing import Optional
+import math
+import time
+from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
@@ -47,6 +52,11 @@ CHAT_PLATFORMS = frozenset({"google_meet", "jitsi"})
 #: a megabyte of text from being typed into somebody's meeting by one call.
 MAX_CHAT_CHARS = 2000
 
+#: A meeting takes at most this many chat posts in each ``CHAT_WINDOW_SEC``-second window. A person
+#: typing, or an agent answering in turn, stays far below it; a loop posting into the room does not.
+CHAT_POSTS_PER_WINDOW = 10
+CHAT_WINDOW_SEC = 10
+
 # The one status in which the bot is IN the meeting and listening on its command channel. A bot in
 # `needs_help` is stuck before admission, and a `stopping` one is on its way out.
 _IN_MEETING_STATUSES = frozenset({"active"})
@@ -55,6 +65,46 @@ _IN_MEETING_STATUSES = frozenset({"active"})
 def chat_send_payload(text: str) -> dict:
     """The ``acts.v1`` ``ChatSend`` body — exactly its two declared fields."""
     return {"action": "chat_send", "text": text}
+
+
+class ChatRateLimit:
+    """Counts a meeting's chat posts in fixed ``window``-second windows and refuses past ``limit``.
+
+    In Redis when the store is a Redis client (one ``INCR`` per post on the window's own key, which
+    expires with it, so every meeting-api replica draws on the same count), else in this process.
+    """
+
+    PREFIX = "chat:rate:meeting:"
+
+    def __init__(self, store: Any = None, *, limit: int = CHAT_POSTS_PER_WINDOW,
+                 window: int = CHAT_WINDOW_SEC, clock: Optional[Callable[[], float]] = None) -> None:
+        if limit <= 0 or window <= 0:
+            raise ValueError("limit and window must be > 0")
+        self._redis = store if store is not None and hasattr(store, "pipeline") else None
+        self.limit = limit
+        self.window = window
+        self._clock = clock or time.time
+        self._counts: dict[str, tuple[int, int]] = {}
+
+    async def take(self, meeting_id: Any) -> Optional[int]:
+        """Count one post for the meeting. ``None`` when it is within the limit, else the whole
+        seconds until the window turns (the ``Retry-After``)."""
+        now = self._clock()
+        slot = int(now // self.window)
+        key = str(meeting_id)
+        if self._redis is not None:
+            redis_key = f"{self.PREFIX}{key}:{slot}"
+            async with self._redis.pipeline(transaction=True) as pipe:
+                pipe.incr(redis_key)
+                pipe.expire(redis_key, self.window + 1)
+                count, _ = await pipe.execute()
+        else:
+            self._counts = {k: v for k, v in self._counts.items() if v[0] == slot}
+            count = self._counts.get(key, (slot, 0))[1] + 1
+            self._counts[key] = (slot, count)
+        if int(count) <= self.limit:
+            return None
+        return max(1, math.ceil((slot + 1) * self.window - now))
 
 
 async def _text_from(request: Request) -> str:
@@ -71,9 +121,12 @@ async def _text_from(request: Request) -> str:
     return text
 
 
-def build_chat_router(repo: MeetingRepo, publisher: CommandPublisher) -> APIRouter:
-    """The chat-send route over the injected ``MeetingRepo`` + ``CommandPublisher`` ports."""
+def build_chat_router(repo: MeetingRepo, publisher: CommandPublisher,
+                      rate_limit: Optional[ChatRateLimit] = None) -> APIRouter:
+    """The chat-send route over the injected ``MeetingRepo`` + ``CommandPublisher`` ports. The
+    per-meeting limit counts in the command bus's Redis unless a ``rate_limit`` is given."""
     router = APIRouter()
+    limit = rate_limit or ChatRateLimit(publisher)
 
     @router.post("/bots/{platform}/{native_meeting_id}/chat")
     async def send_chat(
@@ -116,6 +169,22 @@ def build_chat_router(repo: MeetingRepo, publisher: CommandPublisher) -> APIRout
                 status_code=409,
                 detail=f"the bot is not in the meeting (status '{rows[0].get('status')}') — "
                        "chat can be sent once it has been admitted",
+            )
+
+        try:
+            retry_after = await limit.take(meeting["id"])
+        except Exception as e:  # noqa: BLE001 — the count lives on the command bus: same failure
+            raise HTTPException(
+                status_code=503,
+                detail="bot command bus (redis) unavailable; the message was not sent — retry",
+            ) from e
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=429,
+                detail=f"this meeting takes at most {limit.limit} chat messages every "
+                       f"{limit.window} seconds; the message was not sent — retry after "
+                       f"{retry_after} s",
+                headers={"Retry-After": str(retry_after)},
             )
 
         try:

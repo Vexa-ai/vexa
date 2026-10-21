@@ -29,7 +29,9 @@ from meeting_api.collector import create_app as create_collector_app
 from meeting_api.collector import ingest
 from meeting_api.collector.db_writer import db_writer_tick
 from meeting_api.collector.fakes import FakeRedisBus, InMemoryTranscriptStore
-from meeting_api.lifecycle.chat_router import MAX_CHAT_CHARS
+from meeting_api.lifecycle.chat_router import (
+    CHAT_POSTS_PER_WINDOW, CHAT_WINDOW_SEC, MAX_CHAT_CHARS, ChatRateLimit,
+)
 from meeting_api.lifecycle.stop_router import InMemoryCommandPublisher
 
 from collector_contracts import assert_api_conforms
@@ -204,6 +206,61 @@ def test_post_chat_when_the_command_bus_is_down_is_503():
     _seed(repo)
     r = client.post(f"/bots/{PLAT}/{NATIVE}/chat", headers=H, json={"text": "hi"})
     assert r.status_code == 503
+
+
+# ── the per-meeting rate limit: CHAT_POSTS_PER_WINDOW posts per CHAT_WINDOW_SEC, then 429 ────────
+
+
+def test_post_chat_past_the_meetings_limit_is_429_with_retry_after_and_sends_nothing():
+    client, repo, pub = _app()
+    _seed(repo)
+    other = _seed(repo, native="xyz-wxyz-xyz")
+
+    for n in range(CHAT_POSTS_PER_WINDOW):
+        ok = client.post(f"/bots/{PLAT}/{NATIVE}/chat", headers=H, json={"text": f"line {n}"})
+        assert ok.status_code == 200, (n, ok.text)
+    r = client.post(f"/bots/{PLAT}/{NATIVE}/chat", headers=H, json={"text": "one too many"})
+
+    assert r.status_code == 429, r.text
+    assert 1 <= int(r.headers["retry-after"]) <= CHAT_WINDOW_SEC
+    assert len(pub.published) == CHAT_POSTS_PER_WINDOW
+    # The count is the meeting's own: another meeting of the same owner still sends.
+    r2 = client.post(f"/bots/{PLAT}/xyz-wxyz-xyz/chat", headers=H, json={"text": "elsewhere"})
+    assert r2.status_code == 200, r2.text
+    assert pub.published[-1][0] == f"bot_commands:meeting:{other['id']}"
+
+
+class _Clock:
+    def __init__(self, t: float) -> None:
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+async def test_chat_rate_limit_in_process_refuses_until_the_window_turns():
+    clock = _Clock(1000.0)
+    limit = ChatRateLimit(limit=2, window=10, clock=clock)
+    assert await limit.take(1) is None
+    assert await limit.take(1) is None
+    clock.t = 1003.2
+    assert await limit.take(1) == 7          # the window [1000, 1010) turns in 6.8 s
+    assert await limit.take(2) is None       # another meeting has its own count
+    clock.t = 1010.0
+    assert await limit.take(1) is None       # a new window, a new count
+
+
+async def test_chat_rate_limit_counts_in_redis_across_replicas():
+    """Two meeting-api replicas on one Redis draw on the same per-meeting count."""
+    redis = fakeredis.aioredis.FakeRedis()
+    clock = _Clock(2000.0)
+    a = ChatRateLimit(redis, limit=3, window=10, clock=clock)
+    b = ChatRateLimit(redis, limit=3, window=10, clock=clock)
+    assert [await a.take(42), await b.take(42), await a.take(42)] == [None, None, None]
+    assert await b.take(42) == 10
+    assert 0 < await redis.ttl(f"{ChatRateLimit.PREFIX}42:200") <= 11   # the window's key expires
+    clock.t = 2010.0
+    assert await b.take(42) is None
 
 
 # ── who may send: the gateway's signed identity, the `bot` scope, the owner ─────────────────────
