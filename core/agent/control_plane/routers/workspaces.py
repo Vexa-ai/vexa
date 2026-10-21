@@ -51,7 +51,7 @@ from control_plane.workspace_attach import (
     shared_active_mounts, shared_attached_state, swap_workspace, workspace_slot_dir)
 from control_plane.workspace_git_sync import (
     RemoteSyncError, SyncRefused, detach_home, fetch_status, pull_origin, push_origin, remote_status)
-from control_plane.workspace_membership import MembershipError
+from control_plane.workspace_membership import POLICY_UNREADABLE, MembershipError
 from control_plane.workspace_publish import (
     PublishError, RepoExistsError, TokenRejectedError, UnsupportedHostError, publish_workspace,
     published_remote_url, resolve_provider)
@@ -576,9 +576,15 @@ def build(**d) -> APIRouter:
         if isinstance(content, (bytes, bytearray)):
             import base64 as _b64  # noqa: PLC0415
             content = {"base64": _b64.b64encode(bytes(content)).decode()}
+        try:
+            readers = private_taint.other_readers(wsr.root, Path(target), str(subject))
+        except MembershipError as exc:
+            raise HTTPException(status_code=503, detail={
+                "refused": POLICY_UNREADABLE,
+                "message": "Who reads this workspace could not be checked, so nothing was written."}) from exc
         held = private_taint.check_egress(
             subject=str(subject), unit=identity_token.session_of(request.headers), surface=surface,
-            target=f"{ws}/{rel}", readers=private_taint.other_readers(Path(target), str(subject)),
+            target=f"{ws}/{rel}", readers=readers,
             workspace=ws, name=ws_name, path=rel, content=content, delegated=True,
             before=before, text=text)
         if held is not None:

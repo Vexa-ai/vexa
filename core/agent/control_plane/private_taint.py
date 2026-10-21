@@ -173,20 +173,30 @@ def mark_unavailable_body(detail: str = "") -> dict:
 
 # ── who else reads ───────────────────────────────────────────────────────────────────────────────
 
-def other_readers(ws_dir: Path, subject: str) -> list[str]:
-    """Who else reads workspace ``ws_dir``: every member in ``policy/members.json`` but ``subject``
-    (by email when the roster has one). Empty for the person's own desk."""
+def roster_readers(root: Path, workspace_id: str, subject: str) -> list[str]:
+    """Who else reads workspace ``workspace_id``: every member of its AUTHORITATIVE roster — the
+    policy store behind ``workspace_membership.read_members``, the source every access decision
+    reads — but ``subject`` (by email when the row has one). The tree's ``policy/members.json`` is a
+    mirror and is never consulted: a missing or stale mirror changes nobody's audience.
+
+    Raises ``workspace_membership.MembershipError`` (503 ``policy_unreadable``) when the store cannot
+    answer. A caller holds or refuses on it; an unknown audience is never "nobody else"."""
+    from control_plane import workspace_membership as membership  # noqa: PLC0415
+    return _readers(membership.read_members(Path(root), str(workspace_id)), subject)
+
+
+def other_readers(root: Path, ws_dir: Path, subject: str) -> list[str]:
+    """Who else reads the workspace directory ``ws_dir`` under the store ``root``: ``roster_readers``
+    for a workspace at the top of the store. A tree anywhere else (an attached private slot, the
+    person's system store) is nobody's shared workspace and has no other readers."""
     from workspaces.shared import workspace_paths as wpaths  # noqa: PLC0415
-    raw = wpaths.read_text_inside(Path(ws_dir), "policy/members.json", allow=("policy",))
-    return readers_in(raw, subject)
-
-
-def readers_in(raw: Optional[str], subject: str) -> list[str]:
-    """Every member of the roster text ``raw`` but ``subject`` (by email when it has one)."""
-    try:
-        rows = json.loads(raw) if raw else []
-    except ValueError:
+    root, ws_dir = Path(root).resolve(), Path(ws_dir).resolve()
+    if ws_dir.parent != root or not wpaths.is_workspace_name(ws_dir.name):
         return []
+    return roster_readers(root, ws_dir.name, subject)
+
+
+def _readers(rows, subject: str) -> list[str]:
     out = []
     for m in rows if isinstance(rows, list) else []:
         if isinstance(m, dict) and m.get("subject") and str(m.get("subject")) != str(subject):
@@ -338,30 +348,25 @@ def _keep(subject: str, code: str, *, surface: str, found, payload: dict) -> boo
     return store.put(subject, code, surface=surface, sources=found, payload=payload)
 
 
-def check_write(*, subject: str, unit: str, workspace: str, path: str, ws_dir: Path,
-                workspace_name: str = "", content=None, before: str = "",
-                text: Optional[str] = None) -> Optional[dict]:
-    """A PAGE write (the file and entity routes): ``check_egress`` on the workspace's roster."""
-    return check_egress(subject=subject, unit=unit, surface="page", target=f"{workspace}/{path}",
-                        readers=other_readers(ws_dir, subject), workspace=workspace,
-                        name=workspace_name, path=path, content=content, before=before, text=text)
-
-
-def check_push(*, subject: str, unit: str, workspace: str, repo: Path, base: str,
-               new: str) -> Optional[dict]:
+def check_push(*, subject: str, unit: str, workspace: str, root: Path, ws_dir: Path, repo: Path,
+               base: str, new: str) -> Optional[dict]:
     """A worker's PUSH into the workspace store (the s3 backend): every version of every file a
     pushed commit writes is a page write, held by ``check_egress`` exactly as the page route holds
-    it. The roster is the one at ``base`` — the store's, before the turn; a push cannot change it
-    (``policy/`` is reserved). This is the hold for the writes the worker's commit seam never sees:
-    a harness that commits by itself leaves that seam an empty change, and its commits arrive here.
+    it, on the same audience: ``other_readers`` of ``ws_dir`` — the workspace's authoritative roster
+    in the policy store under ``root``, never the ``policy/members.json`` mirror in the pushed tree. This is
+    the hold for the writes the worker's commit seam never sees: a harness that commits by itself
+    leaves that seam an empty change, and its commits arrive here.
 
     ``None`` when the push may land; otherwise the refusal body (409) of the first held write, with
-    every held path and its code."""
+    every held path and its code. A session that read nothing private pushes without a roster
+    read; for any other session a roster that cannot be read raises ``MembershipError`` (503), and
+    the push does not land."""
     from workspaces.shared.gitexec import run_git  # noqa: PLC0415
 
-    shown = run_git(repo, "show", f"{base}:policy/members.json")
-    readers = readers_in(shown.stdout if shown.returncode == 0 else None, subject)
-    if not readers or (str(unit or "").strip() and not sources(unit)):
+    if str(unit or "").strip() and not sources(unit):
+        return None
+    readers = other_readers(root, ws_dir, subject)
+    if not readers:
         return None
     # every (commit, parent, path) a push writes: one diff-tree per commit and parent ...
     writes: list[tuple[str, Optional[str], str]] = []

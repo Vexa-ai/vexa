@@ -5,9 +5,10 @@ them, in their home org's CRM (``caller.org``). The claim is strictly one-to-one
 keyed by the record and unique per account. A second account of the same human never claims a second
 record: it resolves to the claimed Person and joins it through the merge card (``persons.py``).
 
-- It happens on its own at sign-in when exactly ONE record matches the verified address (a match
-  identifier, or a Person whose ``Email`` is that address). With several, ``/person/profile`` answers
-  them as a claim card and the person picks. With no verified address there is no claim: the address
+- It happens on its own at sign-in when the record holding the verified address's match identifier
+  (``email:<address>``) is unclaimed. The record's ``Email`` field never makes a claim: any writer
+  of that field can type an address into it. A record the claimant merged another record into by
+  hand is not theirs to claim either (``candidates``). With no verified address there is no claim: the address
   counts only when identity says a sign-in proved it (``Caller.email_verified``), so an address an
   API call or an identity provider merely asserted claims nothing.
 - A claim moves nothing from the org to the person. The org's fields (contact history, notes, deal
@@ -36,7 +37,7 @@ import secrets
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 
 from . import schema as s
 from .caller import as_caller
@@ -202,27 +203,43 @@ class Profiles:
                                                  s.profiles.c.claimed_by == str(subject))).mappings().first()
         return dict(row) if row else None
 
-    def candidates(self, c, org, email):
-        """Person records matching a verified address: its match identifier, or a Person whose
-        ``Email`` is that address. Live records only (a merged id answers its survivor)."""
+    def candidates(self, c, org, email, subject):
+        """Person records ``subject`` may claim with the verified address ``email``: the live record
+        (a merged id answers its survivor) holding the match identifier ``email:<address>``.
+
+        The identifier is the binding, not the record's ``Email`` field: any writer of that field can
+        type an address into it. An identifier is written by the sign-in that creates a Person, by
+        the org when it creates a record, and by a merge carrying a duplicate's identifiers to its
+        survivor. A merge is the one way a writer puts an address onto a record someone else already
+        has, so a record ``subject`` merged another record into by hand (``store.merge``, not the
+        person's own merge card) is not theirs to claim: the address may be the one they carried."""
         email = str(email or '').strip().lower()
         if not email:
             return []
-        out = []
         held = self.persons._held(c, org, EMAIL + email)
-        if held:
-            row = self.persons._follow(c, org, held)
-            if row is not None:
-                out.append(row)
-        r = s.records
-        for (rid,) in c.execute(select(r.c.id).where(
-                r.c.org_id == org, r.c.object_type == 'Person', r.c.deleted == False,  # noqa: E712
-                r.c.merged_into.is_(None), func.lower(r.c.fields['Email'].as_string()) == email)).all():
-            if not any(o['id'] == rid for o in out):
-                row = self.persons._follow(c, org, rid)
-                if row is not None:
-                    out.append(row)
-        return out
+        row = self.persons._follow(c, org, held) if held else None
+        if row is None or self._merged_in_by(c, org, row['id'], subject):
+            return []
+        return [row]
+
+    @staticmethod
+    def _merged_in_by(c, org, record_id, subject):
+        """True when ``subject`` merged a record into ``record_id`` (directly or through a record
+        that later merged into it) with a CRM merge."""
+        r, v = s.records, s.revisions
+        into, frontier = set(), {record_id}
+        while frontier:
+            frontier = {i for (i,) in c.execute(select(r.c.id).where(
+                r.c.org_id == org, r.c.merged_into.in_(frontier))).all()} - into
+            into |= frontier
+        if not into:
+            return False
+        for (evidence,) in c.execute(select(v.c.evidence).where(
+                v.c.org_id == org, v.c.record_id.in_(into), v.c.actor_id == str(subject))).all():
+            for e in evidence if isinstance(evidence, list) else []:
+                if isinstance(e, dict) and e.get('merged_into') and not e.get('card'):
+                    return True
+        return False
 
     def _human_claim(self, c, org, subject, email):
         """The claim any account of this human already holds: this account's own, or the claim on the
@@ -263,7 +280,7 @@ class Profiles:
             return None
         if self._human_claim(c, org, caller.subject, caller.email):
             return None
-        found = self.candidates(c, org, caller.email)
+        found = self.candidates(c, org, caller.email, caller.subject)
         if len(found) != 1:
             return None
         row = self._by_record(c, org, found[0]['id'])
@@ -287,7 +304,7 @@ class Profiles:
                 e = PersonError('You already have a profile; a second address joins it through the merge card')
                 e.status = 409
                 raise e
-            found = self.candidates(c, org, caller.email)
+            found = self.candidates(c, org, caller.email, caller.subject)
             if record_id:
                 found = [r for r in found if r['id'] == str(record_id)]
                 if not found:
@@ -331,7 +348,7 @@ class Profiles:
                     return {'claimed': True, 'via_merge': True, 'record_id': held['record_id'],
                             'fields': dict(held['fields'] or {}), 'public_fields': list(held['public_fields'] or []),
                             'published': bool(held['published']), 'handle': None, 'candidates': []}
-                found = self.candidates(c, org, caller.email) if caller.email_verified else []
+                found = self.candidates(c, org, caller.email, caller.subject) if caller.email_verified else []
                 return {'claimed': False, 'record_id': None, 'fields': {}, 'public_fields': [], 'published': False,
                         'handle': None, 'candidates': [self._candidate(r) for r in found] if len(found) > 1 else []}
             return {'claimed': True, 'record_id': row['record_id'], 'fields': dict(row['fields'] or {}),

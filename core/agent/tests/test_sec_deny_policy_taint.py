@@ -386,6 +386,103 @@ def test_an_unmarked_session_or_the_persons_own_desk_pushes_as_before(stack, tmp
     assert r.status_code == 200 and r.json()["head"] == new, "nobody else reads the person's desk"
 
 
+# ── M2-b: the push hold's audience is the authoritative roster, never the tree's mirror ─────────
+
+def _registry(stack, slug: str, rows: list) -> None:
+    """The workspace's roster in the policy store (what every access decision reads)."""
+    m.store_put(stack.cache, slug, "members", rows)
+
+
+def test_a_push_into_a_workspace_whose_mirror_is_absent_is_held_on_the_registry_roster(stack, tmp_path, marked):
+    """M2-b: ``deal`` has no ``policy/members.json`` in its tree, and bob is in its registry roster."""
+    _registry(stack, "deal", [{"subject": "17", "role": "owner"},
+                              {"subject": "bob", "email": "bob@example.com", "role": "viewer"}])
+    record(stack, [{"path": f"{stack.cache}/deal", "write": True}], unit=CHAT_UNIT)
+    marked(CHAT_UNIT)
+    base, _, data = _worker_commit(tmp_path, _fetch(stack, "deal"),
+                                   {"notes/bank.md": "Invoice 4471-2210 from Dana Whitfield"})
+    r = _push(stack, "deal", base, data)
+    assert r.status_code == 409, r.text[:300]
+    assert r.json()["detail"]["readers"] == ["bob@example.com"]
+    assert stack.run.store.latest("deal").gen == 1, "nothing landed"
+
+
+def test_a_push_hold_names_the_registry_readers_when_the_mirror_is_stale(stack, tmp_path, marked):
+    """M2-b: the mirror still lists bob, whom the owner removed, and does not list carol, added since."""
+    _registry(stack, "team", [{"subject": "17", "role": "owner"},
+                              {"subject": "carol", "email": "carol@example.com", "role": "viewer"}])
+    record(stack, [{"path": f"{stack.cache}/team", "write": True}], unit=CHAT_UNIT)
+    marked(CHAT_UNIT)
+    base, _, data = _worker_commit(tmp_path, _fetch(stack, "team"),
+                                   {"notes/bank.md": "Invoice 4471-2210 from Dana Whitfield"})
+    r = _push(stack, "team", base, data)
+    assert r.status_code == 409, r.text[:300]
+    assert r.json()["detail"]["readers"] == ["carol@example.com"]
+
+
+def test_a_push_hold_releases_when_the_registry_says_only_the_person_reads(stack, tmp_path, marked):
+    """M2-b, the other direction: the mirror lists bob, the registry says the workspace is 17's alone."""
+    _registry(stack, "team", [{"subject": "17", "role": "owner"}])
+    record(stack, [{"path": f"{stack.cache}/team", "write": True}], unit=CHAT_UNIT)
+    marked(CHAT_UNIT)
+    base, new, data = _worker_commit(tmp_path, _fetch(stack, "team"), {"notes/bank.md": "Dana Whitfield"})
+    r = _push(stack, "team", base, data)
+    assert r.status_code == 200 and r.json()["head"] == new, r.text[:300]
+
+
+class _DownStore:
+    """A policy store that does not answer."""
+
+    def __getattr__(self, name):
+        def fail(*a, **kw):
+            raise ConnectionError("registry down")
+        return fail
+
+
+def test_a_marked_push_does_not_land_when_the_registry_cannot_be_read(stack, tmp_path, marked):
+    """M2-b: an unknown audience is never "nobody else" — the push is refused, nothing lands."""
+    record(stack, [{"path": f"{stack.cache}/deal", "write": True}], unit=CHAT_UNIT)
+    marked(CHAT_UNIT)
+    base, _, data = _worker_commit(tmp_path, _fetch(stack, "deal"), {"notes/bank.md": "Dana Whitfield"})
+    m.set_policy_store(_DownStore())
+    try:
+        r = _push(stack, "deal", base, data)
+    finally:
+        m.set_policy_store(None)
+    assert r.status_code == 503 and r.json()["detail"]["refused"] == "policy_unreadable", r.text[:300]
+    assert stack.run.store.latest("deal").gen == 1, "nothing landed"
+
+
+def test_an_unmarked_push_lands_without_a_roster_read(stack, tmp_path, marked):
+    """The roster is read only for a session that read something private."""
+    record(stack, [{"path": f"{stack.cache}/deal", "write": True}], unit="agent-17-chat-clean")
+    base, new, data = _worker_commit(tmp_path, _fetch(stack, "deal", unit="agent-17-chat-clean"),
+                                     {"notes/plan.md": "Ship on Friday"})
+    m.set_policy_store(_DownStore())
+    try:
+        r = _push(stack, "deal", base, data, unit="agent-17-chat-clean")
+    finally:
+        m.set_policy_store(None)
+    assert r.status_code == 200 and r.json()["head"] == new, r.text[:300]
+
+
+def test_the_page_routes_audience_is_the_registry_roster_not_the_mirror(tmp_path):
+    """M2-b at the shared reader: a workspace with no mirror still has its registry's readers, a
+    stale mirror changes nobody's audience, and a tree outside the store's top level has none."""
+    from control_plane import private_taint
+    root = tmp_path / "ws"
+    (root / "deal").mkdir(parents=True)
+    (root / "team" / "policy").mkdir(parents=True)
+    (root / "team" / "policy" / "members.json").write_text(
+        '[{"subject": "17", "role": "owner"}, {"subject": "bob", "role": "viewer"}]')
+    m.store_put(root, "deal", "members", [{"subject": "17", "role": "owner"},
+                                          {"subject": "bob", "email": "bob@example.com", "role": "viewer"}])
+    m.store_put(root, "team", "members", [{"subject": "17", "role": "owner"}])
+    assert private_taint.other_readers(root, root / "deal", "17") == ["bob@example.com"]
+    assert private_taint.other_readers(root, root / "team", "17") == []
+    assert private_taint.other_readers(root, root / ".attached" / "17" / "deal", "17") == []
+
+
 @pytest.mark.parametrize("rel", [".claude/settings.json", ".Claude/settings.json", "Policy/members.json",
                                  ".VEXA/state.json", "policy/réglage.json"])
 def test_a_push_touching_a_reserved_path_in_any_case_is_refused(stack, tmp_path, rel):

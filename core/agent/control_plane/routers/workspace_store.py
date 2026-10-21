@@ -9,9 +9,11 @@ writable ones, fast-forward only, never touching ``policy/``, ``.vexa/``, ``.cla
 in any case; a push answers 200 only once the new generation is durable in the bucket.
 
 A PUSH IS HELD TO THE PRIVATE-WRITE RULE HERE (D6, SC4). Every file each pushed commit writes passes
-``private_taint.check_push`` — the page route's hold, on the roster at the store's base — before it
-lands: a session that read the person's private data cannot carry it into a workspace others read by
-committing it itself. A held push answers 409 ``private_sources_to_shared`` and nothing lands.
+``private_taint.check_push`` — the page route's hold, on the workspace's authoritative roster (the
+policy store, never the tree's mirror) — before it lands: a session that read the person's private
+data cannot carry it into a workspace others read by committing it itself. A held push answers 409
+``private_sources_to_shared`` and nothing lands; a roster that cannot be read answers 503
+``policy_unreadable`` and nothing lands.
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ import os
 
 from control_plane import private_taint
 from control_plane import workspace_store_service as svc
+from control_plane.workspace_membership import POLICY_UNREADABLE, MembershipError
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
@@ -28,6 +31,7 @@ _PUSH_MAX_BYTES = 256 * 1024 * 1024
 def build(**d) -> APIRouter:
     router = APIRouter()
     settings = d.get("settings")
+    wsr = d.get("wsr")
     redis_url = d.get("redis_url") or ""
     _client = {}
 
@@ -71,6 +75,12 @@ def build(**d) -> APIRouter:
                                                         "message": "That path is outside the workspace store."})
         return real[len(root.rstrip("/")) + 1:]
 
+    def _policy_root() -> str:
+        """The store root the membership policy lives under — the one every access decision reads."""
+        if wsr is not None:
+            return str(wsr.root)
+        return str(settings.workspaces_dir)
+
     @router.get("/api/workspace-store/fetch")
     def ws_store_fetch(request: Request, path: str, have: str = ""):
         from workspaces.store.observer import classify  # noqa: PLC0415
@@ -107,8 +117,14 @@ def build(**d) -> APIRouter:
         subject = (request.headers.get("x-user-id") or "").strip()
 
         def admit(repo, old: str, new: str) -> None:
-            withheld = private_taint.check_push(subject=subject, unit=unit, workspace=os.path.basename(rel),
-                                                repo=repo, base=old, new=new)
+            try:
+                withheld = private_taint.check_push(subject=subject, unit=unit, workspace=os.path.basename(rel),
+                                                    root=_policy_root(), ws_dir=os.path.join(_policy_root(), rel),
+                                                    repo=repo, base=old, new=new)
+            except MembershipError as exc:
+                raise HTTPException(status_code=503, detail={
+                    "refused": POLICY_UNREADABLE,
+                    "message": "Who reads this workspace could not be checked, so nothing was pushed."}) from exc
             if withheld is not None:
                 raise HTTPException(status_code=409, detail=withheld)
 

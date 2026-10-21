@@ -248,3 +248,86 @@ def test_workspace_principal_gets_members_intersection_never_the_org_default(sto
     with store.engine.begin() as c:
         c.execute(s.orgs.update().where(s.orgs.c.org_id == ORG).values(default_policy={'active': False}))
     assert store.get(ORG, principal, rid)['fields'].get('Name') == 'Globex'
+
+
+# ── A2-b: a CRM writer cannot claim someone else's Person by writing their own address onto it ─────
+
+VICTIM, ATTACKER = 'val@work.test', 'mallory@acme.test'
+
+
+def _writer(store, subject):
+    """A CRM member who may write every Person (not an administrator)."""
+    with store.engine.begin() as c:
+        c.execute(s.policies.insert().values(org_id=ORG, subject_id=subject, policy={
+            'active': True, 'objects': {'Person': {'read': 'all', 'read_fields': ['*'], 'write': 'all',
+                                                   'write_fields': ['*'], 'create': True}}}))
+
+
+def _victim_record(store):
+    return store.create(ORG, ADMIN, 'Person', {'Name': 'Val Example', 'Email': VICTIM}, reason='met',
+                        idempotency_key='victim', match=['email:' + VICTIM])['record_id']
+
+
+def _claim_status(store, who, record_id=None):
+    try:
+        return store.profiles.claim(ORG, who, record_id)
+    except CRMError as e:
+        return {'refused': getattr(e, 'status', 400)}
+
+
+def _claimed_by(store, record_id):
+    with store.engine.connect() as c:
+        return c.execute(select(s.profiles.c.claimed_by).where(
+            s.profiles.c.org_id == ORG, s.profiles.c.record_id == record_id)).scalar_one_or_none()
+
+
+def test_a_writer_who_sets_a_persons_email_to_their_own_address_cannot_claim_it(store):
+    """A2-b: the record's ``Email`` field is writable by any writer, so it never makes a claim."""
+    victim = _victim_record(store)
+    _writer(store, '40')
+    mallory = from_validate('t', {'user_id': 40, 'email': ATTACKER, 'email_verified': True,
+                                  'scopes': ['bot'], 'is_admin': False})
+    rev = store.get(ORG, ADMIN, victim)['revision']
+    store.change(ORG, mallory, victim, rev, {'Email': ATTACKER}, reason='typo fix')
+    with store.engine.connect() as c:
+        assert store.profiles.candidates(c, ORG, ATTACKER, '40') == []
+    with store.engine.begin() as c:
+        assert store.profiles.auto_claim(c, ORG, mallory) is None
+    assert _claim_status(store, mallory, victim)['refused'] in (403, 404)
+    assert _claimed_by(store, victim) is None
+
+
+def test_a_writer_who_merges_their_own_person_into_another_cannot_claim_it(store):
+    """A2-b through the identifier: a merge carries the writer's ``email:`` identifier onto the
+    victim's record; the writer's own merge is not a binding they may claim through."""
+    victim = _victim_record(store)
+    _writer(store, '40')
+    mallory = from_validate('t', {'user_id': 40, 'email': ATTACKER, 'email_verified': True,
+                                  'scopes': ['bot'], 'is_admin': False})
+    own = store.create(ORG, mallory, 'Person', {'Name': 'M'}, reason='me', idempotency_key='m',
+                       match=['email:' + ATTACKER])['record_id']
+    store.merge(ORG, mallory, own, victim, reason='duplicate')
+    with store.engine.connect() as c:
+        assert store.profiles.persons._held(c, ORG, 'email:' + ATTACKER) == victim   # the identifier moved
+        assert store.profiles.candidates(c, ORG, ATTACKER, '40') == []
+    with store.engine.begin() as c:
+        assert store.profiles.auto_claim(c, ORG, mallory) is None
+    assert _claim_status(store, mallory, victim)['refused'] in (403, 404)
+    assert _claimed_by(store, victim) is None
+
+
+def test_the_person_the_org_bound_by_identifier_still_claims_their_record(store):
+    """The legitimate first claim: the org's record holds ``email:<address>``; a verified sign-in
+    with that address claims it, even after a writer other than the claimant edited or merged it."""
+    victim = _victim_record(store)
+    _writer(store, '40')
+    mallory = from_validate('t', {'user_id': 40, 'email': ATTACKER, 'email_verified': True,
+                                  'scopes': ['bot'], 'is_admin': False})
+    dup = store.create(ORG, mallory, 'Person', {'Name': 'Val E.'}, reason='dup', idempotency_key='d')['record_id']
+    store.merge(ORG, mallory, dup, victim, reason='duplicate')
+    val = from_validate('t', {'user_id': 21, 'email': VICTIM, 'email_verified': True,
+                              'scopes': ['bot'], 'is_admin': False})
+    store.ensure_account(ORG, val)
+    with store.engine.begin() as c:
+        assert store.profiles.auto_claim(c, ORG, val) == victim
+    assert _claimed_by(store, victim) == '21'

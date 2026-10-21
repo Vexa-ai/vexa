@@ -88,17 +88,14 @@ def test_no_claim_without_a_verified_address(store):
         assert store.profiles.auto_claim(c, ORG, Caller(subject='21', email='')) is None
 
 
-def test_several_matches_ask_with_a_claim_card(store):
-    first = org_record(store, key='a', match=(WORK,))
-    second = store.create(ORG, ADMIN, 'Person', {'Name': 'V. Example', 'Email': WORK}, reason='dup',
-                          idempotency_key='b')['record_id']
+def test_only_the_match_identifier_makes_a_claim_never_the_email_field(store):
+    typed = store.create(ORG, ADMIN, 'Person', {'Name': 'V. Example', 'Email': WORK}, reason='typed',
+                         idempotency_key='b')['record_id']
     sign_in(store, A)
     mine = store.profiles.mine(ORG, A)
-    assert mine['claimed'] is False
-    assert {c['record_id'] for c in mine['candidates']} == {first, second}
-    assert set(mine['candidates'][0]) == {'record_id', 'name'}      # the name only, no org notes
-    assert store.profiles.claim(ORG, A)['status'] == 'choose'
-    assert store.profiles.claim(ORG, A, second) == {'status': 'claimed', 'record_id': second}
+    assert mine['claimed'] is True and mine['record_id'] != typed     # the sign-in's own Person
+    with pytest.raises(PersonError):
+        store.profiles.claim(ORG, A, typed)
 
 
 def test_profile_fields_are_edited_by_the_owner_only(store):
