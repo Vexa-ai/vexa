@@ -95,8 +95,16 @@ def _sync_columns(conn: Connection, base):
             conn.execute(text(stmt))
 
 
-def _sync_indexes(conn: Connection, base):
+def _sync_indexes(conn: Connection, base, deferred: list | None = None):
     """Additive index convergence — tolerant for non-unique, FAIL CLOSED for unique (#1186).
+
+    On Postgres a missing NON-UNIQUE index is not built here: it is appended to ``deferred`` and
+    built after this transaction commits, ``CONCURRENTLY`` (``_build_deferred_indexes``). This
+    transaction can hold ACCESS EXCLUSIVE on ``users`` and ``api_tokens`` (an additive ``ADD
+    COLUMN``) until it commits, so an index built inside it would hold every ``/internal/validate``
+    for the whole build. An INVALID leftover of a failed concurrent build under a non-unique model
+    name is deferred the same way, to be dropped and rebuilt. UNIQUE indexes stay in-band: they are
+    invariants the code relies on, and their failure stops the convergence (below).
 
     A non-unique index is a performance hint: losing one degrades latency, nothing else, so a
     failed CREATE stays tolerated at DEBUG. A UNIQUE index is an *invariant the application code
@@ -117,13 +125,22 @@ def _sync_indexes(conn: Connection, base):
     """
     inspector = inspect(conn)
     existing_tables = set(inspector.get_table_names())
+    invalid = _invalid_index_names(conn)
     unique_failures: list[tuple[str, str, str]] = []   # (table, index, underlying error)
     for table in base.metadata.sorted_tables:
         if table.name not in existing_tables:
             continue
         existing = {idx["name"] for idx in inspector.get_indexes(table.name) if idx["name"]}
         for index in table.indexes:
+            unique = bool(getattr(index, "unique", False))
             if index.name and index.name in existing:
+                if index.name not in invalid:
+                    continue
+                if unique or deferred is None:
+                    logger.error(_invalid_index_message(table.name, str(index.name)))
+                    continue
+            if deferred is not None and not unique:
+                deferred.append(index)
                 continue
             # Per-index SAVEPOINT: a failed CREATE INDEX (e.g. a UNIQUE index on a table that still
             # holds rows violating it) must NOT poison the surrounding convergence transaction —
@@ -145,6 +162,81 @@ def _sync_indexes(conn: Connection, base):
                 logger.debug("index %s not created: %s", index.name, e)
     if unique_failures:
         raise SchemaInvariantError(_unique_index_failure_message(unique_failures))
+
+
+#: Reflection lists an index by name whether or not Postgres can use it, so the INVALID leftover of a
+#: failed ``CREATE INDEX CONCURRENTLY`` would otherwise read as present and never be rebuilt.
+_INVALID_INDEXES_SQL = (
+    "SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE NOT i.indisvalid AND n.nspname = current_schema()"
+)
+
+
+def _invalid_index_names(conn: Connection) -> set[str]:
+    if getattr(getattr(conn, "dialect", None), "name", None) != "postgresql":
+        return set()
+    return {row[0] for row in conn.execute(text(_INVALID_INDEXES_SQL))}
+
+
+def _invalid_index_message(table: str, index: str) -> str:
+    return (f"schema-sync: index {index} on {table} exists but is INVALID (a failed CREATE INDEX "
+            f"CONCURRENTLY); Postgres never uses it. Rebuild it: DROP INDEX CONCURRENTLY {index}; "
+            f"then restart admin-api (or run python -m admin_api.migrate).")
+
+
+#: The concurrent builds run on their own autocommit connection after the convergence commits.
+#: One process builds at a time (every admin-api replica and the migrations Job converge): the
+#: others find the advisory lock held and leave the work to it. A build first waits for every
+#: transaction already writing the table; ``CONCURRENT_LOCK_TIMEOUT_MS`` bounds each of those waits,
+#: so a long-open writer delays a boot by seconds, never indefinitely. The lock it takes (SHARE
+#: UPDATE EXCLUSIVE) conflicts with no read or write, so nobody queues behind a build.
+CONCURRENT_INDEX_LOCK_KEY = 0x76786131          # "vxa1"
+CONCURRENT_LOCK_TIMEOUT_MS = 5000
+
+
+def _concurrent_index_sql(index, dialect) -> str:
+    from sqlalchemy.schema import CreateIndex  # noqa: PLC0415
+
+    ddl = str(CreateIndex(index, if_not_exists=True).compile(dialect=dialect))
+    prefix = "CREATE INDEX IF NOT EXISTS "
+    if not ddl.startswith(prefix):
+        raise ValueError(f"unexpected index DDL for {index.name}: {ddl[:80]}")
+    return "CREATE INDEX CONCURRENTLY IF NOT EXISTS " + ddl[len(prefix):]
+
+
+def _build_deferred_indexes(conn: Connection, indexes: list) -> None:
+    """Build each deferred non-unique index CONCURRENTLY. ``conn`` must be in AUTOCOMMIT.
+
+    A failed build is logged with the statement to run by hand and does not fail the convergence:
+    a non-unique index is a performance hint. Postgres leaves an INVALID index behind a failed
+    concurrent build; the next convergence drops and rebuilds it."""
+    if not indexes:
+        return
+    if not conn.execute(text("SELECT pg_try_advisory_lock(:k)"),
+                        {"k": CONCURRENT_INDEX_LOCK_KEY}).scalar():
+        logger.warning("schema-sync: another process is building indexes concurrently; leaving %s "
+                       "to it", ", ".join(str(i.name) for i in indexes))
+        return
+    try:
+        conn.execute(text(f"SET lock_timeout = '{CONCURRENT_LOCK_TIMEOUT_MS}ms'"))
+        invalid = _invalid_index_names(conn)
+        for index in indexes:
+            sql = _concurrent_index_sql(index, conn.dialect)
+            try:
+                if index.name in invalid:
+                    conn.execute(text(f'DROP INDEX CONCURRENTLY IF EXISTS "{index.name}"'))
+                started = time.monotonic()
+                conn.execute(text(sql))
+                logger.info("schema-sync: built index %s on %s concurrently in %.2fs",
+                            index.name, index.table.name, time.monotonic() - started)
+            except DBAPIError as e:
+                logger.error("schema-sync: index %s on %s NOT built (%s); the next convergence "
+                             "retries it. By hand: DROP INDEX CONCURRENTLY IF EXISTS %s; %s",
+                             index.name, index.table.name, getattr(e, "orig", e), index.name, sql)
+    finally:
+        conn.execute(text("RESET lock_timeout"))
+        conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": CONCURRENT_INDEX_LOCK_KEY})
 
 
 def _unique_index_failure_message(failures: list[tuple[str, str, str]]) -> str:
@@ -274,41 +366,62 @@ def _bound_locks(conn: Connection):
         conn.execute(text(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT_MS}ms'"))
 
 
-def _ensure_schema_sync(conn: Connection, base):
+def _ensure_schema_sync(conn: Connection, base, deferred: list | None = None):
     _bound_locks(conn)
     _sync_functions(conn)                              # MIGRATION-0005 fn (indexes reference it)
     base.metadata.create_all(conn, checkfirst=True)   # missing tables, FK order
     _sync_columns(conn, base)                          # additive columns
     _backfill_token_scopes(conn)                       # MIGRATION-0004 data backfill
     _ensure_default_org(conn)                          # MIGRATION-0008 the default org row
-    _sync_indexes(conn, base)                          # additive indexes
+    _sync_indexes(conn, base, deferred)                # additive indexes (non-unique: deferred)
+
+
+def _deferred_list(engine) -> list | None:
+    return [] if getattr(getattr(engine, "dialect", None), "name", None) == "postgresql" else None
 
 
 async def ensure_schema(engine, base):
     """Converge the DB to `base.metadata`. Never drops. Idempotent. async-engine entry."""
     for wait in (*LOCK_RETRY_BACKOFF_S, None):
+        deferred = _deferred_list(engine)
         try:
             async with engine.begin() as conn:
-                await conn.run_sync(_ensure_schema_sync, base)
-            return
+                await conn.run_sync(_ensure_schema_sync, base, deferred)
         except DBAPIError as e:
             if wait is None or not _lock_not_available(e):
                 raise
             logger.warning("schema-sync: a lock was not available in %d ms; retrying in %ss",
                            LOCK_TIMEOUT_MS, wait)
             await asyncio.sleep(wait)
+            continue
+        if deferred:
+            try:
+                async with engine.connect() as conn:
+                    conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+                    await conn.run_sync(_build_deferred_indexes, deferred)
+            except Exception as e:  # noqa: BLE001 — a performance hint never fails the convergence
+                logger.error("schema-sync: concurrent index builds did not run: %s", e)
+        return
 
 
 def ensure_schema_sync(engine, base):
     """Sync-engine entry (same convergence and retry) — used by the testcontainers evals."""
     for wait in (*LOCK_RETRY_BACKOFF_S, None):
+        deferred = _deferred_list(engine)
         try:
             with engine.begin() as conn:
-                _ensure_schema_sync(conn, base)
-            return
+                _ensure_schema_sync(conn, base, deferred)
         except DBAPIError as e:
             if wait is None or not _lock_not_available(e):
                 raise
             logger.warning("schema-sync: a lock was not available in %d ms; retrying in %ss",
                            LOCK_TIMEOUT_MS, wait)
             time.sleep(wait)
+            continue
+        if deferred:
+            try:
+                with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                    _build_deferred_indexes(conn, deferred)
+            except Exception as e:  # noqa: BLE001 — a performance hint never fails the convergence
+                logger.error("schema-sync: concurrent index builds did not run: %s", e)
+        return

@@ -125,7 +125,8 @@ class User(Base):
         Index("ix_users_email_lower", text("lower(email)")),
         # The public profile's opaque handle (app/public_profile.py): directory reads and crm-api's live
         # reads find a profile by it. NON-UNIQUE: a handle is random (16+ bytes), and a unique build
-        # that ever met a collision would fail the boot (`_sync_indexes`, #1186).
+        # that ever met a collision would fail the boot (`_sync_indexes`, #1186). Being non-unique, it
+        # is built CONCURRENTLY after the convergence commits, never under its lock on `users`.
         Index("ix_users_public_profile_handle", text("((data -> 'public_profile') ->> 'handle')")),
     )
 
@@ -301,8 +302,8 @@ class Meeting(Base):
         # three access branches, one scan path each — owner top-N, transcript-share containment,
         # workspace top-N. The whole-column GIN above cannot serve a containment probe on the
         # `transcript_viewers` key alone.
-        # ⚠ PROD ROLLOUT: build CONCURRENTLY out-of-band before deploying (vexa-platform O-book
-        # O4); _sync_indexes' in-band CREATE INDEX locks `meetings` under live traffic.
+        # A missing one is built CONCURRENTLY after the convergence commits (`_sync_indexes`), so
+        # it never locks `meetings` under live traffic.
         Index("ix_meeting_user_created_at", "user_id", "created_at"),
         Index("ix_meeting_transcript_viewers_gin",
               text("(data -> 'transcript_viewers') jsonb_path_ops"), postgresql_using="gin"),
