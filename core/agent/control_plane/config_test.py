@@ -159,12 +159,14 @@ _STT_PATH = "/v1/audio/transcriptions"
 
 def _transcribe_probe(endpoint: str, token: str) -> tuple:
     """POST the shared audio probe body — the same request the boot preflight makes."""
-    from control_plane.config_preflight import audio_probe_body
+    from control_plane.config_preflight import (
+        IDEMPOTENCY_HEADER, audio_probe_body, new_idempotency_key)
 
     content_type, body = audio_probe_body()
     req = urllib.request.Request(
         endpoint, data=body, method="POST",
-        headers={"Content-Type": content_type, "Authorization": f"Bearer {token}"})
+        headers={"Content-Type": content_type, "Authorization": f"Bearer {token}",
+                 IDEMPOTENCY_HEADER: new_idempotency_key()})
     try:
         with urllib.request.urlopen(req, timeout=_STT_PROBE_TIMEOUT) as r:
             return r.status, r.read().decode("utf-8", "replace")
