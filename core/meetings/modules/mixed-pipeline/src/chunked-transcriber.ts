@@ -552,10 +552,13 @@ export class ChunkedTranscriber {
       // what we have by closing the turn, instead of holding it for the 3rd pass.
       if (t.turn.pendingTail.length > 0 && t.now() - t.turn.lastVoicedWallMs > CONFIRM_TTL_MS) {
         t.queue.push({ kind: 'close', t1: t.latestAudioMs });
-        // On the transport spine the pause that triggered this is a pause, NOT the end of the
-        // speaker's turn — the transport has not said they stopped. Reopen on the same track so
-        // the audio after the pause is neither dropped nor handed to a different label.
-        if (t.turn.trackId) t.queue.push(t.rollOpen(t.turn, t.latestAudioMs));
+        // The TTL is a commit, not a turn edge: neither spine has said the speaker stopped. Only a
+        // spine edge opens a turn, and under unbroken speech the next one can be minutes away, so a
+        // turn left closed here would leave every second until then untranscribed. Reopen at the
+        // same instant (on the same track, on the transport spine). A pause that really was the
+        // end costs nothing: silence never reaches STT, and the spine's late edge closes the
+        // successor empty.
+        t.queue.push(t.rollOpen(t.turn, t.latestAudioMs));
         void t.pump();
         return;
       }

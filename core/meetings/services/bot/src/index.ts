@@ -39,7 +39,7 @@ import { describeGaps, mergeDegraded, transcriptGapsReport } from './transcript-
 import { createSttFaultReporter } from './stt-faults.js';
 import { launchBrowser, startCaptureBridge, startRecording, restartMixedCapture, createSpeakController, createChatSender, type BrowserSession } from './capture-bridge.js';
 import { createActDispatch } from './act-dispatch.js';
-import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
+import { createDeafLaneMonitor, createRemoteAudioActivityTap, deafLaneFault, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import { createVoiceNoteJoinDriver, createVoiceNotePipeline, createVoiceNoteSource, voiceNoteIdleMs, voiceNoteMaxActiveMs } from './voice-note.js';
 import { createRedisAudioStreamReader, redisStreamClientFrom, type LiveRedisStreamClient } from './adapters/voice-note-redis.js';
@@ -246,6 +246,15 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     onCaptureFault: () => restartCapture?.(),
   });
   console.log(`[bot] aloneness: silence adapter + deaf-capture guard enabled (window_ms=${aloneSilenceWindowMs})`);
+  // The deaf-lane guard: audio keeps arriving and no STT round-trip settles. Its incident is a
+  // typed fault on the same accumulator the terminal lifecycle event reports, so a lane that went
+  // deaf mid-meeting ends `degraded`, never as a clean meeting that just stopped talking.
+  const transcribing = inv.transcribeEnabled !== false && !!inv.transcriptionServiceUrl;
+  const deafLane = createDeafLaneMonitor({
+    activity: remoteAudioActivity,
+    onDeaf: (i) => sttFaults.record(deafLaneFault(i)),
+  });
+  const stopDeafLane = transcribing ? deafLane.start() : () => { /* nothing to guard */ };
   if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
 
   // The live transcription-language setting: seeded from the invocation (validated at parse), then
@@ -327,8 +336,11 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     session = await launchBrowser(inv);                                   // L4 (O6/VM)
     join = createBrowserJoinDriver(session.page, inv);
     botPipeline = createBotPipeline(inv, transcript, {
-      // When recording, tee every STT round-trip to <session>.stt.jsonl (the capture/STT/assembly bisect).
-      transcribe: signalRecorder ? wrapTranscribeWithTap(createTranscribe(inv, languageControl), signalRecorder.path) : undefined,
+      // When recording, every STT round-trip is teed to <session>.stt.jsonl (the capture/STT/assembly
+      // bisect); every settled one also tells the deaf-lane guard the lane is alive.
+      transcribe: deafLane.watch(signalRecorder
+        ? wrapTranscribeWithTap(createTranscribe(inv, languageControl), signalRecorder.path)
+        : createTranscribe(inv, languageControl)),
       languageControl,
       config: speakerStreamConfig,
       // Every STT fault is counted and carried out on the terminal lifecycle event (see
@@ -456,6 +468,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // the revoked credential, and ends the client instead of looping (adapters/redis-terminal.ts).
     redisSession.end();
     releaseSignals();
+    stopDeafLane();
     // Tear down the pipeline (capture bridge + recording + engine) + browser (best-effort — a
     // teardown failure must not change the exit code). The orchestrator already stopped the pipeline
     // on a normal end; createLivePipeline.stop() is idempotent, and this also covers an early-exit
