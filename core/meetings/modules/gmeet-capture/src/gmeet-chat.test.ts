@@ -7,10 +7,12 @@
  * same data-message-id do not re-emit), a run of messages under one sender header is
  * attributed to that sender, the bot's own "You" messages and the text it just sent
  * are skipped, a closed panel is opened, and the sender fills + sends through the
- * composer or reports false when there is none. The live Meet DOM is validated live.
+ * composer and counts the send only once the line shows in the list (no composer → no_composer,
+ * never shown → not_landed). Hidden fields and Meet's reCAPTCHA response textarea are never the
+ * composer. The live Meet DOM is validated live.
  * Run: npx tsx src/gmeet-chat.test.ts   (the package's `npm test` chains it)
  */
-import { createGmeetChat, sendGmeetChatMessage, openGmeetChatPanel, type GmeetChatMessage } from './gmeet-chat.js';
+import { createGmeetChat, sendGmeetChatMessage, openGmeetChatPanel, findGmeetChatComposer, type GmeetChatMessage } from './gmeet-chat.js';
 
 let failed = 0;
 const check = (name: string, cond: boolean, detail?: string) => {
@@ -161,13 +163,14 @@ const toolbar = (pressed: boolean) => e('div', {}, [
 {
   const got: GmeetChatMessage[] = [];
   const list = e('div', { jsname: 'xySENc' }, []);
-  const { area } = composerArea();
+  const { area, send } = composerArea();
   setDoc(e('body', {}, [toolbar(true), e('aside', {}, [list, area])]));
   const chat = createGmeetChat({ onMessage: (m) => got.push(m) });
+  // Meet renders the sent line (under a label that is not "You") when the send button is clicked.
+  onClick = (el) => { if (el === send) { list.append(group('Vexa Notetaker', [['s1', 'auto reply']]).el); mutate(); } };
   const ok = await sendGmeetChatMessage('auto reply');
-  list.append(group('Vexa Notetaker', [['s1', 'auto reply']]).el);
-  mutate();
-  check('the just-sent text is skipped by the reader', ok && got.length === 0, JSON.stringify(got));
+  onClick = null;
+  check('the just-sent text is skipped by the reader', ok.ok && got.length === 0, `${JSON.stringify(ok)} ${JSON.stringify(got)}`);
   list.append(group('Carol', [['c1', 'auto reply']]).el);
   mutate();
   check('the recent-sent entry is consumed — the same words from a person later still emit',
@@ -182,6 +185,27 @@ const toolbar = (pressed: boolean) => e('div', {}, [
   mutate();
   check('a message under the bot\'s own display name (selfName) is skipped', named.length === 0, JSON.stringify(named));
   chat2.destroy();
+}
+
+// ── 2b) Live Meet renders the bot's OWN line with no sender header (right-aligned, time only), and
+//    may render it more than once — a pending node, then the confirmed one under a new
+//    data-message-id. Every render of it is the bot's own; a person typing the same words is not. ──
+{
+  const got: GmeetChatMessage[] = [];
+  const list = e('div', { jsname: 'xySENc' }, []);
+  const { area, send, textarea } = composerArea();
+  const ownLine = (id: string, text: string) => e('div', { class: 'Ss4fHf' }, [t('div', '9:47 PM', { class: 'MuzmKe' }), e('div', { class: 'beTDc' }, [message(id, text)])]);
+  setDoc(e('body', {}, [toolbar(true), e('aside', {}, [list, area])]));
+  const chat = createGmeetChat({ selfName: 'Vexa B', onMessage: (m) => got.push(m) });
+  onClick = (el) => { if (el === send) { const pending = ownLine('tmp-1', textarea.value); list.append(pending); mutate(); pending.remove(); list.append(ownLine('srv-9', textarea.value)); mutate(); } };
+  const ok = await sendGmeetChatMessage('car22d-B-plain-run1');
+  onClick = null;
+  tick();
+  check('the bot\'s own unlabelled line, rendered twice under two ids, is never emitted', ok.ok && got.length === 0, `${JSON.stringify(ok)} ${JSON.stringify(got)}`);
+  list.append(group('Carol', [['c9', 'car22d-B-plain-run1']]).el);
+  mutate();
+  check('a person typing the same words afterwards is still emitted', got.length === 1 && got[0].sender === 'Carol', JSON.stringify(got));
+  chat.destroy();
 }
 
 // ── 3) A closed panel is opened; an empty panel primes without swallowing the first message ──
@@ -205,29 +229,65 @@ const toolbar = (pressed: boolean) => e('div', {}, [
   chat.destroy();
 }
 
-// ── 4) Sender: false with no composer; true + value set + input + send clicked with one ──
+// ── 4) Sender: no_composer with none; ok once the line lands; not_landed when it never shows ──
 {
   setDoc(e('body', {}, [e('div', {}, [])]));
-  check('send returns false when there is no composer and no chat toggle', (await sendGmeetChatMessage('nobody hears this')) === false);
+  const none = await sendGmeetChatMessage('nobody hears this');
+  check('send fails no_composer when there is no composer and no chat toggle', !none.ok && none.reason === 'no_composer', JSON.stringify(none));
 
   const bar = toolbar(true);
   const reaction = bar.querySelector('button[aria-label*="Send a reaction" i]')!;
   const { area, textarea, send } = composerArea();
-  setDoc(e('body', {}, [bar, e('aside', {}, [area])]));
+  const list = e('div', { jsname: 'xySENc' }, []);
+  setDoc(e('body', {}, [bar, e('aside', {}, [list, area])]));
+  // Meet renders the composer's text into the list when its send button is clicked.
+  onClick = (el) => { if (el === send) list.append(group('You', [[`r${send.clicks}`, textarea.value]]).el); };
   const ok = await sendGmeetChatMessage('hello from the agent');
-  check('send returns true with a composer', ok === true);
+  check('send is ok once the sent line shows in the message list', ok.ok, JSON.stringify(ok));
   check('the composer value is set and focused', textarea.value === 'hello from the agent' && textarea.focused, `value=${textarea.value}`);
   check('an input event announces the value', textarea.events.some((ev) => ev.type === 'input'), JSON.stringify(textarea.events));
   check('the send button beside the composer is clicked', send.clicks === 1, `clicks=${send.clicks}`);
   check('the unrelated "Send a reaction" control is not clicked', reaction.clicks === 0, `clicks=${reaction.clicks}`);
 
+  // The same words again: the earlier line is already on screen, so only a NEW one counts.
+  onClick = null;
+  const repeat = await sendGmeetChatMessage('hello from the agent', { landWaitMs: 50 });
+  check('a send whose line never shows is not_landed — an earlier identical line does not count',
+    !repeat.ok && repeat.reason === 'not_landed' && send.clicks === 2, JSON.stringify(repeat));
+
   const disabled = composerArea();
   disabled.send.setAttribute('disabled', '');
   setDoc(e('body', {}, [e('aside', {}, [disabled.area])]));
-  await sendGmeetChatMessage('enter fallback');
+  await sendGmeetChatMessage('enter fallback', { landWaitMs: 10 });
   check('a disabled send button falls back to an Enter keydown on the composer',
     disabled.send.clicks === 0 && disabled.textarea.events.some((ev) => ev.type === 'keydown' && ev.key === 'Enter'),
     JSON.stringify(disabled.textarea.events));
+}
+
+// ── 5) Meet's in-call page as seen live: reCAPTCHA's response textarea sits next to a "Send
+//    feedback" control, and the chat panel is closed. It is never the composer: the toggle is
+//    clicked, and a send that cannot reach a visible composer fails without touching it. ──
+{
+  const recaptcha = e('textarea', { id: 'g-recaptcha-response-100000', name: 'g-recaptcha-response', class: 'g-recaptcha-response' });
+  const feedback = e('button', { 'aria-label': 'Send feedback to Google' });
+  const bar = toolbar(false);
+  const toggle = bar.querySelector('button[aria-label*="Chat with everyone" i]')!;
+  setDoc(e('body', {}, [bar, e('div', {}, [e('div', {}, [e('div', {}, [recaptcha])]), feedback])]));
+  check('closed panel: the reCAPTCHA textarea (the only text field) is not the composer', findGmeetChatComposer() === null,
+    JSON.stringify(findGmeetChatComposer()?.via));
+  check('closed panel: openGmeetChatPanel clicks the chat toggle', openGmeetChatPanel() && toggle.clicks === 1, `clicks=${toggle.clicks}`);
+  const res = await sendGmeetChatMessage('into the void', { waitMs: 30 });
+  check('closed panel that never opens: send fails no_composer, reCAPTCHA field and feedback button untouched',
+    !res.ok && res.reason === 'no_composer' && recaptcha.value === '' && feedback.clicks === 0,
+    `${JSON.stringify(res)} value=${recaptcha.value} feedback=${feedback.clicks}`);
+
+  // Open panel: a hidden field (aria-hidden ancestor, `hidden`) beside the real composer is skipped.
+  const shadow = e('textarea', {});
+  const { area, textarea } = composerArea();
+  setDoc(e('body', {}, [toolbar(true), e('div', { 'aria-hidden': 'true' }, [shadow]), e('textarea', { hidden: '' }),
+    e('aside', {}, [e('div', { jsname: 'xySENc' }, []), area]), e('div', {}, [recaptcha])]));
+  const hit = findGmeetChatComposer();
+  check('open panel: the composer is the visible field of the panel, never a hidden one or reCAPTCHA', hit?.el === textarea, hit?.via);
 }
 
 console.log(failed ? `\n❌ ${failed} check(s) failed` : '\n✅ gmeet-chat: all checks passed');

@@ -21,7 +21,7 @@ const dispatch = createActDispatch({
     async speak(text, voice) { calls.push(`speak:${text}:${voice ?? ''}`); },
     async stop() { calls.push('speak_stop'); },
   },
-  chat: { async send(text) { calls.push(`chat:${text}`); return true; } },
+  chat: { async send(text) { calls.push(`chat:${text}`); return { sent: true, via: 'test' }; } },
 });
 const run = async (act: Act) => { calls.length = 0; await dispatch(act); return [...calls]; };
 

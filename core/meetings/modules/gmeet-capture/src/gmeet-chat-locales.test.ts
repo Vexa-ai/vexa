@@ -9,8 +9,11 @@
  *   • history is primed, a new participant line is emitted once with its sender, the localised
  *     "You" line and the bot's own just-sent line are skipped;
  *   • the in-page sender fills the composer and clicks the row's send button (never the toolbar's
- *     reaction button); prepareGmeetChatSend marks the same two elements for trusted input; a closed
- *     panel is opened through the language-free toggle.
+ *     reaction button), and counts the send only once the line shows in the message list;
+ *     prepareGmeetChatSend marks the same two elements for trusted input; a closed panel is opened
+ *     through the language-free toggle;
+ *   • Meet's reCAPTCHA response field (a textarea on every in-call page) is never the composer —
+ *     not with the panel open, and not as the page's only text field with the panel closed.
  * The fixtures are constructed, not live captures (see src/fixtures/README.md).
  * Run: npx tsx src/gmeet-chat-locales.test.ts   (the package's `npm test` chains it)
  */
@@ -80,9 +83,15 @@ for (const c of CASES) {
   g.KeyboardEvent = w.KeyboardEvent;
   const byFx = (id: string) => doc.querySelector(`[data-fixture-id="${id}"]`) as HTMLElement;
   const clicks: string[] = [];
+  // Meet renders a sent line into the list: clicking the row's send button posts the composer's text
+  // (under the local participant's label) unless `renderSends` is off.
+  let renderSends = true, sentSeq = 0;
   doc.addEventListener('click', (ev) => {
     const b = (ev.target as Element).closest('button');
-    clicks.push(b?.getAttribute('data-fixture-id') || b?.getAttribute('aria-label') || '?');
+    const id = b?.getAttribute('data-fixture-id');
+    clicks.push(id || b?.getAttribute('aria-label') || '?');
+    const field = byFx('composer') as HTMLTextAreaElement | null;
+    if (id === 'send' && renderSends && field?.value) byFx('list').append(group(doc, c.self, `${c.lang}-sent-${sentSeq++}`, field.value));
   });
 
   if (c.lang !== 'en') {
@@ -99,6 +108,7 @@ for (const c of CASES) {
   check(`${c.lang}: message list found via ${c.listVia}`, list?.el === byFx('list') && list?.via === c.listVia, `via=${list?.via}`);
   check(`${c.lang}: composer found via ${c.composerVia}`, composer?.el === byFx('composer') && composer?.via === c.composerVia, `via=${composer?.via}`);
   check(`${c.lang}: send button found via ${c.sendVia}`, send?.el === byFx('send') && send?.via === c.sendVia, `via=${send?.via}`);
+  check(`${c.lang}: the reCAPTCHA textarea is not the composer with the panel open`, composer?.el !== byFx('recaptcha'), `via=${composer?.via}`);
 
   // Reader.
   const got: GmeetChatMessage[] = [];
@@ -120,16 +130,26 @@ for (const c of CASES) {
     check(`${c.lang}: the localised self label "${c.self}" is skipped`, got.length === 1, JSON.stringify(got));
   }
 
-  // In-page sender: fills the composer, clicks the row's send button (never the reaction button).
+  // In-page sender: fills the composer, clicks the row's send button (never the reaction button), and
+  // counts the send once Meet shows the line.
   clicks.length = 0;
-  const ok = await sendGmeetChatMessage(`bot line ${c.lang}`);
-  check(`${c.lang}: in-page send fills the composer and clicks the row's send button`,
-    ok && (byFx('composer') as HTMLTextAreaElement).value === `bot line ${c.lang}` && JSON.stringify(clicks) === '["send"]',
-    `ok=${ok} clicks=${JSON.stringify(clicks)}`);
   const before = got.length;
+  renderSends = false;   // rendered by hand below, under a label that is not the bot's
+  const unlanded = await sendGmeetChatMessage(`bot line ${c.lang}`, { landWaitMs: 50 });
+  check(`${c.lang}: a send whose line never shows in the list is a failure (not_landed)`,
+    !unlanded.ok && unlanded.reason === 'not_landed' && JSON.stringify(clicks) === '["send"]',
+    `result=${JSON.stringify(unlanded)} clicks=${JSON.stringify(clicks)}`);
   byFx('list').append(group(doc, 'Vexa Notetaker (other label)', `${c.lang}-3`, `bot line ${c.lang}`));
   await flush();
   check(`${c.lang}: the bot's own just-sent line is not echoed (any sender label)`, got.length === before, JSON.stringify(got));
+  renderSends = true;
+  clicks.length = 0;
+  const ok = await sendGmeetChatMessage(`landed line ${c.lang}`);
+  check(`${c.lang}: in-page send fills the composer, clicks the row's send button, and the line lands`,
+    ok.ok && (byFx('composer') as HTMLTextAreaElement).value === `landed line ${c.lang}` && JSON.stringify(clicks) === '["send"]',
+    `result=${JSON.stringify(ok)} clicks=${JSON.stringify(clicks)}`);
+  await flush();
+  check(`${c.lang}: the landed line is not echoed either`, got.length === before, JSON.stringify(got));
 
   // Trusted-input preparation marks the same two elements.
   const prep = await prepareGmeetChatSend(`trusted ${c.lang}`);
@@ -142,12 +162,20 @@ for (const c of CASES) {
   check(`${c.lang}: the trusted line is not echoed either`, got.length === before, JSON.stringify(got));
   chat.destroy();
 
-  // A closed panel: no composer, toggle unpressed → the language-free toggle is clicked.
+  // A closed panel: no composer, toggle unpressed. The reCAPTCHA textarea is now the page's only
+  // text field — it is not the composer, and the language-free toggle is clicked.
   const aside = doc.querySelector('aside')!;
   aside.remove();
   byFx('toggle').setAttribute('aria-pressed', 'false');
+  const closed = findGmeetChatComposer();
+  check(`${c.lang}: with the panel closed the reCAPTCHA textarea (the only text field) is not the composer`,
+    closed === null, `via=${closed?.via} el=${closed?.el.getAttribute('id')}`);
   clicks.length = 0;
   check(`${c.lang}: a closed panel is opened through the toggle`, openGmeetChatPanel() && JSON.stringify(clicks) === '["toggle"]', JSON.stringify(clicks));
+  const sendClosed = await sendGmeetChatMessage(`into a closed panel ${c.lang}`, { waitMs: 50 });
+  check(`${c.lang}: a send with the panel closed and never opening fails (no_composer), the reCAPTCHA field untouched`,
+    !sendClosed.ok && sendClosed.reason === 'no_composer' && (byFx('recaptcha') as HTMLTextAreaElement).value === '',
+    `result=${JSON.stringify(sendClosed)} recaptcha=${(byFx('recaptcha') as HTMLTextAreaElement).value}`);
 }
 
 console.log(failed ? `\n❌ ${failed} check(s) failed` : '\n✅ gmeet-chat-locales: all checks passed');

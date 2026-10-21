@@ -1545,71 +1545,107 @@ export function createSpeakController(page: Page, inv: Invocation): SpeakControl
  * The CHAT-SEND path — write a line into the meeting chat (acts.v1 `chat_send`).  // L4 (O6/VM).
  *
  * google_meet sends with TRUSTED input: the page-side prepareGmeetChatSend opens the panel, finds the
- * composer and its send button by structure (language-independent — see gmeet-chat.ts) and marks
- * them; Playwright then fills the marked composer and clicks the marked button, or presses Enter
- * when the row has no identifiable button. When that path cannot run (no Playwright locator, or a
- * step throws), the page-side sendGmeetChatMessage (DOM value + click / synthetic Enter) is the
- * fallback. jitsi calls the conference's own sendTextMessage (sendJitsiChatMessage). Not gated on
- * voiceAgentEnabled: chat is a text act, not a voice one. Every other platform reports false.
+ * visible composer and its send button by structure (language-independent, never a hidden field or
+ * reCAPTCHA's — see gmeet-chat.ts) and marks them; Playwright then fills the marked composer and
+ * clicks the marked button, or presses Enter when the row has no identifiable button. When that path
+ * cannot run (no Playwright locator, or a step throws before the line went out), the page-side
+ * sendGmeetChatMessage (DOM value + click / synthetic Enter) is the fallback. Either way the send
+ * counts only when the line shows in Meet's message list (awaitGmeetChatLanded). jitsi calls the
+ * conference's own sendTextMessage (sendJitsiChatMessage). Not gated on voiceAgentEnabled: chat is a
+ * text act, not a voice one. Every other platform reports `unsupported_platform`.
+ *
+ * The acts bus carries no acknowledgement, so the outcome is the bot's log: `chat_send: sent …` once
+ * the line is in the meeting, else `chat_send_failed reason=<ChatSendFailure>`.
  */
+export type ChatSendFailure =
+  | 'unsupported_platform'  // the platform's bot has no chat sender
+  | 'no_composer'           // no visible chat composer, even after opening the panel
+  | 'not_landed'            // written and sent, but the line never showed in the message list
+  | 'no_chat_api'           // the page has no sender (bundle missing / jitsi conference API absent)
+  | 'page_error'            // the page-side sender threw
+  | 'empty_text';
+
+/** The outcome of one chat_send: sent only once the line is in the meeting. */
+export type ChatSendResult = { sent: true; via: string } | { sent: false; reason: ChatSendFailure };
+
 export interface ChatSender {
-  /** Send `text` into the meeting chat. Resolves false when the platform or the page cannot. */
-  send(text: string): Promise<boolean>;
+  /** Send `text` into the meeting chat. Resolves `sent: true` only once the line is in the meeting. */
+  send(text: string): Promise<ChatSendResult>;
 }
 
-/** google_meet's trusted send: page-side lookup + marks, then Playwright input on the marks.
- *  Resolves true when sent, false when the page has no composer, null when the trusted path could
- *  not run (the caller falls back to the page-side sender). */
-async function sendGmeetTrusted(page: Page, text: string): Promise<boolean | null> {
+/** How long a sent line may take to show in Meet's message list before the send is a failure. */
+const GMEET_CHAT_LAND_WAIT_MS = Number(process.env.VEXA_GMEET_CHAT_LAND_WAIT_MS || 8000);
+
+/** google_meet's trusted send: page-side lookup + marks, then Playwright input on the marks, then the
+ *  landing check. Resolves the outcome, or null when the trusted path could not put the line out (the
+ *  caller falls back to the page-side sender). */
+async function sendGmeetTrusted(page: Page, text: string, landWaitMs: number): Promise<ChatSendResult | null> {
   if (typeof (page as { locator?: unknown }).locator !== 'function') return null;
+  let found: { composer: string | null; send: string | null; before: number } | null = null;
+  const landed = () => page.evaluate(async ({ text, before, waitMs }) => {
+    const u = (globalThis as any).VexaBrowserUtils;
+    return u?.awaitGmeetChatLanded ? !!(await u.awaitGmeetChatLanded(text, before, waitMs)) : false;
+  }, { text, before: found?.before ?? 0, waitMs: landWaitMs });
   try {
-    const found = await page.evaluate(async (text: string) => {
+    found = await page.evaluate(async (text: string) => {
       const u = (globalThis as any).VexaBrowserUtils;
       if (!u?.prepareGmeetChatSend) return null;
       const log = (m: string) => (globalThis as any).logBot?.('[ChatSend] ' + m);
-      return await u.prepareGmeetChatSend(text, { log }) as { composer: string | null; send: string | null };
+      return await u.prepareGmeetChatSend(text, { log }) as { composer: string | null; send: string | null; before: number };
     }, text);
     if (!found) return null;
-    if (!found.composer) return false;
+    if (!found.composer) return { sent: false, reason: 'no_composer' };
     const composer = page.locator('[data-vexa-chat-composer]').first();
     await composer.fill(text, { timeout: 5000 });
     const send = page.locator('[data-vexa-chat-send]').first();
+    let how: string;
     if (found.send && await send.isEnabled({ timeout: 2000 }).catch(() => false)) {
       await send.click({ timeout: 5000 });
-      console.log(`[bot] chat_send: trusted fill + click (composer via ${found.composer}, send via ${found.send})`);
+      how = `trusted fill + click (composer via ${found.composer}, send via ${found.send})`;
     } else {
       await composer.press('Enter', { timeout: 5000 });
-      console.log(`[bot] chat_send: trusted fill + Enter (composer via ${found.composer}, send via ${found.send ?? 'none'})`);
+      how = `trusted fill + Enter (composer via ${found.composer}, send via ${found.send ?? 'none'})`;
     }
-    return true;
+    if (await landed()) return { sent: true, via: how };
+    console.error(`[bot] chat_send: ${how} — the line did not show in the message list within ${landWaitMs} ms`);
+    return { sent: false, reason: 'not_landed' };
   } catch (e) {
+    // A step threw. If the line is in the list anyway it went out; otherwise the page-side sender retries.
+    if (found?.composer && await landed().catch(() => false)) return { sent: true, via: 'trusted (a step threw after the line went out)' };
     console.error(`[bot] chat_send: trusted path failed, falling back to the page-side sender: ${String(e)}`);
     return null;
   }
 }
 
-export function createChatSender(page: Page, inv: Invocation): ChatSender {
+export function createChatSender(page: Page, inv: Invocation, opts: { landWaitMs?: number } = {}): ChatSender {
   const platform = inv.platform;
+  const landWaitMs = opts.landWaitMs ?? GMEET_CHAT_LAND_WAIT_MS;
+  const report = (text: string, r: ChatSendResult): ChatSendResult => {
+    if (r.sent) console.log(`[bot] chat_send: sent via ${r.via}: "${text.slice(0, 60)}"`);
+    else console.error(`[bot] chat_send_failed reason=${r.reason} platform=${platform} chars=${text.length}`);
+    return r;
+  };
   return {
-    async send(text: string): Promise<boolean> {
-      if (platform !== 'google_meet' && platform !== 'jitsi') {
-        console.error(`[bot] chat_send unsupported on ${platform}`);
-        return false;
-      }
-      const trusted = platform === 'google_meet' ? await sendGmeetTrusted(page, text) : null;
+    async send(text: string): Promise<ChatSendResult> {
+      if (platform !== 'google_meet' && platform !== 'jitsi') return report(text, { sent: false, reason: 'unsupported_platform' });
+      const trusted = platform === 'google_meet' ? await sendGmeetTrusted(page, text, landWaitMs) : null;
+      if (trusted) return report(text, trusted);
       // Runs IN THE BROWSER; the platform's sender lives on the injected bundle.
-      const ok = trusted !== null ? trusted : await page.evaluate(async ({ text, platform }) => {
+      const r = await page.evaluate(async ({ text, platform, landWaitMs }): Promise<ChatSendResult> => {
         const u = (globalThis as any).VexaBrowserUtils;
         const log = (m: string) => (globalThis as any).logBot?.('[ChatSend] ' + m);
-        if (platform === 'google_meet') return u?.sendGmeetChatMessage ? !!(await u.sendGmeetChatMessage(text, { log })) : false;
-        return u?.sendJitsiChatMessage ? !!u.sendJitsiChatMessage(text) : false;
-      }, { text, platform }).catch((e) => {
+        if (platform === 'google_meet') {
+          if (!u?.sendGmeetChatMessage) return { sent: false, reason: 'no_chat_api' };
+          const res = await u.sendGmeetChatMessage(text, { log, landWaitMs });
+          return res.ok ? { sent: true, via: `page-side ${res.send} (composer via ${res.composer})` } : { sent: false, reason: res.reason };
+        }
+        return u?.sendJitsiChatMessage && u.sendJitsiChatMessage(text)
+          ? { sent: true, via: 'jitsi conference API' } : { sent: false, reason: 'no_chat_api' };
+      }, { text, platform, landWaitMs }).catch((e): ChatSendResult => {
         console.error(`[bot] chat_send: page-side send threw: ${String(e)}`);
-        return false;
+        return { sent: false, reason: 'page_error' };
       });
-      if (ok) console.log(`[bot] chat_send: "${text.slice(0, 60)}"`);
-      else console.error(`[bot] chat_send FAILED on ${platform}: the page could not send (no composer / no chat API)`);
-      return ok;
+      return report(text, r);
     },
   };
 }

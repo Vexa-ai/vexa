@@ -2,15 +2,18 @@
  * The bot's in-meeting act handler — routes the acts.v1 actions the bot performs IN the meeting
  * (beside `leave`, which the orchestrator owns) to the controller that performs them:
  *   • speak / speak_stop → the SpeakController (gated inside it on voiceAgentEnabled)
- *   • chat_send          → the ChatSender (ungated — a text act, not a voice one)
+ *   • chat_send          → the ChatSender (ungated — a text act, not a voice one); the sender logs the
+ *                          outcome itself (`chat_send: sent …` / `chat_send_failed reason=…`) — the
+ *                          acts bus carries no acknowledgement back to meeting-api
  * Every other action is ignored here. Pure: the controllers are injected, so the routing is
  * provable without a browser.
  */
 import type { Act } from './contracts.js';
+import type { ChatSendResult } from './capture-bridge.js';
 
 export interface ActControllers {
   speak: { speak(text: string, voice?: string): Promise<void>; stop(): Promise<void> };
-  chat: { send(text: string): Promise<boolean> };
+  chat: { send(text: string): Promise<ChatSendResult> };
 }
 
 export function createActDispatch(c: ActControllers): (act: Act) => Promise<void> {

@@ -25,10 +25,23 @@
  * one. A run of messages from one person shares a single sender header, so the
  * sender is read from the nearest enclosing group.
  *
+ * A composer is a field a person could type into: shown (no `hidden` / `aria-hidden` / `inert`
+ * ancestor, not `display:none` / `visibility:hidden`, and laid out with a box when the page has
+ * layout) and never part of reCAPTCHA — Meet's in-call page carries reCAPTCHA's hidden
+ * `g-recaptcha-response` textarea, which is the page's only text field while the chat panel is
+ * closed. "The page's only text field" is a composer layer only while the chat toggle says the panel
+ * is open.
+ *
+ * A send counts only when it LANDS: the sent line shows in Meet's message list within a bounded
+ * wait. Every send path returns a GmeetChatSendResult — `{ ok: true }` once the line is on screen,
+ * else `{ ok: false, reason }`.
+ *
  * The bot's OWN messages are never emitted: every text a send path writes is held
- * in a short recent-sent set the reader consumes (rememberGmeetChatSent), and a
- * message under the bot's display name or Meet's localised "You" label is skipped —
- * so an embedder that auto-replies to chat cannot converse with itself.
+ * in a short recent-sent set (rememberGmeetChatSent). Meet renders the local
+ * participant's lines with no sender header, sometimes more than once; every
+ * unlabelled render of a just-sent text is the bot's own (claimSent). A message under
+ * the bot's display name or Meet's localised "You" label is skipped too — so an
+ * embedder that auto-replies to chat cannot converse with itself.
  */
 
 export interface GmeetChatMessage { sender: string; text: string }
@@ -59,6 +72,17 @@ export interface GmeetChat {
 
 /** A lookup's result: the element and the layer that found it. */
 export interface GmeetChatHit { el: HTMLElement; via: string }
+
+/** Why a send did not land in the meeting chat. */
+export type GmeetChatSendFailure =
+  | 'empty_text'      // nothing to send
+  | 'no_composer'     // no visible chat composer, even after opening the panel
+  | 'not_landed';     // written and sent, but the line never showed in the message list
+
+/** The outcome of a send: ok only once the line is in Meet's message list. */
+export type GmeetChatSendResult =
+  | { ok: true; composer: string; send: string }
+  | { ok: false; reason: GmeetChatSendFailure; composer: string | null; send: string | null };
 
 // ── Layer 1: stable attributes (plain CSS, language-free) ──
 /** The chat side-panel toggle: Meet keys each side-panel button by `data-panel-id`; chat is 2. */
@@ -129,25 +153,34 @@ export const gmeetChatSelfLabels: string[] = [
 /** How long a sent text stays claimable as the bot's own echo (ms). */
 const RECENT_SENT_TTL_MS = 120_000;
 
-// Texts this page just sent → when. Shared by every send path and every reader in the page.
-const recentSent = new Map<string, number>();
+// Texts this page just sent → when, and whether the reader has already seen it rendered as the
+// bot's own (unlabelled) line. Shared by every send path and every reader in the page.
+const recentSent = new Map<string, { at: number; ownRendered: boolean }>();
 const normalize = (t: string): string => t.replace(/\s+/g, ' ').trim();
 const fold = (t: string): string => normalize(t).toLowerCase();
 
 /** Record `text` as the bot's own line so the reader skips its echo. Every send path calls it. */
 export function rememberGmeetChatSent(text: string): void {
   const now = Date.now();
-  for (const [t, at] of recentSent) if (now - at > RECENT_SENT_TTL_MS) recentSent.delete(t);
-  recentSent.set(normalize(text), now);
+  for (const [t, e] of recentSent) if (now - e.at > RECENT_SENT_TTL_MS) recentSent.delete(t);
+  recentSent.set(normalize(text), { at: now, ownRendered: false });
 }
 
-/** True (and the entry is consumed) when `text` is one this page sent within the TTL. */
-function consumeSent(text: string): boolean {
+/** True when a rendered line reading `text` is the bot's own just-sent one.
+ *  • `unlabelled` — Meet renders the local participant's lines with no sender header, and may render
+ *    one line more than once (a pending node, then the confirmed one under a new id): every such
+ *    render within the TTL is the bot's, and the entry stays.
+ *  • labelled — a line under some sender label claims the entry once (it is consumed), unless the bot's
+ *    line was already seen unlabelled: then a labelled line with the same words is a person's. */
+function claimSent(text: string, unlabelled: boolean): boolean {
   const key = normalize(text);
-  const at = recentSent.get(key);
-  if (at === undefined) return false;
+  const e = recentSent.get(key);
+  if (!e) return false;
+  if (Date.now() - e.at > RECENT_SENT_TTL_MS) { recentSent.delete(key); return false; }
+  if (unlabelled) { e.ownRendered = true; return true; }
+  if (e.ownRendered) return false;
   recentSent.delete(key);
-  return Date.now() - at <= RECENT_SENT_TTL_MS;
+  return true;
 }
 
 const firstMatch = (root: ParentNode, selectors: string[]): Element | null => {
@@ -176,31 +209,77 @@ const hasWord = (label: string, words: string[]): boolean => !!label && words.so
 const isDisabled = (el: Element): boolean =>
   el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true';
 
+/** True for reCAPTCHA's own elements (`g-recaptcha-response`, `.g-recaptcha`, `grecaptcha-*`) and
+ *  anything inside them. */
+export function isRecaptcha(el: Element): boolean {
+  for (let cur: Element | null = el; cur; cur = cur.parentElement) {
+    const id = `${cur.getAttribute('id') || ''} ${cur.getAttribute('name') || ''} ${cur.getAttribute('class') || ''}`;
+    if (/recaptcha/i.test(id)) return true;
+  }
+  return false;
+}
+
+/** Whether the page has layout (a real browser does; a DOM without a renderer reports no boxes). */
+const hasLayout = (): boolean => {
+  const root = document.documentElement as Element | undefined;
+  return typeof root?.getClientRects === 'function' && root.getClientRects().length > 0;
+};
+
+/** True when a person could see `el`: no `hidden` / `aria-hidden="true"` / `inert` on it or an
+ *  ancestor, no `display:none` / `visibility:hidden` on the way up, and — where the page has
+ *  layout — a box of non-zero size. */
+export function isShown(el: Element): boolean {
+  const style = typeof getComputedStyle === 'function' ? getComputedStyle : null;
+  for (let cur: Element | null = el; cur; cur = cur.parentElement) {
+    if (cur.hasAttribute('hidden') || cur.hasAttribute('inert') || cur.getAttribute('aria-hidden') === 'true') return false;
+    if (style) {
+      const cs = style(cur);
+      if (cs.display === 'none' || (cur === el && (cs.visibility === 'hidden' || cs.visibility === 'collapse'))) return false;
+    }
+  }
+  if (hasLayout()) {
+    const r = el.getBoundingClientRect();
+    if (!el.getClientRects().length || r.width <= 0 || r.height <= 0) return false;
+  }
+  return true;
+}
+
 /** The message list: a stable container selector, else the live region / list holding a message. */
 export function findGmeetChatContainer(): { el: Element; via: string } | null {
   for (const sel of gmeetChatContainerSelectors) {
-    const el = document.querySelector(sel);
+    const el = Array.from(document.querySelectorAll(sel)).find(isShown);
     if (el) return { el, via: sel };
   }
-  const msg = firstMatch(document, gmeetChatMessageSelectors);
+  const msg = Array.from(document.querySelectorAll(gmeetChatMessageSelectors.join(','))).find(isShown);
   for (let cur = msg?.parentElement ?? null, i = 0; cur && i < 8; cur = cur.parentElement, i++) {
     if (cur.hasAttribute('aria-live') || cur.getAttribute('role') === 'list') return { el: cur, via: 'structure:live-region-of-message' };
   }
   return null;
 }
 
-/** Text fields inside `root`, in selector order, de-duplicated, enabled. */
+/** Fields a person could type a chat line into, inside `root`: in selector order, de-duplicated,
+ *  enabled, shown, and never reCAPTCHA's. */
 const fieldsIn = (root: ParentNode): Element[] => {
   const out: Element[] = [];
   for (const sel of gmeetChatComposerFieldSelectors) {
-    for (const el of Array.from(root.querySelectorAll(sel))) if (!out.includes(el) && !isDisabled(el)) out.push(el);
+    for (const el of Array.from(root.querySelectorAll(sel))) {
+      if (!out.includes(el) && !isDisabled(el) && !isRecaptcha(el) && isShown(el)) out.push(el);
+    }
   }
   return out;
 };
 
-/** The chat composer, by structure: the text field of the panel that holds the message list; else
- *  the document's only text field (Meet's in-call page has no other); else a field whose label is
- *  a "send a message" label in a supported language. */
+/** The chat toggle's own word on the panel: 'open' / 'closed' from its `aria-pressed`, or null
+ *  when there is no toggle or it does not say. */
+export function gmeetChatPanelState(): 'open' | 'closed' | null {
+  const pressed = findGmeetChatToggle()?.el.getAttribute('aria-pressed');
+  return pressed === 'true' ? 'open' : pressed === 'false' ? 'closed' : null;
+}
+
+/** The chat composer, by structure: the text field of the panel that holds the message list; else,
+ *  while the chat toggle says the panel is open, the page's only text field; else a field whose label
+ *  is a "send a message" label in a supported language. Only fields a person could type into count
+ *  (fieldsIn) — never a hidden one, never reCAPTCHA's. */
 export function findGmeetChatComposer(): GmeetChatHit | null {
   const list = findGmeetChatContainer()?.el ?? null;
   for (let cur = list?.parentElement ?? null, i = 0; cur && i < 8; cur = cur.parentElement, i++) {
@@ -208,7 +287,7 @@ export function findGmeetChatComposer(): GmeetChatHit | null {
     if (f.length) return { el: f[0] as HTMLElement, via: 'structure:panel-of-message-list' };
   }
   const all = fieldsIn(document);
-  if (all.length === 1) return { el: all[0] as HTMLElement, via: 'structure:only-text-field' };
+  if (all.length === 1 && gmeetChatPanelState() === 'open') return { el: all[0] as HTMLElement, via: 'structure:only-text-field' };
   const labelled = all.find((el) => hasWord(labelOf(el), gmeetChatSendLabels));
   if (labelled) return { el: labelled as HTMLElement, via: 'label:multilingual' };
   return null;
@@ -246,7 +325,7 @@ export function findGmeetChatToggle(): GmeetChatHit | null {
 }
 
 /** Open the chat panel when it is closed. Returns true when the panel is open or a toggle was
- *  clicked; false when no composer and no toggle is in the DOM. */
+ *  clicked; false when no visible composer and no toggle is in the DOM. */
 export function openGmeetChatPanel(): boolean {
   if (findGmeetChatComposer()) return true;
   const toggle = findGmeetChatToggle();
@@ -272,6 +351,39 @@ async function awaitComposer(waitMs: number): Promise<GmeetChatHit | null> {
   return composer;
 }
 
+/** The texts of the lines in Meet's message list (the matched list, else the whole page). */
+function chatLines(): string[] {
+  const root: ParentNode = findGmeetChatContainer()?.el ?? document;
+  const out: string[] = [];
+  for (const sel of gmeetChatMessageSelectors) {
+    const nodes = Array.from(root.querySelectorAll(sel));
+    if (!nodes.length) continue;
+    for (const node of nodes) {
+      const textEl = node.matches?.(gmeetChatTextSelectors.join(',')) ? node : firstMatch(node, gmeetChatTextSelectors);
+      out.push(normalize((textEl ?? node).textContent || ''));
+    }
+    return out;
+  }
+  return out;
+}
+
+/** How many lines in the message list read exactly `text` now — the baseline a landing check
+ *  compares against, so a repeat of an earlier line is told apart from it. */
+export function countGmeetChatLines(text: string): number {
+  const want = normalize(text);
+  return chatLines().filter((t) => t === want).length;
+}
+
+/** Wait (up to `waitMs`) for one more line reading `text` than `before`. True once it shows. */
+export async function awaitGmeetChatLanded(text: string, before: number, waitMs = 8000): Promise<boolean> {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    if (countGmeetChatLines(text) > before) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(Math.min(150, Math.max(1, deadline - Date.now())));
+  }
+}
+
 /** Attributes the bot's trusted-input path addresses the composer and the send button by. */
 export const GMEET_CHAT_COMPOSER_MARK = 'data-vexa-chat-composer';
 export const GMEET_CHAT_SEND_MARK = 'data-vexa-chat-send';
@@ -279,37 +391,44 @@ export const GMEET_CHAT_SEND_MARK = 'data-vexa-chat-send';
 /** Prepare a TRUSTED send driven from outside the page (Playwright fill + click / Enter): open the
  *  panel, find the composer and its send button, mark them with GMEET_CHAT_COMPOSER_MARK /
  *  GMEET_CHAT_SEND_MARK, and record `text` as the bot's own line. Returns the layer that found
- *  each (null when absent). */
+ *  each (null when absent) and `before` — the count of list lines already reading `text`, which
+ *  the caller hands to awaitGmeetChatLanded once it has sent. */
 export async function prepareGmeetChatSend(
   text: string,
   opts: { log?: (m: string) => void; waitMs?: number } = {},
-): Promise<{ composer: string | null; send: string | null }> {
+): Promise<{ composer: string | null; send: string | null; before: number }> {
   const log = opts.log || (() => {});
   for (const m of Array.from(document.querySelectorAll(`[${GMEET_CHAT_COMPOSER_MARK}], [${GMEET_CHAT_SEND_MARK}]`))) {
     m.removeAttribute?.(GMEET_CHAT_COMPOSER_MARK);
     m.removeAttribute?.(GMEET_CHAT_SEND_MARK);
   }
   const composer = await awaitComposer(opts.waitMs ?? 3000);
-  if (!composer) { log('chat send: no composer found'); return { composer: null, send: null }; }
+  if (!composer) { log('chat send: no visible chat composer (panel would not open)'); return { composer: null, send: null, before: 0 }; }
   composer.el.setAttribute(GMEET_CHAT_COMPOSER_MARK, '1');
   const send = findGmeetChatSendButton(composer.el);
   if (send) send.el.setAttribute(GMEET_CHAT_SEND_MARK, '1');
   rememberGmeetChatSent(text);
+  const before = countGmeetChatLines(text);
   log(`chat send: composer via ${composer.via}, send button via ${send?.via ?? 'none (Enter)'}`);
-  return { composer: composer.via, send: send?.via ?? null };
+  return { composer: composer.via, send: send?.via ?? null, before };
 }
 
 /** Write `text` into the meeting chat from INSIDE the page: open the panel if needed, fill the
- *  composer, click its send button, else press Enter. Returns false when no composer can be found. */
+ *  composer, click its send button, else press Enter — then wait (up to `landWaitMs`) for the line to
+ *  show in the message list. ok only once it does. */
 export async function sendGmeetChatMessage(
   text: string,
-  opts: { log?: (m: string) => void; waitMs?: number } = {},
-): Promise<boolean> {
+  opts: { log?: (m: string) => void; waitMs?: number; landWaitMs?: number } = {},
+): Promise<GmeetChatSendResult> {
   const log = opts.log || (() => {});
-  if (!normalize(text)) return false;
+  if (!normalize(text)) return { ok: false, reason: 'empty_text', composer: null, send: null };
   const found = await awaitComposer(opts.waitMs ?? 3000);
-  if (!found) { log('chat send: no composer found'); return false; }
+  if (!found) {
+    log('chat send: no visible chat composer (panel would not open)');
+    return { ok: false, reason: 'no_composer', composer: null, send: null };
+  }
   const composer = found.el;
+  const before = countGmeetChatLines(text);
 
   composer.focus?.();
   if (composer.getAttribute('contenteditable') === 'true') {
@@ -326,18 +445,23 @@ export async function sendGmeetChatMessage(
   rememberGmeetChatSent(text);
 
   const send = findGmeetChatSendButton(composer);
+  let how: string;
   if (send && !isDisabled(send.el)) {
     send.el.click();
-    log(`chat send: composer via ${found.via}, clicked send via ${send.via} (${text.slice(0, 60)})`);
-    return true;
+    how = `send:${send.via}`;
+  } else {
+    const init = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+    const enter = typeof KeyboardEvent === 'function'
+      ? new KeyboardEvent('keydown', init)
+      : Object.assign(new Event('keydown', init), { key: 'Enter', code: 'Enter', keyCode: 13 });
+    composer.dispatchEvent(enter);
+    how = 'enter';
   }
-  const init = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
-  const enter = typeof KeyboardEvent === 'function'
-    ? new KeyboardEvent('keydown', init)
-    : Object.assign(new Event('keydown', init), { key: 'Enter', code: 'Enter', keyCode: 13 });
-  composer.dispatchEvent(enter);
-  log(`chat send: composer via ${found.via}, dispatched Enter (${text.slice(0, 60)})`);
-  return true;
+  const landed = await awaitGmeetChatLanded(text, before, opts.landWaitMs);
+  log(`chat send: composer via ${found.via}, ${how}, ${landed ? 'landed in the message list' : 'NOT in the message list'} (${text.slice(0, 60)})`);
+  return landed
+    ? { ok: true, composer: found.via, send: how }
+    : { ok: false, reason: 'not_landed', composer: found.via, send: how };
 }
 
 export function createGmeetChat(opts: GmeetChatOptions): GmeetChat {
@@ -374,12 +498,13 @@ export function createGmeetChat(opts: GmeetChatOptions): GmeetChat {
     return id ? `id:${id}` : `txt:${sender}\u0000${text}`;
   };
 
-  const extract = (node: Element): { msg: GmeetChatMessage; key: string } | null => {
+  const extract = (node: Element): { msg: GmeetChatMessage; key: string; unlabelled: boolean } | null => {
     const textEl = node.matches?.(gmeetChatTextSelectors.join(',')) ? node : firstMatch(node, gmeetChatTextSelectors);
     const text = textOf(textEl ?? node);
     if (!text) return null;   // not rendered yet — left unseen so a later scan reads it
-    const sender = senderOf(node) || 'Unknown';
-    return { msg: { sender, text }, key: keyOf(node, sender, text) };
+    const named = senderOf(node);
+    const sender = named || 'Unknown';
+    return { msg: { sender, text }, key: keyOf(node, sender, text), unlabelled: !named };
   };
 
   const isOwn = (msg: GmeetChatMessage): boolean => {
@@ -403,8 +528,11 @@ export function createGmeetChat(opts: GmeetChatOptions): GmeetChat {
       seenKeys.add(got.key);
       // What is on screen when the panel first opens predates the reader — recorded, not emitted.
       if (!primed) continue;
-      const justSent = consumeSent(got.msg.text);   // consumed either way, so it cannot swallow a later echo
-      if (isOwn(got.msg) || justSent) continue;
+      const justSent = claimSent(got.msg.text, got.unlabelled);
+      if (isOwn(got.msg) || justSent) {
+        if (justSent) log(`chat: own line skipped (${got.unlabelled ? 'unlabelled' : `under "${got.msg.sender}"`})`);
+        continue;
+      }
       recent.push(got.msg);
       if (recent.length > 30) recent.shift();
       log(`chat ${got.msg.sender}: ${got.msg.text.slice(0, 60)}`);
@@ -418,7 +546,11 @@ export function createGmeetChat(opts: GmeetChatOptions): GmeetChat {
     const found = findGmeetChatContainer();
     const composer = findGmeetChatComposer();
     matchedComposer = composer?.via ?? null;
-    panelOpen = !!(found || composer || messageNodes(document).length);
+    // The toggle's own aria-pressed is the authority when it says; otherwise a visible list,
+    // composer or message means the panel is open.
+    const toggleSays = gmeetChatPanelState();
+    panelOpen = toggleSays === 'open'
+      || (toggleSays === null && !!(found || composer || messageNodes(document).some(isShown)));
     if (!panelOpen) {
       const now = Date.now();
       if (now - lastOpenAttempt >= reopenMs) {

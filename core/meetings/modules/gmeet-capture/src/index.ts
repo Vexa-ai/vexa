@@ -18,7 +18,10 @@ export { GmeetChannelBinder } from "./gmeet-channel-binder.js";
 export type { GmeetChannelBinderOptions } from "./gmeet-channel-binder.js";
 export {
   createGmeetChat, sendGmeetChatMessage, openGmeetChatPanel, prepareGmeetChatSend, rememberGmeetChatSent,
+  awaitGmeetChatLanded, countGmeetChatLines, isRecaptcha, isShown, gmeetChatPanelState,
   findGmeetChatContainer, findGmeetChatComposer, findGmeetChatSendButton, findGmeetChatToggle,
   GMEET_CHAT_COMPOSER_MARK, GMEET_CHAT_SEND_MARK,
 } from "./gmeet-chat.js";
-export type { GmeetChat, GmeetChatHit, GmeetChatMessage, GmeetChatOptions } from "./gmeet-chat.js";
+export type {
+  GmeetChat, GmeetChatHit, GmeetChatMessage, GmeetChatOptions, GmeetChatSendFailure, GmeetChatSendResult,
+} from "./gmeet-chat.js";

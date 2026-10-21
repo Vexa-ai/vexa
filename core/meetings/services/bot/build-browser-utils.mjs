@@ -23,6 +23,7 @@
  *   • createGmeetChat({ log, onMessage, selfName }) — gmeet chat reader → __vexaChatMessage
  *   • sendGmeetChatMessage(text) / sendJitsiChatMessage(text) — the acts.v1 chat_send senders
  *   • prepareGmeetChatSend(text)                  — marks the Meet composer + send for trusted input
+ *   • awaitGmeetChatLanded(text, before, ms)      — a Meet send counts once its line is in the list
  * We additionally expose the rest of the gmeet capture surface
  * (GmeetChannelBinder, createPcmCaptureNode, createGmeetCaptureV1, pickBoundName,
  * installRemoteAudioHook) so the global mirrors production's shape and the same
@@ -75,6 +76,7 @@ import {
   sendGmeetChatMessage,
   openGmeetChatPanel,
   prepareGmeetChatSend,
+  awaitGmeetChatLanded,
 } from ${JSON.stringify(GMEET)};
 import {
   createMixedAudioCapture,
@@ -112,6 +114,7 @@ const VexaBrowserUtils = {
   sendGmeetChatMessage,      // capture-bridge.ts createChatSender: acts.v1 chat_send on google_meet
   openGmeetChatPanel,
   prepareGmeetChatSend,      // capture-bridge.ts createChatSender: marks composer + send for trusted input
+  awaitGmeetChatLanded,      // capture-bridge.ts createChatSender: the trusted send's landing check
   // ── mixed lane (zoom/teams single combined stream) ──
   createMixedAudioCapture,   // capture-bridge.ts: w.VexaBrowserUtils.createMixedAudioCapture
   installRemoteAudioHook,
@@ -173,7 +176,7 @@ console.log(`✅ Browser utilities bundle created: ${OUT} (${bytes} bytes)`);
 console.log('📦 window.VexaBrowserUtils exposes:');
 console.log('  - createGmeetCapture / createGmeetSpeakers / createGmeetCaptureV1 / pickBoundName');
 console.log('  - GmeetChannelBinder / createPcmCaptureNode');
-console.log('  - createGmeetChat / sendGmeetChatMessage / openGmeetChatPanel / prepareGmeetChatSend');
+console.log('  - createGmeetChat / sendGmeetChatMessage / openGmeetChatPanel / prepareGmeetChatSend / awaitGmeetChatLanded');
 console.log('  - createMixedAudioCapture / installRemoteAudioHook / selectTeamsMixStreams / createCsrcPoll');
 console.log('  - createJitsiSpeakers / createJitsiChat / sendJitsiChatMessage');
 console.log('  - createTeamsSpeakers / createTeamsCaptions / createZoomSpeakers / createTrackNameResolver');
