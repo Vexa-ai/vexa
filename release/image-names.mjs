@@ -31,8 +31,9 @@ export const SERVICES = [
 export const UNPREFIXED_IMAGES = ["vexaai/vexa-bot", "vexaai/vexa-lite"];
 
 /** Opt-in images that compose and the chart name but no release publishes: the operator builds them
- *  from source (the CRM: compose profile `crm`, Helm `crm.enabled`, both off by default). */
-export const SOURCE_BUILT_IMAGES = ["vexaai/vexa-crm"];
+ *  from source (the CRM: compose profile `crm`, Helm `crm.enabled`; transcript signals: compose
+ *  profile `signals`, Helm `signals.enabled` — all off by default). */
+export const SOURCE_BUILT_IMAGES = ["vexaai/vexa-crm", "vexaai/vexa-signals"];
 
 export const LEGACY_REPOSITORY_PREFIX = "v012-";
 /** The last release that also publishes the `v012-` names. Its successor publishes `vexa-` only. */

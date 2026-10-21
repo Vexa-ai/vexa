@@ -10,10 +10,12 @@ required-reviewer approval — a committed file cannot forge a human approval, s
 Publish and promote are **separate acts**; neither the moving tag `:v012` nor a published GitHub
 Release happens before the witness pass is signed.
 
-0. **Version-bump (before you tag)** — advance **all three version stamps** `release-images`
-   preflight cross-checks: `version` in the root `package.json`, `appVersion` in
-   `deploy/helm/charts/vexa/Chart.yaml`, and the matching `docs-reflects:` stamp (and the visible
-   line) in `docs/docs/changelog.mdx` so `gate:docs-version` stays green. Then **assemble the
+0. **Version-bump (before you tag)** — `node release/version.mjs set X.Y.Z` writes the root
+   `package.json` `version` and every surface derived from it: `appVersion` in
+   `deploy/helm/charts/vexa/Chart.yaml` (which `release-images` preflight cross-checks against the
+   tag), the `docs-reflects:` stamp and the visible line in `docs/docs/changelog.mdx`, `IMAGE_TAG` in
+   `deploy/compose/.env.example` and the example in `docs/docs/configuration.mdx`;
+   `gate:docs-version` fails if any of them differs. Then **assemble the
    changelog fragments** that PRs dropped since the last release (the towncrier pattern —
    [`docs/changelog.d/`](../docs/changelog.d/README.md)):
 
@@ -24,8 +26,16 @@ Release happens before the witness pass is signed.
 
    The collector appends each `docs/changelog.d/<pr>-<slug>.md` bullet into the current version
    section and deletes the consumed fragments; it does **not** touch the `docs-reflects:` stamp (you
-   just advanced it). Commit the bumped `Chart.yaml` + assembled `changelog.mdx` + emptied
-   `changelog.d/` together, then tag.
+   just advanced it). A fragment is pasted verbatim into MDX, so a bare `<word>` in one breaks the
+   page: run `node scripts/gates.mjs docs-links` after the fold. Commit the bumped surfaces +
+   assembled `changelog.mdx` + emptied `changelog.d/` together, then tag.
+
+   **Freeze the image inputs before the first rc.** The candidate map binds each image to the
+   commit that built it, and `check-source-inputs` re-proves that at the stable tag. A later commit
+   that touches an image's inputs (`release/candidate-image-map.mjs` lists them — Lite takes all of
+   `core/`, `scripts/` and `clients/terminal/`, so a test-only change under `scripts/` counts) makes
+   that image a new candidate, and the only partial rebuild the planner allows is exactly Bot+Lite.
+   v0.12.28 paid an extra rc for this (#1793 touched `scripts/` after rc.3 was bound).
 
 1. **Publish + validate** — push tag `vX.Y.Z`. `release-images` builds and publishes the versioned
    `:vX.Y.Z` images and runs `release-validate` with **`promote: false`** — the L4 legs prove the
@@ -44,11 +54,14 @@ review. Until it is done, the candidate has no reviewed identity — which is ex
 promote and stable-tag gates refuse to move on.
 
 1. **Bind the packet.** Write `releases/v<BASE>/candidate-images.json` from the *exact published*
-   registry identities of the eleven images (11 top descriptors, 21 platform identities — the bot is
-   amd64-only), then pin its hash in **both** places that assert it:
+   registry identities of the release's images — twelve under schema 4 (v0.13.3+): 12 top
+   descriptors, 23 platform identities, the bot being amd64-only (eleven / 21 under schema 2) — then
+   pin its hash in **each** place that asserts it:
    - the reviewed-identity table in the `resolve` job of
      [`.github/workflows/release-validate.yml`](../.github/workflows/release-validate.yml)
-     (`CANDIDATE_MAP` / `EXPECTED_MAP_STABLE_TAG` / `EXPECTED_MAP_SHA256` / the two counts), and
+     (`CANDIDATE_MAP` / `EXPECTED_MAP_STABLE_TAG` / `EXPECTED_MAP_SHA256` / the two counts),
+   - the stable-promotion table in the `promote` job of the same file (stable versions only; its
+     readback counts the map itself), and
    - the canonical-packet assertion in
      [`release/candidate-image-map.test.mjs`](../release/candidate-image-map.test.mjs).
 

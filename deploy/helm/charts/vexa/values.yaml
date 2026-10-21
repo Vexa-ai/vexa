@@ -849,6 +849,8 @@ signals:
   # Transcript signals (docs/docs/transcript-signals.mdx). Off by default; even when enabled it calls
   # no model until _global/POLICIES.md sets transcript_signals: on and a model_signals. Needs the
   # credential broker (the signal model's key is a company secret there).
+  # No release publishes a vexa-signals image: to turn it on, build core/signals/Dockerfile, push it
+  # to your registry and set signals.image.repository and signals.image.tag.
   enabled: false
   replicaCount: 1               # more are safe: one replica holds each live meeting under a lease
   image:

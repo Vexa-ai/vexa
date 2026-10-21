@@ -96,6 +96,8 @@ woken twice for it.
      signals up -d`).
    - Helm: `signals.enabled: true`, and `signals.flowsApiUrl` set to flows-api's address. The service
      needs the credential broker (`credentialBroker.enabled`, on by default).
+     No release publishes a `vexa-signals` image: build `core/signals/Dockerfile`, push it to your
+     registry and set `signals.image.repository` and `signals.image.tag`.
 2. **Store the model's key in the credential broker**, from inside the broker's container. The key is
    read from standard input, so it never appears in a process list or a shell history:
    ```sh

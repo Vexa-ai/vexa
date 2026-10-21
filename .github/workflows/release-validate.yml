@@ -1461,10 +1461,16 @@ jobs:
             echo "· :latest untouched (promote_latest not requested)"
           fi
 
+          # The population is the pinned map's own: its image count and its platform count (ten and
+          # nineteen under schema 1, eleven and twenty-one under 2, twelve and twenty-three under 3-4).
+          # The map's sha256 is already pinned above, so counting it adds no unreviewed input.
+          MAP_FILE="releases/$VERSION/candidate-images.json"
+          MAP_TOP="$(jq '.images | length' "$MAP_FILE")"
+          MAP_PLATFORMS="$(jq '[.images[].platforms | length] | add' "$MAP_FILE")"
           node scripts/registry-candidate-validate.mjs \
-            --candidate-map "releases/$VERSION/candidate-images.json" \
+            --candidate-map "$MAP_FILE" \
             --tag v012 \
             --expected-map-stable-tag "$VERSION" \
             --expected-map-sha256 "$EXPECTED_MAP_SHA256" \
-            --expected-top-descriptors 10 \
-            --expected-platform-identities 19
+            --expected-top-descriptors "$MAP_TOP" \
+            --expected-platform-identities "$MAP_PLATFORMS"

@@ -264,6 +264,9 @@ COPY core/agent/routes.v1.json /app/agent/routes.v1.json
 # worker import them as `workspaces.shared.<module>`.
 COPY core/workspaces/__init__.py /app/agent/workspaces/__init__.py
 COPY core/workspaces/shared     /app/agent/workspaces/shared
+# WS-S3: the s3 workspace backend (agent-api: the store; worker: the stdlib client). control_plane
+# imports workspaces.store at boot, so agent-api does not start without it.
+COPY core/workspaces/store      /app/agent/workspaces/store
 COPY behavior/workspaces /app/agent/workspace-seeds
 COPY core/agent/tools-seed      /app/agent/tools-seed
 COPY core/meetings/contracts/transcript.v1/transcript.schema.json /app/agent/meetings/contracts/transcript.v1/transcript.schema.json

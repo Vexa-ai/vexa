@@ -36,8 +36,13 @@ const mailerReads = [...new Set([...MAILER.matchAll(/process\.env\.([A-Z][A-Z0-9
  *  unset and the relay is the VEXA_MAIL_SMTP_* family. Declared, but on compose alone. */
 const CAPTURE_SWITCH = ["VEXA_MAIL_CAPTURE_SMTP"];
 
-/** The relay settings the mailer reads, e.g. VEXA_MAIL_SMTP_HOST (the capture switch apart). */
-const mailerSettings = mailerReads.filter((n) => !CAPTURE_SWITCH.includes(n));
+/** The relay password by reference (`broker:mail/<name>`). Only flows reads the broker, and only the
+ *  compose stack wires mail by reference, so the terminal declares it for compose alone: with it set
+ *  and no raw password, the terminal leaves authenticated sending to flows. */
+const BROKER_REF = ["VEXA_MAIL_SMTP_PASSWORD_REF"];
+
+/** The relay settings the mailer reads, e.g. VEXA_MAIL_SMTP_HOST (the capture switch and the broker ref apart). */
+const mailerSettings = mailerReads.filter((n) => !CAPTURE_SWITCH.includes(n) && !BROKER_REF.includes(n));
 
 /** One top-level service block of the compose file, as text (the line-wise read gate:config-contract uses). */
 function service(name) {
@@ -77,6 +82,17 @@ test("compose, .env.example, Helm and Lite each carry every key the mailer reads
     assert.match(LITE, new RegExp(`^export ${name}=`, "m"), `Lite does not export ${name}`);
   }
   assert.doesNotMatch(terminal, /- SMTP_[A-Z_]+=/, "compose still passes an unprefixed SMTP_* key");
+});
+
+test("the broker reference the mailer reads is declared for compose only, and compose passes it", () => {
+  const declared = new Map(DECL.keys.map((k) => [k.key, k]));
+  const terminal = service("terminal");
+  for (const name of BROKER_REF) {
+    assert.ok(mailerReads.includes(name), `mailer.ts no longer reads ${name}`);
+    assert.ok(declared.has(name), `clients/terminal/config.v1.json does not declare ${name}`);
+    assert.deepEqual(declared.get(name).targets, ["compose"], `${name} is a compose-only key`);
+    assert.match(terminal, new RegExp(`- ${name}=\\$\\{${name}:-\\}`), `compose terminal does not pass ${name}`);
+  }
 });
 
 test("the capture switch the mailer reads is declared for compose only, and compose passes it", () => {

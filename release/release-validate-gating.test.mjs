@@ -289,6 +289,17 @@ test("promote keeps its own reviewed stable-promotion map identity, fail-closed 
   }
 });
 
+test("promote's readback counts the pinned map's own population, never a constant", () => {
+  // v0.12.28's promote moved every alias, then failed its readback: it asserted 10 top
+  // descriptors / 19 platform identities against an eleven-image map (run 37928324217).
+  const promoteJob = validateYaml.slice(validateYaml.indexOf("\n  promote:"));
+  assert.doesNotMatch(promoteJob, /--expected-top-descriptors \d/);
+  assert.doesNotMatch(promoteJob, /--expected-platform-identities \d/);
+  assert.match(promoteJob, /MAP_TOP="\$\(jq '\.images \| length' "\$MAP_FILE"\)"/);
+  assert.match(promoteJob, /--expected-top-descriptors "\$MAP_TOP"/);
+  assert.match(promoteJob, /--expected-platform-identities "\$MAP_PLATFORMS"/);
+});
+
 test("stable-tag aliasing still proves the packet map before any tag moves", () => {
   // release-images' alias-candidate job is the other place a candidate becomes a stable tag.
   // It must keep refusing on any drift from the committed map.
