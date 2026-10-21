@@ -70,16 +70,29 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+          # The first start runs initdb before the server listens on TCP, and on a loaded node that
+          # takes minutes. The startup probe holds liveness off until pg_isready answers once
+          # (periodSeconds × failureThreshold is the budget); a liveness kill during initdb leaves a
+          # half-initialised data directory that never serves a password login.
+          {{- $probes := .Values.postgres.probes }}
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h localhost -p 5432 -U $POSTGRES_USER -d $POSTGRES_DB"]
+            periodSeconds: {{ $probes.startup.periodSeconds }}
+            timeoutSeconds: {{ $probes.startup.timeoutSeconds }}
+            failureThreshold: {{ $probes.startup.failureThreshold }}
           readinessProbe:
             exec:
               command: ["sh", "-c", "pg_isready -h localhost -p 5432 -U $POSTGRES_USER -d $POSTGRES_DB"]
-            initialDelaySeconds: 10
-            periodSeconds: 10
+            periodSeconds: {{ $probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ $probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ $probes.readiness.failureThreshold }}
           livenessProbe:
             exec:
               command: ["sh", "-c", "pg_isready -h localhost -p 5432 -U $POSTGRES_USER -d $POSTGRES_DB"]
-            initialDelaySeconds: 30
-            periodSeconds: 20
+            periodSeconds: {{ $probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ $probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ $probes.liveness.failureThreshold }}
           resources:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
   volumeClaimTemplates:

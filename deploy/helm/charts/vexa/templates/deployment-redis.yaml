@@ -79,16 +79,27 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+          # Replaying a large append-only file on a loaded node can outlast a fixed initial delay;
+          # the startup probe holds liveness off until the server first accepts a connection.
+          {{- $probes := .Values.redis.probes }}
+          startupProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: {{ $probes.startup.periodSeconds }}
+            timeoutSeconds: {{ $probes.startup.timeoutSeconds }}
+            failureThreshold: {{ $probes.startup.failureThreshold }}
           readinessProbe:
             tcpSocket:
               port: redis
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            periodSeconds: {{ $probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ $probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ $probes.readiness.failureThreshold }}
           livenessProbe:
             tcpSocket:
               port: redis
-            initialDelaySeconds: 15
-            periodSeconds: 20
+            periodSeconds: {{ $probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ $probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ $probes.liveness.failureThreshold }}
           resources:
             {{- toYaml .Values.redis.resources | nindent 12 }}
       volumes:

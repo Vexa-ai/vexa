@@ -1883,4 +1883,18 @@ TNO="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-o
 tb "livekit.enabled hands the terminal LIVEKIT_URL for its page policy" 'grep -A1 "name: LIVEKIT_URL" <<< "$TLK" | grep -q "\"wss://calls.example.test\""'
 tb "calls off: the terminal's LIVEKIT_URL is empty" 'grep -A1 "name: LIVEKIT_URL" <<< "$TNO" | grep -q "value: \"\""'
 
+# In-chart databases: a startup probe holds liveness off through a slow first start (postgres initdb,
+# redis AOF replay), so a loaded node does not kill the server mid-initialisation; no probe on them
+# times out in under 5 s.
+PGS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/statefulset-postgres.yaml)"
+RDS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-redis.yaml)"
+startup_budget() { awk '/startupProbe:/{f=1} f&&/periodSeconds:/{p=$2} f&&/failureThreshold:/{print p*$2; exit}' <<< "$1"; }
+min_timeout() { grep -E '^[[:space:]]+timeoutSeconds:' <<< "$1" | awk '{print $2}' | sort -n | head -1; }
+tb "postgres has a pg_isready startup probe" 'grep -A3 "startupProbe:" <<< "$PGS" | grep -q pg_isready'
+tb "postgres startup budget covers initdb on a loaded node (>= 300 s)" '[ "$(startup_budget "$PGS")" -ge 300 ]'
+tb "postgres liveness has no initialDelay race and a >= 5 s timeout" '! grep -q initialDelaySeconds <<< "$PGS" && [ "$(grep -c timeoutSeconds <<< "$PGS")" -eq 3 ] && [ "$(min_timeout "$PGS")" -ge 5 ]'
+tb "redis has a startup probe with a >= 300 s budget" 'grep -q "startupProbe:" <<< "$RDS" && [ "$(startup_budget "$RDS")" -ge 300 ]'
+tb "redis probes time out in >= 5 s" '[ "$(grep -c timeoutSeconds <<< "$RDS")" -eq 3 ] && [ "$(min_timeout "$RDS")" -ge 5 ]'
+tb "postgres.probes is operator-tunable" '[ "$(startup_budget "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set postgres.probes.startup.failureThreshold=120 --show-only templates/statefulset-postgres.yaml)")" -eq 1200 ]'
+
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

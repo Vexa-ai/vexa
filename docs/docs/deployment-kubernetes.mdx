@@ -27,6 +27,8 @@ The gateway, admin-api, meeting-api (and the migrations Job), MCP, terminal and 
 uid 10001, and their pods set `runAsNonRoot` with that uid and `fsGroup`. The runtime and agent-api
 run as root (the runtime starts workloads; agent-api moves workspace trees other uids write);
 `global.podSecurityContext` / `global.securityContext` apply on top.
+
+The bundled postgres and redis each have a startup probe; liveness checks begin only after it passes. The first-start budget is `periodSeconds × failureThreshold` under `postgres.probes.startup` (10 min) and `redis.probes.startup` (5 min). Raise it if postgres's initdb or redis's append-only replay runs longer on your nodes.
 Containers have all capabilities dropped, with PodDisruptionBudgets on the control plane and
 rolling updates that never take the last replica down.
 

@@ -1092,6 +1092,12 @@ postgres:
   resources:
     requests: { cpu: 200m, memory: 512Mi }
     limits:   { cpu: 4000m, memory: 4Gi }
+  # The startup probe budget (periodSeconds × failureThreshold, 10 min by default) covers the first
+  # start's initdb on a slow or loaded node; liveness runs only after it passes.
+  probes:
+    startup:   { periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 60 }
+    readiness: { periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 3 }
+    liveness:  { periodSeconds: 20, timeoutSeconds: 5, failureThreshold: 6 }
 
 redis:
   enabled: true
@@ -1123,6 +1129,12 @@ redis:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 1000m, memory: 1Gi }
+  # The startup probe budget (periodSeconds × failureThreshold, 5 min by default) covers replaying
+  # the append-only file; liveness runs only after it passes.
+  probes:
+    startup:   { periodSeconds: 5, timeoutSeconds: 5, failureThreshold: 60 }
+    readiness: { periodSeconds: 10, timeoutSeconds: 5, failureThreshold: 3 }
+    liveness:  { periodSeconds: 20, timeoutSeconds: 5, failureThreshold: 6 }
 
 # ---------- Ingress (optional; fronts the terminal web UI by default) ----------
 # The terminal is the human front door (it proxies /ws → gateway and /api → agent-api/admin-api
