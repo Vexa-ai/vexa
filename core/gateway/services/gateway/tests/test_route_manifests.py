@@ -152,7 +152,7 @@ AGENT_ROWS = frozenset({
 #: What shipped. A count, not a copy of the table: a second copy of 188 rows is a second thing to
 #: keep in step, and `test_the_assembled_table_matches_the_app_exactly` is what proves the
 #: CONTENT — against the routes themselves, which is a stronger anchor than a literal.
-FULL_SCOPED, FULL_UNSCOPED = 208, 3   # + GET/POST /agent/workspace-store/* (WS-S3), + /internal/mcp/taint (D6), + POST /agent/workspace/policy/proposals (int-s1), + GET/PUT /user/notifications (S6), + POST /agent/rooms/call (call-person-1018), + GET /agent/rooms/list (held-label-rooms-1018)
+FULL_SCOPED, FULL_UNSCOPED = 209, 3   # + POST /bots/{platform}/{native_meeting_id}/chat (#1089), + GET/POST /agent/workspace-store/* (WS-S3), + /internal/mcp/taint (D6), + POST /agent/workspace/policy/proposals (int-s1), + GET/PUT /user/notifications (S6), + POST /agent/rooms/call (call-person-1018), + GET /agent/rooms/list (held-label-rooms-1018)
 #: What THIS BUILD publishes — the full profile, less the agent rows when the build omits them.
 #: DERIVED, so the count stays exact in either build rather than softening to a range or a
 #: subset check.
@@ -229,7 +229,8 @@ def test_every_domain_declares_its_own_and_only_its_own():
     # identity 20-26: the public profile, company verification and the directory (`public_profiles`, R4).
     # 111 includes call_person, "Call <person>": a Vexa call in the room of two (call-person-1018).
     # 112 is rooms_list, a workspace's rooms described for the agent (held-label-rooms-1018).
-    assert a.domains == {"agent": 112, "gateway": 3, "identity": 28, "mcp": 12, "meetings": 56}
+    # meetings 57 is POST /bots/{platform}/{native_meeting_id}/chat, the in-meeting chat send (#1089).
+    assert a.domains == {"agent": 112, "gateway": 3, "identity": 28, "mcp": 12, "meetings": 57}
     assert {k for k, d in a.owner_of.items() if d == "agent"} == AGENT_ROWS
     # The EDGE declares two routes and they are its own — /health and /auth/me forward nothing.
     assert {k for k, d in a.owner_of.items() if d == "gateway"} == set(UNSCOPED_ROUTES)

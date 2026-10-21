@@ -35,6 +35,8 @@ and stays in their ecosystem (FastAPI + redis + DB).
 | consumes | transcription worker | redis stream `transcription_segments` | raw `transcript.v1` segments → DB |
 | publishes | api-gateway `/ws` | redis channel `tc:meeting:{id}:mutable` | the live mutable transcript bundle |
 | publishes | api-gateway `/ws` | redis channel `bm:meeting:{id}:status` | ws.v1 `meeting.status` (BotStatus) on each FSM advance |
+| publishes | api-gateway `/ws` | redis channel `va:meeting:{id}:chat` | ws.v1 `chat_message`, one per stored `source:'chat'` segment |
+| publishes | meeting-bot | redis channel `bot_commands:meeting:{id}` | acts.v1 `leave` (stop), `reconfigure` (PUT …/config), `chat_send` (POST …/chat) |
 | produces | user webhook endpoint | `webhook.v1` envelope | `meeting.status_change` (signed, best-effort delivery) |
 
 ### The session token (MeetingToken)

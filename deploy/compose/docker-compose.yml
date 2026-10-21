@@ -447,6 +447,8 @@ services:
       - BOT_TRANSCRIPTION_LATENCY=${BOT_TRANSCRIPTION_LATENCY:-}
       - BOT_STT_CONFIDENCE_FILTER=${BOT_STT_CONFIDENCE_FILTER:-}
       - BOT_TRANSCRIPT_RECONFIRM_SEC=${BOT_TRANSCRIPT_RECONFIRM_SEC:-}
+      # The bot browser's UI language (#856); unset keeps en-US.
+      - BOT_UI_LOCALE=${BOT_UI_LOCALE:-}
       - VEXA_AGENT_SRC_MOUNT=${VEXA_AGENT_SRC_MOUNT:-}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       # The Runtime brokers model credentials into spawned agents. Subscription credentials may be

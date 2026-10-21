@@ -1,5 +1,5 @@
 /**
- * Capture bridge (2b) — the browser-resident capture → pipeline pump + the speak path.
+ * Capture bridge (2b) — the browser-resident capture → pipeline pump + the speak and chat-send paths.
  *
  * ╔══════════════════════════════════════════════════════════════════════════════════════╗
  * ║ L4 (O6/VM): live-validated against a real meeting.                                      ║
@@ -730,7 +730,7 @@ export async function startCaptureBridge(
   inv: Invocation,
   pipeline: BotPipeline,
   telemetry?: TelemetrySink,
-  /** In-meeting chat sink (jitsi lane) — each captured chat message crosses here;
+  /** In-meeting chat sink (google_meet + jitsi) — each captured chat message crosses here;
    *  the composition root publishes it as a transcript.v1 `source:'chat'` segment. */
   onChat?: (sender: string, text: string) => void,
   /** Active-phase silence signal. It remains unavailable until page capture reports ready. */
@@ -829,7 +829,8 @@ export async function startCaptureBridge(
   await page.exposeFunction('__vexaStreamPresence', (count: number): void => activity?.observeStreamPresence?.(count)).catch((e: Error) => {
     if (!String(e.message).includes('already registered')) throw e;
   });
-  // jitsi chat → the embedder's sink (a transcript.v1 `chat` segment at the composition root).
+  // In-meeting chat (google_meet + jitsi readers) → the embedder's sink (a transcript.v1 `chat`
+  // segment at the composition root).
   await page.exposeFunction('__vexaChatMessage', (sender: string, text: string): void => {
     try { onChat?.(sender, text); } catch (e) { console.error(`[bot] chat sink rejected: ${String(e)}`); }
   }).catch(() => { /* optional */ });
@@ -1315,7 +1316,15 @@ export async function startCaptureBridge(
       // (Zoom's watcher lives in the per-track branch above — it feeds the resolver, not the mix.)
       return;
     }
-    // gmeet lane: per-channel capture + glow attribution (the SAME module the extension runs).
+    // gmeet lane: the chat reader (opens the chat panel itself; the bot's own lines are skipped),
+    // then per-channel capture + glow attribution (the SAME module the extension runs).
+    if (w.VexaBrowserUtils?.createGmeetChat && !w.__vexaGmeetChat) {
+      w.__vexaGmeetChat = w.VexaBrowserUtils.createGmeetChat({
+        selfName: botName,
+        log: (m: string) => w.logBot?.('[GmeetChat] ' + m),
+        onMessage: (m: { sender: string; text: string }) => w.__vexaChatMessage?.(m.sender, m.text),
+      });
+    }
     if (w.VexaBrowserUtils?.createGmeetCapture && !w.__vexaGmeetCapture) {
       w.__vexaGmeetSpeakers = w.__vexaGmeetSpeakers
         ?? w.VexaBrowserUtils.createGmeetSpeakers?.({ log: (m: string) => w.logBot?.('[PerSpeaker] ' + m) });
@@ -1357,6 +1366,7 @@ export async function startCaptureBridge(
     await page.evaluate(() => {
       const w = (globalThis as any) as Record<string, any>;
       try { w.__vexaGmeetCapture?.stop?.(); } catch { /* best-effort */ }
+      try { w.__vexaGmeetChat?.destroy?.(); w.__vexaGmeetChat = null; } catch { /* best-effort */ }
       try { if (w.__vexaTeamsHealthTimer) { (globalThis as any).clearInterval(w.__vexaTeamsHealthTimer); w.__vexaTeamsHealthTimer = null; } } catch { /* */ }
       try { w.__vexaTeamsSpeakers?.destroy?.(); w.__vexaTeamsSpeakers = null; } catch { /* best-effort */ }
       // destroy() flushes a caption still mid-refinement as stable:false — the meeting's last
@@ -1527,6 +1537,79 @@ export function createSpeakController(page: Page, inv: Invocation): SpeakControl
       tts.stop();                                             // barge-in: kill playback + re-mute tts_sink
       await setMic(false);
       console.log('[bot] speak_stop');
+    },
+  };
+}
+
+/**
+ * The CHAT-SEND path — write a line into the meeting chat (acts.v1 `chat_send`).  // L4 (O6/VM).
+ *
+ * google_meet sends with TRUSTED input: the page-side prepareGmeetChatSend opens the panel, finds the
+ * composer and its send button by structure (language-independent — see gmeet-chat.ts) and marks
+ * them; Playwright then fills the marked composer and clicks the marked button, or presses Enter
+ * when the row has no identifiable button. When that path cannot run (no Playwright locator, or a
+ * step throws), the page-side sendGmeetChatMessage (DOM value + click / synthetic Enter) is the
+ * fallback. jitsi calls the conference's own sendTextMessage (sendJitsiChatMessage). Not gated on
+ * voiceAgentEnabled: chat is a text act, not a voice one. Every other platform reports false.
+ */
+export interface ChatSender {
+  /** Send `text` into the meeting chat. Resolves false when the platform or the page cannot. */
+  send(text: string): Promise<boolean>;
+}
+
+/** google_meet's trusted send: page-side lookup + marks, then Playwright input on the marks.
+ *  Resolves true when sent, false when the page has no composer, null when the trusted path could
+ *  not run (the caller falls back to the page-side sender). */
+async function sendGmeetTrusted(page: Page, text: string): Promise<boolean | null> {
+  if (typeof (page as { locator?: unknown }).locator !== 'function') return null;
+  try {
+    const found = await page.evaluate(async (text: string) => {
+      const u = (globalThis as any).VexaBrowserUtils;
+      if (!u?.prepareGmeetChatSend) return null;
+      const log = (m: string) => (globalThis as any).logBot?.('[ChatSend] ' + m);
+      return await u.prepareGmeetChatSend(text, { log }) as { composer: string | null; send: string | null };
+    }, text);
+    if (!found) return null;
+    if (!found.composer) return false;
+    const composer = page.locator('[data-vexa-chat-composer]').first();
+    await composer.fill(text, { timeout: 5000 });
+    const send = page.locator('[data-vexa-chat-send]').first();
+    if (found.send && await send.isEnabled({ timeout: 2000 }).catch(() => false)) {
+      await send.click({ timeout: 5000 });
+      console.log(`[bot] chat_send: trusted fill + click (composer via ${found.composer}, send via ${found.send})`);
+    } else {
+      await composer.press('Enter', { timeout: 5000 });
+      console.log(`[bot] chat_send: trusted fill + Enter (composer via ${found.composer}, send via ${found.send ?? 'none'})`);
+    }
+    return true;
+  } catch (e) {
+    console.error(`[bot] chat_send: trusted path failed, falling back to the page-side sender: ${String(e)}`);
+    return null;
+  }
+}
+
+export function createChatSender(page: Page, inv: Invocation): ChatSender {
+  const platform = inv.platform;
+  return {
+    async send(text: string): Promise<boolean> {
+      if (platform !== 'google_meet' && platform !== 'jitsi') {
+        console.error(`[bot] chat_send unsupported on ${platform}`);
+        return false;
+      }
+      const trusted = platform === 'google_meet' ? await sendGmeetTrusted(page, text) : null;
+      // Runs IN THE BROWSER; the platform's sender lives on the injected bundle.
+      const ok = trusted !== null ? trusted : await page.evaluate(async ({ text, platform }) => {
+        const u = (globalThis as any).VexaBrowserUtils;
+        const log = (m: string) => (globalThis as any).logBot?.('[ChatSend] ' + m);
+        if (platform === 'google_meet') return u?.sendGmeetChatMessage ? !!(await u.sendGmeetChatMessage(text, { log })) : false;
+        return u?.sendJitsiChatMessage ? !!u.sendJitsiChatMessage(text) : false;
+      }, { text, platform }).catch((e) => {
+        console.error(`[bot] chat_send: page-side send threw: ${String(e)}`);
+        return false;
+      });
+      if (ok) console.log(`[bot] chat_send: "${text.slice(0, 60)}"`);
+      else console.error(`[bot] chat_send FAILED on ${platform}: the page could not send (no composer / no chat API)`);
+      return ok;
     },
   };
 }

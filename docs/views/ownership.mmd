@@ -68,6 +68,7 @@ flowchart LR
   gateway -.->|read| bm_status
   gateway -.->|read| u_meetings
   gateway -.->|read| va_chat
+  meeting_api -->|write| va_chat
   admin_api -->|write| identity_db
   flows_worker -->|write| flows_rows
   flows_api -->|write| flows_rows

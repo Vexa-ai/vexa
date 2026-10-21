@@ -1318,7 +1318,7 @@
    "unique-id": "bot-commands",
    "node-type": "data-asset",
    "name": "bot_commands:meeting:{id} (pubsub)",
-   "description": "acts.v1 commands (leave/speak) to the bot",
+   "description": "acts.v1 commands (leave/reconfigure/chat_send) to the bot",
    "controls": {
     "ownership": {
      "description": "single writer (P23)",
@@ -1369,7 +1369,29 @@
    "unique-id": "va-chat",
    "node-type": "data-asset",
    "name": "va:meeting:{id}:chat (pubsub)",
-   "description": "in-meeting chat pub/sub; gateway fans out. NO in-repo writer in this carve"
+   "description": "in-meeting chat as ws.v1 chat_message frames: the collector publishes each captured source:'chat' segment once it is stored; the gateway fans out",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "https://vexa.ai/calm/controls/single-writer.requirement.json",
+       "config": {
+        "writers": [
+         "meeting-api"
+        ],
+        "match": "va:meeting:.*:chat",
+        "op": "publish"
+       }
+      }
+     ]
+    }
+   },
+   "metadata": [
+    {
+     "contract": "ws.v1"
+    }
+   ]
   },
   {
    "unique-id": "identity-db",
@@ -2916,7 +2938,7 @@
      }
     }
    },
-   "description": "PUBLISH leave/speak",
+   "description": "PUBLISH leave/reconfigure/chat_send",
    "metadata": [
     {
      "access": "write"
@@ -3462,6 +3484,25 @@
    "metadata": [
     {
      "access": "read"
+    }
+   ]
+  },
+  {
+   "unique-id": "collector-publishes-chat",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "meeting-api"
+     },
+     "destination": {
+      "node": "va-chat"
+     }
+    }
+   },
+   "description": "PUBLISH a ws.v1 chat_message per stored chat segment (collector/ingest.py)",
+   "metadata": [
+    {
+     "access": "write"
     }
    ]
   },

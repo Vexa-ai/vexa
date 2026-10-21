@@ -110,6 +110,14 @@
       "shared": "refuse"
     },
     {
+      "method": "POST",
+      "path": "/bots/{platform}/{native_meeting_id}/chat",
+      "scopes": [
+        "bot"
+      ],
+      "shared": "refuse"
+    },
+    {
       "method": "PUT",
       "path": "/bots/{platform}/{native_meeting_id}/config",
       "scopes": [

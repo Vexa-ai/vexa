@@ -14,6 +14,9 @@ This carve splits that into a pure, explicitly-driven core:
     ``ingest`` each → ``ack``). No background loop: the eval calls this explicitly, like the
     runtime scheduler's ``tick()`` — same in ⇒ same out.
 
+A ``source:'chat'`` segment is additionally published as a ws.v1 ``chat_message`` frame on
+``va:meeting:{id}:chat`` (``chat.py``).
+
 The ``:mutable`` payload mirrors the bot's live publisher
 (``services/vexa-bot_new/src/adapters/transcript-redis.ts``):
 ``{type:"transcript", meeting:{id}, speaker, confirmed, pending, ts}``.
@@ -30,6 +33,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from . import segment_entry
+from .chat import chat_channel, chat_frame, is_chat
 from .ports import RedisBus, TranscriptStore
 
 # Stream / consumer-group defaults (parent ``collector/config.py``).
@@ -412,6 +416,21 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
             )
         except Exception as e:  # noqa: BLE001 — publish is best-effort; persistence already succeeded
             _log_publish_failure(meeting_id, e)
+        # Each captured chat line also goes out as a ws.v1 `chat_message` frame on
+        # va:meeting:{id}:chat — the channel the gateway /ws subscribes per meeting. The collector is
+        # its one producer, for the same reason it is the transcript feed's: it is where a chat
+        # segment is first known to be durable. Best-effort, like the publish above.
+        for seg in persisted:
+            if not is_chat(seg):
+                continue
+            try:
+                await redis.publish(
+                    chat_channel(meeting_id),
+                    json.dumps(chat_frame(seg, meeting_id=meeting_id, native_id=native_id,
+                                          platform=platform_native)),
+                )
+            except Exception as e:  # noqa: BLE001 — persistence already succeeded
+                _log_publish_failure(meeting_id, e)
         # P23/P0: the collector is the SINGLE writer of the transcript feed tc:meeting:{meeting_id}
         # (the numeric ROW id — cross-tenant safe; the native id collided across users/rows). Append each
         # persisted segment (confirmed + pending, in order) for the copilot worker + terminal SSE. Written

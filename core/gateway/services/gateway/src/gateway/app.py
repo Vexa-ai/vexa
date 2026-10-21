@@ -1082,11 +1082,16 @@ def create_app(
     async def delete_native_meeting(platform: MeetingPlatform, native_meeting_id: str, request: Request):
         return await _forward_meeting(request)
 
-    # native-keyed chat READ (#579 C3): the sealed api.v1 GET the 0.10 dashboard's chat panel calls.
-    # Thin passthrough to meeting-api's honest empty-list restore (0.12 does not persist in-meeting
-    # chat server-side). The POST (send) half is a SIGNED GAP — no bot-command backend in 0.12.
+    # native-keyed in-meeting chat (sealed api.v1). GET reads the meeting's captured chat (the
+    # `source:'chat'` transcript segments); POST sends a line into the meeting — meeting-api publishes
+    # it to the bot as an acts.v1 `chat_send`. Thin passthroughs: owner resolution, the
+    # active-meeting check and the command publish all live in meeting-api.
     @app.get("/bots/{platform}/{native_meeting_id}/chat")
     async def read_meeting_chat(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
+
+    @app.post("/bots/{platform}/{native_meeting_id}/chat")
+    async def send_meeting_chat(platform: MeetingPlatform, native_meeting_id: str, request: Request):
         return await _forward_meeting(request)
 
     # ---- user self-serve webhook config (main.py:1080 set_user_webhook_proxy) ----

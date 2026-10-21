@@ -196,19 +196,32 @@ def _segment_to_api(seg: dict) -> dict:
 # get the segment identity wrong. Keyed on ``(meeting_id, segment_id)`` (the partial unique index
 # ``ix_transcription_meeting_segment``): a re-write lands as an UPDATE, never a duplicate row.
 _SEGMENT_UPSERT_SQL = """
-    INSERT INTO transcriptions (meeting_id, start_time, end_time, text, speaker, language, session_uid, segment_id, created_at)
-    VALUES (:mid, :start, :end, :text, :speaker, :lang, :uid, :segid, :created)
+    INSERT INTO transcriptions (meeting_id, start_time, end_time, text, speaker, language, session_uid, segment_id, source, created_at)
+    VALUES (:mid, :start, :end, :text, :speaker, :lang, :uid, :segid, :source, :created)
     ON CONFLICT (meeting_id, segment_id) WHERE segment_id IS NOT NULL
     DO UPDATE SET text = EXCLUDED.text, speaker = EXCLUDED.speaker,
                   start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time,
-                  language = EXCLUDED.language, created_at = EXCLUDED.created_at
+                  language = EXCLUDED.language, source = EXCLUDED.source,
+                  created_at = EXCLUDED.created_at
 """
+
+
+def _persisted_segment(row) -> dict:
+    """A ``transcriptions`` row → the stored-segment dict ``_segment_to_api`` maps. A durable row is
+    confirmed by construction (only completed segments are flushed)."""
+    return {
+        "start": row.start_time, "end": row.end_time, "text": row.text,
+        "language": row.language, "speaker": row.speaker,
+        "segment_id": row.segment_id, "completed": True,
+        "source": getattr(row, "source", None),
+    }
 
 
 def _segment_upsert_rows(meeting_id, segments) -> "list[dict]":
     """Normalize a batch of segments into the bind-parameter rows ``_SEGMENT_UPSERT_SQL`` takes.
     A segment with no ``segment_id`` is skipped (0.12 ingest guarantees one; a legacy stray is
-    skipped, not guessed) and an unparseable start/end likewise."""
+    skipped, not guessed) and an unparseable start/end likewise. ``source`` is carried, so a chat line
+    is still a chat line once it is durable."""
     from datetime import datetime as _dt
 
     rows = []
@@ -227,7 +240,7 @@ def _segment_upsert_rows(meeting_id, segments) -> "list[dict]":
             "mid": int(meeting_id), "start": start, "end": end,
             "text": seg.get("text") or "", "speaker": seg.get("speaker"),
             "lang": seg.get("language"), "uid": seg.get("session_uid"),
-            "segid": str(sid), "created": _dt.utcnow(),
+            "segid": str(sid), "source": seg.get("source"), "created": _dt.utcnow(),
         })
     return rows
 
@@ -365,11 +378,7 @@ class SqlAlchemyTranscriptStore:
         seg_by_id: dict = {}
         order: list = []
         for r in seg_rows:
-            s = _segment_to_api({
-                "start": r.start_time, "end": r.end_time, "text": r.text,
-                "language": r.language, "speaker": r.speaker,
-                "segment_id": r.segment_id, "completed": True,
-            })
+            s = _segment_to_api(_persisted_segment(r))
             sid = s.get("segment_id") or f"pg-{len(order)}"
             if sid not in seg_by_id:
                 order.append(sid)

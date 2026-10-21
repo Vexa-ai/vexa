@@ -66,7 +66,7 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   service agent-worker
   data-asset out-stream [writers: agent-worker]
   data-asset unit-in [writers: agent-api]
-  data-asset va-chat
+  data-asset va-chat [writers: meeting-api]
   data-asset imports-status [writers: agent-api]
   data-asset onboarding-research-state [writers: agent-api]
   data-asset rail-order [writers: agent-api]
@@ -170,7 +170,7 @@ edges:
   bot -read-> bot-commands  # SUBSCRIBE acts.v1 commands
   meeting-api -write-> bm-status  # PUBLISH status
   meeting-api -write-> u-meetings  # PUBLISH per-user status
-  meeting-api -write-> bot-commands  # PUBLISH leave/speak
+  meeting-api -write-> bot-commands  # PUBLISH leave/reconfigure/chat_send
   meeting-api -write-> recording-blob  # S3 PUT stitched master
   meeting-api -write-> postgres
   meeting-api -write-> object-store
@@ -201,6 +201,7 @@ edges:
   gateway -read-> bm-status  # WS fan-out
   gateway -read-> u-meetings  # WS auto-subscribe
   gateway -read-> va-chat  # WS fan-out
+  meeting-api -write-> va-chat  # PUBLISH a ws.v1 chat_message per stored chat segment (collector/ingest.py)
   admin-api -write-> identity-db
   admin-api -write-> postgres
   terminal -req-> gateway  # every REST call a browser makes, via gateway (the terminal's server also calls admin-api and agent-api directly: term-admin-internal, term-agent-internal)

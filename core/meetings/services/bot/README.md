@@ -26,7 +26,7 @@ composition root (`src/index.ts`).
 | consumes | meeting-api (spawner) | `VEXA_BROWSER_SESSION` env (JSON), instead of `VEXA_BOT_CONFIG` | a browser-session workload: `signin` or `verify` of a bot account (below) |
 | produces | meeting-api | HTTP PUT → `save_url` (signin) · GET `restore_url` + POST `result_url` (verify), `Authorization: Bearer <token>` | the signed-in profile as a `WritebackBody` · `{logged_in, detail}` |
 | serves | meeting-api (live-view relay) | websockify on `:6080` (noVNC web client + VNC WebSocket), signin only | the browser display, behind a per-session VNC password |
-| consumes | gateway (commands) | redis pub/sub `bot_commands:meeting:{id}` | `acts.v1` commands (e.g. `speak` / `speak_stop`, `reconfigure` of the transcription language — see [src/README.md](src/README.md#transcription-language)) |
+| consumes | gateway (commands) | redis pub/sub `bot_commands:meeting:{id}` | `acts.v1` commands (e.g. `speak` / `speak_stop`, `chat_send`, `reconfigure` of the transcription language — see [src/README.md](src/README.md#transcription-language)) |
 
 ### Pre-join reachability gate (#530)
 

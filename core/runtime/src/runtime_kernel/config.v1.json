@@ -445,6 +445,16 @@
       ]
     },
     {
+      "key": "BOT_UI_LOCALE",
+      "class": "defaulted",
+      "default": "(unset — bot default en-US)",
+      "description": "the UI language spawned bots' browser is pinned to (#856): Chrome --lang and Accept-Language, the Playwright context locale and Google Meet's ?hl=; a BCP 47 tag such as nl-NL or de-DE. The meeting's own participants are unaffected; forwarded to spawned bots",
+      "targets": [
+        "compose",
+        "lite"
+      ]
+    },
+    {
       "key": "BOT_TRANSCRIPTION_LATENCY",
       "class": "defaulted",
       "default": "(unset — fast drafts + reconfirmation)",

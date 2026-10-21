@@ -46,6 +46,9 @@ parent's FM-003 discipline). `active → joining` (and any re-open of a terminal
   change (transcription-language.v1). Owner, or an owner/contributor of the bound workspace (role read
   from identity); publishes an acts.v1 `reconfigure` and stores `data.transcription_language` only when a
   bot received it (409 otherwise).
+- `chat_router.py` — `POST /bots/{platform}/{native_meeting_id}/chat`: an acts.v1 `chat_send` to the
+  owner's admitted bot (google_meet · jitsi). Owner only; 409 when the bot is not in the meeting or no
+  bot received the act; `text` capped at `MAX_CHAT_CHARS`.
 - `retry.py` (P3d) — `JoinRetryController` + the transient/permanent taxonomy
   (`classify_retry` / `is_transient`): on a TRANSIENT join-failure schedule a fresh re-spawn (a new
   `meeting_session`) through the runtime scheduler with bounded exponential backoff; a PERMANENT

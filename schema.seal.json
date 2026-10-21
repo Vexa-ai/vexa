@@ -551,6 +551,7 @@
       "meeting_id": "Column(Integer, ForeignKey('meetings.id'), nullable=False, index=True)",
       "segment_id": "Column(String, nullable=True)",
       "session_uid": "Column(String, nullable=True, index=True)",
+      "source": "Column(String(32), nullable=True)",
       "speaker": "Column(String(255), nullable=True)",
       "start_time": "Column(Float, nullable=False)",
       "text": "Column(Text, nullable=False)"
@@ -605,6 +606,7 @@
       "meeting_id": "Column(Integer, ForeignKey('meetings.id'), nullable=False, index=True)",
       "segment_id": "Column(String, nullable=True)",
       "session_uid": "Column(String, nullable=True, index=True)",
+      "source": "Column(String(32), nullable=True)",
       "speaker": "Column(String(255), nullable=True)",
       "start_time": "Column(Float, nullable=False)",
       "text": "Column(Text, nullable=False)"

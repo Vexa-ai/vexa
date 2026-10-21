@@ -37,7 +37,8 @@ import { createCaptureSignalRecorder, startBotLogSidecar, wrapTranscribeWithTap,
 import { uploadSignalTapes } from './signal-upload.js';
 import { describeGaps, mergeDegraded, transcriptGapsReport } from './transcript-gaps.js';
 import { createSttFaultReporter } from './stt-faults.js';
-import { launchBrowser, startCaptureBridge, startRecording, restartMixedCapture, createSpeakController, type BrowserSession, type SpeakController } from './capture-bridge.js';
+import { launchBrowser, startCaptureBridge, startRecording, restartMixedCapture, createSpeakController, createChatSender, type BrowserSession } from './capture-bridge.js';
+import { createActDispatch } from './act-dispatch.js';
 import { createRemoteAudioActivityTap, createSilenceAlonenessSource, resolveAloneSilenceWindowMs } from './aloneness.js';
 import { installSignalHandlers } from './signals.js';
 import { createVoiceNoteJoinDriver, createVoiceNotePipeline, createVoiceNoteSource, voiceNoteIdleMs, voiceNoteMaxActiveMs } from './voice-note.js';
@@ -108,9 +109,10 @@ function deriveMaxActiveMs(inv: Invocation, everyoneLeftMs: number, env: NodeJS.
 
 /**
  * Tee an ActsSource so EVERY act reaches the orchestrator (its single `handle`, which owns `leave`)
- * AND each side handler — voice (speak / speak_stop), transcription language (reconfigure) — from
- * ONE underlying subscription. The orchestrator stays the pure core (it never imports the
- * SpeakController or the language control); the side paths are wired here at the composition root.
+ * AND each side handler — in-meeting acts (speak / speak_stop / chat_send — act-dispatch.ts),
+ * transcription language (reconfigure) — from ONE underlying subscription. The orchestrator stays
+ * the pure core (it never imports the page controllers or the language control); the side paths
+ * are wired here at the composition root.
  */
 export function teeActs(
   source: ActsSource,
@@ -125,15 +127,6 @@ export function teeActs(
         }
       });
     },
-  };
-}
-
-/** The bot's voice-act handler: route acts.v1 speak / speak_stop to the SpeakController. The
- *  other voice acts (chat/screen/avatar) are out of this increment's scope. */
-function voiceHandler(speak: SpeakController): (act: Act) => Promise<void> {
-  return async (act) => {
-    if (act.action === 'speak') await speak.speak(act.text, act.voice);
-    else if (act.action === 'speak_stop') await speak.stop();
   };
 }
 
@@ -363,7 +356,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
         .then((requested) => console.log(`[bot] capture restart ${requested ? 'requested' : 'not applicable (no mixed rescan)'}`))
         .catch((e) => console.error(`[bot] capture restart failed: ${String(e)}`));
     };
-    // In-meeting chat (jitsi lane) → a transcript.v1 `chat` segment: the sender is the
+    // In-meeting chat (google_meet + jitsi readers) → a transcript.v1 `chat` segment: the sender is the
     // speaker, the wall clock is the timing (epoch seconds, like the audio lanes), and
     // `completed` is immediate — a chat line has no draft phase.
     let chatSeq = 0;
@@ -394,10 +387,14 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
         console.error(`[bot] live-pipeline: ${stage} failed (non-fatal, bot stays seated): ${serr(e)}`);
       },
     });
-    // Tee acts: `speak`/`speak_stop` reach the SpeakController (gated on voiceAgentEnabled) and
-    // `reconfigure` reaches the transcription-language control.
-    const speak = createSpeakController(session.page, inv);
-    acts = teeActs(liveActs, { voice: voiceHandler(speak), 'transcription-language': languageActs });
+    // Tee acts: `speak`/`speak_stop` reach the SpeakController (gated on voiceAgentEnabled),
+    // `chat_send` reaches the ChatSender (ungated: a text act, not a voice one), and `reconfigure`
+    // reaches the transcription-language control.
+    const inMeeting = createActDispatch({
+      speak: createSpeakController(session.page, inv),
+      chat: createChatSender(session.page, inv),
+    });
+    acts = teeActs(liveActs, { 'in-meeting': inMeeting, 'transcription-language': languageActs });
   } catch (e) {
     console.error(`[bot] browser launch/capture wiring failed — falling back to clean terminal failed: ${String(e)}`);
     join = noBrowserJoinDriver(String(e));

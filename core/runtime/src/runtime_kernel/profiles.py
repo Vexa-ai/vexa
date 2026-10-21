@@ -331,6 +331,9 @@ def default_registry() -> ProfileRegistry:
             "BOT_TRANSCRIPTION_LATENCY",
             "BOT_STT_CONFIDENCE_FILTER",
             "BOT_TRANSCRIPT_RECONFIRM_SEC",
+            # The bot browser's pinned UI language (#856): --lang, Accept-Language, the Playwright
+            # locale and Meet's ?hl=. Unset keeps the bot's en-US.
+            "BOT_UI_LOCALE",
         )
         if os.environ.get(key, "").strip()
     }

@@ -390,6 +390,12 @@ def create_app(
     app.include_router(build_reconfigure_router(
         meeting_repo, command_publisher, workspace_roles or workspace_roles_from_env()))
 
+    # --- chat-send: POST /bots/{platform}/{native_meeting_id}/chat → acts.v1 `chat_send` on the same
+    #     command bus (lifecycle/chat_router.py) ---
+    from .lifecycle.chat_router import build_chat_router
+
+    app.include_router(build_chat_router(meeting_repo, command_publisher))
+
     # Resolve the shared recording storage before mounting the collector: completed-meeting erasure
     # uses this same port to delete objects before its transcript/JSONB finalization.
     if storage is None:

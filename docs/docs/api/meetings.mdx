@@ -78,9 +78,15 @@ name on meet.jit.si (`MyRoom`), and `room@host` on any other deployment
 (`MyRoom@video.example.org`) — so same-named rooms on different deployments never collide.
 A password-protected room is joined by passing the optional `passcode` field. To make
 **calendar sync** recognize a self-hosted deployment's links, list its hostnames in the
-`VEXA_JITSI_HOSTS` env (comma-separated). On Jitsi the transcript also carries the meeting's **chat**: each chat
-message arrives as a segment with `source: "chat"` (the sender is the `speaker`), and speaker
-names come from the conference's own dominant-speaker signal.
+`VEXA_JITSI_HOSTS` env (comma-separated). On Jitsi speaker names come from the conference's own
+dominant-speaker signal.
+
+On **Google Meet** and **Jitsi** the transcript also carries the meeting's **chat**: each chat
+message from another participant arrives as a segment with `source: "chat"` (the sender is the
+`speaker`). Read it alone with `GET /bots/{platform}/{native_meeting_id}/chat`, follow it live as
+`chat_message` frames on `/ws`, and post into it with `POST /bots/{platform}/{native_meeting_id}/chat`
+(the native-id support table below has each answer). On Meet the bot opens the
+chat panel itself and reads only lines sent after it joined.
 
 ## Meeting statuses
 
@@ -248,8 +254,8 @@ native_meeting_id)` keying a 0.10 client uses is served by the 0.12 core:
 | `GET /bots/status` | **Yes** — body carries both `running_bots` (0.10) and `running`/`count` (0.12). |
 | `POST /transcripts/{platform}/{native_meeting_id}/share` | **Aliased** to the moved `POST /meetings/{platform}/{native_meeting_id}/share` mint. The response is the capability-token share (`{id, token, mode, expires_at}`), not the 0.10 public-URL `TranscriptShareResponse` — the public-URL-share backend is not in the 0.12 core. |
 | `GET /recordings/{recording_id}/media/{media_file_id}/download` | **Aliased** to the `.../raw` master byte stream (Range-capable). |
-| `GET /bots/{platform}/{native_meeting_id}/chat` | **Restored, empty** — the owner boundary is real; the message list is always empty (0.12 does not persist in-meeting chat server-side; chat flows live over the WS `va:…:chat` channel). |
-| `POST /bots/{platform}/{native_meeting_id}/chat` | **Not implemented** — no bot-command (send) backend in the 0.12 core. |
+| `GET /bots/{platform}/{native_meeting_id}/chat` | **Yes** — the chat the bot captured in your newest owned meeting on that link, oldest first, as `{messages: [{sender, text, timestamp, is_from_bot}]}` (`timestamp` in epoch milliseconds). It is the transcript's `source: "chat"` segments, so it holds only what the platform's chat reader captured (Google Meet and Jitsi). `is_from_bot` is always `false`; the bot's own lines are not captured. Each new line also arrives live over `/ws` as `{"type": "chat_message", "meeting": {id, native_id, platform}, sender, text, timestamp, is_from_bot}`. |
+| `POST /bots/{platform}/{native_meeting_id}/chat` | **Yes, on Google Meet and Jitsi** — body `{"text": "…"}`, at most 2000 characters; only the meeting's owner can send. Hands the line to your bot in that meeting and answers `200 {"status": "queued", "meeting_id", "native_meeting_id"}`: received by the bot, not confirmed posted. `404` with no live meeting, `409` before the bot is admitted or when no bot is listening, `422` for empty or too-long `text`, an unknown platform, or a platform whose bot cannot send chat (Zoom, Teams), `503` when the command bus is down (nothing was sent, retry). |
 | `POST /meetings/{meeting_id}/transcribe` | **Not implemented** — no on-demand re-transcribe backend in the 0.12 core. |
 
 <Note>

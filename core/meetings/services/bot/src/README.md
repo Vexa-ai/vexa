@@ -20,7 +20,8 @@ types; transports are adapters wired at the composition root.
 | `session-restore.ts` | a saved bot account's profile over HTTP — `GET inv.sessionRestoreUrl` (MeetingToken), the answer checked against session-profile.v1 `WritebackBody`, written profile paths only via `writeSessionProfile`; any failure is `SessionSyncError('session-restore')`. |
 | `session-writeback.ts` | the rotated session back to meeting-api on clean teardown (`PUT inv.sessionWritebackUrl`). |
 | `browser-session.ts` | **browser-session mode** (`VEXA_BROWSER_SESSION`): `signin` (private live view: x11vnc on localhost behind a per-session password, websockify :6080; `provisionLogin`; PUT the profile) or `verify` (restore, `validateLoggedIn`, POST the result). Run by `main()` instead of a meeting. |
-| `capture-bridge.ts` | **L4-pending (O6)** — browser launch (+ auth profile from S3 or `sessionRestoreUrl`), page-side capture inject + PCM pump → `pipeline.feedAudio`, and the speak controller. Browser-resident; not unit-provable — validated on the VM. |
+| `capture-bridge.ts` | **L4-pending (O6)** — browser launch (+ auth profile from S3 or `sessionRestoreUrl`), page-side capture inject + PCM pump → `pipeline.feedAudio`, the in-meeting chat reader (google_meet · jitsi) → `onChat`, and the speak + chat-send controllers. Browser-resident; not unit-provable — validated on the VM. |
+| `act-dispatch.ts` | the in-meeting act router — `speak`/`speak_stop` → SpeakController, `chat_send` → ChatSender (ungated: a text act). Pure (controllers injected). |
 | `*.test.ts` | L1/L2/L3 — config (ajv goldens) · orchestrator (lifecycle.v1 sequence, fake ports) · lifecycle-http/transcript-redis/acts-redis (transports) · **pipeline (L3: capture→lane→stt→publish, overlap no cross-mislabel)** · **recording (L3: webm/wav/seq)**. |
 
 Tests run via `tsx` (no build step): `npx tsx src/<file>.test.ts`; all chained in `npm test`.

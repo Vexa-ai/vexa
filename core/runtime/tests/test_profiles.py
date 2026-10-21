@@ -70,6 +70,15 @@ def test_meeting_bot_forwards_speaker_stream_tuning(monkeypatch):
     }
 
 
+def test_meeting_bot_forwards_ui_locale(monkeypatch):
+    """BOT_UI_LOCALE (#856) reaches every spawned bot when the deployment sets it, and is absent
+    (the bot keeps its en-US) when it does not."""
+    monkeypatch.setenv("BOT_UI_LOCALE", "nl-NL")
+    assert default_registry().get("meeting-bot").base_env.get("BOT_UI_LOCALE") == "nl-NL"
+    monkeypatch.setenv("BOT_UI_LOCALE", "")
+    assert "BOT_UI_LOCALE" not in default_registry().get("meeting-bot").base_env
+
+
 def test_meeting_bot_env_is_a_valid_invocation():
     """The bot's whole config is delivered as VEXA_BOT_CONFIG — a JSON-encoded Invocation. Build the
     env the control plane would hand the profile and prove the payload conforms to invocation.v1."""
