@@ -60,6 +60,13 @@ class TestParseExistingPlatformsUnchanged:
     def test_zoom(self):
         assert parse_meeting_url("https://us05web.zoom.us/j/84335626851?pwd=x") == ("zoom", "84335626851")
 
+    def test_zoom_host_start_link_from_a_calendar(self):
+        # The owner's calendar carries the /s/ start link with the host's zak (#1845); the id is
+        # what the event imports, and the bot rebuilds its own guest join URL from the link.
+        link = "https://us06web.zoom.us/s/85176323856?zak=eyJ0eXAiOiJKV1QifQ.e30.sig"
+        assert parse_meeting_url(link) == ("zoom", "85176323856")
+        assert find_meeting_link(f"Join Zoom Meeting\n{link}\n") == ("zoom", "85176323856", link)
+
     def test_teams_short(self):
         assert parse_meeting_url("https://teams.live.com/meet/9361792952021?p=abc") == ("teams", "9361792952021")
 

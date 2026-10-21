@@ -59,6 +59,15 @@ describe("parseMeetingInput", () => {
       expect(r?.originalUrl).toBeUndefined();
     });
 
+    it("parses a host start link (/s/<id>?zak=…) from a calendar (#1845)", () => {
+      const r = parseMeetingInput("https://us06web.zoom.us/s/85176323856?zak=eyJ0eXAiOiJKV1QifQ.e30.sig&pwd=secret");
+      expect(r?.platform).toBe("zoom");
+      expect(r?.meetingId).toBe("85176323856");
+      expect(r?.passcode).toBe("secret");
+      // Recognised as Zoom outright — not the unknown-vendor fallback that asks for a platform.
+      expect(r?.platformNeeded).toBeUndefined();
+    });
+
     it("parses subdomain zoom URL", () => {
       const r = parseMeetingInput("https://us05web.zoom.us/j/85173157171");
       expect(r?.platform).toBe("zoom");

@@ -59,7 +59,7 @@ POLL_SECONDS = 12
 # for two of the four supported platforms nothing whatsoever happens. Teams is the one that
 # matters most commercially — it is what a bank or a studio actually runs.
 MEET_URL = re.compile(r"https://meet\.google\.com/[a-z-]+")
-ZOOM_URL = re.compile(r"https://(?:[A-Za-z0-9-]+\.)*zoom\.us/j/\d+(?:\?pwd=[A-Za-z0-9._%~-]+)?")
+ZOOM_URL = re.compile(r"https://(?:[A-Za-z0-9-]+\.)*zoom\.us/[js]/\d+(?:\?pwd=[A-Za-z0-9._%~-]+)?")
 TEAMS_URL = re.compile(
     r"https://teams\.(?:microsoft|live)\.com/l/meetup-join/[^\s<>\"']+"
     r"|https://teams\.(?:microsoft|live)\.com/meet/[^\s<>\"']+")

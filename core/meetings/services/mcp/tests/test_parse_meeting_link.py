@@ -167,6 +167,15 @@ class TestZoom:
     def test_web_client_wc_join(self):
         assert parse("https://zoom.us/wc/join/12345678901").native_meeting_id == "12345678901"
 
+    def test_host_start_link_s_path(self):
+        # /s/<id>?zak=… is the host's start link a calendar shows the meeting owner (#1845).
+        r = parse("https://us06web.zoom.us/s/85176323856?zak=eyJ0eXAiOiJKV1QifQ.e30.sig")
+        assert (r.platform, r.native_meeting_id, r.passcode) == ("zoom", "85176323856", None)
+
+    def test_host_start_link_keeps_pwd(self):
+        r = parse("https://us06web.zoom.us/s/85176323856?zak=eyJ0eXAiOiJKV1QifQ.e30.sig&pwd=abc")
+        assert (r.native_meeting_id, r.passcode) == ("85176323856", "abc")
+
     def test_9_digit_legacy_id(self):
         assert parse("https://zoom.us/j/123456789").native_meeting_id == "123456789"
 
