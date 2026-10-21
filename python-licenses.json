@@ -49,7 +49,7 @@
     "greenlet==3.5.2": "MIT AND PSF-2.0",
     "greenlet==3.5.5": "MIT AND PSF-2.0",
     "greenlet==3.5.6": "MIT AND PSF-2.0",
-    "guard-core==3.4.0": "MIT",
+    "guard-core==4.4.0": "MIT",
     "h11==0.16.0": "MIT",
     "hf-xet==1.5.1": "Apache-2.0",
     "httpcore==1.0.9": "BSD-3-Clause",

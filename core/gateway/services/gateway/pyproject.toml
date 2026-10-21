@@ -14,6 +14,9 @@ dependencies = [
     # Pinned <8.0 so a major bump (which may rename SecurityConfig fields) can't silently
     # break the gateway on a `uv sync --frozen` image rebuild.
     "fastapi-guard>=7.2,<8.0",
+    # guard-core redacts Authorization, Cookie, X-API-Key and query credentials in the request
+    # context it logs for every block; 3.x wrote them verbatim.
+    "guard-core>=4.4,<5",
     # gateway-identity.v1: the gateway signs the identity it resolved with an Ed25519 private key
     # (OpenSSL through cryptography). Apache-2.0 OR BSD-3-Clause.
     "cryptography>=50.0.1,<51",

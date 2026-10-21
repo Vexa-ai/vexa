@@ -609,7 +609,7 @@ wheels = [
 
 [[package]]
 name = "guard-core"
-version = "3.4.0"
+version = "4.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -620,9 +620,9 @@ dependencies = [
     { name = "requests" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/48/bb/97ce44ba282bcb60bdca1950b0499708477af81c700b3cb44a082590d662/guard_core-3.4.0.tar.gz", hash = "sha256:11fda317276881f1f9ff9753bb9dcd78a47633f493a465c0fec4e1dfd5be29a6", size = 185595, upload-time = "2026-07-02T02:11:28.446Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/3c/4d1f131a235ef84e644e0e1a9eec56be77302cc15094ca701a1d2e0f32e4/guard_core-4.4.0.tar.gz", hash = "sha256:2125e2a1ad55d9ebbad4cae95fe4b1d5afd77365226bfa2ed3a740c2f4574154", size = 811933, upload-time = "2026-10-15T12:29:04.728Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/21/c9642468c439e4bab9f7e85ace789009347b1afea594d33457dd9f93cbf5/guard_core-3.4.0-py3-none-any.whl", hash = "sha256:f791e4a6f3db51bb1a21776ca7eff1494223e0507412e8ae95a0862891505884", size = 234930, upload-time = "2026-07-02T02:11:27.03Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/bc/44604837e4fc8efb9022370cf815a6b7bc001f604abf12c376ddb4ccc0a1/guard_core-4.4.0-py3-none-any.whl", hash = "sha256:fd63873148c8d9f0b84536001f3357e25ce0e70abaff136a13275d06da691575", size = 652368, upload-time = "2026-10-15T12:29:02.745Z" },
 ]
 
 [[package]]
@@ -1526,6 +1526,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "fastapi" },
     { name = "fastapi-guard" },
+    { name = "guard-core" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "starlette" },
@@ -1548,6 +1549,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=50.0.1,<51" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "fastapi-guard", specifier = ">=7.2,<8.0" },
+    { name = "guard-core", specifier = ">=4.4,<5" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic", specifier = ">=2" },
     { name = "starlette", specifier = ">=0.37" },
