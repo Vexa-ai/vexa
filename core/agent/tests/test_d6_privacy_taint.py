@@ -36,10 +36,9 @@ def _shared(client, root):
     r = client.post("/api/workspace/shared/new", json={"name": "Meetup"}, headers=_person())
     assert r.status_code == 201, r.text
     ws = r.json()["workspace_id"]
-    wsdir = membership_mod._ws_dir(root, ws)
     rows = membership_mod.read_members(root, ws) or [{"subject": PERSON, "role": "owner"}]
     rows.append({"subject": OTHER, "role": "contributor", "email": "val@example.com"})
-    membership_mod._write_json_list(wsdir, membership_mod.MEMBERS_FILE, rows)
+    membership_mod.write_policy(root, ws, "members", rows)
     return ws
 
 

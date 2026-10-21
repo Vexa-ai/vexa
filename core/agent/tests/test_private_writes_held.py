@@ -48,10 +48,9 @@ def setup(monkeypatch, tmp_path):
     assert r.status_code == 201, r.text
     ws = r.json()["workspace_id"]
     root = tmp_path / "workspaces"
-    wsdir = membership_mod._ws_dir(root, ws)
     rows = membership_mod.read_members(root, ws) or [{"subject": PERSON, "role": "owner"}]
     rows.append({"subject": OTHER, "role": "contributor", "email": "val@example.com"})
-    membership_mod._write_json_list(wsdir, membership_mod.MEMBERS_FILE, rows)
+    membership_mod.write_policy(root, ws, "members", rows)
     yield client, ws, root
     private_taint.reset()
 
