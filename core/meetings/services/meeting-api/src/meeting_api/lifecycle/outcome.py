@@ -111,7 +111,6 @@ DETAIL_RULES = (
      r"|launchpersistentcontext|trustedscript", "ours", "page_or_browser"),
     (r"zoom_client_id", "ours", "config_missing"),
     (r"post_join_setup_error", "ours", "died_in_meeting"),
-    (r"bot exited with code \d+; reason: none", "ours", "exited_without_reason"),
 )
 _DETAIL_RX = tuple((re.compile(p), c, r) for p, c, r in DETAIL_RULES)
 
@@ -410,6 +409,13 @@ CASES = [
     (dict(status="failed", last_stage="active", reached_active=True, created_at="2026-07-01"),
      ("ours", "died_in_meeting")),
     (dict(status="idle"), ("pending", "idle_never_dispatched")),
+    # the FSM synthesizes "reason: None" when the bot sent none; it must not override the lobby stage
+    (dict(status="failed", completion_reason="join_failure", failure_stage="awaiting_admission",
+          created_at="2026-10-01", detail="Bot exited with code 1; reason: None"),
+     ("host_or_platform", "not_admitted_1655")),
+    (dict(status="failed", completion_reason="join_failure", failure_stage="joining",
+          created_at="2026-10-01", detail="Bot exited with code 1; reason: None"),
+     ("ours", "exited_without_reason")),
     (dict(status="failed", created_at="2026-06-20"), ("ours", "bot_never_reported")),
     (dict(status="failed", last_stage="needs_human_help", created_at="2026-07-01"), ("user", "needs_help_unanswered")),
 ]

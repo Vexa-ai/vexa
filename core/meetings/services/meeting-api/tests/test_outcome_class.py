@@ -283,3 +283,21 @@ def test_backfill_plans_only_absent_terminal_rows():
     assert [w for _, w in plans] == [True, False, True, False]
     s = bf.summarize_plan(plans)
     assert s["writes"] == 2 and s["by_class"]["host_or_platform"] == 2
+
+
+def test_lifecycle_callback_reasonless_lobby_failure_is_not_ours(goldens):
+    """The FSM synthesizes error_details 'Bot exited with code 1; reason: None' when the bot sends
+    no reason. A lobby wait that ends that way is still the host not admitting the bot."""
+    repo = InMemoryMeetingRepo()
+    m = _seed(repo)
+    client = TestClient(create_app(open_callbacks=True, meeting_repo=repo))
+    _post(client, goldens["joining"])
+    _post(client, {"connection_id": "sess-uid", "status": "awaiting_admission",
+                   "timestamp": "2026-10-20T10:00:05.000Z"})
+    _post(client, {"connection_id": "sess-uid", "status": "failed", "exit_code": 1,
+                   "timestamp": "2026-10-20T10:13:00.000Z", "completion_reason": "join_failure"})
+    data = repo._meetings[m["id"]]["data"]
+    assert data["last_error"]["error_details"] == "Bot exited with code 1; reason: None"
+    # The FSM's own join_evidence (it saw awaiting_admission) gives the precise slug.
+    assert data["join_evidence"]["reason"] == "awaiting_admission_timeout"
+    assert (data["outcome_class"], data["outcome_reason"]) == ("host_or_platform", "not_admitted")
