@@ -175,7 +175,9 @@ def parse_meeting_url(meeting_url: str) -> ParseMeetingLinkResponse:
     if _host_is(host, "zoom.us") or _host_is(host, "zoomgov.com"):
         parts = [p for p in path.split("/") if p]
         native_id = ""
-        if len(parts) >= 2 and parts[0] in {"j", "w"}:
+        # /j/ attendee join, /w/ webinar join, /s/ the host's start link (what a calendar shows
+        # the meeting's owner) — all three carry the meeting id as the next segment.
+        if len(parts) >= 2 and parts[0] in {"j", "w", "s"}:
             native_id = parts[1]
         elif len(parts) >= 3 and parts[0] == "wc" and parts[1] == "join":
             native_id = parts[2]

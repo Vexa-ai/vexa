@@ -59,6 +59,33 @@ expect(
   'https://app.zoom.us/wc/84335626851/join',
 );
 
+// /s/<id> is the HOST's start link — what a calendar shows the meeting's owner
+// (Zoho calendar auto-join, #1845). Same meeting id as /j/; the bot joins as a
+// guest, so the host start token (zak) never reaches the web-client URL.
+expect(
+  '/s/ start link with zak — guest web client, zak dropped',
+  buildZoomWebClientUrl('https://us06web.zoom.us/s/85176323856?zak=eyJ0eXAiOiJKV1QifQ.e30.sig'),
+  'https://app.zoom.us/wc/85176323856/join',
+);
+
+expect(
+  '/s/ start link with zak and pwd — pwd kept, zak dropped',
+  buildZoomWebClientUrl('https://us06web.zoom.us/s/85176323856?zak=eyJ0eXAiOiJKV1QifQ.e30.sig&pwd=secret'),
+  'https://app.zoom.us/wc/85176323856/join?pwd=secret',
+);
+
+expect(
+  '/j/ link carrying a zak — zak dropped',
+  buildZoomWebClientUrl('https://zoom.us/j/84335626851?pwd=abc123&zak=eyJ0eXAiOiJKV1QifQ.e30.sig'),
+  'https://app.zoom.us/wc/84335626851/join?pwd=abc123',
+);
+
+expect(
+  '/wc/join/<id> form — already the web client, passthrough',
+  buildZoomWebClientUrl('https://zoom.us/wc/join/84335626851?pwd=abc123'),
+  'https://zoom.us/wc/join/84335626851?pwd=abc123',
+);
+
 expect(
   'already web client URL — passthrough',
   buildZoomWebClientUrl('https://app.zoom.us/wc/85173157171/join?pwd=secret'),
@@ -117,7 +144,7 @@ console.log('\n=== buildZoomWebClientUrl — negative cases (canonical-only) ===
 // White-label URLs are no longer parsed — they pass through. Only canonical
 // zoom.us / *.zoom.us URLs that we attempted to rewrite can throw.
 expectThrows(
-  'canonical zoom.us without /j/ — throws',
+  'canonical zoom.us without a meeting path — throws',
   () => buildZoomWebClientUrl('https://zoom.us/some-other-path'),
   'Cannot extract meeting ID',
 );
@@ -126,6 +153,12 @@ expect(
   'unknown host without numeric — passthrough (not our concern)',
   buildZoomWebClientUrl('https://example.com/just-a-bare-page'),
   'https://example.com/just-a-bare-page',
+);
+
+expectThrows(
+  'canonical zoom.us /s/ without a numeric id — throws',
+  () => buildZoomWebClientUrl('https://zoom.us/s/not-a-number?zak=x'),
+  'Cannot extract meeting ID',
 );
 
 console.log(`\n=== summary: ${passed} passed, ${failed} failed ===`);
