@@ -33,8 +33,10 @@ function rememberNotNow(session: string, row: string): void {
 const startedAt = (m: MeetingMock) => { const t = Date.parse(m.start_time || m.created_at || ""); return Number.isFinite(t) ? t : 0; };
 
 /** The live calls a chat offers to listen to: live, not a voice note, newest first, at most two. */
+/** The live meetings a chat's banner offers: bot calls. A voice note has no call, and an in-app call
+ *  (`vexa_call`) is held in its own room, with its own call view and listener. */
 export function liveCallsFor(meetings: readonly MeetingMock[]): MeetingMock[] {
-  return liveMeetings(meetings).filter((m) => m.platform !== "voice_note")
+  return liveMeetings(meetings).filter((m) => m.platform !== "voice_note" && m.platform !== "vexa_call")
     .sort((a, b) => startedAt(b) - startedAt(a)).slice(0, 2);
 }
 

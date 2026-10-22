@@ -114,6 +114,15 @@ describe("LiveCallBanner", () => {
     expect(calls).toHaveLength(0);
     expect(container.innerHTML).toBe("");
   });
+
+  it("no line for an in-app call: its room holds the call view and its own listener", async () => {
+    // founder, app.dev 22 Oct: «Listening to Call with Evgeniagrani» and the opt-ins sat as a second
+    // box inside the call room, over the room's own listener panel
+    replies = [{ status: 200, body: att({ attached_here: true }) }];
+    await mount(<LiveCallBanners session="pchat-room" meetings={[{ ...MEETING, platform: "vexa_call" } as MeetingMock]} />);
+    expect(calls).toHaveLength(0);
+    expect(container.innerHTML).toBe("");
+  });
 });
 
 describe("the attachment's wire shape", () => {
