@@ -39,6 +39,18 @@ SEED = [
 ]
 
 
+# the expression index on meetings calls this; the deployment creates it beside the schema
+_EVENT_TIME = """
+CREATE OR REPLACE FUNCTION meeting_event_time(data jsonb, start_time timestamp, created_at timestamp)
+RETURNS timestamp LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $fn$
+BEGIN
+    RETURN COALESCE(((data ->> 'scheduled_at')::timestamptz AT TIME ZONE 'UTC'), start_time, created_at);
+EXCEPTION WHEN OTHERS THEN
+    RETURN COALESCE(start_time, created_at);
+END $fn$;
+"""
+
+
 async def _state(conn):
     from sqlalchemy import text
     rows = (await conn.execute(text(
@@ -55,6 +67,7 @@ async def db():
 
     engine = create_async_engine(URL)
     async with engine.begin() as conn:
+        await conn.execute(text(_EVENT_TIME))
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
         for native, data in SEED:

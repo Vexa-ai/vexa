@@ -7,8 +7,7 @@
  *
  * Run: npx tsx src/shared/url-redaction.test.ts
  */
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import vectors from "./meeting-url-redaction-vectors.json";
 import { redactMeetingUrl, redactUrlsIn, rethrowRedacted } from "./url-redaction";
 import { log } from "../_host";
 import { buildZoomWebClientUrl, joinZoomMeeting } from "../zoom/join";
@@ -29,7 +28,6 @@ function check(name: string, ok: boolean, detail = "") {
 }
 
 // ── the vector table ───────────────────────────────────────────────────────────────────────────
-const vectors = JSON.parse(readFileSync(join(__dirname, "meeting-url-redaction-vectors.json"), "utf8"));
 console.log("\n=== vectors ===");
 for (const v of vectors.redact_url) {
   const got = redactMeetingUrl(v.in);
