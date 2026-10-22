@@ -2745,9 +2745,49 @@ def start_prompt(start: dict) -> str | None:
 
 #: The reason a turn the person stopped ends with (`turn-truncated`); the chat reads the prefix.
 STOPPED_REASON = "stopped: the person pressed Stop"
+#: The reason a turn ends with when its subject lost the membership of a workspace it mounts.
+REVOKED_REASON = "stopped: you are no longer a member who may use a workspace this chat mounts"
 #: How often the stop watcher looks, and how old a Stop may be and still be this turn's.
 STOP_POLL_S = 0.5
 STOP_SLACK_MS = 2000
+#: How often an idle worker looks whether one of its mounts was revoked.
+REVOKE_POLL_MS = 2000
+
+
+class RevokedMounts:
+    """A REMOVED MEMBER'S UNIT ENDS. agent-api names a mount ``revoked`` in the unit's audience key
+    the moment the unit's subject loses its membership grant (``control_plane.mount_audience``). On
+    the volume backend the mount is a bind of the workspace's own tree, which a worker would hold, and
+    a running turn would go on writing into, until the unit ends. Calling this answers which of the
+    worker's mounts are revoked now (their names; empty when none, or when the key cannot be read);
+    ``put_back`` returns every uncommitted change in them to the tree's HEAD (``Guard.discard_revoked``)
+    and answers ``[{workspace, paths}]``."""
+
+    def __init__(self, guard: Callable[[], object], mounts: Callable[[], list]) -> None:
+        self._guard, self._mounts = guard, mounts
+
+    def _paths(self) -> list[Path]:
+        return [Path(str(m["path"])) for m in self._mounts() or [] if isinstance(m, dict) and m.get("path")]
+
+    def __call__(self) -> list[str]:
+        try:
+            return [p.name for p in self._guard().revoked_mounts(self._paths())]
+        except Exception as e:  # noqa: BLE001 — unreadable is not revoked: the commit hold covers it
+            log.warning("revoked-mount check failed: %s: %s", type(e).__name__, e)
+            return []
+
+    def put_back(self) -> list[dict]:
+        out = []
+        guard = self._guard()
+        for p in self._paths():
+            try:
+                dropped = guard.discard_revoked(p)
+            except Exception:  # noqa: BLE001
+                log.exception("could not put back the revoked mount %s", p.name)
+                continue
+            if dropped and dropped.get("paths"):
+                out.append(dropped)
+        return out
 
 
 class StopWatch:
@@ -2759,24 +2799,41 @@ class StopWatch:
     no "between". A press older than the turn (a Stop meant for an earlier one) is cleared, not
     obeyed."""
 
-    def __init__(self, stream, key: "str | None", harness) -> None:
+    def __init__(self, stream, key: "str | None", harness, revoked: "RevokedMounts | None" = None) -> None:
         self._stream, self._key, self._harness = stream, key, harness
         self._getter = getattr(stream, "get", None) if key else None
+        self._revoked = revoked
         self._started_ms = int(time.time() * 1000)
         self._done = threading.Event()
         self._thread: "threading.Thread | None" = None
         self.hit = False
+        self.reason = STOPPED_REASON
 
     def start(self) -> None:
-        if self._getter is None or self._thread is not None:
+        if (self._getter is None and self._revoked is None) or self._thread is not None:
             return
         self._thread = threading.Thread(target=self._run, name="turn-stop-watch", daemon=True)
         self._thread.start()
 
     def check(self) -> bool:
-        """One look: True (and the turn is being killed) when the person pressed Stop during it."""
-        if self.hit or self._getter is None:
-            return self.hit
+        """One look: True (and the turn is being killed) when the person pressed Stop during it, or
+        when a workspace it mounts was revoked (``reason`` says which)."""
+        if self.hit:
+            return True
+        if self._pressed():
+            log.warning("turn stopped by the person")
+        elif self._revoked is not None and self._revoked():
+            self.reason = REVOKED_REASON
+            log.warning("turn stopped: the membership of a workspace it mounts was revoked")
+        else:
+            return False
+        self.hit = True
+        self._kill()
+        return True
+
+    def _pressed(self) -> bool:
+        if self._getter is None:
+            return False
         try:
             raw = str(self._getter(self._key) or "")
         except Exception:  # noqa: BLE001 — a store that cannot answer stops nothing
@@ -2788,17 +2845,15 @@ class StopWatch:
         except ValueError:
             pressed = self._started_ms
         self._clear()
-        if pressed < self._started_ms - STOP_SLACK_MS:
-            return False
-        self.hit = True
-        log.warning("turn stopped by the person (pressed %d ms after it started)", pressed - self._started_ms)
+        return pressed >= self._started_ms - STOP_SLACK_MS
+
+    def _kill(self) -> None:
         stop = getattr(self._harness, "stop_running_turn", None)
         if callable(stop):
             try:
                 stop()
             except Exception as e:  # noqa: BLE001
                 log.warning("could not kill the stopped turn's processes: %s: %s", type(e).__name__, e)
-        return True
 
     def _clear(self) -> None:
         # SET to empty, not DEL: the worker's redis user holds set/get on this key and no DEL
@@ -2823,7 +2878,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
           jobs_dir: "Path | None" = None, jobs_session: str = "",
           inbox_cursor: "str | None" = None, in_key: "str | None" = None,
           jobs_root: "Path | None" = None, express=None, send_now_key: "str | None" = None,
-          stop_key: "str | None" = None) -> None:
+          stop_key: "str | None" = None, revoked: "RevokedMounts | None" = None) -> None:
     """Run the entrypoint turn (if any), then serve interactive messages on ``in_topic`` until idle.
 
     Only stream entries signed with this unit's input key run (``shared/unit_input.py``; ``in_key``,
@@ -3120,7 +3175,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         # THE TURN'S MODEL CREDENTIAL (H5/W1): the token agent-api minted for this message. Every
         # harness run of the turn — its write-back trailer and the jobs it starts included — uses it,
         # and it is revoked when the last of them ends (shared/model_grant.py).
-        stopper = StopWatch(stream, stop_key, harness)
+        stopper = StopWatch(stream, stop_key, harness, revoked)
         try:
             with model_grant.use(grant):
                 _run_message(prompt, turn_id, nonce, cursor, trace, bundle, stopper)
@@ -3217,12 +3272,21 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                     break
         stopper.close()
         if stopper.hit:
-            # SAID, NEVER SILENT: the person pressed Stop and this is the turn ending because of it.
-            # No correction pass and no write-back follow a stopped turn — it completes now, so the
-            # conversation's head is released and the next message runs.
+            # SAID, NEVER SILENT: the person pressed Stop (or lost a workspace this turn mounts) and
+            # this is the turn ending because of it. No correction pass and no write-back follow a
+            # stopped turn — it completes now, so the conversation's head is released and the next
+            # message runs.
             close_event_stream(gen)
+            if stopper.reason == REVOKED_REASON and revoked is not None:
+                # what the turn wrote into a workspace its subject left stays in no shared tree
+                from llm.private_writes import revoked_line  # noqa: PLC0415
+                for dropped in revoked.put_back():
+                    stream.xadd(out_topic, {"event": json.dumps(
+                        {"type": "write-refused", "reason": "membership_revoked", **dropped, "turn_id": turn_id})})
+                    stream.xadd(out_topic, {"event": json.dumps(
+                        {"type": "message-delta", "text": revoked_line(dropped), "turn_id": turn_id})})
             stream.xadd(out_topic, {"event": json.dumps(
-                {"type": "turn-truncated", "turn_id": turn_id, "reason": STOPPED_REASON})})
+                {"type": "turn-truncated", "turn_id": turn_id, "reason": stopper.reason})})
         # THE WRITE-BACK PHASE (decision 24.2). It runs AFTER the answer has streamed — the person
         # is already reading — and before `turn-complete`, so its tool calls land as step lines on
         # the turn they belong to instead of on nothing. A phase that raises must not lose the
@@ -3430,6 +3494,22 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         run_message(text, f"t{n}", cursor=cursor, trace=trace, bundle=waiting_bundle,
                     grant=waiting_grant)
 
+    def _ended_by_revocation() -> bool:
+        """The unit's subject lost a workspace it mounts: the worker takes nothing more, puts back
+        what is uncommitted there and exits, so the unit ends and its mounts with it. A message
+        waiting in the in-topic is run by the next unit, which the dispatch spawns on the mount set
+        the roster now grants."""
+        gone = revoked() if revoked is not None else []
+        if not gone:
+            return False
+        log.warning("a workspace this unit mounts was revoked (%s): the unit ends", ", ".join(gone))
+        _join_trailers()
+        for dropped in revoked.put_back():
+            stream.xadd(out_topic, {"event": json.dumps(
+                {"type": "write-refused", "reason": "membership_revoked", **dropped})})
+        return True
+
+    idle_since: "float | None" = None    # when this worker last found its in-topic empty, in a row
     while True:
         while priority:
             want = priority.pop(0)
@@ -3448,17 +3528,27 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                 run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"), cursor=cursor,
                             trace=msg.get("trace"), bundle=msg.get("session_bundle"),
                             grant=msg.get(model_grant.ENTRY_FIELD))
-        resp = stream.xread({in_topic: cursor[0]}, count=1, block=idle_ms)
+        if _ended_by_revocation():
+            return
+        # a worker that can be revoked looks again every REVOKE_POLL_MS while it idles
+        wait = idle_ms if revoked is None else max(1, min(idle_ms, REVOKE_POLL_MS))
+        resp = stream.xread({in_topic: cursor[0]}, count=1, block=wait)
+        if not resp and wait < idle_ms:
+            idle_since = idle_since if idle_since is not None else time.monotonic() - wait / 1000.0
+            if (time.monotonic() - idle_since) * 1000 < idle_ms:
+                continue
         if not resp:
             # A JOB IS A THREAD IN THIS PROCESS, so an idle reap under one is a kill. Keep serving
             # while any job runs — the loop is doing nothing anyway, and the alternative is a page
             # that never gets written because nobody spoke for two minutes.
             if _jobs is not None and _jobs.busy():
+                idle_since = None
                 continue
             _join_trailers()  # a trailer still writing back must finish before the container reaps
             if _jobs is not None:
                 _jobs.join_all()
             return  # idle → exit 0 → container reaped
+        idle_since = None
         for _name, entries in resp:
             for entry_id, fields in entries:
                 _took(cursor, entry_id)
@@ -3686,6 +3776,9 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # STOP: agent-api writes the press here; the watcher kills the running turn (live 2026-10-15)
         stop_key=shared_units.stop_key(
             shared_units.unit_of_topic(os.environ["VEXA_UNIT_IN_TOPIC"])),
+        # A REMOVED MEMBER'S UNIT ENDS: a mount agent-api marked revoked stops the running turn, puts
+        # back what is uncommitted there and ends the worker, with its mounts
+        revoked=RevokedMounts(lambda: private_guard(active_mounts()), active_mounts),
         jobs_session=session,
         # WHERE THIS WORKER SAYS HOW FAR IT HAS READ (Vexa-ai/vexa#1610). Derived from the in-topic
         # rather than handed in as a second environment variable: both sides can already compute it,

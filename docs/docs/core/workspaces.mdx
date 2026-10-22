@@ -444,7 +444,15 @@ verbs, each a route in `routers/workspaces.py`:
 ### Where repositories live: a volume or S3
 
 `VEXA_WORKSPACE_BACKEND` (Helm `agentApi.workspaces.backend`) is `volume` by default: the tree under
-`VEXA_WORKSPACES_DIR` on the `agent-workspaces` volume is the truth, and workers mount it. With `s3`,
+`VEXA_WORKSPACES_DIR` on the `agent-workspaces` volume is the truth, and workers mount it. A worker's
+shared workspace is then a mount of that workspace's own tree, so it follows the roster: when a
+roster change removes the worker's person, or makes them a viewer of a workspace they write,
+agent-api marks the mount `revoked` in the unit's audience key, and the worker stops a running turn
+(`turn-truncated`), puts back every uncommitted change in that workspace (`write-refused`,
+`membership_revoked`) and exits, so the unit and its mounts end. An idle worker checks every 2
+seconds. A dispatch that no longer mounts the workspace keeps it marked until that worker has ended
+(`worker/engine.py` `RevokedMounts`, `control_plane/mount_audience.py`;
+`test_sec_deny_revoked_mount_ends_unit.py`). With `s3`,
 an S3-compatible bucket is the **single durable truth** and every pod copy is a disposable cache
 (`core/workspaces/store`):
 

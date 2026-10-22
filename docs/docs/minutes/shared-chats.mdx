@@ -362,7 +362,10 @@ session into a workspace whose member list names anyone besides the person is re
 the membership store's, never the tree's `policy/members.json` mirror; agent-api hands it to the
 worker with each turn and re-writes it the moment a roster changes, and the worker reads it again
 when it commits, so a member added while a turn runs is counted in that turn; a person removed
-from a workspace while their turn runs commits nothing there)
+from a workspace, or made a viewer of one their agent writes, loses it at once: a running turn is
+stopped within half a second, what it wrote there is put back, and the worker ends, so it no longer
+holds that workspace; an idle worker ends within 2 seconds. The next message starts a worker that
+mounts only what the roster now grants)
 (`409 private_sources_to_shared`, with `confirm_code`); at the commit the worker puts that workspace
 back and hands the change to agent-api, which keeps it encrypted in Redis for 3 days, on no desk and
 no mount. The person's own chat message `confirm <code>` releases that write once: agent-api takes

@@ -13,7 +13,8 @@ Keys (agent-api the one writer; the worker's Redis user may only read its own un
 * ``vexa:audience:unit:<unit>`` — JSON ``{"readers": {mount path: [readers] | null},
   "revoked": [mount path, …], "unknown": bool}``. ``revoked`` names a mount the subject no longer
   holds by membership (removed, or made a viewer of a mount it writes): nothing of the turn is
-  committed there. ``unknown: true`` is what agent-api writes when it could not re-read a roster:
+  committed there, and the worker stops its turn, puts the mount back and ends. A later dispatch
+  that no longer mounts it keeps it named, for the worker still holding it. ``unknown: true`` is what agent-api writes when it could not re-read a roster:
   every mount is then held.
 * ``vexa:audience:ws:<workspace id>`` — the set of units whose mounts include that shared workspace,
   so a roster change knows whose key to rewrite.

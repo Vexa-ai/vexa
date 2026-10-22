@@ -4,7 +4,9 @@ The worker's commit hold counts who besides the person reads each mount. It is t
 and on every turn, and that is as fresh as the turn. This module keeps it fresh to the commit:
 
 * :func:`publish` — at every dispatch: the unit's readers (``private_taint.mount_readers``, the
-  membership store) into its key, and the unit into the set of every shared workspace it mounts.
+  membership store) into its key, and the unit into the set of every shared workspace it mounts. A
+  mount already named ``revoked`` stays named while this dispatch does not mount it again: the unit's
+  running worker may still hold it, and it is what ends that worker (``worker.engine.RevokedMounts``).
 * :func:`refresh` — the membership store's roster-change hook (``workspace_membership``
   ``set_roster_listener``): every unit mounting that workspace gets its readers re-read at once, and
   a mount its subject no longer holds by membership is named ``revoked``. A unit whose roster cannot
@@ -64,9 +66,11 @@ def publish(r, root: Path, unit: str, subject: str, mounts: list, readers: Optio
     record = {"subject": str(subject), "mounts": [{"path": str(m.get("path")), "role": m.get("role"),
                                                    "write": bool(m.get("write", True))}
                                                   for m in mounts or [] if isinstance(m, dict) and m.get("path")]}
+    still_revoked = _carried(r, unit, record["mounts"])
     try:
         pipe = r.pipeline()
         pipe.set(audience.unit_key(unit), audience.encode(readers if isinstance(readers, dict) else {},
+                                                          revoked=still_revoked,
                                                           unknown=not isinstance(readers, dict)),
                  ex=audience.TTL_SEC)
         pipe.set(_record_key(unit), json.dumps(record), ex=audience.TTL_SEC)
@@ -76,6 +80,17 @@ def publish(r, root: Path, unit: str, subject: str, mounts: list, readers: Optio
         pipe.execute()
     except Exception as exc:  # noqa: BLE001 — the worker then holds on the turn's own stamp
         log.warning("audience of %s not published (%s)", unit, type(exc).__name__)
+
+
+def _carried(r, unit: str, mounts: list) -> set[str]:
+    """The mounts ``unit``'s key names ``revoked`` that ``mounts`` no longer includes: the unit's
+    running worker may still hold them, so they stay named until it ends."""
+    paths = {str(Path(str(m.get("path")))) for m in mounts or [] if isinstance(m, dict) and m.get("path")}
+    try:
+        prior = audience.decode(r.get(audience.unit_key(unit))) or {}
+    except Exception:  # noqa: BLE001 — the key is rewritten either way; only the carried mark is lost
+        return set()
+    return {p for p in prior.get("revoked") or set() if p not in paths}
 
 
 def _record_key(unit: str) -> str:
@@ -110,16 +125,17 @@ def refresh(r, root: Path, workspace_id: str) -> int:
             except Exception:  # noqa: BLE001
                 pass
             continue
+        mounts: list = []
         try:
             rec = json.loads(raw)
             subject, mounts = str(rec.get("subject") or ""), list(rec.get("mounts") or [])
             readers = private_taint.mount_readers(Path(root), mounts, subject)
             revoked = _revoked(Path(root), subject, _membership_mounts(root, mounts))
-            value = audience.encode(readers, revoked=revoked)
+            value = audience.encode(readers, revoked=[*revoked, *_carried(r, unit, mounts)])
         except (MembershipError, ValueError, TypeError) as exc:
             log.warning("audience of %s unknown after %s changed (%s): every mount held",
                         unit, workspace_id, type(exc).__name__)
-            value = audience.encode({}, unknown=True)
+            value = audience.encode({}, revoked=_carried(r, unit, mounts), unknown=True)
         try:
             r.set(audience.unit_key(unit), value, ex=audience.TTL_SEC)
             done += 1

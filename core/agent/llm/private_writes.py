@@ -239,6 +239,12 @@ class Guard:
         now = self._now()
         return bool(now) and str(Path(mount)) in (now.get("revoked") or set())
 
+    def revoked_mounts(self, mounts) -> list[Path]:
+        """Which of ``mounts`` had the subject's membership grant revoked while this unit runs, from
+        one read of the audience key."""
+        gone = (self._now() or {}).get("revoked") or set()
+        return [Path(p) for p in mounts if str(Path(p)) in gone]
+
     def discard_revoked(self, mount: Path) -> Optional[dict]:
         """Put back every change the turn made to ``mount`` when its grant was revoked; nothing of it
         is committed. Returns ``{workspace, paths}`` or None."""
