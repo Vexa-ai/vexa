@@ -330,21 +330,142 @@ def test_the_person_the_org_bound_by_identifier_still_claims_their_record(store)
     assert _claimed_by(store, victim) == '21'
 
 
-@pytest.mark.xfail(strict=True, reason='A2-c (open, car 34 finding): a CRM merge moves the writer\'s '
-                   'account onto the victim\'s record; the writer then resolves to it and reads the '
-                   'victim\'s profile as their own')
-def test_a_writer_who_merges_their_account_into_another_person_does_not_resolve_to_them(store):
+# ── A2-c: a CRM merge moves data, never an account ─────────────────────────────────────────────
+
+MALLORY = {'user_id': 40, 'email': ATTACKER, 'email_verified': True, 'scopes': ['bot'], 'is_admin': False}
+VAL = {'user_id': 21, 'email': VICTIM, 'email_verified': True, 'scopes': ['bot'], 'is_admin': False}
+
+
+def _writer_merges_own_person_into_victim(store):
+    """The A2-c move: a writer with ``all`` write merges their own sign-in Person into a record the org
+    made for someone who has not signed in yet, then that person signs in, claims it and keeps a
+    private bio. The merge is refused; the steps after it run either way, so each test below states
+    the consequence it denies."""
     victim = _victim_record(store)
     _writer(store, '40')
-    mallory = from_validate('t', {'user_id': 40, 'email': ATTACKER, 'email_verified': True,
-                                  'scopes': ['bot'], 'is_admin': False})
+    mallory = from_validate('t', MALLORY)
     own = store.ensure_account(ORG, mallory)                     # the writer's sign-in Person
-    store.merge(ORG, mallory, own, victim, reason='duplicate')  # their account moves onto the victim's
-    val = from_validate('t', {'user_id': 21, 'email': VICTIM, 'email_verified': True,
-                              'scopes': ['bot'], 'is_admin': False})
+    try:
+        store.merge(ORG, mallory, own, victim, reason='duplicate')
+    except CRMError:
+        pass
+    val = from_validate('t', VAL)
     store.ensure_account(ORG, val)
     with store.engine.begin() as c:
         assert store.profiles.auto_claim(c, ORG, val) == victim
     store.profiles.edit(ORG, val, {'bio': 'PRIVATE-BIO-7731'})
+    return victim, own, mallory, val
+
+
+def test_a_writer_who_merges_their_account_into_another_person_does_not_resolve_to_them(store):
+    victim, own, mallory, _ = _writer_merges_own_person_into_victim(store)
+    with store.engine.connect() as c:
+        assert store.persons.resolve(c, ORG, '40', ATTACKER)['id'] == own
+        assert store.persons.resolve(c, ORG, '40')['id'] == own
     assert store.profiles.mine(ORG, mallory)['fields'] == {}
     assert store.profiles.directory(ORG, [{'subject': '40'}])['40'] is None
+
+
+def test_a_crm_merge_of_a_sign_in_person_is_refused_and_changes_nothing(store):
+    victim = _victim_record(store)
+    _writer(store, '40')
+    mallory = from_validate('t', MALLORY)
+    own = store.ensure_account(ORG, mallory)
+    with pytest.raises(CRMError) as refused:
+        store.merge(ORG, mallory, own, victim, reason='duplicate')
+    assert refused.value.status == 409 and 'merge card' in str(refused.value)
+    with store.engine.connect() as c:
+        rows = {r['id']: r for r in c.execute(select(s.records).where(
+            s.records.c.org_id == ORG, s.records.c.id.in_([own, victim]))).mappings()}
+        assert rows[own]['merged_into'] is None and rows[own]['account_id'] == '40'
+        assert rows[victim]['account_id'] is None
+        assert store.persons._held(c, ORG, 'email:' + ATTACKER) == own
+
+
+def test_a_writer_does_not_read_the_victims_private_profile_after_their_merge(store):
+    _, _, mallory, val = _writer_merges_own_person_into_victim(store)
+    mine = store.profiles.mine(ORG, mallory)
+    assert 'PRIVATE-BIO-7731' not in json.dumps(mine) and not mine.get('via_merge')
+    assert store.profiles.mine(ORG, val)['fields'] == {'bio': 'PRIVATE-BIO-7731'}    # the victim still does
+
+
+def test_a_writer_is_not_shown_as_the_victim_in_the_people_directory(store):
+    _writer_merges_own_person_into_victim(store)
+    out = store.profiles.directory(ORG, [{'subject': '40', 'email': ATTACKER, 'email_verified': True},
+                                         {'subject': '21', 'email': VICTIM, 'email_verified': True}])
+    assert out['40'] is None
+    assert out['21'] == {'bio': 'PRIVATE-BIO-7731'}
+
+
+def test_the_victim_is_offered_no_merge_card_with_the_writers_account(store):
+    victim, own, mallory, val = _writer_merges_own_person_into_victim(store)
+    me = store.persons.me(ORG, val)
+    assert me['person'] == victim and me['accounts'] == 1 and me['merge'] is None
+    assert store.persons.me(ORG, mallory)['merge'] is None
+    with store.engine.connect() as c:
+        assert store.persons._waiting_for(c, ORG, '40') == []
+        assert store.persons.linked_accounts(c, ORG, '21') == ['21']       # a grant to Val reaches Val only
+    out = store.persons.group(ORG, [{'subject': '21', 'email': VICTIM, 'email_verified': True}])['21']
+    assert out['accounts'] == ['21'] and out['confirmed'] == ['21'] and out['person'] == victim
+
+
+def test_the_writers_invites_still_go_to_the_writers_own_address(store):
+    _, own, _, _ = _writer_merges_own_person_into_victim(store)
+    out = store.persons.group(ORG, [{'subject': '40', 'email': ATTACKER, 'email_verified': True}])['40']
+    assert out['person'] == own and out['accounts'] == ['40']
+    assert out['primary'] == ATTACKER
+
+
+def test_a_record_an_account_is_linked_to_does_not_merge_away_either(store):
+    """The other account binding: an ``account:`` link (a second sign-in that resolved to a record
+    with no attached account) is the person's too, and a CRM merge does not carry it."""
+    _writer(store, '40')
+    mallory_unproven = from_validate('t', {**MALLORY, 'email_verified': False})
+    store.ensure_account(ORG, mallory_unproven)                  # a Person attached to account 40
+    org_made = store.create(ORG, ADMIN, 'Person', {'Name': 'M.'}, reason='met', idempotency_key='m-org',
+                            match=['email:' + ATTACKER])['record_id']
+    mallory = from_validate('t', MALLORY)
+    assert store.ensure_account(ORG, mallory) == org_made        # the proven address links 40 to it
+    with store.engine.connect() as c:
+        assert store.persons._held(c, ORG, 'account:40') == org_made
+    victim = _victim_record(store)
+    with pytest.raises(CRMError):
+        store.merge(ORG, mallory, org_made, victim, reason='duplicate')
+    with store.engine.connect() as c:
+        assert store.persons._held(c, ORG, 'account:40') == org_made
+        assert store.persons.resolve(c, ORG, '40')['id'] == org_made
+
+
+def test_a_duplicate_still_merges_into_a_sign_in_person_and_its_data_moves(store):
+    """Data merges continue: a duplicate the org made merges INTO the record an account answers to;
+    its identifiers move, the account stays where it is."""
+    _writer(store, '40')
+    mallory = from_validate('t', MALLORY)
+    own = store.ensure_account(ORG, mallory)
+    dup = store.create(ORG, ADMIN, 'Person', {'Name': 'Mallory (old)'}, reason='import', idempotency_key='dup',
+                       match=['email:mallory@home.test'])['record_id']
+    assert store.merge(ORG, mallory, dup, own, reason='duplicate')['merged_into'] == own
+    with store.engine.connect() as c:
+        assert store.persons._held(c, ORG, 'email:mallory@home.test') == own
+        assert store.persons.resolve(c, ORG, '40')['id'] == own
+    assert store.get(ORG, ADMIN, dup)['id'] == own
+
+
+def test_the_persons_own_confirmed_merge_card_still_joins_their_accounts(store):
+    """Positive control: two sign-ins of one human, each with a Person of its own, become one Person
+    through the merge card both accounts confirm; the account bindings move there."""
+    work = from_validate('t', VAL)
+    home = from_validate('t', {'user_id': 22, 'email': 'val@home.test', 'email_verified': True,
+                               'scopes': ['bot'], 'is_admin': False})
+    a = store.ensure_account(ORG, work)
+    b = store.ensure_account(ORG, home)
+    assert a != b
+    store.persons.offer_for_address(ORG, work, 'val@home.test')
+    card = store.persons.me(ORG, home)['merge']['id']
+    assert store.persons.confirm(ORG, home, card)['status'] == 'merged'
+    with store.engine.connect() as c:
+        assert store.persons.resolve(c, ORG, '22')['id'] == a
+        assert store.persons.resolve(c, ORG, '22', 'val@home.test')['id'] == a
+        assert sorted(store.persons.linked_accounts(c, ORG, '21')) == ['21', '22']
+    out = store.persons.group(ORG, [{'subject': '22', 'email': 'val@home.test', 'email_verified': True}])['22']
+    assert out['person'] == a and out['merged'] is True and sorted(out['confirmed']) == ['21', '22']

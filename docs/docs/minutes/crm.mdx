@@ -223,7 +223,10 @@ git: `docker compose exec agent-api python -m control_plane.crm_references rebui
   read. Identity's own admin is the CRM's admin.
 - **People are entities with accounts attached.** On a person's first CRM call their account is
   attached to a person record: one whose verified email is among its match identifiers, or a new one.
-  Duplicates merge; the merged id answers the surviving record everywhere.
+  Duplicates merge; the merged id answers the surviving record everywhere. A merge moves a record's
+  data and identifiers, never an account: a record someone signs in with joins another person only
+  on their own merge card, confirmed from each of their sessions. `crm_change`'s `merge` refuses such
+  a record with a 409; merge the duplicate into it instead.
 - **A profile is claimed through the match identifier only.** A signed-in person claims the person
   record that holds `email:<their verified address>` among its match identifiers. The record's
   `Email` field never makes a claim, because anyone who may write the record can type into it, and a

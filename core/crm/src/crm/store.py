@@ -930,7 +930,13 @@ class Store:
 
     def merge(self, org, actor, record_id, into, reason=''):
         """Decision 3: duplicates merge. The merged record names its survivor, its identifiers and
-        bindings move to the survivor, and every read of its id answers the survivor."""
+        workspace bindings move to the survivor, and every read of its id answers the survivor.
+
+        A merge moves data, never an account. A record an account answers to (its attached
+        ``account_id`` or an ``account:`` link) is someone's sign-in; it joins another Person only on
+        that person's own merge card (``persons.Persons.confirm``), confirmed from each account's
+        session. So a record carrying an account binding never merges away here; merging the other
+        way, a duplicate INTO the record the account answers to, keeps the account where it is."""
         caller=as_caller(actor);actor=caller.subject
         if not reason.strip():raise CRMError('A merge requires a reason')
         with self.begin() as c:
@@ -941,12 +947,13 @@ class Store:
             if loser['object_type']!=winner['object_type']:raise CRMError('Only records of one type merge')
             for row in (loser,winner):
                 if '*' not in self._rights(policy,row,'write'):raise Forbidden('Merge needs write access to every field of both records')
-            if loser['account_id'] and winner['account_id']:raise Conflict('Both records carry an account; they are two people')
-            after={**loser,'merged_into':winner['id'],'revision':loser['revision']+1,'account_id':None}
+            if loser['account_id'] or c.execute(select(s.match_ids.c.identifier).where(s.match_ids.c.org_id==org,
+                    s.match_ids.c.record_id==loser['id'],s.match_ids.c.identifier.like('account:%')).limit(1)).first():
+                raise Conflict('This record is a person\'s sign-in: it joins another person only on their own merge '
+                               'card. Merge the duplicate into this record instead')
+            after={**loser,'merged_into':winner['id'],'revision':loser['revision']+1}
             c.execute(update(s.records).where(s.records.c.org_id==org,s.records.c.id==loser['id'],
-                s.records.c.revision==loser['revision']).values(merged_into=winner['id'],revision=after['revision'],account_id=None))
-            if loser['account_id']:
-                c.execute(update(s.records).where(s.records.c.org_id==org,s.records.c.id==winner['id']).values(account_id=loser['account_id']))
+                s.records.c.revision==loser['revision']).values(merged_into=winner['id'],revision=after['revision']))
             c.execute(update(s.match_ids).where(s.match_ids.c.org_id==org,s.match_ids.c.record_id==loser['id']).values(record_id=winner['id']))
             b=s.workspace_bindings
             have=set(self._bindings(c,org,winner['id']))
