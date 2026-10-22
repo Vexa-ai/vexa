@@ -38,8 +38,8 @@ the public key in the `<release>-identity-public-key` ConfigMap, mounted by agen
 the credential broker. The gateway signs every request it forwards; the others can verify that
 signature and cannot make one. If you render with `helm template` (GitOps), set `identity.signingKey`
 to a key from `openssl genpkey -algorithm ed25519`, or every render mints a new pair. The chart Secret
-also generates `VEXA_MCP_DELEGATION_SECRET`; with `secrets.existingSecretName`, your Secret must carry
-it.
+also generates `VEXA_MCP_DELEGATION_SECRET` and `VEXA_MODEL_PROXY_SECRET`; with
+`secrets.existingSecretName`, your Secret must carry both.
 
 ## Network policy
 

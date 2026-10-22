@@ -199,6 +199,16 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: VEXA_MCP_DELEGATION_SECRET
+            # NO WORKER HOLDS A MODEL-PROVIDER KEY (H5/W1): agent-api seals each turn's model route
+            # with this secret for the model proxy and hands the worker a per-turn token to it.
+            - name: VEXA_MODEL_PROXY_URL
+              value: "http://{{ include "vexa.componentName" (list . "model-proxy") }}:8102"
+            - name: VEXA_MODEL_PROXY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_MODEL_PROXY_SECRET
+                  optional: true
             - name: VEXA_DISPATCH_SIGNING_KEY
               valueFrom:
                 secretKeyRef:

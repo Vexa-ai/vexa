@@ -226,9 +226,8 @@ def test_inline_card_decision_requires_browser_session(world):
 
 # ── H5: the model's shell holds no provider credential ──────────────────────────────────────────
 
-@pytest.mark.xfail(strict=True, reason="H5: model-provider keys stay in the harness subprocess env by "
-                                       "design (ports.py:59-75, harness_subprocess_env) "
-                                       "(security-validation-2026-10-17)")
+# Was xfail (H5/W1); passes since the model proxy (0.13.4 car 37): no worker is given a provider key,
+# and none reaches a harness subprocess even if one sat in the worker's environment.
 @pytest.mark.parametrize("var", ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY"])
 def test_model_shell_holds_no_provider_key(monkeypatch, var):
     from llm.ports import harness_subprocess_env

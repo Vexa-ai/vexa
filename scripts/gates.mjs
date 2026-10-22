@@ -1243,7 +1243,10 @@ const CONFIG_ADOPTED = [
     // - so scanning only the control plane made every dial the turn actually runs on invisible to
     // the contract, and VEXA_LLM_EXTRA_BODY was declared nowhere at all.
     scan: ["core/agent/control_plane", "core/agent/shared", "core/agent/llm", "core/agent/worker"],
-    compose: "agent-api", helm: ["deployment-agent-api.yaml"], lite: "agent-api",
+    // The model proxy (H5/W1) is this image under another command, reading this declaration: its
+    // compose lane and chart template are part of the same surface.
+    compose: ["agent-api", "model-proxy"], helm: ["deployment-agent-api.yaml", "deployment-model-proxy.yaml"],
+    lite: "agent-api",
   },
   {
     // #526: the two services carrying today's fail-closed INTERNAL_API_SECRET guard.

@@ -205,6 +205,15 @@ class Settings(BaseSettings):
     # credential at all: a delegation token signed with a zero-length key would verify for anyone who
     # guessed the format, so "unset" must mean ABSENT, never "signed with nothing".
     mcp_delegation_secret: SecretStr = SecretStr("")
+    # ── the model proxy (H5/W1) — no worker holds a model-provider key ────────────────────────
+    # Where workers reach the model proxy (`control_plane.model_proxy`): a worker's harness sends its
+    # model requests there with a per-turn token, and the proxy forwards them with the route's real
+    # credential. Empty ⇒ no worker is given a model credential at all, and every turn fails at its
+    # first model call (fail closed: the key is never handed to the worker instead).
+    model_proxy_url: str = ""
+    # The key agent-api seals each model route with before it rests in Redis, and the proxy opens it
+    # with. Same value on agent-api and the proxy; generated at install on every deploy surface.
+    model_proxy_secret: SecretStr = SecretStr("")
     # The git providers this deployment reaches (shared.git_provider): a JSON list of
     # {name, kind: github|gitlab, baseUrl, caBundle?|caFile?, label?, apiUrl?} — or the earlier
     # comma list ``gitlab.example.com=gitlab,git.example.org=basic:svc``. GitHub is always present.

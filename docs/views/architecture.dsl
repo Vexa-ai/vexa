@@ -64,6 +64,9 @@ system agent  # the execution domain: a trigger becomes one governed agent turn 
   service credentials-broker
   data-asset credentials-store [writers: credentials-broker]
   service agent-worker
+  data-asset model-grants [writers: agent-api, model-proxy]
+  data-asset model-routes [writers: agent-api]
+  service model-proxy
   data-asset out-stream [writers: agent-worker]
   data-asset unit-in [writers: agent-api]
   data-asset va-chat [writers: meeting-api]
@@ -223,7 +226,7 @@ edges:
   terminal -req-> credentials-broker  # the terminal's server to the credential broker, role human for the identity-validated person (credential-broker.v1): consent, credential save, disconnect, delete
   credentials-broker -req-> credentials-vault
   credentials-broker -write-> credentials-store
-  agent-worker -req-> gateway  # the worker's toolbelt: /mcp and /agent/friction with its per-dispatch delegation token, which identity resolves as the person it acts for
+  agent-worker -req-> gateway  # the worker's toolbelt: /mcp and /agent/friction with its per-dispatch delegation token, which identity resolves as the person it acts for. With the model proxy configured, the harness's own /mcp traffic goes through the proxy instead (aw-mp) and the token stays in the worker process, for its in-process calls
   mcp -req-> agent-api  # boot assembly: GET /.well-known/mcp-tools.json + /openapi.json — the agent domain's tools join the one MCP surface
   agent-api -req-> meeting-api  # agent-api reads meetings as the caller, X-User-Id (and X-User-Workspaces) over the internal tier (X-Internal-Secret): GET /meetings/{id} (the meeting access lookup behind every meeting-scoped agent route), GET /transcripts/by-id/{id} (a transcript the caller may read), GET /meetings?… (the schedule digest's three bounded queries, also read by the desktop to place a workspace's last and live call), POST /meetings/{id}/annotate (the minted meeting's recorder). meeting-api decides access; agent-api holds no meetings data
   agent-api -req-> admin-api  # agent-api asks identity about a person over the internal tier (X-Internal-Secret): GET /internal/users/by-email/{email} (falling back to GET /admin/users/email/{email} with X-Admin-API-Key) to resolve a share's invitee; POST/DELETE/GET /internal/users/{id}/memberships[/{ws}] (the membership index mirror); GET /internal/users/{id}/model-config; GET /internal/users/{id}/is-admin (the _global tier's writer); GET /internal/users/{id}/bot-context (admin overview); GET/PUT /internal/users/{id}/settings (the person's clock and timezone, and their presence switch), GET /internal/presence?ids=… (many people's presence choice at once, for the desktop and the people strip); GET /internal/users/{id}/photo (a person's photo bytes, asked only after agent-api decided the viewer shares a workspace or chat with them); GET /internal/users/{id}/org (the viewer's org for every workspace access check, cached)
@@ -275,11 +278,18 @@ edges:
   crm-api -req-> flows-api  # the crm outbox (python -m crm.outbox --watch, the crm-outbox process of the crm image): POST /events with the CRM's publish key (X-Flows-Publisher-Key, VEXA_FLOWS_CRM_PUBLISH_KEY: the CRM's own facts, no other flows route), one crm.record.changed per revision with its event.v2 envelope sealed under VEXA_FACT_SEAL_SECRET; marked delivered only on a 202. A publish edge: no flows, rows stay pending
   signals-service -req-> credentials-broker
   signals-service -call-> signal-model  # one call per confirmed line: the line, up to 24 lines before it and the brief's questions; answers a 0..1 score per label, parsed strictly
-  agent-worker -call-> model-provider  # an agent turn: the prompt with its meeting grounding (transcript excerpts) and the workspace context the turn reads
+  agent-worker -call-> model-proxy  # every model request a turn's harness makes (/llm/*, its turn's token as the bearer — never a provider key) and the harness's MCP toolbelt (/mcp, the same token; the proxy presents the delegation bearer); the worker revokes the token when the last run holding it ends
+  model-proxy -call-> gateway  # a harness's MCP request relayed to the gateway's /mcp with the unit's current delegation token (agent-api's record, else the one sealed at spawn)
+  agent-api -write-> model-routes  # SET a cold spawn's sealed route and the unit's pointer to it; GET the pointer for a message to a running worker
+  agent-api -write-> model-grants  # SET one turn's grant per delivered message (the spawn's entrypoint, every unit-in entry)
+  model-proxy -read-> model-routes  # GET and open (AES-GCM) the route a live grant names
+  model-proxy -write-> model-grants  # GET the grant a request's token names; INCR its request count; DELETE both on revocation
+  model-proxy -read-> delegation-current  # GET the unit's current delegation token to present on a relayed MCP request
+  model-proxy -call-> model-provider  # an agent turn's model request, forwarded by the model proxy with the turn route's credential: the prompt with its meeting grounding (transcript excerpts) and the workspace context the turn reads
   agent-api -call-> model-provider  # the one model call a home composition may make (core/agent/control_plane/home_model.py): the cheapest catalog model orders the cards it is handed, at most once per composition
   meeting-api -call-> customer-webhook  # signed webhook.v1 delivery of meeting lifecycle, recording and transcription-ready events to the customer's registered URL
   bot, agent-worker deployed-in runtime
-  gateway, meeting-api, agent-api, admin-api, runtime, redis, postgres, object-store, transcription deployed-in deploy
+  gateway, meeting-api, agent-api, model-proxy, admin-api, runtime, redis, postgres, object-store, transcription deployed-in deploy
   flows-api, flows-worker deployed-in deploy
 
 flows:

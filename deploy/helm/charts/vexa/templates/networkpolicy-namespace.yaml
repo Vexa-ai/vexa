@@ -15,6 +15,7 @@ networkpolicy-workloads.yaml and networkpolicy-credential-broker.yaml add to the
     flows-api                        from the chart's Pods and agent workers (the timeline)
     agent-api, meeting-api, runtime  their own policies (named callers only)
     credential-broker                its own policy (agent-api and the terminal)
+    model-proxy                      its own policy (agent workers only)
     postgres                         from the services that hold its credentials: admin-api,
                                      meeting-api, agent-api (the session store, ADR-0048),
                                      pgbouncer, the flows tier, the migrations Job, and with the CRM

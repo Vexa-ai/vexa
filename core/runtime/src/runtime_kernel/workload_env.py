@@ -51,26 +51,16 @@ WORKSPACE_PATH_ENV = "VEXA_WORKSPACE_PATH"
 WORKER_CODEX_HOME = "/tmp/.codex"
 CODEX_HOME_ENV = "CODEX_HOME"
 
-#: Deployment dials and model credentials the runtime forwards from its OWN environment into an
-#: agent worker (the runtime brokers model credentials) — the agent profile's ``forward_env``. A value
-#: the dispatch already stamped wins. Meeting bots receive none of these: they read no model credential.
+#: Deployment dials the runtime forwards from its OWN environment into an agent worker — the agent
+#: profile's ``forward_env``. A value the dispatch already stamped wins. NO MODEL ROUTE AND NO MODEL
+#: CREDENTIAL is among them (H5/W1): agent-api is the one writer of a worker's model route — runner,
+#: endpoint, models, request dialect — and it hands the worker a per-turn token to the model proxy
+#: instead of a key (``control_plane.model_proxy``); a deployment SUBSCRIPTION reaches a worker only as
+#: its file (``profiles.configured_credentials``) or as the OAuth token the dispatch stamps for a
+#: subscription route. Meeting bots receive none of these.
 WORKER_FORWARD_ENV = (
-    # The harness runner selection and its gate. What remains of the completion dials is read by the
-    # openai-agent HARNESS inside the worker (decision 37), so it is forwarded.
-    # THE WORKER'S MODEL (decision 36): `engine.py` reads VEXA_AGENT_MODEL for every turn — the chat
-    # turn AND the write-back phase — so a deployment that wants Sonnet sets one value here.
-    "VEXA_AGENT_MODEL",
-    "VEXA_LLM_BASE_URL",
-    "VEXA_LLM_API_KEY",
-    "VEXA_LLM_MODEL",
-    # Server-specific request fields the OpenAI dialect cannot express. LOAD-BEARING for a
-    # self-hosted Qwen ({"chat_template_kwargs":{"enable_thinking":false}}): without it the model
-    # reasons its whole budget away and returns nothing parseable.
-    "VEXA_LLM_EXTRA_BODY",
     "VEXA_MODEL_ALLOWLIST",
-    "VEXA_RUNNER",
     "VEXA_MIDTURN_INJECT",
-    "VEXA_CODEX_MODEL",
     # openai-agent harness budget dials (per-turn ceiling + context trim + streaming)
     "VEXA_AGENT_MAX_TOOL_CALLS",
     "VEXA_AGENT_MAX_TURN_SEC",
@@ -95,17 +85,6 @@ WORKER_FORWARD_ENV = (
     "VEXA_SEARCH_URL",
     "VEXA_SEARCH_DIALECT",
     "VEXA_SEARCH_API_KEY",
-    # codex harness API-key auth (subscription auth is a read-only file mount)
-    "OPENAI_API_KEY",
-    "CODEX_API_KEY",
-    # claude-code harness credentials (that adapter's concern only)
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_BASE_URL",
-    "ANTHROPIC_MODEL",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
 )
 
 #: What a CHILD PROCESS (the process backend) inherits from the runtime's environment besides its

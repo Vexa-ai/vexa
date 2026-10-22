@@ -19,6 +19,7 @@ live meeting copilot — sat beside it until PRD decision 34 removed that pipeli
 """
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import itertools
 import json
@@ -27,6 +28,7 @@ import logging
 import os
 import sys
 import re
+import secrets
 import threading
 import time
 import urllib.error
@@ -71,7 +73,7 @@ from shared.timeline import timeline_preamble  # noqa: F401 — re-exported for 
 # `unit_of_topic` reads it back out and `inbox_cursor_key` spells the one key this loop writes, so
 # the reader that answers "what is still queued for this chat" is looking where the writer wrote.
 from shared import units as shared_units
-from shared import obs, stream_bounds, unit_input
+from shared import model_grant, obs, stream_bounds, unit_input
 # THE JOB RUNNER (Vexa-ai/vexa#1584) — a long act that does not hold the chat. It sits above the
 # harness on purpose, so `serve` gets background work for every runner rather than one adapter's.
 from worker import jobs as worker_jobs
@@ -2185,6 +2187,66 @@ class DelegationRefresh:
             self._trace = trace
 
 
+class McpAttachment:
+    """The harness's MCP attachment — one file per run when the model proxy serves the toolbelt.
+
+    THE BEARER NEVER REACHES THE MODEL'S SHELL (H5/W1). The file a harness attaches is given to the
+    tools user, so the model's Bash can read it; with the model proxy configured, what it reads is
+    the proxy's ``/mcp`` and the RUN's own model-proxy token, and the proxy presents the unit's
+    delegation bearer to the gateway. Each run gets a file of its own (a background job runs beside
+    a chat turn, and each must start its CLI with its own token), removed when the run ends.
+    Without the proxy, the single file carries the gateway URL and the delegation token, as the
+    toolbelt has always been attached."""
+
+    def __init__(self, base: "str | None") -> None:
+        self.base = base
+        self._run: contextvars.ContextVar = contextvars.ContextVar("mcp_run_attachment", default=None)
+
+    @property
+    def proxied(self) -> bool:
+        return bool(self.base and model_grant.proxy_toolbelt())
+
+    def path(self) -> "str | None":
+        """The attachment a harness starting now is handed: this run's, else the unit's."""
+        return self._run.get() or self.base
+
+    def endpoint(self) -> "tuple[str, dict] | None":
+        """``(url, headers)`` an in-process MCP call (the express lane) presents right now."""
+        if self.proxied:
+            token = model_grant.current()
+            return (model_grant.proxy_toolbelt(), {"Authorization": f"Bearer {token}"}) if token else None
+        return _mcp_endpoint(self.base) if self.base else None
+
+    def open(self) -> "str | None":
+        """Write this run's attachment (proxy only) and return its path, or None."""
+        token = model_grant.current()
+        if not (self.proxied and token):
+            return None
+        p = Path(self.base).with_name(f"mcp-{secrets.token_hex(8)}.json")
+        try:
+            write_mcp_config(p, model_grant.proxy_toolbelt(), token, obs.get_trace_id() or "")
+        except (OSError, ValueError) as e:
+            log.warning("run MCP attachment not written (%s) — the run attaches the unit's", e)
+            return None
+        return str(p)
+
+    def bind(self, path: "str | None"):
+        return self._run.set(path)
+
+    def unbind(self, handle) -> None:
+        self._run.reset(handle)
+
+    @staticmethod
+    def close(path: "str | None") -> None:
+        if not path:
+            return
+        from workspaces.shared import workspace_paths as wpaths
+        try:
+            wpaths.unlink_inside(Path(path).parent, Path(path).name)
+        except (OSError, ValueError):
+            pass
+
+
 def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     """Materialize the worker's AUTHENTICATED vexa MCP attachment → (mcp-config path, extra allow-set).
 
@@ -2225,7 +2287,12 @@ def mcp_delegation_config(work: Path) -> "tuple[str | None, list[str]]":
     try:
         base = private_dir.make(refuse_under=_mount_roots(work), reader=tools_identity())
         path = base / "mcp.json"
-        write_mcp_config(path, url, token)
+        # With the model proxy, the file the tools user can read names the proxy and the spawn's own
+        # turn token — never the delegation bearer, which only the proxy presents (H5/W1).
+        if model_grant.proxy_toolbelt():
+            write_mcp_config(path, model_grant.proxy_toolbelt(), model_grant.boot_token())
+        else:
+            write_mcp_config(path, url, token)
     except (private_dir.NotPrivate, wpaths.PathRefused, OSError) as e:
         log.warning("vexa MCP delegation config not written (%s) — running WITHOUT the toolbelt", e)
         _file_spawn_gap(url, token)
@@ -2604,19 +2671,19 @@ def run_turn_over_workspace(
             log.warning("session pointer %s not saved: %s", sess_file.name, exc)
 
 
-def _express_lane(mcp_config: "str | None"):
+def _express_lane(attachment: "McpAttachment"):
     """The express lane over this unit's MCP attachment, or None without one."""
     from worker import express as _express, meeting_link as _ml  # noqa: PLC0415
 
-    if not mcp_config:
+    if not attachment.base:
         return None
 
     def _send(link: str):
-        endpoint = _mcp_endpoint(mcp_config)
+        endpoint = attachment.endpoint()
         return _ml.send(link, endpoint) if endpoint else ([], None)
 
     def _stop(platform: str, native_id: str) -> str:
-        endpoint = _mcp_endpoint(mcp_config)
+        endpoint = attachment.endpoint()
         if not endpoint or not native_id:
             return ""
         caller = _ml.McpCaller(*endpoint)
@@ -2914,6 +2981,8 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                 if not inject(text):
                     return  # no active stdin — leave queued
                 _took(cursor, entry_id)
+                # the message joins the running turn, which keeps its own token: this one is unused
+                model_grant.discard(msg.get(model_grant.ENTRY_FIELD))
                 # satisfy the dispatcher's warm-delivery watchdog: the injected message WAS taken
                 if msg.get("nonce"):
                     stream.xadd(out_topic, {"event": json.dumps({"type": "turn-accepted", "nonce": msg["nonce"], "injected": True})})
@@ -2960,7 +3029,7 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                     # `cursor=None`: this call takes the job branch below and returns without
                     # streaming anything, so it neither drains again nor re-enters here.
                     run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"),
-                                trace=msg.get("trace"))
+                                trace=msg.get("trace"), grant=msg.get(model_grant.ENTRY_FIELD))
             if not took:
                 return
 
@@ -3033,10 +3102,15 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         return want
 
     def run_message(prompt: str, turn_id: str, nonce: str | None = None, cursor: list | None = None,
-                    trace: "str | None" = None, bundle: "dict | None" = None) -> None:
+                    trace: "str | None" = None, bundle: "dict | None" = None,
+                    grant: "str | None" = None) -> None:
+        # THE TURN'S MODEL CREDENTIAL (H5/W1): the token agent-api minted for this message. Every
+        # harness run of the turn — its write-back trailer and the jobs it starts included — uses it,
+        # and it is revoked when the last of them ends (shared/model_grant.py).
         stopper = StopWatch(stream, stop_key, harness)
         try:
-            _run_message(prompt, turn_id, nonce, cursor, trace, bundle, stopper)
+            with model_grant.use(grant):
+                _run_message(prompt, turn_id, nonce, cursor, trace, bundle, stopper)
         finally:
             stopper.close()
 
@@ -3239,8 +3313,10 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         # overlap (a fast turn following a slow write-back) — `_desk_lock` serializes the desk
         # mutations (write-back's tool calls, `refresh_desk_readme`) between them; nothing else
         # about a trailer needs to block the next turn.
+        held = model_grant.capture()      # the trailer's model calls run on this turn's token
+
         def _trailer() -> None:
-            with _desk_lock:
+            with model_grant.adopt(held), _desk_lock:
                 try:
                     calls, secs = writeback_budget()
                     for ev in writeback_events(bounded(writeback(candidates),
@@ -3311,7 +3387,8 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                     continue          # the entrypoint's own copy — it runs as t0 below
                 text = msg.get("prompt", "")
                 if text:
-                    pending.append((text, msg.get("trace"), msg.get("session_bundle")))
+                    pending.append((text, msg.get("trace"), msg.get("session_bundle"),
+                                    msg.get(model_grant.ENTRY_FIELD)))
         except Exception:  # noqa: BLE001 — never a boot blocker; fall back below
             pending, last, entry_bundle = [], "$", None
     if last == "$" and xrevrange is not None:
@@ -3332,12 +3409,13 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
     n = 0
     if first:
         run_message(first, "t0", cursor=cursor, trace=os.environ.get("VEXA_TRACE_ID"),
-                    bundle=entry_bundle)
+                    bundle=entry_bundle, grant=model_grant.boot_token())
     # …then everything that was already waiting, in the order it arrived. These are turns somebody
     # sent and got a 200 for; the only thing that made them disappear was the anchor.
-    for text, trace, waiting_bundle in pending:
+    for text, trace, waiting_bundle, waiting_grant in pending:
         n += 1
-        run_message(text, f"t{n}", cursor=cursor, trace=trace, bundle=waiting_bundle)
+        run_message(text, f"t{n}", cursor=cursor, trace=trace, bundle=waiting_bundle,
+                    grant=waiting_grant)
 
     while True:
         while priority:
@@ -3355,7 +3433,8 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                 skip.add(entry_id)
                 n += 1
                 run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"), cursor=cursor,
-                            trace=msg.get("trace"), bundle=msg.get("session_bundle"))
+                            trace=msg.get("trace"), bundle=msg.get("session_bundle"),
+                            grant=msg.get(model_grant.ENTRY_FIELD))
         resp = stream.xread({in_topic: cursor[0]}, count=1, block=idle_ms)
         if not resp:
             # A JOB IS A THREAD IN THIS PROCESS, so an idle reap under one is a kill. Keep serving
@@ -3382,7 +3461,8 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
                     return
                 n += 1
                 run_message(msg.get("prompt", ""), f"t{n}", nonce=msg.get("nonce"), cursor=cursor,
-                            trace=msg.get("trace"), bundle=msg.get("session_bundle"))
+                            trace=msg.get("trace"), bundle=msg.get("session_bundle"),
+                            grant=msg.get(model_grant.ENTRY_FIELD))
 
 
 def count_usage(events, client, unit_id: str):
@@ -3415,6 +3495,8 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     # stops the worker (P18). On the volume backend this is None and nothing changes.
     from workspaces.store import client as ws_store_client  # noqa: PLC0415
 
+    # The cold spawn's model-proxy token leaves the environment before any subprocess can inherit it.
+    model_grant.take_boot_token()
     _boot_token = (os.environ.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
     ws_cache = ws_store_client.boot(lambda: _boot_token)
     work = Path(os.environ.get("VEXA_WORKSPACE_PATH", "/workspace"))
@@ -3461,9 +3543,12 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     # THE TOKEN IS KEPT FRESH, AND OUT OF THE ENVIRONMENT (control_plane.delegation_refresh). It
     # leaves os.environ here, so no harness subprocess inherits it; the attachment is rewritten
     # before each turn whenever agent-api has published a newer one for this unit.
+    attachment = McpAttachment(mcp_cfg)
     refresh_delegation = DelegationRefresh(
         client, shared_units.delegation_key(shared_units.unit_of_topic(os.environ["VEXA_UNIT_IN_TOPIC"])),
-        path=mcp_cfg, url=(os.environ.get("VEXA_MCP_URL") or "").strip(),
+        # with the model proxy the refreshed bearer is the proxy's to present: this process keeps it
+        # for its own calls and writes it into no file a harness reads
+        path=None if attachment.proxied else mcp_cfg, url=(os.environ.get("VEXA_MCP_URL") or "").strip(),
         token=DelegationRefresh.take())
     use_token_source(refresh_delegation.current)
     if ws_cache is not None:
@@ -3481,7 +3566,22 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
             if ws_cache is not None:
                 ws_cache.freshen()      # a route may have written a mount since the last turn
             exp = tool_access.token_exp(refresh_delegation.current())
-            return count_usage(tool_access.watch(fn(*args, **kwargs), exp), client, _unit)
+            run_file = attachment.open()          # this run's MCP attachment (model proxy only)
+            bound = attachment.bind(run_file)
+            try:
+                events = fn(*args, **kwargs)      # the harness is handed `attachment.path()` here
+            finally:
+                attachment.unbind(bound)
+            counted = count_usage(tool_access.watch(events, exp), client, _unit)
+            if run_file is None:
+                return counted
+
+            def _then_remove():
+                try:
+                    yield from counted
+                finally:
+                    attachment.close(run_file)
+            return _then_remove()
         return call
 
     room = room_run()
@@ -3500,7 +3600,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
     if harness_warning:
         log.warning("agent-api worker: %s", harness_warning)
 
-    def _job_turn(brief: str):
+    def _job_turn(brief: str, mcp_path: "str | None"):
         """A BACKGROUND JOB'S TURN, on the job's own thread (Vexa-ai/vexa#1584, #1613).
 
         Two lines of difference from a chat turn, and both are about ownership:
@@ -3521,7 +3621,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         try:
             yield from run_turn_over_workspace(
                 work, brief, model=model, allowed_tools=chat_tools, session=session,
-                session_continuity=False, mcp_config=mcp_cfg, harness=chat_harness)
+                session_continuity=False, mcp_config=mcp_path, harness=chat_harness)
         finally:
             llm_jobs.mark_job_thread(False)
 
@@ -3529,7 +3629,8 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         client, out_topic=out_topic, in_topic=os.environ["VEXA_UNIT_IN_TOPIC"],
         turn=_fresh(lambda prompt: run_turn_over_workspace(work, prompt, model=model,
                                                            allowed_tools=chat_tools, session=session,
-                                                           mcp_config=mcp_cfg, harness=chat_harness)),
+                                                           mcp_config=attachment.path(),
+                                                           harness=chat_harness)),
         # SAME session on purpose: the phase has to see what the turn just saw, and a fresh
         # session would have to be told the whole conversation to ask one bookkeeping question.
         # Small budget by TOOLSET rather than by a step cap the harness does not expose.
@@ -3544,7 +3645,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         writeback=_fresh(lambda candidates: run_turn_over_workspace(
             work, writeback_prompt(candidates, active_mounts()), model=model,
             allowed_tools=[*WRITEBACK_TOOLS, *mcp_tools], session=session,
-            mcp_config=mcp_cfg, harness=chat_harness)),
+            mcp_config=attachment.path(), harness=chat_harness)),
         # A BACKGROUND JOB'S TURN, and the one line of difference that matters:
         # `session_continuity=False`. A job runs its OWN harness session — it does not resume the
         # conversation, does not move the continuity pointer and does not append to the transcript
@@ -3557,7 +3658,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         # running beside it in this same process keeps the per-turn budget it always had. The
         # harness reads it (`llm/jobs.in_job`) to pick a budget that fits an act rather than a
         # sentence: the founder's Example Bank job ran 72 steps and then died on a 40-call turn budget.
-        job=_fresh(_job_turn),
+        job=_fresh(lambda brief: _job_turn(brief, attachment.path())),
         # The register that makes "a restart cancels them and the chat is told" true. It sits beside
         # the session pointers, under the private continuity root, which is already outside the
         # workspace commit — and is therefore SHARED by every chat this person has, which is why
@@ -3566,7 +3667,7 @@ def main() -> None:  # pragma: no cover — the container entrypoint (wired in t
         jobs_root=_continuity_root(work),     # the register is read and written nofollow under it
         # THE EXPRESS LANE: a meeting link or a bot command acted on beside a running turn, on this
         # unit's own MCP attachment (the person's token), never queued behind it.
-        express=_express_lane(mcp_cfg),
+        express=_express_lane(attachment),
         send_now_key=shared_units.send_now_key(
             shared_units.unit_of_topic(os.environ["VEXA_UNIT_IN_TOPIC"])),
         # STOP: agent-api writes the press here; the watcher kills the running turn (live 2026-10-15)

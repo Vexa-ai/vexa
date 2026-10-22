@@ -93,9 +93,9 @@ COPY core/agent/contracts/tool.v1/tool.schema.json                 ./agent/contr
 # $HOME/.gitconfig. /tmp is mode 1777, so it is writable by every UID without knowing which one.
 # See vexa-delivery docs/engineering/openshift-parity.mdx — "HOME=/tmp is the one-variable fix".
 ENV HOME=/tmp
-# The Codex home the runtime names for every worker (runtime_kernel.workload_env.WORKER_CODEX_HOME,
-# handed over as CODEX_HOME): the subscription auth.json is mounted inside it, and Codex keeps its
-# state beside it, so it exists in the image writable by any UID before anything is mounted there.
+# The Codex home ($HOME/.codex): Codex keeps its state there, so it exists in the image writable by
+# any UID. No credential is ever placed in it: a codex turn reaches its model through the model proxy
+# with its turn's token (H5/W1).
 RUN mkdir -p -m 1777 /tmp/.codex
 
 # The runtime kernel spawns this image with this command (profiles.py "agent" profile).

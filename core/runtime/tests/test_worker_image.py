@@ -172,15 +172,16 @@ def test_worker_dev_mount_is_first_on_pythonpath(monkeypatch):
     assert captured["WorkingDir"] == "/app/src/agent_api"
 
 
-def test_worker_create_spec_injects_anthropic_route_env(monkeypatch):
+def test_worker_create_spec_carries_the_dispatchs_model_route_and_nothing_of_the_runtimes(monkeypatch):
+    """H5/W1: the model route is the dispatch's (agent-api stamps the proxy and the turn's token); the
+    runtime's own environment contributes no model key and no model route."""
     routes = {
         ("POST", "/containers/create"): FakeResp(201, body={"Id": "cid123"}),
         ("POST", "/containers/cid123/start"): FakeResp(204),
     }
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "token")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "runtime-token")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://openrouter.ai/api")
     monkeypatch.setenv("ANTHROPIC_MODEL", "deepseek/deepseek-v4-pro")
-    monkeypatch.setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "deepseek/deepseek-v4-flash")
     b, sess = _backend(routes)
     captured = {}
     orig = sess.request
@@ -194,13 +195,12 @@ def test_worker_create_spec_injects_anthropic_route_env(monkeypatch):
     b.start(
         "agent-foo-chat",
         _profiles.agent(TARGET),
-        {"ANTHROPIC_AUTH_TOKEN": "dispatch-wins"},
+        {"ANTHROPIC_BASE_URL": "http://model-proxy:8102/llm", "VEXA_MODEL_PROXY_TOKEN": "vxm_turn"},
     )
     env = dict(item.split("=", 1) for item in captured["Env"])
-    assert env["ANTHROPIC_AUTH_TOKEN"] == "dispatch-wins"
-    assert env["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api"
-    assert env["ANTHROPIC_MODEL"] == "deepseek/deepseek-v4-pro"
-    assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "deepseek/deepseek-v4-flash"
+    assert env["ANTHROPIC_BASE_URL"] == "http://model-proxy:8102/llm"
+    assert env["VEXA_MODEL_PROXY_TOKEN"] == "vxm_turn"
+    assert "ANTHROPIC_AUTH_TOKEN" not in env and "ANTHROPIC_MODEL" not in env
 
 
 def _create_payload(monkeypatch, runnable, workload_id):
@@ -246,7 +246,8 @@ def test_a_bot_receives_no_model_credential(monkeypatch, tmp_path):
     assert not (bot["HostConfig"].get("Binds") or [])
     worker = _create_payload(monkeypatch, _profiles.agent(TARGET), "agent-foo-chat")
     env = dict(item.split("=", 1) for item in worker["Env"])
-    assert env["ANTHROPIC_API_KEY"] == "model-key"
+    # no API key reaches a worker either (H5/W1); the subscription FILE does, for the official CLI
+    assert "ANTHROPIC_API_KEY" not in env
     assert "/host/.claude/.credentials.json:/root/.claude/.credentials.json:ro" in worker["HostConfig"]["Binds"]
 
 

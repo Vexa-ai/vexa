@@ -1,0 +1,100 @@
+{{- if .Values.agentApi.enabled }}
+# The model-provider key proxy (H5/W1). No agent worker holds a model-provider key: agent-api seals
+# each turn's model route (endpoint, credential, models) into Redis with VEXA_MODEL_PROXY_SECRET and
+# hands the worker a per-turn token. A worker's harness sends its model requests here; this service
+# checks the token is live, the model in the turn's scope and the turn under its request ceiling,
+# swaps the token for the route's credential and streams the provider's answer back. It holds no
+# trust header and no key of its own. Only agent workers may reach it (networkpolicy.yaml).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vexa.componentName" (list . "model-proxy") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.modelProxy.replicaCount }}
+  {{- include "vexa.deploymentStrategy" . | nindent 2 }}
+  selector:
+    matchLabels:
+      {{- include "vexa.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: model-proxy
+  template:
+    metadata:
+      labels:
+        {{- include "vexa.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: model-proxy
+      annotations:
+        {{- toYaml .Values.global.podAnnotations | nindent 8 }}
+    spec:
+      {{- include "vexa.nonRootPodSecurityContext" . | nindent 6 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: model-proxy
+          {{- include "vexa.containerSecurityContext" . | nindent 10 }}
+          image: "{{ .Values.agentApi.image.repository }}:{{ .Values.global.imageTag | default .Values.agentApi.image.tag | default (include "vexa.releaseTag" .) }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "control_plane.model_proxy"]
+          ports:
+            - name: http
+              containerPort: 8102
+          env:
+            {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
+            - name: VEXA_REDIS_URL
+              value: {{ include "vexa.redisUrl" . | quote }}
+            - name: VEXA_MODEL_PROXY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_MODEL_PROXY_SECRET
+            - name: VEXA_LOG_LEVEL
+              value: {{ .Values.modelProxy.logLevel | default "info" | quote }}
+            {{- with .Values.modelProxy.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.modelProxy.resources | nindent 12 }}
+      {{- with .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vexa.componentName" (list . "model-proxy") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8102
+      targetPort: http
+  selector:
+    {{- include "vexa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: model-proxy
+{{- end }}

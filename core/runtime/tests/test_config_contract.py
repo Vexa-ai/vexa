@@ -46,7 +46,8 @@ def test_capability_tri_states():
     assert cp.capability_states({})["agent_spawn"] == cp.NOT_CONFIGURED
     # mode=any: any ONE credential path configures model_inference; none ⇒ not_configured
     assert cp.capability_states({})["model_inference"] == cp.NOT_CONFIGURED
-    assert cp.capability_states({"ANTHROPIC_API_KEY": "sk-x"})["model_inference"] == cp.CONFIGURED
+    # an API key is not the runtime's (H5/W1): agent-api seals it for the model proxy
+    assert cp.capability_states({"ANTHROPIC_API_KEY": "sk-x"})["model_inference"] == cp.NOT_CONFIGURED
     assert cp.capability_states({"HOST_CLAUDE_CREDENTIALS": "/x.json"})["model_inference"] == cp.CONFIGURED
 
 
@@ -82,11 +83,16 @@ def test_file_probe_flags_directory_the_docker_missing_mount_signature(tmp_path)
     assert "not a regular file" in rows["model_inference"]["probe"]["reason"]
 
 
-def test_file_probe_skipped_when_credential_rides_an_api_key():
-    # mode=any satisfied by ANTHROPIC_API_KEY alone: the file probe must SKIP, not fail
+def test_the_runtime_declares_no_api_key():
+    """H5/W1: the runtime reads and forwards no model API key and no model route — agent-api seals
+    those for the model proxy, and a worker holds only its turn's token. What it may hand a worker is
+    a SUBSCRIPTION file, for the vendor's own CLI."""
+    declared = {k["key"] for k in cp.load_declaration()["keys"]}
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY",
+                 "CODEX_API_KEY", "VEXA_LLM_API_KEY", "ANTHROPIC_BASE_URL", "VEXA_LLM_BASE_URL"):
+        assert name not in declared, name
     rows = cp.capability_health({"ANTHROPIC_API_KEY": "sk-x"})
-    assert rows["model_inference"]["state"] == cp.CONFIGURED
-    assert rows["model_inference"]["probe"].get("skipped")
+    assert rows["model_inference"]["state"] == cp.NOT_CONFIGURED
 
 
 def test_file_probe_uses_the_mirror_mount_fallback(tmp_path):

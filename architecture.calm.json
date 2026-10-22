@@ -1252,6 +1252,76 @@
    ]
   },
   {
+   "unique-id": "model-proxy",
+   "node-type": "service",
+   "name": "model-proxy",
+   "description": "the model-provider key proxy (H5/W1): the agent-api image run as `python -m control_plane.model_proxy` (port 8102). An agent worker's harness sends every model request \u2014 and its MCP toolbelt traffic \u2014 here with its turn's token; the proxy checks the token is live (not revoked, not expired), the model in the turn's scope and the turn under its request ceiling, swaps the token for the route's sealed credential (or reads the deployment's subscription file from its own mount), and streams the answer back. Holds no trust header and no key of its own; reachable only from agent workers",
+   "metadata": [
+    {
+     "path": "core/agent/control_plane/model_proxy.py"
+    }
+   ],
+   "interfaces": [
+    {
+     "unique-id": "model-proxy-rest",
+     "type": "api"
+    }
+   ]
+  },
+  {
+   "unique-id": "model-routes",
+   "node-type": "data-asset",
+   "name": "mproxy:route:{id} + mproxy:unit-route:{unit} (redis keys)",
+   "description": "a unit's model route as agent-api resolved it \u2014 endpoint, credential, the turn's models and output cap, the toolbelt URL and delegation token \u2014 AES-GCM sealed with VEXA_MODEL_PROXY_SECRET; the unit's pointer to it. No worker's Redis user can reach either",
+   "controls": {
+    "ownership": {
+     "description": "single writer (P23)",
+     "requirements": [
+      {
+       "requirement-url": "calm/controls/single-writer.requirement.json",
+       "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "agent-api seals a cold spawn's route (control_plane/model_proxy.py Grants.put_route)",
+        "writers": [
+         "agent-api"
+        ],
+        "match": "ROUTE_PREFIX",
+        "op": "set"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "unique-id": "model-grants",
+   "node-type": "data-asset",
+   "name": "mproxy:grant:{sha256} + mproxy:count:{sha256} (redis keys)",
+   "description": "one turn's token to the model proxy, by digest: its unit, route, expiry and request ceiling; the proxy counts the turn's model requests beside it and deletes both when the worker revokes the token at the end of its last run. No worker's Redis user can reach them",
+   "controls": {
+    "ownership": {
+     "description": "shared writer (P23 review)",
+     "requirements": [
+      {
+       "requirement-url": "calm/controls/single-writer.requirement.json",
+       "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "agent-api mints a grant per delivered message; the proxy counts and revokes",
+        "writers": [
+         "agent-api",
+         "model-proxy"
+        ],
+        "match": "GRANT_PREFIX|COUNT_PREFIX",
+        "op": "kv-write"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
    "unique-id": "agent-worker",
    "node-type": "service",
    "name": "agent-worker",
@@ -2163,7 +2233,7 @@
    "unique-id": "mcp.tools.v1",
    "node-type": "contract",
    "name": "mcp.tools.v1",
-   "description": "mcp.tools.v1 — sealed contract (gateway): each domain's MCP tool manifest, served at /.well-known/mcp-tools.json or mounted by a private deployment; who may call each tool, which credential the edge presents to its door, and its route",
+   "description": "mcp.tools.v1 \u2014 sealed contract (gateway): each domain's MCP tool manifest, served at /.well-known/mcp-tools.json or mounted by a private deployment; who may call each tool, which credential the edge presents to its door, and its route",
    "metadata": [
     {
      "path": "core/gateway/contracts/mcp.tools.v1",
@@ -2175,7 +2245,7 @@
    "unique-id": "meeting-bundle.v1",
    "node-type": "contract",
    "name": "meeting-bundle.v1",
-   "description": "meeting-bundle.v1 — sealed/published contract (deploy): one meeting as a portable zip that any separate Vexa deployment can import (manifest with a SHA-256 per file; meeting, transcript and annotations parts; optional media and workspace parts); nothing deployment-bound is carried; its goldens include malicious bundles the Python importer and the Node re-derivation must both refuse with the same code",
+   "description": "meeting-bundle.v1 \u2014 sealed/published contract (deploy): one meeting as a portable zip that any separate Vexa deployment can import (manifest with a SHA-256 per file; meeting, transcript and annotations parts; optional media and workspace parts); nothing deployment-bound is carried; its goldens include malicious bundles the Python importer and the Node re-derivation must both refuse with the same code",
    "metadata": [
     {
      "path": "deploy/contracts/meeting-bundle.v1",
@@ -2339,7 +2409,7 @@
    "unique-id": "signals.v1",
    "node-type": "contract",
    "name": "signals.v1",
-   "description": "signals.v1 — the brief signals reads, the annotation it writes (sig:{kind}:{id}), the wake data it hands to flows and the model_signals policy value",
+   "description": "signals.v1 \u2014 the brief signals reads, the annotation it writes (sig:{kind}:{id}), the wake data it hands to flows and the model_signals policy value",
    "metadata": [
     {
      "path": "core/signals/contracts/signals.v1",
@@ -2476,6 +2546,9 @@
       "credentials-broker",
       "credentials-store",
       "agent-worker",
+      "model-grants",
+      "model-routes",
+      "model-proxy",
       "out-stream",
       "unit-in",
       "va-chat",
@@ -3861,6 +3934,7 @@
       "gateway",
       "meeting-api",
       "agent-api",
+      "model-proxy",
       "admin-api",
       "runtime",
       "redis",
@@ -4095,7 +4169,7 @@
      }
     }
    },
-   "description": "the worker's toolbelt: /mcp and /agent/friction with its per-dispatch delegation token, which identity resolves as the person it acts for",
+   "description": "the worker's toolbelt: /mcp and /agent/friction with its per-dispatch delegation token, which identity resolves as the person it acts for. With the model proxy configured, the harness's own /mcp traffic goes through the proxy instead (aw-mp) and the token stays in the worker process, for its in-process calls",
    "protocol": "HTTPS"
   },
   {
@@ -4155,7 +4229,7 @@
      }
     }
    },
-   "description": "agent-api asks identity about a person over the internal tier (X-Internal-Secret): GET /internal/users/by-email/{email} (falling back to GET /admin/users/email/{email} with X-Admin-API-Key) to resolve a share's invitee; POST/DELETE/GET /internal/users/{id}/memberships[/{ws}] (the membership index mirror); GET /internal/users/{id}/model-config; GET /internal/users/{id}/is-admin (the _global tier's writer); GET /internal/users/{id}/bot-context (admin overview); GET/PUT /internal/users/{id}/settings (the person's clock and timezone, and their presence switch), GET /internal/presence?ids=… (many people's presence choice at once, for the desktop and the people strip); GET /internal/users/{id}/photo (a person's photo bytes, asked only after agent-api decided the viewer shares a workspace or chat with them); GET /internal/users/{id}/org (the viewer's org for every workspace access check, cached)",
+   "description": "agent-api asks identity about a person over the internal tier (X-Internal-Secret): GET /internal/users/by-email/{email} (falling back to GET /admin/users/email/{email} with X-Admin-API-Key) to resolve a share's invitee; POST/DELETE/GET /internal/users/{id}/memberships[/{ws}] (the membership index mirror); GET /internal/users/{id}/model-config; GET /internal/users/{id}/is-admin (the _global tier's writer); GET /internal/users/{id}/bot-context (admin overview); GET/PUT /internal/users/{id}/settings (the person's clock and timezone, and their presence switch), GET /internal/presence?ids=\u2026 (many people's presence choice at once, for the desktop and the people strip); GET /internal/users/{id}/photo (a person's photo bytes, asked only after agent-api decided the viewer shares a workspace or chat with them); GET /internal/users/{id}/org (the viewer's org for every workspace access check, cached)",
    "protocol": "HTTP",
    "metadata": [
     {
@@ -4785,7 +4859,7 @@
      }
     }
    },
-   "description": "GET /meetings/{meeting_id}/export — the owner's whole meeting as a meeting-bundle.v1 zip",
+   "description": "GET /meetings/{meeting_id}/export \u2014 the owner's whole meeting as a meeting-bundle.v1 zip",
    "metadata": [
     {
      "access": "write",
@@ -4805,7 +4879,7 @@
      }
     }
    },
-   "description": "POST /meetings/import — validate a meeting-bundle.v1 zip (manifest, every hash, paths, sizes) and land it as a new meeting the importer owns",
+   "description": "POST /meetings/import \u2014 validate a meeting-bundle.v1 zip (manifest, every hash, paths, sizes) and land it as a new meeting the importer owns",
    "metadata": [
     {
      "access": "read",
@@ -4825,7 +4899,7 @@
      }
     }
    },
-   "description": "GET /api/meeting/bundle-parts — the owner's bound workspace tree (never its roster or policy) and the meeting's page",
+   "description": "GET /api/meeting/bundle-parts \u2014 the owner's bound workspace tree (never its roster or policy) and the meeting's page",
    "metadata": [
     {
      "access": "write",
@@ -4845,7 +4919,7 @@
      }
     }
    },
-   "description": "POST /meetings/{meeting_id}/export — the parts placed into the bundle",
+   "description": "POST /meetings/{meeting_id}/export \u2014 the parts placed into the bundle",
    "metadata": [
     {
      "access": "read",
@@ -4865,7 +4939,7 @@
      }
     }
    },
-   "description": "POST /api/meeting/bundle-restore — the bundle's workspace part as a new private workspace of the importer and its notes page on their desk, re-bound to the imported meeting",
+   "description": "POST /api/meeting/bundle-restore \u2014 the bundle's workspace part as a new private workspace of the importer and its notes page on their desk, re-bound to the imported meeting",
    "metadata": [
     {
      "access": "read",
@@ -5105,7 +5179,7 @@
     {
      "access": "req",
      "contract": "credential-broker.v1",
-     "description": "role signals: POST /api/internal/signals/model-key — the signal model's key the policy names (service/signals/<name> only), kept in memory"
+     "description": "role signals: POST /api/internal/signals/model-key \u2014 the signal model's key the policy names (service/signals/<name> only), kept in memory"
     }
    ]
   },
@@ -5149,11 +5223,148 @@
    }
   },
   {
-   "unique-id": "aw-model-provider",
+   "unique-id": "aw-mp",
    "relationship-type": {
     "connects": {
      "source": {
       "node": "agent-worker"
+     },
+     "destination": {
+      "node": "model-proxy",
+      "interface": "model-proxy-rest"
+     }
+    }
+   },
+   "description": "every model request a turn's harness makes (/llm/*, its turn's token as the bearer \u2014 never a provider key) and the harness's MCP toolbelt (/mcp, the same token; the proxy presents the delegation bearer); the worker revokes the token when the last run holding it ends",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "call"
+    }
+   ]
+  },
+  {
+   "unique-id": "mp-gw",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "model-proxy"
+     },
+     "destination": {
+      "node": "gateway",
+      "interface": "gateway-rest"
+     }
+    }
+   },
+   "description": "a harness's MCP request relayed to the gateway's /mcp with the unit's current delegation token (agent-api's record, else the one sealed at spawn)",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "call"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-model-routes",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "model-routes"
+     }
+    }
+   },
+   "description": "SET a cold spawn's sealed route and the unit's pointer to it; GET the pointer for a message to a running worker",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-model-grants",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "model-grants"
+     }
+    }
+   },
+   "description": "SET one turn's grant per delivered message (the spawn's entrypoint, every unit-in entry)",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "mp-model-routes",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "model-proxy"
+     },
+     "destination": {
+      "node": "model-routes"
+     }
+    }
+   },
+   "description": "GET and open (AES-GCM) the route a live grant names",
+   "metadata": [
+    {
+     "access": "read"
+    }
+   ]
+  },
+  {
+   "unique-id": "mp-model-grants",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "model-proxy"
+     },
+     "destination": {
+      "node": "model-grants"
+     }
+    }
+   },
+   "description": "GET the grant a request's token names; INCR its request count; DELETE both on revocation",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "mp-delegation-current",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "model-proxy"
+     },
+     "destination": {
+      "node": "delegation-current"
+     }
+    }
+   },
+   "description": "GET the unit's current delegation token to present on a relayed MCP request",
+   "metadata": [
+    {
+     "access": "read"
+    }
+   ]
+  },
+  {
+   "unique-id": "mp-model-provider",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "model-proxy"
      },
      "destination": {
       "node": "model-provider",
@@ -5161,7 +5372,7 @@
      }
     }
    },
-   "description": "an agent turn: the prompt with its meeting grounding (transcript excerpts) and the workspace context the turn reads",
+   "description": "an agent turn's model request, forwarded by the model proxy with the turn route's credential: the prompt with its meeting grounding (transcript excerpts) and the workspace context the turn reads",
    "protocol": "HTTPS",
    "metadata": [
     {

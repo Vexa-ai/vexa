@@ -127,6 +127,9 @@ secrets:
   mcpDelegationSecret: ""           # the worker toolbelt: agent-api signs each worker's delegation token,
                                     # identity verifies it. Generated at install like the one above; with
                                     # existingSecretName, carry VEXA_MCP_DELEGATION_SECRET.
+  modelProxySecret: ""              # H5/W1: agent-api seals each turn's model route with it, the model proxy
+                                    # opens it. Generated at install like the ones above; with
+                                    # existingSecretName, carry VEXA_MODEL_PROXY_SECRET.
   terminalSessionSecret: ""         # D13: the terminal's second secret — identity mints the signed-in
                                     # browser's SESSION credential only with it. Generated at install like
                                     # the one above; with existingSecretName, carry VEXA_TERMINAL_SESSION_SECRET
@@ -730,6 +733,17 @@ crm:
   # How often agent-api reads each workspace's record links at its head commit (seconds).
   referencesPollSeconds: 30
   resources: {}
+# The model-provider key proxy (H5/W1): the one process that sends a model request with a real
+# credential. Agent workers reach it with their turn's token; it forwards to the route agent-api
+# sealed for that turn. Rendered whenever agentApi is; runs the agent-api image.
+modelProxy:
+  replicaCount: 1
+  logLevel: "info"
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 1000m, memory: 384Mi }
+  extraEnv: []
+
 agentApi:
   # THE KILL SWITCH for model calls (VEXA_LLM_KILL_SWITCH): true refuses every agent turn —
   # chat, routine, sensor — before dispatch. The spend caps are _global/POLICIES.md keys

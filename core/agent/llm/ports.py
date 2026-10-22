@@ -58,15 +58,20 @@ def scrubbed_git_env() -> dict[str, str]:
 # subprocess must NEVER inherit. A harness CLI exposes a Bash tool to the model; with ``REDIS_URL`` in its
 # environment that Bash reaches the SHARED redis and can read/write ANOTHER tenant's ``tc:meeting:*`` /
 # ``unit:*:in`` keys — filesystem tenancy is mount-enforced, the data plane is not. The per-dispatch
-# identity token is a bearer secret the subprocess has no use for. The model DOES need its MODEL
-# credentials (ANTHROPIC_*/CLAUDE_CODE_OAUTH_TOKEN) to talk to the provider, so those are
-# deliberately absent here — this is the tight denylist of vars the model has no legitimate reason to hold.
+# identity token is a bearer secret the subprocess has no use for.
 #
 # Every credential the worker PROCESS holds for its own use is listed, not just the data-plane ones:
 # what the CLI's environment carries, the model's shell carries. The audit of a worker's environment
-# (dispatch's stamped env + runtime_kernel.workload_env.WORKER_FORWARD_ENV) finds these credentials;
-# the ones KEPT are the model-provider credentials the CLI itself sends (CLAUDE_CODE_OAUTH_TOKEN,
-# ANTHROPIC_API_KEY / _AUTH_TOKEN, OPENAI_API_KEY, CODEX_API_KEY). tests/test_access_harness_env.py.
+# (dispatch's stamped env + runtime_kernel.workload_env.WORKER_FORWARD_ENV) finds these credentials.
+# MODEL-PROVIDER CREDENTIALS ARE AMONG THEM (H5/W1): no worker is given one — agent-api hands it a
+# per-turn token to the model proxy instead (shared/model_grant.py) — and should one reach this
+# process's environment anyway, no harness subprocess inherits it. Each harness adds the turn's token
+# under the one name its CLI reads (llm/claude_code.py, llm/codex.py). tests/test_access_harness_env.py.
+#
+# A module-local twin of ``shared.model_grant.PROVIDER_CREDENTIAL_ENV`` + ``TOKEN_ENV`` (this module
+# owns zero product imports); tests/test_model_proxy.py holds the two equal.
+MODEL_CREDENTIAL_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+                         "OPENAI_API_KEY", "CODEX_API_KEY", "VEXA_LLM_API_KEY", "VEXA_MODEL_PROXY_TOKEN")
 _HARNESS_SUBPROCESS_DENY_VARS = ("REDIS_URL", "VEXA_AGENT_IDENTITY_TOKEN",
                                  # the unit's input-stream key (shared/unit_input.py): whoever holds it
                                  # can put a message on the worker's input as its owner
@@ -81,9 +86,9 @@ _HARNESS_SUBPROCESS_DENY_VARS = ("REDIS_URL", "VEXA_AGENT_IDENTITY_TOKEN",
                                  # the operator's search endpoint key: WebSearch/WebFetch run in-process
                                  # (llm/web_tools.py)
                                  "VEXA_SEARCH_API_KEY",
-                                 # the openai-agent harness's model key: that harness runs in-process,
-                                 # and no CLI reads it
-                                 "VEXA_LLM_API_KEY")
+                                 # every model-provider credential name, and the boot turn token: a
+                                 # harness is handed its own run's token, never another run's
+                                 *MODEL_CREDENTIAL_VARS)
 
 
 def harness_subprocess_env() -> dict[str, str]:

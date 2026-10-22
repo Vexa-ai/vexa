@@ -290,7 +290,8 @@ def host_claude_credentials(env: Optional[Mapping[str, str]] = None) -> Optional
 
 
 def configured_credentials(env: Optional[Mapping[str, str]] = None) -> tuple[CredentialFile, ...]:
-    """The model-subscription files the operator configured for the runtime to hand to workers —
+    """The model-SUBSCRIPTION files the operator configured for the runtime to hand to workers (never
+    an API key: those reach no worker, H5/W1) —
     the one place that knows which harness reads which file: the claude CLI's credential
     (``HOST_CLAUDE_CREDENTIALS`` / ``HOST_CLAUDE_DIR``) and the Codex ``auth.json``
     (``HOST_CODEX_CREDENTIALS``, inside ``WORKER_CODEX_HOME`` in a container, ``~/.codex`` for a
@@ -382,8 +383,12 @@ def default_registry() -> ProfileRegistry:
                 runnable=Runnable(
                     image=agent_worker_image,
                     command=["python", "-m", "worker"],
-                    # An agent worker joins its own network (gateway, redis, flows-api — no internal
-                    # service), and the runtime brokers model credentials and dials into it.
+                    # An agent worker joins its own network (gateway, the model proxy, redis,
+                    # flows-api — no internal service) and receives the deployment's dials. NO API KEY
+                    # is among them (H5/W1): a worker's model requests go through the model proxy with
+                    # its turn's token. What the runtime does hand it is the deployment's SUBSCRIPTION
+                    # file, for the vendor's own CLI to read from its own path — a consumer credential
+                    # is never moved into a proxy (docs/docs/model-credentials-licensing.mdx).
                     labels={CLASS_LABEL: "worker"},
                     network_env="DOCKER_WORKER_NETWORK",
                     forward_env=WORKER_FORWARD_ENV,

@@ -415,12 +415,13 @@ services:
       - "${DOCKER_GID:-0}"
     ports:
       - "127.0.0.1:${RUNTIME_API_PORT:-18090}:8090"
-    # Provider auth (ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL) is sourced from .env via env_file so the
-    # token/endpoint pair is a SINGLE SOURCE OF TRUTH the ambient shell cannot shadow. The runtime brokers
-    # these into spawned agent containers, so a shell-shadowed base_url here would poison every agent.
+    # The worker dials (turn ceilings, search endpoint, output cap) reach the runtime from .env, which
+    # it forwards into each worker. NO MODEL API KEY does (H5/W1): model routes and keys are agent-api's,
+    # sealed for the model-proxy service below, and a worker receives only its turn's token to that
+    # proxy. Every API key .env carries is blanked in the environment block below, so the runtime does
+    # not hold it either; the subscription FILE is the one model credential it still mounts.
     env_file:
-      # required:false — a fresh checkout (CI, gate worktree) has no .env; the proof stack
-      # must boot without LLM auth. On a real deploy the file exists and wins as before.
+      # required:false — a fresh checkout (CI, gate worktree) has no .env.
       - path: .env
         required: false
     environment:
@@ -429,11 +430,6 @@ services:
       # is set EXPLICITLY (no suffix derivation); AGENT_IMAGE now matches the built control-plane tag.
       - AGENT_IMAGE=${AGENT_IMAGE:-vexaai/vexa-agent-api:${IMAGE_TAG:-dev}}
       - AGENT_WORKER_IMAGE=${AGENT_WORKER_IMAGE:-vexaai/vexa-agent-worker:${IMAGE_TAG:-dev}}
-      # THE MODEL EVERY SPAWNED WORKER RUNS (decision 36, founder: "let's move to sonnet"). Unset =
-      # the CLI's own default, which on 2.1.197 is `claude-opus-4-8[1m]` — measured, not assumed.
-      # Set it here and the runtime forwards it into each spawned worker (docker_backend's forward
-      # list); ROLLBACK is to unset it and recreate the runtime.
-      - VEXA_AGENT_MODEL=${VEXA_AGENT_MODEL:-}
       # Optional low-latency tuning for the Google Meet speaker-stream pipeline. Empty values keep
       # the bot defaults; runtime forwards configured values to spawned bot containers.
       - BOT_ALONE_SILENCE_WINDOW_MS=${BOT_ALONE_SILENCE_WINDOW_MS:-}
@@ -449,8 +445,9 @@ services:
       - BOT_TRANSCRIPT_RECONFIRM_SEC=${BOT_TRANSCRIPT_RECONFIRM_SEC:-}
       - VEXA_AGENT_SRC_MOUNT=${VEXA_AGENT_SRC_MOUNT:-}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
-      # The Runtime brokers model credentials into spawned agents. Subscription credentials may be
-      # mounted from the host; API-style Anthropic/OpenRouter env is forwarded from this trusted service.
+      # The deployment's model SUBSCRIPTION file, mounted into each worker for the vendor's own CLI
+      # to read from its own path (a consumer credential is never moved into the model proxy). API
+      # keys are not the runtime's: agent-api seals them for the model proxy (H5/W1).
       - HOST_CLAUDE_CREDENTIALS=${HOST_CLAUDE_CREDENTIALS:-}
       # The DIRECTORY holding it (~/.claude). Same credential, inode-stable delivery — see the
       # volumes: block below and .env.example. The docker backend derives the worker's credential
@@ -458,25 +455,22 @@ services:
       - HOST_CLAUDE_DIR=${HOST_CLAUDE_DIR:-}
       - HOST_CODEX_CREDENTIALS=${HOST_CODEX_CREDENTIALS:-}
       - VEXA_MIDTURN_INJECT=${VEXA_MIDTURN_INJECT:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - CODEX_API_KEY=${CODEX_API_KEY:-}
-      # Subscription OAuth as ENV (the twin of the credentials-file mount): `claude setup-token`
-      # output. Dispatch forwards it to workers via MODEL_AUTH_ENV_ALLOWLIST when set.
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      # ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL now come from env_file (above), NOT environment: — an
-      # `environment:` ${VAR} entry interpolates the AMBIENT SHELL first and silently shadowed .env (prod 401).
-      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
-      - ANTHROPIC_DEFAULT_OPUS_MODEL=${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
-      - ANTHROPIC_DEFAULT_SONNET_MODEL=${ANTHROPIC_DEFAULT_SONNET_MODEL:-}
-      - ANTHROPIC_DEFAULT_HAIKU_MODEL=${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
       # The runtime caller credential: every route but /health requires it, and agent-api and
       # meeting-api present it. No default — the runtime refuses to boot without one (mint-dev-env.sh
       # mints it into .env). No spawned workload receives it.
       - RUNTIME_API_TOKEN=${RUNTIME_API_TOKEN:-}
-      # The env_file above carries the whole .env, so the LiveKit API secret is blanked here: the
-      # runtime reads no LiveKit key, and the secret stays with LiveKit, meeting-api and agent-api.
+      # The env_file above carries the whole .env, so every credential the runtime has no use for is
+      # blanked here: the LiveKit API secret, every model-provider API key (and the subscription
+      # OAuth token, which agent-api stamps for a subscription route itself), and the model proxy's
+      # sealing key — agent-api and the model proxy hold those.
       - LIVEKIT_API_SECRET=
+      - ANTHROPIC_API_KEY=
+      - ANTHROPIC_AUTH_TOKEN=
+      - CLAUDE_CODE_OAUTH_TOKEN=
+      - OPENAI_API_KEY=
+      - CODEX_API_KEY=
+      - VEXA_LLM_API_KEY=
+      - VEXA_MODEL_PROXY_SECRET=
       # The workspace store as the RUNTIME serves it: what backs it (the named volume agent-api also
       # mounts) and where it sits inside a worker. A workload spec cannot move either; every mount a
       # spec declares must sit under the target. The target must equal agent-api's
@@ -664,6 +658,12 @@ services:
       # and every spawn says so in the log.
       - VEXA_MCP_URL=${VEXA_MCP_URL:-http://gateway:8000/mcp}
       - VEXA_MCP_DELEGATION_SECRET=${VEXA_MCP_DELEGATION_SECRET:-}
+      # NO WORKER HOLDS A MODEL-PROVIDER KEY (H5/W1). agent-api resolves each turn's model route from
+      # the keys in .env, seals it with this secret for the model-proxy service, and hands the worker
+      # a per-turn token to the proxy instead. mint-dev-env.sh generates the secret; with it empty no
+      # worker gets a model credential at all and every turn says so.
+      - VEXA_MODEL_PROXY_URL=${VEXA_MODEL_PROXY_URL:-http://model-proxy:8102}
+      - VEXA_MODEL_PROXY_SECRET=${VEXA_MODEL_PROXY_SECRET:-}
       # THE SCAFFOLD's link origin (PRD §5.5). The SAME variable the flows lane reads, on purpose:
       # one deployment fact, one name. Unset, POST /internal/scaffolds refuses to mint rather than
       # handing a step a url with no origin — every deeplink the rig ever minted pointed at a port
@@ -786,6 +786,37 @@ services:
         condition: service_completed_successfully
     # `connections` reaches the credential broker; spawned workers join `vexa` only and cannot.
     networks: [vexa, connections]
+    restart: unless-stopped
+
+  # ─── The model-provider key proxy (H5/W1) ─────────────────────────────────────────────────────
+  # The agent-api image, run as the one process that sends a model request with a real credential.
+  # A worker's harness is pointed here (its base URL) with its turn's token; the proxy opens the
+  # turn's sealed route from Redis, checks the token is live, the model in scope and the turn under
+  # its ceiling, swaps the token for the route's key and streams the answer back. It holds no trust
+  # header and no key of its own: API keys arrive sealed in the route. The harness's MCP toolbelt
+  # goes the same way, so the delegation bearer is never in a file the model's shell can read. A
+  # SUBSCRIPTION route does not come here for its model calls: a consumer credential is read only by
+  # the vendor's own CLI (docs/docs/model-credentials-licensing.mdx).
+  model-proxy:
+    image: vexaai/vexa-agent-api:${IMAGE_TAG:-dev}
+    command: ["python", "-m", "control_plane.model_proxy"]
+    environment:
+      - VEXA_REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - VEXA_MODEL_PROXY_SECRET=${VEXA_MODEL_PROXY_SECRET:-}
+      - VEXA_LOG_LEVEL=${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8102/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    init: true
+    depends_on:
+      redis:
+        condition: service_healthy
+    # `workers` is where every spawned worker reaches it; `vexa` is its way to Redis and out to the
+    # model providers. It joins nothing else.
+    networks: [vexa, workers]
     restart: unless-stopped
 
   meeting-api:
@@ -2171,8 +2202,8 @@ networks:
   # Where the runtime puts meeting bots (DOCKER_NETWORK): meeting-api, redis and storage only.
   bots:
     driver: bridge
-  # Where the runtime puts agent workers (DOCKER_WORKER_NETWORK): the gateway, redis, flows-api and
-  # the opt-in llm-shim / searxng only.
+  # Where the runtime puts agent workers (DOCKER_WORKER_NETWORK): the gateway, the model proxy, redis,
+  # flows-api and the opt-in llm-shim / searxng only.
   workers:
     driver: bridge
   # Connections: agent-api, the terminal, meeting-api, signals and the broker only. internal = no route out, and no

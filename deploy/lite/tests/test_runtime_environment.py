@@ -95,10 +95,15 @@ def test_the_runtime_keeps_what_it_declares_and_what_its_children_need():
     inherited = {**inherited, "PATH": "/usr/bin", "HOME": "/root", "PYTHONPATH": str(RUNTIME_SRC),
                  "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright", "VEXA_HF_CACHE": "/opt/hf-cache"}
     env = _launcher().runtime_environment(inherited, str(RUNTIME_SRC))
-    for key in ("RUNTIME_API_TOKEN", "BOT_COMMAND", "AGENT_WORKER_COMMAND", "ANTHROPIC_API_KEY",
+    for key in ("RUNTIME_API_TOKEN", "BOT_COMMAND", "AGENT_WORKER_COMMAND", "HOST_CLAUDE_CREDENTIALS",
                 "BOT_SPEAKER_MIN_AUDIO_SEC", "VEXA_WORKSPACE_MOUNT_TARGET", "PATH", "HOME", "PYTHONPATH",
                 "PLAYWRIGHT_BROWSERS_PATH", "VEXA_HF_CACHE"):
         assert env.get(key) == inherited[key], key
+    # no model API key reaches the runtime, nor any worker it starts (H5/W1)
+    leaked = {**inherited, "ANTHROPIC_API_KEY": "sk-ant-api03-x", "VEXA_LLM_API_KEY": "sk-x",
+              "VEXA_MODEL_PROXY_SECRET": "s" * 64}
+    env = _launcher().runtime_environment(leaked, str(RUNTIME_SRC))
+    assert not {"ANTHROPIC_API_KEY", "VEXA_LLM_API_KEY", "VEXA_MODEL_PROXY_SECRET"} & set(env)
 
 
 def test_supervisord_starts_the_runtime_through_the_launcher():

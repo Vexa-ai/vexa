@@ -177,7 +177,7 @@ def test_the_secret_class_comes_from_the_config_contract(runtime_env, monkeypatc
     from runtime_kernel.config_preflight import load_declaration
 
     declared = {k["key"]: bool(k.get("secret")) for k in load_declaration()["keys"]}
-    assert declared["VEXA_LLM_API_KEY"] and declared["ANTHROPIC_API_KEY"] and not declared["VEXA_AGENT_MAX_OUTPUT_TOKENS"]
+    assert declared["VEXA_SEARCH_API_KEY"] and not declared["VEXA_AGENT_MAX_OUTPUT_TOKENS"]
     monkeypatch.setenv("VEXA_NOT_IN_THE_CONTRACT", "unknown-value")
     pod, secrets = _submit(monkeypatch, {"LOG_LEVEL": "info"},
                            forward=("VEXA_NOT_IN_THE_CONTRACT", "VEXA_AGENT_MAX_TOOL_CALLS"))

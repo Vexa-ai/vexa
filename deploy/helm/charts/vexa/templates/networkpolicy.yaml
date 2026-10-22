@@ -21,6 +21,7 @@ WHO MAY REACH agent-api AND meeting-api — derived from the callers in the code
     meeting-api   itself
 
 Agent WORKERS reach neither service: they act through the gateway with their delegation token.
+They alone reach the model proxy (8102), with their turn's token (H5/W1).
 */}}
 {{- $sel := include "vexa.selectorLabels" . }}
 {{- if .Values.agentApi.enabled }}
@@ -63,6 +64,29 @@ spec:
         {{- with .Values.networkPolicy.agentApi.extraFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+---
+# model-proxy (8102): agent WORKERS only — the one place a worker's model request goes (H5/W1).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list . "model-proxy-ingress") }}
+  labels:
+    {{- include "vexa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $sel | nindent 6 }}
+      app.kubernetes.io/component: model-proxy
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 8102
+          protocol: TCP
+      from:
+        - podSelector:
+            matchLabels:
+              runtime.managed: "true"
+              vexa.role: worker
 ---
 {{- end }}
 apiVersion: networking.k8s.io/v1

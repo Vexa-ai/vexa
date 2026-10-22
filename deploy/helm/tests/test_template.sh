@@ -46,7 +46,7 @@ fi
 # carry the optional secret refs (values-test leaves auth unset — CI has no creds; render + boot
 # must stay green, the env ref is optional:true).
 need 1 'key: CLAUDE_CODE_OAUTH_TOKEN' "agent-api CLAUDE_CODE_OAUTH_TOKEN secret ref"
-need 2 'key: ANTHROPIC_AUTH_TOKEN'    "ANTHROPIC_AUTH_TOKEN secret refs (agent-api + runtime)"
+need 1 'key: ANTHROPIC_AUTH_TOKEN'    "ANTHROPIC_AUTH_TOKEN secret ref (agent-api only: no worker holds it, H5/W1)"
 need 2 'name: MEETING_API_URL' "MEETING_API_URL set on gateway AND meeting-api"
 # A terminating meeting-api must stay alive until EndpointSlice/kube-proxy stops routing its IP.
 # Without this drain, deleting co-located replicas produces immediate connection refusals even
@@ -269,13 +269,13 @@ else
   echo "  FAIL: agent-api did not render type: Recreate under default RWO workspace"; fail=1
 fi
 # The other API/UI Deployments keep the shared zero-downtime RollingUpdate — redis + agent-api are
-# the only two single-PVC opt-outs, so exactly 6 RollingUpdate blocks remain (gateway, admin-api,
-# meeting-api, runtime, terminal, mcp).
+# the only two single-PVC opt-outs, so exactly 7 RollingUpdate blocks remain (gateway, admin-api,
+# meeting-api, runtime, terminal, mcp, model-proxy).
 roll_count="$(grep -cE '^    type: RollingUpdate' <<< "$RENDER" || true)"
-if [ "$roll_count" -eq 6 ]; then
-  echo "  OK: 6 non-PVC Deployments keep RollingUpdate (agent-api + redis excepted)"
+if [ "$roll_count" -eq 7 ]; then
+  echo "  OK: 7 non-PVC Deployments keep RollingUpdate (agent-api + redis excepted)"
 else
-  echo "  FAIL: expected 6 RollingUpdate Deployments, got $roll_count"; fail=1
+  echo "  FAIL: expected 7 RollingUpdate Deployments, got $roll_count"; fail=1
 fi
 # A ReadWriteMany workspace lifts the single-mount constraint → agent-api takes the shared rolling
 # strategy back (conditional is on accessMode, not hardcoded).
@@ -996,14 +996,14 @@ else echo "  FAIL: no generated RUNTIME_API_TOKEN in the chart Secret"; fail=1; 
 refuse_rt="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set secrets.runtimeApiToken=short 2>&1 || true)"
 if grep -q 'secrets.runtimeApiToken must be 32+ bytes' <<< "$refuse_rt"; then echo "  OK: a short secrets.runtimeApiToken is refused"
 else echo "  FAIL: a short secrets.runtimeApiToken rendered"; fail=1; fi
-# The chart's redis requires a password; each of its five clients expands it into its URL.
+# The chart's redis requires a password; each of its six clients expands it into its URL.
 redis_dep="$(awk '/deployment-redis.yaml/{f=1} f{print} f&&/^---/{exit}' <<< "$RENDER")"
 if grep -q -- '- "--requirepass"' <<< "$redis_dep" && grep -A1 -- '- "--requirepass"' <<< "$redis_dep" | grep -q '\$(REDIS_PASSWORD)'; then
   echo "  OK: redis requires a password"
 else echo "  FAIL: redis does not require a password"; fail=1; fi
 n_urls="$(grep -cE 'value: "redis://:\$\(REDIS_PASSWORD\)@vexa-vexa-redis' <<< "$RENDER" || true)"
-if [ "$n_urls" = 5 ]; then echo "  OK: the five redis clients carry the password in their URL"
-else echo "  FAIL: $n_urls redis URL(s) carry the password, want 5"; fail=1; fi
+if [ "$n_urls" = 6 ]; then echo "  OK: the six redis clients carry the password in their URL"
+else echo "  FAIL: $n_urls redis URL(s) carry the password, want 6"; fail=1; fi
 if grep -qE 'value: "redis://vexa-vexa-redis' <<< "$RENDER"; then
   echo "  FAIL: a redis URL without the password is rendered"; fail=1
 else echo "  OK: no password-less redis URL"; fi
@@ -1660,13 +1660,20 @@ tb "default: no harness route is set (claude-code, ANTHROPIC_*)" '! grep -qE "na
 route="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set models.runner=openai-agent \
   --set models.llmBaseUrl=http://litellm.ai.svc:4000/v1 --set-string 'models.llmExtraBody={"temperature":0}' \
   --set secrets.llmApiKey=sk-render-test-only)"
-for d in agent-api runtime; do
+# agent-api alone holds the route: the runtime forwards no model key and no route (H5/W1)
+tb "the runtime carries no model route and no model key" '! grep -qE "name: (VEXA_RUNNER|VEXA_LLM_BASE_URL|VEXA_LLM_API_KEY|ANTHROPIC_AUTH_TOKEN)$" <<< "$(doc Deployment vexa-vexa-runtime "$route")"'
+for d in agent-api; do
   dd="$(doc Deployment "vexa-vexa-$d" "$route")"
   tb "$d carries VEXA_RUNNER=openai-agent" '[ "$(envval VEXA_RUNNER "$dd")" = "\"openai-agent\"" ]'
   tb "$d carries VEXA_LLM_BASE_URL" '[ "$(envval VEXA_LLM_BASE_URL "$dd")" = "\"http://litellm.ai.svc:4000/v1\"" ]'
   tb "$d carries VEXA_LLM_EXTRA_BODY" 'grep -A1 "name: VEXA_LLM_EXTRA_BODY" <<< "$dd" | grep -q temperature'
   tb "$d reads VEXA_LLM_API_KEY from the Secret, never inline" 'grep -A4 "name: VEXA_LLM_API_KEY" <<< "$dd" | grep -q "key: VEXA_LLM_API_KEY" && ! grep -q "sk-render-test-only" <<< "$dd"'
 done
+# H5/W1: the model proxy — workers reach it and nothing else does; agent-api names it and holds its key
+mp_np="$(doc NetworkPolicy vexa-vexa-model-proxy-ingress "$RENDER")"
+tb "the model proxy admits agent workers only, on 8102" 'grep -q "vexa.role: worker" <<< "$mp_np" && grep -q "port: 8102" <<< "$mp_np" && ! grep -q "component: gateway" <<< "$mp_np"'
+tb "agent workers may reach the model proxy" 'grep -B1 -A6 "component: model-proxy" <<< "$w_np" | grep -q "port: 8102"'
+tb "agent-api names the model proxy and reads its sealing key from the Secret" '[ "$(envval VEXA_MODEL_PROXY_URL "$aa_dep")" = "\"http://vexa-vexa-model-proxy:8102\"" ] && grep -A4 "name: VEXA_MODEL_PROXY_SECRET" <<< "$aa_dep" | grep -q "key: VEXA_MODEL_PROXY_SECRET"'
 tb "the chart Secret carries VEXA_LLM_API_KEY when set" 'grep -q "VEXA_LLM_API_KEY: \"sk-render-test-only\"" <<< "$(doc Secret vexa-vexa-secrets "$route")"'
 tb "and not when unset" '! grep -q "VEXA_LLM_API_KEY" <<< "$sec"'
 # A mirrored install (Harbor / GitLab registry) pinning one tag spawns its chat workers FROM THE MIRROR.

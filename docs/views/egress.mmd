@@ -17,6 +17,7 @@ flowchart LR
     terminal["terminal"]
     segments_table["transcription_segments (table)"]
     runtime["runtime"]
+    model_proxy["model-proxy"]
     agent_worker["agent-worker"]
     redis["redis"]
     postgres["postgres"]
@@ -35,7 +36,7 @@ flowchart LR
   signal_model["signal model"]
   signals_service ==>|"transcript -> external-saas"| signal_model
   model_provider["model provider"]
-  agent_worker ==>|"transcript -> external-saas"| model_provider
+  model_proxy ==>|"transcript -> external-saas"| model_provider
   agent_api ==>|"transcript -> external-saas"| model_provider
   customer_webhook["customer webhook"]
   meeting_api ==>|"metadata -> external-saas"| customer_webhook

@@ -29,6 +29,8 @@ from control_plane.workspace_membership import reconciled_memberships
 from control_plane.workspace_purpose import read_purpose
 from control_plane import delegation_refresh, delegation_revocation, global_layer
 from control_plane import model_endpoint
+from control_plane import model_proxy
+from shared import model_grant as model_grant_mod
 from control_plane import model_providers
 from control_plane import private_taint, unit_faults
 from control_plane.meeting_room import group_desk_mount
@@ -401,14 +403,13 @@ def build_mount_set(settings: Settings, subject: str, memberships: Optional[list
 
     return stack
 
-# ── model-auth passthrough (the k8s/helm credential seam) ────────────────────
-# The worker needs a MODEL credential, and delivery used to differ by substrate: the docker backend
-# brokers creds itself (the HOST_CLAUDE_CREDENTIALS bind-mount + copying ANTHROPIC_* from
-# the runtime service env), but the k8s and process backends deliver ONLY this spec env — so a helm
-# worker booted with no credential at all (claude CLI: "Not logged in" → chat "Model inference
-# error"). agent-api therefore stamps an EXPLICIT allowlist from its own environment into every
-# dispatch, making credential delivery uniform across backends. Never blanket-forward env (P14/P15):
-# each entry is a var a core/agent/llm adapter (or the claude CLI itself) actually reads.
+# ── the deployment's model credentials, as the route is resolved ──────────────
+# agent-api reads the deployment's model credentials from its OWN environment — this explicit
+# allowlist — so route resolution is uniform across backends. They name the route; they never reach
+# a worker: `model_proxy.confine` seals an API key for the model proxy and stamps every credential
+# name empty, keeping only a subscription's OAuth token on the subscription route, for the claude CLI
+# itself (H5/W1). Never blanket-forward env (P14/P15): each entry is a var a core/agent/llm adapter
+# (or the claude CLI itself) actually reads.
 MODEL_AUTH_ENV_ALLOWLIST = (
     "CLAUDE_CODE_OAUTH_TOKEN",  # claude CLI subscription OAuth — the env twin of the docker credentials mount
     "ANTHROPIC_API_KEY",        # claude CLI (last-resort fallback)
@@ -1680,7 +1681,8 @@ class Dispatcher:
         route_model = env.pop(MODEL_ID_ENV, "")
         # COLD OR WARM, asked before anything is delivered: only a worker this dispatch really starts
         # runs this route, so only then is its model recorded for the unit.
-        cold = self._workload_gone(uid) if route_model else False
+        gone = self._workload_gone(uid)
+        cold = gone if route_model else False
         # THE STORE IS ON: the worker keeps no conversation under a mount, ever (ADR-0048 decision 2).
         if getattr(self, "_session_store", None) is not None:
             env["VEXA_SESSION_STORE"] = "1"
@@ -1688,6 +1690,11 @@ class Dispatcher:
             # left in the person's `_system` tier is moved out of every worker's reach first.
             _archive_cli_transcripts(self._settings, str(identity["subject"]))
         self._record_delegation(uid, env)
+        # NO WORKER HOLDS A MODEL-PROVIDER KEY (H5/W1). The route just resolved leaves the env sealed
+        # for the model proxy — with the toolbelt's delegation token, once it has been recorded (or
+        # withheld) above — and the worker gets this turn's token to it, on the spawn env (cold) and
+        # on the delivered entry (warm) alike.
+        model_token = self._confine_model(uid, env, cold=gone)
         # WHAT THIS UNIT MAY FETCH AND PUSH on the s3 workspace backend: its own mounts, nothing else.
         # Keyed to the subject the worker's token names — the store routes compare it with
         # `x-user-id` — which for a room's turn is the workspace's own principal, not the owner.
@@ -1754,7 +1761,8 @@ class Dispatcher:
         meter_from = self._output_tail(uid) if meter is not None else "0-0"
         try:
             delivery = (self._predeliver(uid, invocation, entry_nonce, inbox=inbox, trace_id=trace_id, bundle=bundle,
-                                         readers=json.loads(env.get("VEXA_MOUNT_READERS") or "null"))
+                                         readers=json.loads(env.get("VEXA_MOUNT_READERS") or "null"),
+                                         model_grant=model_token)
                         if invocation["trigger"] == "message" or bundle is not None else None)
             if delivery is _DELIVERY_FAILED:
                 # The XADD failed. If the worker is GONE the spawn below re-runs this prompt as its
@@ -1960,7 +1968,7 @@ class Dispatcher:
 
     def _predeliver(self, uid: str, invocation: dict, nonce: str,
                     *, inbox: Optional[dict] = None, trace_id: str = "", bundle=_UNSET,
-                    readers: Optional[dict] = None) -> Optional[str]:
+                    readers: Optional[dict] = None, model_grant: str = "") -> Optional[str]:
         """XADD the message's prompt to ``unit:<uid>:in`` with a matching nonce; returns the
         out-stream TAIL id the watchdog reads the ack from.
 
@@ -1999,6 +2007,8 @@ class Dispatcher:
                 entry["inbox"] = inbox
             if readers is not None:
                 entry["readers"] = readers          # this dispatch's audience for the commit hold
+            if model_grant:
+                entry[model_grant_mod.ENTRY_FIELD] = model_grant   # this message's turn token
             if bundle is _UNSET:
                 bundle = self._session_bundle(invocation)
             if bundle is not None:
@@ -2078,6 +2088,31 @@ class Dispatcher:
         except Exception as exc:  # noqa: BLE001
             logger.warning("could not withdraw the refused turn for unit=%s: %s", uid, exc)
         return False
+
+    def _model_grants(self) -> "Optional[model_proxy.Grants]":
+        """The model proxy's grant store, or None when this deployment has no proxy to hand a token
+        to (no URL, no sealing key, or no Redis) — the worker then holds no model credential at all."""
+        secret = self._settings.model_proxy_secret.get_secret_value()
+        if not (self._settings.model_proxy_url and secret):
+            return None
+        r = self._redis()
+        return model_proxy.Grants(r, secret) if r is not None else None
+
+    def _confine_model(self, uid: str, env: dict[str, str], *, cold: bool) -> str:
+        """Seal this dispatch's model route for the proxy and mint the turn's token (``""`` when
+        none can be). Whatever fails, no provider credential is left in ``env``."""
+        try:
+            grants = self._model_grants()
+            if grants is None:
+                logger.error("model proxy not configured (VEXA_MODEL_PROXY_URL / VEXA_MODEL_PROXY_SECRET "
+                             "/ Redis) — unit=%s runs with no model credential", uid)
+            return model_proxy.confine(env, url=self._settings.model_proxy_url, grants=grants,
+                                       unit=uid, cold=cold)
+        except Exception:  # noqa: BLE001 — a route that cannot be sealed is never handed out instead
+            logger.exception("model route for unit=%s could not be sealed — it runs with no model "
+                             "credential", uid)
+            return model_proxy.confine(env, url=self._settings.model_proxy_url, grants=None,
+                                       unit=uid, cold=cold)
 
     def _workload_gone(self, uid: str) -> bool:
         """True when the runtime says the workload is NOT alive. Errors read as gone: a respawn on

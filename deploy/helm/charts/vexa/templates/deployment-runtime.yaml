@@ -112,60 +112,9 @@ spec:
               value: {{ include "vexa.workspacesDir" . | quote }}
             - name: RUNTIME_EXTRA_MOUNT_SOURCES
               value: {{ .Values.agentApi.globalSystemWorkspacePath | default "" | quote }}
-            - name: ANTHROPIC_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: ANTHROPIC_API_KEY
-                  optional: true
-            - name: CLAUDE_CODE_OAUTH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: CLAUDE_CODE_OAUTH_TOKEN
-                  optional: true
-            - name: ANTHROPIC_AUTH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: ANTHROPIC_AUTH_TOKEN
-                  optional: true
-            - name: ANTHROPIC_BASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: ANTHROPIC_BASE_URL
-                  optional: true
-            # THE HARNESS ROUTE (models.runner / llmBaseUrl / llmExtraBody, secrets.llmApiKey). The runtime
-            # forwards these to every agent worker it spawns (runtime_kernel.workload_env
-            # WORKER_FORWARD_ENV) — the worker's openai-agent harness reads them, so they must be HERE,
-            # not only on agent-api. A subject's own Settings → Models endpoint still replaces them.
-            {{- with .Values.models.runner }}
-            - name: VEXA_RUNNER
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.models.llmBaseUrl }}
-            - name: VEXA_LLM_BASE_URL
-              value: {{ . | quote }}
-            {{- end }}
-            {{- with .Values.models.llmExtraBody }}
-            - name: VEXA_LLM_EXTRA_BODY
-              value: {{ . | quote }}
-            {{- end }}
-            - name: VEXA_LLM_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: VEXA_LLM_API_KEY
-                  optional: true
-            - name: ANTHROPIC_MODEL
-              value: {{ .Values.models.anthropicModel | default "" | quote }}
-            - name: ANTHROPIC_DEFAULT_OPUS_MODEL
-              value: {{ .Values.models.anthropicOpusModel | default "" | quote }}
-            - name: ANTHROPIC_DEFAULT_SONNET_MODEL
-              value: {{ .Values.models.anthropicSonnetModel | default "" | quote }}
-            - name: ANTHROPIC_DEFAULT_HAIKU_MODEL
-              value: {{ .Values.models.anthropicHaikuModel | default "" | quote }}
+            # NO MODEL CREDENTIAL AND NO MODEL ROUTE (H5/W1): the runtime brokers nothing into a worker.
+            # agent-api is the one writer of a worker's model route, and it hands the worker a per-turn
+            # token to the model proxy (deployment-model-proxy.yaml) instead of a key.
             - name: LOG_LEVEL
               value: {{ .Values.runtime.logLevel | default "info" | quote }}
             {{- if eq .Values.runtime.backend "k8s" }}

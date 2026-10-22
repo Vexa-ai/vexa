@@ -128,6 +128,7 @@ from llm.ports import harness_subprocess_env, max_output_tokens
 from llm import jobs, web_tools
 from llm.refusal_guard import RefusalGuard
 from llm import workspace_paths as wpaths
+from shared import model_grant
 
 
 def _parse_extra_body(raw: object) -> dict:
@@ -1277,6 +1278,12 @@ class OpenAIAgentHarness:
         self._mcp_http = mcp_http_client
         self._chat_root: Optional[Path] = None
 
+    def _credential(self) -> str:
+        """The bearer a model request carries: the running turn's token to the model proxy
+        (``shared.model_grant``, H5/W1), else the key this harness was built with — which a worker,
+        whose every provider-credential name the dispatch stamps empty, never has."""
+        return model_grant.current() or self._key
+
     # -- port surface -----------------------------------------------------------------------
     def prepare(self, work: Path, chat_root: Optional[Path] = None) -> None:
         """Remember where continuity lives. claude-code does this with a `~/.claude/projects`
@@ -1645,7 +1652,8 @@ class OpenAIAgentHarness:
         if specs:
             body["tools"] = specs
             body["tool_choice"] = "auto"
-        headers = {"Authorization": f"Bearer {self._key}"} if self._key else {}
+        key = self._credential()
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
         stream = (os.environ.get("VEXA_AGENT_STREAM", "1") or "1").strip() not in ("0", "false", "no")
         if not stream:
             yield from self._complete_blocking(body, headers)
@@ -1792,7 +1800,8 @@ class OpenAIAgentHarness:
         body = {**self._extra, "model": model, "max_tokens": _TOOL_CHECK_MAX_TOKENS,
                 "messages": [{"role": "user", "content": _TOOL_CHECK_PROMPT}],
                 "tools": [_TOOL_CHECK_SPEC]}
-        headers = {"Authorization": f"Bearer {self._key}"} if self._key else {}
+        key = self._credential()
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
         host = self._host()
         inconclusive = provider_faults.ProviderFault(kind=provider_faults.UNAVAILABLE,
                                                      provider=host, model=model)

@@ -118,6 +118,10 @@ runtime_api_token="${RUNTIME_API_TOKEN:-$(python3 -c "import secrets; print(secr
 unset RUNTIME_API_TOKEN
 # The worker toolbelt: agent-api signs each worker's delegation token, admin-api verifies it.
 export VEXA_MCP_DELEGATION_SECRET="${VEXA_MCP_DELEGATION_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
+# The model proxy's sealing key (H5/W1): agent-api seals each turn's model route with it before the
+# route rests in Redis, and the model proxy opens it. Minted per boot like the two above; a restart
+# ends every worker, and with them every route sealed under the old key.
+export VEXA_MODEL_PROXY_SECRET="${VEXA_MODEL_PROXY_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
 # The terminal's second secret for minting the signed-in browser's SESSION credential at admin-api
 # (D13, POST /internal/sessions). Minted per boot like the two above; sessions end with the boot's key.
 export VEXA_TERMINAL_SESSION_SECRET="${VEXA_TERMINAL_SESSION_SECRET:-$(python3 -c "import secrets; print(secrets.token_hex(32))")}"
@@ -209,7 +213,9 @@ export VEXA_MODEL_CATALOG="${VEXA_MODEL_CATALOG:-}"
 #   -v ~/.claude/.credentials.json:/var/lib/vexa/host-claude/.credentials.json:ro
 #   -e HOST_CLAUDE_CREDENTIALS=/var/lib/vexa/host-claude/.credentials.json
 # — never the whole ~/.claude, which holds the operator's own transcripts and history. The runtime
-# copies the file into each worker's private HOME; its config.v1 file probe verifies it on /health.
+# copies the file into each worker's private HOME for the claude CLI to read (a consumer subscription
+# is never moved into the model proxy); its config.v1 file probe verifies it on /health. The API keys
+# below reach no worker (H5/W1): agent-api seals them into the turn's route for the model proxy.
 # A single-file bind pins the inode it was created with, and the CLI refreshes a token by rename(2)-ing
 # a new file over it: after the host CLI refreshes, re-create the container (`make up`).
 # Alternative: leave empty and set ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN instead.

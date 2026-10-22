@@ -10,6 +10,9 @@ flowchart LR
   style recording_blob stroke-dasharray: 5 5,stroke-width:3px
   userdata_blob[("userdata bucket (blob)")]
   style userdata_blob stroke-dasharray: 5 5,stroke-width:3px
+  model_routes[("mproxy:route:{id} + mproxy:unit-route:{unit} (redis keys)")]
+  model_grants[("mproxy:grant:{sha256} + mproxy:count:{sha256} (redis keys)")]
+  style model_grants stroke-dasharray: 5 5,stroke-width:3px
   bm_status[("bm:meeting:{id}:status (pubsub)")]
   u_meetings[("u:{user}:meetings (pubsub)")]
   bot_commands[("bot_commands:meeting:{id} (pubsub)")]
@@ -99,3 +102,8 @@ flowchart LR
   agent_api -->|write| meeting_bundle_parts
   meeting_api -.->|read| meeting_bundle_parts
   agent_api -.->|read| meeting_bundle_file
+  agent_api -->|write| model_routes
+  agent_api -->|write| model_grants
+  model_proxy -.->|read| model_routes
+  model_proxy -->|write| model_grants
+  model_proxy -.->|read| delegation_current

@@ -29,6 +29,7 @@ from llm.tool_events import (_BOT_TOOLS, _TERMS_TOOLS, _WRITER_TOOLS, _bot_artif
 from llm import faults as provider_faults
 from llm import workspace_paths as wpaths
 from llm.ports import harness_identity_kwargs, harness_subprocess_env, tools_identity
+from shared import model_grant
 
 
 def _short(value: object, n: int = 120) -> str:
@@ -308,6 +309,27 @@ _CODEX_TRANSPORT = ("httpConnectionFailed", "responseStreamConnectionFailed",
                     "responseStreamDisconnected", "responseTooManyFailedAttempts")
 
 
+#: The model provider Codex is pointed at when the model proxy serves the turn (H5/W1).
+PROXY_PROVIDER = "vexa-proxy"
+
+
+def proxy_provider_args(env: dict) -> list[str]:
+    """Codex's config overrides that send every model request to the model proxy with the turn's
+    token, and the token added to ``env`` under the name the provider reads it from. Empty when no
+    proxy is configured (no credential then reaches Codex at all)."""
+    base = model_grant.proxy_base()
+    if not base or os.environ.get("VEXA_MODEL_ROUTE") == "subscription":
+        # no proxy, or the deployment's subscription: Codex signs in with its own auth.json
+        return []
+    env[model_grant.TOKEN_ENV] = model_grant.current()
+    p = f"model_providers.{PROXY_PROVIDER}"
+    return ["-c", f'model_provider="{PROXY_PROVIDER}"',
+            "-c", f'{p}.name="{PROXY_PROVIDER}"',
+            "-c", f'{p}.base_url="{base}"',
+            "-c", f'{p}.env_key="{model_grant.TOKEN_ENV}"',
+            "-c", f'{p}.wire_api="responses"']
+
+
 def _codex_provider() -> str:
     """The host a Codex turn's model requests go to: the OpenAI API for a key, else the ChatGPT
     backend a subscription signs in to."""
@@ -390,6 +412,8 @@ class CodexHarness:
         return total
 
     def preflight(self) -> Optional[str]:
+        if model_grant.proxy_base() and os.environ.get("VEXA_MODEL_ROUTE") != "subscription":
+            return None                      # the model proxy holds the credential (H5/W1)
         if any((os.environ.get(key) or "").strip()
                for key in ("OPENAI_API_KEY", "CODEX_API_KEY")):
             return None
@@ -467,7 +491,7 @@ class CodexHarness:
         if ident is not None:
             env["CODEX_HOME"] = str(_tools_codex_home(ident))
         return self._process_factory(
-            ["codex", "app-server", "--stdio"], cwd=str(work), stdin=subprocess.PIPE,
+            ["codex", *proxy_provider_args(env), "app-server", "--stdio"], cwd=str(work), stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env,
             **harness_identity_kwargs(),
         )

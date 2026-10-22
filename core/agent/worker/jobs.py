@@ -35,6 +35,7 @@ import uuid
 from pathlib import Path
 from typing import Callable, Iterator, NamedTuple, Optional
 
+from shared import model_grant
 from workspaces.shared import workspace_paths as wpaths
 
 log = logging.getLogger("agent_api.worker")
@@ -123,6 +124,9 @@ class _Job(NamedTuple):
     target: str
     brief: str
     turn_id: str
+    #: The hold this act keeps on the model-proxy token of the turn that asked for it
+    #: (``shared.model_grant``): that token is revoked when the turn AND its jobs are done.
+    grant: object = None
 
 
 class JobRunner:
@@ -219,7 +223,7 @@ class JobRunner:
                         ev["turn_id"] = turn_id
                     self._emit(ev)
                     return ev
-                job = _Job(_new_id(), kind, target, brief, turn_id)
+                job = _Job(_new_id(), kind, target, brief, turn_id, model_grant.capture())
                 waiting.append(job)
                 ahead = len(waiting)          # the one running, plus everyone already waiting
                 ev = self._own({"type": "job-queued", "job_id": job.job_id, "kind": kind,
@@ -233,7 +237,7 @@ class JobRunner:
                 self._note(job.job_id, kind, target)
                 self._emit(ev)
                 return ev
-            job = _Job(_new_id(), kind, target, brief, turn_id)
+            job = _Job(_new_id(), kind, target, brief, turn_id, model_grant.capture())
             self._running[key] = job
         return self._begin(key, job)
 
@@ -249,7 +253,7 @@ class JobRunner:
         self._emit(ev)
         # The job continues the trace of the turn that asked for it (logevent.v1, Vexa-ai/vexa#1783):
         # a thread starts with an empty context unless it is handed this one.
-        th = threading.Thread(target=contextvars.copy_context().run, args=(self._run, job, key),
+        th = threading.Thread(target=contextvars.copy_context().run, args=(self._run_holding, job, key),
                               daemon=True, name=f"job-{job.job_id}")
         with self._lock:
             self._threads = [t for t in self._threads if t.is_alive()]
@@ -327,6 +331,12 @@ class JobRunner:
         return out
 
     # -- the job itself ----------------------------------------------------------------------
+    def _run_holding(self, job: _Job, key: str) -> None:
+        """Run the act under the model-proxy token of the turn that asked for it, and let go of it
+        after."""
+        with model_grant.adopt(job.grant):
+            self._run(job, key)
+
     def _run(self, job: _Job, key: str) -> None:
         job_id, kind, target = job.job_id, job.kind, job.target
         ok, why = True, ""

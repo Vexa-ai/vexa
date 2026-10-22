@@ -9,9 +9,10 @@ The rest of the system sees only ``HarnessPort`` UnitEvents.
 This is the proven ``claude -p --allowedTools --resume`` pattern (stream-json → SSE). The
 subprocess is an INJECTED runner (``HarnessExec``), so the parser is offline-provable with a fake.
 
-Credentials: ``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN`` / ``ANTHROPIC_BASE_URL`` (or the
-``HOST_CLAUDE_CREDENTIALS`` subscription mount brokered by the runtime) — this adapter's concern
-only; other runners declare their own.
+Credentials: no API key of its own. ``ANTHROPIC_BASE_URL`` names the model proxy and the turn's
+token rides ``ANTHROPIC_AUTH_TOKEN`` (``shared.model_grant``); the key is the proxy's
+(``control_plane.model_proxy``), never this worker's. The one exception is the deployment's
+subscription route, where the CLI reads its own OAuth credential (``VEXA_MODEL_ROUTE=subscription``).
 """
 from __future__ import annotations
 
@@ -37,6 +38,7 @@ from llm.tool_events import (_BOT_TOOLS, _FOCUS_TOOLS, _OPEN_TOOLS, _TERMS_TOOLS
                              _FETCH_TOOLS, _bot_artifact, _fetched_source, _open_event, _published_terms, _short,
                              _tool_result_text, _workspace_focus, _written_artifact, result_outcome)
 from llm.private_writes import private_source
+from shared import model_grant
 from shared.private_fingerprint import digests_of
 
 logger = logging.getLogger("llm.claude_code")
@@ -472,6 +474,19 @@ def _cli_env() -> dict[str, str]:
     workspace's ``CLAUDE.md`` loading as project memory."""
     env = harness_subprocess_env()
     env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] = "1"
+    # THE TURN'S MODEL CREDENTIAL (H5/W1): its token to the model proxy, which ANTHROPIC_BASE_URL
+    # names (the dispatch stamps it). The CLI sends it as its bearer; the proxy sends the real one.
+    # On the deployment's SUBSCRIPTION route the CLI signs in itself — with the OAuth token the
+    # dispatch stamped for that route, or its credential file — and calls Anthropic directly: a
+    # consumer credential is never moved into a proxy (docs/docs/model-credentials-licensing.mdx).
+    if os.environ.get(SUBJECT_ROUTE_ENV) == "subscription":
+        oauth = (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
+        if oauth:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth
+    else:
+        token = model_grant.current()
+        if token:
+            env["ANTHROPIC_AUTH_TOKEN"] = token
     # THE OUTPUT CAP (`llm.ports.max_output_tokens`). The CLI asks for 32000 output tokens unless
     # told otherwise; the deployment's one dial is mapped onto the CLI's own variable here.
     cap = max_output_tokens()
@@ -720,8 +735,9 @@ def _link_chat_into_workspace(work: Path) -> None:
         os.close(home_fd)
 
 
-#: The dispatch's mark on a worker whose model route is the person's OWN endpoint
-#: (``control_plane.dispatch.subject_route_env``). Present on that route and on no other.
+#: The dispatch's mark on a worker's model route: ``subject`` for the person's OWN endpoint
+#: (``control_plane.dispatch.subject_route_env``), ``subscription`` for the deployment's subscription,
+#: ``proxy`` for any other route through the model proxy (``control_plane.model_proxy.confine``).
 SUBJECT_ROUTE_ENV = "VEXA_MODEL_ROUTE"
 #: The CLI's credential file, relative to its config directory — where the runtime stages the
 #: deployment's subscription in a process-backend HOME (``runtime_kernel.profiles``, a test holds

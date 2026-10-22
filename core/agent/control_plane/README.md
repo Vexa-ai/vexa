@@ -73,6 +73,9 @@ caller or with the internal secret, never with a credential of its own:
 - `workload_redis.py` — the Redis user an agent worker connects as.
 - `model_endpoint.py` — whether a subject's model config points elsewhere, and the operator gate on
   where.
+- `model_proxy.py` — the model-provider key proxy (H5/W1): `confine` takes a dispatched worker's model
+  route out of its env (sealed in Redis, a per-turn token in its place), and the proxy app (a process
+  of its own, port 8102) forwards a worker's model and toolbelt requests with the real credential.
 - `model_providers/` — the operator's model catalog (`VEXA_MODEL_CATALOG`, `models.v1`) and the
   provider port each model resolves through, one adapter per provider kind (ADR-0043). The dispatch
   (`dispatch.apply_model_route`, `route_env`) is the one place a resolved route becomes a worker's

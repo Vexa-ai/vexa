@@ -516,7 +516,7 @@
       "class": "capability",
       "capability": "model_inference",
       "secret": true,
-      "description": "DOCKER-HOST path (NOT an in-container path) to a claude credentials JSON (~/.claude/.credentials.json); the docker backend bind-mounts it READ-ONLY into every spawned agent-worker at /root/.claude/.credentials.json — the claude-code runner's subscription credential path. compose also mirror-mounts it into the runtime container at /var/lib/vexa/host-claude-credentials so the config.v1 file probe can verify the host file actually exists (docker turns a MISSING host path into an empty directory in the worker → 'Model inference failed: Not logged in'). PAIR IT WITH HOST_CLAUDE_DIR: this single-FILE mirror is pinned to the inode it was created with, so it goes stale the moment the CLI refreshes the token",
+      "description": "DOCKER-HOST path (NOT an in-container path) to a claude credentials JSON (~/.claude/.credentials.json); the docker backend bind-mounts it READ-ONLY into every spawned agent-worker at /root/.claude/.credentials.json — the claude-code runner's subscription credential path, read only by the official claude CLI (a consumer subscription is never moved into the model proxy; every API key is, and reaches no worker: H5/W1). compose also mirror-mounts it into the runtime container at /var/lib/vexa/host-claude-credentials so the config.v1 file probe can verify the host file actually exists (docker turns a MISSING host path into an empty directory in the worker → 'Model inference failed: Not logged in'). PAIR IT WITH HOST_CLAUDE_DIR: this single-FILE mirror is pinned to the inode it was created with, so it goes stale the moment the CLI refreshes the token",
       "targets": [
         "compose",
         "lite"
@@ -539,136 +539,6 @@
       "description": "DOCKER-HOST path to Codex subscription auth (~/.codex/auth.json); mounted read-only into spawned agent workers at /tmp/.codex/auth.json (WORKER_CODEX_HOME), or copied to ~/.codex/auth.json in a process-backend child's private HOME",
       "targets": [
         "compose"
-      ]
-    },
-    {
-      "key": "ANTHROPIC_API_KEY",
-      "class": "capability",
-      "capability": "model_inference",
-      "secret": true,
-      "description": "API-key credential path, brokered into spawned workers (alternative to the subscription mount)"
-    },
-    {
-      "key": "CLAUDE_CODE_OAUTH_TOKEN",
-      "class": "capability",
-      "capability": "model_inference",
-      "secret": true,
-      "description": "Claude Code subscription OAuth as env (`claude setup-token`) — the env twin of the HOST_CLAUDE_CREDENTIALS file mount, brokered into spawned workers"
-    },
-    {
-      "key": "ANTHROPIC_AUTH_TOKEN",
-      "class": "capability",
-      "capability": "model_inference",
-      "secret": true,
-      "description": "OAuth/OpenRouter-style bearer credential path, brokered into spawned workers (pairs with ANTHROPIC_BASE_URL)"
-    },
-    {
-      "key": "OPENAI_API_KEY",
-      "class": "capability",
-      "capability": "model_inference",
-      "secret": true,
-      "description": "OpenAI API credential brokered into Codex harness workers as an alternative to subscription auth",
-      "targets": [
-        "compose"
-      ]
-    },
-    {
-      "key": "CODEX_API_KEY",
-      "class": "capability",
-      "capability": "model_inference",
-      "secret": true,
-      "description": "Codex-specific API credential brokered into Codex harness workers as an alternative to subscription auth",
-      "targets": [
-        "compose"
-      ]
-    },
-    {
-      "key": "ANTHROPIC_BASE_URL",
-      "class": "defaulted",
-      "default": "(provider default — api.anthropic.com)",
-      "description": "endpoint the ANTHROPIC_* credentials authenticate against, brokered into spawned workers"
-    },
-    {
-      "key": "ANTHROPIC_MODEL",
-      "class": "defaulted",
-      "default": "(provider default)",
-      "description": "model id brokered into spawned workers"
-    },
-    {
-      "key": "ANTHROPIC_DEFAULT_OPUS_MODEL",
-      "class": "defaulted",
-      "default": "(provider default)",
-      "description": "opus-alias model id brokered into spawned workers"
-    },
-    {
-      "key": "ANTHROPIC_DEFAULT_SONNET_MODEL",
-      "class": "defaulted",
-      "default": "(provider default)",
-      "description": "sonnet-alias model id brokered into spawned workers"
-    },
-    {
-      "key": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-      "class": "defaulted",
-      "default": "(provider default)",
-      "description": "haiku-alias model id brokered into spawned workers"
-    },
-    {
-      "key": "VEXA_RUNNER",
-      "class": "defaulted",
-      "default": "claude-code",
-      "description": "the agent HARNESS for workspace turns, brokered into spawned workers",
-      "targets": [
-        "compose",
-        "helm"
-      ]
-    },
-    {
-      "key": "VEXA_AGENT_MODEL",
-      "class": "defaulted",
-      "default": "(harness CLI default)",
-      "description": "the model id spawned workers run every turn on — chat and the write-back phase alike. The runtime does not use it itself; it FORWARDS it into each spawned worker, which is the only reason it is declared here",
-      "targets": [
-        "compose"
-      ]
-    },
-    {
-      "key": "VEXA_LLM_BASE_URL",
-      "class": "defaulted",
-      "default": "(adapter default)",
-      "description": "openai-agent harness endpoint, forwarded into spawned agent workers when the spec does not set it. A dispatch that applies a subject's own model endpoint stamps it, and a stamped value always wins",
-      "targets": [
-        "compose",
-        "helm"
-      ]
-    },
-    {
-      "key": "VEXA_LLM_API_KEY",
-      "class": "capability",
-      "capability": "model_inference",
-      "secret": true,
-      "description": "openai-agent harness credential, forwarded into spawned agent workers when the spec does not set it. Never over a stamped value, the empty string included, so a subject's own model endpoint never receives it",
-      "targets": [
-        "compose",
-        "helm"
-      ]
-    },
-    {
-      "key": "VEXA_LLM_MODEL",
-      "class": "defaulted",
-      "default": "(adapter default)",
-      "description": "openai-agent harness fallback model, forwarded into spawned agent workers when the spec does not set it; VEXA_AGENT_MODEL wins inside the worker",
-      "targets": [
-        "compose"
-      ]
-    },
-    {
-      "key": "VEXA_LLM_EXTRA_BODY",
-      "class": "defaulted",
-      "default": "(unset — no extra fields)",
-      "description": "openai-agent harness: a JSON object merged into every chat/completions request (server-specific fields the OpenAI dialect cannot express); forwarded into spawned agent workers when the spec does not set it. A subject's own model endpoint stamps its own, empty included",
-      "targets": [
-        "compose",
-        "helm"
       ]
     },
     {
@@ -808,15 +678,6 @@
       ]
     },
     {
-      "key": "VEXA_CODEX_MODEL",
-      "class": "defaulted",
-      "default": "(subscription account default)",
-      "description": "optional model override for the codex harness; empty avoids inheriting a Claude runner model pin",
-      "targets": [
-        "compose"
-      ]
-    },
-    {
       "key": "VEXA_MIDTURN_INJECT",
       "class": "defaulted",
       "default": "0",
@@ -859,9 +720,9 @@
       "when_unconfigured": "a runtime.v1 create with profile=agent fails loud at spawn time (no worker image derivable)"
     },
     "model_inference": {
-      "description": "spawned agent-workers get model-provider credentials brokered in — a mounted Claude/Codex subscription file or an API-style key",
+      "description": "spawned agent-workers get the deployment's model SUBSCRIPTION file mounted for the vendor's own CLI (a Claude or Codex subscription). API keys are not the runtime's: agent-api seals them for the model proxy, and no worker holds one (H5/W1)",
       "mode": "any",
-      "when_unconfigured": "agent dispatches spawn but every turn fails inside the worker ('Model inference failed: Not logged in' / provider 401) — configure ONE credential path",
+      "when_unconfigured": "workers get no subscription file — fine when the deployment's model route is an API key (agent-api + the model proxy); a subscription-only deployment's turns fail inside the worker ('Not logged in')",
       "probe": {
         "kind": "file",
         "ttl_s": 60,
@@ -879,6 +740,34 @@
     {
       "key": "LIVEKIT_API_SECRET",
       "reason": "compose blanks it on the runtime (LIVEKIT_API_SECRET= in its environment block) so the whole-.env env_file does not hand the runtime the LiveKit API secret; the runtime reads no LiveKit key"
+    },
+    {
+      "key": "ANTHROPIC_API_KEY",
+      "reason": "compose blanks it on the runtime (ANTHROPIC_API_KEY= in its environment block) so the whole-.env env_file does not hand the runtime a model credential: the runtime reads none and forwards none into a worker (H5/W1) — agent-api and the model proxy hold them"
+    },
+    {
+      "key": "ANTHROPIC_AUTH_TOKEN",
+      "reason": "compose blanks it on the runtime (ANTHROPIC_AUTH_TOKEN= in its environment block) so the whole-.env env_file does not hand the runtime a model credential: the runtime reads none and forwards none into a worker (H5/W1) — agent-api and the model proxy hold them"
+    },
+    {
+      "key": "CLAUDE_CODE_OAUTH_TOKEN",
+      "reason": "compose blanks it on the runtime (CLAUDE_CODE_OAUTH_TOKEN= in its environment block) so the whole-.env env_file does not hand the runtime a model credential: the runtime reads none and forwards none into a worker (H5/W1) — agent-api and the model proxy hold them"
+    },
+    {
+      "key": "OPENAI_API_KEY",
+      "reason": "compose blanks it on the runtime (OPENAI_API_KEY= in its environment block) so the whole-.env env_file does not hand the runtime a model credential: the runtime reads none and forwards none into a worker (H5/W1) — agent-api and the model proxy hold them"
+    },
+    {
+      "key": "CODEX_API_KEY",
+      "reason": "compose blanks it on the runtime (CODEX_API_KEY= in its environment block) so the whole-.env env_file does not hand the runtime a model credential: the runtime reads none and forwards none into a worker (H5/W1) — agent-api and the model proxy hold them"
+    },
+    {
+      "key": "VEXA_LLM_API_KEY",
+      "reason": "compose blanks it on the runtime (VEXA_LLM_API_KEY= in its environment block) so the whole-.env env_file does not hand the runtime a model credential: the runtime reads none and forwards none into a worker (H5/W1) — agent-api and the model proxy hold them"
+    },
+    {
+      "key": "VEXA_MODEL_PROXY_SECRET",
+      "reason": "compose blanks it on the runtime (VEXA_MODEL_PROXY_SECRET= in its environment block) so the whole-.env env_file does not hand the runtime a model credential: the runtime reads none and forwards none into a worker (H5/W1) — agent-api and the model proxy hold them"
     }
   ]
 }

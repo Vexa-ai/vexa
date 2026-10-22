@@ -6,7 +6,8 @@ description: "The agent runs in a runtime-spawned container, over a mounted work
 1. The [Scheduler](/concepts#scheduler) fires; agent-api asks the [Runtime](/core/runtime) to
    spawn (it touches **no docker** itself).
 2. The container mounts **only** the granted [workspaces](/concepts#workspace) — one bind per mount, no
-   clone; another tenant's workspace is not in the filesystem at all — + brokers creds.
+   clone; another tenant's workspace is not in the filesystem at all. Its model credential is a
+   per-turn token to the model proxy, never a provider key.
 3. The agent **resumes from the session file** in the rw folder (continuity is a file), runs the
    [runner](/concepts#agent), and **commits freeform** changes.
 4. It emits events on its [Stream](/architecture/streaming); the container is **reaped when idle**.
@@ -22,7 +23,7 @@ env + a bind-mount, and the worker drives the [runner](/concepts#agent) over the
 trigger → Scheduler → Runtime spawns the `agent` container  (CMD: python -m agent_api.worker)
   ├─ bind-mounts ONLY the granted workspaces, one per mount  (ported in, not cloned; :ro roles enforced)
   ├─ injects the signed dispatch token + REDIS_URL + the unit:<id>:in / unit:<id>:out topics + `start`
-  └─ brokers the model credential                            (never in the dispatch envelope)
+  └─ hands no model key: agent-api seals the route for the model proxy and stamps the turn's token
 worker → one governed turn:  runner → workspace.v1 re-validate → git commit
   ├─ XADD each UnitEvent to unit:<id>:out                    (the Stream)
   └─ block on unit:<id>:in for the next message; idle ⇒ exit ⇒ container reaped  (TTL-on-idle)
@@ -36,7 +37,34 @@ conversation from the durable git folder, no warm container needed.
 <Note>Proven end-to-end on docker: a `unit.v1` dispatch → isolated `vexa-agent-<id>` container → a real
 claude turn → a `workspace.v1`-governed commit → events on `unit:<id>:out`. Code:
 `core/agent/services/agent-api/src/agent_api/worker.py` (the harness),
-`core/runtime/src/runtime_kernel/docker_backend.py` (mount + credential brokering).</Note>
+`core/runtime/src/runtime_kernel/docker_backend.py` (mounts), `core/agent/control_plane/model_proxy.py`
+(the model proxy).</Note>
+
+## The model proxy
+
+A harness CLI lets the model run shell commands, and whatever the CLI holds, that shell can read. So
+a worker is given no model-provider API key and no toolbelt bearer (H5/W1):
+
+1. **Dispatch.** agent-api resolves the turn's model route as always (the catalog, the person's own
+   endpoint, the deployment's keys), then seals it — endpoint, key, the turn's models, the output
+   cap, the toolbelt URL and delegation token — with `VEXA_MODEL_PROXY_SECRET` into Redis, where no
+   worker's Redis user reaches. Every credential name in the worker's env is stamped empty; every
+   base URL names the proxy.
+2. **Per turn.** Each message agent-api delivers carries a token of its own (`vxm_…`): the cold
+   spawn's in `VEXA_MODEL_PROXY_TOKEN`, every later one on its signed `unit:<id>:in` entry. It
+   expires with the turn's own ceiling (a job's, plus the wait in the queue).
+3. **Use.** The harness sends model requests to `<proxy>/llm/…` and attaches the toolbelt at
+   `<proxy>/mcp`, presenting the token. The proxy refuses an unknown, revoked or expired token, a
+   model outside the turn's scope, and a request past the turn's ceiling; otherwise it swaps the
+   token for the key (or the delegation bearer) and streams the answer back.
+4. **End.** When the last run holding a token — the turn, its write-back, the jobs it started —
+   ends, the worker revokes it. The next turn runs on its own.
+
+A deployment **subscription** is the one exception: a consumer OAuth credential is read only by the
+vendor's own CLI, from its own file or `CLAUDE_CODE_OAUTH_TOKEN`, and is never moved into a proxy
+([Model credentials & licensing](/model-credentials-licensing)). Its turns' model calls go straight
+to the vendor; only its toolbelt goes through the proxy. The licence confines such a deployment to
+the one human the subscription belongs to.
 
 ## The same run, any substrate
 

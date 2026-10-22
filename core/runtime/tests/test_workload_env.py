@@ -239,16 +239,19 @@ def test_no_service_secret_reaches_a_child_process():
         assert env["VEXA_UNIT_ID"] == "u1"
 
 
-def test_model_credentials_reach_workers_only():
+def test_no_model_credential_or_route_reaches_any_workload():
+    """H5/W1: a worker's model route and credential are the dispatch's (a turn token to the model
+    proxy); nothing of the runtime's own reaches a worker or a bot."""
     worker = child_environment({}, forward=_WORKER_FORWARD, parent=_RUNTIME_ENV)
     bot = child_environment({}, forward=_BOT_FORWARD, parent=_RUNTIME_ENV)
-    assert worker["ANTHROPIC_API_KEY"] == "model-credential" and worker["VEXA_AGENT_MODEL"] == "sonnet"
-    assert "ANTHROPIC_API_KEY" not in bot and "VEXA_AGENT_MODEL" not in bot
+    for env in (worker, bot):
+        assert "ANTHROPIC_API_KEY" not in env and "VEXA_AGENT_MODEL" not in env
 
 
 def test_a_dispatch_stamped_value_wins_over_the_forwarded_one():
-    env = child_environment({"VEXA_AGENT_MODEL": "opus"}, forward=_WORKER_FORWARD, parent=_RUNTIME_ENV)
-    assert env["VEXA_AGENT_MODEL"] == "opus"
+    parent = {**_RUNTIME_ENV, "VEXA_AGENT_MAX_TOOL_CALLS": "40"}
+    env = child_environment({"VEXA_AGENT_MAX_TOOL_CALLS": "12"}, forward=_WORKER_FORWARD, parent=parent)
+    assert env["VEXA_AGENT_MAX_TOOL_CALLS"] == "12"
 
 
 def test_an_explicitly_empty_dispatch_value_is_never_refilled():

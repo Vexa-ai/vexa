@@ -41,21 +41,26 @@ models:
 secrets:
   llmApiKey: "<the LiteLLM virtual key>" # or carry VEXA_LLM_API_KEY in secrets.existingSecretName
 networkPolicy:
-  workloads:
-    worker:
-      extraEgress:                       # only when the endpoint is in-cluster or on a private range
-        - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ai}}}]
-          ports: [{port: 4000, protocol: TCP}]
+  controlPlane:
+    extraEgress:                         # only when the endpoint is in-cluster: the model proxy calls it
+      - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ai}}}]
+        ports: [{port: 4000, protocol: TCP}]
 ```
+
+Workers never call the endpoint themselves: their model requests go to the chart's model proxy with
+a per-turn token, and the proxy, a control-plane Pod, calls the endpoint with the key (H5/W1). A
+`networkPolicy.workloads.worker.extraEgress` rule written for an earlier release's worker-side call
+is no longer needed.
 
 | Value | Env it sets | Where | Notes |
 |---|---|---|---|
 | `mcp.enabled` | `MCP_URL` (gateway), `VEXA_MCP_URL` (agent-api) | gateway, agent-api | default `true`. `false` removes the toolbelt: the agent has no vexa tools. |
 | `secrets.mcpDelegationSecret` | `VEXA_MCP_DELEGATION_SECRET` | agent-api signs, admin-api verifies | generated at install and kept across upgrades. With `secrets.existingSecretName`, your Secret must carry it. |
-| `models.runner` | `VEXA_RUNNER` | agent-api, runtime | empty means `claude-code`, which speaks the Anthropic dialect through `secrets.anthropic*`. Use `openai-agent` for vLLM, LiteLLM and other OpenAI-compatible endpoints. |
-| `models.llmBaseUrl` | `VEXA_LLM_BASE_URL` | agent-api, runtime | the `/v1` base of the endpoint. |
-| `models.llmExtraBody` | `VEXA_LLM_EXTRA_BODY` | agent-api, runtime | a JSON object merged into every request, for server-specific fields. |
-| `secrets.llmApiKey` | `VEXA_LLM_API_KEY` | agent-api, runtime (from the Secret) | the endpoint's bearer token. Also what tells agent-api that a model credential exists (see [Limits](#limits)). |
+| `secrets.modelProxySecret` | `VEXA_MODEL_PROXY_SECRET` | agent-api seals, the model proxy opens | generated at install and kept across upgrades. With `secrets.existingSecretName`, your Secret must carry it, or no worker gets a model credential. |
+| `models.runner` | `VEXA_RUNNER` | agent-api | empty means `claude-code`, which speaks the Anthropic dialect through `secrets.anthropic*`. Use `openai-agent` for vLLM, LiteLLM and other OpenAI-compatible endpoints. |
+| `models.llmBaseUrl` | `VEXA_LLM_BASE_URL` | agent-api (the model proxy calls it) | the `/v1` base of the endpoint. |
+| `models.llmExtraBody` | `VEXA_LLM_EXTRA_BODY` | agent-api | a JSON object merged into every request, for server-specific fields. |
+| `secrets.llmApiKey` | `VEXA_LLM_API_KEY` | agent-api (from the Secret) | the endpoint's bearer token, sealed per turn for the model proxy; no worker holds it. Also what tells agent-api that a model credential exists (see [Limits](#limits)). |
 | `models.agentModel` | `VEXA_AGENT_MODEL` | agent-api | the model id. |
 | `runtime.agentWorkerImage` | `AGENT_WORKER_IMAGE` | runtime | the worker image. With `global.imageTag` set, only its tag is replaced, so a mirrored registry is kept. |
 
@@ -140,13 +145,17 @@ no tool call back. A check that fails for another reason, such as a timeout, nev
    `VEXA_MCP_DELEGATION_SECRET`, naming the person, their workspace ceiling and an expiry. It asks
    the runtime to start a worker Pod, with `VEXA_MCP_URL` (the gateway's `/mcp`) and the token in its
    environment.
-3. The runtime starts the worker from `AGENT_WORKER_IMAGE` and passes on the model route
-   (`VEXA_RUNNER`, `VEXA_LLM_BASE_URL`, `VEXA_LLM_API_KEY`, `VEXA_LLM_EXTRA_BODY`). The key travels in
-   a Secret of that Pod's own, never as a value in the Pod spec.
-4. The worker writes `mcp.json` with the token as its bearer, lists the tools at the gateway's `/mcp`,
-   and offers them to the model as `mcp__vexa__<tool>`.
-5. The model calls `request_meeting_bot`. The worker sends `tools/call` to the gateway's `/mcp`. The
-   gateway sends the `vxd_` token to identity (admin-api `/internal/validate`), which verifies the
+3. agent-api resolves the model route (`VEXA_RUNNER`, `VEXA_LLM_BASE_URL`, `VEXA_LLM_API_KEY`,
+   `VEXA_LLM_EXTRA_BODY`), seals it — key and delegation token included — for the **model proxy**
+   (`<release>-model-proxy`, port 8102), and mints this turn's token to it. The runtime starts the
+   worker from `AGENT_WORKER_IMAGE` with the proxy's address and that token. No worker holds the key
+   (H5/W1).
+4. The worker writes `mcp.json` naming the proxy's `/mcp` with the turn's token, lists the tools, and
+   offers them to the model as `mcp__vexa__<tool>`. Each model request goes to the proxy's `/llm` with
+   the same token; the proxy checks it is live and the model in the turn's scope, and forwards with
+   the key.
+5. The model calls `request_meeting_bot`. The proxy relays `tools/call` to the gateway's `/mcp` with
+   the person's `vxd_` token. The gateway sends it to identity (admin-api `/internal/validate`), which verifies the
    signature, the audience, the expiry and the revocation list, and answers with the person.
 6. The gateway forwards the call to the MCP service with a signed identity. The MCP calls the meetings
    API back through the gateway, as the same person, on the routes it declares. meeting-api asks the
@@ -166,8 +175,9 @@ no identity and no data: it relays each call through the gateway with the caller
 **Where the configuration lives.** `deploy/helm/charts/vexa/values.yaml` (`mcp`, `models`,
 `secrets`, `networkPolicy.workloads`). The templates are `deployment-mcp.yaml`, `service-mcp.yaml`,
 `deployment-gateway.yaml` (`MCP_URL`), `deployment-agent-api.yaml` and `deployment-runtime.yaml`
-(the toolbelt and the model route), `networkpolicy-workloads.yaml` (worker egress), and
-`networkpolicy-namespace.yaml` (MCP ingress). The tool-calling check is in
+(the toolbelt and the model route), `deployment-model-proxy.yaml` (the model proxy),
+`networkpolicy-workloads.yaml` (worker egress), `networkpolicy.yaml` (model-proxy ingress: workers
+only), and `networkpolicy-namespace.yaml` (MCP ingress). The tool-calling check is in
 `core/agent/llm/openai_agent.py`, and the fault in `core/agent/llm/faults.py`.
 
 ## Why it complies

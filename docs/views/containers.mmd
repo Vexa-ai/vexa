@@ -11,6 +11,7 @@ flowchart LR
     agent_api["agent-api"]
     credentials_broker["credential-broker"]
     agent_worker["agent-worker"]
+    model_proxy["model-proxy"]
   end
   subgraph gateway_system["gateway"]
     conformance["conformance"]
@@ -121,6 +122,8 @@ flowchart LR
   crm_api -->|"HTTP"| flows_api
   signals_service -->|"HTTP"| credentials_broker
   signals_service -->|"HTTPS"| signal_model
-  agent_worker -->|"HTTPS"| model_provider
+  agent_worker -->|"HTTP"| model_proxy
+  model_proxy -->|"HTTP"| gateway
+  model_proxy -->|"HTTPS"| model_provider
   agent_api -->|"HTTPS"| model_provider
   meeting_api -->|"HTTPS"| customer_webhook
