@@ -39,7 +39,7 @@ for (const v of vectors.redact_urls_in) {
 }
 
 // ── capture ────────────────────────────────────────────────────────────────────────────────────
-const SECRET = "S3cr3tPasscode";
+const SECRET = "TESTPASSCODE";
 const ZOOM = `https://us05web.zoom.us/j/81234567890?pwd=${SECRET}`;
 const ZOOM_LABEL = `https://zoom-lfx.platform.linuxfoundation.org/meeting/91234567890?password=${SECRET}&zak=${SECRET}`;
 const TEAMS = `https://teams.microsoft.com/meet/3741234567890?p=${SECRET}`;

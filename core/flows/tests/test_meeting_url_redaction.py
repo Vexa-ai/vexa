@@ -21,7 +21,7 @@ from flows_steps import grants  # noqa: E402
 from flows_steps import meeting as mt  # noqa: E402
 import meeting_url_redaction as red  # noqa: E402
 
-SECRET = "S3cr3tPasscode"
+SECRET = "TESTPASSCODE"
 ZOOM = f"https://us05web.zoom.us/j/81234567890?pwd={SECRET}"
 TEAMS = f"https://teams.microsoft.com/meet/3741234567890?p={SECRET}"
 VECTORS = json.loads((Path(__file__).resolve().parent / "fixtures" / "meeting-url-redaction-vectors.json").read_text())

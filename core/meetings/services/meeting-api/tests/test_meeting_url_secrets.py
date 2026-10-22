@@ -30,8 +30,8 @@ from meeting_api.collector.fakes import InMemoryTranscriptStore
 SECRET = "test-admin-token"
 USER = 7
 HEADERS = {"x-user-id": str(USER)}
-ZAK = "eyJ0eXAiOiJKV1QiLCJob3N0In0.c2VjcmV0LWhvc3QtdG9rZW4.sig"
-PWD = "S3cr3tPasscode"
+ZAK = "TEST.ZAK.TOKEN"
+PWD = "TESTPASSCODE"
 JOIN = f"https://us05web.zoom.us/j/81234567890?pwd={PWD}"
 WITH_ZAK = f"{JOIN}&zak={ZAK}"
 VECTORS = json.loads((Path(__file__).resolve().parent / "fixtures" / "meeting-url-redaction-vectors.json").read_text())

@@ -155,7 +155,7 @@ async function main(): Promise<void> {
 
   // ── a join error that quotes the meeting URL: the passcode never leaves the bot ──
   {
-    const SECRET = 'S3cr3tPasscode';
+    const SECRET = 'TESTPASSCODE';
     const url = `https://us05web.zoom.us/j/81234567890?pwd=${SECRET}`;
     const lc = recordingSink();
     const join: JoinDriver = {

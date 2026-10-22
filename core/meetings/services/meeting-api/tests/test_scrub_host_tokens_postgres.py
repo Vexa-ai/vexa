@@ -29,12 +29,12 @@ import pytest
 URL = os.getenv("MEETING_API_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="set MEETING_API_TEST_DATABASE_URL to an empty Postgres database")
 
-TOKEN = "eyJ0eXAiOiJKV1QiLCJob3N0In0.c2VjcmV0LWhvc3QtdG9rZW4.sig"
-PWD = "AbC.1"
+TOKEN = "TEST.ZAK.TOKEN"
+PWD = "TESTPASSCODE.1"
 JOIN = f"https://us05web.zoom.us/j/81234567890?pwd={PWD}"
 START = f"https://us05web.zoom.us/s/81234567890?zak={TOKEN}"
 WITH_ZAK = f"{JOIN}&zak={TOKEN}"
-TEAMS_P = "Tm5Pass9"
+TEAMS_P = "TESTTEAMSPASSCODE"
 TEAMS = f"https://teams.microsoft.com/meet/3741234567890?p={TEAMS_P}"
 
 SEED = [
@@ -47,7 +47,7 @@ SEED = [
         '[{"value": "Join: ' + WITH_ZAK + '\\nHost: ' + START + '\\n&lt;a href=' + JOIN + '&amp;zak=' + TOKEN + '&gt;"}]}}}}], '
         '"duration_s": 1.10, "recording_enabled": true, "title": "Weekly"}'
     )),
-    ("B", '{"constructed_meeting_url": "https://us05web.zoom.us/j/81234567891?pwd=Keep", "n": 2.50}'),
+    ("B", '{"constructed_meeting_url": "https://us05web.zoom.us/j/81234567891?pwd=TESTKEEPPASSCODE", "n": 2.50}'),
     ("C", '{"title": "Zakaria said zak=1 and pwd=1 outside any link", "notes": "see ' + JOIN + '", "x": 1}'),
     ("D", (
         '{"constructed_meeting_url": "' + TEAMS + '", '

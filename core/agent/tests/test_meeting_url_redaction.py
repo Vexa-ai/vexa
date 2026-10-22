@@ -17,7 +17,7 @@ import pytest
 from shared import meeting_url_redaction as red
 from worker import meeting_link
 
-SECRET = "S3cr3tPasscode"
+SECRET = "TESTPASSCODE"
 ZOOM = f"https://us05web.zoom.us/j/81234567890?pwd={SECRET}"
 VECTORS = json.loads((pathlib.Path(__file__).resolve().parent / "fixtures"
                       / "meeting-url-redaction-vectors.json").read_text())
