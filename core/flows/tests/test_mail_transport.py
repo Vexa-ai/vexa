@@ -57,14 +57,26 @@ def pki(tmp_path_factory):
     if not shutil.which("openssl"):
         pytest.skip("openssl is needed to mint the per-run certificates")
     d = tmp_path_factory.mktemp("pki")
+    # The extensions a strict verifier (Python >= 3.13 sets VERIFY_X509_STRICT) requires: a CA that
+    # says it is one and may sign certificates, and a leaf naming its issuer's key and its purpose.
+    (d / "ca.cnf").write_text(
+        "[req]\ndistinguished_name = dn\nx509_extensions = v3_ca\n[dn]\n"
+        "[v3_ca]\nbasicConstraints = critical, CA:TRUE\n"
+        "keyUsage = critical, keyCertSign, cRLSign\n"
+        "subjectKeyIdentifier = hash\nauthorityKeyIdentifier = keyid:always\n")
     for ca in ("ca", "other-ca"):
-        _openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+        _openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-config", "ca.cnf",
                  "-subj", f"/CN=test {ca}", "-keyout", f"{ca}.key", "-out", f"{ca}.pem", cwd=d)
-    _openssl("req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost",
+    _openssl("req", "-newkey", "rsa:2048", "-nodes", "-config", "ca.cnf", "-subj", "/CN=localhost",
              "-keyout", "server.key", "-out", "server.csr", cwd=d)
-    (d / "san.ext").write_text("subjectAltName=DNS:localhost,IP:127.0.0.1\n")
+    (d / "server.ext").write_text(
+        "basicConstraints = critical, CA:FALSE\n"
+        "keyUsage = critical, digitalSignature, keyEncipherment\n"
+        "extendedKeyUsage = serverAuth\n"
+        "subjectAltName = DNS:localhost, IP:127.0.0.1\n"
+        "subjectKeyIdentifier = hash\nauthorityKeyIdentifier = keyid, issuer\n")
     _openssl("x509", "-req", "-in", "server.csr", "-CA", "ca.pem", "-CAkey", "ca.key",
-             "-CAcreateserial", "-days", "2", "-extfile", "san.ext", "-out", "server.pem", cwd=d)
+             "-CAcreateserial", "-days", "2", "-extfile", "server.ext", "-out", "server.pem", cwd=d)
     return d
 
 
