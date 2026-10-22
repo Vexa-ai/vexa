@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { canvasFrameContentSecurityPolicy, contentSecurityPolicy, newNonce } from "../contentSecurityPolicy";
 import { middleware, config } from "../../middleware";
+import { BLUR_ASSETS } from "../../minutes/callBlur";
 
 const directives = (csp: string) =>
   Object.fromEntries(csp.split(";").map((d) => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v]));
@@ -195,5 +196,15 @@ describe("which requests the policy middleware runs on (Next's own matcher)", ()
     ];
     expect(files.length).toBeGreaterThan(0);
     for (const f of files) expect(runs(`/${f}`), f).toBe(false);
+  });
+
+  it("names the files the build writes into public/ too: the call blur's runtime and model", () => {
+    // scripts/copy-mediapipe.mjs writes public/mediapipe/ before every build and dev server, and the
+    // production image serves it; a clean checkout has none, so the tree above cannot show it.
+    for (const path of ["/mediapipe", "/mediapipe/README.md", `${BLUR_ASSETS.tasksVisionFileSet}/vision_wasm_internal.wasm`,
+      `${BLUR_ASSETS.tasksVisionFileSet}/vision_wasm_internal.js`, BLUR_ASSETS.modelAssetPath]) {
+      expect(runs(path), path).toBe(false);
+    }
+    for (const page of ["/mediapipes", "/w/mediapipe/notes"]) expect(runs(page), page).toBe(true);
   });
 });

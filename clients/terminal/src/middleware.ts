@@ -7,7 +7,7 @@
  *  Left alone, by exact path and never by extension (a page URL may end in .json or .svg, as a
  *  document link does): API routes, the /b/ proxy, Next's build assets and image optimiser, and the
  *  real files this app serves at the root — `public/` and the app's metadata files, named one by
- *  one. */
+ *  one, and `public/mediapipe/`, which the build writes (scripts/copy-mediapipe.mjs). */
 import { NextResponse, type NextRequest } from "next/server";
 import { NONCE_HEADER, canvasFrameContentSecurityPolicy, contentSecurityPolicy, newNonce } from "./app/contentSecurityPolicy";
 import { CANVAS_FRAME_PATH } from "./canvas/frame/protocol";
@@ -29,12 +29,12 @@ export function middleware(request: NextRequest) {
 }
 
 // Next reads `config` statically, so the matcher is a literal. The files it names are every file in
-// `public/` and the app directory's root metadata files (`app/icon.svg`); middleware.test.ts holds
-// the list to the tree.
+// `public/` and the app directory's root metadata files (`app/icon.svg`), and the `mediapipe/` tree
+// the build writes into `public/`; contentSecurityPolicy.test.ts holds the list to the tree.
 export const config = {
   matcher: [
     {
-      source: "/((?!api/|b/|_next/static/|_next/image$|(?:README\\.md|vexa-logo\\.svg|icon\\.svg)$).*)",
+      source: "/((?!api/|b/|mediapipe(?:/|$)|_next/static/|_next/image$|(?:README\\.md|vexa-logo\\.svg|icon\\.svg)$).*)",
       missing: [{ type: "header", key: "next-router-prefetch" }],
     },
   ],
