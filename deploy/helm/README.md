@@ -98,7 +98,7 @@ them under running services. Supply each from a Secret you manage:
 
 | Value | Secret it comes from |
 |---|---|
-| `secrets.existingSecretName` | the chart's shared Secret: besides `ADMIN_API_TOKEN`, `INTERNAL_API_SECRET` and `TRANSCRIPTION_SERVICE_TOKEN`, it carries `RUNTIME_API_TOKEN`, `REDIS_PASSWORD`, `NEXTAUTH_SECRET`, `VEXA_MCP_DELEGATION_SECRET` and `VEXA_DISPATCH_SIGNING_KEY` |
+| `secrets.existingSecretName` | the chart's shared Secret: besides `ADMIN_API_TOKEN`, `INTERNAL_API_SECRET` and `TRANSCRIPTION_SERVICE_TOKEN`, it carries `RUNTIME_API_TOKEN`, `REDIS_PASSWORD`, `NEXTAUTH_SECRET`, `VEXA_MCP_DELEGATION_SECRET`, `VEXA_DISPATCH_SIGNING_KEY` and, with flows on, `VEXA_FLOWS_SERVICE_KEY` (the flows tier's one credential: it opens the gateway's service door, `gateway-door:8002`) |
 | `credentialBroker.existingSecret` | the broker's `agent.key`, `human.key`, `git.key` and `store.key`. Losing `store.key` makes every stored credential unreadable |
 | `identity.existingSecret` + `identity.publicKey` | the gateway's signing key as `signing-key.pem`, and its PEM public key in values (a render cannot derive it from a Secret it cannot read). Or `identity.signingKey` |
 | `database.existingSecret` | keys `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`; the chart renders no credentials Secret and never rotates this one. Or `database.password` |

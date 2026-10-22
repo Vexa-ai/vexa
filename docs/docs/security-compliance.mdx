@@ -208,6 +208,62 @@ Deny tests:
 | Token refresh | `core/agent/tests/test_delegation_refresh.py` | `test_a_unit_alive_past_the_ttl_keeps_its_tools`, `test_a_stopped_unit_is_never_refreshed_and_its_token_is_refused`, `test_end_to_end_a_turn_that_outlives_its_token_fails_loud` |
 | Skills and hooks | `core/agent/tests/test_llm_claude_code.py`, `core/agent/tests/test_claude_skills_staging.py` | `test_build_argv_turns_every_hook_off`, `test_a_workspace_skill_grants_no_tools_and_registers_no_hooks`, `test_a_platform_skill_keeps_its_name_over_a_workspace_copy`, `test_a_workspace_skill_past_the_turns_budget_is_not_staged` |
 
+## The flows tier's credential
+
+The flows services (flows-api, flows-worker, flows-mailbox) act for people: they read a meeting's
+transcript for its owner, write a desk, post a notice into a chat and put an invite's attendees on
+the platform. They hold **one credential**, `VEXA_FLOWS_SERVICE_KEY`, and it opens one thing: the
+gateway's **service door**. Flows holds no `INTERNAL_API_SECRET` and no `ADMIN_TOKEN`, so a
+compromised or faulty flows process cannot mint a token for anybody, and cannot reach a route the
+door does not list.
+
+### How it works
+
+1. **The door listens on its own port.** It is port 8002 of the gateway process. No deploy surface
+   publishes it: on compose it is reachable only on the compose network; on Kubernetes it has its
+   own ClusterIP Service (`gateway-door`), and a NetworkPolicy admits only the flows Pods, the
+   signals service and the terminal. The door exists only where `VEXA_FLOWS_SERVICE_KEY` is set.
+2. **A fixed allow-list.** `FLOWS_OUTBOUND` in `core/gateway/services/gateway/src/gateway/service_door.py`
+   names every call flows makes, by domain, method and path. A call on it is forwarded to agent-api,
+   admin-api or crm-api over the internal tier, naming the subject flows asked for. Anything else is
+   `403 not_on_the_allow_list` and never leaves the gateway. Token minting (`/admin/*`), connections
+   (calendar, Gmail, connected services), workspace deletion and invites, `/invocations`, recordings
+   and every other route are not on it.
+3. **Meetings calls carry the person's signed identity.** For meeting-api the door asks identity
+   for the subject's identity and signs it with the gateway's key, with the scopes `bot` and `tx`.
+   meeting-api checks the bot limit, the workspaces the person may write and the route's scopes
+   exactly as it does for the person's own key. No internal secret reaches meeting-api from the door.
+4. **Only the subject crosses.** The door forwards `X-User-Id` and the flow headers. Every other
+   `x-user-*` (scopes, credential class, delegation, workspaces) and every authority header flows
+   sends is dropped.
+5. **The internal secret never reaches flows.** The signals service's wake and the terminal's
+   sign-in mail go to the door's `/to-flows` leg with `X-Internal-Secret`; the door forwards the
+   allow-listed calls (`FLOWS_INBOUND`) to flows-api with the flows key.
+6. **Per-person data outside the allow-list is refused.** A person's calendar and mail are read only
+   through their own connection. The flows calendar sensor reads it through the credential broker
+   with its own `sensors` role; the door has no route to `/api/connections/*`.
+
+**What the allow-list still lets flows do.** On a listed route, flows names the subject. A flows
+process can therefore still act as any person on those routes, for example write a desk file or
+post a chat turn. Binding each listed call to a grant the person issued is not built.
+
+### Why it complies
+
+| Rule | How this design meets it | Gate |
+|---|---|---|
+| P20: every access is checked, default deny | The door refuses every call that is not on its allow-list, and refuses a missing or wrong key | `gate:python` |
+| P9 and ADR-0037: a domain reaches another only through a declared door | The gateway reaches flows-api through flows' declared binding (`FLOWS_API_URL`) | `gate:domain-doors` |
+| P23: the architecture model is the truth | `flows-worker → gateway` and `gateway → flows-api` carry the door; the direct flows edges to agent-api, admin-api and crm-api are gone | `gate:calm`, `gate:dataflow` |
+
+Deny tests:
+
+| Protection | Test file | Tests |
+|---|---|---|
+| No token for anybody | `core/gateway/services/gateway/tests/test_service_door.py` | `test_the_flows_credential_cannot_obtain_a_token_for_anybody` |
+| No calendar or mail | `core/gateway/services/gateway/tests/test_service_door.py` | `test_the_flows_credential_cannot_read_a_calendar` |
+| Off-list routes | `core/gateway/services/gateway/tests/test_service_door.py` | `test_routes_off_the_list_are_refused`, `test_a_path_cannot_climb_out_of_a_listed_route`, `test_only_the_subject_crosses_never_a_scope_a_class_or_a_delegation` |
+| Flows holds no impersonation secret | `core/flows/tests/test_flows_holds_no_impersonation_secret.py` | every test in the file |
+
 ## Private data stays out of shared surfaces
 
 A chat agent may read the person's private data: CRM records, meeting transcripts, mail, the

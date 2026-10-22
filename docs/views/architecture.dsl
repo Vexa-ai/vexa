@@ -197,10 +197,10 @@ edges:
   agent-worker -write-> out-stream  # XADD cards/notes/deltas
   agent-worker -read-> unit-in  # chat path XREADs interactive input
   mcp -req-> gateway  # every MCP tool forwards the caller's own bearer (an API key or a worker's delegation token) to the public REST surface; for a worker it also sends back the identity the gateway signed onto the /mcp request (X-Vexa-Internal-Mcp-Identity, gateway-identity.v1 re-entry), the only way a delegation token reaches a REST route
-  gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings and per-calendar sync
-  gateway -req-> agent-api  # proxy /agent/* with the resolved identity signed (gateway-identity.v1)
+  gateway -req-> meeting-api  # proxy /bots /transcripts /meetings /recordings and per-calendar sync — and, on the service door, the flows tier's allow-listed meetings calls with the subject's identity signed here (scopes bot+tx)
+  gateway -req-> agent-api  # proxy /agent/* with the resolved identity signed (gateway-identity.v1) — and, on the service door, the flows tier's allow-listed agent-api calls over the internal tier
   gateway -req-> mcp  # proxy /mcp — the ONE assembled MCP server for every bearer, a person's key or a worker's delegation token; POST buffered, GET relayed unbuffered (SSE stream)
-  gateway -req-> admin-api  # POST /internal/validate (authz oracle) plus user calendar connection CRUD
+  gateway -req-> admin-api  # POST /internal/validate (authz oracle) plus user calendar connection CRUD — and, on the service door, the flows tier's allow-listed identity calls (address and id, ensure a person, settings, is-admin, a room's principal, a bearer's validation, the subject's identity the door signs for meetings calls)
   gateway -read-> bm-status  # WS fan-out
   gateway -read-> u-meetings  # WS auto-subscribe
   gateway -read-> va-chat  # WS fan-out
@@ -211,7 +211,7 @@ edges:
   terminal -req-> gateway  # live WS via gateway
   terminal -req-> admin-api  # the terminal's server, with the internal secret: sign-in admission, the admin claim, the claim-code check, instance state, the one-use redeem of an emailed sign-in link and the binding of an OAuth sign-in to its provider subject (signin.v1), plus /internal/validate and the settings it edits for the admin
   terminal -req-> agent-api  # the terminal's server, with the internal secret: POST /internal/scaffolds (a sign-in's arrival) and GET /internal/has-history
-  terminal -req-> flows-api  # the terminal's server, with the internal secret: POST /mail/sign-in hands an emailed sign-in link to the flows mailer (VEXA_FLOWS_API_URL); on any failure the terminal sends it over its own SMTP
+  terminal -req-> flows-api  # the terminal's server, through the gateway's service door (/to-flows: the door checks its internal secret and forwards with the flows key): POST /mail/sign-in hands an emailed sign-in link to the flows mailer (VEXA_FLOWS_API_URL); on any failure the terminal sends it over its own SMTP
   dashboard -req-> gateway  # dashboard → gateway REST (hosted-compat aliases; the hosted-proven wiring)
   dashboard -req-> gateway  # dashboard → gateway /ws (live transcript view)
   slim -req-> gateway  # Python client; REST via gateway
@@ -219,9 +219,7 @@ edges:
   flows-worker -write-> flows-rows
   flows-api -write-> flows-rows  # the second writer, recorded because it is real: POST /events admits a fact in the API process (flows_integrations/flows_api.py → flows.admit → INSERT INTO reaction) and the registry writes flow_version there too. The chart carried only flows-worker, so the one shared carrier in this domain read as single-writer
   flows-api -read-> flows-rows
-  flows-worker -req-> agent-api  # steps reach domains only over their published HTTP surfaces (core/flows/src/flows_steps/common.py) — a domain never knows flows exists
-  flows-worker -req-> gateway
-  flows-worker -req-> admin-api
+  flows-worker -req-> gateway  # every call a flow step makes into another domain goes through the gateway's SERVICE DOOR (core/gateway/services/gateway/src/gateway/service_door.py, port 8002, never published) with the flows tier's one credential VEXA_FLOWS_SERVICE_KEY; flows-api's identity, timeline and mail-admin calls take the same door. The door forwards only its fixed allow-list (FLOWS_OUTBOUND): agent-api, admin-api and crm-api over the internal tier with the named subject, meeting-api with the subject's identity signed by the gateway (scopes bot+tx); anything else is a 403 at the door. flows holds no INTERNAL_API_SECRET and no admin key, and a domain never knows flows exists
   agent-api -req-> credentials-broker  # agent-api to the credential broker, signed role assertions (credential-broker.v1): role agent for the Connections routes (request, list, read, draft, call; no consent, no stored credential returned) and role git for the Git credential store (the person's own Git credentials and their shared workspaces' deploy keys); every call of either role carries the gateway's X-Vexa-Identity for the person, unchanged, and the broker acts only for the subject it names
   terminal -req-> credentials-broker  # the terminal's server to the credential broker, role human for the identity-validated person (credential-broker.v1): consent, credential save, disconnect, delete
   credentials-broker -req-> credentials-vault
@@ -269,12 +267,12 @@ edges:
   crm-api -req-> admin-api  # POST /internal/validate: who the caller is, their live workspace memberships narrowed to a worker's ceiling, and whether the turn is shared; GET /internal/users/{id}/org (only with personal_crm on): whether the caller is an individual served from their own org of one
   admin-api -req-> crm-api  # account delete: POST /internal/orgs/p-{id}/erase (internal secret) erases an individual account's personal CRM before identity removes the account (capability personal_crm_erase, CRM_API_URL)
   mcp -req-> crm-api  # boot assembly and tool calls: GET /.well-known/mcp-tools.json + /openapi.json, then the crm_*, desktop_* and card_* tools with the caller's own credential; present only where CRM_API_URL is set
-  flows-worker -req-> crm-api  # the flows_defs.crm pack: POST /internal/references with the internal secret — one workspace's record references and roster at one commit (workspace.references.changed)
-  gateway -req-> crm-api  # the edge's /crm/* forward (routes.v1 `forward`): the record page's read, history and review, the desktop's desk/read, desk/arrange, desk/proposal and desk/undo (served while `desktop` is on), and the cards' card/list, card/read, card/create, card/update, card/members and card/membership (served while `desktop_cards` is on), with the caller's own key, present only where CRM_API_URL is set
+  gateway -req-> crm-api  # the edge's /crm/* forward (routes.v1 `forward`): the record page's read, history and review, the desktop's desk/read, desk/arrange, desk/proposal and desk/undo (served while `desktop` is on), and the cards' card/list, card/read, card/create, card/update, card/members and card/membership (served while `desktop_cards` is on), with the caller's own key, present only where CRM_API_URL is set — and, on the service door, the flows tier's POST /internal/references and /internal/cards/offer over the internal tier
+  gateway -req-> flows-api  # the service door's inbound leg (/to-flows): the internal-tier callers of flows-api (the signals service's POST /events/signal, the terminal's POST /mail/sign-in) present X-Internal-Secret to the door, which forwards the allow-listed calls (FLOWS_INBOUND) with X-Vexa-Service-Key, so flows never receives the internal secret
   crm-api -req-> agent-api  # GET /api/workspace/file?path=POLICIES.md&slug=_global over the internal tier (subject crm): the company's desk limits, narrow-only, cached 30 s; optional — CRM_AGENT_API_URL unset or unreachable means the defaults
   signals-service -read-> redis
   signals-service -req-> agent-api  # GET /internal/meetings/{row}/listen?subject=<owner> and GET /internal/chats/{session}/listen?subject=<owner> with the internal secret: the listening brief (the agent's rules and model tier included) and the company's signal policy in one answer, cached 30 s; agent-api reads the source as that subject
-  signals-service -req-> flows-api  # POST /events/signal (X-Internal-Secret + X-Vexa-Service: signals): one event.v1 meeting.signal per wake, data = the buffer; the company's _global flow decides what a wake does. A publish edge: no flows, no wakes
+  signals-service -req-> flows-api  # POST /events/signal through the gateway's service door (/to-flows: the door checks X-Internal-Secret and forwards with the flows key, so flows never receives the secret; X-Vexa-Service: signals): one event.v1 meeting.signal per wake, data = the buffer; the company's _global flow decides what a wake does. A publish edge: no flows, no wakes
   crm-api -req-> flows-api  # the crm outbox (python -m crm.outbox --watch, the crm-outbox process of the crm image): POST /events with the CRM's publish key (X-Flows-Publisher-Key, VEXA_FLOWS_CRM_PUBLISH_KEY: the CRM's own facts, no other flows route), one crm.record.changed per revision with its event.v2 envelope signed with the CRM's own Ed25519 key (VEXA_FACT_SEAL_KEY_FILE; flows verifies under its public half); marked delivered only on a 202. A publish edge: no flows, rows stay pending
   signals-service -req-> credentials-broker
   signals-service -call-> signal-model  # one call per confirmed line: the line, up to 24 lines before it and the brief's questions; answers a 0..1 score per label, parsed strictly

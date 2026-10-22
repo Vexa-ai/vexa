@@ -1,7 +1,7 @@
 """The admin key has no published default on compose (offline — no stack, no docker).
 
-ADMIN_TOKEN mints an API key for any user; admin-api reads it as ADMIN_API_TOKEN, flows as
-VEXA_FLOWS_ADMIN_KEY, and meeting-api derives the MeetingToken key from it. ``.env.example`` shipped it
+ADMIN_TOKEN mints an API key for any user; admin-api reads it as ADMIN_API_TOKEN and meeting-api
+derives the MeetingToken key from it. Flows does not hold it, under any name. ``.env.example`` shipped it
 as ``dev-admin-token``. Now: the example leaves it empty, compose passes it through with no default,
 and ``mint-dev-env.sh`` mints one, replaces any value this repository published for the key (the list
 the services refuse at boot, fact admin-token-placeholders) and keeps a real one — never printing it.
@@ -38,7 +38,11 @@ def test_no_compose_surface_defaults_the_admin_key():
     assert not re.search(r"\$\{ADMIN_TOKEN:-[^}$]", text), "compose re-defaulted ADMIN_TOKEN to a literal"
     assert _env(_service("admin-api"), "ADMIN_API_TOKEN") == "${ADMIN_TOKEN:-}"
     assert _env(_service("meeting-api"), "ADMIN_TOKEN") == "${ADMIN_TOKEN:-}"
-    assert _env(_service("flows-api"), "VEXA_FLOWS_ADMIN_KEY") == "${VEXA_FLOWS_ADMIN_KEY:-${ADMIN_TOKEN:-}}"
+    for lane in ("flows-api", "flows-worker", "flows-mailbox"):
+        held = set(re.findall(r"^\s+- ([A-Z0-9_]+)=", _service(lane), flags=re.M))
+        assert "VEXA_FLOWS_SERVICE_KEY" in held, lane
+        assert not held & {"VEXA_FLOWS_ADMIN_KEY", "ADMIN_TOKEN", "ADMIN_API_TOKEN",
+                           "INTERNAL_API_SECRET"}, (lane, held)
     for literal in ("dev-admin-token", "CHANGE_ME"):
         assert f"={literal}" not in text and f":-{literal}" not in text
 

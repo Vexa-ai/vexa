@@ -6,7 +6,6 @@ WHO MAY REACH agent-api AND meeting-api — derived from the callers in the code
     gateway       forwards /agent/* with the signed identity
     mcp           boot discovery: /.well-known/mcp-tools.json + /openapi.json
     runtime       the scheduler fires routines at /invocations
-    flows-*       flow steps act for a person over the internal tier
     terminal      server-side admin probes and the internal scaffold routes
     agent-api     itself (VEXA_AGENT_API_SELF_URL)
     crm-api       when the CRM is on: reads _global/POLICIES.md for the desk's limits (internal tier)
@@ -21,7 +20,8 @@ WHO MAY REACH agent-api AND meeting-api — derived from the callers in the code
     meeting-api   itself
 
 Agent WORKERS reach neither service: they act through the gateway with their delegation token.
-They alone reach the model proxy (8102), with their turn's token (H5/W1).
+They alone reach the model proxy (8102), with their turn's token (H5/W1). The flows tier reaches
+neither either: it calls the gateway's service door, which forwards its allow-list.
 */}}
 {{- $sel := include "vexa.selectorLabels" . }}
 {{- if .Values.agentApi.enabled }}
@@ -54,13 +54,6 @@ spec:
               {{- $sel | nindent 14 }}
               app.kubernetes.io/component: crm-api
         {{- end }}
-        - podSelector:
-            matchLabels:
-              {{- $sel | nindent 14 }}
-            matchExpressions:
-              - key: app.kubernetes.io/component
-                operator: In
-                values: [flows-worker, flows-api, flows-mailbox]
         {{- with .Values.networkPolicy.agentApi.extraFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

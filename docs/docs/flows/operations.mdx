@@ -47,6 +47,22 @@ running with nobody in the loop can read the person's queue, reactions, timeline
 friction, but a reaction signal (retry, resume, wake, cancel) answers it
 `403 human_session_required`. See [Security & compliance → Agent workers](/security-compliance#agent-workers).
 
+## The flows key and the gateway's service door
+
+Flows reaches every other domain through the gateway's **service door**, with one credential,
+`VEXA_FLOWS_SERVICE_KEY`. flows-api, flows-worker and flows-mailbox hold it, and so does the
+gateway. Flows refuses to start without it, and refuses a published placeholder.
+
+The door listens on port 8002 of the gateway, which no deploy surface publishes. The four door
+variables point at it, one prefix per domain: `VEXA_FLOWS_ADMIN_API_URL` at `/identity`,
+`VEXA_FLOWS_GATEWAY_URL` at `/meetings`, `VEXA_FLOWS_AGENT_API_URL` at `/agent`, and
+`VEXA_FLOWS_CRM_API_URL` at `/crm`. Compose and Helm set these for you. The door forwards only the
+calls on its allow-list and answers anything else `403`; see
+[Security & compliance → The flows tier's credential](/security-compliance#the-flows-tiers-credential).
+
+Flows no longer holds `INTERNAL_API_SECRET` or `ADMIN_TOKEN`. The signals service and the terminal
+reach flows-api through the door's `/to-flows` leg.
+
 ## Who the mailbox will act for
 
 The mailbox is reachable by anyone who can send email, so it answers that question before it

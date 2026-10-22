@@ -52,11 +52,18 @@ preset. See `docs/docs/flows/mailbox.mdx`. Do not
 scale it — the IMAP cursor is single-writer by design.
 
 Two things flows will refuse, and both are deliberate: it will not start without
-`VEXA_FLOWS_API_KEY`, `VEXA_FLOWS_ADMIN_KEY` and `INTERNAL_API_SECRET` (a weak default makes an
-unconfigured deployment look configured), and it will refuse to compose a mailed link when
+`VEXA_FLOWS_API_KEY` and `VEXA_FLOWS_SERVICE_KEY` (a weak default makes an unconfigured
+deployment look configured), and it will refuse to compose a mailed link when
 `VEXA_UI_URL` is unset — at the link, not at boot, because a deployment may legitimately have no
 terminal. Every key it reads is declared in `core/flows/src/config.v1.json` and checked against
 this file by `gate:config-contract`.
+
+Flows holds no `INTERNAL_API_SECRET` and no `ADMIN_TOKEN`. Its one credential,
+`VEXA_FLOWS_SERVICE_KEY` (the gateway holds the same value), opens the gateway's **service door**
+on port 8002 of the compose network — never published. The door forwards only the calls on the
+flows allow-list (`core/gateway/services/gateway/src/gateway/service_door.py`) and refuses the rest;
+the signals service and the terminal reach flows-api through the same door (`/to-flows`), so flows
+never receives the internal secret.
 
 **First run needs no setup step beyond the admin claim.** The first administrator is whoever signs in
 with the one-time admin claim code (below), or an address in `VEXA_ADMIN_EMAILS`; signing in first

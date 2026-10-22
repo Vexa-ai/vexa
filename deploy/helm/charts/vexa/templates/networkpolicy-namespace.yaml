@@ -112,6 +112,35 @@ spec:
 ---
 {{- end }}
 {{- end }}
+{{- /* THE GATEWAY'S SERVICE DOOR (8002): the flows tier, and the internal-tier callers of flows-api
+(the signals service, the terminal) — nobody else. The front-door policy above opens 8000 only. */}}
+{{- if and $.Values.gateway.enabled $.Values.flows.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vexa.componentName" (list $ "gateway-door-ingress") }}
+  labels:
+    {{- include "vexa.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $sel | nindent 6 }}
+      app.kubernetes.io/component: gateway
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 8002
+          protocol: TCP
+      from:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $sel | nindent 14 }}
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [flows-worker, flows-api, flows-mailbox, signals, terminal]
+---
+{{- end }}
 {{- /* internal services the chart's own Pods call */}}
 {{- range $svc := list (dict "c" "admin-api" "on" $.Values.adminApi.enabled "port" 8001) (dict "c" "mcp" "on" $.Values.mcp.enabled "port" 8010) (dict "c" "pgbouncer" "on" $.Values.pgbouncer.enabled "port" 5432) (dict "c" "crm-api" "on" (and $.Values.crm $.Values.crm.enabled) "port" 8300) }}
 {{- if $svc.on }}

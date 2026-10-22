@@ -3587,7 +3587,7 @@
      }
     }
    },
-   "description": "proxy /bots /transcripts /meetings /recordings and per-calendar sync",
+   "description": "proxy /bots /transcripts /meetings /recordings and per-calendar sync — and, on the service door, the flows tier's allow-listed meetings calls with the subject's identity signed here (scopes bot+tx)",
    "protocol": "HTTPS"
   },
   {
@@ -3603,7 +3603,7 @@
      }
     }
    },
-   "description": "proxy /agent/* with the resolved identity signed (gateway-identity.v1)",
+   "description": "proxy /agent/* with the resolved identity signed (gateway-identity.v1) — and, on the service door, the flows tier's allow-listed agent-api calls over the internal tier",
    "protocol": "HTTPS"
   },
   {
@@ -3635,7 +3635,7 @@
      }
     }
    },
-   "description": "POST /internal/validate (authz oracle) plus user calendar connection CRUD",
+   "description": "POST /internal/validate (authz oracle) plus user calendar connection CRUD — and, on the service door, the flows tier's allow-listed identity calls (address and id, ensure a person, settings, is-admin, a room's principal, a bearer's validation, the subject's identity the door signs for meetings calls)",
    "protocol": "HTTPS"
   },
   {
@@ -3840,7 +3840,7 @@
      }
     }
    },
-   "description": "the terminal's server, with the internal secret: POST /mail/sign-in hands an emailed sign-in link to the flows mailer (VEXA_FLOWS_API_URL); on any failure the terminal sends it over its own SMTP",
+   "description": "the terminal's server, through the gateway's service door (/to-flows: the door checks its internal secret and forwards with the flows key): POST /mail/sign-in hands an emailed sign-in link to the flows mailer (VEXA_FLOWS_API_URL); on any failure the terminal sends it over its own SMTP",
    "protocol": "HTTP",
    "metadata": [
     {
@@ -4020,21 +4020,8 @@
    ]
   },
   {
-   "unique-id": "flows-worker-calls-agent-api",
-   "description": "steps reach domains only over their published HTTP surfaces (core/flows/src/flows_steps/common.py) \u2014 a domain never knows flows exists",
-   "relationship-type": {
-    "connects": {
-     "source": {
-      "node": "flows-worker"
-     },
-     "destination": {
-      "node": "agent-api"
-     }
-    }
-   }
-  },
-  {
    "unique-id": "flows-worker-calls-gateway",
+   "description": "every call a flow step makes into another domain goes through the gateway's SERVICE DOOR (core/gateway/services/gateway/src/gateway/service_door.py, port 8002, never published) with the flows tier's one credential VEXA_FLOWS_SERVICE_KEY; flows-api's identity, timeline and mail-admin calls take the same door. The door forwards only its fixed allow-list (FLOWS_OUTBOUND): agent-api, admin-api and crm-api over the internal tier with the named subject, meeting-api with the subject's identity signed by the gateway (scopes bot+tx); anything else is a 403 at the door. flows holds no INTERNAL_API_SECRET and no admin key, and a domain never knows flows exists",
    "relationship-type": {
     "connects": {
      "source": {
@@ -4042,19 +4029,6 @@
      },
      "destination": {
       "node": "gateway"
-     }
-    }
-   }
-  },
-  {
-   "unique-id": "flows-worker-calls-admin-api",
-   "relationship-type": {
-    "connects": {
-     "source": {
-      "node": "flows-worker"
-     },
-     "destination": {
-      "node": "admin-api"
      }
     }
    }
@@ -5028,22 +5002,6 @@
    "protocol": "HTTP"
   },
   {
-   "unique-id": "flows-crm-references",
-   "relationship-type": {
-    "connects": {
-     "source": {
-      "node": "flows-worker"
-     },
-     "destination": {
-      "node": "crm-api",
-      "interface": "crm-http"
-     }
-    }
-   },
-   "description": "the flows_defs.crm pack: POST /internal/references with the internal secret \u2014 one workspace's record references and roster at one commit (workspace.references.changed)",
-   "protocol": "HTTP"
-  },
-  {
    "unique-id": "gw-crm",
    "relationship-type": {
     "connects": {
@@ -5056,8 +5014,29 @@
      }
     }
    },
-   "description": "the edge's /crm/* forward (routes.v1 `forward`): the record page's read, history and review, the desktop's desk/read, desk/arrange, desk/proposal and desk/undo (served while `desktop` is on), and the cards' card/list, card/read, card/create, card/update, card/members and card/membership (served while `desktop_cards` is on), with the caller's own key, present only where CRM_API_URL is set",
+   "description": "the edge's /crm/* forward (routes.v1 `forward`): the record page's read, history and review, the desktop's desk/read, desk/arrange, desk/proposal and desk/undo (served while `desktop` is on), and the cards' card/list, card/read, card/create, card/update, card/members and card/membership (served while `desktop_cards` is on), with the caller's own key, present only where CRM_API_URL is set — and, on the service door, the flows tier's POST /internal/references and /internal/cards/offer over the internal tier",
    "protocol": "HTTP"
+  },
+  {
+   "unique-id": "gw-flows-door",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "gateway"
+     },
+     "destination": {
+      "node": "flows-api",
+      "interface": "flows-http"
+     }
+    }
+   },
+   "description": "the service door's inbound leg (/to-flows): the internal-tier callers of flows-api (the signals service's POST /events/signal, the terminal's POST /mail/sign-in) present X-Internal-Secret to the door, which forwards the allow-listed calls (FLOWS_INBOUND) with X-Vexa-Service-Key, so flows never receives the internal secret",
+   "protocol": "HTTP",
+   "metadata": [
+    {
+     "access": "req"
+    }
+   ]
   },
   {
    "unique-id": "crm-agent-policies",
@@ -5142,7 +5121,7 @@
      }
     }
    },
-   "description": "POST /events/signal (X-Internal-Secret + X-Vexa-Service: signals): one event.v1 meeting.signal per wake, data = the buffer; the company's _global flow decides what a wake does. A publish edge: no flows, no wakes",
+   "description": "POST /events/signal through the gateway's service door (/to-flows: the door checks X-Internal-Secret and forwards with the flows key, so flows never receives the secret; X-Vexa-Service: signals): one event.v1 meeting.signal per wake, data = the buffer; the company's _global flow decides what a wake does. A publish edge: no flows, no wakes",
    "protocol": "HTTP"
   },
   {

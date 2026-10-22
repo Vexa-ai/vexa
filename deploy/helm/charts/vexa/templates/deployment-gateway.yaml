@@ -40,6 +40,10 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+            {{- if .Values.flows.enabled }}
+            - name: door
+              containerPort: 8002
+            {{- end }}
           env:
             {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             - name: ADMIN_API_URL
@@ -77,6 +81,19 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
+            {{- if .Values.flows.enabled }}
+            # THE SERVICE DOOR (gateway/service_door.py) on 8002, behind its own ClusterIP Service
+            # (gateway-door) and never the public one: the flows tier's one way into the other
+            # domains (a fixed allow-list), and the internal tier's way into flows-api (/to-flows/*),
+            # so flows holds no INTERNAL_API_SECRET and never receives it.
+            - name: VEXA_FLOWS_SERVICE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.adminTokenSecretName" . }}
+                  key: VEXA_FLOWS_SERVICE_KEY
+            - name: FLOWS_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "flows-api") }}:18200"
+            {{- end }}
             # gateway-identity.v1: the Ed25519 PRIVATE key that signs the identity the edge resolved
             # onto every forward. The gateway is the only workload that mounts it.
             - name: VEXA_GATEWAY_IDENTITY_SIGNING_KEY_FILE

@@ -50,7 +50,7 @@ for key in MINIO_ACCESS_KEY MINIO_SECRET_KEY; do
   fi
   if [ -n "$old" ]; then echo "replacing ${key} (a published default)"; else echo "minted ${key}"; fi
 done
-# The admin key: admin-api's ADMIN_API_TOKEN, flows' VEXA_FLOWS_ADMIN_KEY and the key meeting-api
+# The admin key: admin-api's ADMIN_API_TOKEN and the key meeting-api
 # derives the MeetingToken key from all come from ADMIN_TOKEN. It mints an API key for any user, and
 # .env.example shipped it as `dev-admin-token`. An unset value, that one, or any other value this
 # repository ever published for the key (the services refuse the same list at boot: config.v1
@@ -86,7 +86,7 @@ else
   echo "kept VEXA_SESSIONS_S3_ACCESS_KEY"
 fi
 for key in INTERNAL_API_SECRET RUNTIME_API_TOKEN DB_PASSWORD REDIS_PASSWORD VEXA_MCP_DELEGATION_SECRET VEXA_MODEL_PROXY_SECRET \
-           VEXA_DISPATCH_SIGNING_KEY VEXA_FLOWS_API_KEY VEXA_FLOWS_TIMELINE_KEY VEXA_FLOWS_CRM_PUBLISH_KEY NEXTAUTH_SECRET \
+           VEXA_DISPATCH_SIGNING_KEY VEXA_FLOWS_API_KEY VEXA_FLOWS_SERVICE_KEY VEXA_FLOWS_TIMELINE_KEY VEXA_FLOWS_CRM_PUBLISH_KEY NEXTAUTH_SECRET \
            VEXA_SESSIONS_DB_PASSWORD VEXA_SESSIONS_S3_SECRET_KEY; do
   if grep -qE "^${key}=\s*$" "$env_file"; then
     v="$(mint)"

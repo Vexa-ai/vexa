@@ -338,8 +338,9 @@ server, Gmail as the preset) on [Connect the bot mailbox](/flows/mailbox).
 | `VEXA_FLOWS_TIMELINE_KEY` | — | A second, narrower key that opens `GET /timeline` and nothing else, so the agent worker — which reads the timeline on every dispatch — does not need the operator key in every container. Unset (or a placeholder) means only the operator key opens the route. |
 | `VEXA_FLOWS_DB_URL` | — | Postgres DSN for the ten flows tables. The stack's own database is the expected home. Any `postgres://` or `postgresql[+driver]://` URL; flows connects through pg8000 whatever driver it names, and reads libpq's `sslmode` (default `prefer`) and `sslrootcert`. As libpq does, `verify-ca` needs `sslrootcert` naming a CA file, and the system store (`sslrootcert=system`, or `verify-full` with no `sslrootcert`) is trusted only with `verify-full`. |
 | `VEXA_FLOWS_API_HOST` / `VEXA_FLOWS_API_PORT` | `127.0.0.1` / `18200` | Listener. The compose service sets the host to `0.0.0.0` in its own environment, where the exposure is visible beside the port binding; the host lane keeps loopback. |
-| `VEXA_FLOWS_ADMIN_API_URL` · `VEXA_FLOWS_GATEWAY_URL` | — | The doors flows calls out through. Unnamed, a step that needs one refuses loudly at the moment it would have been used. |
-| `VEXA_FLOWS_AGENT_API_URL` | — | The **optional** agent domain. Unset, steps that need an agent answer `not_present` instead of reaching for a door that is not there. |
+| `VEXA_FLOWS_SERVICE_KEY` | — | **Required. flows refuses to start without it**, and refuses the published placeholders by name. The flows tier's one credential into the other domains; the gateway holds the same value. It opens the gateway's **service door** (port 8002, never published), which forwards only the calls on the flows allow-list and refuses the rest. Flows holds no `INTERNAL_API_SECRET` and no `ADMIN_TOKEN`. Compose and Helm mint it. |
+| `VEXA_FLOWS_ADMIN_API_URL` · `VEXA_FLOWS_GATEWAY_URL` | — | The doors flows calls out through: the service door's `/identity` and `/meetings` prefixes (`http://gateway:8002/identity`, `http://gateway:8002/meetings` on compose). Unnamed, a step that needs one refuses loudly at the moment it would have been used. |
+| `VEXA_FLOWS_AGENT_API_URL` | — | The **optional** agent domain, reached through the service door's `/agent` prefix (on compose, any non-empty value turns it on). Unset, steps that need an agent answer `not_present` instead of reaching for a door that is not there. |
 | `VEXA_FLOWS_API_URL` | — | Where admin-api and meeting-api publish facts to. Empty (the stock default) means they publish nothing. Formerly `FLOWS_API_URL`, honoured for one release. |
 | `VEXA_UI_URL` | — | The link port. Unset, nothing is mailed with a link. |
 | `VEXA_FLOWS_FACT_RETENTION_DAYS` | `90` | Days a captured fact is kept after its run finished. flows-worker then removes the finished reaction (its refs, an inbound mail's body included, its scratch, receipts and signals), quarantined mail and old mail turns, and clears the payload of spent keyed schedules. A run still waiting is never removed. `0` keeps everything. Helm: `flows.factRetentionDays`. See [Operating workflows](/flows/operations#how-long-captured-facts-are-kept). |
@@ -359,7 +360,6 @@ route for them yet**: the flows templates carry no `extraEnv`, so on Kubernetes 
 | `VEXA_FLOWS_LOOP_LIMIT` | `1` | flows-api, flows-worker | Times an event may start a flow already in the chain that produced it. |
 | `VEXA_FLOWS_MAX_HOPS` | `8` | flows-api, flows-worker | Longest chain of flows an event may carry. |
 | `VEXA_FLOWS_SCHEDULE_CATCHUP_S` | `3600` | flows-worker | After downtime, a schedule flow's most recent missed slot fires once if younger than this; older slots are skipped and counted. |
-| `VEXA_FLOWS_USER_KEY_TTL_S` | `900` | flows | Lifetime (and reuse window) of a gateway token minted for a person's run. |
 
 See [Routines](/flows/routines) for what each refusal looks like to the person.
 

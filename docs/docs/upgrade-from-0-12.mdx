@@ -222,7 +222,7 @@ default. The services' message is:
 
 | Key | Old default | Refused by | What to do |
 |---|---|---|---|
-| `ADMIN_TOKEN` (admin-api `ADMIN_API_TOKEN`, flows `VEXA_FLOWS_ADMIN_KEY`, Helm `secrets.adminApiToken`) | `dev-admin-token`, Helm `CHANGE_ME` | admin-api, meeting-api, flows; Helm render | Compose and Lite mint one. Helm: leave it empty or set your own. Scripts that call the admin API need the new value; API keys already minted keep working. |
+| `ADMIN_TOKEN` (admin-api `ADMIN_API_TOKEN`, Helm `secrets.adminApiToken`) | `dev-admin-token`, Helm `CHANGE_ME` | admin-api, meeting-api; Helm render | Compose and Lite mint one. Helm: leave it empty or set your own. Scripts that call the admin API need the new value; API keys already minted keep working. |
 | `DB_PASSWORD` (Helm `database.password`) | `postgres` | postgres container, admin-api, meeting-api, Lite entrypoint; Helm render | See [Database password](#database-password). |
 | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | `vexa-access-key` / `vexa-secret-key` | Compose `storage`, Lite | Compose and Lite mint a pair and restart storage on the same volume. Recordings stay readable. |
 | `NEXTAUTH_SECRET` (Helm `secrets.nextauthSecret`) | `dev-nextauth-secret` | terminal | Minted on every surface. At least 32 bytes. Everyone is signed out of the web UI once. |

@@ -187,6 +187,13 @@ secrets:
                                     # Empty → kept from this release's Secret, else generated; with
                                     # existingSecretName, carry VEXA_FLOWS_CRM_PUBLISH_KEY (without it the
                                     # crm outbox does not start).
+  flowsServiceKey: ""               # the flows tier's ONE credential (VEXA_FLOWS_SERVICE_KEY, 32+ bytes):
+                                    # the flows containers and the gateway hold it, and it opens only the
+                                    # gateway's service door (8002, ClusterIP gateway-door), which forwards
+                                    # the calls on the flows allow-list. Flows holds no ADMIN_API_TOKEN and
+                                    # no INTERNAL_API_SECRET. Empty → kept from this release's Secret, else
+                                    # generated; with existingSecretName, carry VEXA_FLOWS_SERVICE_KEY
+                                    # (flows.enabled: without it the flows containers and the door do not start).
   redisPassword: ""                 # the chart redis's default-user password (REDIS_PASSWORD, 32+ URL-safe
                                     # chars): the services connect with it, bots and workers never see it.
                                     # Empty → kept from this release's Secret, else generated; with

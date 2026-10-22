@@ -63,7 +63,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: INTERNAL_API_SECRET
-            {{- if .Values.signals.flowsApiUrl }}
+            {{- if .Values.flows.enabled }}
+            # where wakes go (POST /events/signal): through the gateway's service door, which checks
+            # this service's internal secret and forwards with the flows key — flows never sees it
+            - name: VEXA_FLOWS_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/to-flows"
+            {{- else if .Values.signals.flowsApiUrl }}
             # where wakes go (POST /events/signal); unset = no flows here, wakes are dropped
             - name: VEXA_FLOWS_API_URL
               value: {{ .Values.signals.flowsApiUrl | quote }}

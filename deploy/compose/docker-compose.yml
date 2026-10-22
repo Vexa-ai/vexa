@@ -1053,6 +1053,12 @@ services:
       - VEXA_AGENT_ALLOW=${VEXA_AGENT_ALLOW:-}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET}
+      # THE SERVICE DOOR (gateway/service_door.py), on port 8002 of the compose network and never
+      # published: the flows lanes' one way into the other domains (a fixed allow-list), and the
+      # internal tier's way into flows-api (/to-flows/*) so flows never receives the internal
+      # secret. Empty key = no door, for a stack that runs no flows.
+      - VEXA_FLOWS_SERVICE_KEY=${VEXA_FLOWS_SERVICE_KEY:-}
+      - FLOWS_API_URL=${VEXA_FLOWS_API_URL:-http://flows-api:8200}
       # gateway-identity.v1: the Ed25519 PRIVATE key the gateway signs the identity it resolved with,
       # onto every forward. This is the only service that mounts it; agent-api, meeting-api and the
       # credential broker get the public half and can verify but never sign. Written once by the
@@ -1173,11 +1179,11 @@ services:
       # deployments that do not run flows at all. The refusal belongs to the process that needs the
       # secret, where it names itself and stops only itself — and it is already there, and tested.
       - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
-      # admin-api's OWN token, under the name flows reads it by. One credential, two spellings, is
-      # what F95 was; this is the second spelling of ADMIN_TOKEN and it is passed through, never
-      # re-defaulted to a literal of its own.
-      - VEXA_FLOWS_ADMIN_KEY=${VEXA_FLOWS_ADMIN_KEY:-${ADMIN_TOKEN:-}}
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
+      # THE FLOWS TIER'S ONE WAY INTO THE OTHER DOMAINS: the gateway's service door (port 8002 on
+      # the compose network, never published) forwards the calls on its flows allow-list and
+      # refuses the rest. flows holds no INTERNAL_API_SECRET and no admin key — neither can be used
+      # from here to act as an arbitrary person. The gateway reads the same value.
+      - VEXA_FLOWS_SERVICE_KEY=${VEXA_FLOWS_SERVICE_KEY:-}
       - VEXA_FLOWS_TIMELINE_KEY=${VEXA_FLOWS_TIMELINE_KEY:-}
       # event.v2 (D8): the sealing producers' PUBLIC keys, `<producer>.pem` (the fact-seal-keys
       # one-shot writes crm.pem); public only, so nothing here can seal. No file = that producer's
@@ -1190,17 +1196,17 @@ services:
       - VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN=${VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN:-5}
       - VEXA_FLOWS_NUDGE_BUDGET_CEILING=${VEXA_FLOWS_NUDGE_BUDGET_CEILING:-12}
       # ── the doors (#1453 made these required-explicit) ──────────────────────────────────────
-      # Service names on the compose network. An unnamed door is a loud refusal at the moment it
-      # would have been used, so naming them here is what makes the refusal never fire in a stack
-      # that does run these domains.
-      - VEXA_FLOWS_ADMIN_API_URL=http://admin-api:8001
-      - VEXA_FLOWS_GATEWAY_URL=http://gateway:8000
-      # OPTIONAL DOMAIN, and the reason it is a variable rather than a service name: decision 40
-      # says a deployment may not run the agent domain at all. Unset, steps that need it answer
-      # `not_present` instead of reaching for a door that is not there (#1453).
-      - VEXA_FLOWS_AGENT_API_URL=${VEXA_FLOWS_AGENT_API_URL:-}
+      # Every door is the gateway's SERVICE DOOR (port 8002), one prefix per domain: the door holds
+      # the allow-list and the internal tier, flows holds only VEXA_FLOWS_SERVICE_KEY. An unnamed
+      # door is a loud refusal at the moment it would have been used.
+      - VEXA_FLOWS_ADMIN_API_URL=http://gateway:8002/identity
+      - VEXA_FLOWS_GATEWAY_URL=http://gateway:8002/meetings
+      # OPTIONAL DOMAIN, and the reason it is a variable: decision 40 says a deployment may not run
+      # the agent domain at all. Unset (or empty), steps that need it answer `not_present`; set to
+      # anything, flows reaches agent-api through the door (#1453).
+      - VEXA_FLOWS_AGENT_API_URL=${VEXA_FLOWS_AGENT_API_URL:+http://gateway:8002/agent}
       # The optional CRM's door (ADR-0047) for the flows_defs.crm pack; unset = no CRM (not_present).
-      - VEXA_FLOWS_CRM_API_URL=${CRM_API_URL:-}
+      - VEXA_FLOWS_CRM_API_URL=${CRM_API_URL:+http://gateway:8002/crm}
       - VEXA_FLOWS_DEFS_EXTRA=${VEXA_FLOWS_DEFS_EXTRA:-}
       # THE LINK PORT, not a door (PRD decision 4: flows owns a link port, the terminal is one
       # adapter, the no-agents product has none). Unset, nothing is mailed with a link and any step
@@ -1274,7 +1280,6 @@ services:
       # showcase baked into the image at /behavior is what flows reads.
       - VEXA_BEHAVIOR_DIR=${VEXA_BEHAVIOR_DIR:-}
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
-      - VEXA_FLOWS_USER_KEY_TTL_S=${VEXA_FLOWS_USER_KEY_TTL_S:-900}
       - VEXA_TIMELINE_SCAN_ROWS=${VEXA_TIMELINE_SCAN_ROWS:-2000}
       # Set uniformly across this stack; the flows processes log through uvicorn's own level and do
       # not read it. Carried in the declaration's `surface_only` list with that reason, so
@@ -1340,11 +1345,11 @@ services:
       # deployments that do not run flows at all. The refusal belongs to the process that needs the
       # secret, where it names itself and stops only itself — and it is already there, and tested.
       - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
-      # admin-api's OWN token, under the name flows reads it by. One credential, two spellings, is
-      # what F95 was; this is the second spelling of ADMIN_TOKEN and it is passed through, never
-      # re-defaulted to a literal of its own.
-      - VEXA_FLOWS_ADMIN_KEY=${VEXA_FLOWS_ADMIN_KEY:-${ADMIN_TOKEN:-}}
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
+      # THE FLOWS TIER'S ONE WAY INTO THE OTHER DOMAINS: the gateway's service door (port 8002 on
+      # the compose network, never published) forwards the calls on its flows allow-list and
+      # refuses the rest. flows holds no INTERNAL_API_SECRET and no admin key — neither can be used
+      # from here to act as an arbitrary person. The gateway reads the same value.
+      - VEXA_FLOWS_SERVICE_KEY=${VEXA_FLOWS_SERVICE_KEY:-}
       - VEXA_FLOWS_TIMELINE_KEY=${VEXA_FLOWS_TIMELINE_KEY:-}
       # event.v2 (D8): the sealing producers' PUBLIC keys, `<producer>.pem` (the fact-seal-keys
       # one-shot writes crm.pem); public only, so nothing here can seal. No file = that producer's
@@ -1355,17 +1360,17 @@ services:
       - VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN=${VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN:-5}
       - VEXA_FLOWS_NUDGE_BUDGET_CEILING=${VEXA_FLOWS_NUDGE_BUDGET_CEILING:-12}
       # ── the doors (#1453 made these required-explicit) ──────────────────────────────────────
-      # Service names on the compose network. An unnamed door is a loud refusal at the moment it
-      # would have been used, so naming them here is what makes the refusal never fire in a stack
-      # that does run these domains.
-      - VEXA_FLOWS_ADMIN_API_URL=http://admin-api:8001
-      - VEXA_FLOWS_GATEWAY_URL=http://gateway:8000
-      # OPTIONAL DOMAIN, and the reason it is a variable rather than a service name: decision 40
-      # says a deployment may not run the agent domain at all. Unset, steps that need it answer
-      # `not_present` instead of reaching for a door that is not there (#1453).
-      - VEXA_FLOWS_AGENT_API_URL=${VEXA_FLOWS_AGENT_API_URL:-}
+      # Every door is the gateway's SERVICE DOOR (port 8002), one prefix per domain: the door holds
+      # the allow-list and the internal tier, flows holds only VEXA_FLOWS_SERVICE_KEY. An unnamed
+      # door is a loud refusal at the moment it would have been used.
+      - VEXA_FLOWS_ADMIN_API_URL=http://gateway:8002/identity
+      - VEXA_FLOWS_GATEWAY_URL=http://gateway:8002/meetings
+      # OPTIONAL DOMAIN, and the reason it is a variable: decision 40 says a deployment may not run
+      # the agent domain at all. Unset (or empty), steps that need it answer `not_present`; set to
+      # anything, flows reaches agent-api through the door (#1453).
+      - VEXA_FLOWS_AGENT_API_URL=${VEXA_FLOWS_AGENT_API_URL:+http://gateway:8002/agent}
       # The optional CRM's door (ADR-0047) for the flows_defs.crm pack; unset = no CRM (not_present).
-      - VEXA_FLOWS_CRM_API_URL=${CRM_API_URL:-}
+      - VEXA_FLOWS_CRM_API_URL=${CRM_API_URL:+http://gateway:8002/crm}
       - VEXA_FLOWS_DEFS_EXTRA=${VEXA_FLOWS_DEFS_EXTRA:-}
       # THE LINK PORT, not a door (PRD decision 4: flows owns a link port, the terminal is one
       # adapter, the no-agents product has none). Unset, nothing is mailed with a link and any step
@@ -1441,7 +1446,6 @@ services:
       # showcase baked into the image at /behavior is what flows reads.
       - VEXA_BEHAVIOR_DIR=${VEXA_BEHAVIOR_DIR:-}
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
-      - VEXA_FLOWS_USER_KEY_TTL_S=${VEXA_FLOWS_USER_KEY_TTL_S:-900}
       - VEXA_TIMELINE_SCAN_ROWS=${VEXA_TIMELINE_SCAN_ROWS:-2000}
       # Set uniformly across this stack; the flows processes log through uvicorn's own level and do
       # not read it. Carried in the declaration's `surface_only` list with that reason, so
@@ -1505,11 +1509,11 @@ services:
       # deployments that do not run flows at all. The refusal belongs to the process that needs the
       # secret, where it names itself and stops only itself — and it is already there, and tested.
       - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
-      # admin-api's OWN token, under the name flows reads it by. One credential, two spellings, is
-      # what F95 was; this is the second spelling of ADMIN_TOKEN and it is passed through, never
-      # re-defaulted to a literal of its own.
-      - VEXA_FLOWS_ADMIN_KEY=${VEXA_FLOWS_ADMIN_KEY:-${ADMIN_TOKEN:-}}
-      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
+      # THE FLOWS TIER'S ONE WAY INTO THE OTHER DOMAINS: the gateway's service door (port 8002 on
+      # the compose network, never published) forwards the calls on its flows allow-list and
+      # refuses the rest. flows holds no INTERNAL_API_SECRET and no admin key — neither can be used
+      # from here to act as an arbitrary person. The gateway reads the same value.
+      - VEXA_FLOWS_SERVICE_KEY=${VEXA_FLOWS_SERVICE_KEY:-}
       - VEXA_FLOWS_TIMELINE_KEY=${VEXA_FLOWS_TIMELINE_KEY:-}
       # event.v2 (D8): the sealing producers' PUBLIC keys, `<producer>.pem` (the fact-seal-keys
       # one-shot writes crm.pem); public only, so nothing here can seal. No file = that producer's
@@ -1520,17 +1524,17 @@ services:
       - VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN=${VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN:-5}
       - VEXA_FLOWS_NUDGE_BUDGET_CEILING=${VEXA_FLOWS_NUDGE_BUDGET_CEILING:-12}
       # ── the doors (#1453 made these required-explicit) ──────────────────────────────────────
-      # Service names on the compose network. An unnamed door is a loud refusal at the moment it
-      # would have been used, so naming them here is what makes the refusal never fire in a stack
-      # that does run these domains.
-      - VEXA_FLOWS_ADMIN_API_URL=http://admin-api:8001
-      - VEXA_FLOWS_GATEWAY_URL=http://gateway:8000
-      # OPTIONAL DOMAIN, and the reason it is a variable rather than a service name: decision 40
-      # says a deployment may not run the agent domain at all. Unset, steps that need it answer
-      # `not_present` instead of reaching for a door that is not there (#1453).
-      - VEXA_FLOWS_AGENT_API_URL=${VEXA_FLOWS_AGENT_API_URL:-}
+      # Every door is the gateway's SERVICE DOOR (port 8002), one prefix per domain: the door holds
+      # the allow-list and the internal tier, flows holds only VEXA_FLOWS_SERVICE_KEY. An unnamed
+      # door is a loud refusal at the moment it would have been used.
+      - VEXA_FLOWS_ADMIN_API_URL=http://gateway:8002/identity
+      - VEXA_FLOWS_GATEWAY_URL=http://gateway:8002/meetings
+      # OPTIONAL DOMAIN, and the reason it is a variable: decision 40 says a deployment may not run
+      # the agent domain at all. Unset (or empty), steps that need it answer `not_present`; set to
+      # anything, flows reaches agent-api through the door (#1453).
+      - VEXA_FLOWS_AGENT_API_URL=${VEXA_FLOWS_AGENT_API_URL:+http://gateway:8002/agent}
       # The optional CRM's door (ADR-0047) for the flows_defs.crm pack; unset = no CRM (not_present).
-      - VEXA_FLOWS_CRM_API_URL=${CRM_API_URL:-}
+      - VEXA_FLOWS_CRM_API_URL=${CRM_API_URL:+http://gateway:8002/crm}
       - VEXA_FLOWS_DEFS_EXTRA=${VEXA_FLOWS_DEFS_EXTRA:-}
       # THE LINK PORT, not a door (PRD decision 4: flows owns a link port, the terminal is one
       # adapter, the no-agents product has none). Unset, nothing is mailed with a link and any step
@@ -1604,7 +1608,6 @@ services:
       # showcase baked into the image at /behavior is what flows reads.
       - VEXA_BEHAVIOR_DIR=${VEXA_BEHAVIOR_DIR:-}
       - VEXA_JITSI_HOSTS=${VEXA_JITSI_HOSTS:-}
-      - VEXA_FLOWS_USER_KEY_TTL_S=${VEXA_FLOWS_USER_KEY_TTL_S:-900}
       - VEXA_TIMELINE_SCAN_ROWS=${VEXA_TIMELINE_SCAN_ROWS:-2000}
       # Set uniformly across this stack; the flows processes log through uvicorn's own level and do
       # not read it. Carried in the declaration's `surface_only` list with that reason, so
@@ -1853,7 +1856,9 @@ services:
       - VEXA_MAIL_REPLY_TO=${VEXA_MAIL_REPLY_TO:-}
       - VEXA_MAIL_RELAY=${VEXA_MAIL_RELAY:-}
       - VEXA_MAIL_CAPTURE_SMTP=${VEXA_MAIL_CAPTURE_SMTP:-mailpit:1025}
-      - VEXA_FLOWS_API_URL=${VEXA_FLOWS_API_URL:-http://flows-api:8200}
+      # The sign-in mail goes to flows THROUGH THE GATEWAY'S SERVICE DOOR: the door checks this
+      # service's internal secret and forwards with the flows key, so flows never receives it.
+      - VEXA_FLOWS_API_URL=http://gateway:8002/to-flows
       - VEXA_MAIL_SMTP_USER=${VEXA_MAIL_SMTP_USER:-}
       - VEXA_MAIL_SMTP_PASSWORD=${VEXA_MAIL_SMTP_PASSWORD:-}
       # PRD 0.13.4 S2: the relay password BY REFERENCE, broker:mail/<name> — the credential broker
@@ -2003,7 +2008,9 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
       - SIGNALS_AGENT_API_URL=${SIGNALS_AGENT_API_URL:-http://agent-api:8100}
       - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-}
-      - VEXA_FLOWS_API_URL=${VEXA_FLOWS_API_URL:-http://flows-api:8200}
+      # The wake goes to flows THROUGH THE GATEWAY'S SERVICE DOOR (/to-flows): the door checks the
+      # internal secret and forwards with the flows key, so flows never receives it.
+      - VEXA_FLOWS_API_URL=http://gateway:8002/to-flows
       - VEXA_SIGNALS_BROKER_URL=http://credential-broker:8100
       - VEXA_SIGNALS_BROKER_KEY_FILE=/run/vexa-connections/signals/key
       # `dev` alone lets SIGNALS_OPENROUTER_API_KEY stand in for the broker; SIGNALS_VEXA_ENV sets it for

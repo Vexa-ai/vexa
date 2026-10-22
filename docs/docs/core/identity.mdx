@@ -72,8 +72,9 @@ The gateway signs with an **Ed25519 private key that only it holds**. agent-api,
 credential broker hold the public key: they can check the signature and cannot make one. agent-api and
 meeting-api believe `X-User-Id` (and the email, limits, workspaces and webhook beside it) only when the
 gateway's signature verifies, and rebuild those headers from the signed claims. The one other way to
-name a person to them is the **internal tier**: a service holding `INTERNAL_API_SECRET` (flows,
-agent-api calling meeting-api) presents `X-Internal-Secret` and names the user it acts for. Anything
+name a person to them is the **internal tier**: a service holding `INTERNAL_API_SECRET` (agent-api
+calling meeting-api, the gateway's service door forwarding a flows call on its allow-list) presents
+`X-Internal-Secret` and names the user it acts for. The flows tier itself holds no internal secret. Anything
 else that names a person is refused with `401` before a route reads it — a process that reaches a
 service past the gateway cannot become a user.
 

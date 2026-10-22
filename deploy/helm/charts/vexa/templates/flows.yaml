@@ -209,7 +209,7 @@ spec:
             - name: FLOWS_DB_NAME
               value: {{ .Values.flows.databaseName | quote }}
             - name: VEXA_FLOWS_GATEWAY_URL
-              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/meetings"
             {{- /* AGENT DOMAIN PRESENCE (F-D5 item 4): unset means "no agent domain deployed" to
             flows_config.py (a `capability` key, degrades via flows_steps.common.domain_present) —
             NOT a URL pointed at a Service that does not exist in a no-agents estate.
@@ -220,17 +220,17 @@ spec:
             half of it. Omitted when disabled, the SERVICE ADDRESS when enabled. */}}
             {{- if .Values.agentApi.enabled }}
             - name: VEXA_FLOWS_AGENT_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/agent"
             {{- end }}
             {{- if .Values.crm.enabled }}
             # The optional CRM's door for the flows_defs.crm pack (ADR-0047).
             - name: VEXA_FLOWS_CRM_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "crm-api") }}:8300"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/crm"
             - name: VEXA_FLOWS_DEFS_EXTRA
               value: "flows_defs.crm"
             {{- end }}
             - name: VEXA_FLOWS_ADMIN_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/identity"
             {{- /* THE TERMINAL'S PUBLIC ORIGIN (F-D5 item 5): unset means "no terminal adapter" to
             flows_config.py (a `capability` key) — nothing is mailed with a link and any step that
             would compose one refuses, naming the key. Previously this ALWAYS resolved to a URL
@@ -241,11 +241,13 @@ spec:
             - name: VEXA_UI_URL
               value: {{ .Values.terminal.publicUrl | default (printf "http://%s:%v" (include "vexa.componentName" (list . "terminal")) .Values.terminal.service.port) | quote }}
             {{- end }}
-            - name: VEXA_FLOWS_ADMIN_KEY
+            {{- /* THE FLOWS TIER'S ONE CREDENTIAL: it opens the gateway's service door and nothing
+            else. Flows holds no ADMIN_API_TOKEN and no INTERNAL_API_SECRET. */}}
+            - name: VEXA_FLOWS_SERVICE_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: ADMIN_API_TOKEN
+                  key: VEXA_FLOWS_SERVICE_KEY
           {{- /* NO PROBE, and that is a documented gap rather than an oversight (A12/E4).
           `flows_worker/__main__.py` and `flows_integrations.mailbox` are `while True: tick();
           sleep()` loops with no server and no port — there is nothing for an httpGet to reach,
@@ -430,29 +432,31 @@ spec:
             - name: FLOWS_DB_NAME
               value: {{ .Values.flows.databaseName | quote }}
             - name: VEXA_FLOWS_GATEWAY_URL
-              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/meetings"
             {{- if .Values.agentApi.enabled }}
             - name: VEXA_FLOWS_AGENT_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/agent"
             {{- end }}
             {{- if .Values.crm.enabled }}
             # The optional CRM's door for the flows_defs.crm pack (ADR-0047).
             - name: VEXA_FLOWS_CRM_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "crm-api") }}:8300"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/crm"
             - name: VEXA_FLOWS_DEFS_EXTRA
               value: "flows_defs.crm"
             {{- end }}
             - name: VEXA_FLOWS_ADMIN_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/identity"
             {{- if .Values.terminal.enabled }}
             - name: VEXA_UI_URL
               value: {{ .Values.terminal.publicUrl | default (printf "http://%s:%v" (include "vexa.componentName" (list . "terminal")) .Values.terminal.service.port) | quote }}
             {{- end }}
-            - name: VEXA_FLOWS_ADMIN_KEY
+            {{- /* THE FLOWS TIER'S ONE CREDENTIAL: it opens the gateway's service door and nothing
+            else. Flows holds no ADMIN_API_TOKEN and no INTERNAL_API_SECRET. */}}
+            - name: VEXA_FLOWS_SERVICE_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: ADMIN_API_TOKEN
+                  key: VEXA_FLOWS_SERVICE_KEY
           {{- /* READINESS FROM THE LOOP'S OWN REPORT. The loop writes how its last poll went to a file
           in its temp directory (`flows_integrations/mailbox_status.py`) and this probe reads it: a
           wrong password, an untrusted certificate or an unreachable IMAP host shows as NotReady
@@ -652,17 +656,17 @@ spec:
             chart with flows.enabled=true. Same four values as the two lanes above, kept in the
             same order so a diff between the three containers reads as one list. */}}
             - name: VEXA_FLOWS_ADMIN_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "admin-api") }}:{{ .Values.adminApi.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/identity"
             - name: VEXA_FLOWS_GATEWAY_URL
-              value: "http://{{ include "vexa.componentName" (list . "gateway") }}:{{ .Values.gateway.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/meetings"
             {{- if .Values.agentApi.enabled }}
             - name: VEXA_FLOWS_AGENT_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "agent-api") }}:{{ .Values.agentApi.service.port }}"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/agent"
             {{- end }}
             {{- if .Values.crm.enabled }}
             # The optional CRM's door for the flows_defs.crm pack (ADR-0047).
             - name: VEXA_FLOWS_CRM_API_URL
-              value: "http://{{ include "vexa.componentName" (list . "crm-api") }}:8300"
+              value: "http://{{ include "vexa.componentName" (list . "gateway-door") }}:8002/crm"
             - name: VEXA_FLOWS_DEFS_EXTRA
               value: "flows_defs.crm"
             {{- end }}
@@ -670,11 +674,13 @@ spec:
             - name: VEXA_UI_URL
               value: {{ .Values.terminal.publicUrl | default (printf "http://%s:%v" (include "vexa.componentName" (list . "terminal")) .Values.terminal.service.port) | quote }}
             {{- end }}
-            - name: VEXA_FLOWS_ADMIN_KEY
+            {{- /* THE FLOWS TIER'S ONE CREDENTIAL: it opens the gateway's service door and nothing
+            else. Flows holds no ADMIN_API_TOKEN and no INTERNAL_API_SECRET. */}}
+            - name: VEXA_FLOWS_SERVICE_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: ADMIN_API_TOKEN
+                  key: VEXA_FLOWS_SERVICE_KEY
             {{- /* event.v2 (D8): POST /events verifies a sealed fact's envelope under the named
             producer's PUBLIC key, `<producer>.pem` in this directory (the fact-verify-keys
             ConfigMap, fact-seal-keys.yaml). Public keys only: flows-api cannot seal. Without the

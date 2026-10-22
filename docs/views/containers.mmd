@@ -89,9 +89,7 @@ flowchart LR
   dashboard -->|""| gateway
   slim -->|"HTTPS"| gateway
   extension -->|"WebSocket"| gateway
-  flows_worker -->|""| agent_api
   flows_worker -->|""| gateway
-  flows_worker -->|""| admin_api
   agent_api -->|"HTTP"| credentials_broker
   terminal -->|"HTTP"| credentials_broker
   credentials_broker -->|"req"| credentials_vault
@@ -113,8 +111,8 @@ flowchart LR
   crm_api -->|"HTTP"| admin_api
   admin_api -->|"HTTP"| crm_api
   mcp -->|"HTTP"| crm_api
-  flows_worker -->|"HTTP"| crm_api
   gateway -->|"HTTP"| crm_api
+  gateway -->|"HTTP"| flows_api
   crm_api -->|"HTTP"| agent_api
   signals_service -->|"TCP"| redis
   signals_service -->|"HTTP"| agent_api
