@@ -14,7 +14,7 @@ dependencies = [
     # A person's photo (UI 15g): every stored image is decoded and re-encoded, so no EXIF, GPS, XMP
     # or text chunk survives (app/person_photos.py `clean`); the bytes live in the install's object
     # store, written with boto3 — the client meeting-api and agent-api already ship.
-    "pillow>=11,<13",
+    "pillow>=13,<14",
     "boto3>=1.35,<2",
     # A provider photo's address is read only from the sign-in's own ID token, verified here against
     # the issuer's keys (app/idp_tokens.py) — never from a caller parameter.
