@@ -758,3 +758,46 @@ test("contract-version GREEN: a contract README edit is not a contract change", 
     () => runGate("contract-version"));
   assert.equal(r.green, true, `prose beside the contract must not move the seal:\n${r.out}`);
 });
+
+// ── gate:config-contract — flows-api on Helm ─────────────────────────────────────────────────────
+// The flows chart hands its keys over four ways: `- name:` env entries, its own Secret's
+// stringData (envFrom), the `export` that composes VEXA_FLOWS_DB_URL, and env from `vexa.flowsMail*`
+// helpers in _helpers.tpl. Each fixture breaks one spelling and the gate must name the key; a
+// reader that only saw `- name:` lines in flows.yaml would pass the last three.
+const FLOWS_HELM = "deploy/helm/charts/vexa/templates/flows.yaml";
+
+test("flows-api Helm: a declared key the flows-api container stops setting is RED", () => {
+  const r = withEdited(FLOWS_HELM, "- name: VEXA_FLOWS_API_HOST", "- name: VEXA_FLOWS_API_HOST_RENAMED",
+    () => runGate("config-contract"));
+  assert.equal(r.green, false, `a flows key missing from the chart passed:\n${r.out}`);
+  assert.match(r.out, /flows-api: VEXA_FLOWS_API_HOST declared for helm but absent from flows\.yaml/);
+  assert.match(r.out, /flows-api: helm sets VEXA_FLOWS_API_HOST_RENAMED but the declaration does not carry it/);
+});
+
+test("flows-api Helm: a key the flows Secret's stringData stops carrying is RED", () => {
+  const r = withEdited(FLOWS_HELM, "  VEXA_FLOWS_MAIL_DOMAINS:", "  VEXA_FLOWS_MAIL_DOMAINZ:",
+    () => runGate("config-contract"));
+  assert.equal(r.green, false, `a Secret-carried flows key going missing passed:\n${r.out}`);
+  assert.match(r.out, /flows-api: VEXA_FLOWS_MAIL_DOMAINS declared for helm but absent/);
+});
+
+test("flows-api Helm: the composed DSN export is read (VEXA_FLOWS_DB_URL)", () => {
+  const r = withEdited(FLOWS_HELM, /export VEXA_FLOWS_DB_URL=/g, "export VEXA_FLOWS_DSN=",
+    () => runGate("config-contract"));
+  assert.equal(r.green, false, `the DSN export going missing passed:\n${r.out}`);
+  assert.match(r.out, /flows-api: VEXA_FLOWS_DB_URL declared for helm but absent/);
+});
+
+test("flows-api Helm: env a vexa.flowsMail* helper renders is read through the include", () => {
+  const r = withEdited("deploy/helm/charts/vexa/templates/_helpers.tpl", "- name: VEXA_MAIL_IMAP_HOST\n",
+    "- name: VEXA_MAIL_IMAP_HOSTNAME\n", () => runGate("config-contract"));
+  assert.equal(r.green, false, `a helper-rendered flows key going missing passed:\n${r.out}`);
+  assert.match(r.out, /flows-api: VEXA_MAIL_IMAP_HOST declared for helm but absent/);
+});
+
+test("flows-api compose control: a declared key the flows-api lane stops setting is still RED", () => {
+  const r = withEdited(COMPOSE, "      - VEXA_FLOWS_TIMELINE_KEY=${VEXA_FLOWS_TIMELINE_KEY:-}\n", "",
+    () => runGate("config-contract"));
+  assert.equal(r.green, false, `a flows key missing from compose passed:\n${r.out}`);
+  assert.match(r.out, /flows-api: VEXA_FLOWS_TIMELINE_KEY declared for compose but absent from the 'flows-api' environment block/);
+});

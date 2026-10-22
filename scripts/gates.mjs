@@ -1184,7 +1184,7 @@ function gateDataflow() {
 //   2. its vendored config_preflight.py is byte-identical to the canonical contract copy;
 //   3. declaration → surfaces: every declared key appears in each deploy surface its `targets` names
 //      (compose: the service's `environment:` block, or .env.example when the service is env_file-fed;
-//      helm: `- name: KEY` in the service's deployment template; lite: the supervisord program's
+//      helm: what the service's templates set, see helmTextKeys; lite: the supervisord program's
 //      environment= line or an entrypoint.sh export);
 //   4. surfaces → declaration: every key a surface sets on the service is declared (or carried in the
 //      declaration's `surface_only` list with a reason) — only process-plumbing vars are allowlisted;
@@ -1213,6 +1213,12 @@ const CONFIG_CONTRACT_DIR = join(ROOT, "deploy", "contracts", "config.v1");
 // process environment every OS supplies is exactly what this allow-list is for, and declaring
 // them in a service config.v1 would assert an operator must set them.
 const CONFIG_SURFACE_ALLOW = new Set(["PYTHONUNBUFFERED", "PYTHONPATH", "DISPLAY", "NODE_ENV", "HOSTNAME", "TZ", "PGTZ", "HOME", "TMPDIR"]);
+// Chart plumbing the Helm reader sees once it follows `include` into _helpers.tpl, set on EVERY
+// component by a shared helper and consumed by the process or by Kubernetes itself, never read as
+// product config: `vexa.extraCA.env` points each runtime's trust store at the operator's CA bundle,
+// and `vexa.redisPasswordEnv` is the `$(REDIS_PASSWORD)` source Kubernetes expands into REDIS_URL.
+// Held for the helm surface only (check 4); a service that READS one still has to declare it.
+const HELM_PLUMBING_ALLOW = new Set(["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS", "VEXA_EXTRA_CA_FILE", "AWS_CA_BUNDLE", "REDIS_PASSWORD"]);
 // literal env-read spellings the scanner recognizes (Python; `_os` aliases included by substring match)
 const CONFIG_READ_RES = [
   /os\.getenv\(\s*["']([A-Z][A-Z0-9_]*)["']/g,
@@ -1295,14 +1301,14 @@ const CONFIG_ADOPTED = [
     // the same environment, so the declaration belongs to the domain and the entry binds it to
     // the API lane — the other two lanes' compose blocks are unchecked by this gate exactly as
     // `flows-mailbox`'s always was (same reasoning: one declaration, one lane scanned for it).
-    // helm/lite are EMPTY: the flows helm chart plumbs its keys through a Secret's `stringData`,
-    // which the line-wise `- name:` scan cannot see, and there is no supervisord program at all.
-    // Naming a surface this check cannot actually read would be worse than saying it is not read.
+    // HELM IS flows.yaml, all three Deployments and the flows Secret read as one surface (the
+    // Secret's stringData, the DSN `export` and the vexa.flowsMail* helpers included, see
+    // helmTextKeys). lite is null: there is no supervisord program for flows.
     service: "flows-api",
     decl: "core/flows/src/config.v1.json",
     preflight: "core/flows/src/config_preflight.py",
     scan: ["core/flows/src"],
-    compose: "flows-api", helm: [], lite: null,
+    compose: "flows-api", helm: ["flows.yaml"], lite: null,
   },
   {
     // The optional CRM (ADR-0047). ONE DECLARATION, THREE PROCESSES of one image: `crm-init` (the
@@ -1413,12 +1419,43 @@ function composeServiceEnv(service) {
 const dotEnvExampleKeys = () => new Set(
   readFileSync(join(ROOT, "deploy", "compose", ".env.example"), "utf8").split("\n")
     .map((l) => (l.match(/^([A-Z][A-Z0-9_]*)=/) || [])[1]).filter(Boolean));
+// A Helm template sets a key on its containers in four spellings, and the reader takes all four:
+//   `- name: KEY`              an env entry;
+//   `  KEY: …`                 a key of a rendered Secret's/ConfigMap's stringData/data (envFrom);
+//   `export KEY=…`             a container's shell wrapper composing a value from other env;
+//   `include "vexa.<helper>"`  a named template, read the same way (recursively), because its body
+//                              is where those lines land once the chart renders.
+// Template comments ({{/* … */}}) and YAML comment lines are not read: prose naming a key sets nothing.
+const HELM_TEMPLATES = join(ROOT, "deploy", "helm", "charts", "vexa", "templates");
+const helmUncomment = (text) => text.replace(/\{\{-?\s*\/\*[\s\S]*?\*\/\s*-?\}\}/g, "").replace(/^\s*#.*$/gm, "");
+let helmDefines = null;
+function helmDefine(name) {
+  if (!helmDefines) {
+    helmDefines = new Map();
+    for (const f of readdirSync(HELM_TEMPLATES).filter((n) => n.endsWith(".tpl"))) {
+      // a define's body runs to the next define in the file (comments between them are stripped)
+      const parts = helmUncomment(readFileSync(join(HELM_TEMPLATES, f), "utf8")).split(/\{\{-?\s*define\s+"/);
+      for (const p of parts.slice(1)) helmDefines.set(p.slice(0, p.indexOf('"')), p.slice(p.indexOf('"') + 1));
+    }
+  }
+  return helmDefines.get(name);
+}
+function helmTextKeys(text, keys, seen) {
+  for (const m of text.matchAll(/-\s+name:\s+([A-Z][A-Z0-9_]*)\b/g)) keys.add(m[1]);
+  for (const m of text.matchAll(/(?:^|[\s;&|])export\s+([A-Z][A-Z0-9_]*)=/gm)) keys.add(m[1]);
+  // a stringData/data map runs from its column-0 key to the next column-0 line
+  for (const m of text.matchAll(/^(?:stringData|data):[ \t]*\n((?:[ \t]+.*\n|[ \t]*\n)*)/gm))
+    for (const k of m[1].matchAll(/^ {2}([A-Z][A-Z0-9_]*):/gm)) keys.add(k[1]);
+  for (const m of text.matchAll(/include\s+"(vexa\.[A-Za-z0-9_.]+)"/g)) {
+    if (seen.has(m[1])) continue;
+    seen.add(m[1]);
+    const body = helmDefine(m[1]);
+    if (body) helmTextKeys(body, keys, seen);
+  }
+}
 function helmEnvKeys(templates) {
   const keys = new Set();
-  for (const t of templates) {
-    const text = readFileSync(join(ROOT, "deploy", "helm", "charts", "vexa", "templates", t), "utf8");
-    for (const m of text.matchAll(/-\s+name:\s+([A-Z][A-Z0-9_]*)\b/g)) keys.add(m[1]);
-  }
+  for (const t of templates) helmTextKeys(helmUncomment(readFileSync(join(HELM_TEMPLATES, t), "utf8")), keys, new Set());
   return keys;
 }
 function liteProgramEnv(program) {
@@ -1536,6 +1573,7 @@ function gateConfigContract() {
     const surfaceSets = [["compose", compose.keys], ["helm", helm], ["lite", lite]];
     for (const [surface, keys] of surfaceSets) {
       for (const key of keys) {
+        if (surface === "helm" && HELM_PLUMBING_ALLOW.has(key)) continue;
         if (inScope(key) && !declared.has(key) && !surfaceOnly.has(key) && !CONFIG_SURFACE_ALLOW.has(key))
           errs.push(`${svc.service}: ${surface} sets ${key} but the declaration does not carry it (declare it, or list it in surface_only with a reason)`);
       }

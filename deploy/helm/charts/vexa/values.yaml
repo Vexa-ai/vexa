@@ -1357,6 +1357,7 @@ flows:
       # credential broker (`python -m credential_broker.mail_secret put <name>` in its pod, the value on
       # stdin). Set, it is the only source — VEXA_MAIL_SMTP_PASSWORD is ignored. Needs the broker.
       passwordRef: ""
+      from: ""                        # VEXA_MAIL_SMTP_FROM, e.g. "Vexa <info@example.com>" [Vexa <address>]
     # Recipient allowlist (VEXA_MAIL_RECIPIENT_ALLOW): comma list of addresses and domains. Set, mail
     # to anybody else is diverted to the capture double and logged `mail_diverted`, never sent.
     recipientAllow: ""
@@ -1376,6 +1377,29 @@ flows:
     # One fixed line back to a quarantined stranger, once per address, no model. Off by default:
     # an automatic reply to an unverified sender is a reflector.
     quarantineReply: ""               # "1" to enable
+    # The rest of the mail dials. EMPTY = the flows code default, written in brackets; any of
+    # them may also come from extraEnv below, which wins. Full meaning: docs/docs/flows/mailbox.mdx.
+    inbox: ""                         # VEXA_MAIL_INBOX: imap | graph (Microsoft 365) [imap]
+    replyTo: ""                       # VEXA_MAIL_REPLY_TO: the Reply-To on every mail [none]
+    # VEXA_MAIL_RELAY: "" (smtp.host, or the Gmail preset) | capture (everything to captureSmtp) |
+    # relay (the smtp relay for real; test-domain recipients never relayed)
+    relay: ""
+    # VEXA_MAIL_CAPTURE_SMTP: host:port of the capture double that `relay: capture` and mail diverted
+    # by recipientAllow go to [mailpit:1025 — compose's double; the chart runs none, so set it
+    # whenever you set either of those]
+    captureSmtp: ""
+    maxPerDay: ""                     # VEXA_MAIL_MAX_PER_DAY: mail per kind per day [2000]
+    kindsDefault: ""                  # VEXA_MAIL_KINDS_DEFAULT: shipped | on [shipped]
+    inboundFilter: ""                 # VEXA_MAIL_INBOUND_FILTER: vexa | all [vexa]
+    bodyMax: ""                       # VEXA_FLOWS_MAIL_BODY_MAX: inbound body chars into a prompt [4000]
+    notifyChannel: ""                 # VEXA_NOTIFY_CHANNEL: smtp | graph [smtp]
+    # Microsoft 365 over Graph (inbox / notifyChannel "graph"): VEXA_GRAPH_*. The client secret is
+    # rendered into the chart's flows Secret; to keep it out of values, set it with extraEnv valueFrom.
+    graph:
+      tenantId: ""
+      clientId: ""
+      clientSecret: ""
+      mailbox: ""
   # THE CEILING ON WHAT ONE INBOX CAN COST. Per-sender bounds one correspondent (including a
   # user whose own mail client has looped); global bounds the deployment, which is the number
   # that matters when the sender is a hundred allow-listed addresses rather than one.
@@ -1389,6 +1413,33 @@ flows:
   # scratch, receipts and signals), a quarantined mail and an old mail turn are kept before the
   # flows-worker removes them; spent keyed schedules lose their payload. "0" keeps everything.
   factRetentionDays: "90"
+  # A read-only key that opens GET /timeline for one named subject (VEXA_FLOWS_TIMELINE_KEY, rendered
+  # into the flows Secret). Empty: only the operator key opens it.
+  timelineKey: ""
+  # Extra Jitsi hosts a meeting link may live on (VEXA_JITSI_HOSTS). Set it to the same value
+  # meeting-api and the MCP service carry (their extraEnv), so every parser agrees what a link is.
+  jitsiHosts: ""
+  # Outbound fan-out (PRD §16.2): VEXA_FLOWS_ATTENDEE_DOMAINS (empty = the organizer's own domain)
+  # and VEXA_FLOWS_DATA_STATEMENT (the deployment's own sentence about where the words live).
+  outbound:
+    attendeeDomains: ""
+    dataStatement: ""
+  # Nudges outside the Inbox (VEXA_FLOWS_NUDGES*): off unless enabled; empty dials = [5] min idle
+  # floor and [12] deliveries per local day.
+  nudges:
+    enabled: false
+    idleFloorMinutes: ""
+    budgetCeiling: ""
+  # Engine ceilings (ADR-0046). Empty = the code default in brackets.
+  limits:
+    timelineScanRows: ""              # VEXA_TIMELINE_SCAN_ROWS [2000]
+    scheduleCatchupSeconds: ""        # VEXA_FLOWS_SCHEDULE_CATCHUP_S [3600]
+    loopLimit: ""                     # VEXA_FLOWS_LOOP_LIMIT [1]
+    maxHops: ""                       # VEXA_FLOWS_MAX_HOPS [8]
+    userActiveFlows: ""               # VEXA_FLOWS_USER_ACTIVE_FLOWS [20]
+    userMinIntervalSeconds: ""        # VEXA_FLOWS_USER_MIN_INTERVAL_S [900]
+    userRunsPerDay: ""                # VEXA_FLOWS_USER_RUNS_PER_DAY [48]
+    userMessagesPerDay: ""            # VEXA_FLOWS_USER_MESSAGES_PER_DAY [100]
 
 # ── The adoption panel (off by default; ConfigMaps only — this chart never deploys Grafana) ──
 # WHAT IT IS: a Grafana dashboard the operator runs inside their own cluster showing who is

@@ -35,6 +35,101 @@ stringData:
   VEXA_FLOWS_MAIL_RATE_WINDOW_S: {{ .Values.flows.mailRate.windowSeconds | quote }}
   # captured facts expire (finished reactions, quarantined mail): days after the run finished, 0 keeps all
   VEXA_FLOWS_FACT_RETENTION_DAYS: {{ .Values.flows.factRetentionDays | quote }}
+  {{- /* The flows tier's remaining dials. Each is rendered only when set, so an empty value is the
+  code default and flows.extraEnv (an explicit env entry, which wins over this envFrom) still
+  overrides any of them. */}}
+  {{- $m := .Values.flows.mail | default dict }}
+  {{- $graph := $m.graph | default dict }}
+  {{- $out := .Values.flows.outbound | default dict }}
+  {{- $nudges := .Values.flows.nudges | default dict }}
+  {{- $lim := .Values.flows.limits | default dict }}
+  {{- with .Values.flows.timelineKey }}
+  VEXA_FLOWS_TIMELINE_KEY: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.inbox }}
+  VEXA_MAIL_INBOX: {{ . | toString | quote }}
+  {{- end }}
+  {{- with ($m.smtp | default dict).from }}
+  VEXA_MAIL_SMTP_FROM: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.replyTo }}
+  VEXA_MAIL_REPLY_TO: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.relay }}
+  VEXA_MAIL_RELAY: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.captureSmtp }}
+  VEXA_MAIL_CAPTURE_SMTP: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.maxPerDay }}
+  VEXA_MAIL_MAX_PER_DAY: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.kindsDefault }}
+  VEXA_MAIL_KINDS_DEFAULT: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.inboundFilter }}
+  VEXA_MAIL_INBOUND_FILTER: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.bodyMax }}
+  VEXA_FLOWS_MAIL_BODY_MAX: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $m.notifyChannel }}
+  VEXA_NOTIFY_CHANNEL: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $graph.tenantId }}
+  VEXA_GRAPH_TENANT_ID: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $graph.clientId }}
+  VEXA_GRAPH_CLIENT_ID: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $graph.clientSecret }}
+  VEXA_GRAPH_CLIENT_SECRET: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $graph.mailbox }}
+  VEXA_GRAPH_MAILBOX: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $out.attendeeDomains }}
+  VEXA_FLOWS_ATTENDEE_DOMAINS: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $out.dataStatement }}
+  VEXA_FLOWS_DATA_STATEMENT: {{ . | toString | quote }}
+  {{- end }}
+  {{- with .Values.flows.jitsiHosts }}
+  VEXA_JITSI_HOSTS: {{ . | toString | quote }}
+  {{- end }}
+  {{- if $nudges.enabled }}
+  VEXA_FLOWS_NUDGES: "1"
+  {{- end }}
+  {{- with $nudges.idleFloorMinutes }}
+  VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $nudges.budgetCeiling }}
+  VEXA_FLOWS_NUDGE_BUDGET_CEILING: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.timelineScanRows }}
+  VEXA_TIMELINE_SCAN_ROWS: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.scheduleCatchupSeconds }}
+  VEXA_FLOWS_SCHEDULE_CATCHUP_S: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.loopLimit }}
+  VEXA_FLOWS_LOOP_LIMIT: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.maxHops }}
+  VEXA_FLOWS_MAX_HOPS: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.userActiveFlows }}
+  VEXA_FLOWS_USER_ACTIVE_FLOWS: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.userMinIntervalSeconds }}
+  VEXA_FLOWS_USER_MIN_INTERVAL_S: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.userRunsPerDay }}
+  VEXA_FLOWS_USER_RUNS_PER_DAY: {{ . | toString | quote }}
+  {{- end }}
+  {{- with $lim.userMessagesPerDay }}
+  VEXA_FLOWS_USER_MESSAGES_PER_DAY: {{ . | toString | quote }}
+  {{- end }}
   {{- /* The operator key, unless it comes from a Secret you manage (flows.existingSecret, or
   secrets.existingSecretName with flows.apiKey empty): then it is not rendered here, and every
   consumer reads it from that Secret by name. */}}

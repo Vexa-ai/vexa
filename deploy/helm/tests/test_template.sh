@@ -2177,4 +2177,15 @@ tb "flows door: signals hands its facts to flows through the door's /to-flows" '
 tb "flows off (negative control): no door Service, no door NetworkPolicy, and the gateway holds no flows key and no 8002 port" 'door_check off <<< "$DOOR_OFF" >/dev/null'
 FSK_RE='^  VEXA_FLOWS_SERVICE_KEY: "[A-Za-z0-9]{32,}"$'
 tb "the chart's Secret renders a generated VEXA_FLOWS_SERVICE_KEY" '[ "$(grep -cE "$FSK_RE" <<< "$DOOR_ON")" -eq 1 ]'
+# flows dials on Helm (config.v1 targets helm for flows-api): a set value lands in the flows Secret
+# under the declared key; an unset one renders nothing, so the code default holds and flows.extraEnv
+# still overrides it.
+FDIALS_ON="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true \
+  --set flows.limits.maxHops=4 --set flows.mail.captureSmtp=capture.example:2525 --set flows.nudges.enabled=true \
+  --set flows.timelineKey=tl-key-for-render-only --show-only templates/flows.yaml)"
+FDIALS_OFF="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --show-only templates/flows.yaml)"
+tb "flows dials: set values render as their declared keys in the flows Secret" \
+  'grep -qx "  VEXA_FLOWS_MAX_HOPS: \"4\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_MAIL_CAPTURE_SMTP: \"capture.example:2525\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_FLOWS_NUDGES: \"1\"" <<< "$FDIALS_ON" && grep -qx "  VEXA_FLOWS_TIMELINE_KEY: \"tl-key-for-render-only\"" <<< "$FDIALS_ON"'
+tb "flows dials (control): unset dials render no key at all" \
+  '! grep -qE "VEXA_(FLOWS_MAX_HOPS|MAIL_CAPTURE_SMTP|FLOWS_NUDGES|FLOWS_TIMELINE_KEY|MAIL_RELAY|GRAPH_CLIENT_SECRET):" <<< "$FDIALS_OFF"'
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

@@ -137,6 +137,28 @@ alternative, and keeps at most `VEXA_FLOWS_MAIL_BODY_MAX` characters and 32 KiB 
 a line that says how many characters were elided. One reaction's refs are at most **36 KiB** stored,
 whatever the mail. The full message stays in the mailbox it arrived in; flows does not copy it.
 
+## Settings on Kubernetes
+
+Every flows key above has a Helm value. Each value renders into the chart's flows Secret only when it is
+set, so an empty value keeps the default in this page. `flows.extraEnv` is set as explicit env, so it
+overrides any of these values.
+
+| Helm value | key |
+|---|---|
+| `flows.timelineKey` | `VEXA_FLOWS_TIMELINE_KEY` |
+| `flows.mail.inbox`, `.replyTo`, `.relay`, `.captureSmtp`, `.smtp.from` | `VEXA_MAIL_INBOX`, `VEXA_MAIL_REPLY_TO`, `VEXA_MAIL_RELAY`, `VEXA_MAIL_CAPTURE_SMTP`, `VEXA_MAIL_SMTP_FROM` |
+| `flows.mail.maxPerDay`, `.kindsDefault`, `.inboundFilter`, `.bodyMax`, `.notifyChannel` | `VEXA_MAIL_MAX_PER_DAY`, `VEXA_MAIL_KINDS_DEFAULT`, `VEXA_MAIL_INBOUND_FILTER`, `VEXA_FLOWS_MAIL_BODY_MAX`, `VEXA_NOTIFY_CHANNEL` |
+| `flows.mail.graph.tenantId`, `.clientId`, `.clientSecret`, `.mailbox` | `VEXA_GRAPH_*` |
+| `flows.outbound.attendeeDomains`, `.dataStatement` | `VEXA_FLOWS_ATTENDEE_DOMAINS`, `VEXA_FLOWS_DATA_STATEMENT` |
+| `flows.jitsiHosts` | `VEXA_JITSI_HOSTS`. Use the value that meeting-api and the MCP service have |
+| `flows.nudges.enabled`, `.idleFloorMinutes`, `.budgetCeiling` | `VEXA_FLOWS_NUDGES`, `VEXA_FLOWS_NUDGE_IDLE_FLOOR_MIN`, `VEXA_FLOWS_NUDGE_BUDGET_CEILING` |
+| `flows.limits.*` | `VEXA_TIMELINE_SCAN_ROWS`, `VEXA_FLOWS_SCHEDULE_CATCHUP_S`, `VEXA_FLOWS_LOOP_LIMIT`, `VEXA_FLOWS_MAX_HOPS`, `VEXA_FLOWS_USER_*` |
+
+The chart runs no capture double. If you set `flows.mail.relay: capture` or `flows.mail.recipientAllow`,
+also set `flows.mail.captureSmtp`. Without it, flows sends diverted mail to `mailpit:1025`, which
+the chart does not run. Only Compose runs the mailpit inbox (`VEXA_MAILPIT_*`) and the private
+behavior mount (`VEXA_BEHAVIOR_DIR`).
+
 ## Reading the friction sink
 
 `GET /friction/all` (operator key) returns every friction report on the deployment, newest first,
