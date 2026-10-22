@@ -2122,7 +2122,8 @@ class Dispatcher:
                 logger.error("model proxy not configured (VEXA_MODEL_PROXY_URL / VEXA_MODEL_PROXY_SECRET "
                              "/ Redis) — unit=%s runs with no model credential", uid)
             budget = getattr(self, "_llm_budget", None)
-            spend = (payer, budget.caps().caps) if (budget is not None and payer) else None
+            caps = budget.caps() if (budget is not None and payer) else None
+            spend = (payer, caps.caps, (caps.price_in, caps.price_out)) if caps is not None else None
             return model_proxy.confine(env, url=self._settings.model_proxy_url, grants=grants,
                                        unit=uid, cold=cold, toolbelt=self._settings.mcp_url,
                                        spend=spend)

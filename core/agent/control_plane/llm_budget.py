@@ -25,8 +25,20 @@ Before this the only cap on model spend was the credit limit of the provider key
     and an in-app notification to each person ``llm_budget_notify`` names.
   * ``VEXA_LLM_KILL_SWITCH`` (agent-api env) refuses every turn, at once, whatever the ledger says.
 
-A turn already running when a cap is reached finishes; the next one is refused. The overshoot is
-therefore at most one turn per person, which is why the defaults leave headroom under the provider
+  * SPEND NOT YET REPORTED counts too. A harness reports a turn's usage when the turn ends (the
+    claude CLI's ``result``), so a long turn's calls reach the ledger only afterwards. The model
+    proxy (``model_proxy.py``) sees every call it relays: it prices each one with :func:`cost_usd`
+    and adds it to the turn's UNREPORTED figure (:func:`add_unreported`, one key per payer and
+    unit). Before every model request the proxy checks ledger + unreported against the caps, so a
+    turn is stopped mid-turn at the cap. When the worker's report arrives, :class:`UsageMeter`
+    records it here and takes the same amount off the unreported figure, and the turn's
+    ``turn-complete`` clears what is left: the report replaces the proxy's running figure, and the
+    ledger stays the one record of spend. A turn that reported nothing at all (the Codex harness
+    reports no usage) is recorded at the proxy's figure when it completes.
+
+A model call the proxy does not relay (a deployment subscription: the vendor's CLI calls the vendor
+directly) reaches the ledger only with the turn's report; such a turn already running when a cap
+is reached finishes, and the next one is refused. The defaults leave headroom under the provider
 key's own limit, the last line of defence.
 """
 from __future__ import annotations
@@ -167,6 +179,84 @@ def _periods(now: float) -> dict:
 def _key(scope: str, subject: str, period: str, pid: str) -> str:
     who = "org" if scope == "org" else f"user:{subject}"
     return f"{PREFIX}:spend:{who}:{period}:{pid}"
+
+
+UNREPORTED_PREFIX = f"{PREFIX}:unreported"
+#: An unreported figure outlives the longest turn that can add to it (a job's 3600 s plus its wait
+#: in the queue) and then lapses: a worker that died without reporting stops counting by then.
+UNREPORTED_TTL_S = 2 * 3600
+
+
+def _unreported_key(payer: str, unit: str) -> str:
+    return f"{UNREPORTED_PREFIX}:{payer}:{unit}"
+
+
+def _unreported_index(scope: str, payer: str = "") -> str:
+    return f"{UNREPORTED_PREFIX}-index:org" if scope == "org" else f"{UNREPORTED_PREFIX}-index:user:{payer}"
+
+
+def add_unreported(r, payer: str, unit: str, usd: float, *, ttl_s: int = UNREPORTED_TTL_S) -> None:
+    """The model proxy's half: one relayed call's cost, added to ``payer``'s running figure for
+    ``unit``'s turn until the worker reports it."""
+    if not (payer and unit) or usd <= 0:
+        return
+    key = _unreported_key(payer, unit)
+    pipe = r.pipeline()
+    pipe.incrbyfloat(key, float(usd))
+    pipe.expire(key, int(ttl_s))
+    for idx in (_unreported_index("user", payer), _unreported_index("org")):
+        pipe.sadd(idx, key)
+        pipe.expire(idx, int(ttl_s))
+    pipe.execute()
+
+
+def unreported(r, payer: str) -> dict:
+    """``{"user": usd, "org": usd}``: what the proxy has relayed and no worker has reported yet, for
+    ``payer`` and for the whole deployment. A lapsed figure is dropped from its index here."""
+    out = {}
+    for scope in ("user", "org"):
+        idx = _unreported_index(scope, payer)
+        keys = sorted(str(k.decode() if isinstance(k, bytes) else k) for k in (r.smembers(idx) or ()))
+        total = 0.0
+        if keys:
+            gone = []
+            for k, raw in zip(keys, r.mget(keys)):
+                if raw is None:
+                    gone.append(k)
+                    continue
+                try:
+                    total += max(0.0, float(raw))
+                except (TypeError, ValueError):
+                    continue
+            if gone:
+                r.srem(idx, *gone)
+        out[scope] = total
+    return out
+
+
+def settle_unreported(r, payer: str, unit: str, usd: Optional[float] = None) -> float:
+    """The worker's report replaces the proxy's running figure. ``usd`` reported for ``unit``'s turn
+    comes off it (never below zero when read). ``None`` — the turn is complete — clears it and
+    returns what is left to record when the turn reported nothing at all, else ``0.0``. Taken
+    atomically, so two meters watching one unit never record it twice."""
+    key = _unreported_key(payer, unit)
+    flag = f"{PREFIX}:reported:{payer}:{unit}"
+    if usd is None:
+        pipe = r.pipeline(transaction=True)
+        pipe.get(key)
+        pipe.get(flag)
+        pipe.delete(key, flag)
+        left, reported, _n = pipe.execute()
+        if reported:
+            return 0.0
+        try:
+            return max(0.0, float(left or 0))
+        except (TypeError, ValueError):
+            return 0.0
+    r.set(flag, "1", ex=UNREPORTED_TTL_S)
+    if usd > 0 and r.exists(key):
+        r.incrbyfloat(key, -float(usd))      # keeps the key's TTL
+    return 0.0
 
 
 class BudgetExhausted(Exception):
@@ -456,11 +546,22 @@ class UsageMeter:
                 if first:
                     try:
                         from shared import usage as usage_mod  # noqa: PLC0415
-                        total += self._budget.record(subject, usage, kind=usage_mod.kind_of_unit(uid))
+                        usd = self._budget.record(subject, usage, kind=usage_mod.kind_of_unit(uid))
+                        total += usd
+                        settle_unreported(self._r, subject, uid, usd)
                     except Exception as exc:  # noqa: BLE001
                         logger.error("usage meter: spend not recorded (%s)", type(exc).__name__)
             elif t == "turn-complete":
                 done += 1
+                try:
+                    left = settle_unreported(self._r, subject, uid)
+                    if left > 0:
+                        # the turn reported nothing: what the model proxy priced is its record
+                        from shared import usage as usage_mod  # noqa: PLC0415
+                        total += self._budget.record(subject, {"cost": left, "source": "model-proxy"},
+                                                     kind=usage_mod.kind_of_unit(uid))
+                except Exception as exc:  # noqa: BLE001 — the figure lapses on its own
+                    logger.warning("usage meter: unreported spend not settled (%s)", type(exc).__name__)
         return total, cursor, done
 
     def poll_once(self) -> float:

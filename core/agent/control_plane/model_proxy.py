@@ -21,8 +21,18 @@ takes that route OUT of the worker's environment:
 The proxy (:func:`create_app`, ``python -m control_plane.model_proxy``) is a separate process that
 workers can reach and that holds no trust header of any kind: a request is authenticated by its
 token alone. It refuses a token it does not hold (unknown, revoked, or expired), a model outside the
-turn's scope, and a request past the turn's ceiling; otherwise it replaces the token with the route's
-credential and forwards the request byte for byte, streaming the answer back as it arrives.
+turn's scope, a request past the turn's ceiling, and a request once the payer's spend has reached a
+cap; otherwise it replaces the token with the route's credential and forwards the request byte for
+byte, streaming the answer back as it arrives.
+
+THE PROXY PRICES WHAT IT RELAYS. A harness reports a turn's usage only when the turn ends, so the
+spend ledger alone cannot stop a long turn. The proxy reads the provider's own usage from every
+answer it relays — Anthropic's ``usage`` in ``message_start``/``message_delta`` or the JSON body,
+OpenAI's ``usage`` (asked for on a stream with ``stream_options.include_usage``) and the Responses
+API's ``response.completed`` — prices it with the ledger's own function and table
+(``llm_budget.cost_usd``, ``model_prices``) and adds it to the turn's unreported figure
+(``llm_budget.add_unreported``). Its spend check is ledger + unreported, so the turn is stopped at
+the cap mid-turn. The worker's report later replaces that figure (``llm_budget.UsageMeter``).
 
 A deployment SUBSCRIPTION is the one exception, and deliberately so: a consumer OAuth credential
 (the claude CLI's ``.credentials.json`` or ``CLAUDE_CODE_OAUTH_TOKEN``, Codex's ``auth.json``) is
@@ -129,13 +139,17 @@ class Route:
     #: The endpoint was admitted only through a wildcard: every connection re-resolves its host,
     #: refuses an address inside the deployment, and dials the address it checked.
     public_only: bool = False
+    #: The operator's ``llm_price_*`` rates (USD per 1M input and output tokens) as they stood at
+    #: dispatch, for a model no price table names; empty: the table's own fallback.
+    spend_rates: tuple = ()
 
     def as_dict(self) -> dict:
         return {"base_url": self.base_url, "auth": self.auth, "credential": self.credential,
                 "subscription": self.subscription, "models": list(self.models),
                 "max_output_tokens": self.max_output_tokens, "toolbelt": self.toolbelt,
                 "toolbelt_bearer": self.toolbelt_bearer, "payer": self.payer,
-                "spend_caps": [list(c) for c in self.spend_caps], "public_only": self.public_only}
+                "spend_caps": [list(c) for c in self.spend_caps], "public_only": self.public_only,
+                "spend_rates": list(self.spend_rates)}
 
     @classmethod
     def from_dict(cls, d: Mapping) -> "Route":
@@ -148,15 +162,27 @@ class Route:
                    toolbelt_bearer=str(d.get("toolbelt_bearer") or ""),
                    payer=str(d.get("payer") or ""),
                    spend_caps=tuple((str(a), str(b), float(c)) for a, b, c in d.get("spend_caps") or ()),
-                   public_only=bool(d.get("public_only")))
+                   public_only=bool(d.get("public_only")),
+                   spend_rates=_rates(d.get("spend_rates")))
 
-    def with_spend(self, payer: str, caps: Mapping) -> "Route":
-        """This route under ``payer``'s spend caps (``{(scope, period): usd | None}``)."""
+    def with_spend(self, payer: str, caps: Mapping, rates: tuple = ()) -> "Route":
+        """This route under ``payer``'s spend caps (``{(scope, period): usd | None}``) and the
+        operator's price rates for an unlisted model (``(input, output)`` USD per 1M tokens)."""
         sealed = tuple((sc, pe, float(cap)) for (sc, pe), cap in sorted(caps.items()) if cap is not None)
-        return Route(**{**self.__dict__, "payer": payer, "spend_caps": sealed})
+        return Route(**{**self.__dict__, "payer": payer, "spend_caps": sealed,
+                        "spend_rates": _rates(rates)})
 
     def with_toolbelt(self, endpoint: str, bearer: str) -> "Route":
         return Route(**{**self.__dict__, "toolbelt": endpoint, "toolbelt_bearer": bearer})
+
+
+def _rates(raw) -> tuple:
+    """``(input, output)`` when both are numbers, else ``()``."""
+    try:
+        a, b = raw or ()
+        return (float(a), float(b)) if a is not None and b is not None else ()
+    except (TypeError, ValueError):
+        return ()
 
 
 def _v(env: Mapping[str, str], name: str) -> str:
@@ -274,12 +300,14 @@ class Grants:
     """The routes and per-turn tokens, in Redis. agent-api writes them; the proxy reads, counts and
     revokes them. ``clock`` is injectable so expiry is testable without waiting."""
 
-    def __init__(self, client, secret: str, *, clock: Callable[[], float] = time.time) -> None:
+    def __init__(self, client, secret: str, *, clock: Callable[[], float] = time.time,
+                 prices=None) -> None:
         if not secret:
             raise ValueError(f"{SECRET_ENV} is not set: a route cannot be sealed")
         self._r = client
         self._secret = secret
         self._clock = clock
+        self._prices = prices
 
     # agent-api's half
     def put_route(self, unit: str, route: Route) -> str:
@@ -293,10 +321,17 @@ class Grants:
         rid = rid.decode() if isinstance(rid, bytes) else rid
         return rid if rid and self._r.exists(ROUTE_PREFIX + rid) else None
 
-    def mint(self, unit: str, rid: str, *, ttl_sec: int, max_requests: int = DEFAULT_MAX_REQUESTS) -> str:
+    def mint(self, unit: str, rid: str, *, ttl_sec: int, max_requests: int = DEFAULT_MAX_REQUESTS,
+             spend: Optional[Route] = None) -> str:
+        """A token to route ``rid`` for one turn of ``unit``. ``spend``: the payer, caps and rates
+        THIS turn was admitted under — a running worker's later turn may bill another person than
+        the one its route was sealed for (a room of two)."""
         token = "vxm_" + secrets.token_urlsafe(32)
         exp = int(self._clock()) + int(ttl_sec)
         rec = {"unit": unit, "route": rid, "exp": exp, "max_requests": int(max_requests)}
+        if spend is not None and spend.payer:
+            rec["spend"] = {"payer": spend.payer, "spend_caps": [list(c) for c in spend.spend_caps],
+                            "spend_rates": list(spend.spend_rates)}
         self._r.set(GRANT_PREFIX + _digest(token), json.dumps(rec), ex=int(ttl_sec))
         # the route lives at least as long as the last token to it
         self._r.expire(ROUTE_PREFIX + rid, max(ROUTE_TTL_SEC, int(ttl_sec)))
@@ -335,42 +370,69 @@ class Grants:
     def admit(self, token: str, model: Optional[str]) -> Route:
         """The route for one request with ``token`` asking for ``model`` (None: the request names
         none), or :class:`Refused`. Counts the request against the turn's ceiling."""
+        return self.admit_turn(token, model)[1]
+
+    def admit_turn(self, token: str, model: Optional[str]) -> tuple["Turn", Route]:
+        """:meth:`admit`, with the turn the request belongs to (who pays for it, for :meth:`charge`)."""
         rec, route = self._resolve(token)
         if route.subscription:
             raise Refused(403, "a subscription route's model calls go from the vendor's CLI, never "
                                "through the proxy")
         if model is not None and not model_in_scope(model, route.models):
             raise Refused(403, f"model {model!r} is outside this turn's scope")
-        self._within_spend(route)
+        turn = Turn.of(rec, route)
+        self._within_spend(turn)
         key = COUNT_PREFIX + _digest(token)
         n = self._r.incr(key)
         if n == 1:
             self._r.expire(key, max(1, int(rec["exp"]) - int(self._clock())))
         if n > int(rec.get("max_requests") or DEFAULT_MAX_REQUESTS):
             raise Refused(429, "this turn has made all the model requests it may")
-        return route
+        return turn, route
 
-    def _within_spend(self, route: Route) -> None:
-        """Refuse once the payer's ledger (``llm_budget``: the USD agent-api has recorded from each
-        reported model call) has reached a cap the turn was admitted under. The same check
+    def _within_spend(self, turn: "Turn") -> None:
+        """Refuse once the payer's spend has reached a cap the turn was admitted under: the ledger
+        (``llm_budget``: the USD agent-api has recorded from each reported model call) plus what this
+        proxy has relayed that no worker has reported yet (``llm_budget.unreported``). The check
         ``Budget.admit`` makes before dispatch, made again before every model request of the turn."""
-        if not (route.payer and route.spend_caps):
+        if not (turn.payer and turn.caps):
             return
         from control_plane import llm_budget  # noqa: PLC0415
 
         periods = llm_budget._periods(self._clock())
-        keys = [llm_budget._key(sc, route.payer, pe, periods[pe][0]) for sc, pe, _cap in route.spend_caps]
+        keys = [llm_budget._key(sc, turn.payer, pe, periods[pe][0]) for sc, pe, _cap in turn.caps]
         try:
             values = self._r.mget(keys)
+            pending = llm_budget.unreported(self._r, turn.payer)
         except Exception:  # noqa: BLE001 — a ledger that cannot be read is no headroom (fail closed)
             raise Refused(503, "the spend ledger cannot be read") from None
-        for (scope, period, cap), raw in zip(route.spend_caps, values):
+        for (scope, period, cap), raw in zip(turn.caps, values):
             try:
                 used = float(raw or 0)
             except (TypeError, ValueError):
                 used = 0.0
-            if used >= cap:
+            if used + pending.get(scope, 0.0) >= cap:
                 raise Refused(402, f"the {scope} {period} model spend cap (${cap:g}) is reached")
+
+    def prices(self):
+        """The ledger's price table (``model_prices.PriceTable``, the shared redis copy)."""
+        if self._prices is None:
+            from control_plane import model_prices  # noqa: PLC0415
+            self._prices = model_prices.PriceTable(self._r)
+        return self._prices
+
+    def charge(self, turn: "Turn", usage: Optional[Mapping]) -> float:
+        """Price one relayed call's ``usage`` (the ledger's shape) the way the ledger prices it, and
+        add it to the payer's unreported figure for the turn's unit. Returns the USD."""
+        if not usage or not turn.payer:
+            return 0.0
+        from control_plane import llm_budget  # noqa: PLC0415
+
+        rates = turn.rates or (None, None)
+        caps = llm_budget.Caps(caps={}, price_in=rates[0], price_out=rates[1])
+        usd = llm_budget.cost_usd(usage, caps, self.prices())
+        llm_budget.add_unreported(self._r, turn.payer, turn.unit, usd)
+        return usd
 
     def toolbelt(self, token: str) -> tuple[str, str]:
         """``(url, bearer)`` for one MCP request with ``token``: the unit's CURRENT delegation token
@@ -391,6 +453,141 @@ class Grants:
     def revoke(self, token: str) -> bool:
         d = _digest((token or "").strip())
         return bool(self._r.delete(GRANT_PREFIX + d, COUNT_PREFIX + d))
+
+
+@dataclass(frozen=True)
+class Turn:
+    """Who pays for a token's requests, under which caps, and the unit whose turn it is."""
+
+    unit: str
+    payer: str = ""
+    caps: tuple = ()
+    rates: tuple = ()
+
+    @classmethod
+    def of(cls, rec: Mapping, route: Route) -> "Turn":
+        spend = rec.get("spend") if isinstance(rec.get("spend"), dict) else None
+        if spend:
+            return cls(unit=str(rec.get("unit") or ""), payer=str(spend.get("payer") or ""),
+                       caps=tuple((str(a), str(b), float(c)) for a, b, c in spend.get("spend_caps") or ()),
+                       rates=_rates(spend.get("spend_rates")))
+        return cls(unit=str(rec.get("unit") or ""), payer=route.payer, caps=route.spend_caps,
+                   rates=route.spend_rates)
+
+
+# ── the provider's usage, read from the answer the proxy relays ────────────────────────────────
+
+#: The most of a non-streamed answer the proxy keeps to read its usage from.
+_BODY_KEEP = 16 * 1024 * 1024
+
+
+def ledger_usage(model: str, u: Mapping) -> dict:
+    """A provider's ``usage`` in the ledger's shape (``llm_budget.cost_usd``): prompt tokens with the
+    cached ones included, completion tokens, the cached reads, and the provider's own cost when it
+    gave one. Anthropic counts cache reads and writes beside ``input_tokens``; OpenAI's
+    ``prompt_tokens`` and the Responses API's ``input_tokens`` already hold their cached tokens."""
+    def n(v) -> int:
+        return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else 0
+
+    def detail(name: str) -> int:
+        d = u.get(name)
+        return n(d.get("cached_tokens")) if isinstance(d, Mapping) else 0
+    prompt = (n(u.get("prompt_tokens")) + n(u.get("input_tokens"))
+              + n(u.get("cache_creation_input_tokens")) + n(u.get("cache_read_input_tokens")))
+    cached = n(u.get("cache_read_input_tokens")) or detail("prompt_tokens_details") or detail(
+        "input_tokens_details")
+    out = {"model": model, "prompt_tokens": prompt,
+           "completion_tokens": n(u.get("completion_tokens")) + n(u.get("output_tokens")),
+           "cache_read_tokens": min(cached, prompt)}
+    cost = u.get("cost")
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
+        out["cost"] = float(cost)
+    return out
+
+
+class UsageTap:
+    """Reads the provider's usage out of one relayed answer as it passes, without holding it up.
+
+    A stream (``text/event-stream``) is read event by event: Anthropic's ``message_start`` carries
+    the model and the input usage and each ``message_delta`` the running output count; an OpenAI
+    chunk carries ``usage`` (the last one, when asked for); the Responses API's terminal
+    ``response.*`` event carries the response's ``usage``. A JSON answer is read whole at its end."""
+
+    def __init__(self, content_type: str) -> None:
+        self.stream = "text/event-stream" in (content_type or "").lower()
+        self._json = "json" in (content_type or "").lower()
+        self._buf = bytearray()
+        self._kept = 0
+        self.model = ""
+        self.fields: dict = {}
+
+    def feed(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        if self.stream:
+            self._buf.extend(chunk)
+            while True:
+                i = self._buf.find(b"\n")
+                if i < 0:
+                    break
+                line = bytes(self._buf[:i]).strip()
+                del self._buf[:i + 1]
+                if line.startswith(b"data:"):
+                    self._event(line[5:].strip())
+        elif self._json and self._kept < _BODY_KEEP:
+            self._buf.extend(chunk[:_BODY_KEEP - self._kept])
+            self._kept += len(chunk)
+
+    def _event(self, data: bytes) -> None:
+        if not data or data == b"[DONE]":
+            return
+        try:
+            ev = json.loads(data)
+        except ValueError:
+            return
+        if not isinstance(ev, dict):
+            return
+        t = str(ev.get("type") or "")
+        if t == "message_start" and isinstance(ev.get("message"), dict):
+            self._take(ev["message"])
+        elif t.startswith("response.") and isinstance(ev.get("response"), dict):
+            self._take(ev["response"])
+        else:
+            self._take(ev)
+
+    def _take(self, obj: Mapping) -> None:
+        if isinstance(obj.get("model"), str) and obj["model"]:
+            self.model = obj["model"]
+        u = obj.get("usage")
+        if isinstance(u, Mapping):
+            # a later event restates a count (Anthropic's cumulative output_tokens): keep the largest
+            for k, v in u.items():
+                if isinstance(v, Mapping):
+                    self.fields[k] = {**(self.fields.get(k) or {}), **v}
+                elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                    self.fields[k] = max(v, self.fields.get(k) or 0)
+
+    def usage(self) -> Optional[dict]:
+        """The call's usage in the ledger's shape, or None when the answer reported none."""
+        if not self.stream and self._json and self._buf and self._kept <= _BODY_KEEP:
+            try:
+                body = json.loads(bytes(self._buf))
+            except ValueError:
+                body = None
+            if isinstance(body, dict):
+                self._take(body)
+                if isinstance(body.get("response"), dict):
+                    self._take(body["response"])
+        if not self.fields:
+            return None
+        return ledger_usage(self.model, self.fields)
+
+
+def estimated_usage(model: Optional[str], body: bytes, out_cap: int) -> dict:
+    """A successful answer that reported no usage (a stream cut short, a server that sends none) is
+    counted, never free: its request's size as prompt and its whole output allowance as completion."""
+    return {"model": model or "", "prompt_tokens": max(1, len(body) // 4),
+            "completion_tokens": max(1, out_cap), "estimated": True}
 
 
 # ── the dispatch's half: take the route out of the worker env ──────────────────────────────────
@@ -434,7 +631,8 @@ def confine(env: dict, *, url: str, grants: Optional[Grants], unit: str, cold: b
         rid = None if cold else grants.unit_route(unit)
         if rid is None:
             rid = grants.put_route(unit, route)
-        token = grants.mint(unit, rid, ttl_sec=grant_ttl_sec(source))
+        token = grants.mint(unit, rid, ttl_sec=grant_ttl_sec(source),
+                            spend=route if spend is not None else None)
     base = (url.rstrip("/") + mg.LLM_PATH) if url else ""
     for name in mg.PROVIDER_CREDENTIAL_ENV:
         env[name] = ""
@@ -499,9 +697,13 @@ def _token_of(headers: Mapping[str, str]) -> str:
     return (headers.get("x-api-key") or "").strip()
 
 
-def _shape_body(body: bytes, content_type: str, route: Route) -> tuple[Optional[str], bytes]:
+def _shape_body(body: bytes, content_type: str, route: Route, *,
+                chat: bool = False) -> tuple[Optional[str], bytes]:
     """(the model the request asks for — None when it names none — and the body to forward). An
-    output allowance above the route's cap is lowered to it."""
+    output allowance above the route's cap is lowered to it, and a ``chat`` (``/chat/completions``)
+    stream is asked
+    to end with its usage (``stream_options.include_usage``) unless the request already says
+    otherwise — ``"stream_options": null`` is a server that refuses the field, and is left alone."""
     if "json" not in (content_type or "").lower() or not body:
         return None, body
     try:
@@ -519,13 +721,36 @@ def _shape_body(body: bytes, content_type: str, route: Route) -> tuple[Optional[
             if isinstance(v, int) and not isinstance(v, bool) and v > route.max_output_tokens:
                 payload[f] = route.max_output_tokens
                 changed = True
-        if changed:
-            body = json.dumps(payload).encode("utf-8")
+    else:
+        changed = False
+    if chat and payload.get("stream") is True and "stream_options" not in payload:
+        payload["stream_options"] = {"include_usage": True}
+        changed = True
+    if changed:
+        body = json.dumps(payload).encode("utf-8")
     return model, body
 
 
 def _peek_model(body: bytes, content_type: str) -> Optional[str]:
     return _shape_body(body, content_type, Route(base_url=""))[0]
+
+
+def _output_allowance(body: bytes, route: Route) -> int:
+    """The output the forwarded request may produce: its own allowance, else the route's cap."""
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        asked = [v for f in _OUTPUT_FIELDS if isinstance(v := payload.get(f), int)
+                 and not isinstance(v, bool) and v > 0]
+        if asked:
+            return max(asked)
+    return route.max_output_tokens or _UNKNOWN_OUTPUT_TOKENS
+
+
+#: The output an answer is counted at when neither it nor its request names one.
+_UNKNOWN_OUTPUT_TOKENS = 32_000
 
 
 def create_app(grants: Grants, *, transport=None, timeout: float = 600.0, resolver=None):
@@ -562,7 +787,8 @@ def create_app(grants: Grants, *, transport=None, timeout: float = 600.0, resolv
         await run_in_threadpool(grants.revoke, token)
         return JSONResponse({"revoked": True})
 
-    async def _relay(request: Request, url: str, headers: dict, body: bytes, via=None):
+    async def _relay(request: Request, url: str, headers: dict, body: bytes, via=None,
+                     on_answer: Optional[Callable] = None):
         via = via or client
         if request.url.query:
             url += "?" + request.url.query
@@ -577,8 +803,25 @@ def create_app(grants: Grants, *, transport=None, timeout: float = 600.0, resolv
             logger.warning("model proxy: upstream unreachable (%s)", type(exc).__name__)
             return _refusal(Refused(502, f"the upstream could not be reached ({type(exc).__name__})"))
         out_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _DROP_RESPONSE}
-        return StreamingResponse(resp.aiter_bytes(), status_code=resp.status_code, headers=out_headers,
+        chunks = resp.aiter_bytes()
+        if on_answer is not None:
+            chunks = _metered(chunks, resp, on_answer)
+        return StreamingResponse(chunks, status_code=resp.status_code, headers=out_headers,
                                  background=BackgroundTask(resp.aclose))
+
+    async def _metered(chunks, resp, on_answer: Callable):
+        """The answer as it arrives, its usage read on the way; ``on_answer(status, tap)`` runs when
+        it ends — however it ends, a caller that hangs up included."""
+        tap = UsageTap(resp.headers.get("content-type", ""))
+        try:
+            async for chunk in chunks:
+                tap.feed(chunk)
+                yield chunk
+        finally:
+            try:
+                on_answer(resp.status_code, tap)
+            except Exception:  # noqa: BLE001 — the answer is already the caller's
+                logger.exception("model proxy: a relayed call's spend was not counted")
 
     async def forward(request: Request):
         headers = {k.lower(): v for k, v in request.headers.items()}
@@ -586,17 +829,30 @@ def create_app(grants: Grants, *, transport=None, timeout: float = 600.0, resolv
         body = await request.body()
         ctype = headers.get("content-type", "")
         try:
-            route = await run_in_threadpool(grants.admit, token, _peek_model(body, ctype))
+            turn, route = await run_in_threadpool(grants.admit_turn, token, _peek_model(body, ctype))
         except Refused as exc:
             logger.info("model proxy refused a request: %s", exc.reason)
             return _refusal(exc)
         if not route.base_url:
             return _refusal(Refused(502, "this turn's model route names no endpoint"))
-        _model, body = _shape_body(body, ctype, route)
         path = request.path_params.get("path", "")
+        model, body = _shape_body(body, ctype, route, chat=path.rstrip("/").endswith("chat/completions"))
         url = route.base_url.rstrip("/") + "/" + path.lstrip("/")
+
+        def on_answer(status: int, tap: UsageTap) -> None:
+            # Synchronous on purpose: it runs in the stream's `finally`, which a hang-up cancels at
+            # its first `await` — the spend of a call the caller abandoned is spend all the same.
+            usage = tap.usage()
+            if usage is None and 200 <= status < 300:
+                usage = estimated_usage(model, body, _output_allowance(body, route))
+                logger.warning("model proxy: an answer reported no usage; counted at its allowance")
+            if usage is not None:
+                if not usage.get("model") and model:
+                    usage["model"] = model
+                grants.charge(turn, usage)
+
         return await _relay(request, url, upstream_headers(route, headers), body,
-                            public if route.public_only else client)
+                            public if route.public_only else client, on_answer)
 
     async def toolbelt(request: Request):
         """The harness's MCP attachment: the turn's token in, the unit's delegation bearer out."""
