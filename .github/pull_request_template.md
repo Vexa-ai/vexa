@@ -1,3 +1,5 @@
+**Implements #… (agreed contract)**
+
 <!-- The PR carries TWO artifacts, judged on different axes (docs/docs/governance/delivery.mdx D8):
      the OBSERVATION BUNDLE answers "is the value real?"; the DIFF answers "is it correct and safe?".
      A diff with no bundle is not reviewable. -->
@@ -7,7 +9,7 @@
 > It makes reviewing your value bundle faster and connects you to the reporter and the maintainers.
 > Your PR is judged on its evidence, not on whether you show up — but showing up helps a lot.
 
-**Delivers issue:** #
+- [ ] Validation artifacts from the issue attached (below).
 
 ## Contribution rights (first contribution only)
 
