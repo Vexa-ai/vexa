@@ -769,6 +769,13 @@
       "targets": []
     },
     {
+      "key": "VEXA_ON_BEHALF_OF",
+      "class": "defaulted",
+      "default": "(unset — stamped per dispatch on a room principal's turn: the person the room's agent answered)",
+      "description": "the person a room's agent turn answered; the worker writes it as the `On-behalf-of` trailer on the turn's commits, falling back to VEXA_OWNER. Runtime-injected per dispatch, never a deploy surface",
+      "targets": []
+    },
+    {
       "key": "VEXA_OWNER",
       "class": "defaulted",
       "default": "(unset — derived per dispatch: the subject the dispatch acts for)",

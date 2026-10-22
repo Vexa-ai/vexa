@@ -10,29 +10,16 @@ tier names.
 
 Every writer that commits a change a caller asked for takes its trailers from here, so one rule
 decides attribution everywhere: the page routes, entity cards, assets, the brief, workspace icons
-and pins, accepted call proposals, folder imports and a room's meeting note.
+and pins, templates, accepted call proposals, folder imports and meeting pages. A worker turn's own
+commits take theirs from ``shared.commit_trailers`` (the same lines, from its dispatch).
 """
 from __future__ import annotations
 
-import re
 from typing import Mapping
 
 from control_plane import identity_token
-
-ON_BEHALF_OF = "On-behalf-of"
-WRITTEN_BY = "Written-by"
-AGENT_UNIT = "Agent-unit"
-_TRAILER_VALUE = re.compile(r"[^A-Za-z0-9@._+:-]")
-
-
-def agent_trailers(subject: str, unit: str = "") -> list[str]:
-    """The trailer lines of a commit an agent made for ``subject`` (``unit``: its session, if known)."""
-    who = _TRAILER_VALUE.sub("", str(subject or ""))[:128] or "unknown"
-    out = [f"{ON_BEHALF_OF}: {who}", f"{WRITTEN_BY}: agent"]
-    unit = _TRAILER_VALUE.sub("", str(unit or ""))[:160]
-    if unit:
-        out.append(f"{AGENT_UNIT}: {unit}")
-    return out
+from shared.commit_trailers import (AGENT_UNIT, ON_BEHALF_OF, WRITTEN_BY,  # noqa: F401  (the one rule)
+                                    agent_trailers, with_trailers)
 
 
 def writer_trailers(headers: Mapping[str, str]) -> list[str]:
@@ -40,12 +27,6 @@ def writer_trailers(headers: Mapping[str, str]) -> list[str]:
     if not identity_token.is_delegated(headers):
         return []
     return agent_trailers(str(headers.get("x-user-id") or ""), identity_token.session_of(headers))
-
-
-def with_trailers(message: str, trailers) -> str:
-    """``message`` with ``trailers`` as its last paragraph (unchanged when there are none)."""
-    lines = [t for t in (trailers or ()) if t]
-    return f"{message}\n\n" + "\n".join(lines) if lines else message
 
 
 def attributed(message: str, headers: Mapping[str, str]) -> str:

@@ -363,7 +363,7 @@ def test_the_qwen_lane_dials_are_declared():
 #      CODEX_API_KEY, which agent-api now reads (and seals) in place of the runtime.
 # 161: +2 VEXA_ROOM_RING_PER_PERSON, VEXA_ROOM_RING_PER_CALLER (the ring limit, room_ring).
 # 163: +2 VEXA_GIT_ALLOWED_INTERNAL_HOSTS, GIT_SSH_COMMAND (car 40: git egress check and pin).
-EXPECTED_DECLARED_KEYS = 163
+EXPECTED_DECLARED_KEYS = 164
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

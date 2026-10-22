@@ -887,10 +887,11 @@ def _redact_staged_identifiers(work: Path, env) -> dict:
 
 
 def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]],
-                  policy_removed: Iterable[str] = ()) -> Optional[str]:
+                  policy_removed: Iterable[str] = (), trailers: Iterable[str] = ()) -> Optional[str]:
     """Commit ``work`` if its tree changed, attributed to ``author`` (committer = platform). Returns the
     new HEAD sha, or None on a clean tree. A path with no ``.git`` is skipped (a mount not yet seeded).
-    Best-effort per mount: one mount failing to commit must not abort the others.
+    Best-effort per mount: one mount failing to commit must not abort the others. ``trailers`` close
+    the message (``shared.commit_trailers``: an agent wrote this, for whom, in which session).
 
     ``policy_removed`` is what the policy guard removed in THIS turn — the only ``policy/`` deletions
     this commit is entitled to record. See the un-staging step below."""
@@ -956,6 +957,9 @@ def _commit_mount(work: Path, *, message: str, author: Optional[tuple[str, str]]
     args = ["commit", "-m", subject]
     if body:
         args += ["-m", body]
+    lines = [t for t in trailers if t]
+    if lines:
+        args += ["-m", "\n".join(lines)]   # the LAST paragraph, where git reads trailers
     _git(work, *args, env=env)
     return _git(work, "rev-parse", "HEAD", env=env)
 
@@ -1001,6 +1005,7 @@ def run_harness_turn(
     commit_message: Optional[str] = None,
     commit: bool = True,
     author: Optional[tuple[str, str]] = None,
+    trailers: Iterable[str] = (),
     extra_mounts: Optional[Iterable[Path | str]] = None,
     private_guard=None,
     confirm_text: str = "",
@@ -1020,7 +1025,8 @@ def run_harness_turn(
     agent). After the turn, for EVERY writable mount in the active set (``work`` first, then each of
     ``extra_mounts``) whose tree changed, commit INDEPENDENTLY and emit ``{"type":"commit","sha":...}``
     (WP-A1.2: one commit per changed mount). Attribution (D4): the ``author`` (the dispatch principal)
-    authors each commit; the committer is always the platform.
+    authors each commit; the committer is always the platform; ``trailers`` (H10) close each message
+    with who the agent wrote it for and in which session.
 
     COMPOSED with the policy guard (Lane M / Q3): ``policy/`` is PLATFORM-WRITE-ONLY (the member roster
     lives there; see ``control_plane.workspace_membership``). Each mount is a separate workspace repo that
@@ -1119,7 +1125,8 @@ def run_harness_turn(
             try:
                 home_msg = private_guard.commit_message(home, msg) if private_guard is not None else msg
                 sha = None if (held_home or {}).get("failed") else _commit_mount(home, message=home_msg,
-                                                                                author=author)
+                                                                                author=author,
+                                                                                trailers=trailers)
             except subprocess.CalledProcessError:
                 sha = None
             if sha:
@@ -1166,7 +1173,8 @@ def run_harness_turn(
             # The guard's own removals are the ONLY `policy/` deletions this commit may record.
             # A marked session's body never reaches a mount other people read (D6): a fixed one does.
             mount_msg = private_guard.commit_message(mount, msg) if private_guard is not None else msg
-            sha = _commit_mount(mount, message=mount_msg, author=author, policy_removed=reverted)
+            sha = _commit_mount(mount, message=mount_msg, author=author, policy_removed=reverted,
+                                trailers=trailers)
         except subprocess.CalledProcessError:
             continue  # one mount's commit failing must not abort the rest of the set
         if sha:

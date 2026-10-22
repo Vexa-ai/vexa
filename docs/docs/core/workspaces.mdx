@@ -540,6 +540,13 @@ the turn made under `policy/` is reverted, and the commit runs through `gitexec`
 program the repository names (hooks, filters, credential helpers, …). Where the worker cannot switch
 users (Lite's per-tenant UID), it makes itself non-dumpable instead.
 
+Each commit a turn makes is authored by the person the turn runs for, and its message ends with git
+trailers that say an agent wrote it: `On-behalf-of: <person>` (the person a room's agent answered,
+else the dispatch's owner), `Written-by: agent` and `Agent-unit: <the turn's unit>`. The worker takes
+them from its dispatch environment (`VEXA_ON_BEHALF_OF`, `VEXA_OWNER`, `VEXA_UNIT_ID`), never from
+what the model wrote, and puts them in the message's last paragraph, which is where git reads
+trailers. `git log --format='%(trailers)'` tells an agent's commit from a person's own.
+
 **Recording an entity** (`POST /api/workspace/entity`, the `entity_upsert` tool):
 
 1. The agent's call reaches agent-api as the person (`routers/workspaces.py` `ws_entity_upsert`).

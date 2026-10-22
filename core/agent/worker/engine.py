@@ -1947,6 +1947,17 @@ def _principal_author() -> tuple[str, str] | None:
     return None
 
 
+def _turn_trailers() -> list[str]:
+    """WHO WROTE THIS TURN'S COMMITS (H10): an agent, for the person its dispatch names, in this unit.
+
+    The person is the one a room's agent answered (``VEXA_ON_BEHALF_OF``), else the dispatch's owner
+    (``VEXA_OWNER``); the unit is ``VEXA_UNIT_ID``. All three are stamped by the dispatcher from the
+    verified invocation — nothing the model says reaches them."""
+    from shared.commit_trailers import agent_trailers  # noqa: PLC0415
+    person = (os.environ.get("VEXA_ON_BEHALF_OF") or os.environ.get("VEXA_OWNER") or "").strip()
+    return agent_trailers(person, os.environ.get("VEXA_UNIT_ID") or "")
+
+
 def _note_home(mounts: list[dict]) -> "Path | None":
     """Where this person's meeting notes live (#1783, ``llm.meeting_note_home``): their PRIMARY
     writable workspace — the one every write that names no workspace lands in: Personal, or the
@@ -2541,6 +2552,7 @@ def run_turn_over_workspace(
     # kg-links rule ([[wikilinks]] render as actionable entity chips) applies to EVERY turn.
     mounts = active_mounts()
     author = _principal_author()
+    trailers = _turn_trailers()
     extras = _extra_mount_paths(work)
     # THE MODEL IS TOLD, NOT LEFT TO GUESS (F153's second half). A silent toolbelt gap is exactly
     # how the model came to tell the founder a plausible-sounding excuse instead of the truth — so a
@@ -2599,7 +2611,7 @@ def run_turn_over_workspace(
                             else "flow" if turn_namespace(prompt) == "flow"
                             else "room" if room_run() else "chat")
     gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=resume, model=model,
-                           commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config,
+                           commit=commit, author=author, trailers=trailers, extra_mounts=extras, mcp_config=mcp_config,
                            private_guard=private_guard(mounts), confirm_text=prompt,
                            note_home=_note_home(mounts))
     first = next(gen, None)
@@ -2619,7 +2631,7 @@ def run_turn_over_workspace(
             seed = conversation_seed(_records)
             turn_prompt = seed + turn_prompt
         gen = run_harness_turn(work, turn_prompt, harness, allowed_tools=allowed, session=None, model=model,
-                               commit=commit, author=author, extra_mounts=extras, mcp_config=mcp_config,
+                               commit=commit, author=author, trailers=trailers, extra_mounts=extras, mcp_config=mcp_config,
                                private_guard=private_guard(mounts), confirm_text=prompt,
                            note_home=_note_home(mounts))
         first = next(gen, None)
