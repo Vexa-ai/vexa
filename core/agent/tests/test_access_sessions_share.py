@@ -84,10 +84,11 @@ def env(tmp_path, monkeypatch):
                      email_subject_lookup=lambda a: SUBJECTS.get(str(a).lower()))
     # alice, bob and carol share a workspace (the people alice may add); mallory has an account
     # here and shares nothing with her
-    (root / "team" / "policy").mkdir(parents=True)
-    (root / "team" / "policy" / "members.json").write_text(json.dumps(
-        [{"subject": "alice", "role": "owner"}, {"subject": "bob", "role": "contributor"},
-         {"subject": "carol", "role": "contributor"}]))
+    (root / "team").mkdir(parents=True)
+    from control_plane import workspace_membership as _wm
+    _wm.write_policy(root, "team", "members",
+                     [{"subject": "alice", "role": "owner"}, {"subject": "bob", "role": "contributor"},
+                      {"subject": "carol", "role": "contributor"}])
     private = store.create("alice", name="pchat-1")
     store.save_bundle(private["id"], 0, _private_bundle())
     yield TestClient(app), store, private["id"]

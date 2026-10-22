@@ -215,8 +215,9 @@ def test_the_routine_shape_is_read_narrowly():
 def test_a_routine_file_in_a_shared_workspace_becomes_its_owners_flow(world, flows):
     client, scheduler, root = world
     team = root / "team-abc123"
-    (team / "policy").mkdir(parents=True)
-    (team / "policy" / "members.json").write_text(json.dumps([{"subject": "7", "role": "owner"}]))
+    team.mkdir(parents=True)
+    from control_plane import workspace_membership as m
+    m.write_policy(root, "team-abc123", "members", [{"subject": "7", "role": "owner"}])
     (team / "routines").mkdir()
     (team / "routines" / "sweep.md").write_text(ROUTINE)
     rf.migrate(scheduler=scheduler, workspaces_dir=root)

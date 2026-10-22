@@ -288,10 +288,10 @@ class _SentRooms(_Rooms):
 
 
 def _members(root, ws, *subjects):
-    p = root / ws / "policy"
-    p.mkdir(parents=True, exist_ok=True)
-    (p / "members.json").write_text(json.dumps([{"subject": s, "role": "owner" if i == 0 else "contributor"}
-                                                for i, s in enumerate(subjects)]))
+    from control_plane import workspace_membership as m
+    (root / ws).mkdir(parents=True, exist_ok=True)
+    m.write_policy(root, ws, "members", [{"subject": s, "role": "owner" if i == 0 else "contributor"}
+                                         for i, s in enumerate(subjects)])
 
 
 def test_show_opens_the_page_for_everyone_and_leaves_one_line_in_the_chat(env, monkeypatch):

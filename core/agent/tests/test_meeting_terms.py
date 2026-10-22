@@ -237,7 +237,9 @@ def test_a_publish_without_terms_is_refused_rather_than_guessed(client):
 def test_the_map_is_a_file_beside_the_meeting_and_not_the_transcript(client, tmp_path):
     client.post("/api/meeting/terms", headers={"X-User-Id": JANE},
                 json={"meeting_id": ROW, "cursor": "c9", "terms": [known("Northwind Labs")]})
-    written = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file())
+    from control_plane.workspace_membership import ADOPTION_RECORD
+    written = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*")
+                     if p.is_file() and p.relative_to(tmp_path).as_posix() != ADOPTION_RECORD)
     # The desk gained the map and nothing else — no transcript, no page, nothing a person opens.
     # Both files are under the machinery dot-dir (`.vexa/workspace.json` is the desk's own identity).
     assert written == [f"{JANE}/{meeting_terms.TERMS_DIR}/{ROW}.json", f"{JANE}/.vexa/workspace.json"]

@@ -27,7 +27,10 @@ def _app(tmp_path, **kw):
 
 
 def _written(tmp_path):
-    return sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*") if p.is_file())
+    """Every file under the store, but the boot's own record of its policy adoption."""
+    from control_plane.workspace_membership import ADOPTION_RECORD
+    return sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*")
+                  if p.is_file() and p.relative_to(tmp_path).as_posix() != ADOPTION_RECORD)
 
 
 def test_an_upload_without_an_authenticated_subject_is_refused_and_writes_nothing(tmp_path):
