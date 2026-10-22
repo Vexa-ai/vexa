@@ -1759,9 +1759,9 @@ if grep -q 'values: \[admin-api, meeting-api, agent-api, pgbouncer, migrations, 
   echo "  OK: with the CRM on, crm-api reaches Postgres and the chart's pods reach crm-api"
 else echo "  FAIL: the network policy does not admit the CRM"; fail=1; fi
 # The CRM's outbox (car 19): with flows on it is a Deployment of its own that logs in as the CRM's
-# role and holds flows' door, the CRM's publish key and the fact seal (never flows' operator key);
-# crm-api holds none of them, and flows-api reads the seal and the publish key from the same Secret
-# keys. With flows off there is no outbox.
+# role and holds flows' door, the CRM's publish key and the CRM's own fact seal key (never flows'
+# operator key); crm-api holds none of them, and flows-api reads the publish key from the same Secret
+# key and the seal's public half from a ConfigMap. With flows off there is no outbox.
 crm_fl="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set flows.enabled=true)"
 outbox="$(doc Deployment vexa-vexa-crm-outbox "$crm_fl")"
 crmapi="$(doc Deployment vexa-vexa-crm-api "$crm_fl")"
@@ -1773,14 +1773,45 @@ tb "flows-api reads the same publish key (optional ref)" 'grep -A5 "name: VEXA_F
 tb "the chart's Secret generates VEXA_FLOWS_CRM_PUBLISH_KEY" 'grep -qE "^  VEXA_FLOWS_CRM_PUBLISH_KEY: \"[A-Za-z0-9]{64}\"$" <<< "$crm_fl"'
 short_pub="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set secrets.crmPublishKey=short 2>&1 || true)"
 tb "secrets.crmPublishKey shorter than 32 bytes is refused" 'grep -q "secrets.crmPublishKey must be 32+ bytes" <<< "$short_pub"'
-tb "crm outbox: the fact seal is required from the shared Secret" 'grep -A5 "name: VEXA_FACT_SEAL_SECRET$" <<< "$outbox" | grep -q "name: \"vexa-vexa-secrets\"" && ! grep -A5 "name: VEXA_FACT_SEAL_SECRET$" <<< "$outbox" | grep -q "optional: true"'
-tb "crm outbox holds no internal secret and crm-api no flows key or seal" '! grep -q "INTERNAL_API_SECRET" <<< "$outbox" && ! grep -qE "name: (FLOWS_PUBLISH_KEY|VEXA_FACT_SEAL_SECRET)$" <<< "$crmapi"'
-tb "flows-api verifies under the same seal (optional ref)" 'grep -A5 "name: VEXA_FACT_SEAL_SECRET$" <<< "$flowsapi" | grep -q "key: VEXA_FACT_SEAL_SECRET" && grep -A5 "name: VEXA_FACT_SEAL_SECRET$" <<< "$flowsapi" | grep -q "optional: true"'
-tb "the chart's Secret generates VEXA_FACT_SEAL_SECRET" 'grep -qE "^  VEXA_FACT_SEAL_SECRET: \"[A-Za-z0-9]{64}\"$" <<< "$crm_fl"'
-short_seal="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set secrets.factSealSecret=short 2>&1 || true)"
-tb "secrets.factSealSecret shorter than 32 bytes is refused" 'grep -q "secrets.factSealSecret must be 32+ bytes" <<< "$short_seal"'
+# event.v2 fact seal (car 44): the CRM signs with its OWN Ed25519 key, a Secret only crm-outbox mounts;
+# flows-api holds the public half alone, in a ConfigMap. No shared seal secret exists in any render.
+fseal="$(doc Secret vexa-vexa-fact-seal-crm-key "$crm_fl")"
+fverify="$(doc ConfigMap vexa-vexa-fact-verify-keys "$crm_fl")"
+crm_pem() { awk '/^  crm.pem: \|/{f=1;next} f&&/^    /{sub(/^    /,"");print;next} f{exit}' <<< "$1"; }  # crm_pem <configmap doc>
+fact_pair_ok() {  # fact_pair_ok <secret doc> <configmap doc>: the ConfigMap's crm.pem IS the key's public half
+  local priv pub derived tmp
+  tmp="$(mktemp -d)"
+  priv="$(awk '/^  signing-key.pem: /{print $2}' <<< "$1")"
+  pub="$(crm_pem "$2")"
+  [ -n "$priv" ] && [ -n "$pub" ] || { rm -rf "$tmp"; return 1; }
+  printf '%s' "$priv" | base64 -d > "$tmp/k" 2>/dev/null || printf '%s' "$priv" | base64 -D > "$tmp/k"
+  openssl pkey -in "$tmp/k" -noout -text 2>/dev/null | grep -q 'ED25519 Private-Key' || { rm -rf "$tmp"; return 1; }
+  derived="$(openssl pkey -in "$tmp/k" -pubout 2>/dev/null)"
+  rm -rf "$tmp"
+  [ "$derived" = "$pub" ]
+}
+if command -v openssl >/dev/null 2>&1; then
+  tb "fact seal: an Ed25519 signing-key.pem whose public half is the verify ConfigMap's crm.pem" 'fact_pair_ok "$fseal" "$fverify"'
+else
+  echo "  SKIP: openssl not installed — fact seal key pair not cross-checked"
+fi
+tb "crm outbox reads VEXA_FACT_SEAL_KEY_FILE from the fact-seal Secret, and is the only workload that mounts it" 'grep -A1 "name: VEXA_FACT_SEAL_KEY_FILE$" <<< "$outbox" | grep -q "value: /run/vexa-fact-seal/key.pem" && grep -q "secretName: vexa-vexa-fact-seal-crm-key" <<< "$outbox" && [ "$(grep -c "secretName: vexa-vexa-fact-seal-crm-key" <<< "$crm_fl")" -eq 1 ]'
+tb "flows-api verifies from the public keys (optional ConfigMap) and mounts no fact-seal Secret" 'grep -A1 "name: VEXA_FACT_VERIFY_KEYS_DIR$" <<< "$flowsapi" | grep -q "value: /run/vexa-fact-verify" && grep -A2 "name: vexa-vexa-fact-verify-keys$" <<< "$flowsapi" | grep -q "optional: true" && ! grep -q "fact-seal-crm-key" <<< "$flowsapi"'
+tb "crm outbox holds no internal secret and crm-api no flows key or seal" '! grep -q "INTERNAL_API_SECRET" <<< "$outbox" && ! grep -qE "name: (FLOWS_PUBLISH_KEY|VEXA_FACT_SEAL_KEY_FILE)$" <<< "$crmapi" && ! grep -q "fact-seal-crm-key" <<< "$crmapi"'
 crm_pre="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set flows.enabled=true --set secrets.existingSecretName=shared-secrets)"
-tb "pre-created Secrets: the outbox and flows-api read the seal from secrets.existingSecretName" '[ "$(grep -A4 "name: VEXA_FACT_SEAL_SECRET$" <<< "$crm_pre" | grep -c "name: \"\?shared-secrets\"\?$")" -eq 2 ] && ! grep -q "^  VEXA_FACT_SEAL_SECRET:" <<< "$crm_pre"'
+tb "no render carries a shared VEXA_FACT_SEAL_SECRET (chart Secret or secrets.existingSecretName)" '! grep -q "VEXA_FACT_SEAL_SECRET" <<< "$crm_fl" && ! grep -q "VEXA_FACT_SEAL_SECRET" <<< "$crm_pre" && ! grep -q "VEXA_FACT_SEAL_SECRET" <<< "$RENDER"'
+if command -v openssl >/dev/null 2>&1; then
+  NOT_ED="$(openssl genpkey -algorithm rsa -pkeyopt rsa_keygen_bits:2048 2>/dev/null)"
+  rsa_seal="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set flows.enabled=true --set-string factSeal.crm.signingKey="$NOT_ED" 2>&1 || true)"
+  tb "factSeal.crm.signingKey that is not Ed25519 (RSA) refuses the render, naming the fix" 'grep -q "factSeal.crm.signingKey must be an Ed25519 private key" <<< "$rsa_seal" && grep -q "openssl genpkey -algorithm ed25519" <<< "$rsa_seal"'
+  OWN_PUB="$(openssl genpkey -algorithm ed25519 2>/dev/null | openssl pkey -pubout 2>/dev/null)"
+  no_pub="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set flows.enabled=true --set factSeal.crm.existingSecret=my-seal 2>&1 || true)"
+  ext_seal="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set flows.enabled=true --set factSeal.crm.existingSecret=my-seal --set-string factSeal.crm.publicKey="$OWN_PUB")"
+  tb "factSeal.crm.existingSecret: refused without publicKey; with it no generated Secret, the ConfigMap carries the given key, crm-outbox mounts the named Secret" 'grep -q "factSeal.crm.publicKey is required with factSeal.crm.existingSecret" <<< "$no_pub" && [ -z "$(doc Secret vexa-vexa-fact-seal-crm-key "$ext_seal")" ] && [ "$(crm_pem "$(doc ConfigMap vexa-vexa-fact-verify-keys "$ext_seal")")" = "$OWN_PUB" ] && grep -q "secretName: my-seal" <<< "$(doc Deployment vexa-vexa-crm-outbox "$ext_seal")"'
+  unset NOT_ED OWN_PUB
+fi
+crm_only="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}")"
+tb "with crm off (or flows off) neither fact-seal object renders" '! grep -qE "vexa-vexa-fact-(seal-crm-key|verify-keys)" <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --show-only templates/fact-seal-keys.yaml 2>&1 || true)" && ! grep -qE "^  name: vexa-vexa-fact-(seal-crm-key|verify-keys)$" <<< "$crm_only"'
 tb "with flows off there is no crm outbox" '! grep -q "vexa-vexa-crm-outbox" <<< "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}")"'
 crm_np_fl="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${CRM[@]}" --set flows.enabled=true --set networkPolicy.enabled=true --show-only templates/networkpolicy-namespace.yaml)"
 tb "with the CRM and flows on, the crm outbox reaches Postgres" 'grep -q "values: \[admin-api, meeting-api, agent-api, pgbouncer, migrations, crm-api, crm-outbox\]" <<< "$crm_np_fl"'

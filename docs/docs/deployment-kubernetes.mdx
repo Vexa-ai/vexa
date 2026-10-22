@@ -917,13 +917,19 @@ under `/crm/*`, the MCP adds the `crm_*` tools, the flows pack hands workspace r
 agent-api publishes each workspace's record links every `crm.referencesPollSeconds`. With agent-api
 on, `crm-api` also reads the desktop's limits from `_global/POLICIES.md` through agent-api
 (`CRM_AGENT_API_URL`, admitted by agent-api's NetworkPolicy). With `flows.enabled` too, the chart also
-runs `crm-outbox`, which hands each record change to `flows-api` and seals card facts with
-`VEXA_FACT_SEAL_SECRET`. It posts with the CRM's publish key, `VEXA_FLOWS_CRM_PUBLISH_KEY`, which
+runs `crm-outbox`, which hands each record change to `flows-api` and seals card facts with the
+CRM's own Ed25519 private key. That key lives in the `<release>-fact-seal-crm-key` Secret
+(`signing-key.pem`), which only `crm-outbox` mounts (`VEXA_FACT_SEAL_KEY_FILE`). `flows-api` holds
+the public half alone, `crm.pem` in the `<release>-fact-verify-keys` ConfigMap
+(`VEXA_FACT_VERIFY_KEYS_DIR`), so it can verify a fact but never seal one. The chart generates the
+pair on install and keeps it across upgrades. When a GitOps tool renders with `helm template`, set
+`factSeal.crm.signingKey` (`openssl genpkey -algorithm ed25519`), or name your own Secret with
+`factSeal.crm.existingSecret` plus its public key in `factSeal.crm.publicKey`; otherwise every render
+mints a new pair. The outbox posts with the CRM's publish key, `VEXA_FLOWS_CRM_PUBLISH_KEY`, which
 admits the CRM's own facts and opens no other flows route; the outbox never holds flows' operator
-key. The chart generates both secrets in its Secret (`secrets.factSealSecret`,
-`secrets.crmPublishKey`, kept across upgrades), and `flows-api` reads the same keys. With
-`secrets.existingSecretName`, your Secret must carry both: without them the outbox does not start
-and flows-api refuses sealed facts. See [CRM](/minutes/crm).
+key. The chart generates the publish key in its Secret (`secrets.crmPublishKey`, kept across
+upgrades), and `flows-api` reads the same key. With `secrets.existingSecretName`, your Secret must
+carry `VEXA_FLOWS_CRM_PUBLISH_KEY`; it carries nothing for the fact seal. See [CRM](/minutes/crm).
 
 ## Meeting and onboarding facts to flows
 

@@ -11,7 +11,9 @@ itself never spends the token (live 2026-10-15).
   `vexa-signin-bind` cookie on that browser, and the link carries its SHA-256. Opened in any other
   browser the GET says so with no button, and the POST answers `403` before anything is spent — so
   a link somebody asked for to their own address cannot sign a victim into their account (login
-  CSRF, S03T-3). Only a reserved-domain test user's link (`../test-users/link`) is unbound.
+  CSRF, S03T-3). Two links are unbound: a reserved-domain test user's (`../test-users/link`), and
+  the one the operator prints from the instance's shell (`scripts/signin-link.mjs`, Lite's
+  `vexa-signin-link`), which carries `o: 1`. No route mints either for a request.
 - `HEAD` — `200`, empty, no side effect.
 - `POST` (the button; form fields `t`, `next`) — the only act:
   0. Same-origin only: `Sec-Fetch-Site` (when sent) must be `same-origin`, `Origin` (when sent)
