@@ -65,7 +65,7 @@ overrides:
   # source-map-js <1.2.2: event-loop DoS through an indexed source map (GHSA-68fv-2mgg-jv7q).
   # Enters via postcss (next, tailwind) and css-tree (jsdom).
   "source-map-js@<1.2.2": "^1.2.2"
-  # dompurify <3.4.16: two IN_PLACE sanitiser bypasses (GHSA-6688-9rhm-gjv2, GHSA-p98j-92pf-mc4p).
-  # Enters via mermaid in the terminal's diagram rendering. Taken under Apache-2.0 of its
-  # (MPL-2.0 OR Apache-2.0) licence.
-  "dompurify@<3.4.16": "^3.4.16"
+  # dompurify <3.4.17: two IN_PLACE sanitiser bypasses (GHSA-6688-9rhm-gjv2, GHSA-p98j-92pf-mc4p)
+  # and a SAFE_FOR_TEMPLATES bypass (GHSA-cg2g-xh64-v4q7). Enters via mermaid in the terminal's
+  # diagram rendering. Taken under Apache-2.0 of its (MPL-2.0 OR Apache-2.0) licence.
+  "dompurify@<3.4.17": "^3.4.17"
