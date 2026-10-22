@@ -58,6 +58,16 @@ row may end in one (the sign-in session's live-view files, `/bot-accounts/sessio
 its tail is forwarded under the catch-all rule (`paths.tail_path`). The live view's websocket is not a
 row — routes.v1 declares HTTP verbs — and is held to the scopes of `GET /bot-accounts/sessions/{session_id}`.
 
+## The service door (flows)
+
+Where `VEXA_FLOWS_SERVICE_KEY` is set, `python -m gateway` also serves `service_door.py` on
+`VEXA_GATEWAY_SERVICE_DOOR_PORT` (8002), a listener no deploy surface publishes. It is the flows
+tier's one way into the other domains: `FLOWS_OUTBOUND` lists every call flows makes, and the door
+forwards those to agent-api, admin-api and crm-api over the internal tier, and to meeting-api with
+the subject's identity signed here (scopes `bot`, `tx`). Anything else is `403`. Its `/to-flows`
+leg takes the internal tier's calls into flows-api (`FLOWS_INBOUND`) and forwards them with the
+flows key, so flows never holds `INTERNAL_API_SECRET`. Tests: `tests/test_service_door.py`.
+
 ## The validate hop when admin-api is unavailable
 **How it works.** `AdminApiAuthorizer.resolve` (`src/gateway/adapters.py`) POSTs each credential to
 admin-api `/internal/validate` with a 5 s budget. A hop that could not connect (`ConnectError`,

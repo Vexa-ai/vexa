@@ -1451,6 +1451,39 @@ def create_app() -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
         return {"id": user.id, "email": user.email}
 
+    # The flows tier's way to put a person on the platform (an invite's organiser, a meeting's
+    # attendees, an allow-listed sender) WITHOUT the admin key: the admin key also mints any user's
+    # tokens and patches any account, and flows holds no credential that can do either. Same
+    # creation as POST /admin/users — one point a person enters, one onboarding fact — and an
+    # answer of exactly the id and the address, so the door cannot be read as a directory.
+    @app.post("/internal/users", include_in_schema=False)
+    async def internal_ensure_user(request: Request, response: Response,
+                                   payload: Dict[str, Any] = Body(...),
+                                   db: AsyncSession = Depends(get_db)):
+        check_internal_no_dev_bypass(request)
+        email = str((payload or {}).get("email") or "").strip()
+        if "@" not in email:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="email required")
+        name = (payload or {}).get("name")
+        made = await create_user(UserCreate(email=email, name=str(name) if name else None),
+                                 response, db)
+        return {"id": made.id, "email": made.email}
+
+    # A person's identity as the edge would stamp it for their own key, minus the scopes: the
+    # gateway's service door signs it, with the fixed scopes the door grants, onto the meetings calls
+    # the flows tier makes for that person — so flows never holds a token of theirs. A workspace
+    # principal is not a person and has none.
+    @app.get("/internal/users/{user_id}/identity", include_in_schema=False)
+    async def internal_user_identity(user_id: str, request: Request,
+                                     db: AsyncSession = Depends(get_db)):
+        check_internal_no_dev_bypass(request)
+        user = await _load_user(user_id, db)
+        from . import principals as principals_mod  # noqa: PLC0415
+        if principals_mod.is_principal_account(user):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown user")
+        is_admin = signin_allow.is_admin(user.email, user.data, signin_allow.admin_emails()[0])
+        return validate_mod.identity_of(user, scopes=[], is_admin=is_admin)
+
     @app.get("/internal/users/{user_id}/is-admin", include_in_schema=False)
     async def user_is_admin(user_id: str, request: Request, db: AsyncSession = Depends(get_db)):
         """Is THIS subject the instance admin? The role oracle agent-api asks before it mounts the

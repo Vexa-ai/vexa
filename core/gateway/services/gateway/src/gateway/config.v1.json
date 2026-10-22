@@ -9,6 +9,11 @@
     "agent_domain": {
       "description": "Whether this deployment fronts the AGENT domain (PRD decision 40.7: meetings, agents and flows work independently and in any configuration, identity being the only shared dependency). Presence is a configuration fact \u2014 whether the deployment named the door \u2014 never a probe: a probe makes \"agent-api is restarting\" and \"there is no agent-api\" the same answer, and the second is a shipped product.",
       "when_unconfigured": "The edge registers no /agent/* route and assembles no agent rows into its scope table, so a request to /agent/anything is 404 \u2014 this deployment does not serve it \u2014 rather than a 401 about a route that is not here. Everything else is unchanged: this is the `no-agents` product of decision 40.6 (gateway + meetings + flows + identity), not a degraded gateway."
+    },
+    "flows_service_door": {
+      "description": "This deployment runs a flows tier, and the gateway serves its service door (service_door.py): the only way the flows services reach another domain, and the only way the internal tier reaches flows-api.",
+      "mode": "all",
+      "when_unconfigured": "No door is served. A deployment without flows needs none; flows itself refuses to start without its key."
     }
   },
   "keys": [
@@ -64,6 +69,43 @@
         "compose",
         "helm"
       ]
+    },
+    {
+      "key": "VEXA_FLOWS_SERVICE_KEY",
+      "class": "capability",
+      "capability": "flows_service_door",
+      "secret": true,
+      "description": "The flows tier's one credential (service_door.py). Set, this process also listens on VEXA_GATEWAY_SERVICE_DOOR_PORT and forwards exactly the calls on the flows allow-list (FLOWS_OUTBOUND) to agent-api, admin-api, meeting-api and crm-api \u2014 over the internal tier, or for meeting-api with the subject's identity signed here with the scopes bot+tx \u2014 and refuses everything else with a 403 that never leaves this process. flows-api, flows-worker and flows-mailbox hold the SAME value and no other internal credential: not INTERNAL_API_SECRET, not the admin key. Unset: no door, and this deployment runs no flows tier.",
+      "forbidden_values": [
+        "vexa-internal-secret",
+        "lite-internal-secret",
+        "changeme",
+        "change-me",
+        "CHANGE-ME",
+        "default",
+        "secret"
+      ],
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "FLOWS_API_URL",
+      "class": "capability",
+      "capability": "flows_service_door",
+      "description": "flows-api's base URL (the name flows' mcp.tools.v1 manifest binds for the edge, base_url_env), for the door's inbound leg (/to-flows/*): the signals service's wake and the terminal's sign-in mail present X-Internal-Secret to the door, never to flows, and the door forwards the allow-listed calls (FLOWS_INBOUND) with the flows key.",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
+      "key": "VEXA_GATEWAY_SERVICE_DOOR_PORT",
+      "class": "defaulted",
+      "default": "8002",
+      "description": "The service door's own port. No deploy surface publishes it: only the flows tier, the signals service and the terminal reach it, inside the deployment's network.",
+      "targets": []
     },
     {
       "key": "MCP_URL",
