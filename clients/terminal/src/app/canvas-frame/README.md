@@ -2,5 +2,7 @@
 
 `/canvas-frame` — the document a Meeting Canvas view runs in (`canvas/frame/CanvasFrame.tsx`).
 `middleware.ts` serves it with `canvasFrameContentSecurityPolicy`: `sandbox allow-scripts` (an
-opaque origin), `connect-src 'none'`, `frame-ancestors 'self'`. The terminal page frames it from
+opaque origin), `connect-src 'none'`, and `frame-ancestors` = the terminal's public origins when it has
+an origin of its own (`TERMINAL_CANVAS_ORIGIN`, `../canvasOrigin.mjs`), else `'self'`. The page passes
+the frame those origins, the only ones it takes a message from. The terminal page frames it from
 `canvas/runtime.tsx` and talks to it by `postMessage` only (`canvas/frame/protocol.ts`).

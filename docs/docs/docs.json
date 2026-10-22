@@ -150,6 +150,7 @@
           "deployment-lite",
           "deployment-kubernetes",
           "sign-in-oidc",
+          "meeting-canvas-isolation",
           "deployment-helm-agent-tools",
           "deployment-zoom-sdk",
           "configuration",

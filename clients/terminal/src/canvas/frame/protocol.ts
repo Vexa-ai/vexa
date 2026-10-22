@@ -9,8 +9,33 @@
  *  actions a person pressed out, and the page decides what each action does. */
 import type { HarnessActions, MeetingState } from "../types";
 
-/** Where the frame document is served. */
+/** Where the frame document is served, on the canvas origin when the deployment names one
+ *  (`TERMINAL_CANVAS_ORIGIN`, app/canvasOrigin.mjs), else on the terminal's own. */
 export const CANVAS_FRAME_PATH = "/canvas-frame";
+/** The `<meta>` the root layout writes the canvas origin into, for the page to mount the frame from. */
+export const CANVAS_ORIGIN_META = "vexa-canvas-origin";
+
+/** The frame's URL for a page: on the canvas origin the layout names, else this origin's path. */
+export function canvasFrameSrc(doc: Document | undefined = typeof document === "undefined" ? undefined : document): string {
+  const origin = doc?.querySelector(`meta[name="${CANVAS_ORIGIN_META}"]`)?.getAttribute("content") ?? "";
+  try {
+    const u = new URL(origin);
+    if (u.protocol === "https:" || u.protocol === "http:") return `${u.origin}${CANVAS_FRAME_PATH}`;
+  } catch { /* none named */ }
+  return CANVAS_FRAME_PATH;
+}
+
+/** The origin a message from the frame arrives with: a sandboxed document's origin is opaque, and a
+ *  browser serializes it as "null" — whichever host served it. */
+export const FRAME_MESSAGE_ORIGIN = "null";
+
+/** The page's origins the frame takes a message from and posts back to: those the server named
+ *  (the terminal's public origins, when the frame has an origin of its own), else the origin the
+ *  frame document was served from, which is then the terminal's. */
+export function parentOriginsFor(named: readonly string[], frameUrl: string): string[] {
+  if (named.length) return [...named];
+  try { return [new URL(frameUrl).origin]; } catch { return []; }
+}
 /** The iframe's sandbox: scripts, and nothing that would give the frame an origin, a popup, a form,
  *  a top-level navigation or a download. NEVER add `allow-same-origin`: with it the frame would be
  *  the terminal's origin again, and the view could lift its own sandbox. */

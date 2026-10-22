@@ -35,7 +35,7 @@ describe("the image optimizer route", () => {
 
   it("is checked in server.mjs before the request reaches Next's handler", () => {
     const src = readFileSync(SERVER, "utf8");
-    const body = src.slice(src.indexOf("createServer((req, res)"));
+    const body = src.slice(src.indexOf("const handleRequest = (viaCanvasPort) => (req, res)"));
     const check = body.indexOf("isImageOptimizerPath(req.url)");
     expect(check).toBeGreaterThan(0);
     expect(check).toBeLessThan(body.indexOf("handle(req, res)"));

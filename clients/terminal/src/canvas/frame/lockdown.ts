@@ -7,12 +7,13 @@
  *  - WEBRTC. ICE candidate gathering reaches a STUN/TURN host of the view's choosing, and no CSP
  *    directive governs it. The constructors are removed from the frame's window here, before the
  *    first view is compiled, and cannot be put back.
- *  - NAVIGATING ITS OWN FRAME. The embedding page's `frame-src 'self'` is checked on every
- *    navigation of the frame, so the browser refuses one to any other host (and to every redirect
- *    hop). A navigation to a URL on the terminal's own origin is not refused: it reaches only this
- *    server, without the reader's cookies (the frame's origin is opaque, so `SameSite` cookies stay
- *    home). The Navigation API cannot cancel it — an opaque-origin document has its navigation
- *    events disabled — so nothing here pretends to.
+ *  - NAVIGATING ITS OWN FRAME. The embedding page's `frame-src` is checked on every navigation of
+ *    the frame (and every redirect hop), so the browser refuses one to any host the page did not
+ *    name. Nothing inside the frame can cancel the rest — an opaque-origin document has its
+ *    Navigation API events disabled — so nothing here pretends to. The line is drawn outside it:
+ *    the frame is served from an origin of its own (app/canvasOrigin.mjs), the only one the page
+ *    names, and the server's door (app/api/frameDoor.mjs) refuses any URL there but the frame's own
+ *    files, and refuses the terminal to a frame of another origin.
  *
  *  Idempotent; a no-op outside a browser. */
 const WEBRTC = ["RTCPeerConnection", "webkitRTCPeerConnection", "mozRTCPeerConnection", "RTCDataChannel", "RTCRtpSender", "RTCRtpReceiver", "RTCIceTransport"] as const;

@@ -239,6 +239,20 @@
       "default": "(unset — no Company profile switch is offered)",
       "description": "The deployment's admin account address(es), the same value admin-api reads (comma-separated). An instance administrator's account menu offers Switch to Company, which opens that account's session on their tab and gives it back (src/app/api/auth/company, ADR-0049). The switch counts only when admin-api answers admin_account for the opened session.",
       "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "TERMINAL_CANVAS_ORIGIN",
+      "class": "defaulted",
+      "default": "(unset — the Meeting Canvas frame shares the terminal's origin, and the terminal warns at start)",
+      "description": "The public origin the Meeting Canvas frame is served from: a second host (https://canvas.vexa.example) or the terminal's host on a second port (http://localhost:3002). The same server answers it, by Host or on TERMINAL_CANVAS_PORT, with the frame document and the build's own files and nothing else; the pages frame that origin alone, and the frame lets only the terminal's public origin (NEXTAUTH_URL, which must then be set) frame it (src/app/canvasOrigin.mjs, src/app/api/frameDoor.mjs). An invalid value, or one equal to the terminal's origin, refuses the start.",
+      "targets": ["compose", "helm", "lite"]
+    },
+    {
+      "key": "TERMINAL_CANVAS_PORT",
+      "class": "defaulted",
+      "default": "(unset — no second listener; the canvas host is told apart by its Host header)",
+      "description": "A second port the terminal listens on for the canvas origin alone, when TERMINAL_CANVAS_ORIGIN names a port rather than a host (compose maps it to TERMINAL_CANVAS_HOST_PORT, Lite exposes 3002). Every request on it is the canvas host's.",
+      "targets": ["compose", "lite"]
     }
   ],
   "capabilities": {

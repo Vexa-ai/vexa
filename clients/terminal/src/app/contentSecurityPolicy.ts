@@ -29,8 +29,13 @@
  *  - Pictures are this origin (every workspace image, avatar and logo comes through `/api`),
  *    `data:` and `blob:` (an attachment's preview before upload). Media is this origin: recordings
  *    stream through `/api/recordings`.
- *  - Frames are this origin only (the sign-in browser view is served from /api). `base`, `object`
- *    and form targets are closed. */
+ *  - Frames: with a Meeting Canvas origin configured (`TERMINAL_CANVAS_ORIGIN`, canvasOrigin.mjs),
+ *    that origin, plus the sign-in browser's live view under this terminal's own public origin, by
+ *    path (`/api/bot-accounts/sessions/`) — so a canvas frame that navigates itself can go nowhere
+ *    else. Without one, this origin (the canvas frame and the live view both live here). `base`,
+ *    `object` and form targets are closed. */
+import { canvasOrigin, terminalOrigins } from "./canvasOrigin.mjs";
+
 export const NONCE_HEADER = "x-nonce";
 
 /** What the deployment turned on that the pages reach beyond their own origin for. */
@@ -39,6 +44,10 @@ export interface PolicySources {
   livekitUrl?: string;
   /** the Google Analytics measurement id (`NEXT_PUBLIC_GA_MEASUREMENT_ID`); empty when GA is off */
   gaMeasurementId?: string;
+  /** the Meeting Canvas frame's own origin (`TERMINAL_CANVAS_ORIGIN`); empty = this origin */
+  canvasOrigin?: string;
+  /** this terminal's public origins (`NEXTAUTH_URL`, `TERMINAL_URL`) */
+  terminalOrigins?: string[];
 }
 
 /** The deployment's sources, read from the same environment the rest of the stack reads. */
@@ -46,7 +55,23 @@ export function policySources(): PolicySources {
   return {
     livekitUrl: process.env.LIVEKIT_URL,
     gaMeasurementId: process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID,
+    canvasOrigin: canvasOrigin(process.env),
+    terminalOrigins: terminalOrigins(process.env),
   };
+}
+
+/** Where the sign-in browser's live view is served (minutes/browserSession.ts `viewSrc`). */
+export const LIVE_VIEW_FRAME_PATH = "/api/bot-accounts/sessions/";
+
+/** Whether this deployment serves the canvas frame from an origin of its own. */
+function separateCanvas(sources: PolicySources): boolean {
+  return (sources.canvasOrigin ?? "") !== "" && (sources.terminalOrigins ?? []).length > 0;
+}
+
+/** The pages' `frame-src`: the canvas origin and the live view by path, or this origin. */
+export function frameSources(sources: PolicySources): string[] {
+  if (!separateCanvas(sources)) return ["'self'"];
+  return [sources.canvasOrigin as string, ...(sources.terminalOrigins as string[]).map((o) => `${o}${LIVE_VIEW_FRAME_PATH}`)];
 }
 
 /** gtag.js loads from the tag manager and reports to these hosts. Google's own guidance names them
@@ -95,7 +120,7 @@ export function contentSecurityPolicy(nonce: string, sources: PolicySources = po
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'none'",
-    "frame-src 'self'",
+    `frame-src ${frameSources(sources).join(" ")}`,
     "form-action 'self'",
     "frame-ancestors 'self'",
   ].join("; ");
@@ -103,26 +128,35 @@ export function contentSecurityPolicy(nonce: string, sources: PolicySources = po
 
 /** THE MEETING CANVAS FRAME'S POLICY (`/canvas-frame`, canvas/frame/protocol.ts). The document runs
  *  workspace-written view code, so:
+ *  - It is served from its OWN ORIGIN when the deployment names one (`TERMINAL_CANVAS_ORIGIN`). The
+ *    page's `frame-src` then admits that origin alone (and the live view by path), so the frame's
+ *    own navigation can reach only the canvas host, which serves this document and the build's
+ *    files and refuses everything else at the door (api/frameDoor.mjs). Without one, the frame
+ *    shares the terminal's origin, and the terminal's door refuses what the frame asks of it.
  *  - `sandbox allow-scripts` — the response itself is sandboxed, embedded or opened directly: an
  *    opaque origin, so no cookie, storage or DOM of the terminal's, no popup, form, top navigation
  *    or download. Never `allow-same-origin`.
  *  - `connect-src 'none'` and nothing to load but this response's own scripts and styles: the view
  *    reaches no server at all — not the terminal's API, not anybody's. Its one channel is
- *    `postMessage` to the page that frames it.
+ *    `postMessage` to the page that frames it. Scripts are this response's nonce'd ones and files
+ *    from the frame's own origin — no 'strict-dynamic': under it a script element the view creates
+ *    would load from ANY host, and its URL would carry whatever the view put in it.
  *  - 'unsafe-eval' because compiling the view is this document's job (`new Function`). This is the
  *    one document that keeps it, and it is the one whose origin is opaque and whose network is shut.
  *  - It cannot carry the view's data to another host by NAVIGATING either: the frame's own
- *    navigation is checked against the embedding page's `frame-src 'self'`, so the browser refuses
- *    one to any other host. A navigation to this origin is allowed and reaches only this server,
- *    without the reader's cookies (canvas/frame/lockdown.ts says why nothing can cancel it).
+ *    navigation is checked against the embedding page's `frame-src`, so the browser refuses one to
+ *    any host the page did not name. No browser ships a `navigate-to` directive, and the sandbox has
+ *    no flag against self-navigation, so the line is drawn there and at the door.
  *    `canvas/frame/lockdown.ts` removes WebRTC before any view code runs, and
  *    `X-DNS-Prefetch-Control: off` (middleware.ts) asks the browser not to resolve names a view
  *    writes into links.
- *  - `frame-ancestors 'self'`: only the terminal's own pages may frame it. */
-export function canvasFrameContentSecurityPolicy(nonce: string): string {
+ *  - `frame-ancestors`: only the terminal's own pages may frame it — its public origins when the
+ *    frame has an origin of its own, else 'self'. */
+export function canvasFrameContentSecurityPolicy(nonce: string, sources: PolicySources = policySources()): string {
+  const ancestors = separateCanvas(sources) ? (sources.terminalOrigins as string[]).join(" ") : "'self'";
   return [
     "default-src 'none'",
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval'`,
+    `script-src 'self' 'nonce-${nonce}' 'unsafe-eval'`,
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self'",
     "img-src data:",
@@ -134,7 +168,7 @@ export function canvasFrameContentSecurityPolicy(nonce: string): string {
     "manifest-src 'none'",
     "base-uri 'none'",
     "form-action 'none'",
-    "frame-ancestors 'self'",
+    `frame-ancestors ${ancestors}`,
     "sandbox allow-scripts",
   ].join("; ");
 }

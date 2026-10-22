@@ -5,14 +5,15 @@
  *  source (`compile.ts`), trial-renders it hidden, and only then shows it — the last good view
  *  stays up when a new one fails. Everything it reports goes back by `postMessage` to its parent:
  *  the status of each source, its own height, and every action a person pressed. It accepts
- *  messages from its parent only, and it can reach nothing else. */
+ *  messages from its parent window only, and only when they come from the terminal's origin
+ *  (`parentOriginsFor`); it posts to that origin by name, and it can reach nothing else. */
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ErrorInfo, type ReactNode } from "react";
 import { ui } from "../kit";
 import { HarnessActionsProvider } from "../actions";
 import { MeetingStateProvider } from "../useMeeting";
 import type { HarnessActions, MeetingState } from "../types";
 import { compileView } from "./compile";
-import { ACTION_NAMES, readToFrame, type ActionName, type FromFrame } from "./protocol";
+import { ACTION_NAMES, parentOriginsFor, readToFrame, type ActionName, type FromFrame } from "./protocol";
 import { lockFrame } from "./lockdown";
 
 // Before anything else in the frame's realm, and long before a view is compiled (lockdown.ts).
@@ -20,10 +21,13 @@ lockFrame();
 
 type ActiveView = { source: string; component: ComponentType };
 
+/** The terminal origins this frame answers to, fixed once for the document. */
+let parents: string[] = [];
+
 function post(msg: FromFrame): void {
-  // The parent is the only reader there is. Its origin cannot be named from an opaque origin, and
-  // nothing this frame says is secret from the page that handed it the meeting.
-  window.parent.postMessage(msg, "*");
+  // To the parent window, and only while the parent is the terminal: a message is delivered to the
+  // one named origin the parent actually has, and to nothing else.
+  for (const origin of parents) window.parent.postMessage(msg, origin);
 }
 
 /** `HarnessActions` as messages to the page — the view's only way to cause anything. */
@@ -58,7 +62,8 @@ function RenderCandidate({ candidate, onSuccess }: { candidate: ActiveView; onSu
   return <View />;
 }
 
-export function CanvasFrame() {
+export function CanvasFrame({ parentOrigins = [] }: { parentOrigins?: readonly string[] }) {
+  parents = parentOriginsFor(parentOrigins, typeof document === "undefined" ? "" : document.URL);
   const [source, setSource] = useState<string | null>(null);
   const [state, setState] = useState<MeetingState | null>(null);
   const [active, setActive] = useState<ActiveView | null>(null);
@@ -68,7 +73,7 @@ export function CanvasFrame() {
 
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
-      if (e.source !== window.parent || window.parent === window) return;
+      if (e.source !== window.parent || window.parent === window || !parents.includes(e.origin)) return;
       const m = readToFrame(e.data);
       if (!m) return;
       document.documentElement.setAttribute("data-theme", m.theme);

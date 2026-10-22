@@ -1787,8 +1787,17 @@ services:
     image: vexaai/vexa-terminal:${IMAGE_TAG:-dev}
     ports:
       - "127.0.0.1:${TERMINAL_PORT:-13000}:3000"
+      # The Meeting Canvas origin's port: served only when TERMINAL_CANVAS_ORIGIN is set (below).
+      - "127.0.0.1:${TERMINAL_CANVAS_HOST_PORT:-13002}:3002"
     environment:
       - NODE_ENV=production
+      # THE MEETING CANVAS ORIGIN. A canvas view runs in a sandboxed frame; served from an origin of
+      # its own, nothing the view does can reach the terminal. Set it to the public address of the
+      # port above (http://localhost:13002 locally, or a host your proxy sends to it, e.g.
+      # https://canvas.vexa.example); NEXTAUTH_URL must then be set too. Empty = the frame shares the
+      # terminal's origin, as before, and the terminal warns at start (docs: Meeting Canvas isolation).
+      - TERMINAL_CANVAS_ORIGIN=${TERMINAL_CANVAS_ORIGIN:-}
+      - TERMINAL_CANVAS_PORT=3002
       # HTTP scheme: the terminal's REST proxy fetches GATEWAY_URL as http; server.mjs converts it to
       # ws:// itself for the /ws upgrade. ws:// here would break the REST proxy (502 fetch failed).
       - GATEWAY_URL=http://gateway:8000

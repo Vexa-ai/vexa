@@ -19,6 +19,7 @@
 // key, so a mismatched key would deliver another user's live meeting.status frames
 // (or none), freezing the client's meeting list at its last REST snapshot.
 import { createServer } from "node:http";
+import { join } from "node:path";
 import nextEnv from "@next/env";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
@@ -27,6 +28,8 @@ import { signinConfigStartupError } from "./src/app/api/auth/oidcConfig.mjs";
 import { stampClientAddress, trustedProxies } from "./src/app/api/auth/clientAddress.mjs";
 import { isImageOptimizerPath, refuseImageOptimizer } from "./src/app/api/imageOptimizer.mjs";
 import { applyFallbackPolicy } from "./src/app/api/responsePolicy.mjs";
+import { canvasDoorRefusal, refuse, terminalDoorRefusal } from "./src/app/api/frameDoor.mjs";
+import { canvasOrigin, canvasPort, canvasStartupError, canvasStartupWarning } from "./src/app/canvasOrigin.mjs";
 import { refuseUpgrade, upgradeRefusal, upstreamKey } from "./src/app/api/socketUpgrade.mjs";
 import { wsUpstream } from "./src/app/api/wsUpstream.mjs";
 
@@ -50,6 +53,20 @@ if (signinError) {
   console.error(`[terminal] refusing to start: ${signinError}`);
   process.exit(1);
 }
+
+// The Meeting Canvas origin (src/app/canvasOrigin.mjs): a value that cannot be served, or one with no
+// terminal origin to let frame it, is refused by name; unset, the canvas shares this origin, and the
+// operator is told so.
+const canvasError = canvasStartupError(process.env);
+if (canvasError) {
+  console.error(`[terminal] refusing to start: ${canvasError}`);
+  process.exit(1);
+}
+const CANVAS_ORIGIN = canvasOrigin(process.env);
+const CANVAS_HOST = CANVAS_ORIGIN ? new URL(CANVAS_ORIGIN).host.toLowerCase() : "";
+const CANVAS_PORT = CANVAS_ORIGIN ? canvasPort(process.env) : 0;
+const canvasWarning = canvasStartupWarning(process.env);
+if (canvasWarning) console.warn(canvasWarning);
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const hostname = process.env.HOST || "0.0.0.0";
@@ -79,7 +96,21 @@ await app.prepare();
 // to X-Forwarded-For when the peer is loopback or a TERMINAL_TRUSTED_PROXIES address or range.
 const TRUSTED_PROXIES = trustedProxies(process.env);
 
-const server = createServer((req, res) => {
+// The build's own files, the one thing besides the frame document the canvas host serves.
+const DOOR = { staticDir: join(process.cwd(), ".next", "static"), dev, canvasConfigured: Boolean(CANVAS_ORIGIN) };
+
+/** Whether a request is for the canvas host: it came in on the canvas listener, or names its host. */
+function forCanvas(req, viaCanvasPort) {
+  if (!CANVAS_ORIGIN) return false;
+  return viaCanvasPort || String(req.headers.host || "").toLowerCase() === CANVAS_HOST;
+}
+
+const handleRequest = (viaCanvasPort) => (req, res) => {
+  // THE FRONT DOOR (src/app/api/frameDoor.mjs), before any route or log sees the URL: the canvas host
+  // serves its frame and the build's files and nothing else; the terminal is never framed by, and
+  // serves no code to, another origin.
+  const refusal = forCanvas(req, viaCanvasPort) ? canvasDoorRefusal(req, DOOR) : terminalDoorRefusal(req, DOOR);
+  if (refusal) return refuse(res, refusal);
   stampClientAddress(req, TRUSTED_PROXIES);
   // A response its route gave no Content-Security-Policy leaves with the one for its path
   // (src/app/api/responsePolicy.mjs): the API, the /b/ proxy, build assets and public files.
@@ -90,12 +121,19 @@ const server = createServer((req, res) => {
     logError("request handler failed", err);
     sendProxyError(res);
   });
-});
+};
+
+const server = createServer(handleRequest(false));
 
 // Browser-facing WS server — we do the upgrade ourselves (noServer) only for `/ws`.
 const wss = new WebSocketServer({ noServer: true });
 
 server.on("upgrade", (req, socket, head) => {
+  // The canvas host relays no socket.
+  if (forCanvas(req, false)) {
+    socket.destroy();
+    return;
+  }
   let pathname;
   try {
     pathname = new URL(req.url, `http://${req.headers.host}`).pathname;
@@ -278,3 +316,18 @@ server.listen(port, hostname, () => {
   // eslint-disable-next-line no-console
   console.log(`> Terminal ready on http://${hostname}:${port} (WS proxy /ws, /voice-notes/*/stream -> ${GATEWAY_URL})`);
 });
+
+// The canvas host on a port of its own (compose, Lite): every request here is the canvas host's.
+if (CANVAS_PORT) {
+  const canvasServer = createServer(handleRequest(true));
+  canvasServer.on("upgrade", (_req, socket) => socket.destroy());
+  canvasServer.on("clientError", (err, socket) => endSocket(socket));
+  canvasServer.on("error", (err) => logError("canvas server error", err));
+  canvasServer.listen(CANVAS_PORT, hostname, () => {
+    // eslint-disable-next-line no-console
+    console.log(`> Meeting Canvas frame on http://${hostname}:${CANVAS_PORT} (public origin ${CANVAS_ORIGIN})`);
+  });
+} else if (CANVAS_ORIGIN) {
+  // eslint-disable-next-line no-console
+  console.log(`> Meeting Canvas frame served for Host ${CANVAS_HOST} (public origin ${CANVAS_ORIGIN})`);
+}

@@ -108,6 +108,18 @@ spec:
             - name: TERMINAL_URL
               value: {{ .Values.terminal.publicUrl | quote }}
             {{- end }}
+            {{- with .Values.terminal.canvasHost }}
+            {{- if not $.Values.terminal.publicUrl }}
+            {{- fail "terminal.canvasHost needs terminal.publicUrl: the canvas origin lets only the terminal's public origin frame it" }}
+            {{- end }}
+            {{- if not (regexMatch "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?$" .) }}
+            {{- fail "terminal.canvasHost must be a host name (and optional port), e.g. canvas.vexa.example" }}
+            {{- end }}
+            # THE MEETING CANVAS ORIGIN (docs: Meeting Canvas isolation): the canvas frame is served from
+            # this host — the same pods, routed by Host — so a canvas view runs on an origin of its own.
+            - name: TERMINAL_CANVAS_ORIGIN
+              value: {{ printf "%s://%s" (urlParse $.Values.terminal.publicUrl).scheme . | quote }}
+            {{- end }}
             {{- if include "vexa.credentialBrokerEnabled" . }}
             # Connections panel (credential-broker.v1): the terminal's server routes sign as the
             # `human` role for the signed-in person. Browser POSTs must come from the public origin.

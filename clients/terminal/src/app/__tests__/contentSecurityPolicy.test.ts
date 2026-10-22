@@ -166,6 +166,42 @@ describe("the Meeting Canvas frame's policy (S03T-1)", () => {
   });
 });
 
+describe("the Meeting Canvas on an origin of its own (TERMINAL_CANVAS_ORIGIN)", () => {
+  const separate = { canvasOrigin: "https://canvas.example.test", terminalOrigins: ["https://app.example.test"] };
+
+  it("the pages frame the canvas origin and the live view by path, and never their own origin whole", () => {
+    const d = directives(contentSecurityPolicy("abc", separate));
+    expect(d["frame-src"]).toEqual(["https://canvas.example.test", "https://app.example.test/api/bot-accounts/sessions/"]);
+    expect(d["frame-src"]).not.toContain("'self'");
+    expect(d["frame-ancestors"]).toEqual(["'self'"]);
+  });
+
+  it("the frame lets only the terminal's public origins frame it", () => {
+    const d = directives(canvasFrameContentSecurityPolicy("abc", separate));
+    expect(d["frame-ancestors"]).toEqual(["https://app.example.test"]);
+    expect(d.sandbox).toEqual(["allow-scripts"]);
+    expect(d["connect-src"]).toEqual(["'none'"]);
+    expect(d["form-action"]).toEqual(["'none'"]);
+    expect(d["frame-src"]).toEqual(["'none'"]);
+  });
+
+  it("a script the view creates loads from the frame's own origin only — no 'strict-dynamic', on either origin", () => {
+    // under 'strict-dynamic' a script element a view creates loads from ANY host, with whatever it
+    // put in the URL (measured in Chromium 145: scripts/canvas-isolation.mjs "script → sink")
+    for (const sources of [separate, {}]) {
+      const d = directives(canvasFrameContentSecurityPolicy("abc", sources));
+      expect(d["script-src"]).toEqual(["'self'", "'nonce-abc'", "'unsafe-eval'"]);
+    }
+  });
+
+  it("with no canvas origin, or no terminal origin to let frame it, everything stays on this origin", () => {
+    for (const sources of [{}, { canvasOrigin: "https://canvas.example.test", terminalOrigins: [] }]) {
+      expect(directives(contentSecurityPolicy("abc", sources))["frame-src"]).toEqual(["'self'"]);
+      expect(directives(canvasFrameContentSecurityPolicy("abc", sources))["frame-ancestors"]).toEqual(["'self'"]);
+    }
+  });
+});
+
 describe("which requests the policy middleware runs on (Next's own matcher)", () => {
   // the matcher exactly as Next compiles and applies it at build and run time
   const require = createRequire(import.meta.url);

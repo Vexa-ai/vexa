@@ -464,9 +464,12 @@ content, so the terminal treats them as untrusted input in the reader's own sign
   build assets and public files get a fixed one when their route sets none: an API answer opened as a
   document runs and loads nothing, and the sign-in browser's live view runs only its own scripts.
 - **A canvas view keeps what it was shown.** It runs in an opaque-origin sandbox that connects
-  nowhere, and WebRTC is removed before any view code runs. The page's `frame-src` refuses the
-  frame's navigation to another host; a navigation to the terminal's own origin reaches only the
-  terminal, without the reader's cookies.
+  nowhere, and WebRTC is removed before any view code runs. A script it creates loads only from the
+  frame's own origin. Served from an origin of its own (`TERMINAL_CANVAS_ORIGIN`, see
+  [Meeting Canvas isolation](/meeting-canvas-isolation)), the page frames that origin alone, so the
+  frame's own navigation can reach only the canvas host, which serves the frame and the build's files
+  and refuses any other URL. On every deployment the terminal refuses to be loaded into a frame by
+  another origin, and serves no script, stylesheet or font to one but its build files.
 - **An emailed link signs in only the browser that asked.** The link carries the hash of an httpOnly
   cookie set when it was requested, so someone who forwards a link for their own address cannot sign
   you into their account.
@@ -484,6 +487,7 @@ content, so the terminal treats them as untrusted input in the reader's own sign
 | No eval in the pages' policy; pages still render MDX | `clients/terminal/src/app/__tests__/contentSecurityPolicy.test.ts`, `clients/terminal/src/ui-kit/__tests__/mdxNoEval.test.tsx` | every test in those files |
 | A policy on every non-page response | `clients/terminal/src/app/api/__tests__/responsePolicy.test.ts` | every test in the file |
 | A canvas frame opens no WebRTC; its foreign navigation is refused | `clients/terminal/src/canvas/__tests__/frameLockdown.test.ts` | every test in the file |
+| A canvas view carries nothing out: the canvas origin, the door, the frame's script policy | `clients/terminal/src/app/api/__tests__/frameDoor.test.ts`, `clients/terminal/src/app/__tests__/canvasOrigin.test.ts`, `clients/terminal/src/app/__tests__/contentSecurityPolicy.test.ts`; in a browser, `clients/terminal/scripts/canvas-isolation.mjs` | every test in the first two files; `describe("the Meeting Canvas on an origin of its own (TERMINAL_CANVAS_ORIGIN)")` |
 | A link signs in only its own browser | `clients/terminal/src/app/api/auth/__tests__/redeem.test.ts` | `describe("bound to the browser that asked (S03T-3)")` |
 | No session from a key; sign-ins end | `core/identity/services/admin-api/tests/test_session_credential.py`, `test_sign_in_expiry_backfill_pg.py` | `test_a_legacy_login_key_is_never_traded_for_a_session`, `test_sign_in_credentials_with_no_end_end_with_their_cookie` |
 | The websocket key travels outside the URL | `core/gateway/services/gateway/tests/test_ws_key_subprotocol.py` | every test in the file |

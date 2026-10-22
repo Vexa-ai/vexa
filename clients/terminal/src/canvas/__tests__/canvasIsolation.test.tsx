@@ -11,7 +11,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CanvasRuntime } from "../runtime";
 import { HarnessActionsProvider } from "../actions";
 import { validateViewSource } from "../validator";
-import { ACTION_NAMES, CANVAS_FRAME_PATH, CANVAS_FRAME_SANDBOX, readFromFrame, readToFrame, runAction } from "../frame/protocol";
+import { ACTION_NAMES, CANVAS_FRAME_PATH, CANVAS_FRAME_SANDBOX, CANVAS_ORIGIN_META, canvasFrameSrc, parentOriginsFor, readFromFrame, readToFrame, runAction } from "../frame/protocol";
+import { CanvasFrame } from "../frame/CanvasFrame";
 import type { HarnessActions } from "../types";
 
 const ESCAPE = `
@@ -80,5 +81,60 @@ describe("the frame's wire", () => {
     // a message from any other window is dropped before it is read
     window.dispatchEvent(new MessageEvent("message", { data: { type: "vexa-canvas:action", name: "ask", args: ["x"] }, source: window }));
     expect(ask).not.toHaveBeenCalled();
+  });
+});
+
+describe("the canvas on an origin of its own", () => {
+  afterEach(() => { document.head.querySelectorAll(`meta[name="${CANVAS_ORIGIN_META}"]`).forEach((m) => m.remove()); });
+  const named = (origin: string) => {
+    const m = document.createElement("meta");
+    m.name = CANVAS_ORIGIN_META;
+    m.content = origin;
+    document.head.appendChild(m);
+  };
+
+  it("mounts the frame from the canvas origin the layout names, else from this origin", async () => {
+    expect(canvasFrameSrc(document)).toBe(CANVAS_FRAME_PATH);
+    named("https://canvas.example.test");
+    expect(canvasFrameSrc(document)).toBe("https://canvas.example.test/canvas-frame");
+    const { container } = render(<CanvasRuntime source={ESCAPE} />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    const frame = container.querySelector("iframe");
+    expect(frame?.getAttribute("src")).toBe("https://canvas.example.test/canvas-frame");
+    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+  });
+
+  it("a named origin that is not http(s) is no origin", () => {
+    named("javascript:alert(1)");
+    expect(canvasFrameSrc(document)).toBe(CANVAS_FRAME_PATH);
+  });
+
+  it("the page runs an action only from its frame's window AND its opaque origin", async () => {
+    const ask = vi.fn();
+    const actions = Object.fromEntries(ACTION_NAMES.map((n) => [n, n === "ask" ? ask : vi.fn()])) as unknown as HarnessActions;
+    const { container } = render(<HarnessActionsProvider value={actions}><CanvasRuntime source={ESCAPE} /></HarnessActionsProvider>);
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    const win = container.querySelector("iframe")?.contentWindow;
+    expect(win).toBeTruthy();
+    const data = { type: "vexa-canvas:action", name: "ask", args: ["x"] };
+    window.dispatchEvent(new MessageEvent("message", { data, source: win, origin: "https://canvas.example.test" }));
+    expect(ask).not.toHaveBeenCalled();
+    window.dispatchEvent(new MessageEvent("message", { data, source: win, origin: "null" }));
+    expect(ask).toHaveBeenCalledWith("x");
+  });
+
+  it("the frame answers to the terminal origins it was told, else the origin it was served from", () => {
+    expect(parentOriginsFor(["https://app.example.test"], "https://canvas.example.test/canvas-frame")).toEqual(["https://app.example.test"]);
+    expect(parentOriginsFor([], "https://app.example.test/canvas-frame")).toEqual(["https://app.example.test"]);
+  });
+
+  it("the frame posts to those origins by name, never to '*'", async () => {
+    const posted = vi.spyOn(window, "postMessage");
+    render(<CanvasFrame parentOrigins={["https://app.example.test"]} />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+    const ready = posted.mock.calls.filter(([m]) => (m as { type?: string })?.type === "vexa-canvas:ready");
+    expect(ready.length).toBeGreaterThan(0);
+    expect(ready.map(([, origin]) => origin)).toEqual(ready.map(() => "https://app.example.test"));
+    posted.mockRestore();
   });
 });

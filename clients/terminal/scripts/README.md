@@ -6,6 +6,17 @@ alias (→ `./src/*`) as intra-package, allows Node/browser builtins, and requir
 bare/npm import to be a **declared** dependency in `package.json` — so the app installs and
 builds standalone. Dynamic `import(`${expr}`)` specifiers are skipped (not static).
 
+## canvas-isolation.mjs
+
+The Meeting Canvas way-out proof in a real browser: opens a terminal page, mounts the canvas frame as
+`canvas/runtime.tsx` does, hands a view a meeting whose title is a marker, and lets the view try 28
+ways to carry it out (its own frame navigated to the terminal, to its own origin and to another host;
+top navigation; `window.open`; forms; fetch, beacon, WebSocket; picture, script, stylesheet, font,
+prefetch, worker). Fails when the marker reached a server that took it — a sink on another host, or a
+terminal request answered by anything but its door's refusal (`x-vexa-refused`). The control: a view
+that renders the meeting shows it and reports `ok`. `--proxy listen=upstream` records what reached
+the server side too. Needs Playwright (not a terminal dependency): run it on bbb with `NODE_PATH`.
+
 ## layout-sweep.mjs
 
 The terminal's layout proof (design guidelines §8, L1–L3): loads a page that renders the Minutes

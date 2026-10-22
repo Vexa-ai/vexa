@@ -1238,6 +1238,28 @@ if grep -q 'value: "https://app.example.test/api/auth/callback/google"' <<< "$OA
 else echo "  FAIL: Google consent wiring"; fail=1; fi
 refuse "openbao backend without an address" 'credentialBroker\.openbao\.address is required' \
   -f "$CHART/values-test.yaml" --set credentialBroker.store.backend=openbao
+# ── terminal.canvasHost — the Meeting Canvas origin (docs/docs/meeting-canvas-isolation.mdx) ────────
+# Unset (the default): no canvas origin is named and the ingress has no second host; the terminal then
+# serves the frame itself and warns at start. Set: the terminal is told the origin (publicUrl's scheme),
+# and the ingress routes that host to the terminal for the frame document and the build's files only.
+if ! grep -q 'TERMINAL_CANVAS_ORIGIN' <<< "$RENDER"; then echo "  OK: no canvas origin by default"
+else echo "  FAIL: a canvas origin is rendered by default"; fail=1; fi
+CANVAS="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set terminal.publicUrl=https://app.example.test \
+  --set terminal.canvasHost=canvas.example.test --set ingress.enabled=true --set ingress.host=app.example.test)"
+canvas_ing="$(awk '/^# Source: vexa\/templates\/ingress.yaml/{f=1} f{print} f&&/^---/{exit}' <<< "$CANVAS")"
+canvas_rule="$(awk '/- host: "canvas.example.test"/{f=1} f{print}' <<< "$canvas_ing")"
+if grep -A1 'name: TERMINAL_CANVAS_ORIGIN$' <<< "$CANVAS" | has 'value: "https://canvas.example.test"'; then
+  echo "  OK: terminal.canvasHost names the canvas origin on the terminal, with publicUrl's scheme"
+else echo "  FAIL: terminal.canvasHost does not reach TERMINAL_CANVAS_ORIGIN"; fail=1; fi
+if grep -q 'path: /canvas-frame' <<< "$canvas_rule" && grep -A1 'path: /canvas-frame' <<< "$canvas_rule" | has 'pathType: Exact' \
+   && grep -A1 'path: /_next/static$' <<< "$canvas_rule" | has 'pathType: Prefix' \
+   && [ "$(grep -c 'path: ' <<< "$canvas_rule")" -eq 2 ] && grep -q 'name: vexa-vexa-terminal' <<< "$canvas_rule"; then
+  echo "  OK: the ingress routes the canvas host to the terminal for /canvas-frame and /_next/static alone"
+else echo "  FAIL: the canvas host's ingress rule is not exactly /canvas-frame + /_next/static to the terminal"; fail=1; fi
+refuse "a canvas host without the terminal's public origin" 'terminal\.canvasHost needs terminal\.publicUrl' \
+  -f "$CHART/values-test.yaml" --set terminal.canvasHost=canvas.example.test
+refuse "a canvas host that is not a host name" 'terminal\.canvasHost must be a host name' \
+  -f "$CHART/values-test.yaml" --set terminal.publicUrl=https://app.example.test --set 'terminal.canvasHost=https://canvas.example.test/x'
 EXT="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set credentialBroker.existingSecret=my-keys)"
 if ! grep -q 'name: vexa-vexa-credential-broker-keys' <<< "$EXT" && [ "$(grep -c 'secretName: my-keys' <<< "$EXT")" -eq 4 ]; then
   echo "  OK: existingSecret replaces the generated keys on all four consumers"

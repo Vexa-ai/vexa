@@ -1023,6 +1023,13 @@ terminal:
   # security, OAuth callbacks, and the emailed sign-in link, which is built only from it — empty, the
   # terminal sends no link). Empty for cluster-internal / port-forward access.
   publicUrl: ""
+  # The Meeting Canvas origin: a second host name (e.g. canvas.vexa.example) the canvas frame is
+  # served from, so a canvas view runs on an origin the terminal never serves. Needs publicUrl (its
+  # scheme is used) and a DNS record for the host pointing at the ingress; with ingress.enabled the
+  # chart adds the host's rule (the frame and the build's files only) — add the host to ingress.tls.
+  # Empty = the frame shares the terminal's origin, as before, and the terminal warns at start.
+  # docs/docs/meeting-canvas-isolation.mdx.
+  canvasHost: ""
   # Proxies whose X-Forwarded-For names the client, for the sign-in link's per-client rate limit:
   # addresses or CIDR ranges, comma-separated. Empty = the in-cluster private ranges while the
   # Service is ClusterIP (only the ingress controller and other pods can reach it then), and nothing

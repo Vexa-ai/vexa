@@ -27,6 +27,28 @@ spec:
                 port:
                   number: {{ .servicePort }}
           {{ end }}
+    {{- with .Values.terminal.canvasHost }}
+    # The Meeting Canvas origin (terminal.canvasHost): the terminal's own pods, and only the frame
+    # document and the build's files — the terminal's door refuses anything else on this host too.
+    # Its certificate: add this host to ingress.tls.
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - path: /canvas-frame
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "vexa.componentName" (list $ "terminal") }}
+                port:
+                  number: {{ $.Values.terminal.service.port }}
+          - path: /_next/static
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "vexa.componentName" (list $ "terminal") }}
+                port:
+                  number: {{ $.Values.terminal.service.port }}
+    {{- end }}
   {{- if .Values.ingress.tls }}
   tls:
     {{- toYaml .Values.ingress.tls | nindent 4 }}

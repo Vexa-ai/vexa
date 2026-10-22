@@ -243,6 +243,11 @@ export VEXA_API_KEY="${VEXA_API_KEY:-}"
 # signed in, and anyone who can reach port 3001 is that person. A banner says so at every start.
 export VEXA_TERMINAL_ZERO_LOGIN="${VEXA_TERMINAL_ZERO_LOGIN:-false}"
 export TERMINAL_PUBLIC_URL="${TERMINAL_PUBLIC_URL:-http://localhost:3001}"
+# The Meeting Canvas origin: the terminal also listens on 3002 for the canvas frame alone. Publish that
+# port and name its address (-p 3002:3002 -e TERMINAL_CANVAS_ORIGIN=http://localhost:3002) and a canvas
+# view runs on an origin of its own. Empty = the frame shares the terminal's origin, as before, and
+# the terminal warns at start.
+export TERMINAL_CANVAS_ORIGIN="${TERMINAL_CANVAS_ORIGIN:-}"
 # The terminal's signing secret — it signs sign-in cookies and (through a derived key) every emailed
 # sign-in link, so it has NO published default, and the terminal refuses to start on one shorter
 # than 32 bytes or published in this repository. Unset, it is minted on first boot and kept in

@@ -338,10 +338,12 @@ ENV LOG_LEVEL=info \
     ANTHROPIC_DEFAULT_OPUS_MODEL= ANTHROPIC_DEFAULT_SONNET_MODEL= ANTHROPIC_DEFAULT_HAIKU_MODEL= \
     VEXA_PUBLIC_API_URL=http://localhost:8056 VEXA_API_KEY= \
     TERMINAL_PUBLIC_URL=http://localhost:3001 \
+    TERMINAL_CANVAS_ORIGIN= \
     NEXTAUTH_SECRET= JWT_SECRET=
 
-# Front doors: gateway (8056) · terminal (3001) · agent control plane (8100).
-EXPOSE 8056 3001 8100
+# Front doors: gateway (8056) · terminal (3001) · agent control plane (8100) · the Meeting Canvas
+# origin (3002, served only when TERMINAL_CANVAS_ORIGIN is set).
+EXPOSE 8056 3001 8100 3002
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -sf http://localhost:8056/health > /dev/null || exit 1

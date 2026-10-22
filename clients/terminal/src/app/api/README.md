@@ -11,4 +11,6 @@ One front door for the client (P6): surfaces fetch `/api/*`, never agent-api dir
 
 `imageOptimizer.mjs` — read by `server.mjs`: the image optimizer is off, so `/_next/image` is answered with a 404 before Next sets up a cache it cannot write.
 
+`frameDoor.mjs` — read by `server.mjs`, before any route: the Meeting Canvas host (`TERMINAL_CANVAS_ORIGIN`) serves the frame document and the build's files by exact path and nothing else; the terminal refuses to be framed by another origin and serves no script, stylesheet or font to one but its build files (from `Sec-Fetch-*`). A refusal carries `x-vexa-refused` and never echoes the URL.
+
 `wsUpstream.mjs` — read by `server.mjs`: which WebSocket upgrades go to the gateway — `/ws` and a browser session's live view `/bot-accounts/sessions/<id>/vnc`, both with the per-user key; other `/bot-accounts/` shapes are refused.

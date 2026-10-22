@@ -3,6 +3,8 @@ import "./globals.css";
 import { headers } from "next/headers";
 import { Analytics } from "./AnalyticsScript";
 import { NONCE_HEADER, styleNonceBootstrap } from "./contentSecurityPolicy";
+import { canvasOrigin } from "./canvasOrigin.mjs";
+import { CANVAS_ORIGIN_META } from "../canvas/frame/protocol";
 // Geist Sans and Geist Mono (SIL OFL 1.1, served unmodified as web fonts; logged as a Category B
 // exception in license-exceptions.json). Each sets a CSS variable that tokens.css reads.
 import { GeistSans } from "geist/font/sans";
@@ -25,9 +27,12 @@ export const viewport: Viewport = {
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   // the response's script nonce (middleware.ts); reading it renders every page per request
   const nonce = (await headers()).get(NONCE_HEADER) ?? undefined;
+  // where the Meeting Canvas frame is served from (canvas/runtime.tsx reads it); absent = this origin
+  const canvas = canvasOrigin(process.env);
   return (
     <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <head>
+        {canvas && <meta name={CANVAS_ORIGIN_META} content={canvas} />}
         {/* first: <style> elements scripts create carry this response's nonce (style-src-elem) */}
         {nonce && <script nonce={nonce} dangerouslySetInnerHTML={{ __html: styleNonceBootstrap(nonce) }} />}
         {/* apply the saved theme before first paint so day mode doesn't flash dark on reload */}
