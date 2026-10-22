@@ -210,6 +210,44 @@ def test_an_external_address_is_mailed_through_the_carrier(tmp_path):
     assert fact["uid"] == OWNER and fact["inviter"] == OWNER_MAIL
 
 
+def _mailed_fact(tmp_path, **kw) -> dict:
+    idx = _owned(tmp_path)
+    sent: list = []
+    acts.invite(tmp_path, WS, email=NEW_MAIL, role="contributor", inviter=OWNER, inviter_email=OWNER_MAIL,
+                index=idx, ui_url="https://app.example.test", resolve_subject=lambda a: None,
+                mail=lambda fact: (sent.append(fact), True)[1], **kw)
+    return sent[0]
+
+
+@pytest.mark.parametrize("name", [
+    "Acme IT: your password expired, reset it at evil.example/login",
+    "Pilot\n\nURGENT: confirm your account at https://evil.example",
+    "Pilot \u202ewww.evil.example",
+    "Write to helpdesk@evil.example to join",
+])
+def test_an_inviter_chosen_name_never_carries_a_link_into_the_invite_mail(tmp_path, name):
+    """Gate Low 10: the workspace name is the inviter's text inside a mail this deployment sends a
+    stranger. A name that reads as somewhere to go or someone to write to is not said."""
+    fact = _mailed_fact(tmp_path, workspace_name=name)
+    said = fact["workspace_name"]
+    assert "evil" not in said and "\n" not in said and "\u202e" not in said
+    assert said == WS                                               # the slug stands in
+
+
+def test_an_inviter_chosen_name_is_one_short_line(tmp_path):
+    fact = _mailed_fact(tmp_path, workspace_name="Pilot   programme\twith a very long name " + "x" * 200)
+    assert "\t" not in fact["workspace_name"] and len(fact["workspace_name"]) <= acts.MAIL_NAME_MAX
+    assert fact["workspace_name"].startswith("Pilot programme with")
+
+
+def test_an_ordinary_name_reaches_the_mail_as_typed(tmp_path):
+    """Positive control."""
+    assert _mailed_fact(tmp_path, workspace_name="Citizenship applications")["workspace_name"] == \
+        "Citizenship applications"
+    assert acts.mail_name("Design review · Q3") == "Design review · Q3"
+    assert acts.mail_name("evil.example", "a workspace") == "a workspace"
+
+
 def test_a_deployment_that_captures_mail_never_says_mailed(tmp_path):
     """LIVE DEFECT (founder, 2026-10-14): the agent said "the invite link was emailed to her" while
     the mail landed in the capture double and she received nothing. The carrier's acceptance is not

@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -73,6 +74,28 @@ from control_plane.workspace_membership import (
 log = logging.getLogger(__name__)
 
 #: The private tier, in every spelling ``RESERVED_SLUGS`` holds for it. Refused for everyone.
+#: The longest name an invite mail carries for the workspace or the room.
+MAIL_NAME_MAX = 60
+#: What reads as somewhere to go or someone to write to: a scheme, ``www.``, an address, a domain.
+_LINKISH = re.compile(r"(?i)[a-z][a-z0-9+.\-]*:/|www\.|@|\b[a-z0-9\-]+(?:\.[a-z0-9\-]+)*\.[a-z]{2,}\b")
+
+
+def mail_name(value, fallback: str = "") -> str:
+    """A name an inviter chose (the workspace's, a room's), as an invite mail to a stranger may say it:
+    one line of at most ``MAIL_NAME_MAX`` printable characters, with no link, address or domain in it.
+    The mail goes out from this deployment's own address, so text an inviter typed must not read as
+    an instruction from it ("verify at …", "write to …"); a name that does is replaced by
+    ``fallback``. Control and format characters (bidi overrides included) are dropped."""
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = "".join(ch if unicodedata.category(ch)[0] not in "CZ" or ch == " " else " " for ch in text)
+    text = " ".join(text.split())
+    if len(text) > MAIL_NAME_MAX:
+        text = text[:MAIL_NAME_MAX - 1].rstrip() + "…"
+    if not text or _LINKISH.search(text):
+        return fallback
+    return text
+
+
 SYSTEM_SLUGS = frozenset({"sys", "_system", "system"})
 
 #: The company layer. Admin-only, and then refused — see the module header.
@@ -242,10 +265,12 @@ def invite(root: Path, slug: str, *, email, role, inviter: str, index,
         # THE FIXED TEMPLATE'S FIELDS AND NOTHING ELSE (PRD 0.13.4 S2, D15 floor): who invited, to
         # which workspace or room, as what, and the one link. There is no field a message, a page or
         # a chat line could travel in, so the mail cannot carry content whatever the caller sends.
-        room_title = str((room or {}).get("title") or "").strip()
+        # THE NAMES ARE THE INVITER'S WORDS IN OUR MAIL (gate Low 10): each is one short line with no
+        # link, address or domain (``mail_name``), so a name cannot make the mail say "go here".
+        room_title = mail_name((room or {}).get("title"))
         mailed = bool(mail({
             "uid": str(inviter), "email": address, "workspace": slug,
-            "workspace_name": str(workspace_name or slug), "role": word,
+            "workspace_name": mail_name(workspace_name, mail_name(slug, "a workspace")), "role": word,
             "role_sentence": role_sentence(word),
             "inviter": str(inviter_email or inviter), "link": link,
             "expires_at": int(minted.expires_at), "invite_id": minted.id,
