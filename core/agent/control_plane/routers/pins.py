@@ -19,6 +19,7 @@ from control_plane import universal_refs as refs_mod
 from control_plane import workspace_membership as membership_mod
 from control_plane import workspace_pins
 from control_plane.ceiling import refuse_delegated, require_read_in_ceiling
+from control_plane.commit_trailers import writer_trailers
 from control_plane.routers import refs as refs_router
 from control_plane.workspace_membership import MembershipError
 from workspaces.shared import links
@@ -111,7 +112,8 @@ def build(**d) -> APIRouter:
                         "said": "Only contributors can pin here; readers see the pins."}) from None
             ws = _target(request, body.workspace, write=True)
         try:
-            pins = workspace_pins.set_pin(ws, body.ref, by=subject, pinned=body.pinned, room=room)
+            pins = workspace_pins.set_pin(ws, body.ref, by=subject, pinned=body.pinned, room=room,
+                                          trailers=writer_trailers(request.headers))
         except workspace_pins.PinError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
         return {"workspace": body.workspace, "room": room, "pins": _resolved(request, subject, pins)}

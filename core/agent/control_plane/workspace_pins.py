@@ -15,10 +15,11 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 import yaml
 
+from control_plane.commit_trailers import with_trailers
 from shared.gitexec import run_git
 from workspaces.shared import links
 from workspaces.shared import workspace_paths as wpaths
@@ -64,20 +65,21 @@ def read(ws: Path, room: Optional[str] = None) -> list[dict]:
     return sorted(_clean(items), key=lambda p: -p["at"])
 
 
-def _commit(ws: Path, message: str) -> None:
+def _commit(ws: Path, message: str, trailers: Iterable[str] = ()) -> None:
     if not (ws / ".git").exists():
         return
     try:
         run_git(ws, "add", "--", FILE, check=True)
         run_git(ws, "-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local",
-                "commit", "-q", "-m", message, "--", FILE)
+                "commit", "-q", "-m", with_trailers(message, trailers), "--", FILE)
     except Exception:  # noqa: BLE001 — the file is authoritative; a later commit picks it up
         logger.warning("workspace_pins: commit failed in %s", ws)
 
 
 def set_pin(ws: Path, ref_text: str, *, by: str, pinned: bool, room: Optional[str] = None,
-            now: Optional[float] = None) -> list[dict]:
-    """Pin (or unpin) one reference for everyone in the workspace or the room. Idempotent."""
+            now: Optional[float] = None, trailers: Iterable[str] = ()) -> list[dict]:
+    """Pin (or unpin) one reference for everyone in the workspace or the room. Idempotent. The commit
+    closes with ``trailers`` (who made it when an agent did, ``commit_trailers``)."""
     ws = Path(ws)
     ref = links.parse_universal(ref_text)
     if ref is None or ref.kind == "join":
@@ -102,5 +104,5 @@ def set_pin(ws: Path, ref_text: str, *, by: str, pinned: bool, room: Optional[st
     else:
         doc["pins"] = items
     wpaths.write_text_inside(ws, FILE, yaml.safe_dump(doc, sort_keys=True, allow_unicode=True), allow=(".vexa",))
-    _commit(ws, f"{'pin' if pinned else 'unpin'} {chip}" + (f" in room {room}" if room else ""))
+    _commit(ws, f"{'pin' if pinned else 'unpin'} {chip}" + (f" in room {room}" if room else ""), trailers)
     return sorted(items, key=lambda p: -p["at"])

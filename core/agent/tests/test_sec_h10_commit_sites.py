@@ -130,3 +130,23 @@ def test_a_persons_own_template_work_carries_no_agent_trailer(env):
     r = c.post("/api/workspace/templates/save", headers=JANE, json={"name": "Board meeting", "slug": slot.name})
     assert r.status_code == 201, r.text
     assert_persons(ws / "u_jane", "template saved: board-meeting")
+
+
+# ── pins: the person's own act — an agent is refused, so a pin commit is never an agent's ────────
+
+def test_an_agent_cannot_pin_so_no_pin_commit_is_an_agents(world, monkeypatch):
+    monkeypatch.setenv("VEXA_FEATURES", "all,rooms,readme_page")
+    client, store, _c, _sp, root, _d = world
+    chat = store.create("alice", name="a-chat")
+    agent = {**AGENT_OF_ALICE, "x-user-delegation-workspaces": "team", "x-user-delegation-target": "team"}
+    r = client.post("/api/pins", headers=agent, json={"workspace": "team", "ref": f"[[chat:{chat['id']}]]"})
+    assert r.status_code == 403 and "person_only" in r.text, r.text
+
+
+def test_a_persons_own_pin_carries_no_agent_trailer(world, monkeypatch):
+    monkeypatch.setenv("VEXA_FEATURES", "all,rooms,readme_page")
+    client, store, _c, _sp, root, _d = world
+    chat = store.create("alice", name="a-chat")
+    r = client.post("/api/pins", headers=_h("alice"), json={"workspace": "team", "ref": f"[[chat:{chat['id']}]]"})
+    assert r.status_code == 200, r.text
+    assert_persons(root / "team", "pin [[chat:")
