@@ -207,12 +207,12 @@ new one; otherwise 409 `still_in_call`.
 
 **Names.** Where a call starts in a room (`call_person`, or `POST /api/sessions/{id}/call` from Start
 call), agent-api writes its name on the meeting row through meeting-api's owner-scoped annotate:
-`title` "Call with <first name>" or "#<room> call", plus metadata `call_named`, `call_kind` and, for a
+`title` "`Call with <first name>`" or "`#<room> call`", plus metadata `call_named`, `call_kind` and, for a
 room of two, `call_with` (both people, so each reads the other's name). A private chat's call is not
 named here. When the caller's chat list is read, their live calls whose title is still exactly
 `call_named` are renamed once by topic: the live transcript (`tc:meeting:{id}`) is given to the cheap
 model (`model_home`, within the spend cap) for at most five words, and the title becomes
-"#pilot · <topic>" with `call_renamed_from` recorded. No model call is spent before the transcript has
+"`#pilot · <topic>`" with `call_renamed_from` recorded. No model call is spent before the transcript has
 something to name, and at most three per call.
 
 **Who is in now.** `GET /api/sessions/{id}/call` answers `call.in_now`: the room's participants by
