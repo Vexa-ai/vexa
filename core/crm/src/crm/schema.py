@@ -84,8 +84,16 @@ orgs = Table('crm_orgs', metadata, org(), Column('name', String, nullable=False)
     Column('default_policy', Document, nullable=False), Column('created_at', String, nullable=False))
 # Match identifiers (email:…, domain:…, calendar:…): one record per identifier per organisation,
 # so a second person with the same address is a merge candidate, never a silent duplicate.
+# ``proof`` (9) says whether an ``email:`` identifier binds a sign-in, and who may have set it:
+# ``signin:<account>`` — identity proved the address for that account at its sign-in (the identity
+# path writes it, never a CRM writer); ``record`` — given with the record when it was created
+# (``crm_change`` create's ``match``), never moved, so the first sign-in identity proves it for may
+# take the record while no account holds it; NULL — carried by a CRM merge, or not an address: it
+# finds duplicates and binds nobody (``persons.Persons.binds``).
 match_ids = Table('crm_match_ids', metadata, org(), Column('identifier', String, primary_key=True),
-    Column('record_id', String, nullable=False), record_fk())
+    Column('record_id', String, nullable=False), Column('proof', String, nullable=True), record_fk())
+PROOF_SIGNIN = 'signin:'
+PROOF_RECORD = 'record'
 # Decision 5: page P in workspace W refers to record R, as of W's commit. Replaced per workspace
 # from a full snapshot, so it is rebuildable from git. No foreign key: a page may name an id the
 # CRM does not hold (yet), and the reference is still a fact about the page.
@@ -198,7 +206,7 @@ card_nonces = Table('crm_card_nonces', metadata, org(), Column('nonce', String, 
     Column('revision', Integer, nullable=False), Column('content_hash', String, nullable=False),
     Column('created_at', String, nullable=False), Column('expires_at', String, nullable=False),
     Column('used_at', String, nullable=True), record_fk())
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 Index("crm_refs_by_record", page_references.c.org_id, page_references.c.record_id)
 Index("crm_bindings_by_record", workspace_bindings.c.org_id, workspace_bindings.c.record_id)

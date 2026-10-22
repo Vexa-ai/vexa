@@ -5,12 +5,15 @@ them, in their home org's CRM (``caller.org``). The claim is strictly one-to-one
 keyed by the record and unique per account. A second account of the same human never claims a second
 record: it resolves to the claimed Person and joins it through the merge card (``persons.py``).
 
-- It happens on its own at sign-in when the record holding the verified address's match identifier
-  (``email:<address>``) is unclaimed. The record's ``Email`` field never makes a claim: any writer
-  of that field can type an address into it. A record the claimant merged another record into by
-  hand is not theirs to claim either (``candidates``). With no verified address there is no claim: the address
-  counts only when identity says a sign-in proved it (``Caller.email_verified``), so an address an
-  API call or an identity provider merely asserted claims nothing.
+- It happens on its own at sign-in when the verified address BINDS the person to a record
+  (``persons.Persons.binds``) and that record is unclaimed: its ``email:<address>`` identifier was
+  proven by identity for this account, or came with the record at its creation while no account
+  holds it (the org's own record of someone who has not signed in yet). The record's ``Email`` field
+  never makes a claim: any writer of that field can type an address into it. Nor does an identifier
+  a CRM merge carried, so no writer can move an address onto a record and have its sign-in claim it
+  (``candidates``). With no verified address there is no claim: the address counts only when
+  identity says a sign-in proved it (``Caller.email_verified``), so an address an API call or an
+  identity provider merely asserted claims nothing.
 - A claim moves nothing from the org to the person. The org's fields (contact history, notes, deal
   links, cadence) stay on the record under its CRM policy and field classes (S1-C); the person gets an
   empty profile of their own.
@@ -41,7 +44,7 @@ from sqlalchemy import select, update
 
 from . import schema as s
 from .caller import as_caller
-from .persons import EMAIL, PersonError, PersonNotFound, PersonRefused
+from .persons import PersonError, PersonNotFound, PersonRefused
 
 #: field → (kind, max length). ``links`` and ``contact`` are objects of their own.
 PROFILE_FIELDS = {
@@ -204,42 +207,20 @@ class Profiles:
         return dict(row) if row else None
 
     def candidates(self, c, org, email, subject):
-        """Person records ``subject`` may claim with the verified address ``email``: the live record
-        (a merged id answers its survivor) holding the match identifier ``email:<address>``.
+        """Person records ``subject`` may claim with the verified address ``email``: the one record
+        that address binds a sign-in to (``persons.Persons.bound``), when no account holds it or
+        ``subject`` is one of its accounts.
 
-        The identifier is the binding, not the record's ``Email`` field: any writer of that field can
-        type an address into it. An identifier is written by the sign-in that creates a Person, by
-        the org when it creates a record, and by a merge carrying a duplicate's identifiers to its
-        survivor. A merge is the one way a writer puts an address onto a record someone else already
-        has, so a record ``subject`` merged another record into by hand (``store.merge``, not the
-        person's own merge card) is not theirs to claim: the address may be the one they carried."""
-        email = str(email or '').strip().lower()
-        if not email:
+        The binding is identity's, never a CRM writer's: the record's ``Email`` field and an
+        identifier a CRM merge carried bind nobody, so neither a writer acting alone nor two writers
+        together can put an address onto someone else's record and claim it."""
+        row = self.persons.bound(c, org, email)
+        if row is None:
             return []
-        held = self.persons._held(c, org, EMAIL + email)
-        row = self.persons._follow(c, org, held) if held else None
-        if row is None or self._merged_in_by(c, org, row['id'], subject):
+        accounts = self.persons.linked(c, org, row)
+        if accounts and str(subject) not in accounts:
             return []
         return [row]
-
-    @staticmethod
-    def _merged_in_by(c, org, record_id, subject):
-        """True when ``subject`` merged a record into ``record_id`` (directly or through a record
-        that later merged into it) with a CRM merge."""
-        r, v = s.records, s.revisions
-        into, frontier = set(), {record_id}
-        while frontier:
-            frontier = {i for (i,) in c.execute(select(r.c.id).where(
-                r.c.org_id == org, r.c.merged_into.in_(frontier))).all()} - into
-            into |= frontier
-        if not into:
-            return False
-        for (evidence,) in c.execute(select(v.c.evidence).where(
-                v.c.org_id == org, v.c.record_id.in_(into), v.c.actor_id == str(subject))).all():
-            for e in evidence if isinstance(evidence, list) else []:
-                if isinstance(e, dict) and e.get('merged_into') and not e.get('card'):
-                    return True
-        return False
 
     def _human_claim(self, c, org, subject, email):
         """The claim any account of this human already holds: this account's own, or the claim on the
@@ -256,7 +237,7 @@ class Profiles:
         return None
 
     # ── claim ────────────────────────────────────────────────────────────────────────────────
-    def _write_claim(self, c, org, record, subject):
+    def _write_claim(self, c, org, record, subject, email):
         now = _now()
         existing = self._by_record(c, org, record['id'])
         if existing is None:
@@ -271,6 +252,9 @@ class Profiles:
                 s.records.c.org_id == org, s.records.c.account_id == subject)).scalar_one_or_none() is None:
             c.execute(update(s.records).where(s.records.c.org_id == org, s.records.c.id == record['id'])
                       .values(account_id=subject))
+            record = {**record, 'account_id': subject}
+        if str(subject) in self.persons.linked(c, org, record):
+            self.persons.prove(c, org, record, subject, email)     # the identity path: a proven address
 
     def auto_claim(self, c, org, caller):
         """On sign-in: claim the one record matching the verified address, if exactly one does, it is
@@ -286,7 +270,7 @@ class Profiles:
         row = self._by_record(c, org, found[0]['id'])
         if row and (row['claimed_by'] or row['unclaimed_by'] == caller.subject):
             return None
-        self._write_claim(c, org, found[0], caller.subject)
+        self._write_claim(c, org, found[0], caller.subject, caller.email)
         return found[0]['id']
 
     def claim(self, org, caller, record_id=None):
@@ -318,7 +302,7 @@ class Profiles:
                 e = PersonError('Someone else has claimed that record')
                 e.status = 409
                 raise e
-            self._write_claim(c, org, found[0], caller.subject)
+            self._write_claim(c, org, found[0], caller.subject, caller.email)
             return {'status': 'claimed', 'record_id': found[0]['id']}
 
     @staticmethod

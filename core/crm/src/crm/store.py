@@ -875,30 +875,41 @@ class Store:
         never a second record. Only an address identity says a sign-in proved (``email_verified``)
         matches a record or becomes one's ``Email`` and match identifier; an unproven one only names
         the person created. Returns the person's record id, or None where the organisation has no
-        Person type yet."""
+        Person type yet.
+
+        THE IDENTITY PATH (``persons.binds``): a proven address finds a record only where its
+        identifier binds a sign-in — proven for an account the record answers to, or given with an
+        unheld record at its creation. Every proven address ends as an identifier proven for this
+        account (``persons.prove``): one a writer put on someone else's record, or a CRM merge
+        carried there, moves to this account's own Person instead of moving the account."""
         caller=as_caller(actor)
         if caller.internal or not caller.subject:
             return None
         email=caller.email if caller.email_verified else ''
         with self.engine.begin() as c:
             if email:
-                matched=self.persons.resolve(c,org,'',email)
+                held=self.persons.holder(c,org,email)
+                if held is not None and caller.subject in self.persons.linked(c,org,held):
+                    self.persons.prove(c,org,held,caller.subject,email)
+                    self.persons.offer(c,org,held,{caller.subject:email})
+                    return held['id']
+                matched=self.persons.bound(c,org,email)
                 if matched is not None:
-                    if matched['account_id']==caller.subject:
-                        self.persons.offer(c,org,matched,{caller.subject:email})
-                        return matched['id']
                     attached_elsewhere=c.execute(select(s.records.c.id).where(s.records.c.org_id==org,
                         s.records.c.account_id==caller.subject)).scalar_one_or_none()
-                    if not matched['account_id'] and not attached_elsewhere:
+                    if not self.persons.linked(c,org,matched) and not attached_elsewhere:
                         before=dict(matched);after={**before,'account_id':caller.subject,'revision':before['revision']+1}
                         c.execute(update(s.records).where(s.records.c.org_id==org,s.records.c.id==matched['id'])
                             .values(account_id=caller.subject,revision=after['revision']))
                         self._revision(c,org,caller.subject,before,after,'Account attached on sign-in (verified email)',[])
+                        self.persons.prove(c,org,after,caller.subject,email)
                         return matched['id']
                     self.persons.link(c,org,matched,caller.subject,email)
                     return matched['id']
             found=self.persons.resolve(c,org,caller.subject)
-            if found is not None:return found['id']
+            if found is not None:
+                self.persons.prove(c,org,found,caller.subject,email)
+                return found['id']
             if c.execute(select(s.object_types.c.name).where(s.object_types.c.org_id==org,
                     s.object_types.c.name=='Person')).scalar_one_or_none() is None:
                 return None
@@ -913,20 +924,22 @@ class Store:
             row=dict(org_id=org,id=record_id,object_type='Person',owner_id=caller.subject,revision=1,fields=fields,
                      narrative='',quarantined=False,deleted=False,account_id=caller.subject,merged_into=None)
             c.execute(s.records.insert().values(**row))
-            if email and c.execute(select(s.match_ids.c.record_id).where(s.match_ids.c.org_id==org,
-                    s.match_ids.c.identifier=='email:'+email)).scalar_one_or_none() is None:
-                c.execute(s.match_ids.insert().values(org_id=org,identifier='email:'+email,record_id=record_id))
+            self.persons.prove(c,org,row,caller.subject,email)
             self._revision(c,org,caller.subject,None,row,'Person created on sign-in',[])
             return record_id
 
     def add_match_ids(self, c, org, record_id, identifiers):
+        """A new record's identifiers (``create``). An address given here is ``record``: it lets the
+        first sign-in identity proves it for take this record while no account holds it, and it never
+        binds once it moves (``schema.match_ids``)."""
         for raw in identifiers or []:
             identifier=normalise_match(raw)
             held=c.execute(select(s.match_ids.c.record_id).where(s.match_ids.c.org_id==org,
                 s.match_ids.c.identifier==identifier)).scalar_one_or_none()
             if held==record_id:continue
             if held:raise Conflict('Identifier already belongs to another record; search for it or merge')
-            c.execute(s.match_ids.insert().values(org_id=org,identifier=identifier,record_id=record_id))
+            c.execute(s.match_ids.insert().values(org_id=org,identifier=identifier,record_id=record_id,
+                proof=s.PROOF_RECORD if identifier.startswith('email:') else None))
 
     def merge(self, org, actor, record_id, into, reason=''):
         """Decision 3: duplicates merge. The merged record names its survivor, its identifiers and
@@ -936,7 +949,12 @@ class Store:
         ``account_id`` or an ``account:`` link) is someone's sign-in; it joins another Person only on
         that person's own merge card (``persons.Persons.confirm``), confirmed from each account's
         session. So a record carrying an account binding never merges away here; merging the other
-        way, a duplicate INTO the record the account answers to, keeps the account where it is."""
+        way, a duplicate INTO the record the account answers to, keeps the account where it is.
+
+        Nor does a merge move a sign-in binding: the merged record's identifiers reach the survivor
+        without their proof, so they find duplicates there and bind nobody's sign-in
+        (``persons.binds``). A writer cannot carry an address onto someone else's record and have a
+        sign-in follow it."""
         caller=as_caller(actor);actor=caller.subject
         if not reason.strip():raise CRMError('A merge requires a reason')
         with self.begin() as c:
@@ -954,7 +972,8 @@ class Store:
             after={**loser,'merged_into':winner['id'],'revision':loser['revision']+1}
             c.execute(update(s.records).where(s.records.c.org_id==org,s.records.c.id==loser['id'],
                 s.records.c.revision==loser['revision']).values(merged_into=winner['id'],revision=after['revision']))
-            c.execute(update(s.match_ids).where(s.match_ids.c.org_id==org,s.match_ids.c.record_id==loser['id']).values(record_id=winner['id']))
+            c.execute(update(s.match_ids).where(s.match_ids.c.org_id==org,s.match_ids.c.record_id==loser['id'])
+                .values(record_id=winner['id'],proof=None))
             b=s.workspace_bindings
             have=set(self._bindings(c,org,winner['id']))
             for workspace in self._bindings(c,org,loser['id']):

@@ -30,8 +30,9 @@ import sys
 import time
 from urllib.parse import quote
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import String, cast, create_engine, select, text, update
 
+from . import schema as s
 from .schema import SCHEMA_VERSION, metadata, schema_version
 
 DEFAULT_ROLE = 'vexa_crm'
@@ -212,8 +213,10 @@ def tables_and_version(c):
     (``crm_profiles``: a claimed Person record's person-owned fields, D35). 8 (D13) adds the decision
     nonce table and four decision-record columns on ``crm_revisions``, also in place with an empty
     default; the Card definition's new lifecycle properties reach an existing org through
-    ``bootstrap.upgrade_card_definition``."""
+    ``bootstrap.upgrade_card_definition``. 9 adds ``crm_match_ids.proof`` in place and fills it once,
+    on the upgrade from an earlier version (``match_proof_9``)."""
     metadata.create_all(c)
+    before = c.execute(text('SELECT version FROM crm_schema')).scalar()
     if c.dialect.name == 'postgresql':
         # 4 (cards): a proposal may name no record yet — it proposes a new card. Idempotent.
         c.execute(text('ALTER TABLE crm_change_proposals ALTER COLUMN record_id DROP NOT NULL'))
@@ -224,6 +227,10 @@ def tables_and_version(c):
         # the append-only trigger is not involved.
         for column in REVISION_COLUMNS_7:
             c.execute(text(f"ALTER TABLE crm_revisions ADD COLUMN IF NOT EXISTS {column} varchar NOT NULL DEFAULT ''"))
+        # 9: whether an email identifier binds a sign-in, and who set it (schema.match_ids)
+        c.execute(text('ALTER TABLE crm_match_ids ADD COLUMN IF NOT EXISTS proof varchar NULL'))
+    if before is not None and int(before) < 9:
+        match_proof_9(c)
     for table in metadata.sorted_tables:
         for index in table.indexes:
             index.create(c, checkfirst=True)
@@ -231,6 +238,53 @@ def tables_and_version(c):
         c.execute(schema_version.insert().values(version=SCHEMA_VERSION))
     else:
         c.execute(text('UPDATE crm_schema SET version = :v'), {'v': SCHEMA_VERSION})
+
+
+def match_proof_9(c):
+    """The proof of every ``email:`` identifier an install held before 9, filled once on the upgrade.
+
+    * On a record a CRM merge carried identifiers into (a merge revision with ``merged_into`` and no
+      person's ``card``, followed to its survivor): NULL. Which identifiers came with the merge is not
+      recorded, so none of that record's addresses binds a sign-in until identity proves one again
+      (the account still finds its Person by ``account_id``; its next proven sign-in re-proves it).
+    * On a record an account answers to: ``signin:<that account>``, as before 9 every identifier there
+      bound it.
+    * On any other record: ``record`` (the org's record of someone who has not signed in yet)."""
+    r, m, v = s.records, s.match_ids, s.revisions
+    merged_into = {(o, i): into for o, i, into in c.execute(select(r.c.org_id, r.c.id, r.c.merged_into))}
+
+    def survivor(org, record_id):
+        for _ in range(16):
+            into = merged_into.get((org, record_id))
+            if not into:
+                return record_id
+            record_id = into
+        return record_id
+
+    carried = set()
+    for org, evidence in c.execute(select(v.c.org_id, v.c.evidence).where(
+            cast(v.c.evidence, String).like('%merged_into%'))):
+        if isinstance(evidence, str):
+            try:
+                evidence = json.loads(evidence)
+            except ValueError:
+                continue
+        for e in evidence if isinstance(evidence, list) else []:
+            if isinstance(e, dict) and e.get('merged_into') and not e.get('card'):
+                carried.add((org, survivor(org, str(e['merged_into']))))
+    accounts = {(o, i): a for o, i, a in c.execute(select(r.c.org_id, r.c.id, r.c.account_id))}
+    links = {}
+    for o, identifier, record_id in c.execute(select(m.c.org_id, m.c.identifier, m.c.record_id).where(
+            m.c.identifier.like('account:%'))):
+        links.setdefault((o, record_id), identifier[len('account:'):])
+    for o, identifier, record_id in c.execute(select(m.c.org_id, m.c.identifier, m.c.record_id).where(
+            m.c.identifier.like('email:%'), m.c.proof.is_(None))).all():
+        key = (o, record_id)
+        if key in carried:
+            continue
+        account = accounts.get(key) or links.get(key)
+        proof = s.PROOF_SIGNIN + str(account) if account else s.PROOF_RECORD
+        c.execute(update(m).where(m.c.org_id == o, m.c.identifier == identifier).values(proof=proof))
 
 
 def migrate(engine):

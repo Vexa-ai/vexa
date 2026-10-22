@@ -52,6 +52,19 @@ def founder_record(store):
                         idempotency_key='val', match=['email:' + WORK, 'email:' + HOME])['record_id']
 
 
+def joined_by_her(store):
+    """Val's two logins. The org's record lists both addresses, but only the one identity proved for
+    the account holding the record binds a sign-in: the home login gets a Person of its own. Val then
+    says, from her work login, that the home address is hers too (her own merge card); the card waits
+    for the home login's confirmation."""
+    val = founder_record(store)
+    assert store.ensure_account(ORG, A) == val
+    home = store.ensure_account(ORG, B)
+    assert home != val
+    store.persons.offer_for_address(ORG, A, HOME)
+    return val, home
+
+
 def card_of(store, person_id):
     p = s.change_proposals
     with store.engine.connect() as c:
@@ -60,27 +73,31 @@ def card_of(store, person_id):
 
 
 # ── resolution: two accounts, one Person ─────────────────────────────────────────────────────
-def test_two_accounts_resolve_to_one_person_by_verified_address(store):
-    val = founder_record(store)
-    assert store.ensure_account(ORG, A) == val            # attached: the first account
-    assert store.ensure_account(ORG, B) == val            # linked, never a second record
+def test_two_accounts_resolve_to_one_person_only_on_her_own_merge_card(store):
+    val, home = joined_by_her(store)
+    grouped = store.persons.group(ORG, [{'subject': '21', 'email': WORK}, {'subject': '22', 'email': HOME}])
+    assert grouped['21']['person'] == val and grouped['22']['person'] == home       # two until she confirms
+    card = store.persons.me(ORG, B)['merge']
+    assert store.persons.confirm(ORG, B, card['id'])['status'] == 'merged'
     grouped = store.persons.group(ORG, [{'subject': '21', 'email': WORK}, {'subject': '22', 'email': HOME}])
     assert grouped['21']['person'] == grouped['22']['person'] == val
     assert sorted(grouped['21']['accounts']) == ['21', '22'] == sorted(grouped['22']['accounts'])
-    assert grouped['21']['merged'] is False
+    assert grouped['21']['merged'] is True
     # there is no persons table: the link is a match identifier on the Person record
     assert 'crm_persons' not in s.metadata.tables
     assert store.get(ORG, ADMIN, val)['match_ids'] == sorted(['account:22', 'email:' + HOME, 'email:' + WORK])
 
 
-def test_the_picker_groups_by_address_even_before_the_second_account_signed_in(store):
-    """A producer that vouches an account's address was proven (``email_verified``) groups it with no
-    CRM sign-in; an address nobody vouches for groups nothing (``test_person_reads_proven``)."""
+def test_an_address_the_org_listed_groups_no_second_account(store):
+    """The org's record lists both addresses, and a producer vouches that the second account's address
+    was proven: it still groups nothing, because identity proved that address for an account the
+    record does not answer to (``persons.binds``)."""
     val = founder_record(store)
     store.ensure_account(ORG, A)
     grouped = store.persons.group(ORG, [{'subject': '21', 'email': WORK, 'email_verified': True},
                                         {'subject': '22', 'email': HOME, 'email_verified': True}])
-    assert grouped['22']['person'] == val and sorted(grouped['22']['accounts']) == ['21', '22']
+    assert grouped['21']['person'] == val and grouped['21']['accounts'] == ['21']
+    assert grouped['22']['person'] is None and grouped['22']['accounts'] == ['22']
 
 
 def test_an_account_with_no_person_is_a_person_of_one(store):
@@ -97,20 +114,16 @@ def test_crm_change_cannot_write_an_account_link(store):
 def test_a_wrong_address_gets_nothing_before_the_person_confirms(store):
     """Coordinator ruling 2026-10-17: a linked login receives the Person's grants only after the person
     confirmed the merge card from each login's own session. Before that, nothing."""
-    val = founder_record(store)
-    store.ensure_account(ORG, A)
-    store.ensure_account(ORG, B)                      # linked by the record's identifiers, unconfirmed
+    val, home = joined_by_her(store)                  # her card is open, unconfirmed by the home login
     from crm.card_ops import Cards
     cards = Cards(store)
     card = cards.create(ORG, ADMIN, 'Send the deck')
     card_id = card['card'].get('id') or card['card'].get('record_id')
     members = {m['subject'] for m in cards.members(ORG, ADMIN, card_id, '21', True)['members']}
     assert '21' in members and '22' not in members
-    grouped = store.persons.group(ORG, [{'subject': '21', 'email': WORK}])['21']
-    assert grouped['confirmed'] == ['21'] and sorted(grouped['accounts']) == ['21', '22']   # a hint only
-    # half a confirmation is still nothing
+    # half a confirmation (the work login opened the card, which confirms it) is still nothing
     merge = store.persons.me(ORG, A)['merge']
-    store.persons.confirm(ORG, A, merge['id'])
+    assert merge['confirmed_by_you'] is True and merge['waiting_on'] == 1
     assert store.persons.group(ORG, [{'subject': '21', 'email': WORK}])['21']['confirmed'] == ['21']
     # both logins confirmed: now a grant to the person reaches both
     store.persons.confirm(ORG, B, merge['id'])
@@ -126,22 +139,18 @@ def test_a_wrong_address_gets_nothing_before_the_person_confirms(store):
 
 # ── the merge card: only the person's own confirmation ───────────────────────────────────────
 def test_a_merge_card_is_offered_and_nothing_merges_without_every_account_confirming(store):
-    val = founder_record(store)
-    store.ensure_account(ORG, A)
-    store.ensure_account(ORG, B)
-    me = store.persons.me(ORG, A)
-    assert me['person'] == val and me['accounts'] == 2
+    val, home = joined_by_her(store)
+    me = store.persons.me(ORG, B)
+    assert me['person'] == home and me['accounts'] == 1
     card = me['merge']
-    assert card and card['status'] == OFFERED and card['waiting_on'] == 2
+    assert card and card['status'] == OFFERED and card['waiting_on'] == 1 and card['confirmed_by_you'] is False
     # her own address in full, the other one masked
     shown = {a['address'] for a in card['addresses']}
-    assert WORK in shown and mask(HOME) in shown and HOME not in shown
-    work = next(a['option'] for a in card['addresses'] if a['yours'])
-    first = store.persons.confirm(ORG, A, card['id'], primary=work)
-    assert first['status'] == 'confirmed' and first['merge']['waiting_on'] == 1
+    assert HOME in shown and mask(WORK) in shown and WORK not in shown
+    work = next(a['option'] for a in card['addresses'] if not a['yours'])
     assert store.persons.group(ORG, [{'subject': '21', 'email': WORK}])['21']['merged'] is False
     assert card_of(store, val)[0]['status'] == OFFERED
-    done = store.persons.confirm(ORG, B, card['id'])
+    done = store.persons.confirm(ORG, B, card['id'], primary=work)
     assert done['status'] == 'merged'
     assert card_of(store, val)[0]['status'] == CONFIRMED
     grouped = store.persons.group(ORG, [{'subject': '22', 'email': HOME}])['22']
@@ -151,11 +160,9 @@ def test_a_merge_card_is_offered_and_nothing_merges_without_every_account_confir
 
 
 def test_no_automatic_merge_nobody_else_and_no_agent_confirms(store):
-    val = founder_record(store)
-    store.ensure_account(ORG, A)
-    store.ensure_account(ORG, B)
-    card = store.persons.me(ORG, A)['merge']
-    agent = acct('21', WORK, delegated=True, regime='human')
+    val, _ = joined_by_her(store)
+    card = store.persons.me(ORG, B)['merge']
+    agent = acct('22', HOME, delegated=True, regime='human')
     with pytest.raises(PersonRefused):
         store.persons.confirm(ORG, agent, card['id'])
     with pytest.raises(PersonRefused):
@@ -173,13 +180,16 @@ def test_no_automatic_merge_nobody_else_and_no_agent_confirms(store):
 
 
 def test_declining_splits_the_accounts_so_grants_stop_following(store):
+    """Two logins identity proved ONE address for (the address binds both: ``persons.binds``) share
+    the Person and get the card; declining it gives the second login a Person of its own."""
     val = founder_record(store)
     store.ensure_account(ORG, A)
-    store.ensure_account(ORG, B)
+    B = acct('22', WORK)
+    assert store.ensure_account(ORG, B) == val
     card = store.persons.me(ORG, B)['merge']
     assert store.persons.decline(ORG, B, card['id']) == {'status': 'declined', 'split': 1}
     assert card_of(store, val)[0]['status'] == DECLINED
-    grouped = store.persons.group(ORG, [{'subject': '21', 'email': WORK}, {'subject': '22', 'email': HOME}])
+    grouped = store.persons.group(ORG, [{'subject': '21', 'email': WORK}, {'subject': '22'}])
     assert grouped['21']['person'] == val and grouped['21']['accounts'] == ['21']
     assert grouped['22']['person'] != val and grouped['22']['accounts'] == ['22']
     # a fresh sign-in by B resolves to its own Person now, and no new card appears
@@ -204,9 +214,7 @@ def test_a_person_offers_their_other_address_and_it_completes_only_from_that_acc
 
 
 def test_a_decided_card_cannot_be_decided_again(store):
-    founder_record(store)
-    store.ensure_account(ORG, A)
-    store.ensure_account(ORG, B)
+    joined_by_her(store)
     card = store.persons.me(ORG, A)['merge']
     store.persons.decline(ORG, A, card['id'])
     with pytest.raises(PersonError):
@@ -215,9 +223,8 @@ def test_a_decided_card_cannot_be_decided_again(store):
 
 # ── field privacy: match identifiers stay private for other viewers ──────────────────────────
 def test_match_ids_and_account_links_are_absent_for_other_viewers(store):
-    val = founder_record(store)
-    store.ensure_account(ORG, A)
-    store.ensure_account(ORG, B)
+    val, _ = joined_by_her(store)
+    store.persons.confirm(ORG, B, store.persons.me(ORG, B)['merge']['id'])
     store.bind(ORG, ADMIN, 'sales', val)
     store.apply_workspace_snapshot(ORG, 'sales', 'c1', '2026-10-17T10:00:00Z', [],
                                    [{'subject': '1', 'role': 'owner'}, {'subject': '50', 'role': 'contributor'}])
@@ -255,15 +262,17 @@ def test_the_front_door_person_routes_and_internal_grouping(store):
     me_a = client.post('/person/me', json={}, headers={'X-API-Key': 'a'})
     assert me_a.status_code == 200, me_a.text
     me_b = client.post('/person/me', json={}, headers={'X-API-Key': 'b'}).json()
-    assert me_b['accounts'] == 2 and me_b['merge']
+    assert me_b['accounts'] == 1 and me_b['merge'] is None        # an address the org listed joins nothing
+    assert client.post('/person/merge', json={'action': 'offer', 'address': HOME},
+                       headers={'X-API-Key': 'a'}).json()['status'] == 'offered'
+    me_b = client.post('/person/me', json={}, headers={'X-API-Key': 'b'}).json()
+    assert me_b['merge'] and me_b['merge']['waiting_on'] == 1
     card = me_b['merge']['id']
     assert client.post('/person/merge', json={'action': 'confirm', 'card': card},
                        headers={'Authorization': 'Bearer vxd_w'}).status_code == 403
     # an API key — a leaked bot key included — never confirms a merge: the person's session does
     assert client.post('/person/merge', json={'action': 'confirm', 'card': card},
                        headers={'X-API-Key': 'k'}).status_code == 403
-    assert client.post('/person/merge', json={'action': 'confirm', 'card': card},
-                       headers={'X-API-Key': 'a'}).json()['status'] == 'confirmed'
     assert client.post('/person/merge', json={'action': 'confirm', 'card': card},
                        headers={'X-API-Key': 'b'}).json()['status'] == 'merged'
     body = {'accounts': [{'subject': '21', 'email': WORK}, {'subject': '22', 'email': HOME}]}

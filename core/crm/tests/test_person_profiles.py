@@ -49,6 +49,14 @@ def sign_in(store, caller):
         store.profiles.auto_claim(c, ORG, caller)
 
 
+def her_merge_card(store):
+    """The home login joins Val's Person only through her own merge card: an address the org listed
+    beside her work address binds no second login (``persons.binds``)."""
+    store.persons.offer_for_address(ORG, A, HOME)
+    card = store.persons.me(ORG, B)['merge']
+    assert store.persons.confirm(ORG, B, card['id'])['status'] == 'merged'
+
+
 def test_first_sign_in_claims_the_one_matching_record_and_moves_no_org_data(store):
     val = org_record(store)
     sign_in(store, A)
@@ -64,7 +72,9 @@ def test_one_to_one_a_second_login_joins_through_the_merge_card_not_a_second_cla
     val = org_record(store)
     other = org_record(store, key='other', match=('someone@else.test',), fields={'Name': 'Other'})
     sign_in(store, A)
-    sign_in(store, B)                                  # same human, second login: linked, not claimed
+    sign_in(store, B)                                  # same human, second login: a Person of its own
+    assert store.profiles.mine(ORG, B)['record_id'] != val
+    her_merge_card(store)                              # joined by her card: one profile, not a second claim
     assert store.profiles.mine(ORG, B)['via_merge'] is True
     with pytest.raises(PersonError) as e:
         store.profiles.claim(ORG, B, other)
@@ -132,6 +142,7 @@ def test_directory_answers_profile_fields_only_and_follows_the_second_login(stor
     org_record(store)
     sign_in(store, A)
     sign_in(store, B)
+    her_merge_card(store)
     store.profiles.edit(ORG, A, {'display_name': 'Val'})
     out = store.profiles.directory(ORG, [{'subject': '21', 'email': WORK}, {'subject': '22', 'email': HOME},
                                          {'subject': '60', 'email': 'nobody@x.test'}])

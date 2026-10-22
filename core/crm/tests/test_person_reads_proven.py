@@ -35,18 +35,28 @@ def test_an_unproven_address_reads_nobodys_profile_or_person(store):
                for c in _cards(store, rid))
 
 
-def test_the_same_address_proven_still_finds_the_person(store):
+def test_an_address_the_org_listed_does_not_join_a_second_login_to_the_person(store):
+    """An address a writer listed on Val's record beside her own binds no other sign-in, even one that
+    proved it: identity proved it for an account the record does not answer to (``persons.binds``).
+    That second login reads nothing of Val's until she joins it on her own merge card."""
     rid = _val_with_a_private_profile(store)
     second = caller(uid=22, email=ALIAS, email_verified=True)
-    store.ensure_account(ORG, second)
+    own = store.ensure_account(ORG, second)
+    assert own != rid
+    mine = store.profiles.mine(ORG, second)
+    assert 'SECRET-LOCATION' not in str(mine) and not mine.get('via_merge')
+    assert store.persons.me(ORG, second)['person'] == own
+    assert store.persons.group(ORG, [{'subject': '22', 'email': ''}])['22']['person'] == own
+    assert store.profiles.directory(ORG, [{'subject': '22'}])['22'] is None
+    assert store.persons.group(ORG, [{'subject': '23', 'email': ALIAS, 'email_verified': True}])['23']['person'] == own
+    # Val's own act joins them: she names the address from her session, the second login confirms
+    val = caller(uid=21, email_verified=True)
+    store.persons.offer_for_address(ORG, val, ALIAS)
+    store.persons.confirm(ORG, second, store.persons.me(ORG, second)['merge']['id'])
     mine = store.profiles.mine(ORG, second)
     assert mine['claimed'] is True and mine['record_id'] == rid and mine.get('via_merge')
-    assert store.persons.me(ORG, second)['person'] == rid
-    # once an account signed in with a proven address it is linked: its subject alone finds the Person
     assert store.persons.group(ORG, [{'subject': '22', 'email': ''}])['22']['person'] == rid
     assert store.profiles.directory(ORG, [{'subject': '22'}])['22']['location'] == 'SECRET-LOCATION'
-    # and a producer that vouches for the address groups an account crm has not seen yet
-    assert store.persons.group(ORG, [{'subject': '23', 'email': ALIAS, 'email_verified': True}])['23']['person'] == rid
 
 
 def _cards(store, rid):

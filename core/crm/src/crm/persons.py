@@ -5,6 +5,16 @@ which addresses are theirs. An account is a login: it resolves to its Person by 
 verified for it (``email:<verified address>``), and only when no Person holds that address by the
 record its account is attached to (``account_id``).
 
+**Only identity binds an address to an account** (``crm_match_ids.proof``, ``binds``). An ``email:``
+identifier finds a sign-in's Person only when identity proved that address for an account the record
+answers to (``signin:<account>``, written here and in ``Store.ensure_account``, the identity path), or
+when it came with the record at its creation and no account holds the record yet (``record``: the
+org's own record of someone who has not signed in, taken by the first sign-in identity proves the
+address for). An identifier a CRM merge carried binds nobody, and a CRM writer never writes a proof:
+``crm_change`` can create a record naming an address, never move an address onto a record someone
+already is. When identity proves an address that sits on a record it does not bind, the identity path
+takes the identifier to the Person of the account that proved it (``prove``).
+
 One Person may therefore answer for several accounts — the founder's record of a colleague lists
 her work and her personal address, and she has signed in with both. The accounts linked to a Person
 are its attached account (``account_id``) plus one ``account:<id>`` match identifier per further
@@ -37,6 +47,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from sqlalchemy import select, update, delete
 
 from . import schema as s
+from .schema import PROOF_RECORD, PROOF_SIGNIN
 from .caller import CONFIRM_REFUSAL, as_caller
 from .store import CRMError
 
@@ -106,17 +117,60 @@ class Persons:
         return c.execute(select(s.match_ids.c.record_id).where(
             s.match_ids.c.org_id == org, s.match_ids.c.identifier == identifier)).scalar_one_or_none()
 
-    def resolve(self, c, org, subject, email=''):
-        """The Person an account answers to: by ``email`` first (I10), then by an ``account:`` link,
-        then by the record the account is attached to. None when there is none. ``email`` is an
-        address a sign-in PROVED (``Caller.proven_email``) or ""; an account that once signed in with
-        a proven one is already attached or linked, so its subject alone finds it."""
+    def _identifier(self, c, org, identifier):
+        return c.execute(select(s.match_ids.c.record_id, s.match_ids.c.proof).where(
+            s.match_ids.c.org_id == org, s.match_ids.c.identifier == identifier)).first()
+
+    def holder(self, c, org, email):
+        """The live record holding ``email:<address>``, whether or not it binds a sign-in."""
+        got = self._identifier(c, org, EMAIL + str(email or '').strip().lower())
+        return self._follow(c, org, got[0]) if got else None
+
+    def binds(self, c, org, row, proof):
+        """Does an ``email:`` identifier with ``proof`` on Person ``row`` bind a sign-in to it? Only
+        when identity proved the address for an account the record answers to, or when the identifier
+        came with the record at its creation and no account holds the record yet."""
+        accounts = self.linked(c, org, row)
+        proof = str(proof or '')
+        if proof == PROOF_RECORD:
+            return not accounts
+        return proof.startswith(PROOF_SIGNIN) and proof[len(PROOF_SIGNIN):] in accounts
+
+    def bound(self, c, org, email):
+        """The Person a PROVEN address binds a sign-in to (``binds``), or None."""
         email = str(email or '').strip().lower()
-        if email:
-            held = self._held(c, org, EMAIL + email)
-            row = self._follow(c, org, held) if held else None
-            if row is not None:
-                return row
+        if not email:
+            return None
+        got = self._identifier(c, org, EMAIL + email)
+        row = self._follow(c, org, got[0]) if got else None
+        return row if row is not None and self.binds(c, org, row, got[1]) else None
+
+    def prove(self, c, org, row, subject, email):
+        """THE IDENTITY PATH: identity proved ``email`` for account ``subject``, whose Person is
+        ``row``. The address's identifier is that Person's from now on, proven for that account —
+        wherever a CRM writer had put it, because a proven address outranks anything a writer set."""
+        email = str(email or '').strip().lower()
+        if not email:
+            return
+        identifier, proof = EMAIL + email, PROOF_SIGNIN + str(subject)
+        got = self._identifier(c, org, identifier)
+        if got is None:
+            c.execute(s.match_ids.insert().values(org_id=org, identifier=identifier, record_id=row['id'], proof=proof))
+        elif got[0] == row['id'] and str(got[1] or '').startswith(PROOF_SIGNIN) and self.binds(c, org, row, got[1]):
+            return                          # already proven for an account of this Person
+        elif got[0] != row['id'] or got[1] != proof:
+            c.execute(update(s.match_ids).where(s.match_ids.c.org_id == org, s.match_ids.c.identifier == identifier)
+                      .values(record_id=row['id'], proof=proof))
+
+    def resolve(self, c, org, subject, email=''):
+        """The Person an account answers to: by ``email`` first (I10) where that address binds a
+        sign-in (``bound``), then by an ``account:`` link, then by the record the account is attached
+        to. None when there is none. ``email`` is an address a sign-in PROVED
+        (``Caller.proven_email``) or ""; an account that once signed in with a proven one is already
+        attached or linked, so its subject alone finds it."""
+        row = self.bound(c, org, email)
+        if row is not None:
+            return row
         subject = str(subject or '')
         if not subject:
             return None
@@ -155,9 +209,16 @@ class Persons:
         return out
 
     def addresses(self, c, org, record_id):
-        return sorted(i[len(EMAIL):] for (i,) in c.execute(select(s.match_ids.c.identifier).where(
-            s.match_ids.c.org_id == org, s.match_ids.c.record_id == record_id,
-            s.match_ids.c.identifier.like(EMAIL + '%'))).all())
+        """The Person's own addresses: those identity proved for an account it answers to. An address
+        a writer gave the record, or a merge carried to it, is the org's data, never the person's."""
+        row = self._follow(c, org, record_id)
+        if row is None:
+            return []
+        accounts = set(self.linked(c, org, row))
+        return sorted(i[len(EMAIL):] for (i, proof) in c.execute(select(s.match_ids.c.identifier, s.match_ids.c.proof).where(
+            s.match_ids.c.org_id == org, s.match_ids.c.record_id == row['id'],
+            s.match_ids.c.identifier.like(EMAIL + '%'))).all()
+            if str(proof or '').startswith(PROOF_SIGNIN) and str(proof)[len(PROOF_SIGNIN):] in accounts)
 
     def _cards(self, c, org, record_id, statuses=MERGE_STATUSES):
         p = s.change_proposals
@@ -225,6 +286,7 @@ class Persons:
                 # the verified address decides (I10): the link follows the address to this Person
                 c.execute(update(s.match_ids).where(s.match_ids.c.org_id == org,
                                                     s.match_ids.c.identifier == identifier).values(record_id=row['id']))
+        self.prove(c, org, row, subject, email)
         self.offer(c, org, row, {subject: str(email or '').strip().lower()})
 
     def offer(self, c, org, row, seen=None):
@@ -474,8 +536,10 @@ class Persons:
             target = {'id': record_id}
         for identifier in [ACCOUNT + who] + ([EMAIL + address] if address else []):
             if self._held(c, org, identifier) == row['id']:
+                # the address goes with the account it was proven for (``prove``)
+                proof = {'proof': PROOF_SIGNIN + who} if identifier.startswith(EMAIL) else {}
                 c.execute(update(s.match_ids).where(s.match_ids.c.org_id == org, s.match_ids.c.identifier == identifier)
-                          .values(record_id=target['id']))
+                          .values(record_id=target['id'], **proof))
 
     # ── for the platform (agent-api through /internal/persons, crm's own card membership) ────
     def group(self, org, accounts):

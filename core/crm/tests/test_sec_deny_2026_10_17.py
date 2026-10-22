@@ -469,3 +469,163 @@ def test_the_persons_own_confirmed_merge_card_still_joins_their_accounts(store):
         assert sorted(store.persons.linked_accounts(c, ORG, '21')) == ['21', '22']
     out = store.persons.group(ORG, [{'subject': '22', 'email': 'val@home.test', 'email_verified': True}])['22']
     assert out['person'] == a and out['merged'] is True and sorted(out['confirmed']) == ['21', '22']
+
+
+# ── car 42: only identity binds an address to an account (A2-c reverse, A2-b with two writers) ──
+
+BOB = {'user_id': 50, 'email': 'bob@acme.test', 'email_verified': True, 'scopes': ['bot'], 'is_admin': False}
+MALLORY_TWO = {'user_id': 41, 'email': 'mallory.two@home.test', 'email_verified': True, 'scopes': ['bot'],
+               'is_admin': False}
+
+
+def _proof(store, address):
+    with store.engine.connect() as c:
+        return c.execute(select(s.match_ids.c.record_id, s.match_ids.c.proof).where(
+            s.match_ids.c.org_id == ORG, s.match_ids.c.identifier == 'email:' + address)).first()
+
+
+def test_a_writer_who_merges_an_org_record_into_their_own_person_does_not_get_its_owners_sign_in(store):
+    """A2-c reverse: the writer merges the victim's org record (carrying ``email:<victim>``) INTO the
+    writer's own sign-in Person, a data merge the 409 allows. The victim's verified sign-in must not
+    land on the writer's Person, be linked there, or be offered a merge card with the writer."""
+    victim = _victim_record(store)
+    _writer(store, '40')
+    mallory = from_validate('t', MALLORY)
+    own = store.ensure_account(ORG, mallory)
+    assert store.merge(ORG, mallory, victim, own, reason='duplicate')['merged_into'] == own
+    val = from_validate('t', VAL)
+    landed = store.ensure_account(ORG, val)
+    assert landed != own
+    me = store.persons.me(ORG, val)
+    assert me['person'] == landed and me['accounts'] == 1 and me['merge'] is None
+    with store.engine.connect() as c:
+        assert store.persons._waiting_for(c, ORG, '40') == [] and store.persons._waiting_for(c, ORG, '21') == []
+        assert store.persons.resolve(c, ORG, '21', VICTIM)['id'] == landed
+        assert store.persons.linked(c, ORG, store.persons.resolve(c, ORG, '40')) == ['40']
+    assert store.persons.group(ORG, [{'subject': '40', 'email': ATTACKER, 'email_verified': True}])['40']['accounts'] == ['40']
+    assert _proof(store, VICTIM) == (landed, 'signin:21')        # identity took the address back
+
+
+def test_a_merged_in_address_claims_nothing_for_its_owner_on_the_writers_person(store):
+    """The same move, read through the claim: the victim's sign-in claims a Person of their own, never
+    the writer's, and the writer's profile answer never becomes theirs."""
+    victim = _victim_record(store)
+    _writer(store, '40')
+    mallory = from_validate('t', MALLORY)
+    own = store.ensure_account(ORG, mallory)
+    with store.engine.begin() as c:
+        assert store.profiles.auto_claim(c, ORG, mallory) == own
+    store.profiles.edit(ORG, mallory, {'bio': 'WRITER-BIO'})
+    store.merge(ORG, mallory, victim, own, reason='duplicate')
+    val = from_validate('t', VAL)
+    store.ensure_account(ORG, val)
+    with store.engine.begin() as c:
+        claimed = store.profiles.auto_claim(c, ORG, val)
+    assert claimed not in (None, own)
+    assert store.profiles.mine(ORG, val)['fields'] == {} and not store.profiles.mine(ORG, val).get('via_merge')
+
+
+def test_two_writers_cannot_move_one_writers_address_onto_someone_elses_record(store):
+    """A2-b with two colluding writers: Mallory creates a record carrying Bob's address and merges it
+    into Val's org record; Bob's verified sign-in must neither attach to nor claim Val's record."""
+    victim = _victim_record(store)
+    _writer(store, '40')
+    mallory = from_validate('t', MALLORY)
+    carrier = store.create(ORG, mallory, 'Person', {'Name': 'B'}, reason='dup', idempotency_key='carrier',
+                           match=['email:bob@acme.test'])['record_id']
+    store.merge(ORG, mallory, carrier, victim, reason='duplicate')
+    bob = from_validate('t', BOB)
+    assert store.ensure_account(ORG, bob) != victim
+    with store.engine.begin() as c:
+        assert store.profiles.auto_claim(c, ORG, bob) != victim
+    assert _claim_status(store, bob, victim)['refused'] in (403, 404, 409)
+    assert _claimed_by(store, victim) is None
+    with store.engine.connect() as c:
+        row = c.execute(select(s.records).where(s.records.c.org_id == ORG, s.records.c.id == victim)).mappings().first()
+    assert row['account_id'] is None
+    # the person the org's record is about still takes it at their first verified sign-in
+    val = from_validate('t', VAL)
+    assert store.ensure_account(ORG, val) == victim
+    with store.engine.begin() as c:
+        assert store.profiles.auto_claim(c, ORG, val) == victim
+
+
+def test_a_second_address_listed_at_creation_does_not_join_a_writer_to_the_persons_record(store):
+    """A writer creates Val's record listing Val's address AND one of the writer's own. Val signs in,
+    claims it and keeps a private bio. The writer's sign-in with the listed address proved it only
+    for the writer's account, which the record does not answer to: no link, no merge card, no read."""
+    _writer(store, '40')
+    mallory = from_validate('t', MALLORY)
+    rid = store.create(ORG, mallory, 'Person', {'Name': 'Val Example'}, reason='met', idempotency_key='two',
+                       match=['email:' + VICTIM, 'email:' + MALLORY_TWO['email']])['record_id']
+    val = from_validate('t', VAL)
+    assert store.ensure_account(ORG, val) == rid
+    with store.engine.begin() as c:
+        assert store.profiles.auto_claim(c, ORG, val) == rid
+    store.profiles.edit(ORG, val, {'bio': 'PRIVATE-BIO-7731'})
+    second = from_validate('t', MALLORY_TWO)
+    assert store.ensure_account(ORG, second) != rid
+    mine = store.profiles.mine(ORG, second)
+    assert 'PRIVATE-BIO-7731' not in json.dumps(mine) and not mine.get('via_merge')
+    assert store.profiles.directory(ORG, [{'subject': '41'}])['41'] is None
+    assert store.persons.me(ORG, val)['merge'] is None and store.persons.me(ORG, val)['accounts'] == 1
+
+
+def test_an_imported_record_becomes_the_persons_at_their_verified_sign_in(store):
+    """Item 3, the legitimate path: the org's record of someone who has not signed in carries their
+    address from its creation; the first sign-in identity proves that address for attaches and claims
+    it, and the identifier is proven for that account from then on."""
+    rid = _victim_record(store)
+    val = from_validate('t', VAL)
+    assert store.ensure_account(ORG, val) == rid
+    with store.engine.begin() as c:
+        assert store.profiles.auto_claim(c, ORG, val) == rid
+    assert store.persons.me(ORG, val)['person'] == rid
+
+
+def test_who_set_an_address_is_recorded_and_only_identity_proves_one(store):
+    """``crm_match_ids.proof``: an address given at creation is the record's; a CRM merge carries it
+    without a proof; identity's sign-in proves it for the account."""
+    rid = _victim_record(store)
+    assert _proof(store, VICTIM) == (rid, 'record')
+    _writer(store, '40')
+    mallory = from_validate('t', MALLORY)
+    carrier = store.create(ORG, mallory, 'Person', {'Name': 'B'}, reason='dup', idempotency_key='carrier',
+                           match=['email:bob@acme.test'])['record_id']
+    store.merge(ORG, mallory, carrier, rid, reason='duplicate')
+    assert _proof(store, 'bob@acme.test') == (rid, None)
+    store.ensure_account(ORG, from_validate('t', VAL))
+    assert _proof(store, VICTIM) == (rid, 'signin:21')
+
+
+def test_an_org_record_merged_into_the_persons_own_sign_in_moves_its_data_to_them(store):
+    """The operator's path for a record whose address a merge carried (it binds nobody): the person
+    signs in, gets a Person of their own, and the org merges its record INTO that Person."""
+    victim = _victim_record(store)
+    other = store.create(ORG, ADMIN, 'Person', {'Name': 'Val (old)'}, reason='import', idempotency_key='old')['record_id']
+    store.merge(ORG, ADMIN, victim, other, reason='duplicate')      # the address is carried now
+    val = from_validate('t', VAL)
+    own = store.ensure_account(ORG, val)
+    assert own not in (victim, other)
+    assert store.merge(ORG, ADMIN, other, own, reason='this is Val')['merged_into'] == own
+    assert store.get(ORG, ADMIN, other)['id'] == own
+    with store.engine.connect() as c:
+        assert store.persons.resolve(c, ORG, '21', VICTIM)['id'] == own
+
+
+def test_the_proof_of_an_existing_install_is_filled_once_on_the_upgrade_to_9(store):
+    """Schema 9's backfill: an identifier on a record a CRM merge carried identifiers into binds
+    nobody; one on a record an account answers to is proven for that account; any other is the org's
+    record of someone who has not signed in."""
+    from crm import migrate
+    a = store.create(ORG, ADMIN, 'Person', {'Name': 'A'}, reason='r', idempotency_key='a', match=['email:a@x.test'])['record_id']
+    b = store.create(ORG, ADMIN, 'Person', {'Name': 'B'}, reason='r', idempotency_key='b', match=['email:b@x.test'])['record_id']
+    d = store.create(ORG, ADMIN, 'Person', {'Name': 'D'}, reason='r', idempotency_key='d', match=['email:d@x.test'])['record_id']
+    store.merge(ORG, ADMIN, d, b, reason='duplicate')
+    signed = store.ensure_account(ORG, from_validate('t', {**VAL, 'email': 'v@x.test'}))
+    with store.engine.begin() as c:
+        c.execute(s.match_ids.update().where(s.match_ids.c.org_id == ORG).values(proof=None))   # as before 9
+        migrate.match_proof_9(c)
+    assert _proof(store, 'a@x.test') == (a, 'record')
+    assert _proof(store, 'b@x.test') == (b, None) and _proof(store, 'd@x.test') == (b, None)
+    assert _proof(store, 'v@x.test') == (signed, 'signin:21')
