@@ -1290,6 +1290,7 @@
       "arguments": [
         "draft_id",
         "replace_person_draft",
+        "pressed",
         "recipient",
         "subject",
         "body",

@@ -131,8 +131,11 @@ class GmailDraftUpdate(GmailDraft):
                           description='the draft_id gmail_draft_create returned, or the draft_id gmail_thread gives a '
                                       'draft message')
     replace_person_draft: bool = Field(default=False, description=(
-        'true only when the person asked in this chat to replace a draft Vexa did not create (one they wrote); '
-        'without it such a draft is refused'))
+        'true only when the person pressed a card in this chat asking to replace a draft Vexa did not create '
+        '(one they wrote); without it such a draft is refused'))
+    pressed: str = Field(default='', max_length=128, description=(
+        'with replace_person_draft: the #<pending> of the person\'s press on the ```ask card that names the '
+        'recipient; one press replaces one draft'))
 
 
 class CalendarTimeIn(BaseModel):
@@ -613,7 +616,7 @@ def _with_private_note(response):
                         headers=keep)
 
 
-def build(*, subject_of, wsr=None, settings=None, _global_root=None, _read_target=None, **_):
+def build(*, subject_of, wsr=None, settings=None, _global_root=None, _read_target=None, session_store=None, **_):
     # A TURN OTHER PEOPLE READ (ADR-0048 decision 4) reaches none of this: every route here reads or
     # spends something only its person may see, so the whole router refuses a shared turn's worker.
     router=APIRouter(route_class=_NamedRefusalRoute,
@@ -860,7 +863,7 @@ def build(*, subject_of, wsr=None, settings=None, _global_root=None, _read_targe
         signed=signed_identity(request)
         policy, effective = _authorize(request, actor, signed, action)
         cid=_mailbox(actor, signed, body.connection_id)
-        payload=body.model_dump(exclude={'connection_id','attachments'})
+        payload=body.model_dump(exclude={'connection_id','attachments','pressed'})
         payload['attachments']=_attachments(request, body.attachments, effective)
         payload['policy']=policy
         return call_broker(actor,'POST','/api/connections/'+cid+path,payload,identity=signed)
@@ -883,11 +886,42 @@ def build(*, subject_of, wsr=None, settings=None, _global_root=None, _read_targe
     def draft_update(request: Request, body: GmailDraftUpdate):
         """Replace the content of a Gmail draft Vexa created earlier (the draft_id from gmail_draft_create, or one
         gmail_thread returns). This NEVER sends email. A draft the person wrote themselves is refused unless they
-        asked, in this chat, to replace it: then pass replace_person_draft true. Never set it on your own initiative.
+        asked to replace it: offer a ```ask card naming the recipient (primary "Replace my draft"), and on their
+        press pass replace_person_draft true with `pressed` = the #<pending> of their answer; without that press
+        it is refused (403 press_required). Never set it on your own initiative.
         Send the complete new content: recipient, subject, body, cc, bcc and attachments replace what the draft had.
         Use a new request_id for each change and reuse it only to retry that change.
         Never claim the draft changed unless status is draft_updated."""
+        if body.replace_person_draft:
+            _press_to_replace(request, body)
         return _draft(request, body, 'gmail.draft.update', '/draft-update')
+
+    def _press_to_replace(request: Request, body: GmailDraftUpdate) -> None:
+        """A PERSON'S OWN DRAFT IS REPLACED ONLY ON THE PERSON'S PRESS (D13, 7g). A worker's
+        ``replace_person_draft`` is the model's claim that the person asked; it counts only with
+        ``pressed``: the speaker's own answered card in THIS chat, naming the new recipient on its
+        face, pressed on its primary button, and spent here, so one press replaces one draft. The
+        person's own app needs no press: the request is theirs."""
+        if not ceiling.is_delegated(request):
+            return
+        from control_plane import session_sync  # noqa: PLC0415
+        from control_plane.routers import asks  # noqa: PLC0415
+        from control_plane.routers.chat_read import _unit_session  # noqa: PLC0415
+        subject = str(subject_of(request))
+        chat = _unit_session(identity_token.session_of(request.headers), subject)
+        card = None
+        if session_store is not None and chat and body.pressed:
+            row = session_sync.resolve(session_store, subject, chat, create=False)
+            if row is not None:
+                card = asks.pressed_card(session_store, body.pressed, subject=subject, session_id=row['id'])
+        if (card is None or asks.pressed_choice(card) != 'primary' or not asks.press_names(card, {body.recipient})
+                or not session_store.spend(body.pressed, subject)):
+            raise HTTPException(status_code=403, detail={
+                'refused': 'press_required',
+                'instruction': 'Replacing a draft the person wrote needs their press: offer a ```ask card whose '
+                               'question names the recipient and says their own draft will be replaced, and call '
+                               'this with `pressed` set to the #<pending> of their pressed answer. A typed line, '
+                               'another card, or a press already used replaces nothing.'})
 
     def _calendar(request: Request, body, action: str, fields: dict):
         actor=subject_of(request)
