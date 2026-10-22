@@ -30,6 +30,9 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with include "vexa.extraCA.initContainer" . }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
       containers:
         - name: migrate
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
@@ -37,17 +40,20 @@ spec:
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           command: ["python", "-m", "workspaces.store.migrate", "--source", "/source"]
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             {{- include "vexa.workspaceStore.bucketEnv" . | nindent 12 }}
           volumeMounts:
             - name: source
               mountPath: /source
               readOnly: true
             {{- include "vexa.workspaceStore.caMount" . | nindent 12 }}
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
       volumes:
         - name: source
           persistentVolumeClaim:
             claimName: {{ include "vexa.componentName" (list . "agent-workspaces") }}
             readOnly: true
         {{- include "vexa.workspaceStore.caVolume" . | nindent 8 }}
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
 {{- end }}
 {{- end }}

@@ -37,6 +37,9 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       automountServiceAccountToken: false
+      {{- with include "vexa.extraCA.initContainer" . }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
       containers:
         - name: signals
           {{- if eq (include "vexa.securityContextDeliver" .) "true" }}
@@ -49,6 +52,7 @@ spec:
             - name: http
               containerPort: 8310
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
             - name: REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
@@ -74,6 +78,7 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            {{- with include "vexa.extraCA.mounts" . }}{{ . | trim | nindent 12 }}{{ end }}
           livenessProbe:
             httpGet:
               path: /health
@@ -93,4 +98,5 @@ spec:
               - { key: signals.key, path: key }
         - name: tmp
           emptyDir: {}
+        {{- with include "vexa.extraCA.volumes" . }}{{ . | trim | nindent 8 }}{{ end }}
 {{- end }}

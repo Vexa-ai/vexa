@@ -31,6 +31,9 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with include "vexa.extraCA.initContainer" . }}
+      initContainers:{{ . | trim | nindent 8 }}
+      {{- end }}
       containers:
         - name: model-proxy
           {{- include "vexa.containerSecurityContext" . | nindent 10 }}
@@ -41,6 +44,7 @@ spec:
             - name: http
               containerPort: 8102
           env:
+            {{- with include "vexa.extraCA.env" . }}{{ . | trim | nindent 12 }}{{ end }}
             {{- include "vexa.redisPasswordEnv" . | nindent 12 }}
             - name: VEXA_REDIS_URL
               value: {{ include "vexa.redisUrl" . | quote }}
@@ -67,8 +71,14 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 20
             timeoutSeconds: 5
+          {{- with include "vexa.extraCA.mounts" . }}
+          volumeMounts:{{ . | trim | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.modelProxy.resources | nindent 12 }}
+      {{- with include "vexa.extraCA.volumes" . }}
+      volumes:{{ . | trim | nindent 8 }}
+      {{- end }}
       {{- with .Values.global.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
