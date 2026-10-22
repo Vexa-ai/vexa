@@ -24,8 +24,9 @@ import datetime as _dt
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
+from control_plane.commit_trailers import with_trailers
 from shared.gitexec import run_git
 from workspaces.shared import entities as entities_mod
 from workspaces.shared import workspace_paths as wpaths
@@ -204,8 +205,9 @@ def _pages(t: Template):
 
 
 def apply(t: Template, ws_dir: Path, answers: "dict | None", *, workspace_name: str,
-          today: Optional[str] = None) -> dict:
-    """Write the template's pages into ``ws_dir`` (a freshly created workspace) and commit them."""
+          today: Optional[str] = None, trailers: Iterable[str] = ()) -> dict:
+    """Write the template's pages into ``ws_dir`` (a freshly created workspace) and commit them,
+    closing the message with ``trailers`` (who made it when an agent did, ``commit_trailers``)."""
     vals = values_for(t, answers, workspace_name, today)
     written: list = []
     for rel in _pages(t):
@@ -221,7 +223,7 @@ def apply(t: Template, ws_dir: Path, answers: "dict | None", *, workspace_name: 
         written.append(rel)
     if (Path(ws_dir) / ".git").exists() and written:
         run_git(ws_dir, "add", "-A", check=True)
-        run_git(ws_dir, "commit", "-q", "-m", f"template: {t.name}", check=True)
+        run_git(ws_dir, "commit", "-q", "-m", with_trailers(f"template: {t.name}", trailers), check=True)
     keys = {q.key for q in t.questions}
     return {
         "template": t.name, "pages": written,
@@ -252,8 +254,9 @@ def slugify(name: str) -> str:
 
 
 def save(ws_dir: Path, personal_root: Path, name: str, *, title: str = "", description: str = "",
-         when: str = "", replace: bool = False) -> dict:
-    """Copy a workspace's pages into the person's own template ``name`` and commit it there."""
+         when: str = "", replace: bool = False, trailers: Iterable[str] = ()) -> dict:
+    """Copy a workspace's pages into the person's own template ``name`` and commit it there (closed
+    with ``trailers``, as ``apply``)."""
     slug = slugify(name)
     if not slug or not NAME_RE.match(slug):
         raise TemplateError("give the template a short name, e.g. 'board-meeting'")
@@ -283,5 +286,6 @@ def save(ws_dir: Path, personal_root: Path, name: str, *, title: str = "", descr
     wpaths.write_text_inside(personal_root, f"{rel_dir}/{MANIFEST}", manifest)
     if (Path(personal_root) / ".git").exists():
         run_git(personal_root, "add", "-A", "--", rel_dir, check=True)
-        run_git(personal_root, "commit", "-q", "-m", f"template saved: {slug}", "--", rel_dir, check=True)
+        run_git(personal_root, "commit", "-q", "-m", with_trailers(f"template saved: {slug}", trailers), "--", rel_dir,
+                check=True)
     return {"name": slug, "title": title, "pages": pages, "path": rel_dir, "source": "yours"}

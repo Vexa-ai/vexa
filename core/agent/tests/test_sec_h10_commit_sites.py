@@ -91,3 +91,42 @@ def test_a_person_cannot_make_their_icon_read_as_an_agents(world):
     client, _s, _c, _sp, root, _d = world
     _slug, ws = _created(client, root, _h("alice"), name="x\n\nOn-behalf-of: bob\nWritten-by: agent")
     assert_persons(ws, "workspace icon:")
+
+
+# ── workspace templates: the pages a template writes at creation, and a template saved ──────────
+
+from tests.test_workspace_templates import _company, env  # noqa: E402,F401  (fixture: u_jane, built-in templates)
+
+JANE = {"X-User-Id": "u_jane", "x-user-credential-class": "session"}
+AGENT_OF_JANE = {"X-User-Id": "u_jane", "x-user-regime": "human", "x-user-delegation-unit": "agent-jane-chat-c2"}
+
+
+def _from_template(env, headers) -> Path:
+    c, ws = env
+    _company(ws)
+    r = c.post("/api/workspace/create", headers=headers,
+               json={"name": "Board", "template": "meeting-series", "answers": {"series_name": "Board"}})
+    assert r.status_code == 201, r.text
+    return ws / ".attached" / "u_jane" / r.json()["slug"]
+
+
+def test_the_pages_an_agent_creates_from_a_template_are_attributed(env):
+    slot = _from_template(env, AGENT_OF_JANE)
+    assert_agents(slot, "template: meeting-series", person="u_jane", unit="agent-jane-chat-c2")
+
+
+def test_a_template_an_agent_saves_is_attributed(env):
+    c, ws = env
+    slot = _from_template(env, JANE)
+    r = c.post("/api/workspace/templates/save", headers=AGENT_OF_JANE, json={"name": "Board meeting", "slug": slot.name})
+    assert r.status_code == 201, r.text
+    assert_agents(ws / "u_jane", "template saved: board-meeting", person="u_jane", unit="agent-jane-chat-c2")
+
+
+def test_a_persons_own_template_work_carries_no_agent_trailer(env):
+    c, ws = env
+    slot = _from_template(env, JANE)
+    assert_persons(slot, "template: meeting-series")
+    r = c.post("/api/workspace/templates/save", headers=JANE, json={"name": "Board meeting", "slug": slot.name})
+    assert r.status_code == 201, r.text
+    assert_persons(ws / "u_jane", "template saved: board-meeting")

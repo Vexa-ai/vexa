@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from control_plane import system_mounts
 from control_plane.ceiling import require_in_ceiling
+from control_plane.commit_trailers import writer_trailers
 from control_plane import workspace_templates as tpl
 from control_plane.workspace_attach import create_workspace, workspace_slot_dir
 
@@ -109,7 +110,8 @@ def build(**d) -> APIRouter:
         ws_dir = workspace_slot_dir(wsr.root, subject, result.slug)
         applied = None
         if template is not None:
-            applied = tpl.apply(template, ws_dir, body.answers, workspace_name=name or result.slug)
+            applied = tpl.apply(template, ws_dir, body.answers, workspace_name=name or result.slug,
+                                trailers=writer_trailers(request.headers))
         _ws_sync(result.slug, kind="desk", owner=str(subject), name=name, ws_dir=ws_dir)
         out = {"subject": result.subject, "slug": result.slug, "created": result.slug,
                "name": name or result.slug, "changed": True, "added": True}
@@ -141,7 +143,8 @@ def build(**d) -> APIRouter:
         src = _read_target(request, body.slug)
         try:
             return tpl.save(src, personal, body.name, description=body.description or "",
-                            when=body.when or "", replace=body.replace)
+                            when=body.when or "", replace=body.replace,
+                            trailers=writer_trailers(request.headers))
         except tpl.TemplateError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
 
