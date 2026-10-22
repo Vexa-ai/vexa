@@ -265,9 +265,71 @@ def test_two_writers_racing_for_one_generation_cannot_both_be_acknowledged(tmp_p
     held_b.check = lambda: None
     with pytest.raises(LockLost, match="same time"):
         b.publish("ws", held=held_b)
-    keys = [k for k in bucket.list("repos/ws/@/gen/") if "/000000000002-" in k]
+    keys = [k for k in bucket.list("repos/ws/@/gen/") if "/000000000002-" in k and k.endswith(".json")]
     assert len(keys) == 1
     assert type(a).latest(a, "ws").writer == acked.writer, "the acknowledged generation stays current"
+
+
+def test_a_stale_writers_claim_left_beside_an_acknowledged_generation_is_never_elected(tmp_path, bucket, redis):
+    """A writer acknowledges generation 2 (fence F). A stale writer holding an OLDER fencing token
+    passed its fence check before that (it saw generation 1), PUTs its own claim at generation 2 and
+    dies before it can see the rival and remove its object. Every reader must still elect the
+    acknowledged write; the lowest-token rule alone elected the dead writer's claim."""
+    a = new_pod(tmp_path, bucket, redis, "pod-a")
+    make_repo(a.path("ws"), {"f": "0"})
+    g1 = publish(a, "ws")
+    b = new_pod(tmp_path, bucket, redis, "pod-b")
+    b.hydrate("ws")
+    commit(a.path("ws"), {"f": "acknowledged"}, "a")
+    commit(b.path("ws"), {"f": "stale"}, "b")
+    stale = b.locks.acquire("ws")                   # B takes the lock first (the older token) …
+    redis.delete("wsstore:lock:ws")                 # … and stalls past its TTL
+    acked = publish(a, "ws")                        # A: a newer token, generation 2, acknowledged
+    assert acked.gen == 2 and acked.fence > stale.fence
+
+    class Dies(Exception):
+        pass
+
+    class DyingBucket:
+        """The bucket as the stale pod sees it: the PUT lands, then the pod dies at its next LIST."""
+        def __init__(self, inner):
+            self.inner, self.put_done = inner, False
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def put(self, key, data):
+            self.inner.put(key, data)
+            if "/gen/" in key:
+                self.put_done = True
+
+        def list(self, prefix):
+            if self.put_done:
+                raise Dies("pod killed between its PUT and its rival check")
+            return self.inner.list(prefix)
+
+    b.objects = DyingBucket(bucket)
+    b.latest = lambda rel: g1                       # it passed its fence check on generation 1
+    stale.check = lambda: None
+    with pytest.raises(Dies):
+        b.publish("ws", held=stale)
+    claims = [k for k in bucket.list("repos/ws/@/gen/") if "/000000000002-" in k and k.endswith(".json")]
+    assert len(claims) == 2, claims                 # the dead writer's claim stays in the bucket
+    reader = new_pod(tmp_path, bucket, redis, "reader")
+    assert reader.latest("ws").writer == acked.writer
+    reader.hydrate("ws")
+    assert (reader.path("ws") / "f").read_text() == "acknowledged"
+
+
+def test_with_no_ack_at_the_top_generation_the_lowest_fence_is_elected():
+    """The control: a generation nobody acknowledged yet (a writer between its PUT and its ack)
+    is elected by the lowest token, as before; an ack wins over a lower unacknowledged token."""
+    from workspaces.store.repostore import ack_key, current_key, gen_key
+
+    keys = [gen_key("ws", 1, 1), ack_key("ws", 1, 1), gen_key("ws", 2, 7), gen_key("ws", 2, 3)]
+    assert current_key(keys) == gen_key("ws", 2, 3)
+    assert current_key(keys + [ack_key("ws", 2, 7)]) == gen_key("ws", 2, 7)
+    assert current_key([ack_key("ws", 3, 1)] + keys) == gen_key("ws", 2, 3)   # an ack alone is no generation
 
 
 def test_the_current_generation_is_the_highest_with_the_lowest_fence():

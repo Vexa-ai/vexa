@@ -18,9 +18,12 @@ A publish holds the workspace's Redis lock (``lock.WorkspaceLocks``) and its mon
 fencing token; refuses unless the cache is based on the current generation N (:class:`StaleBase`);
 re-checks the lock; re-reads the current generation and refuses if it moved or carries a newer token
 (a stalled writer that outlived its lock TTL); then PUTs ``gen/<N+1>-<token>.json`` — a key of its own,
-never overwriting anyone — and acknowledges only if that object is ALONE at N+1 afterwards. The
-current generation, for every reader, is the highest one and, within it, the lowest token
-(:func:`current_key`), which is always the acknowledged object when there is one.
+never overwriting anyone — and acknowledges only if that object is ALONE at N+1 afterwards, by
+writing its ACK (``gen/<N+1>-<token>.ack``) before it returns. The current generation, for every
+reader, is the highest one and, within it, the acknowledged object; with no ack at that generation
+(a writer between its PUT and its ack), the lowest token (:func:`current_key`). A stale writer's claim
+that lands beside an acknowledged one — and stays, if that writer dies before removing it — is never
+elected over it.
 
 Every git command runs through ``gitexec`` (no hooks, no helpers). Cache paths are reached through
 ``workspace_paths``; bundles are staged in this process's own temp directory.
@@ -118,11 +121,17 @@ def gen_key(rel: str, gen: int, fence: int = 0) -> str:
     return f"{repo_prefix(rel)}gen/{gen:0{GEN_DIGITS}d}-{fence:0{GEN_DIGITS + 2}d}.json"
 
 
-def parse_gen_key(key: str) -> Optional[tuple[int, int]]:
+def ack_key(rel: str, gen: int, fence: int) -> str:
+    """``gen/<gen>-<fence>.ack``: written once, by the writer of ``gen_key(rel, gen, fence)``, after
+    it found its object alone at that generation and before it acknowledges the write."""
+    return gen_key(rel, gen, fence)[:-len(".json")] + ".ack"
+
+
+def _parse(key: str, suffix: str) -> Optional[tuple[int, int]]:
     name = key.rsplit("/", 1)[-1]
-    if not name.endswith(".json"):
+    if not name.endswith(suffix):
         return None
-    stem = name[:-5]
+    stem = name[:-len(suffix)]
     gen, _, fence = stem.partition("-")
     try:
         return int(gen), int(fence or 0)
@@ -130,16 +139,29 @@ def parse_gen_key(key: str) -> Optional[tuple[int, int]]:
         return None
 
 
+def parse_gen_key(key: str) -> Optional[tuple[int, int]]:
+    return _parse(key, ".json")
+
+
+def parse_ack_key(key: str) -> Optional[tuple[int, int]]:
+    return _parse(key, ".ack")
+
+
 def current_key(keys: list) -> Optional[str]:
-    """THE ELECTION RULE every reader applies: the highest generation; within it, the lowest
-    fencing token. A writer acknowledges only when its object was alone at its generation after its
-    PUT, so whenever an acknowledged object exists it is the one this rule picks."""
+    """THE ELECTION RULE every reader applies: the highest generation; within it, the object whose
+    writer acknowledged it (its ``.ack`` is present), else the lowest fencing token. At most one
+    object per generation is ever acknowledged (a writer acks only when it found its object alone
+    after its PUT), so an acknowledged write is the one elected even when a stale writer's claim
+    lands beside it later — with a lower token — and is never removed."""
     parsed = [(parse_gen_key(k), k) for k in keys]
     parsed = [(g, f, k) for (gf, k) in parsed if gf for g, f in [gf]]
     if not parsed:
         return None
+    acked = {gf for gf in (parse_ack_key(k) for k in keys) if gf}
     top = max(g for g, _, _ in parsed)
-    return min((f, k) for g, f, k in parsed if g == top)[1]
+    at_top = [(f, k) for g, f, k in parsed if g == top]
+    chosen = [(f, k) for f, k in at_top if (top, f) in acked] or at_top
+    return min(chosen)[1]
 
 
 def _git(repo, *args, check=True, **kw):
@@ -419,6 +441,9 @@ class RepoStore:
         back = self.objects.get(key)
         if back is None or Generation.from_bytes(back).writer != nxt.writer:
             raise LockLost(f"{rel}: generation {nxt.gen} was not read back as written")
+        # THE ACK, before anything says the write is done: from here on every reader elects this
+        # object at its generation, whatever stale claim lands beside it afterwards.
+        self.objects.put(ack_key(rel, nxt.gen, held.fence), nxt.writer.encode())
         self._write_marker(rel, nxt)
         if cur is not None and not incremental:
             self._collect(rel, keep=set(bundles), rewrite=replace)
@@ -437,7 +462,7 @@ class RepoStore:
 
     def _trim_gens(self, rel: str, newest: int) -> None:
         for k in self.objects.list(f"{repo_prefix(rel)}gen/"):
-            gf = parse_gen_key(k)
+            gf = parse_gen_key(k) or parse_ack_key(k)
             if gf is None:
                 continue
             n = gf[0]

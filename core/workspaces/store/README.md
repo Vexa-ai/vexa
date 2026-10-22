@@ -13,7 +13,7 @@ cache from the bucket. Bucket unreachable → writes fail loudly (503), reads ar
 |---|---|---|
 | `objects.py` | The bucket port (`get/put/delete/list`), the boto3 adapter for any S3-compatible endpoint (path-style, private CA, optional region, static key), the in-memory double, and the boot self-test | boto3 (lazily) |
 | `lock.py` | The per-workspace Redis write lock and its monotonically increasing fencing token | redis client passed in |
-| `repostore.py` | Bundle chain + one manifest per (generation, fencing token); publish with fence check and generation election (no conditional PUT), hydrate (cold/warm/stub), rollback, worker push/fetch, platform files | `gitexec`, `workspace_paths` |
+| `repostore.py` | Bundle chain + one manifest per (generation, fencing token) and its writer's ack; publish with fence check and generation election — the acknowledged manifest wins its generation (no conditional PUT), hydrate (cold/warm/stub), rollback, worker push/fetch, platform files | `gitexec`, `workspace_paths` |
 | `observer.py` | agent-api's observer on `gitexec` (access hook; lock → fresh → git → publish) and `workspace_paths` (access hook; platform writes published before they return), and `CacheSync` for whole-tree moves | — |
 | `client.py` | A worker's hydrate of its own dispatch's mounts and its push-back observer, over agent-api's store routes. Standard library only | `gitexec`, `workspace_paths` |
 | `cache.py` | agent-api's lazy cache: stubs hydrated on first use (`workspace_paths` / `gitexec` access hooks), LRU eviction under `VEXA_WORKSPACE_CACHE_MAX_BYTES` | `gitexec` |
