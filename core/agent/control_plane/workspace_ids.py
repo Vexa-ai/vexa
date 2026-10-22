@@ -445,12 +445,14 @@ def migrate(root, registry: WorkspaceRegistry, *, created: Optional[str] = None)
     git workspace. Dot-directories are platform plumbing (``.attached``, ``.system``) and the
     reserved system slugs are skipped — see ``_SKIP_SLUGS``.
 
-    PARKED TREES ARE ALSO WALKED (``.attached/<subject>/<slug>``) but only to MINT their id file,
-    never to index them: a parked workspace is not addressable, and a registry row pointing at a
-    slot inside somebody's attach store would resolve links to a tree nobody can open. Minting it
-    now is what makes the id survive the swap that brings it back."""
+    THE ATTACH STORE IS WALKED TOO (``.attached/<subject>/<slug>``). A tree there with no id gets
+    one minted, so the id survives any later move. A tree there whose id the registry does not hold
+    is indexed as its subject's own: a store slot is a member of its owner's flat active set, the
+    agent writes into it, and `private_owner` keeps it readable by that owner alone. Without that
+    row every ``[[page:<slot>/…]]`` the agent writes answers ``gone``. A slot whose slug another
+    live record already holds is left unindexed (a slug names one workspace)."""
     rootp = Path(root)
-    out = {"indexed": [], "minted": [], "parked_minted": [], "dropped": []}
+    out = {"indexed": [], "minted": [], "parked_minted": [], "store_indexed": [], "dropped": []}
     if not rootp.is_dir():
         return out
     # A record no slug can address (a platform directory registered by name, say) is dropped: its
@@ -475,11 +477,23 @@ def migrate(root, registry: WorkspaceRegistry, *, created: Optional[str] = None)
     if store.is_dir():
         for subject_dir in sorted(p for p in store.iterdir() if p.is_dir()):
             for slot in sorted(p for p in subject_dir.iterdir() if p.is_dir() and not p.name.startswith(".")):
-                if read_workspace_json(slot) is not None:
+                found = read_workspace_json(slot)
+                if found is None:
+                    rec, minted = ensure_workspace_json(slot, kind=classify(slot), created=day)
+                    if minted:
+                        out["parked_minted"].append({"slug": slot.name, "subject": subject_dir.name, **rec})
+                    found = rec
+                if registry.get(str(found.get("id") or "")) is not None:
                     continue
-                rec, minted = ensure_workspace_json(slot, kind=classify(slot), created=day)
-                if minted:
-                    out["parked_minted"].append({"slug": slot.name, "subject": subject_dir.name, **rec})
+                holder = registry.by_slug(slot.name)
+                if holder is not None and Path(str(holder.get("dir") or "")).is_dir():
+                    continue
+                if not wpaths.is_workspace_name(subject_dir.name):
+                    continue
+                rec = sync_workspace(rootp, slot.name, registry=registry, owner=subject_dir.name,
+                                     ws_dir=slot, created=day)
+                if rec is not None:
+                    out["store_indexed"].append(rec)
     return out
 
 

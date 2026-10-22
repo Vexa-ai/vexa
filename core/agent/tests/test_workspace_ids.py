@@ -411,3 +411,46 @@ def test_a_membership_check_that_raises_is_not_yours_never_a_500(tmp_path):
         raise RuntimeError("policy store unreadable")
 
     assert ids.access_for(rec, "126", root=tmp_path, is_member=boom) == ids.ACCESS_NOT_YOURS
+
+
+def test_a_store_slot_the_registry_lost_is_indexed_and_its_pages_open_for_its_owner(tmp_path):
+    """Founder, live 2026-10-22: the prep message's `[[page:biz-…/kg/entities/meeting/….md]]` chip
+    read «Unavailable». The page was written and committed in the person's imported workspace, a
+    slot in their attach store, but the registry held no row for that tree's id, and the startup
+    migration never indexed store slots. The migration now indexes such a slot as its owner's."""
+    from control_plane import link_resolver
+
+    _ws(tmp_path, "2")
+    slot = tmp_path / ".attached" / "2" / "biz-b1c87fc32ecb"
+    (slot / "kg" / "entities" / "meeting").mkdir(parents=True)
+    (slot / "kg" / "entities" / "meeting" / "call.md").write_text("# Call with qdsqd\n")
+    wsid.write_workspace_json(slot, id="nljhmutsfa", kind="desk", created="2026-10-07")
+
+    reg = ids.WorkspaceRegistry()
+    out = ids.migrate(tmp_path, reg)
+
+    rec = reg.by_slug("biz-b1c87fc32ecb")
+    assert rec is not None and rec["id"] == "nljhmutsfa" and rec["owner"] == "2"
+    assert Path(rec["dir"]) == slot
+    assert [r["id"] for r in out["store_indexed"]] == ["nljhmutsfa"]
+
+    ref = "ws:nljhmutsfa/kg/entities/meeting/call.md"
+    mine = link_resolver.resolve(ref, subject="2", root=tmp_path, registry=reg)
+    assert mine["access"] == ids.ACCESS_READABLE and mine.get("path") == "kg/entities/meeting/call.md"
+    theirs = link_resolver.resolve(ref, subject="3", root=tmp_path, registry=reg)
+    assert theirs["access"] != ids.ACCESS_READABLE
+
+
+def test_a_store_slot_never_takes_a_slug_a_live_workspace_holds(tmp_path):
+    _ws(tmp_path, "narrative")
+    reg = ids.WorkspaceRegistry()
+    ids.migrate(tmp_path, reg)
+    live = reg.by_slug("narrative")
+    slot = tmp_path / ".attached" / "2" / "narrative"
+    slot.mkdir(parents=True)
+    wsid.write_workspace_json(slot, id="abcdefghij", kind="desk", created="2026-10-07")
+
+    out = ids.migrate(tmp_path, reg)
+
+    assert out["store_indexed"] == []
+    assert reg.by_slug("narrative")["id"] == live["id"]
