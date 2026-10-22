@@ -30,6 +30,7 @@ from control_plane import folder_import as fi
 from control_plane import system_mounts
 from control_plane.api_shared import logger
 from control_plane.ceiling import require_in_ceiling
+from control_plane.commit_trailers import attributed
 from control_plane.workspace_attach import create_workspace, workspace_slot_dir
 from shared.gitexec import run_git
 from workspaces.shared import workspace_paths as wpaths
@@ -258,8 +259,9 @@ def mount(router: APIRouter, *, subject_of: Callable, wsr, settings, write_dir: 
 
     def _commit_as_person(request: Request, base: Path, paths: list, name: str) -> Optional[str]:
         """ONE commit of exactly the imported paths, AUTHORED by the person (the platform commits, the
-        person decided — `workspace_membership.policy_commit_as`, the same split). Staged and committed
-        by pathspec, so nothing else in the index rides along."""
+        person decided — `workspace_membership.policy_commit_as`, the same split), closed with the
+        writer's trailers when their agent finished the import (``commit_trailers``). Staged and
+        committed by pathspec, so nothing else in the index rides along."""
         if not paths or not (base / ".git").is_dir():
             return None
         email = (request.headers.get("x-user-email") or "").strip()
@@ -269,7 +271,8 @@ def mount(router: APIRouter, *, subject_of: Callable, wsr, settings, write_dir: 
         platform = ("-c", "user.name=vexa-platform", "-c", "user.email=platform@vexa.ai")
         run_git(base, "add", "--pathspec-from-file=-", input=spec)
         done = run_git(base, *platform, "commit", "-q", "--author", author,
-                       "-m", f"import folder: {name} ({len(paths)} files)", "--pathspec-from-file=-",
+                       "-m", attributed(f"import folder: {name} ({len(paths)} files)", request.headers),
+                       "--pathspec-from-file=-",
                        input=spec)
         if done.returncode != 0:
             logger.warning("folder import: commit failed in %s: %s", base, (done.stderr or "")[:300])
