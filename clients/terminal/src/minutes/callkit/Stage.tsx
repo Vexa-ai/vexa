@@ -22,10 +22,12 @@ export function CallStage({ people, share, activeId, variant = "dock", narrow, s
 
   if (share) {
     const film = [...others, ...(self ? [self] : [])];
+    // the viewer's own share is "You're presenting", in the header and its accessible name alike
+    const presenting = self && share.by === self.id ? "You're presenting" : `${share.byName} is presenting`;
     return (
       <div className="vx-ck-stage" data-layout="share" data-variant={variant} data-narrow={narrow ? "" : undefined}>
-        <section className="vx-ck-share" aria-label={`${share.byName} is presenting`}>
-          <header className="vx-ck-share-head"><MonitorUp size={12} /> {share.byName} is presenting · {share.title}</header>
+        <section className="vx-ck-share" aria-label={presenting}>
+          <header className="vx-ck-share-head"><MonitorUp size={12} /> {presenting} · {share.title}</header>
           <div className="vx-ck-share-body">{share.content}</div>
         </section>
         <div className="vx-ck-film" aria-label="Participants">
