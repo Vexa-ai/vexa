@@ -2,7 +2,7 @@
 on the person's press.
 
 The flag used to be the model's word that "the person asked in this chat". Now an attended worker's
-call carries ``pressed``: the person's answered ```ask card in THIS chat, naming the new recipient,
+call carries ``pressed``: the person's answered ```ask card in THIS chat, naming the draft and the new recipient,
 pressed on its primary button, spent once. The person's own app needs no press.
 
 Offline: FastAPI over a sqlite session store, the broker replaced by a recorder. No network.
@@ -98,10 +98,26 @@ def test_a_press_on_another_card_or_another_button_replaces_nothing(world):
     assert r.status_code == 403 and _forwarded(calls) == []
 
 
-def test_the_persons_press_replaces_their_draft_once(world):
-    """Positive control: the press naming the recipient lets the worker replace the draft, once."""
+def test_a_press_replaces_only_the_draft_its_card_names(world):
+    """The press is bound to the draft the person reviewed, not only to its recipient: a card naming
+    one draft does not replace another draft to the same recipient, and a card naming no draft
+    replaces none."""
     client, store, chat, calls = world
-    _card(store, chat, "Replace your own draft with the new text to ada@example.test?")
+    _card(store, chat, "Replace your own draft r-person-wrote with the new text to ada@example.test?")
+    pending = _press(client, chat)
+    r = client.post("/api/connections/gmail/draft/update",
+                    json={**BODY, "draft_id": "r-another-draft", "pressed": pending}, headers=_worker(chat))
+    assert r.status_code == 403 and r.json()["detail"]["refused"] == "press_required", r.text
+    _card(store, chat, "Replace your own draft to ada@example.test?", ask_id="replace-2")
+    pending = _press(client, chat, ask_id="replace-2")
+    r = client.post("/api/connections/gmail/draft/update", json={**BODY, "pressed": pending}, headers=_worker(chat))
+    assert r.status_code == 403 and _forwarded(calls) == []
+
+
+def test_the_persons_press_replaces_their_draft_once(world):
+    """Positive control: the press naming the draft and the recipient lets the worker replace it, once."""
+    client, store, chat, calls = world
+    _card(store, chat, "Replace your own draft r-person-wrote with the new text to ada@example.test?")
     pending = _press(client, chat)
     r = client.post("/api/connections/gmail/draft/update", json={**BODY, "pressed": pending}, headers=_worker(chat))
     assert r.status_code == 200, r.text

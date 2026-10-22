@@ -1301,7 +1301,7 @@
           },
           "pressed": {
             "default": "",
-            "description": "with replace_person_draft: the #<pending> of the person's press on the ```ask card that names the recipient; one press replaces one draft",
+            "description": "with replace_person_draft: the #<pending> of the person's press on the ```ask card that names this draft_id and the recipient; one press replaces that one draft",
             "maxLength": 128,
             "title": "Pressed",
             "type": "string"
@@ -3899,7 +3899,7 @@
     },
     "/api/connections/gmail/draft/update": {
       "post": {
-        "description": "Replace the content of a Gmail draft Vexa created earlier (the draft_id from gmail_draft_create, or one\ngmail_thread returns). This NEVER sends email. A draft the person wrote themselves is refused unless they\nasked to replace it: offer a ```ask card naming the recipient (primary \"Replace my draft\"), and on their\npress pass replace_person_draft true with `pressed` = the #<pending> of their answer; without that press\nit is refused (403 press_required). Never set it on your own initiative.\nSend the complete new content: recipient, subject, body, cc, bcc and attachments replace what the draft had.\nUse a new request_id for each change and reuse it only to retry that change.\nNever claim the draft changed unless status is draft_updated.",
+        "description": "Replace the content of a Gmail draft Vexa created earlier (the draft_id from gmail_draft_create, or one\ngmail_thread returns). This NEVER sends email. A draft the person wrote themselves is refused unless they\nasked to replace it: offer a ```ask card naming the draft_id and the recipient (primary \"Replace my draft\"),\nand on their press pass replace_person_draft true with that draft_id and `pressed` = the #<pending> of their\nanswer; without that press it is refused (403 press_required). Never set it on your own initiative.\nSend the complete new content: recipient, subject, body, cc, bcc and attachments replace what the draft had.\nUse a new request_id for each change and reuse it only to retry that change.\nNever claim the draft changed unless status is draft_updated.",
         "requestBody": {
           "content": {
             "application/json": {
