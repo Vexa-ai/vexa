@@ -48,8 +48,9 @@ Where each service applies it:
 |---|---|---|
 | meeting-api (`webhooks/ssrf.py`) | customer webhook, at send; calendar feed fetch | `webhooks/delivery.py`, `__main__.py` (pinned transports), `calendar_sync/adapters.py` |
 | admin-api (`app/ssrf.py`) | saved webhook (`PUT /user/webhook`), saved transcription endpoint (`PUT /user/transcription`), saved calendar feed | `app/main.py`, `app/calendars.py` |
-| agent control plane (`shared/ssrf.py`) | asset and page-image fetches; model endpoint host; repository host; the Settings transcription-endpoint test | `shared/asset_source.py`, `shared/page_images.py`, `control_plane/model_endpoint.py`, `control_plane/repo_ref.py`, `control_plane/config_test.py` |
+| agent control plane (`shared/ssrf.py`) | asset and page-image fetches; model endpoint host; repository host and the git connection (`shared/git_egress.py`); the Settings transcription-endpoint test | `shared/asset_source.py`, `shared/page_images.py`, `control_plane/model_endpoint.py`, `control_plane/repo_ref.py`, `control_plane/config_test.py` |
 | agent worker (`llm/ssrf.py`) | WebFetch | `llm/web_tools.py` |
+| signals (`meeting_signals/ssrf.py`) | the signal model's `base_url` from `_global/POLICIES.md`, on every request | `model.py` |
 | credential broker (`ssrf.py`) | custom-service calls and OAuth exchanges: the host must resolve only to public addresses | `secret_service.py`, `service_oauth.py` |
 | bot (`@vexa/transcribe-whisper` `url-guard.ts`) | the person's own transcription endpoint, on every request (`publicOnly` when the endpoint's owner is the customer) | `transcription-client.ts` |
 
@@ -57,8 +58,10 @@ The deployment's own endpoints (its bundled transcription service, its own model
 operator configuration and are not held to this rule.
 
 **The one operator exception: `OperatorAllowance`.** An operator may name internal hosts and
-networks that ONE kind of fetch may reach, today calendar feeds served inside a corporate network
-(`VEXA_CALENDAR_FEED_ALLOW`, read by meeting-api's ICS fetch and admin-api's save check).
+networks that ONE kind of fetch may reach: calendar feeds served inside a corporate network
+(`VEXA_CALENDAR_FEED_ALLOW`, read by meeting-api's ICS fetch and admin-api's save check), internal
+git mirrors (`VEXA_GIT_ALLOWED_INTERNAL_HOSTS`, agent-api's repository gate and git connection) and
+an internal signal model (`VEXA_SIGNALS_MODEL_ALLOW`, signals).
 `parse_allowance` builds it from deployment configuration and refuses a wildcard, a URL, a malformed
 name, `localhost` and metadata names, and any network overlapping loopback, link-local (cloud
 metadata), unspecified, multicast or reserved addresses. The check never admits those addresses even

@@ -289,7 +289,7 @@
       "enforced": true,
       "canonical": "deploy/contracts/outbound-url.v1/ssrf.py",
       "how_to_agree": "edit the canonical copy in the contract directory and copy it VERBATIM over every other site",
-      "why": "Six spellings of this rule existed (meeting-api's webhook guard, agent-api's asset fetch, the worker's WebFetch, the model-endpoint gate, the repository host check, the credential broker), each reading a different subset of address notations. Five separately-built images fetch user-supplied URLs and may not import each other (P2), so the module is vendored and byte-compared (ADR-0044); its canonical copy lives with the rule, in outbound-url.v1.",
+      "why": "Six spellings of this rule existed (meeting-api's webhook guard, agent-api's asset fetch, the worker's WebFetch, the model-endpoint gate, the repository host check, the credential broker, the signal model endpoint), each reading a different subset of address notations. Six separately-built images fetch user- or admin-supplied URLs and may not import each other (P2), so the module is vendored and byte-compared (ADR-0044); its canonical copy lives with the rule, in outbound-url.v1.",
       "sites": [
         {
           "path": "deploy/contracts/outbound-url.v1/ssrf.py"
@@ -308,6 +308,9 @@
         },
         {
           "path": "core/agent/services/credential-broker/src/credential_broker/ssrf.py"
+        },
+        {
+          "path": "core/signals/src/meeting_signals/ssrf.py"
         }
       ]
     },

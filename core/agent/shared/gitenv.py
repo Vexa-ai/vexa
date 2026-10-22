@@ -10,8 +10,10 @@ discovery scrub below and much more. What remains here is what other code needs 
   pre-push gate run once destroyed a branch: ``.githooks/pre-push`` → ``pnpm gates`` → pytest, and
   a test's ``git add -A && git commit`` in a tmp workspace rewrote the branch being pushed (~180
   junk commits deleting the tree). The test session scrubs these at import (``tests/conftest.py``).
-* ``transport_env`` / ``pinned_git_env`` — the transports a network op may use, derived from the
-  URL it was given (below).
+* ``git_transport`` — what a NETWORK op runs with: the transports it may use, derived from the URL
+  it was given (``transport_env``, below), and the connection pinned to the remote's checked
+  addresses (``shared.git_egress``). Every network call site uses it; ``transport_env`` /
+  ``pinned_git_env`` are its unpinned halves.
 
 (``llm/ports.py`` keeps a small module-local twin of the discovery scrub for the harness CLIs it
 launches — the llm module imports nothing from product code so it stays liftable.)
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import os
 import re
+from typing import NamedTuple
 
 # Every env var that redirects git's repo/worktree/index/object discovery away from cwd.
 GIT_REPO_DISCOVERY_VARS = (
@@ -99,6 +102,38 @@ def transport_env(url: str | None) -> dict[str, str]:
     if ca:
         env["GIT_SSL_CAINFO"] = ca
     return env
+
+
+class GitTransport(NamedTuple):
+    """What ONE network git op adds to :func:`shared.gitexec.run_git`: ``config`` goes before the
+    subcommand (``run_git(cwd, *t.config, "fetch", …)``) and ``env`` into its environment."""
+    env: dict
+    config: tuple
+
+
+def git_transport(url: str | None, *, ssh_command: str | None = None) -> GitTransport:
+    """The transport for a NETWORK git op against ``url``: :func:`transport_env`, plus the remote's
+    host checked and the connection PINNED to the checked addresses (``shared.git_egress``).
+
+    Raises ``shared.git_egress.GitEgressRefused`` — before any git process exists — when the host
+    leads inside the deployment, is not resolvable now, or the operator's allow-list is malformed.
+    ``ssh_command`` is the ``GIT_SSH_COMMAND`` the op would otherwise run (a deploy key's); the
+    pinned command extends it, so the caller passes it here instead of beside the result."""
+    from shared import git_egress    # lazily: git_egress → git_provider → (this module, lazily)
+
+    env = transport_env(url)
+    config: tuple = ()
+    remote = git_egress.remote_of(url)
+    if remote is not None:
+        ips = git_egress.checked_addresses(remote.host, at_connect=True)
+        if ips:
+            if remote.scheme == "ssh":
+                env["GIT_SSH_COMMAND"] = git_egress.pin_ssh_command(remote, ips, ssh_command)
+            else:
+                config = git_egress.pin_config(remote, ips)
+    if ssh_command and "GIT_SSH_COMMAND" not in env:
+        env["GIT_SSH_COMMAND"] = ssh_command
+    return GitTransport(env, config)
 
 
 def _provider_ca(url: str | None) -> str | None:

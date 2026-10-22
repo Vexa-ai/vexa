@@ -35,9 +35,24 @@ def redis_client(url: str):
         retry_on_error=[RedisConnectionError, RedisTimeoutError])
 
 
+def boot_model_allowance(env=None) -> None:
+    """``VEXA_SIGNALS_MODEL_ALLOW`` parsed once at boot: a malformed value refuses the boot naming the
+    entry, rather than refusing every scoring call later (model.py)."""
+    from . import ssrf
+    from .config_preflight import ConfigError
+    from .model import ALLOW_ENV
+
+    env = os.environ if env is None else env
+    try:
+        ssrf.parse_allowance(env.get(ALLOW_ENV, ""), what=ALLOW_ENV)
+    except ValueError as e:
+        raise ConfigError(f"signals refuses to boot: {e}") from None
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     preflight()
+    boot_model_allowance()
 
     me = os.environ.get("SIGNALS_INSTANCE") or f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
     r = redis_client(os.environ.get("REDIS_URL", ""))

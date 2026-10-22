@@ -30,7 +30,8 @@ from typing import Optional
 
 from shared.git_redaction import redact
 from shared.adapters import GitPushError, push_with_token
-from shared.gitenv import transport_env
+from shared.git_egress import GitEgressRefused
+from shared.gitenv import git_transport
 from workspaces.shared import workspace_paths as wpaths
 from shared.gitexec import run_git
 from shared.token_destination import embed_token
@@ -87,13 +88,21 @@ def _git(ws: Path, *args: str, token: Optional[str] = None, check: bool = True,
     the credential for an ``ssh://``/``git@`` home. It rides the ENVIRONMENT, never the URL, so unlike a
     PAT there is nothing to embed, nothing to redact and nothing that can be persisted by accident.
 
-    ``url`` marks this as a NETWORK op and pins git's transport allow-list to what that remote needs —
+    ``url`` marks this as a NETWORK op: git's transport allow-list is pinned to what that remote needs
+    and the connection to the addresses its host was checked at (``shared.gitenv.git_transport``) —
     the home remote was written from a repository the subject supplied at attach time, so it is a
     caller-influenced URL even though it is read back out of ``.git/config``."""
     env = {"GIT_ASKPASS": "true", "GIT_TERMINAL_PROMPT": "0", **(ssh_env or {})}
+    config: tuple = ()
     if url is not None:
-        env.update(transport_env(url))
-    proc = run_git(ws, *args, env=env)
+        # pinned to the addresses the remote's host was checked at, just now (shared.git_egress)
+        try:
+            transport = git_transport(url, ssh_command=env.pop("GIT_SSH_COMMAND", None))
+        except GitEgressRefused as exc:
+            raise RemoteSyncError(str(exc)) from None
+        env.update(transport.env)
+        config = transport.config
+    proc = run_git(ws, *config, *args, env=env)
     if check and proc.returncode != 0:
         raise RemoteSyncError(_redacted(f"git {' '.join(args)} failed: {proc.stderr.strip()}", token))
     return proc

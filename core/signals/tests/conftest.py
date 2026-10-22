@@ -5,6 +5,20 @@ import httpx
 import pytest
 
 
+#: The model endpoints the suite's policies name (``http://m/v1``, ``http://llm/v1`` …) are internal
+#: hosts the operator allowed — the on-prem model server case — reached at a private address. The
+#: tests about the guard itself (``test_model_endpoint_guard.py``) set their own.
+SUITE_MODEL_HOSTS = "m l llm h"
+SUITE_MODEL_ADDRESS = "10.0.0.5"
+
+
+@pytest.fixture(autouse=True)
+def _allowed_suite_model_hosts(monkeypatch):
+    from meeting_signals import model
+    monkeypatch.setenv(model.ALLOW_ENV, SUITE_MODEL_HOSTS)
+    monkeypatch.setattr(model, "resolver", lambda host: [SUITE_MODEL_ADDRESS])
+
+
 def run(coro):
     return asyncio.run(coro)
 

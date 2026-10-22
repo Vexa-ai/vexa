@@ -126,6 +126,7 @@ call, but nothing can be created there and no saved token is sent to it.
 | Setting | Default | Meaning |
 |---|---|---|
 | `agentApi.gitProviders` / `VEXA_GIT_PROVIDERS` | empty (GitHub only) | the list above; the earlier comma form `<host>=gitlab` is still read |
+| `agentApi.gitAllowedInternalHosts` / `VEXA_GIT_ALLOWED_INTERNAL_HOSTS` | empty | internal git hosts (exact names) and networks (CIDR) a repository URL may point at without being a configured provider, such as a read-only mirror. A repository host that resolves to a private address is refused unless it is listed here or is a provider above. |
 
 ## Why it complies
 

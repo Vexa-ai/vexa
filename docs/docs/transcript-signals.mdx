@@ -127,6 +127,15 @@ woken twice for it.
 
 `thinking: off|on` applies to the `openai-compatible` adapter only. Leave it out to use the server's own default.
 
+A `base_url` is held to the same outbound guard as every other URL Vexa fetches for someone else
+(outbound-url.v1). Before each call, signals resolves the host, checks every address, and connects
+to the checked address. A model server inside your network is reached only when the operator names
+it in `VEXA_SIGNALS_MODEL_ALLOW`, as exact host names or networks (`llm.corp.example,10.20.0.0/16`;
+Helm `signals.modelAllow`). This is an environment setting, so `POLICIES.md` cannot widen it.
+Loopback and cloud metadata addresses are never reached. A key from `secret_ref` goes over plain
+`http://` only to a host named there. A refused endpoint is not called: the line is recorded as
+`model_refused` with the reason.
+
 ### Caps
 
 Both caps are checked **before every model call**, per meeting:

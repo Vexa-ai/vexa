@@ -19,14 +19,26 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from dataclasses import asdict, dataclass
 from typing import Optional
+from urllib.parse import urlsplit
 
 import httpx
+
+from . import ssrf
 
 OPENROUTER_DECISIONS = "https://openrouter.ai/api/alpha/decisions"
 TYPESAFE_DIRECT = "https://api.typesafe.ai/v1/systemone"
 OPENROUTER_OPENAI = "https://openrouter.ai/api/v1"
+
+#: The operator's allowance for the signal model's ``base_url`` (env only — never the policy file):
+#: exact host names and CIDR networks an admin-set endpoint may reach inside the network, the
+#: on-prem model server case. Unset admits public addresses only.
+ALLOW_ENV = "VEXA_SIGNALS_MODEL_ALLOW"
+
+#: DNS for the endpoint check; tests replace it.
+resolver = None
 STATE_LIMIT = 60000
 OUT_TOKENS_PER_LABEL = 8
 TIMEOUT_S = 20.0
@@ -138,7 +150,50 @@ def parse_label_json(content: str, labels) -> dict:
     return {k: _probability(data[k]) for k in labels}
 
 
+def endpoint_allowance() -> ssrf.OperatorAllowance:
+    """The operator's :data:`ALLOW_ENV`, read at call time. Malformed is a refusal, never a guess."""
+    try:
+        return ssrf.parse_allowance(os.environ.get(ALLOW_ENV, ""), what=ALLOW_ENV)
+    except ValueError as exc:
+        raise ModelRefused(f"endpoint refused: {exc}") from None
+
+
+def _resolve(host: str):
+    return (resolver or ssrf.resolve_host)(host)
+
+
+def endpoint_refusal(base_url: str, key: Optional[str]) -> Optional[str]:
+    """Why an admin-set ``base_url`` may not carry this call, or ``None``. Static half only — where
+    the host resolves is checked on every request by the pinned transport (:func:`guarded`).
+
+    A key travels in cleartext only to a host the operator named: ``http://`` with a key is refused
+    unless :data:`ALLOW_ENV` names the host (or, for a literal address, its network)."""
+    parts = urlsplit(base_url)
+    host = (parts.hostname or "").lower()
+    if parts.scheme.lower() not in ("http", "https") or not host:
+        return "model_signals.base_url is not an http(s) URL with a host"
+    if parts.scheme.lower() == "http" and key:
+        allow = endpoint_allowance()
+        literal = ssrf.literal_address(host)
+        named = allow.admits_host(host) or (literal is not None and allow.admits_ip(literal))
+        if not named:
+            return (f"model_signals.base_url sends a key over http:// to {host!r}; use https://, or "
+                    f"name the host in {ALLOW_ENV}")
+    return None
+
+
+def guarded(transport=None):
+    """``transport`` (or the default) behind the outbound-URL guard: every request re-resolves the
+    host, checks every address against outbound-url.v1 with the operator's :data:`ALLOW_ENV`, and
+    dials the checked address (Host header and TLS SNI keep the name)."""
+    return ssrf.build_pinned_transport(inner=transport, resolver=_resolve, allow=endpoint_allowance())
+
+
 class OpenAICompatibleAdapter:
+    """``base_url`` comes from ``_global/POLICIES.md`` (admin-written, and writable by the admin's own
+    chat agent). It is a URL somebody else supplied, so it goes through outbound-url.v1 like any
+    other: resolved, checked, pinned on every request, with internal hosts only by the operator's
+    :data:`ALLOW_ENV`. The built-in default endpoint is deployment code and is not guarded."""
     name = "openai-compatible"
 
     def __init__(self, route: str, key: Optional[str], *, base_url: str = "", transport=None,
@@ -146,6 +201,7 @@ class OpenAICompatibleAdapter:
         self.route, self.key, self.transport = route, key, transport
         self.base = (base_url or OPENROUTER_OPENAI).rstrip("/")
         self.thinking = thinking
+        self.admin_endpoint = bool((base_url or "").strip())
 
     def payload(self, instructions: dict, new: Line, context: list) -> dict:
         user = json.dumps({"labels": instructions, "transcript": json.loads(state_json(new, context))},
@@ -161,11 +217,19 @@ class OpenAICompatibleAdapter:
     async def score(self, instructions: dict, new: Line, context: list) -> Scored:
         payload = self.payload(instructions, new, context)
         headers = {"Authorization": f"Bearer {self.key}"} if self.key else {}
+        transport = self.transport
+        if self.admin_endpoint:
+            reason = endpoint_refusal(self.base, self.key)
+            if reason:
+                raise ModelRefused(f"endpoint refused: {reason}")
+            transport = guarded(transport)
         try:
-            async with httpx.AsyncClient(transport=self.transport, timeout=TIMEOUT_S) as client:
+            async with httpx.AsyncClient(transport=transport, timeout=TIMEOUT_S) as client:
                 r = await client.post(self.base + "/chat/completions", json=payload, headers=headers)
         except httpx.HTTPError as exc:
             raise ModelUnavailable(type(exc).__name__) from None
+        except ssrf.SSRFError as exc:
+            raise ModelRefused(f"endpoint refused: model_signals.base_url — {exc}") from None
         _status(r)
         try:
             body = r.json()

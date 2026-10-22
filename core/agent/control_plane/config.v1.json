@@ -575,6 +575,16 @@
       ]
     },
     {
+      "key": "VEXA_GIT_ALLOWED_INTERNAL_HOSTS",
+      "class": "defaulted",
+      "default": "(empty — no internal git host is reachable)",
+      "description": "operator allowance for workspace repositories on an internal git host (shared/git_egress.py): exact host names and IP networks (CIDR), comma- or space-separated (git.corp.example, 10.20.0.0/16). A repository host is resolved and every address checked against the outbound URL guard (deploy/contracts/outbound-url.v1); a private, link-local (cloud metadata), CGNAT or loopback answer is refused unless the host or the address's network is listed, and git's connection is pinned to the checked addresses (http.curloptResolve; ssh HostName with HostKeyAlias). Loopback, link-local/cloud metadata, unspecified, multicast and reserved addresses are never admitted, and an entry overlapping them, a wildcard, a URL or a malformed name refuses the boot. A host configured in VEXA_GIT_PROVIDERS is the operator's already and needs no entry",
+      "targets": [
+        "compose",
+        "helm"
+      ]
+    },
+    {
       "key": "VEXA_ALLOW_LOCAL_REPO_ROOT",
       "class": "defaulted",
       "default": "(unset)",

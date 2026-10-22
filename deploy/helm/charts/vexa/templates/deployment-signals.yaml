@@ -72,6 +72,9 @@ spec:
               value: {{ include "vexa.credentialBrokerUrl" . | quote }}
             - name: VEXA_SIGNALS_BROKER_KEY_FILE
               value: /run/vexa-connections/signals/key
+            # internal hosts/networks the signal model's base_url may reach (meeting_signals/model.py)
+            - name: VEXA_SIGNALS_MODEL_ALLOW
+              value: {{ .Values.signals.modelAllow | default "" | quote }}
           volumeMounts:
             - name: signals-key
               mountPath: /run/vexa-connections/signals

@@ -28,7 +28,8 @@ from typing import Optional, Protocol
 
 import yaml
 
-from shared.gitenv import transport_env
+from shared.git_egress import GitEgressRefused
+from shared.gitenv import git_transport
 from shared.gitexec import run_git
 from shared.models import WorkspaceWrite
 from shared.ports import IdentityPort, RuntimePort, SchedulerPort, StreamReader, VcsPort, WorkspacePort
@@ -67,12 +68,19 @@ def _git(cwd: Path, *args: str, token: str | None = None, url: str | None = None
     hook-exported GIT_DIR can never re-point the workspace op at the hook's repo.
 
     ``url`` marks this call as a NETWORK op against that remote and pins git's transport allow-list
-    to what the URL legitimately needs, so a remote reference can never reach a transport that runs a
+    to what the URL legitimately needs and the connection to the remote's checked addresses
+    (``git_transport``), so a remote reference can never reach a transport that runs a
     command (``ext::``) or reads this host's disk (``file://``)."""
     env = {"GIT_ASKPASS": "true"} if token is not None else {}
+    config: tuple = ()
     if url is not None:
-        env.update(transport_env(url))
-    proc = run_git(cwd, *args, env=env)
+        try:
+            transport = git_transport(url)
+        except GitEgressRefused as exc:
+            raise RuntimeError(f"git {args[0] if args else ''} refused: {exc}") from None
+        env.update(transport.env)
+        config = transport.config
+    proc = run_git(cwd, *config, *args, env=env)
     if proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc.stdout.strip()
@@ -207,8 +215,9 @@ class RealGitWorkspace(WorkspacePort):
             return
         # Local clone (file path or file:// URL) — derived from parent git_clone_init. The transport
         # allow-list is pinned to what this reference needs; `--` keeps a leading `-` a repository.
-        run_git(None, "clone", "--", repo_url, str(self.work_dir), env=transport_env(repo_url),
-                check=True)
+        transport = git_transport(repo_url)
+        run_git(None, *transport.config, "clone", "--", repo_url, str(self.work_dir),
+                env=transport.env, check=True)
         name, email = self._identity
         _git(self.work_dir, "config", "user.name", name)
         _git(self.work_dir, "config", "user.email", email)

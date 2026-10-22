@@ -51,10 +51,11 @@ shape list was written down:
   credential cannot reach ``git clone`` through the MCP, a future route, or a test that forgot. The
   host check is duplicated the same way, for the same reason (``assert_public_host``).
 
-**What this module does NOT close, stated plainly:** a DNS name that resolves to an internal address
-(``localtest.me``, a rebinding record) passes ``_host_is_internal``, because the check is on the name
-and the resolution happens inside git. Closing that needs resolution-time enforcement (resolve, check
-every answer, pin the connection), which is a different mechanism than a string check.
+**DNS is checked, and the connection pinned.** A dotted name is resolved and every answer checked
+(``_host_is_internal``); the connection resolves once more, checks again and pins git to exactly
+those addresses (``shared.gitenv.git_transport``), so a record rebound between this gate and the
+clone reaches nothing. An internal mirror is the operator's to name, in
+``VEXA_GIT_ALLOWED_INTERNAL_HOSTS`` (``shared.git_egress``).
 """
 from __future__ import annotations
 
@@ -63,7 +64,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from shared import git_provider, ssrf
+from shared import git_egress, git_provider
 from shared.git_redaction import TOKEN_PREFIXES, looks_like_token
 
 #: The one sentence a person sees when they paste a credential where a repository goes. It says what
@@ -195,20 +196,19 @@ def _host_is_internal(host: str) -> bool:
       ``admin-api``, ``redis`` and ``meeting-api`` belong to. ``localhost`` (and ``*.localhost``)
       and the cloud metadata names included.
 
-    A DOTTED name is left alone even when it is obviously internal (``git.internal:8080`` is an
-    accepted self-hosted mirror in this codebase's own fixtures): a name with a dot is one somebody
-    configured, and refusing it would break the self-host case to close nothing the two rules above
-    leave open — the compose neighbours all answer to bare labels."""
-    h = _bare_host(host)
-    if not h:
+    A DOTTED name is resolved, and every address it resolves to is held to the same list: a name
+    that leads to a private, link-local, CGNAT or loopback address (``localtest.me``,
+    ``git.corp.example`` → ``10.0.0.7``) is refused unless the operator named it, or its network,
+    in ``VEXA_GIT_ALLOWED_INTERNAL_HOSTS``. A host the operator configured as a git provider is
+    theirs to name wherever it lives (an in-cluster GitLab answers to a bare label). A name that
+    does not resolve passes here — there is nothing to fetch — and the connection, which resolves,
+    checks and pins again (``shared.gitenv.git_transport``), refuses it if it still does not.
+    The rules live in ``shared.git_egress`` so this gate and the connection cannot disagree."""
+    try:
+        git_egress.checked_addresses(_bare_host(host), at_connect=False)
+    except git_egress.GitEgressRefused:
         return True
-    # A host the OPERATOR configured as a git provider is theirs to name, wherever it lives (an
-    # in-cluster GitLab answers to a bare label): the configuration, not the request, decides it.
-    if any(p.host == h for p in git_provider.registry().all()):
-        return False
-    if ssrf.literal_address(h) is not None:
-        return ssrf.is_blocked_ip(h)
-    return ssrf.is_blocked_hostname(h)    # a bare label: only resolvable inside the deployment
+    return False
 
 
 def _checked_host(host: str) -> str:

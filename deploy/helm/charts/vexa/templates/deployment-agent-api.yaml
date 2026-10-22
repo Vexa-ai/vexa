@@ -244,6 +244,9 @@ spec:
               {{- else }}
               value: {{ .Values.agentApi.gitProviders | default "" | quote }}
               {{- end }}
+            # Internal git hosts and networks a workspace repository may reach (shared/git_egress.py).
+            - name: VEXA_GIT_ALLOWED_INTERNAL_HOSTS
+              value: {{ .Values.agentApi.gitAllowedInternalHosts | default "" | quote }}
             {{- with .Values.models.catalog }}
             # The model catalog (models.v1 Catalog, ADR-0043): the providers and models people pick
             # per chat. Refused whole at boot when anything in it is wrong. It holds no credential:

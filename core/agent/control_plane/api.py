@@ -1382,6 +1382,15 @@ def _build_production_app() -> FastAPI:
     # or whose workers will have NO model credentials says so in the boot log and on /health,
     # instead of failing at first chat with 'Model inference failed: Not logged in'.
     preflight()
+    # The internal git allowance is parsed once here so a malformed value refuses the boot, naming
+    # the entry, instead of refusing every internal mirror at the first clone (shared/git_egress.py).
+    from shared import ssrf as _ssrf  # noqa: PLC0415
+    from shared.git_egress import ALLOWED_INTERNAL_HOSTS_ENV as _git_allow_env  # noqa: PLC0415
+    try:
+        _ssrf.parse_allowance(os.environ.get(_git_allow_env, ""), what=_git_allow_env)
+    except ValueError as e:
+        from control_plane.config_preflight import ConfigError  # noqa: PLC0415
+        raise ConfigError(f"agent-api refuses to boot: {e}") from None
 
     settings = load_settings()
     runtime_token = settings.runtime_api_token.get_secret_value()

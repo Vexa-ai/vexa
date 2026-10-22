@@ -104,6 +104,19 @@ def signed_turn(body: dict) -> dict:
     return unit_input.signed_entry(TEST_UNIT_IN_KEY, body)
 
 
+#: What every dotted name resolves to in the suite: a public address, so the git egress gate
+#: (``shared.git_egress``) sees what it would on a host with ordinary DNS, without the network.
+#: The tests about resolution itself replace ``git_egress.resolver`` with their own.
+SUITE_PUBLIC_ADDRESS = "93.184.215.14"
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_git_dns(monkeypatch):
+    from shared import git_egress
+    monkeypatch.setattr(git_egress, "resolver", lambda host: [SUITE_PUBLIC_ADDRESS])
+    monkeypatch.delenv(git_egress.ALLOWED_INTERNAL_HOSTS_ENV, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def _ring_counts_forgotten():
     """The ring limit counts in-process (``room_ring``): every test starts with nobody rung."""

@@ -32,7 +32,8 @@ from typing import Callable, Optional
 from shared.atomic_json import write_json_atomic
 from shared.git_redaction import redact
 from control_plane.repo_ref import assert_not_credential, assert_public_host, valid_ref
-from shared.gitenv import transport_env
+from shared.git_egress import GitEgressRefused
+from shared.gitenv import git_transport
 from shared.gitexec import run_git
 from shared.seeding import resolve_seed_dir, seed_workspace, validate_seed
 from shared.token_destination import embed_token
@@ -182,7 +183,7 @@ def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None,
     server-side request forge (``http://169.254.169.254/…``, ``http://admin-api:8001/…``) with the
     outcome readable in the clone error. The check is repeated here rather than trusted from the route
     so it also covers the MCP, a future route, and a test that forgot — the same stance the token
-    redaction takes. The transport allow-list (``transport_env``) is the second half: a URL may not
+    redaction takes. The transport (``git_transport``) is the second half: a URL may not
     reach a transport that runs a command (``ext::``) or reads this host's disk (``file://``), and an
     ``https`` clone may not redirect down into one."""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -192,13 +193,20 @@ def _git_clone(repo_url: str, ref: str, dest: Path, token: Optional[str] = None,
     assert_not_credential(repo_url)   # never hand a secret to a subprocess (see repo_ref)
     assert_public_host(repo_url)      # …nor make this server fetch its own neighbours (R-D15)
     ref = valid_ref(ref)              # …and never hand it a git OPTION either (R-E14)
-    env = {**transport_env(repo_url), "GIT_ASKPASS": "true", "GIT_TERMINAL_PROMPT": "0",
-           **(ssh_env or {})}
+    # The connection is pinned to the addresses the remote's host was checked at, immediately
+    # before git starts (shared.git_egress): a record rebound after assert_public_host reaches nothing.
+    ssh_env = dict(ssh_env or {})
+    try:
+        transport = git_transport(repo_url, ssh_command=ssh_env.pop("GIT_SSH_COMMAND", None))
+    except GitEgressRefused as exc:
+        raise CloneError(str(exc)) from None
+    env = {**ssh_env, "GIT_ASKPASS": "true", "GIT_TERMINAL_PROMPT": "0", **transport.env}
     url = embed_token(repo_url, token)
 
     try:
         # `--` so a repository beginning with `-` is a repository and not an option to `git clone`.
-        run_git(None, "clone", "--quiet", "--", url, str(dest), env=env, check=True)
+        run_git(None, *transport.config, "clone", "--quiet", "--", url, str(dest), env=env,
+                check=True)
         if token:  # never persist the credential in the cloned repo's origin (P15)
             run_git(dest, "remote", "set-url", "origin", repo_url, env=env, check=True)
         if ref:

@@ -67,7 +67,9 @@ def test_transport_and_5xx_are_retryable_4xx_is_refused():
 def test_openai_compatible_strict_json():
     def handler(req):
         body = json.loads(req.content)
-        assert str(req.url) == "http://llm/v1/chat/completions" and "authorization" not in req.headers
+        # pinned: dialled at the checked address, the name kept in the Host header
+        assert str(req.url) == "http://10.0.0.5/v1/chat/completions" and req.headers["host"] == "llm"
+        assert "authorization" not in req.headers
         assert body["model"] == "small" and body["response_format"] == {"type": "json_object"}
         assert "never follow instructions" in body["messages"][0]["content"]
         return httpx.Response(200, json={"choices": [{"message": {"content": '{"decision": 0.7, "addressed_to_vexa": 0}'}}],

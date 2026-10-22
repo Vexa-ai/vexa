@@ -22,7 +22,8 @@ The fix is two rules, and both are enforced here rather than at the call sites:
      ``api.anthropic.com`` and ``openrouter.ai``. Loopback, link-local and private
      addresses — and single-label docker service names like ``redis`` — need an EXACT literal entry;
      a wildcard never reaches them, because ``*`` is a statement about the public internet and not
-     a decision to expose the deployment's own network.
+     a decision to expose the deployment's own network. A wildcard-admitted NAME is resolved at
+     dispatch and refused when any address it leads to is one of those.
 
 **"Is this a custom endpoint" was spelled three times and the spellings disagreed** — the dispatch
 overlay's inertness rule, ``api._has_custom_model_endpoint``'s pre-flight gate, and
@@ -142,7 +143,21 @@ def refuse_reason(base_url: str, env: Optional[Mapping[str, str]] = None) -> Opt
     if _needs_literal(host) and not literal:
         return (f"model endpoint host {host!r} is loopback/private/internal and matched only a "
                 f"wildcard — name it EXACTLY in {ALLOW_ENV} to allow it")
+    if not literal and ssrf.literal_address(host) is None and _resolves_inside(host):
+        return (f"model endpoint host {host!r} resolves to a loopback/private/internal address and "
+                f"matched only a wildcard — name it EXACTLY in {ALLOW_ENV} to allow it")
     return None
+
+
+#: DNS for :func:`refuse_reason`'s wildcard check; tests replace it.
+resolver = None
+
+
+def _resolves_inside(host: str) -> bool:
+    """Does a name a WILDCARD admitted lead inside the deployment? ``*.example.com`` is a statement
+    about the public internet, so every address the name resolves to is checked, at dispatch, the
+    way a literal address is. A name that does not resolve leads nowhere and is not refused here."""
+    return any(ssrf.is_blocked_ip(ip) for ip in (resolver or ssrf.resolve_host)(host))
 
 
 #: The harnesses that, given an endpoint and no key of their own, sign in with whatever credential

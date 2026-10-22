@@ -905,6 +905,11 @@ agentApi:
   # The earlier comma form "<host>=gitlab,<host>=basic:<username>" is still read. A malformed value
   # stops agent-api at boot.
   gitProviders: ""
+  # Internal git hosts (exact names) and networks (CIDR) a workspace repository may live on — a mirror
+  # inside your network — as VEXA_GIT_ALLOWED_INTERNAL_HOSTS, comma-separated. Empty: a repository
+  # whose host resolves to a private, link-local or CGNAT address is refused. Loopback and cloud
+  # metadata are never admitted; a malformed value stops agent-api at boot.
+  gitAllowedInternalHosts: ""
   extraEnv: []
 
 # ---------- Connections: the credential broker (credential-broker.v1, ADR-0040) ----------
@@ -926,6 +931,9 @@ signals:
     tag: ""                 # empty → the chart's release, v<appVersion> (never a moving tag)
   # flows-api's address, where wakes go (POST /events/signal). Empty: no flows here, wakes are dropped.
   flowsApiUrl: ""
+  # Internal hosts (exact names) and networks (CIDR) the signal model's base_url (_global/POLICIES.md)
+  # may reach — an on-prem model server — as VEXA_SIGNALS_MODEL_ALLOW. Empty: public addresses only.
+  modelAllow: ""
   resources: {}
 credentialBroker:
   enabled: true                 # takes effect only with agentApi.enabled

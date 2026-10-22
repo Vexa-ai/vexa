@@ -103,7 +103,9 @@ _OWNED_ENV = frozenset({
 
 #: The only ``-c`` keys a caller may add (lower-cased). Everything else is this module's.
 #: ``transfer.fsckobjects`` only tightens: the workspace store checks every object a worker pushes.
-_CALLER_CONFIG = frozenset({"user.name", "user.email", "transfer.fsckobjects"})
+#: ``http.curloptresolve`` only tightens as well: it pins a remote's name to the addresses the caller
+#: already checked (``shared.git_egress``), so a rebinding record is never followed.
+_CALLER_CONFIG = frozenset({"user.name", "user.email", "transfer.fsckobjects", "http.curloptresolve"})
 
 # ── the repository's own config: what may stay ─────────────────────────────────────────────────
 _LOCAL_ALLOWED = re.compile(

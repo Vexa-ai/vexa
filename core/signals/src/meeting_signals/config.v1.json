@@ -59,6 +59,13 @@
       "targets": ["compose"]
     },
     {
+      "key": "VEXA_SIGNALS_MODEL_ALLOW",
+      "class": "defaulted",
+      "default": "(empty — public addresses only)",
+      "description": "operator allowance for the signal model's base_url set in _global/POLICIES.md (model.py): exact host names and IP networks (CIDR), comma- or space-separated (llm.corp.example, 10.20.0.0/16) — the on-prem model server case. Every request to an admin-set base_url re-resolves the host, checks every address against the outbound URL guard (deploy/contracts/outbound-url.v1) and dials the checked address; an internal address is admitted only through this list, and loopback, link-local/cloud metadata, unspecified, multicast and reserved addresses never are. A key travels over plain http:// only to a host named here. An entry overlapping a never-allowed range, a wildcard, a URL or a malformed name refuses the boot. Env only: the policy file cannot widen it",
+      "targets": ["compose", "helm"]
+    },
+    {
       "key": "SIGNALS_USD_PER_MTOK",
       "class": "defaulted",
       "default": "2.0",

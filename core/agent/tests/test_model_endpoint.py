@@ -338,3 +338,32 @@ def test_extra_body_is_stamped_exactly_once(monkeypatch):
     env = _overlay({"mode": "custom", "base_url": ALLOWED, "api_key": "k",
                     "extra_body": '{"chat_template_kwargs": {"enable_thinking": false}}'})
     assert env["VEXA_LLM_EXTRA_BODY"] == '{"chat_template_kwargs": {"enable_thinking": false}}'
+
+
+@pytest.mark.parametrize("answer", [["10.0.0.7"], ["169.254.169.254"], ["127.0.0.1"], ["100.64.0.1"],
+                                    ["93.184.215.14", "192.168.1.9"]])
+def test_a_wildcard_admitted_name_that_resolves_inside_is_refused_at_dispatch(answer, monkeypatch):
+    """`*.example.com` admits names on the public internet. A name under it that leads to a private
+    or metadata address is refused at dispatch, as the literal address would be (the worker's own
+    client then never dials it). DNS is replaced at socket level."""
+    import socket
+
+    def getaddrinfo(host, *a, **kw):
+        if host == "evil.vllm.example.test":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 0)) for ip in answer]
+        raise socket.gaierror(socket.EAI_NONAME, "unknown")
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    env = {model_endpoint.ALLOW_ENV: "*.vllm.example.test"}
+    assert model_endpoint.refuse_reason("https://evil.vllm.example.test/v1", env=env) is not None
+    # positive control: the operator naming it exactly is the operator's decision
+    exact = {model_endpoint.ALLOW_ENV: "evil.vllm.example.test"}
+    assert model_endpoint.refuse_reason("https://evil.vllm.example.test/v1", env=exact) is None
+
+
+def test_a_wildcard_admitted_name_that_resolves_publicly_is_allowed(monkeypatch):
+    import socket
+    monkeypatch.setattr(socket, "getaddrinfo", lambda host, *a, **kw: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.215.14", 0))])
+    env = {model_endpoint.ALLOW_ENV: "*.vllm.example.test"}
+    assert model_endpoint.refuse_reason("https://good.vllm.example.test/v1", env=env) is None
