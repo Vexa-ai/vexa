@@ -3,7 +3,8 @@
 A worker talks to Redis for exactly four keys of its own unit: it reads ``unit:<id>:in``, appends to
 ``unit:<id>:out``, records how far it has read in ``unit:<id>:cursor``, and reads its current
 delegation token at ``unit:<id>:delegation`` (agent-api replaces it before it expires,
-``delegation_refresh``). It is given a Redis user that can do that and nothing else — no other key,
+``delegation_refresh``); it also reads, never writes, its privacy marks and who reads each of its
+mounts now (``vexa:audience:unit:<id>``, ``shared.audience``). It is given a Redis user that can do that and nothing else — no other key,
 no pub/sub channel, no admin command, and only read access to its own input stream (agent-api is that
 stream's one writer) and to its delegation key (agent-api publishes it) — instead of the service
 connection agent-api itself uses. Every other unit's streams, every meeting's transcript
@@ -35,6 +36,7 @@ import time
 from typing import Callable, Iterable, Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
+from shared import audience
 from shared import stream_bounds
 from shared import taint as taint_mod
 from shared.units import (delegation_key, inbox_cursor_key, input_topic, output_topic, send_now_key,
@@ -105,6 +107,8 @@ def acl_rules(unit_id: str, password: str, *, read_only_input: bool = True) -> l
             # conversation are read-only here; the worker writes only its own observations
             + [read_only + _glob_literal(k) for k in taint_mod.keys_for(unit_id)[:2]]
             + [f"~{_glob_literal(taint_mod.keys_for(unit_id)[2])}"]
+            # WHO READS EACH MOUNT NOW (`shared.audience`): agent-api writes it, the commit hold reads it
+            + [read_only + _glob_literal(audience.unit_key(unit_id))]
             + ["resetchannels", "-@all"]
             + [f"+{c}" for c in WORKER_COMMANDS])
 

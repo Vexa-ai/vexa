@@ -4,8 +4,9 @@
 as ``/agent/workspace-store/*`` for a worker's own delegation token (``routes.v1.json``,
 ``delegation``). On the volume backend both answer 404 ``volume_backend``: the worker's workspaces
 are bind mounts and there is nothing to fetch. On the s3 backend a worker fetches and pushes only
-the mounts its own dispatch recorded (``workspace_store_service.record_unit_mounts``), pushes only
-writable ones, fast-forward only, never touching ``policy/``, ``.vexa/``, ``.claude/`` or ``.git``
+the mounts its own dispatch recorded (``workspace_store_service.record_unit_mounts``) — a shared
+workspace only while the roster still names the subject (re-read on every request, so a removed
+member is refused at once) — pushes only writable ones, fast-forward only, never touching ``policy/``, ``.vexa/``, ``.claude/`` or ``.git``
 in any case; a push answers 200 only once the new generation is durable in the bucket.
 
 A PUSH IS HELD TO THE PRIVATE-WRITE RULE HERE (D6, SC4). Every file each pushed commit writes passes
@@ -18,8 +19,10 @@ data cannot carry it into a workspace others read by committing it itself. A hel
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from control_plane import private_taint
+from control_plane import workspace_membership as membership
 from control_plane import workspace_store_service as svc
 from control_plane.workspace_membership import POLICY_UNREADABLE, MembershipError
 from fastapi import APIRouter, HTTPException, Request
@@ -67,6 +70,8 @@ def build(**d) -> APIRouter:
         if write and not mount.get("write"):
             raise HTTPException(status_code=403, detail={"refused": "read_only",
                                                         "message": "That workspace is mounted read-only."})
+        if mount.get("member_of"):
+            _still_member(subject, str(mount["member_of"]), write=write)
         root = os.path.realpath(str(run.store.cache_root))
         real = os.path.normpath(os.path.join(root, os.path.relpath(path, settings.workspaces_dir))) \
             if settings is not None else os.path.normpath(path)
@@ -74,6 +79,21 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=403, detail={"refused": "outside_store",
                                                         "message": "That path is outside the workspace store."})
         return real[len(root.rstrip("/")) + 1:]
+
+    def _still_member(subject: str, workspace: str, *, write: bool) -> None:
+        """A mount granted by membership is used only while the roster still grants it: a member
+        removed (or made a viewer) after the dispatch fetches and pushes nothing more, at once."""
+        try:
+            role = membership.is_member(Path(_policy_root()), workspace, subject)
+        except MembershipError as exc:
+            raise HTTPException(status_code=503, detail={
+                "refused": POLICY_UNREADABLE,
+                "message": "Who may use this workspace could not be checked, so nothing was done."}) from exc
+        if role is None or (write and role not in ("contributor", "owner")):
+            raise HTTPException(status_code=403, detail={
+                "refused": "not_a_member" if role is None else "read_only",
+                "message": "You are no longer a member of that workspace." if role is None
+                else "That workspace is read-only for you now."})
 
     def _policy_root() -> str:
         """The store root the membership policy lives under — the one every access decision reads."""

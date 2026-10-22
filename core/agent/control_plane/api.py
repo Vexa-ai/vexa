@@ -1175,12 +1175,19 @@ def create_app(
     # that nothing reads for access, and caller routes cannot reach policy/ at all. Index =
     # users.data.memberships[] over the injected port. INVITES live at <root>/.invites/<workspace_id>.json
     # (Vexa-ai/vexa#1645). is_member(workspace_id, subject) -> role|None is the seam Lane A calls.
-    # Legacy in-tree rosters are adopted into the store ONCE, here at start, so the read-compatible
-    # window lasts no longer than the boot (workspace_membership.migrate_policy_store).
+    # Legacy in-tree rosters are adopted into the store ONCE, here at start, and the store records it:
+    # no tree is read for policy after this (workspace_membership.migrate_policy_store).
     try:
         membership_mod.migrate_policy_store(wsr.root)
-    except Exception as _exc:  # noqa: BLE001 — never block boot; each read still adopts on demand
+    except Exception as _exc:  # noqa: BLE001 — never block boot; an unadopted workspace refuses its members
         logging.getLogger(__name__).warning("policy store migration at start failed: %s", _exc)
+    # A roster change reaches every running unit that mounts the workspace at once (M2-b): the
+    # audience its worker's commit hold reads is re-read from the store (mount_audience).
+    from control_plane import mount_audience as _mount_audience  # noqa: PLC0415
+
+    membership_mod.set_roster_listener(
+        lambda _root, _ws: _mount_audience.refresh(dispatcher._redis(), _root, _ws)
+        if hasattr(dispatcher, "_redis") else None)
     # M2: notification rows written before 0.13.4 hold the invite TOKEN in their link; rewrite them to
     # the invite's id once, at start (idempotent).
     if notifier is not None:

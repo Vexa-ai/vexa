@@ -96,18 +96,28 @@ def mount_key(unit_id: str) -> str:
     return f"wsstore:unit:{unit_id}"
 
 
+#: The mount role a shared workspace's membership grants (``workspace_attach.SHARED_ROLE``).
+_MEMBER_MOUNT = "shared"
+
+
 def record_unit_mounts(r, unit_id: str, subject: str, env: dict) -> None:
     """Record what ``unit_id``'s worker may fetch and push: its subject and its mount set
-    (``VEXA_MOUNTS``: path + write). Only on the s3 backend. Never raises; a unit with no record
-    fetches and pushes nothing (fail closed)."""
+    (``VEXA_MOUNTS``: path + write). A mount the subject has only as a MEMBER of a shared workspace
+    names that workspace (``member_of``): the record is what the dispatch was granted, and the store
+    routes re-read the roster on every fetch and push, so a member removed after the dispatch reaches
+    nothing more. Only on the s3 backend. Never raises; a unit with no record fetches and pushes
+    nothing (fail closed)."""
     if _running is None:
         return
     try:
         mounts = json.loads(env.get("VEXA_MOUNTS") or "[]")
     except ValueError:
         mounts = []
+    person = not env.get("VEXA_PRINCIPAL")
     record = {"subject": str(subject),
-              "mounts": [{"path": m["path"], "write": bool(m.get("write", True))}
+              "mounts": [{"path": m["path"], "write": bool(m.get("write", True)),
+                          **({"member_of": str(m.get("slug") or os.path.basename(str(m["path"])))}
+                             if person and m.get("role") == _MEMBER_MOUNT else {})}
                          for m in mounts if isinstance(m, dict) and m.get("path") and not m.get("source")]}
     if r is None:
         _local_mounts[unit_id] = record

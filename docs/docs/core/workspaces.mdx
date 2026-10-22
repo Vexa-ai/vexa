@@ -479,7 +479,10 @@ an S3-compatible bucket is the **single durable truth** and every pod copy is a 
    through the gateway with its delegation token; before each turn it fetches what changed. Each
    commit in a writable mount is pushed to `POST /agent/workspace-store/push` before `run_git` returns,
    so the turn's commit event comes after agent-api has made it durable. A refused push un-commits
-   locally and the turn reports the write as not saved. agent-api refuses a push whose commits touch
+   locally and the turn reports the write as not saved. A shared workspace is fetched and pushed only
+   while its roster still names the worker's person, read again on every fetch and push: a member
+   removed after the dispatch is refused at once (403 `not_a_member`), and one made a viewer may still
+   fetch but not push (403 `read_only`). agent-api refuses a push whose commits touch
    `policy/`, `.vexa/`, `.claude/` or `.git` in any letter case (403 `reserved_path`), and holds it to
    the private-write rule: when the session read the person's private data and someone else reads the
    workspace, every file version a pushed commit writes is checked as a page write, and a held one

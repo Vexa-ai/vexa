@@ -507,6 +507,64 @@ def test_a_push_touching_a_reserved_path_in_any_case_is_refused(stack, tmp_path,
     assert stack.run.store.latest("17").gen == 1
 
 
+# ── Low (gate 0.13.4 final, car 43): a removed member pushes nothing more, at once ──────────────
+
+BOB_UNIT = "agent-bob-chat-c9"
+
+
+def _bob_on_team(stack, role="contributor"):
+    from control_plane import workspace_store_service as svc
+    root = stack.cache
+    m.store_put(root, "team", "members", [{"subject": "17", "role": "owner"},
+                                          {"subject": "bob", "role": role}])
+    svc.record_unit_mounts(None, BOB_UNIT, "bob", {"VEXA_MOUNTS": json.dumps(
+        [{"slug": "team", "path": f"{root}/team", "role": "shared", "write": True}])})
+
+
+def _bob(stack, verb, **kw):
+    path = f"{stack.cache}/team"
+    if verb == "fetch":
+        return stack.client.get("/api/workspace-store/fetch", params={"path": path},
+                                headers=headers(unit=BOB_UNIT, subject="bob"))
+    return stack.client.post("/api/workspace-store/push", params={"path": path, "base": kw["base"]},
+                             content=kw["data"], headers=headers(unit=BOB_UNIT, subject="bob"))
+
+
+def test_a_member_removed_after_the_dispatch_pushes_and_fetches_nothing_more(stack, tmp_path):
+    _bob_on_team(stack)
+    got = _bob(stack, "fetch")
+    assert got.status_code == 200
+    base, _new, data = _worker_commit(tmp_path, got.content, {"notes/bob.md": "after I left\n"})
+    gen = stack.run.store.latest("team").gen
+    m.store_put(stack.cache, "team", "members", [{"subject": "17", "role": "owner"}])   # bob removed
+    r = _bob(stack, "push", base=base, data=data)
+    assert r.status_code == 403 and r.json()["detail"]["refused"] == "not_a_member", r.text[:300]
+    assert stack.run.store.latest("team").gen == gen
+    assert _bob(stack, "fetch").status_code == 403
+
+
+def test_a_member_made_a_viewer_after_the_dispatch_pushes_nothing_more(stack, tmp_path):
+    _bob_on_team(stack)
+    base, _new, data = _worker_commit(tmp_path, _bob(stack, "fetch").content, {"notes/bob.md": "x\n"})
+    gen = stack.run.store.latest("team").gen
+    m.store_put(stack.cache, "team", "members", [{"subject": "17", "role": "owner"},
+                                                 {"subject": "bob", "role": "viewer"}])
+    r = _bob(stack, "push", base=base, data=data)
+    assert r.status_code == 403 and r.json()["detail"]["refused"] == "read_only", r.text[:300]
+    assert stack.run.store.latest("team").gen == gen
+    assert _bob(stack, "fetch").status_code == 200                      # a viewer still reads
+
+
+def test_a_member_still_on_the_roster_pushes(stack, tmp_path):
+    """Control: nothing changed after the dispatch; bob's push lands."""
+    _bob_on_team(stack)
+    base, _new, data = _worker_commit(tmp_path, _bob(stack, "fetch").content, {"notes/bob.md": "x\n"})
+    gen = stack.run.store.latest("team").gen
+    r = _bob(stack, "push", base=base, data=data)
+    assert r.status_code == 200, r.text[:300]
+    assert stack.run.store.latest("team").gen == gen + 1
+
+
 # ── M2-b on the volume backend: the worker's commit hold counts agent-api's read of the roster ────
 
 def _volume_turn(tmp_path, env_readers, *, tree_members=None):
@@ -563,6 +621,101 @@ def test_each_turn_brings_a_fresh_audience(tmp_path):
     assert guard.readers(shared) == []
     guard.set_audience({str(shared): ["dana@example.com"]})
     assert guard.readers(shared) == ["dana@example.com"]
+
+
+# ── M2-b freshness (gate 0.13.4 final, car 43): the audience is as fresh as the commit ──────────
+
+def _live_turn(tmp_path, during):
+    """A worker of unit ``agent-7-chat-live`` (its own Redis, ``configure_worker``) mounts ``meetup``,
+    a shared workspace only 7 reads at the dispatch. Its turn reads mail, writes a page into meetup,
+    and ``during(root)`` runs WHILE the turn runs (a roster change). Returns (held, meetup commits,
+    the turn's events)."""
+    import fakeredis
+    from llm import private_writes
+    from llm.ports import run_harness_turn
+    from llm.private_writes import Guard
+    from tests.test_private_writes_commit import AUTHOR as WAUTHOR, OWNER, _Harness, _log, _repo
+    root, unit = tmp_path, "agent-7-chat-live"
+    desk, shared = _repo(root / OWNER), _repo(root / "meetup")
+    m.store_put(root, "meetup", "members", [{"subject": OWNER, "role": "owner"},
+                                            {"subject": "8", "role": "contributor"}])
+    fake = fakeredis.FakeRedis(decode_responses=True)
+    stamp = {str(desk): [], str(shared): []}            # the dispatch's read: only 7 (and 8, below)
+    mounts = [{"path": str(desk), "role": "private", "write": True},
+              {"path": str(shared), "role": "shared", "write": True}]
+    try:
+        from control_plane import mount_audience
+    except ImportError:                                 # a tree without the live audience
+        mount_audience = None
+    if mount_audience is not None:
+        mount_audience.publish(fake, root, unit, OWNER, mounts, stamp)
+        m.set_roster_listener(lambda r_, ws: mount_audience.refresh(fake, r_, ws))
+    private_writes.configure_worker(fake, unit)
+    try:
+        guard = Guard.from_env({"VEXA_OWNER": OWNER, "VEXA_MOUNT_READERS": json.dumps(stamp)},
+                               [{"path": str(desk)}, {"path": str(shared)}])
+
+        class _MidTurn(_Harness):
+            def run_turn(self, work, prompt, **kw):
+                for ev in super().run_turn(work, prompt, **kw):
+                    if ev.get("type") == "done":
+                        during(root)
+                    yield ev
+        h = _MidTurn("mcp__vexa__gmail_search", [(shared / "notes/bank.md", "Invoice 4471-2210")])
+        events = list(run_harness_turn(desk, "go", h, extra_mounts=[shared], private_guard=guard,
+                                       author=WAUTHOR))
+    finally:
+        private_writes.configure_worker(None, "")
+        if hasattr(m, "set_roster_listener"):
+            m.set_roster_listener(None)
+    return [e for e in events if e["type"] == "write-withheld"], _log(shared), events
+
+
+def test_a_member_added_while_the_turn_runs_holds_its_commit(tmp_path):
+    """The dispatch saw only the person; dana joins meetup mid-turn: the commit is held on dana."""
+    def add_dana(root):
+        rows = m.read_members(root, "meetup")
+        m.write_policy(root, "meetup", "members",
+                       rows + [{"subject": "dana", "email": "dana@example.com", "role": "viewer"}])
+    held, commits, _ev = _live_turn(tmp_path, add_dana)
+    assert held and "dana@example.com" in held[0]["readers"], held
+    assert commits == 1, "nothing committed into meetup"
+
+
+def test_with_no_roster_change_the_turn_commits_as_before(tmp_path):
+    """Control: nobody joined; the dispatch's audience still holds (only the person reads)."""
+    held, commits, _ev = _live_turn(tmp_path, lambda root: None)
+    assert held == [] and commits == 2
+
+
+def test_a_member_removed_while_the_turn_runs_commits_nothing_there(tmp_path, monkeypatch):
+    """The unit's subject leaves meetup mid-turn: the turn's change there is put back, not committed
+    (the volume backend's half of 'a removed member pushes nothing more')."""
+    from tests.test_private_writes_commit import OWNER
+    def remove_owner(root):
+        m.write_policy(root, "meetup", "members", [{"subject": "8", "role": "owner"}])
+    held, commits, events = _live_turn(tmp_path, remove_owner)
+    assert commits == 1
+    refused = [e for e in events if e.get("type") == "write-refused"]
+    assert refused and refused[0]["paths"] == ["notes/bank.md"], events
+    assert not (tmp_path / "meetup" / "notes" / "bank.md").exists()
+    assert OWNER not in [r["subject"] for r in m.read_members(tmp_path, "meetup")]
+
+
+def test_an_audience_that_cannot_be_reread_holds_every_mount(tmp_path, monkeypatch):
+    """Fail closed: the roster change could not be re-read for the unit: unknown, held."""
+    from llm.private_writes import READERS_UNKNOWN
+
+    def add_with_store_down(root):
+        rows = m.read_members(root, "meetup")
+        m.store_put(root, "meetup", "members", rows + [{"subject": "dana", "role": "viewer"}])
+        m.set_policy_store(_DownStore())
+        try:
+            m._roster_changed(root, "meetup") if hasattr(m, "_roster_changed") else None
+        finally:
+            m.set_policy_store(None)
+    held, commits, _ev = _live_turn(tmp_path, add_with_store_down)
+    assert held and held[0]["readers"] == [READERS_UNKNOWN] and commits == 1, held
 
 
 def test_the_dispatch_stamps_each_mounts_readers_from_the_registry(tmp_path):

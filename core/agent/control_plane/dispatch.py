@@ -1699,6 +1699,14 @@ class Dispatcher:
         # Keyed to the subject the worker's token names — the store routes compare it with
         # `x-user-id` — which for a room's turn is the workspace's own principal, not the owner.
         _ws_store.record_unit_mounts(self._redis(), uid, self._token_subject(env, identity["subject"]), env)
+        # WHO READS EACH MOUNT, AS OF NOW, where the worker reads it at its commit: re-written by
+        # every roster change while the unit runs (`mount_audience`), so a member added mid-turn
+        # counts at once and a member removed mid-turn commits nothing more into it.
+        from control_plane import mount_audience  # noqa: PLC0415
+
+        mount_audience.publish(self._redis(), Path(self._settings.workspaces_dir), uid,
+                               str(env.get("VEXA_OWNER") or ""), json.loads(env.get("VEXA_MOUNTS") or "[]"),
+                               json.loads(env.get("VEXA_MOUNT_READERS") or "null"))
         if invocation.get("trigger") == "signal" or units.is_mail_unit(uid):
             # THE ONE PAGE THIS SIGNAL'S TURN MAY WRITE, recorded against its unit before anything
             # is delivered (`signal_scope`): no page, no write — every write is then a proposal.

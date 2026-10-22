@@ -12,10 +12,14 @@ straight onto its mounts, and those writes meet the platform only at the post-tu
   private data — are written to the one taint key the worker may write, so a worker idle exit or a
   respawn forgets nothing. A mark that cannot be read counts as held (fail closed).
 * at the commit, a marked session's changes to a mount whose readers are not only the person are NOT
-  committed. The readers are the ones agent-api read from the membership store for the dispatch
-  (``VEXA_MOUNT_READERS``) and again for every turn it hands this worker (the entry's ``readers``),
-  never the tree's ``policy/members.json`` mirror. A mount it did not answer for, or could not read,
-  is held.
+  committed. The readers are the ones agent-api read from the membership store AS OF THE COMMIT: its
+  unit key (``shared/audience``), which it writes at the dispatch and re-writes the moment a roster
+  changes, so a member added while the turn runs counts at once. Without that key (no Redis), the
+  dispatch's stamp (``VEXA_MOUNT_READERS``) and the turn's (the entry's ``readers``) decide. Never the
+  tree's ``policy/members.json`` mirror. A mount agent-api did not answer for, or could not read, is
+  held, and so is every mount while the key cannot be read.
+* a mount whose membership grant was REVOKED while the unit runs (the key's ``revoked``) commits
+  nothing: the turn's changes there are put back and the turn says so.
 * WHAT IS HELD NEVER LANDS ON A DESK (H7). It is handed to agent-api by reference (a hand-back key
   of this unit, short TTL), which keeps it ENCRYPTED and off every mount (``control_plane/held_store``)
   for the person's share card; the mount is put back as it was, and the turn says what it withheld,
@@ -155,7 +159,7 @@ class Guard:
     """One worker's view: which private data its session read (persisted), and where held writes go."""
 
     def __init__(self, owner: str, held_root: Optional[Path] = None, *, unit: str = "",
-                 store=None, handback=None, audience=None):
+                 store=None, handback=None, audience=None, live=None):
         # ``held_root`` is accepted for callers of the pre-0.13.4 shape and ignored: nothing held is
         # ever written to a desk again (H7).
         self.owner = str(owner or "")
@@ -163,6 +167,7 @@ class Guard:
         self.store = store                  # shared.taint.TaintStore over the worker's Redis, or None
         self.handback = handback            # (code, payload) -> ref | None
         self.audience = audience_of(audience)     # {mount path: other readers | None}, from agent-api
+        self.live = live                          # () -> the unit's audience key now (shared/audience)
         self._marked: dict[str, float] = {}
         self._released: dict[str, set] = {}       # mount path -> paths the person released this turn
         self._fp = Fingerprint()                  # what the private reads gave the agent (digests)
@@ -190,7 +195,12 @@ class Guard:
             except Exception:  # noqa: BLE001 — nothing kept; the turn says to ask again
                 log.warning("held write %s could not be handed to agent-api", code)
                 return None
-        return cls(owner, unit=unit, store=TaintStore(client), handback=handback, audience=audience)
+        from shared import audience as audience_key  # noqa: PLC0415
+
+        def live():
+            return audience_key.decode(client.get(audience_key.unit_key(unit)))
+        return cls(owner, unit=unit, store=TaintStore(client), handback=handback, audience=audience,
+                   live=live)
 
     # ── who else reads ──────────────────────────────────────────────────────────────────────────
     def set_audience(self, raw) -> None:
@@ -200,12 +210,49 @@ class Guard:
         if found is not None:
             self.audience = found
 
+    def _now(self) -> Optional[dict]:
+        """The unit's audience key as agent-api last wrote it; None when there is none (the stamp
+        decides); ``unknown`` when it cannot be read."""
+        if self.live is None:
+            return None
+        try:
+            return self.live()
+        except Exception:  # noqa: BLE001 — an audience that cannot be read holds every mount
+            return {"readers": {}, "revoked": set(), "unknown": True}
+
     def readers(self, mount: Path) -> list[str]:
-        """Who besides the person reads ``mount``: what agent-api read from the membership store for
-        this dispatch. The tree's ``policy/members.json`` is a mirror and is never counted. A mount
-        agent-api did not answer for, or could not read, has unknown readers and is held."""
+        """Who besides the person reads ``mount``, NOW: what agent-api last read from the membership
+        store for this unit — re-read by every roster change — else this turn's stamp. The tree's
+        ``policy/members.json`` is a mirror and is never counted. A mount agent-api did not answer
+        for, or could not read, has unknown readers and is held."""
+        now = self._now()
+        if now is not None:
+            if now.get("unknown"):
+                return [READERS_UNKNOWN]
+            found = (now.get("readers") or {}).get(str(Path(mount)))
+            return found if isinstance(found, list) else [READERS_UNKNOWN]
         found = (self.audience or {}).get(str(Path(mount)))
         return found if isinstance(found, list) else [READERS_UNKNOWN]
+
+    def revoked(self, mount: Path) -> bool:
+        """Was the subject's membership grant on ``mount`` revoked while this unit runs?"""
+        now = self._now()
+        return bool(now) and str(Path(mount)) in (now.get("revoked") or set())
+
+    def discard_revoked(self, mount: Path) -> Optional[dict]:
+        """Put back every change the turn made to ``mount`` when its grant was revoked; nothing of it
+        is committed. Returns ``{workspace, paths}`` or None."""
+        mount = Path(mount)
+        if not self.revoked(mount) or not wpaths.is_dir_inside(mount, ".git", allow=(".git",)):
+            return None
+        paths = _changed(mount)
+        for rel in paths:
+            run_git(mount, "reset", "-q", "HEAD", "--", rel)
+            if _in_head(mount, rel):
+                _git(mount, "checkout", "HEAD", "--", rel)
+            else:
+                wpaths.unlink_inside(mount, rel, allow=_VEXA)
+        return {"workspace": mount.name, "paths": paths}
 
     # ── marking ──────────────────────────────────────────────────────────────────────────────────
     def observe(self, ev: dict) -> None:
@@ -355,6 +402,13 @@ def withheld_line(held: dict) -> str:
             f"above. This chat read your private "
             f"{' and '.join(held['sources'])}, and {held['workspace']} is also read by {who}, so "
             f"nothing was written there.{how}")
+
+
+def revoked_line(dropped: dict) -> str:
+    """What the person reads when a turn's changes to a workspace they left were not committed."""
+    pages = ", ".join(dropped["paths"][:5]) + (" …" if len(dropped["paths"]) > 5 else "")
+    return (f"\n\nNot saved to {dropped['workspace']}: {pages} — you are no longer a member who may "
+            f"write there, so nothing was written.")
 
 
 def released_line(rows: Iterable[dict]) -> str:

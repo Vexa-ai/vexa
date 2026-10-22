@@ -1138,6 +1138,18 @@ def run_harness_turn(
         if reverted:
             yield {"type": "policy-reverted", "paths": reverted}
         if private_guard is not None:
+            # A MEMBERSHIP REVOKED WHILE THE TURN RAN commits nothing there (agent-api's audience key).
+            try:
+                dropped = private_guard.discard_revoked(mount) if hasattr(private_guard, "discard_revoked") else None
+            except (OSError, ValueError, subprocess.CalledProcessError):
+                logging.getLogger(__name__).exception("revoked-mount check failed on %s — nothing committed there", mount.name)
+                continue
+            if dropped is not None:
+                if dropped["paths"]:
+                    from llm.private_writes import revoked_line  # noqa: PLC0415
+                    yield {"type": "write-refused", "reason": "membership_revoked", **dropped}
+                    yield {"type": "message-delta", "text": revoked_line(dropped)}
+                continue
             try:
                 held = private_guard.hold(mount)
             except (OSError, ValueError, subprocess.CalledProcessError):
