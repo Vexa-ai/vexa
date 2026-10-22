@@ -74,7 +74,7 @@
     },
     {
       "id": "fact-envelope",
-      "fact": "event.v2's sealed fact envelope: canonical form, per-producer key, seal and verify (who a fact reaches, D8)",
+      "fact": "event.v2's sealed fact envelope: canonical form, the signed message, seal and verify over injected producer keys (who a fact reaches, D8)",
       "kind": "file-bytes",
       "enforced": true,
       "canonical": "core/flows/contracts/event.v2/fact_envelope.py",
@@ -89,6 +89,26 @@
         },
         {
           "path": "core/flows/src/flows/fact_envelope.py"
+        }
+      ]
+    },
+    {
+      "id": "fact-keys",
+      "fact": "event.v2's producer keys: each producer's own Ed25519 private key, and the verifier's public keys per producer",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/flows/contracts/event.v2/fact_keys.py",
+      "how_to_agree": "edit the contract's fact_keys.py and copy it VERBATIM over every vendored copy; the crm outbox suite and the flows D8 suite must stay green",
+      "why": "the crm outbox signs with what this file loads and flows-api verifies with what it loads, in two separately-built images (P2). A loader that drifted on one side would refuse every sealed fact, or read a key the other side never wrote.",
+      "sites": [
+        {
+          "path": "core/flows/contracts/event.v2/fact_keys.py"
+        },
+        {
+          "path": "core/crm/src/crm/fact_keys.py"
+        },
+        {
+          "path": "core/flows/src/flows_integrations/fact_keys.py"
         }
       ]
     },

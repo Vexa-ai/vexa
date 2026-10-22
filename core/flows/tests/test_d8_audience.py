@@ -6,7 +6,8 @@ event.v2 envelope; flows verifies the seal and admits a person's flow when the p
 subject (`refs.uid`) or in the audience. A caller cannot claim an audience: `_audience` in refs is
 stripped, and an envelope that does not verify is a 403, never an unsigned admission. The seal is
 bound to the fact it rides on and expires, so a sealed audience cannot be lifted onto another
-subject, record or event, nor replayed later; and it is keyed by its own secret only.
+subject, record or event, nor replayed later; and it verifies only under the named producer's own
+public key, so one producer's key cannot speak for another and flows holds nothing that can seal.
 
 OFFLINE: sqlite double, FakeClock, flows-api in process. Synthetic ids only.
 """
@@ -21,8 +22,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from fastapi.testclient import TestClient  # noqa: E402
 from fixtures import rig  # noqa: E402
+from cryptography.hazmat.primitives import serialization  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 from flows import admit  # noqa: E402
 from flows import fact_envelope as fe  # noqa: E402
+from flows_integrations import fact_keys as fk  # noqa: E402
 from flows.admission import audience_of, owner_of, reaches  # noqa: E402
 
 # Same literals as test_sec_deny_2026_10_17.py: `flows_api` captures them at import and whichever
@@ -46,7 +50,14 @@ from sqlite_double import SqliteDB  # noqa: E402
 if not isinstance(getattr(fa, "db", None), SqliteDB):
     fa.db = SqliteDB()
 
-SEAL = "test-seal-secret"
+def _pem() -> bytes:
+    return Ed25519PrivateKey.generate().private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+
+
+CRM_KEY, MEETINGS_KEY, ROGUE_KEY = _pem(), _pem(), _pem()
+SEAL = fk.load_signer(CRM_KEY)
+CHECKS = {"crm": fk.load_check(fk.public_pem(CRM_KEY))}
 V, D, X, W = "301", "302", "399", "ws:acme-sales"       # decider, waiting person, outsider, workspace
 EVENT = "crm.record.changed"
 REFS = {"org_id": "org-acme", "record_id": "card-7", "revision": 4, "uid": V}
@@ -56,9 +67,9 @@ ENVELOPE = {"v": 2, "producer": "crm", "object": "card", "owner": D, "visibility
                           "next_check_at": "2026-10-18T09:00:00+00:00", "handoff": "accepted"}}
 
 
-def _seal(env=ENVELOPE, secret=SEAL, *, source_event_id, refs=REFS, event_type=EVENT, now=None):
+def _seal(env=ENVELOPE, sign=SEAL, *, source_event_id, refs=REFS, event_type=EVENT, now=None):
     """The envelope sealed over the fact `{event_type, source_event_id, refs}` it is posted with."""
-    return fe.seal(env, secret, fe.fact(event_type, source_event_id, refs), now=now)
+    return fe.seal(env, sign, fe.fact(event_type, source_event_id, refs), now=now)
 
 
 def _body(source_event_id, refs=REFS, **seal):
@@ -82,7 +93,7 @@ def _admitted(db) -> set:
 def test_a_sealed_audience_admits_the_waiting_person_and_nobody_outside_it():
     db, reg, clock = _people_rig()
     the_fact = fe.fact(EVENT, "e19", REFS)
-    sealed = fe.verify(fe.seal(ENVELOPE, SEAL, the_fact), SEAL, {"crm"}, the_fact)
+    sealed = fe.verify(fe.seal(ENVELOPE, SEAL, the_fact), CHECKS, {"crm"}, the_fact)
     assert admit(db, reg, clock, source_event_id="e19", event_type=EVENT, subject_refs=dict(REFS),
                  sealed=sealed) == 1
     assert _admitted(db) == {f"user:{D}/card-watch"}
@@ -121,8 +132,12 @@ def test_the_owner_is_the_sealed_owner_else_the_subject():
 
 # ── the intake, over HTTP ─────────────────────────────────────────────────────────────────────
 @pytest.fixture
-def api(monkeypatch):
-    monkeypatch.setenv("VEXA_FACT_SEAL_SECRET", SEAL)
+def api(monkeypatch, tmp_path):
+    keys = tmp_path / "fact-verify-keys"
+    keys.mkdir()
+    (keys / "crm.pem").write_bytes(fk.public_pem(CRM_KEY))
+    (keys / "meetings.pem").write_bytes(fk.public_pem(MEETINGS_KEY))
+    monkeypatch.setenv("VEXA_FACT_VERIFY_KEYS_DIR", str(keys))
     for owner in (D, X):
         fa.db.execute("DELETE FROM flow_version WHERE scope = :s", {"s": f"user:{owner}"})
         fa.db.execute("INSERT INTO flow_version (scope, name, version, on_event, cron, steps, params, "
@@ -173,20 +188,45 @@ def test_deny_19_a_tampered_envelope_is_refused_403_and_admits_nobody(api, tampe
     assert _people_admitted() == set()
 
 
-def test_an_envelope_sealed_under_another_secret_is_refused(api, monkeypatch):
-    body = _body("d8-other-secret", secret="not-the-deployment-secret")
+def test_an_envelope_sealed_under_another_key_is_refused(api):
+    body = _body("d8-other-key", sign=fk.load_signer(ROGUE_KEY))
     assert api.post("/events", json=body, headers=KEY).status_code == 403
     assert _people_admitted() == set()
 
 
-def test_deny_with_no_seal_env_the_internal_secret_verifies_nothing(api, monkeypatch):
-    """The seal secret is its own credential: a fact sealed under the internal-tier secret is
-    refused when the seal secret is unset, and so is everything else."""
-    monkeypatch.delenv("VEXA_FACT_SEAL_SECRET", raising=False)
+def test_deny_a1_the_crm_key_cannot_seal_a_meetings_fact(api):
+    """A1: an envelope signed with the CRM's key that names `producer: meetings` is refused, though
+    meetings' public key is installed and the CRM's verifies (positive control: the same envelope
+    signed with meetings' own key is admitted)."""
+    as_meetings = {**ENVELOPE, "producer": "meetings"}
+    forged = _body("d8-a1-forged", env=as_meetings)
+    r = api.post("/events", json=forged, headers=KEY)
+    assert r.status_code == 403, r.text[:300]
+    assert r.json()["detail"] == {"refused": "envelope_unverified"}
+    assert _people_admitted() == set()
+    genuine = _body("d8-a1-genuine", env=as_meetings, sign=fk.load_signer(MEETINGS_KEY))
+    assert api.post("/events", json=genuine, headers=KEY).status_code == 202
+    assert _people_admitted() == {f"user:{D}/card-watch"}
+
+
+def test_deny_a1_a_producer_with_no_public_key_verifies_nothing(api):
+    """`agent` is on the allow-list but has no `agent.pem`: its envelopes are refused, whatever key
+    signed them."""
+    for i, key in enumerate((CRM_KEY, MEETINGS_KEY, ROGUE_KEY)):
+        body = _body(f"d8-a1-agent-{i}", env={**ENVELOPE, "producer": "agent"}, sign=fk.load_signer(key))
+        assert api.post("/events", json=body, headers=KEY).status_code == 403
+    assert _people_admitted() == set()
+
+
+def test_deny_with_no_verify_keys_nothing_verifies_and_no_secret_opens_it(api, monkeypatch):
+    """The verify keys are their own configuration: with `VEXA_FACT_VERIFY_KEYS_DIR` unset, a
+    correctly sealed fact is refused, and neither the internal secret nor a shared seal secret
+    stands in for the keys."""
+    monkeypatch.delenv("VEXA_FACT_VERIFY_KEYS_DIR", raising=False)
     monkeypatch.setenv("INTERNAL_API_SECRET", "test-internal-secret")
-    for i, secret in enumerate(("test-internal-secret", SEAL)):
-        r = api.post("/events", json=_body(f"d8-no-seal-env-{i}", secret=secret), headers=KEY)
-        assert r.status_code == 403, r.text[:300]
+    monkeypatch.setenv("VEXA_FACT_SEAL_SECRET", "s" * 64)
+    r = api.post("/events", json=_body("d8-no-keys"), headers=KEY)
+    assert r.status_code == 403, r.text[:300]
     assert _people_admitted() == set()
 
 

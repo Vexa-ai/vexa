@@ -54,6 +54,13 @@ auto-join block list), `meetingApi.transcriptionLanguage` / `meetingApi.transcri
   rendering with `helm template`). `VEXA_MCP_DELEGATION_SECRET` (each agent worker's delegation token,
   verified by admin-api) is generated into the chart Secret; set `secrets.mcpDelegationSecret` to supply
   your own, and with `secrets.existingSecretName` your Secret must carry it.
+- **Generated at install: the CRM's fact seal keypair** (`templates/fact-seal-keys.yaml`, with crm and
+  flows on). The crm outbox signs each card fact with its own Ed25519 private key (the
+  `fact-seal-crm-key` Secret, mounted by crm-outbox alone); flows-api verifies under the public half
+  (`crm.pem` in the `fact-verify-keys` ConfigMap) and cannot sign. Same lifecycle as the identity
+  keypair; set `factSeal.crm.signingKey`, or `factSeal.crm.existingSecret` with
+  `factSeal.crm.publicKey`, when rendering with `helm template`. `secrets.existingSecretName` does
+  not carry it.
 - **One MCP server.** `mcp.enabled` (default on) deploys the assembled MCP service; the gateway relays
   `/mcp` to it and agent-api points every worker's toolbelt at the gateway's `/mcp`. Workers reach it
   only through the gateway.

@@ -12,4 +12,5 @@ trigger (an update moves it, a cancel removes it) and fires due rows into ordina
 
 `fact_envelope.py` is event.v2's sealed fact envelope (D8), vendored verbatim from
 `core/flows/contracts/event.v2/` (parity fact `fact-envelope`): the intake verifies a producer's
-envelope with it, and `admission.py` admits a person's flow by subject ∪ the verified audience.
+envelope with it under that producer's public key (`flows_integrations/fact_keys.py`, parity fact
+`fact-keys`), and `admission.py` admits a person's flow by subject ∪ the verified audience.

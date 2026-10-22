@@ -659,15 +659,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . }}
                   key: ADMIN_API_TOKEN
-            {{- /* event.v2 (D8): POST /events verifies a sealed fact's envelope under this secret —
-            the value the crm outbox seals with. Optional: a pre-created Secret without the key
-            leaves flows-api serving, refusing sealed facts (403) and admitting unsealed ones. */}}
-            - name: VEXA_FACT_SEAL_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.adminTokenSecretName" . }}
-                  key: VEXA_FACT_SEAL_SECRET
-                  optional: true
+            {{- /* event.v2 (D8): POST /events verifies a sealed fact's envelope under the named
+            producer's PUBLIC key, `<producer>.pem` in this directory (the fact-verify-keys
+            ConfigMap, fact-seal-keys.yaml). Public keys only: flows-api cannot seal. Without the
+            ConfigMap (no CRM) the directory is empty and every sealed fact is refused 403. */}}
+            - name: VEXA_FACT_VERIFY_KEYS_DIR
+              value: /run/vexa-fact-verify
             {{- /* The crm outbox's publish key (security review 19.1): POST /events for the CRM's own
             facts, no other route. Optional: without it only the operator key admits facts. */}}
             - name: VEXA_FLOWS_CRM_PUBLISH_KEY
@@ -697,15 +694,20 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 3
             failureThreshold: 3
-          {{- with include "vexa.flowsMailCaMount" . }}
-          volumeMounts:{{ . | trim | nindent 12 }}
-          {{- end }}
+          volumeMounts:
+            - name: fact-verify-keys
+              mountPath: /run/vexa-fact-verify
+              readOnly: true
+          {{- with include "vexa.flowsMailCaMount" . }}{{ . | trim | nindent 12 }}{{- end }}
           resources:
             requests: {cpu: 50m, memory: 96Mi}
             limits: {cpu: 250m, memory: 256Mi}
-      {{- with include "vexa.flowsMailCaVolume" . }}
-      volumes:{{ . | trim | nindent 8 }}
-      {{- end }}
+      volumes:
+        - name: fact-verify-keys
+          configMap:
+            name: {{ include "vexa.componentName" (list . "fact-verify-keys") }}
+            optional: true
+      {{- with include "vexa.flowsMailCaVolume" . }}{{ . | trim | nindent 8 }}{{- end }}
 ---
 apiVersion: v1
 kind: Service

@@ -17,7 +17,7 @@ THE ENVELOPE. Enumerated keys only — a content field (a title, a summary, a bo
 fat fact cannot be sealed or admitted (C8, M5):
 
     v           2
-    producer    the producing domain; its key is derived from the seal secret and this name
+    producer    the producing domain; it names the public key the seal is verified under
     object      what the fact is about ("card", "record", ...)
     owner       the person id who owns the object
     visibility  "members" | "workspace" | "owner"
@@ -26,8 +26,9 @@ fat fact cannot be sealed or admitted (C8, M5):
                 coordination fields and nothing else (C8)
     exp         unix seconds after which the seal is refused; set by `seal`, at most `SEAL_TTL_S`
                 ahead (plus `CLOCK_SKEW_S`) when verified
-    sig         hex HMAC-SHA256 over `canonical({"envelope": <envelope without sig>, "fact": <fact>})`,
-                keyed per producer
+    sig         hex Ed25519 signature (128 hex digits) over
+                `canonical({"envelope": <envelope without sig>, "fact": <fact>})`, made with the
+                producer's own private key
 
 THE FACT. The seal covers the whole fact the envelope rides on — `event_type`, `source_event_id`
 and every `refs` key (the subject `uid`, the object id, the revision, the org) — so a sealed
@@ -35,24 +36,26 @@ audience cannot be lifted onto a different event, a different record or a differ
 `verify` answers only for the exact fact it was sealed over. `fact(event_type, source_event_id,
 refs)` builds that binding; producer and verifier pass the refs exactly as posted.
 
-THE KEY. `producer_key(secret, producer)` = HMAC-SHA256(secret, b"vexa-fact-envelope:" + producer).
-One deployment secret yields a distinct key per producer, so an envelope sealed as `crm` does not
-verify as `meetings`. The secret is the env `VEXA_FACT_SEAL_SECRET` and nothing else: it is its own
-credential, never the internal tier's. Unset ⇒ nothing seals and nothing verifies.
+THE KEYS. Each producer holds its OWN Ed25519 private key and nothing else; flows-api holds only the
+producers' PUBLIC keys. An envelope verifies under the public key of the producer it names, so a
+service that leaks its key can forge its own facts and no other producer's, and the verifier holds
+nothing that can seal at all. This module never touches a key: `seal` takes the producer's `sign`
+(bytes -> 64-byte signature) and `verify` takes `{producer: check}` (check(message, signature) ->
+bool), both injected, so the module stays standard library only. `fact_keys.py` beside it builds
+both from PEM files: the producer's private key file, and flows' directory of public keys.
+No sign: nothing seals. No check for a producer: nothing of that producer's verifies.
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
-import os
+import re
 import time
 
 VERSION = 2
-#: The env the seal secret is read from. There is no fallback.
-SEAL_SECRET_ENV = "VEXA_FACT_SEAL_SECRET"
-#: Domain separation for the per-producer key.
-KEY_LABEL = b"vexa-fact-envelope:"
+#: The signature scheme every seal uses. `fact_keys.py` holds the only implementation.
+ALG = "ed25519"
+#: An Ed25519 signature is 64 bytes: 128 lowercase hex digits.
+_SIG_FORM = re.compile(r"[0-9a-f]{128}")
 #: How long a seal is good for. A producer seals at delivery, so this covers transit, not a queue.
 SEAL_TTL_S = 300
 #: The clock difference between a producer and flows that `verify` tolerates on `exp`.
@@ -73,12 +76,6 @@ MAX_STR = 200
 WORKSPACE_PREFIX = "ws:"
 
 
-def secret_from_env(environ=None) -> str:
-    """The seal secret: `VEXA_FACT_SEAL_SECRET`, else ""."""
-    env = os.environ if environ is None else environ
-    return str(env.get(SEAL_SECRET_ENV) or "")
-
-
 def fact(event_type, source_event_id, refs) -> dict:
     """The fact a seal is bound to: the event's type, its producer-side id and its refs as posted."""
     return {"event_type": event_type, "source_event_id": source_event_id, "refs": refs}
@@ -89,13 +86,9 @@ def canonical(env: dict) -> bytes:
     return json.dumps(env, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def _bytes(secret) -> bytes:
-    return secret if isinstance(secret, bytes) else str(secret or "").encode("utf-8")
-
-
-def producer_key(secret, producer: str) -> bytes:
-    """HMAC-SHA256(secret, b"vexa-fact-envelope:" + producer)."""
-    return hmac.new(_bytes(secret), KEY_LABEL + str(producer).encode("utf-8"), hashlib.sha256).digest()
+def message(body: dict, the_fact: dict) -> bytes:
+    """What the producer signs: the envelope without its seal, bound to the fact it rides on."""
+    return canonical({"envelope": body, "fact": the_fact})
 
 
 def _short(value) -> bool:
@@ -142,22 +135,18 @@ def _body(env: dict) -> dict:
     return body
 
 
-def _sig(body: dict, the_fact: dict, secret) -> str:
-    return hmac.new(producer_key(secret, body["producer"]),
-                    canonical({"envelope": body, "fact": the_fact}), hashlib.sha256).hexdigest()
-
-
 def _now(now) -> int:
     return int(time.time() if now is None else now)
 
 
-def seal(env: dict, secret, the_fact: dict, *, now=None) -> dict:
-    """The envelope with `exp` (now + `SEAL_TTL_S`) and `sig` added, keyed by `env["producer"]` and
-    bound to `the_fact` (`fact(...)`). Raises ValueError on an envelope that would not verify (wrong
-    version, an extra key, an unenumerated lifecycle field, an over-long audience, an `exp` of its
-    own), on a malformed fact, or with no secret — a producer bug fails at the producer, loudly."""
-    if not _bytes(secret):
-        raise ValueError(f"fact envelope: no seal secret ({SEAL_SECRET_ENV} is unset)")
+def seal(env: dict, sign, the_fact: dict, *, now=None) -> dict:
+    """The envelope with `exp` (now + `SEAL_TTL_S`) and `sig` added: `sign` is the producer's own
+    signer (`fact_keys.signer_from_file`), applied to `message(envelope, the_fact)`. Raises ValueError
+    on an envelope that would not verify (wrong version, an extra key, an unenumerated lifecycle
+    field, an over-long audience, an `exp` of its own), on a malformed fact, or with no signer — a
+    producer bug fails at the producer, loudly."""
+    if not callable(sign):
+        raise ValueError("fact envelope: no seal key (the producer has no signer)")
     if not _well_formed_fact(the_fact):
         raise ValueError("fact envelope: the fact must be event_type, source_event_id and refs")
     if isinstance(env, dict) and "exp" in env:
@@ -165,28 +154,34 @@ def seal(env: dict, secret, the_fact: dict, *, now=None) -> dict:
     body = {**_body(env), "exp": _now(now) + SEAL_TTL_S}
     if not _well_formed(body):
         raise ValueError("fact envelope: not an event.v2 envelope (enumerated keys and short strings only)")
-    return {**body, "sig": _sig(body, the_fact, secret)}
+    sig = sign(message(body, the_fact))
+    if not isinstance(sig, (bytes, bytearray)) or len(sig) != 64:
+        raise ValueError("fact envelope: the seal key is not an Ed25519 key")
+    return {**body, "sig": bytes(sig).hex()}
 
 
-def verify(env, secret, producers, the_fact, *, now=None) -> "dict | None":
+def verify(env, checks, producers, the_fact, *, now=None) -> "dict | None":
     """The envelope without `sig` when it is well formed, carries an `exp` that has not passed (and
-    is no further ahead than a seal sets it), its producer is one of `producers`, and its seal is
-    valid under that producer's key over this envelope AND `the_fact` — the event type, the
-    producer's event id and the refs exactly as posted. Otherwise None. Never raises on caller
-    input."""
+    is no further ahead than a seal sets it), its producer is one of `producers`, and its seal
+    verifies under THAT producer's public key (`checks[producer]`, from `fact_keys.checks_from_dir`)
+    over this envelope AND `the_fact` — the event type, the producer's event id and the refs exactly
+    as posted. Otherwise None. Never raises on caller input."""
     try:
-        if not isinstance(env, dict) or not _bytes(secret) or not _well_formed_fact(the_fact):
+        if not isinstance(env, dict) or not isinstance(checks, dict) or not _well_formed_fact(the_fact):
             return None
         sig = env.get("sig")
-        if not isinstance(sig, str):
+        if not isinstance(sig, str) or not _SIG_FORM.fullmatch(sig):
             return None
         body = {k: v for k, v in env.items() if k != "sig"}
         if not _well_formed(body) or "exp" not in body or body["producer"] not in producers:
             return None
+        check = checks.get(body["producer"])
+        if not callable(check):
+            return None
         t = _now(now)
         if not (t < body["exp"] <= t + SEAL_TTL_S + CLOCK_SKEW_S):
             return None
-        if not hmac.compare_digest(_sig(body, the_fact, secret), sig):
+        if check(message(body, the_fact), bytes.fromhex(sig)) is not True:
             return None
         return body
     except Exception:  # noqa: BLE001 — a malformed envelope is unverified, never a 500

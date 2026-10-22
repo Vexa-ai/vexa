@@ -10,11 +10,13 @@ OFFLINE: the same in-process flows-api and sqlite double as `test_d8_audience.py
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
-from test_d8_audience import D, ENVELOPE, EVENT, KEY, REFS, _body, _people_admitted, _seal, api, fa  # noqa: F401
+from test_d8_audience import D, ENVELOPE, EVENT, KEY, REFS, _body, _pem, _people_admitted, _seal, api, fa  # noqa: F401
+from flows_integrations import fact_keys as fk
 
 PUBLISH = "crm-publish-key-not-a-placeholder"
 AS_CRM = {"X-Flows-Publisher-Key": PUBLISH}
@@ -42,9 +44,13 @@ def test_the_publish_key_admits_no_other_producers_fact(crm_key):
 
 
 def test_the_publish_key_verifies_only_its_own_producers_envelope(crm_key):
+    """An envelope genuinely sealed by `agent` (its own key, its public half installed) is refused
+    on the CRM's publish key and admitted on the operator's intake."""
+    agent_key = _pem()
+    (Path(os.environ["VEXA_FACT_VERIFY_KEYS_DIR"]) / "agent.pem").write_bytes(fk.public_pem(agent_key))
     as_agent = {**ENVELOPE, "producer": "agent"}
     body = {"event_type": EVENT, "source_event_id": "pk-agent-seal", "refs": REFS,
-            "envelope": _seal(as_agent, source_event_id="pk-agent-seal")}
+            "envelope": _seal(as_agent, fk.load_signer(agent_key), source_event_id="pk-agent-seal")}
     r = crm_key.post("/events", json=body, headers=AS_CRM)
     assert r.status_code == 403 and r.json()["detail"] == {"refused": "envelope_unverified"}
     # the operator's intake still verifies it: only the publish key is narrowed

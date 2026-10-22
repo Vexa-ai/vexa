@@ -207,8 +207,10 @@ Then `docker compose up -d`. On Kubernetes, set `crm.enabled`, `crm.orgId` and `
 its tables and the organisation, then exits; `crm-api` starts after it. `crm-outbox` starts after it
 too and hands each record change to flows (`VEXA_FLOWS_API_URL`) with the CRM's publish key
 (`VEXA_FLOWS_CRM_PUBLISH_KEY`): it admits the CRM's own facts and nothing else, so the outbox never
-holds flows' operator key. It seals card facts with `VEXA_FACT_SEAL_SECRET`. Both must equal
-flows-api's (`make up` mints them), and the outbox does not start without them. On Kubernetes the chart runs it when flows is on too. To rebuild every backlink from
+holds flows' operator key. The publish key must equal flows-api's (`make up` mints it). It signs
+card facts with the CRM's own Ed25519 key, which the `fact-seal-keys` one-shot generates on first
+start; flows verifies under its public half and cannot sign. The outbox does not start without
+either. On Kubernetes the chart runs it when flows is on too. To rebuild every backlink from
 git: `docker compose exec agent-api python -m control_plane.crm_references rebuild`.
 
 ## How it works

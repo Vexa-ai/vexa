@@ -97,6 +97,7 @@ from pydantic import BaseModel, Field  # noqa: E402
 
 from flows import Registry, SystemClock, admit, cancel, db_from_url, resume, retry, wake  # noqa: E402
 from flows import fact_envelope  # noqa: E402 — event.v2: the sealed fact envelope (D8)
+from flows_integrations import fact_keys  # noqa: E402 — event.v2: the producers' public keys
 from flows.admission import strip_sealed  # noqa: E402
 import flows_config  # noqa: E402
 import flows_obs  # noqa: E402
@@ -1261,9 +1262,13 @@ class EventSubmission(BaseModel):
     envelope: Optional[dict] = None
 
 
-#: The producers whose sealed envelopes the intake admits (D8). `meetings` and `agent` are listed
-#: ahead of their producers sealing, so adopting the envelope there is a producer-side change only.
+#: The producers whose sealed envelopes the intake admits (D8), each under its own public key
+#: (`fact_keys.checks_from_dir`). `meetings` and `agent` are listed ahead of their producers sealing:
+#: adopting the envelope there is that producer's own keypair and its public half in the verify
+#: directory, nothing here.
 ENVELOPE_PRODUCERS = frozenset({"crm", "meetings", "agent"})
+#: The directory of the producers' PUBLIC keys, `<producer>.pem` (flows_config: a capability).
+FACT_VERIFY_KEYS_DIR_ENV = "VEXA_FACT_VERIFY_KEYS_DIR"
 
 
 def _actor(x_actor: str) -> str:
@@ -1325,8 +1330,8 @@ def admit_event(ev: EventSubmission, x_actor: str = Header(default=""),
     refs = {**strip_sealed(ev.refs), "admitted_by": actor}
     sealed = None
     if ev.envelope is not None:
-        sealed = fact_envelope.verify(ev.envelope, fact_envelope.secret_from_env(),
-                                      frozenset({producer}) if producer else ENVELOPE_PRODUCERS,
+        producers = frozenset({producer}) if producer else ENVELOPE_PRODUCERS
+        sealed = fact_envelope.verify(ev.envelope, fact_keys.checks_from_dir(os.environ.get(FACT_VERIFY_KEYS_DIR_ENV), producers), producers,
                                       fact_envelope.fact(ev.event_type, ev.source_event_id, ev.refs))
         if sealed is None:
             raise HTTPException(status_code=403, detail={"refused": "envelope_unverified"})

@@ -183,8 +183,9 @@ spec:
 # The CRM's outbox: hands each revision's fact (crm.record.changed, its envelope sealed per event.v2)
 # to flows-api's POST /events and marks it delivered only on a 202, so an unreachable flows leaves
 # the rows pending. It logs in as the CRM's role, holds the CRM's publish key on flows (never flows'
-# operator key) and the fact seal, and nothing else — crm-api holds neither. It refuses to start without the seal; flows-api verifies
-# under the same Secret key. One replica: rows are claimed FOR UPDATE SKIP LOCKED, so a second
+# operator key) and the CRM's own Ed25519 fact seal key (fact-seal-keys.yaml), and nothing else —
+# crm-api holds neither. It refuses to start without the key; flows-api verifies under its public
+# half and cannot sign. One replica: rows are claimed FOR UPDATE SKIP LOCKED, so a second
 # would be safe, and would only add load.
 apiVersion: apps/v1
 kind: Deployment
@@ -234,13 +235,22 @@ spec:
                 secretKeyRef:
                   name: {{ include "vexa.adminTokenSecretName" . | quote }}
                   key: VEXA_FLOWS_CRM_PUBLISH_KEY
-            - name: VEXA_FACT_SEAL_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "vexa.adminTokenSecretName" . | quote }}
-                  key: VEXA_FACT_SEAL_SECRET
+            # event.v2: the CRM's own Ed25519 PRIVATE seal key, mounted here and in no other workload.
+            - name: VEXA_FACT_SEAL_KEY_FILE
+              value: /run/vexa-fact-seal/key.pem
+          volumeMounts:
+            - name: fact-seal-crm-key
+              mountPath: /run/vexa-fact-seal
+              readOnly: true
           resources:
             {{- toYaml .Values.crm.resources | nindent 12 }}
+      volumes:
+        - name: fact-seal-crm-key
+          secret:
+            secretName: {{ .Values.factSeal.crm.existingSecret | default (include "vexa.componentName" (list . "fact-seal-crm-key")) }}
+            defaultMode: 0440
+            items:
+              - { key: signing-key.pem, path: key.pem }
 ---
 {{- end }}
 apiVersion: v1

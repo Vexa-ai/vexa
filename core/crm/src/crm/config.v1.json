@@ -60,11 +60,10 @@
       "forbidden_values": ["vexa-internal-secret", "lite-internal-secret", "changeme", "change-me", "CHANGE-ME", "default", "secret"]
     },
     {
-      "key": "VEXA_FACT_SEAL_SECRET",
+      "key": "VEXA_FACT_SEAL_KEY_FILE",
       "class": "capability",
       "capability": "fact_seal_key",
-      "secret": true,
-      "description": "the secret event.v2 fact envelopes are sealed under (PRD 0.13.4 D8): the outbox seals each card fact with the `crm` producer key derived from it (`fact_envelope.producer_key`), bound to the event type, event id and refs it is posted with. It must equal flows-api's value, or flows refuses the fact 403 and the row stays pending. Its own credential, never the internal tier's: the outbox refuses to start without it",
+      "description": "event.v2 fact seal key (PRD 0.13.4 D8): a file holding the CRM's OWN Ed25519 PRIVATE key (PKCS#8 PEM). The outbox signs each card fact with it, bound to the event type, event id and refs it is posted with; flows-api verifies under the public half (`crm.pem` in its VEXA_FACT_VERIFY_KEYS_DIR) and cannot sign. No other service mounts this file, and no shared secret stands in for it. The outbox refuses to start when it is unset or not an Ed25519 private key. Generated at install: compose's fact-seal-keys one-shot, the Helm fact-seal-keys Secret (`python -m crm.fact_keys keygen` mints one by hand)",
       "targets": ["compose", "helm"]
     },
     {
@@ -135,8 +134,8 @@
   ],
   "capabilities": {
     "fact_seal_key": {
-      "description": "The seal secret for event.v2 fact envelopes (D8): the crm outbox seals each card fact's audience so it reaches the people the card names, not only its subject.",
-      "when_unconfigured": "The outbox refuses to start (`VEXA_FACT_SEAL_SECRET is required`), so no fact leaves the CRM and the outbox rows stay pending. crm-api itself serves as before."
+      "description": "The CRM's own fact seal key for event.v2 envelopes (D8): the crm outbox seals each card fact's audience so it reaches the people the card names, not only its subject.",
+      "when_unconfigured": "The outbox refuses to start (`VEXA_FACT_SEAL_KEY_FILE` not set, or not an Ed25519 private key), so no fact leaves the CRM and the outbox rows stay pending. crm-api itself serves as before."
     }
   }
 }

@@ -13,7 +13,7 @@
   "core/agent/contracts/tool.v1": "a6a19a0539f26adeb2ecfccea6071f6eda99b2185e506eed6f474256810f224e",
   "core/agent/contracts/unit.v1": "a81babdd9995f2fb4111a777886369d7a0e586035ce718e96b9ac0ddbce3492c",
   "core/crm/contracts/crm.v1": "a3d67e058a859670028fed97c353bd1aecae076f4834b8257e220f2ee11fad55",
-  "core/flows/contracts/event.v2": "090d1bf5e3390c20f8d2d67e2ecc2356a3ecab3a89bbeecb9bd7574e96b485ba",
+  "core/flows/contracts/event.v2": "4feac78c1ce8a1905e69eb20a04d0d2e839686a0a477f8fa05ae8a9efbd97c70",
   "core/flows/contracts/flows.v1": "2bdc4a8443c6f6f0195043e6d6a53268afacd253dd96ebcf6e8ba5418ddf901a",
   "core/gateway/contracts/api.v1": "3c5ce23400fb09c7663cedef639f9bc11656b3067af211847182ab0bfa937dea",
   "core/gateway/contracts/gateway-identity.v1": "4af0b688991dc99c6dfd3e29df4fadd4665de66097946404cf5bc4cacc6cfb16",

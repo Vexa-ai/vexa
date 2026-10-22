@@ -65,14 +65,14 @@ DECLARED: dict[str, tuple[str, object, str]] = {
         "capability", None,
         "the crm outbox's publish key: `POST /events` for the CRM's own facts (`crm.record.changed`) "
         "and nothing else. Unset = only the operator key admits facts."),
-    "VEXA_FACT_SEAL_SECRET": (
+    "VEXA_FACT_VERIFY_KEYS_DIR": (
         "capability", None,
-        "the secret event.v2 fact envelopes are sealed under (D8): `POST /events` verifies a "
-        "producer's envelope with HMAC-SHA256 keyed per producer from it, bound to the fact it rides "
-        "on. Read through `fact_envelope.SEAL_SECRET_ENV`. Its own credential, never the internal "
-        "tier's: unset = no envelope verifies, so every sealed fact is refused 403 and only facts "
-        "without an envelope admit (to their subject). Set it to the value every sealing producer "
-        "(crm's outbox) holds."),
+        "the directory of the sealing producers' Ed25519 PUBLIC keys, one `<producer>.pem` each "
+        "(event.v2, D8): `POST /events` verifies a producer's envelope under that producer's own "
+        "public key, bound to the fact it rides on. Read through `flows_api.FACT_VERIFY_KEYS_DIR_ENV`. "
+        "Public keys only: nothing flows holds can seal. Unset, or no file for a producer = that "
+        "producer's envelopes do not verify, so its sealed facts are refused 403 and only facts "
+        "without an envelope admit (to their subject)."),
 
     # ── service endpoints: THE DOORS ────────────────────────────────────────
     #
@@ -370,7 +370,7 @@ DECLARED: dict[str, tuple[str, object, str]] = {
 #: store; a service that reads a secret store itself is the shape decision 18(c) removed.
 SECRETS = frozenset({
     "INTERNAL_API_SECRET", "VEXA_INTERNAL_SECRET", "VEXA_INTERNAL_API_SECRET",
-    "VEXA_FLOWS_ADMIN_KEY", "VEXA_FLOWS_API_KEY", "VEXA_FLOWS_TIMELINE_KEY", "VEXA_FACT_SEAL_SECRET",
+    "VEXA_FLOWS_ADMIN_KEY", "VEXA_FLOWS_API_KEY", "VEXA_FLOWS_TIMELINE_KEY",
     "VEXA_FLOWS_CRM_PUBLISH_KEY",
     "VEXA_MAIL_APP_PASSWORD", "VEXA_MAIL_SMTP_PASSWORD",
 })

@@ -83,6 +83,24 @@ identity:
   existingSecret: ""
   publicKey: ""
 
+# ---------- event.v2: each fact producer's own seal keypair ----------
+# The crm outbox signs every card fact's envelope with the CRM's OWN Ed25519 PRIVATE key (the
+# `<release>-fact-seal-crm-key` Secret, mounted by crm-outbox only); flows-api verifies under its
+# PUBLIC half (`crm.pem` in the `<release>-fact-verify-keys` ConfigMap) and cannot sign. There is no
+# shared seal secret: a leaked producer key forges that producer's facts and no other's. Rendered
+# when crm and flows are both enabled.
+factSeal:
+  crm:
+    # Empty → GENERATED at install and kept across upgrades (read back from the release's Secret,
+    # which also survives an uninstall). Set it to a PKCS#8 PEM Ed25519 private key
+    # (`openssl genpkey -algorithm ed25519`) when a GitOps tool renders with `helm template`.
+    # To rotate: delete the Secret, `helm upgrade`, then restart crm-outbox and flows-api.
+    signingKey: ""
+    # Or keep the private key out of values: name a Secret holding it as `signing-key.pem` and give
+    # its PEM public key (`openssl pkey -in signing-key.pem -pubout`) here. Nothing is generated then.
+    existingSecret: ""
+    publicKey: ""
+
 # ---------- Shared secrets ----------
 # Recommended: override via --set-file / external secret tooling, or point existingSecretName at a
 # Secret carrying these keys: ADMIN_API_TOKEN, INTERNAL_API_SECRET, TRANSCRIPTION_SERVICE_TOKEN,
@@ -139,11 +157,6 @@ secrets:
                                     # browser's SESSION credential only with it. Generated at install like
                                     # the one above; with existingSecretName, carry VEXA_TERMINAL_SESSION_SECRET
                                     # (optional: without it sign-in uses an ordinary key).
-  factSealSecret: ""                # event.v2 fact seal (VEXA_FACT_SEAL_SECRET, 32+ bytes): the crm outbox
-                                    # seals each card fact with it and flows-api verifies under the same
-                                    # value. Empty → kept from this release's Secret, else generated; with
-                                    # existingSecretName, carry VEXA_FACT_SEAL_SECRET (without it flows-api
-                                    # refuses every sealed fact and the crm outbox does not start).
   crmPublishKey: ""                 # the crm outbox's publish key on flows (VEXA_FLOWS_CRM_PUBLISH_KEY, 32+
                                     # bytes): POST /events for the CRM's own facts, no other flows route.
                                     # Empty → kept from this release's Secret, else generated; with

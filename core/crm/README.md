@@ -231,12 +231,17 @@ neither sends messages nor starts an autonomous agent with implicit CRM rights.
 
 A revision's event also carries a fact envelope (event.v2, PRD 0.13.4 D8: who
 it reaches — owner, visibility, audience, and a card's lifecycle fields kind,
-state, next_actor, next_check_at, handoff). The outbox seals it at delivery with
-the `crm` producer key derived from `VEXA_FACT_SEAL_SECRET`, bound to the event
-type, event ID and refs it is posted with, and good for five minutes. The secret
-is its own credential: the outbox refuses to start without it, and flows-api must
-hold the same value or it refuses the fact 403 and the row stays pending. No title, summary or other field value is in
-the envelope (`crm/fact_envelope.py`, vendored from `core/flows/contracts/event.v2`).
+state, next_actor, next_check_at, handoff). The outbox signs it at delivery with
+the CRM's own Ed25519 private key (`VEXA_FACT_SEAL_KEY_FILE`, mounted by the
+outbox alone), bound to the event type, event ID and refs it is posted with, and
+good for five minutes. flows-api verifies under the public half (`crm.pem` in its
+`VEXA_FACT_VERIFY_KEYS_DIR`) and cannot sign; no other service's key verifies as
+`crm`. The outbox refuses to start without a readable Ed25519 key; a fact flows
+refuses (403) stays pending and is signed afresh on the next pass. No title,
+summary or other field value is in the envelope (`crm/fact_envelope.py` and
+`crm/fact_keys.py`, vendored from `core/flows/contracts/event.v2`). Compose's
+`fact-seal-keys` one-shot and the chart's `fact-seal-keys.yaml` generate the
+keypair; `python -m crm.fact_keys keygen <private.pem> <public.pem>` mints one by hand.
 
 Native meetings retain their transcripts. Agent proposals cite the meeting ID
 as evidence. Meeting linkage grants no CRM permission. Mounted workspaces retain

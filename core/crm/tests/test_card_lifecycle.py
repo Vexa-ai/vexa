@@ -444,14 +444,19 @@ def test_the_s5_shapes_conform_to_crm_v1(cards):
 
 def test_every_card_fact_seals_including_a_finished_one(cards, store):
     """event.v2's sealer refuses empty strings: a closed card's fact (no next actor) still seals."""
-    from crm import fact_envelope
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from crm import fact_envelope, fact_keys
+    pem = Ed25519PrivateKey.generate().private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    sign, checks = fact_keys.load_signer(pem), {'crm': fact_keys.load_check(fact_keys.public_pem(pem))}
     card = offer(cards, kind='question')
     decide(cards, V, card['id'], 'answer', answer='yes')
     decide(cards, D, card['id'], 'use')
     for ev in _outbox(store, card['id']):
         the_fact = fact_envelope.fact(ev['event_type'], ev['source_event_id'], ev['subject_refs'])
-        sealed = fact_envelope.seal(ev['envelope'], 'test-secret', the_fact)
-        assert fact_envelope.verify(sealed, 'test-secret', ('crm',), the_fact) is not None
+        sealed = fact_envelope.seal(ev['envelope'], sign, the_fact)
+        assert fact_envelope.verify(sealed, checks, ('crm',), the_fact) is not None
     assert 'next_actor' not in _outbox(store, card['id'])[-1]['envelope']['lifecycle']
 
 

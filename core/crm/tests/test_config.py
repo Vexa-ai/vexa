@@ -25,7 +25,7 @@ def test_crm_api_boots_without_the_outbox_keys_and_reports_the_seal():
     """The flows door, its key and the seal belong to the outbox: crm-api boots without them."""
     rows = cp.preflight(dict(REQUIRED))['capabilities']
     assert rows['fact_seal_key']['state'] == cp.NOT_CONFIGURED
-    rows = cp.preflight({**REQUIRED, 'VEXA_FACT_SEAL_SECRET': 's' * 64})['capabilities']
+    rows = cp.preflight({**REQUIRED, 'VEXA_FACT_SEAL_KEY_FILE': '/run/vexa-fact-seal/key.pem'})['capabilities']
     assert rows['fact_seal_key']['state'] == cp.CONFIGURED
 
 
@@ -35,4 +35,5 @@ def test_the_outbox_keys_are_declared_publish_edges_and_secret_where_they_are_cr
     assert keys['FLOWS_API_URL']['publishes_events'] == ['crm.record.changed']
     assert keys['FLOWS_PUBLISH_KEY']['secret'] is True
     assert 'FLOWS_API_KEY' not in keys, 'the outbox never holds flows\' operator key'
-    assert keys['VEXA_FACT_SEAL_SECRET']['secret'] is True
+    assert not keys['VEXA_FACT_SEAL_KEY_FILE'].get('secret')   # a path; the key is the file it names
+    assert 'VEXA_FACT_SEAL_SECRET' not in keys, 'no shared seal secret: each producer holds its own key'
