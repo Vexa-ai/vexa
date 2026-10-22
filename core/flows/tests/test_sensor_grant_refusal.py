@@ -48,9 +48,10 @@ def test_no_grant_stops_the_sensor_with_the_step_that_fixes_it(broker_env):
                  "reason": "sensor_grant_required"})
     with pytest.raises(SensorFault) as e:
         cal.broker_call("7", cal.PATH, {"owner": "7"}, session="sensor:user:7/s")
+    assert "calendar_sensor_grant" in e.value.reason, "the reason names the step that fixes it"
+    assert "connect Google Calendar" not in e.value.reason, "not mistaken for a missing connection"
     assert e.value.retryable is False
     assert e.value.reason.startswith(cal.GRANT_NEEDED)
-    assert "calendar_sensor_grant" in e.value.reason
 
     db, clock = SqliteDB(), FakeClock(1_800_000_000)
     kinds = {"calendar": cal.CalendarSensor()}
@@ -77,4 +78,4 @@ def test_positive_control_a_granted_read_feeds_the_sensor_and_a_missing_connecti
     answer(409, {"detail": "No ready calendar connection for this person"})
     with pytest.raises(SensorFault) as e:
         cal.broker_call("7", cal.PATH, {"owner": "7"}, session="sensor:user:7/s")
-    assert "connect Google Calendar" in e.value.reason and cal.GRANT_NEEDED not in e.value.reason
+    assert "connect Google Calendar" in e.value.reason and "calendar_sensor_grant" not in e.value.reason
