@@ -126,3 +126,24 @@ async def test_calendar_sync_stores_no_host_token():
     (row,) = await store.list_meetings(USER)
     assert ZAK not in json.dumps(row, default=str)
     assert row["data"]["constructed_meeting_url"] == JOIN
+
+
+
+@pytest.mark.parametrize("platform,native,url", [
+    ("teams", "3741234567890", f"https://teams.evil.example/meet/3741234567890?p={PWD}"),
+    ("google_meet", "abc-defg-hij", f"https://meet.evil.example/abc-defg-hij?pwd={PWD}"),
+    ("jitsi", "room", f"https://jitsi.corp.example/room?jwt={PWD}"),
+])
+def test_meeting_host_refusals_carry_no_passcode(monkeypatch, platform, native, url):
+    """The host rule's 422s name the host, never the link: the passcode stays out of the refusal."""
+    from meeting_api.bot_spawn import meeting_host
+
+    monkeypatch.setattr(meeting_host, "resolver", lambda host: ["10.0.0.7"])
+    client, repo, runtime = _bots(monkeypatch)
+    r = client.post("/bots", headers=HEADERS,
+                    json={"platform": platform, "native_meeting_id": native, "meeting_url": url})
+    assert r.status_code == 422, r.text
+    assert "meeting_url refused" in r.json()["detail"], "the host rule answered, not an earlier check"
+    assert PWD in url, "positive control: the request carried the passcode"
+    assert PWD not in r.text
+    assert not repo._meetings and not runtime.specs
