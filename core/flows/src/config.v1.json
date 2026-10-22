@@ -549,7 +549,7 @@
     {
       "key": "VEXA_FLOWS_MAIL_BODY_MAX",
       "class": "defaulted",
-      "description": "How much of an inbound body may enter an agent prompt, inside the untrusted block.",
+      "description": "How many characters of an inbound body a mail reply carries into its reaction and its agent prompt, inside the untrusted block. At most 16000; a higher value is read as 16000.",
       "default": "4000",
       "targets": [
         "compose"

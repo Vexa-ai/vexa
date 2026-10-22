@@ -309,7 +309,7 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     "VEXA_FLOWS_MAIL_RATE_WINDOW_S": ("defaulted", "3600", "the window both mail rate limits count over."),
     "VEXA_FLOWS_MAIL_BODY_MAX": (
         "defaulted", "4000",
-        "how much of an inbound body may enter an agent prompt, inside the untrusted block."),
+        "how many characters of an inbound body a mail reply carries into its reaction and its agent prompt, inside the untrusted block. At most 16000; a higher value is read as 16000."),
 
     # ── behaviour and content ───────────────────────────────────────────────
     "VEXA_FLOWS_ATTENDEE_DOMAINS": (

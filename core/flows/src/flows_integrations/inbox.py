@@ -92,7 +92,9 @@ def from_rfc822(raw: bytes, *, cursor: str, ext_id: str) -> InboundMessage:
     body, ics = "", None
     for part in msg.walk():
         ct = part.get_content_type()
-        if ct == "text/plain" and not body:
+        # The body is the first INLINE text/plain part: a `text/plain` attachment is a file the
+        # sender attached, not what they wrote, and it never travels as their words.
+        if ct == "text/plain" and not body and part.get_content_disposition() != "attachment":
             body = (part.get_payload(decode=True) or b"").decode(errors="replace")
         if ct in ICS_TYPES or (part.get_filename() or "").endswith(".ics"):
             # `decode_ics` sniffs a BOM before assuming UTF-8. For every UTF-8 payload without

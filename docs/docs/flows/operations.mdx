@@ -110,7 +110,7 @@ the organizer is known.
 | `VEXA_FLOWS_MAIL_RATE_PER_SENDER` | `12` | mail-triggered agent turns one sender may cause per window |
 | `VEXA_FLOWS_MAIL_RATE_GLOBAL` | `120` | mail-triggered agent turns the deployment may run per window |
 | `VEXA_FLOWS_MAIL_RATE_WINDOW_S` | `3600` | the window both limits count over |
-| `VEXA_FLOWS_MAIL_BODY_MAX` | `4000` | how much of an inbound body may enter a prompt |
+| `VEXA_FLOWS_MAIL_BODY_MAX` | `4000` | how many characters of an inbound body a reply carries into its reaction and prompt; at most `16000` (a higher value is read as `16000`) |
 
 Limits count **admitted** turns (`mail_turn`), so quarantined mail never consumes anyone's budget.
 Every refusal is a row — read them with:
@@ -125,6 +125,17 @@ should be served appears here: add their domain to the allow-list, or create the
 
 An inbound body that is admitted reaches the agent quoted, delimited, length-capped and labelled
 as untrusted text from its sender. The text itself is never altered.
+
+### What a mail reply's reaction holds
+
+A reply admitted as `mail.reply` stores seven refs and nothing else: `uid` and `session` (the
+thread it continues), `from_addr` and `organizer` (the sender, at most 320 characters), `subject`
+and `orig_msgid` (one unfolded header line each, at most 998 characters), and `text`, the sender's
+own words. `text` drops the quoted thread (`>` lines, the `On … wrote:` line above them, and
+everything from Outlook's `-----Original Message-----`), never includes an attachment or the HTML
+alternative, and keeps at most `VEXA_FLOWS_MAIL_BODY_MAX` characters and 32 KiB stored, ending with
+a line that says how many characters were elided. One reaction's refs are at most **36 KiB** stored,
+whatever the mail. The full message stays in the mailbox it arrived in; flows does not copy it.
 
 ## Reading the friction sink
 
@@ -148,7 +159,8 @@ workload id.
 
 ## How long captured facts are kept
 
-A fact is admitted with its refs: an inbound mail's body, an invite's attendees, a calendar event.
+A fact is admitted with its refs: an inbound mail's excerpt
+([what a reply holds](#what-a-mail-replys-reaction-holds)), an invite's attendees, a calendar event.
 Those refs, the scratch the steps wrote and every receipt's result are what flows keeps about the
 people involved. flows-worker keeps them while the run is live and for
 `VEXA_FLOWS_FACT_RETENTION_DAYS` (default **90**) after it finished, then removes them once an hour:

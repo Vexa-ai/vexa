@@ -50,6 +50,12 @@ An inbound body that IS allowed through never reaches a prompt raw: it arrives q
 length-capped (`VEXA_FLOWS_MAIL_BODY_MAX`) and labelled untrusted, with the machinery note AFTER
 the block. The frame is the control; the text itself is never altered.
 
+A `mail.reply` reaction holds `mailbox.REPLY_FIELDS` and nothing else (`mailbox.reply_refs`, used by
+the poller and the `mailbox` sensor kind): the sender's own words with the quoted thread dropped,
+capped at `VEXA_FLOWS_MAIL_BODY_MAX` characters (ceiling `BODY_CEILING`, 16000) and 32 KiB stored,
+plus the sender, one-line subject and Message-ID. No attachment and no HTML alternative is read as
+the body. The stored refs are at most `REPLY_REFS_MAX_BYTES` (36 KiB).
+
 ## What is waiting is flows
 
 `GET /queue/waiting` answers, for ONE person, what this engine is holding for them: the pending

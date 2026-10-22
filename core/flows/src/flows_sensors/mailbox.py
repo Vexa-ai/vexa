@@ -136,7 +136,7 @@ class MailboxSensor(SensorKind):
     def _judge(self, db, rules: dict, self_addr: str, msg, *, first: bool, live: bool):
         from flows_integrations import mail_policy
         from flows_integrations.mail_sensor import KEEP_INVITE, KEEP_REPLY, classify
-        from flows_integrations.mailbox import route, strip_quotes
+        from flows_integrations.mailbox import reply_refs, route
         kept, _why = classify(db, msg, "vexa")
         if kept is None:
             return None                                      # dropped at the edge, no trace
@@ -190,10 +190,7 @@ class MailboxSensor(SensorKind):
                     return None
                 mail_policy.record_turn(db, ext, msg.frm)
             return Change("mail.reply", f"mail-{ext}",
-                          {"uid": str(payload["uid"]), "session": payload["session"],
-                           "from_addr": msg.frm, "text": strip_quotes(msg.body),
-                           "subject": msg.subject, "orig_msgid": msg.message_id,
-                           "organizer": msg.frm})
+                          reply_refs(payload["uid"], payload["session"], msg))
         if kind == "quarantine" and live:
             mail_policy.quarantine(db, ext_id=ext, frm=msg.frm, kind=payload["kind"],
                                    reason=payload["reason"], facts={"subject": msg.subject})

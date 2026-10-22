@@ -488,38 +488,112 @@ def invite_source_id(ev: dict) -> str:
 BODY_ELISION = "\n\n[… {n} more characters of this message elided at VEXA_FLOWS_MAIL_BODY_MAX ({cap}) …]"
 
 
+#: THE MOST `VEXA_FLOWS_MAIL_BODY_MAX` MAY RAISE THE CAP TO, in characters. The key tunes the excerpt
+#: a reply carries; it never lifts the bound on what one reaction row stores.
+BODY_CEILING = 16_000
+
+#: WHAT ONE `mail.reply` REACTION STORES, in bytes of its stored JSON (`flows.db.dumps`, ASCII
+#: escaped): the sum of the field budgets below plus the field names and the two ids this
+#: deployment wrote itself (`uid`, `session`, from `mail_thread`).
+REPLY_REFS_MAX_BYTES = 36 * 1024
+
+#: Field budgets, in stored-JSON bytes including the quotes. A header line is at most 998
+#: characters (RFC 5322 §2.1.1) and an address at most 320 (RFC 3696 erratum 1690).
+TEXT_MAX_BYTES = 32 * 1024
+HEADER_MAX_BYTES = 1000
+ADDR_MAX_BYTES = 322
+#: What `BODY_ELISION` may take of the text budget once formatted (it is about 120 bytes stored).
+ELISION_BYTES = 200
+
+#: THE FIELDS A `mail.reply` REACTION HOLDS — exactly what its steps read: `feedback_turn` reads
+#: uid, session, text and from_addr; `email_reply` reads uid, session, from_addr, subject and
+#: orig_msgid; `organizer` names the sender for the timeline and for `feedback_turn`'s fallback.
+REPLY_FIELDS = ("uid", "session", "from_addr", "text", "subject", "orig_msgid", "organizer")
+
+
 def body_max() -> int:
-    """How much of an inbound body may travel on `mail.reply` — `VEXA_FLOWS_MAIL_BODY_MAX`.
+    """How much of an inbound body may travel on `mail.reply` — `VEXA_FLOWS_MAIL_BODY_MAX`, in
+    characters, between 1 and `BODY_CEILING`.
 
-    THE KEY WAS DECLARED AND READ BY NOTHING (R-B12). `flows_config.DECLARED` carries it with a
-    default of 4000 and the sentence *"how much of an inbound body may enter an agent prompt,
-    inside the untrusted block"*; `core/flows/README.md` tells an operator that an allowed body
-    "arrives quoted, fenced, length-capped (`VEXA_FLOWS_MAIL_BODY_MAX`)". Neither was true: the
-    only cap in the intake was a literal `[:2000]` on the line below, so an operator who set the
-    key got no error and no effect, and one who read the README believed a number that was not the
-    number. That is the failure mode `test_config_declaration`'s declared⊆read direction exists to
-    catch, and it caught this one.
+    Read PER CALL, never bound at import: the poller is a long-lived process. Floored at 1: a cap
+    of zero would admit a reply carrying no text at all, which is a fact thrown away rather than a
+    limit applied. `cfg.get_int` answers the declared default for a value that is not a number, so
+    a typo is 4000 and never a crash mid-poll."""
+    return min(max(cfg.get_int("VEXA_FLOWS_MAIL_BODY_MAX"), 1), BODY_CEILING)
 
-    Read PER CALL, never bound at import: the poller is a long-lived process and a door resolved at
-    import is the defect the rest of this brick spent a release removing.
 
-    Floored at 1: a cap of zero would admit a reply carrying no text at all, which is a fact
-    thrown away rather than a limit applied. `cfg.get_int` already answers the declared default for
-    a value that is not a number, so a typo is 4000 and never a crash mid-poll."""
-    return max(cfg.get_int("VEXA_FLOWS_MAIL_BODY_MAX"), 1)
+def _json_len(ch: str) -> int:
+    """Bytes one character takes in the stored JSON (ASCII-escaped: `\\uXXXX`, a surrogate pair
+    for a character outside the BMP)."""
+    if ord(ch) < 0x80:
+        return 2 if ch in '"\\\b\f\n\r\t' else (6 if ch < " " else 1)
+    return 6 if ord(ch) < 0x10000 else 12
+
+
+def _fit(text: str, budget: int) -> str:
+    """The longest prefix of `text` whose stored JSON, quotes included, is at most `budget` bytes."""
+    used, i = 2, 0
+    for i, ch in enumerate(text):
+        used += _json_len(ch)
+        if used > budget:
+            return text[:i]
+    return text
+
+
+#: Where a reply's own words end and the thread it answers begins, for a client that does not
+#: prefix the history with `>`: Outlook's separator, and its web client's rule followed by `From:`.
+HISTORY_START = re.compile(r"^\s*-{2,}\s*Original Message\s*-{2,}\s*$", re.I)
+WEB_RULE = re.compile(r"^\s*_{10,}\s*$")
+#: The attribution line a client writes above a `>`-quoted thread ("On <date>, <who> wrote:").
+ATTRIBUTION = re.compile(r"^\s*On .{1,400}wrote:\s*$")
 
 
 def strip_quotes(body: str) -> str:
-    """The sender's own words: quoted lines dropped, then capped at `body_max()`.
+    """The sender's own words: the quoted thread dropped, then capped at `body_max()` characters
+    and at `TEXT_MAX_BYTES` of stored JSON.
 
     The quote strip comes FIRST and the cap second, which is the order that matters — a reply whose
     first screen is the thread it is answering would otherwise spend its whole budget on text we
-    already sent."""
-    text = "\n".join(l for l in body.strip().splitlines() if not l.strip().startswith(">"))
+    already sent. A body that was cut ends with `BODY_ELISION`, saying how much was dropped."""
+    lines = body.strip().splitlines()
+    own: list[str] = []
+    for n, line in enumerate(lines):
+        if HISTORY_START.match(line) or (
+                WEB_RULE.match(line) and n + 1 < len(lines) and lines[n + 1].startswith("From:")):
+            break
+        if line.strip().startswith(">"):
+            continue
+        if ATTRIBUTION.match(line) and any(l.strip().startswith(">") for l in lines[n + 1:n + 3]):
+            continue
+        own.append(line)
+    text = "\n".join(own).strip()
     cap = body_max()
-    if len(text) <= cap:
+    kept = _fit(text[:cap], TEXT_MAX_BYTES - ELISION_BYTES)
+    if len(kept) == len(text):
         return text
-    return text[:cap] + BODY_ELISION.format(n=len(text) - cap, cap=cap)
+    return kept + BODY_ELISION.format(n=len(text) - len(kept), cap=cap)
+
+
+def _header(value: str, budget: int) -> str:
+    """A header value as one line (RFC 5322 unfolding), within its stored budget."""
+    return _fit(re.sub(r"\r?\n(?=[ \t])", "", str(value or "")).replace("\r", "").replace("\n", " "),
+                budget)
+
+
+def reply_refs(uid, session, msg) -> dict:
+    """THE `mail.reply` REACTION'S REFS — `REPLY_FIELDS`, each within its budget, and nothing else.
+
+    Both intakes build them here: the mailbox poller (`handle`) and the `mailbox` sensor kind
+    (`flows_sensors.mailbox`). The row is durable until fact retention removes it, so what goes in
+    is what its steps read and no more: the sender's own words as a bounded excerpt, never the
+    message — no quoted thread, no attachment, no HTML alternative (`inbox.from_rfc822` reads only
+    the first inline `text/plain` part). The stored JSON is at most `REPLY_REFS_MAX_BYTES`."""
+    frm = _fit(str(msg.frm or ""), ADDR_MAX_BYTES)
+    return {"uid": str(uid), "session": str(session), "from_addr": frm,
+            "text": strip_quotes(str(msg.body or "")),
+            "subject": _header(msg.subject, HEADER_MAX_BYTES),
+            "orig_msgid": _header(msg.message_id, HEADER_MAX_BYTES),
+            "organizer": frm}
 
 
 def _fixed_reply(db, msg, ext_id: str, now: float, reply) -> bool:
@@ -630,10 +704,7 @@ def handle(db, reg, clock, self_addr: str, msg, known_uid, is_scaffolded,
     n = admit(db, reg, clock,
               source_event_id=f"mail-{msg.message_id or msg.ext_id}",
               event_type="mail.reply",
-              subject_refs={"uid": str(payload["uid"]), "session": payload["session"],
-                            "from_addr": msg.frm, "text": strip_quotes(msg.body),
-                            "subject": msg.subject, "orig_msgid": msg.message_id,
-                            "organizer": msg.frm})
+              subject_refs=reply_refs(payload["uid"], payload["session"], msg))
     if n:
         mail_policy.record_turn(db, ext, msg.frm, now)
     return (kind, n)
