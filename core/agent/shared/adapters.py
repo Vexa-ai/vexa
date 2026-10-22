@@ -643,23 +643,26 @@ class AdminApiPolicyStore:
     roster, visibility, connections and invites. Identity is the one writer; this is agent-api's port.
 
     Unlike the membership index it is AUTHORITATIVE, so it is not best-effort: every failure but a
-    404 raises, and the caller turns that into a refusal (fail closed, FD3). A workspace's document is
-    cached in-process for ``ttl`` seconds and dropped on every write through this port — agent-api is
-    pinned single-replica and is the registry's only client, so its own writes are the only change.
-    ``root`` is accepted and ignored: the registry is not on this filesystem."""
+    404 raises, and the caller turns that into a refusal (fail closed, FD3). A PRESENT workspace's
+    document is read from the registry on every access decision (``ttl`` 0): a member removed by any
+    writer — another replica, admin-api's own account merge — is refused at once, never after a
+    process-local cache expires. Inside one request's read scope the membership module answers a
+    repeated read itself (``workspace_membership.store_get``). An ABSENT workspace is remembered for
+    ``absent_ttl``: absence grants nothing (no roster, no member), so a stale absence can only refuse,
+    and a ``put`` through this port drops it. ``root`` is accepted and ignored: the registry is not on
+    this filesystem."""
 
-    def __init__(self, base_url: str, internal_secret: str, *, timeout: float = 5.0, ttl: float = 2.0,
+    def __init__(self, base_url: str, internal_secret: str, *, timeout: float = 5.0, ttl: float = 0.0,
                  absent_ttl: float = 30.0) -> None:
         self._base = base_url.rstrip("/") + "/internal/registry"
         self._secret = internal_secret
         self._timeout = timeout
         self._ttl = ttl
-        # AN ABSENT WORKSPACE IS REMEMBERED LONGER (perf, app.dev 2026-10-17). Every enumeration
+        # AN ABSENT WORKSPACE IS REMEMBERED (perf, app.dev 2026-10-17). Every enumeration
         # (`list_memberships`, the people rosters) asks about EVERY directory on the host, and most
-        # of them — people's own desks — are not in the registry at all; at a 2 s TTL that was a GET
-        # per desk per listing (~14 req/s to admin-api, ~120-190 ms per listing). A workspace only
-        # ENTERS the registry through `put` on this port, which drops the cached absence first, so a
-        # longer absence TTL cannot hide a grant this process made.
+        # of them — people's own desks — are not in the registry at all; asking each time is a GET
+        # per desk per listing (~14 req/s to admin-api, ~120-190 ms per listing). An absence grants
+        # nothing, and a `put` through this port drops it, so it cannot hide a grant this process made.
         self._absent_ttl = max(absent_ttl, ttl)
         self._docs: dict[str, tuple[float, Optional[dict]]] = {}
 

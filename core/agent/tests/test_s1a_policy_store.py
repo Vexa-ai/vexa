@@ -69,6 +69,80 @@ def test_boot_migration_adopts_every_tree_and_is_idempotent(tmp_path):
     assert not m.policy_in_store(tmp_path, "desk")
 
 
+# ── M3 (gate 0.13.4 final): the boot sweep is the one reader of the trees ───────────────────────
+
+def _restart() -> None:
+    """A new agent-api process: nothing it swept is remembered in memory."""
+    getattr(m, "_SWEPT", set()).clear()
+    m.set_policy_store(m.policy_store())
+
+
+def test_after_the_boot_sweep_a_tree_planted_in_a_new_workspace_confers_nothing(tmp_path):
+    _legacy(_ws(tmp_path, "team"), "members", ROSTER)
+    assert m.migrate_policy_store(tmp_path) == ["team"]
+    # later, a tree nobody shared arrives with a roster in it (a restored backup, an attached clone)
+    _legacy(_ws(tmp_path, "planted"), "members", ROSTER)
+    _legacy(tmp_path / "planted", "visibility", {"visibility": "open"})
+    assert m.is_member(tmp_path, "planted", "bob") is None
+    assert not m.policy_in_store(tmp_path, "planted")
+    assert rp.visibility(tmp_path, "planted") == "closed"
+    assert "planted" not in {r["workspace_id"] for r in m.list_memberships(tmp_path, "bob")}
+    assert m.is_member(tmp_path, "team", "bob") == "contributor"            # the swept one still answers
+
+
+def test_once_the_adoption_is_recorded_no_later_boot_reads_a_tree(tmp_path, monkeypatch):
+    _legacy(_ws(tmp_path, "team"), "members", ROSTER)
+    m.migrate_policy_store(tmp_path)
+    assert m.adoption_recorded(tmp_path)
+    _legacy(_ws(tmp_path, "planted"), "members", ROSTER)
+    _restart()
+    read: list = []
+    real = m._legacy_sources
+    monkeypatch.setattr(m, "_legacy_sources", lambda *a, **k: read.append(k) or real(*a, **k))
+    assert m.migrate_policy_store(tmp_path) == []
+    assert m.is_member(tmp_path, "planted", "bob") is None
+    assert not any(k.get("tree") for k in read), read
+    assert m.is_member(tmp_path, "team", "bob") == "contributor"
+
+
+def test_upgrade_from_0133_adopts_rosters_and_tree_invites_once(tmp_path):
+    """A 0.13.3 instance on the file backend: rosters, visibility and invites in the trees, no store."""
+    ws = _ws(tmp_path, "team")
+    _legacy(ws, "members", ROSTER)
+    _legacy(ws, "visibility", {"visibility": "open"})
+    minted = m.hash_token("tok-0133")
+    (ws / "policy" / "invites.json").write_text(json.dumps(
+        [{"id": "i1", "hash": minted, "role": "viewer", "uses": 0, "max_uses": 5, "revoked": False}]))
+    assert not m.adoption_recorded(tmp_path)
+    assert m.migrate_policy_store(tmp_path) == ["team"]                    # the first boot on 0.13.4
+    assert m.adoption_recorded(tmp_path)
+    assert m.is_member(tmp_path, "team", "bob") == "contributor"
+    assert rp.visibility(tmp_path, "team") == "open"
+    assert m.find_invite(tmp_path, "tok-0133")[0] == "team"                 # the invite still redeems
+    # after the boot the tree's invite file is nobody's: a forged one finds nothing
+    forged = m.hash_token("tok-forged")
+    (ws / "policy" / "invites.json").write_text(json.dumps([{"id": "i9", "hash": forged, "role": "owner"}]))
+    _restart()
+    m.migrate_policy_store(tmp_path)                                        # a second boot
+    assert m.find_invite(tmp_path, "tok-forged") is None
+    assert m.find_invite(tmp_path, "tok-0133")[0] == "team"
+
+
+def test_a_sweep_that_could_not_adopt_records_nothing_and_the_next_boot_does(tmp_path, registry):
+    _legacy(_ws(tmp_path, "team"), "members", ROSTER)
+    registry.down = True
+    assert m.migrate_policy_store(tmp_path) == []
+    assert not m.adoption_recorded(tmp_path)
+    with pytest.raises(m.MembershipError):
+        m.is_member(tmp_path, "team", "bob")                                 # refused, never the tree's word
+    registry.down = False
+    assert m.is_member(tmp_path, "team", "bob") is None                     # this process swept: no tree read
+    _restart()
+    assert m.migrate_policy_store(tmp_path) == ["team"]                      # the next boot adopts
+    assert m.adoption_recorded(tmp_path)
+    assert m.is_member(tmp_path, "team", "bob") == "contributor"
+
+
 def test_writing_one_file_migrates_the_others_first(tmp_path):
     """A role change on a legacy workspace must not strand its visibility in the tree (it would
     silently close the workspace)."""
@@ -668,3 +742,59 @@ def test_the_http_port_remembers_an_absent_workspace_until_this_port_writes_it(m
     assert port.has(None, "team") and gets.count("/workspaces/team") == 2   # a present doc keeps 2 s
     port.put(None, "desk-7", "members", [{"subject": "bob", "role": "owner"}])
     assert port.has(None, "desk-7") and gets.count("/workspaces/desk-7") == 2  # the write dropped the absence
+
+
+# ── Low (gate 0.13.4 final, car 43): the registry is read on every access decision ──────────────
+
+def _registry_port(monkeypatch, **kw):
+    from shared import adapters
+    from shared.adapters import AdminApiPolicyStore
+    port = AdminApiPolicyStore("http://registry.invalid", "s3cret", **kw)
+    docs = {"team": {"workspace": {}, "members": [{"subject": "alice", "role": "owner"},
+                                                  {"subject": "bob", "role": "contributor"}]}}
+    gets: list = []
+
+    def fake_req(method, path, body=None):
+        if method == "GET":
+            gets.append(path)
+            return docs.get(path.rsplit("/", 1)[-1])
+        return {}
+    monkeypatch.setattr(port, "_req", fake_req)
+    clock = [1000.0]
+    monkeypatch.setattr(adapters.time, "monotonic", lambda: clock[0])
+    return port, docs, gets, clock
+
+
+def test_a_member_removed_by_another_writer_is_refused_at_once(tmp_path, monkeypatch):
+    """Another replica (or admin-api's own account merge) removes bob: this process's next access
+    decision reads the registry, not a copy it kept."""
+    port, docs, gets, clock = _registry_port(monkeypatch)
+    m.set_policy_store(port)
+    try:
+        _ws(tmp_path, "team")
+        assert m.is_member(tmp_path, "team", "bob") == "contributor"
+        docs["team"]["members"] = [{"subject": "alice", "role": "owner"}]       # written elsewhere
+        clock[0] += 0.5
+        assert m.is_member(tmp_path, "team", "bob") is None
+    finally:
+        m.set_policy_store(None)
+
+
+def test_one_read_scope_asks_the_registry_once_and_sees_its_own_write(tmp_path, monkeypatch):
+    """Control (perf): inside a request's read scope repeated decisions are one GET; a write in the
+    scope is read back."""
+    port, docs, gets, clock = _registry_port(monkeypatch)
+    m.set_policy_store(port)
+    try:
+        _ws(tmp_path, "team")
+        with m.read_scope():
+            assert m.is_member(tmp_path, "team", "bob") == "contributor"
+            first = gets.count("/workspaces/team")
+            assert m.is_member(tmp_path, "team", "alice") == "owner"
+            assert m.is_member(tmp_path, "team", "carol") is None
+            assert gets.count("/workspaces/team") == first                  # answered by the scope
+            m.store_put(tmp_path, "team", "visibility", {"visibility": "open"})
+            m.is_member(tmp_path, "team", "bob")
+            assert gets.count("/workspaces/team") == first + 1                # its own write read back
+    finally:
+        m.set_policy_store(None)

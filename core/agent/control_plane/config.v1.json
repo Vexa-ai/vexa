@@ -158,7 +158,7 @@
       "key": "VEXA_POLICY_LEGACY_READ",
       "class": "defaulted",
       "default": "1",
-      "description": "adopt a workspace's pre-0.13.4 policy records (interim .policy files, else the tree's policy/members.json, visibility.json, connections.json and invites) into the policy store: every unmigrated workspace at agent-api start (migrate_policy_store), and one not yet adopted on its first read; a closed room's participant rows likewise. 0/false/no/off stops all adoption, the boot migration included — set it only after every instance has started once on 0.13.4, or an unmigrated workspace reads as having no members",
+      "description": "adopt a workspace's pre-0.13.4 policy records into the policy store. A workspace tree's policy/members.json, visibility.json, connections.json and invites are read ONCE, by the boot sweep (migrate_policy_store); when that sweep adopted everything, the store records it (.policy/_tree_adoption.json) and no read and no later boot reads a tree again, so leaving it unset is safe and needs no follow-up. A sweep that could not reach the store records nothing and the next boot retries. The interim .policy files (registry backend) and a closed room's participant rows are platform state and are still adopted on first read. 0/false/no/off adopts nothing at all, the boot sweep included: an unmigrated workspace then reads as having no members",
       "targets": []
     },
     {

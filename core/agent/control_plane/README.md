@@ -206,10 +206,12 @@ start by `Notifier.scrub_invite_tokens`). With Redis, `_ws_lock` also takes `Red
   `PolicyStore` port (`shared.adapters.AdminApiPolicyStore`, `/internal/registry/*`). Without
   `VEXA_ADMIN_API_URL` the file backend answers (`<store-root>/.policy/<ws>/` + `.invites/`), outside
   every mount. `read_policy` / `write_policy` / `read_invites` are the only readers and writers.
-  Legacy records (interim files, else the tree's `policy/*.json`) are adopted once — at start
-  (`migrate_policy_store`) and on first read; `VEXA_POLICY_LEGACY_READ=0` stops it. A store that does
+  Legacy records are adopted once: a tree's `policy/*.json` only by the boot sweep
+  (`migrate_policy_store`), which records the adoption in the store (`.policy/_tree_adoption.json`)
+  so no read and no later boot reads a tree again; the interim files also on first read.
+  `VEXA_POLICY_LEGACY_READ=0` adopts nothing. A store that does
   not answer refuses, `503 policy_unreadable` (FD3). The workspace keeps a platform-written MIRROR at
-  `policy/members.json` (audit trail, the worker's reader count) that nothing reads for access;
+  `policy/members.json` (the audit trail) that nothing reads for access;
   evaluator rules stay in git at `policy/rules.json`, platform-only. Invites keep only the sha256 **hash** of each token, with
   `{id, role, mode, allowed_emails, expires_at, max_uses, uses, revoked, …}`, in the same store;
   see the write-guard section below for why they left the tree first.

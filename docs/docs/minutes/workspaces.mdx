@@ -447,9 +447,14 @@ the runtime mounts one folder per workspace and never the folder above them.
    hidden), else its `policy/members.json`, `visibility.json` and `connections.json`, and its
    invites from `.invites/` (or an old `policy/invites.json`). This is also what happens the first
    time a Helm or lite install starts agent-api with identity wired (`VEXA_ADMIN_API_URL`): the
-   file store it ran on before is copied in. A workspace not yet copied is copied on its first read. After that the
-   registry alone answers. Set `VEXA_POLICY_LEGACY_READ=0` on agent-api
-   to stop reading old in-workspace files altogether once every instance has started on 0.13.4.
+   file store it ran on before is copied in. The workspaces' own `policy/*.json` files are read by that
+   start-up copy and nowhere else: once it copied everything, the store records it
+   (`.policy/_tree_adoption.json`) and no later read and no later start reads an in-workspace policy
+   file again, so a file planted in a workspace afterwards grants nothing. A start that could not
+   reach the registry records nothing and the next start copies again; meanwhile that workspace's
+   members are refused. Old `.policy/` files are still copied on first read. After that the
+   registry alone answers, and agent-api asks it on every access decision (it keeps a workspace's
+   rows no longer than one request), so a member removed by any writer is refused at once. `VEXA_POLICY_LEGACY_READ=0` on agent-api copies nothing at all.
    Un-sharing or deleting a workspace removes its rows (and any old files).
 
 ### Invites by email (0.13.4)
@@ -510,7 +515,8 @@ the runtime mounts one folder per workspace and never the folder above them.
 `python -m credential_broker.mail_secret put <name>` in the broker container; see
 [Configuration](/configuration)). `VEXA_SIGNIN_INVITES_ADMIT` on admin-api (default `1`): `0` stops a
 mailed invite from admitting a new address. `VEXA_POLICY_LEGACY_READ` on agent-api
-(default `1`): `0` stops adopting old in-workspace policy files (see Membership and policy). `VEXA_GIT_PROVIDERS` on agent-api (Helm
+(default `1`): old in-workspace policy files are copied once at the first start and then never read;
+`0` copies nothing (see Membership and policy). `VEXA_GIT_PROVIDERS` on agent-api (Helm
 `agentApi.gitProviders`) registers self-hosted git hosts; it is validated when agent-api starts.
 `VEXA_ADMIN_ACCOUNT` on admin-api names the admin account (compose `.env`, Helm
 `adminApi.adminAccount`, Lite `-e`); see [Configuration](/configuration). agent-api's old

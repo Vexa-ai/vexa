@@ -110,11 +110,13 @@ _POLICY_ALLOW = (POLICY_DIR,)
 # from it: the worker's commit hold is told them by agent-api (``private_taint.mount_readers``).
 # Editing it changes nothing.
 #
-# MIGRATION, READ-COMPATIBLE. A workspace with no store directory yet has its legacy in-tree files
-# ADOPTED once — all three together, under the workspace lock, at agent-api start
-# (``migrate_policy_store``) and on first read. After that the store answers alone. Adoption from
-# the tree is a window: a tree file written after the platform last wrote it would be believed once.
-# ``VEXA_POLICY_LEGACY_READ=0`` closes it after the release that migrated every instance.
+# MIGRATION, ONCE, AT BOOT. A workspace with no store directory yet has its legacy in-tree files
+# ADOPTED — all three together, with its in-tree invites, under the workspace lock — by the boot
+# sweep (``migrate_policy_store``), and the store records that its sweep adopted everything
+# (``ADOPTION_RECORD``). From then on the tree is never read for policy again: not on a read, not
+# on a later boot. A tree file planted afterwards confers nothing, whatever it says. Until the sweep
+# has run in this process (an embedding that never boots agent-api, a test), a first read adopts
+# as the sweep would. ``VEXA_POLICY_LEGACY_READ=0`` adopts nothing from any tree at all.
 #
 # FAIL CLOSED (founder FD3, 2026-10-17): a store file that exists and cannot be read refuses
 # (``MembershipError`` 503, ``policy_unreadable``) — it is never "no members", never "open".
@@ -133,6 +135,10 @@ STORE_NAMES = POLICY_NAMES + ("invites", "kind")
 ROOM_STORE_DIR = ".rooms"
 POLICY_UNREADABLE = "policy_unreadable"
 LEGACY_READ_ENV = "VEXA_POLICY_LEGACY_READ"
+#: The store's record that its boot sweep adopted every legacy in-tree record (file backend and
+#: registry alike: it sits beside the interim store, at the store root, outside every mount). Once
+#: it exists no tree is read for policy again.
+ADOPTION_RECORD = f"{POLICY_STORE_DIR}/_tree_adoption.json"
 
 # ── WHERE INVITES LIVE, AND WHY IT IS NOT IN THE WORKSPACE (Vexa-ai/vexa#1645) ───────────────────
 #
@@ -883,7 +889,16 @@ def is_pair(root: Path, workspace_id: str) -> bool:
 
 
 def store_get(root: Path, workspace_id: str, name: str):
-    return _call(_STORE.get, Path(root), workspace_id, name)
+    """One record from the store. Inside a read scope a repeated read is answered from the scope (a
+    policy write in the scope forgets it); outside one, the store answers every time."""
+    scope = _SCOPE.get()
+    key = ("memo", "store", str(root), str(workspace_id), name)
+    if scope is not None and key in scope:
+        return scope[key]
+    value = _call(_STORE.get, Path(root), workspace_id, name)
+    if scope is not None:
+        scope[key] = value
+    return value
 
 
 def store_put(root: Path, workspace_id: str, name: str, value) -> None:
@@ -893,7 +908,39 @@ def store_put(root: Path, workspace_id: str, name: str, value) -> None:
 
 
 def _legacy_read() -> bool:
+    """Adoption of pre-0.13.4 records is allowed at all (``VEXA_POLICY_LEGACY_READ`` not ``0``):
+    the interim file store's rows and a closed room's participant rows, which are platform state,
+    and — only while ``tree_adoption_open`` — a workspace tree's ``policy/*.json``."""
     return os.environ.get(LEGACY_READ_ENV, "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+#: Store roots whose boot sweep ran in this process (recorded or not): their trees are not read again.
+_SWEPT: set[str] = set()
+
+
+def adoption_recorded(root: Path) -> bool:
+    """Has this store's boot sweep recorded that it adopted every legacy in-tree record?"""
+    try:
+        return wpaths.stat_inside(Path(root), ADOPTION_RECORD) is not None
+    except (wpaths.PathRefused, OSError):
+        return False
+
+
+def tree_adoption_open(root: Path) -> bool:
+    """May a workspace tree's ``policy/*.json`` still be adopted under ``root``? Only before the boot
+    sweep: never once the store recorded its adoption, never after this process swept it, and never
+    with ``VEXA_POLICY_LEGACY_READ=0``."""
+    return _legacy_read() and str(Path(root)) not in _SWEPT and not adoption_recorded(root)
+
+
+def _record_adoption(root: Path, adopted: list[str]) -> None:
+    text = json.dumps({"adopted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                       "workspaces": len(adopted)}) + "\n"
+    try:
+        wpaths.write_text_inside(Path(root), ADOPTION_RECORD, text)
+    except (wpaths.PathRefused, OSError) as exc:
+        # the sweep ran and this process reads no tree again; the next boot sweeps once more
+        log.warning("policy store: the tree adoption could not be recorded: %s", exc)
 
 
 def policy_in_store(root: Path, workspace_id: str) -> bool:
@@ -907,10 +954,11 @@ def policy_in_store(root: Path, workspace_id: str) -> bool:
     return False
 
 
-def _legacy_sources(root: Path, workspace_id: str) -> dict:
+def _legacy_sources(root: Path, workspace_id: str, *, tree: bool) -> dict:
     """What an unmigrated workspace has elsewhere: the interim file store (when the backend is not
-    it) first, else the workspace tree's ``policy/*.json``; and its invites (``.invites`` file, else
-    the tree's ``policy/invites.json``). ``{name: value}``; unparseable files are skipped, said."""
+    it) first, else — only with ``tree`` (the boot sweep, or before it) — the workspace tree's
+    ``policy/*.json``; and its invites (``.invites`` file, else the tree's ``policy/invites.json``).
+    ``{name: value}``; unparseable files are skipped, said."""
     found: dict = {}
     if _STORE is not _FILE_STORE and _FILE_STORE.has(root, workspace_id):
         # the interim store also knows a room of two's hidden workspace (``kind``, never in the tree)
@@ -921,7 +969,7 @@ def _legacy_sources(root: Path, workspace_id: str) -> dict:
                 continue
             if v is not None:
                 found[name] = v
-    else:
+    elif tree:
         try:
             ws = _ws_dir(root, workspace_id)
         except MembershipError:
@@ -935,12 +983,16 @@ def _legacy_sources(root: Path, workspace_id: str) -> dict:
             except ValueError:
                 log.warning("policy store: legacy %s/%s.json in %s does not parse; not adopted",
                             POLICY_DIR, name, workspace_id)
-    if _STORE is not _FILE_STORE and found:
-        try:
-            inv = _FILE_STORE.get(root, workspace_id, "invites")
-        except MembershipError:
-            inv = None
-        if inv is None:
+    if found:
+        inv = None
+        if _STORE is not _FILE_STORE:
+            try:
+                inv = _FILE_STORE.get(root, workspace_id, "invites")
+            except MembershipError:
+                inv = None
+        elif wpaths.stat_inside(Path(root), _store_rel(workspace_id, "invites")) is not None:
+            inv = []                                  # the file backend already holds its invites
+        if inv is None and tree:
             try:
                 inv = _read_json_list(_ws_dir(root, workspace_id), LEGACY_INVITES_FILE) or None
             except MembershipError:
@@ -967,13 +1019,13 @@ def _ensure_migrated(root: Path, workspace_id: str) -> bool:
     return adopted
 
 
-def _adopt(root: Path, workspace_id: str) -> bool:
+def _adopt(root: Path, workspace_id: str, *, sweep: bool = False) -> bool:
     with _ws_lock(workspace_id):
         if policy_in_store(root, workspace_id):
             return True
         if not _legacy_read():
             return False
-        found = _legacy_sources(root, workspace_id)
+        found = _legacy_sources(root, workspace_id, tree=sweep or tree_adoption_open(root))
         if not found:
             return False
         for name in ("members", "visibility", "connections", "kind", "invites"):
@@ -997,12 +1049,39 @@ def read_policy(root: Path, workspace_id: str, name: str, default):
     return default if value is None else value
 
 
+#: Told ``(root, workspace_id)`` after a workspace's roster changed or was dropped: agent-api
+#: re-reads the audience of every running unit that mounts it (``mount_audience.refresh``).
+_ROSTER_LISTENER: list = []
+
+
+def set_roster_listener(fn: Optional[Callable[[Path, str], None]]) -> None:
+    """Install (or, with ``None``, remove) the one roster-change listener."""
+    _ROSTER_LISTENER[:] = [fn] if fn is not None else []
+
+
+def _roster_changed(root: Path, workspace_id: str) -> None:
+    for fn in list(_ROSTER_LISTENER):
+        try:
+            fn(Path(root), workspace_id)
+        except Exception as exc:  # noqa: BLE001 — the decision is stored; only the hint failed, said
+            log.error("roster change of %s not passed on: %s", workspace_id, exc)
+
+
 def write_policy(root: Path, workspace_id: str, name: str, value, *,
                  commit_fn: Optional[CommitFn] = None, message: str = "") -> None:
     """THE ONE WRITER: the store (authoritative), then the tree's ``policy/<name>.json`` mirror and its
     commit. A workspace still on legacy records is migrated first, so writing one never strands the
-    others."""
+    others. A roster write is passed on at once to every running unit that mounts the workspace."""
     root = Path(root)
+    try:
+        _write_policy(root, workspace_id, name, value, commit_fn=commit_fn, message=message)
+    finally:
+        if name == "members":
+            _roster_changed(root, workspace_id)
+
+
+def _write_policy(root: Path, workspace_id: str, name: str, value, *,
+                  commit_fn: Optional[CommitFn], message: str) -> None:
     with _ws_lock(workspace_id):
         _ensure_migrated(root, workspace_id)
         store_put(root, workspace_id, name, value)
@@ -1032,6 +1111,7 @@ def drop_policy_store(root: Path, workspace_id: str) -> bool:
     dropped = bool(_call(_STORE.drop, Path(root), workspace_id))
     if _STORE is not _FILE_STORE:                       # and the interim files, so nothing re-adopts them
         dropped = _FILE_STORE.drop(Path(root), workspace_id) or dropped
+    _roster_changed(Path(root), workspace_id)
     return dropped
 
 
@@ -1056,29 +1136,47 @@ def read_rules(root: Path, workspace_id: str) -> list:
 
 
 def migrate_policy_store(root: Path) -> list[str]:
-    """Adopt every workspace's legacy policy (interim files, else tree files; and their invites)
-    into the store — run once at agent-api start, so the read-compatible window lasts no longer than
-    the boot. Idempotent. Never raises. The workspace ids adopted by this call."""
+    """THE BOOT SWEEP: adopt every workspace's legacy policy (interim files, else tree files; and
+    their invites) into the store, once. Run at agent-api start, before anything is served.
+
+    The trees are read here and nowhere else: once this has run, this process never reads a tree for
+    policy again, and once a sweep adopted everything without a failure the store records it
+    (``ADOPTION_RECORD``) and no later boot reads a tree either. A sweep that could not adopt a
+    workspace (the store did not answer) records nothing, so the next boot tries again; its members
+    are refused meanwhile, never guessed from the tree. The interim file store (when the registry is
+    the backend) is platform state outside every mount and is still adopted at boot and on first
+    read. Idempotent. Never raises. The workspace ids adopted by this call."""
     root = Path(root)
     adopted: list[str] = []
     if not _legacy_read():
+        _SWEPT.add(str(root))
         return adopted
+    tree = not adoption_recorded(root)
     try:
-        names = set(wpaths.list_dirs_inside(root, ""))
+        names = set(wpaths.list_dirs_inside(root, "")) if tree else set()
         if _STORE is not _FILE_STORE:
             names |= set(wpaths.list_dirs_inside(root, POLICY_STORE_DIR))
     except Exception:  # noqa: BLE001
+        _SWEPT.add(str(root))
         return adopted
+    failed: list[str] = []
     for slug in sorted(names):
         if slug.startswith(".") or slug in RESERVED_SLUGS or not wpaths.is_workspace_name(slug):
             continue
         try:
             if policy_in_store(root, slug):
                 continue
-            if _ensure_migrated(root, slug):
+            if _adopt(root, slug, sweep=tree):
                 adopted.append(slug)
         except Exception as exc:  # noqa: BLE001 — one bad tree never stops the rest
+            failed.append(slug)
             log.warning("policy store: %s not migrated: %s", slug, exc)
+    _SWEPT.add(str(root))
+    if tree and not failed:
+        _record_adoption(root, adopted)
+    elif failed:
+        log.error("policy store: %d workspace(s) not adopted (%s); their members are refused until "
+                  "a boot adopts them", len(failed), ", ".join(failed[:10]))
     if adopted:
         log.info("policy store: migrated %d workspace(s)", len(adopted))
     return adopted
@@ -1121,7 +1219,7 @@ def read_invites(root: Path, workspace_id: str) -> list[dict]:
     rows = store_get(root, workspace_id, "invites")
     if rows is not None:
         return rows if isinstance(rows, list) else []
-    if _STORE is not _FILE_STORE:
+    if _STORE is not _FILE_STORE or not tree_adoption_open(root):
         return []
     return _read_json_list(_ws_dir(root, workspace_id), LEGACY_INVITES_FILE)
 
@@ -1168,7 +1266,7 @@ def workspaces_with_invites(root: Path) -> list[str]:
     store_dir = root / INVITE_STORE_DIR
     if store_dir.is_dir():
         found |= {p.stem for p in store_dir.glob("*.json")}
-    if root.exists():
+    if root.exists() and tree_adoption_open(root):
         for child in root.iterdir():
             if child.is_dir() and (child / LEGACY_INVITES_FILE).exists():
                 found.add(child.name)
@@ -1305,9 +1403,9 @@ def list_memberships(root: Path, subject: str) -> list[dict]:
         return []
     out = list(_call(_STORE.member_workspaces, root, subject) or [])
     seen = {r.get("workspace_id") for r in out}
-    # Read-compatible migration: a tree (or interim file) not yet adopted is adopted here, then asked.
+    # A tree (before the boot sweep) or an interim file not yet adopted is adopted here, then asked.
     if _legacy_read():
-        candidates = {c.name for c in root.iterdir() if c.is_dir()}
+        candidates = {c.name for c in root.iterdir() if c.is_dir()} if tree_adoption_open(root) else set()
         if _STORE is not _FILE_STORE:
             candidates |= set(wpaths.list_dirs_inside(root, POLICY_STORE_DIR))
         for slug in sorted(candidates - seen):
