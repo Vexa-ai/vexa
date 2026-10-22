@@ -773,7 +773,7 @@ def test_a_member_removed_by_another_writer_is_refused_at_once(tmp_path, monkeyp
     try:
         _ws(tmp_path, "team")
         assert m.is_member(tmp_path, "team", "bob") == "contributor"
-        docs["team"]["members"] = [{"subject": "alice", "role": "owner"}]       # written elsewhere
+        docs["team"] = {"workspace": {}, "members": [{"subject": "alice", "role": "owner"}]}  # elsewhere
         clock[0] += 0.5
         assert m.is_member(tmp_path, "team", "bob") is None
     finally:
