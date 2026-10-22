@@ -2038,6 +2038,19 @@ tb "extraCA under the OpenShift profile: the bundle writer brings no securityCon
 tb "extraCA reaches the model proxy and signals (both call a model through the inspection)" 'xca_check on <<< "$X_ON" | grep -q "model-proxy" && xca_check on <<< "$X_ON" | grep -q "signals"'
 X_MIG="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${WS[@]}" --set agentApi.workspaces.s3.migrate.enabled=true --set global.extraCA.secret=corp-ca,global.extraCA.key=root.pem --show-only templates/job-workspaces-s3-migrate.yaml)"
 tb "extraCA reaches the workspace-store migration Job beside its own S3 CA" 'grep -q "name: vexa-ca-bundle" <<< "$X_MIG" && grep -q "name: workspace-s3-ca" <<< "$X_MIG" && grep -A1 "name: SSL_CERT_FILE" <<< "$X_MIG" | grep -q ca-bundle.crt'
+X_ADM="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-admin-api.yaml \
+  --set terminal.oidc.issuer=https://adfs.example.test/adfs --set terminal.oidc.clientId=vexa-terminal --set terminal.oidc.existingSecret=vexa-oidc \
+  --set terminal.oidc.caBundle.configMap=oidc-ca --set global.extraCA.configMap=corp-ca,global.extraCA.key=root.pem)"
+tb "admin-api: extraCA sits beside its photo store and OIDC CA under one volumes key and one volumeMounts key" 'python3 -c "
+import sys, yaml
+d = yaml.safe_load(sys.stdin); sp = d[\"spec\"][\"template\"][\"spec\"]; c = sp[\"containers\"][0]
+vols = [v[\"name\"] for v in sp[\"volumes\"]]; mounts = [m[\"name\"] for m in c[\"volumeMounts\"]]
+assert {\"vexa-extra-ca\", \"vexa-ca-bundle\", \"s3-client\"} <= set(vols) and len(vols) == len(set(vols)), vols
+assert {\"vexa-extra-ca\", \"vexa-ca-bundle\", \"s3-client\", \"oidc-ca\"} <= set(mounts) and len(mounts) == len(set(mounts)), mounts
+assert any(\"oidc\" in v for v in vols), vols
+" <<< "$X_ADM" && [ "$(grep -c "^      volumes:" <<< "$X_ADM")" -eq 1 ]'
+X_INJ="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -f "$CHART/values-openshift.yaml" --set agentApi.workspaces.storageClassName=rwx --set global.extraCA.configMap=trusted-ca,global.extraCA.key=ca-bundle.crt --show-only templates/deployment-runtime.yaml)"
+tb "extraCA from an OpenShift injected trusted-CA ConfigMap (key ca-bundle.crt) reaches the runtime and its spawned Pods" 'grep -q "key: \"ca-bundle.crt\", path: ca.crt" <<< "$X_INJ" && grep -A1 "name: RUNTIME_K8S_EXTRA_CA" <<< "$X_INJ" | grep -q "ca-bundle.crt"'
 tb "extraCA naming both a configMap and a secret is refused" '! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set global.extraCA.configMap=a,global.extraCA.secret=b >/dev/null 2>&1'
 
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
