@@ -61,6 +61,7 @@ flowchart LR
   meeting_api -->|"JDBC"| postgres
   meeting_api -->|"HTTPS"| object_store
   meeting_api -->|"HTTP"| livekit
+  meeting_api -->|"HTTPS"| transcription
   agent_api -->|"HTTP"| livekit
   bot -->|"WebSocket"| livekit
   terminal -->|"WebSocket"| livekit

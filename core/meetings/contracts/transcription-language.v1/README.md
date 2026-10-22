@@ -44,11 +44,34 @@ on `bot_commands:meeting:{meeting_id}`, and stores it (source `meeting`) only wh
 the bot applies it from its next STT call. Allowed for the meeting's owner and for an owner or
 contributor of the workspace it is bound to. Refusals are in `x-routes`.
 
+## The languages a caller can choose from
+
+`GET /transcription/languages` (`LanguageCatalog`) answers which codes a bot this caller sends can
+transcribe, and the deployment default:
+
+```json
+{ "languages": [{"code": "en", "name": "English"}, {"code": "zh", "name": "Chinese"}, …],
+  "default": {"language": null, "allowed_languages": []},
+  "model": "large-v3-turbo", "source": "provider" }
+```
+
+The list belongs to the model. meeting-api finds the caller's backend as a spawn would (their Settings
+backend, else the deployment's), asks a backend the deployment owns for its model (`GET {url}/health`
+→ `model`; never a customer's endpoint), and reads that model's codes from the sealed `catalog.json`.
+`source` says which model id chose the list: `provider` (the backend named it), `configured` (the
+configured model id), `assumed` (none known or not listed → every code the language fields accept).
+`default` is the deployment tier, the lowest one: it never narrows `languages`.
+
+`catalog.json` holds Whisper's 100 codes with English names and the model-id → list table. Its
+reading is pinned by the `ModelLookup.*` goldens; a `LanguageCatalog` golden lists exactly what its
+model reads to.
+
 ## Readers
 
 | Reader | Uses |
 |---|---|
 | meeting-api `bot_spawn/transcription_language.py` | validates every tier, resolves, stores, publishes |
+| meeting-api `bot_spawn/language_catalog.py` | `catalog.json`; answers `GET /transcription/languages` |
 | identity admin-api | validates and stores the user tier |
 | meeting bot `src/transcription-language.ts` | applies the setting and every `reconfigure` |
 | terminal, MCP `request_meeting_bot` / `update_bot_config` | write the meeting tier |
