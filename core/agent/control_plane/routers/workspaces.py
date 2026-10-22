@@ -79,6 +79,35 @@ import os
 import re
 
 
+#: WHO WROTE A PAGE (H10). A page-route commit made for a person by their agent (a delegated caller)
+#: closes its message with git trailers that say so: ``On-behalf-of: <person>`` and
+#: ``Written-by: agent`` (plus ``Agent-unit: <unit>`` when the identity names one). The person's own
+#: write carries none. The audit reads them with ``git log --format=%(trailers)``; nothing a caller
+#: sends reaches the trailer block, which is written here from the verified identity alone.
+ON_BEHALF_OF = "On-behalf-of"
+WRITTEN_BY = "Written-by"
+AGENT_UNIT = "Agent-unit"
+_TRAILER_VALUE = re.compile(r"[^A-Za-z0-9@._+:-]")
+
+
+def writer_trailers(headers) -> list:
+    """The trailer lines a commit made for this caller carries: none for a person's own write."""
+    if not identity_token.is_delegated(headers):
+        return []
+    subject = _TRAILER_VALUE.sub("", str(headers.get("x-user-id") or ""))[:128] or "unknown"
+    out = [f"{ON_BEHALF_OF}: {subject}", f"{WRITTEN_BY}: agent"]
+    unit = _TRAILER_VALUE.sub("", identity_token.session_of(headers))[:160]
+    if unit:
+        out.append(f"{AGENT_UNIT}: {unit}")
+    return out
+
+
+def attributed(message: str, headers) -> str:
+    """``message`` with the writer's trailers as its last paragraph (unchanged for a person)."""
+    lines = writer_trailers(headers)
+    return f"{message}\n\n" + "\n".join(lines) if lines else message
+
+
 #: HOW FAR BACK THE FRONT PAGE LOOKS for a change a person can read (Vexa-ai/vexa#1634). Deep enough
 #: to walk past a run of plumbing commits — an identity write, a roster write, a policy commit — and
 #: shallow enough that the answer is still "recently". A workspace whose last twenty commits are all
@@ -401,7 +430,7 @@ def build(**d) -> APIRouter:
             logger.warning("page images: could not file the friction for %s", path or "(no path)")
         return clean
 
-    def _commit(target: Path, paths: list[str], message: str) -> "str | None":
+    def _commit(target: Path, paths: list[str], message: str, request: Optional[Request] = None) -> "str | None":
         """Commit exactly the paths named, so history stays honest and a concurrent write in the
         same workspace is not swept into somebody else's message (the index is a shared surface).
         Returns the workspace's HEAD afterwards, or None when it is not a repository.
@@ -421,6 +450,8 @@ def build(**d) -> APIRouter:
 
         staged = [p for p in paths if p and _git("add", "--", p).returncode == 0]
         if staged:
+            if request is not None:
+                message = attributed(message, request.headers)
             _git("-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local",
                  "commit", "-m", message, "--", *staged)
         return _git("rev-parse", "HEAD").stdout.strip() or None
@@ -447,7 +478,7 @@ def build(**d) -> APIRouter:
             wpaths.write_text_inside(ibase, irel, assets_mod.record_source(existing, rel, source))
         except wpaths.PathRefused as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        _commit(target, [rel, assets_mod.SOURCES_INDEX], f"asset {rel} ({source or 'uploaded'})")
+        _commit(target, [rel, assets_mod.SOURCES_INDEX], f"asset {rel} ({source or 'uploaded'})", request)
         return {"path": rel, "bytes": len(content), "source": source,
                 "content_type": assets_mod.media_type_for(rel)}
 
@@ -771,7 +802,8 @@ def build(**d) -> APIRouter:
             if (target / ".git").is_dir():
                 run_git(target, "add", "--", rel)
                 run_git(target, "-c", "user.name=vexa-terminal", "-c", "user.email=terminal@vexa.local",
-                        "commit", "-m", f"edit {rel} (terminal page editor)" + (f"\n\n{notice}" if notice else ""))
+                        "commit", "-m", attributed(f"edit {rel} (terminal page editor)"
+                                                   + (f"\n\n{notice}" if notice else ""), request.headers))
         _record_call_change(request, slug, target, rel, _before, content)
         # THE FILE'S REFERENCE, qualified (founder ruling 2026-10-18): the agent names what it wrote
         # with this, never a bare path — `README.md` is in every workspace.
@@ -844,7 +876,8 @@ def build(**d) -> APIRouter:
             if (target / ".git").is_dir():
                 run_git(target, "add", "--", rel)
                 run_git(target, "-c", "user.name=vexa-agent", "-c", "user.email=agent@vexa.local",
-                        "commit", "-m", f"listening brief v{version} for meeting {body.meeting}")
+                        "commit", "-m", attributed(f"listening brief v{version} for meeting {body.meeting}",
+                                                   request.headers))
         listening = pol["transcript_signals"] == "on" and bool(pol["model_signals"])
         return {"meeting": body.meeting, "path": rel, "workspace": place["workspace"],
                 "version": version, "brief": brief, "listening": listening,
@@ -1001,7 +1034,7 @@ def build(**d) -> APIRouter:
         if not wpaths.unlink_inside(froot, frel):
             raise HTTPException(status_code=404, detail="not found")
         sha = _commit(target, [rel, *_kg_index_after(target, rel)],
-                      _page_subject(target.name, rel, "removed") + (f"\n\n{notice}" if notice else ""))
+                      _page_subject(target.name, rel, "removed") + (f"\n\n{notice}" if notice else ""), request)
         return {"path": rel, "deleted": True, "workspace": slug or "", "commit": sha}
 
     @router.post("/api/workspace/restore")
@@ -1054,7 +1087,7 @@ def build(**d) -> APIRouter:
         except wpaths.PathRefused as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
         head = _commit(target, [rel, *_kg_index_after(target, rel)],
-                       _page_subject(target.name, rel, "restored"))
+                       _page_subject(target.name, rel, "restored"), request)
         return {"path": rel, "restored": True, "workspace": slug or "", "commit": head,
                 "from_commit": sha}
 
@@ -1122,15 +1155,16 @@ def build(**d) -> APIRouter:
         subject_line = f"{dst.name}: {dst_rel} — moved from {src_rel}"[:72] + (f"\n\n{notice}" if notice else "")
         if same_workspace:
             sha = _commit(src, [src_rel, dst_rel, *_kg_index_after(src, src_rel, dst_rel)],
-                          subject_line)
+                          subject_line, request)
             return {"from": src_rel, "to": dst_rel, "workspace": src_slug or "",
                     "to_workspace": dst_slug or "", "moved": True,
                     "pointer": src_rel if stub else None, "commit": sha, "source_commit": sha}
         # TWO REPOSITORIES, TWO COMMITS — the target first, so the moment between them is one where
         # the page exists twice rather than not at all.
-        to_sha = _commit(dst, [dst_rel, *_kg_index_after(dst, dst_rel)], subject_line)
+        to_sha = _commit(dst, [dst_rel, *_kg_index_after(dst, dst_rel)], subject_line, request)
         from_sha = _commit(src, [src_rel, *_kg_index_after(src, src_rel)],
-                           f"{src.name}: {src_rel} — moved out"[:72] + (f"\n\n{notice}" if notice else ""))
+                           f"{src.name}: {src_rel} — moved out"[:72] + (f"\n\n{notice}" if notice else ""),
+                           request)
         return {"from": src_rel, "to": dst_rel, "workspace": src_slug or "",
                 "to_workspace": dst_slug or "", "moved": True, "pointer": None,
                 "commit": to_sha, "source_commit": from_sha}
@@ -1244,7 +1278,8 @@ def build(**d) -> APIRouter:
                     target, [result["path"], index_rel, *result.get("back_links", ()),
                              *[new for _old, new in moved], *tracked],
                     subject_path=result["path"], created=bool(result.get("created")),
-                    author=(str(subject), f"{subject}@vexa.local"))
+                    author=(str(subject), f"{subject}@vexa.local"),
+                    trailers=writer_trailers(request.headers))
             ref = links_mod.page_ref(slug or str(subject), result["path"]) if result.get("path") else None
             return {**result, "index": index_rel, "commit": sha, **({"ref": ref} if ref else {})}
     @router.get("/api/workspace/git")

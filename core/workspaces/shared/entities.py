@@ -2181,7 +2181,7 @@ def write_index(root, slug: str = "") -> str:
 # ── the commit ───────────────────────────────────────────────────────────────────────────────────
 
 def commit_entity(root, paths, *, subject_path: str, created: bool,
-                  author=None):
+                  author=None, trailers=()):
     """ONE commit, BY PATHSPEC, carrying the F31 subject shape ``<workspace>: <path> — added|updated``.
 
     By pathspec on purpose, and for a standing reason rather than a local nicety: ``git commit``
@@ -2189,7 +2189,8 @@ def commit_entity(root, paths, *, subject_path: str, created: bool,
     running worker turn had staged in the same repo and file it under this message. The index is a
     write surface with no owner; naming the paths is how this writer stays in its own lane. The
     subject names the ENTITY page even when `kg/INDEX.md` rides along, because that is the change a
-    reader of ``git log --oneline`` came for."""
+    reader of ``git log --oneline`` came for. ``trailers`` (``"Key: value"`` lines) close the
+    message: who wrote the change when it was not the person (an agent acting for them)."""
     root = Path(root)
     if not (root / ".git").is_dir():
         return None
@@ -2208,6 +2209,8 @@ def commit_entity(root, paths, *, subject_path: str, created: bool,
     if not git("diff", "--cached", "--name-only", "--", *paths).stdout.strip():
         return None
     subject = f"{root.name}: {subject_path} — {'added' if created else 'updated'}"[:72]
+    if trailers:
+        subject += "\n\n" + "\n".join(trailers)
     if git("commit", "-m", subject, "--", *paths).returncode != 0:
         return None
     return git("rev-parse", "HEAD").stdout.strip() or None

@@ -247,14 +247,21 @@ def test_model_shell_holds_no_delegation_bearer(monkeypatch):
 
 # ── H10: git history tells a person's write from an agent's ─────────────────────────────────────
 
-@pytest.mark.xfail(strict=True, reason="H10: page-route commits use one fixed `vexa-terminal` identity for "
-                                       "a person and their agent alike (workspaces.py:719-722) "
-                                       "(security-validation-2026-10-17)")
+def _trailer(root, key, n=1):
+    import subprocess
+    return subprocess.run(["git", "-C", str(root / "team"), "log", f"-{n}",
+                           f"--format=%(trailers:key={key},valueonly)%x00"],
+                          capture_output=True, text=True, check=True).stdout.split("\x00")[0].strip()
+
+
+AGENT_OF_ALICE = {"X-User-Id": "alice", "x-user-regime": "human", "x-user-delegation-workspaces": "team",
+                  "x-user-delegation-target": "team", "x-user-delegation-unit": "agent-alice-chat-c1"}
+
+
 def test_agent_page_write_is_attributed_differently_from_the_persons(world):
     import subprocess
     client, store, calls, spawned, root, _d = world
-    agent = {"X-User-Id": "alice", "x-user-regime": "human", "x-user-delegation-workspaces": "team",
-             "x-user-delegation-target": "team"}
+    agent = AGENT_OF_ALICE
     assert client.put("/api/workspace/file", headers=_h("alice"),
                       json={"path": "a.md", "content": "by alice\n", "slug": "team"}).status_code == 200
     assert client.put("/api/workspace/file", headers=agent,
@@ -265,6 +272,45 @@ def test_agent_page_write_is_attributed_differently_from_the_persons(world):
     assert len(entries) == 2, entries
     (agent_author, agent_body), (person_author, _pb) = (e.split("|", 1) for e in entries)
     assert agent_author != person_author or "on-behalf-of" in agent_body.lower(), entries
+    # read as git reads a trailer: the agent's commit says who it wrote for, and that an agent wrote it
+    assert _trailer(root, "On-behalf-of") == "alice"
+    assert _trailer(root, "Written-by") == "agent"
+    assert _trailer(root, "Agent-unit") == "agent-alice-chat-c1"
+
+
+def test_a_persons_own_page_write_carries_no_agent_trailer(world):
+    """The control: the person's own write is theirs, with no on-behalf-of trailer."""
+    client, store, calls, spawned, root, _d = world
+    assert client.put("/api/workspace/file", headers=_h("alice"),
+                      json={"path": "mine.md", "content": "by alice\n", "slug": "team"}).status_code == 200
+    assert _trailer(root, "On-behalf-of") == "" and _trailer(root, "Written-by") == ""
+
+
+def test_a_person_cannot_make_their_write_read_as_an_agents(world):
+    """Nothing a caller sends reaches the trailer block: a path spelling a trailer stays in the subject."""
+    client, store, calls, spawned, root, _d = world
+    r = client.put("/api/workspace/file", headers=_h("alice"),
+                   json={"path": "On-behalf-of: bob.md", "content": "x\n", "slug": "team"})
+    if r.status_code == 200:
+        assert _trailer(root, "On-behalf-of") == ""
+
+
+@pytest.mark.parametrize("verb", ["remove", "move", "entity"])
+def test_every_page_route_an_agent_reaches_attributes_its_commit(world, verb):
+    client, store, calls, spawned, root, _d = world
+    assert client.put("/api/workspace/file", headers=_h("alice"),
+                      json={"path": "p.md", "content": "page\n", "slug": "team"}).status_code == 200
+    if verb == "remove":
+        r = client.post("/api/workspace/remove", headers=AGENT_OF_ALICE, json={"path": "p.md", "slug": "team"})
+    elif verb == "move":
+        r = client.post("/api/workspace/move", headers=AGENT_OF_ALICE,
+                        json={"path": "p.md", "to": "q.md", "slug": "team"})
+    else:
+        r = client.post("/api/workspace/entity", headers=AGENT_OF_ALICE,
+                        json={"kind": "person", "name": "Dana Example", "summary": "a person", "slug": "team",
+                              "source": "the test"})
+    assert r.status_code == 200, r.text
+    assert _trailer(root, "On-behalf-of") == "alice" and _trailer(root, "Written-by") == "agent"
 
 
 # ── an ask that names no credential is never a person's session (gate Low: credential default) ──
