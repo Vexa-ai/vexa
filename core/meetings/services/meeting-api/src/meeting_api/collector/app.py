@@ -46,6 +46,7 @@ from . import reader_directory as _reader_directory
 from . import room_plan as _room_plan
 from .chat import chat_messages
 from .meeting_link import parse_meeting_url
+from ..meeting_url_redaction import strip_host_tokens
 from .obs import TraceMiddleware as _DefaultTraceMiddleware
 from .obs import log_event as _default_log_event
 from .ports import RedisBus, TranscriptStore
@@ -584,7 +585,8 @@ def build_router(
         meeting_url = payload.get("meeting_url")
         if meeting_url is not None and not isinstance(meeting_url, str):
             raise HTTPException(status_code=422, detail="'meeting_url' must be a string")
-        meeting_url = (meeting_url or "").strip() or None
+        # a host-only token (Zoom's `zak`) is never stored — the bot joins as a guest
+        meeting_url = strip_host_tokens((meeting_url or "").strip()) or None
         platform, native_id = "unknown", None
         if meeting_url:
             parsed = parse_meeting_url(meeting_url)
@@ -673,7 +675,7 @@ def build_router(
             meeting_url = payload["meeting_url"]
             if meeting_url is not None and not isinstance(meeting_url, str):
                 raise HTTPException(status_code=422, detail="'meeting_url' must be a string")
-            meeting_url = (meeting_url or "").strip() or None
+            meeting_url = strip_host_tokens((meeting_url or "").strip()) or None
             if meeting_url:
                 parsed = parse_meeting_url(meeting_url)
                 if parsed is None:

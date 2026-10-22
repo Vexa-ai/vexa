@@ -5,6 +5,7 @@ import {
   jitsiRemovalTexts,
   jitsiPostMeetingIndicators,
 } from "./selectors";
+import { redactMeetingUrl } from "../shared/url-redaction";
 
 /**
  * Poll for removal / end-of-meeting. Returns a cleanup fn that stops polling.
@@ -42,7 +43,7 @@ export function startJitsiRemovalMonitor(
     stopped = true;
     const elapsed = ((Date.now() - joinedAtMs) / 1000).toFixed(1);
     log(`[Jitsi] REMOVAL TRIGGERED (${elapsed}s after join): ${reason}`);
-    log(`[Jitsi] Current URL at removal: ${page.url()}`);
+    log(`[Jitsi] Current URL at removal: ${redactMeetingUrl(page.url())}`);
     onRemoval && await onRemoval();
   };
 
@@ -54,7 +55,7 @@ export function startJitsiRemovalMonitor(
     if (Date.now() - joinedAtMs < GRACE_PERIOD_MS) return;
     try {
       if (origin && new URL(url).origin !== origin) {
-        triggerRemoval(`Navigation away from the Jitsi deployment: ${url}`);
+        triggerRemoval(`Navigation away from the Jitsi deployment: ${redactMeetingUrl(url)}`);
       }
     } catch { /* unparsable URL — leave it to the poll loop */ }
   };

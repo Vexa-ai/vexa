@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..collector.meeting_link import parse_meeting_url
+from ..meeting_url_redaction import redact_url, strip_host_tokens
 from .. import identity_token
 from ..regime import require_person_or_granted, shared_bot_workspace
 from ..workspace_write import require_writable, writable_workspaces
@@ -181,7 +182,7 @@ def _validate_meeting_url(url: object) -> str:
     try:
         parsed = urlparse(raw)
     except ValueError:
-        raise HTTPException(status_code=422, detail=f"meeting_url does not parse as a URL: {raw!r}")
+        raise HTTPException(status_code=422, detail=f"meeting_url does not parse as a URL: {redact_url(raw)!r}")
     if parsed.scheme != "https":
         raise HTTPException(
             status_code=422,
@@ -209,7 +210,9 @@ def _validate_meeting_url(url: object) -> str:
             status_code=422,
             detail="meeting_url cannot be an IP literal — use the deployment's hostname",
         )
-    return raw
+    # A host-only token (Zoom's `zak`) starts the meeting AS ITS HOST; the bot joins as a guest and
+    # never uses it, so it is dropped here, before it can reach a stored row, a log or the bot.
+    return strip_host_tokens(raw)
 
 
 def _resolve_user_id(x_user_id: Optional[str]) -> int:
@@ -441,7 +444,7 @@ def build_router(
                     status_code=422,
                     detail=(
                         "'native_meeting_id' is required: it could not be derived from "
-                        f"meeting_url '{meeting_url}' (unrecognized meeting link)"
+                        f"meeting_url '{redact_url(meeting_url)}' (unrecognized meeting link)"
                     ),
                 )
             derived_platform, native_meeting_id = derived

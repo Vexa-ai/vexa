@@ -24,6 +24,7 @@ import {
   isTerminal,
 } from './contracts.js';
 import { buildJoinEvidence } from './join-evidence.js';
+import { redactUrlsIn } from '@vexa/join/url-redaction';
 import type {
   JoinDriver,
   JoinOutcome,
@@ -157,6 +158,21 @@ function assertRequiredPorts(deps: OrchestratorDeps): void {
  * Build the meeting orchestrator. Returns `run()` (drives the machine to a terminal state)
  * and `handle(act)` (the acts.v1 entrypoint the ActsSource adapter — or a test — feeds).
  */
+/**
+ * A lifecycle event's free text — `reason` and `join_evidence.detail` — is an error message from
+ * somewhere in the join, and it becomes the meeting's stored reason, its `last_error` and its
+ * webhook. A message that quotes the meeting URL would carry the passcode into all of them, so the
+ * URLs in it are redacted (host, path and meeting id kept) on the way out.
+ */
+export function redactEvent<E extends LifecycleEvent>(ev: E): E {
+  const out: E = { ...ev };
+  if (typeof out.reason === 'string') out.reason = redactUrlsIn(out.reason);
+  if (out.join_evidence && typeof out.join_evidence.detail === 'string') {
+    out.join_evidence = { ...out.join_evidence, detail: redactUrlsIn(out.join_evidence.detail) };
+  }
+  return out;
+}
+
 export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
   assertRequiredPorts(deps);
   const base: { connection_id: string; container_id?: string } = {
@@ -180,13 +196,13 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
     if (isTerminal(status) && deps.degraded) {
       try { degraded = deps.degraded(); } catch { degraded = undefined; }
     }
-    await deps.lifecycle.emit({
+    await deps.lifecycle.emit(redactEvent({
       ...base,
       status,
       timestamp: extra.timestamp ?? eventTime(),
       ...extra,
       ...(degraded ?? {}),
-    });
+    }));
   };
 
   // The load-bearing FIRST emit (#530). `cur` is already `joining` (the initial state), so this
@@ -199,8 +215,8 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
       timestamp: extra.timestamp ?? eventTime(),
       ...extra,
     };
-    if (deps.lifecycle.emitReachable) return (await deps.lifecycle.emitReachable(ev)) === 'reachable';
-    await deps.lifecycle.emit(ev);
+    if (deps.lifecycle.emitReachable) return (await deps.lifecycle.emitReachable(redactEvent(ev))) === 'reachable';
+    await deps.lifecycle.emit(redactEvent(ev));
     return true;
   };
 

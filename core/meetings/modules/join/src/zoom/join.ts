@@ -11,6 +11,7 @@ import {
 } from "./selectors";
 import { checkUiLocale } from '../shared/ui-locale';
 import { readZoomPreJoinSnapshot, classifyZoomPreJoin, describeZoomPreJoin } from './prejoin-state';
+import { redactMeetingUrl, redactUrlsIn, rethrowRedacted } from '../shared/url-redaction';
 
 // NOTE vs the monolith: the audio-join flow (prepareZoomWebMeeting) and the
 // per-speaker capture pipeline are RECORDING/HOST concerns and stay outside
@@ -69,7 +70,7 @@ export function buildZoomWebClientUrl(meetingUrl: string): string {
       const pathMatch = url.pathname.match(/\/j\/(\d+)/);
       const meetingId = pathMatch?.[1];
       if (!meetingId) {
-        throw new Error(`Cannot extract meeting ID from Zoom URL: ${meetingUrl}`);
+        throw new Error(`Cannot extract meeting ID from Zoom URL: ${redactMeetingUrl(meetingUrl)}`);
       }
       const pwd = url.searchParams.get('pwd') || '';
       const wcUrl = new URL(`https://app.zoom.us/wc/${meetingId}/join`);
@@ -85,7 +86,7 @@ export function buildZoomWebClientUrl(meetingUrl: string): string {
   } catch (err: any) {
     // If already a web client URL or unrecognised format, return as-is
     if (meetingUrl.includes('/wc/')) return meetingUrl;
-    throw new Error(`Invalid Zoom meeting URL: ${meetingUrl} — ${err.message}`);
+    throw new Error(`Invalid Zoom meeting URL: ${redactMeetingUrl(meetingUrl)} — ${redactUrlsIn(err.message)}`);
   }
 }
 
@@ -114,7 +115,7 @@ export async function joinZoomMeeting(
 
   const rawUrl = meetingUrl;
   const webClientUrl = buildZoomWebClientUrl(rawUrl);
-  log(`[Zoom Web] Navigating to web client: ${webClientUrl}`);
+  log(`[Zoom Web] Navigating to web client: ${redactMeetingUrl(webClientUrl)}`);
 
   // White-label / enterprise URLs (LFX, AWS Chime, Bloomberg-style portals) often render an extra
   // page in front of Zoom's pre-join: T&C consent, guest-name confirm, captcha, magic-link auth. The
@@ -132,7 +133,7 @@ export async function joinZoomMeeting(
   // `…/join?wpk=…`, and what lives there may reload itself, so the page is read again on every poll
   // (prejoin-state.ts) — never once before the redirect.
   const startTime = Date.now();
-  await page.goto(webClientUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.goto(webClientUrl, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(rethrowRedacted);
   let navigatedAt = Date.now();
   let nameDeadline = navigatedAt + nameInputTimeoutMs;
   let lastHeadline: string | null = null;
@@ -161,7 +162,7 @@ export async function joinZoomMeeting(
       }
       log(`[Zoom Web] Host not started yet (title="${snapshot?.title}"). Retrying in ${HOST_NOT_STARTED_RETRY_INTERVAL_MS / 1000}s...`);
       await page.waitForTimeout(HOST_NOT_STARTED_RETRY_INTERVAL_MS);
-      await page.goto(webClientUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await page.goto(webClientUrl, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(rethrowRedacted);
       navigatedAt = Date.now();
       nameDeadline = navigatedAt + nameInputTimeoutMs;
       continue;

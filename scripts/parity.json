@@ -246,6 +246,49 @@
       ]
     },
     {
+      "id": "meeting-url-redaction",
+      "fact": "what a meeting link may look like once it leaves the request: secret query/fragment values masked, host-only tokens (Zoom zak) never stored",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/meetings/services/meeting-api/src/meeting_api/meeting_url_redaction.py",
+      "how_to_agree": "edit core/meetings/services/meeting-api/src/meeting_api/meeting_url_redaction.py and copy it VERBATIM over core/agent/shared/meeting_url_redaction.py and core/flows/src/meeting_url_redaction.py",
+      "why": "meeting-api, agent-api and flows each log or echo a caller's meeting link (Zoom pwd, Teams p, Jitsi jwt, Zoom zak) and are separately built images that may not import each other (P2), so the module is vendored and byte-compared. Its TypeScript twin in @vexa/join is held to the same vector table (fact meeting-url-redaction-vectors).",
+      "sites": [
+        {
+          "path": "core/meetings/services/meeting-api/src/meeting_api/meeting_url_redaction.py"
+        },
+        {
+          "path": "core/agent/shared/meeting_url_redaction.py"
+        },
+        {
+          "path": "core/flows/src/meeting_url_redaction.py"
+        }
+      ]
+    },
+    {
+      "id": "meeting-url-redaction-vectors",
+      "fact": "the table every meeting-URL redactor is held to: the TypeScript url-redaction.ts in @vexa/join and the vendored Python meeting_url_redaction.py",
+      "kind": "file-bytes",
+      "enforced": true,
+      "canonical": "core/meetings/modules/join/src/shared/meeting-url-redaction-vectors.json",
+      "how_to_agree": "edit the @vexa/join copy and copy it VERBATIM over every other site; the join, meeting-api, agent and flows suites must stay green",
+      "why": "A byte comparison across Python and TypeScript means nothing, so the two redactors share a vector table instead (the outbound-url-vectors pattern). Each suite reads its own copy; this fact keeps the copies one table.",
+      "sites": [
+        {
+          "path": "core/meetings/modules/join/src/shared/meeting-url-redaction-vectors.json"
+        },
+        {
+          "path": "core/meetings/services/meeting-api/tests/fixtures/meeting-url-redaction-vectors.json"
+        },
+        {
+          "path": "core/agent/tests/fixtures/meeting-url-redaction-vectors.json"
+        },
+        {
+          "path": "core/flows/tests/fixtures/meeting-url-redaction-vectors.json"
+        }
+      ]
+    },
+    {
       "id": "workspace-paths",
       "fact": "how this domain reaches a file inside a work tree the model's tools can write",
       "kind": "file-bytes",

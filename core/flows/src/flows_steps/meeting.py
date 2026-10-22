@@ -11,6 +11,7 @@ from flows import Block, Done, StepCtx, StepError, Wait
 # than against this file. Found while adding the prep step, not by a test: nothing exercises
 # dispatch_bot outside a live meeting.
 from .common import door_headers, http, meetings_door, setting
+from meeting_url_redaction import redact_url, redact_urls_in
 
 # THE FIXTURE-TRANSCRIPT INJECTION IS GONE (PRD decision 18d). When a rehearsed meeting completed
 # with no segments, this file used to write seven canned transcript rows into the MEETINGS database
@@ -122,6 +123,12 @@ class ShareMintError(StepError):
         super().__init__(
             f"share mint failed for meeting {meeting_id} as {identity}: HTTP {status} — {detail}",
             retryable=retryable)
+
+
+def _native_of(url: str) -> str:
+    """The link's last path segment — the meeting id — without its query or fragment, which carry
+    the passcode on Zoom (`?pwd=`) and Teams (`?p=`)."""
+    return str(url).split("#", 1)[0].split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
 
 
 def _http_detail(body) -> str:
@@ -457,15 +464,15 @@ def dispatch_bot(ctx: StepCtx):
         st2, existing = http("GET", f"{meetings_door()}/bots", hdr)
         rows = existing if isinstance(existing, list) else existing.get("meetings", [])
         for m in rows:
-            if m.get("native_meeting_id") == ctx.refs["url"].rsplit("/", 1)[1]:
+            if m.get("native_meeting_id") == _native_of(ctx.refs["url"]):
                 return Done({"meeting_id": m["id"], "native": m["native_meeting_id"],
                              "platform": m.get("platform", "google_meet")},
                             provider_ref=str(m["id"]))
         raise StepError(f"409 but meeting not found")
     if st not in (200, 201):
-        raise StepError(f"spawn failed {st}: {str(body)[:120]}")
+        raise StepError(f"spawn failed {st}: {redact_urls_in(str(body))[:120]}")
     return Done({"meeting_id": body["id"],
-                 "native": body.get("native_meeting_id") or ctx.refs["url"].rsplit("/", 1)[1],
+                 "native": body.get("native_meeting_id") or _native_of(ctx.refs["url"]),
                  "platform": body.get("platform", "google_meet")},
                 provider_ref=str(body["id"]))
 
@@ -670,19 +677,19 @@ def register_user_steps(reg) -> None:
                         {"meeting_url": url, **({"workspace_id": ws} if ws else {})})
         st = int(st or 0)
         if st == 409:
-            sent = {"meeting_id": None, "native": url.rstrip("/").rsplit("/", 1)[-1],
+            sent = {"meeting_id": None, "native": _native_of(url),
                     "platform": "", "already": True}
-            _say(ctx, uid, f"The bot is already in {url}.")
+            _say(ctx, uid, f"The bot is already in {redact_url(url)}.")
         elif 200 <= st < 300 and isinstance(body, dict):
             sent = {"meeting_id": body.get("id"), "native": body.get("native_meeting_id"),
                     "platform": body.get("platform")}
-            _say(ctx, uid, f"Sent the bot to {url} — admit it from the lobby when it asks.")
+            _say(ctx, uid, f"Sent the bot to {redact_url(url)} — admit it from the lobby when it asks.")
         else:
             detail = body.get("detail") if isinstance(body, dict) else body
             if st in (400, 403, 404, 422) or not st:
-                _say(ctx, uid, f"Couldn't send the bot to {url}: {str(detail)[:160]}")
-                raise StepError(f"bot refused {st}: {str(detail)[:200]}", retryable=False)
-            raise StepError(f"bot request failed {st}: {str(detail)[:200]}", retryable=True)
+                _say(ctx, uid, f"Couldn't send the bot to {redact_url(url)}: {redact_urls_in(detail)[:160]}")
+                raise StepError(f"bot refused {st}: {redact_urls_in(detail)[:200]}", retryable=False)
+            raise StepError(f"bot request failed {st}: {redact_urls_in(detail)[:200]}", retryable=True)
         flows_log = __import__("logging").getLogger("flows.grants")
         flows_log.info("routine_grant_used action=bot.request flow=%s", getattr(flow, "ident", ""))
         ctx.scratch["sent"] = sent

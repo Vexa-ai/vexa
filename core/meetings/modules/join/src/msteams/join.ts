@@ -23,6 +23,7 @@ import {
 } from "./auth-redirect";
 import { TeamsPreJoinBlockedError, teamsDisplayNameDisallowedChars } from "./prejoin-blocked";
 import { checkUiLocale } from "../shared/ui-locale";
+import { rethrowRedacted } from '../shared/url-redaction';
 
 // NOTE vs the monolith: the WebRTC remote-audio hook and the voice-agent
 // virtual-camera flow are RECORDING/HOST concerns and stay outside this brick.
@@ -220,7 +221,7 @@ export async function joinMicrosoftTeams(
   // `?p=` query, and bot logs are read by humans and shipped off-box. Same rule the redirect
   // errors already follow — the query is dropped whole rather than filtered key by key.
   log(`Step 1: Navigating to Teams meeting: ${redactUrl(meetingUrl)}`);
-  await page.goto(meetingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.goto(meetingUrl, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(rethrowRedacted);
   await page.waitForTimeout(500);
 
   // Fix 2: Propagate JOINING callback failure — bot must NOT proceed if server rejected

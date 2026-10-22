@@ -50,6 +50,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 
 from ..collector.meeting_link import find_meeting_link
+from ..meeting_url_redaction import strip_host_tokens, strip_host_tokens_in
 from ..lifecycle import may_dispatch_again
 
 # How far ahead the importer looks (events beyond it import on a later sweep) and how far back a
@@ -154,7 +155,9 @@ def _ical_text(value: Any, redact_values: tuple[str, ...] = ()) -> str:
     for secret in redact_values:
         if secret:
             text = text.replace(secret, "[REDACTED_FEED_URL]")
-    return text
+    # A host's own calendar carries Zoom START links (`?zak=`, the host token); the snapshot is
+    # stored, so the token is dropped from every URL in it.
+    return strip_host_tokens_in(text)
 
 
 def _component_metadata(comp, *, include_components: bool = True,
@@ -279,6 +282,9 @@ def parse_ics(text: str, *, now: datetime,
                 break
         # no recognizable link → import LINK-LESS (fail loud; the terminal shows "no link")
         platform, native_id, url = link if link else (None, None, None)
+        # the joinable link is stored and handed to the bot, which joins as a guest: a host-only
+        # token (`zak`) on it would be stored for nothing and echoed by everything that reads it
+        url = strip_host_tokens(url) if url else url
         event_metadata = {
             "resolved_start": occurrence.isoformat(),
             "calendar": calendar_metadata,

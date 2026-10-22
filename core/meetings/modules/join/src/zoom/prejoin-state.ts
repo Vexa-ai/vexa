@@ -25,6 +25,7 @@ import {
   zoomAuthRequiredTexts,
   zoomInvalidMeetingTitle,
 } from "./selectors";
+import { redactMeetingUrl } from "../shared/url-redaction";
 
 /** A reading of the page, taken in the browser. Plain data, so the classification is testable. */
 export interface ZoomPreJoinSnapshot {
@@ -107,7 +108,7 @@ export function classifyZoomPreJoin(s: ZoomPreJoinSnapshot | null): ZoomPreJoinS
 /** The evidence a typed pre-join failure carries: where the page was and what it said. */
 export function describeZoomPreJoin(s: ZoomPreJoinSnapshot | null): string {
   if (!s) return "page=unreadable (navigation in flight)";
-  let where = s.url;
+  let where = redactMeetingUrl(s.url);
   try {
     const u = new URL(s.url);
     where = `${u.origin}${u.pathname}${u.searchParams.has("wpk") ? " (after the ?wpk= redirect)" : ""}`;

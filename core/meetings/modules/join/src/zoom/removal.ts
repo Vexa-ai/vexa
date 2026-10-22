@@ -2,6 +2,7 @@ import { Page } from "playwright";
 import { log } from "../_host";
 import { zoomLeaveButtonSelector, zoomMeetingEndedModalSelector, zoomRemovalTexts } from "./selectors";
 import { dismissZoomPopups } from "./leave";
+import { redactMeetingUrl } from '../shared/url-redaction';
 
 /**
  * Starts polling for removal/end-of-meeting events.
@@ -40,7 +41,7 @@ export function startZoomRemovalMonitor(
     stopped = true;
     const elapsed = ((Date.now() - joinedAtMs) / 1000).toFixed(1);
     log(`[Zoom Web] REMOVAL TRIGGERED (${elapsed}s after join): ${reason}`);
-    log(`[Zoom Web] Current URL at removal: ${page.url()}`);
+    log(`[Zoom Web] Current URL at removal: ${redactMeetingUrl(page.url())}`);
     const title = await page.title().catch(() => '<unknown>');
     log(`[Zoom Web] Current title at removal: "${title}"`);
     onRemoval && await onRemoval();
@@ -57,27 +58,27 @@ export function startZoomRemovalMonitor(
     // Grace period: Zoom performs internal redirects during audio init handshake
     // right after join. Ignore navigations during this window to avoid false ejection.
     if (Date.now() - joinedAtMs < GRACE_PERIOD_MS) {
-      log(`[Zoom Web] Ignoring navigation during grace period (${elapsed}s after join): ${url}`);
+      log(`[Zoom Web] Ignoring navigation during grace period (${elapsed}s after join): ${redactMeetingUrl(url)}`);
       return;
     }
 
     // Always ignore known audio-init redirect URLs regardless of grace period.
     // These patterns appear during Zoom's audio handshake which can extend beyond the grace window.
     if (isZoomAudioInitUrl(url)) {
-      log(`[Zoom Web] Ignoring audio-init redirect URL (${elapsed}s after join): ${url}`);
+      log(`[Zoom Web] Ignoring audio-init redirect URL (${elapsed}s after join): ${redactMeetingUrl(url)}`);
       return;
     }
 
     // Any navigation away from the zoom.us domain means the meeting ended
     // (covers company SSO redirects, homepages, sign-in pages, etc.)
     if (!/zoom\.(us|com|eu|com\.cn|com\.br|com\.au|de|fr|jp|ca|co\.uk)\b/.test(url)) {
-      triggerRemoval(`Navigation away from Zoom domain: ${url}`);
+      triggerRemoval(`Navigation away from Zoom domain: ${redactMeetingUrl(url)}`);
     } else if (url.includes('/signin') || url.includes('/login')) {
       // Explicit sign-in redirect — meeting definitely ended
-      triggerRemoval(`Navigation to Zoom sign-in: ${url}`);
+      triggerRemoval(`Navigation to Zoom sign-in: ${redactMeetingUrl(url)}`);
     } else if (url.includes('/wc/') && !url.includes('/meeting')) {
       // Non-meeting /wc/ URL — but only if it's not a known init pattern
-      log(`[Zoom Web] Suspicious non-meeting /wc/ URL (${elapsed}s after join): ${url} — deferring to polling`);
+      log(`[Zoom Web] Suspicious non-meeting /wc/ URL (${elapsed}s after join): ${redactMeetingUrl(url)} — deferring to polling`);
       // Don't trigger immediately — let the polling loop confirm via Leave button absence
     }
   };
@@ -128,7 +129,7 @@ export function startZoomRemovalMonitor(
         const url = page.url();
         const title = await page.title().catch(() => '');
         const elapsed = ((Date.now() - joinedAtMs) / 1000).toFixed(1);
-        log(`[Zoom Web] Leave button miss #${consecutiveLeaveButtonMisses} (${elapsed}s after join) — URL: ${url}, title: "${title}"`);
+        log(`[Zoom Web] Leave button miss #${consecutiveLeaveButtonMisses} (${elapsed}s after join) — URL: ${redactMeetingUrl(url)}, title: "${title}"`);
 
         // During grace period or on audio-init URLs, don't act on Leave button absence.
         // Zoom's UI hasn't fully loaded yet — Leave button simply doesn't exist.
@@ -137,19 +138,19 @@ export function startZoomRemovalMonitor(
         } else {
           // Navigated off Zoom entirely — immediate exit (no counter needed)
           if (url && !url.startsWith('about:') && !/zoom\.(us|com|eu|com\.cn|com\.br|com\.au|de|fr|jp|ca|co\.uk)\b/.test(url)) {
-            await triggerRemoval(`Leave button gone and URL left Zoom domain: ${url}`);
+            await triggerRemoval(`Leave button gone and URL left Zoom domain: ${redactMeetingUrl(url)}`);
             return;
           }
           // Redirected to sign-in — immediate exit
           if (url.includes('/signin') || url.includes('/login')) {
-            await triggerRemoval(`Leave button gone and redirected to sign-in: ${url}`);
+            await triggerRemoval(`Leave button gone and redirected to sign-in: ${redactMeetingUrl(url)}`);
             return;
           }
           // For other conditions, only act after consecutive misses
           if (consecutiveLeaveButtonMisses >= LEAVE_BUTTON_MISS_THRESHOLD) {
             // Redirected away from meeting page within Zoom
             if (url.includes('/wc/') && !url.includes('/meeting')) {
-              await triggerRemoval(`Leave button gone ${consecutiveLeaveButtonMisses}x and URL is non-meeting: ${url}`);
+              await triggerRemoval(`Leave button gone ${consecutiveLeaveButtonMisses}x and URL is non-meeting: ${redactMeetingUrl(url)}`);
               return;
             }
             // Error page or blank

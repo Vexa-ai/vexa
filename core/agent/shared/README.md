@@ -24,6 +24,7 @@ nothing here starts a server.
 | `atomic_json` | the one atomic JSON write: a private temp file beside the target, fsynced, then `os.replace` |
 | `gitexec` | the one way git runs (`run_git`): nothing a workspace repository configures — hooks, fsmonitor, drivers, helpers, includes — runs in this process; vendored verbatim into `llm/` and `core/workspaces/shared/` (parity fact `git-exec`), and `tests/test_git_single_path.py` fails on any other git subprocess |
 | `git_redaction` · `gitenv` | the P15 scrubber for git output; the repo-discovery scrub and the transports a network op may use (`transport_env`) |
+| `meeting_url_redaction` | a meeting link in a log line or an error: secret parameter values masked, host and meeting id kept; vendored byte-identically from meeting-api (gate:fact-parity) |
 | `host_claude` | where this container reads the host's Claude subscription credential, resolved at read time |
 | `timeline` | the worker's `now / last / next` block, from flows-api's read-only timeline route |
 | `proposals` | the person's short list: what is worth doing now, written by whichever agent saw it |

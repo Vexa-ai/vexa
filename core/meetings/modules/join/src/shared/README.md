@@ -12,3 +12,10 @@ Meet's `hl=`) and its check. `checkUiLocale` reads the meeting page's language a
 non-English page as `ui_locale_mismatch`; `joinMeeting` then throws a failed join on that page as
 `UiLocaleMismatchError` (an `AdmissionError`, outcome `join_failure`), because the English
 waiting-room and rejection detectors cannot read it.
+
+`url-redaction.ts` — `redactMeetingUrl` / `redactUrlsIn`: every log line and error in this brick
+that names a URL names it with its secret query and fragment values masked (Zoom `pwd`, Teams `p`,
+Jitsi `jwt`, Zoom `zak`, any `*key*`/`*secret*`/`*token*`), host, path and meeting id kept.
+`rethrowRedacted` is the `page.goto(...).catch(...)` that redacts Playwright's own message, which
+quotes the URL. Exported as `@vexa/join/url-redaction` for the bot. Held, with the vendored Python
+`meeting_url_redaction.py`, to `meeting-url-redaction-vectors.json` (gate:fact-parity).

@@ -14,6 +14,7 @@ import {
 import { HumanizedInteractor, MOCAP_LIBRARY } from "./humanized";
 import { AdmissionError } from "../shared/admission";
 import { PINNED_UI_LOCALE, checkUiLocale } from "../shared/ui-locale";
+import { redactMeetingUrl, rethrowRedacted } from "../shared/url-redaction";
 
 /** Thrown when authenticated mode detects a signed-out browser profile. Extends AdmissionError so
  *  the JoinDriver's single `instanceof` catch maps the typed `auth_session_missing` outcome to a
@@ -171,7 +172,7 @@ async function firstVisibleSelector(
  */
 async function observedPageContext(page: Page): Promise<string> {
   let url = "?";
-  try { url = page.url(); } catch { /* best-effort */ }
+  try { url = redactMeetingUrl(page.url()); } catch { /* best-effort */ }
   try {
     const ctx: any = await page.evaluate(() => ({
       lang: document.documentElement.getAttribute("lang") || "",
@@ -317,7 +318,7 @@ export async function joinGoogleMeeting(
   botConfig: BotConfig
 ): Promise<void> {
   const navUrl = withPinnedMeetLocale(meetingUrl, PINNED_UI_LOCALE);
-  await page.goto(navUrl, { waitUntil: "domcontentloaded" });
+  await page.goto(navUrl, { waitUntil: "domcontentloaded" }).catch(rethrowRedacted);
   await page.bringToFront();
 
   // Take screenshot after navigation

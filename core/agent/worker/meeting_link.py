@@ -40,6 +40,7 @@ import httpx
 
 from llm.tool_events import _bot_artifact
 from shared.marks import MACHINERY_MARK, PHASE_MARK, act_label, read_job_mark, turn_namespace
+from shared.meeting_url_redaction import redact_url, redact_urls_in
 
 log = logging.getLogger("agent_api.worker")
 
@@ -228,13 +229,13 @@ def act(link: str, caller: McpCaller, *, new_id: Callable[[], str] = lambda: uui
     except ToolError as e:
         if _is_not_a_link(str(e)):
             return [], None
-        log.warning("meeting link %s not checked: %s", link, _first_line(str(e)))
+        log.warning("meeting link %s not checked: %s", redact_url(link), redact_urls_in(_first_line(str(e))))
         ev = {"type": "meeting-link", "outcome": "unchecked", "url": link,
               "refusal": {"source": "parse_meeting_link", "kind": "unavailable", "status": None,
                           "detail": _first_line(str(e)) or "the link could not be checked"}}
         return [ev], ev
     except (httpx.HTTPError, OSError, ValueError) as e:
-        log.warning("meeting link %s not checked: %s", link, e)
+        log.warning("meeting link %s not checked: %s", redact_url(link), redact_urls_in(e))
         ev = {"type": "meeting-link", "outcome": "unchecked", "url": link,
               "refusal": {"source": "parse_meeting_link", "kind": "unreachable", "status": None,
                           "detail": f"{type(e).__name__}: {e}"}}
@@ -281,8 +282,8 @@ def act(link: str, caller: McpCaller, *, new_id: Callable[[], str] = lambda: uui
         ev["status"] = str(meeting.get("status"))
     if result.get("refusal"):
         ev["refusal"] = result["refusal"]
-        log.warning("bot for %s refused: %s/%s %s", link, ev["refusal"]["source"],
-                    ev["refusal"]["kind"], ev["refusal"]["detail"])
+        log.warning("bot for %s refused: %s/%s %s", redact_url(link), ev["refusal"]["source"],
+                    ev["refusal"]["kind"], redact_urls_in(ev["refusal"]["detail"]))
     events.append(ev)
     return events, ev
 
