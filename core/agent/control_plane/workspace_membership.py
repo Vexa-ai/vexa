@@ -14,8 +14,8 @@ index is derived), and a third, separate one for INVITES:
         [{"subject", "role": "owner"|"contributor"|"viewer", "added_by", "added_at"}]
 
      The workspace's own git repo keeps a platform-written MIRROR at ``policy/members.json``, committed
-     with the deciding person as author: the audit trail, and what the worker counts readers from.
-     The mirror is never read for access, and no caller route can write it.
+     with the deciding person as author: the audit trail. The mirror is never read for access — not
+     by a privacy hold either (``private_taint.other_readers``) — and no caller route can write it.
 
   2. **Index copy** — the user row's JSONB ``users.data.memberships[]`` = ``[{workspace_id, role, added_at}]``,
      for listing "workspaces shared with me". agent-api has no DB, so this is reached through the injected
@@ -104,10 +104,11 @@ _POLICY_ALLOW = (POLICY_DIR,)
 # not present in one. Nothing a caller route or an agent turn can reach writes it.
 #
 # THE TREE KEEPS A MIRROR. The platform still writes ``policy/*.json`` into the workspace and commits
-# it (author = the person who decided, #1632), because three readers want the roster IN the tree:
-# the worker's private-write hold counts readers there (``llm/private_writes.other_readers``), a
+# it (author = the person who decided, #1632), because two readers want the roster IN the tree: a
 # group is told from a desk by it (``workspace_ids.kind_of``), and the workspace's own history is the
-# audit of who added whom. The mirror is NEVER read for access. Editing it changes nothing.
+# audit of who added whom. The mirror is NEVER read for access, and no privacy hold counts readers
+# from it: the worker's commit hold is told them by agent-api (``private_taint.mount_readers``).
+# Editing it changes nothing.
 #
 # MIGRATION, READ-COMPATIBLE. A workspace with no store directory yet has its legacy in-tree files
 # ADOPTED once — all three together, under the workspace lock, at agent-api start

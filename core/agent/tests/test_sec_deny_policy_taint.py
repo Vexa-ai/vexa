@@ -506,3 +506,81 @@ def test_a_push_touching_a_reserved_path_in_any_case_is_refused(stack, tmp_path,
     r = _push(stack, "17", base, data, unit="agent-u-1")
     assert r.status_code == 403 and r.json()["detail"]["refused"] == "reserved_path", r.text[:300]
     assert stack.run.store.latest("17").gen == 1
+
+
+# ── M2-b on the volume backend: the worker's commit hold counts agent-api's read of the roster ────
+
+def _volume_turn(tmp_path, env_readers, *, tree_members=None):
+    """A worker started from a dispatch env (``Guard.from_env``) whose turn reads mail, then writes a
+    page into ``meetup``. Returns (the turn's events, meetup's commit count)."""
+    from llm.ports import run_harness_turn
+    from llm.private_writes import Guard
+    from tests.test_private_writes_commit import AUTHOR as WAUTHOR, OWNER, _Harness, _log, _repo
+    desk = _repo(tmp_path / OWNER)
+    shared = _repo(tmp_path / "meetup", members=tree_members)
+    env = {"VEXA_OWNER": OWNER}
+    if env_readers is not None:
+        env["VEXA_MOUNT_READERS"] = json.dumps(env_readers(desk, shared))
+    guard = Guard.from_env(env, [{"path": str(desk)}, {"path": str(shared)}])
+    h = _Harness("mcp__vexa__gmail_search", [(shared / "notes/bank.md", "Invoice 4471-2210")])
+    events = list(run_harness_turn(desk, "go", h, extra_mounts=[shared], private_guard=guard,
+                                   author=WAUTHOR))
+    return [e for e in events if e["type"] == "write-withheld"], _log(shared), guard, shared
+
+
+def test_the_worker_holds_on_the_registry_readers_when_the_tree_copy_is_missing(tmp_path):
+    held, commits, *_ = _volume_turn(tmp_path, lambda d, s: {str(d): [], str(s): ["bob@example.com"]})
+    assert held and held[0]["readers"] == ["bob@example.com"], held
+    assert commits == 1, "nothing committed into meetup"
+
+
+def test_the_worker_counts_the_registry_readers_not_a_stale_tree_copy(tmp_path):
+    stale = [{"subject": "7", "role": "owner"}, {"subject": "bob", "email": "bob@example.com", "role": "viewer"}]
+    held, commits, *_ = _volume_turn(tmp_path, lambda d, s: {str(d): [], str(s): ["carol@example.com"]},
+                                     tree_members=stale)
+    assert held and held[0]["readers"] == ["carol@example.com"], held
+    assert commits == 1
+
+
+def test_the_worker_commits_when_the_registry_says_only_the_person_reads(tmp_path):
+    stale = [{"subject": "7", "role": "owner"}, {"subject": "bob", "email": "bob@example.com", "role": "viewer"}]
+    held, commits, *_ = _volume_turn(tmp_path, lambda d, s: {str(d): [], str(s): []}, tree_members=stale)
+    assert held == [] and commits == 2
+
+
+@pytest.mark.parametrize("readers", [lambda d, s: {str(d): [], str(s): None}, lambda d, s: {str(d): []}, None],
+                         ids=["registry-unreadable", "mount-not-answered", "no-audience"])
+def test_the_worker_holds_when_the_registry_could_not_be_read(tmp_path, readers):
+    """Fail closed: a mount agent-api could not read, did not answer for, or a worker told nothing."""
+    held, commits, *_ = _volume_turn(tmp_path, readers)
+    assert held and commits == 1, "the change into meetup is held, nothing committed"
+    from llm.private_writes import READERS_UNKNOWN
+    assert held[0]["readers"] == [READERS_UNKNOWN], held
+
+
+def test_each_turn_brings_a_fresh_audience(tmp_path):
+    """A member added after the worker started: the next turn's entry carries them."""
+    *_, guard, shared = _volume_turn(tmp_path, lambda d, s: {str(d): [], str(s): []})
+    assert guard.readers(shared) == []
+    guard.set_audience({str(shared): ["dana@example.com"]})
+    assert guard.readers(shared) == ["dana@example.com"]
+
+
+def test_the_dispatch_stamps_each_mounts_readers_from_the_registry(tmp_path):
+    from control_plane.dispatch import build_unit_env
+    from shared.config import load_settings
+    inv = {"identity": {"subject": "u_1", "launcher": "user:u_1"}, "runner": "openai-agent",
+           "workspaces": [{"id": "u_1", "mode": "rw"}], "trigger": "message",
+           "start": {"entrypoint": {"inline": "hi"}}}
+    env = build_unit_env(load_settings(workspaces_dir=str(tmp_path)), inv, unit_id="unit-1", token="tok")
+    readers = json.loads(env["VEXA_MOUNT_READERS"])
+    mounts = json.loads(env["VEXA_MOUNTS"])
+    desk = next(mt["path"] for mt in mounts if mt.get("desk"))
+    assert set(readers) == {str(Path(mt["path"])) for mt in mounts}
+    assert readers[str(Path(desk))] == []
+    m.set_policy_store(_DownStore())
+    try:
+        env = build_unit_env(load_settings(workspaces_dir=str(tmp_path)), inv, unit_id="unit-1", token="tok")
+    finally:
+        m.set_policy_store(None)
+    assert json.loads(env["VEXA_MOUNT_READERS"])[str(Path(desk))] is None

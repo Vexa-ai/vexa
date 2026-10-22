@@ -196,6 +196,24 @@ def other_readers(root: Path, ws_dir: Path, subject: str) -> list[str]:
     return roster_readers(root, ws_dir.name, subject)
 
 
+def mount_readers(root: Path, mounts: list, subject: str) -> dict:
+    """``{mount path: who else reads it}`` for every mount of a dispatch, stamped into the worker's
+    env (``VEXA_MOUNT_READERS``) and onto each turn it is handed: the audience the worker's own
+    commit hold (``llm/private_writes``) counts, from ``other_readers`` — the worker reaches no roster
+    of its own. A mount whose roster cannot be read is ``None``, and the worker holds on it."""
+    from control_plane.workspace_membership import MembershipError  # noqa: PLC0415
+    out: dict = {}
+    for m in mounts or []:
+        path = str((m or {}).get("path") or "")
+        if not path:
+            continue
+        try:
+            out[str(Path(path))] = other_readers(root, Path(path), subject)
+        except MembershipError:
+            out[str(Path(path))] = None
+    return out
+
+
 def _readers(rows, subject: str) -> list[str]:
     out = []
     for m in rows if isinstance(rows, list) else []:

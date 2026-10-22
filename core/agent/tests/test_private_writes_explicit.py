@@ -51,7 +51,7 @@ def _setup(tmp_path):
     shared = _repo(tmp_path / "meetup", members=[{"subject": OWNER, "role": "owner"},
                                                  {"subject": "8", "role": "contributor",
                                                   "email": "val@example.com"}])
-    return desk, shared, Guard(OWNER, desk)
+    return desk, shared, Guard(OWNER, desk, audience={str(desk): [], str(shared): ["val@example.com"]})
 
 
 def _run(guard, desk, shared, h, prompt="go"):

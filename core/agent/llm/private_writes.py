@@ -12,8 +12,10 @@ straight onto its mounts, and those writes meet the platform only at the post-tu
   private data — are written to the one taint key the worker may write, so a worker idle exit or a
   respawn forgets nothing. A mark that cannot be read counts as held (fail closed).
 * at the commit, a marked session's changes to a mount whose readers are not only the person are NOT
-  committed. The readers come from the roster as it was BEFORE the turn (``HEAD:policy/members.json``,
-  joined with the work tree's) — a turn cannot shrink its own audience by editing the roster.
+  committed. The readers are the ones agent-api read from the membership store for the dispatch
+  (``VEXA_MOUNT_READERS``) and again for every turn it hands this worker (the entry's ``readers``),
+  never the tree's ``policy/members.json`` mirror. A mount it did not answer for, or could not read,
+  is held.
 * WHAT IS HELD NEVER LANDS ON A DESK (H7). It is handed to agent-api by reference (a hand-back key
   of this unit, short TTL), which keeps it ENCRYPTED and off every mount (``control_plane/held_store``)
   for the person's share card; the mount is put back as it was, and the turn says what it withheld,
@@ -93,25 +95,24 @@ def private_source(tool: str) -> Optional[str]:
     return PRIVATE_VEXA_TOOLS.get(name)
 
 
-def _roster(raw: Optional[str], owner: str) -> list[str]:
-    try:
-        rows = json.loads(raw) if raw else []
-    except ValueError:
-        return []
-    return [str(m.get("email") or m.get("subject")) for m in (rows if isinstance(rows, list) else [])
-            if isinstance(m, dict) and m.get("subject") and str(m.get("subject")) != str(owner)]
+#: Said as the readers of a mount whose audience this worker was not told, or that agent-api could
+#: not read: the change is held (fail closed).
+READERS_UNKNOWN = "others (who reads it could not be checked)"
+#: The env key the dispatch stamps the audience into (``control_plane.private_taint.mount_readers``).
+READERS_ENV = "VEXA_MOUNT_READERS"
 
 
-def other_readers(mount: Path, owner: str) -> list[str]:
-    """Who besides ``owner`` reads ``mount``: the roster committed BEFORE the turn joined with the
-    work tree's, so a turn that edits ``policy/members.json`` cannot shrink its own audience."""
-    mount = Path(mount)
-    head = None
-    if wpaths.is_dir_inside(mount, ".git", allow=(".git",)):
-        r = run_git(mount, "show", "HEAD:policy/members.json")
-        head = r.stdout if r.returncode == 0 else None
-    tree = wpaths.read_text_inside(mount, "policy/members.json", allow=("policy",))
-    return sorted(set(_roster(head, owner)) | set(_roster(tree, owner)))
+def audience_of(raw) -> Optional[dict]:
+    """``{mount path: [readers] | None}`` from the dispatch's stamp (a dict, or its JSON), or None
+    when there is none or it does not parse."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw else None
+        except ValueError:
+            return None
+    if not isinstance(raw, dict):
+        return None
+    return {str(Path(k)): ([str(r) for r in v] if isinstance(v, list) else None) for k, v in raw.items()}
 
 
 def _git(work: Path, *args: str) -> str:
@@ -154,13 +155,14 @@ class Guard:
     """One worker's view: which private data its session read (persisted), and where held writes go."""
 
     def __init__(self, owner: str, held_root: Optional[Path] = None, *, unit: str = "",
-                 store=None, handback=None):
+                 store=None, handback=None, audience=None):
         # ``held_root`` is accepted for callers of the pre-0.13.4 shape and ignored: nothing held is
         # ever written to a desk again (H7).
         self.owner = str(owner or "")
         self.unit = str(unit or "")
         self.store = store                  # shared.taint.TaintStore over the worker's Redis, or None
         self.handback = handback            # (code, payload) -> ref | None
+        self.audience = audience_of(audience)     # {mount path: other readers | None}, from agent-api
         self._marked: dict[str, float] = {}
         self._released: dict[str, set] = {}       # mount path -> paths the person released this turn
         self._fp = Fingerprint()                  # what the private reads gave the agent (digests)
@@ -173,8 +175,9 @@ class Guard:
     @classmethod
     def from_env(cls, env: dict, mounts: list[dict]) -> "Guard":
         owner = str(env.get("VEXA_OWNER") or "")
+        audience = env.get(READERS_ENV)
         if not _WORKER_STORE:
-            return cls(owner)
+            return cls(owner, audience=audience)
         client, unit = _WORKER_STORE[0]
         from shared import stream_bounds  # noqa: PLC0415
         from shared.taint import TaintStore  # noqa: PLC0415
@@ -187,7 +190,22 @@ class Guard:
             except Exception:  # noqa: BLE001 — nothing kept; the turn says to ask again
                 log.warning("held write %s could not be handed to agent-api", code)
                 return None
-        return cls(owner, unit=unit, store=TaintStore(client), handback=handback)
+        return cls(owner, unit=unit, store=TaintStore(client), handback=handback, audience=audience)
+
+    # ── who else reads ──────────────────────────────────────────────────────────────────────────
+    def set_audience(self, raw) -> None:
+        """The audience a turn arrived with (its signed stream entry's ``readers``): the dispatch's
+        fresh read of the membership store, replacing the one this worker started with."""
+        found = audience_of(raw)
+        if found is not None:
+            self.audience = found
+
+    def readers(self, mount: Path) -> list[str]:
+        """Who besides the person reads ``mount``: what agent-api read from the membership store for
+        this dispatch. The tree's ``policy/members.json`` is a mirror and is never counted. A mount
+        agent-api did not answer for, or could not read, has unknown readers and is held."""
+        found = (self.audience or {}).get(str(Path(mount)))
+        return found if isinstance(found, list) else [READERS_UNKNOWN]
 
     # ── marking ──────────────────────────────────────────────────────────────────────────────────
     def observe(self, ev: dict) -> None:
@@ -228,7 +246,7 @@ class Guard:
 
     def commit_message(self, mount: Path, msg: str) -> str:
         """A marked session's commit into a mount other people read carries a fixed body."""
-        if self.sources() and other_readers(Path(mount), self.owner):
+        if self.sources() and self.readers(Path(mount)):
             return NEUTRAL_BODY
         return msg
 
@@ -267,7 +285,7 @@ class Guard:
         if found:
             for m in mounts:
                 m = Path(m)
-                if wpaths.is_dir_inside(m, ".git", allow=(".git",)) and other_readers(m, self.owner):
+                if wpaths.is_dir_inside(m, ".git", allow=(".git",)) and self.readers(m):
                     shared.append(m.name)
         if shared:
             lines.append(
@@ -286,7 +304,7 @@ class Guard:
         mount = Path(mount)
         if not wpaths.is_dir_inside(mount, ".git", allow=(".git",)):
             return None
-        readers = other_readers(mount, self.owner)
+        readers = self.readers(mount)
         if not readers:
             return None
         released = self._released.get(str(mount), set())

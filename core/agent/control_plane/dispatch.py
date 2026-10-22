@@ -30,7 +30,7 @@ from control_plane.workspace_purpose import read_purpose
 from control_plane import delegation_refresh, delegation_revocation, global_layer
 from control_plane import model_endpoint
 from control_plane import model_providers
-from control_plane import unit_faults
+from control_plane import private_taint, unit_faults
 from control_plane.meeting_room import group_desk_mount
 from control_plane.system_mounts import GLOBAL_SLUG, SYSTEM_SLUG, global_mount, system_mount
 from shared.config import Settings
@@ -1013,6 +1013,8 @@ def build_unit_env(settings: Settings, invocation: dict, *, unit_id: str, token:
                                 if shared_scope is not None or least_privilege
                                 else _worker_cwd(root, subject, mounts, cwd_target)),  # the worker's cwd — the chat's target, else the primary baseline, or (if it's switched off) the first active normal workspace
         "VEXA_MOUNTS": json.dumps(mounts),                       # the ordered active mount set [{slug,path,role,write,primary}]
+        # who else reads each mount, from the membership store: the worker's commit hold counts it
+        "VEXA_MOUNT_READERS": json.dumps(private_taint.mount_readers(root, mounts, subject)),
         # s3 backend (WS-S3): agent-api's store routes through the gateway — the worker hydrates
         # its mounts from there and pushes every commit back; on the volume backend, unchanged.
         "VEXA_WORKSPACE_STORE_URL": _ws_store.worker_url(settings) or settings.workspace_store_url,
@@ -1751,7 +1753,8 @@ class Dispatcher:
         meter = getattr(self, "_llm_meter", None)
         meter_from = self._output_tail(uid) if meter is not None else "0-0"
         try:
-            delivery = (self._predeliver(uid, invocation, entry_nonce, inbox=inbox, trace_id=trace_id, bundle=bundle)
+            delivery = (self._predeliver(uid, invocation, entry_nonce, inbox=inbox, trace_id=trace_id, bundle=bundle,
+                                         readers=json.loads(env.get("VEXA_MOUNT_READERS") or "null"))
                         if invocation["trigger"] == "message" or bundle is not None else None)
             if delivery is _DELIVERY_FAILED:
                 # The XADD failed. If the worker is GONE the spawn below re-runs this prompt as its
@@ -1956,7 +1959,8 @@ class Dispatcher:
         self._warm_retry_at = time.monotonic() + 60.0
 
     def _predeliver(self, uid: str, invocation: dict, nonce: str,
-                    *, inbox: Optional[dict] = None, trace_id: str = "", bundle=_UNSET) -> Optional[str]:
+                    *, inbox: Optional[dict] = None, trace_id: str = "", bundle=_UNSET,
+                    readers: Optional[dict] = None) -> Optional[str]:
         """XADD the message's prompt to ``unit:<uid>:in`` with a matching nonce; returns the
         out-stream TAIL id the watchdog reads the ack from.
 
@@ -1993,6 +1997,8 @@ class Dispatcher:
                 entry["trace"] = trace_id
             if inbox:
                 entry["inbox"] = inbox
+            if readers is not None:
+                entry["readers"] = readers          # this dispatch's audience for the commit hold
             if bundle is _UNSET:
                 bundle = self._session_bundle(invocation)
             if bundle is not None:

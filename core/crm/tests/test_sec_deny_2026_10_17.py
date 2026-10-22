@@ -328,3 +328,23 @@ def test_the_person_the_org_bound_by_identifier_still_claims_their_record(store)
     with store.engine.begin() as c:
         assert store.profiles.auto_claim(c, ORG, val) == victim
     assert _claimed_by(store, victim) == '21'
+
+
+@pytest.mark.xfail(strict=True, reason='A2-c (open, car 34 finding): a CRM merge moves the writer\'s '
+                   'account onto the victim\'s record; the writer then resolves to it and reads the '
+                   'victim\'s profile as their own')
+def test_a_writer_who_merges_their_account_into_another_person_does_not_resolve_to_them(store):
+    victim = _victim_record(store)
+    _writer(store, '40')
+    mallory = from_validate('t', {'user_id': 40, 'email': ATTACKER, 'email_verified': True,
+                                  'scopes': ['bot'], 'is_admin': False})
+    own = store.ensure_account(ORG, mallory)                     # the writer's sign-in Person
+    store.merge(ORG, mallory, own, victim, reason='duplicate')  # their account moves onto the victim's
+    val = from_validate('t', {'user_id': 21, 'email': VICTIM, 'email_verified': True,
+                              'scopes': ['bot'], 'is_admin': False})
+    store.ensure_account(ORG, val)
+    with store.engine.begin() as c:
+        assert store.profiles.auto_claim(c, ORG, val) == victim
+    store.profiles.edit(ORG, val, {'bio': 'PRIVATE-BIO-7731'})
+    assert store.profiles.mine(ORG, mallory)['fields'] == {}
+    assert store.profiles.directory(ORG, [{'subject': '40'}])['40'] is None

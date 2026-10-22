@@ -186,6 +186,13 @@
       "targets": []
     },
     {
+      "key": "VEXA_MOUNT_READERS",
+      "class": "defaulted",
+      "default": "(unset — every mount's readers unknown: a marked session's change is held)",
+      "description": "who besides the person reads each mount of the dispatch — a JSON object {mount path: [readers] | null}, read by agent-api from the membership store (private_taint.mount_readers); null when that store could not be read. The worker's commit hold counts it, never the tree's policy/members.json mirror; each turn's signed stream entry carries a fresh copy (readers). Runtime-injected per dispatch, never a deploy surface",
+      "targets": []
+    },
+    {
       "key": "VEXA_MOUNTS",
       "class": "defaulted",
       "default": "(unset — derived per dispatch: the private baseline only)",

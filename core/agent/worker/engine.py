@@ -2883,6 +2883,9 @@ def serve(stream: _Stream, *, out_topic: str, in_topic: str, turn: TurnFn, start
         if msg is None:
             log.warning("input entry %s is not signed for this unit — not run", entry_id)
             return msg
+        if "readers" in msg:
+            # who else reads each mount, read again by agent-api for this turn (the commit hold's audience)
+            private_guard(active_mounts()).set_audience(msg["readers"])
         return stream_bounds.resolve_in_bundle(getattr(stream, "get", None), msg)
 
     def _drain_inject(cursor: list) -> None:

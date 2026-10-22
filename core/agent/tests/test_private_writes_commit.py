@@ -62,7 +62,8 @@ def _setup(tmp_path):
     def handback(code, payload):
         handed[code] = payload
         return f"unit:u1:handback:held-{code}"
-    guard = Guard(OWNER, unit="", handback=handback)
+    guard = Guard(OWNER, unit="", handback=handback,
+                  audience={str(desk): [], str(shared): ["val@example.com"]})   # agent-api's read
     guard.handed = handed
     return desk, shared, guard
 
@@ -135,12 +136,11 @@ def test_the_commit_body_of_a_marked_session_is_never_the_reply(tmp_path):
     assert guard.commit_message(desk, "the invoice is unpaid") == "the invoice is unpaid"
 
 
-def test_a_roster_edited_by_the_turn_does_not_shrink_its_audience(tmp_path):
-    """The readers come from HEAD's roster joined with the work tree's (SF-8)."""
-    from llm.private_writes import other_readers
-    _desk, shared, _guard = _setup(tmp_path)
+def test_a_roster_edited_by_the_turn_changes_nobodys_audience(tmp_path):
+    """The readers are agent-api's read of the membership store; the tree's roster is a mirror."""
+    _desk, shared, guard = _setup(tmp_path)
     (shared / "policy" / "members.json").write_text(json.dumps([{"subject": OWNER, "role": "owner"}]))
-    assert other_readers(shared, OWNER) == ["val@example.com"]
+    assert guard.readers(shared) == ["val@example.com"]
 
 
 def test_an_unreadable_mark_holds(tmp_path):

@@ -358,7 +358,8 @@ def test_the_qwen_lane_dials_are_declared():
 # 150: +2 VEXA_WORKSPACE_CACHE_MAX_BYTES, VEXA_WORKSPACE_CACHE_MIN_IDLE_S (WS-S3 lazy cache, LRU eviction).
 # 153: the integration line's 141 + WS-S3's 12 (int-next).
 # 154: +1 VEXA_POLICY_LEGACY_READ (the policy store's adoption of pre-0.13.4 records, declared).
-EXPECTED_DECLARED_KEYS = 154
+# 155: +1 VEXA_MOUNT_READERS (each mount's readers from the membership store, for the worker's hold).
+EXPECTED_DECLARED_KEYS = 155
 
 
 def test_connections_keys_are_capabilities_on_real_surfaces():

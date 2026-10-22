@@ -10,3 +10,7 @@
   over. A record the org created is claimable by the person it describes when it carries their
   `email:` identifier. Records that only have the address in `Email` are no longer offered: give them
   the identifier, or the person gets a record of their own at sign-in. See [CRM](/minutes/crm).
+- **The worker's own commit hold counts the same readers (volume backend, M2-b).** A turn that read
+  private data and then wrote files into a workspace others read is held at the commit on the member
+  list agent-api read from the membership store for that dispatch and turn, no longer on the tree's
+  `policy/members.json`. A mount whose list could not be read is held.

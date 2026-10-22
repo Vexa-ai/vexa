@@ -350,7 +350,9 @@ What the principal can do, and where it lands:
 A session that calls a private-source route (mail, calendar, a connected service, onboarding
 research) is marked for 12 hours, in agent-api for its tool writes (`workspace_write`,
 `entity_upsert`) and in the worker for the files the turn writes itself. A write from a marked
-session into a workspace whose `policy/members.json` names anyone besides the person is refused
+session into a workspace whose member list names anyone besides the person is refused (the list is
+the membership store's, read by agent-api and handed to the worker with each turn, never the tree's
+`policy/members.json` mirror)
 (`409 private_sources_to_shared`, with `confirm_code`); at the commit the worker puts that workspace
 back and keeps the change on the person's desk under `.vexa/held-writes/` (git-excluded). The
 person's own chat message `confirm <code>` releases that write once: agent-api takes the code only

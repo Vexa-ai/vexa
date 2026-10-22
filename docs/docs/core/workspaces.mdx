@@ -231,8 +231,11 @@ writes it, a reader reads it. An invite may be minted for any of the three (`INV
 - The system workspace and a person's own private workspaces are never shareable (`assert_shareable`).
 
 **Where membership and invites live:**
-- **Members** — the workspace's own git repo, `policy/members.json`
-  (`[{subject, role, added_by, added_at, email?}]`), authoritative and travelling with the workspace.
+- **Members** — the membership store (`[{subject, role, added_by, added_at, email?}]`): the identity
+  registry in a deployment, `<store-root>/.policy/<workspace_id>/members.json` without one, outside
+  every workspace mount. Every access decision and every privacy hold reads it. The workspace's own
+  git repo keeps a platform-written mirror at `policy/members.json` as the audit trail of who added
+  whom; it is never read for access, and editing it changes nothing.
 - **Index** — `users.data.memberships[]` for "shared with me", through the `MembershipIndex` port
   (admin-api `/internal/users/{id}/memberships`).
 - **Invites** — `<store-root>/.invites/<workspace_id>.json`, outside every workspace mount, holding only
@@ -543,7 +546,7 @@ users (Lite's per-tenant UID), it makes itself non-dumpable instead.
 | Workspace generations and bundles (s3) | agent-api, `core/workspaces/store/repostore.py`, under the workspace's Redis lock | `repos/<path>/@/` in the workspaces bucket |
 | Workspace id | the platform, through `shared/workspace_id.py` | `.vexa/workspace.json` in each tree |
 | Workspace registry (id → slug, folder, name, owner) | agent-api, `control_plane/workspace_ids.py` | Redis, or memory; rebuildable from the trees except display names |
-| Member list | agent-api, `workspace_membership.policy_commit` | `policy/members.json` in the workspace |
+| Member list | agent-api, `workspace_membership.write_policy` | the membership store (identity registry, or `<store-root>/.policy/<workspace_id>/`); mirrored to `policy/members.json` in the workspace, never read for access |
 | Invites (hashes only) | agent-api, `workspace_membership` | `<store-root>/.invites/<workspace_id>.json`, outside every workspace |
 | Import status | agent-api, `workspace_import.py` | `.imports/<subject>/` (`imports-status` in the architecture chart) |
 | Saved Git token and deploy keys | the [credential broker](/connections#git-credentials), for agent-api's `git` role | the broker's store |
@@ -569,7 +572,7 @@ users (Lite's per-tenant UID), it makes itself non-dumpable instead.
 | Single path | No file in `core/agent` or `core/workspaces` opens, lists, creates, renames or removes a work-tree path by name outside `workspace_paths`, unless allow-listed with a reason. No git subprocess bypasses `gitexec`. | `gate:python`: `test_worktree_io_single_path.py`, `test_git_single_path.py` |
 | P23 (one writer per carrier) | See the table above. Import status is charted. | `gate:dataflow` (import status); the registry and member list: ungated, reviewed |
 | P18 (fail loud) | A refused path raises; it never returns a value a caller could ignore. A broker outage stops Git operations instead of falling back. A path the tools user cannot get stops the turn. | `gate:python` (tests below) |
-| P20 (authorize every access) | Every route resolves a slug or id only inside the caller's own store or a workspace they belong to; roles are checked against `policy/members.json`. | `gate:python` (tests below) |
+| P20 (authorize every access) | Every route resolves a slug or id only inside the caller's own store or a workspace they belong to; roles are checked against the membership store, never the tree's `policy/members.json` mirror. | `gate:python` (tests below) |
 | P12 | `core/workspaces/README.md` and every folder below it. | `gate:readme` |
 | One durable truth (s3 backend) | No write is acknowledged before its commit and refs are in the bucket: the `gitexec` ref observer publishes inside `run_git`, `CacheSync` runs before a state-changing response leaves, a worker's commit returns only after agent-api's push answered. A pod's cache is rebuilt from the bucket and anything it held that the bucket does not is dropped. | `gate:python`: `test_workspace_store.py`, `test_workspace_store_service.py` |
 | No write after the response has begun (s3 backend) | A store write after `http.response.start` raises `write_after_response_started` (`StreamGuard`); the one sanctioned write in a streamed body, the meeting page minted before its event, runs in `durable_in_stream()`. Size and mtime of a work-tree path are read through `workspace_paths.stat_inside`, which hydrates an evicted workspace first. | `gate:python`: `test_no_store_write_in_a_streamed_body.py` (scan of every streamed body, runtime guard, stat on a stub, the bare-stat gate) |
