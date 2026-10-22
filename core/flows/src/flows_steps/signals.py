@@ -36,7 +36,15 @@ SIGNALS_SERVICE = "signals"
 #: buffer's running score). The lines themselves follow it as data, fenced by agent-api.
 DEFAULT_PLAN = ("Signals since your last look (score {score} against your brief): the lines are "
                 "below, each with what it scored. Update the meeting page; if your focus should "
-                "change, call meeting_listen.")
+                "change, call meeting_listen. When a line matches one of your labels, tell your person "
+                "here in one or two lines what was said and why it matters to them.")
+
+#: …and when someone in the call ADDRESSED Vexa (reason `addressed`; the flow's `addressed_plan`
+#: param overrides it): the answer is the point of the wake. It goes to this chat, whoever spoke.
+DEFAULT_ADDRESSED_PLAN = ("Someone in the call spoke to you: the line that names you is below. Answer "
+                          "here, in this chat, in a few lines: who asked what, then your answer, "
+                          "grounded in the meeting and your person's context. Then update the meeting "
+                          "page if something worth keeping was said.")
 
 DEFAULT_ROOM_PLAN = ("Messages since you last spoke (score {score} against the room's brief): they are "
                      "below, each with what it scored. Speak only if it helps the room; otherwise say "
@@ -167,8 +175,14 @@ def register(reg) -> None:
 
 def _wake(ctx: StepCtx, uid: str, name: str, chat: str, data: dict, *, where: dict):
     """Post the wake to agent-api's event door: ``name`` with ``target.chat``, the plan, the buffer."""
-    template = (ctx.flow.param("plan") if ctx.flow is not None else None) or (
-        DEFAULT_ROOM_PLAN if name == ROOM_SIGNAL_EVENT else DEFAULT_PLAN)
+    reason = str(data.get("reason") or "")
+    if reason == "addressed" and name != ROOM_SIGNAL_EVENT:
+        # a company's own `plan` still decides an addressed wake unless it names an `addressed_plan`
+        template = ((ctx.flow.param("addressed_plan") or ctx.flow.param("plan")) if ctx.flow is not None
+                    else None) or DEFAULT_ADDRESSED_PLAN
+    else:
+        template = (ctx.flow.param("plan") if ctx.flow is not None else None) or (
+            DEFAULT_ROOM_PLAN if name == ROOM_SIGNAL_EVENT else DEFAULT_PLAN)
     try:
         plan = str(template).format(score=f"{float(data.get('score') or 0):.2f}")
     except (KeyError, IndexError, ValueError):

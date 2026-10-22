@@ -173,7 +173,7 @@ def _run():
 
 
 def test_a_signal_wakes_the_meetings_chat_with_the_buffer_as_data(client, agent_api):
-    r = client.post("/events/signal", json=_signal(), headers=SERVICE)
+    r = client.post("/events/signal", json=_signal(reason="threshold"), headers=SERVICE)
     assert r.status_code == 202, r.text
     _run()
     assert agent_api.reads and "/internal/meetings/4417/listen?subject=7" in agent_api.reads[0]
@@ -187,6 +187,22 @@ def test_a_signal_wakes_the_meetings_chat_with_the_buffer_as_data(client, agent_
     assert ev["data"]["buffer"][0]["scores"] == {"addressed_to_vexa": 0.97}
     status = fa.db.execute("SELECT status FROM reaction WHERE event_type = 'meeting.signal'")
     assert status and status[0][0] == "done"
+
+
+def test_being_spoken_to_in_the_call_is_answered_in_the_chat(client, agent_api):
+    # live check 22 Oct, meeting 212: «Hey Vexa, … what is two plus two?» woke the attached chat and
+    # the turn ended [vexa-quiet] — its plan asked only to update the meeting page
+    client.post("/events/signal", json=_signal(reason="addressed"), headers=SERVICE)
+    _run()
+    (ev,) = agent_api.events
+    assert "Answer here, in this chat" in ev["plan"]["prompt"]
+    assert SPOKEN not in ev["plan"]["prompt"]
+
+
+def test_a_label_match_is_told_to_the_person(client, agent_api):
+    client.post("/events/signal", json=_signal(reason="threshold"), headers=SERVICE)
+    _run()
+    assert "tell your person" in agent_api.events[0]["plan"]["prompt"]
 
 
 def test_a_call_attached_to_another_persons_chat_wakes_as_that_person(client, agent_api):
