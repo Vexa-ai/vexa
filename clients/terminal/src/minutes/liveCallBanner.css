@@ -7,6 +7,8 @@
   border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-1_5) var(--space-3);
 }
 .vx-live-call-here { flex-direction: column; align-items: stretch; }
+/* stacked, the line is one row tall: its 16em basis is a width beside the buttons, never a height */
+.vx-live-call-here .vx-live-call-line { flex: none; }
 .vx-live-call-line { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 16em; }
 .vx-live-call-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--t1); }
 .vx-live-call-note { flex: none; color: var(--t3); }

@@ -134,3 +134,13 @@ describe("the attachment's wire shape", () => {
       post_chat: false, owner: true, chat: { session: "pchat-a", title: "Prep" } })).toMatchObject({ row: "210", chat_title: "Prep" });
   });
 });
+
+describe("the attached chat's banner is as tall as its lines", () => {
+  it("the stacked line does not take its 16em basis as a height", async () => {
+    // live check 22 Oct: «Listening to …» sat in a box ~250px tall — in a column the line's
+    // `flex: 1 1 16em` became a 16em height (jsdom does no layout, so the rule is read as written)
+    const { readFileSync } = await import("node:fs");
+    const css = readFileSync("src/minutes/liveCallBanner.css", "utf8");
+    expect(css).toMatch(/\.vx-live-call-here \.vx-live-call-line \{ flex: none; \}/);
+  });
+});
