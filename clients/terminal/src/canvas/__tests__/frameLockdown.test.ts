@@ -16,7 +16,7 @@ describe("the canvas frame's lockdown", () => {
     expect(lockFrame(win)).toEqual({ webrtc: true });
     expect((win as unknown as Record<string, unknown>).RTCPeerConnection).toBeUndefined();
     expect(() => Object.defineProperty(win, "RTCPeerConnection", { value: class {} })).toThrow();
-    (win as unknown as Record<string, unknown>).RTCPeerConnection = class {};      // a plain write does nothing
+    expect(() => { (win as unknown as Record<string, unknown>).RTCPeerConnection = class {}; }).toThrow(TypeError);
     expect((win as unknown as Record<string, unknown>).RTCPeerConnection).toBeUndefined();
   });
 
