@@ -21,7 +21,7 @@ import "../../canvas/register";
 const MEETING = { id: "207", title: "Call with Vu", when: "", status: "live", live_status: "active", platform: "google_meet",
   participants: [], mentioned: [], actions: [], transcript: [], insights: [], start_time: "2026-10-22T09:00:00Z" } as unknown as MeetingMock;
 
-const att = (over: Record<string, unknown> = {}) => ({ row: "207", attached: true, attached_here: false, chat_title: "Prep for 10:15",
+const att = (over: Record<string, unknown> = {}) => ({ meeting: "207", attached: true, attached_here: false, chat: { session: "pchat-prep", title: "Prep for 10:15" },
   mine: true, how: "auto", speak: false, post_chat: false, owner: true, ...over });
 
 type Reply = { status: number; body?: unknown };
@@ -113,5 +113,15 @@ describe("LiveCallBanner", () => {
     await mount(<LiveCallBanners session="pchat-1" meetings={[{ ...MEETING, live_status: "completed", status: "past" } as MeetingMock]} />);
     expect(calls).toHaveLength(0);
     expect(container.innerHTML).toBe("");
+  });
+});
+
+describe("the attachment's wire shape", () => {
+  it("names the chat by its title, never by its id", async () => {
+    const { fromWire } = await import("../../data/meetingAttachment");
+    expect(fromWire({ meeting: "210", attached: true, attached_here: false, mine: true, how: "auto", speak: false,
+      post_chat: false, owner: true, chat: { session: "pchat-mvjitvmi", title: "pchat-mvjitvmi" } }).chat_title).toBeUndefined();
+    expect(fromWire({ meeting: "210", attached: true, attached_here: false, mine: true, how: "sent", speak: false,
+      post_chat: false, owner: true, chat: { session: "pchat-a", title: "Prep" } })).toMatchObject({ row: "210", chat_title: "Prep" });
   });
 });
