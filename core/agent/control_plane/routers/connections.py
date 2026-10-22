@@ -1,4 +1,5 @@
 """Agent-facing connection requests/status. Human OAuth routes are never proxied here."""
+import inspect
 import os
 import re
 import time
@@ -485,8 +486,10 @@ WEB_URL_RULE = 'Link to a message or event only with its web_url; never construc
 
 
 def _links_rule(fn):
-    """Append WEB_URL_RULE to a read tool's description (its docstring, which FastAPI publishes)."""
-    fn.__doc__ = (fn.__doc__ or '').rstrip() + '\n        ' + WEB_URL_RULE
+    """Append WEB_URL_RULE to a read tool's description (its docstring, which FastAPI publishes).
+    The docstring is cleaned first, so the rule is a line of its own at the same indentation whether
+    or not the interpreter already stripped the docstring's indentation (Python 3.13 does)."""
+    fn.__doc__ = inspect.cleandoc(fn.__doc__ or '') + '\n' + WEB_URL_RULE
     return fn
 
 
