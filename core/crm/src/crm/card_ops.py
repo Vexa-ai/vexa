@@ -277,7 +277,10 @@ class Cards:
     #: the gate-only fields. Thread-local, because one Cards object serves concurrent requests.
     _gate = threading.local()
 
-    def normalise_fields(self, object_type, fields, before):
+    def normalise_fields(self, object_type, fields, before, actor=None):
+        """A card's fields as every write path stores them. ``actor`` is the person whose write is
+        being APPLIED (``store._edit``: an edit, or the reviewer accepting a proposal); None while a
+        proposal is only filed, which changes nothing until a person accepts it."""
         fields = dict(fields or {})
         prior = (before or {}) if isinstance(before, dict) else {}
         gate_write = bool(getattr(self._gate, 'on', False))
@@ -323,14 +326,32 @@ class Cards:
                     raise CRMError('A card of a kind names its next actor (NextActor: a person id)')
                 fields.setdefault('Handoff', 'offered')
                 fields.setdefault('HandoffSince', self.clock().isoformat())
-            elif not gate_write and 'NextActor' in fields and fields['NextActor'] != prior.get('NextActor'):
-                # reassigned: a new offer to the new next actor, never custody by assignment (D12)
-                fields['Handoff'] = 'offered'
-                fields['HandoffSince'] = self.clock().isoformat()
+            elif not gate_write:
+                if actor is not None:
+                    self._may_reassign(prior, fields, str(actor))
+                if 'NextActor' in fields and fields['NextActor'] != prior.get('NextActor'):
+                    # reassigned: a new offer to the new next actor, never custody by assignment (D12)
+                    fields['Handoff'] = 'offered'
+                    fields['HandoffSince'] = self.clock().isoformat()
             state = merged.get('State') or fields.get('State')
             if tpl.is_open(template, state) and not merged.get('NextCheckAt'):
                 fields['NextCheckAt'] = self.next_check(merged.get('Due'))
         return fields
+
+    @staticmethod
+    def _may_reassign(prior, fields, actor):
+        """WHOSE MOVE IT IS IS NOT A FIELD ANY WRITER SETS (D12). On a card of a kind the person waiting
+        (``Requester``) is fixed when the card is made, and the next actor changes by an edit only
+        when the person waiting or the current next actor hands it on — to someone else, never to
+        themselves. Otherwise a writer of the card could make themselves the one who decides it."""
+        if 'Requester' in fields and fields['Requester'] != prior.get('Requester'):
+            raise Forbidden("A card's requester does not change; make a new card")
+        if 'NextActor' not in fields or fields['NextActor'] == prior.get('NextActor'):
+            return
+        if actor not in {str(prior.get('Requester') or ''), str(prior.get('NextActor') or '')} - {''}:
+            raise Forbidden('Only the person waiting on this card, or its next actor, hands it to someone else')
+        if str(fields['NextActor'] or '') == actor:
+            raise Forbidden('A card is handed to you by someone else; you do not make yourself its next actor')
 
     # ── reading one card ──────────────────────────────────────────────────────────────────────
     def _definition(self, c, org, object_type):

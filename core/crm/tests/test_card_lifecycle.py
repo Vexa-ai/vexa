@@ -158,6 +158,41 @@ def test_custody_moves_only_on_acknowledgement_and_a_gate_passes_on_its_owner(ca
     assert {d['by'] for d in closed['decisions']} == {'3', '17'}
 
 
+def test_a_card_writer_cannot_make_themselves_the_next_actor_and_decide_it(cards):
+    """Gate Low 7: X may write the card (a writer of its workspace) but is neither the person waiting
+    nor the next actor. X cannot hand the approval to X and then approve it."""
+    card = offer(cards, kind='approval', next_actor='17', title='Send the invite')
+    with pytest.raises(Forbidden):
+        cards.update(ORG, X, card['id'], card['revision'], fields={'NextActor': '40'})
+    fresh = cards.read(ORG, X, card['id'])
+    assert fresh['next_actor'] == '17' and fresh['viewer']['actions'] == []
+    with pytest.raises(Forbidden):
+        decide(cards, X, card['id'], 'decide')
+    with pytest.raises(Forbidden):                                   # nor reassign it to anyone else
+        cards.update(ORG, X, card['id'], card['revision'], fields={'NextActor': '3'})
+
+
+def test_the_person_waiting_is_fixed_and_nobody_hands_a_card_to_themselves(cards):
+    card = offer(cards, kind='approval', next_actor='17', title='Send the invite')
+    with pytest.raises(Forbidden):                                   # the requester does not change
+        cards.update(ORG, X, card['id'], card['revision'], fields={'Requester': '40'})
+    with pytest.raises(Forbidden):
+        cards.update(ORG, D, card['id'], card['revision'], fields={'Requester': '40'})
+    with pytest.raises(Forbidden):                                   # the person waiting never approves it
+        cards.update(ORG, D, card['id'], card['revision'], fields={'NextActor': '3'})
+
+
+def test_the_person_waiting_or_the_next_actor_still_hands_a_card_on(cards):
+    """Positive control: the requester reassigns their request, and the next actor hands it on; each
+    hand-over is a new offer (D12)."""
+    card = offer(cards, kind='approval', next_actor='17', title='Send the invite')
+    moved = cards.update(ORG, D, card['id'], card['revision'], fields={'NextActor': '40'})['card']
+    assert moved['next_actor'] == '40' and moved['handoff']['phase'] == 'offered'
+    back = cards.update(ORG, X, card['id'], moved['revision'], fields={'NextActor': '17'})['card']
+    assert back['next_actor'] == '17'
+    assert decide(cards, V, card['id'], 'decide')['card']['state'] == 'decided'
+
+
 def test_approval_executed_needs_an_effect_receipt(cards):
     card = offer(cards, kind='approval', next_actor='17', title='Send the invite')
     assert card['state'] == 'opened'

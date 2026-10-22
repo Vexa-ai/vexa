@@ -714,7 +714,7 @@ class Store:
             raise Forbidden('Field write not permitted')
         if row['revision'] != expected_revision:
             raise Conflict('Record changed; read the current revision')
-        fields=self._card_fields(c,org,row['object_type'],fields,row['fields'])
+        fields=self._card_fields(c,org,row['object_type'],fields,row['fields'],actor=actor)
         after={**row,'fields':{**row['fields'],**fields},'revision':row['revision']+1}
         if narrative is not None:
             after['narrative']=narrative
@@ -815,10 +815,10 @@ class Store:
             s.records.c.id==record_id)).scalar_one_or_none()
         return bool(kind) and bool(self._definition(c,org,kind).get('x-card'))
 
-    def _card_fields(self, c, org, object_type, fields, before):
+    def _card_fields(self, c, org, object_type, fields, before, actor=None):
         if self.cards is None or not self._definition(c,org,object_type).get('x-card'):
             return fields
-        return self.cards.normalise_fields(object_type, fields, before)
+        return self.cards.normalise_fields(object_type, fields, before, actor=actor)
 
     # ── ADR-0047: organisation, accounts, merges, bindings, references, audit ──────────────────
     def _now(self):
