@@ -139,10 +139,10 @@ def pin_config(remote: Remote, ips: List[str]) -> tuple[str, ...]:
 
 
 def pin_ssh_command(remote: Remote, ips: List[str], base: Optional[str]) -> str:
-    """``base`` (the ssh command the op would have run — a deploy key's, or plain ``ssh``, which is
-    what ``shared.gitexec`` pins) told to dial the first checked address and to check the host key
-    under the name the person gave."""
+    """``base`` (the ssh command the op would have run: a deploy key's, else the operator's own
+    ``GIT_SSH_COMMAND``, which ``shared.gitexec`` keeps, else plain ``ssh``) told to dial the first
+    checked address and to check the host key under the name the person gave."""
     alias = remote.host if remote.port == 22 else f"[{remote.host}]:{remote.port}"
-    cmd = (base or "").strip() or "ssh"
+    cmd = (base or "").strip() or os.environ.get("GIT_SSH_COMMAND", "").strip() or "ssh"
     return (f"{cmd} -o HostName={shlex.quote(ips[0])} -o HostKeyAlias={shlex.quote(alias)} "
             "-o CheckHostIP=no")

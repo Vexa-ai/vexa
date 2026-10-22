@@ -575,6 +575,13 @@
       ]
     },
     {
+      "key": "GIT_SSH_COMMAND",
+      "class": "defaulted",
+      "default": "(unset — ssh)",
+      "description": "the operator's ssh command for git over ssh (git's own variable; shared/gitexec.py keeps it from the environment). A workspace deploy key's command replaces it for that operation. For a caller-supplied remote, shared/git_egress.py extends it with -o HostName=<checked address> -o HostKeyAlias=<host> -o CheckHostIP=no, so the connection is pinned to the address that was checked",
+      "targets": []
+    },
+    {
       "key": "VEXA_GIT_ALLOWED_INTERNAL_HOSTS",
       "class": "defaulted",
       "default": "(empty — no internal git host is reachable)",
