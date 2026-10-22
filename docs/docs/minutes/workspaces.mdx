@@ -138,7 +138,10 @@ Sign out and back in with your everyday account for everything else.
    `<room> in <workspace>` and the link opens that room.
 
 The invite email is a fixed template: who invited them, to which workspace or room, as what, and one
-link. It never carries a message, a page or anything said in a chat.
+link. It never carries a message, a page or anything said in a chat. The workspace and room names in
+it are one line of at most 60 characters; a name that contains a web address, an email address or a
+domain is not said (the email uses the workspace's short name, or leaves the room out), so a name
+cannot make the email point anyone somewhere.
 
 Changing a role and removing someone work the same way, from **People** or in the chat. A workspace
 always keeps at least one owner.
@@ -250,7 +253,7 @@ something, which opens the same page.
 | Card | Lets your agents |
 |---|---|
 | **Git repositories** | save a token for each git provider (GitHub, your GitLab), or attach a repository |
-| **Gmail** | read email and save drafts (Minutes does not send mail) |
+| **Gmail** | read email and save drafts (Minutes does not send mail). A draft you wrote yourself is replaced only after you press **Replace my draft** on the card the agent shows, naming the recipient; one press replaces one draft |
 | **Google Calendar** | read calendar events |
 | **Custom secret** | use a secret, optionally against one HTTPS address you name |
 

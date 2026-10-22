@@ -222,17 +222,28 @@ git: `docker compose exec agent-api python -m control_plane.crm_references rebui
   workspace memberships (for a worker, narrowed to its job), and whether the turn is one other people
   read. Identity's own admin is the CRM's admin.
 - **People are entities with accounts attached.** On a person's first CRM call their account is
-  attached to a person record: one whose verified email is among its match identifiers, or a new one.
+  attached to a person record: the one their verified email binds them to, or a new one. Only the
+  identity service binds an address to an account. A record's `email:` identifier binds a sign-in
+  when identity proved that address for an account the record answers to, or when the address was
+  given with the record at its creation and no account holds the record yet. An address a CRM merge
+  carried to a record, a second address the org listed on a record someone already signs in with,
+  and the record's `Email` field bind nobody. When you sign in with an address that sits on such a
+  record, the address moves to your own person record; the other record is left as it is.
   Duplicates merge; the merged id answers the surviving record everywhere. A merge moves a record's
   data and identifiers, never an account: a record someone signs in with joins another person only
   on their own merge card, confirmed from each of their sessions. `crm_change`'s `merge` refuses such
   a record with a 409; merge the duplicate into it instead.
 - **A profile is claimed through the match identifier only.** A signed-in person claims the person
-  record that holds `email:<their verified address>` among its match identifiers. The record's
-  `Email` field never makes a claim, because anyone who may write the record can type into it, and a
-  record the claimant merged another record into with a CRM merge is not theirs to claim. To make a
-  record the org created claimable by the person it describes, give it the `email:` identifier when
-  it is created (`crm_change`'s `match`).
+  record their verified address binds them to (above). The record's `Email` field never makes a
+  claim, because anyone who may write the record can type into it, and neither does an identifier a
+  merge carried. To make a record the org created or imported claimable by the person it describes,
+  give it the `email:` identifier when it is created (`crm_change`'s `match`): their first sign-in
+  with that address takes the record and claims it. If the address reached the record through a
+  merge, it does not: the person signs in, gets a person record of their own, and you merge the old
+  record into it (its data moves; their account stays where it is).
+- **A second address joins on the person's own merge card.** Listing a second address on someone's
+  record does not join a second login to them. The person adds it themselves: from one signed-in
+  session they name the other address, and the card completes when that address's account confirms.
 - **Backlinks come from git.** agent-api holds the workspace checkouts. When a workspace's head moves
   it reads every record link in the tree at that commit, and the roster in `policy/members.json`, and
   publishes `workspace.references.changed` to flows. The `flows_defs.crm` pack hands it to `crm-api`,

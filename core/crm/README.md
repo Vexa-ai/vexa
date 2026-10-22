@@ -90,7 +90,15 @@ its own transaction (H9 asks for the same transaction), and is not hash-chained.
 **How it works.** There is no persons table: the human is the organisation's Person record, and its
 match identifiers say which addresses are theirs (`src/crm/persons.py`). A signed-in account resolves
 to its Person by the address identity verified for it (`email:<address>`), and only failing that by
-the record it is attached to. When that Person already has another account attached, the new one is
+the record it is attached to. **Only identity binds an address to an account** (`crm_match_ids.proof`,
+schema version 9, `Persons.binds`): an `email:` identifier binds a sign-in when identity proved the
+address for an account the record answers to (`signin:<account>`, written only by the sign-in path),
+or when it was given with the record at its creation and no account holds the record yet (`record`).
+An identifier a CRM merge carried (`proof` NULL), or a second address the org listed on a record
+someone already signs in with, binds nobody; a sign-in that proves such an address takes the
+identifier to its own Person (`Persons.prove`). Upgrading to 9 fills `proof` once
+(`migrate.match_proof_9`): NULL on a record a CRM merge carried identifiers into, the record's account
+where it has one, else `record`. When that Person already has another account attached, the new one is
 **linked**, not given a second record: an `account:<id>` match identifier on the same Person. The
 picker shows the Person once, hinting "2 accounts?" until the person confirms. **Grants follow only
 confirmed links** (coordinator ruling 2026-10-17): a card member here, or a chat participant or a
@@ -120,9 +128,9 @@ confirmed them from its own session.
 
 **How it works.** A signed-in person claims the Person record that matches their verified address in
 their home org's CRM (`src/crm/person_profiles.py`, table `crm_profiles`, schema version 7). It happens
-on its own at sign-in when exactly one record matches (a match identifier, or a Person whose `Email`
-is that address); with several, `POST /person/profile` (`action: read`) lists them as a claim card and
-`action: claim` takes the one the person picks. The claim is one-to-one: the row is keyed by the record
+on its own at sign-in when their verified address binds them to a record (above); the `Email` field
+and an identifier a merge carried never do. There is at most one such record, so the claim card's
+`choose` answer no longer occurs. The claim is one-to-one: the row is keyed by the record
 and unique per account, and a second login of the same human joins the claimed Person through the merge
 card instead of claiming another record. The person's **profile fields** (display name, photo, headline,
 company, bio, location, time zone, links to LinkedIn, GitHub, X or a website, contact preferences) live
