@@ -2053,4 +2053,8 @@ X_INJ="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -f "$C
 tb "extraCA from an OpenShift injected trusted-CA ConfigMap (key ca-bundle.crt) reaches the runtime and its spawned Pods" 'grep -q "key: \"ca-bundle.crt\", path: ca.crt" <<< "$X_INJ" && grep -A1 "name: RUNTIME_K8S_EXTRA_CA" <<< "$X_INJ" | grep -q "ca-bundle.crt"'
 tb "extraCA naming both a configMap and a secret is refused" '! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set global.extraCA.configMap=a,global.extraCA.secret=b >/dev/null 2>&1'
 
+SCR_ON="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-meeting-api.yaml)"
+tb "calls.transcribeSharedScreen by default: the shared screen is transcribed" 'grep -A1 "name: CALL_TRANSCRIBE_SHARED_SCREEN$" <<< "$SCR_ON" | grep -qF "value: \"true\""'
+SCR_OFF="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-meeting-api.yaml --set meetingApi.calls.transcribeSharedScreen=false)"
+tb "calls.transcribeSharedScreen=false (a boolean) renders \"false\"" 'grep -A1 "name: CALL_TRANSCRIBE_SHARED_SCREEN$" <<< "$SCR_OFF" | grep -qF "value: \"false\""'
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }
