@@ -682,7 +682,7 @@ class Store:
             allowed=['*'] if policy.get('admin') else rule.get('write_fields',[])
             if '*' not in allowed and (set(fields)-set(allowed) or narrative):
                 raise Forbidden('Field write not permitted')
-            fields=self._card_fields(c,org,object_type,fields,None)
+            fields=self._card_fields(c,org,object_type,fields,None,actor=actor)
             self._validate(self._definition(c,org,object_type), fields)
             record_id=str(uuid5(NAMESPACE_URL,json.dumps(['crm-create',org,actor,idempotency_key]))) if idempotency_key else str(uuid4())
             if idempotency_key:

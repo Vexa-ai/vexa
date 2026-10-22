@@ -193,6 +193,44 @@ def test_the_person_waiting_or_the_next_actor_still_hands_a_card_on(cards):
     assert decide(cards, V, card['id'], 'decide')['card']['state'] == 'decided'
 
 
+def _card_writers(store, *subjects):
+    """People whose CRM policy lets them create and write cards through the generic record path."""
+    with store.engine.begin() as c:
+        for subject in subjects:
+            c.execute(s.policies.insert().values(org_id=ORG, subject_id=subject, policy={'active': True, 'objects': {
+                'Card': {'create': True, 'read': 'all', 'write': 'all', 'write_fields': ['*']}}}))
+
+
+def test_a_kind_card_made_through_the_generic_create_waits_on_its_maker(store, cards):
+    """The generic record create (``crm_change`` create) makes a card of a kind too. Its requester is
+    the person who makes it, as on ``Cards.create``: a writer does not make a card that someone else
+    is waiting on, and then hand it to themselves to decide."""
+    _card_writers(store, '3', '40')
+    fields = {'Title': 'Approve the wire', 'Kind': 'approval', 'NextActor': '40', 'Requester': '3'}
+    with pytest.raises(Forbidden):
+        store.create(ORG, X, 'Card', fields, reason='r')
+    with store.engine.connect() as c:
+        made = [r['fields'] for r in c.execute(select(s.records).where(s.records.c.org_id == ORG,
+                                                                        s.records.c.object_type == 'Card')).mappings()]
+    assert not [f for f in made if f.get('Title') == 'Approve the wire']
+
+
+def test_a_kind_card_made_through_the_generic_create_names_its_maker_as_requester(store, cards):
+    """Positive control: the maker named as requester, or no requester given, makes the card; and
+    ``Cards.create`` is unchanged."""
+    _card_writers(store, '3', '40')
+    own = store.create(ORG, D, 'Card', {'Title': 'Mine', 'Kind': 'approval', 'NextActor': '17', 'Requester': '3'},
+                       reason='r')
+    assert cards.read(ORG, D, own['record_id'])['requester'] == '3'
+    implied = store.create(ORG, D, 'Card', {'Title': 'Also mine', 'Kind': 'approval', 'NextActor': '17'}, reason='r')
+    assert cards.read(ORG, D, implied['record_id'])['requester'] == '3'
+    plain = store.create(ORG, X, 'Card', {'Title': 'No kind'}, reason='r')
+    assert plain['status'] == 'saved'
+    made = cards.create(ORG, D, title='Through cards', workspace='team',
+                        fields={'Kind': 'approval', 'NextActor': '17'})['card']
+    assert made['requester'] == '3' and made['next_actor'] == '17'
+
+
 def test_approval_executed_needs_an_effect_receipt(cards):
     card = offer(cards, kind='approval', next_actor='17', title='Send the invite')
     assert card['state'] == 'opened'

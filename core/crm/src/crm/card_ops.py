@@ -279,8 +279,9 @@ class Cards:
 
     def normalise_fields(self, object_type, fields, before, actor=None):
         """A card's fields as every write path stores them. ``actor`` is the person whose write is
-        being APPLIED (``store._edit``: an edit, or the reviewer accepting a proposal); None while a
-        proposal is only filed, which changes nothing until a person accepts it."""
+        being APPLIED (``store._edit``: an edit, or the reviewer accepting a proposal; ``store.create``:
+        the person making the record); None while a proposal is only filed, which changes nothing until
+        a person accepts it, and on the paths of this class that set the requester themselves."""
         fields = dict(fields or {})
         prior = (before or {}) if isinstance(before, dict) else {}
         gate_write = bool(getattr(self._gate, 'on', False))
@@ -324,6 +325,8 @@ class Cards:
             if before is None:
                 if not merged.get('NextActor'):
                     raise CRMError('A card of a kind names its next actor (NextActor: a person id)')
+                if actor is not None:
+                    self._made_by(fields, str(actor))
                 fields.setdefault('Handoff', 'offered')
                 fields.setdefault('HandoffSince', self.clock().isoformat())
             elif not gate_write:
@@ -337,6 +340,15 @@ class Cards:
             if tpl.is_open(template, state) and not merged.get('NextCheckAt'):
                 fields['NextCheckAt'] = self.next_check(merged.get('Due'))
         return fields
+
+    @staticmethod
+    def _made_by(fields, actor):
+        """A card of a kind made through the generic record create waits on the person who makes it,
+        as one made by ``create`` does: a writer does not make a card someone else is waiting on."""
+        if fields.get('Requester') is None:
+            fields['Requester'] = actor
+        elif fields['Requester'] != actor:
+            raise Forbidden('A card of a kind waits on the person who makes it; Requester is you')
 
     @staticmethod
     def _may_reassign(prior, fields, actor):

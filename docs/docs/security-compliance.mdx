@@ -410,7 +410,9 @@ whose move it is moves one, from their own signed-in app.
   confirmation is the waiting person's.
 - **Whose move it is is not a field.** The person waiting is fixed when the card is made. Only the
   person waiting or the current next actor hands a card to someone else, and nobody makes themselves
-  its next actor by an edit, so a writer of the card cannot become the one who decides it.
+  its next actor by an edit, so a writer of the card cannot become the one who decides it. A card of
+  a kind made through the generic record create (`crm_change`) waits on the person who makes it: a
+  `Requester` naming anyone else is refused (403).
 - **A decision is a record.** Each gate decision is an append-only revision of the card that carries
   the action, the credential it was made with, a server nonce bound to that person and that card at
   that revision, and the hash of the card face they saw. A replayed nonce, a nonce minted for someone
