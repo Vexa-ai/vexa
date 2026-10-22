@@ -312,7 +312,7 @@ def test_the_room_addresses_the_ROW_not_the_native_id(monkeypatch):
     assert seen["room"]["names"] == NAMES
 
 
-def test_the_kick_names_the_desks_it_may_read(monkeypatch):
+def test_the_kick_says_what_is_mounted_and_names_no_attendee_desk(monkeypatch):
     reg = Registry()
     production.build(reg, _StubDB())
     seen = {}
@@ -330,9 +330,13 @@ def test_the_kick_names_the_desks_it_may_read(monkeypatch):
                  "f", 1, "step", "running", 1, 0.0, None, None, None)
     reg.steps["process_meeting"](StepCtx(reaction=r, effect_key="k", prior={},
                                          clock_now=1_700_000_000.0, scratch={}, flow=None))
-    assert "anna.smith@bank.test, ben@bank.test" in seen["prompt"]
-    assert "READ-ONLY access to the personal workspaces" in seen["prompt"]
-    assert "never copy a line, a note or a phrase out of one into this report" in seen["prompt"]
+    # agent-api mounts no attendee's desk (decision 3), so the kick names none and claims none
+    assert "anna.smith@bank.test" not in seen["prompt"] and "ben@bank.test" not in seen["prompt"]
+    assert "READ-ONLY access to the personal workspaces" not in seen["prompt"]
+    assert "no other attendee's personal workspace" in seen["prompt"]
+    # positive control: what IS mounted is said, and the no-quoting rule stays
+    assert "your own person's personal workspace, READ-ONLY" in seen["prompt"]
+    assert "Never copy a line, a note or a phrase out of your person's workspace" in seen["prompt"]
 
 def test_the_kick_reads_the_transcript_by_the_resolved_row(monkeypatch):
     """The kick tells the agent to read the words with `get_meeting_transcript(meeting_db_id=…)`,

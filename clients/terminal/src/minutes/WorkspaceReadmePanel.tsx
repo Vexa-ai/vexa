@@ -593,7 +593,7 @@ export function WorkspaceReadmePanel(p: { slug?: string; path: string; title?: s
       <Section id="people" name="People" first>
           {facts.kind === "desk" && (
             <div data-ws-members="desk" className="c-2 lh-snug" style={{ ...ty.body }}>
-              Its owner writes it. The company&apos;s agents read it for meetings the owner is in.
+              Its owner writes it. Everyone here, and their agents, can read it.
             </div>
           )}
           {facts.kind === "global" && (

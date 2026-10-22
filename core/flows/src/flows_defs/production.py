@@ -1674,9 +1674,10 @@ def build(reg: Registry, db) -> None:
             # `meeting_db_id`, which addresses exactly one meeting, and the ref may be a native id.
             kick = kick_template.format(mid=row_id or ctx.refs["meeting_id"],
                                         native=ctx.refs["native"], date=_meeting_stamp(ctx, uid))
-            # The PROMPT names only as many desks as agent-api will actually mount: the wire
-            # carries the whole ordered room, the sentence must not claim more than the cap allows.
-            kick += _shared_report_rules(room_read[:read_max] if read_max else room_read, group)
+            # The PROMPT says what agent-api mounts: the person's own desk read-only and, with a
+            # group, the group's workspace. The room's addresses ride the wire for agent-api's own
+            # membership check; no attendee's desk is mounted (agent-api decision 3).
+            kick += _shared_report_rules(group)
             ctx.scratch["baseline"] = ag.dispatch_turn(
                 uid, session, kick,
                 room={"meeting_id": row_id, "read": room_read,
@@ -1797,7 +1798,7 @@ def build(reg: Registry, db) -> None:
             raise StepError("the agent turn never finished (no reply after 15min)", retryable=False)
         return Wait(seconds=10)
 
-    def _shared_report_rules(room_read: list, group: str) -> str:
+    def _shared_report_rules(group: str) -> str:
         """What the post-meeting turn is told on top of the behavior-domain kick.
 
     ⚠ IT ONCE CONTRADICTED THAT KICK, and the contradiction shipped. `behavior/prompts/
@@ -1825,14 +1826,14 @@ def build(reg: Registry, db) -> None:
             "copy in their own personal workspace afterwards, which is not your job either. Your REPLY is the "
             "artefact — it is mailed verbatim, so no preamble and no meta-commentary.\n\n"
             "MEETING-RELEVANT FACTS ONLY, ATTRIBUTED — a person's personal workspace informs the report, it is "
-            "never quoted into it. ")
-        if room_read:
-            block += (
-                "You have READ-ONLY access to the personal workspaces of the people who were in this meeting ("
-                + ", ".join(room_read) + "). Use them to understand what was said and to attribute "
-                "it correctly, and never copy a line, a note or a phrase out of one into this "
-                "report — a report that goes to everyone in the room is not a place where one "
-                "person's own notes can appear. ")
+            "never quoted into it. "
+            "WHAT IS MOUNTED: your own person's personal workspace, READ-ONLY, and no other "
+            "attendee's personal workspace — theirs are not mounted in this turn, so do not look "
+            "for them or claim to have read them. Work from the transcript"
+            + (" and the group's workspace below" if group else "") + ". Never copy a line, a "
+            "note or a phrase out of your person's workspace into this report — a report that "
+            "goes to everyone in the room is not a place where one person's own notes can "
+            "appear. ")
         block += ("Everything in the report was said, decided, committed or asked IN THIS ROOM.\n\n"
                   "Anything person-centric happens when they click the link in the mail, not here.")
         if group:

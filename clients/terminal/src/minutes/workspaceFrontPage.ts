@@ -97,32 +97,29 @@ export function companyName(readme: string | null): string | null {
 
 /** WHO MAY READ THIS PLACE, in one clause — for the two kinds where people are not the point.
  *
- *  DERIVED FROM `POLICIES.md`'s ANSWERS, not from its prose. #1623 lifted the rule's own heading
- *  sentence ("an agent may read its user's desk when its user is a participant"), which is right for
- *  a Policy row in a facts table and wrong for the first line a person reads: it is a rule, and this
- *  is a place. So the on/off of the one rule that governs each kind is read out of the front matter
- *  and turned into the sentence the founder wrote.
+ *  A DESK'S CLAUSE IS WHAT THE SOFTWARE DOES, NOT A RULE'S ANSWER. agent-api serves a desk to any
+ *  signed-in member of the instance, and so to any agent working for one, and only its owner
+ *  writes it. `agent_reads_desk` narrows none of that (it is declared, not yet enforced), so the
+ *  desk's clause does not read it and does not wait for the policy file.
  *
- *  `null` when the file could not be read — the line then simply has one clause fewer, which is the
- *  panel's standing rule about a fact it does not have. */
+ *  THE COMPANY LAYER'S CLAUSE IS READ FROM `POLICIES.md`'s ANSWERS (`global_admin_only`, which the
+ *  read-only `_global` mount enforces), not from its prose. `null` when the file could not be
+ *  read — the line then simply has one clause fewer, which is the panel's standing rule about a
+ *  fact it does not have. */
 export function visibilitySentence(
   kind: WorkspaceKind, policies: string | null,
   who: { company?: string | null; adminFirstName?: string | null } = {},
 ): string | null {
+  const everyone = who.company ? `everyone at ${who.company}` : "everyone here";
+  if (kind === "desk") return `${everyone} and their agents read it`;
   if (!policies) return null;
   const on = (key: string) => {
     const v = frontMatterValue(policies, key);
     return v === null ? null : /^(on|true|yes)$/i.test(v);
   };
-  if (kind === "desk") {
-    const reads = on("agent_reads_desk");
-    if (reads === null) return null;
-    return reads ? "agents read it for meetings you are in" : "no agent reads it";
-  }
   if (kind === "global") {
     const adminOnly = on("global_admin_only");
     if (adminOnly === null) return null;
-    const everyone = who.company ? `everyone at ${who.company}` : "everyone here";
     if (!adminOnly) return `${everyone} reads and writes it`;
     // **THE WRITER IS A PERSON OR NOBODY — never the words *the admin*** (Vexa-ai/vexa#1642).
     // That was the fallback, and the founder met it on his own instance: *"everyone at Vexa reads

@@ -154,9 +154,10 @@ def process_meeting(ctx: StepCtx):
         # `meeting_db_id`, which addresses exactly one meeting, and the ref may be a native id.
         kick = kick_template.format(mid=row_id or ctx.refs["meeting_id"],
                                     native=ctx.refs["native"], date=_meeting_stamp(ctx, uid))
-        # The PROMPT names only as many desks as agent-api will actually mount: the wire
-        # carries the whole ordered room, the sentence must not claim more than the cap allows.
-        kick += _shared_report_rules(room_read[:read_max] if read_max else room_read, group)
+        # The PROMPT says what agent-api mounts: the person's own desk read-only and, with a
+        # group, the group's workspace. The room's addresses ride the wire for agent-api's own
+        # membership check; no attendee's desk is mounted (agent-api decision 3).
+        kick += _shared_report_rules(group)
         ctx.scratch["baseline"] = ag.dispatch_turn(
             uid, session, kick,
             room={"meeting_id": row_id, "read": room_read,

@@ -493,7 +493,8 @@ describe("the two workspaces that are not groups", () => {
     });
     await open(container, "people");
     expect(container.querySelector("[data-ws-readme]")?.getAttribute("data-ws-kind")).toBe("desk");
-    expect(container.querySelector('[data-ws-members="desk"]')?.textContent).toContain("agents read it");
+    expect(container.querySelector('[data-ws-members="desk"]')?.textContent)
+      .toBe("Its owner writes it. Everyone here, and their agents, can read it.");
     // …and the rule it comes from is not ALSO printed as a fact row: `Policy — an agent may read
     // its user's desk when its user is a participant` was a rule in a table, which is what the
     // header's own sentence replaced (Vexa-ai/vexa#1634, and #1642's second look).

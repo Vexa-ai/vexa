@@ -123,7 +123,7 @@ describe("the three viewers' lines", () => {
     });
 
     expect(eyebrow(facts.kind)).toBe("Your personal workspace");
-    expect(row(facts)).toBe("agents read it for meetings you are in · 12 pages");
+    expect(row(facts)).toBe(`everyone at ${companyName(README)} and their agents read it · 12 pages`);
     expect(lastChangeSentence(mine, now)).toBe("You changed the standing orders page yesterday");
     expect(stripActs({ kind: "desk", owner: true, remote: null }).map((a) => a.label))
       .toEqual(["History"]);
@@ -273,9 +273,6 @@ describe("people as names, you first", () => {
 // ── the visibility sentence, derived ────────────────────────────────────────────────────────────
 describe("where people are not the point, the rule is", () => {
   it("is derived from POLICIES.md's answers and the kind, never retyped", () => {
-    expect(visibilitySentence("desk", POLICIES)).toBe("agents read it for meetings you are in");
-    expect(visibilitySentence("desk", POLICIES.replace("agent_reads_desk: on", "agent_reads_desk: off")))
-      .toBe("no agent reads it");
     expect(visibilitySentence("global", POLICIES, { company: "Pilot Industries", adminFirstName: "Jane" }))
       .toBe("everyone at Pilot Industries reads it, Jane writes it");
     expect(visibilitySentence("group", POLICIES)).toBeNull();     // a group's people ARE the point
@@ -291,10 +288,10 @@ describe("where people are not the point, the rule is", () => {
   });
 
   it("says nothing rather than something invented when a fact is missing", () => {
-    expect(visibilitySentence("desk", null)).toBeNull();
+    expect(visibilitySentence("global", null)).toBeNull();
     expect(visibilitySentence("global", POLICIES, {})).toBe("everyone here reads it");
     // …and a row with a missing clause is a shorter row, never a row with a hole in it
-    expect(peopleClause({ kind: "desk", name: null, pages: null, policies: null, company: null,
+    expect(peopleClause({ kind: "global", name: null, pages: null, policies: null, company: null,
                           members: null })).toBeNull();
     expect(pageCount(null)).toBeNull();
   });
@@ -377,5 +374,25 @@ describe("the buttons are what this viewer may do, and nothing else", () => {
     expect(actInstruction("member", where)).toBe("");
     expect(actInstruction("policies", where)).toBe("");
     expect(actInstruction("history", where)).toBe("");
+  });
+});
+
+// ── a desk's clause is what agent-api enforces, never `agent_reads_desk` (S03-2) ─────────────────
+describe("a desk says who can read it, whatever the unenforced rule answers", () => {
+  // agent-api serves a desk to any signed-in member (and their agents) and lets only its owner write
+  // it (`api._read_target`; agent test_agent_api_authz.py::test_a_colleagues_desk_is_readable_and_
+  // never_writable). `agent_reads_desk` is read by no access path, so it changes nothing here.
+  const off = POLICIES.replace("agent_reads_desk: on", "agent_reads_desk: off");
+  it.each([["on", POLICIES], ["off", off], ["no policy file", null]])(
+    "agent_reads_desk %s", (_label, policies) => {
+      const said = visibilitySentence("desk", policies as string | null, { company: "Pilot Industries" });
+      expect(said).toBe("everyone at Pilot Industries and their agents read it");
+      expect(said).not.toMatch(/no agent|for meetings you are in/);
+    });
+
+  it("positive control: the company layer still follows the rule the mount enforces", () => {
+    const open = POLICIES.replace("global_admin_only: on", "global_admin_only: off");
+    expect(visibilitySentence("global", open, { company: "Pilot Industries" }))
+      .toBe("everyone at Pilot Industries reads and writes it");
   });
 });
