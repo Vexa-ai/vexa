@@ -99,3 +99,21 @@ def test_past_the_cap_one_quiet_wake_still_goes_so_the_room_can_be_told():
     assert lst.due(st, briefs.DEFAULT, []) == "max_wait"                 # the wake agent-api refuses and says so
     st.wakes = 3
     assert lst.due(st, briefs.DEFAULT, []) is None                       # and only that one
+
+
+def test_being_addressed_past_the_cap_wakes_a_bounded_number_of_times():
+    """Every addressed wake is an agent turn. Past the hour's cap a line naming Vexa still wakes —
+    up to the cap again — and then nothing, however often it is said (it used to be unbounded)."""
+    lst = Listener(SRC, scorer=scorer([]), caps=Caps(2, 10.0), now=lambda: 0.0)
+    st = State(wakes=0, opened=0.0, buffer=[{"segment_id": "s", "speaker": "A", "text": "Vexa?",
+                                              "start": 0.0, "scores": {}}])
+    asked = [{"addressed_to_vexa": 1.0}]
+    woke = 0
+    for _ in range(20):
+        st.buffer = st.buffer or [{"segment_id": "s", "speaker": "A", "text": "Vexa?", "start": 0.0, "scores": {}}]
+        if lst.due(st, briefs.DEFAULT, asked) == "addressed":
+            Listener.woke(st)
+            woke += 1
+    assert woke == 4 and st.wakes == 4                        # the cap (2), then the cap again (2)
+    st.buffer = [{"segment_id": "s", "speaker": "A", "text": "Vexa?", "start": 0.0, "scores": {}}]
+    assert lst.due(st, briefs.DEFAULT, asked) is None

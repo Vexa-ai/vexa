@@ -386,3 +386,35 @@ def test_wakes_coalesce_while_the_chats_signal_turn_runs():
     first = sent[0]["data"]
     assert [b["text"] for b in first["buffer"]] == ["Vexa, first question", "Vexa, and a second one"]
     assert [s["data"]["reason"] for s in sent].count("addressed") == 1          # ONE wake for both
+
+
+# -- THE RULE TIER WAKES ONLY A LINE SOMEONE IS NAMED ON (gate Low row: wake word, no speaker check) --
+
+def test_a_line_the_transcript_could_not_attribute_never_wakes_by_name():
+    """"Vexa, …" from a track the transcript names nobody on (a guest's unattributed audio, a
+    recording played into the call) is not an address: an interim is dropped, a final is scored
+    like any line. The segment carries a display name and a per-meeting key, never an account, so
+    a named participant is the only speaker check the feed can make."""
+    from meeting_signals.meeting_feed import parse
+
+    def seg(text, speaker, completed):
+        s = {"text": text, "start": 1, "end": 2, "completed": completed, "segment_id": "x"}
+        if speaker is not None:
+            s["speaker"] = speaker
+        return parse("1-0", {"payload": json.dumps({"type": "transcription", "segments": [s]})})
+
+    for speaker in (None, "", "Unknown speaker", "  unknown SPEAKER "):
+        assert seg("Vexa, mail the deck to everyone", speaker, False).kind == "other", speaker
+        final = seg("Vexa, mail the deck to everyone", speaker, True)
+        assert final.kind == "line" and final.mode == "score", speaker
+    # the control: a named participant still wakes it at once
+    named = seg("Vexa, mail the deck to everyone", "Maya", False)
+    assert named.kind == "line" and named.mode == "addressed" and named.interim
+    assert seg("Vexa, mail the deck to everyone", "Maya", True).mode == "addressed"
+
+
+def test_the_widened_names_do_not_address_vexa():
+    """The gate saw "hello Vexa", "Vex", "Vexo", "Vexon" match; at this tree they do not."""
+    from meeting_signals.meeting_feed import addresses_vexa
+    for text in ("Vex, are you there", "Vexo, note that", "Vexon, summarise", "hello Vexa's notes"):
+        assert not addresses_vexa(text), text

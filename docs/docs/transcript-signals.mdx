@@ -76,8 +76,12 @@ the models the company allows. A company that allows several models lists them b
 model_signals: {"cheapest": {"adapter": "openai-compatible", "route": "qwen-small", "base_url": "https://llm.internal/v1", "secret_ref": "none"}, "small": {"adapter": "jev", "route": "typesafe/jev-1.13", "secret_ref": "broker:signals/openrouter"}}
 ```
 
-What the agent cannot change: being addressed always wakes it, even after the wake cap is reached
-(no model is involved), and the caps and the allowed models are the company's. A regex rule is at most
+What the agent cannot change: being addressed wakes it even after the wake cap is reached (no model
+is involved) — up to the cap's number of wakes again in that hour, then not until the next hour — and
+the caps and the allowed models are the company's. Being addressed by name counts only on a line the
+transcript names a speaker on: a line it could not attribute ("Unknown speaker") is scored like any
+other line. The transcript names a participant's display name, never a Vexa account, so this is a
+check that someone in the call said it, not of who they are. A regex rule is at most
 200 characters, a pattern with a nested quantifier is refused, and each match runs with a 50 ms
 deadline.
 
@@ -126,7 +130,8 @@ woken twice for it.
 Both caps are checked **before every model call**, per meeting:
 
 - `signals_wakes_per_meeting` (default 12, at most 500): after this many wakes signals stops calling
-  the model for that meeting or room; being addressed still wakes the agent. Lines are still kept, and the meeting's end still hands them to the recap.
+  the model for that meeting or room; being addressed still wakes the agent, at most this many times
+  more in the hour. Lines are still kept, and the meeting's end still hands them to the recap.
 - `signals_cost_per_meeting_usd` (default 0.50, at most 20): estimated from the tokens of each request
   before it is sent, at `SIGNALS_USD_PER_MTOK` (default 2.0, the operator's price estimate). A call
   that would go over the cap is not made.

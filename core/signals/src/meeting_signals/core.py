@@ -45,6 +45,9 @@ log = logging.getLogger("signals.core")
 
 CONTEXT_LINES = 24
 BUFFER_MAX = 500
+#: Past the hour's wake cap, being addressed still wakes the agent — this many caps' worth more, then
+#: nothing until the next hour: every wake is an agent turn, and a name said again is not free.
+ADDRESSED_HEADROOM = 1
 CONCURRENCY = 4
 DEFAULT_USD_PER_MTOK = 2.0
 
@@ -206,10 +209,14 @@ class Listener:
 
     def due(self, state: State, brief: Brief, batch: list) -> Optional[str]:
         """The wake reason now, or None. A source that has used its wakes is woken only when it is
-        addressed (no model is involved: someone asked the agent) and at its end."""
+        addressed (no model is involved: someone asked the agent) and at its end — and being
+        addressed is capped too: past the cap it wakes at most the cap's number again
+        (``ADDRESSED_HEADROOM`` × the cap), so a line that names Vexa, said over and over, is not an
+        unbounded run of agent turns. Every wake counts (``woke``)."""
         allowed = self.allowed_wakes(state)
         if state.wakes >= allowed:
-            if state.buffer and scoring.addressed(batch):
+            if (state.buffer and scoring.addressed(batch)
+                    and state.wakes < allowed * (1 + ADDRESSED_HEADROOM)):
                 return "addressed"
             # ONE QUIET WAKE PAST THE CAP (by max_wait): agent-api refuses it and tells the room that
             # Vexa paused listening, instead of silence

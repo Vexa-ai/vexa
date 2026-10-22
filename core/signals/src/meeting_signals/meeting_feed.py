@@ -48,7 +48,7 @@ def feed(row: str) -> str:
     return f"tc:meeting:{row}"
 
 
-#: THE RULE TIER: Vexa named at the start of a clause ("Vexa, …", "ok vexa …", "… . Vexa can you"),
+#: THE RULE TIER, for a line the transcript names a speaker on (``attributed``): Vexa named at the start of a clause ("Vexa, …", "ok vexa …", "… . Vexa can you"),
 #: "@vexa", or the "To Vexa" tag. Heard on an interim it wakes at once; on a FINAL it is marked
 #: addressed too, so being addressed by name never depends on the signal model (app.dev 2026-10-17,
 #: meeting 153: every model call answered 402, and "Векса, привет" on a final was sent to it, refused,
@@ -63,6 +63,19 @@ _ADDRESS = re.compile(rf"(?:^|[.!?;:,]\s*|(?<!\w){_LEAD}\s+){_NAME}"
 
 def addresses_vexa(text: str) -> bool:
     return bool(_ADDRESS.search(text or ""))
+
+
+#: What the transcript says when it could not tell who spoke. A line nobody is named on never wakes
+#: the agent by name: anyone in the call — a guest, a recording played into it — could have said it.
+UNATTRIBUTED = "Unknown speaker"
+
+
+def attributed(speaker: str) -> bool:
+    """Is the line someone's? The speaker a transcript names is the platform's display name for a
+    participant track (``speaker``, beside a per-meeting ``speaker_key``): never a Vexa account, so
+    this is the only speaker check the feed can make — a named participant, not who they are."""
+    name = str(speaker or "").strip()
+    return bool(name) and name.casefold() != UNATTRIBUTED.casefold()
 
 
 def parse(entry_id: str, fields: dict) -> Item:
@@ -85,16 +98,18 @@ def parse(entry_id: str, fields: dict) -> Item:
     if not text:
         return Item(entry_id, "other")
     interim = s.get("completed") is not True
-    if interim and not addresses_vexa(text):
+    speaker = str(s.get("speaker") or "").strip()
+    by_name = addresses_vexa(text) and attributed(speaker)
+    if interim and not by_name:
         return Item(entry_id, "other")
     try:
         start, end = float(s.get("start") or 0.0), float(s.get("end") or s.get("start") or 0.0)
     except (TypeError, ValueError):
         start = end = 0.0
-    line = Line(str(s.get("segment_id") or entry_id), str(s.get("speaker") or "Unknown speaker"), text, start, end)
+    line = Line(str(s.get("segment_id") or entry_id), speaker or UNATTRIBUTED, text, start, end)
     if interim:
         return Item(entry_id, "line", line=line, mode="addressed", interim=True)
-    if addresses_vexa(text):
+    if by_name:
         return Item(entry_id, "line", line=line, mode="addressed")
     return Item(entry_id, "line", line=line)
 
