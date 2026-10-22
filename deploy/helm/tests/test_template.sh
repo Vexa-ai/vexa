@@ -1982,18 +1982,19 @@ tb "postgres.probes is operator-tunable" '[ "$(startup_budget "$(helm template v
 # Corporate TLS inspection (global.extraCA). Unset renders nothing new; set, every Vexa Deployment and
 # Job writes image bundle + operator PEM into an emptyDir before the app starts and points every
 # runtime's trust env at it, and the runtime hands the same to the Pods it spawns.
-XCA_FULL=(--set flows.enabled=true,crm.enabled=true,crm.orgId=x,dashboard.enabled=true,flows.mail.enabled=true,flows.mail.address=a@b.c,flows.databaseName=flows,migrations.enabled=true)
+XCA_FULL=(--set flows.enabled=true,crm.enabled=true,crm.orgId=x,dashboard.enabled=true,flows.mail.enabled=true,flows.mail.address=a@b.c,flows.databaseName=flows,migrations.enabled=true,signals.enabled=true)
 xca_check() { python3 -c '
 import sys, json, yaml
 mode = sys.argv[1]; docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
 infra = {"redis", "postgres", "pgbouncer", "livekit", "install"}
-seen = 0
+seen, names = 0, set()
 for d in docs:
     if d["kind"] not in ("Deployment", "Job", "StatefulSet"): continue
     sp = d["spec"]["template"]["spec"]
     for c in sp["containers"]:
         if c["name"] in infra: continue
         seen += 1
+        names.add(c["name"])
         env = {e["name"]: e.get("value") for e in c.get("env", [])}
         inits = sp.get("initContainers", [])
         if mode == "off":
@@ -2022,7 +2023,7 @@ for d in docs:
             j = json.loads(env["RUNTIME_K8S_EXTRA_CA"])
             assert j["key"] == "root.pem" and j["awsCaBundle"] == (mode != "s3ca"), j
 assert seen >= 10, seen
-print("ok", seen)
+print("ok", seen, " ".join(sorted(names)))
 ' "$1"; }
 X_OFF="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${XCA_FULL[@]}")"
 tb "extraCA unset: no bundle writer, no CA volume, no trust env anywhere" 'xca_check off <<< "$X_OFF" >/dev/null'
@@ -2034,6 +2035,9 @@ X_S3="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${XCA_
 tb "extraCA leaves AWS_CA_BUNDLE to storage.s3.caBundle when that is set" 'xca_check s3ca <<< "$X_S3" >/dev/null'
 X_OSH="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" -f "$CHART/values-openshift.yaml" "${XCA_FULL[@]}" --set agentApi.workspaces.storageClassName=rwx --set global.extraCA.configMap=corp-ca,global.extraCA.key=root.pem)"
 tb "extraCA under the OpenShift profile: the bundle writer brings no securityContext of its own" 'xca_check osh <<< "$X_OSH" >/dev/null'
+tb "extraCA reaches the model proxy and signals (both call a model through the inspection)" 'xca_check on <<< "$X_ON" | grep -q "model-proxy" && xca_check on <<< "$X_ON" | grep -q "signals"'
+X_MIG="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${WS[@]}" --set agentApi.workspaces.s3.migrate.enabled=true --set global.extraCA.secret=corp-ca,global.extraCA.key=root.pem --show-only templates/job-workspaces-s3-migrate.yaml)"
+tb "extraCA reaches the workspace-store migration Job beside its own S3 CA" 'grep -q "name: vexa-ca-bundle" <<< "$X_MIG" && grep -q "name: workspace-s3-ca" <<< "$X_MIG" && grep -A1 "name: SSL_CERT_FILE" <<< "$X_MIG" | grep -q ca-bundle.crt'
 tb "extraCA naming both a configMap and a secret is refused" '! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set global.extraCA.configMap=a,global.extraCA.secret=b >/dev/null 2>&1'
 
 [ "$fail" -eq 0 ] && { echo "gate:helm PASS"; exit 0; } || { echo "gate:helm FAIL"; exit 1; }

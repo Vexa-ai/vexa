@@ -122,3 +122,64 @@ def test_bundle_script_writes_system_bundle_plus_extra(tmp_path):
     assert body.count("BEGIN CERTIFICATE") == 2 and body.index("SYS") < body.index("CORP")
     extra.write_text("not a pem")
     assert subprocess.run(["/bin/sh", "-c", script], capture_output=True).returncode == 1
+
+
+def test_a_secret_key_that_is_a_model_or_control_plane_secret_is_refused():
+    from runtime_kernel import workload_env
+    key = sorted(workload_env.REFUSED_SECRET_KEYS)[0]
+    with pytest.raises(ValueError):
+        extra_ca({EXTRA_CA_ENV: json.dumps({"secret": "vexa-secrets", "key": key})})
+    # the same name on a ConfigMap carries no secret and is the operator's own choice of key
+    assert extra_ca({EXTRA_CA_ENV: json.dumps({"configMap": "corp-ca", "key": "ca-bundle.crt"})})
+
+
+def _spawned(monkeypatch, profile: str, env: dict) -> dict:
+    """Start the REAL registry's profile through K8sBackend, with the chart's runtime env."""
+    from runtime_kernel import default_registry
+    monkeypatch.setenv("BROWSER_IMAGE", "vexaai/vexa-bot:t")
+    monkeypatch.setenv("AGENT_IMAGE", "vexaai/agent-api:t")
+    monkeypatch.setenv(EXTRA_CA_ENV, json.dumps({"configMap": "corp-ca", "key": "ca-bundle.crt",
+                                                 "awsCaBundle": True}))
+    seen = {}
+
+    def fake(*args, check=True, stdin=None):
+        if args[:1] == ("create",):
+            seen["pod"] = json.loads(stdin)
+            return subprocess.CompletedProcess(args, 0, "pod/x created", "")
+        return subprocess.CompletedProcess(args, 0, "{}", "")
+    monkeypatch.setattr("runtime_kernel.k8s_backend._kubectl", fake)
+    runnable = default_registry().resolve(profile)
+    K8sBackend(namespace="ns").start(f"{profile}-1", runnable, env=env)
+    return seen["pod"]
+
+
+@pytest.mark.parametrize("profile", ["meeting-bot", "agent"])
+def test_every_spawned_class_trusts_the_ca(monkeypatch, profile):
+    """A meeting bot and an agent worker, from the deployment's own registry: Python (requests,
+    httpx through SSL_CERT_FILE), Node (NODE_EXTRA_CA_CERTS) and the bot's Chromium (VEXA_EXTRA_CA_FILE,
+    imported into NSS by entrypoint.sh) all read the operator's CA; the bundle writer runs the
+    workload's own image under the workload's own hardening."""
+    pod = _spawned(monkeypatch, profile, {"LOG_LEVEL": "info"})
+    spec, c = pod["spec"], pod["spec"]["containers"][0]
+    init = spec["initContainers"][0]
+    assert init["name"] == "vexa-ca-bundle" and init["image"] == c["image"]
+    assert init["securityContext"]["allowPrivilegeEscalation"] is False
+    assert "add" not in init["securityContext"]["capabilities"]
+    env = {e["name"]: e.get("value") for e in c["env"]}
+    for k in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO", "AWS_CA_BUNDLE"):
+        assert env[k] == CA_BUNDLE_FILE, k
+    assert env["NODE_EXTRA_CA_CERTS"] == EXTRA_CA_FILE and env["VEXA_EXTRA_CA_FILE"] == EXTRA_CA_FILE
+    vols = {v["name"]: v for v in spec["volumes"]}
+    assert vols["vexa-extra-ca"]["configMap"]["items"] == [{"key": "ca-bundle.crt", "path": "ca.crt"}]
+    mounts = {m["name"]: m for m in c["volumeMounts"]}
+    assert mounts["vexa-extra-ca"]["readOnly"] and mounts["vexa-ca-bundle"]["readOnly"]
+
+
+def test_spawned_pod_keeps_its_secret_mounts_beside_the_ca(monkeypatch):
+    """RUNTIME_K8S_SECRET_MOUNTS (one named key per mount) and the CA land in the same Pod."""
+    monkeypatch.setenv("RUNTIME_K8S_SECRET_MOUNTS",
+                       json.dumps([{"secret": "codex-auth", "file": "auth.json", "mountPath": "/home/w/.codex/auth.json"}]))
+    pod = _spawned(monkeypatch, "agent", {"LOG_LEVEL": "info"})
+    names = [v["name"] for v in pod["spec"]["volumes"]]
+    assert "vexa-extra-ca" in names and "vexa-ca-bundle" in names and len(names) == len(set(names))
+    assert any(v.get("secret", {}).get("secretName") == "codex-auth" for v in pod["spec"]["volumes"])

@@ -175,6 +175,11 @@ def extra_ca(env: dict[str, str]) -> Optional[dict]:
         raise ValueError(f"{EXTRA_CA_ENV}: {name!r} is not a Kubernetes object name")
     if not _CONFIG_KEY.match(key):
         raise ValueError(f"{EXTRA_CA_ENV}: {key!r} is not a ConfigMap/Secret key")
+    if secret and (key in workload_env.REFUSED_SECRET_KEYS
+                   or key.startswith(workload_env.REFUSED_SECRET_KEY_PREFIX)):
+        # the CA's key is mounted into every spawned Pod, so it is held to RUNTIME_K8S_SECRET_MOUNTS'
+        # rule: a model credential or a control-plane secret never reaches a workload (H5/W1)
+        raise ValueError(f"{EXTRA_CA_ENV}: key {key!r} is a model credential or a control-plane secret")
     return {"configMap": config_map, "secret": secret, "key": key,
             "awsCaBundle": bool(value.get("awsCaBundle", True))}
 
