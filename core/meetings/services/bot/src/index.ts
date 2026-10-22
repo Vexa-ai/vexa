@@ -187,7 +187,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   const redisSession = createSessionEnd();
   const transcriptClient = redisClientFrom(inv.redisUrl, { session: redisSession });
   const actsClient = redisActsClientFrom(inv.redisUrl, { session: redisSession });
-  const liveTranscript: TranscriptSink = createRedisTranscriptSink({
+  const liveTranscript = createRedisTranscriptSink({
     client: transcriptClient,
     meetingId,
     nativeMeetingId: inv.nativeMeetingId,
@@ -400,11 +400,13 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
       },
     });
     // Tee acts: `speak`/`speak_stop` reach the SpeakController (gated on voiceAgentEnabled),
-    // `chat_send` reaches the ChatSender (ungated: a text act, not a voice one), and `reconfigure`
-    // reaches the transcription-language control.
+    // `chat_send` reaches the ChatSender (ungated: a text act, not a voice one) and its outcome goes
+    // back to meeting-api on the signed stream, and `reconfigure` reaches the transcription-language
+    // control.
     const inMeeting = createActDispatch({
       speak: createSpeakController(session.page, inv),
       chat: createChatSender(session.page, inv),
+      report: (r) => liveTranscript.chatSendResult(r),
     });
     acts = teeActs(liveActs, { 'in-meeting': inMeeting, 'transcription-language': languageActs });
   } catch (e) {

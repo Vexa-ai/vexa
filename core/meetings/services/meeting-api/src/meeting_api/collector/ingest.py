@@ -356,6 +356,26 @@ async def ingest(store: TranscriptStore, redis: RedisBus, message: dict) -> int:
         except Exception as e:  # noqa: BLE001 — best-effort, like every live marker
             _log_publish_failure(meeting_id, e)
         return 0
+    if msg_type == "chat_send_result":
+        # The bot's outcome for one chat send (`chat_delivery.py`): it settles only a send that is
+        # still `queued` and was sent into the meeting this entry's token names. Nothing is persisted
+        # beyond that record, nothing is fanned out, and a fault never aborts the batch.
+        try:
+            meeting_id = int(data.get("meeting_id"))
+        except (TypeError, ValueError):
+            return 0
+        request_id, posted = data.get("id"), data.get("posted")
+        if not isinstance(request_id, str) or not isinstance(posted, bool):
+            return 0
+        reason = data.get("reason")
+        try:
+            await redis.settle_chat_send(
+                request_id, meeting_id=meeting_id, posted=posted,
+                reason=reason if isinstance(reason, str) else None,
+            )
+        except Exception as e:  # noqa: BLE001 — best-effort, like every typed bus message
+            _log_publish_failure(meeting_id, e)
+        return 0
     if msg_type not in ("transcription", "transcript"):
         # session_start / speaker events are out of scope for this segment unit.
         return 0

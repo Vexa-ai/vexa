@@ -1,9 +1,10 @@
-"""The chat-send HTTP route — ``POST /bots/{platform}/{native_meeting_id}/chat`` (api.v1).
+"""The chat-send HTTP routes — ``POST /bots/{platform}/{native_meeting_id}/chat`` and its status read
+``GET /bots/{platform}/{native_meeting_id}/chat/{request_id}`` (api.v1).
 
 Sugar over the ``acts.v1`` ``chat_send`` act (ADR-0035): the route resolves the caller's meeting the
-way the user stop does and publishes ``{"action":"chat_send","text":…}`` on that meeting's
-``bot_commands:meeting:{id}`` channel, through the same ``CommandPublisher`` port. The bot types the
-line into the meeting chat; whatever the meeting's chat reader then captures comes back through
+way the user stop does and publishes ``{"action":"chat_send","text":…,"id":<request_id>}`` on that
+meeting's ``bot_commands:meeting:{id}`` channel, through the same ``CommandPublisher`` port. The bot
+types the line into the meeting chat; whatever the meeting's chat reader then captures comes back through
 ``GET …/chat`` and the ``va:meeting:{id}:chat`` live frame like any other message.
 
 Who may send: the meeting's OWNER only — the caller's own non-terminal rows for the room, the
@@ -28,19 +29,29 @@ Refusals, in the order they are checked:
     caller and every replica); ``Retry-After`` says when the window turns. Nothing was sent.
   * ``503`` — the command bus (redis) is unreachable; nothing was sent, retry.
 
-``200`` means a listening bot RECEIVED the act (``status: "queued"``), not that the line appeared in
-the meeting: the bot does not acknowledge a ``chat_send``.
+``200`` means a listening bot RECEIVED the act (``status: "queued"``), not yet that the line appeared
+in the meeting. The answer carries a ``request_id``: the act carries it to the bot, the bot reports
+whether the line showed in the meeting (``chat_send_result`` on its signed stream, settled by the
+collector), and ``GET /bots/{platform}/{native_meeting_id}/chat/{request_id}`` reads the outcome —
+``queued``, ``posted``, ``failed`` with the bot's reason, or ``unconfirmed`` when no result came
+within ``UNCONFIRMED_AFTER_SEC`` (``chat_delivery.py``). The record is written before the act goes
+out and removed again when nothing received it.
+
+The status read answers the SENDER only, with the same scope and shared-turn rules as the send;
+``404`` for an id that is unknown, expired, another user's, or not of this platform and meeting.
 """
 from __future__ import annotations
 
 import json
 import math
 import time
+import uuid
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from ..bot_spawn.ports import MeetingRepo
+from ..chat_delivery import ChatDeliveryLedger
 from .stop import leave_command_channel
 from .stop_router import _SUPPORTED_PLATFORMS, CommandPublisher, _active_rows, _resolve_user_id
 
@@ -62,9 +73,9 @@ CHAT_WINDOW_SEC = 10
 _IN_MEETING_STATUSES = frozenset({"active"})
 
 
-def chat_send_payload(text: str) -> dict:
-    """The ``acts.v1`` ``ChatSend`` body — exactly its two declared fields."""
-    return {"action": "chat_send", "text": text}
+def chat_send_payload(text: str, request_id: str) -> dict:
+    """The ``acts.v1`` ``ChatSend`` body — exactly its declared fields."""
+    return {"action": "chat_send", "text": text, "id": request_id}
 
 
 class ChatRateLimit:
@@ -122,11 +133,14 @@ async def _text_from(request: Request) -> str:
 
 
 def build_chat_router(repo: MeetingRepo, publisher: CommandPublisher,
-                      rate_limit: Optional[ChatRateLimit] = None) -> APIRouter:
-    """The chat-send route over the injected ``MeetingRepo`` + ``CommandPublisher`` ports. The
-    per-meeting limit counts in the command bus's Redis unless a ``rate_limit`` is given."""
+                      rate_limit: Optional[ChatRateLimit] = None,
+                      ledger: Optional[ChatDeliveryLedger] = None) -> APIRouter:
+    """The chat-send and send-status routes over the injected ``MeetingRepo`` + ``CommandPublisher``
+    ports. The per-meeting limit and the delivery records live in the command bus's Redis unless a
+    ``rate_limit`` / ``ledger`` is given."""
     router = APIRouter()
     limit = rate_limit or ChatRateLimit(publisher)
+    sends = ledger or ChatDeliveryLedger(publisher)
 
     @router.post("/bots/{platform}/{native_meeting_id}/chat")
     async def send_chat(
@@ -187,11 +201,16 @@ def build_chat_router(repo: MeetingRepo, publisher: CommandPublisher,
                 headers={"Retry-After": str(retry_after)},
             )
 
+        # The record exists before the act goes out, so a result the bot sends back at once finds it.
+        request_id = uuid.uuid4().hex
         try:
+            await sends.record(request_id, user_id=user_id, meeting_id=meeting["id"],
+                               platform=platform, native_meeting_id=native_meeting_id)
             receivers = await publisher.publish(
-                leave_command_channel(meeting["id"]), json.dumps(chat_send_payload(text))
+                leave_command_channel(meeting["id"]), json.dumps(chat_send_payload(text, request_id))
             )
         except Exception as e:  # noqa: BLE001 — Redis unreachable → narrow, retryable failure
+            await _forget(sends, request_id)
             raise HTTPException(
                 status_code=503,
                 detail="bot command bus (redis) unavailable; the message was not sent — retry",
@@ -199,6 +218,7 @@ def build_chat_router(repo: MeetingRepo, publisher: CommandPublisher,
         # Redis answers with how many subscribers received the act. None did: the bot has not
         # subscribed yet, or it has gone — the line went nowhere, and the caller is told so.
         if isinstance(receivers, int) and receivers <= 0:
+            await _forget(sends, request_id)
             raise HTTPException(
                 status_code=409,
                 detail="no bot was listening in the meeting; the message was not sent — retry "
@@ -208,11 +228,57 @@ def build_chat_router(repo: MeetingRepo, publisher: CommandPublisher,
         _log_chat_queued(user_id, meeting["id"], len(text))
         return {
             "status": "queued",
+            "request_id": request_id,
             "meeting_id": meeting["id"],
             "native_meeting_id": native_meeting_id,
         }
 
+    @router.get("/bots/{platform}/{native_meeting_id}/chat/{request_id}")
+    async def chat_send_status(
+        platform: str,
+        native_meeting_id: str,
+        request_id: str,
+        x_user_id: Optional[str] = Header(default=None),
+    ):
+        user_id = _resolve_user_id(x_user_id)
+        if platform not in _SUPPORTED_PLATFORMS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"unsupported platform '{platform}' — "
+                    f"must be one of: {', '.join(sorted(_SUPPORTED_PLATFORMS))}"
+                ),
+            )
+        try:
+            record = await sends.read(request_id)
+        except Exception as e:  # noqa: BLE001 — the records live on the command bus
+            raise HTTPException(
+                status_code=503, detail="bot command bus (redis) unavailable — retry",
+            ) from e
+        # Another user's send, or one made into a different meeting, is indistinguishable from none.
+        if (record is None or record.get("user_id") != user_id
+                or record.get("platform") != platform
+                or record.get("native_meeting_id") != native_meeting_id):
+            raise HTTPException(status_code=404, detail="No such chat message")
+        answer = {
+            "request_id": request_id,
+            "status": record["status"],
+            "meeting_id": record.get("meeting_id"),
+            "native_meeting_id": native_meeting_id,
+        }
+        if record["status"] == "failed":
+            answer["reason"] = record.get("reason") or "unknown"
+        return answer
+
     return router
+
+
+async def _forget(sends: ChatDeliveryLedger, request_id: str) -> None:
+    """Remove the record of a send that never went out; it expires on its own if this fails too."""
+    try:
+        await sends.discard(request_id)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _log_chat_queued(user_id, meeting_id, chars: int) -> None:

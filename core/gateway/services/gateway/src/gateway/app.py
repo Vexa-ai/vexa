@@ -1084,14 +1084,20 @@ def create_app(
 
     # native-keyed in-meeting chat (sealed api.v1). GET reads the meeting's captured chat (the
     # `source:'chat'` transcript segments); POST sends a line into the meeting — meeting-api publishes
-    # it to the bot as an acts.v1 `chat_send`. Thin passthroughs: owner resolution, the
-    # active-meeting check and the command publish all live in meeting-api.
+    # it to the bot as an acts.v1 `chat_send` and answers a `request_id`; GET …/chat/{request_id}
+    # reads whether that line posted. Thin passthroughs: owner resolution, the active-meeting check,
+    # the command publish and the delivery record all live in meeting-api.
     @app.get("/bots/{platform}/{native_meeting_id}/chat")
     async def read_meeting_chat(platform: MeetingPlatform, native_meeting_id: str, request: Request):
         return await _forward_meeting(request)
 
     @app.post("/bots/{platform}/{native_meeting_id}/chat")
     async def send_meeting_chat(platform: MeetingPlatform, native_meeting_id: str, request: Request):
+        return await _forward_meeting(request)
+
+    @app.get("/bots/{platform}/{native_meeting_id}/chat/{request_id}")
+    async def read_meeting_chat_send(platform: MeetingPlatform, native_meeting_id: str, request_id: str,
+                                     request: Request):
         return await _forward_meeting(request)
 
     # ---- user self-serve webhook config (main.py:1080 set_user_webhook_proxy) ----

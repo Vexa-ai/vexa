@@ -118,6 +118,14 @@
       "shared": "refuse"
     },
     {
+      "method": "GET",
+      "path": "/bots/{platform}/{native_meeting_id}/chat/{request_id}",
+      "scopes": [
+        "bot"
+      ],
+      "shared": "refuse"
+    },
+    {
       "method": "PUT",
       "path": "/bots/{platform}/{native_meeting_id}/config",
       "scopes": [

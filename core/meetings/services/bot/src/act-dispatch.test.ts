@@ -46,5 +46,51 @@ for (const act of [{ action: 'leave' }, { action: 'chat_read' }, { action: 'scre
   check(`${act.action} is not performed by the in-meeting handler`, got.length === 0, JSON.stringify(got));
 }
 
+// ── the chat-send outcome goes back to meeting-api, once, only when the act carried an id ──
+{
+  const reports: unknown[] = [];
+  let outcome: { sent: true; via: string } | { sent: false; reason: 'not_landed' } = { sent: true, via: 'test' };
+  const sent: string[] = [];
+  const withReport = createActDispatch({
+    speak: { async speak() {}, async stop() {} },
+    chat: { async send(text) { sent.push(text); return outcome; } },
+    report: async (r) => { reports.push(r); },
+  });
+  const id = '0f1e2d3c4b5a69788796a5b4c3d2e1f0';
+
+  await withReport({ action: 'chat_send', text: 'posted line', id });
+  check('a chat_send with an id reports exactly one posted result',
+    JSON.stringify(reports) === JSON.stringify([{ id, posted: true }]), JSON.stringify(reports));
+
+  reports.length = 0; outcome = { sent: false, reason: 'not_landed' };
+  await withReport({ action: 'chat_send', text: 'lost line', id });
+  check('a failed send reports posted:false with the sender\'s reason',
+    JSON.stringify(reports) === JSON.stringify([{ id, posted: false, reason: 'not_landed' }]), JSON.stringify(reports));
+
+  reports.length = 0; outcome = { sent: true, via: 'test' };
+  await withReport({ action: 'chat_send', text: 'no id here' });
+  check('a chat_send without an id reports nothing (but is still sent)',
+    reports.length === 0 && sent[sent.length - 1] === 'no id here', JSON.stringify({ reports, sent }));
+
+  reports.length = 0; sent.length = 0;
+  await withReport({ action: 'chat_send', text: '   ', id });
+  check('an empty chat_send with an id is reported as empty_text and never sent',
+    JSON.stringify(reports) === JSON.stringify([{ id, posted: false, reason: 'empty_text' }]) && sent.length === 0,
+    JSON.stringify({ reports, sent }));
+
+  reports.length = 0;
+  await withReport({ action: 'speak', text: 'not chat' });
+  check('a non-chat act reports nothing', reports.length === 0, JSON.stringify(reports));
+
+  const failing = createActDispatch({
+    speak: { async speak() {}, async stop() {} },
+    chat: { async send() { return { sent: true, via: 'test' }; } },
+    report: async () => { throw new Error('redis down'); },
+  });
+  let threw = false;
+  try { await failing({ action: 'chat_send', text: 'still fine', id }); } catch { threw = true; }
+  check('a report that fails never fails the act', !threw);
+}
+
 console.log(failed ? `\n❌ ${failed} check(s) failed` : '\n✅ act-dispatch: all checks passed');
 process.exit(failed ? 1 : 0);

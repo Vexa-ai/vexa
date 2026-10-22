@@ -107,6 +107,15 @@ export interface TranscriptSink {
   progress?(p: TranscriptionProgressReport): Promise<void>;
 }
 
+/** The outcome of one acts.v1 `chat_send` that carried an `id`, as the bot reports it to meeting-api
+ *  (transcript.v1 `ChatSendResult`, on the same signed stream as the transcript): `posted` only once
+ *  the line showed in the meeting chat, otherwise the sender's failure reason. */
+export interface ChatSendReport {
+  id: string;
+  posted: boolean;
+  reason?: string;
+}
+
 export interface TranscriptionProgressReport {
   backlog_s: number;
   silence_s: number | null;

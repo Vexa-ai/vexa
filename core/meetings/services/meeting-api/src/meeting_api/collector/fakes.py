@@ -1095,3 +1095,10 @@ class FakeRedisBus:
     async def publish(self, channel, data):
         self.published.append((channel, data))
         return await self._client.publish(channel, data)
+
+    async def settle_chat_send(self, request_id, *, meeting_id, posted, reason=None):
+        """``RedisBus.settle_chat_send`` over the wrapped fakeredis client."""
+        from ..chat_delivery import ChatDeliveryLedger
+
+        return await ChatDeliveryLedger(self._client).settle(
+            request_id, meeting_id=meeting_id, posted=posted, reason=reason)

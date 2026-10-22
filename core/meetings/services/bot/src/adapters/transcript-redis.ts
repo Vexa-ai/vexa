@@ -22,7 +22,7 @@
 import { createHmac } from 'node:crypto';
 import { createClient } from 'redis';
 import type { TranscriptSegment } from '../contracts.js';
-import type { TranscriptionProgressReport, TranscriptSink } from '../ports.js';
+import type { ChatSendReport, TranscriptionProgressReport, TranscriptSink } from '../ports.js';
 import { makeLazyConnect } from './redis-lazy-connect.js';
 import { botReconnectStrategy, type BotRedisOptions } from './redis-terminal.js';
 
@@ -66,10 +66,16 @@ export interface RedisTranscriptSinkOptions {
   liveEnvelope?: 'segment' | 'speaker-snapshot';
 }
 
+/** The live sink: the transcript, plus the chat-send outcome that rides the same signed stream. */
+export interface RedisTranscriptSink extends TranscriptSink {
+  /** Report one chat send's outcome to meeting-api (transcript.v1 `ChatSendResult`). */
+  chatSendResult(r: ChatSendReport): Promise<void>;
+}
+
 /** Build the live transcript sink. `publish` XADDs the durable feed AND publishes the live
  *  mutable channel for one segment (best-effort fan-out; rejections propagate to the engine,
  *  which decides whether a publish failure is fatal). */
-export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): TranscriptSink {
+export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): RedisTranscriptSink {
   const { client, meetingId, nativeMeetingId, token, liveEnvelope = 'segment' } = opts;
   const channel = mutableChannel(meetingId);
   const pendingBySpeakerKey = new Map<string, Map<string, TranscriptSegment>>();
@@ -184,7 +190,17 @@ export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): Tra
     await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload, ...entryAuth(token, payload) });
   }
 
-  return { publish, retract, progress };
+  /** A chat send's outcome on the same signed stream; the collector settles the send it names and
+   *  nothing else (meeting-api `chat_delivery.py`). */
+  async function chatSendResult(r: ChatSendReport): Promise<void> {
+    const payload = JSON.stringify({
+      type: 'chat_send_result', meeting_id: meetingId, id: r.id, posted: r.posted,
+      ...(r.posted || !r.reason ? {} : { reason: r.reason }),
+    });
+    await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload, ...entryAuth(token, payload) });
+  }
+
+  return { publish, retract, progress, chatSendResult };
 }
 
 /** A live transcript client that also exposes connect/quit so the composition root can

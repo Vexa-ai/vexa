@@ -74,6 +74,19 @@
         "session_uid": { "type": "string" }
       }
     },
+    "ChatSendResult": {
+      "description": "A bus message (bot -> collector): the outcome of one acts.v1 `chat_send` that carried an `id`. `posted` is true only once the line showed in the meeting chat; otherwise `reason` is the bot's ChatSendFailure. The collector applies it only to a send recorded for that `id` and the meeting the entry's token names, and only while that send is still queued.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "meeting_id", "id", "posted"],
+      "properties": {
+        "type": { "const": "chat_send_result" },
+        "meeting_id": { "type": ["integer", "string"] },
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+        "posted": { "type": "boolean" },
+        "reason": { "enum": ["unsupported_platform", "no_composer", "not_landed", "no_chat_api", "page_error", "empty_text"] }
+      }
+    },
     "MutableBundle": {
       "description": "The live confirmed+pending bundle the gateway forwards verbatim to the dashboard.",
       "type": "object",
@@ -94,7 +107,7 @@
       }
     },
     "StreamEntry": {
-      "description": "One entry of the transcription_segments Redis stream (bot -> collector): the fields an XADD carries. `payload` is the JSON of one bus message (session_start, transcription, transcript_retract, session_end). `auth` and `sig` prove the session may speak for the meeting the payload names: `auth` is the header.payload of the session's MeetingToken (invocation.v1 `token`, whose claims name the meeting) and `sig` is HMAC-SHA256(key = the whole token, message = the `payload` string) as 64 lowercase hex digits. The collector rebuilds the token from `auth` with the secret that minted it, so the bearer never enters Redis, and acknowledges and drops any entry whose token or signature fails or whose payload `meeting_id` is not the token's. A bot older than v0.13.2 writes no `auth`/`sig`, and its entries are dropped. The signer is segment_entry.py in this folder.",
+      "description": "One entry of the transcription_segments Redis stream (bot -> collector): the fields an XADD carries. `payload` is the JSON of one bus message (session_start, transcription, transcript_retract, transcription_progress, chat_send_result, session_end). `auth` and `sig` prove the session may speak for the meeting the payload names: `auth` is the header.payload of the session's MeetingToken (invocation.v1 `token`, whose claims name the meeting) and `sig` is HMAC-SHA256(key = the whole token, message = the `payload` string) as 64 lowercase hex digits. The collector rebuilds the token from `auth` with the secret that minted it, so the bearer never enters Redis, and acknowledges and drops any entry whose token or signature fails or whose payload `meeting_id` is not the token's. A bot older than v0.13.2 writes no `auth`/`sig`, and its entries are dropped. The signer is segment_entry.py in this folder.",
       "type": "object",
       "additionalProperties": false,
       "required": [

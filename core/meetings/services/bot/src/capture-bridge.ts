@@ -1554,8 +1554,9 @@ export function createSpeakController(page: Page, inv: Invocation): SpeakControl
  * conference's own sendTextMessage (sendJitsiChatMessage). Not gated on voiceAgentEnabled: chat is a
  * text act, not a voice one. Every other platform reports `unsupported_platform`.
  *
- * The acts bus carries no acknowledgement, so the outcome is the bot's log: `chat_send: sent …` once
- * the line is in the meeting, else `chat_send_failed reason=<ChatSendFailure>`.
+ * The outcome is logged here (`chat_send: sent …` once the line is in the meeting, else
+ * `chat_send_failed reason=<ChatSendFailure>`) and returned; the act handler (act-dispatch.ts) reports
+ * it to meeting-api when the act carried an `id`.
  */
 export type ChatSendFailure =
   | 'unsupported_platform'  // the platform's bot has no chat sender

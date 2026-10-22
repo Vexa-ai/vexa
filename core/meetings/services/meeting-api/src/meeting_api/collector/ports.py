@@ -560,3 +560,10 @@ class RedisBus(Protocol):
         ``payload`` field). The collector is the SINGLE writer of the per-meeting native transcript
         feed ``tc:meeting:{native}`` (P23) — the copilot worker + terminal SSE read it."""
         ...
+
+    async def settle_chat_send(
+        self, request_id: str, *, meeting_id: int, posted: bool, reason: Optional[str] = None
+    ) -> bool:
+        """Apply a bot's ``chat_send_result`` to the chat send it names (``chat_delivery.py``):
+        only a ``queued`` send into ``meeting_id`` changes. Returns whether one did."""
+        ...

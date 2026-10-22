@@ -225,6 +225,24 @@ async function main(): Promise<void> {
     check('progress: type, meeting and numbers', p.type === 'transcription_progress' && p.meeting_id === 5 && p.backlog_s === 31.5 && p.silence_s === 0.2 && p.finishing === true, JSON.stringify(p));
   }
 
+  // ── chat_send_result: the outcome of one chat send, signed on the same stream, nothing live ──
+  {
+    const { client, xadds, pubs: publishes } = fakeClient();
+    const token = 'eyJhbGciOiJIUzI1NiJ9.eyJtZWV0aW5nX2lkIjo1fQ.c2lnbmF0dXJl';
+    const sink = createRedisTranscriptSink({ client, meetingId: 5, token });
+    await sink.chatSendResult({ id: 'req-1', posted: false, reason: 'not_landed' });
+    await sink.chatSendResult({ id: 'req-2', posted: true });
+    const [a, b] = xadds.map((x) => JSON.parse(x.fields.payload ?? '{}'));
+    check('chat_send_result: two signed entries on the transcription stream',
+      xadds.length === 2 && xadds.every((x) => x.key === TRANSCRIPTION_STREAM
+        && x.fields.sig === createHmac('sha256', token).update(x.fields.payload!).digest('hex')), JSON.stringify(xadds));
+    check('chat_send_result: a failure carries its reason',
+      JSON.stringify(a) === JSON.stringify({ type: 'chat_send_result', meeting_id: 5, id: 'req-1', posted: false, reason: 'not_landed' }), JSON.stringify(a));
+    check('chat_send_result: a posted line carries no reason',
+      JSON.stringify(b) === JSON.stringify({ type: 'chat_send_result', meeting_id: 5, id: 'req-2', posted: true }), JSON.stringify(b));
+    check('chat_send_result: nothing on the live channel', publishes.length === 0, JSON.stringify(publishes));
+  }
+
   if (failed) { console.error(`\n❌ transcript-redis (L3): ${failed} check(s) FAILED.`); process.exit(1); }
   console.log('\n✅ transcript-redis (L3): XADDs the transcription_segments stream + PUBLISHes tc:meeting:{id}:mutable, payload round-trips a schema-valid transcript.v1 segment.');
 }

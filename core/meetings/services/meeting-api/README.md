@@ -32,11 +32,11 @@ and stays in their ecosystem (FastAPI + redis + DB).
 | consumes | meeting-bot | `GET /internal/browser-session/{session_uid}` | a bot joining as a bot account restores its profile (session-profile.v1 restore route, `sessionRestoreUrl`); its write-back goes to the account. Admitted by that session's MeetingToken, only while it is the account's live bot |
 | consumes | runtime kernel | `POST /runtime/callback` | workload state/terminal ACK (CC5 synthetic `failed`). Admitted only with the runtime's `X-Runtime-Signature`, an HMAC over the signing time, this door's URL and the event keyed from `RUNTIME_API_TOKEN`, signed within 300 s and not seen before (`src/meeting_api/runtime_signature.py`) |
 | calls (optional) | operator service authority | `service-authority.v1` over signed HTTP | allow/deny before spawn and at each one-minute active-service boundary; no hosted billing data |
-| consumes | transcription worker | redis stream `transcription_segments` | raw `transcript.v1` segments → DB |
+| consumes | transcription worker | redis stream `transcription_segments` | raw `transcript.v1` segments → DB; a bot's `chat_send_result` settles the chat send it names (`src/meeting_api/chat_delivery.py`, read back by `GET /bots/{platform}/{native_meeting_id}/chat/{request_id}`) |
 | publishes | api-gateway `/ws` | redis channel `tc:meeting:{id}:mutable` | the live mutable transcript bundle |
 | publishes | api-gateway `/ws` | redis channel `bm:meeting:{id}:status` | ws.v1 `meeting.status` (BotStatus) on each FSM advance |
 | publishes | api-gateway `/ws` | redis channel `va:meeting:{id}:chat` | ws.v1 `chat_message`, one per stored `source:'chat'` segment |
-| publishes | meeting-bot | redis channel `bot_commands:meeting:{id}` | acts.v1 `leave` (stop), `reconfigure` (PUT …/config), `chat_send` (POST …/chat) |
+| publishes | meeting-bot | redis channel `bot_commands:meeting:{id}` | acts.v1 `leave` (stop), `reconfigure` (PUT …/config), `chat_send` with its `request_id` (POST …/chat) |
 | produces | user webhook endpoint | `webhook.v1` envelope | `meeting.status_change` (signed, best-effort delivery) |
 
 ### The session token (MeetingToken)

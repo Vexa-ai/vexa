@@ -115,12 +115,14 @@ def test_post_chat_publishes_a_chat_send_act_on_the_meetings_command_channel():
     r = client.post(f"/bots/{PLAT}/{NATIVE}/chat", headers=H, json={"text": "hello room"})
 
     assert r.status_code == 200, r.text
-    assert r.json() == {"status": "queued", "meeting_id": m["id"], "native_meeting_id": NATIVE}
+    body = r.json()
+    assert body == {"status": "queued", "request_id": body["request_id"], "meeting_id": m["id"],
+                    "native_meeting_id": NATIVE}
     assert len(pub.published) == 1
     channel, raw = pub.published[0]
     assert channel == f"bot_commands:meeting:{m['id']}"
     act = json.loads(raw)
-    assert act == {"action": "chat_send", "text": "hello room"}
+    assert act == {"action": "chat_send", "text": "hello room", "id": body["request_id"]}
     ACT.validate(act)
 
 

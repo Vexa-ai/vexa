@@ -8,6 +8,9 @@ this schema (P4).
 - **`TranscriptSegment`** — `segment_id · speaker · text · start/end (sec)` + optional `language ·
   completed · absolute_* · source` (attribution) · `confidence` · `words`.
 - **Bus stream** (bot → collector): `SessionStart` → `Transcription` (confirmed batches) → `SessionEnd`.
+  Beside them, `ChatSendResult` — the outcome of one acts.v1 `chat_send` that carried an `id`
+  (`posted`, or not with the bot's `ChatSendFailure` reason); the collector settles the chat send it
+  names, for the meeting the entry's token names only.
 - **`MutableBundle`** — the live `confirmed`+`pending` bundle the gateway forwards verbatim to the dashboard.
 
 ## The bus entry is signed (`StreamEntry`)

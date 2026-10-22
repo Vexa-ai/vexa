@@ -50,7 +50,10 @@ parent's FM-003 discipline). `active → joining` (and any re-open of a terminal
   owner's admitted bot (google_meet · jitsi). Owner only; 409 when the bot is not in the meeting or no
   bot received the act; `text` capped at `MAX_CHAT_CHARS`; 429 + `Retry-After` past
   `CHAT_POSTS_PER_WINDOW` posts per `CHAT_WINDOW_SEC` s per meeting (`ChatRateLimit`, counted in the
-  command bus's Redis so every replica shares it).
+  command bus's Redis so every replica shares it). The answer carries a `request_id` the act carries
+  to the bot; `GET …/chat/{request_id}` reads the send's outcome (`queued` · `posted` · `failed` +
+  the bot's reason · `unconfirmed` after `UNCONFIRMED_AFTER_SEC`), sender only, from the record
+  `../chat_delivery.py` keeps and the collector settles from the bot's `chat_send_result`.
 - `retry.py` (P3d) — `JoinRetryController` + the transient/permanent taxonomy
   (`classify_retry` / `is_transient`): on a TRANSIENT join-failure schedule a fresh re-spawn (a new
   `meeting_session`) through the runtime scheduler with bounded exponential backoff; a PERMANENT

@@ -19,7 +19,9 @@ conformance.
   `va:meeting:{id}:chat` for each `source:'chat'` segment, `chat.py`) and append to the per-meeting feed
   `tc:meeting:{id}` (transcript.v1 `FeedEntry`). The stream-facing paths admit only an entry signed by
   a MeetingToken for the meeting it writes for (`auth` + `sig`, transcript.v1 `StreamEntry`); anything
-  else is acknowledged and dropped. No background loop — the caller drives it (eval `tick`).
+  else is acknowledged and dropped. A `chat_send_result` entry settles the chat send it names
+  (`../chat_delivery.py`), only while that send is still `queued` and only for the meeting the entry's
+  token names. No background loop — the caller drives it (eval `tick`).
 - **`segment_entry.py`** — transcript.v1's signer, vendored byte for byte from the contract (fact
   `segment-entry-signer`); the package's front door exports it as `signed_entry` for the tools that publish to the stream.
 - **`erased_feed_sweep.py`** — the one-time operator sweep

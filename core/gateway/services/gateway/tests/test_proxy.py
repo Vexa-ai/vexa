@@ -335,6 +335,20 @@ def test_native_chat_send_forwards_to_meeting_api_with_its_body():
     assert downstream.last["headers"]["x-user-id"] == "7"
 
 
+def test_native_chat_send_status_forwards_to_meeting_api():
+    """GET /bots/{platform}/{native}/chat/{request_id} reaches meeting-api's delivery-status read for
+    that send, path for path, with the resolved identity. The edge adds no chat logic of its own."""
+    client, downstream = _client()
+    r = client.get("/bots/google_meet/abc-defg-hij/chat/0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+                   headers={**AUTH, "x-user-id": "999"})
+    assert r.status_code == 200
+    assert downstream.last["method"] == "GET"
+    assert downstream.last["url"].endswith(
+        "/bots/google_meet/abc-defg-hij/chat/0f1e2d3c4b5a69788796a5b4c3d2e1f0")
+    assert "meeting-api" in downstream.last["url"]
+    assert downstream.last["headers"]["x-user-id"] == "7"
+
+
 def test_native_participants_read_forwards_to_meeting_api():
     """#451: GET /meetings/{platform}/{native}/participants forwards, path-for-path, to the
     owner-scoped meeting-api read. The edge adds no roster logic of its own — it must not, or the

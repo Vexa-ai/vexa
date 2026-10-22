@@ -115,7 +115,7 @@ export type Act =
   | { action: 'speak'; text: string; voice?: string }
   | { action: 'speak_audio'; url?: string; audioBase64?: string }
   | { action: 'speak_stop' }
-  | { action: 'chat_send'; text: string }
+  | { action: 'chat_send'; text: string; id?: string }
   | { action: 'chat_read' }
   | { action: 'screen_show'; imageUrl?: string; text?: string }
   | { action: 'screen_stop' }

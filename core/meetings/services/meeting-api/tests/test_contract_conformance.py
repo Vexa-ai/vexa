@@ -47,6 +47,7 @@ API_V1_MEETING_SURFACE: set[tuple[str, str]] = {
     ("POST", "/bots/{platform}/{native_meeting_id}/speak"),
     ("GET", "/bots/{platform}/{native_meeting_id}/chat"),
     ("POST", "/bots/{platform}/{native_meeting_id}/chat"),
+    ("GET", "/bots/{platform}/{native_meeting_id}/chat/{request_id}"),
     ("GET", "/transcripts/{platform}/{native_meeting_id}"),
     ("GET", "/recordings"),
     ("GET", "/recordings/{recording_id}"),
