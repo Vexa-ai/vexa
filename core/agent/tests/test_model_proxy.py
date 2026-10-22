@@ -545,3 +545,108 @@ def test_the_dispatch_seals_the_spend_cap_the_turn_was_admitted_under(monkeypatc
     d.dispatch(VALID_INV)
     route = mp.Grants(r, SECRET).route(rt.spawned[0][2][mg.TOKEN_ENV])
     assert route.payer == "u_jane" and ("user", "day", 3.0) in route.spend_caps
+
+
+# ── a wildcard-admitted endpoint is held to public addresses at every connection ──────────────────
+
+class _Dns:
+    """DNS the test controls: the answer can change between the dispatch and the connection."""
+
+    def __init__(self, *answers: str) -> None:
+        self.answers = list(answers)
+        self.asked: list[str] = []
+
+    def __call__(self, host: str) -> list[str]:
+        self.asked.append(host)
+        return [self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]]
+
+
+def _public_world(dns):
+    r = fakeredis.FakeRedis(decode_responses=True)
+    grants = mp.Grants(r, SECRET, clock=Clock())
+    upstream = Upstream()
+    app = mp.create_app(grants, transport=httpx.MockTransport(upstream), resolver=dns)
+    return grants, upstream, app
+
+
+def test_a_wildcard_admitted_endpoint_that_rebinds_inside_is_refused_at_the_connection():
+    dns = _Dns("10.0.0.5")
+    grants, upstream, app = _public_world(dns)
+    token = _turn(grants, route=_route(base_url="https://llm.models.example/v1", auth=mp.AUTH_BEARER,
+                                       public_only=True))
+    with TestClient(app) as client:
+        resp = _ask(client, token, path="/llm/chat/completions")
+    assert resp.status_code == 502, resp.text
+    assert "inside the deployment" in resp.json()["error"]["message"]
+    assert upstream.requests == [] and dns.asked == ["llm.models.example"]
+
+
+def test_a_wildcard_admitted_endpoint_is_dialled_at_the_address_it_was_checked_at():
+    dns = _Dns("93.184.216.34")
+    grants, upstream, app = _public_world(dns)
+    token = _turn(grants, route=_route(base_url="https://llm.models.example/v1", auth=mp.AUTH_BEARER,
+                                       public_only=True))
+    with TestClient(app) as client:
+        resp = _ask(client, token, path="/llm/chat/completions")
+    assert resp.status_code == 200, resp.text
+    (sent,) = upstream.requests
+    assert sent.url.host == "93.184.216.34"
+    assert sent.headers["host"] == "llm.models.example"
+    assert sent.extensions.get("sni_hostname") == "llm.models.example"
+
+
+def test_each_request_is_checked_again_so_a_record_that_flips_later_reaches_nothing():
+    dns = _Dns("93.184.216.34", "169.254.169.254")
+    grants, upstream, app = _public_world(dns)
+    token = _turn(grants, route=_route(base_url="https://llm.models.example/v1", auth=mp.AUTH_BEARER,
+                                       public_only=True))
+    with TestClient(app) as client:
+        first = _ask(client, token, path="/llm/chat/completions")
+        second = _ask(client, token, path="/llm/chat/completions")
+    assert (first.status_code, second.status_code) == (200, 502)
+    assert len(upstream.requests) == 1
+
+
+def test_an_endpoint_the_operator_named_exactly_is_dialled_as_named():
+    """Control: an exact allow-list entry is the operator's own choice, private or not."""
+    dns = _Dns("10.0.0.5")
+    grants, upstream, app = _public_world(dns)
+    token = _turn(grants, route=_route(base_url="https://llm.bank.internal/v1", auth=mp.AUTH_BEARER))
+    with TestClient(app) as client:
+        resp = _ask(client, token, path="/llm/chat/completions")
+    assert resp.status_code == 200, resp.text
+    assert upstream.requests[0].url.host == "llm.bank.internal" and dns.asked == []
+
+
+@pytest.mark.parametrize("allow, base_url, public_only", [
+    ("*.models.example", "https://llm.models.example/v1", True),
+    ("llm.models.example,*.models.example", "https://llm.models.example/v1", False),
+    ("llm.bank.internal", "https://llm.bank.internal/v1", False),
+])
+def test_the_dispatch_marks_a_persons_endpoint_a_wildcard_alone_admits(monkeypatch, allow, base_url,
+                                                                         public_only):
+    class _Models:
+        def resolve(self, subject):
+            return {"mode": "custom", "base_url": base_url, "api_key": "sk-PERSON-OWN",
+                    "model": "m-1", "runner": "openai-agent"}
+    monkeypatch.setenv("VEXA_MODEL_BASE_URL_ALLOW", allow)
+    from control_plane import model_endpoint
+    monkeypatch.setattr(model_endpoint, "resolver", lambda host: ["93.184.216.34"])
+    r = fakeredis.FakeRedis(decode_responses=True)
+    rt = _Runtime()
+    s = load_settings(internal_api_secret="internal-secret-for-tests-0123456789abcdef",
+                      model_proxy_url=PROXY, model_proxy_secret=SECRET)
+    d = dispatch.Dispatcher(s, rt, _FakeIdentity(), warm_stream=r, model_config=_Models())
+    d.dispatch(VALID_INV)
+    route = mp.Grants(r, SECRET).route(rt.spawned[0][2][mg.TOKEN_ENV])
+    assert (route.base_url, route.public_only) == (base_url, public_only)
+
+
+def test_the_deployments_own_route_is_never_marked():
+    """Control: the operator's own endpoint is configuration, not a person's choice."""
+    env = {"ANTHROPIC_API_KEY": REAL_KEY, "ANTHROPIC_BASE_URL": "https://gw.anything.example",
+           "VEXA_RUNNER": "claude-code"}
+    r = fakeredis.FakeRedis(decode_responses=True)
+    grants = mp.Grants(r, SECRET)
+    token = mp.confine(env, url=PROXY, grants=grants, unit="u-1", cold=True, source={})
+    assert grants.route(token).public_only is False

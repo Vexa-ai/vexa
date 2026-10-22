@@ -30,6 +30,12 @@ read only by the vendor's own CLI from its own place, never extracted into a pro
 (``docs/docs/model-credentials-licensing.mdx``, operator checklist). A subscription route therefore
 keeps its credential with the CLI and its model calls go straight to the vendor; the licence
 confines it to the one human it belongs to. Its toolbelt still goes through the proxy.
+
+A person's own endpoint that the deployment's allow-list admits only through a WILDCARD is a
+statement about the public internet (``control_plane.model_endpoint``). The dispatch checks where it
+resolves; the proxy, which makes the connection, checks again on every request and dials the
+address it checked (``Route.public_only``), so a record that flips after the dispatch reaches no
+address inside the deployment.
 """
 from __future__ import annotations
 
@@ -44,8 +50,11 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional
+from urllib.parse import urlsplit
 
+from control_plane import model_endpoint
 from shared import model_grant as mg
+from shared import ssrf
 from shared import units
 
 logger = logging.getLogger("agent_api.model_proxy")
@@ -117,13 +126,16 @@ class Route:
     #: The proxy refuses a model request once the payer's ledger has reached any of them.
     payer: str = ""
     spend_caps: tuple = ()
+    #: The endpoint was admitted only through a wildcard: every connection re-resolves its host,
+    #: refuses an address inside the deployment, and dials the address it checked.
+    public_only: bool = False
 
     def as_dict(self) -> dict:
         return {"base_url": self.base_url, "auth": self.auth, "credential": self.credential,
                 "subscription": self.subscription, "models": list(self.models),
                 "max_output_tokens": self.max_output_tokens, "toolbelt": self.toolbelt,
                 "toolbelt_bearer": self.toolbelt_bearer, "payer": self.payer,
-                "spend_caps": [list(c) for c in self.spend_caps]}
+                "spend_caps": [list(c) for c in self.spend_caps], "public_only": self.public_only}
 
     @classmethod
     def from_dict(cls, d: Mapping) -> "Route":
@@ -135,7 +147,8 @@ class Route:
                    toolbelt=str(d.get("toolbelt") or ""),
                    toolbelt_bearer=str(d.get("toolbelt_bearer") or ""),
                    payer=str(d.get("payer") or ""),
-                   spend_caps=tuple((str(a), str(b), float(c)) for a, b, c in d.get("spend_caps") or ()))
+                   spend_caps=tuple((str(a), str(b), float(c)) for a, b, c in d.get("spend_caps") or ()),
+                   public_only=bool(d.get("public_only")))
 
     def with_spend(self, payer: str, caps: Mapping) -> "Route":
         """This route under ``payer``'s spend caps (``{(scope, period): usd | None}``)."""
@@ -408,6 +421,12 @@ def confine(env: dict, *, url: str, grants: Optional[Grants], unit: str, cold: b
     eff["VEXA_MODEL_ROUTE"] = env.get("VEXA_MODEL_ROUTE", "")
     bearer = (env.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
     route = route_of(eff).with_toolbelt(toolbelt.strip() if bearer else "", bearer)
+    if eff["VEXA_MODEL_ROUTE"] == "subject" and route.base_url:
+        # a person's own endpoint the allow-list names only through a wildcard: held to public
+        # addresses at every connection the proxy makes, not only at this dispatch
+        host = (urlsplit(route.base_url).hostname or "").lower()
+        if host and not model_endpoint.named_exactly(host, source):
+            route = Route(**{**route.__dict__, "public_only": True})
     if spend is not None:
         route = route.with_spend(*spend)
     token = ""
@@ -509,9 +528,10 @@ def _peek_model(body: bytes, content_type: str) -> Optional[str]:
     return _shape_body(body, content_type, Route(base_url=""))[0]
 
 
-def create_app(grants: Grants, *, transport=None, timeout: float = 600.0):
+def create_app(grants: Grants, *, transport=None, timeout: float = 600.0, resolver=None):
     """The proxy's ASGI app. ``transport`` (an ``httpx.AsyncBaseTransport``) is injectable so the
-    whole path — authentication, scope, credential injection, streaming — runs offline in tests."""
+    whole path — authentication, scope, credential injection, streaming — runs offline in tests;
+    ``resolver`` replaces DNS for a ``public_only`` route's connection check."""
     import httpx  # noqa: PLC0415
     from starlette.applications import Starlette  # noqa: PLC0415
     from starlette.background import BackgroundTask  # noqa: PLC0415
@@ -522,6 +542,9 @@ def create_app(grants: Grants, *, transport=None, timeout: float = 600.0):
 
     client = httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(timeout, connect=15.0),
                                follow_redirects=False)
+    # a wildcard-admitted endpoint: re-resolved, checked and pinned on every request it is sent
+    public = httpx.AsyncClient(transport=ssrf.build_pinned_transport(transport, resolver),
+                               timeout=httpx.Timeout(timeout, connect=15.0), follow_redirects=False)
 
     def _refusal(exc: Refused) -> JSONResponse:
         # Both dialects read `error.message`; `type` names the refusal for a person reading a log.
@@ -539,12 +562,17 @@ def create_app(grants: Grants, *, transport=None, timeout: float = 600.0):
         await run_in_threadpool(grants.revoke, token)
         return JSONResponse({"revoked": True})
 
-    async def _relay(request: Request, url: str, headers: dict, body: bytes):
+    async def _relay(request: Request, url: str, headers: dict, body: bytes, via=None):
+        via = via or client
         if request.url.query:
             url += "?" + request.url.query
-        req = client.build_request(request.method, url, headers=headers, content=body)
+        req = via.build_request(request.method, url, headers=headers, content=body)
         try:
-            resp = await client.send(req, stream=True)
+            resp = await via.send(req, stream=True)
+        except ssrf.SSRFError:
+            logger.warning("model proxy: a wildcard-admitted endpoint resolved inside the deployment")
+            return _refusal(Refused(502, "the endpoint now resolves to an address inside the "
+                                         "deployment, which a wildcard allow-list entry never reaches"))
         except httpx.HTTPError as exc:
             logger.warning("model proxy: upstream unreachable (%s)", type(exc).__name__)
             return _refusal(Refused(502, f"the upstream could not be reached ({type(exc).__name__})"))
@@ -567,7 +595,8 @@ def create_app(grants: Grants, *, transport=None, timeout: float = 600.0):
         _model, body = _shape_body(body, ctype, route)
         path = request.path_params.get("path", "")
         url = route.base_url.rstrip("/") + "/" + path.lstrip("/")
-        return await _relay(request, url, upstream_headers(route, headers), body)
+        return await _relay(request, url, upstream_headers(route, headers), body,
+                            public if route.public_only else client)
 
     async def toolbelt(request: Request):
         """The harness's MCP attachment: the turn's token in, the unit's delegation bearer out."""
@@ -591,6 +620,7 @@ def create_app(grants: Grants, *, transport=None, timeout: float = 600.0):
             yield
         finally:
             await client.aclose()
+            await public.aclose()
 
     return Starlette(routes=[
         HttpRoute("/health", health, methods=["GET"]),
