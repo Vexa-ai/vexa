@@ -177,7 +177,26 @@ def test_the_new_keys_are_declared():
         assert key in flows_config.DECLARED, f"{key} is read and declared nowhere"
 
 
-def test_a_step_time_door_is_not_read_at_import(monkeypatch):
+@pytest.fixture
+def cold_flows_modules():
+    """`flows_defs.*` and `flows_steps.*` imported from a cold start, and the suite's own copies
+    back in `sys.modules` afterwards. Every other test module bound these at collection time
+    (`from flows_steps import grants`, `meeting as mt`); a step resolves its siblings at call time
+    (`from . import grants`), so leaving the fresh copies behind would split a later test's patch
+    from the module the step reads."""
+    import sys
+
+    prefixes = ("flows_defs", "flows_steps")
+    saved = {m: mod for m, mod in sys.modules.items() if m.startswith(prefixes)}
+    for m in saved:
+        del sys.modules[m]
+    yield
+    for m in [m for m in sys.modules if m.startswith(prefixes)]:
+        del sys.modules[m]
+    sys.modules.update(saved)
+
+
+def test_a_step_time_door_is_not_read_at_import(monkeypatch, cold_flows_modules):
     """A REQUIRED-EXPLICIT door that is only used to compose a mailed link must not decide whether
     the process can BOOT. Found by the live proof on bbb: flows-api crash-looped with
     `VEXA_UI_URL is unset` before serving anything, including /health and the tool manifest.
@@ -191,13 +210,10 @@ def test_a_step_time_door_is_not_read_at_import(monkeypatch):
     the link would have been composed.
     """
     import importlib
-    import sys
 
     monkeypatch.delenv("VEXA_UI_URL", raising=False)
     monkeypatch.setenv("VEXA_FLOWS_GATEWAY_URL", "http://gateway:8000")
     monkeypatch.setenv("VEXA_FLOWS_ADMIN_API_URL", "http://admin-api:8001")
-    for mod in [m for m in sys.modules if m.startswith(("flows_defs", "flows_steps"))]:
-        del sys.modules[mod]
 
     importlib.import_module("flows_defs.production")      # must not raise
 
