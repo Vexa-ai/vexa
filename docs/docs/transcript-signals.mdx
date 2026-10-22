@@ -80,8 +80,10 @@ What the agent cannot change: being addressed wakes it even after the wake cap i
 is involved) — up to the cap's number of wakes again in that hour, then not until the next hour — and
 the caps and the allowed models are the company's. Being addressed by name counts only on a line the
 transcript names a speaker on: a line it could not attribute ("Unknown speaker") is scored like any
-other line. The transcript names a participant's display name, never a Vexa account, so this is a
-check that someone in the call said it, not of who they are. A regex rule is at most
+other line. That holds for the forms of the name the transcript often writes ("Hello, Vex", "Hey
+Vexon"), which count right after a greeting or as a line's first word. The transcript names a
+participant's display name, never a Vexa account, so this is a check that someone in the call said
+it, not of who they are. A regex rule is at most
 200 characters, a pattern with a nested quantifier is refused, and each match runs with a 50 ms
 deadline.
 
