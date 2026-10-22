@@ -177,8 +177,9 @@ def quarantine(db, *, ext_id: str, frm: str, kind: str, reason: str,
 
 
 def already_answered(db, frm: str) -> bool:
-    """Has this sender ever had the fixed line back? Once per address, ever — a stranger who keeps
-    writing gets rows, not replies, and a mail loop between two auto-responders cannot start."""
+    """Has this sender had the fixed line back? Once per address for as long as its quarantine rows
+    are kept (`VEXA_FLOWS_FACT_RETENTION_DAYS`, `flows.retention`) — a stranger who keeps writing
+    gets rows, not replies, and a mail loop between two auto-responders cannot start."""
     return bool(db.execute("SELECT 1 FROM mail_quarantine WHERE from_addr = :f AND replied_at IS NOT NULL",
                            {"f": (frm or "").strip().lower()}))
 

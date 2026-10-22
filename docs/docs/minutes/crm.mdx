@@ -274,6 +274,12 @@ git: `docker compose exec agent-api python -m control_plane.crm_references rebui
   credential. Every change keeps a revision with its actor, reason and evidence.
 - **Audit with the trace.** Every read and write is recorded in `crm_audit` with the caller's kind
   (person, agent, unattended agent, shared turn), the session and the request's trace id.
+- **The audit expires, and only by the clock.** `crm_audit` keeps a row for
+  `CRM_AUDIT_RETENTION_DAYS` (default **365**; `0` keeps it for ever; 1–29 is refused). `crm-init`
+  writes the period into `crm_purge_audit()`, which `crm-api` runs every hour. Inside the period a
+  row cannot be updated or deleted by anyone, and past it nothing but that function deletes it.
+  `crm-api`'s role may run the function but cannot change the period. On Helm the period is
+  `crm.auditRetentionDays`.
 - **Shared conversations stay shared-safe.** A turn other people read may use only records bound to
   workspaces every participant can read, matching the rule for workspaces.
 - **No field values in other systems.** The facts the CRM sends to flows carry record ids and

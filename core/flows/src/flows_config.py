@@ -299,6 +299,9 @@ DECLARED: dict[str, tuple[str, object, str]] = {
     "VEXA_FLOWS_SCHEDULE_CATCHUP_S": (
         "defaulted", "3600",
         "After downtime the worker fires a schedule flow's most recent missed slot once, if it is younger than this many seconds; older slots are skipped and counted (ADR-0046 decision 3)."),
+    "VEXA_FLOWS_FACT_RETENTION_DAYS": (
+        "defaulted", "90",
+        "How many days a captured fact is kept after its reaction finished: the flows-worker's retention pass removes finished reactions (their refs, mail bodies included, scratch, receipts and signals), quarantined mail and old mail turns, and clears the payload of spent keyed schedules, once they are older than this. A reaction still running or waiting is never removed. 0 keeps everything (PRD 0.13.4: a fact is admitted, then expires)."),
     "VEXA_FLOWS_LOOP_LIMIT": (
         "defaulted", "1",
         "How many times an event may start a flow that is already in the chain of flows that produced it (ADR-0046 decision 8). 1 means a flow's own step events never start that flow again."),

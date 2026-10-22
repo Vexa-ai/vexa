@@ -525,7 +525,8 @@ def strip_quotes(body: str) -> str:
 def _fixed_reply(db, msg, ext_id: str, now: float, reply) -> bool:
     """AT MOST one fixed line back to a quarantined stranger — a template, never a model.
 
-    Off unless the deployment turns it on, and once per address ever. Silence is the safest answer
+    Off unless the deployment turns it on, and once per address per retention period
+    (`mail_policy.already_answered`). Silence is the safest answer
     to somebody we cannot place: an automatic reply to an unverified sender is a reflector, and two
     auto-responders that answer each other are a mail loop nobody notices until the bill.
     """

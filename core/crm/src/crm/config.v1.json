@@ -125,6 +125,13 @@
       "targets": ["compose", "helm"]
     },
     {
+      "key": "CRM_AUDIT_RETENTION_DAYS",
+      "class": "defaulted",
+      "default": "365",
+      "description": "`crm.migrate init` only: how many days `crm_audit` keeps a row. Init writes the period into `crm_purge_audit()`, which crm-api runs every hour; a row younger than the period can be neither updated nor deleted, and nothing but that function deletes an older one. 0 keeps the audit for ever; 1-29 is refused (init stops), so a typo cannot empty it",
+      "targets": ["compose", "helm"]
+    },
+    {
       "key": "CRM_WAIT_SEC",
       "class": "defaulted",
       "default": "600",

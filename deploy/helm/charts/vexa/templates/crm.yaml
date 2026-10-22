@@ -40,6 +40,8 @@ spec:
               value: {{ $root.Values.crm.orgId | quote }}
             - name: CRM_ORG_NAME
               value: {{ $root.Values.crm.orgName | default $root.Values.crm.orgId | quote }}
+            - name: CRM_AUDIT_RETENTION_DAYS
+              value: {{ $root.Values.crm.auditRetentionDays | quote }}
           resources:
             {{- toYaml $root.Values.migrations.resources | nindent 12 }}
 {{- end -}}

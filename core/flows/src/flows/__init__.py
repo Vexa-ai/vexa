@@ -7,6 +7,7 @@ from .loop import claim, effect_key, tick
 from .model import Block, Done, NotPresent, Reaction, Receipt, StepCtx, StepError, Wait
 from .projection import status, waiting
 from .reconciler import escalate, reclaim
+from . import retention  # noqa: F401 — captured facts expire (`retention.purge`)
 from .registry import EventType, Flow, Registry
 from .signals import cancel, resume, retry, wake
 

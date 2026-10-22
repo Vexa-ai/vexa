@@ -33,6 +33,8 @@ stringData:
   VEXA_FLOWS_MAIL_RATE_PER_SENDER: {{ .Values.flows.mailRate.perSender | quote }}
   VEXA_FLOWS_MAIL_RATE_GLOBAL: {{ .Values.flows.mailRate.global | quote }}
   VEXA_FLOWS_MAIL_RATE_WINDOW_S: {{ .Values.flows.mailRate.windowSeconds | quote }}
+  # captured facts expire (finished reactions, quarantined mail): days after the run finished, 0 keeps all
+  VEXA_FLOWS_FACT_RETENTION_DAYS: {{ .Values.flows.factRetentionDays | quote }}
   {{- /* The operator key, unless it comes from a Secret you manage (flows.existingSecret, or
   secrets.existingSecretName with flows.apiKey empty): then it is not rendered here, and every
   consumer reads it from that Secret by name. */}}

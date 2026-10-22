@@ -130,6 +130,25 @@ retryable as a **new attempt causally linked** — history is never mutated) and
 Receipts carry each effect's provider reference: the SMTP message-id, the git commit, the bot
 workload id.
 
+## How long captured facts are kept
+
+A fact is admitted with its refs: an inbound mail's body, an invite's attendees, a calendar event.
+Those refs, the scratch the steps wrote and every receipt's result are what flows keeps about the
+people involved. flows-worker keeps them while the run is live and for
+`VEXA_FLOWS_FACT_RETENTION_DAYS` (default **90**) after it finished, then removes them once an hour:
+
+| what | removed when |
+|---|---|
+| a reaction that is `done`, `failed` or `cancelled`, with its receipts and signals | its last change is older than the period |
+| a `mail_quarantine` row (sender, reason, a refused invite's meeting facts) | it is older than the period |
+| a `mail_turn` row | it is older than the period and outside `VEXA_FLOWS_MAIL_RATE_WINDOW_S` |
+| the `payload` of a keyed schedule that fired, was cancelled or was missed | its last change is older than the period; the row stays, so a redelivered event cannot arm the same fire again |
+
+A reaction that is `admitted`, `retrying`, `running` or `blocked` is never removed, however old.
+A failed reaction past the period can no longer be retried. With the fixed quarantine reply on, a
+stranger is answered once per period rather than once ever. `0` keeps everything. On Helm the
+period is `flows.factRetentionDays`. The worker logs `retention pass removed {...}` with the counts.
+
 ## Friction reports: repeats are folded into one row
 
 `report_friction` (flows-api `POST /friction`) is where an agent or a person reports something that

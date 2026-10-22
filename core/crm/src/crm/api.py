@@ -784,6 +784,9 @@ def configured_app():
     from .migrate import check
     engine = create_engine(url, pool_pre_ping=True, pool_size=3, max_overflow=0)
     check(engine)       # its own role, never a superuser, and the schema version this code knows
+    # the audit expires on schedule, through the migrations path's function only (crm.retention)
+    from . import retention
+    retention.start(engine)
     limits = company_limits()
     from .bootstrap import ensure_personal_org
     # an individual's personal CRM is made on its first use (only with `personal_crm` on), through the

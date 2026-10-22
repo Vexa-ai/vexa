@@ -24,6 +24,9 @@ commitment, approval (also invitation, policy_change), question (also ask) — a
 `nonce`, `content_hash`; nonces in `crm_card_nonces`), `seen` is the terminal's render-in-view, and
 `inbox`/`counts` are the one predicate every surface counts with. `store.Store.begin` writes the pending
 audit row inside the operation's transaction (H9), and `store._envelope` computes a fact's audience (D8).
+The audit expires: `migrate` writes `CRM_AUDIT_RETENTION_DAYS` into the SECURITY DEFINER
+`crm_purge_audit()` and guards `crm_audit`'s DELETE row by row so only that function, and only past
+the period, removes a row; `retention.py` is crm-api's hourly call to it.
 
 `config.v1.json` declares every environment key the CRM's processes read — crm-api, the outbox and
 `migrate` — and `config_preflight.py` is the config.v1 contract's validator, vendored verbatim (gated

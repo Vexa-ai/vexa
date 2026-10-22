@@ -341,6 +341,7 @@ server, Gmail as the preset) on [Connect the bot mailbox](/flows/mailbox).
 | `VEXA_FLOWS_AGENT_API_URL` | — | The **optional** agent domain. Unset, steps that need an agent answer `not_present` instead of reaching for a door that is not there. |
 | `VEXA_FLOWS_API_URL` | — | Where admin-api and meeting-api publish facts to. Empty (the stock default) means they publish nothing. Formerly `FLOWS_API_URL`, honoured for one release. |
 | `VEXA_UI_URL` | — | The link port. Unset, nothing is mailed with a link. |
+| `VEXA_FLOWS_FACT_RETENTION_DAYS` | `90` | Days a captured fact is kept after its run finished. flows-worker then removes the finished reaction (its refs, an inbound mail's body included, its scratch, receipts and signals), quarantined mail and old mail turns, and clears the payload of spent keyed schedules. A run still waiting is never removed. `0` keeps everything. Helm: `flows.factRetentionDays`. See [Operating workflows](/flows/operations#how-long-captured-facts-are-kept). |
 
 ### Per-person flow quotas
 

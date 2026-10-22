@@ -206,11 +206,13 @@ card_nonces = Table('crm_card_nonces', metadata, org(), Column('nonce', String, 
     Column('revision', Integer, nullable=False), Column('content_hash', String, nullable=False),
     Column('created_at', String, nullable=False), Column('expires_at', String, nullable=False),
     Column('used_at', String, nullable=True), record_fk())
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 Index("crm_refs_by_record", page_references.c.org_id, page_references.c.record_id)
 Index("crm_bindings_by_record", workspace_bindings.c.org_id, workspace_bindings.c.record_id)
 Index("crm_audit_by_time", audit.c.org_id, audit.c.at)
+# 10: the audit expires across every org at once (`migrate.audit_purge_function_sql`).
+Index("crm_audit_by_age", audit.c.at)
 Index("crm_card_members_by_subject", card_members.c.org_id, card_members.c.subject)
 Index("crm_links_by_target", relationships.c.org_id, relationships.c.target_domain, relationships.c.target_id)
 Index("crm_desk_proposals_by_person", desk_proposals.c.org_id, desk_proposals.c.person, desk_proposals.c.status)

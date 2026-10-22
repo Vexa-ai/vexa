@@ -756,6 +756,9 @@ crm:
     tag: ""
   # How often agent-api reads each workspace's record links at its head commit (seconds).
   referencesPollSeconds: 30
+  # Days crm_audit keeps a row; crm-api removes older rows hourly through crm_purge_audit(), the only
+  # path that can. "0" keeps the audit for ever; 1-29 is refused by the crm-schema Job.
+  auditRetentionDays: "365"
   resources: {}
 # The model-provider key proxy (H5/W1): the one process that sends a model request with a real
 # credential. Agent workers reach it with their turn's token; it forwards to the route agent-api
@@ -1315,6 +1318,10 @@ flows:
     perSender: "12"
     global: "120"
     windowSeconds: "3600"
+  # CAPTURED FACTS EXPIRE. Days a finished reaction (its refs — an inbound mail's body included —
+  # scratch, receipts and signals), a quarantined mail and an old mail turn are kept before the
+  # flows-worker removes them; spent keyed schedules lose their payload. "0" keeps everything.
+  factRetentionDays: "90"
 
 # ── The adoption panel (off by default; ConfigMaps only — this chart never deploys Grafana) ──
 # WHAT IT IS: a Grafana dashboard the operator runs inside their own cluster showing who is

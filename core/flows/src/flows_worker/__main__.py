@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from flows import Registry, SystemClock, admit, escalate, postgres_db, reclaim
+from flows import Registry, SystemClock, admit, escalate, postgres_db, reclaim, retention
 from flows.schedule import fire_due
 from flows import keyed
 from flows.admission import admissible
@@ -71,6 +71,18 @@ def keyed_pass(db, reg, clock, limits: "dict | None" = None) -> int:
         db, f, clock, event_type=keyed.KEYED_EVENT, subject_refs=refs, **limits))
 
 
+#: How often the retention pass runs when it left no backlog; with one, it runs again next tick.
+RETENTION_EVERY_S = 3600.0
+
+
+def retention_pass(db, clock) -> dict:
+    """CAPTURED FACTS EXPIRE (PRD 0.13.4): finished reactions with their receipts and signals,
+    quarantined mail, old mail turns and spent keyed payloads older than
+    `VEXA_FLOWS_FACT_RETENTION_DAYS` are removed (`flows.retention`). 0 keeps everything."""
+    return retention.purge(db, clock, days=flows_config.get_int("VEXA_FLOWS_FACT_RETENTION_DAYS"),
+                           rate_window_s=float(flows_config.get_int("VEXA_FLOWS_MAIL_RATE_WINDOW_S")))
+
+
 def main() -> int:
     # Refuse to start without the internal-tier secret, the same refusal flows-api already makes
     # for the operator key: a worker that starts without it runs every post-meeting turn with no
@@ -115,6 +127,7 @@ def main() -> int:
 
     print(f"flows-worker up · {len(reg.flows)} flows · {len(reg.steps)} steps", flush=True)
     last_recon = 0.0
+    next_retention = 0.0
     while True:
         if time.time() - last_recon > 10:
             last_recon = time.time()
@@ -150,6 +163,16 @@ def main() -> int:
                     print(f"ticked {len(ticked)} sensor(s)", flush=True)
             except PassFailed as exc:
                 failed.append(str(exc))
+            if time.time() >= next_retention:
+                try:
+                    gone = guarded("retention", retention_pass, db, clock)
+                    removed = {k: v for k, v in gone.items() if k != "more" and v}
+                    if removed:
+                        print(f"retention pass removed {removed}", flush=True)
+                    next_retention = time.time() + (0.0 if gone.get("more") else RETENTION_EVERY_S)
+                except PassFailed as exc:
+                    failed.append(str(exc))
+                    next_retention = time.time() + RETENTION_EVERY_S
             if failed:
                 _log.error("reconciliation tick FAILED: %s pass(es) raised (traceback above)",
                            ", ".join(failed))

@@ -10,6 +10,10 @@ retires its version); `triggers.py` reads a trigger's event glob, its closed fil
 relative time (`payload.start - 60s`); `keyed.py` keeps one pending fire per key for a relative
 trigger (an update moves it, a cancel removes it) and fires due rows into ordinary reactions.
 
+Facts expire: `retention.py` removes finished reactions with their receipts and signals,
+quarantined mail and old mail turns, and clears spent keyed payloads, once they are older than the
+retention period (the worker's hourly pass, `VEXA_FLOWS_FACT_RETENTION_DAYS`).
+
 `fact_envelope.py` is event.v2's sealed fact envelope (D8), vendored verbatim from
 `core/flows/contracts/event.v2/` (parity fact `fact-envelope`): the intake verifies a producer's
 envelope with it under that producer's public key (`flows_integrations/fact_keys.py`, parity fact

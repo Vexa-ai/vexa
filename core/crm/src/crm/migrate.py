@@ -7,7 +7,9 @@ crm-api never holds the instance's admin credential and runs no DDL. The migrati
    password it is given;
 2. creates the ``crm_*`` tables and the append-only triggers on revisions, card layouts, the audit
    and desk layout versions, and
-   records the schema version;
+   records the schema version. The audit is append-only for as long as it is kept: a row older
+   than ``CRM_AUDIT_RETENTION_DAYS`` is removed by ``crm_purge_audit()`` and by nothing else
+   (``audit_purge_function_sql``);
 3. grants that role exactly what the record writer needs — SELECT on every CRM table, and the
    writes below — and nothing on any other table, so it cannot read accounts, tokens or meetings;
 4. creates the organisation and its stable entity types if they are missing (`bootstrap`);
@@ -18,9 +20,12 @@ crm-api never holds the instance's admin credential and runs no DDL. The migrati
    code, so the definitions and the erase plan they carry follow the release.
 
 crm-api then logs in as that role and only CHECKS (``check``): not a superuser, and the schema
-version this code knows.
+version this code knows. It may EXECUTE ``crm_purge_audit()``, which takes no argument: the period
+is the one this path wrote into it, so the runtime role can expire the audit on schedule and can
+never shorten what is kept (``crm.retention``).
 
     python -m crm.migrate init    # admin DB_* + CRM_DB_USER / CRM_DB_PASSWORD + CRM_ORG_ID
+                                  # (+ CRM_AUDIT_RETENTION_DAYS, default 365, 0 keeps the audit)
     python -m crm.migrate check   # the role's own login (CRM_DATABASE_URL); exits 0 once ready
 """
 import json
@@ -87,6 +92,19 @@ ERASE_APPEND_ONLY = False
 #: The functions crm-api's role may EXECUTE (``init`` grants them; nothing else is granted on them).
 BOOTSTRAP_FN = 'crm_bootstrap_personal_org(text, text)'
 ERASE_FN = 'crm_erase_personal_org(text)'
+PURGE_AUDIT_FN = 'crm_purge_audit()'
+
+#: How long the audit is kept (``CRM_AUDIT_RETENTION_DAYS``): a year by default, because who read
+#: and changed a record is what an incident review or a compliance request asks for months later.
+#: 0 keeps it for ever. A period shorter than ``AUDIT_RETENTION_MIN_DAYS`` is refused, so a typo
+#: cannot empty the audit.
+AUDIT_RETENTION_DEFAULT_DAYS = 365
+AUDIT_RETENTION_MIN_DAYS = 30
+#: The transaction-local setting ``crm_purge_audit()`` turns on for its own DELETE; the audit's row
+#: trigger refuses a DELETE made without it.
+AUDIT_EXPIRE_SETTING = 'crm.audit_expiring'
+#: ``at`` is written as ``datetime.isoformat()`` in UTC; the cutoff is spelled the same way.
+_ISO_UTC = 'YYYY-MM-DD"T"HH24:MI:SS.US"+00:00"'
 _PERSONAL_ORG_SQL = '^p-[0-9]+$'          # orgs.PERSONAL_ORG, as Postgres reads it
 
 
@@ -148,6 +166,66 @@ BEGIN
 END $fn$"""
 
 
+def audit_retention_days(env=None):
+    """``CRM_AUDIT_RETENTION_DAYS`` as days: unset is the default, 0 keeps the audit for ever."""
+    raw = ((os.environ if env is None else env).get('CRM_AUDIT_RETENTION_DAYS') or '').strip()
+    if not raw:
+        return AUDIT_RETENTION_DEFAULT_DAYS
+    try:
+        days = int(raw)
+    except ValueError:
+        raise ValueError('CRM_AUDIT_RETENTION_DAYS must be a whole number of days (0 keeps the audit)') from None
+    if days != 0 and not AUDIT_RETENTION_MIN_DAYS <= days <= 36500:
+        raise ValueError(f'CRM_AUDIT_RETENTION_DAYS must be 0 (keep) or {AUDIT_RETENTION_MIN_DAYS}..36500 days')
+    return days
+
+
+def _audit_cutoff_sql(days):
+    """The moment before which an audit row has expired, spelled like ``at``."""
+    return f"to_char((now() - interval '{int(days)} days') AT TIME ZONE 'UTC', '{_ISO_UTC}')"
+
+
+def audit_purge_function_sql(days):
+    """``crm_purge_audit()``: removes the audit rows older than ``days`` and returns how many.
+
+    The period is written into the body here, by the migrations path, so the role that may call
+    it cannot choose it. The audit's row trigger (``audit_expire_trigger_sql``) refuses every
+    DELETE unless ``AUDIT_EXPIRE_SETTING`` is on — which only this function sets, for its own
+    transaction — and, even then, of any row inside the same period."""
+    days = int(days)
+    return f"""CREATE OR REPLACE FUNCTION crm_purge_audit() RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE
+  n bigint := 0;
+BEGIN
+  IF {days} <= 0 THEN
+    RETURN 0;
+  END IF;
+  PERFORM set_config('{AUDIT_EXPIRE_SETTING}', 'on', true);
+  DELETE FROM crm_audit WHERE at < {_audit_cutoff_sql(days)};
+  GET DIAGNOSTICS n = ROW_COUNT;
+  PERFORM set_config('{AUDIT_EXPIRE_SETTING}', '', true);
+  RETURN n;
+END $fn$"""
+
+
+def audit_expire_trigger_sql(days):
+    """The audit's DELETE guard, row by row: a row goes only inside ``crm_purge_audit()`` and only
+    when it is older than the period, which is written here too — so no caller, the owner holding
+    the purge's own setting included, removes a row the period still keeps without changing this
+    function first. With the period 0 every DELETE is refused."""
+    days = int(days)
+    return f"""CREATE OR REPLACE FUNCTION crm_audit_expire_only() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+  IF {days} <= 0 OR COALESCE(current_setting('{AUDIT_EXPIRE_SETTING}', true), '') <> 'on'
+     OR OLD.at >= {_audit_cutoff_sql(days)} THEN
+    RAISE EXCEPTION 'CRM revisions are append-only';
+  END IF;
+  RETURN OLD;
+END $fn$"""
+
+
 def bootstrap_function_sql():
     """``crm_bootstrap_personal_org(org, name)``: ``bootstrap.bootstrap_org`` for an org of one,
     with the personal policy and this release's definitions (``orgs.PERSONAL_POLICY``,
@@ -185,8 +263,8 @@ BEGIN
 END $fn$"""
 
 
-def _functions(c):
-    for sql in (bootstrap_function_sql(), erase_function_sql()):
+def _functions(c, audit_days=AUDIT_RETENTION_DEFAULT_DAYS):
+    for sql in (bootstrap_function_sql(), erase_function_sql(), audit_purge_function_sql(audit_days)):
         if '%' in sql or '$fn$' in sql.split('$fn$', 1)[1].rsplit('$fn$', 1)[0]:
             raise ValueError('a function body the driver would misread')
         c.exec_driver_sql(sql)
@@ -214,7 +292,9 @@ def tables_and_version(c):
     nonce table and four decision-record columns on ``crm_revisions``, also in place with an empty
     default; the Card definition's new lifecycle properties reach an existing org through
     ``bootstrap.upgrade_card_definition``. 9 adds ``crm_match_ids.proof`` in place and fills it once,
-    on the upgrade from an earlier version (``match_proof_9``)."""
+    on the upgrade from an earlier version (``match_proof_9``). 10 adds only an index on the audit's
+    time (the expiry across every org); the audit's purge function and its row trigger are re-created
+    by ``migrate`` on every run, whatever the version."""
     metadata.create_all(c)
     before = c.execute(text('SELECT version FROM crm_schema')).scalar()
     if c.dialect.name == 'postgresql':
@@ -287,7 +367,7 @@ def match_proof_9(c):
         c.execute(update(m).where(m.c.org_id == o, m.c.identifier == identifier).values(proof=proof))
 
 
-def migrate(engine):
+def migrate(engine, *, audit_days=AUDIT_RETENTION_DEFAULT_DAYS):
     """The tables and triggers alone (the tests' and the importer's path)."""
     if engine.dialect.name != 'postgresql':
         raise RuntimeError('Migration requires PostgreSQL')
@@ -297,22 +377,30 @@ def migrate(engine):
             LANGUAGE plpgsql AS $$ BEGIN
               RAISE EXCEPTION 'CRM revisions are append-only';
             END $$'''))
+        c.exec_driver_sql(audit_expire_trigger_sql(audit_days))
         for table in APPEND_ONLY:
             c.execute(text(f'DROP TRIGGER IF EXISTS {table}_immutable ON {table}'))
-            c.execute(text(f'''CREATE TRIGGER {table}_immutable BEFORE UPDATE OR DELETE OR TRUNCATE
+            c.execute(text(f'DROP TRIGGER IF EXISTS {table}_expire_only ON {table}'))
+            # the audit expires (``crm_purge_audit``): its DELETE is guarded row by row instead
+            refused = 'UPDATE OR TRUNCATE' if table == 'crm_audit' else 'UPDATE OR DELETE OR TRUNCATE'
+            c.execute(text(f'''CREATE TRIGGER {table}_immutable BEFORE {refused}
                 ON {table} FOR EACH STATEMENT EXECUTE FUNCTION crm_history_immutable()'''))
-        _functions(c)       # the personal CRM's two functions (step 5); `init` grants EXECUTE
+        c.execute(text('''CREATE TRIGGER crm_audit_expire_only BEFORE DELETE ON crm_audit
+            FOR EACH ROW EXECUTE FUNCTION crm_audit_expire_only()'''))
+        # the personal CRM's two functions (step 5) and the audit's purge; `init` grants EXECUTE
+        _functions(c, audit_days)
 
 
-def init(engine, *, role, password, database):
+def init(engine, *, role, password, database, audit_days=AUDIT_RETENTION_DEFAULT_DAYS):
     """With the admin credential. Idempotent: re-asserts the role's limits and password, creates
     what is missing, re-grants."""
     role = check_role(role)
+    audit_days = audit_retention_days({'CRM_AUDIT_RETENTION_DAYS': str(audit_days)})
     if not _PASSWORD.fullmatch(password or ''):
         raise ValueError("the CRM's database password must be 24-256 URL-safe characters")
     if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_-]{0,62}', database or ''):
         raise ValueError('not a database name')
-    migrate(engine)
+    migrate(engine, audit_days=audit_days)
     q = f'"{role}"'
     with engine.begin() as c:
         if c.execute(text('SELECT 1 FROM pg_roles WHERE rolname = :r'), {'r': role}).first() is None:
@@ -325,7 +413,7 @@ def init(engine, *, role, password, database):
         c.execute(text(f'GRANT SELECT ON TABLE {", ".join(tables)} TO {q}'))
         for table, rights in WRITES.items():
             c.execute(text(f'GRANT {rights} ON TABLE {table} TO {q}'))
-        for fn in (BOOTSTRAP_FN, ERASE_FN):
+        for fn in (BOOTSTRAP_FN, ERASE_FN, PURGE_AUDIT_FN):
             c.execute(text(f'REVOKE ALL ON FUNCTION {fn} FROM PUBLIC'))
             c.execute(text(f'GRANT EXECUTE ON FUNCTION {fn} TO {q}'))
 
@@ -374,7 +462,9 @@ def main(argv):
                     return 1
                 time.sleep(2)
         try:
-            init(engine, role=role, password=password, database=os.environ.get('DB_NAME', 'vexa'))
+            audit_days = audit_retention_days()
+            init(engine, role=role, password=password, database=os.environ.get('DB_NAME', 'vexa'),
+                 audit_days=audit_days)
         except ValueError as exc:
             print(f'[crm-schema] STOP: {exc}', flush=True)
             return 1
@@ -383,7 +473,8 @@ def main(argv):
         if upgrade_card_definition(engine, org):
             created.append('Card lifecycle properties')
         print(f'[crm-schema] role {role} and the crm_* tables are ready (schema version {SCHEMA_VERSION}; '
-              f'grants on those tables only); created: {", ".join(created) or "nothing"}', flush=True)
+              f'grants on those tables only); audit kept {audit_days or "for ever"}'
+              f'{" days" if audit_days else ""}; created: {", ".join(created) or "nothing"}', flush=True)
         return 0
     if cmd == 'check':
         engine = create_engine(os.environ['CRM_DATABASE_URL'], pool_pre_ping=True, pool_size=1, max_overflow=0)
@@ -400,7 +491,7 @@ def main(argv):
                 time.sleep(3)
     if cmd == '':
         # The prototype's form: tables and triggers with whatever credential CRM_DATABASE_URL holds.
-        migrate(create_engine(os.environ['CRM_DATABASE_URL']))
+        migrate(create_engine(os.environ['CRM_DATABASE_URL']), audit_days=audit_retention_days())
         return 0
     print('usage: python -m crm.migrate init|check', file=sys.stderr)
     return 2
