@@ -357,16 +357,41 @@ def test_the_s3_adapter_keeps_to_its_prefix_and_deletes_a_person():
             s3.put(bad, b"x", "image/png")
 
 
+_STORE_ENV = ("S3_ENDPOINT", "MINIO_ENDPOINT", "S3_ACCESS_KEY", "MINIO_ACCESS_KEY", "S3_SECRET_KEY",
+              "MINIO_SECRET_KEY", "VEXA_PHOTOS_S3_ACCESS_KEY", "VEXA_PHOTOS_S3_SECRET_KEY")
+
+
 def test_the_store_is_off_without_an_endpoint_or_key(monkeypatch):
     photo_storage.reset_for_tests()
-    for k in ("S3_ENDPOINT", "MINIO_ENDPOINT", "S3_ACCESS_KEY", "MINIO_ACCESS_KEY", "S3_SECRET_KEY", "MINIO_SECRET_KEY"):
+    for k in _STORE_ENV:
         monkeypatch.delenv(k, raising=False)
     assert photo_storage.from_env() is None
     photo_storage.reset_for_tests()
     monkeypatch.setenv("MINIO_ENDPOINT", "storage:9000")
-    monkeypatch.setenv("MINIO_ACCESS_KEY", "ak")
-    monkeypatch.setenv("MINIO_SECRET_KEY", "sk")
+    monkeypatch.setenv("VEXA_PHOTOS_S3_ACCESS_KEY", "ak")
+    monkeypatch.setenv("VEXA_PHOTOS_S3_SECRET_KEY", "sk")
     assert isinstance(photo_storage.from_env(), photo_storage.S3Objects)
+    photo_storage.reset_for_tests()
+
+
+def test_the_store_never_uses_the_root_pair_or_the_recordings_key(monkeypatch):
+    """admin-api's reach is its own photos account. The storage root pair (MINIO_*) and the
+    recordings key (S3_*) in its environment open no store, and with its own pair set they are not
+    the key it signs with."""
+    photo_storage.reset_for_tests()
+    for k in _STORE_ENV:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("MINIO_ENDPOINT", "storage:9000")
+    for k in ("S3_ACCESS_KEY", "MINIO_ACCESS_KEY"):
+        monkeypatch.setenv(k, "root-ak")
+    for k in ("S3_SECRET_KEY", "MINIO_SECRET_KEY"):
+        monkeypatch.setenv(k, "root-sk")
+    assert photo_storage.from_env() is None
+    photo_storage.reset_for_tests()
+    monkeypatch.setenv("VEXA_PHOTOS_S3_ACCESS_KEY", "photos-ak")
+    monkeypatch.setenv("VEXA_PHOTOS_S3_SECRET_KEY", "photos-sk")
+    store = photo_storage.from_env()
+    assert (store._ak, store._sk) == ("photos-ak", "photos-sk")
     photo_storage.reset_for_tests()
 
 

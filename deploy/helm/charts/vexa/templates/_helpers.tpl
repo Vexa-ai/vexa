@@ -700,6 +700,30 @@ active: {{ and .Values.agentApi.enabled (ne ($s3.existingSecret | default "" | t
 {{- end -}}
 
 {{/*
+People's photos (admin-api, UI 15g). The bytes live in storage.s3's endpoint and bucket under
+person-photos/, signed with admin-api's OWN key (adminApi.photos.existingSecret), scoped by the
+operator to <bucket>/person-photos/* — never the recordings key. `active` only when that key is named
+and the store is configured; otherwise there are no photos (initials). Nil-safe for --reuse-values.
+*/}}
+{{- define "vexa.adminPhotos" -}}
+{{- $p := (.Values.adminApi | default dict).photos | default dict -}}
+{{- $s3 := include "vexa.s3" . | fromYaml -}}
+{{- $sec := $p.existingSecret | default "" | toString | trim -}}
+existingSecret: {{ $sec | quote }}
+accessKeyIdKey: {{ $p.accessKeyIdKey | default "AWS_ACCESS_KEY_ID" | quote }}
+secretAccessKeyKey: {{ $p.secretAccessKeyKey | default "AWS_SECRET_ACCESS_KEY" | quote }}
+active: {{ and .Values.meetingApi.enabled (ne ($s3.existingSecret | default "" | toString) "") (ne $sec "") }}
+{{- end -}}
+
+{{- define "vexa.adminPhotos.validate" -}}
+{{- $p := include "vexa.adminPhotos" . | fromYaml -}}
+{{- $s3 := include "vexa.s3" . | fromYaml -}}
+{{- if and $p.existingSecret (eq $p.existingSecret ($s3.existingSecret | default "" | toString)) -}}
+{{- fail "adminApi.photos.existingSecret names the recordings key Secret (storage.s3.existingSecret). admin-api's photos need their own key pair, scoped to <bucket>/person-photos/* (list, get, put, delete)." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Corporate TLS inspection: global.extraCA (a ConfigMap OR a Secret holding the PEM root CA, under
 `key`). When set, every Vexa workload Pod — the chart's Deployments and Jobs, and through the runtime
 (RUNTIME_K8S_EXTRA_CA) every bot and agent worker Pod it spawns — gets:

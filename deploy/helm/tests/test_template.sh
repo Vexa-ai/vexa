@@ -808,6 +808,23 @@ done
 if grep -A1 -E 'name: (S3|MINIO)_(ACCESS|SECRET)_KEY$' <<< "$MA" | has 'value:'; then
   echo "  FAIL: a storage credential is rendered as a literal value"; fail=1
 else echo "  OK: no storage credential rendered as a literal value"; fi
+# People's photos: admin-api signs with its OWN key (adminApi.photos.existingSecret), never the
+# recordings key and never a root pair. Unset ⇒ no photos and no storage credential on admin-api;
+# named ⇒ only that Secret; the recordings key Secret named there is refused at render.
+AD_OFF="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-admin-api.yaml)"
+if ! grep -qE 'name: (S3|MINIO|VEXA_PHOTOS_S3|ROOT)_(ACCESS|SECRET)_KEY$' <<< "$AD_OFF" && ! grep -q 's3-fixture-credentials' <<< "$AD_OFF"; then
+  echo "  OK: admin-api holds no storage credential when no photos key is named"
+else echo "  FAIL: admin-api holds a storage credential without adminApi.photos.existingSecret"; fail=1; fi
+AD_ON="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set adminApi.photos.existingSecret=vexa-photos-s3 --show-only templates/deployment-admin-api.yaml)"
+if grep -A5 'name: VEXA_PHOTOS_S3_ACCESS_KEY$' <<< "$AD_ON" | tr -d '\n' | has -E 'secretKeyRef:[[:space:]]+name: "vexa-photos-s3"[[:space:]]+key: "AWS_ACCESS_KEY_ID"' \
+   && grep -A5 'name: VEXA_PHOTOS_S3_SECRET_KEY$' <<< "$AD_ON" | tr -d '\n' | has -E 'secretKeyRef:[[:space:]]+name: "vexa-photos-s3"[[:space:]]+key: "AWS_SECRET_ACCESS_KEY"' \
+   && grep -A1 'name: MINIO_BUCKET$' <<< "$AD_ON" | has -F 'value: "vexa-recordings"' \
+   && ! grep -qE 'name: (S3|MINIO|ROOT)_(ACCESS|SECRET)_KEY$' <<< "$AD_ON" && ! grep -q 's3-fixture-credentials' <<< "$AD_ON"; then
+  echo "  OK: admin-api reads its photos key from adminApi.photos.existingSecret, in the recordings bucket, and no recordings or root key"
+else echo "  FAIL: admin-api's photos wiring is not its own key"; fail=1; fi
+if ! helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set adminApi.photos.existingSecret=s3-fixture-credentials >/dev/null 2>&1; then
+  echo "  OK: rendering refuses the recordings key Secret as admin-api's photos key"
+else echo "  FAIL: adminApi.photos.existingSecret may name the recordings key"; fail=1; fi
 # The boto3 shared-config file: path-style by default, virtual when forcePathStyle=false, and a CA
 # bundle only when one is named (ConfigMap or Secret, mounted read-only at the path it names).
 CM="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/configmap-s3-client.yaml)"
@@ -2052,6 +2069,7 @@ tb "extraCA reaches the model proxy and signals (both call a model through the i
 X_MIG="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" "${WS[@]}" --set agentApi.workspaces.s3.migrate.enabled=true --set global.extraCA.secret=corp-ca,global.extraCA.key=root.pem --show-only templates/job-workspaces-s3-migrate.yaml)"
 tb "extraCA reaches the workspace-store migration Job beside its own S3 CA" 'grep -q "name: vexa-ca-bundle" <<< "$X_MIG" && grep -q "name: workspace-s3-ca" <<< "$X_MIG" && grep -A1 "name: SSL_CERT_FILE" <<< "$X_MIG" | has ca-bundle.crt'
 X_ADM="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --show-only templates/deployment-admin-api.yaml \
+  --set adminApi.photos.existingSecret=vexa-photos-s3 \
   --set terminal.oidc.issuer=https://adfs.example.test/adfs --set terminal.oidc.clientId=vexa-terminal --set terminal.oidc.existingSecret=vexa-oidc \
   --set terminal.oidc.caBundle.configMap=oidc-ca --set global.extraCA.configMap=corp-ca,global.extraCA.key=root.pem)"
 tb "admin-api: extraCA sits beside its photo store and OIDC CA under one volumes key and one volumeMounts key" 'python3 -c "

@@ -85,9 +85,21 @@ if ! grep -qE "^VEXA_SESSIONS_S3_ACCESS_KEY=.+" "$env_file"; then
 else
   echo "kept VEXA_SESSIONS_S3_ACCESS_KEY"
 fi
+# admin-api's own photos key: storage-init scopes it to person-photos/ in the recordings bucket.
+if ! grep -qE "^VEXA_PHOTOS_S3_ACCESS_KEY=.+" "$env_file"; then
+  v="vexa-photos-$(openssl rand -hex 12)"
+  if grep -qE "^VEXA_PHOTOS_S3_ACCESS_KEY=" "$env_file"; then
+    sed -i.bak "s|^VEXA_PHOTOS_S3_ACCESS_KEY=.*|VEXA_PHOTOS_S3_ACCESS_KEY=${v}|" "$env_file" && rm -f "$env_file.bak"
+  else
+    echo "VEXA_PHOTOS_S3_ACCESS_KEY=${v}" >> "$env_file"
+  fi
+  echo "minted VEXA_PHOTOS_S3_ACCESS_KEY"
+else
+  echo "kept VEXA_PHOTOS_S3_ACCESS_KEY"
+fi
 for key in INTERNAL_API_SECRET RUNTIME_API_TOKEN DB_PASSWORD REDIS_PASSWORD VEXA_MCP_DELEGATION_SECRET VEXA_MODEL_PROXY_SECRET \
            VEXA_DISPATCH_SIGNING_KEY VEXA_FLOWS_API_KEY VEXA_FLOWS_SERVICE_KEY VEXA_FLOWS_TIMELINE_KEY VEXA_FLOWS_CRM_PUBLISH_KEY NEXTAUTH_SECRET \
-           VEXA_SESSIONS_DB_PASSWORD VEXA_SESSIONS_S3_SECRET_KEY; do
+           VEXA_SESSIONS_DB_PASSWORD VEXA_SESSIONS_S3_SECRET_KEY VEXA_PHOTOS_S3_SECRET_KEY; do
   if grep -qE "^${key}=\s*$" "$env_file"; then
     v="$(mint)"
     # portable in-place edit (GNU and BSD sed)

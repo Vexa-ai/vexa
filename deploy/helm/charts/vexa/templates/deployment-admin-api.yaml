@@ -1,6 +1,7 @@
 {{- if .Values.adminApi.enabled }}
 {{- $s3 := include "vexa.s3" . | fromYaml }}
-{{- $photos := and .Values.meetingApi.enabled $s3.existingSecret }}
+{{- $ph := include "vexa.adminPhotos" . | fromYaml }}
+{{- $photos := $ph.active }}
 {{- $oidc := .Values.terminal.oidc | default dict }}
 {{- $oidcCa := and $oidc.issuer (or ($oidc.caBundle | default dict).configMap ($oidc.caBundle | default dict).secret) }}
 apiVersion: apps/v1
@@ -111,22 +112,23 @@ spec:
               value: {{ .Values.adminApi.adminAccount | default "" | quote }}
             {{- if $photos }}
             # People's photos (UI 15g): the bytes go to storage.s3 — the recordings store and bucket —
-            # under person-photos/<user id>/, with the names meeting-api reads. Without it there are
-            # no photos (initials).
+            # under person-photos/<user id>/, signed with admin-api's OWN key (adminApi.photos), scoped
+            # to that prefix. admin-api never holds the recordings key. Without it there are no photos
+            # (initials).
             - name: S3_ENDPOINT
               value: {{ $s3.endpoint | quote }}
             - name: MINIO_BUCKET
               value: {{ $s3.bucket | quote }}
-            - name: S3_ACCESS_KEY
+            - name: VEXA_PHOTOS_S3_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ $s3.existingSecret | quote }}
-                  key: {{ $s3.accessKeyIdKey | quote }}
-            - name: S3_SECRET_KEY
+                  name: {{ $ph.existingSecret | quote }}
+                  key: {{ $ph.accessKeyIdKey | quote }}
+            - name: VEXA_PHOTOS_S3_SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ $s3.existingSecret | quote }}
-                  key: {{ $s3.secretAccessKeyKey | quote }}
+                  name: {{ $ph.existingSecret | quote }}
+                  key: {{ $ph.secretAccessKeyKey | quote }}
             # boto3 reads the addressing style, signing region and CA bundle from this file.
             - name: AWS_CONFIG_FILE
               value: /etc/vexa/s3/config

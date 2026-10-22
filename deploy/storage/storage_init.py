@@ -19,6 +19,14 @@ Runs inside the meeting-api image, which already carries boto3. Safe to re-run.
    storage, its own account with a bucket policy on that bucket alone; then prove it: read, write and
    delete in its bucket allowed, every read, list, write and delete in the recordings bucket denied.
    On an operator's own S3 the operator makes the bucket and key; only object I/O is proved.
+5. People's photos (admin-api), when VEXA_PHOTOS_S3_ACCESS_KEY / _SECRET_KEY are set -> on this
+   storage, admin-api's own account and a bucket-policy grant on the recordings bucket's
+   ``person-photos/`` prefix alone (list, read, write, delete), then prove it: all four allowed in the
+   prefix, and every read, list, write and delete elsewhere in the bucket (recordings/ included), the
+   session store's bucket and the bot userdata prefix denied. Photos already stored there stay where
+   they are. On an operator's own S3 the operator makes and scopes the key; I/O under the prefix is
+   proved. versitygw holds ONE policy per bucket, so when the bots' userdata prefix lives in the same
+   bucket both grants go into that one policy.
 
 Exit codes: 0 ready - 1 the stack must not start (message says why).
 """
@@ -360,6 +368,120 @@ def prepare_sessions(storage_ep: str, recordings: str) -> int:
     return 0
 
 
+#: Where admin-api keeps people's photos (admin_api/app/photo_storage.py PREFIX), and all it may do there.
+PHOTOS_PREFIX = "person-photos"
+PHOTOS_ACTIONS = ("s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject")
+
+
+def photos_statements(bucket: str, principal: str) -> list[dict]:
+    """admin-api's account: list, read, write and delete under ``person-photos/``, and nothing else."""
+    return [
+        {"Sid": "VexaPhotosList", "Effect": "Allow", "Principal": {"AWS": [principal]},
+         "Action": ["s3:ListBucket"], "Resource": [f"arn:aws:s3:::{bucket}"],
+         "Condition": {"StringLike": {"s3:prefix": [f"{PHOTOS_PREFIX}/*"]}}},
+        {"Sid": "VexaPhotosObjects", "Effect": "Allow", "Principal": {"AWS": [principal]},
+         "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+         "Resource": [f"arn:aws:s3:::{bucket}/{PHOTOS_PREFIX}/*"]},
+    ]
+
+
+def bucket_policy(statements: list[dict]) -> dict:
+    return {"Version": "2012-10-17", "Statement": statements}
+
+
+def prove_photos_scope(endpoint: str, ak: str, sk: str, bucket: str, root, others: "list[tuple[str, str]]") -> list[str]:
+    """The photos key: write, read, list and delete (one and many) under person-photos/ allowed. A probe
+    under recordings/, one at the bucket's root and one in each of ``others`` (bucket, key prefix):
+    read, overwrite and delete denied, and listings of recordings/ and the bucket denied. The foreign
+    probes are written and removed by root."""
+    c = client(endpoint, ak, sk)
+    nonce = uuid4().hex
+    own = f"{PHOTOS_PREFIX}/.vexa-storage-init-{nonce}"
+    foreign = [(bucket, f"recordings/.vexa-storage-init-{nonce}"), (bucket, f".vexa-storage-init/{nonce}/not-photos")]
+    foreign += [(b, f"{p.strip('/') + '/' if p.strip('/') else ''}.vexa-storage-init-{nonce}") for b, p in others]
+    for b, k in foreign:
+        root.put_object(Bucket=b, Key=k, Body=b"not a photo")
+    bad: list[str] = []
+
+    def allowed(label, fn):
+        try:
+            fn()
+        except ClientError as e:
+            bad.append(f"{label} was denied ({code_of(e)}) but must be allowed")
+
+    def denied(label, fn):
+        try:
+            fn()
+            bad.append(f"{label} was allowed but must be denied")
+        except ClientError:
+            pass
+
+    allowed("write a photo", lambda: c.put_object(Bucket=bucket, Key=own, Body=b"photo"))
+    allowed("read a photo", lambda: c.get_object(Bucket=bucket, Key=own)["Body"].read())
+    allowed("list person-photos/", lambda: c.list_objects_v2(Bucket=bucket, Prefix=f"{PHOTOS_PREFIX}/"))
+    allowed("delete a photo", lambda: c.delete_object(Bucket=bucket, Key=own))
+    allowed("write a second photo", lambda: c.put_object(Bucket=bucket, Key=own + "-2", Body=b"photo"))
+
+    def delete_many():
+        r = c.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": own + "-2"}]})
+        if r.get("Errors"):
+            raise ClientError({"Error": {"Code": r["Errors"][0].get("Code", "AccessDenied")}}, "DeleteObjects")
+    allowed("delete a person's photos in one call", delete_many)
+    denied("list recordings/", lambda: c.list_objects_v2(Bucket=bucket, Prefix="recordings/"))
+    denied("list the whole bucket", lambda: c.list_objects_v2(Bucket=bucket))
+    for b, k in foreign:
+        where = f"s3://{b}/{k.rsplit('/', 1)[0] + '/' if '/' in k else ''}"
+        denied(f"read in {where}", lambda b=b, k=k: c.get_object(Bucket=b, Key=k)["Body"].read())
+        denied(f"overwrite in {where}", lambda b=b, k=k: c.put_object(Bucket=b, Key=k, Body=b"x"))
+        denied(f"delete in {where}", lambda b=b, k=k: c.delete_object(Bucket=b, Key=k))
+    for b, k in foreign:
+        try:
+            if root.get_object(Bucket=b, Key=k)["Body"].read() != b"not a photo":
+                bad.append(f"s3://{b}/{k} changed during the check")
+        except ClientError:
+            bad.append(f"s3://{b}/{k} was removed during the check")
+    for b, k in foreign + [(bucket, own), (bucket, own + "-2")]:
+        try:
+            root.delete_object(Bucket=b, Key=k)
+        except ClientError:
+            pass
+    return bad
+
+
+def check_photos_io(endpoint: str, ak: str, sk: str, bucket: str) -> bool:
+    """An operator's own S3: the photos key writes, reads and deletes a probe under person-photos/."""
+    key = f"{PHOTOS_PREFIX}/.vexa-storage-init-{uuid4().hex}"
+    try:
+        c = client(endpoint, ak, sk)
+        c.put_object(Bucket=bucket, Key=key, Body=b"photo")
+        if c.get_object(Bucket=bucket, Key=key)["Body"].read() != b"photo":
+            raise ValueError("probe bytes differ")
+        c.delete_object(Bucket=bucket, Key=key)
+    except (BotoCoreError, ClientError, ValueError, OSError) as e:
+        say(f"STOP: the photos key cannot write, read and delete under s3://{bucket}/{PHOTOS_PREFIX}/ at {endpoint} ({code_of(e)})")
+        return False
+    say(f"photos key: PUT/GET/DELETE verified under s3://{bucket}/{PHOTOS_PREFIX}/ at {endpoint}")
+    return True
+
+
+def photos_key() -> "tuple[str, str] | None | int":
+    """admin-api's photos pair, None when unset, 1 when it is a root pair's (a stop)."""
+    ak = os.getenv("VEXA_PHOTOS_S3_ACCESS_KEY", "").strip()
+    sk = os.getenv("VEXA_PHOTOS_S3_SECRET_KEY", "").strip()
+    if not (ak and sk):
+        say("people's photos: no VEXA_PHOTOS_S3_ACCESS_KEY / _SECRET_KEY; admin-api shows initials")
+        return None
+    root_access = {v for v in (os.getenv("MINIO_ACCESS_KEY", ""), os.getenv("S3_ACCESS_KEY", "")) if v}
+    root_secret = {v for v in (os.getenv("MINIO_SECRET_KEY", ""), os.getenv("S3_SECRET_KEY", "")) if v}
+    if ak in root_access:
+        say("STOP: VEXA_PHOTOS_S3_ACCESS_KEY is a storage root or recordings key. admin-api's photos need their own scoped key pair.")
+        return 1
+    if sk in root_secret:
+        say("STOP: VEXA_PHOTOS_S3_SECRET_KEY is a storage root or recordings secret. admin-api's photos need their own scoped key pair.")
+        return 1
+    return ak, sk
+
+
 def main(argv: "list[str] | None" = None) -> int:
     storage_ep = os.getenv("STORAGE_ENDPOINT", "http://storage:9000").strip()
     if "--sessions-only" in (argv or []):
@@ -377,45 +499,76 @@ def main(argv: "list[str] | None" = None) -> int:
             f"Expected if that is your own S3; if this install was upgraded from MinIO, see {UPGRADE_DOC}")
     if prepare_sessions(storage_ep, bucket) != 0:
         return 1
+    photos = photos_key()
+    if photos == 1:
+        return 1
+    if photos and hostport(ep)[0] != hostport(storage_ep)[0]:
+        # Recordings (and so photos) live on an operator's own S3: the key and its scope are theirs.
+        if not check_photos_io(ep, photos[0], photos[1], bucket):
+            return 1
+        photos = None
 
     bot_ep = os.getenv("BOT_S3_ENDPOINT", "").strip()
     bot_ak, bot_sk = os.getenv("BOT_S3_ACCESS_KEY", "").strip(), os.getenv("BOT_S3_SECRET_KEY", "").strip()
-    if not (bot_ep and bot_ak and bot_sk) or hostport(bot_ep)[0] != hostport(storage_ep)[0]:
+    bots = bool(bot_ep and bot_ak and bot_sk) and hostport(bot_ep)[0] == hostport(storage_ep)[0]
+    if not (bots or photos):
         return 0
     prefix = os.getenv("BOT_USERDATA_S3_PATH", "").strip().strip("/")
     bot_bucket = os.getenv("BOT_S3_BUCKET", "").strip() or bucket
     root_ak, root_sk = os.getenv("MINIO_ACCESS_KEY", ""), os.getenv("MINIO_SECRET_KEY", "")
-    if not prefix:
-        say("STOP: BOT_S3_* point at this storage but BOT_USERDATA_S3_PATH is empty; the scoped account needs its own prefix.")
-        return 1
-    # Neither half of the bots' pair may be a root pair's (this storage's or an operator S3's):
-    # meeting-api refuses such a spawn too. Names only — never a value.
-    root_access = {v for v in (root_ak, os.getenv("S3_ACCESS_KEY", "")) if v}
-    root_secret = {v for v in (root_sk, os.getenv("S3_SECRET_KEY", "")) if v}
-    if bot_ak in root_access:
-        say("STOP: BOT_S3_ACCESS_KEY is the storage root key. Authenticated bots need their own scoped key pair.")
-        return 1
-    if bot_sk in root_secret:
-        say("STOP: BOT_S3_SECRET_KEY is a storage root secret. Authenticated bots need their own scoped key pair.")
-        return 1
+    if bots:
+        if not prefix:
+            say("STOP: BOT_S3_* point at this storage but BOT_USERDATA_S3_PATH is empty; the scoped account needs its own prefix.")
+            return 1
+        if prefix == PHOTOS_PREFIX or prefix.startswith(PHOTOS_PREFIX + "/"):
+            say(f"STOP: BOT_USERDATA_S3_PATH is under {PHOTOS_PREFIX}/, admin-api's photos prefix. Bot userdata needs its own prefix.")
+            return 1
+        # Neither half of the bots' pair may be a root pair's (this storage's or an operator S3's):
+        # meeting-api refuses such a spawn too. Names only — never a value.
+        root_access = {v for v in (root_ak, os.getenv("S3_ACCESS_KEY", "")) if v}
+        root_secret = {v for v in (root_sk, os.getenv("S3_SECRET_KEY", "")) if v}
+        if bot_ak in root_access:
+            say("STOP: BOT_S3_ACCESS_KEY is the storage root key. Authenticated bots need their own scoped key pair.")
+            return 1
+        if bot_sk in root_secret:
+            say("STOP: BOT_S3_SECRET_KEY is a storage root secret. Authenticated bots need their own scoped key pair.")
+            return 1
     rc = client(storage_ep, root_ak, root_sk)
     if not wait_ready(rc, f"storage at {storage_ep}"):
         return 1
-    say(f"bucket '{bot_bucket}' {ensure_bucket(rc, bot_bucket)} for bot userdata")
-    say(f"scoped userdata account {ensure_scoped_account(storage_ep, root_ak, root_sk, bot_ak, bot_sk)}")
-    rc.put_bucket_policy(Bucket=bot_bucket, Policy=json.dumps(userdata_policy(bot_bucket, prefix, bot_ak)))
+    # versitygw holds one policy per bucket: every grant on a bucket goes into that bucket's one policy.
+    grants: dict[str, list[dict]] = {}
+    if photos:
+        say(f"people's photos account {ensure_scoped_account(storage_ep, root_ak, root_sk, photos[0], photos[1])}")
+        grants.setdefault(bucket, []).extend(photos_statements(bucket, photos[0]))
+    if bots:
+        say(f"bucket '{bot_bucket}' {ensure_bucket(rc, bot_bucket)} for bot userdata")
+        say(f"scoped userdata account {ensure_scoped_account(storage_ep, root_ak, root_sk, bot_ak, bot_sk)}")
+        grants.setdefault(bot_bucket, []).extend(userdata_policy(bot_bucket, prefix, bot_ak)["Statement"])
+    for b, statements in grants.items():
+        rc.put_bucket_policy(Bucket=b, Policy=json.dumps(bucket_policy(statements)))
+    sessions_bucket = os.getenv("VEXA_SESSIONS_S3_BUCKET", "").strip() or "vexa-sessions"
+    others = [(bot_bucket, prefix)] if bots else []
+    if os.getenv("VEXA_SESSIONS_S3_ACCESS_KEY", "").strip():
+        others.append((sessions_bucket, ""))
     bad = []
     for _ in range(10):  # the gateway caches IAM for a short while; give a fresh account a moment
-        bad = prove_scope(storage_ep, bot_ak, bot_sk, bot_bucket, prefix, rc)
+        bad = []
+        if bots:
+            bad += prove_scope(storage_ep, bot_ak, bot_sk, bot_bucket, prefix, rc)
+        if photos:
+            bad += prove_photos_scope(storage_ep, photos[0], photos[1], bucket, rc, others)
         if not bad:
             break
         time.sleep(2)
     if bad:
-        say("STOP: the scoped userdata account is not limited as required: " + "; ".join(bad))
+        say("STOP: a scoped account is not limited as required: " + "; ".join(bad))
         return 1
-    say(f"scoped userdata account read-only on s3://{bot_bucket}/{prefix}/ (list and read allowed; writes, recordings and the rest denied)")
+    if bots:
+        say(f"scoped userdata account read-only on s3://{bot_bucket}/{prefix}/ (list and read allowed; writes, recordings and the rest denied)")
+    if photos:
+        say(f"people's photos account scoped to s3://{bucket}/{PHOTOS_PREFIX}/ (list, read, write, delete; recordings, the rest of the bucket and other buckets denied)")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

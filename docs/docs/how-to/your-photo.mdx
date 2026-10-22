@@ -25,7 +25,10 @@ appears only when they join Vexa and bring their own.
 
 - **Identity keeps the photo.** admin-api is the only service that writes it. For each source
   (upload, provider, Gravatar) it keeps one image in the install's object store, under
-  `person-photos/<account>/` in the same bucket recordings use. Its own `person_photos` table holds
+  `person-photos/<account>/` in the same bucket recordings use. It signs with its own storage key,
+  limited to `person-photos/`: it can read no recording, no chat file and no bot session (on
+  Compose `make up` mints it and storage-init scopes it; on Helm you name it in
+  `adminApi.photos.existingSecret`; Lite has no photos). Its own `person_photos` table holds
   only the object's key, type and checksum, so the database every sign-in check reads carries no
   images. It accepts only a PNG, JPEG or WebP of at most 200 KB and at most 4096 pixels on each
   side. It checks the bytes themselves, so the claimed type and the file name don't count. SVG and

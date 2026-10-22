@@ -539,6 +539,18 @@ adminApi:
   # already signed in as an everyday account is never turned into the admin account. Empty = nobody
   # writes `_global` (everybody reads it). Replaces agentApi.globalAdminSubjects, which is retired.
   adminAccount: ""
+  # People's photos (UI 15g): admin-api keeps them in storage.s3's bucket under person-photos/, with
+  # its OWN key pair, never the recordings key. Make a key limited to <bucket>/person-photos/*
+  # (s3:ListBucket with prefix person-photos/*, s3:GetObject, s3:PutObject, s3:DeleteObject), put it in
+  # a Secret and name it here:
+  #   kubectl -n vexa create secret generic vexa-photos-s3 \
+  #     --from-literal=AWS_ACCESS_KEY_ID=… --from-literal=AWS_SECRET_ACCESS_KEY=…
+  # Empty ⇒ no photos (initials); photos already stored stay in the bucket and show again once a key
+  # is named. Rendering refuses storage.s3.existingSecret here.
+  photos:
+    existingSecret: ""
+    accessKeyIdKey: AWS_ACCESS_KEY_ID
+    secretAccessKeyKey: AWS_SECRET_ACCESS_KEY
   extraEnv: []
 
 # Meetings + recordings (compose: meeting-api → :8080).

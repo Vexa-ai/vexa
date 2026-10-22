@@ -5,11 +5,13 @@ images. The bytes go to the install's object store — the same S3 service and b
 under their own prefix ``person-photos/<user id>/`` — and the ``person_photos`` row keeps the key,
 the SHA-256 and the type. admin-api is the only writer of that prefix.
 
-The store is configured the way meeting-api's is, from the same names: ``S3_ENDPOINT`` else
-``MINIO_ENDPOINT`` (a bare ``host:port`` is http, https with ``MINIO_SECURE=true``), ``S3_ACCESS_KEY``
-/ ``S3_SECRET_KEY`` else ``MINIO_ACCESS_KEY`` / ``MINIO_SECRET_KEY``, and ``MINIO_BUCKET`` (default
-``vexa``). With no endpoint or key there is no store: a photo cannot be set (503) and none is shown;
-initials are drawn instead.
+The store's location is meeting-api's: ``S3_ENDPOINT`` else ``MINIO_ENDPOINT`` (a bare ``host:port``
+is http, https with ``MINIO_SECURE=true``) and ``MINIO_BUCKET`` (default ``vexa``). The key is
+admin-api's own: ``VEXA_PHOTOS_S3_ACCESS_KEY`` / ``VEXA_PHOTOS_S3_SECRET_KEY``, an account scoped to
+read, write, list and delete under ``person-photos/`` and nothing else (on the bundled storage,
+storage-init makes it and proves the limit). admin-api never holds the store's root pair or the
+recordings key. With no endpoint or key there is no store: a photo cannot be set (503) and none is
+shown; initials are drawn instead.
 
 Keys are made here only (``key_for``) and checked on every call, so nothing a caller supplies can
 name an object outside the prefix.
@@ -125,8 +127,8 @@ def from_env() -> Optional[ObjectStore]:
     if "store" in _configured:
         return _configured["store"]
     ep = _endpoint()
-    ak = (os.getenv("S3_ACCESS_KEY") or os.getenv("MINIO_ACCESS_KEY") or "").strip()
-    sk = (os.getenv("S3_SECRET_KEY") or os.getenv("MINIO_SECRET_KEY") or "").strip()
+    ak = (os.getenv("VEXA_PHOTOS_S3_ACCESS_KEY") or "").strip()
+    sk = (os.getenv("VEXA_PHOTOS_S3_SECRET_KEY") or "").strip()
     bucket = (os.getenv("MINIO_BUCKET") or "vexa").strip()
     store = S3Objects(bucket=bucket, endpoint=ep, access_key=ak, secret_key=sk) if ep and ak and sk else None
     _configured["store"] = store

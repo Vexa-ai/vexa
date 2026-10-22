@@ -295,22 +295,22 @@
    "class": "defaulted",
    "default": "(unset \u2014 falls back to MINIO_ENDPOINT/MINIO_SECURE)",
    "targets": ["compose", "helm"],
-   "description": "people's photos (app/photo_storage.py): the S3 endpoint the photo bytes are written to, under person-photos/<user id>/ — the same store meeting-api writes recordings to (helm: storage.s3.endpoint). No endpoint or key = no photos; initials are drawn."
+   "description": "people's photos (app/photo_storage.py): the S3 endpoint the photo bytes are written to, under person-photos/<user id>/ — the same store meeting-api writes recordings to (helm: storage.s3.endpoint). No endpoint or photos key = no photos; initials are drawn."
   },
   {
-   "key": "S3_ACCESS_KEY",
+   "key": "VEXA_PHOTOS_S3_ACCESS_KEY",
    "class": "defaulted",
-   "default": "(unset \u2014 falls back to MINIO_ACCESS_KEY)",
+   "default": "(unset \u2014 no photos)",
    "targets": ["compose", "helm"],
-   "description": "people's photos (app/photo_storage.py): access key for that store (helm: storage.s3.existingSecret)"
+   "description": "people's photos (app/photo_storage.py): admin-api's OWN access key for the photo store, scoped to person-photos/ in the recordings bucket (list, read, write and delete there; nothing else). Compose: mint-dev-env.sh mints it, storage-init makes the account on the bundled storage and proves the limit. Helm: adminApi.photos.existingSecret. Never the storage root pair or the recordings key; unset = no photos (initials)."
   },
   {
-   "key": "S3_SECRET_KEY",
+   "key": "VEXA_PHOTOS_S3_SECRET_KEY",
    "class": "defaulted",
-   "default": "(unset \u2014 falls back to MINIO_SECRET_KEY)",
+   "default": "(unset \u2014 no photos)",
    "secret": true,
    "targets": ["compose", "helm"],
-   "description": "people's photos (app/photo_storage.py): secret key for that store (helm: storage.s3.existingSecret)"
+   "description": "people's photos (app/photo_storage.py): the secret of admin-api's own photos key (VEXA_PHOTOS_S3_ACCESS_KEY). Helm: adminApi.photos.existingSecret."
   },
   {
    "key": "MINIO_ENDPOINT",
@@ -318,21 +318,6 @@
    "default": "(unset)",
    "targets": ["compose", "lite"],
    "description": "people's photos (app/photo_storage.py): the bundled store's host:port (or a full URL) when S3_ENDPOINT is unset; https with MINIO_SECURE=true"
-  },
-  {
-   "key": "MINIO_ACCESS_KEY",
-   "class": "defaulted",
-   "default": "(unset)",
-   "targets": ["compose", "lite"],
-   "description": "people's photos (app/photo_storage.py): the bundled store's access key when S3_ACCESS_KEY is unset"
-  },
-  {
-   "key": "MINIO_SECRET_KEY",
-   "class": "defaulted",
-   "default": "(unset)",
-   "secret": true,
-   "targets": ["compose", "lite"],
-   "description": "people's photos (app/photo_storage.py): the bundled store's secret key when S3_SECRET_KEY is unset"
   },
   {
    "key": "MINIO_SECURE",

@@ -143,6 +143,8 @@ services:
     # Any failure holds meeting-api back. When authenticated bots point BOT_S3_ENDPOINT here, also
     # creates their scoped account and a bucket policy that makes it read-only on
     # BOT_USERDATA_S3_PATH, then proves it (list/read allowed; write, delete and the rest denied).
+    # Likewise admin-api's photos account (VEXA_PHOTOS_S3_*): list/read/write/delete on person-photos/
+    # only, in the same bucket policy when the buckets coincide.
     build:
       context: ../..
       dockerfile: core/meetings/services/meeting-api/Dockerfile
@@ -171,6 +173,9 @@ services:
       - VEXA_SESSIONS_S3_BUCKET=${VEXA_SESSIONS_S3_BUCKET:-vexa-sessions}
       - VEXA_SESSIONS_S3_ACCESS_KEY=${VEXA_SESSIONS_S3_ACCESS_KEY:-}
       - VEXA_SESSIONS_S3_SECRET_KEY=${VEXA_SESSIONS_S3_SECRET_KEY:-}
+      # admin-api's own photos account: made here on the bundled storage, scoped to person-photos/.
+      - VEXA_PHOTOS_S3_ACCESS_KEY=${VEXA_PHOTOS_S3_ACCESS_KEY:-}
+      - VEXA_PHOTOS_S3_SECRET_KEY=${VEXA_PHOTOS_S3_SECRET_KEY:-}
     volumes:
       - ../storage:/vexa-storage-tools:ro
     networks: [vexa]
@@ -400,14 +405,15 @@ services:
       - VEXA_FLOWS_API_URL=${VEXA_FLOWS_API_URL:-}
       - VEXA_FLOWS_API_KEY=${VEXA_FLOWS_API_KEY:-}
       # People's photos (UI 15g): the bytes go to the install's object store — the same service and
-      # bucket recordings use, under person-photos/<user id>/ — with the same names meeting-api reads.
-      # Unset = no photos (initials). Gravatar at sign-in is on unless VEXA_PERSON_GRAVATAR=false.
+      # bucket recordings use, under person-photos/<user id>/. admin-api signs with its OWN key,
+      # VEXA_PHOTOS_S3_* (mint-dev-env.sh mints it; storage-init scopes it to person-photos/ and
+      # proves recordings, sessions and bot userdata are refused). It never holds the storage root
+      # pair or the recordings key. Unset = no photos (initials). Gravatar at sign-in is on unless
+      # VEXA_PERSON_GRAVATAR=false.
       - S3_ENDPOINT=${S3_ENDPOINT:-}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-storage:9000}
-      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-}
-      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-}
+      - VEXA_PHOTOS_S3_ACCESS_KEY=${VEXA_PHOTOS_S3_ACCESS_KEY:-}
+      - VEXA_PHOTOS_S3_SECRET_KEY=${VEXA_PHOTOS_S3_SECRET_KEY:-}
       - MINIO_BUCKET=${MINIO_BUCKET:-vexa}
       - MINIO_SECURE=${MINIO_SECURE:-false}
       - VEXA_PERSON_GRAVATAR=${VEXA_PERSON_GRAVATAR:-true}
