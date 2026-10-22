@@ -11,7 +11,7 @@ camera is off, and the invite screen.
 
 | Kind | Shown |
 |---|---|
-| Workspace | Its own image → its company's logo → a monogram and colour from its id |
+| Workspace | Its own image → the standard icon a person picked → its company's logo → its standard icon |
 | Person who uses Vexa | Their photo → a monogram and colour |
 | Person in the CRM who does not use Vexa | Initials, plus their company's logo as a small badge. Never a face. |
 | Company | Its logo → a monogram |
@@ -27,8 +27,16 @@ the README's front matter `icon:`. It moves with the workspace through renames, 
 A README with `domain: example.com` binds the workspace to that company: with no image of its own,
 the workspace shows that company's logo.
 
-**Changing it.** Open the workspace, then **⋯ → Change image…**, or click its image. You can upload
-a file (SVG, PNG or WebP, up to 200 KB), use the company's logo, or reset it.
+**Its standard icon.** Every workspace also has one icon from a fixed set of outline icons (lucide,
+ISC), named in the README's front matter as `glyph:` with `glyph_by:` (`auto`, `model` or `person`).
+A new workspace gets the icon its name matches, else a neutral one. A workspace with nothing stored
+shows the icon its README and slug match. The icon shows wherever the workspace has no image of its
+own, drawn in the theme's colours.
+
+**Changing it.** Open the workspace, then **⋯ → Change image…**, or click its image. You can pick a
+standard icon from the grid, upload a file (SVG, PNG or WebP, up to 200 KB), use the company's logo,
+or reset it. An icon you pick replaces an uploaded image. In a shared workspace the agent cannot set
+the standard icon; it proposes an image instead.
 
 **The agent does it unasked.** When a workspace is created or shared, or still shows only its
 monogram, the agent gives it an image:
@@ -42,7 +50,9 @@ In a private workspace the agent sets it and says so in one line. In a shared wo
 agent never replaces an image a person chose, and in a shared workspace it cannot reset one.
 
 The agent's tools are `workspace_icon_state(slug)` and
-`workspace_icon_set(slug, site | url | use="company_logo" | svg | data_b64 + type | reset)`.
+`workspace_icon_set(slug, site | url | use="company_logo" | svg | data_b64 + type | reset | glyph)`.
+`glyph` names a standard icon, or `auto` picks one from the workspace's name and purpose (a small
+model is asked only when no keyword matches, and its answer must be a listed name).
 
 ### For operators: the backfill
 
@@ -62,10 +72,12 @@ company-logo fallback, `use="company_logo"`, a `site` or `url` that a person or 
 
 1. **Read.** `GET /api/workspaces/{slug}/identity/icon` returns the workspace's own image, else its
    company's logo through the media proxy (`/api/home/media`, fetched and cached by the server),
-   else 404, and the client draws the monogram. It uses the same access check as reading the
+   else its standard icon, built on the server from the fixed list as an SVG carrying
+   `data-vexa-glyph="<name>"` (an icon a person picked comes before the company logo). A readable
+   workspace never answers 404 here. It uses the same access check as reading the
    workspace's pages, and a browser keeps the image privately for up to a minute.
-   `GET …/identity/state` says where the image comes from (`workspace`, `company` or none) and
-   whether a proposal is waiting.
+   `GET …/identity/state` says where the image comes from (`workspace`, `company` or `glyph`), which
+   icon and who chose it, and whether a proposal is waiting.
 2. **Write.** `PUT /api/workspaces/{slug}/identity/icon` checks the bytes, writes `.vexa/icon.*`,
    updates the README's `icon:` and commits both. An owner or contributor may write it. A reader
    may not.
