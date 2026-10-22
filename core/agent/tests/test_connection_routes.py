@@ -264,3 +264,36 @@ def test_the_connection_providers_are_exactly_the_brokers_catalog(client):
     assert accepted == broker
     r = client.post('/api/connections/request', json={'provider': 'github'}, headers=HUMAN)
     assert r.status_code == 422 and 'provider' in json.dumps(r.json())
+
+
+# ── 08S-b: the person's grant that lets their sensors read their calendar ──────────────────────
+def test_the_sensor_grant_is_the_persons_own_signed_act(client, broker):
+    r = client.post('/api/connections/sensor-grant', headers=HUMAN, json={'days': 30})
+    assert r.status_code == 200, r.text
+    assert broker[-1] == ('u1', 'POST', '/api/sensor-grants', {'days': 30})
+    client.post('/api/connections/sensor-grant', headers=HUMAN, json={'connection_id': 'b' * 32})
+    assert broker[-1][3] == {'days': 90, 'connection_id': 'b' * 32}
+    assert client.get('/api/connections/sensor-grants', headers=HUMAN).status_code == 200
+    assert broker[-1][1:3] == ('GET', '/api/sensor-grants')
+    client.post('/api/connections/sensor-grant/revoke', headers=HUMAN, json={'grant_id': 'f' * 32})
+    assert broker[-1][1:3] == ('POST', '/api/sensor-grants/' + 'f' * 32 + '/revoke')
+
+
+def test_a_worker_without_a_person_cannot_grant_but_may_revoke(client, broker):
+    before = len(broker)
+    r = client.post('/api/connections/sensor-grant', headers=WORKER, json={})
+    assert r.status_code == 403 and r.json()['detail']['reason'] == 'human_session_required'
+    assert len(broker) == before
+    # revoking only narrows: the positive control
+    assert client.post('/api/connections/sensor-grant/revoke', headers=WORKER,
+                       json={'grant_id': 'f' * 32}).status_code == 200
+
+
+def test_a_sensor_grant_never_rides_an_unsigned_call_or_a_widened_body(client, broker):
+    before = len(broker)
+    assert client.post('/api/connections/sensor-grant', headers=INTERNAL_TIER, json={}).status_code == 403
+    for bad in ({'days': 91}, {'days': 0}, {'actor': 'u2'}, {'connection_id': 'not-an-id'}):
+        assert client.post('/api/connections/sensor-grant', headers=HUMAN, json=bad).status_code == 422, bad
+    assert client.post('/api/connections/sensor-grant/revoke', headers=HUMAN,
+                       json={'grant_id': '../x'}).status_code == 422
+    assert len(broker) == before

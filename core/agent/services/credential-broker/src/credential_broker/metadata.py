@@ -3,7 +3,8 @@ broker-private HMAC key.
 
 `metadata.sqlite` holds connection metadata, the audit trail, pending OAuth states, draft
 idempotency rows (drafts and calendar changes), the drafts this broker created, each person's
-narrower connection-policy setting, the assertion nonces the replay check remembers, and `broker_meta` (one-time
+narrower connection-policy setting, the grants each person gave flows' sensors to read one
+calendar connection (`sensor_grants`), the assertion nonces the replay check remembers, and `broker_meta` (one-time
 upgrade steps the broker has completed). `open_schema` creates the
 tables and adds any column a database from an earlier release lacks; it never drops or rewrites one.
 """
@@ -22,6 +23,8 @@ CREATE TABLE IF NOT EXISTS assertion_nonces (nonce TEXT PRIMARY KEY, expires REA
 CREATE TABLE IF NOT EXISTS broker_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS drafts (draft_id TEXT PRIMARY KEY, actor TEXT NOT NULL, connection TEXT NOT NULL, created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS preferences (actor TEXT PRIMARY KEY, value TEXT NOT NULL, updated REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS sensor_grants (id TEXT PRIMARY KEY, actor TEXT NOT NULL, connection TEXT NOT NULL, scope TEXT NOT NULL, created REAL NOT NULL, expires REAL NOT NULL, revoked REAL NOT NULL DEFAULT 0, issued_via TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS sensor_grants_by_person ON sensor_grants(actor, connection);
 """
 # Columns the 0.13.2 development harness added one release at a time. Kept, with the same names and
 # defaults, so a deployment that ran the harness opens its existing metadata.sqlite unchanged.

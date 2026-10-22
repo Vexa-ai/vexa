@@ -11,6 +11,8 @@ through it the agent and the Connections panel), which must tell three cases apa
   is missing. The person reconnects in the Connections panel.
 * ``provider_error`` — the provider or service refused the request for another reason, or is down
   (an ``UpstreamFault``). Reconnecting does not help.
+* ``sensor_grant_required`` — a sensor read for a person who has given flows' sensors no live grant
+  on that calendar (none, revoked or expired). The person grants it in chat; reconnecting does not help.
 
 A refusal's reason is decided from its sentence, and only the sentences listed in ``RECONNECT``
 mean reconnect: every sentence this package raises that asks for a reconnect is listed here, and
@@ -20,7 +22,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
-REASONS = ("store_unavailable", "reconnect_required", "provider_error")
+REASONS = ("store_unavailable", "reconnect_required", "provider_error", "sensor_grant_required")
 
 RECONNECT = frozenset({
     "Authorization failed; reconnect this account",

@@ -137,6 +137,7 @@ OAuth consent screen if your Google project lists scopes explicitly.
 | `calendar_event_create` | creates an event: title, start and end with a time zone (or all-day dates), description, location, attendees, an optional Google Meet link | emails attendees, unless `notify: true` and policy allows it |
 | `calendar_event_update` | changes the fields given on an event from a calendar read, if the person organizes it or guests may modify it | resolves an id it was not given by a read |
 | `calendar_event_cancel` | deletes an event the person organizes (Google's cancellation: attendees see it cancelled) | tells attendees, unless `notify: true` and policy allows it |
+| `calendar_sensor_grant` / `calendar_sensor_grants` / `calendar_sensor_grant_revoke` | lets the person's [sensors](/flows/sensors) read one Google Calendar connection (calendar read only, up to 90 days), lists those grants, ends one | grants from a run with nobody in the loop or a chat other people read; a sensor reads no calendar without it |
 | `connection_policy_get` / `connection_policy_set` | reads the policy; saves the person's own, narrower setting (`set` from the person's own client only) | widens past the administrator's policy; `set` is refused to every agent, even in a chat the person is watching |
 
 Each write takes a `request_id`. A retry with the same id and the same content returns the first

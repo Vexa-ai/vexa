@@ -1625,7 +1625,7 @@
    "unique-id": "flows-sensors",
    "node-type": "module",
    "name": "flows-sensors",
-   "description": "sensors turn the outside world into typed events with no model call (ADR-0050): one interface (SensorKind.tick(sensor, cursor) -> changes + next cursor) and one pool that keeps the needed sensors, ticks them under a lease, admits their changes through flows admission and reports their health; it reads providers only through the credential broker and writes only the sensor table",
+   "description": "sensors turn the outside world into typed events with no model call (ADR-0050): one interface (SensorKind.tick(sensor, cursor) -> changes + next cursor) and one pool that keeps the needed sensors, ticks them under a lease, admits their changes through flows admission and reports their health; it reads providers only through the credential broker, which reads a person's calendar only under a live sensor grant that person issued (credential-broker.v1 /api/sensor-grants), and writes only the sensor table",
    "metadata": [
     {
      "path": "core/flows/src/flows_sensors"

@@ -214,7 +214,7 @@
       "requires": ["identity", "flows"],
       "route": { "method": "POST", "path": "/sensors" },
       "arguments": ["name", "kind", "filter", "connection_id", "interval_s", "scope"],
-      "note": "Design a sensor as a DRAFT from the person's words: `kind` (`calendar`), `filter` over each event, e.g. \"payload.video_url exists and payload.self_response != 'declined'\" (paths, ==, !=, in [..], exists, contains, and/or/not). Next: sensor_test, show the person what it would emit and drop, then sensor_action enable, then sensor_connect."
+      "note": "Design a sensor as a DRAFT from the person's words: `kind` (`calendar`), `filter` over each event, e.g. \"payload.video_url exists and payload.self_response != 'declined'\" (paths, ==, !=, in [..], exists, contains, and/or/not). Next: sensor_test, show the person what it would emit and drop, then sensor_action enable, then sensor_connect. A calendar sensor reads only under the person's grant: when sensor_test answers that it may not read the calendar, ask the person, call calendar_sensor_grant, then test again."
     },
     {
       "name": "sensor_test",

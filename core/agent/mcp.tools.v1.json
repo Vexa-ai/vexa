@@ -1381,6 +1381,55 @@
       "note": "Cancels an event the user organizes; needs the calendar change permission. A cancellation with notify needs the person's press: offer it as a ```ask card that names the event first, and call this with `pressed` = the `#<pending>` of their answer (`[answer <card> #<pending>] \u2026`); without it, on a card that does not name it, or a second time on one press, it is refused (403 `press_required`)."
     },
     {
+      "name": "calendar_sensor_grant",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/sensor-grant"
+      },
+      "arguments": [
+        "connection_id",
+        "days"
+      ],
+      "note": "Lets the person's sensors read their Google Calendar (calendar read only, one connection, at most 90 days). Only when the person asked; a sensor without it is refused. A worker with nobody in the loop, or a turn other people read, is refused."
+    },
+    {
+      "name": "calendar_sensor_grants",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "GET",
+        "path": "/api/connections/sensor-grants"
+      },
+      "note": "The person's sensor grants: connection, expiry, active / revoked / expired."
+    },
+    {
+      "name": "calendar_sensor_grant_revoke",
+      "identity": "user",
+      "auth": "subject",
+      "requires": [
+        "identity",
+        "agent"
+      ],
+      "route": {
+        "method": "POST",
+        "path": "/api/connections/sensor-grant/revoke"
+      },
+      "arguments": [
+        "grant_id"
+      ],
+      "note": "Ends one of the person's sensor grants now."
+    },
+    {
       "name": "connection_policy_get",
       "identity": "user",
       "auth": "subject",

@@ -292,6 +292,36 @@
     },
     {
       "method": "POST",
+      "path": "/agent/connections/sensor-grant",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/connections/sensor-grants",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/sensor-grant/revoke",
+      "scopes": [
+        "bot",
+        "tx"
+      ],
+      "mcp_reentry": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
       "path": "/agent/connections/request",
       "scopes": [
         "bot",
@@ -1257,6 +1287,24 @@
       "method": "PUT",
       "path": "/agent/connections/policy",
       "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/sensor-grant",
+      "person": true,
+      "shared": "refuse"
+    },
+    {
+      "method": "GET",
+      "path": "/agent/connections/sensor-grants",
+      "person": false,
+      "shared": "refuse"
+    },
+    {
+      "method": "POST",
+      "path": "/agent/connections/sensor-grant/revoke",
+      "person": false,
       "shared": "refuse"
     },
     {

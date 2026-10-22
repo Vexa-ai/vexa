@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
 
-from . import assertion, identity_token, metadata, providers
+from . import assertion, identity_token, metadata, providers, sensor_grants
 from .obs import log_event
 from .settings import Settings, google_client
 from .reasons import store_unavailable
@@ -103,6 +103,8 @@ class Broker:
         except StoreUnavailable as exc:
             # The store is down at boot: the first credential read retries (`get`).
             self.fault("store", "seal_" + exc.kind)
+        # Calendars a sensor was already reading before grants existed keep a bounded grant (once).
+        sensor_grants.adopt(self)
 
     # ── storage ───────────────────────────────────────────────────────────────────────────
     def db(self) -> sqlite3.Connection:

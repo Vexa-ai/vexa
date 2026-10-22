@@ -19,6 +19,7 @@ only when it moves and backs off on failure (`degraded` after `degrade_after`, w
 routine strip and `sensor_list`.
 
 Kinds (`calendar.KINDS`): `calendar.py` (a person's Google Calendar through the credential broker's
-`sensors` role, incremental by sync token) and `mailbox.py` (the deployment's shared mailbox, read
+`sensors` role, incremental by sync token, and only under a live sensor grant that person issued with
+`calendar_sensor_grant`; without one the sensor stops with `calendar.GRANT_NEEDED` as its reason) and `mailbox.py` (the deployment's shared mailbox, read
 only: invitations, cancellations and replies to Vexa's own mail). Verify:
 `uv run pytest tests/test_sensors_triggers.py tests/test_mailbox_sensor_kind.py`.

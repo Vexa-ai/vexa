@@ -624,6 +624,18 @@ def _with_private_note(response):
                         headers=keep)
 
 
+class SensorGrantIn(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    connection_id: str = Field(default='', pattern=r'^(|[a-f0-9]{32})$',
+                               description='the Google Calendar connection; empty = the person\'s most recent ready one')
+    days: int = Field(default=90, ge=1, le=90, description='how long the grant lasts, at most 90 days')
+
+
+class SensorGrantRevoke(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    grant_id: str = Field(pattern=r'^[a-f0-9]{32}$', description='a grant_id from calendar_sensor_grants')
+
+
 def build(*, subject_of, wsr=None, settings=None, _global_root=None, _read_target=None,
           session_store=None, mindex=None, **_):
     # A TURN OTHER PEOPLE READ (ADR-0048 decision 4) reaches none of this: every route here reads or
@@ -1037,6 +1049,31 @@ def build(*, subject_of, wsr=None, settings=None, _global_root=None, _read_targe
         saved=call_broker(actor,'POST','/api/preferences',merged,identity=signed)
         return {'status': 'saved', 'user': saved,
                 'effective': connection_policy.public(connection_policy.narrow(admin, saved))}
+
+    @router.post('/api/connections/sensor-grant')
+    def calendar_sensor_grant(request: Request, body: SensorGrantIn):
+        """Let the person's sensors read their Google Calendar: only when the person asked for a calendar
+        sensor, or agreed after sensor_test answered that the sensor may not read their calendar. A sensor
+        reads a calendar only under this grant, which names this person, one ready calendar connection and
+        calendar read only, and lasts `days` (at most 90). It replaces the live grant on that connection.
+        Then run sensor_test again and enable the sensor. Tell the person they can end it any time
+        (calendar_sensor_grant_revoke)."""
+        payload = {'days': body.days, **({'connection_id': body.connection_id} if body.connection_id else {})}
+        return call_broker(subject_of(request), 'POST', '/api/sensor-grants', payload,
+                           identity=signed_identity(request))
+
+    @router.get('/api/connections/sensor-grants')
+    def calendar_sensor_grants(request: Request):
+        """The person's sensor grants, newest first: which calendar connection, until when, and whether
+        each is active, revoked or expired."""
+        return call_broker(subject_of(request), 'GET', '/api/sensor-grants', identity=signed_identity(request))
+
+    @router.post('/api/connections/sensor-grant/revoke')
+    def calendar_sensor_grant_revoke(request: Request, body: SensorGrantRevoke):
+        """End one of the person's sensor grants now, when they ask: their calendar sensors on that
+        connection stop reading at their next check."""
+        return call_broker(subject_of(request), 'POST', '/api/sensor-grants/' + body.grant_id + '/revoke',
+                           identity=signed_identity(request))
 
     @router.post('/api/connections/service/call')
     def service_call(request: Request, body: CustomCall):

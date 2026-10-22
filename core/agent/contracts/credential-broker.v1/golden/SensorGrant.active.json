@@ -1,0 +1,9 @@
+{
+  "grant_id": "5f0c2a9e6b1d4c7e8a3f9b2d1e0c4a6b",
+  "connection_id": "0d9b8a7c6e5f4a3b2c1d0e9f8a7b6c5d",
+  "scope": "calendar.read",
+  "created": 1792656000.0,
+  "expires": 1800432000.0,
+  "status": "active",
+  "issued_via": "person"
+}

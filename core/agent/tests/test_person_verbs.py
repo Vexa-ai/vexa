@@ -62,6 +62,8 @@ EXPECTED = frozenset({
     ("POST", "/api/connections/calendar/event/cancel"),
     ("POST", "/api/connections/service/call"), ("POST", "/api/onboarding/research"),
     ("PUT", "/api/connections/policy"), ("PUT", "/api/time/zone"),
+    # the person's grant that lets their sensors read their calendar (08S-b)
+    ("POST", "/api/connections/sensor-grant"),
 })
 #: A body that would act on the person's own things if the gate let it through.
 BODIES = {

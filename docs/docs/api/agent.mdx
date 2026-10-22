@@ -634,12 +634,13 @@ The agent domain's Connections tools are served by the gateway's one MCP server
 `calendar_events` · `mail_inbox` · `mail_read`, the drafts `gmail_draft_create` (a reply in a
 thread, Cc, Bcc, workspace attachments) · `gmail_draft_update`, the calendar changes
 `calendar_event_create` · `calendar_event_update` · `calendar_event_cancel`, the policy
-`connection_policy_get` · `connection_policy_set`, `secret_service_call` and `onboarding_research`. Each is one `/api/connections/*` or
+`connection_policy_get` · `connection_policy_set`, the sensor grants `calendar_sensor_grant` ·
+`calendar_sensor_grants` · `calendar_sensor_grant_revoke`, `secret_service_call` and `onboarding_research`. Each is one `/api/connections/*` or
 `/api/onboarding/research` route with a typed body; a meetings-only installation does
 not expose them, and without a credential broker they answer that Connections are not
 configured (`onboarding_research` with `action: status` still reports stored progress, because it
 reads no account). A worker dispatched without a person in the loop is refused `connection_request`,
-`connection_policy_set`, `secret_service_call` and `onboarding_research`; the mail and calendar
+`connection_policy_set`, `calendar_sensor_grant`, `secret_service_call` and `onboarding_research`; the mail and calendar
 tools follow the administrator's `connection_actions_unattended` policy, which refuses all of them
 by default ([Connections → the policy](/connections#what-an-agent-may-do-the-policy)). What onboarding research reads, its receipts and its failure
 modes are on [Onboarding research and Extend](/how-to/onboarding-research).

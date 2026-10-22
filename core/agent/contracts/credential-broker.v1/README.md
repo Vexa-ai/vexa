@@ -57,9 +57,10 @@ and the assertion's session is recorded as sent.
 
 | Role | Held by | May |
 |---|---|---|
-| `agent` | agent-api, for the person in the forwarded `X-Vexa-Identity` | list, request, prepare, read mail and calendar, create and update Gmail drafts, create, update and cancel calendar events, read and narrow the person's connection-policy setting (`/api/preferences`), call a saved custom service |
+| `agent` | agent-api, for the person in the forwarded `X-Vexa-Identity` | list, request, prepare, read mail and calendar, create and update Gmail drafts, create, update and cancel calendar events, read and narrow the person's connection-policy setting (`/api/preferences`), call a saved custom service, issue, list and revoke the person's sensor grants (`/api/sensor-grants`) |
 | `human` | the terminal's server routes, for a signed-in person | everything `agent` may, plus store a credential, save an OAuth application, start and complete consent, disconnect, delete |
 | `git` | agent-api's Git credential store, for the person in the forwarded `X-Vexa-Identity` | read and write that person's Git credentials (`pat/<person>`, `deploy/user-<person>.*`) and the deploy keys of the shared workspaces among the memberships signed with them (`deploy/ws-<id>.*`), nothing else |
+| `sensors` | flows' sensor pool, for the person whose sensor it is (no `X-Vexa-Identity`; actor `<uid>`) | `POST /api/internal/sensor/calendar-changes` under a live sensor grant that person issued; `POST /api/internal/mail/smtp-credential` (actor `flows-mail`). It cannot issue a grant |
 | `bots` | meeting-api, for a bot (no `X-Vexa-Identity`; actor `user:<id>`, `company` or `meeting-api`) | `POST /api/internal/bot-account` only: list, read, save, re-state and delete saved signed-in browser profiles (bot accounts) |
 
 ## Bot accounts (role `bots`)
@@ -76,6 +77,22 @@ The broker keeps each account at `bot/<id>` (`{account, files}`, sealed with `ac
 index `bot-index` (`{accounts: {id: BotAccount}}`), both written under its one lock; every action is
 audited as `bot.account.<action>`. On a deployment without `VEXA_CONNECTIONS_BOTS_KEY_FILE` no
 caller can use the route: a `bots` assertion is refused (401) and every other role is refused (403).
+
+## Sensor grants (roles `agent`, `human`; read by `sensors`)
+
+The sensors key is one key for the deployment, so it does not decide whose calendar is read: the
+person does. `POST /api/sensor-grants` (`SensorGrantRequest` → `SensorGrant`) lets flows' sensors
+read one ready `google_calendar` connection of the caller's, scope `calendar.read`, for at most 90
+days; a new grant revokes the live one on that connection. Only the agent role, in a watched turn no
+one else reads (the gateway's signature over the person), and the human role issue one; the sensors
+role cannot. `GET /api/sensor-grants` lists the caller's grants; `POST
+/api/sensor-grants/{grant_id}/revoke` ends one now (a narrowing, so an unwatched worker may too).
+
+`/api/internal/sensor/calendar-changes` reads only under the owner's live grant on the connection
+read; otherwise it answers 409 `sensor_grant_required` (none, revoked or expired) and audits the
+read `refused`. Disconnecting or deleting the connection ends its grants. Once per state directory,
+at upgrade, a calendar the broker's own audit shows a sensor read successfully in the last 14 days
+gets a 30-day grant (`issued_via: upgrade`).
 
 ## The connection policy on the wire
 

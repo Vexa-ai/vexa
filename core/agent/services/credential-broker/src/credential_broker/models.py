@@ -234,6 +234,13 @@ class CalendarChangesBody(Strict):
     cursor: Optional[str] = Field(default=None, max_length=4096)
 
 
+class SensorGrantBody(Strict):
+    """credential-broker.v1 `SensorGrantRequest`: the person lets flows' sensors read one calendar
+    connection of theirs, for `days`."""
+    connection_id: Optional[str] = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    days: int = Field(default=90, ge=1, le=90)
+
+
 class MailCredentialBody(Strict):
     """credential-broker.v1 `MailCredentialRequest`: which outbound-mail credential the install names."""
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9_.-]{0,62}$")

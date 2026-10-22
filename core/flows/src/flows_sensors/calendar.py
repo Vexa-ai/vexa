@@ -3,7 +3,10 @@
 Read-only and token-free on this side: the pool hands the sensor's cursor (a sync token) to the
 broker's `sensors` role (`POST /api/internal/sensor/calendar-changes`, credential-broker.v1), signed
 for exactly the person who owns the sensor; the broker refreshes the token if it must, reads the
-changes and answers normalised events and the next cursor. Each change becomes
+changes and answers normalised events and the next cursor. The broker reads only under a live sensor
+grant that person issued (`calendar_sensor_grant`, through their own signed identity): without one
+the read is refused with `sensor_grant_required`, and the sensor stops with `GRANT_NEEDED` as its
+reason until the person grants it and enables the sensor again. Each change becomes
 `calendar.event.created|updated|cancelled` with refs `event_id`, `start`, `end`, `title`, `video_url`,
 `self_response`, `organizer_self`, `status`, `etag`; the dedupe key is `event_id:etag`, so a resync
 re-reads without re-emitting. Whether an event was seen before (created vs updated) is not known to a
@@ -24,6 +27,11 @@ from .base import Change, SensorFault, SensorKind, SensorRow, Tick
 
 PATH = "/api/internal/sensor/calendar-changes"
 TIMEOUT_S = 20.0
+#: The broker's reason for a read with no live grant from the sensor's person (credential-broker.v1).
+GRANT_REQUIRED = "sensor_grant_required"
+#: What the person and their agent read on the sensor: the one step that lets it read again.
+GRANT_NEEDED = ("this sensor may not read your calendar: let it with calendar_sensor_grant in chat, "
+                "then test and enable it again")
 
 
 def broker_call(owner: str, path: str, body: dict, *, session: str) -> dict:
@@ -46,9 +54,13 @@ def broker_call(owner: str, path: str, body: dict, *, session: str) -> dict:
             return json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
         try:
-            detail = json.loads(e.read() or b"{}").get("detail")
+            answer = json.loads(e.read() or b"{}")
         except ValueError:
-            detail = None
+            answer = {}
+        detail = answer.get("detail") if isinstance(answer, dict) else None
+        if e.code == 409 and isinstance(answer, dict) and answer.get("reason") == GRANT_REQUIRED:
+            raise SensorFault(GRANT_NEEDED + (f" ({str(detail)[:120]})" if detail else ""),
+                              retryable=False) from None
         if e.code == 409:
             raise SensorFault("no ready calendar connection — connect Google Calendar first",
                               retryable=False) from None

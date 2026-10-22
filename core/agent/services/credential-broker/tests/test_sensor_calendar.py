@@ -24,6 +24,7 @@ def _calendar(connection, ready, store, *, actor=OWNER):
 
 def test_the_sensor_reads_changes_for_the_person_it_is_signed_for(signed, connection, ready, store):
     cid = _calendar(connection, ready, store)
+    assert signed("agent", "POST", "/api/sensor-grants", {}, actor=OWNER).status_code == 200
     answer = {"items": [{"event_id": "e1", "status": "confirmed", "self_response": "accepted",
                          "organizer_self": False, "calendar_id": "primary"}],
               "cursor": "tok-2", "resync_required": False}
