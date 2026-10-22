@@ -500,9 +500,14 @@ view the token budgets read, so the dollar ledger and the token budgets count on
 whether or not anyone is watching the turn, and adds it to per-day and per-month counters in Redis for
 the person and the deployment. The first time a cap passes 80% and 100% in its period, the crossing is
 logged (`llm_budget_threshold`), listed in the admin panel and sent to the people `llm_budget_notify`
-names. A turn already running when a cap is reached finishes; the next one is refused. A ledger that
-cannot be read refuses turns rather than letting them run uncounted. Codex-harness turns report no
-usage yet and are not counted.
+names. A harness reports a turn's usage when the turn ends, so the model proxy also prices every call it
+relays, from the provider's own usage in the answer (streamed or not) and at the same price table, and
+keeps it as the turn's unreported spend until the worker's report replaces it. Before each model
+request the proxy checks the ledger plus that unreported spend, so a long turn is stopped at the cap
+partway through (402) rather than after it ends. A turn that reports no usage (the Codex harness) is
+recorded at the proxy's figure when it completes. Calls on a deployment subscription do not go through
+the proxy: such a turn already running when a cap is reached finishes, and the next one is refused. A
+ledger that cannot be read refuses turns rather than letting them run uncounted.
 
 **Why it complies.** The cap bounds the cost a deployment and each person can incur, independently of
 the provider's own credit limit, which stays the last line of defence. The counters hold amounts and

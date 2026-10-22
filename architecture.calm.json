@@ -1322,6 +1322,33 @@
    }
   },
   {
+   "unique-id": "llm-unreported-spend",
+   "node-type": "data-asset",
+   "name": "vexa:llm:unreported:{payer}:{unit} + its indexes (redis keys)",
+   "description": "what the model proxy has relayed for a running turn and no worker has reported yet: each relayed call's provider usage, priced at the spend ledger's own table (llm_budget.cost_usd), per payer and unit, with a per-payer and a deployment index. The proxy checks ledger + this figure against the spend caps before every model request; agent-api's usage meter takes each reported amount off it and clears it when the turn completes (recording it when the turn reported nothing). Amounts and ids only; expires after two hours",
+   "controls": {
+    "ownership": {
+     "description": "shared writer (P23 review)",
+     "requirements": [
+      {
+       "requirement-url": "calm/controls/single-writer.requirement.json",
+       "config": {
+        "control-id": "vexa-p23-single-writer",
+        "name": "Single-writer ownership",
+        "description": "the model proxy adds each relayed call (llm_budget.add_unreported); agent-api's usage meter settles it against the worker's report (llm_budget.settle_unreported)",
+        "writers": [
+         "agent-api",
+         "model-proxy"
+        ],
+        "match": "UNREPORTED_PREFIX|_unreported_key|_unreported_index",
+        "op": "kv-write"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
    "unique-id": "agent-worker",
    "node-type": "service",
    "name": "agent-worker",
@@ -5313,6 +5340,44 @@
     }
    },
    "description": "GET the grant a request's token names; INCR its request count; DELETE both on revocation",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "mp-llm-unreported-spend",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "model-proxy"
+     },
+     "destination": {
+      "node": "llm-unreported-spend"
+     }
+    }
+   },
+   "description": "INCRBYFLOAT each relayed call's priced usage onto the turn's unreported figure; read every figure of the payer and the deployment, with the spend ledger, before each model request",
+   "metadata": [
+    {
+     "access": "write"
+    }
+   ]
+  },
+  {
+   "unique-id": "aa-llm-unreported-spend",
+   "relationship-type": {
+    "connects": {
+     "source": {
+      "node": "agent-api"
+     },
+     "destination": {
+      "node": "llm-unreported-spend"
+     }
+    }
+   },
+   "description": "the usage meter takes each amount a worker reports off the turn's figure and clears it at turn-complete, recording what is left when the turn reported nothing",
    "metadata": [
     {
      "access": "write"

@@ -282,6 +282,8 @@ edges:
   agent-api -write-> model-grants  # SET one turn's grant per delivered message (the spawn's entrypoint, every unit-in entry)
   model-proxy -read-> model-routes  # GET and open (AES-GCM) the route a live grant names
   model-proxy -write-> model-grants  # GET the grant a request's token names; INCR its request count; DELETE both on revocation
+  model-proxy -write-> llm-unreported-spend  # INCRBYFLOAT each relayed call's priced usage onto the turn's unreported figure; read every figure of the payer and the deployment, with the spend ledger, before each model request
+  agent-api -write-> llm-unreported-spend  # the usage meter takes each amount a worker reports off the turn's figure and clears it at turn-complete, recording what is left when the turn reported nothing
   model-proxy -read-> delegation-current  # GET the unit's current delegation token to present on a relayed MCP request
   model-proxy -call-> model-provider  # an agent turn's model request, forwarded by the model proxy with the turn route's credential: the prompt with its meeting grounding (transcript excerpts) and the workspace context the turn reads
   agent-api -call-> model-provider  # the one model call a home composition may make (core/agent/control_plane/home_model.py): the cheapest catalog model orders the cards it is handed, at most once per composition

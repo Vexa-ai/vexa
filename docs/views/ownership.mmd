@@ -13,6 +13,8 @@ flowchart LR
   model_routes[("mproxy:route:{id} + mproxy:unit-route:{unit} (redis keys)")]
   model_grants[("mproxy:grant:{sha256} + mproxy:count:{sha256} (redis keys)")]
   style model_grants stroke-dasharray: 5 5,stroke-width:3px
+  llm_unreported_spend[("vexa:llm:unreported:{payer}:{unit} + its indexes (redis keys)")]
+  style llm_unreported_spend stroke-dasharray: 5 5,stroke-width:3px
   bm_status[("bm:meeting:{id}:status (pubsub)")]
   u_meetings[("u:{user}:meetings (pubsub)")]
   bot_commands[("bot_commands:meeting:{id} (pubsub)")]
@@ -106,4 +108,6 @@ flowchart LR
   agent_api -->|write| model_grants
   model_proxy -.->|read| model_routes
   model_proxy -->|write| model_grants
+  model_proxy -->|write| llm_unreported_spend
+  agent_api -->|write| llm_unreported_spend
   model_proxy -.->|read| delegation_current

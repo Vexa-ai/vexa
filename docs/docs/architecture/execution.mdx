@@ -55,8 +55,12 @@ a worker is given no model-provider API key and no toolbelt bearer (H5/W1):
    expires with the turn's own ceiling (a job's, plus the wait in the queue).
 3. **Use.** The harness sends model requests to `<proxy>/llm/…` and attaches the toolbelt at
    `<proxy>/mcp`, presenting the token. The proxy refuses an unknown, revoked or expired token, a
-   model outside the turn's scope, and a request past the turn's ceiling; otherwise it swaps the
-   token for the key (or the delegation bearer) and streams the answer back.
+   model outside the turn's scope, a request past the turn's ceiling, and a request once the payer's
+   spend has reached a cap; otherwise it swaps the token for the key (or the delegation bearer) and
+   streams the answer back. It reads the provider's usage from each answer as it passes, prices it at
+   the spend ledger's own table, and counts it as the turn's unreported spend, so the cap check is
+   ledger plus unreported and a long turn stops at the cap partway through. The worker's usage report
+   at the turn's end replaces that figure ([spend caps](/configuration)).
 4. **End.** When the last run holding a token — the turn, its write-back, the jobs it started —
    ends, the worker revokes it. The next turn runs on its own.
 
