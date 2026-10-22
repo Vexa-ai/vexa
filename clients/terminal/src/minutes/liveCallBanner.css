@@ -1,0 +1,15 @@
+/* The live call a chat listens to (minutes/LiveCallBanner.tsx): one quiet line at the top of the
+ * chat, the listening brief and the owner's opt-ins under it when this chat is the one. Tokens only. */
+.vx-live-calls { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-2) var(--space-4) 0; min-width: 0; }
+.vx-live-call {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1_5) var(--space-3); min-width: 0;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.5; color: var(--t2);
+  border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-1_5) var(--space-3);
+}
+.vx-live-call-here { flex-direction: column; align-items: stretch; }
+.vx-live-call-line { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 16em; }
+.vx-live-call-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--t1); }
+.vx-live-call-note { flex: none; color: var(--t3); }
+.vx-live-call-acts { display: inline-flex; align-items: center; gap: var(--space-1_5); flex: none; }
+.vx-live-call-optins { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); font-family: var(--sans); }
+.vx-live-call-error { font-family: var(--sans); font-size: var(--text-xs); color: var(--danger-text); }

@@ -80,6 +80,7 @@ import { withRoutineState,
   type Artifact, type Chat as ChatRec, type Row, closingTab } from "./chats";
 import { addParticipant, bindMeetingToChat, listParticipants, listSessions } from "../surfaces/sessionsApi";
 import { LiveMeetingChip, meetingToOpen } from "./ChatMeetingStrip";
+import { LiveCallBanners } from "./LiveCallBanner";
 import { pinLive } from "./livePin";
 import { OPEN_MEETING_CHAT } from "./MeetingPageHeader";
 import { meetingActs, meetingStatusOf, sendBotAgain, stopBot } from "./meetingActions";
@@ -2691,6 +2692,8 @@ export function MinutesShell() {
           if (!roomsOn) return strip;
           return activityOpen ? <Modal title="Activity" onClose={() => setActivityOpen(false)} width={460}>{strip}</Modal> : null;
         })()}
+        {/* A LIVE CALL THIS CHAT MAY LISTEN TO (or does): the chat it wakes, Listen here, the brief. */}
+        {sel.kind === "chat" && <LiveCallBanners session={session} meetings={meetings} />}
         <BlocksProvider value={homeHandlers}>
         <div style={{ flex: 1, minHeight: 0 }}>
           {/* THE ADMIN ACCOUNT'S HOME (founder ruling 2026-10-11): its four areas in place of the

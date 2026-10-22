@@ -7,8 +7,10 @@ import { registerTab } from "../contributions";
 import { MeetingCanvasView } from "./MeetingCanvasView";
 import { MeetingView } from "./MeetingView";
 import { MeetingChip } from "./MeetingChip";
+import { LiveCallBrief } from "./LiveCallBrief";
 import { TRANSCRIPT_WIDGET_KIND } from "../ui-kit/transcriptSlot";
 import { MEETING_CANVAS_VIEW_KIND } from "../ui-kit/canvasSlot";
+import { LIVE_CALL_BRIEF_KIND } from "../ui-kit/liveCallBriefSlot";
 
 function CanvasTab() {
   return <MeetingCanvasView />;
@@ -23,3 +25,7 @@ registerTab(MEETING_CANVAS_VIEW_KIND, ({ params }) =>
 // renders whatever is registered under this kind, so the page renderer never imports this layer.
 registerTab(TRANSCRIPT_WIDGET_KIND, ({ params }) =>
   <MeetingChip meetingId={String((params as { meetingId?: unknown })?.meetingId ?? "")} />);
+// WHAT A LIVE CALL LISTENS FOR, in the chat that listens to it: `minutes/LiveCallBanner` renders
+// whatever is registered here.
+registerTab(LIVE_CALL_BRIEF_KIND, ({ params }) =>
+  <LiveCallBrief meetingId={String(params.meetingId ?? "")} editable={params.editable === true} />);
