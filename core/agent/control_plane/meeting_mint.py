@@ -130,7 +130,7 @@ def compose(row) -> str:
     return NOTE_PATH.format(stamp=moment(row).strftime(_STAMP), slug=slug(name))
 
 
-def mint(workspaces_root, subject: str, row, *, path: str = "", record=None) -> dict:
+def mint(workspaces_root, subject: str, row, *, path: str = "", record=None, trailers=()) -> dict:
     """This meeting's page on THIS person's desk — `{"path", "created"}`.
 
     IDEMPOTENT, AND THAT IS THE WHOLE SAFETY PROPERTY. A page that is already there is returned
@@ -225,7 +225,7 @@ def mint(workspaces_root, subject: str, row, *, path: str = "", record=None) -> 
         wpaths.write_text_inside(desk, rel, meeting_doc.scaffold(
             meeting=facts["id"], title=title_of(row), native=facts["native"], date=facts["day"]))
         created = True
-        _commit(desk, rel)
+        _commit(desk, rel, trailers)
     if record is not None and not recorded:
         try:
             record(str(subject), facts["id"], rel)
@@ -234,8 +234,9 @@ def mint(workspaces_root, subject: str, row, *, path: str = "", record=None) -> 
     return {"path": rel, "created": created}
 
 
-def _commit(desk: Path, rel: str) -> None:
-    """One commit, BY PATHSPEC — the same writer every other desk write goes through.
+def _commit(desk: Path, rel: str, trailers=()) -> None:
+    """One commit, BY PATHSPEC — the same writer every other desk write goes through, closed with
+    ``trailers`` (who made it when an agent did, ``commit_trailers``).
 
     `git commit` commits THE INDEX, so a bare `add` + `commit` here would sweep in whatever the
     person's own worker had staged in the same repo mid-turn and file it under this message. A
@@ -243,7 +244,7 @@ def _commit(desk: Path, rel: str) -> None:
     from workspaces.shared import entities as entities_mod
 
     try:
-        entities_mod.commit_entity(desk, [rel], subject_path=rel, created=True)
+        entities_mod.commit_entity(desk, [rel], subject_path=rel, created=True, trailers=tuple(trailers))
     except Exception:  # noqa: BLE001 — the file is written; an uncommitted page still opens
         logger.exception("committing the minted meeting page %s failed", rel)
 

@@ -16,6 +16,7 @@ from control_plane import system_mounts
 from control_plane.api_shared import _decode_sse_cursor, _encode_sse_cursor, _sse, transcript_erased
 from control_plane.peer_lookups import meeting_access_check, meeting_transcript_reader
 from control_plane.ceiling import reads_within, require_in_ceiling, require_private
+from control_plane.commit_trailers import writer_trailers
 from control_plane.bodies import MeetingAttachBody, TranscriptTermsBody
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -143,7 +144,8 @@ def build(**d) -> APIRouter:
             raise HTTPException(status_code=403, detail="not authorized for this meeting")
         return meeting_mint_mod.mint(wsr.root, subject, row,
                                      path=str((body or {}).get("path") or ""),
-                                     record=_meeting_note_recorder)
+                                     record=_meeting_note_recorder,
+                                     trailers=writer_trailers(request.headers))
     @router.post("/api/meeting/note/attach")
     def attach_meeting_page(request: Request, body: MeetingAttachBody = Body(...)):
         """MAKE THIS PAGE THE MEETING'S PAGE — `meeting_attach_page`, and "Use as meeting page" (#1783).
@@ -244,7 +246,8 @@ def build(**d) -> APIRouter:
         if stamped != text:
             _wp.write_text_inside(place["dir"], path, stamped)
             try:
-                commit_entity(place["dir"], [path], subject_path=path, created=False)
+                commit_entity(place["dir"], [path], subject_path=path, created=False,
+                              trailers=tuple(writer_trailers(request.headers)))
             except Exception:  # noqa: BLE001 — a workspace with no repo keeps the file uncommitted
                 pass
         recorded = False

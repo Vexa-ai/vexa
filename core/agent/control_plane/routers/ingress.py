@@ -226,8 +226,10 @@ def build(**d) -> APIRouter:
                 if (wdir / ".git").is_dir():
                     from shared.gitexec import run_git as _git  # noqa: PLC0415
                     _git(wdir, "add", "--", rel)
+                    from control_plane.commit_trailers import agent_trailers, with_trailers  # noqa: PLC0415
                     _git(wdir, "-c", "user.name=vexa-agent", "-c", "user.email=agent@vexa.local",
-                         "commit", "-q", "-m", f"meeting note for call {row}", "--", rel)
+                         "commit", "-q", "-m", with_trailers(f"meeting note for call {row}", agent_trailers(subject)),
+                         "--", rel)
             if _meeting_note_recorder is not None:
                 try:
                     _meeting_note_recorder(str(subject), str(row), rel, rp_.workspace)
@@ -463,7 +465,9 @@ def build(**d) -> APIRouter:
                 # idempotent act the bot-send performs) so the turn has its meeting's note to write.
                 try:
                     from control_plane import meeting_mint as _mint  # noqa: PLC0415
-                    _mint.mint(wsr.root, subject, mrow, record=_meeting_note_recorder)
+                    from control_plane.commit_trailers import agent_trailers  # noqa: PLC0415
+                    _mint.mint(wsr.root, subject, mrow, record=_meeting_note_recorder,
+                               trailers=agent_trailers(subject))
                 except Exception as exc:  # noqa: BLE001 — no page: the turn still answers
                     import logging as _logging  # noqa: PLC0415
                     _logging.getLogger("agent_api.ingress").warning(
