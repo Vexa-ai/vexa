@@ -113,10 +113,23 @@ NO_README_WORKSPACE_FOCUS = (
     "ground answers in the workspace's files, and say when context is missing.\n\n"
 )
 
-# Live/post when the stream holds nothing — honest, never fabricated (fail loud).
+# Live when the fold holds nothing. An empty fold is not evidence that nothing was said, and a fold
+# that could not be read is not an empty one: both send the model to the live transcript itself, and
+# a read failure is reported as one, never as "no transcript" (fail loud, never fabricate).
 NO_TRANSCRIPT_LIVE = (
-    "You are assisting in a live meeting ({platform}/{native}), but no transcript has been "
-    "captured yet. Tell the user the meeting has no transcript yet.\n\n"
+    "You are assisting in the live meeting \"{title}\" ({platform}/{native}, meeting {meeting_id}). "
+    "No transcript lines reached this turn. Before telling the user anything about what was or was "
+    "not said, read the live transcript with get_meeting_transcript(platform=\"{platform}\", "
+    "native_meeting_id=\"{native}\"). Only if it returns no segments, say nothing has been "
+    "transcribed in this meeting yet. If that read fails, say you could not read the live "
+    "transcript.\n\n"
+)
+TRANSCRIPT_UNREAD_LIVE = (
+    "You are assisting in the live meeting \"{title}\" ({platform}/{native}, meeting {meeting_id}). "
+    "Its live transcript could not be read for this turn. Read it with "
+    "get_meeting_transcript(platform=\"{platform}\", native_meeting_id=\"{native}\") before "
+    "answering. If that read fails too, tell the user you could not read the live transcript; never "
+    "say the meeting has no transcript.\n\n"
 )
 NO_RECORD_POST = (
     "The meeting \"{title}\" ({platform}/{native}) has ended{failed}, but no transcript or "

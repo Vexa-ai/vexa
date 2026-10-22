@@ -184,15 +184,22 @@ describe("minutes live view — the raw transcript, and nothing else (PRD decisi
   });
 
   it("a quiet admitted bot says so, with the silence measured", async () => {
-    meetingsState = [meetingRow(true, "active")];
-    liveState = {
-      connected: true,
-      transcript: [{ id: "s1", speaker: "Jane", text: "hello", t: 1, completed: true }],
-      lastTranscriptAt: Date.now() - 24_000,
-    };
-    await renderCanvas();
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      meetingsState = [meetingRow(true, "active")];
+      liveState = {
+        connected: true,
+        transcript: [{ id: "s1", speaker: "Jane", text: "hello", t: 1, completed: true }],
+        lastTranscriptAt: Date.now() - 24_000,
+      };
+      await renderCanvas();
+      await act(async () => { vi.advanceTimersByTime(25_000); });
+    } finally {
+      vi.useRealTimers();
+    }
 
-    expect(container.textContent).toMatch(/Bot admitted · no words for \d+s/);
+    expect(container.textContent).toMatch(/Bot admitted · quiet for \d+s/);
+    expect(container.textContent).not.toContain("no words");
     expect(container.textContent).not.toContain("Waiting for transcript");
   });
 });

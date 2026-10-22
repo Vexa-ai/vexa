@@ -1800,15 +1800,19 @@ def _model_creds_error_message() -> str:
 MEETING_CHAT_TRANSCRIPT_SEGMENTS = 400  # bound the live transcript folded into a meeting-chat prompt
 
 
-def _fold_meeting_transcript(redis_url: "str | None", stream_key: str, *, limit: int) -> str:
+def _fold_meeting_transcript(
+    redis_url: "str | None", stream_key: str, *, limit: int, unreadable: "str | None" = ""
+) -> "str | None":
     """Fold the live transcript Stream ``tc:meeting:{stream_key}`` — the SAME stream the terminal
     renders — into ordered ``speaker: text`` lines for chat
     grounding. ``stream_key`` is the meetings-domain ROW id (P0 cross-tenant leak fix: the carrier keys
     on the row id, never the native id which collides across tenants/re-sends). Refining live drafts are
     upserted by ``segment_id`` (latest text wins, no duplicate), arrival order preserved, bounded to the
-    last ``limit`` segments. Best-effort: returns "" when redis is unwired or the stream is empty."""
+    last ``limit`` segments. Returns "" when the stream is empty, and ``unreadable`` when it cannot be
+    read (redis unwired or the read failed): "" by default for best-effort callers; a caller that must
+    tell "nothing said" from "could not read" passes ``unreadable=None``."""
     if not redis_url:
-        return ""
+        return unreadable
     try:
         import redis
 
@@ -1816,7 +1820,7 @@ def _fold_meeting_transcript(redis_url: "str | None", stream_key: str, *, limit:
         rows = r.xrange(f"tc:meeting:{stream_key}")
     except Exception as exc:  # noqa: BLE001 — grounding is best-effort; never fail the chat turn
         logger.warning("could not read transcript for %s: %s", stream_key, exc)
-        return ""
+        return unreadable
     order: list[str] = []
     seg_by_id: dict[str, dict] = {}
     for entry_id, fields in rows:
@@ -1910,12 +1914,16 @@ def _meeting_grounding(
         fields["transcript"] = folded
         return (ctx, [], meeting_steering.render("post", fields) + prompt)
 
-    transcript = _fold_meeting_transcript(redis_url, stream_key, limit=MEETING_CHAT_TRANSCRIPT_SEGMENTS)
+    transcript = _fold_meeting_transcript(
+        redis_url, stream_key, limit=MEETING_CHAT_TRANSCRIPT_SEGMENTS, unreadable=None
+    )
     if transcript:
         fields["transcript"] = transcript
         preamble = meeting_steering.render("live", fields)
+    elif transcript is None:
+        preamble = meeting_steering.TRANSCRIPT_UNREAD_LIVE.format(**fields)
     else:
-        preamble = meeting_steering.NO_TRANSCRIPT_LIVE.format(platform=platform, native=native)
+        preamble = meeting_steering.NO_TRANSCRIPT_LIVE.format(**fields)
     return (ctx, [], preamble + prompt)
 
 

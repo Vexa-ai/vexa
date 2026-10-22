@@ -75,8 +75,9 @@ describe("botStateHeadline — the words name the BOT, never the product's work"
     expect(h("at-door", { needsHelp: true })).toBe("Bot needs someone to let it in");
     expect(h("ended")).toBe("Bot left");
     expect(h("disconnected")).toBe("Reconnecting to the bot\u2026");
-    expect(h("stalled", { staleForMs: 24_000 })).toBe("Bot admitted \u00b7 no words for 24s");
-    expect(h("stalled")).toBe("Bot admitted \u00b7 no words for a while");
+    expect(h("stalled", { staleForMs: 24_000 })).toBe("Bot admitted \u00b7 quiet for 24s");
+    expect(h("stalled")).toBe("Bot admitted \u00b7 quiet for a while");
+    expect(h("stalled", { staleForMs: 24_000, segments: 0 })).toBe("Bot admitted \u00b7 no words for 24s");
   });
 
   it("carries no wording that could read as the product processing anything (decision 34)", () => {
@@ -138,13 +139,25 @@ describe("words on screen clear the no-words verdict", () => {
     expect(wordsSeen(a, [{ id: "1", text: "hello" }, { id: "2", text: "next" }], now + 5000).at).toBe(now + 5000);
     expect(wordsSeen(a, [{ id: "1", text: "hello there" }], now + 7000).at).toBe(now + 7000);   // a draft refining
     expect(wordsSeen({ sig: "" }, [], now).at).toBeUndefined();
-    expect(wordsSeen({ sig: null }, [{ id: "1", text: "already there" }], now).at).toBeUndefined();   // a baseline, not news
+    expect(wordsSeen({ sig: null }, [], now).at).toBeUndefined();
   });
   it("is not stalled when segments keep landing although the live stream went quiet", () => {
     const streamLast = now - 50_000;
     const seen = wordsSeen({ sig: "" }, [{ id: "9", text: "still talking" }], now - 1000);
     const h = meetingHealth({ liveConnected: true, lastTranscriptAt: Math.max(streamLast, seen.at ?? 0) }, now, true, STALE_MS, "active");
     expect(h.kind).toBe("ok");
+  });
+  it("lines already on screen when the view opens count as heard", () => {
+    const seen = wordsSeen({ sig: null }, [{ id: "1", text: "already there" }], now);
+    expect(seen.at).toBe(now);
+    expect(meetingHealth({ liveConnected: true, lastTranscriptAt: seen.at }, now, true, STALE_MS, "joining").kind).toBe("ok");
+  });
+  it("visible lines and 99 s of silence: the headline says quiet, never 'no words'", () => {
+    const seen = wordsSeen({ sig: null }, [{ id: "1", text: "hello" }, { id: "2", text: "and then" }], now - 99_000);
+    const h = meetingHealth({ liveConnected: true, lastTranscriptAt: seen.at }, now, true, STALE_MS, "active", 2);
+    expect(h.kind).toBe("stalled");
+    expect(botStateHeadline(h)).toBe("Bot admitted \u00b7 quiet for 1m 39s");
+    expect(botStateHeadline(h)).not.toContain("no words");
   });
   it("clears 'at the door' on the first segment", () => {
     const seen = wordsSeen({ sig: "" }, [{ id: "1", text: "hi" }], now);

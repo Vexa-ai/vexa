@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { newerActiveSameCall } from "../useMeeting";
+import { newerActiveSameCall } from "../../surfaces/meetingModel";
 import type { MeetingMock } from "../../surfaces/meetingModel";
 
 /** F169 (ledger 2026-09-02 14:17Z-14:30Z) — "the panel stays on the ended meeting". When the

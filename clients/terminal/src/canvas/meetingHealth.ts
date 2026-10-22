@@ -36,6 +36,8 @@ export interface MeetingHealth {
   needsHelp?: boolean;
   /** `behind` only: seconds of audio not yet transcribed. */
   backlogS?: number;
+  /** Segments on screen, when the caller knows: zero is the only count that makes silence "no words". */
+  segments?: number;
 }
 
 type Diagnostics = NonNullable<MeetingState["diagnostics"]>;
@@ -52,10 +54,11 @@ export function isTranscriptStale(lastTranscriptAt: number | undefined, now: num
   return now - lastTranscriptAt >= staleMs;
 }
 
-/** WORDS ON SCREEN ARE EVIDENCE TOO (app.dev 2026-10-16: "Bot admitted · no words for 50s" stayed up
- *  over a call whose transcript was plainly flowing). The time the segments the reader sees last
- *  CHANGED — a new line, or a draft refining — whatever source brought them. `sig` is the last state
- *  seen; `at` is undefined until the first segment. Pure: the caller keeps the value between renders. */
+/** WORDS ON SCREEN ARE EVIDENCE TOO. The time the segments the reader sees last CHANGED — a new
+ *  line, or a draft refining — whatever source brought them. Lines already on screen when the view
+ *  opens count as heard at that moment: they are words, so the headline can never claim "no words"
+ *  over them. `sig` is the last state seen; `at` is undefined until the first segment. Pure: the
+ *  caller keeps the value between renders. */
 export function wordsSeen(
   prev: { sig: string | null; at?: number },
   segments: ReadonlyArray<{ id?: string; text?: string }>,
@@ -63,8 +66,7 @@ export function wordsSeen(
 ): { sig: string; at?: number } {
   const last = segments.length ? segments[segments.length - 1] : undefined;
   const sig = last ? `${segments.length}|${last.id ?? ""}|${last.text ?? ""}` : "";
-  // the first look is a BASELINE: lines already there when the view opened are not news
-  if (prev.sig === null) return { sig };
+  if (prev.sig === null) return last ? { sig, at: now } : { sig };
   if (sig === prev.sig || !last) return { sig: prev.sig, at: prev.at };
   return { sig, at: now };
 }
@@ -77,6 +79,7 @@ export function meetingHealth(
   live: boolean,
   staleMs = STALE_MS,
   status = "",
+  segments?: number,
 ): MeetingHealth {
   const d = diagnostics ?? {};
   const issues = d.issues ?? [];
@@ -114,7 +117,7 @@ export function meetingHealth(
 
   // Stale transcript: connected but no new lines for a while.
   if (isTranscriptStale(d.lastTranscriptAt, now, staleMs)) {
-    return { kind: "stalled", reconnects, latestIssue, staleForMs };
+    return { kind: "stalled", reconnects, latestIssue, staleForMs, segments };
   }
 
   // A STREAM THAT DROPPED AND CAME BACK is not an error (founder 2026-10-16): words arrived after it,
@@ -157,10 +160,17 @@ export function botStateHeadline(health: MeetingHealth, platform?: string): stri
     case "stalled":
       // It HAS been admitted and HAS been heard from — `stalled` cannot fire before a first line —
       // so this is a quiet room, not a stuck product. Say the silence, and how long it has run.
-      return `Bot admitted \u00b7 no words for ${health.staleForMs != null ? formatElapsed(health.staleForMs) : "a while"}`;
+      return `Bot admitted \u00b7 ${silence(health)}`;
     default:
       return "Bot feed error";
   }
+}
+
+/** How long the room has been silent. Words the reader can see make it "quiet"; "no words" is said
+ *  only when the caller counted zero segments on screen. */
+function silence(health: MeetingHealth): string {
+  const elapsed = health.staleForMs != null ? formatElapsed(health.staleForMs) : "a while";
+  return `${health.segments === 0 ? "no words" : "quiet"} for ${elapsed}`;
 }
 
 /** A VOICE NOTE's words (#1783). There is no room, door or bot to a person recording into their own
@@ -174,7 +184,7 @@ export function voiceNoteHeadline(health: MeetingHealth): string {
     case "disconnected":
       return "Reconnecting\u2026";
     case "stalled":
-      return `Recording \u00b7 no words for ${health.staleForMs != null ? formatElapsed(health.staleForMs) : "a while"}`;
+      return `Recording \u00b7 ${silence(health)}`;
     default:
       return "Transcript error";
   }

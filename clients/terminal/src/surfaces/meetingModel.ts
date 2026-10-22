@@ -89,3 +89,25 @@ export function meetingEntities(m: MeetingMock): { present: Entity[]; detected: 
   const detected = m.mentioned.filter((t) => !seen.has(t)).map(entityFor);
   return { present, detected };
 }
+
+/** F169 — "the panel stays on the ended meeting". A bot can be RE-DROPPED into the SAME call (the
+ *  person says "send bot" again after the first session ended, or an auto-reconnect fires):
+ *  meeting-api mints a NEW row (a new `id`) for the new session, but the underlying call's
+ *  `native_id` (the Meet/Zoom code) is unchanged. A tab pinned to the OLD row's id used to keep
+ *  rendering that row's now-static transcript forever — `resolveMeeting` only ever looked up the
+ *  exact id it was given, so the pane never learned a fresher session for the same call existed.
+ *
+ *  Pure, no I/O — the meeting pane (`canvas/useMeeting`) and the chat (`focusedMeeting`) both resolve
+ *  a row through it: given the resolved row and the full list, is there a LIVE row for the same call,
+ *  newer than this one? Row ids are
+ *  sequential ints assigned in creation order (matchesMeeting/toMock's own comment), so the
+ *  highest numeric id among same-`native_id` live rows is unambiguously the newest session —
+ *  robust even when a fresh row's `start_time` hasn't landed yet (still `requested`/`joining`). */
+export function newerActiveSameCall(meetings: MeetingMock[], resolved: MeetingMock): MeetingMock | undefined {
+  if (resolved.status === "live" || !resolved.native_id) return undefined;
+  const candidates = meetings.filter(
+    (m) => m.status === "live" && m.native_id === resolved.native_id && m.id !== resolved.id,
+  );
+  if (!candidates.length) return undefined;
+  return candidates.reduce((newest, m) => (Number(m.id) > Number(newest.id) ? m : newest));
+}

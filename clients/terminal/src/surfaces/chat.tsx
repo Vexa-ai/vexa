@@ -39,7 +39,7 @@ import { readFault } from "./faults";
 import { createStickToBottom, type StickToBottom } from "./stickToBottom";
 import { buildChatContext, focusTarget, readIncludeSchedule, scheduleEligible, writeIncludeSchedule, type FocusPayload } from "./chatContext";
 import { useLiveMeetings } from "./liveMeetings";
-import { meetingPhase, type MeetingMock, type MeetingPhase } from "./meetingModel";
+import { meetingPhase, newerActiveSameCall, type MeetingMock, type MeetingPhase } from "./meetingModel";
 import { presentError } from "../data/apiClient";
 import { ModelPicker } from "./ModelPicker";
 import { promptCarriesActiveContext } from "./surfaceSync";
@@ -382,6 +382,14 @@ const CONTEXT_SENTINEL = "<!--vexa:user-input-below-->";
  *  chat rendered as a grey USER bubble containing "## Referencing knowledge (always)", the mount
  *  stack and the write-routing policy, with his own sentence buried at the bottom. Do not extend it
  *  to cover a new preamble; the field is the answer. */
+/** The meeting a focused tab names, resolved as the transcript pane resolves it: the row whose id or
+ *  native id matches, followed to a newer live row for the same call. The `meeting_id` a turn carries
+ *  is then the row the reader is looking at. */
+export function focusedMeeting(meetings: MeetingMock[], ref: string): MeetingMock | undefined {
+  const named = meetings.find((m) => m.id === ref || m.native_id === ref);
+  return named && (newerActiveSameCall(meetings, named) ?? named);
+}
+
 export function stripContextBlocks(raw: string): string {
   const si = raw.lastIndexOf(CONTEXT_SENTINEL);
   if (si >= 0) {
@@ -1006,9 +1014,7 @@ export function Chat({ params = {}, emptyExtra }: ChatProps) {
   const bundleFocus: FocusPayload | null = focusCleared ? null : focusTarget(activeTab);
   const focusRef = focusCleared ? null : activeRef;
   const meetings = useLiveMeetings();
-  const activeMeeting = activeRef?.kind === "meeting"
-    ? meetings.find((m) => m.id === activeRef.value || m.native_id === activeRef.value)
-    : undefined;
+  const activeMeeting = activeRef?.kind === "meeting" ? focusedMeeting(meetings, activeRef.value) : undefined;
   // MINUTES: the composer stops ADVERTISING the focused doc (founder, 2026-09-01 — same treatment
   // as 722629588 gave the schedule chip). The context still flows: contextRef below continues to
   // ground the prompt and to fill the wire bundle; only the FOCUS chip and the badge stamped on the
