@@ -22,3 +22,14 @@ Drawer in a real browser and fails when the element under a dialog button is not
 a mouse click on the confirm does not reach it, or when the drawer's scrim leaves its stratum.
 jsdom has no hit-testing, so this cannot be a unit test. Runs in the terminal-layout workflow;
 locally, on bbb with `NODE_PATH` pointing at a Playwright install.
+
+## signin-link.mjs
+
+`node scripts/signin-link.mjs [email]` prints a one-time sign-in link (`/api/auth/redeem?t=…`) for
+the person named (default `self-host@vexa.ai`). It is the emailed door's own token, minted by the
+same rule (`src/app/api/auth/magicTokenMint.mjs`) and redeemed by the same route: verified, used
+once, valid for an hour, and admitted only if admin-api says that person may sign in. It is the
+first-run door of an install with no mail and no OAuth: Lite prints one at start and ships it as
+`vexa-signin-link` (`docker exec vexa-lite vexa-signin-link`). Needs the terminal's
+`NEXTAUTH_SECRET` (or `MAGIC_LINK_SECRET`) and `TERMINAL_PUBLIC_URL`; refuses when
+`VEXA_SIGNIN_METHODS` leaves out `email`.

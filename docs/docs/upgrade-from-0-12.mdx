@@ -123,11 +123,15 @@ not send. The newer side refuses what it does not find.
 so a 0.12 bot can still be in its meeting when the services around it are 0.13. Three things keep
 that meeting whole:
 
-- **Transcript.** For `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S` seconds after meeting-api starts
-  (default 14400, four hours), it admits the unsigned transcript entries a 0.12 bot writes, for the
-  meetings that were in flight and spawned before 0.13 only. A meeting spawned on 0.13 is never on
-  that list, and an entry whose signature does not verify is still refused. meeting-api logs
-  `segment_entry_legacy_admitted` for each one. `0` turns this off.
+- **Transcript.** Off by default: meeting-api refuses the unsigned transcript entries a 0.12 bot
+  writes. For the upgrade, set `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S=14400` on meeting-api
+  (Helm `compat.legacyUnsignedWindowSeconds: 14400`). For that many seconds after meeting-api starts
+  it then admits those entries, for the meetings that were in flight and spawned before 0.13 only. A
+  meeting spawned on 0.13 is never on that list, and an entry whose signature does not verify is
+  still refused. meeting-api logs `segment_entry_legacy_admitted` for each one and prints a warning
+  at every start while the setting is above `0`. Once the last 0.12 bot has left (at most four hours),
+  remove the setting (Helm: back to `0`) and apply it again. With no meeting in flight at the
+  upgrade, skip it.
 - **Status.** The 0.12 bot's lifecycle callbacks carry `x-internal-secret`, which 0.13 accepts. Keep
   `INTERNAL_API_SECRET` unchanged across the upgrade, and keep meeting-api's Service name, which is in
   the callback URL the bot was given.
@@ -329,22 +333,19 @@ is refused.
 
 ### Compatibility switches
 
-Three settings re-open a 0.12 behaviour for an upgrade that still needs it. The first two ship
-closed; turning one on is a residual risk for as long as it stays on, so count the log line it
-writes, move those callers, and turn it off again.
+Three settings re-open a 0.12 behaviour for an upgrade that still needs it. All three ship closed;
+turning one on is a residual risk for as long as it stays on, so count the log line it writes, move
+those callers, and turn it off again. While one is open, the service prints a warning banner at
+every start (and logs `compat_switch_open`) naming it. **All three are removed in 0.14.0.**
 
 | Setting (services) | Closed (default) | Open — what it re-admits | Log line while open |
 |---|---|---|---|
 | `VEXA_WS_SCOPE_MODE` (gateway and meeting-api; set both) | `strict`: `/ws` takes the REST routes' scopes | `legacy`: any valid key, a `bot`-only one included, streams its owner's transcripts and signals | `ws_scope_legacy_allowed` |
 | `VEXA_WEBHOOK_STORED_URL_POLICY` (meeting-api) | `strict`: the outbound-url.v1 guard | `v012`: every per-client webhook may also reach 100.64/10 (carrier NAT, Tailscale, some pod networks) and the documentation and benchmarking ranges. Loopback, private, link-local and metadata stay refused | `webhook_stored_url_v012` |
-| `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S` (meeting-api) | `0` | default `14400`: for that many seconds after each meeting-api start, unsigned transcript entries are admitted for meetings a 0.12 bot was already transcribing (see [Upgrade every component together](#upgrade-every-component-together)) | `segment_entry_legacy_admitted` |
-
-The third stays open by default because closing it drops the live transcript of every meeting a
-0.12 bot is still in when the services are upgraded. It admits only meetings spawned before 0.13,
-so on a fresh install it admits nothing; set it to `0` once no 0.12 bot is running.
+| `VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S` (meeting-api) | `0`: unsigned transcript entries are refused | `14400` (the upgrade's value): for that many seconds after each meeting-api start, unsigned transcript entries are admitted for meetings a 0.12 bot was already transcribing (see [Upgrade every component together](#upgrade-every-component-together)) | `segment_entry_legacy_admitted` |
 
 On Compose and Lite set them in the environment (`deploy/compose/.env`, `docker run -e`); on Helm,
-`compat.wsScopeMode` and `compat.webhookStoredUrlPolicy`.
+`compat.wsScopeMode`, `compat.webhookStoredUrlPolicy` and `compat.legacyUnsignedWindowSeconds`.
 
 ### Redis password and per-workload users
 
@@ -530,6 +531,17 @@ on the `workers` network (gateway, redis, flows-api, and the optional `llm-shim`
   `LOGIN_S3_SECRET_KEY` (on Compose, `.env`'s `MINIO_*` pair). See
   [Authenticated bots](/authenticated-bots#storage-layout-and-security).
 
+### Vexa Lite: sign-in is on
+
+- **Hits:** Vexa Lite. On 0.12 `http://localhost:3001` opened signed in for anyone who reached the
+  port (zero-login). 0.13 asks for a sign-in.
+- **If you skip it:** the terminal shows its sign-in card.
+- **Do:** sign in with the one-time link Lite prints to its log once it is up
+  (`docker logs vexa-lite 2>&1 | grep -A2 'Sign in to the terminal'`), or print a fresh one with
+  `docker exec vexa-lite vexa-signin-link`. On a box nobody else can reach you may keep the 0.12
+  behaviour with `-e VEXA_TERMINAL_ZERO_LOGIN=true`; Lite then prints a warning at every start while
+  the port listens beyond loopback. See [Vexa Lite](/deployment-lite).
+
 ### Vexa Lite run by hand
 
 If you start the Lite image with your own `docker run` instead of `make lite`:
@@ -647,6 +659,31 @@ kubectl -n vexa get secret <release>-vexa-secrets -o jsonpath='{.data.ADMIN_API_
 helm upgrade vexa deploy/helm/charts/vexa -n vexa -f values-0.12.yaml \
   --set database.password=<value> --set secrets.adminApiToken=<value>
 ```
+
+**Roll back the services behind the gateway first.** A 0.12 gateway sends the caller's identity
+unsigned, and a 0.13 meeting-api or agent-api refuses that with `401`; a 0.13 gateway in front of
+0.12 services works. When every Deployment rolls at once, requests that reach a new 0.12 gateway
+pod while a 0.13 meeting-api pod still serves get `401` until the last 0.13 pod is gone (about
+20 s in our hosted rehearsal). Hold the gateway on 0.13 until the rest is back:
+
+```bash
+kubectl -n vexa rollout pause deploy/<release>-vexa-gateway
+helm upgrade vexa deploy/helm/charts/vexa -n vexa -f values-0.12.yaml \
+  --set database.password=<value> --set secrets.adminApiToken=<value>    # no --wait
+kubectl -n vexa rollout status deploy/<release>-vexa-meeting-api
+kubectl -n vexa rollout status deploy/<release>-vexa-admin-api
+kubectl -n vexa rollout status deploy/<release>-vexa-agent-api          # if agent-api is enabled
+kubectl -n vexa rollout resume deploy/<release>-vexa-gateway
+kubectl -n vexa rollout status deploy/<release>-vexa-gateway
+```
+
+Under Argo CD, put the gateway in a later sync wave than the services
+(`gateway.deploymentAnnotations: {argocd.argoproj.io/sync-wave: "1"}`): Argo waits for each wave to
+be healthy before it starts the next.
+
+With the in-chart postgres and redis, a version change restarts both, and for about 30 s
+authenticated requests get `503` (`auth_unavailable`) in either direction, whatever the order. Use
+an external database and Redis where that window matters.
 
 If the database itself is damaged, restore the dump you took before the upgrade.
 

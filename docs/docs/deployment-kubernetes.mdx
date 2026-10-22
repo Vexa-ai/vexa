@@ -925,6 +925,23 @@ key. The chart generates both secrets in its Secret (`secrets.factSealSecret`,
 `secrets.existingSecretName`, your Secret must carry both: without them the outbox does not start
 and flows-api refuses sealed facts. See [CRM](/minutes/crm).
 
+## Meeting and onboarding facts to flows
+
+With `flows.enabled`, meeting-api tells flows when a bot it dispatched goes active and when it
+completes, and when a meeting is shared by email (`meeting.started`, `meeting.completed`,
+`meeting.shared`); admin-api tells it when a person finishes onboarding (`onboarding.completed`).
+Both reach the in-chart flows-api (`VEXA_FLOWS_API_URL`) with the flows operator key
+(`VEXA_FLOWS_API_KEY`, from the flows Secret or `flows.existingSecret`), as under Docker Compose. The
+publish is best-effort: flows down never stops a meeting or an onboarding. With flows off neither
+service gets the setting.
+
+## 0.12 compatibility switches
+
+`compat.wsScopeMode`, `compat.webhookStoredUrlPolicy` and `compat.legacyUnsignedWindowSeconds` ship
+closed (`strict`, `strict`, `0`). Each open value is a residual for an upgrade from 0.12; the service
+prints a warning at every start while one is open, and all three are removed in 0.14.0. See
+[Compatibility switches](/upgrade-from-0-12#compatibility-switches).
+
 ## The deprecated dashboard (optional)
 
 The 0.10 dashboard — the multi-user web UI that predates the Terminal — ships as an

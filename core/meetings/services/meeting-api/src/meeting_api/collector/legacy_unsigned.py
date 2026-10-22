@@ -16,8 +16,11 @@ This module admits exactly those entries, and only for a bounded time:
   meeting spawned after the upgrade is never on the list, whatever its status.
 * **Which entries.** Only an entry with NO ``auth`` and NO ``sig`` field — the 0.12 shape. An entry
   that carries a signature which does not verify is still refused.
-* **How long.** ``VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S`` seconds from boot (default 14400, four
-  hours; production's 7-day p95 bot run is about 90 minutes). ``0`` turns the hand-off off.
+* **How long.** ``VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S`` seconds from boot. The default is ``0``:
+  the hand-off is off, and an unsigned entry is refused like any other. The upgrade runbook sets it
+  (14400, four hours, covers production's 7-day p95 bot run of about 90 minutes) for the cut-over
+  and unsets it afterwards; a value that is not a number reads as ``0``. While it is above ``0``,
+  meeting-api prints a warning at boot (``compat_switches``).
 
 Each admitted entry is logged (``segment_entry_legacy_admitted``) so the cut-over watch can see the
 hand-off working and see it end.
@@ -31,7 +34,7 @@ import time
 from typing import Iterable, Optional
 
 WINDOW_ENV = "VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S"
-DEFAULT_WINDOW_S = 14400
+DEFAULT_WINDOW_S = 0
 
 #: Statuses of a meeting whose bot may still be writing segments.
 IN_FLIGHT_STATUSES = ("requested", "joining", "awaiting_admission", "active", "needs_help", "stopping")
@@ -48,7 +51,7 @@ def window_seconds(env: Optional[dict] = None) -> int:
     try:
         return max(0, int(raw))
     except ValueError:
-        log.warning("%s: not a number of seconds; using %d", WINDOW_ENV, DEFAULT_WINDOW_S)
+        log.warning("%s: not a number of seconds; the hand-off stays off", WINDOW_ENV)
         return DEFAULT_WINDOW_S
 
 

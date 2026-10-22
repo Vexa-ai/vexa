@@ -211,6 +211,9 @@ def build_production_app():
     _calendar_feed_allow_at_boot()  # a malformed internal-feed allowance refuses the boot
     _auto_join_block_at_boot()  # a malformed auto-join block list refuses the boot
     _transcription_language_at_boot()  # a refused default language stops the boot, not the first spawn
+    from .compat_switches import warn_at_boot
+
+    warn_at_boot()  # an open 0.12 compatibility switch is printed at every boot, with its removal release
 
     import redis.asyncio as aioredis
 

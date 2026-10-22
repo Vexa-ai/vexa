@@ -13,9 +13,9 @@
  * account domains (`SIGNIN_NAVIGATION_DOMAINS`) is aborted and logged — an internal service, a
  * `file://` path or a `chrome://` page included. Subresources still load from the platform's CDNs.
  * A company identity provider outside those domains (an Okta or ADFS tenant) is refused with them,
- * unless the operator names it (`extraHosts`, from `VEXA_BOT_SIGNIN_EXTRA_HOSTS`): an exact host or
- * `*.suffix`, over https only. An entry that is an IP literal, a bare label or localhost is dropped
- * here as well as where it is configured.
+ * unless the operator names it (`extraHosts`, from `VEXA_BOT_SIGNIN_EXTRA_HOSTS`): an exact host, over
+ * https only. An entry that is a wildcard, an IP literal, a bare label or localhost is dropped here as
+ * well as where it is configured.
  */
 import { AuthPlatform, LoginStatus } from './types';
 import { launchPersistentBrowser } from './browser';

@@ -157,7 +157,7 @@ def test_opening_a_session_spawns_a_signin_workload(rig):
 
 
 # ── VEXA_BOT_SIGNIN_EXTRA_HOSTS: an operator's company IdP (a bank's ADFS) ─────────────────────────
-_RESOLVES = {"adfs.bank.example": ["203.0.114.10"], "adfs-internal.bank.example": ["10.1.2.3"],
+_RESOLVES = {"adfs.bank.example": ["203.0.114.10"], "login.okta.bank.example": ["203.0.114.12"], "adfs-internal.bank.example": ["10.1.2.3"],
              "metadata.bank.example": ["169.254.169.254"], "mixed.bank.example": ["203.0.114.11", "127.0.0.1"]}
 
 
@@ -175,10 +175,19 @@ def test_no_extra_hosts_by_default(rig):
     assert "extra_hosts" not in rig.last_env()
 
 
-def test_an_extra_public_host_and_a_suffix_reach_the_signin_browser(rig):
-    r = _extra_rig("ADFS.bank.example, *.okta.bank.example")
+def test_extra_public_hosts_reach_the_signin_browser(rig):
+    r = _extra_rig("ADFS.bank.example, login.okta.bank.example")
     assert r.open().status_code == 201, r.client
-    assert r.last_env()["extra_hosts"] == ["adfs.bank.example", "*.okta.bank.example"]
+    assert r.last_env()["extra_hosts"] == ["adfs.bank.example", "login.okta.bank.example"]
+
+
+@pytest.mark.parametrize("entry", ["*.okta.bank.example", "*.bank.example", "*adfs.bank.example", "adfs.*.example"])
+def test_a_wildcard_sign_in_host_refuses_the_boot(entry):
+    """The `*.suffix` form is gone: a wildcard could not be resolved ahead, so a subdomain that
+    resolved to an internal address reached the sign-in browser. Each host is named exactly."""
+    from meeting_api.bot_accounts.service import parse_signin_extra_hosts
+    with pytest.raises(ValueError, match="wildcard"):
+        parse_signin_extra_hosts(f"adfs.bank.example,{entry}")
 
 
 @pytest.mark.parametrize("host", ["adfs-internal.bank.example", "metadata.bank.example", "mixed.bank.example",

@@ -62,6 +62,39 @@ WS_SCOPE_MODE_ENV = "VEXA_WS_SCOPE_MODE"
 WS_SCOPE_MODES = ("legacy", "strict")
 
 
+#: The release that removes ``VEXA_WS_SCOPE_MODE=legacy`` (a 0.12 compatibility switch).
+WS_SCOPE_LEGACY_REMOVED_IN = "0.14.0"
+
+
+def warn_ws_scope_legacy_at_boot(env: "dict | None" = None, stream=None) -> bool:
+    """While ``legacy`` is open, print a banner on stderr and log ``compat_switch_open`` at boot.
+    True when it printed. Never raises: a warning never stops the gateway."""
+    import sys
+
+    if ((env if env is not None else os.environ).get(WS_SCOPE_MODE_ENV) or "").strip().lower() != "legacy":
+        return False
+    rule = "#" * 96
+    lines = [
+        "WARNING: gateway runs with a 0.12 compatibility switch OPEN.",
+        "",
+        f"  {WS_SCOPE_MODE_ENV}=legacy",
+        "    re-opens: any valid key, a bot-only one included, streams its owner's transcripts over /ws",
+        "",
+        f"It is a residual risk while it is set, and it is removed in {WS_SCOPE_LEGACY_REMOVED_IN}. Unset it once",
+        "the 0.12 callers have moved: https://docs.vexa.ai/upgrade-from-0-12#compatibility-switches",
+    ]
+    out = sys.stderr if stream is None else stream
+    out.write("\n".join([rule, *(f"##  {line}".rstrip() for line in lines), rule]) + "\n")
+    out.flush()
+    try:
+        log_event("compat_switch_open", audience="system", level="warning", span="boot",
+                  fields={"key": WS_SCOPE_MODE_ENV, "value": "legacy",
+                          "removed_in": WS_SCOPE_LEGACY_REMOVED_IN})
+    except Exception:  # noqa: BLE001 — the banner above already said it
+        pass
+    return True
+
+
 def ws_scope_mode(env: "dict | None" = None) -> str:
     """The configured mode; unset or an unknown value reads as ``strict`` (an unknown one is logged)."""
     raw = ((env if env is not None else os.environ).get(WS_SCOPE_MODE_ENV) or "strict").strip().lower()

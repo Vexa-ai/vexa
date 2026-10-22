@@ -913,9 +913,11 @@ services:
       - VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP=${VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP:-false}
       - VEXA_SYSTEM_WEBHOOK_TIMEOUT_S=${VEXA_SYSTEM_WEBHOOK_TIMEOUT_S:-10}
       # 0.12 compatibility switches, closed by default (docs: upgrade-from-0-12 → compatibility
-      # switches). `legacy` / `v012` are explicit opt-ins and each one is a residual.
+      # switches). `legacy` / `v012` / a window above 0 are explicit opt-ins, each one a residual,
+      # printed at every boot and removed in 0.14.0.
       - VEXA_WS_SCOPE_MODE=${VEXA_WS_SCOPE_MODE:-strict}
       - VEXA_WEBHOOK_STORED_URL_POLICY=${VEXA_WEBHOOK_STORED_URL_POLICY:-strict}
+      - VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S=${VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S:-0}
       # Voice notes (/minutes/voice-notes): the longest note in seconds of audio, and the idle wait.
       - VOICE_NOTE_MAX_DURATION_SEC=${VOICE_NOTE_MAX_DURATION_SEC:-1800}
       - VOICE_NOTE_IDLE_TIMEOUT_SEC=${VOICE_NOTE_IDLE_TIMEOUT_SEC:-120}

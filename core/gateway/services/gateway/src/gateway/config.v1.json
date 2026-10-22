@@ -127,7 +127,7 @@
       "key": "VEXA_WS_SCOPE_MODE",
       "class": "defaulted",
       "default": "strict",
-      "description": "how /ws holds a key to the REST routes' scopes. strict (default) = opening takes a meeting-status scope and subscribing takes the transcript read's scope (tx); a refused key gets insufficient_scope / close 4403. legacy = an explicit opt-in to the 0.12 contract, a residual: any valid key (a bot-only key included) opens the socket and subscribes to the meetings the authorize hop grants it, logging ws_scope_legacy_allowed when strict would refuse. Set the gateway and meeting-api to the same value.",
+      "description": "how /ws holds a key to the REST routes' scopes. strict (default) = opening takes a meeting-status scope and subscribing takes the transcript read's scope (tx); a refused key gets insufficient_scope / close 4403. legacy = an explicit opt-in to the 0.12 contract, a residual: any valid key (a bot-only key included) opens the socket and subscribes to the meetings the authorize hop grants it, logging ws_scope_legacy_allowed when strict would refuse. Set the gateway and meeting-api to the same value. A 0.12 compatibility switch, removed in 0.14.0; while it is open every boot prints a warning (compat_switch_open).",
       "targets": [
         "compose",
         "helm",

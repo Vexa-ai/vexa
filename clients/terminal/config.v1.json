@@ -222,7 +222,7 @@
       "key": "VEXA_TERMINAL_ZERO_LOGIN",
       "class": "defaulted",
       "default": "false — a request with no session cookie is anonymous and is forwarded with no key",
-      "description": "ZERO-LOGIN, for a single-person box behind a closed port: `true` makes every request that carries no session cookie act as the deployment key (VEXA_API_KEY, else VEXA_BOT_API_KEY) over REST and /ws (src/app/api/auth/deploymentKey.mjs). Anyone who can reach the terminal is then that key's person. Any other value, or unset, and an anonymous request carries no key and the gateway refuses it. Lite sets it to `true` for the box it runs on (deploy/lite/entrypoint.sh); set it `false` there when the port is reachable by anybody else.",
+      "description": "ZERO-LOGIN, for a single-person box behind a closed port: `true` makes every request that carries no session cookie act as the deployment key (VEXA_API_KEY, else VEXA_BOT_API_KEY) over REST and /ws (src/app/api/auth/deploymentKey.mjs). Anyone who can reach the terminal is then that key's person. Any other value, or unset, and an anonymous request carries no key and the gateway refuses it. Off on every surface, Lite included (deploy/lite/entrypoint.sh): `true` is an explicit opt-in for a box only its operator can reach, and Lite prints a warning banner at every start while it is on and the terminal listens beyond loopback. With it off, Lite's first-run door is a one-time sign-in link it prints at start (vexa-signin-link).",
       "targets": ["lite"]
     },
     {

@@ -48,22 +48,26 @@ AUTH_SESSION_MISSING = "auth_session_missing"
 
 
 #: An operator's extra sign-in hosts — a company identity provider the platform hands the sign-in to
-#: (a bank's ADFS for its Teams account). Comma-separated exact host names or ``*.suffix``; empty by
-#: default. The sign-in browser may navigate to these over https beside the platform's own hosts.
+#: (a bank's ADFS for its Teams account). Comma-separated exact host names; empty by default. The
+#: sign-in browser may navigate to these over https beside the platform's own hosts. A wildcard
+#: (``*.example.com``) is refused: name each host the sign-in passes through.
 SIGNIN_EXTRA_HOSTS_ENV = "VEXA_BOT_SIGNIN_EXTRA_HOSTS"
 _HOST_NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$")
 
 
 def parse_signin_extra_hosts(raw: Optional[str]) -> tuple:
-    """``VEXA_BOT_SIGNIN_EXTRA_HOSTS`` as a tuple of entries, or ``ValueError`` naming the first entry
-    that may not widen the sign-in browser: an IP literal, a single label, ``localhost``, a metadata
-    name, or a suffix of one label (``*.com``)."""
+    """``VEXA_BOT_SIGNIN_EXTRA_HOSTS`` as a tuple of exact host names, or ``ValueError`` naming the first
+    entry that may not widen the sign-in browser: a wildcard (``*.example.com``), an IP literal, a
+    single label, ``localhost`` or a metadata name."""
     entries = []
     for part in (raw or "").split(","):
         entry = part.strip().lower().rstrip(".")
         if not entry:
             continue
-        name = entry[2:] if entry.startswith("*.") else entry
+        if "*" in entry:
+            raise ValueError(f"{SIGNIN_EXTRA_HOSTS_ENV}: {part.strip()!r} is a wildcard; name each sign-in "
+                             "host exactly (for example adfs.example.com, login.example.okta.com)")
+        name = entry
         if (ssrf.literal_address(name) is not None or ssrf.is_blocked_hostname(name)
                 or not _HOST_NAME.match(name) or name.rsplit(".", 1)[-1].isdigit()):
             raise ValueError(f"{SIGNIN_EXTRA_HOSTS_ENV}: {part.strip()!r} is not a host name a sign-in "
@@ -287,19 +291,17 @@ class BotAccounts:
         }
 
     def _signin_extra_hosts(self) -> list:
-        """The operator's extra sign-in hosts this session may reach. An exact host is resolved now and
-        left out (logged) when it does not resolve or any address it resolves to is internal; a
-        ``*.suffix`` cannot be resolved ahead and is passed as configured."""
+        """The operator's extra sign-in hosts this session may reach. Each is resolved now and left
+        out (logged) when it does not resolve or any address it resolves to is internal."""
         resolve = self.resolver or ssrf.resolve_host
         out = []
         for entry in self.settings.signin_extra_hosts:
-            if not entry.startswith("*."):
-                addrs = resolve(entry)
-                if not addrs or any(ssrf.is_blocked_ip(a) for a in addrs):
-                    log_event("browser_session_extra_host_refused", audience="system", level="warning",
-                              span="bot_accounts",
-                              fields={"host": entry, "why": "internal address" if addrs else "does not resolve"})
-                    continue
+            addrs = resolve(entry)
+            if not addrs or any(ssrf.is_blocked_ip(a) for a in addrs):
+                log_event("browser_session_extra_host_refused", audience="system", level="warning",
+                          span="bot_accounts",
+                          fields={"host": entry, "why": "internal address" if addrs else "does not resolve"})
+                continue
             out.append(entry)
         return out
 

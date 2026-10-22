@@ -144,6 +144,8 @@ spec:
               value: {{ .Values.compat.wsScopeMode | default "strict" | quote }}
             - name: VEXA_WEBHOOK_STORED_URL_POLICY
               value: {{ .Values.compat.webhookStoredUrlPolicy | default "strict" | quote }}
+            - name: VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S
+              value: {{ .Values.compat.legacyUnsignedWindowSeconds | default 0 | quote }}
             # diagnostics.captureSignal (default "false"): no captured-signal tape unless turned on.
             - name: VEXA_CAPTURE_SIGNAL_DEFAULT
               value: {{ include "vexa.captureSignalDefault" . | quote }}
@@ -249,8 +251,22 @@ spec:
             - name: VEXA_BOT_ACCOUNTS_KEY_FILE
               value: /run/vexa-connections/bots/key
             # credentialBroker.botSigninExtraHosts: a company IdP the sign-in browser may also reach.
+            {{- if contains "*" (.Values.credentialBroker.botSigninExtraHosts | default "") }}
+            {{- fail "credentialBroker.botSigninExtraHosts: wildcards are not accepted; name each sign-in host exactly (e.g. adfs.example.com,login.example.okta.com)" }}
+            {{- end }}
             - name: VEXA_BOT_SIGNIN_EXTRA_HOSTS
               value: {{ .Values.credentialBroker.botSigninExtraHosts | default "" | quote }}
+            {{- end }}
+            {{- if .Values.flows.enabled }}
+            # The publish edge to flows (config.v1 publish-edge): meeting.started, meeting.completed and meeting.shared, best-effort,
+            # authenticated with the flows operator key, as under compose.
+            - name: VEXA_FLOWS_API_URL
+              value: "http://{{ include "vexa.componentName" (list . "flows-api") }}:18200"
+            - name: VEXA_FLOWS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vexa.flowsApiKeySecretName" . }}
+                  key: VEXA_FLOWS_API_KEY
             {{- end }}
             {{- with .Values.meetingApi.extraEnv }}
             {{- toYaml . | nindent 12 }}

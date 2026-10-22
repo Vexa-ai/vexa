@@ -100,7 +100,8 @@ vexaEnv: "development"
 features: ""
 # 0.12 compatibility switches. Each ships CLOSED; the open value is an explicit, documented opt-in
 # for an upgrade that still needs the 0.12 behaviour, and each one is a residual while set (docs:
-# upgrade-from-0-12 → "Compatibility switches").
+# upgrade-from-0-12 → "Compatibility switches"). Every boot with one open prints a warning, and
+# every one of them is removed in 0.14.0.
 compat:
   # /ws key scopes (VEXA_WS_SCOPE_MODE, gateway + meeting-api). strict = the REST routes' scopes;
   # legacy = any valid key, a bot-only one included, streams its owner's transcripts.
@@ -108,6 +109,10 @@ compat:
   # Per-client webhook delivery (VEXA_WEBHOOK_STORED_URL_POLICY, meeting-api). strict = the
   # outbound-url.v1 guard; v012 = also 100.64/10 and the TEST-NET/benchmark ranges, as 0.12 did.
   webhookStoredUrlPolicy: "strict"
+  # Upgrade hand-off for meetings a 0.12 bot is still in (VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S,
+  # meeting-api). 0 = off: an unsigned transcript entry is refused. The 0.12 → 0.13 upgrade sets it
+  # to 14400 for the cut-over and back to 0 afterwards (docs: upgrade-from-0-12).
+  legacyUnsignedWindowSeconds: 0
 
 secrets:
   existingSecretName: ""
@@ -917,8 +922,9 @@ credentialBroker:
   botAccounts: true
   # Hosts the bot-account sign-in browser may reach beside the platform's own (meeting-api
   # VEXA_BOT_SIGNIN_EXTRA_HOSTS): a company identity provider, e.g. "adfs.bank.example" or
-  # "*.okta.bank.example". Comma-separated, https only; an IP literal, a single label or localhost
-  # refuses meeting-api's boot, and a host that resolves to an internal address is left out.
+  # "adfs.bank.example,login.bank.okta.com". Comma-separated exact hosts, https only; a wildcard, an IP
+  # literal, a single label or localhost refuses meeting-api's boot, and a host that resolves to an
+  # internal address is left out.
   botSigninExtraHosts: ""
   networkPolicy:
     enabled: true               # ingress from agent-api and terminal Pods only

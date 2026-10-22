@@ -80,22 +80,23 @@ export function withSiteIsolation(args: readonly string[]): string[] {
   return out;
 }
 
-/** An operator's extra sign-in host (`VEXA_BOT_SIGNIN_EXTRA_HOSTS`): an exact DNS name, or `*.suffix`
- *  for the suffix's subdomains (never the suffix itself). Null for an entry that may not widen the
- *  list: an IP literal, a single label, `localhost` or `*.localhost`, a one-label suffix (`*.com`). */
+/** An operator's extra sign-in host (`VEXA_BOT_SIGNIN_EXTRA_HOSTS`): an exact DNS name. Null for an
+ *  entry that may not widen the list: a wildcard (`*.example.com`), an IP literal, a single label or
+ *  `localhost`. */
 export function extraHostEntry(raw: string): string | null {
   const e = raw.trim().toLowerCase().replace(/\.$/, '');
-  const name = e.startsWith('*.') ? e.slice(2) : e;
+  if (e.includes('*')) return null;
+  const name = e;
   if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(name)) return null;
   if (/^[0-9.]+$/.test(name) || /\.[0-9]+$/.test(name)) return null;   // an IPv4 literal or a numeric TLD
   if (name === 'localhost' || name.endsWith('.localhost')) return null;
   return e;
 }
 
-/** Whether `host` is one of the operator's extra entries (exact, or a subdomain of a `*.suffix`). */
+/** Whether `host` is exactly one of the operator's extra entries. */
 export function extraHostAllowed(host: string, extra: readonly string[]): boolean {
   const h = host.toLowerCase().replace(/\.$/, '');
-  return extra.some((e) => (e.startsWith('*.') ? h.endsWith(e.slice(1)) && h.length > e.length - 1 : h === e));
+  return extra.some((e) => h === e);
 }
 
 /** Whether a URL is off the list (and so must not be navigated to). */

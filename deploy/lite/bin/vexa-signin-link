@@ -1,0 +1,18 @@
+#!/bin/sh
+# vexa-signin-link [email] — print a one-time sign-in link for this Lite instance's terminal.
+#
+#   docker exec vexa-lite vexa-signin-link                 # the instance's own person, self-host@vexa.ai
+#   docker exec vexa-lite vexa-signin-link you@example.com # anybody admin-api admits
+#
+# The terminal's own minting rule (clients/terminal/scripts/signin-link.mjs): the emailed link's
+# token, single use, valid for an hour. It reads the link key the terminal runs with: NEXTAUTH_SECRET
+# from the container's environment, else the one the entrypoint keeps in $VEXA_LITE_STATE_DIR.
+set -eu
+state_dir="${VEXA_LITE_STATE_DIR:-/var/lib/vexa/state}"
+if [ -z "${NEXTAUTH_SECRET:-}" ] && [ -r "$state_dir/nextauth-secret" ]; then
+    NEXTAUTH_SECRET="$(cat "$state_dir/nextauth-secret")"
+fi
+export NEXTAUTH_SECRET="${NEXTAUTH_SECRET:-}"
+export TERMINAL_PUBLIC_URL="${TERMINAL_PUBLIC_URL:-http://localhost:3001}"
+cd /app/terminal
+exec node scripts/signin-link.mjs "$@"

@@ -88,9 +88,10 @@ meeting-api; see [Connections](/connections).
 
 The sign-in browser reaches only the platform's own sign-in hosts. If your account signs in through a
 company identity provider (ADFS, Okta), name its host in `VEXA_BOT_SIGNIN_EXTRA_HOSTS` on meeting-api
-(Helm `credentialBroker.botSigninExtraHosts`): comma-separated exact hosts or `*.suffix`, https only.
-IP addresses, single labels and `localhost` are refused at start, and a host that resolves to an
-internal address is left out.
+(Helm `credentialBroker.botSigninExtraHosts`): comma-separated exact hosts, https only, for example
+`adfs.example.com,login.example.okta.com`. Name every host the sign-in passes through: wildcards
+(`*.example.com`), IP addresses, single labels and `localhost` are refused at start, and a host that
+resolves to an internal address is left out.
 
 ## Why it complies
 

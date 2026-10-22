@@ -267,6 +267,9 @@ def build_production_app(
     # reject every /internal/validate hop (503 on every API-key check), the 2026-04-23 shape. Fail
     # loud at boot with one message naming the missing key, instead of coming up green and 503ing.
     preflight()
+    from .multiplex import warn_ws_scope_legacy_at_boot
+
+    warn_ws_scope_legacy_at_boot()  # an open 0.12 compatibility switch is printed at every boot
 
     admin_api_url = admin_api_url or os.getenv("ADMIN_API_URL", "http://admin-api:8001")
     meeting_api_url = meeting_api_url or os.getenv("MEETING_API_URL", "http://meeting-api:8080")

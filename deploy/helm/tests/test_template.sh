@@ -1355,8 +1355,9 @@ else echo "  FAIL: identity.existingSecret rendered without a public key"; fail=
 
 # flows' operator key (VEXA_FLOWS_API_KEY) from a Secret you manage, so a template-only render can
 # turn flows on without the key in values: flows.existingSecret, or secrets.existingSecretName when
-# flows.apiKey is empty. Then the chart's flows Secret omits the key and all five consumers (three
-# flows containers, the MCP edge, agent-api) read it from that Secret by name. With flows.apiKey set, nothing
+# flows.apiKey is empty. Then the chart's flows Secret omits the key and all seven consumers (three
+# flows containers, the MCP edge, agent-api, and the publish edges of meeting-api and admin-api) read
+# it from that Secret by name. With flows.apiKey set, nothing
 # changes; both apiKey and existingSecret is refused.
 flows_key_refs() {  # flows_key_refs <render> → "<secret> <count>" lines for VEXA_FLOWS_API_KEY refs
   grep -A4 -E '^[[:space:]]+- name: VEXA_FLOWS_API_KEY$' <<< "$1" | grep 'key: VEXA_FLOWS_API_KEY' -B1 \
@@ -1366,12 +1367,12 @@ for src in "secrets.existingSecretName=shared-secrets shared-secrets" "flows.exi
   set -- $src
   fk="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true --set "$1")"
   if grep -qE '^  VEXA_FLOWS_API_KEY:' <<< "$fk"; then echo "  FAIL: $1 still renders the key into the flows Secret"; fail=1
-  elif [ "$(flows_key_refs "$fk")" = "$2 5" ]; then echo "  OK: $1 — flows' three containers, the MCP edge and agent-api read VEXA_FLOWS_API_KEY from $2"
+  elif [ "$(flows_key_refs "$fk")" = "$2 7" ]; then echo "  OK: $1 — flows' three containers, the MCP edge, agent-api, meeting-api and admin-api read VEXA_FLOWS_API_KEY from $2"
   else echo "  FAIL: $1 — VEXA_FLOWS_API_KEY refs: $(flows_key_refs "$fk" | tr '\n' ';')"; fail=1; fi
 done
 fk="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true \
   --set secrets.existingSecretName=shared-secrets --set flows.apiKey=inline-test-key)"
-if grep -qE '^  VEXA_FLOWS_API_KEY: "inline-test-key"$' <<< "$fk" && [ "$(flows_key_refs "$fk")" = "vexa-vexa-flows 2" ]; then
+if grep -qE '^  VEXA_FLOWS_API_KEY: "inline-test-key"$' <<< "$fk" && [ "$(flows_key_refs "$fk")" = "vexa-vexa-flows 4" ]; then
   echo "  OK: flows.apiKey in values keeps the key in the chart's flows Secret, as before"
 else echo "  FAIL: flows.apiKey with secrets.existingSecretName"; fail=1; fi
 fboth="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true --set flows.mail.enabled=true \
@@ -1831,10 +1832,28 @@ tb "default: stored webhook URLs get the outbound-url.v1 guard (strict)" '[ "$(e
 compat_open="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set compat.wsScopeMode=legacy --set compat.webhookStoredUrlPolicy=v012)"
 tb "the opt-ins reach both services" \
   '[ "$(envval VEXA_WS_SCOPE_MODE "$(doc Deployment vexa-vexa-gateway "$compat_open")")" = "\"legacy\"" ] && [ "$(envval VEXA_WEBHOOK_STORED_URL_POLICY "$(doc Deployment vexa-vexa-meeting-api "$compat_open")")" = "\"v012\"" ]'
+# 10-E: the upgrade hand-off for 0.12 bots' unsigned transcript entries ships off; the runbook opens it.
+tb "default: the unsigned-segment hand-off is off (VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S=0)" \
+  '[ "$(envval VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S "$ma_c")" = "\"0\"" ]'
+tb "compat.legacyUnsignedWindowSeconds opens it for the cut-over" \
+  '[ "$(envval VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S "$(doc Deployment vexa-vexa-meeting-api "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set compat.legacyUnsignedWindowSeconds=14400)")")" = "\"14400\"" ]'
 sx_def="$(doc Deployment vexa-vexa-meeting-api "$compat_def")"
-sx_set="$(doc Deployment vexa-vexa-meeting-api "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set credentialBroker.botSigninExtraHosts='adfs.bank.example\,*.okta.bank.example')")"
+sx_set="$(doc Deployment vexa-vexa-meeting-api "$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set credentialBroker.botSigninExtraHosts='adfs.bank.example\,login.bank.okta.com')")"
 tb "the sign-in browser's extra hosts are empty by default and reach meeting-api when set" \
-  '[ "$(envval VEXA_BOT_SIGNIN_EXTRA_HOSTS "$sx_def")" = "\"\"" ] && [ "$(envval VEXA_BOT_SIGNIN_EXTRA_HOSTS "$sx_set")" = "\"adfs.bank.example,*.okta.bank.example\"" ]'
+  '[ "$(envval VEXA_BOT_SIGNIN_EXTRA_HOSTS "$sx_def")" = "\"\"" ] && [ "$(envval VEXA_BOT_SIGNIN_EXTRA_HOSTS "$sx_set")" = "\"adfs.bank.example,login.bank.okta.com\"" ]'
+refuse "a wildcard sign-in host" "wildcards are not accepted" -f "$CHART/values-test.yaml" --set credentialBroker.botSigninExtraHosts='adfs.bank.example\,*.okta.bank.example'
+
+# A3: meeting-api and admin-api tell flows their facts on Helm as they do under compose — the in-chart
+# flows-api and its operator key, only when flows is on. Without flows they hold no flows edge at all.
+fl_on="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set flows.enabled=true)"
+fl_url="\"http://vexa-vexa-flows-api:18200\""
+for svc in meeting-api admin-api; do
+  d_on="$(doc Deployment "vexa-vexa-$svc" "$fl_on")"; d_off="$(doc Deployment "vexa-vexa-$svc" "$compat_def")"
+  tb "flows on: $svc publishes to the in-chart flows-api" '[ "$(envval VEXA_FLOWS_API_URL "$d_on")" = "$fl_url" ]'
+  tb "flows on: $svc presents the flows operator key from the flows Secret" \
+    'grep -A4 "name: VEXA_FLOWS_API_KEY$" <<< "$d_on" | grep -q "name: vexa-vexa-flows" && grep -A4 "name: VEXA_FLOWS_API_KEY$" <<< "$d_on" | grep -q "key: VEXA_FLOWS_API_KEY"'
+  tb "flows off (negative control): $svc has no flows edge" '! grep -qE "name: VEXA_FLOWS_API_(URL|KEY)$" <<< "$d_off"'
+done
 
 # ── Production-shape options (prod-shape-0133): a hosted install runs this chart unpatched ──
 echo "=== production-shape options ==="

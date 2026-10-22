@@ -30,15 +30,25 @@ self-host key is minted):
 | **terminal** — the workbench UI | `3001` |
 | **agent-api** — the agent control plane. The port answers health checks; clients call it through the gateway as `/agent/*`, since agent-api accepts a user only from the gateway's signed identity | `8100` |
 
-On first boot Lite mints its own credentials — a `self-host@vexa.ai` user and `bot,tx`-scoped API
-keys — and hands them to the terminal, so `http://localhost:3001` opens signed in. Set
-`VEXA_API_KEY` in `.env` to bring your own key and skip the minting.
+On first boot Lite mints its own credentials: a `self-host@vexa.ai` user and `bot,tx`-scoped API
+keys. Set `VEXA_API_KEY` in `.env` to bring your own key and skip the minting.
 
-That is **zero-login** (`VEXA_TERMINAL_ZERO_LOGIN=true`, Lite's default): every visitor who can
-reach port 3001 acts as that self-host user. Set `VEXA_TERMINAL_ZERO_LOGIN=false` when the port is
-reachable by anybody but you; the terminal then answers a visitor with no session as anonymous and
-asks them to sign in. Compose and Kubernetes deployments have no zero-login.
-While zero-login is on and the terminal listens beyond loopback, Lite prints a warning banner to the container log at every start; `make -C deploy/lite up` publishes 3001 on every interface, so either set `VEXA_TERMINAL_ZERO_LOGIN=false` or publish it as `-p 127.0.0.1:3001:3001`.
+`http://localhost:3001` asks you to sign in. With no mail server and no OAuth provider configured,
+the way in is a **one-time sign-in link** for `self-host@vexa.ai` that Lite prints to the container
+log once that user exists. The link works once and for an hour. Print a fresh one at any time:
+
+```bash
+docker logs vexa-lite 2>&1 | grep -A2 'Sign in to the terminal'
+docker exec vexa-lite vexa-signin-link                    # self-host@vexa.ai
+docker exec vexa-lite vexa-signin-link you@example.com    # anybody admin-api lets sign in
+```
+
+**Zero-login** (`VEXA_TERMINAL_ZERO_LOGIN=true`) is an explicit opt-in for a box nobody but you can
+reach: every visitor with no session acts as the self-host user, so `http://localhost:3001` opens
+signed in without a link. While it is on and the terminal listens beyond loopback, Lite prints a
+warning banner to the container log at every start. `make -C deploy/lite up` publishes 3001 on every
+interface, so with zero-login on also publish it as `-p 127.0.0.1:3001:3001`. Compose and Kubernetes
+deployments have no zero-login.
 
 The terminal then asks for the **admin claim code** before anyone can become the instance's
 administrator. admin-api writes it to the container log at boot, and it works once:

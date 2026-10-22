@@ -159,11 +159,14 @@ export VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVATE_HTTP="${VEXA_SYSTEM_WEBHOOK_ALLOW_PRIVA
 export VEXA_SYSTEM_WEBHOOK_TIMEOUT_S="${VEXA_SYSTEM_WEBHOOK_TIMEOUT_S:-10}"
 
 # 0.12 compatibility switches, closed by default (docs: upgrade-from-0-12 → compatibility switches).
-# -e VEXA_WS_SCOPE_MODE=legacy / -e VEXA_WEBHOOK_STORED_URL_POLICY=v012 are explicit opt-ins.
+# -e VEXA_WS_SCOPE_MODE=legacy / -e VEXA_WEBHOOK_STORED_URL_POLICY=v012 /
+# -e VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S=14400 (a 0.12 cut-over only) are explicit opt-ins, each
+# printed at every boot and removed in 0.14.0.
 export VEXA_WS_SCOPE_MODE="${VEXA_WS_SCOPE_MODE:-strict}"
 export VEXA_WEBHOOK_STORED_URL_POLICY="${VEXA_WEBHOOK_STORED_URL_POLICY:-strict}"
+export VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S="${VEXA_COLLECTOR_LEGACY_UNSIGNED_WINDOW_S:-0}"
 
-# A company IdP the bot-account sign-in browser may also reach (comma-separated, exact or *.suffix).
+# A company IdP the bot-account sign-in browser may also reach (comma-separated exact hosts; no wildcards).
 export VEXA_BOT_SIGNIN_EXTRA_HOSTS="${VEXA_BOT_SIGNIN_EXTRA_HOSTS:-}"
 
 export MINIO_ENDPOINT="${MINIO_ENDPOINT:-}"
@@ -232,10 +235,13 @@ export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}"
 # Dashboard + terminal (both Next.js UIs)
 export VEXA_PUBLIC_API_URL="${VEXA_PUBLIC_API_URL:-http://localhost:8056}"
 export VEXA_API_KEY="${VEXA_API_KEY:-}"
-# ZERO-LOGIN: the terminal answers a visitor with no session as the self-host key, so
-# http://localhost:3001 opens signed in. Anyone who can reach port 3001 is then that person — set
-# VEXA_TERMINAL_ZERO_LOGIN=false when the port is reachable by anybody but you, and sign in instead.
-export VEXA_TERMINAL_ZERO_LOGIN="${VEXA_TERMINAL_ZERO_LOGIN:-true}"
+# Sign-in: off by default, a visitor with no session signs in. With no mail and no OAuth configured,
+# the first-run door is a one-time link the container prints at start (provision-key.sh), and
+# `docker exec <container> vexa-signin-link` prints a fresh one.
+# ZERO-LOGIN (-e VEXA_TERMINAL_ZERO_LOGIN=true, an explicit opt-in for a box only you can reach): the
+# terminal answers a visitor with no session as the self-host key, so http://localhost:3001 opens
+# signed in, and anyone who can reach port 3001 is that person. A banner says so at every start.
+export VEXA_TERMINAL_ZERO_LOGIN="${VEXA_TERMINAL_ZERO_LOGIN:-false}"
 export TERMINAL_PUBLIC_URL="${TERMINAL_PUBLIC_URL:-http://localhost:3001}"
 # The terminal's signing secret — it signs sign-in cookies and (through a derived key) every emailed
 # sign-in link, so it has NO published default, and the terminal refuses to start on one shorter

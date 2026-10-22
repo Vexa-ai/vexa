@@ -8,7 +8,7 @@
  *
  *  Wire format — two base64url parts, dot-separated:
  *      <payload>.<sig>
- *      payload = base64url(JSON {e: <email>, x: <expiry, epoch seconds>, j: <jti>})
+ *      payload = base64url(JSON {e: <email>, x: <expiry, epoch seconds>, j: <jti>, b: <binding>[, o: 1]})
  *      sig     = base64url(HMAC-SHA256(<link key>, payload))
  *  The link key is never the session secret: `MAGIC_LINK_SECRET` when configured, else a key
  *  derived from `NEXTAUTH_SECRET` (`./authSecret.mjs`). Signatures are compared with
@@ -31,20 +31,26 @@
  *  reserved-domain test user's, which an instance administrator mints by hand
  *  (`../test-users/link`, `@example.test` only).
  */
-import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { redeemSigninLink } from "./adminApi";
 import { magicLinkKey } from "./authSecret.mjs";
+import {
+  b64url,
+  DEFAULT_TTL_SECONDS,
+  MAX_TTL_SECONDS,
+  mintToken,
+  signPayload,
+  ttlSeconds as ttlFromEnv,
+} from "./magicTokenMint.mjs";
 
 /** Default lifetime of an emailed link — long enough to walk to a phone, short enough that a
- *  forwarded/leaked mail stops being a credential quickly. */
-export const DEFAULT_TTL_SECONDS = 15 * 60;
-
-/** The longest an emailed link may live, whatever MAGIC_LINK_TTL_SECONDS says. */
-export const MAX_TTL_SECONDS = 60 * 60;
+ *  forwarded/leaked mail stops being a credential quickly. The longest one may live is
+ *  MAX_TTL_SECONDS, whatever MAGIC_LINK_TTL_SECONDS says. Minting is `magicTokenMint.mjs`, shared
+ *  with the operator's printed first-run link. */
+export { DEFAULT_TTL_SECONDS, MAX_TTL_SECONDS };
 
 export function ttlSeconds(): number {
-  const raw = parseInt(process.env.MAGIC_LINK_TTL_SECONDS || "", 10);
-  return Number.isFinite(raw) && raw > 0 ? Math.min(raw, MAX_TTL_SECONDS) : DEFAULT_TTL_SECONDS;
+  return ttlFromEnv(process.env);
 }
 
 /** The signing key. Read at call time (not as a module constant) so tests and the server observe
@@ -53,16 +59,8 @@ function secret(): string | null {
   return magicLinkKey(process.env);
 }
 
-function b64url(buf: Buffer): string {
-  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
 function unb64url(s: string): Buffer {
   return Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64");
-}
-
-function signPayload(payload: string, key: string): string {
-  return b64url(createHmac("sha256", key).update(payload).digest());
 }
 
 // ── the browser that asked ────────────────────────────────────────────────────────────────
@@ -101,17 +99,11 @@ export type MintResult =
  *  unbound link, and only for a reserved-domain test address. `now`/`ttl` are injectable so expiry
  *  is testable without sleeping. */
 export function mintMagicToken(email: string, browser: string | null, opts: { ttl?: number; now?: number } = {}): MintResult {
-  const key = secret();
-  if (!key) return { ok: false, error: "no usable NEXTAUTH_SECRET (or MAGIC_LINK_SECRET) — magic links are disabled" };
+  if (!secret()) return { ok: false, error: "no usable NEXTAUTH_SECRET (or MAGIC_LINK_SECRET) — magic links are disabled" };
   if (browser === null ? !UNBOUND_ADDRESS.test(email) : !BIND_VALUE.test(browser)) {
     return { ok: false, error: "a sign-in link is bound to the browser that asked for it" };
   }
-  const nowSec = Math.floor((opts.now ?? Date.now()) / 1000);
-  const expiresAt = nowSec + Math.min(opts.ttl ?? ttlSeconds(), MAX_TTL_SECONDS);
-  const jti = randomUUID();
-  const b = browser === null ? "" : bindingClaim(browser);
-  const payload = b64url(Buffer.from(JSON.stringify({ e: email, x: expiresAt, j: jti, b }), "utf8"));
-  return { ok: true, token: `${payload}.${signPayload(payload, key)}`, jti, expiresAt };
+  return mintToken(email, process.env, { ...opts, binding: browser === null ? "" : bindingClaim(browser) }) as MintResult;
 }
 
 /** `unavailable`: the link verified, but whether it was already used could not be learned (admin-api
@@ -140,7 +132,7 @@ export function verifyMagicToken(token: string, opts: { now?: number } = {}): Ve
     return { ok: false, reason: "bad-signature" };
   }
 
-  let claims: { e?: unknown; x?: unknown; j?: unknown; b?: unknown };
+  let claims: { e?: unknown; x?: unknown; j?: unknown; b?: unknown; o?: unknown };
   try {
     claims = JSON.parse(unb64url(payload).toString("utf8"));
   } catch {
@@ -150,9 +142,14 @@ export function verifyMagicToken(token: string, opts: { now?: number } = {}): Ve
   const jti = typeof claims.j === "string" ? claims.j : "";
   const expiresAt = typeof claims.x === "number" ? claims.x : NaN;
   if (!email || !jti || !Number.isFinite(expiresAt)) return { ok: false, reason: "malformed" };
-  // Every link names the browser it belongs to; only a test user's may name none.
+  // Every link names the browser it belongs to. Two may name none: a test user's, and the one the
+  // operator prints from the box's own shell (`o: 1`, `scripts/signin-link.mjs`), where no browser
+  // has asked and whoever reads it already runs the instance. No route mints either kind for a
+  // request.
   const binding = typeof claims.b === "string" ? claims.b : null;
-  if (binding === null || (!binding && !UNBOUND_ADDRESS.test(email))) return { ok: false, reason: "malformed" };
+  const operator = claims.o === 1;
+  if (binding === null || (!binding && !operator && !UNBOUND_ADDRESS.test(email))) return { ok: false, reason: "malformed" };
+  if (binding && operator) return { ok: false, reason: "malformed" };
 
   const nowSec = Math.floor((opts.now ?? Date.now()) / 1000);
   if (nowSec >= expiresAt) return { ok: false, reason: "expired" };

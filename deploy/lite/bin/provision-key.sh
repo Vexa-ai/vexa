@@ -1,11 +1,12 @@
 #!/bin/bash
 # =============================================================================
-# Vexa Lite — self-host API key provisioner (zero-login)
+# Vexa Lite — self-host API key provisioner, and the first-run sign-in link
 # =============================================================================
 # Runs in the background from the entrypoint. Once admin-api is up, mints (idempotently) a scoped
 # API token for a self-host user and writes it to /run/vexa/key.env, then restarts the two UIs so
-# they pick it up (their supervisord command sources that file). This is what makes the dashboard +
-# terminal work WITHOUT an interactive login on a fresh lite stack.
+# they pick it up (their supervisord command sources that file). With zero-login on, that key is
+# what a visitor without a session acts as; with it off (the default) it prints a one-time sign-in
+# link for the self-host person instead.
 #
 # No-op when VEXA_API_KEY was supplied by the operator (their key wins) — login mode otherwise.
 set -u
@@ -59,7 +60,23 @@ if [ -n "$TOKS" ]; then
     rm -f /run/vexa/key.env.new
     ( umask 077; printf '%s\n' "$TOKS" > /run/vexa/key.env.new ) && mv -f /run/vexa/key.env.new /run/vexa/key.env
     supervisorctl -c /etc/supervisor/conf.d/vexa.conf restart vexa:dashboard vexa:terminal >/dev/null 2>&1 || true
-    echo "[provision-key] self-host keys provisioned; dashboard + terminal restarted (zero-login)"
+    echo "[provision-key] self-host keys provisioned; dashboard + terminal restarted"
+    # Sign-in is on (zero-login off, the default): the first-run door is a one-time link for the
+    # self-host person, printed here for whoever reads the container log. Same token as an emailed
+    # link; it works once and for an hour, and `vexa-signin-link` prints a fresh one.
+    case "$(printf '%s' "${VEXA_TERMINAL_ZERO_LOGIN:-}" | tr '[:upper:]' '[:lower:]')" in
+        true) ;;
+        *)
+            if LINK="$(/usr/local/bin/vexa-signin-link self-host@vexa.ai)"; then
+                echo "[provision-key] ============================================================"
+                echo "[provision-key] Sign in to the terminal (one use, valid for 1 hour):"
+                echo "[provision-key]   $LINK"
+                echo "[provision-key] A new link any time: docker exec <this container> vexa-signin-link"
+                echo "[provision-key] ============================================================"
+            else
+                echo "[provision-key] WARN: no sign-in link printed (see the line above); sign in with a configured provider"
+            fi ;;
+    esac
 else
     echo "[provision-key] WARN: could not mint keys — the UIs will require an interactive login"
 fi

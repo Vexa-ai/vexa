@@ -58,8 +58,10 @@ async function main() {
     'intranet', 'localhost', '*.localhost', '*.com', '[::1]', '169.254.169.254']);
   check(bank(new URL('https://adfs.bank.example/adfs/ls')) === false, 'an extra exact host is allowed');
   check(bank(new URL('https://x.adfs.bank.example/')) === true, 'an exact entry does not admit its subdomains');
-  check(bank(new URL('https://tenant.okta.bank.example/')) === false, 'a *.suffix entry admits its subdomains');
-  check(bank(new URL('https://okta.bank.example/')) === true, 'a *.suffix entry does not admit the suffix itself');
+  check(bank(new URL('https://tenant.okta.bank.example/')) === true, 'a wildcard entry admits nothing: not a subdomain');
+  check(bank(new URL('https://okta.bank.example/')) === true, 'a wildcard entry admits nothing: not the suffix itself');
+  const named = await confined('teams', ['tenant.okta.bank.example']);
+  check(named(new URL('https://tenant.okta.bank.example/')) === false, 'the same IdP named exactly is allowed');
   check(bank(new URL('http://adfs.bank.example/')) === true, 'an extra host is https only');
   check(bank(new URL('https://idp.other.example/')) === true, 'an unlisted IdP is still refused');
   for (const internal of ['http://10.0.0.5/', 'https://10.0.0.5/', 'https://192.168.1.1/', 'https://intranet/',

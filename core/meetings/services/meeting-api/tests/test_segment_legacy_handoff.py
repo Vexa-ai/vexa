@@ -100,9 +100,12 @@ async def test_signed_entries_are_unaffected(store, bus, admin_token):
 
 
 def test_the_window_setting(monkeypatch):
-    assert lu.window_seconds({}) == lu.DEFAULT_WINDOW_S
+    # 10-E: off unless the operator opens it for a 0.12 cut-over; a value that is not a number is off.
+    assert lu.window_seconds({}) == 0
+    assert lu.window_seconds({lu.WINDOW_ENV: ""}) == 0
     assert lu.window_seconds({lu.WINDOW_ENV: "0"}) == 0
-    assert lu.window_seconds({lu.WINDOW_ENV: "junk"}) == lu.DEFAULT_WINDOW_S
+    assert lu.window_seconds({lu.WINDOW_ENV: "junk"}) == 0
+    assert lu.window_seconds({lu.WINDOW_ENV: "14400"}) == 14400  # the runbook's cut-over value
     w = lu.LegacyUnsignedWindow()
     w.open([1], window_s=0)
     assert not w.admits({"payload": json.dumps(_data(1, "x"))})
@@ -134,7 +137,7 @@ class _Session:
 async def test_boot_reads_in_flight_meetings_without_the_0_13_marker():
     seen, ids = [], [11, 12]
     w = lu.LegacyUnsignedWindow()
-    n = await lu.open_from_db(lambda: _Session(ids, seen), env={}, window=w)
+    n = await lu.open_from_db(lambda: _Session(ids, seen), env={lu.WINDOW_ENV: "3600"}, window=w)
     assert n == 2 and w.meeting_ids == {11, 12}
     sql, params = seen[0]
     assert "status IN" in sql and "'active'" in sql and "'stopping'" in sql
@@ -143,12 +146,25 @@ async def test_boot_reads_in_flight_meetings_without_the_0_13_marker():
 
 async def test_refresh_adds_0_12_meetings_spawned_during_a_rolling_upgrade_but_never_extends():
     w = lu.LegacyUnsignedWindow()
-    await lu.open_from_db(lambda: _Session([11], []), env={}, window=w)
+    await lu.open_from_db(lambda: _Session([11], []), env={lu.WINDOW_ENV: "3600"}, window=w)
     until = w.until
     assert await lu.refresh_from_db(lambda: _Session([11, 13], []), window=w) == 1
     assert w.meeting_ids == {11, 13} and w.until == until
     assert await lu.refresh_from_db(lambda: _Session([14], []), window=w, now=until + 1) == 0
     assert 14 not in w.meeting_ids
+
+
+async def test_by_default_boot_opens_nothing_and_reads_nothing():
+    """10-E: with the setting unset no meeting is read and an unsigned entry of a 0.12 meeting is refused."""
+    seen, w = [], lu.LegacyUnsignedWindow()
+    assert await lu.open_from_db(lambda: _Session([1], seen), env={}, window=w) == 0
+    assert seen == [] and not w.admits({"payload": json.dumps(_data(1, "x"))})
+
+
+async def test_the_runbook_value_opens_it_over_the_in_flight_0_12_meetings():
+    seen, w = [], lu.LegacyUnsignedWindow()
+    assert await lu.open_from_db(lambda: _Session([1], seen), env={lu.WINDOW_ENV: "14400"}, window=w) == 1
+    assert w.admits({"payload": json.dumps(_data(1, "x"))})
 
 
 async def test_window_off_reads_nothing():
