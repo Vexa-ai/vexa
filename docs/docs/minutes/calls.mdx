@@ -45,7 +45,7 @@ a call. The notice comes from the room itself, so every client shows the same th
 When someone shares a screen with sound (a tab or a video, with "Share audio" ticked in the browser's
 picker), that sound is transcribed too, as its own speaker: "`<name> (shared screen)`". The Vexa mark's
 tooltip says so. The administrator turns this off with `CALL_TRANSCRIBE_SHARED_SCREEN=false`; the
-shared screen is then still seen and heard by everyone in the call, but Vexa does not transcribe it.
+shared screen is then still seen and heard by everyone in the call, but Vexa does not subscribe to its sound, so none of it reaches Vexa.
 
 Calls are always transcribed unless the administrator sets `CALL_TRANSCRIPTION_SWITCHABLE=true`.
 When that setting is on, a call in an **incognito** chat (its profile chip) is started untranscribed,
@@ -162,8 +162,8 @@ join after the sixth hour cannot redeem it, and their join fails.
    own echo cancellation, noise suppression and gain control. Audio is sent as Opus with DTX and
    redundancy.
 4. **Capture.** The listener is the meeting bot without a browser. It joins the room hidden and can
-   only subscribe, using `@livekit/rtc-node`. It subscribes to every audio track a participant
-   publishes and reads it as mono 16 kHz audio, on that participant's own channel, named after them. That channel is fed into the same
+   only subscribe, using `@livekit/rtc-node`. It subscribes to each participant's microphone and, unless
+   `CALL_TRANSCRIBE_SHARED_SCREEN=false`, the sound of a screen they share — never to video — and reads it as mono 16 kHz audio, on that participant's own channel, named after them. That channel is fed into the same
    per-speaker lane, speech-to-text service and transcript sinks that a meeting and a voice note use.
    Digital silence (a muted or quiet track) is not fed, so the lane sees the gaps between speech.
 5. **Follow.** A turn in the shared chat is grounded in the call's live transcript. The access check

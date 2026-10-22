@@ -5,8 +5,9 @@
  * `call.token`), subscribes to every participant's microphone track — and, unless the call's policy
  * turns it off (invocation.v1 `call.screenShareAudio`), the audio of a screen they share — and reads
  * each one as a stream of 16 kHz mono frames (`AudioStream`), which `../call.ts` feeds into the lane,
- * a shared screen on its own channel. Camera and screen video are never read. Participants already
- * in the room when the listener arrives are reported as joins.
+ * a shared screen on its own channel. It subscribes to nothing else: camera and screen video, and a
+ * shared screen's audio while the policy is off, are never subscribed, so their media never reaches
+ * the listener. Participants already in the room when the listener arrives are reported as joins.
  *
  * The SDK is injected (`sdk`) so the mapping is offline-provable; the live composition root passes
  * the real module.
@@ -17,7 +18,7 @@ import type { CallAudioFrame, CallParticipant, CallRoom, CallRoomHandlers } from
 export interface LiveKitSdk {
   Room: new () => LkRoom;
   AudioStream: new (track: unknown, options: { sampleRate: number; numChannels: number }) => AsyncIterable<CallAudioFrame> & { cancel?: () => Promise<void> };
-  RoomEvent: { ParticipantConnected: string; ParticipantDisconnected: string; TrackSubscribed: string; Disconnected: string };
+  RoomEvent: { ParticipantConnected: string; ParticipantDisconnected: string; TrackPublished: string; TrackSubscribed: string; Disconnected: string };
   TrackKind: { KIND_AUDIO: unknown };
   /** The publication's source (rtc-ffi TrackSource). Optional: absent ⇒ the proto values below. */
   TrackSource?: { SOURCE_MICROPHONE: unknown; SOURCE_SCREENSHARE_AUDIO: unknown };
@@ -25,7 +26,12 @@ export interface LiveKitSdk {
 /** rtc-ffi `TrackSource` values (track.proto): SOURCE_MICROPHONE = 2, SOURCE_SCREENSHARE_AUDIO = 4. */
 const SOURCE_MICROPHONE = 2;
 const SOURCE_SCREENSHARE_AUDIO = 4;
-export interface LkParticipant { identity: string; name?: string; disconnectReason?: number }
+/** A remote publication: what it carries, and the listener's say over whether it is sent. */
+export interface LkPublication { kind?: unknown; source?: unknown; setSubscribed?: (subscribed: boolean) => void }
+export interface LkParticipant {
+  identity: string; name?: string; disconnectReason?: number;
+  trackPublications?: Map<string, LkPublication>;
+}
 /** rtc-node's DisconnectReason.CLIENT_INITIATED: the participant pressed Leave (or closed the tab). */
 const CLIENT_INITIATED = 1;
 export interface LkRoom {
@@ -49,6 +55,20 @@ export function createLiveKitRoom(opts: {
   let room: LkRoom | null = null;
   const streams = new Set<{ cancel?: () => Promise<void> }>();
 
+  /** What the listener reads, and so the only publications it subscribes to: a microphone (or a
+   *  publication that names no source: older servers), and a shared screen's audio unless the
+   *  policy is off. */
+  const wanted = (pub: LkPublication | undefined): 'mic' | 'screen' | null => {
+    if (pub?.kind !== undefined && pub.kind !== opts.sdk.TrackKind.KIND_AUDIO) return null;
+    const source = pub?.source;
+    if (source === SCREEN_AUDIO) return screenShareAudio ? 'screen' : null;
+    return source === undefined || source === MIC || source === 0 ? 'mic' : null;
+  };
+  const subscribe = (pub: LkPublication, p: LkParticipant) => {
+    if (wanted(pub)) { pub.setSubscribed?.(true); return; }
+    if (pub.source === SCREEN_AUDIO) log(`[bot] call: shared-screen audio of ${p.identity} not subscribed (policy off)`);
+  };
+
   const read = async (h: CallRoomHandlers, p: CallParticipant, track: unknown) => {
     const stream = new opts.sdk.AudioStream(track, { sampleRate: 16_000, numChannels: 1 });
     streams.add(stream);
@@ -69,22 +89,25 @@ export function createLiveKitRoom(opts: {
       r.on(ev.ParticipantConnected, (p: LkParticipant) => h.participantJoined(who(p)));
       r.on(ev.ParticipantDisconnected, (p: LkParticipant) =>
         h.participantLeft({ ...who(p), left: p.disconnectReason === CLIENT_INITIATED ? 'leave' : 'lost' }));
-      r.on(ev.TrackSubscribed, (track: { kind?: unknown }, pub: { source?: unknown } | undefined, p: LkParticipant) => {
+      r.on(ev.TrackPublished, (pub: LkPublication, p: LkParticipant) => subscribe(pub, p));
+      r.on(ev.TrackSubscribed, (track: { kind?: unknown }, pub: LkPublication | undefined, p: LkParticipant) => {
         if (track?.kind !== opts.sdk.TrackKind.KIND_AUDIO) return;
-        const source = pub?.source;
-        if (source === SCREEN_AUDIO) {
-          if (!screenShareAudio) { log(`[bot] call: shared-screen audio of ${p.identity} not transcribed (policy off)`); return; }
+        const kind = wanted(pub ?? {});
+        if (kind === 'screen') {
           log(`[bot] call: transcribing the shared-screen audio of ${p.identity}`);
           void read(h, { ...who(p), source: 'screen_share_audio' }, track);
-          return;
+        } else if (kind === 'mic') {
+          void read(h, who(p), track);
+        } else {
+          pub?.setSubscribed?.(false);
         }
-        // A microphone, or a publication that does not say (older servers): the person's own voice.
-        if (source !== undefined && source !== MIC && source !== 0) return;
-        void read(h, who(p), track);
       });
       r.on(ev.Disconnected, (reason: unknown) => h.disconnected(String(reason)));
-      await r.connect(opts.url, opts.token, { autoSubscribe: true, dynacast: false });
-      for (const p of r.remoteParticipants.values()) h.participantJoined(who(p));
+      await r.connect(opts.url, opts.token, { autoSubscribe: false, dynacast: false });
+      for (const p of r.remoteParticipants.values()) {
+        h.participantJoined(who(p));
+        for (const pub of p.trackPublications?.values() ?? []) subscribe(pub, p);
+      }
       log(`[bot] call: joined the room (${r.remoteParticipants.size} already there)`);
     },
     async disconnect() {
