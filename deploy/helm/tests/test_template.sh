@@ -1674,6 +1674,15 @@ mp_np="$(doc NetworkPolicy vexa-vexa-model-proxy-ingress "$RENDER")"
 tb "the model proxy admits agent workers only, on 8102" 'grep -q "vexa.role: worker" <<< "$mp_np" && grep -q "port: 8102" <<< "$mp_np" && ! grep -q "component: gateway" <<< "$mp_np"'
 tb "agent workers may reach the model proxy" 'grep -B1 -A6 "component: model-proxy" <<< "$w_np" | grep -q "port: 8102"'
 tb "agent-api names the model proxy and reads its sealing key from the Secret" '[ "$(envval VEXA_MODEL_PROXY_URL "$aa_dep")" = "\"http://vexa-vexa-model-proxy:8102\"" ] && grep -A4 "name: VEXA_MODEL_PROXY_SECRET" <<< "$aa_dep" | grep -q "key: VEXA_MODEL_PROXY_SECRET"'
+# H5/W1: a worker Secret mount names one key, never a model credential or the chart's own Secret
+sm_ok="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set-json 'runtime.workerSecretMounts=[{"secret":"codex-auth","file":"auth.json","mountPath":"/tmp/.codex/auth.json"}]' 2>&1)"
+tb "a named subscription key renders into RUNTIME_K8S_SECRET_MOUNTS" 'grep -A1 "name: RUNTIME_K8S_SECRET_MOUNTS" <<< "$sm_ok" | grep -q "codex-auth"'
+for bad in '{"secret":"codex-auth","mountPath":"/x"}' '{"secret":"vexa-vexa-secrets","file":"auth.json","mountPath":"/x"}' \
+           '{"secret":"keys","file":"ANTHROPIC_API_KEY","mountPath":"/x"}' '{"secret":"keys","file":"VEXA_MODEL_PROXY_SECRET","mountPath":"/x"}' \
+           '{"secret":"keys","file":"INTERNAL_API_SECRET","mountPath":"/x"}' '{"secret":"keys","file":"VEXA_MODEL_SECRET_OR","mountPath":"/x"}'; do
+  sm_bad="$(helm template vexa "$CHART" -n vexa -f "$CHART/values-test.yaml" --set-json "runtime.workerSecretMounts=[$bad]" 2>&1 || true)"
+  tb "runtime.workerSecretMounts refuses $bad" 'grep -q "runtime.workerSecretMounts\[0\]" <<< "$sm_bad"'
+done
 tb "the chart Secret carries VEXA_LLM_API_KEY when set" 'grep -q "VEXA_LLM_API_KEY: \"sk-render-test-only\"" <<< "$(doc Secret vexa-vexa-secrets "$route")"'
 tb "and not when unset" '! grep -q "VEXA_LLM_API_KEY" <<< "$sec"'
 # A mirrored install (Harbor / GitLab registry) pinning one tag spawns its chat workers FROM THE MIRROR.

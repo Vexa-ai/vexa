@@ -129,6 +129,27 @@ spec:
               value: {{ .Values.runtime.tolerations | default .Values.global.tolerations | toJson | quote }}
             - name: RUNTIME_K8S_NODE_SELECTOR
               value: {{ .Values.runtime.nodeSelector | default .Values.global.nodeSelector | toJson | quote }}
+            # A SUBSCRIPTION file an agent worker's harness reads (codex: auth.json), one named Secret
+            # key per entry. Never a whole Secret, never a model API key, the model proxy's sealing key
+            # or the internal tier's secret, and never this chart's own Secret (H5/W1): the render
+            # fails here, and the runtime refuses the spawn if one gets past it.
+            {{- $own := include "vexa.adminTokenSecretName" . }}
+            {{- $refused := list "ANTHROPIC_API_KEY" "ANTHROPIC_AUTH_TOKEN" "CLAUDE_CODE_OAUTH_TOKEN" "OPENAI_API_KEY" "CODEX_API_KEY" "VEXA_LLM_API_KEY" "VEXA_MODEL_PROXY_SECRET" "INTERNAL_API_SECRET" }}
+            {{- range $i, $m := .Values.runtime.workerSecretMounts }}
+            {{- if not (and $m.secret $m.file $m.mountPath) }}
+            {{- fail (printf "runtime.workerSecretMounts[%d] must name {secret, file, mountPath}: a whole Secret is never mounted into a worker" $i) }}
+            {{- end }}
+            {{- if or (eq $m.secret $own) (has $m.file $refused) (hasPrefix "VEXA_MODEL_SECRET_" $m.file) }}
+            {{- fail (printf "runtime.workerSecretMounts[%d] refused: %s/%s holds a model credential or a control-plane secret, and no worker holds one (H5/W1)" $i $m.secret $m.file) }}
+            {{- end }}
+            {{- range $.Values.models.catalogSecrets }}
+            {{- if eq .secretName $m.secret }}
+            {{- fail (printf "runtime.workerSecretMounts[%d] refused: %s holds a model catalog secret" $i $m.secret) }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            - name: RUNTIME_K8S_SECRET_MOUNTS
+              value: {{ .Values.runtime.workerSecretMounts | default list | toJson | quote }}
             # Per-class sizing for SPAWNED Pods (#1005). A namespace whose policy requires every
             # container to declare CPU/memory requests AND limits rejects an unsized Pod at admission,
             # so both shipped workload classes carry their own — sized independently, since a Chromium

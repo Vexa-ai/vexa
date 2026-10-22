@@ -286,7 +286,7 @@ def test_process_backend_reads_the_mount_set_without_binding(tmp_path):
 
 # ── k8s: file-shaped credential mounts for agent workers (the codex seam) ─────
 
-_SM = '[{"secret": "codex-auth", "mountPath": "/tmp/.codex"}]'
+_SM = '[{"secret": "codex-auth", "file": "auth.json", "mountPath": "/tmp/.codex/auth.json"}]'
 
 
 def test_k8s_secret_mounts_reach_agent_worker_pods_read_only():
@@ -295,15 +295,38 @@ def test_k8s_secret_mounts_reach_agent_worker_pods_read_only():
     env = {**_env(source="vexa-agent-workspaces"), "VEXA_UNIT_ID": "u-1",
            "RUNTIME_K8S_SECRET_MOUNTS": _SM}
     spec = pod_overrides(env, container_name="w", credential_mounts=True)["spec"]
-    assert {"name": "cred-0-codex-auth", "secret": {"secretName": "codex-auth"}} in spec["volumes"]
-    assert {"name": "cred-0-codex-auth", "mountPath": "/tmp/.codex", "readOnly": True} \
-        in spec["containers"][0]["volumeMounts"]
+    assert {"name": "cred-0-codex-auth", "secret": {
+        "secretName": "codex-auth", "items": [{"key": "auth.json", "path": "auth.json"}]}} in spec["volumes"]
+    assert {"name": "cred-0-codex-auth", "mountPath": "/tmp/.codex/auth.json", "readOnly": True,
+            "subPath": "auth.json"} in spec["containers"][0]["volumeMounts"]
 
 
 def test_k8s_secret_mounts_never_reach_bot_pods():
     """A meeting bot is not a worker — it must not carry a model credential, whatever its env says."""
     ov = pod_overrides({"VEXA_UNIT_ID": "u-1", "RUNTIME_K8S_SECRET_MOUNTS": _SM}, container_name="mtg")
     assert ov is None
+
+
+@pytest.mark.parametrize("entry", [
+    {"secret": "vexa-vexa-secrets", "mountPath": "/s"},                        # a whole Secret
+    {"secret": "vexa-vexa-secrets", "file": "ANTHROPIC_API_KEY", "mountPath": "/s/k"},
+    {"secret": "vexa-vexa-secrets", "file": "ANTHROPIC_AUTH_TOKEN", "mountPath": "/s/k"},
+    {"secret": "vexa-vexa-secrets", "file": "CLAUDE_CODE_OAUTH_TOKEN", "mountPath": "/s/k"},
+    {"secret": "vexa-vexa-secrets", "file": "VEXA_LLM_API_KEY", "mountPath": "/s/k"},
+    {"secret": "vexa-vexa-secrets", "file": "OPENAI_API_KEY", "mountPath": "/s/k"},
+    {"secret": "vexa-vexa-secrets", "file": "CODEX_API_KEY", "mountPath": "/s/k"},
+    {"secret": "vexa-vexa-secrets", "file": "VEXA_MODEL_PROXY_SECRET", "mountPath": "/s/k"},
+    {"secret": "vexa-vexa-secrets", "file": "INTERNAL_API_SECRET", "mountPath": "/s/k"},
+    {"secret": "model-keys", "file": "VEXA_MODEL_SECRET_OPENROUTER", "mountPath": "/s/k"},
+])
+def test_k8s_never_mounts_a_model_credential_or_a_whole_secret_into_a_worker(entry):
+    """H5/W1: a whole Secret puts every key it holds into the worker, and the model's shell reads what
+    the worker holds; a model API key, the proxy's sealing key and the internal tier's secret live with
+    agent-api and the model proxy alone. Each is refused, and the spawn fails loudly."""
+    import json
+    with pytest.raises(ValueError, match="refused"):
+        pod_overrides({"RUNTIME_K8S_SECRET_MOUNTS": json.dumps([entry])}, container_name="w",
+                      credential_mounts=True)
 
 
 def test_k8s_secret_mounts_malformed_entry_fails_loud():
@@ -332,7 +355,7 @@ def test_k8s_submitted_container_survives_the_mount_overlay():
     env_names = {e["name"] for e in c["env"]}
     assert "FOO" in env_names and "RUNTIME_K8S_SECRET_MOUNTS" not in env_names
     paths = {vm["mountPath"] for vm in c["volumeMounts"]}
-    assert "/workspaces/u1" in paths and "/tmp/.codex" in paths
+    assert "/workspaces/u1" in paths and "/tmp/.codex/auth.json" in paths
 
 
 def test_k8s_pod_overrides_needs_no_image():

@@ -87,6 +87,16 @@ WORKER_FORWARD_ENV = (
     "VEXA_SEARCH_API_KEY",
 )
 
+#: Secret keys no spawned workload may be handed through a Secret mount (``RUNTIME_K8S_SECRET_MOUNTS``),
+#: whatever Secret they sit in: every model-provider API key, the model proxy's sealing key and the
+#: internal tier's secret live with agent-api and the model proxy alone (H5/W1).
+REFUSED_SECRET_KEYS = frozenset({
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY",
+    "CODEX_API_KEY", "VEXA_LLM_API_KEY", "VEXA_MODEL_PROXY_SECRET", "INTERNAL_API_SECRET",
+})
+#: A model catalog provider's secret (``secret_ref: env:VEXA_MODEL_SECRET_<NAME>``), by its key's prefix.
+REFUSED_SECRET_KEY_PREFIX = "VEXA_MODEL_SECRET_"
+
 #: What a CHILD PROCESS (the process backend) inherits from the runtime's environment besides its
 #: profile's forward list: what any program needs to run on this host (paths, locale, the browser
 #: install, proxies and CA bundles). Never product configuration and never a service credential —

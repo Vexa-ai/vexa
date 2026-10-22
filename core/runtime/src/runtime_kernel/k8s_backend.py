@@ -18,7 +18,7 @@ import subprocess
 import time
 from typing import Optional
 
-from . import pod_scheduling
+from . import pod_scheduling, workload_env
 from .backend import WorkloadHandle
 from .models import Resources
 from .mounts import k8s_volume_mounts
@@ -82,11 +82,29 @@ GPU_RESOURCE = "nvidia.com/gpu"
 # the runtime itself is allowed to run.
 TOLERATIONS_ENV = "RUNTIME_K8S_TOLERATIONS"      # JSON array of toleration objects
 NODE_SELECTOR_ENV = "RUNTIME_K8S_NODE_SELECTOR"  # JSON object of node-label selectors
-# File-shaped credentials for spawned workloads (the twin of dispatch's MODEL_AUTH_ENV_ALLOWLIST,
-# which covers env-shaped ones): some harnesses read a credential FILE (codex: ~/.codex/auth.json),
-# and a bare `kubectl run` Pod inherits no mounts. JSON array of {"secret": <name>, "mountPath": <dir>}.
-# Mounted read-only — a token refresh cannot persist, so keep the Secret fresh operator-side.
-SECRET_MOUNTS_ENV = "RUNTIME_K8S_SECRET_MOUNTS"  # JSON array of {secret, mountPath}
+# File-shaped credentials for spawned workloads: a harness that reads a SUBSCRIPTION file (codex:
+# ~/.codex/auth.json) gets it from a Secret, since a bare `kubectl run` Pod inherits no mounts. JSON
+# array of {"secret": <name>, "file": <the one key>, "mountPath": <the file's path>}, mounted read-only
+# — a token refresh cannot persist, so keep the Secret fresh operator-side.
+#
+# ONE NAMED KEY PER MOUNT, AND NEVER A MODEL KEY (H5/W1). A whole-Secret mount puts every key of that
+# Secret into the worker, and the model's shell reads whatever the worker holds; so each mount names
+# the one key it carries, and a key that is a model-provider API key, the model proxy's sealing key or
+# the internal tier's secret is refused — those live with agent-api and the model proxy alone. A
+# refused entry fails the spawn loudly, never quietly mounting less.
+SECRET_MOUNTS_ENV = "RUNTIME_K8S_SECRET_MOUNTS"  # JSON array of {secret, file, mountPath}
+def refused_secret_mount(entry: object) -> Optional[str]:
+    """Why a ``RUNTIME_K8S_SECRET_MOUNTS`` entry may not be mounted, or None when it may."""
+    if not (isinstance(entry, dict) and entry.get("secret") and entry.get("mountPath")):
+        return "must be {secret, file, mountPath}"
+    key = entry.get("file")
+    if not key:
+        return ("names no `file`: a whole Secret is never mounted into a workload — name the one key "
+                "it carries")
+    if key in workload_env.REFUSED_SECRET_KEYS or str(key).startswith(workload_env.REFUSED_SECRET_KEY_PREFIX):
+        return (f"key {key!r} is a model credential or a control-plane secret, and no workload holds "
+                "one (H5/W1)")
+    return None
 
 
 def _scheduling_json(env: dict[str, str], key: str, expected: type) -> Optional[object]:
@@ -172,17 +190,18 @@ def pod_overrides(env: dict[str, str], *, container_name: str,
     # a model credential and must not carry one
     secret_mounts = _scheduling_json(env, SECRET_MOUNTS_ENV, list) if credential_mounts else None
     for i, sm in enumerate(secret_mounts or ()):
-        if not (isinstance(sm, dict) and sm.get("secret") and sm.get("mountPath")):
-            raise ValueError(f"{SECRET_MOUNTS_ENV}[{i}] must be {{secret, mountPath[, file]}}, got {sm!r}")
+        why = refused_secret_mount(sm)
+        if why:
+            raise ValueError(f"{SECRET_MOUNTS_ENV}[{i}] refused: {why}")
         name = f"cred-{i}-{sm['secret']}"[:63].rstrip("-")
-        volumes.append({"name": name, "secret": {"secretName": sm["secret"]}})
-        mount = {"name": name, "mountPath": sm["mountPath"], "readOnly": True}
-        if sm.get("file"):
-            # single-FILE mount (subPath): the surrounding directory stays writable — required by
-            # harnesses that treat their config dir as state (codex: sqlite under ~/.codex);
-            # mountPath is then the file's full path and `file` is the Secret key
-            mount["subPath"] = sm["file"]
-        volume_mounts.append(mount)
+        # only the named key is projected into the volume, so nothing else of the Secret is there
+        volumes.append({"name": name, "secret": {"secretName": sm["secret"],
+                                                 "items": [{"key": sm["file"], "path": sm["file"]}]}})
+        # single-FILE mount (subPath): the surrounding directory stays writable — required by
+        # harnesses that treat their config dir as state (codex: sqlite under ~/.codex); mountPath
+        # is the file's full path and `file` is the Secret key
+        volume_mounts.append({"name": name, "mountPath": sm["mountPath"], "readOnly": True,
+                              "subPath": sm["file"]})
     if not volumes and not tolerations and not node_selector:
         return None
     # ``containers`` is emitted ONLY when volumeMounts force it (the workspace-store seam);

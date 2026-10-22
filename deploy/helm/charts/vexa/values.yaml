@@ -568,6 +568,12 @@ meetingApi:
 # Runtime kernel — spawns bot + agent-worker workloads (compose: runtime → :8090).
 runtime:
   enabled: true
+  # A subscription FILE an agent worker's harness reads (RUNTIME_K8S_SECRET_MOUNTS), one named key of a
+  # Secret you create, e.g. codex's auth.json:
+  #   - {secret: codex-auth, file: auth.json, mountPath: /tmp/.codex/auth.json}
+  # Never a whole Secret, a model API key, VEXA_MODEL_PROXY_SECRET, INTERNAL_API_SECRET or this chart's
+  # Secret: API keys reach no worker (H5/W1), and the render fails on any of those.
+  workerSecretMounts: []
   # backend selects the spawn substrate (runtime __main__._build_backend):
   #   k8s    → Pods via kubectl under the runtime SA/RBAC (this chart's RBAC). The real cloud path.
   #   docker → host /var/run/docker.sock (single-node k3s fallback; mounts the socket — see below).

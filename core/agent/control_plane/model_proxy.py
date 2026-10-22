@@ -112,12 +112,18 @@ class Route:
     #: attachment points at this proxy with the turn's token, and the proxy presents the bearer.
     toolbelt: str = ""
     toolbelt_bearer: str = field(default="", repr=False)
+    #: THE SPEND CAP the turn was admitted under (``control_plane.llm_budget``): who pays, and the
+    #: deployment's USD caps per scope and period as they stood at dispatch ("user/day": 5.0, …).
+    #: The proxy refuses a model request once the payer's ledger has reached any of them.
+    payer: str = ""
+    spend_caps: tuple = ()
 
     def as_dict(self) -> dict:
         return {"base_url": self.base_url, "auth": self.auth, "credential": self.credential,
                 "subscription": self.subscription, "models": list(self.models),
                 "max_output_tokens": self.max_output_tokens, "toolbelt": self.toolbelt,
-                "toolbelt_bearer": self.toolbelt_bearer}
+                "toolbelt_bearer": self.toolbelt_bearer, "payer": self.payer,
+                "spend_caps": [list(c) for c in self.spend_caps]}
 
     @classmethod
     def from_dict(cls, d: Mapping) -> "Route":
@@ -127,7 +133,14 @@ class Route:
                    models=tuple(str(m) for m in d.get("models") or ()),
                    max_output_tokens=int(d.get("max_output_tokens") or 0),
                    toolbelt=str(d.get("toolbelt") or ""),
-                   toolbelt_bearer=str(d.get("toolbelt_bearer") or ""))
+                   toolbelt_bearer=str(d.get("toolbelt_bearer") or ""),
+                   payer=str(d.get("payer") or ""),
+                   spend_caps=tuple((str(a), str(b), float(c)) for a, b, c in d.get("spend_caps") or ()))
+
+    def with_spend(self, payer: str, caps: Mapping) -> "Route":
+        """This route under ``payer``'s spend caps (``{(scope, period): usd | None}``)."""
+        sealed = tuple((sc, pe, float(cap)) for (sc, pe), cap in sorted(caps.items()) if cap is not None)
+        return Route(**{**self.__dict__, "payer": payer, "spend_caps": sealed})
 
     def with_toolbelt(self, endpoint: str, bearer: str) -> "Route":
         return Route(**{**self.__dict__, "toolbelt": endpoint, "toolbelt_bearer": bearer})
@@ -315,6 +328,7 @@ class Grants:
                                "through the proxy")
         if model is not None and not model_in_scope(model, route.models):
             raise Refused(403, f"model {model!r} is outside this turn's scope")
+        self._within_spend(route)
         key = COUNT_PREFIX + _digest(token)
         n = self._r.incr(key)
         if n == 1:
@@ -322,6 +336,28 @@ class Grants:
         if n > int(rec.get("max_requests") or DEFAULT_MAX_REQUESTS):
             raise Refused(429, "this turn has made all the model requests it may")
         return route
+
+    def _within_spend(self, route: Route) -> None:
+        """Refuse once the payer's ledger (``llm_budget``: the USD agent-api has recorded from each
+        reported model call) has reached a cap the turn was admitted under. The same check
+        ``Budget.admit`` makes before dispatch, made again before every model request of the turn."""
+        if not (route.payer and route.spend_caps):
+            return
+        from control_plane import llm_budget  # noqa: PLC0415
+
+        periods = llm_budget._periods(self._clock())
+        keys = [llm_budget._key(sc, route.payer, pe, periods[pe][0]) for sc, pe, _cap in route.spend_caps]
+        try:
+            values = self._r.mget(keys)
+        except Exception:  # noqa: BLE001 — a ledger that cannot be read is no headroom (fail closed)
+            raise Refused(503, "the spend ledger cannot be read") from None
+        for (scope, period, cap), raw in zip(route.spend_caps, values):
+            try:
+                used = float(raw or 0)
+            except (TypeError, ValueError):
+                used = 0.0
+            if used >= cap:
+                raise Refused(402, f"the {scope} {period} model spend cap (${cap:g}) is reached")
 
     def toolbelt(self, token: str) -> tuple[str, str]:
         """``(url, bearer)`` for one MCP request with ``token``: the unit's CURRENT delegation token
@@ -360,7 +396,8 @@ def grant_ttl_sec(env: Mapping[str, str] = os.environ) -> int:
 
 
 def confine(env: dict, *, url: str, grants: Optional[Grants], unit: str, cold: bool,
-            toolbelt: str = "", source: Mapping[str, str] = os.environ) -> str:
+            toolbelt: str = "", spend: Optional[tuple] = None,
+            source: Mapping[str, str] = os.environ) -> str:
     """Take the model route out of a dispatched worker env, in place, and return the turn's token
     (``""`` when no token could be minted: the worker then holds no model credential at all).
 
@@ -371,6 +408,8 @@ def confine(env: dict, *, url: str, grants: Optional[Grants], unit: str, cold: b
     eff["VEXA_MODEL_ROUTE"] = env.get("VEXA_MODEL_ROUTE", "")
     bearer = (env.get("VEXA_MCP_DELEGATION_TOKEN") or "").strip()
     route = route_of(eff).with_toolbelt(toolbelt.strip() if bearer else "", bearer)
+    if spend is not None:
+        route = route.with_spend(*spend)
     token = ""
     if grants is not None and url:
         rid = None if cold else grants.unit_route(unit)

@@ -1694,7 +1694,7 @@ class Dispatcher:
         # for the model proxy — with the toolbelt's delegation token, once it has been recorded (or
         # withheld) above — and the worker gets this turn's token to it, on the spawn env (cold) and
         # on the delivered entry (warm) alike.
-        model_token = self._confine_model(uid, env, cold=gone)
+        model_token = self._confine_model(uid, env, cold=gone, payer=payer)
         # WHAT THIS UNIT MAY FETCH AND PUSH on the s3 workspace backend: its own mounts, nothing else.
         # Keyed to the subject the worker's token names — the store routes compare it with
         # `x-user-id` — which for a room's turn is the workspace's own principal, not the owner.
@@ -2098,16 +2098,20 @@ class Dispatcher:
         r = self._redis()
         return model_proxy.Grants(r, secret) if r is not None else None
 
-    def _confine_model(self, uid: str, env: dict[str, str], *, cold: bool) -> str:
-        """Seal this dispatch's model route for the proxy and mint the turn's token (``""`` when
-        none can be). Whatever fails, no provider credential is left in ``env``."""
+    def _confine_model(self, uid: str, env: dict[str, str], *, cold: bool, payer: str = "") -> str:
+        """Seal this dispatch's model route for the proxy — under the spend cap the turn was just
+        admitted under — and mint the turn's token (``""`` when none can be). Whatever fails, no
+        provider credential is left in ``env``."""
         try:
             grants = self._model_grants()
             if grants is None:
                 logger.error("model proxy not configured (VEXA_MODEL_PROXY_URL / VEXA_MODEL_PROXY_SECRET "
                              "/ Redis) — unit=%s runs with no model credential", uid)
+            budget = getattr(self, "_llm_budget", None)
+            spend = (payer, budget.caps().caps) if (budget is not None and payer) else None
             return model_proxy.confine(env, url=self._settings.model_proxy_url, grants=grants,
-                                       unit=uid, cold=cold, toolbelt=self._settings.mcp_url)
+                                       unit=uid, cold=cold, toolbelt=self._settings.mcp_url,
+                                       spend=spend)
         except Exception:  # noqa: BLE001 — a route that cannot be sealed is never handed out instead
             logger.exception("model route for unit=%s could not be sealed — it runs with no model "
                              "credential", uid)

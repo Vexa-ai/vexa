@@ -510,3 +510,38 @@ def test_the_dispatch_seals_the_toolbelt_and_the_worker_attaches_the_proxy(monke
     attachment.end_run(run_file)
     import os
     assert not os.path.exists(run_file)
+
+
+# ── the turn's spend cap, held at every model request ─────────────────────────────────────────────
+
+def test_a_turn_stops_at_the_spend_cap_it_was_admitted_under(world):
+    """The USD caps the turn was admitted under (`llm_budget`) are sealed in its route; once the
+    payer's ledger reaches one, the proxy refuses the next model request (402), not the next turn."""
+    from control_plane import llm_budget
+    r, clock, grants, upstream, client = world
+    route = _route().with_spend("u_jane", {("user", "day"): 5.0, ("org", "day"): 25.0,
+                                           ("user", "month"): None})
+    token = _turn(grants, route=route)
+    day = llm_budget._periods(clock())["day"][0]
+    r.set(llm_budget._key("user", "u_jane", "day", day), "4.99")
+    assert _ask(client, token).status_code == 200                 # control: under the cap
+    r.set(llm_budget._key("user", "u_jane", "day", day), "5.0")
+    refused = _ask(client, token)
+    assert refused.status_code == 402 and "user day" in refused.json()["error"]["message"]
+    assert len(upstream.requests) == 1
+    # another person's spend is not this payer's
+    r.set(llm_budget._key("user", "u_jane", "day", day), "0")
+    r.set(llm_budget._key("user", "u_other", "day", day), "99")
+    assert _ask(client, token).status_code == 200
+
+
+def test_the_dispatch_seals_the_spend_cap_the_turn_was_admitted_under(monkeypatch):
+    from control_plane import llm_budget
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-X")
+    r = fakeredis.FakeRedis(decode_responses=True)
+    rt = _Runtime()
+    d = _dispatcher(r, rt)
+    d.set_llm_budget(llm_budget.Budget(r, lambda: {"llm_budget_user_daily_usd": 3}, prices=object()))
+    d.dispatch(VALID_INV)
+    route = mp.Grants(r, SECRET).route(rt.spawned[0][2][mg.TOKEN_ENV])
+    assert route.payer == "u_jane" and ("user", "day", 3.0) in route.spend_caps

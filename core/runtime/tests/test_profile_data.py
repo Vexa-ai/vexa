@@ -62,7 +62,7 @@ def test_credential_data_reaches_only_a_profile_that_asks_for_credentials(monkey
 
 
 def test_k8s_applies_a_profiles_data_and_nothing_more():
-    overlay = {"RUNTIME_K8S_SECRET_MOUNTS": '[{"secret": "cred", "mountPath": "/m"}]'}
+    overlay = {"RUNTIME_K8S_SECRET_MOUNTS": '[{"secret": "cred", "file": "auth.json", "mountPath": "/m"}]'}
     tuned = build_pod(name="vexa-job-1", workload_id="job-1", runnable=TUNED, env={}, namespace=None,
                       resources=None, overlay_env=overlay)
     assert tuned["metadata"]["labels"]["tier"] == "batch"
