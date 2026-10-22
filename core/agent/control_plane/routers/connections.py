@@ -943,7 +943,7 @@ def build(*, subject_of, wsr=None, settings=None, _global_root=None, _read_targe
                                  why='agents may not ask Google to email attendees')
         # AN EVENT THAT REACHES OTHER PEOPLE IS AN ACT A CARD SUGGESTS (M1): the person's watching
         # agent makes it only on the person's press of a card naming every attendee.
-        own = (request.headers.get('x-user-email') or '').strip().lower()
+        own = (request.headers.get(identity_token.CLAIM_HEADERS['email']) or '').strip().lower()
         others = [a for a in (getattr(body, 'attendees', None) or []) if a.strip().lower() != own]
         if (others or body.notify) and ceiling.is_delegated(request) and not is_unwatched(request):
             from control_plane.routers import asks  # noqa: PLC0415
