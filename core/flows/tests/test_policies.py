@@ -9,10 +9,10 @@ Four claims, in the order they would fail:
   P2  Resolution order: flow param, then the file, then env, then the baked default. An absent or
       empty file changes nothing; a file that exists and cannot be read, or names a profile nobody
       knows, CLOSES every rule that widens who is mailed, joined or read (S03-1).
-  P3  The disclosure claims only what the software backs. It composes, byte for byte, to the
-      sentence the founder wrote (decision 21) and `mailtext.VISIBILITY_SENTENCE` still carries;
-      `data_statement` replaces its locality clause; and the rules nothing enforces
-      (`agent_reads_desk`, the two retention rules) change none of it (S03-2).
+  P3  The disclosure claims only what the software backs. It composes, byte for byte, to
+      `mailtext.VISIBILITY_SENTENCE`; `data_statement` replaces its locality clause; the rules
+      nothing enforces (`agent_reads_desk`, the two retention rules) change none of it; and it does
+      not say where recordings and transcripts are kept (S03-2).
   P4  The rules reach the steps: who the follow-up is mailed to, and whether it is sent at all.
   P5  Every block `asks/policies-wizard.md` recommends is one THIS module can read (Vexa-ai/vexa#1627),
       and the clauses the wizard says the attendee sentence is composed from are this module's own.
@@ -221,7 +221,7 @@ def test_param_prefers_the_flow_over_the_file(monkeypatch):
 
 # ── P3 · the derived disclosure ──────────────────────────────────────────────────────────────────
 
-def test_at_the_defaults_it_is_the_founders_sentence():
+def test_at_the_defaults_it_is_the_baked_sentence():
     """The composition and `mailtext.VISIBILITY_SENTENCE` are the same bytes.
 
     That constant stays where it is: `scripts/parity.json`'s `visibility-sentence` fact anchors one
@@ -266,13 +266,11 @@ def test_the_clauses_that_stay_are_in_every_sentence():
     """POSITIVE CONTROL for the test above: the clauses the software backs are still said, and the
     sentence is not emptied to pass it. The desk clause is backed by agent-api serving any desk to
     any signed-in member (agent `test_agent_api_authz.py::
-    test_a_colleagues_desk_is_readable_and_never_writable`); the locality and keeping clauses name
-    no rule and no duration."""
+    test_a_colleagues_desk_is_readable_and_never_writable`); the locality clause names no rule."""
     said = policies.visibility_sentence(policies.resolve("---\nagent_reads_desk: off\n---\n"))
-    assert said == (f"{policies.LOCALITY_CLAUSE}; {policies.DESK_VISIBLE_CLAUSE}; "
-                    f"{policies.RETENTION_STAYS_CLAUSE}.")
+    assert said == f"{policies.LOCALITY_CLAUSE}; {policies.DESK_VISIBLE_CLAUSE}."
+    assert said.startswith("Vexa runs on this organisation's own servers;")
     assert "visible to the company's agents" in said
-    assert "recordings and transcripts stay here" in said
 
 
 def test_a_studio_that_keeps_recordings_says_so():
@@ -296,7 +294,7 @@ def test_the_mail_renderer_fills_visibility_from_the_rules(monkeypatch):
     _subject, body = mailtext.render("minutes-head", "57", {"title": "T", "when": "now"})
     # the rule the software backs reaches the mail; the ones nothing enforces do not
     assert "Everything stays in our Frankfurt rack;" in body
-    assert policies.DESK_VISIBLE_CLAUSE in body and policies.RETENTION_STAYS_CLAUSE in body
+    assert policies.DESK_VISIBLE_CLAUSE in body
     for claim in ("read only by", "30 days", "no recording"):
         assert claim not in body
 
@@ -493,11 +491,11 @@ def test_the_wizards_attendee_sentence_is_composed_from_THIS_modules_clauses():
     if not WIZARD.is_file():
         pytest.skip(f"no wizard at {WIZARD}")
     said = " ".join(WIZARD.read_text(encoding="utf-8").split())
-    for clause in (policies.LOCALITY_CLAUSE, policies.DESK_VISIBLE_CLAUSE,
-                   policies.RETENTION_STAYS_CLAUSE):
+    for clause in (policies.LOCALITY_CLAUSE, policies.DESK_VISIBLE_CLAUSE):
         assert clause in said, f"the wizard would compose a sentence this module does not: {clause!r}"
     # …and never the clauses that followed a rule nothing enforces (S03-2)
-    for gone in ("read only by an agent working for its own person", "say the two numbers"):
+    for gone in ("read only by an agent working for its own person", "say the two numbers",
+                 "recordings and transcripts stay here"):
         assert gone not in said, f"the wizard still composes {gone!r}"
 
 

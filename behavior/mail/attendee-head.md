@@ -4,4 +4,4 @@ I am Vexa, the meeting assistant at {{company}}. I sit in meetings you are invit
 
 {{organizer}} had me in {{meeting}} on {{date}}. This is now in your personal workspace.
 
-Vexa runs on this organisation's own servers; what you and your colleagues keep in your workspaces is visible to the company's agents; recordings and transcripts stay here.
+Vexa runs on this organisation's own servers; what you and your colleagues keep in your workspaces is visible to the company's agents.

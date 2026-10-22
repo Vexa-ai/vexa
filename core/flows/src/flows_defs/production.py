@@ -2174,7 +2174,11 @@ def build(reg: Registry, db) -> None:
         who = (ctx.flow.param("data_statement") if ctx.flow else None) or \
             (policies.read(uid).get("data_statement") or "") or \
             os.environ.get("VEXA_FLOWS_DATA_STATEMENT") or \
-            "Vexa runs on this organisation's own servers; the recording and transcript stay there."
+            "Vexa runs on this organisation's own servers."
+        # A sentence of its own, whoever wrote it: a `data_statement` is a clause in the disclosure
+        # (`policies.visibility_sentence`) and so is usually written without its full stop.
+        who = str(who).strip()
+        who = who if who.endswith((".", "!", "?")) else who + "."
         if to_attendee:
             first = f"You were in {title}{when}. {organizer} had Vexa in the room, so these are the notes."
         else:

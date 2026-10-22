@@ -545,16 +545,19 @@ def param(ctx, key: str, uid: str = ""):
 
 # ── the sentence attendees read ──────────────────────────────────────────────────────────────────
 #
-# Three clauses, joined with "; ". It composes to exactly the sentence the founder wrote on
-# 2026-09-02 (decision 21), and `test_policies.py` pins that equality against
-# `mailtext.VISIBILITY_SENTENCE`, which stays where it is, spelled the way the parity ledger's
-# `visibility-sentence` fact expects to find it.
+# Two clauses, joined with "; ". It composes to exactly `mailtext.VISIBILITY_SENTENCE`, and
+# `test_policies.py` pins that equality; the constant stays where it is, spelled the way the parity
+# ledger's `visibility-sentence` fact expects to find it.
 #
-# EVERY CLAUSE IS ONE THE SOFTWARE BACKS, WHATEVER THE RULES SAY. A clause that followed a rule
-# nothing enforces would tell a stranger something the install does not do, so only `data_statement`
-# (a deployment's own words about itself) changes the sentence. `agent_reads_desk` and the two
-# retention rules are declared and not yet enforced (`POLICIES.md` § *Where each rule is read
-# today*), and the sentence does not follow them.
+# EVERY CLAUSE IS ONE THE SOFTWARE BACKS, WHATEVER THE RULES SAY AND HOWEVER IT IS DEPLOYED. A
+# clause that followed a rule nothing enforces would tell a stranger something the install does not
+# do, so only `data_statement` (a deployment's own words about itself) changes the sentence.
+# `agent_reads_desk` and the two retention rules are declared and not yet enforced (`POLICIES.md`
+# § *Where each rule is read today*), and the sentence does not follow them. Nor does it say where
+# recordings and transcripts are kept: a supported install may send the audio to a hosted
+# transcription service, keep recordings in an external object store and hand transcripts to a
+# hosted model, and only the operator knows which. An operator who can promise it writes it in
+# `data_statement`.
 
 #: Where it runs. Locality is STATED, NOT CHOSEN — it is a fact about the install. A deployment that
 #: wants to say it in its own words writes `data_statement`, which replaces this clause and nothing
@@ -568,16 +571,12 @@ LOCALITY_CLAUSE = "Vexa runs on this organisation's own servers"
 DESK_VISIBLE_CLAUSE = ("what you and your colleagues keep in your workspaces is visible to the "
                        "company's agents")
 
-#: What is kept. Nothing in the install deletes a transcript or a recording on a schedule, so the
-#: clause names no number of days and no absence of a recording.
-RETENTION_STAYS_CLAUSE = "recordings and transcripts stay here"
-
 
 def visibility_sentence(rules: Optional[dict] = None) -> str:
-    """WHO CAN SEE WHAT. Three facts, one sentence, no disclaimer.
+    """WHO CAN SEE WHAT. Two facts, one sentence, no disclaimer.
 
     It goes into the mails a person reads before they have decided whether to keep anything here,
     because that is the only moment at which telling them is a choice they still have."""
     p = dict(DEFAULTS) if rules is None else rules
     locality = str(p.get("data_statement") or "").strip().rstrip(".") or LOCALITY_CLAUSE
-    return f"{locality}; {DESK_VISIBLE_CLAUSE}; {RETENTION_STAYS_CLAUSE}."
+    return f"{locality}; {DESK_VISIBLE_CLAUSE}."

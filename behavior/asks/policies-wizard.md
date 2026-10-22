@@ -203,15 +203,18 @@ One message, and it carries exactly four things:
    does with it and what bounds it (adversarial) — plus the price of the other answer, which that
    section also states. Quote the file. Do not paraphrase it into something shorter and warmer.
 3. **The derived attendee sentence** — what every attendee will read in the first mail they ever get
-   from this deployment, under these answers. It is DERIVED from the rules, never written: three
+   from this deployment, under these answers. It is DERIVED from the rules, never written: two
    clauses joined with `; `, and a full stop. It states only what the software does, so the rules
    nothing enforces do not change it.
    - where it runs: `data_statement` if they wrote one, otherwise
      *Vexa runs on this organisation's own servers*;
    - what agents read, whatever `agent_reads_desk` answers:
-     *what you and your colleagues keep in your workspaces is visible to the company's agents*;
-   - what is kept, whatever the two retention rules answer:
-     *recordings and transcripts stay here*.
+     *what you and your colleagues keep in your workspaces is visible to the company's agents*.
+
+   It says nothing about where recordings and transcripts are kept, whatever the two retention
+   rules answer: hosted transcription, an external object store or a hosted model each take them
+   off these servers. If they want attendees told that, it goes in `data_statement`, in words they
+   can stand behind.
 4. **Anything on the block that is declared and not yet enforced**, named, with the words *intended,
    not yet enforced*. It is a `MISSING.md` line, not something to smooth over.
 

@@ -366,9 +366,9 @@ same workspace instead of somewhere else, and every write is a commit with an au
 whether a bot records is the deployment's `RECORDING_ENABLED`, not this rule. A number of days, or
 a recording `0`, is a written commitment: say *intended, not yet enforced* when you recommend it.
 
-**The sentence.** Attendees are told *recordings and transcripts stay here*. The answers here do
-not change it: the mail names no number of days and promises no absent recording until the product
-deletes on schedule.
+**The sentence.** The answers here do not change what attendees are told: the mail names no number
+of days and promises no absent recording until the product deletes on schedule, and it does not say
+where recordings and transcripts are kept. Saying that is [`data_statement`](#data_statement)'s job.
 
 **The intended effect.** `forever` keeps it for as long as the deployment holds it; a number is a
 count of days; `0` means it is not kept at all. Nothing here moves data off this deployment either
@@ -516,8 +516,16 @@ SMTP relay and the rate limits are the operator's (`VEXA_MAIL_*`, `VEXA_GRAPH_*`
 **Default: empty, which means the derived sentence.**
 
 A studio running this on its own hardware may want to say so in its own words. Written here, it
-replaces the locality clause of the disclosure. Left empty, the disclosure is composed from the
-rules on this page, which is the shape that cannot drift away from what the software actually does.
+replaces the locality clause of the disclosure, so attendees read it followed by *; what you and
+your colleagues keep in your workspaces is visible to the company's agents.* Left empty, the
+disclosure is composed from the rules on this page, which is the shape that cannot drift away from
+what the software actually does.
+
+The derived sentence does not say where recordings and transcripts are kept, because a supported
+install may not keep them on its own servers: hosted transcription receives the audio, helm with an
+external object store keeps the recordings there, and a hosted model reads the transcript. An
+operator who can promise more writes it here — *Recordings and transcripts stay in our Frankfurt
+rack* — and owns the promise.
 
 <a id="user_flow_steps"></a>
 ### `user_flow_steps` — the steps a person's own flow may use

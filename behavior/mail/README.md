@@ -125,10 +125,15 @@ mail the braces. If that sentence changes it changes in three files at once — 
 ## Who can see what
 
 Founder decision 21, 2026-09-02: **a person's own workspace is not private from the company.** The
-attendee head and the minutes head both say so, in his words:
+attendee head and the minutes head both say so:
 
 > Vexa runs on this organisation's own servers; what you and your colleagues keep in your workspaces
-> is visible to the company's agents; recordings and transcripts stay here.
+> is visible to the company's agents.
+
+It does not say where recordings and transcripts are kept. A supported install may send the audio to
+a hosted transcription service, keep recordings in an external object store, or hand transcripts to
+a hosted model, and only the operator knows which. An operator who can promise it says so in
+`data_statement` (`_global/POLICIES.md`), which takes the place of the first clause.
 
 It is in the first mail a stranger ever gets from us, because that is the only moment at which
 telling them is still a choice they can act on. The `_global` setup chat tells the administrator the

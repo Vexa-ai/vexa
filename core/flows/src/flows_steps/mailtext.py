@@ -53,9 +53,9 @@ SERVICE_SENTENCE = ("I sit in meetings you are invited to; afterwards you get wh
 # understand who can see their notes.
 WORKSPACE_WORD = "personal workspace"
 
-# WHO CAN SEE WHAT, in the founder's own words. It goes into the mails a person reads before they
+# WHO CAN SEE WHAT, as the founder decided it (decision 21). It goes into the mails a person reads before they
 # have decided whether to keep anything here, because that is the only moment at which telling them
-# is a choice they still have. Not a disclaimer and not a legal line: three facts.
+# is a choice they still have. Not a disclaimer and not a legal line: two facts.
 #
 # ⚠ THIS CONSTANT IS THE COMPOSITION WITHOUT A `data_statement`, NOT THE SENTENCE ITSELF. What
 # `render` fills `{{visibility}}` with is `policies.visibility_sentence`: `data_statement` replaces
@@ -65,8 +65,7 @@ WORKSPACE_WORD = "personal workspace"
 # `scripts/parity.json`'s `visibility-sentence` fact anchors one of its four sites on this
 # assignment — the ledger is untouched by the derivation.
 VISIBILITY_SENTENCE = ("Vexa runs on this organisation's own servers; what you and your colleagues "
-                       "keep in your workspaces is visible to the company's agents; recordings and "
-                       "transcripts stay here.")
+                       "keep in your workspaces is visible to the company's agents.")
 
 # The company half's fallback, for an instance whose `_global/README.md` names no company. That is
 # an ordinary state now, not a bug: nothing waits for the company layer to be written (founder
@@ -124,7 +123,7 @@ DEFAULTS: dict[str, str] = {
         "{{organizer}} had me in {{meeting}} on {{date}}. This is now in your personal workspace.\n"
         "\n"
         "Vexa runs on this organisation's own servers; what you and your colleagues keep in your "
-        "workspaces is visible to the company's agents; recordings and transcripts stay here.\n"
+        "workspaces is visible to the company's agents.\n"
     ),
     # The MINUTES head -- the same meeting, to someone who already knows what Vexa is. No
     # introduction: repeating it to a returning person is the tell of a machine that does not know

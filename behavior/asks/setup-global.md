@@ -149,7 +149,7 @@ their people will be most surprised by and the one they will hear from us last i
 first (founder decision 21, 2026-09-02):
 
 > Vexa runs on this organisation's own servers; what you and your colleagues keep in your workspaces
-> is visible to the company's agents; recordings and transcripts stay here.
+> is visible to the company's agents.
 
 Say what the words mean, because the name is the argument:
 
